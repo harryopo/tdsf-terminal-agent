@@ -57,8 +57,18 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// 优雅退出等待时间（3s，超时后 SIGKILL）
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
-/// 最大重启次数（Fix-loop DEC-V321-11）
-const MAX_RETRY: u32 = 3;
+/// 最大重启次数（TDSF P0 修复：3 → 5，配合运行冷却重置，5 次足够覆盖偶发崩溃）
+const MAX_RETRY: u32 = 5;
+
+/// 重启退避基准（秒）：backoff = 2^(retry-1)，首重试 1s
+/// TDSF P0 修复：避免 ready 后即崩场景下的无限快速重启
+const RESTART_BACKOFF_BASE: u64 = 1;
+
+/// 重启退避上限（秒）
+const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// 运行冷却阈值：Python 运行超过此时长后崩溃，视为偶发，重置 retry_count
+const RUNTIME_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Python 解释器环境变量名（用户可指定自定义路径）
 const ENV_PYTHON: &str = "TDSF_SIDECAR_PYTHON";
@@ -223,6 +233,10 @@ pub struct SidecarManager {
     /// 解耦设计：避免 exit_watcher_task 直接调用 start() 形成循环依赖
     /// （Rust 编译器无法证明循环调用的 future 是 Send，导致 tokio::spawn 失败）
     restart_tx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>>,
+
+    /// 重启取消信号发送端（stop() 发送 → restart_loop 在退避 sleep 中接收，中断循环）
+    /// TDSF P0 修复：退避等待期间用户点"停止 Sidecar"可中断
+    cancel_tx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>>,
 }
 
 impl SidecarManager {
@@ -238,6 +252,7 @@ impl SidecarManager {
             app_handle: Arc::new(Mutex::new(None)),
             script_path: Arc::new(Mutex::new(script_path)),
             restart_tx: Arc::new(Mutex::new(None)),
+            cancel_tx: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -301,10 +316,25 @@ impl SidecarManager {
         }
 
         // 6. 等待 ready 通知（10s 超时）
-        self.wait_for_ready().await?;
+        // TDSF P0 修复：ready 失败时清理已 spawn 的 child，避免句柄泄漏
+        // （场景 B：Python import 阶段崩溃，start() 提前返回，exit_watcher 未 spawn）
+        if let Err(e) = self.wait_for_ready().await {
+            let mut guard = self.child.lock().await;
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
+            drop(guard);
+            // 清理 stdin_tx
+            let mut stdin_guard = self.stdin_tx.lock().await;
+            *stdin_guard = None;
+            return Err(e);
+        }
 
-        // 7. 重置 retry_count（启动成功）
-        self.retry_count.store(0, Ordering::SeqCst);
+        // 7. TDSF P0 修复：不再在此处无条件重置 retry_count
+        //    重置逻辑移到 exit_watcher_task 的"运行冷却"判断中（运行 ≥60s 后崩溃才重置）
+        //    手动 restart() 仍保留无条件重置。这样"发 ready 后即崩"场景下 retry_count
+        //    持续递增，配合退避与 MAX_RETRY 终止循环。
 
         // 8. 启动 health check task
         let health_state = self.state.clone();
@@ -351,6 +381,13 @@ impl SidecarManager {
             let mut guard = self.restart_tx.lock().await;
             *guard = Some(tx);
         }
+        // TDSF P0 修复：创建 cancel channel，stop() 持有发送端
+        // 退避 sleep 期间收到 cancel 即中断循环，避免用户点"停止"后仍在等待退避
+        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        {
+            let mut guard = self.cancel_tx.lock().await;
+            *guard = Some(cancel_tx);
+        }
 
         let manager = self.clone();
         tokio::spawn(async move {
@@ -358,7 +395,7 @@ impl SidecarManager {
             while let Some(()) = rx.recv().await {
                 log::info!("[sidecar:restart_loop] received restart signal");
 
-                // 检查状态：Stopping/Stopped 时不重启
+                // 1. 检查状态：Stopping/Stopped 时不重启
                 let need_restart = {
                     let state = manager.state.read().await;
                     !(state.status == SidecarStatus::Stopping
@@ -369,11 +406,46 @@ impl SidecarManager {
                     continue;
                 }
 
-                // 调用 start() 重启
+                // 2. TDSF P0 修复：指数退避（基于 retry_count，已被 exit_watcher fetch_add 自增）
+                //    backoff = 2^(retry-1) 秒，上限 60s
+                let retry = manager.retry_count.load(Ordering::SeqCst);
+                // shift 限制在 0-6（retry=1→1s, retry=7→64s 但被 min(60) 截断）
+                let shift = retry.saturating_sub(1).min(6) as u32;
+                let backoff_secs = RESTART_BACKOFF_BASE
+                    .saturating_mul(1u64 << shift);
+                let backoff = Duration::from_secs(backoff_secs).min(RESTART_BACKOFF_MAX);
+                log::info!(
+                    "[sidecar:restart_loop] backing off {:?} before restart (retry_count={})",
+                    backoff, retry
+                );
+
+                // 3. 退避等待，期间监听取消信号（用户 stop() 可中断）
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = cancel_rx.recv() => {
+                        log::info!("[sidecar:restart_loop] cancelled during backoff, exiting loop");
+                        break;
+                    }
+                }
+
+                // 4. 再次检查状态（sleep 期间用户可能已 stop）
+                let need_restart = {
+                    let state = manager.state.read().await;
+                    !(state.status == SidecarStatus::Stopping
+                        || state.status == SidecarStatus::Stopped)
+                };
+                if !need_restart {
+                    log::info!("[sidecar:restart_loop] skip restart after backoff (stopping/stopped)");
+                    continue;
+                }
+
+                // 5. 调用 start() 重启
                 match manager.start().await {
                     Ok(()) => log::info!("[sidecar:restart_loop] restart succeeded"),
                     Err(e) => {
                         log::error!("[sidecar:restart_loop] restart failed: {}", e);
+                        // start() 失败时 retry_count 未达 MAX_RETRY，exit_watcher 仍会发后续信号
+                        // （若新 child spawn 成功且崩溃）；若 spawn 本身失败则无后续信号，循环自然停止
                         {
                             let mut state = manager.state.write().await;
                             state.status = SidecarStatus::Crashed;
@@ -400,6 +472,14 @@ impl SidecarManager {
         {
             let mut state = self.state.write().await;
             state.status = SidecarStatus::Stopping;
+        }
+
+        // TDSF P0 修复：通知 restart_loop 中断退避 sleep，停止重试循环
+        {
+            let guard = self.cancel_tx.lock().await;
+            if let Some(tx) = guard.as_ref() {
+                let _ = tx.send(());
+            }
         }
 
         // 2. 发送 shutdown 方法（best effort，不等待响应）
@@ -977,6 +1057,21 @@ async fn exit_watcher_task(
     }
 
     // 4. 检查 retry 次数
+    // TDSF P0 修复：运行冷却判断——若 Python 运行 ≥60s 才崩溃，视为偶发，重置 retry_count
+    // 这样偶发崩溃（运行 ≥60s）会重置计数器，从 1 开始重新计数，不累积历史偶发；
+    // 而快速崩溃（运行 <60s，场景 C "发 ready 后即崩"）不重置，retry_count 持续递增直至 MAX_RETRY
+    let runtime = {
+        let state_guard = state.read().await;
+        state_guard.started_at.map(|t| t.elapsed()).unwrap_or(Duration::ZERO)
+    };
+    if runtime >= RUNTIME_COOLDOWN {
+        log::info!(
+            "[sidecar:watcher] runtime {:?} >= cooldown {:?}, resetting retry_count",
+            runtime, RUNTIME_COOLDOWN
+        );
+        retry_count.store(0, Ordering::SeqCst);
+    }
+
     let retry = retry_count.fetch_add(1, Ordering::SeqCst);
     if retry >= MAX_RETRY {
         log::error!(
@@ -1228,5 +1323,32 @@ mod tests {
             manager.next_request_id.load(Ordering::SeqCst),
             cloned.next_request_id.load(Ordering::SeqCst)
         );
+    }
+
+    /// TDSF P0 修复：退避计算辅助函数（与 start_restart_loop 内联公式一致）
+    fn compute_backoff(retry: u32) -> Duration {
+        let shift = retry.saturating_sub(1).min(6) as u32;
+        let secs = RESTART_BACKOFF_BASE.saturating_mul(1u64 << shift);
+        Duration::from_secs(secs).min(RESTART_BACKOFF_MAX)
+    }
+
+    #[test]
+    fn test_max_retry_is_five() {
+        // TDSF P0 修复：MAX_RETRY 从 3 提升到 5
+        assert_eq!(MAX_RETRY, 5);
+    }
+
+    #[test]
+    fn test_backoff_calculation() {
+        // retry=1 → 1s, retry=2 → 2s, retry=3 → 4s, retry=4 → 8s, retry=5 → 16s
+        assert_eq!(compute_backoff(1), Duration::from_secs(1));
+        assert_eq!(compute_backoff(2), Duration::from_secs(2));
+        assert_eq!(compute_backoff(3), Duration::from_secs(4));
+        assert_eq!(compute_backoff(4), Duration::from_secs(8));
+        assert_eq!(compute_backoff(5), Duration::from_secs(16));
+        // retry=7 → 1<<6=64s 但被 min(60) 截断
+        assert_eq!(compute_backoff(7), Duration::from_secs(60));
+        // 防御性：retry=0 → saturating_sub(1)=0 → 1<<0=1 → 1s
+        assert_eq!(compute_backoff(0), Duration::from_secs(1));
     }
 }
