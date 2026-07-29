@@ -1,0 +1,70 @@
+# TDSF SquillaRouter 4 档模型配置（T-P5-01, DEC-V32-01）
+# 定义 L1-L4 4 档模型路由配置，供 squilla_router.py 加载使用。
+# 档位说明：
+# - L1 快速档：简单任务（如查询命令）→ 小模型
+# - L2 标准档：常规任务（如解释概念）→ 中模型
+# - L3 推理档：复杂任务（如故障排查）→ 大模型
+# - L4 推理+档：超复杂任务（如架构设计）→ 超大模型
+
+# 默认用户偏好（可被 context.preference 覆盖）
+default_preference: balanced  # fast / balanced / thorough / max
+
+# 4 档模型配置
+tiers:
+  # ===== L1 快速档：简单任务 =====
+  # 触发条件：复杂度评分 < 25 + 上下文 < 4K tokens
+  # 适用：查询命令、简单问答、单步操作
+  L1:
+    model: "gpt-4o-mini"
+    max_tokens: 4096
+    cost_per_1k_tokens: 0.00015  # USD
+    description: "快速档：小模型，低延迟，低成本"
+    complexity_range: [0, 25]
+    context_range: [0, 4096]
+
+  # ===== L2 标准档：常规任务 =====
+  # 触发条件：复杂度评分 25-50 + 上下文 4K-32K tokens
+  # 适用：解释概念、配置修改、代码生成
+  L2:
+    model: "gpt-4o"
+    max_tokens: 16384
+    cost_per_1k_tokens: 0.005  # USD
+    description: "标准档：中模型，平衡性能与成本"
+    complexity_range: [25, 50]
+    context_range: [4096, 32768]
+
+  # ===== L3 推理档：复杂任务 =====
+  # 触发条件：复杂度评分 50-75 + 上下文 32K-128K tokens
+  # 适用：故障排查、根因分析、复杂调试
+  L3:
+    model: "o1-preview"
+    max_tokens: 65536
+    cost_per_1k_tokens: 0.015  # USD
+    description: "推理档：大模型，深度推理能力"
+    complexity_range: [50, 75]
+    context_range: [32768, 131072]
+
+  # ===== L4 推理+档：超复杂任务 =====
+  # 触发条件：复杂度评分 >= 75 或 上下文 >= 128K tokens
+  # 适用：架构设计、大规模重构、跨系统分析
+  L4:
+    model: "o1-mini"
+    max_tokens: 200000
+    cost_per_1k_tokens: 0.030  # USD
+    description: "推理+档：超大模型，1M Token 上下文"
+    complexity_range: [75, 100]
+    context_range: [131072, 1000000]
+
+# 用户偏好到档位的偏移量（在复杂度评分基础上 ± 调整）
+preference_offset:
+  fast: -15       # 偏好快速：评分减 15（更倾向低档）
+  balanced: 0     # 平衡：不调整
+  thorough: +15   # 偏好深入：评分加 15（更倾向高档）
+  max: +30        # 最高档：评分加 30（强制倾向 L4）
+
+# 复杂度评分权重（_score_complexity 内部使用）
+complexity_weights:
+  keyword_match: 30      # 关键词匹配得分上限
+  context_length: 30     # 上下文长度得分上限
+  task_length: 20        # 任务文本长度得分上限
+  multi_step: 20         # 多步骤指示词得分上限

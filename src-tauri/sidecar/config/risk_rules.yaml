@@ -1,0 +1,206 @@
+# TDSF-Linux 风险规则库（T-P1-06 迁移自 projects/config/risk_rules.yaml）
+# 定义命令的风险分级，供 risk_engine 模块加载使用。
+# 分级：low（只读）/ medium（配置变更）/ high（不可逆）/ deny（拒绝执行）
+# L0-L4 映射：low → L0/L1, medium → L2, high → L3, deny → L4
+
+# ===== 低风险：只读诊断命令（允许自动执行） =====
+low_risk:
+  - name: cat
+    description: 查看文件内容
+    patterns:
+      - "^cat\\s+.+"
+  - name: ls
+    description: 列出目录内容
+    patterns:
+      - "^ls\\s+.*"
+  - name: grep
+    description: 文本搜索
+    patterns:
+      - "^grep\\s+.+"
+  - name: df
+    description: 查看磁盘使用情况
+    patterns:
+      - "^df\\s+.*"
+  - name: free
+    description: 查看内存使用情况
+    patterns:
+      - "^free\\s+.*"
+  - name: ps
+    description: 查看进程列表
+    patterns:
+      - "^ps\\s+.*"
+  - name: ss
+    description: 查看套接字统计
+    patterns:
+      - "^ss\\s+.*"
+  - name: journalctl
+    description: 查看系统日志
+    patterns:
+      - "^journalctl\\s+.+"
+  - name: dmesg
+    description: 查看内核日志
+    patterns:
+      - "^dmesg(\\s+.*)?"
+  - name: uptime
+    description: 查看系统运行时间与负载
+    patterns:
+      - "^uptime\\s*"
+  - name: top
+    description: 查看进程资源占用（快照模式）
+    patterns:
+      - "^top\\s+-n\\s+1\\s+.*"
+  - name: netstat
+    description: 查看网络连接状态
+    patterns:
+      - "^netstat\\s+.*"
+  - name: stat
+    description: 查看文件状态
+    patterns:
+      - "^stat\\s+.+"
+  - name: head
+    description: 查看文件头部
+    patterns:
+      - "^head\\s+.+"
+  - name: tail
+    description: 查看文件尾部
+    patterns:
+      - "^tail\\s+.+"
+  - name: less
+    description: 分页查看文件
+    patterns:
+      - "^less\\s+.+"
+  - name: wc
+    description: 统计行/词/字节数
+    patterns:
+      - "^wc\\s+.+"
+  - name: date
+    description: 查看系统时间
+    patterns:
+      - "^date\\s*.*"
+  - name: hostname
+    description: 查看主机名
+    patterns:
+      - "^hostname\\s*"
+
+# ===== 中风险：配置变更命令（需人工确认） =====
+medium_risk:
+  - name: systemctl_restart
+    description: 重启系统服务
+    patterns:
+      - "^systemctl\\s+restart\\s+.+"
+    requires_confirmation: true
+  - name: systemctl_reload
+    description: 重载系统服务配置
+    patterns:
+      - "^systemctl\\s+reload\\s+.+"
+    requires_confirmation: true
+  - name: chmod
+    description: 修改文件权限
+    patterns:
+      - "^chmod\\s+.+"
+    requires_confirmation: true
+  - name: chown
+    description: 修改文件属主
+    patterns:
+      - "^chown\\s+.+"
+    requires_confirmation: true
+  - name: iptables
+    description: 修改防火墙规则
+    patterns:
+      - "^iptables\\s+.+"
+    requires_confirmation: true
+  - name: sed
+    description: 流编辑器修改文件
+    patterns:
+      - "^sed\\s+-i\\s+.+"
+    requires_confirmation: true
+  - name: kill
+    description: 终止进程
+    patterns:
+      - "^kill\\s+.+"
+    requires_confirmation: true
+  - name: mount
+    description: 挂载文件系统
+    patterns:
+      - "^mount\\s+.+"
+    requires_confirmation: true
+  - name: umount
+    description: 卸载文件系统
+    patterns:
+      - "^umount\\s+.+"
+    requires_confirmation: true
+  - name: sysctl
+    description: 修改内核参数
+    patterns:
+      - "^sysctl\\s+-w\\s+.+"
+    requires_confirmation: true
+
+# ===== 高风险：不可逆操作（强制人工确认 + 审计日志） =====
+high_risk:
+  - name: rm_rf
+    description: 递归强制删除（不可逆）
+    patterns:
+      - "^rm\\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\s+.+"
+      - "^rm\\s+-rf\\s+.+"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+  - name: dd
+    description: 块设备读写（可覆盖磁盘数据）
+    patterns:
+      - "^dd\\s+.+"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+  - name: mkfs
+    description: 格式化文件系统（数据全失）
+    patterns:
+      - "^mkfs\\..+\\s+.+"
+      - "^mkfs\\s+.+"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+  - name: fdisk
+    description: 磁盘分区操作
+    patterns:
+      - "^fdisk\\s+.+"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+  - name: shutdown
+    description: 关机
+    patterns:
+      - "^shutdown\\s+.+"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+  - name: reboot
+    description: 重启系统
+    patterns:
+      - "^reboot\\s*.*"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+  - name: init
+    description: 切换运行级别
+    patterns:
+      - "^init\\s+[0-6]"
+    requires_confirmation: true
+    requires_audit_log: true
+    irreversible: true
+
+# ===== 拒绝执行（无论何种情况都不允许 AI 执行） =====
+deny:
+  - name: rm_root
+    description: 删除根目录（绝对禁止）
+    patterns:
+      - "^rm\\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\s+/\\s*$"
+      - "^rm\\s+-rf\\s+/\\s*$"
+  - name: chmod_777_root
+    description: 对根目录设 777 权限（绝对禁止）
+    patterns:
+      - "^chmod\\s+777\\s+/\\s*$"
+  - name: mkfs_root
+    description: 格式化根磁盘（绝对禁止）
+    patterns:
+      - "^mkfs\\..+\\s+/dev/sda\\s*$"

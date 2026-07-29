@@ -1,0 +1,21 @@
+/* =============================================================================
+ * index.css — TDSF Terminal Agent v4.0 全局样式入口
+ * -----------------------------------------------------------------------------
+ * 使用方式 (在 main.tsx / main.ts 顶部):
+ *   import './styles/index.css';
+ *
+ * 加载顺序 (至关重要):
+ *   1. tokens.css   — CSS 变量源 (主色 / 15 主题 / 7 mood / 5 风险 / 间距 / 圆角 / 阴影 / 动效 / z-index)
+ *   2. fonts.css    — @font-face 声明 (Inter / Maple Mono / JetBrains Mono)
+ *   3. animations.css — 7 状态关键帧 + 通用过渡
+ *   4. theme.css    — Tailwind v4 @theme inline 桥 + base/components 层
+ *
+ * 注意:
+ *   - 必须用 @import (不是 @use), 因为变量在运行时动态切换主题
+ *   - 主题切换: document.documentElement.dataset.theme = 'dark' | 'light' | 'dracula' | ...
+ * ============================================================================= */
+
+@import './tokens.css';
+@import './fonts.css';
+@import './animations.css';
+@import './theme.css';

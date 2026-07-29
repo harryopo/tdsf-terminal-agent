@@ -1,0 +1,33 @@
+/**
+ * galaxy.ts — Galaxy 主题
+ * 星系紫调主题
+ */
+
+import type { TerminalTheme } from './types';
+
+export const galaxy: TerminalTheme = {
+  name: 'galaxy',
+  displayName: 'Galaxy',
+  category: 'colorful',
+  foreground: '#c5c8c6',
+  background: '#1d1f21',
+  cursor: '#b294bb',
+  cursorAccent: '#1d1f21',
+  selectionBackground: 'rgba(178, 148, 187, 0.3)',
+  black: '#1d1f21',
+  red: '#cc6666',
+  green: '#b5bd68',
+  yellow: '#f0c674',
+  blue: '#81a2be',
+  magenta: '#b294bb',
+  cyan: '#8abeb7',
+  white: '#c5c8c6',
+  brightBlack: '#969896',
+  brightRed: '#cc6666',
+  brightGreen: '#b5bd68',
+  brightYellow: '#f0c674',
+  brightBlue: '#81a2be',
+  brightMagenta: '#b294bb',
+  brightCyan: '#8abeb7',
+  brightWhite: '#ffffff',
+};

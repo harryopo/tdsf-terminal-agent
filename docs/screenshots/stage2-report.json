@@ -1,0 +1,15 @@
+{
+  "titlebar_present": true,
+  "mood_present": true,
+  "agent_switcher_present": true,
+  "agents_visible": {
+    "coder": true,
+    "explore": true,
+    "history": true,
+    "teach": true
+  },
+  "primary_color": "#059669",
+  "background_color": "#ffffff",
+  "agent_panel_rendered": true,
+  "errors_count": 4
+}

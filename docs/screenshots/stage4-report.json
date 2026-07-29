@@ -1,0 +1,14 @@
+{
+  "ssh_rail_count": 1,
+  "skills_rail_count": 1,
+  "skill_cards_count": 5,
+  "ssh_panel_text_preview": "[>_]\nTDSF\n|\nlocal\n⬡‿⬡ idle\nCoder\nExplore\nHistory\nTeach\n代码生成与重构\n18:14\nDefault\nshell\nSSH 远程\n\n还没有 SSH 连接\n\n连接 Linux 服务器, 浏览和编辑远程文件\n\n新建连接\nFiles\nSource Control\nSSH\nSkills\nno directory\nOpen AI agent\nCtrl+I\nC",
+  "skills_panel_text_preview": "SKILL 管理\n全部5\nLinux2\nDocker1\nSSH1\nPython1\n自定义0\ndocker-management\n内置\nDocker · v1.0.0\n\nDocker 管理 Skill，处理容器/镜像/网络/卷/Compose 等任务\n\n调用\n详情\nlinux-ops\n内置\nLinux · v1.0.0\n\nLinux 运维 Skill，处理 nginx/systemd/journal",
+  "final_state": {
+    "tdsfAgentId": "coder",
+    "miniOpen": true,
+    "activeSessionId": "s-ms32lifj-qitije"
+  },
+  "errors_count": 0,
+  "errors_preview": []
+}

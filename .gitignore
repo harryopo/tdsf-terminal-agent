@@ -1,0 +1,98 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+.yarn/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Cache
+.cache/
+.parcel-cache/
+.eslintcache
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Test
+playwright-report/
+test-results/
+
+# Local fonts (downloaded to public/fonts at build time)
+# (Keep tracked — fonts are committed)
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python coverage
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Python sidecar runtime data (SQLite/Chroma/Langfuse 等)
+python-sidecar/data/
+python-sidecar/.coverage
+
+# Auto-generated Skills (KEPA 自动生成，不入库)
+python-sidecar/skills/auto-generated/
+
+# IDE / Trae 临时
+.trae/specs/p5-advanced-ai/__pycache__/
+
+
+# 会话临时产物 (2026-07-29 基线固化时补充)
+lint-*.txt
+.tmp-*
+.codegraph/
+.tdsf-data/
+.agent-collaboration/
+.claude/

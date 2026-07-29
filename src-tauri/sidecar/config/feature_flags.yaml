@@ -1,0 +1,28 @@
+# TDSF Feature Flags 配置（T-P5-02）
+# 控制 P5+ 阶段实验性功能的开关。
+# 通过 FeatureFlags 类加载，可在运行时通过 feature_flags.set 方法动态修改。
+
+# ===== 长上下文管理（1M Token 兼容，Phase 2）=====
+long_context:
+  enabled: false              # 默认关闭（Phase 2 实验）
+  max_tokens_per_chunk: 100000  # 单块最大 token 数
+  summary_max_tokens: 4000      # 摘要最大 token 数
+
+# ===== SquillaRouter（4 档模型路由）=====
+squilla_router:
+  enabled: true               # 默认启用（P5 稳定）
+
+# ===== Langfuse 可观测性 =====
+langfuse:
+  enabled: false              # 默认关闭（避免本地数据库增长）
+  offline: true               # 离线模式（缓存到本地 SQLite）
+
+# ===== KEPA 自我进化 =====
+kepa:
+  enabled: false              # 默认关闭（实验性）
+  learning_rate: 0.01         # 学习率
+
+# ===== Skill 自动生成 =====
+skill_auto_generate:
+  enabled: false              # 默认关闭（实验性）
+  min_pattern_frequency: 3    # 触发生成的最小模式频次
