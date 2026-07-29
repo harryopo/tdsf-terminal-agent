@@ -1,0 +1,151 @@
+[package]
+name = "tdsf-terminal-agent"
+version = "4.0.0"
+description = "TDSF Terminal Agent v4.0 — 终端优先的 Linux 运维 AI 工作台"
+authors = ["TDSF Team"]
+license = "MIT"
+repository = "https://github.com/tdsf/terminal-agent"
+edition = "2021"
+# 升级到 1.85 以支持 russh 0.61（async fn in trait 稳定 + 新版 tokio）
+# Rust 1.96.0 已实际安装,远超此最低要求
+rust-version = "1.85"
+
+# Tauri 2 标准入口 (二进制 = 产品名)
+[[bin]]
+name = "tdsf-terminal-agent"
+path = "src/main.rs"
+
+[lib]
+name = "tdsf_terminal_agent_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri 2 核心
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+tauri-plugin-store = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-log = "2"
+tauri-plugin-process = "2"
+
+# PTY (伪终端) — 从 terax-ai 搬运的 portable-pty 0.9
+portable-pty = "0.9"
+
+# 进程管理
+shared_child = "1"
+
+# 序列化 / 异步 / 日志
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# tokio features 扩展：rt + process（子进程）+ io-util（stdin/stdout pipe）
+# + sync（Mutex/oneshot）+ time（timeout/interval）+ macros（spawn/await）
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "process", "io-util", "sync", "time", "macros", "fs"] }
+log = "0.4"
+env_logger = "0.11"
+
+# HTTP 客户端 (AI 请求)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+bytes = "1"
+futures-util = "0.3"
+
+# 文件/进程工具
+tempfile = "3"
+which = "8.0.4"
+dirs = "6"
+notify = "8.2.0"
+
+# 文件搜索
+ignore = "0.4"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+grep-matcher = "0.1"
+globset = "0.4"
+nucleo-matcher = "0.3"
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "1.0"
+
+# SSH 客户端 (P2-B T-P2-03)
+# russh 0.61: 纯 Rust + tokio 异步,与 Tauri 2 完美契合
+# - 原生 keepalive / inactivity_timeout / known_hosts / agent forwarding
+# - ring feature: 预编译 crypto backend,Windows 零系统依赖
+# - 禁用默认 aws-lc-rs (Windows MSVC 编译失败,需 NASM + alignas 支持)
+russh = { version = "0.61", default-features = false, features = ["ring"] }
+# russh 内置 keys 模块 (0.50+ 已合并 russh-keys),无需单独 crate
+# 指纹计算: russh::keys::ssh_key::HashAlg::Sha256 (russh 重新导出 ssh-key crate)
+# 测试随机数: russh::keys::ssh_key::rand_core::OsRng (无需额外 rand 依赖)
+
+# SFTP 子系统 (T-P2-05: 文件树 + Monaco Editor)
+# russh-sftp 2.1: 与 russh 0.61 channel.into_stream() 完美契合的 SFTP 客户端
+# - 高层 SftpSession: read/write/read_dir/metadata/rename/remove_file/create_dir
+# - 协议层 FileAttributes: size/uid/gid/permissions/atime/mtime
+# - FileType: Dir/File/Symlink/Other
+russh-sftp = "2.1"
+
+# 时间戳
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# T-P2-07: side-git 影子仓库 (libgit2 绑定 + sha256 项目哈希)
+# git2 0.19: libgit2 1.8 绑定,提供 init_bare / commit / reset / blob / tree 全套 API
+# sha2 0.10: SHA-256 计算项目绝对路径哈希(用作影子仓库目录名)
+git2 = "0.19"
+sha2 = "0.10"
+
+# T-P2-08: Docker 沙箱 (DEC-V321-10, bollard 0.17 稳定版)
+# bollard 0.17: 异步 Docker Daemon API 客户端,支持 Unix socket + Windows Named Pipe
+#   - connect_with_local_defaults() 自动检测: Linux 用 /var/run/docker.sock, Windows 用 \\.\pipe\docker_engine
+#   - 0.17.x 系列最后稳定版为 0.17.1 (2024-08-18), 0.18+ 引入 Builder API 改动较大
+#   - ssl feature: 通过 rustls 支持 HTTPS 连接(可选,本地连接不需要)
+# 注: bollard-stubs 由 bollard 内部自动传递依赖(bollard-stubs 0.17 不存在,
+#     实际版本是 1.45.0-rc.x 格式), 无需显式声明
+bollard = { version = "0.17", features = ["ssl"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri-plugin-clipboard-manager = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
+
+[dev-dependencies]
+# SSH 测试用随机数 (russh 0.61 / ssh-key 0.7 依赖 rand_core 0.10)
+# rand 0.10 才兼容 rand_core 0.10
+rand = "0.10"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
