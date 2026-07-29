@@ -1,0 +1,592 @@
+/* =============================================================================
+ * tokens.css — TDSF Terminal Agent v4.0 CSS 变量源
+ * -----------------------------------------------------------------------------
+ * 优先级: 项目 specs/06-design-tokens.md (硬约束) > 设计稿 trae-semantic-bridge.css
+ * 原则:   所有颜色/字号/间距/动效 100% CSS 变量, 禁止硬编码
+ * 主题:   15 内置主题 (dark/light/13 经典), 通过 [data-theme="X"] 切换
+ * ============================================================================= */
+
+/* === 主色体系 (低饱和靛蓝, 设计稿 v4.0) ==================================== */
+:root {
+  /* 主色 — 暗色默认 (设计稿 #5B8CFF, 终端友好的开发者蓝) */
+  --color-primary:           #5B8CFF;
+  --color-primary-bright:    #7BA4FF;
+  --color-primary-dim:       #3B6FE0;
+  --color-primary-50:        #eef4ff;
+  --color-primary-900:       #1e3a8a;
+  --color-primary-soft:      rgba(91, 140, 255, 0.12);  /* hover/选中底色 */
+  --color-primary-glow:      rgba(91, 140, 255, 0.20);  /* 阴影/光晕 */
+
+  /* 暗色背景 (设计稿: #1A1D24 深中性灰, 非纯黑, 长时间盯屏不累) */
+  --color-bg:                #1A1D24;
+  --color-bg-elevated:       #21252E;
+  --color-surface:           #21252E;
+  --color-surface-hover:     #2A2F3A;
+  --color-surface-active:    #1E222B;
+  --color-border:            rgba(91, 140, 255, 0.12);
+  --color-border-strong:     rgba(91, 140, 255, 0.20);
+
+  /* 文字色 (设计稿: 柔和白) */
+  --color-text:              #DCE3F0;
+  --color-text-muted:        #8892A8;
+  --color-text-faint:        #5A6478;
+  --color-text-inverse:      #1A1D24;
+  --color-text-on-primary:   #1A1D24;
+
+  /* 语义色 (设计稿, 含 soft 用于背景) */
+  --color-success:           #34D399;
+  --color-success-soft:      rgba(52, 211, 153, 0.15);
+  --color-success-bg:        #064e3b;
+  --color-warning:           #F59E0B;
+  --color-warning-soft:      rgba(245, 158, 11, 0.15);
+  --color-warning-bg:        #713f12;
+  --color-error:             #F87171;
+  --color-error-soft:        rgba(248, 113, 113, 0.15);
+  --color-error-bg:          #7f1d1d;
+  --color-info:              #5B8CFF;
+  --color-info-soft:         rgba(91, 140, 255, 0.15);
+  --color-info-bg:           #1e3a8a;
+  --color-alert:             #EAB308;
+
+  /* Accent 调色板 (设计稿) */
+  --accent-blue:             #5B8CFF;
+  --accent-violet:           #A78BFA;
+  --accent-cyan:             #22D3EE;
+  --accent-amber:            #F59E0B;
+  --accent-coral:            #F87171;
+  --accent-magenta:          #E879F9;
+  --accent-lime:             #84CC16;
+  --accent-green:            #34D399;
+
+  /* 风险等级 5 档 */
+  --color-risk-safe:         #10b981;  /* L0 */
+  --color-risk-caution:      #84cc16;  /* L1 */
+  --color-risk-warning:      #eab308;  /* L2 */
+  --color-risk-danger:       #f97316;  /* L3 */
+  --color-risk-critical:     #ef4444;  /* L4 — 必须二次密码 */
+
+  /* 7 状态 Mood Ring (设计稿 v4.0) */
+  --color-mood-idle:         #8892A8;
+  --color-mood-thinking:     #A78BFA;
+  --color-mood-stream:       #22D3EE;
+  --color-mood-working:      #F59E0B;
+  --color-mood-done:         #34D399;
+  --color-mood-error:        #F87171;
+  --color-mood-waiting:      #EAB308;
+
+  /* 终端 ANSI 16 色 (设计稿深色) */
+  --terminal-bg:             #1A1D24;
+  --terminal-fg:             #DCE3F0;
+  --terminal-cursor:         #5B8CFF;
+  --terminal-selection:      rgba(91, 140, 255, 0.25);
+  --terminal-black:          #21252E;
+  --terminal-red:            #F87171;
+  --terminal-green:          #34D399;
+  --terminal-yellow:         #FBBF24;
+  --terminal-blue:           #5B8CFF;
+  --terminal-magenta:        #E879F9;
+  --terminal-cyan:           #22D3EE;
+  --terminal-white:          #DCE3F0;
+  --terminal-bright-black:   #5A6478;
+  --terminal-bright-red:     #FCA5A5;
+  --terminal-bright-green:   #6EE7B7;
+  --terminal-bright-yellow:  #FCD34D;
+  --terminal-bright-blue:    #93C5FD;
+  --terminal-bright-magenta: #F0ABFC;
+  --terminal-bright-cyan:    #67E8F9;
+  --terminal-bright-white:   #F0F4FF;
+
+  /* 代码高亮 (深色) */
+  --code-text:               #e5e7eb;
+  --code-comment:            #6b7280;
+  --code-keyword:            #c084fc;
+  --code-string:             #4ade80;
+  --code-number:             #e879f9;
+  --code-function:           #facc15;
+  --code-variable:           #e5e7eb;
+  --code-constant:           #60a5fa;
+  --code-type:               #fde047;
+  --code-tag:                #f87171;
+  --code-link:               #818cf8;
+  --code-operator:           #e879f9;
+
+  /* Accent 调色板 (深色) */
+  --accent-blue:             #818cf8;
+  --accent-violet:           #a78bfa;
+  --accent-cyan:             #22d3ee;
+  --accent-amber:            #f59e0b;
+  --accent-coral:            #f87171;
+  --accent-magenta:          #e879f9;
+  --accent-lime:             #84cc16;
+  --accent-green:            #10b981;
+
+  /* 间距 (4px 栅格) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+  --space-10: 64px;
+
+  /* 圆角 (4 档 + full) */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* 阴影 (3 档 + 面板专用) */
+  --shadow-low:       0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-medium:    0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-high:      0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-panel:     0 0 0 1px rgba(129, 140, 248, 0.15), 0 12px 40px rgba(0, 0, 0, 0.5);
+  --shadow-glow:      0 0 20px rgba(129, 140, 248, 0.15);
+
+  /* 字号 */
+  --fs-xs:  11px;  --text-xs:  11px;
+  --fs-sm:  12px;  --text-sm:  12px;
+  --fs-base:14px;  --text-base:14px;
+  --fs-md:  16px;  --text-md:  16px;
+  --fs-lg:  18px;  --text-lg:  18px;
+  --fs-xl:  20px;  --text-xl:  20px;
+  --fs-2xl: 24px;  --text-2xl: 24px;
+  --fs-3xl: 30px;  --text-3xl: 30px;
+
+  /* 字重 */
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* 行高 */
+  --lh-tight:    1.2;
+  --lh-base:     1.5;
+  --lh-relaxed:  1.75;
+  --lh-mono:     1.4;
+
+  /* 动效时长 */
+  --duration-instant: 50ms;
+  --duration-fast:    150ms;
+  --duration-base:    250ms;
+  --duration-slow:    400ms;
+  --duration-slower:  600ms;
+
+  /* 缓动 */
+  --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out:  cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-linear:  linear;
+
+  /* z-index 层级 */
+  --z-base:       0;
+  --z-elevated:   10;
+  --z-sticky:     100;
+  --z-overlay:    1000;
+  --z-modal:      2000;
+  --z-toast:      3000;
+  --z-tooltip:    4000;
+
+  /* 断点 (px 值, 用于 CSS 容器查询) */
+  --bp-sm:   640px;
+  --bp-md:   800px;
+  --bp-lg:   1024px;
+  --bp-xl:   1280px;
+  --bp-2xl:  1536px;
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgba(129, 140, 248, 0.20);
+  --scrollbar-track: transparent;
+}
+
+/* === 浅色主题 (data-theme="light", 设计稿 v4.0) ============================== */
+:root[data-theme="light"] {
+  --color-primary:           #2563EB;
+  --color-primary-bright:    #1D4ED8;
+  --color-primary-dim:       #1E40AF;
+  --color-primary-50:        #eff6ff;
+  --color-primary-900:       #1e3a8a;
+  --color-primary-soft:      rgba(37, 99, 235, 0.08);
+  --color-primary-glow:      rgba(37, 99, 235, 0.15);
+
+  --color-bg:                #F8FAFC;
+  --color-bg-elevated:       #FFFFFF;
+  --color-surface:           #FFFFFF;
+  --color-surface-hover:     #F1F5F9;
+  --color-surface-active:    #E2E8F0;
+  --color-border:            rgba(37, 99, 235, 0.10);
+  --color-border-strong:     rgba(37, 99, 235, 0.16);
+
+  --color-text:              #1E293B;
+  --color-text-muted:        #64748B;
+  --color-text-faint:        #94A3B8;
+  --color-text-inverse:      #F8FAFC;
+  --color-text-on-primary:   #FFFFFF;
+
+  --color-success:           #059669;
+  --color-warning:           #D97706;
+  --color-error:             #DC2626;
+  --color-info:              #2563EB;
+  --color-alert:             #CA8A04;
+
+  --terminal-bg:             #F1F5F9;
+  --terminal-fg:             #1E293B;
+  --terminal-cursor:         #2563EB;
+  --terminal-yellow:         #D97706;
+  --terminal-magenta:        #DB2777;
+
+  --shadow-low:       0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-medium:    0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-high:      0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-panel:     0 0 0 1px rgba(37, 99, 235, 0.10), 0 8px 32px rgba(0, 0, 0, 0.10);
+  --shadow-glow:      0 0 20px rgba(37, 99, 235, 0.10);
+
+  --scrollbar-thumb: rgba(0, 0, 0, 0.12);
+}
+
+/* === 13 经典主题 (仅覆盖主色 + 背景, 复用默认结构) ========================== */
+
+/* Dracula */
+:root[data-theme="dracula"] {
+  --color-bg:                #282a36;
+  --color-bg-elevated:       #21222c;
+  --color-surface:           #343746;
+  --color-surface-hover:     #44475a;
+  --color-surface-active:    #4d5068;
+  --color-border:            #44475a;
+  --color-border-strong:     #6272a4;
+  --color-text:              #f8f8f2;
+  --color-text-muted:        #bfbfbf;
+  --color-text-faint:        #6272a4;
+  --color-primary:           #bd93f9;
+  --color-primary-bright:    #caa9fa;
+  --color-primary-dim:       #9d6dd9;
+  --color-primary-soft:      rgba(189, 147, 249, 0.15);
+  --color-primary-glow:      rgba(189, 147, 249, 0.25);
+  --color-success:           #50fa7b;
+  --color-warning:           #f1fa8c;
+  --color-error:             #ff5555;
+  --color-info:              #8be9fd;
+  --terminal-bg:             #282a36;
+  --terminal-fg:             #f8f8f2;
+  --terminal-cursor:         #f8f8f2;
+  --terminal-yellow:         #f1fa8c;
+  --terminal-cyan:           #8be9fd;
+  --terminal-magenta:        #ff79c6;
+  --scrollbar-thumb:         rgba(189, 147, 249, 0.20);
+}
+
+/* Gruvbox Dark */
+:root[data-theme="gruvbox-dark"] {
+  --color-bg:                #1d2021;
+  --color-bg-elevated:       #282828;
+  --color-surface:           #3c3836;
+  --color-surface-hover:     #504945;
+  --color-surface-active:    #5f5654;
+  --color-border:            #504945;
+  --color-border-strong:     #7c6f64;
+  --color-text:              #ebdbb2;
+  --color-text-muted:        #a89984;
+  --color-text-faint:        #928374;
+  --color-primary:           #d3869b;
+  --color-primary-bright:    #e89aac;
+  --color-primary-dim:       #b16286;
+  --color-primary-soft:      rgba(211, 134, 155, 0.15);
+  --color-primary-glow:      rgba(211, 134, 155, 0.25);
+  --color-success:           #b8bb26;
+  --color-warning:           #fabd2f;
+  --color-error:             #fb4934;
+  --color-info:              #83a598;
+  --terminal-bg:             #1d2021;
+  --terminal-fg:             #ebdbb2;
+  --scrollbar-thumb:         rgba(211, 134, 155, 0.20);
+}
+
+/* Nord */
+:root[data-theme="nord"] {
+  --color-bg:                #2e3440;
+  --color-bg-elevated:       #3b4252;
+  --color-surface:           #434c5e;
+  --color-surface-hover:     #4c566a;
+  --color-surface-active:    #5e6878;
+  --color-border:            #4c566a;
+  --color-border-strong:     #616e88;
+  --color-text:              #eceff4;
+  --color-text-muted:        #d8dee9;
+  --color-text-faint:        #7b88a1;
+  --color-primary:           #88c0d0;
+  --color-primary-bright:    #8fbcbb;
+  --color-primary-dim:       #6f9ba7;
+  --color-primary-soft:      rgba(136, 192, 208, 0.15);
+  --color-primary-glow:      rgba(136, 192, 208, 0.25);
+  --color-success:           #a3be8c;
+  --color-warning:           #ebcb8b;
+  --color-error:             #bf616a;
+  --color-info:              #81a1c1;
+  --terminal-bg:             #2e3440;
+  --terminal-fg:             #d8dee9;
+  --terminal-cursor:         #88c0d0;
+  --scrollbar-thumb:         rgba(136, 192, 208, 0.20);
+}
+
+/* Tokyo Night */
+:root[data-theme="tokyo-night"] {
+  --color-bg:                #1a1b26;
+  --color-bg-elevated:       #16161e;
+  --color-surface:           #24283b;
+  --color-surface-hover:     #2f334d;
+  --color-surface-active:    #3b4261;
+  --color-border:            #2f334d;
+  --color-border-strong:     #414868;
+  --color-text:              #c0caf5;
+  --color-text-muted:        #9aa5ce;
+  --color-text-faint:        #565f89;
+  --color-primary:           #7aa2f7;
+  --color-primary-bright:    #9eb8f9;
+  --color-primary-dim:       #5d87d4;
+  --color-primary-soft:      rgba(122, 162, 247, 0.15);
+  --color-primary-glow:      rgba(122, 162, 247, 0.25);
+  --color-success:           #9ece6a;
+  --color-warning:           #e0af68;
+  --color-error:             #f7768e;
+  --color-info:              #7dcfff;
+  --terminal-bg:             #1a1b26;
+  --terminal-fg:             #c0caf5;
+  --scrollbar-thumb:         rgba(122, 162, 247, 0.20);
+}
+
+/* Solarized Dark */
+:root[data-theme="solarized-dark"] {
+  --color-bg:                #002b36;
+  --color-bg-elevated:       #073642;
+  --color-surface:           #08404e;
+  --color-surface-hover:     #0a4d5e;
+  --color-surface-active:    #0c5a6e;
+  --color-border:            #0a4d5e;
+  --color-border-strong:     #586e75;
+  --color-text:              #93a1a1;
+  --color-text-muted:        #657b83;
+  --color-text-faint:        #586e75;
+  --color-primary:           #268bd2;
+  --color-primary-bright:    #3aa0e6;
+  --color-primary-dim:       #1e6da8;
+  --color-primary-soft:      rgba(38, 139, 210, 0.15);
+  --color-primary-glow:      rgba(38, 139, 210, 0.25);
+  --color-success:           #859900;
+  --color-warning:           #b58900;
+  --color-error:             #dc322f;
+  --color-info:              #2aa198;
+  --terminal-bg:             #002b36;
+  --terminal-fg:             #93a1a1;
+  --scrollbar-thumb:         rgba(38, 139, 210, 0.20);
+}
+
+/* Monokai */
+:root[data-theme="monokai"] {
+  --color-bg:                #272822;
+  --color-bg-elevated:       #1e1f1c;
+  --color-surface:           #3e3d32;
+  --color-surface-hover:     #49483e;
+  --color-surface-active:    #54534a;
+  --color-border:            #49483e;
+  --color-border-strong:     #75715e;
+  --color-text:              #f8f8f2;
+  --color-text-muted:        #cfcfc2;
+  --color-text-faint:        #75715e;
+  --color-primary:           #a6e22e;
+  --color-primary-bright:    #b6f23e;
+  --color-primary-dim:       #86c21e;
+  --color-primary-soft:      rgba(166, 226, 46, 0.15);
+  --color-primary-glow:      rgba(166, 226, 46, 0.25);
+  --color-success:           #a6e22e;
+  --color-warning:           #e6db74;
+  --color-error:             #f92672;
+  --color-info:              #66d9ef;
+  --terminal-bg:             #272822;
+  --terminal-fg:             #f8f8f2;
+  --scrollbar-thumb:         rgba(166, 226, 46, 0.20);
+}
+
+/* Catppuccin */
+:root[data-theme="catppuccin"] {
+  --color-bg:                #1e1e2e;
+  --color-bg-elevated:       #181825;
+  --color-surface:           #313244;
+  --color-surface-hover:     #45475a;
+  --color-surface-active:    #585b70;
+  --color-border:            #45475a;
+  --color-border-strong:     #6c7086;
+  --color-text:              #cdd6f4;
+  --color-text-muted:        #bac2de;
+  --color-text-faint:        #6c7086;
+  --color-primary:           #cba6f7;
+  --color-primary-bright:    #d8b9fa;
+  --color-primary-dim:       #a98ed6;
+  --color-primary-soft:      rgba(203, 166, 247, 0.15);
+  --color-primary-glow:      rgba(203, 166, 247, 0.25);
+  --color-success:           #a6e3a1;
+  --color-warning:           #f9e2af;
+  --color-error:             #f38ba8;
+  --color-info:              #89dceb;
+  --terminal-bg:             #1e1e2e;
+  --terminal-fg:             #cdd6f4;
+  --scrollbar-thumb:         rgba(203, 166, 247, 0.20);
+}
+
+/* One Dark */
+:root[data-theme="one-dark"] {
+  --color-bg:                #282c34;
+  --color-bg-elevated:       #21252b;
+  --color-surface:           #2c313c;
+  --color-surface-hover:     #353a45;
+  --color-surface-active:    #3e4451;
+  --color-border:            #353a45;
+  --color-border-strong:     #5c6370;
+  --color-text:              #abb2bf;
+  --color-text-muted:        #9da5b4;
+  --color-text-faint:        #5c6370;
+  --color-primary:           #61afef;
+  --color-primary-bright:    #79b8f2;
+  --color-primary-dim:       #4994d9;
+  --color-primary-soft:      rgba(97, 175, 239, 0.15);
+  --color-primary-glow:      rgba(97, 175, 239, 0.25);
+  --color-success:           #98c379;
+  --color-warning:           #e5c07b;
+  --color-error:             #e06c75;
+  --color-info:              #56b6c2;
+  --terminal-bg:             #282c34;
+  --terminal-fg:             #abb2bf;
+  --scrollbar-thumb:         rgba(97, 175, 239, 0.20);
+}
+
+/* Ayu Dark */
+:root[data-theme="ayu-dark"] {
+  --color-bg:                #0a0e14;
+  --color-bg-elevated:       #0d1117;
+  --color-surface:           #131720;
+  --color-surface-hover:     #1a1f29;
+  --color-surface-active:    #212733;
+  --color-border:            #1a1f29;
+  --color-border-strong:     #2d333d;
+  --color-text:              #b3b1ad;
+  --color-text-muted:        #8a8f99;
+  --color-text-faint:        #4d5566;
+  --color-primary:           #e6b450;
+  --color-primary-bright:    #f0c060;
+  --color-primary-dim:       #c69a3a;
+  --color-primary-soft:      rgba(230, 180, 80, 0.15);
+  --color-primary-glow:      rgba(230, 180, 80, 0.25);
+  --color-success:           #aad94c;
+  --color-warning:           #ff8f3f;
+  --color-error:             #f07178;
+  --color-info:              #39bae6;
+  --terminal-bg:             #0a0e14;
+  --terminal-fg:             #b3b1ad;
+  --scrollbar-thumb:         rgba(230, 180, 80, 0.20);
+}
+
+/* Cobalt */
+:root[data-theme="cobalt"] {
+  --color-bg:                #1a1a1a;
+  --color-bg-elevated:       #0f0f0f;
+  --color-surface:           #262626;
+  --color-surface-hover:     #303030;
+  --color-surface-active:    #3a3a3a;
+  --color-border:            #303030;
+  --color-border-strong:     #4a4a4a;
+  --color-text:              #e1e1e1;
+  --color-text-muted:        #a0a0a0;
+  --color-text-faint:        #6a6a6a;
+  --color-primary:           #3a6ea5;
+  --color-primary-bright:    #4a7eb5;
+  --color-primary-dim:       #2a5e95;
+  --color-primary-soft:      rgba(58, 110, 165, 0.15);
+  --color-primary-glow:      rgba(58, 110, 165, 0.25);
+  --color-success:           #7ec699;
+  --color-warning:           #e0c285;
+  --color-error:             #e06c75;
+  --color-info:              #6fb3d2;
+  --terminal-bg:             #1a1a1a;
+  --terminal-fg:             #e1e1e1;
+  --scrollbar-thumb:         rgba(58, 110, 165, 0.20);
+}
+
+/* Material */
+:root[data-theme="material"] {
+  --color-bg:                #263238;
+  --color-bg-elevated:       #1e272c;
+  --color-surface:           #2e3c43;
+  --color-surface-hover:     #37474f;
+  --color-surface-active:    #455a64;
+  --color-border:            #37474f;
+  --color-border-strong:     #546e7a;
+  --color-text:              #eeffff;
+  --color-text-muted:        #b0bec5;
+  --color-text-faint:        #607d8b;
+  --color-primary:           #80cbc4;
+  --color-primary-bright:    #a7d8d2;
+  --color-primary-dim:       #4db6ac;
+  --color-primary-soft:      rgba(128, 203, 196, 0.15);
+  --color-primary-glow:      rgba(128, 203, 196, 0.25);
+  --color-success:           #c5e478;
+  --color-warning:           #ffcb6b;
+  --color-error:             #ff5370;
+  --color-info:              #82aaff;
+  --terminal-bg:             #263238;
+  --terminal-fg:             #eeffff;
+  --scrollbar-thumb:         rgba(128, 203, 196, 0.20);
+}
+
+/* Vesper */
+:root[data-theme="vesper"] {
+  --color-bg:                #1c1c1c;
+  --color-bg-elevated:       #161616;
+  --color-surface:           #282828;
+  --color-surface-hover:     #333333;
+  --color-surface-active:    #3e3e3e;
+  --color-border:            #333333;
+  --color-border-strong:     #4a4a4a;
+  --color-text:              #d9d9d9;
+  --color-text-muted:        #a0a0a0;
+  --color-text-faint:        #6e6e6e;
+  --color-primary:           #ffc799;
+  --color-primary-bright:    #ffd5ad;
+  --color-primary-dim:       #e6ae7f;
+  --color-primary-soft:      rgba(255, 199, 153, 0.15);
+  --color-primary-glow:      rgba(255, 199, 153, 0.25);
+  --color-success:           #a8c66c;
+  --color-warning:           #e0c084;
+  --color-error:             #ff7e6b;
+  --color-info:              #88b8e0;
+  --terminal-bg:             #1c1c1c;
+  --terminal-fg:             #d9d9d9;
+  --scrollbar-thumb:         rgba(255, 199, 153, 0.20);
+}
+
+/* Gruvbox Light */
+:root[data-theme="gruvbox-light"] {
+  --color-bg:                #fbf1c7;
+  --color-bg-elevated:       #f9f5d7;
+  --color-surface:           #ebdbb2;
+  --color-surface-hover:     #d5c4a1;
+  --color-surface-active:    #bdae93;
+  --color-border:            #d5c4a1;
+  --color-border-strong:     #928374;
+  --color-text:              #3c3836;
+  --color-text-muted:        #5f5654;
+  --color-text-faint:        #7c6f64;
+  --color-primary:           #9d0006;
+  --color-primary-bright:    #b8000a;
+  --color-primary-dim:       #7d0005;
+  --color-primary-soft:      rgba(157, 0, 6, 0.08);
+  --color-primary-glow:      rgba(157, 0, 6, 0.15);
+  --color-success:           #79740e;
+  --color-warning:           #b57614;
+  --color-error:             #9d0006;
+  --color-info:              #076678;
+  --color-text-on-primary:   #fbf1c7;
+  --terminal-bg:             #fbf1c7;
+  --terminal-fg:             #3c3836;
+  --scrollbar-thumb:         rgba(157, 0, 6, 0.12);
+}

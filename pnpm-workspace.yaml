@@ -1,0 +1,24 @@
+# TDSF Terminal Agent v4.0 — pnpm workspace 配置
+# -----------------------------------------------------------------------------
+# 参考: https://pnpm.io/settings
+# pnpm 11+ 强制: 所有非 auth/registry 配置必须放这里
+# -----------------------------------------------------------------------------
+
+# 允许运行 build script 的依赖 (pnpm v11 改用 allowBuilds 替代 onlyBuiltDependencies)
+# - esbuild: Vite/Rollup 必需 (下载 platform-specific binary)
+# - @tailwindcss/oxide: Tailwind v4 加速器 (native binary)
+allowBuilds:
+  esbuild: true
+  '@tailwindcss/oxide': true
+
+# 自动安装 peer dependencies
+autoInstallPeers: true
+
+# 不严格检查 peer (兼容各种 React 19 衍生包)
+strictPeerDependencies: false
+
+# hoist pattern (Vite + ESLint 9 + Tauri 需要)
+shamefullyHoist: true
+
+# 关闭 deps-status-check (避免每个 script 都先做 install)
+verifyDepsBeforeRun: false

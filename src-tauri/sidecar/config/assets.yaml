@@ -1,0 +1,45 @@
+# TDSF-Linux 环境资产关键性标签（T-P1-06 迁移自 projects/config/assets.yaml）
+# 定义演示环境中各资产的关键性等级，供风险引擎评估操作影响。
+# criticality: high（核心，不可中断）/ medium（重要）/ low（普通）
+
+assets:
+  - name: demo-mysql
+    type: database
+    criticality: high
+    description: MySQL 数据库服务，承载核心业务数据
+    ports:
+      - 3306
+    auto_recovery: true
+
+  - name: demo-nginx
+    type: webserver
+    criticality: medium
+    description: Nginx Web 服务器，前端流量入口
+    ports:
+      - 80
+      - 443
+    auto_recovery: true
+
+  - name: demo-app
+    type: application
+    criticality: low
+    description: 演示应用服务，非核心业务
+    ports:
+      - 8080
+    auto_recovery: false
+
+  - name: demo-redis
+    type: cache
+    criticality: medium
+    description: Redis 缓存服务，会话与热点数据
+    ports:
+      - 6379
+    auto_recovery: true
+
+  - name: demo-ssh
+    type: service
+    criticality: high
+    description: SSH 远程登录服务，运维通道
+    ports:
+      - 22
+    auto_recovery: true

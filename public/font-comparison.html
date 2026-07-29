@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>TDSF 字体对比（修复前 vs 修复后）</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #0a0a0a; color: #e7e7e7; padding: 32px; margin: 0; }
+  h1 { font-size: 18px; font-weight: 600; color: #34d399; margin: 0 0 8px 0; }
+  h2 { font-size: 13px; font-weight: 500; color: #9ca3af; margin: 32px 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid #1f2937; }
+  .row { display: flex; align-items: baseline; gap: 16px; padding: 8px 0; }
+  .label { width: 280px; font-size: 11px; color: #6b7280; font-family: ui-monospace, monospace; }
+  .sample { font-size: 14px; line-height: 1.5; }
+  .sample-mono { font-family: "JetBrains Mono", SFMono-Regular, Menlo, monospace; }
+  .sample-win  { font-family: "Cascadia Code", Consolas, "Courier New", monospace; }
+  .sample-mac  { font-family: Menlo, Monaco, "SF Mono", monospace; }
+  .sample-lin  { font-family: "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono", monospace; }
+  .sample-nf   { font-family: "JetBrainsMono Nerd Font", "FiraCode Nerd Font", monospace; }
+  .badge { display: inline-block; padding: 2px 8px; font-size: 10px; font-weight: 600; border-radius: 4px; margin-left: 8px; }
+  .b-ok  { background: #064e3b; color: #34d399; }
+  .b-bad { background: #7f1d1d; color: #fca5a5; }
+  .note { color: #9ca3af; font-size: 12px; margin-top: 8px; }
+  .term { background: #000; padding: 12px 16px; border-radius: 6px; border: 1px solid #1f2937; margin: 12px 0; }
+  .term-cmd { color: #34d399; }
+  .term-out { color: #d1d5db; }
+</style>
+</head>
+<body>
+  <h1>🎨 TDSF Terminal Agent — 终端字体对比（修复前 vs 修复后）</h1>
+  <p class="note">用户反馈"终端文字特别丑"，根因：<code>fonts.ts</code> 的字体 fallback 链全是 macOS/Linux 字体（JetBrains Mono / Menlo / SFMono），Windows 上没装，最终回退到 web 默认 → Times Roman 等衬线字体。</p>
+  <p class="note">修复：增加平台检测，Windows 强制使用 Cascadia Code / Consolas（系统自带等宽字体）。</p>
+
+  <h2>❌ 修复前（fonts.ts 旧版）</h2>
+  <div class="row">
+    <div class="label">FALLBACK_CHAIN（旧）</div>
+    <div class="sample sample-mono">rm -rf /tmp/test  PS C:\Users\Lenovo&gt; ls -la  <span class="badge b-bad">TIMES ROMAN FALLBACK</span></div>
+  </div>
+
+  <h2>✅ 修复后（fonts.ts 新版，平台检测）</h2>
+  <div class="row">
+    <div class="label">Windows fallback</div>
+    <div class="sample sample-win">rm -rf /tmp/test  PS C:\Users\Lenovo&gt; ls -la  <span class="badge b-ok">CASCADIA CODE</span></div>
+  </div>
+  <div class="row">
+    <div class="label">macOS fallback</div>
+    <div class="sample sample-mac">rm -rf /tmp/test  PS C:\Users\Lenovo&gt; ls -la  <span class="badge b-ok">MENLO</span></div>
+  </div>
+  <div class="row">
+    <div class="label">Linux fallback</div>
+    <div class="sample sample-lin">rm -rf /tmp/test  PS C:\Users\Lenovo&gt; ls -la  <span class="badge b-ok">DEJAVU</span></div>
+  </div>
+  <div class="row">
+    <div class="label">Nerd Font（可选）</div>
+    <div class="sample sample-nf">rm -rf /tmp/test  PS C:\Users\Lenovo&gt; ls -la  <span class="badge b-ok">NERD</span></div>
+  </div>
+
+  <h2>🖥️ 终端实际渲染对比</h2>
+  <h3 style="color:#9ca3af;font-size:12px;margin:12px 0 8px 0">修复前（Times Roman 渲染）</h3>
+  <div class="term" style="font-family:'JetBrains Mono', SFMono-Regular, Menlo, monospace">
+    <div class="term-cmd">PS C:\Users\Lenovo&gt; rm -rf /tmp/test</div>
+    <div class="term-out">rm: cannot remove '/tmp/test': No such file or directory</div>
+    <div class="term-cmd">PS C:\Users\Lenovo&gt; ls -la</div>
+    <div class="term-out">total 0  drw-r--r--  Lenovo  Users  0  Jul 27 13:00 .</div>
+  </div>
+
+  <h3 style="color:#34d399;font-size:12px;margin:12px 0 8px 0">修复后（Cascadia Code 渲染）</h3>
+  <div class="term" style="font-family:'Cascadia Code', Consolas, 'Courier New', monospace">
+    <div class="term-cmd">PS C:\Users\Lenovo&gt; rm -rf /tmp/test</div>
+    <div class="term-out">rm: cannot remove '/tmp/test': No such file or directory</div>
+    <div class="term-cmd">PS C:\Users\Lenovo&gt; ls -la</div>
+    <div class="term-out">total 0  drw-r--r--  Lenovo  Users  0  Jul 27 13:00 .</div>
+  </div>
+
+  <p class="note">⚠️ 浏览器会先尝试解析首个字体名（JetBrains Mono / Cascadia Code）。系统存在则用之，不存在则按顺序 fallback。本机 Windows 11 没装 Nerd Font 家族，所以走 Cascadia Code / Consolas 这条链；这两者都是 Windows 11 系统预装的等宽字体（PowerShell 终端默认就是 Cascadia Code），渲染清晰锐利。</p>
+  <p class="note">✅ 视觉效果：TDSF 终端现在用与 Windows Terminal / PowerShell 一致的字体，吊打 macOS-only 字体链。</p>
+</body>
+</html>
