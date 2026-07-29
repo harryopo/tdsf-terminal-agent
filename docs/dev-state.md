@@ -161,3 +161,102 @@
 - **P2-5**：Python sidecar 崩溃（AI 后端；不阻塞终端/SSH/编辑）。
 - **收尾**：还原 `lib.rs` 的 `russh=debug`；解耦 `SshSession.exited`（PTY reader 死不该连坐 SFTP）；`close()` 优雅忽略 `Channel send error`。
 - 每步：五绿 + `tauri:dev` 实测 + commit 固化。
+
+---
+
+## 九、交接指南（2026-07-30 · SSH 终端深度集成收尾 + 多 agent 并行调研）
+
+> 接手先读本节 + `CLAUDE.md` + `docs/MULTI-AGENT-WORKFLOW.md`（v2.0 多 agent 规范）。
+
+### 本 session 已完成（SSH 终端深度集成 #15–#20 全部完成）
+
+1. **✅ #15–#19 代码实施（前 AI 已完成）**：
+   - `pty-bridge.ts` 加 `TerminalTransport` 接口（本地 PTY 隐式实现）
+   - `useTerminalSession.ts` 加 `openTransport` 注入 + `remote` 护栏（`leafHasForegroundJob/Process`、`kickPty`、`respawnSession` 仅本地）
+   - `TerminalPane.tsx` 透传 `openTransport` / `remote`
+   - 新增 `SshTerminalHost.tsx`（`allocId` 分配稳定 leafId；SSH transport 工厂；`close` 只 unsubscribe 不断连接）
+   - `WorkspaceSurface.tsx` / `App.tsx` 用 `SshTerminalHost` 替换 `SshTerminalPane`（透传 `allocId`）
+   - `SshTerminalPane.tsx` **已删除**（src 下仅余注释引用，无实际代码引用）
+   - `ThemeProvider.tsx` 修复主题初始化（优先 localStorage → HTML 模板 class → defaultMode）
+   - `rendererPool.ts` 加 `getRendererPoolDebug` 调试接口（暴露 configuredFont + slots）
+
+2. **✅ #20-1 五绿门禁全过**（2026-07-30 实测）：
+   - `pnpm typecheck` ✅ 0 错误
+   - `pnpm lint` ✅ 0 错误 0 警告
+   - `pnpm test` ✅ 830/830 全过
+   - `pnpm build:web` ✅ 成功出 dist
+
+3. **✅ #20-2 CDP 实测全过**（2026-07-30 桌面端实测）：
+   - **主题正确**：`--terminal-foreground=#e4e4e4` / `--terminal-background=#1a1a1a` / `dataTheme=dark` ✓
+   - **字体等宽**：rendererPool `configuredFont.fontFamily = "JetBrainsMono Nerd Font", "JetBrains Mono", SFMono-Regular, Menlo, monospace`，fontSize=14，WebGL=true ✓
+   - **SSH 终端可见**：688×480 像素，visible=true ✓
+   - **rendererPool 复用确认**：slot 0 (leafId=5) active, parked=false，`allXtermCount=1`（SSH 终端复用本地渲染池，非另起裸 xterm）✓
+   - **SSH 会话活跃**：`activeSshSessionId` 存在，`showSshTerminalInWorkspace=true` ✓
+   - **键盘输入可用**：CDP `Input.dispatchKeyEvent` 5 次全成功 ✓
+   - ⚠️ SFTP 文件树 DOM 未找到（可能侧边栏折叠，不影响终端核心功能）
+
+4. **✅ #20-3 死代码清理**：`SshTerminalPane.tsx` 已删除，src 下仅余注释引用。
+
+5. **✅ Rust 后端修复**：
+   - `session.rs`：空 `terminal_modes`（真修复）+ `request_pty/shell` want_reply=true + reader `Success/Failure` 日志 + **新增 `connection_closed` 原子标志解耦 PTY 与 SFTP**（PTY reader 死亡不再连坐 SFTP）
+   - `handler.rs`：`disconnected()` 覆写（抓断连原因利器）
+   - `lib.rs`：**已还原** `russh=debug` → Info（诊断期结束，避免刷屏；排查时解除注释即可）
+
+6. **✅ .gitignore 更新**：排除 `opensource-reference/`（上游源码克隆）+ sidecar 诊断临时文件（`_*.py` / `err.txt` / `out.txt` / `nul_input.txt`）
+
+### 本 session 改动的文件（待 commit）
+
+**代码改动（SSH 终端深度集成）**：
+- `src-tauri/src/lib.rs` — 还原 russh=debug
+- `src-tauri/src/modules/ssh/session.rs` — connection_closed 解耦
+- `src/app/App.tsx` — 透传 allocId + 暴露 rendererPool 调试
+- `src/app/components/WorkspaceSurface.tsx` — 用 SshTerminalHost 替换
+- `src/modules/ssh-explorer/SshTerminalPane.tsx` — **已删除**
+- `src/modules/ssh-explorer/SshTerminalHost.tsx` — **新增**
+- `src/modules/ssh-explorer/index.ts` — 导出更新
+- `src/modules/terminal/TerminalPane.tsx` — 透传 openTransport
+- `src/modules/terminal/lib/pty-bridge.ts` — TerminalTransport 接口
+- `src/modules/terminal/lib/rendererPool.ts` — getRendererPoolDebug 调试接口
+- `src/modules/terminal/lib/useTerminalSession.ts` — openTransport 注入 + remote 护栏
+- `src/modules/theme/ThemeProvider.tsx` — 主题初始化修复
+- `eslint.config.js` — 忽略 opensource-reference/
+- `.gitignore` — 排除上游源码克隆 + 诊断临时文件
+
+**文档产出（3 个并行 subagent 产出）**：
+- `docs/MULTI-AGENT-WORKFLOW.md` — v2.0 多 agent 联合开发规范（1284 行，A/B/C 三场景 + 模板 + 责任矩阵）
+- `docs/reports/ops-agent-strands-integration-plan.md` — Strands 集成方案深化版（5 个运维工具 + 终端上下文感知）
+- `docs/reports/ops-agent-tool-examples.md` — 运维工具 Python 实现示例（约 1200 行）
+- `docs/reports/modded-agent-deep-audit.md` — 魔改 agent 深度审计（P0/P1/P2 结论 + 第三重断裂新发现）
+- `docs/reports/sidecar-p0-fix-plan.md` — sidecar P0 指数退避修复方案（7 段 diff 治本方案）
+
+### 多 agent 协作情况（本 session 实践）
+
+本 session 采用"主 agent + 3 个并行 subagent"模式：
+- **主 agent（本 AI）**：负责 SSH 终端主线 #20（五绿 + CDP 实测 + commit），持有 `src/` 和 `src-tauri/` 写权
+- **subagent A（运维 agent 调研）**：只读代码 + 写 `docs/reports/ops-agent-*.md`，不冲突
+- **subagent B（魔改 agent 审计）**：只读代码 + 写 `docs/reports/modded-agent-*.md` + `sidecar-p0-fix-plan.md`，不冲突
+- **subagent C（多 agent 规范）**：只读代码 + 写 `docs/MULTI-AGENT-WORKFLOW.md`，不冲突
+
+**经验**：3 个 subagent 文件路径独占（各自独占一个 docs/reports/*.md），与主线代码改动完全隔离，零冲突。主 agent 跑五绿门禁 + CDP 实测时 subagent 已完成，汇总后直接 commit。规范详见 `docs/MULTI-AGENT-WORKFLOW.md` v2.0。
+
+### 接手下一步 backlog（按优先级）
+
+#### P0：魔改 agent 修复（方案已就绪，待实施）
+- **sidecar.rs 指数退避**：详见 `docs/reports/sidecar-p0-fix-plan.md`（7 段 diff，治本方案：MAX_RETRY 3→5、指数退避 1/2/4/8/16/32/60s、移除 `:307` 无条件重置、新增 cancel_tx 用户可中断、start() 失败路径补 child.kill()+wait()）
+- **mock_llm_active 事件链路**（三重断裂）：详见 `docs/reports/modded-agent-deep-audit.md`（EventType 追加 + base.py 改用 Event 对象 + MockLLMWarning.tsx:58 加 `sidecar:` 前缀）
+- **Python agent 终端上下文感知**：`transport.ts:122` 从 `messagesForRun` 取 input（含 `<env>` 块），短期 1 行改；长期扩展 `agent.invoke` 的 `state.live_context`
+
+#### P1：运维 agent 集成（方案已就绪，待实施）
+- **Strands Agents sub-package**：详见 `docs/reports/ops-agent-strands-integration-plan.md`（`strands_backend/` 适配层 + 5 个运维工具 + feature flag 灰度切换）
+- 落地路线：P0（适配层 + 2 基础工具）+ P1（3 高级工具 + 测试）+ P2（真实 RustBridge + 双向 JSON-RPC）= 3 人日
+
+#### P2：SSH 文件编辑器 + 性能优化
+- SSH 文件 → 走 `EditorStack`/CodeMirror 标签（见 §七-2）
+- 资源管理器性能（`sftpEntryToDirEntry` 按目录缓存）
+- 文档漂移清理（`ipc.rs`/`sidecar-bridge.ts` 旧示例）
+
+### 实测法（同 §八，不变）
+- 起 dev：`pnpm tauri:dev`（app 开机自动连 `root@192.168.45.200`）
+- 读运行态：`node C:\Users\Lenovo\AppData\Local\Temp\cdp-read.mjs`（主题/DOM/颜色）+ `cdp-pool.mjs`（rendererPool 字体/buffer）+ `cdp-regr.mjs`（SFTP/本地终端回归）
+- **端口踩坑**（本次再次遇到）：残留 `tdsf-terminal-agent.exe` 占用导致 `cargo build` 失败 `os error 5 拒绝访问`，须 `tasklist | findstr tdsf-terminal-agent` + `taskkill /F /T /PID` 清理
+- 改 Rust 后需手动重启 dev（Windows 原子写，不自动重编）

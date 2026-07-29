@@ -8,6 +8,25 @@ export type PtyHandlers = {
   onExit?: (code: number) => void;
 };
 
+/**
+ * TDSF 魔改 (#15): 传输层抽象 seam —— 让本地 PTY 与远程 SSH 共用同一接口。
+ *
+ * 本地 `PtySession` 天然满足此接口（结构子类型，无需显式 implements）。
+ * SSH 终端通过实现此接口，可注入 `useTerminalSession.openTransport`，
+ * 复用 rendererPool 的渲染/主题/字体/保活，与本地终端一模一样。
+ *
+ * 设计约束：
+ * - `id` 用于日志与诊断（SSH 用 sessionId 字符串，PTY 用数字 ptyId）。
+ * - `write/resize/close` 返回 Promise<void> | void，兼容同步与异步传输。
+ * - `close` 对 SSH 仅 unsubscribe 前端订阅，不断底层连接（SFTP 共用）。
+ */
+export interface TerminalTransport {
+  id: number | string;
+  write(data: string): Promise<void> | void;
+  resize(cols: number, rows: number): Promise<void> | void;
+  close(): Promise<void> | void;
+}
+
 export type PtySession = {
   id: number;
   write: (data: string) => Promise<void>;

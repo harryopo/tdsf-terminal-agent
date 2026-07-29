@@ -71,8 +71,20 @@ function resolveTheme(id: string, customThemes: Theme[]): Theme {
 
 export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderProps) {
   const [mode, setModeState] = useState<ThemeModePref>(() => {
-    const v = readLS(LS_KEY_MODE, defaultMode);
-    return v === "dark" || v === "light" || v === "system" ? v : defaultMode;
+    // 1. 优先读 localStorage (用户主动切换后的偏好)
+    const stored = readLS(LS_KEY_MODE, "");
+    if (stored === "dark" || stored === "light" || stored === "system") return stored;
+    // 2. TDSF 魔改 (#20): 兜底尊重 HTML 模板预设 (index.html 写了 class="dark"/data-theme="dark")
+    //    避免 localStorage 被历史残留清空后回退到 system+light, 导致终端 token 错乱
+    const htmlEl = document.documentElement;
+    if (htmlEl.classList.contains("dark") || htmlEl.getAttribute("data-theme") === "dark") {
+      return "dark";
+    }
+    if (htmlEl.classList.contains("light") || htmlEl.getAttribute("data-theme") === "light") {
+      return "light";
+    }
+    // 3. 最终兜底
+    return defaultMode;
   });
   const [themeId, setThemeIdState] = useState<string>(() =>
     readLS(LS_KEY_THEME_ID, DEFAULT_THEME_ID)

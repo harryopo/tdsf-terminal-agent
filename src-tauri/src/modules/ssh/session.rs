@@ -207,8 +207,19 @@ pub struct SshSession {
     /// 当前状态 (原子读,无需锁)
     state: Arc<std::sync::RwLock<SshSessionState>>,
 
-    /// 是否已退出 (原子标志,reader task 设置)
+    /// PTY channel 是否已退出 (原子标志,reader task 设置)
+    ///
+    /// 仅表示 PTY 通道生命周期: reader task 拿到 ExitStatus/Eof/Close/None
+    /// 时设置。PTY 死亡不一定意味着 SSH 连接断开 (例如用户在远端敲 `exit`
+    /// 退出 shell,但 SFTP 仍可继续用)。
     exited: Arc<AtomicBool>,
+
+    /// SSH 连接是否已关闭 (原子标志,close()/Drop 设置)
+    ///
+    /// TDSF (#20): 解耦 PTY 与 SFTP。PTY reader 死亡不应连坐 SFTP,
+    /// 只有 close() / Drop / 服务器主动 disconnect 才设置此标志。
+    /// open_sftp_channel 只检查此标志 (不再检查 `exited`)。
+    connection_closed: Arc<AtomicBool>,
 
     /// 主机信息 (用于状态事件 + P2-04 多标签会话标识)
     /// 注: 当前仅在日志/host 字段使用,port/user 预留给 P2-04 SSH 多标签
@@ -313,6 +324,8 @@ impl SshSession {
             channel_write: Arc::new(Mutex::new(Some(channel_write))),
             state: Arc::new(std::sync::RwLock::new(SshSessionState::Connected)),
             exited,
+            // TDSF (#20): 连接刚建立,未关闭
+            connection_closed: Arc::new(AtomicBool::new(false)),
             host,
             port,
             user,
@@ -401,7 +414,10 @@ impl SshSession {
 
     /// 写入数据 (前端按键)
     pub async fn write_data(&self, data: &[u8]) -> Result<(), SshSessionError> {
-        if self.exited.load(Ordering::Acquire) {
+        // TDSF (#20): PTY 死亡或连接断开都不能写 PTY
+        if self.exited.load(Ordering::Acquire)
+            || self.connection_closed.load(Ordering::Acquire)
+        {
             return Err(SshSessionError::Closed);
         }
 
@@ -419,7 +435,10 @@ impl SshSession {
 
     /// 调整窗口大小 (window_change)
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), SshSessionError> {
-        if self.exited.load(Ordering::Acquire) {
+        // TDSF (#20): PTY 死亡或连接断开都不能 resize
+        if self.exited.load(Ordering::Acquire)
+            || self.connection_closed.load(Ordering::Acquire)
+        {
             return Err(SshSessionError::Closed);
         }
 
@@ -459,11 +478,13 @@ impl SshSession {
             let mut guard = self.handle.lock().await;
             if let Some(handle) = guard.take() {
                 // Disconnect::ByApplication 表示客户端主动断开
+                // TDSF (#20): disconnect 失败降到 debug 级 (close 本就是要关,
+                // 失败的 send/recv 都是预期内的, 不值得 warn 刷屏)。
                 if let Err(e) = handle
                     .disconnect(Disconnect::ByApplication, "user closed", "en")
                     .await
                 {
-                    log::warn!("[ssh] disconnect failed: {}", e);
+                    log::debug!("[ssh] disconnect failed (expected during close): {}", e);
                     // 即使 disconnect 失败,drop handle 也会清理资源
                 }
                 drop(handle);
@@ -476,7 +497,10 @@ impl SshSession {
             *state = SshSessionState::Closed;
         }
 
+        // TDSF (#20): close 同时设两个标志 — 整个连接都关了,
+        // PTY 也跟着死 (write_data/resize 会因 connection_closed 直接返回 Closed)。
         self.exited.store(true, Ordering::Release);
+        self.connection_closed.store(true, Ordering::Release);
         log::info!("[ssh] session closed: host={}", self.host);
         Ok(())
     }
@@ -486,9 +510,23 @@ impl SshSession {
         self.state.read().unwrap().clone()
     }
 
-    /// 是否已退出
+    /// 是否已退出 (PTY 通道退出 或 SSH 连接关闭)
+    ///
+    /// 保留旧接口契约: 任何一边死了都返回 true。
+    /// 调用方若要区分 PTY 死 vs 连接死, 用 `is_pty_exited` / `is_connection_closed`。
     pub fn is_exited(&self) -> bool {
         self.exited.load(Ordering::Acquire)
+            || self.connection_closed.load(Ordering::Acquire)
+    }
+
+    /// PTY 通道是否已退出 (reader task 拿到 ExitStatus/Eof/Close/None)
+    pub fn is_pty_exited(&self) -> bool {
+        self.exited.load(Ordering::Acquire)
+    }
+
+    /// SSH 连接是否已关闭 (close()/Drop/服务器主动 disconnect)
+    pub fn is_connection_closed(&self) -> bool {
+        self.connection_closed.load(Ordering::Acquire)
     }
 
     /// 打开 SFTP channel (T-P2-05 新增,扩展接口)
@@ -499,12 +537,17 @@ impl SshSession {
     /// 注意: 不影响 PTY 主通道,独立 channel 与 PTY 并发工作。
     ///       限 channel.subsystem(true, "sftp") 用法 (RFC 4254 6.5)。
     ///
+    /// TDSF (#20): **解耦 PTY 与 SFTP** — 只检查 `connection_closed`,
+    /// 不再检查 `exited`。PTY reader 死亡 (用户敲 `exit` 退出 shell) 后,
+    /// SFTP 仍能继续用, 因为 SSH 连接本身还在。
+    ///
     /// # 返回
     /// `Channel<Msg>::into_stream()` 结果,即 AsyncRead+AsyncWrite 流。
     pub async fn open_sftp_channel(
         &self,
     ) -> Result<russh::ChannelStream<russh::client::Msg>, SshSessionError> {
-        if self.exited.load(Ordering::Acquire) {
+        // TDSF (#20): 只在连接已断时拒绝 SFTP, PTY 死亡不影响
+        if self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
         }
 
@@ -526,11 +569,14 @@ impl SshSession {
 
 impl Drop for SshSession {
     fn drop(&mut self) {
-        // drop 时如果还未退出,标记为已退出
-        // (reader task 可能还在运行,但 handle drop 会触发 disconnect)
+        // drop 时设置 connection_closed (即使 reader task 还在跑, handle drop
+        // 会触发底层 disconnect, 后续 open_sftp_channel 会因 connection_closed
+        // 立即拒绝, 避免 "Channel send error" 之类下游 panic)。
+        // PTY exited 也设上 (整连接都死了, PTY 自然也死)。
         if !self.exited.load(Ordering::Acquire) {
             self.exited.store(true, Ordering::Release);
         }
+        self.connection_closed.store(true, Ordering::Release);
     }
 }
 

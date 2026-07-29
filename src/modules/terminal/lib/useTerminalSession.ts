@@ -30,7 +30,7 @@ import {
   registerOsc52ClipboardHandler,
   registerPromptTracker,
 } from "./osc-handlers";
-import { openPty, type PtySession } from "./pty-bridge";
+import { openPty, type TerminalTransport } from "./pty-bridge";
 import "../block/block.css";
 import { ensureAgentActivityListener, isAgentActivePty } from "./agentActivity";
 import {
@@ -70,7 +70,18 @@ type Callbacks = {
 };
 
 type Session = {
-  pty: PtySession | null;
+  // TDSF 魔改 (#16): pty 类型升级为 TerminalTransport，兼容本地 PTY 与远程 SSH 传输。
+  // 本地路径 s.pty 是 PtySession（结构子类型，id 是 number）；
+  // SSH 路径 s.pty 是 SSH transport（id 是 sessionId 字符串）。
+  pty: TerminalTransport | null;
+  // TDSF 魔改 (#16): SSH 传输注入 seam。若提供，openPtyForSession 走 SSH 分支，
+  // 跳过 terminalShell/ConPTY/resize-warmup 等本地专属逻辑。
+  openTransport?: (
+    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+  ) => Promise<TerminalTransport>;
+  // TDSF 魔改 (#16): remote 护栏标志。控制 leafHasForegroundJob/Process、
+  // kickPty、respawnSession 等 PTY 专属调用对 SSH 不生效。
+  remote: boolean;
   ptyOpening: boolean;
   initialCwd: string | undefined;
   lastCwd: string | null;
@@ -391,11 +402,18 @@ export function leafIdForPty(ptyId: number): number | null {
 }
 
 export function ptyIdForLeaf(leafId: number): number | null {
-  return sessions.get(leafId)?.pty?.id ?? null;
+  // TDSF 魔改 (#16): SSH 终端 pty.id 是 sessionId 字符串，不返回给本地 ptyId 查询。
+  const s = sessions.get(leafId);
+  if (!s || s.remote || !s.pty) return null;
+  return s.pty.id as number;
 }
 
 function leafBusy(s: Session): boolean {
-  return s.commandRunning || (s.pty !== null && isAgentActivePty(s.pty.id));
+  if (s.commandRunning) return true;
+  // TDSF 魔改 (#16): SSH 终端不参与 agent activity 检测（pty.id 是 string，
+  // isAgentActivePty 只跟踪本地 PTY 的数字 id）。
+  if (s.remote || !s.pty) return false;
+  return isAgentActivePty(s.pty.id as number);
 }
 
 const HIDDEN_RELEASE_DELAY_MS = 300;
@@ -430,8 +448,12 @@ async function releaseIfIdle(leafId: number, s: Session): Promise<void> {
 async function leafHasForegroundJob(leafId: number): Promise<boolean> {
   const s = sessions.get(leafId);
   if (!s?.pty || s.shellExited) return false;
+  // TDSF 魔改 (#16): SSH 终端保持常驻，不调用 pty_has_foreground_job（无对应 Rust 命令）。
+  if (s.remote) return false;
   try {
-    return await invoke<boolean>("pty_has_foreground_job", { id: s.pty.id });
+    return await invoke<boolean>("pty_has_foreground_job", {
+      id: s.pty.id as number,
+    });
   } catch (e) {
     console.error("[tdsf] pty_has_foreground_job failed for leaf", leafId, e);
     return false;
@@ -490,13 +512,22 @@ configureRendererPool({
       kickPty: (cols, rows) => {
         const pty = s.pty;
         if (!pty || cols <= 0 || rows <= 0) return;
+        // TDSF 魔改 (#16): SSH 终端不做 SIGWINCH +1 bump（本地 ConPTY/Linux trick，
+        // 远程不适用），仅普通 resize。
+        if (s.remote) {
+          void pty.resize(cols, rows);
+          return;
+        }
         // Linux only emits SIGWINCH when the winsize ioctl actually
         // changes dims, so bump +1 row then restore. The TUI receives
         // (possibly two) SIGWINCHes and repaints from scratch.
-        pty
-          .resize(cols, rows + 1)
+        // TDSF 魔改 (#16): TerminalTransport.resize 返回 Promise<void>|void，
+        // 用 Promise.resolve 归一化为 Promise<void> 以链式 .then。
+        Promise.resolve(pty.resize(cols, rows + 1))
           .then(() => pty.resize(cols, rows))
-          .catch((e) => console.warn("[tdsf] kickPty failed:", e));
+          .catch((e: unknown) =>
+            console.warn("[tdsf] kickPty failed:", e),
+          );
       },
     };
   },
@@ -539,6 +570,9 @@ function ensureSession(
 
   const session: Session = {
     pty: null,
+    // TDSF 魔改 (#16): SSH 传输注入字段初始化（默认本地路径，由 hook 同步覆盖）。
+    openTransport: undefined,
+    remote: false,
     ptyOpening: false,
     initialCwd,
     lastCwd: null,
@@ -597,7 +631,7 @@ async function openPtyWithRetry(
   leafId: number,
   s: Session,
   cwd: string | undefined,
-): Promise<PtySession> {
+): Promise<TerminalTransport> {
   try {
     return await openPtyForSession(leafId, s, cwd);
   } catch (e) {
@@ -630,7 +664,33 @@ async function openPtyForSession(
   leafId: number,
   s: Session,
   cwd: string | undefined,
-): Promise<PtySession> {
+): Promise<TerminalTransport> {
+  // TDSF 魔改 (#16): SSH 传输分支 —— 跳过本地 PTY/ConPTY/terminalShell 专属逻辑。
+  // openTransport 工厂由 SshTerminalHost 提供：subscribeTerminalData + handle.write/resize。
+  // close 只 unsubscribe 前端订阅，不断底层 SSH 连接（SFTP 共用）。
+  if (s.openTransport) {
+    const transport = await s.openTransport({
+      onData: (bytes) => deliverPtyBytes(leafId, bytes),
+      onExit: (code) => {
+        s.shellExited = true;
+        s.pty = null;
+        s.pendingInput = "";
+        s.commandRunning = false;
+        const slot = getSlotForLeaf(leafId);
+        if (slot) slot.term.options.disableStdin = true;
+        scheduleHiddenRelease(leafId, s);
+        if (s.callbacks.onExit) s.callbacks.onExit(code);
+        else s.pendingExit = code;
+      },
+    });
+    // SSH 初始尺寸同步（与本地路径对称：本地用 startCols/startRows 起步，
+    // SSH 由 server 推送 MOTD 后客户端 resize 同步尺寸）。
+    if (s.cols > 0 && s.rows > 0) {
+      void transport.resize(s.cols, s.rows);
+    }
+    return transport;
+  }
+  // 本地 PTY 路径（原逻辑，零改动）
   const startCols = s.cols > 0 ? s.cols : 80;
   const startRows = s.rows > 0 ? s.rows : 24;
   const pty = await openPty(
@@ -839,6 +899,16 @@ export async function respawnSession(
 ): Promise<void> {
   const s = sessions.get(leafId);
   if (!s || s.disposed) return;
+  // TDSF 魔改 (#16): SSH 终端不支持本地 respawn（需走 sshStore 重连流程，后续接入）。
+  // 直接 return，保留当前 pane（避免 close 后无法重连导致 pane 死掉）。
+  if (s.remote) {
+    console.warn(
+      "[tdsf] respawnSession skipped for remote SSH leaf",
+      leafId,
+      "(use sshStore.reconnect instead)",
+    );
+    return;
+  }
   s.pty?.close();
   s.pty = null;
   s.snapshot = null;
@@ -861,7 +931,8 @@ export async function respawnSession(
   }
 
   s.ptyOpening = true;
-  let pty: PtySession;
+  // TDSF 魔改 (#16): pty 类型升级为 TerminalTransport（兼容本地 PTY 与 SSH 传输）。
+  let pty: TerminalTransport;
   try {
     pty = await openPtyWithRetry(leafId, s, cwd ?? s.initialCwd);
   } catch (e) {
@@ -887,9 +958,11 @@ export async function leafHasForegroundProcess(
 ): Promise<boolean> {
   const s = sessions.get(leafId);
   if (!s?.pty || s.shellExited) return false;
+  // TDSF 魔改 (#16): SSH 终端保持常驻，不调用 pty_has_foreground_process。
+  if (s.remote) return false;
   try {
     const result = await invoke<boolean>("pty_has_foreground_process", {
-      id: s.pty.id,
+      id: s.pty.id as number,
     });
     return result;
   } catch (e) {
@@ -934,6 +1007,13 @@ type Options = {
   focused?: boolean;
   initialCwd?: string;
   blocks?: boolean;
+  // TDSF 魔改 (#16): SSH 传输注入 seam。若提供，useTerminalSession 走 SSH 分支，
+  // 由 SshTerminalHost 提供 subscribeTerminalData + handle.write/resize。
+  openTransport?: (
+    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+  ) => Promise<TerminalTransport>;
+  // TDSF 魔改 (#16): remote 护栏标志。true 时跳过 PTY 专属 invoke。
+  remote?: boolean;
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
@@ -946,6 +1026,8 @@ export function useTerminalSession({
   focused = true,
   initialCwd,
   blocks = false,
+  openTransport,
+  remote = false,
   onSearchReady,
   onExit,
   onCwd,
@@ -959,9 +1041,20 @@ export function useTerminalSession({
   const initialCwdRef = useRef(initialCwd);
   initialCwdRef.current = initialCwd;
 
+  // TDSF 魔改 (#16): openTransport/remote 同样不能是 effect dep（每次 render 引用变化
+  // 会重订阅），用 ref 同步到 session，与 initialCwd 同模式。
+  const openTransportRef = useRef(openTransport);
+  openTransportRef.current = openTransport;
+  const remoteRef = useRef(remote);
+  remoteRef.current = remote;
+
   useEffect(() => {
     let cancelled = false;
     const s = ensureSession(leafId, initialCwdRef.current, blocks);
+    // TDSF 魔改 (#16): 同步传输注入与护栏标志到 session。
+    // 不放进 deps，防止每次 render 重订阅 effect。
+    s.openTransport = openTransportRef.current;
+    s.remote = remoteRef.current;
     s.ready.then(() => {
       if (cancelled || s.disposed) return;
       const node = container.current;
