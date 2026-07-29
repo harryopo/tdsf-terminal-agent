@@ -265,11 +265,20 @@ impl SshSession {
             term
         );
         channel_write
-            .request_pty(false, &term, cols as u32, rows as u32, 0, 0, &[])
+            .request_pty(
+                false,
+                &term,
+                cols as u32,
+                rows as u32,
+                0,
+                0,
+                // terminal_modes 以 TTY_OP_END(0) 结尾, 保证服务器正确分配 PTY
+                &[(russh::Pty::TTY_OP_END, 0)],
+            )
             .await?;
 
         // 5. 请求 shell
-        log::debug!("[ssh] requesting shell");
+        log::info!("[ssh] requesting interactive shell");
         channel_write.request_shell(false).await?;
 
         // 6. 启动 reader task
@@ -313,13 +322,18 @@ impl SshSession {
         on_exit: Channel<i32>,
         exited: Arc<AtomicBool>,
     ) {
-        log::debug!("[ssh] reader task started");
+        log::info!("[ssh] reader task started");
         let mut exit_code: Option<i32> = None;
+        let mut first_data = true;
 
         loop {
             match channel_read.wait().await {
                 Some(ChannelMsg::Data { data }) => {
                     // 推送输出到前端
+                    if first_data {
+                        log::info!("[ssh] reader first data: {} bytes", data.len());
+                        first_data = false;
+                    }
                     let bytes: Vec<u8> = data.to_vec();
                     if let Err(e) = on_data.send(bytes) {
                         log::warn!("[ssh] on_data send failed: {}", e);
@@ -342,19 +356,19 @@ impl SshSession {
                     // 不立即 break,继续读取剩余输出直到 EOF/Close
                 }
                 Some(ChannelMsg::Eof) => {
-                    log::debug!("[ssh] channel EOF");
+                    log::info!("[ssh] channel EOF");
                     // 服务器关闭写端,继续等 ExitStatus (如果还没收到)
                 }
                 Some(ChannelMsg::Close) => {
-                    log::debug!("[ssh] channel closed");
+                    log::info!("[ssh] channel closed by peer");
                     break;
                 }
                 Some(msg) => {
-                    log::debug!("[ssh] other channel msg: {:?}", msg);
+                    log::info!("[ssh] other channel msg: {:?}", msg);
                 }
                 None => {
                     // channel 已关闭
-                    log::debug!("[ssh] channel.wait() returned None");
+                    log::info!("[ssh] channel.wait() returned None (channel gone)");
                     break;
                 }
             }
