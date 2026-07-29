@@ -106,6 +106,8 @@ import {
   whenSessionReady,
   writeToSession,
 } from "@/modules/terminal";
+// TDSF debug (#20): 仅用于 CDP 实测诊断（只读不改业务）
+import { getRendererPoolDebug } from "@/modules/terminal/lib/rendererPool";
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
@@ -390,6 +392,9 @@ export default function App() {
       activeTabCold: activeTab?.cold,
       showSshTerminalInWorkspace,
       showNoTerminalEmptyState,
+      // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
+      // getRendererPoolDebug 是只读函数, 不改业务逻辑
+      rendererPool: () => getRendererPoolDebug(),
     };
   }
 
@@ -1571,7 +1576,9 @@ export default function App() {
                       // TDSF 魔改 2026-07-28 (P1-D): SSH 终端接管右侧工作区
                       // 2026-07-30 修复: 只传 workspaceSshSessionId,
                       // 保证 connecting/failed 时不提前渲染 SSH 终端。
+                      // 2026-07-30 (#19): 透传 allocId 给 SshTerminalHost 分配稳定 leafId。
                       sshSessionId={workspaceSshSessionId}
+                      allocId={allocId}
                     />
                   </div>
 

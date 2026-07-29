@@ -23,6 +23,7 @@ import {
   subscribePendingRiskCommand,
   useTerminalSession,
 } from "./lib/useTerminalSession";
+import type { TerminalTransport } from "./lib/pty-bridge";
 import type { RiskRpcAssessment } from "@/lib/risk-engine/riskClient";
 
 export type TerminalPaneHandle = {
@@ -42,6 +43,13 @@ type Props = {
   initialCwd?: string;
   /** Enable command-block decorations (OSC 133) for this terminal. */
   blocks?: boolean;
+  // TDSF 魔改 (#17): SSH 传输注入 seam —— 由 SshTerminalHost 提供。
+  // 若提供，useTerminalSession 走 SSH 分支，复用 rendererPool 渲染。
+  openTransport?: (
+    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+  ) => Promise<TerminalTransport>;
+  // TDSF 魔改 (#17): remote 护栏标志，透传给 useTerminalSession。
+  remote?: boolean;
   onSearchReady?: (leafId: number, addon: SearchAddon) => void;
   onExit?: (leafId: number, code: number) => void;
   onCwd?: (leafId: number, cwd: string) => void;
@@ -55,6 +63,8 @@ export const TerminalPane = memo(
       focused = true,
       initialCwd,
       blocks = false,
+      openTransport,
+      remote = false,
       onSearchReady,
       onExit,
       onCwd,
@@ -91,6 +101,9 @@ export const TerminalPane = memo(
       focused,
       initialCwd,
       blocks,
+      // TDSF 魔改 (#17): 透传 SSH 传输注入与 remote 护栏。
+      openTransport,
+      remote,
       onSearchReady: (a) => onSearchReady?.(leafId, a),
       onExit: (c) => onExit?.(leafId, c),
       onCwd: (c) => onCwd?.(leafId, c),

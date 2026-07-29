@@ -198,11 +198,10 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
-                // TDSF 诊断: 放行 russh crate 的 debug 级, 用于排查 SSH shell
-                // "early eof" 根因 (需看 channel_open_confirmation / received
-                // disconnect / channel_success|failure 等 russh 内部事件)。
-                // 其余 crate 仍为 Info, 不影响整体日志量。
-                .level_for("russh", tauri_plugin_log::log::LevelFilter::Debug)
+                // TDSF (#20): SSH 终端深度集成已实测通过 (CDP 验证 rendererPool 复用
+                // JetBrainsMono 等宽字体 + 暗模式 token 正确), 诊断期结束, 还原 russh 为 Info.
+                // 排查 SSH 问题临时开 Debug: 把下行注释解除即可, 不需改 RUST_LOG (无效).
+                // .level_for("russh", tauri_plugin_log::log::LevelFilter::Debug)
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())

@@ -3,7 +3,7 @@ import { AiDiffStack, EditorStack, GitDiffStack } from "@/modules/editor";
 import { GitHistoryStack } from "@/modules/git-history";
 import { MarkdownStack } from "@/modules/markdown";
 import { PreviewStack } from "@/modules/preview";
-import { SshTerminalPane } from "@/modules/ssh-explorer/SshTerminalPane";
+import { SshTerminalHost } from "@/modules/ssh-explorer/SshTerminalHost";
 import type { Tab } from "@/modules/tabs";
 import { TerminalStack } from "@/modules/terminal";
 import { NoTerminalEmptyState } from "@/modules/terminal/NoTerminalEmptyState";
@@ -48,6 +48,11 @@ type Props = {
   // === TDSF 魔改 2026-07-28 (P1-D): SSH 终端接管右侧工作区 ===
   /** 当前活跃的 SSH 会话前端 id */
   sshSessionId?: string | null;
+  /**
+   * TDSF 魔改 (#19): 分配稳定 leafId 的函数，透传给 SshTerminalHost。
+   * 来自 useTabs.allocId（共享 nextIdRef 计数器，与本地 leaf 不撞号）。
+   */
+  allocId?: () => number;
 };
 
 /**
@@ -79,6 +84,7 @@ export function WorkspaceSurface({
   onOpenAgentFromEmptyState,
   onSwitchToSshFromEmptyState,
   sshSessionId,
+  allocId,
 }: Props) {
   const kind = activeTab?.kind;
   const isTerminalTab = kind === "terminal";
@@ -128,10 +134,13 @@ export function WorkspaceSurface({
       ) : null}
 
       {/* === TDSF 魔改 2026-07-28 (P1-D): SSH 终端接管右侧工作区 === */}
-      {showSshTerminal && sshSessionId ? (
+      {/* 2026-07-30 (#19): SshTerminalPane → SshTerminalHost, 走本地 rendererPool,
+          与本地终端同一套主题/字体/字号/保活, 不再独立渲染。 */}
+      {showSshTerminal && sshSessionId && allocId ? (
         <div className="absolute inset-0 px-3 pt-2 pb-2">
-          <SshTerminalPane
+          <SshTerminalHost
             sessionId={sshSessionId}
+            allocId={allocId}
             className="h-full w-full overflow-hidden rounded-md border border-border/40"
           />
         </div>

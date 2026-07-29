@@ -119,6 +119,38 @@ export function poolSize(): number {
   return slots.length;
 }
 
+// TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
+// 只读不改业务逻辑，仅在 window.__TDSF_DBG__ 调用时执行
+export function getRendererPoolDebug(): {
+  configuredFont: RendererFont | null;
+  slots: Array<{
+    id: number;
+    leafId: number | null;
+    parked: boolean;
+    fontFamily: string;
+    fontSize: number;
+    fontWeight: string;
+    cols: number;
+    rows: number;
+    webgl: boolean;
+  }>;
+} {
+  return {
+    configuredFont,
+    slots: slots.map((s) => ({
+      id: s.id,
+      leafId: s.currentLeafId,
+      parked: s.parked,
+      fontFamily: String(s.term.options.fontFamily ?? ""),
+      fontSize: Number(s.term.options.fontSize ?? 0),
+      fontWeight: String(s.term.options.fontWeight ?? ""),
+      cols: s.term.cols,
+      rows: s.term.rows,
+      webgl: !!s.webglAddon,
+    })),
+  };
+}
+
 export type PoolSlotStat = {
   id: number;
   leafId: number | null;
