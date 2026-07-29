@@ -140,6 +140,35 @@ impl Handler for SshClientHandler {
             }
         }
     }
+
+    /// disconnected 回调: russh 会话主循环退出时调用 (TDSF 诊断新增)
+    ///
+    /// 默认实现只在 debug 级别打印,导致 shell 黑屏根因 (连接为何在
+    /// 认证+开 channel 后立刻断) 被吞掉。这里提升到 info/warn 级别,
+    /// 打印确切原因:
+    /// - `ReceivedDisconnect`: 服务器主动发 SSH_MSG_DISCONNECT (含 reason_code)
+    /// - `Error`: 传输层错误 (TCP EOF、IO、KeepaliveTimeout、InactivityTimeout 等)
+    ///
+    /// 保持默认语义: ReceivedDisconnect → Ok(()),Error → Err(e)。
+    async fn disconnected(
+        &mut self,
+        reason: russh::client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            russh::client::DisconnectReason::ReceivedDisconnect(info) => {
+                log::warn!(
+                    "[ssh] disconnected: server sent DISCONNECT reason_code={:?} message={:?}",
+                    info.reason_code,
+                    info.message
+                );
+                Ok(())
+            }
+            russh::client::DisconnectReason::Error(e) => {
+                log::warn!("[ssh] disconnected with transport error: {:?}", e);
+                Err(e)
+            }
+        }
+    }
 }
 
 impl SshClientHandler {

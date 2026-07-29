@@ -282,6 +282,13 @@ const BUFFER_LIMIT_BYTES = 256 * 1024;
 /** TDSF 魔改: 缓冲中当前会话已缓冲字节数, 用于快速判断是否超限 */
 const bufferedSize = new Map<string, number>();
 
+/**
+ * TDSF 诊断 (SSH shell 黑屏排查): 记录已打过"首帧 PTY 数据"日志的会话,
+ * 避免高频字节流刷屏。只在每个会话第一次收到 PTY 数据时输出一行,
+ * 用于确认 Rust on_data → 前端 emitTerminalData 边界是否真的有数据流入。
+ */
+const firstDataLogged = new Set<string>();
+
 /** 注册 SSH 终端数据订阅, 返回 unsubscribe 函数 */
 function subscribeTerminalData(
   sessionId: string,
@@ -298,10 +305,12 @@ function subscribeTerminalData(
   // 导致前 N 个字节丢失"的经典竞态. 这里同步调用 cb 是 OK 的: 缓冲数据
   // 已经在内存里, 没必要再做 setTimeout(0) 异步化, 同步刷新更快更省。
   const buffered = pendingBuffer.get(sessionId);
+  let flushedChunks = 0;
   if (buffered && buffered.length > 0) {
     for (const bytes of buffered) {
       try {
         cb(bytes);
+        flushedChunks += 1;
       } catch (e) {
         console.warn('[sshStore] terminal subscriber flush error:', e);
       }
@@ -309,6 +318,10 @@ function subscribeTerminalData(
     pendingBuffer.delete(sessionId);
     bufferedSize.delete(sessionId);
   }
+  // TDSF 诊断: 确认 SshTerminalPane 挂载并以匹配的 sessionId 订阅成功
+  console.info(
+    `[sshStore] terminal subscribe: session=${sessionId} flushedChunks=${flushedChunks} totalSubscribers=${set.size}`,
+  );
 
   return () => {
     const s = terminalSubscribers.get(sessionId);
@@ -324,6 +337,13 @@ function subscribeTerminalData(
 /** 向所有订阅者 fan-out PTY 输出字节 (供 sshStore.connect 的 onData 调用) */
 function emitTerminalData(sessionId: string, bytes: Uint8Array): void {
   const set = terminalSubscribers.get(sessionId);
+  // TDSF 诊断: 每会话首帧数据打一行, 确认 Rust on_data 边界真有数据流入
+  if (!firstDataLogged.has(sessionId)) {
+    firstDataLogged.add(sessionId);
+    console.info(
+      `[sshStore] first PTY data: session=${sessionId} bytes=${bytes.byteLength} subscribers=${set?.size ?? 0}`,
+    );
+  }
   if (!set || set.size === 0) {
     // TDSF 魔改: 没有订阅者时, 把数据先缓冲起来, 等订阅者挂载时 flush
     // 修复黑屏: SSH 握手期间 (auth -> pty_open) 触发的首批数据不再丢失
@@ -373,6 +393,8 @@ function clearTerminalSubscribers(sessionId: string): void {
   // TDSF 魔改: 同步清理缓冲, 避免断开会话后残余数据被新会话错误消费
   pendingBuffer.delete(sessionId);
   bufferedSize.delete(sessionId);
+  // TDSF 诊断: 清理首帧日志标记, 让重连的同 id 会话可再次记录
+  firstDataLogged.delete(sessionId);
 }
 
 // === Store 实现 ==============================================================

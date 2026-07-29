@@ -266,20 +266,26 @@ impl SshSession {
         );
         channel_write
             .request_pty(
-                false,
+                // want_reply=true: 让服务器回 CHANNEL_SUCCESS/FAILURE,
+                // 与 SFTP request_subsystem(true) 一致,便于在 reader task
+                // 里明确看到 PTY 是否被服务器接受 (诊断 shell 黑屏根因)
+                true,
                 &term,
                 cols as u32,
                 rows as u32,
                 0,
                 0,
-                // terminal_modes 以 TTY_OP_END(0) 结尾, 保证服务器正确分配 PTY
-                &[(russh::Pty::TTY_OP_END, 0)],
+                // terminal_modes 用标准空 slice（russh 官方示例做法）。
+                // 之前用 `&[(TTY_OP_END, 0)]` 是畸形：TTY_OP_END(0) 是终止符却又带了
+                // 4 字节值，疑似导致 OpenSSH 收到 pty-req 后直接硬关 TCP（early eof）。
+                &[],
             )
             .await?;
 
         // 5. 请求 shell
         log::info!("[ssh] requesting interactive shell");
-        channel_write.request_shell(false).await?;
+        // want_reply=true: 同上,捕获 shell 请求的 Success/Failure
+        channel_write.request_shell(true).await?;
 
         // 6. 启动 reader task
         //    reader task 在后台运行,通过 on_data 推送输出
@@ -362,6 +368,14 @@ impl SshSession {
                 Some(ChannelMsg::Close) => {
                     log::info!("[ssh] channel closed by peer");
                     break;
+                }
+                Some(ChannelMsg::Success) => {
+                    // want_reply=true 时,服务器接受 PTY/shell 请求的确认
+                    log::info!("[ssh] channel request Success (pty/shell accepted, data should follow)");
+                }
+                Some(ChannelMsg::Failure) => {
+                    // 服务器拒绝 PTY/shell 请求 → shell 黑屏的根因
+                    log::warn!("[ssh] channel request Failure (pty/shell REJECTED by server)");
                 }
                 Some(msg) => {
                     log::info!("[ssh] other channel msg: {:?}", msg);
