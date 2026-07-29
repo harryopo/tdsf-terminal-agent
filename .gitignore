@@ -96,3 +96,12 @@ lint-*.txt
 .tdsf-data/
 .agent-collaboration/
 .claude/
+
+# 上游 terax-ai 全量源码克隆 (仅本机调研参考, 体积大不入库)
+opensource-reference/
+
+# sidecar 诊断临时产物 (ping 测试 / stdout 重定向 / null 输入)
+src-tauri/sidecar/_*.py
+src-tauri/sidecar/err.txt
+src-tauri/sidecar/out.txt
+src-tauri/sidecar/nul_input.txt

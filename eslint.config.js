@@ -7,7 +7,16 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'src-tauri/target', '**/coverage'] },
+  {
+    ignores: [
+      'dist',
+      'node_modules',
+      'src-tauri/target',
+      '**/coverage',
+      // TDSF 魔改: 上游开源项目源码克隆（仅供调研参考，不参与 lint/typecheck）
+      'opensource-reference/**',
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
