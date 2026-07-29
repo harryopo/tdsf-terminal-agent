@@ -1461,6 +1461,7 @@ export default function App() {
                     <ErrorBoundary>
                       {sidebarView === "explorer" ? (
                         <div className="flex h-full min-h-0 flex-col">
+                          <div className="min-h-0 flex-1">
                           <FileExplorer
                             ref={explorerRef}
                             rootPath={effectiveExplorerRoot}
@@ -1505,8 +1506,12 @@ export default function App() {
                                 : terminalPathDropTarget
                             }
                           />
-                          {/* TDSF 魔改 2026-07-29: 远程文件编辑器叠加在 FileExplorer 下方 */}
-                          {explorerSource === "ssh" ? <SshFileEditor /> : null}
+                          </div>
+                          {/* TDSF 魔改 2026-07-30: 远程文件编辑器与文件树上下二分,
+                             避免被 FileExplorer(h-full) 挤成 1px 不可见 */}
+                          {explorerSource === "ssh" ? (
+                            <SshFileEditor className="min-h-0 flex-1" />
+                          ) : null}
                         </div>
                       ) : sidebarView === "source-control" ? (
                         <SourceControlPanel
