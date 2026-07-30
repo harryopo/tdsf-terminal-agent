@@ -79,5 +79,5 @@ export function deriveTitle(messages: UIMessage[]): string {
       return first.length > 40 ? `${first.slice(0, 40)}…` : first;
     }
   }
-  return "New chat";
+  return "新会话";
 }

@@ -343,10 +343,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
     if (get().sessionsHydrated) return;
     const { sessions } = await loadAll();
 
-    // Reuse the most recent untitled "New chat" session if one exists from
+    // Reuse the most recent untitled "新会话" session if one exists from
     // the previous run — no point stacking empty placeholder sessions every
     // launch. Otherwise prepend a fresh one.
-    const reusable = sessions[0]?.title === "New chat" ? sessions[0] : null;
+    const reusable = sessions[0]?.title === "新会话" ? sessions[0] : null;
     let nextSessions: SessionMeta[];
     let freshId: string;
     if (reusable) {
@@ -356,7 +356,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
       freshId = newSessionId();
       const fresh: SessionMeta = {
         id: freshId,
-        title: "New chat",
+        title: "新会话",
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -376,7 +376,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
     const id = newSessionId();
     const meta: SessionMeta = {
       id,
-      title: "New chat",
+      title: "新会话",
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -423,7 +423,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
     if (remaining.length === 0) {
       const fresh: SessionMeta = {
         id: newSessionId(),
-        title: "New chat",
+        title: "新会话",
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -466,7 +466,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
     const sessions = get().sessions;
     const meta = sessions.find((s) => s.id === id);
     if (!meta) return;
-    const isUntitled = !meta.title || meta.title === "New chat";
+    const isUntitled = !meta.title || meta.title === "新会话";
     if (!isUntitled) return;
     const nextTitle = deriveTitle(messages);
     if (nextTitle === meta.title) return;
