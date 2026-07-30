@@ -420,11 +420,42 @@ def execute_via_ssh(
     # 3. 通过 RustBridge 调 Rust 后端
     # TDSF 魔改 2026-07-30 P0-C4: 对齐 Rust 命令名约定（ssh_command），
     # 当前 Rust 侧尚未实现此命令，P2 backlog 补 russh channel exec 模式。
+    # TDSF 修复 2026-07-30 (Critical Bug): 参数名对齐 Rust camelCase (sessionId)，
+    # 并把 str session_id 转为 int（Rust 侧期望 u32 via as_u64()）。
+    # 前端 LiveSnapshot.sshSessionId 是 number（rustSessionId: u32），
+    # 但经 JSON 序列化→Python dict→ToolContext.ssh_session_id(str) 后变成 str，
+    # 这里转回 int 才能被 Rust as_u64() 解析。
+    try:
+        session_id_int = int(session_id) if session_id else 0
+    except (ValueError, TypeError) as e:
+        logger.error(
+            f"execute_via_ssh invalid session_id: id={session_id!r}, error={e}"
+        )
+        return {
+            "status": "error",
+            "command": command,
+            "ssh_session_id": session_id,
+            "error": f"invalid session_id (expect int-convertible): {session_id!r}",
+        }
+
+    if session_id_int <= 0:
+        logger.warning(
+            f"execute_via_ssh no active ssh session: tool={tool_name}, "
+            f"command={command[:80]}"
+        )
+        return {
+            "status": "unavailable",
+            "command": command,
+            "ssh_session_id": session_id,
+            "reason": "no_ssh_session",
+            "message": "无活跃 SSH 会话，请先连接 SSH 再调用运维工具",
+        }
+
     try:
         result = ctx.rust_bridge.ipc_invoke("ssh_command", {
-            "session_id": session_id,
+            "sessionId": session_id_int,
             "command": command,
-            "timeout": timeout,
+            "timeout": int(timeout),
         })
     except Exception as e:
         logger.exception(

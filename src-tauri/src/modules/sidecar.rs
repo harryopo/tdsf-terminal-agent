@@ -32,7 +32,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{oneshot, Mutex, RwLock};
@@ -303,11 +303,19 @@ impl SidecarManager {
             *guard = Some(stdin_tx);
         }
 
-        // 4. 启动 reader task（读 stdout + 解析 JSON-RPC + 路由响应/通知）
+        // 4. 启动 reader task（读 stdout + 解析 JSON-RPC + 路由响应/通知/反向请求）
+        // TDSF P1: 传入 stdin_tx，用于把反向请求的响应写回 Python stdin
         let reader_state = self.state.clone();
         let reader_pending = self.pending_requests.clone();
         let reader_app = self.app_handle.clone();
-        tokio::spawn(reader_task(stdout, reader_state, reader_pending, reader_app));
+        let reader_stdin = self.stdin_tx.clone();
+        tokio::spawn(reader_task(
+            stdout,
+            reader_state,
+            reader_pending,
+            reader_app,
+            reader_stdin,
+        ));
 
         // 5. 保存 child 句柄
         {
@@ -785,12 +793,29 @@ async fn writer_task(mut stdin: ChildStdin, mut rx: tokio::sync::mpsc::Receiver<
     log::debug!("[sidecar:writer] stopped");
 }
 
-/// reader task: 读 stdout + 解析 JSON-RPC + 路由响应/通知
+/// reader task: 读 stdout + 解析 JSON-RPC + 路由响应/通知/反向请求
+///
+/// TDSF P1（2026-07-30）: 双向 JSON-RPC 桥
+/// ---------------------------------------------------------------
+/// 新增反向请求分支：消息同时含 `method` 和 `id` 时，判定为 Python→Rust 反向请求。
+/// 路由到 `handle_reverse_request`，执行对应 Tauri 命令（如 ssh_command/sftp_*），
+/// 把结果通过 stdin_tx 写回 Python（作为 JSON-RPC response）。
+///
+/// 消息类型判断顺序：
+/// 1. `method + id` → Python→Rust 反向请求（spawn task 执行，不阻塞 reader）
+/// 2. `method`（无 id）→ Python→Rust 通知（原逻辑，转发到前端）
+/// 3. `id`（无 method）→ Rust→Python 请求的响应（原逻辑，匹配 pending_requests）
+///
+/// ID 空间隔离：
+/// - Rust 请求 ID：1, 2, 3...（AtomicI64，从 1 开始）
+/// - Python 反向请求 ID：1,000,000+（Python 侧 counter，避免与 Rust 冲突）
+/// - 响应路由时根据 id 数值匹配 pending_requests（Rust）或 pending_reverse（Python）
 async fn reader_task(
     stdout: ChildStdout,
     state: Arc<RwLock<SidecarState>>,
     pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
+    stdin_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
 ) {
     log::debug!("[sidecar:reader] started");
     let reader = BufReader::new(stdout);
@@ -808,11 +833,74 @@ async fn reader_task(
             Ok(msg) => {
                 // 判断消息类型
                 if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
-                    // 通知（无 id）或请求（有 id）
-                    // Python 侧只会发通知，不会发请求
-                    handle_notification(method, &msg, &state, &app_handle).await;
+                    if let Some(id) = msg.get("id").cloned() {
+                        // TDSF P1: 反向请求（method + id）= Python→Rust
+                        // spawn task 执行 handler，不阻塞 reader 继续读 stdout
+                        let params = msg.get("params").cloned().unwrap_or(Value::Null);
+                        let app_clone = app_handle.clone();
+                        let stdin_clone = stdin_tx.clone();
+                        let method_owned = method.to_string();
+                        log::info!(
+                            "[sidecar:reverse] request: method={}, id={}",
+                            method_owned,
+                            id
+                        );
+                        tokio::spawn(async move {
+                            let response = handle_reverse_request(
+                                &method_owned,
+                                params,
+                                &app_clone,
+                            )
+                            .await;
+                            let response_msg = match response {
+                                Ok(value) => json!({
+                                    "jsonrpc": "2.0",
+                                    "result": value,
+                                    "id": id,
+                                }),
+                                Err(err_msg) => json!({
+                                    "jsonrpc": "2.0",
+                                    "error": {
+                                        "code": -32000,
+                                        "message": err_msg,
+                                    },
+                                    "id": id,
+                                }),
+                            };
+                            // 序列化响应并写回 Python stdin
+                            let line = serde_json::to_string(&response_msg)
+                                .unwrap_or_else(|_| {
+                                    json!({
+                                        "jsonrpc": "2.0",
+                                        "error": {
+                                            "code": -32603,
+                                            "message": "reverse response serialize failed",
+                                        },
+                                        "id": id,
+                                    })
+                                    .to_string()
+                                });
+                            let stdin_guard = stdin_clone.lock().await;
+                            if let Some(tx) = stdin_guard.as_ref() {
+                                if let Err(e) = tx.send(line + "\n").await {
+                                    log::warn!(
+                                        "[sidecar:reverse] failed to send response: {}",
+                                        e
+                                    );
+                                }
+                            } else {
+                                log::warn!(
+                                    "[sidecar:reverse] stdin closed, cannot respond: {}",
+                                    method_owned
+                                );
+                            }
+                        });
+                    } else {
+                        // 通知（method 无 id）→ 原逻辑
+                        handle_notification(method, &msg, &state, &app_handle).await;
+                    }
                 } else if let Some(id) = msg.get("id") {
-                    // 响应（有 id）
+                    // 响应（有 id，无 method）→ Rust→Python 请求的响应
                     if let Some(id_num) = id.as_i64() {
                         let mut pending = pending_requests.lock().await;
                         if let Some(sender) = pending.remove(&id_num) {
@@ -845,6 +933,217 @@ async fn reader_task(
         && state_guard.status != SidecarStatus::Stopped
     {
         state_guard.status = SidecarStatus::Crashed;
+    }
+}
+
+/// TDSF P1（2026-07-30）: 处理 Python→Rust 反向 JSON-RPC 请求
+///
+/// 把 method 路由到对应 Tauri 命令，执行后返回结果。
+///
+/// 支持的方法（参数用 camelCase，与前端 invoke 一致，便于复用 Tauri 命令）：
+/// - `ssh_command`: 执行 SSH 命令（exec 模式，非 PTY）— P0-D 实现
+/// - `sftp_read`: 读取远程文件内容（返回 number[]）
+/// - `sftp_write`: 写入远程文件（接收 number[] content）
+/// - `sftp_stat`: 查询文件属性
+/// - `sftp_list`: 列出目录条目
+/// - `sftp_mkdir`: 创建远程目录
+/// - `sftp_remove`: 删除远程文件
+/// - `sftp_rename`: 重命名远程文件/目录
+///
+/// 设计要点：
+/// 1. 直接调用 `ssh::*` 命令函数（`#[tauri::command]` 宏生成的 wrapper 签名与原始一致）
+/// 2. 通过 `app.state::<SshState>()` 获取状态，避免依赖 Tauri invoke 机制
+/// 3. 错误统一返回 `String`（与 Tauri 命令的 `Result<T, String>` 对齐）
+/// 4. 序列化结果为 `serde_json::Value`（调用方负责写回 JSON-RPC response）
+async fn handle_reverse_request(
+    method: &str,
+    params: Value,
+    app_handle: &Arc<Mutex<Option<AppHandle>>>,
+) -> Result<Value, String> {
+    // 1. clone AppHandle（避免长时间持锁）
+    let app = {
+        let guard = app_handle.lock().await;
+        guard.as_ref().cloned().ok_or_else(|| {
+            "app_handle not set (sidecar 启动中或已停止)".to_string()
+        })?
+    };
+
+    // 2. 路由分发
+    match method {
+        // === SSH 命令执行（exec 模式）===
+        "ssh_command" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("ssh_command: missing or invalid sessionId")?
+                as u32;
+            let command = params
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or("ssh_command: missing or invalid command")?
+                .to_string();
+            let timeout = params.get("timeout").and_then(|v| v.as_u64());
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            let result =
+                crate::ssh::ssh_command(ssh_state, session_id, command, timeout).await?;
+
+            serde_json::to_value(&result)
+                .map_err(|e| format!("ssh_command serialize failed: {}", e))
+        }
+
+        // === SFTP 读取远程文件 ===
+        "sftp_read" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_read: missing or invalid sessionId")?
+                as u32;
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_read: missing or invalid path")?
+                .to_string();
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            let content = crate::ssh::sftp_read(ssh_state, session_id, path).await?;
+            // Vec<u8> → JSON number[]（与 Tauri 自动序列化一致）
+            serde_json::to_value(&content)
+                .map_err(|e| format!("sftp_read serialize failed: {}", e))
+        }
+
+        // === SFTP 写入远程文件 ===
+        "sftp_write" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_write: missing or invalid sessionId")?
+                as u32;
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_write: missing or invalid path")?
+                .to_string();
+            // content 应为 number[]（每项 0-255）
+            let content_arr = params
+                .get("content")
+                .and_then(|v| v.as_array())
+                .ok_or("sftp_write: missing or invalid content (expected number[])")?;
+            let mut content = Vec::with_capacity(content_arr.len());
+            for (i, n) in content_arr.iter().enumerate() {
+                let byte_val = n
+                    .as_u64()
+                    .ok_or_else(|| format!("sftp_write: content[{}] not a number", i))?
+                    as u8;
+                content.push(byte_val);
+            }
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            crate::ssh::sftp_write(ssh_state, session_id, path, content).await?;
+            Ok(Value::Null)
+        }
+
+        // === SFTP 查询文件属性 ===
+        "sftp_stat" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_stat: missing or invalid sessionId")?
+                as u32;
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_stat: missing or invalid path")?
+                .to_string();
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            let attrs = crate::ssh::sftp_stat(ssh_state, session_id, path).await?;
+            serde_json::to_value(&attrs)
+                .map_err(|e| format!("sftp_stat serialize failed: {}", e))
+        }
+
+        // === SFTP 列出目录条目 ===
+        "sftp_list" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_list: missing or invalid sessionId")?
+                as u32;
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_list: missing or invalid path")?
+                .to_string();
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            let entries = crate::ssh::sftp_list(ssh_state, session_id, path).await?;
+            serde_json::to_value(&entries)
+                .map_err(|e| format!("sftp_list serialize failed: {}", e))
+        }
+
+        // === SFTP 创建目录 ===
+        "sftp_mkdir" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_mkdir: missing or invalid sessionId")?
+                as u32;
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_mkdir: missing or invalid path")?
+                .to_string();
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            crate::ssh::sftp_mkdir(ssh_state, session_id, path).await?;
+            Ok(Value::Null)
+        }
+
+        // === SFTP 删除文件 ===
+        "sftp_remove" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_remove: missing or invalid sessionId")?
+                as u32;
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_remove: missing or invalid path")?
+                .to_string();
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            crate::ssh::sftp_remove(ssh_state, session_id, path).await?;
+            Ok(Value::Null)
+        }
+
+        // === SFTP 重命名 ===
+        "sftp_rename" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("sftp_rename: missing or invalid sessionId")?
+                as u32;
+            let from = params
+                .get("from")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_rename: missing or invalid from")?
+                .to_string();
+            let to = params
+                .get("to")
+                .and_then(|v| v.as_str())
+                .ok_or("sftp_rename: missing or invalid to")?
+                .to_string();
+
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            crate::ssh::sftp_rename(ssh_state, session_id, from, to).await?;
+            Ok(Value::Null)
+        }
+
+        _ => Err(format!(
+            "reverse route not found: {} (supported: ssh_command, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename)",
+            method
+        )),
     }
 }
 

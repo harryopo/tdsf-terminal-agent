@@ -116,6 +116,20 @@ START_TIME = time.time()
 # 全局 shutdown 标志（由 shutdown 方法或信号处理设置）
 _shutdown_flag = False
 
+# TDSF P1-3/P1-4/P1-5（2026-07-30）: 全局 RustBridge 实例
+# ---------------------------------------------------------------
+# Python→Rust 反向 JSON-RPC 通道。在 main() 启动时创建并注入
+# write_message 回调；业务代码（如 Strands 工具）通过它调用 Rust 后端
+# 的 ssh_command / sftp_* 命令，阻塞等待响应（30s 超时）。
+#
+# 主循环收到消息时，先用 ``_rust_bridge.is_reverse_response(msg)`` 判定：
+# - True → 调 ``dispatch_response(msg)`` 路由到对应 pending 请求（不进 dispatcher）
+# - False → 走原有 MethodDispatcher.dispatch 逻辑
+#
+# 判定规则：id ≥ 1,000,000 且无 method = Python 反向请求的响应。
+# ID 空间隔离详见 rust_bridge.py docstring。
+_rust_bridge: Any = None  # type: ignore[assignment]
+
 
 def write_message(msg: dict) -> None:
     """写一行 JSON-RPC 消息到 stdout（线程安全，每条消息以换行符分隔）
@@ -355,7 +369,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
             llm_call=llm_call,
         )
 
-        # TDSF 魔改 2026-07-30 P0-C1 + P0-C5: Strands 后端 feature flag 注入点
+        # TDSF 魔改 2026-07-30 P0-C1 + P0-C5 + P1-4: Strands 后端 feature flag 注入点
         # ---------------------------------------------------------------
         # 通过环境变量 TDSF_AGENT_BACKEND 切换 Agent 后端实现：
         #   - "langgraph"（默认）/ 未设置 / 其他值：走 BaseAgent PAOR 主路径
@@ -374,18 +388,44 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         #   - LLM 未配置 / Strands 未安装 / provider 不支持时 strands_model 仍为 None，
         #     adapter.invoke 走降级路径（_check_degraded → emit_needs_you）
         #
-        # 当前限制（P1/P2 阶段补充）：
-        #   - rust_bridge=None（双向 JSON-RPC 待 P1 扩展），运维工具返回 unavailable
+        # P1-4（2026-07-30 完成）：rust_bridge 真实注入
+        #   - main() 启动时已创建全局 _rust_bridge（RustBridge 实例）
+        #   - 这里把它包装成 DefaultRustBridge 注入 Strands 适配层
+        #   - 工具调用 ssh_command/sftp_* 通过 _rust_bridge.send_request 阻塞等响应
+        #   - Rust 侧 reader_task 已支持反向请求路由（handle_reverse_request）
+        #
+        # P0-D（2026-07-30 完成）：Rust ssh_command 命令已实现
+        #   - src-tauri/src/modules/ssh/mod.rs::ssh_command (russh channel exec 模式)
+        #   - 返回 {ok, output, stderr, exitCode, duration} 结构化结果
+        #
+        # 当前限制（P2 阶段补充）：
         #   - Strands 真实端到端实测待 P0-E（设 TDSF_AGENT_BACKEND=strands 启动验证）
-        #   - Rust ssh_command 命令实现待 P0-D（russh channel exec 模式）
         # ---------------------------------------------------------------
         _tdsf_backend = os.environ.get("TDSF_AGENT_BACKEND", "langgraph").lower()
         if _tdsf_backend == "strands":
             try:
                 from strands_backend import configure_strands
+                from strands_backend.tools import DefaultRustBridge
+
+                # P1-4: 用全局 _rust_bridge 包装成 DefaultRustBridge
+                # RustBridge 协议 ipc_invoke(method, params) → send_request(method, params)
+                if _rust_bridge is not None:
+                    _rust_bridge_impl = DefaultRustBridge(
+                        send_request=lambda m, p: _rust_bridge.send_request(m, p)
+                    )
+                    logger.info(
+                        "rust_bridge injected into Strands "
+                        f"(pending={_rust_bridge.pending_count()})"
+                    )
+                else:
+                    _rust_bridge_impl = DefaultRustBridge()  # 未配置降级
+                    logger.warning(
+                        "rust_bridge not initialized, Strands tools will be unavailable"
+                    )
+
                 _strands_adapter = configure_strands(
                     event_bus=event_bus.get_global_bus(),
-                    rust_bridge=None,  # P1 阶段注入真实 send_request
+                    rust_bridge=_rust_bridge_impl,  # P1-4: 真实注入
                     llm_config=llm_config,  # P0-C5: 共享同一份 LLMConfig
                 )
                 agents.set_backend(
@@ -539,6 +579,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
 # ============================================================================
 def main() -> None:
     """Sidecar 主入口"""
+    global _rust_bridge
     logger.info("TDSF Python Sidecar starting...")
     logger.info(f"Python {sys.version.split()[0]} on {sys.platform}")
 
@@ -553,6 +594,24 @@ def main() -> None:
     except Exception as e:
         # 静默失败, 不阻断启动, log_capture 是 best-effort
         sys.stderr.write(f"[sidecar] log_capture install failed: {e}\n")
+
+    # 0.5 TDSF P1-3 (2026-07-30): 创建全局 RustBridge 实例
+    # ---------------------------------------------------------------
+    # Python→Rust 反向 JSON-RPC 通道。注入 write_message 回调，
+    # 让 send_request_to_rust 能把请求写到 stdout 给 Rust 侧 reader_task。
+    # register_business_methods 中 Strands 注入段会读取全局 _rust_bridge
+    # 包装成 DefaultRustBridge 给工具调用。
+    # 主循环用 is_reverse_response 判定 Rust 返回的响应，路由到 pending。
+    try:
+        from rust_bridge import RustBridge
+        _rust_bridge = RustBridge(write_message=write_message)
+        logger.info(
+            f"rust_bridge initialized "
+            f"(reverse_id_start=1_000_000, timeout=30s)"
+        )
+    except Exception as e:
+        logger.exception(f"failed to initialize rust_bridge: {e}")
+        # _rust_bridge 保持 None，Strands 注入段会降级为 unavailable
 
     # 1. 初始化方法分发器
     dispatcher = MethodDispatcher()
@@ -606,8 +665,19 @@ def main() -> None:
                 send_error(ERR_INVALID_REQUEST, "Message must be a JSON object", None)
                 continue
 
+            # TDSF P1-5 (2026-07-30): 反向 JSON-RPC 响应分发
+            # ---------------------------------------------------------------
+            # 先判定是否是 Rust 返回的 Python→Rust 反向请求响应：
+            #   - id ≥ 1,000,000 且无 method = Rust 回给 Python 反向请求的响应
+            #   - 路由到 RustBridge.dispatch_response，唤醒对应的 pending send_request
+            #   - 不进入 MethodDispatcher（响应不是请求，无需 dispatch）
+            # 详见 rust_bridge.py docstring 与 sidecar.rs reader_task 注释。
+            if _rust_bridge is not None and _rust_bridge.is_reverse_response(msg):
+                _rust_bridge.dispatch_response(msg)
+                continue
+
             if "method" not in msg:
-                # 不是请求/通知，可能是响应（Sidecar 不接收响应，忽略）
+                # 不是请求/通知，也不是反向响应（可能是 id < 1,000,000 的孤儿响应）
                 logger.warning(f"ignoring non-method message: {msg}")
                 continue
 
@@ -640,6 +710,14 @@ def main() -> None:
             time.sleep(0.1)  # 避免忙循环消耗 CPU
 
     # 5. 退出清理
+    # 5.0 TDSF P1-3 (2026-07-30): 关闭 RustBridge，唤醒所有 pending 请求
+    #     避免主线程退出时悬挂在 Event.wait 的工具调用永远阻塞
+    if _rust_bridge is not None:
+        try:
+            _rust_bridge.stop()
+            logger.info("rust_bridge stopped")
+        except Exception as e:
+            logger.debug(f"rust_bridge stop on exit: {e}")
     # 5.1 停止 needs_you 超时扫描线程（避免主进程退出时线程残留告警）
     try:
         import needs_you

@@ -42,6 +42,18 @@ export type Live = {
     sessionId: string,
   ) => { tabId: number; leafId: number } | null;
   readLeafBuffer: (leafId: number) => string | null;
+  /**
+   * 获取当前活跃 SSH 会话的 Rust session_id (u32)。
+   *
+   * TDSF 魔改 2026-07-30: Strands 运维工具需要通过 RustBridge 调
+   * ssh_command / sftp_* 命令，这些命令的 sessionId 参数期望 u32 类型
+   * (来自 ssh_connect 返回值)。前端 LiveSnapshot.sshSessionId 字段
+   * 从此方法取值，注入到 state.live.sshSessionId，Python 侧
+   * ToolContext.ssh_session_id 据此填充。
+   *
+   * 返回 null 表示当前无活跃 SSH 会话（本地终端模式）。
+   */
+  getSshRustSessionId: () => number | null;
 };
 
 export type AgentRunStatus =
@@ -195,6 +207,7 @@ const NOOP_LIVE: Live = {
   openPreview: () => false,
   spawnManagedAgent: () => null,
   readLeafBuffer: () => null,
+  getSshRustSessionId: () => null,
 };
 
 const CHATS_LRU_CAP = 8;

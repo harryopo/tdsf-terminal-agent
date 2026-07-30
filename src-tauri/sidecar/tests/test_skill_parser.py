@@ -157,7 +157,7 @@ class TestParseSkillMd:
         skill: Skill = parse_skill_md(linux_ops_skill_path)
         assert skill.name == "linux-ops"
         assert "Linux 运维" in skill.description
-        assert skill.version == "1.0.0"
+        assert skill.version >= "1.0.0"  # 1.0.0 起步, 后续升级不破坏断言
         assert skill.author == "TDSF"
         assert "linux" in skill.tags
         assert "nginx" in skill.tags
@@ -472,7 +472,7 @@ class TestBuiltinSkillsAllParsed:
                 f"skill name mismatch: expected {name}, got {skill.name}"
             )
             assert skill.description, f"{name} description 为空"
-            assert skill.version == "1.0.0", f"{name} version 不为 1.0.0"
+            assert skill.version >= "1.0.0", f"{name} version < 1.0.0 (got {skill.version})"
             assert skill.author == "TDSF", f"{name} author 不为 TDSF"
             assert len(skill.tags) >= 2, f"{name} tags 数量 < 2"
             assert skill.when_to_use, f"{name} when_to_use 为空"

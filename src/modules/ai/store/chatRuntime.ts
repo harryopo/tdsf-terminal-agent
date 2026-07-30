@@ -88,11 +88,17 @@ function makeChat(sessionId: string): Chat<UIMessage> {
     },
     getLive: () => {
       const live = useChatStore.getState().live;
+      // TDSF 魔改 2026-07-30: 注入 sshSessionId 到 LiveSnapshot，
+      // transport.ts formatEnvBlock 会把它写入 <env> 块给 LLM 看，
+      // runSidecarStream 也会把它通过 state.live 传给 Python agent，
+      // Python 侧 Strands 运维工具通过 ctx.ssh_session_id 拿到后调 ssh_command/sftp_*。
+      // Live.getSshRustSessionId() 实时查询 sshStore，SSH 重连后 rustSessionId 会变。
       return {
         cwd: live.getCwd(),
         terminalPrivate: live.isActiveTerminalPrivate(),
         workspaceRoot: live.getWorkspaceRoot(),
         activeFile: live.getActiveFile(),
+        sshSessionId: live.getSshRustSessionId(),
       };
     },
     getPlanMode: () => usePlanStore.getState().active,
