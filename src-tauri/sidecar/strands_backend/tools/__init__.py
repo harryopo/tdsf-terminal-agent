@@ -76,17 +76,18 @@ class RustBridge(Protocol):
         → Rust ipc.rs 收到 request → 调对应 Tauri command
         → 返回结果给 Python
 
-    TDSF 魔改 2026-07-30 P0-C4 注：
-        "ssh_command" 当前 Rust 侧未实现（src-tauri/src/modules/ssh/mod.rs 仅有
-        ssh_connect/ssh_write/ssh_resize/ssh_disconnect/ssh_status/ssh_test
-        等 PTY 模式命令，无"执行单条命令并返回输出"的 exec 模式命令）。
-        P2 backlog：新增 Rust ssh_command Tauri command（基于 russh channel exec
-        而非 PTY，返回 {ok, output, exit_code, duration}）。
-        当前架构下 rust_bridge=None，ipc_invoke 返回 unavailable，工具降级。
+    TDSF 魔改 2026-07-30 P0-D/P0-E 注：
+        "ssh_command" Rust 侧已实现（src-tauri/src/modules/ssh/mod.rs:658
+        `ssh_command` Tauri command，基于 russh channel exec 模式，返回
+        {ok, output, stderr, exit_code, duration}，与 PTY 模式 ssh_write 互斥）。
+        P0-D 已完成：Rust 侧 ssh_command 命令 + SshCommandResult 结构。
+        P0-E 已完成：main.py 注入 RustBridge（_rust_bridge = RustBridge(write_message)）
+        + DefaultRustBridge(send_request=lambda m,p: _rust_bridge.send_request(m,p))
+        + agents.set_backend() 注入 Strands 适配层 + invoke_agent 优先走 override。
 
-    当前架构（Python→Rust 单向 notification）下，DefaultRustBridge 未注入
-    send_request 回调时返回 unavailable 状态，工具据此降级（返回"未配置"
-    结构化结果，而非抛错阻塞 agent loop）。
+    当前架构（Python→Rust 双向 JSON-RPC）下，DefaultRustBridge 已注入
+    send_request 回调时正常调 Rust 后端；未注入时返回 unavailable 状态，
+    工具据此降级（返回"未配置"结构化结果，而非抛错阻塞 agent loop）。
     """
 
     def ipc_invoke(self, method: str, params: dict[str, Any]) -> Any: ...
