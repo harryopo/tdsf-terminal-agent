@@ -504,12 +504,20 @@ class StrandsAgentAdapter:
 
         # 创建 Strands Agent
         # mypy: _StrandsAgent 在降级路径已被排除，这里必有值
+        #
+        # TDSF 魔改 2026-07-30 P0-E: Strands 1.50.2 API 变更
+        #   Agent.__init__() 移除了 max_iterations 参数（实测装 1.50.2 后
+        #   报 "Agent.__init__() got an unexpected keyword argument 'max_iterations'"）。
+        #   控制迭代次数的新方式是 hooks=[LimitToolCounts(max_tool_counts={...})]
+        #   或自定义 HookProvider（见 Strands 官方文档 hooks.mdx）。
+        #   当前先移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
+        #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
         agent = _StrandsAgent(  # type: ignore[misc]
             model=self.strands_model,
             tools=all_tools,
             system_prompt=self.system_prompt,
             callback_handler=handler,
-            max_iterations=self.max_iterations,
+            # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
         )
 
         self._agent_cache[agent_id] = agent
