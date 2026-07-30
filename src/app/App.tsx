@@ -403,6 +403,8 @@ export default function App() {
       // 供 CDP 验证 Python agent 终端上下文感知 (<env> 块注入) 是否生效
       // 之前只挂了 rendererPool, CDP 没法验证 <env> 块是否注入到 messagesForRun
       // 注意: formatEnvBlock 逻辑内联 (不静态 import transport.ts, 避免 @ai-sdk 污染启动包)
+      // TDSF 魔改 2026-07-30 (Bug 4): 补 sshSessionId 字段，与 transport.ts LiveSnapshot 对齐，
+      // 供 CDP 验证 SSH 会话注入是否生效（active ssh session → env block 含 ssh_session_id）
       getLive: () => {
         const live = useChatStore.getState().live;
         return {
@@ -410,6 +412,7 @@ export default function App() {
           terminalPrivate: live.isActiveTerminalPrivate(),
           workspaceRoot: live.getWorkspaceRoot(),
           activeFile: live.getActiveFile(),
+          sshSessionId: live.getSshRustSessionId(),
         };
       },
       getEnvBlock: () => {
@@ -419,10 +422,14 @@ export default function App() {
         const cwd = live.getCwd();
         const activeFile = live.getActiveFile();
         const terminalPrivate = live.isActiveTerminalPrivate();
+        const sshSessionId = live.getSshRustSessionId();
         if (workspaceRoot) lines.push(`workspace_root: ${workspaceRoot}`);
         if (cwd) lines.push(`active_terminal_cwd: ${cwd}`);
         if (activeFile) lines.push(`active_file: ${activeFile}`);
         if (terminalPrivate) lines.push("active_terminal_mode: private");
+        if (sshSessionId !== null) {
+          lines.push(`ssh_session_id: ${sshSessionId}`);
+        }
         return lines.length === 0
           ? null
           : `<env>\n${lines.join("\n")}\n</env>`;

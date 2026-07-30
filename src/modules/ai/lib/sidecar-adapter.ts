@@ -58,6 +58,29 @@ export interface SidecarStreamOptions {
   messages: UIMessage[];
   /** 最后一条 user 消息文本（由 transport 提取，避免 Python 端再解析） */
   input: string;
+  /**
+   * 终端运行时上下文快照（cwd / activeFile / workspaceRoot / sshSessionId 等）。
+   *
+   * TDSF 魔改 2026-07-30 (Bug 5): 通过 state.live 传给 Python agent，
+   * Strands 适配层 StrandsAgentAdapter._build_tool_context() 从 state.live
+   * 提取 sshSessionId 填充 ToolContext.ssh_session_id，运维工具据此调
+   * ssh_command / sftp_* 命令。Python 端 _build_prompt 也从此处读 cwd /
+   * activeFile 注入 <live_context> 块给 LLM。
+   *
+   * 字段说明:
+   *   - cwd:             当前终端工作目录（OSC seq 捕获）
+   *   - terminalPrivate: 隐私模式标记（true 时不发送终端上下文给 LLM）
+   *   - workspaceRoot:   工作区根目录（资源管理器根）
+   *   - activeFile:      当前激活的编辑器文件路径
+   *   - sshSessionId:    活跃 SSH 会话的 Rust session_id (u32)，null 表示无 SSH 会话
+   */
+  live: {
+    cwd: string | null;
+    terminalPrivate: boolean;
+    workspaceRoot: string | null;
+    activeFile: string | null;
+    sshSessionId: number | null;
+  };
   /** 中断信号（与 useChat 的 abortSignal 联动） */
   abortSignal?: AbortSignal;
   /** 步骤变更回调（如 "Thinking" / "Streaming" / null） */
@@ -298,7 +321,7 @@ async function registerSidecarListeners(
 export async function* runSidecarStream(
   opts: SidecarStreamOptions,
 ): AsyncIterable<SidecarStreamPart> {
-  const { agentId, messages, input, abortSignal, onMood, onStep, onUsage } = opts;
+  const { agentId, messages, input, live, abortSignal, onMood, onStep, onUsage } = opts;
   const pythonName = mapToPythonName(agentId);
   const streamId = `tdsf-${agentId}-${Date.now()}`;
   const thinkingId = `${streamId}-thinking`;
@@ -333,12 +356,21 @@ export async function* runSidecarStream(
         );
       });
 
+      // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
+      // Python 端 StrandsAgentAdapter._build_tool_context() 从 state.live 取 sshSessionId
+      // 填充 ToolContext.ssh_session_id（运维工具据此调 ssh_command/sftp_*），
+      // _build_prompt() 从 state.live 取 cwd/activeFile 注入 <live_context> 块给 LLM。
+      //
+      // 注意：sshSessionId 在 JSON 序列化时 number 会被 Python json 解析为 int，
+      // null 会被解析为 None。Python 侧 _build_tool_context 用 live.get("sshSessionId", "")
+      // or "" 转 str，工具内部再 int(session_id) 转回 int 调 Rust。
+      // （JSON round-trip 后 sshSessionId 已是 Python int，or "" 仅在 None 时兜底为 str）
       const raw = await Promise.race([
         invoke<AgentInvokeResult>("ipc_invoke", {
           method: "agent.invoke",
           params: {
             name: pythonName,
-            state: { input, messages },
+            state: { input, messages, live },
           },
         }),
         timeout,

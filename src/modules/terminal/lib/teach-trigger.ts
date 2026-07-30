@@ -222,6 +222,16 @@ export async function notifyCommandExecuted(
       agentId: "teach",
       input: `explain: ${cmd}`,
       messages: [],
+      // TDSF 魔改 2026-07-30 (Bug 5): SidecarStreamOptions.live 必填，
+      // teach-trigger 触发时无终端上下文（仅 command + cwd），传最小空 live。
+      // Python teach agent 会收到 sshSessionId=null，不会调运维工具。
+      live: {
+        cwd: cwd,
+        terminalPrivate: false,
+        workspaceRoot: null,
+        activeFile: null,
+        sshSessionId: null,
+      },
       abortSignal: ac.signal,
     })) {
       if (part.type === "text-delta") {

@@ -59,6 +59,31 @@ function makeMessages(text: string): UIMessage[] {
   ];
 }
 
+// TDSF 魔改 2026-07-30 (Bug 5): runSidecarStream 新增必填 live 字段
+// 构造默认 live 上下文（无 SSH 会话），各用例按需覆盖 sshSessionId 字段
+function makeLive(overrides: Partial<{
+  cwd: string | null;
+  terminalPrivate: boolean;
+  workspaceRoot: string | null;
+  activeFile: string | null;
+  sshSessionId: number | null;
+}> = {}): {
+  cwd: string | null;
+  terminalPrivate: boolean;
+  workspaceRoot: string | null;
+  activeFile: string | null;
+  sshSessionId: number | null;
+} {
+  return {
+    cwd: null,
+    terminalPrivate: false,
+    workspaceRoot: null,
+    activeFile: null,
+    sshSessionId: null,
+    ...overrides,
+  };
+}
+
 // 收集 AsyncIterable 的所有 part
 async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
@@ -92,6 +117,7 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
         agentId: "coder",
         messages: makeMessages("hello"),
         input: "hello",
+        live: makeLive(),
       }),
     );
 
@@ -115,6 +141,7 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
         agentId: "coder",
         messages: makeMessages("hello"),
         input: "hello",
+        live: makeLive(),
       }),
     );
 
@@ -132,19 +159,22 @@ describe("runSidecarStream — Python agent name 映射", () => {
 
     mockInvoke.mockResolvedValue({ output: "done" });
 
+    const live = makeLive();
     await collect(
       runSidecarStream({
         agentId: "coder",
         messages: makeMessages("test"),
         input: "test",
+        live,
       }),
     );
 
+    // TDSF 魔改 2026-07-30 (Bug 5): state 现在含 live 字段
     expect(mockInvoke).toHaveBeenCalledWith("ipc_invoke", {
       method: "agent.invoke",
       params: {
         name: "coding",
-        state: { input: "test", messages: makeMessages("test") },
+        state: { input: "test", messages: makeMessages("test"), live },
       },
     });
   });
@@ -158,6 +188,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
         agentId: "explore",
         messages: makeMessages("scan"),
         input: "scan",
+        live: makeLive(),
       }),
     );
 
@@ -174,6 +205,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
         agentId: "history",
         messages: makeMessages("last"),
         input: "last",
+        live: makeLive(),
       }),
     );
 
@@ -190,6 +222,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
         agentId: "teach",
         messages: makeMessages("explain"),
         input: "explain",
+        live: makeLive(),
       }),
     );
 
@@ -218,6 +251,7 @@ describe("runSidecarStream — 成功路径", () => {
         agentId: "coder",
         messages: makeMessages("hi"),
         input: "hi",
+        live: makeLive(),
         onMood,
         onUsage,
         onStep,
@@ -252,6 +286,7 @@ describe("runSidecarStream — 成功路径", () => {
         agentId: "teach",
         messages: makeMessages("q"),
         input: "q",
+        live: makeLive(),
       }),
     );
 

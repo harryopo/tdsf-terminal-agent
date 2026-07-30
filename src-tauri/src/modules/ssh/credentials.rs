@@ -28,6 +28,7 @@ use tauri::{AppHandle, Manager};
 pub enum CredentialAuthKind {
     Password,
     PublicKey {
+        #[serde(rename = "privateKeyPath")]
         private_key_path: String,
         /// passphrase 是否设置 (实际值在 keyring)
         has_passphrase: bool,
