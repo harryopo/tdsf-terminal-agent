@@ -83,7 +83,8 @@ import {
   useSshStore,
 } from "@/modules/ssh-explorer";
 // TDSF 魔改 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
-import { SshFileEditor } from "@/modules/ssh-explorer/SshFileEditor";
+// TDSF 魔改 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
+// 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
 import { StatusBar } from "@/modules/statusbar";
 import {
   TabSwitcherHud,
@@ -804,14 +805,15 @@ export default function App() {
     [openFileTab, newMarkdownTab],
   );
 
-  // TDSF 魔改 2026-07-29: 远程文件点击后调用 SSH 编辑器
+  // TDSF 魔改 2026-07-30: 远程文件点击改走主区 EditorStack（多 tab 并行），
+  // 废弃侧栏 SshFileEditor（单文件 singleton textarea）。
+  // pin = false 与本地单击行为一致（preview tab，二次单击其他文件替换槽位）。
   const handleOpenRemoteFile = useCallback(
     (path: string) => {
       if (!activeSshSessionId) return;
-      const name = path.slice(path.lastIndexOf("/") + 1) || path;
-      void useSshStore.getState().openFile(activeSshSessionId, path, name);
+      openFileTab(path, false, { sessionId: activeSshSessionId });
     },
-    [activeSshSessionId],
+    [activeSshSessionId, openFileTab],
   );
 
   // "Open With" files arrive via the event (warm start) and get_launch_files
@@ -1543,11 +1545,9 @@ export default function App() {
                             }
                           />
                           </div>
-                          {/* TDSF 魔改 2026-07-30: 远程文件编辑器与文件树上下二分,
-                             避免被 FileExplorer(h-full) 挤成 1px 不可见 */}
-                          {explorerSource === "ssh" ? (
-                            <SshFileEditor className="min-h-0 flex-1" />
-                          ) : null}
+                          {/* TDSF 魔改 2026-07-30: 远程文件编辑器已废弃，
+                             远程文件点击改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程），
+                             侧栏只保留 FileExplorer（文件树），不再内嵌 SshFileEditor。 */}
                         </div>
                       ) : sidebarView === "source-control" ? (
                         <SourceControlPanel

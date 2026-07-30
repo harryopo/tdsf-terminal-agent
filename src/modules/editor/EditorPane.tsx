@@ -85,6 +85,10 @@ export type EditorPaneHandle = {
 type Props = {
   path: string;
   overrideLanguage?: string | null;
+  /**
+   * TDSF 魔改 2026-07-30: 远程文件标记，跳过 LSP/外部 formatter/convertFileSrc 媒体预览。
+   */
+  remote?: { sessionId: string } | null;
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
@@ -104,11 +108,12 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, onDirtyChange, onSaved, onClose } = props;
+    const { path, overrideLanguage, remote, onDirtyChange, onSaved, onClose } = props;
 
     const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
       useDocument({
         path,
+        remote,
         onDirtyChange,
       });
     const reloadRef = useRef(reload);
@@ -183,7 +188,8 @@ export const EditorPane = memo(
       const view = cmRef.current?.view;
       const prefs = usePreferencesStore.getState();
       const formatter = resolveFormatter(languageRef.current, prefs);
-      if (prefs.editorFormatOnSave && formatter === "lsp" && view) {
+      // TDSF 魔改 2026-07-30: 远程文件跳过 format-on-save（LSP/外部 formatter 均走本地，无法处理远程）。
+      if (prefs.editorFormatOnSave && formatter === "lsp" && view && !remote) {
         if (lspActiveRef.current) {
           let res: "done" | "unsupported" = "done";
           try {
@@ -213,7 +219,8 @@ export const EditorPane = memo(
       const docAtSave = view?.state.doc;
       const saved = await saveRef.current();
       if (!saved) return;
-      if (prefs.editorFormatOnSave && formatter !== "lsp") {
+      // TDSF 魔改 2026-07-30: 远程文件跳过外部格式化。
+      if (prefs.editorFormatOnSave && formatter !== "lsp" && !remote) {
         const error = await runExternalFormatter(
           formatter,
           pathRef.current,
@@ -232,7 +239,7 @@ export const EditorPane = memo(
         }
       }
       onSavedRef.current?.();
-    }, []);
+    }, [remote]);
     const performSaveRef = useRef(performSave);
     performSaveRef.current = performSave;
 
@@ -372,13 +379,21 @@ export const EditorPane = memo(
 
     const lspExt = useLspExtension(path, langId, doc.status === "ready");
     useEffect(() => {
+      // TDSF 魔改 2026-07-30: 远程文件不走 LSP（LSP 绑定本地 fs + workspace）。
+      // reconfigure 为空扩展，避免上次本地 tab 残留的 LSP 扩展继续作用于远程文件。
+      if (remote) {
+        lspActiveRef.current = false;
+        const view = cmRef.current?.view;
+        view?.dispatch({ effects: lspCompartment.reconfigure([]) });
+        return;
+      }
       lspActiveRef.current = lspExt !== null;
       const view = cmRef.current?.view;
       if (!view) return;
       view.dispatch({
         effects: lspCompartment.reconfigure(lspExt ?? []),
       });
-    }, [lspExt]);
+    }, [lspExt, remote]);
 
     useEffect(
       () => () => useDiagnosticsStore.getState().report(pathRef.current, null),
@@ -528,7 +543,7 @@ export const EditorPane = memo(
       const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(ext);
       const isPdf = ext === "pdf";
 
-      if (isImage || isVideo || isAudio || isPdf) {
+      if ((isImage || isVideo || isAudio || isPdf) && !remote) {
         const assetUrl = convertFileSrc(path);
         return (
           <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background p-4 overflow-auto">
