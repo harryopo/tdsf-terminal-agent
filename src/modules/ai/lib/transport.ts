@@ -119,7 +119,12 @@ export function createContextAwareTransport(deps: Deps) {
     // 否则走原 Vercel AI SDK 路径（runAgentStream），保持向后兼容。
     const tdsfAgent = deps.getTdsfAgentId?.() ?? null;
     if (tdsfAgent) {
-      const input = extractLastUserText(options.messages);
+      // v2026-07-30 P1-b 修复: 从 messagesForRun（已注入 <env> 块）取 input，
+      // 而非 options.messages（裸用户文本）。这样 Python agent.invoke 收到的
+      // input 字段会包含 <env>workspace_root/active_terminal_cwd/active_file/
+      // active_terminal_mode</env> 前缀，main_agent.plan_task 的关键词路由
+      // 能感知到当前终端上下文（之前 input 是裸文本，Python agent 看不到 cwd）。
+      const input = extractLastUserText(messagesForRun);
       const sidecarStream = runSidecarStream({
         agentId: tdsfAgent,
         messages: messagesForRun,

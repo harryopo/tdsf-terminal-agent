@@ -52,10 +52,14 @@ export function MockLLMWarning() {
     const setup = async () => {
       // TDSF 魔改 2026-07-28: 监听 Tauri 事件桥 (后端通过 event_bus.publish("mock_llm_active", ...) 推送)
       // 复用 @tauri-apps/api/event 的 listen, 与 ssh:host_verify 等事件一致
+      // v2026-07-30 P1-a 修复: 之前缺 "sidecar:" 前缀永远监听不到
+      // Rust sidecar.rs:805 `format!("sidecar:{}", method)` 会给所有 Python 事件加前缀
+      // Python 推 "mock_llm_active" → Rust emit "sidecar:mock_llm_active"
+      // 前端必须 listen("sidecar:mock_llm_active", ...) 才能匹配
       const { listen } = await import("@tauri-apps/api/event");
       if (cancelled) return;
 
-      const un = await listen<MockLLMEvent>("mock_llm_active", (event) => {
+      const un = await listen<MockLLMEvent>("sidecar:mock_llm_active", (event) => {
         setWarning(event.payload);
       });
       unlisten = un;
