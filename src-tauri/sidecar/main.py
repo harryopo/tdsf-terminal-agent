@@ -130,6 +130,30 @@ _shutdown_flag = False
 # ID 空间隔离详见 rust_bridge.py docstring。
 _rust_bridge: Any = None  # type: ignore[assignment]
 
+# TDSF P0-E（2026-07-30）: 后端状态跟踪（Critical-2 可观测性修复）
+# ---------------------------------------------------------------
+# 由 register_business_methods 中 Strands 注入段写入，供 sidecar.health
+# JSON-RPC 读取。前端启动时调用 sidecar.health 拿到 backend_type，
+# 渲染 Backend Pill（Strands 绿色 / LangGraph 黄色 / 降级红色）。
+#
+# 字段说明：
+#   backend_type: "strands" | "langgraph"  (用户配置 TDSF_AGENT_BACKEND)
+#   backend_activated: bool                (Strands 适配层是否真实激活)
+#   strands_available: bool                (strands 包是否可导入)
+#   rust_bridge_active: bool               (rust_bridge 是否注入)
+#   llm_configured: bool                   (LLMConfig 是否配置 api_key)
+#   fallback_reason: str | None            (Strands 启动失败时的异常信息)
+#   activate_time: float                   (激活/降级时间戳)
+_backend_status: dict[str, Any] = {
+    "backend_type": "langgraph",
+    "backend_activated": False,
+    "strands_available": False,
+    "rust_bridge_active": False,
+    "llm_configured": False,
+    "fallback_reason": None,
+    "activate_time": 0.0,
+}
+
 
 def write_message(msg: dict) -> None:
     """写一行 JSON-RPC 消息到 stdout（线程安全，每条消息以换行符分隔）
@@ -402,6 +426,19 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         #   - Strands 真实端到端实测待 P0-E（设 TDSF_AGENT_BACKEND=strands 启动验证）
         # ---------------------------------------------------------------
         _tdsf_backend = os.environ.get("TDSF_AGENT_BACKEND", "langgraph").lower()
+        # P0-E: 写入 _backend_status（供 sidecar.health RPC 读取）
+        _backend_status["backend_type"] = _tdsf_backend
+        _backend_status["rust_bridge_active"] = _rust_bridge is not None
+        _backend_status["llm_configured"] = bool(
+            getattr(llm_config, "api_key", "") if llm_config else False
+        )
+        # 检测 strands 包是否可导入
+        try:
+            import strands  # type: ignore[import]
+            _backend_status["strands_available"] = True
+        except ImportError:
+            _backend_status["strands_available"] = False
+
         if _tdsf_backend == "strands":
             try:
                 from strands_backend import configure_strands
@@ -433,10 +470,16 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                         agent_id, input, state
                     )
                 )
+                # P0-E: 标记 Strands 真实激活
+                _backend_status["backend_activated"] = True
+                _backend_status["fallback_reason"] = None
+                _backend_status["activate_time"] = time.time()
                 logger.info(
                     f"Strands backend activated (TDSF_AGENT_BACKEND=strands): "
                     f"{_strands_adapter.get_stats()}"
                 )
+                # 推送 backend_status 事件给前端（前端 BackendPill 监听渲染）
+                send_notification("backend_status", dict(_backend_status))
             except Exception as se:
                 # Strands 注入失败：清空 override（防残留半初始化状态），回退 PAOR
                 logger.exception(
@@ -444,10 +487,19 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                     f"fallback to BaseAgent PAOR: {se}"
                 )
                 agents.clear_backend()
+                # P0-E: 标记降级 + 推送 fallback 事件给前端
+                _backend_status["backend_activated"] = False
+                _backend_status["fallback_reason"] = f"{type(se).__name__}: {se}"
+                _backend_status["activate_time"] = time.time()
+                send_notification("backend_status", dict(_backend_status))
         else:
             logger.info(
                 f"agent backend: {_tdsf_backend} (default BaseAgent PAOR)"
             )
+            # P0-E: langgraph 模式也推送状态给前端
+            _backend_status["backend_activated"] = False
+            _backend_status["activate_time"] = time.time()
+            send_notification("backend_status", dict(_backend_status))
 
         logger.info(
             f"agents methods registered + configured: "
@@ -572,6 +624,43 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         logger.info("core.log_capture methods registered (5 methods: tail/clear/stats/set_level/levels)")
     except Exception as e:
         logger.exception(f"failed to register core.log_capture: {e}")
+
+    # TDSF P0-E（2026-07-30）: sidecar.health JSON-RPC（Critical-2 可观测性修复）
+    # ---------------------------------------------------------------
+    # 提供后端运行时状态查询，让前端 BackendPill / 启动诊断能感知：
+    #   - 当前 backend_type（strands / langgraph）
+    #   - Strands 适配层是否真实激活（非 fallback）
+    #   - strands 包是否可导入
+    #   - rust_bridge 是否注入
+    #   - LLM 是否配置
+    #   - fallback 原因（如 Strands 启动失败）
+    #   - agents 数量 + 列表
+    #   - uptime / 启动时间
+    #
+    # 配合 sidecar:backend_status 事件（Strands 注入段推送），前端启动时调用
+    # sidecar.health 拉取当前状态，之后监听事件实时更新 BackendPill。
+    try:
+        def _sidecar_health(_params: dict | None = None) -> dict:
+            """sidecar.health: 返回 sidecar 后端运行时状态
+
+            Returns:
+                dict: 见 _backend_status 字段说明 + agents 元信息 + uptime
+            """
+            import agents as _agents_mod
+            return {
+                **_backend_status,
+                "agents_count": len(_agents_mod.AGENT_REGISTRY),
+                "agents_list": _agents_mod.list_agents(),
+                "uptime_seconds": time.time() - START_TIME,
+                "startup_time": START_TIME,
+                "python_version": sys.version.split()[0],
+                "platform": sys.platform,
+            }
+
+        dispatcher.register("sidecar.health", _sidecar_health)
+        logger.info("sidecar.health method registered (backend observability)")
+    except Exception as e:
+        logger.exception(f"failed to register sidecar.health: {e}")
 
 
 # ============================================================================
