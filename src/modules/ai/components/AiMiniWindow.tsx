@@ -57,9 +57,9 @@ const SUGGESTIONS = [
   },
   {
     label: "生成一条命令",
-    hint: "告诉我你想做什么",
+    hint: "告诉 AI 你想做什么",
     icon: TerminalIcon,
-    text: "给我一条命令来 ",
+    text: "帮我写一条命令：",
   },
   {
     label: "总结缓冲区",

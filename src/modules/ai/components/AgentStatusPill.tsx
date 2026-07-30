@@ -41,17 +41,22 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useChatStore } from "../store/chatStore";
 
-/** 子 Agent 名称 → 显示标签的映射 */
-const SUB_AGENT_LABEL: Record<string, { label: string; color: string }> = {
-  main: { label: "Main", color: "text-foreground" },
-  coding: { label: "Coding", color: "text-emerald-500" },
-  explore: { label: "Explore", color: "text-sky-500" },
-  history: { label: "History", color: "text-amber-500" },
-  teach: { label: "Teach", color: "text-violet-500" },
-  debug: { label: "Debug", color: "text-rose-500" },
-  refactor: { label: "Refactor", color: "text-cyan-500" },
-  test: { label: "Test", color: "text-lime-500" },
-  deploy: { label: "Deploy", color: "text-orange-500" },
+// TDSF 魔改 2026-07-30: 视觉收敛 — 对齐上游 terax 风格
+// 原实现: 8 个子 Agent 各一种彩色 (emerald/sky/amber/violet/rose/cyan/lime/orange)
+//   → 视觉花哨, 与上游 terax 低调灰字风格不符。
+// 新实现: 所有子 Agent 统一用 muted-foreground 灰字, 仅状态点用单一 emerald 色
+//   表示"工作中"。空闲时状态点为 muted 灰。保持标签语义, 去除彩色噪音。
+/** 子 Agent 名称 → 显示标签的映射（统一灰字风格，对齐上游 terax） */
+const SUB_AGENT_LABEL: Record<string, { label: string }> = {
+  main: { label: "Main" },
+  coding: { label: "Coding" },
+  explore: { label: "Explore" },
+  history: { label: "History" },
+  teach: { label: "Teach" },
+  debug: { label: "Debug" },
+  refactor: { label: "Refactor" },
+  test: { label: "Test" },
+  deploy: { label: "Deploy" },
 };
 
 export type AgentIconId =
@@ -107,7 +112,7 @@ export function AgentStatusPill({
       className={cn(
         "h-6 gap-1.5 rounded-md px-1.5 text-[10.5px] font-medium",
         onClick ? "cursor-pointer" : "cursor-default",
-        "border border-border/40 bg-card/40",
+        "border border-border/40 bg-card/40 text-muted-foreground",
         isMiniWindow && "text-xs mr-1",
       )}
       title={
@@ -116,35 +121,28 @@ export function AgentStatusPill({
           : "统一主 Agent（自动路由到子 Agent）"
       }
     >
-      {/* 状态圆点：busy 时 pulse 动画 */}
+      {/* 状态圆点：busy 时 emerald pulse, 空闲时 muted 灰 */}
       <span className="relative flex size-1.5 items-center justify-center">
         <span
           className={cn(
             "absolute inline-flex size-full rounded-full opacity-60",
-            isBusy ? "animate-ping" : "opacity-0",
-            isRouted ? "bg-current" : "bg-muted-foreground",
+            isBusy ? "animate-ping bg-emerald-500" : "opacity-0",
           )}
-          style={{ color: isRouted ? undefined : undefined }}
         />
         <span
           className={cn(
             "relative inline-flex size-1.5 rounded-full",
-            isRouted ? routed.color : "bg-muted-foreground",
+            isBusy ? "bg-emerald-500" : "bg-muted-foreground/60",
           )}
         />
       </span>
       <HugeiconsIcon
-        icon={isRouted ? SparklesIcon : SparklesIcon}
+        icon={SparklesIcon}
         size={11}
         strokeWidth={1.75}
-        className={isRouted ? routed.color : "text-muted-foreground"}
+        className="text-muted-foreground"
       />
-      <span
-        className={cn(
-          "max-w-[7rem] truncate",
-          isRouted ? routed.color : "text-muted-foreground",
-        )}
-      >
+      <span className="max-w-[7rem] truncate text-muted-foreground">
         {routed.label}
       </span>
     </Button>
