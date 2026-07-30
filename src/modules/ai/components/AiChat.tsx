@@ -21,12 +21,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
-// TDSF 魔改: 接入 Confidence 标记 (T2.3)
-import {
-  confidenceBorderColor,
-  confidenceLabel,
-  scoreConfidenceRpc,
-} from "@/lib/confidence/client";
+// TDSF 魔改: 接入 Confidence 评分 (2026-07-30 重构: 只保留 score, 移除 border/label)
+import { scoreConfidenceRpc } from "@/lib/confidence/client";
 import { cn } from "@/lib/utils";
 import {
   ArrowRight01Icon,
@@ -324,10 +320,15 @@ const ContinueRow = memo(function ContinueRow({
   );
 });
 
-// TDSF 魔改: ConfidenceMarker — AI 消息置信度视觉标记 (T2.3)
-// 流式结束后调 scoreConfidenceRpc 评分，根据分数加边框 + 标签。
-// 评分 < 0.3 → 红色边框 + "⚠ 不确定" / < 0.5 → 黄色边框 + "🤔 较低置信" / >= 0.5 → 正常
-// 用独立子组件封装 hook，避免 RenderedMessage 的 early return 违反 Rules of Hooks。
+// TDSF 魔改 2026-07-30: ConfidenceMarker 视觉重构 — 对齐上游 terax 气泡风格
+// -----------------------------------------------------------------
+// 原实现: 3px 彩色左边框 + emoji 标签 ("⚠ 不确定"/"🤔 较低置信")
+//   → 破坏上游 terax 消息气泡的视觉统一, 显得突兀。
+// 新实现: 只在消息末尾追加一个低调的小灰字徽章 + hover tooltip,
+//   - score >= 0.5: 不显示任何标记 (大多数正常消息无视觉干扰)
+//   - score < 0.5: 显示小灰字 "置信度 较低" + tooltip 显示具体分数
+//   - score < 0.3: 显示小灰字 "置信度 低" + amber 色调
+// 保留 scoreConfidenceRpc 调用和数据收集, 只改呈现方式。
 const ConfidenceMarker = memo(function ConfidenceMarker({
   message,
   streaming,
@@ -359,31 +360,27 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
     };
   }, [streaming, message.role, message.parts]);
 
-  const borderColor =
-    score !== null ? confidenceBorderColor(score) : "transparent";
-  const label = score !== null ? confidenceLabel(score) : null;
-  const showBorder = borderColor !== "transparent";
+  // 只在低置信度时显示标记 (>= 0.5 完全无标记, 保持气泡整洁)
+  const isLow = score !== null && score < 0.5;
+  const isVeryLow = score !== null && score < 0.3;
+  const labelText = isVeryLow ? "置信度 低" : isLow ? "置信度 较低" : null;
 
   return (
-    <div
-      style={
-        showBorder
-          ? {
-              borderLeft: `3px solid ${borderColor}`,
-              paddingLeft: "8px",
-            }
-          : undefined
-      }
-    >
-      {label ? (
+    <div>
+      {children}
+      {labelText ? (
         <div
-          className="mb-1 text-[10.5px] font-medium"
-          style={{ color: borderColor }}
+          className={cn(
+            "mt-1.5 text-[10px] font-medium",
+            isVeryLow
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-muted-foreground/70",
+          )}
+          title={`AI 回复置信度评分: ${score?.toFixed(2)}（0-1 区间，越低越需要人工核对）`}
         >
-          {label}
+          {labelText}
         </div>
       ) : null}
-      {children}
     </div>
   );
 });
@@ -596,7 +593,7 @@ const ReadGroup = memo(function ReadGroup({ parts }: { parts: AnyPart[] }) {
           </span>
         ) : null}
       </CollapsibleTrigger>
-      <CollapsibleContent className="tdsf-collapsible-content border-t border-border/30">
+      <CollapsibleContent className="terax-collapsible-content border-t border-border/30">
         <ul className="flex flex-col gap-0.5 px-2 py-1.5">
           {paths.map((path) => (
             <li
