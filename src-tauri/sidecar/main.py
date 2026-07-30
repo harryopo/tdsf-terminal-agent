@@ -517,6 +517,10 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                         agent_id, input, state
                     )
                 )
+                # P1-NEW-v3-1 修复 (2026-07-30): 注入 adapter 引用,
+                # 让 agent.configure RPC 能调用 adapter.update_model
+                # (否则 Strands 模式下重新配置 LLM 后仍用旧 model)
+                agents.set_strands_adapter(_strands_adapter)
                 # P0-E: 标记 Strands 真实激活
                 _backend_status["backend_activated"] = True
                 _backend_status["fallback_reason"] = None
@@ -535,6 +539,10 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 )
                 agents.clear_backend()
                 # P0-E: 标记降级 + 推送 fallback 事件给前端
+                # P1-NEW-v2-5 修复 (2026-07-30): 补重置 backend_type="langgraph"，
+                # 否则前端 sidecar.health 拿到 backend_type="strands" + activated=false，
+                # 语义上暗示"仍是 strands 后端"但实际已回退 LangGraph（状态机不一致）。
+                _backend_status["backend_type"] = "langgraph"
                 _backend_status["backend_activated"] = False
                 _backend_status["fallback_reason"] = f"{type(se).__name__}: {se}"
                 _backend_status["activate_time"] = time.time()
@@ -874,10 +882,15 @@ def main() -> None:
     # 5.0 TDSF P1-NEW-1 (2026-07-30): 关闭慢方法线程池
     #     等待正在执行的 agent.invoke 完成（最多 5s），避免响应丢失。
     #     不阻塞过久以免 Rust 侧 SIGTERM 强杀。
+    # P1-NEW-v2-6 修复 (2026-07-30): shutdown(wait=True) 无超时保护，
+    # 若 LLM HTTP 请求 hang 住会导致 sidecar 退出卡死。改为 wait=False，
+    # 不等待正在执行的 future，由 Rust 侧 SHUTDOWN_GRACE=3s + SIGKILL 兜底。
+    # （cancel_futures=True 仍取消排队中的 future；正在执行的 future 在
+    #   进程退出时由 OS 回收，LLM HTTP 连接会被强制断开）
     if _main_executor is not None:
         try:
-            _main_executor.shutdown(wait=True, cancel_futures=True)
-            logger.info("slow method executor shutdown complete")
+            _main_executor.shutdown(wait=False, cancel_futures=True)
+            logger.info("slow method executor shutdown initiated (non-blocking)")
         except Exception as e:
             logger.debug(f"executor shutdown on exit: {e}")
     # 5.0.1 TDSF P1-3 (2026-07-30): 关闭 RustBridge，唤醒所有 pending 请求
@@ -897,6 +910,27 @@ def main() -> None:
     # 5.2 计算 uptime 并记录
     uptime = time.time() - START_TIME
     logger.info(f"TDSF Python Sidecar stopped (uptime: {uptime:.1f}s)")
+
+    # P1-NEW-v3-4 修复 (2026-07-30): 强制 os._exit(0) 跳过 Python atexit
+    # _python_exit handler (concurrent.futures.thread 模块级 atexit 注册)。
+    #
+    # 根因: ThreadPoolExecutor 创建的工作线程默认 daemon=False,
+    # Python 解释器退出时 _python_exit 会 join 所有非 daemon 线程。
+    # 若 LLM HTTP 请求 hang 住, 工作线程不会退出, _python_exit 卡死,
+    # sidecar 进程无法退出 (与 P1-NEW-v2-6 改 wait=False 的修复预期不符)。
+    #
+    # 修复: 在所有手动清理 (5.0/5.0.1/5.1/5.2) 完成后, 调 os._exit(0)
+    # 强制退出, 跳过 _python_exit。手动清理已在上面 try/except 保护,
+    # 确保一定执行。os._exit(0) 会跳过 atexit 但不会跳过已 flush 的日志。
+    #
+    # 安全性:
+    # - 5.0 executor.shutdown(wait=False, cancel_futures=True) 已取消排队 future
+    # - 5.0.1 rust_bridge.stop() 已唤醒所有 pending 工具调用
+    # - 5.1 needs_you.stop_global_service() 已停超时扫描线程
+    # - 正在执行的 LLM HTTP 请求会被 OS 强制断开 (TCP RST)
+    # - Rust 侧 SHUTDOWN_GRACE=3s + SIGKILL 兜底 (sidecar.rs)
+    import os as _os_exit_mod
+    _os_exit_mod._exit(0)
 
 
 if __name__ == "__main__":

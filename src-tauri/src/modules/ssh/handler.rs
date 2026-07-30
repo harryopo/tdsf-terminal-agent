@@ -17,8 +17,24 @@ use russh::client::Handler;
 use russh::keys::PublicKey;
 use tauri::Emitter;
 use tokio::sync::{oneshot, Notify};
+// P1-NEW-v3-3 修复 (2026-07-30): 引入 timeout + Duration,
+// 给主机审批 rx.await 加 5min 超时, 防止用户关闭弹窗不点按钮时
+// SSH 连接 tokio task 永久阻塞 + registry 内存泄漏。
+use tokio::time::{timeout, Duration};
 
 use crate::modules::ssh::known_hosts::KnownHostsManager;
+
+/// 主机审批超时时间 (5 分钟)
+///
+/// 用户在 5 分钟内未点击"信任"/"拒绝"按钮时, 视为超时拒绝:
+/// - 关闭弹窗 / 切换窗口 / 离开电脑 → 5 分钟后自动拒绝连接
+/// - 防止 SSH 连接 tokio task 永久挂起 + approval_id 永留 registry
+///
+/// 超时时间选取依据:
+/// - 太短 (1-2min): 用户可能还在阅读指纹, 误判为拒绝
+/// - 太长 (30min): 连接卡死时间过久, 资源浪费
+/// - 5min: 平衡可用性 (用户有足够时间读指纹) + 资源回收
+const HOST_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// 将字符串错误转换为 russh::Error
 ///
@@ -244,9 +260,36 @@ impl SshClientHandler {
             return Ok(false);
         }
 
-        // 5. 异步等待用户响应 (无超时,用户必须显式决策)
+        // 5. 异步等待用户响应 (P1-NEW-v3-3 修复: 加 5min 超时)
         //    前端应提供"信任"/"拒绝"按钮,调用 ssh_approve_host 命令
-        let approved = rx.await.unwrap_or(false);
+        //
+        //    P1-NEW-v3-3 修复 (2026-07-30):
+        //    - 原版 `rx.await.unwrap_or(false)` 无超时, 用户关闭弹窗
+        //      不点按钮时 SSH 连接 tokio task 永久阻塞 + approval_id
+        //      永留 registry (多次触发累积内存泄漏)
+        //    - 修复: 用 tokio::time::timeout 包裹, 5min 超时后
+        //      视为拒绝, 同时主动清理 registry (虽然 oneshot rx 已
+        //      drop, sender 端的 registry.remove 由超时分支也清理)
+        //    - 超时场景: 用户关弹窗 / 切换窗口 / 离开电脑 / 前端崩溃
+        //    - 正常路径: 用户点"信任"/"拒绝" → resolve_host_approval
+        //      通过 oneshot tx 发送结果 → rx 立即返回
+        let approved = match timeout(HOST_APPROVAL_TIMEOUT, rx).await {
+            Ok(result) => result.unwrap_or(false),
+            Err(_) => {
+                log::warn!(
+                    "[ssh] host approval timeout (5min) id={} host={}:{}, treating as rejected",
+                    approval_id,
+                    self.host,
+                    self.port
+                );
+                // 超时后清理 registry (虽然 oneshot rx 已 drop,
+                // 但 sender 仍在 registry 中, 不清会泄漏)
+                if let Ok(mut registry) = HOST_APPROVAL_REGISTRY.lock() {
+                    registry.remove(&approval_id);
+                }
+                false
+            }
+        };
 
         log::info!(
             "[ssh] host approval result: id={} approved={}",

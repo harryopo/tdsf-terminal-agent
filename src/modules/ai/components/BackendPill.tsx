@@ -194,9 +194,20 @@ export function BackendPill() {
 
     // 2. 监听 sidecar:ready：sidecar 启动完成后重取初始状态
     //    （覆盖 BackendPill 挂载早于 sidecar ready 的时序场景）
+    // P1-NEW-v2-4 修复 (2026-07-30): then 回调内检查 cancelled，
+    // 若组件已卸载则立即 un() 取消订阅，避免 Tauri listener 泄漏。
+    // （subscribe 返回 Promise<UnlistenFn>，cleanup 是同步的无法 await，
+    //   若不在 then 内检查 cancelled，卸载后 push 的 unlisten 永不调用）
     subscribe("ready", () => {
+      if (cancelled) return;
       void fetchHealth();
-    }).then((un) => unlistens.push(un));
+    }).then((un) => {
+      if (cancelled) {
+        un();
+      } else {
+        unlistens.push(un);
+      }
+    });
 
     // 3. 监听 sidecar:backend_status：Strands 注入三路径实时推送
     subscribe("backend_status", (payload) => {
@@ -218,7 +229,13 @@ export function BackendPill() {
         python_version: prev?.python_version,
         platform: prev?.platform,
       }));
-    }).then((un) => unlistens.push(un));
+    }).then((un) => {
+      if (cancelled) {
+        un();
+      } else {
+        unlistens.push(un);
+      }
+    });
 
     return () => {
       cancelled = true;
