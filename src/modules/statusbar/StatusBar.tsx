@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useChatStore } from "@/modules/ai";
 import { AgentStatusPill } from "@/modules/ai/components/AgentStatusPill";
+import { BackendPill } from "@/modules/ai/components/BackendPill";
 import {
   AiOpenButton,
   AiStatusBarControls,
@@ -75,6 +76,7 @@ export function StatusBar({
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         <MockLLMWarning />
+        <BackendPill />
         <AgentStatusPill onClick={onOpenMini} />
         {panelOpen && hasComposer ? (
           <AiStatusBarControls />

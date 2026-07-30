@@ -1359,4 +1359,95 @@ Command Palette（Ctrl+P）内容全英文（占位符/分组 General/Spaces/Tab
 - tauri:dev 进程仍在运行（PID 11524 sidecar / 9222 CDP / 9300 Vite），下一个 AI 可直接复用做 CDP 实测
 - Strands 后端激活的环境变量：`TDSF_AGENT_BACKEND=strands`（PowerShell: `$env:TDSF_AGENT_BACKEND="strands"` 后重启 tauri:dev）
 
+---
+
+## 二十、交接章（2026-07-30 · P0-C BackendPill 卡 loading 修复 + Critical-3 文档漂移 + 前端可观测性收尾）
+
+> 续 §十九。本 session 接手前一个 AI 未提交的 BackendPill 组件 + registry.ts 注释修复，定位并修复 BackendPill 永远卡 "Backend…" 加载态的时序 bug，完成 Critical-2 可观测性收尾。
+
+### 一句话现状
+
+BackendPill 卡 loading 根因定位 + 修复完成。Python `main()` 流程中 `register_business_methods`（推送 `backend_status` 事件）→ 之后才 `send_notification("ready")`，即事件在 sidecar ready 之前推送。旧代码 `isRunning()` 守卫在 sidecar 仍 starting 时返回 false → IIFE 提前返回 → 事件早于 subscribe 完成而丢失 → 永远卡 loading。修复：去掉 `isRunning()` 守卫直接调 `sidecar.health`，新增 `sidecar:ready` 监听触发重取，catch 中加 `console.warn` 暴露错误。CDP 9222 实测确凿：BackendPill 显示 "Strands"（emerald 绿）+ sidecar.health 返回 `backend_type=strands, backend_activated=true, agents_count=9` 完全一致。
+
+### 根因分析（时序图）
+
+```
+Python main() 流程:
+  ├─ register_business_methods()
+  │   ├─ Strands 注入 → send_notification("backend_status", ...)  ← 事件推送
+  │   └─ dispatcher.register("sidecar.health", _sidecar_health)
+  ├─ send_notification("ready", ...)                              ← sidecar 标记 Running
+  └─ 进入主循环
+
+前端 BackendPill 挂载（多在 sidecar starting 阶段）:
+  旧代码:
+    ├─ isRunning() → false（sidecar 还在 starting）→ IIFE return  ← 初始状态拉取被跳过
+    ├─ subscribe("backend_status", cb).then(...)                  ← subscribe 异步注册
+    └─ 事件在 subscribe 完成前已推送 → 丢失 → 永远卡 loading
+
+  修复后:
+    ├─ void fetchHealth()                           ← 直接调 sidecar.health，不 gate isRunning
+    ├─ subscribe("ready", () => fetchHealth())      ← sidecar ready 后重取（覆盖 starting 场景）
+    └─ subscribe("backend_status", cb)              ← 实时更新
+```
+
+### 本轮改动文件清单
+
+| 文件 | 改动类型 | 内容 |
+|------|---------|------|
+| `src/modules/ai/components/BackendPill.tsx` | 新文件 + 修复 | 后端类型指示器组件（Strands 绿/LangGraph 黄/降级红） |
+| `src/modules/ai/index.ts` | 修改 | 导出 `BackendPill` + `BackendStatus` 类型 |
+| `src/modules/statusbar/StatusBar.tsx` | 修改 | 在 MockLLMWarning 与 AgentStatusPill 之间挂载 BackendPill |
+| `src/modules/ai/agents/registry.ts` | 修改 | Critical-3 文档漂移修复：注释澄清前端 5 个 / 后端 9 个 agent 的对应关系 |
+| `docs/dev-state.md` | 修改 | 本节 §二十交接章 |
+
+### 关键技术决策沉淀（4 条）
+
+1. **不 gate `isRunning()`**：`invokeRpc` 本身会在 sidecar 未运行时抛 IPCError（`data.type='not_running'`），catch 后等 `sidecar:ready` 事件重取即可。`isRunning()` 守卫是多余的，且引入了"starting 阶段提前返回"的时序 bug。
+2. **`sidecar:ready` 事件触发重取**：覆盖 BackendPill 挂载早于 sidecar ready 的场景。Python `main()` 在 `register_business_methods` 后才发 `ready`，此时 `sidecar.health` 方法已注册，重取必成功。
+3. **`backend_status` 事件在 `ready` 之前推送**：这是设计如此（Strands 注入在 `register_business_methods` 中），不是 bug。前端不能依赖此事件作为初始状态来源，必须通过 `sidecar.health` RPC 拉取。
+4. **catch 中 `console.warn` 暴露错误**：旧代码 `catch {}` 静默吞掉所有错误，开发期无法排查。新代码输出 `[BackendPill] sidecar.health failed, will retry on sidecar:ready` + 错误对象，生产环境无副作用（console.warn 不阻断）。
+
+### 五绿门禁 + CDP 实测
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过
+- `pnpm build:web` ✅ 52.56s 成功
+- CDP 9222 ✅ BackendPill 显示 "Strands"（emerald 绿，oklch 163.223）+ sidecar.health 返回 `backend_type=strands, backend_activated=true, agents_count=9, rust_bridge_active=true, llm_configured=true, uptime_seconds=1456` 完全一致
+
+### CDP 实测输出摘要
+
+```
+BackendPill: text="Strands", className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+sidecar.health: backend_type="strands", backend_activated=true, fallback_reason=null,
+                agents_count=9, agents_list=[main,coding,explore,history,teach,debug,refactor,test,deploy],
+                rust_bridge_active=true, llm_configured=true, uptime_seconds=1456
+判定: ✅ 验证通过 — BackendPill 正确显示后端类型
+```
+
+### 接手下一步（按优先级）
+
+**P0（高优先级）**
+- 无未完成的 P0 项。Critical-2（后端可观测性）+ Critical-3（文档漂移）均已收尾。
+
+**P1（中优先级）**
+1. **痛点 6（前端 5 agent 模型切换不可用）**：检查 `AgentPanel` 模型切换 UI 状态。用户手动切换 coder/explore/history/teach 时，`setTdsfAgent(id)` 更新 `tdsfAgentId`，但 transport.ts 路由是否正确走对应 Python agent 需验证。
+2. **痛点 7（sidecar 未运行无引导）**：`handleSubmit` 已有 `isRunning` 检查，但错误提示可以更友好（引导用户重启应用而非仅"请等待启动"）。
+3. **SSH 终端深度集成**（§八 backlog #15-#20）：把 SSH 终端并入本地 rendererPool，与本地终端一模一样。计划已写好（`C:\Users\Lenovo\.qoder\plans\still-crest-linnet.md`），代码尚未开始。
+
+**P2（低优先级，长期 backlog）**
+- 资源管理器按目录缓存性能优化（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- Strands ApprovalHook + LimitToolCounts Hook（subagent-A 的 0.8.5 实施方案）
+- Strands 工具 0.8.5 4 个新工具注入（read_remote_file / analyze_logs / inspect_processes / network_diagnose 完整接入）
+- 运维 agent 开源项目调研集成（用户原始 goal 提到：搜集开源运维 agent 项目，分析如何集成到本软件）
+
+### 备注
+
+- 本 session 未碰 docs/竞赛、docs/教程、docs/合规目录的 modified 文件（前 session 遗留改动，不属于本 session 范围）
+- tauri:dev 进程仍在运行（9222 CDP / 9300 Vite），下一个 AI 可直接复用做 CDP 实测
+- Strands 后端激活的环境变量：`TDSF_AGENT_BACKEND=strands`（PowerShell: `$env:TDSF_AGENT_BACKEND="strands"` 后重启 tauri:dev）
+- CDP 实测脚本：`.tdsf-data/cdp_verify_backend_pill.py`（纯 stdlib Python，无第三方依赖）
+
 
