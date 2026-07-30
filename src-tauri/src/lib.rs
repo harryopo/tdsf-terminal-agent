@@ -388,6 +388,9 @@ pub fn run() {
             ssh::sftp_rename,
             // TDSF 魔改: SSH 测试连接 + 凭据持久化 (永久保存密钥 + 自动登录)
             ssh::ssh_test,
+            // TDSF 魔改 P0-D (2026-07-30): SSH exec 命令执行 (运维 Agent 用)
+            // 复用 Handle 开 channel.exec(),返回 {ok, output, stderr, exit_code, duration}
+            ssh::ssh_command,
             ssh::credentials::ssh_credentials_save,
             ssh::credentials::ssh_credentials_list,
             ssh::credentials::ssh_credentials_delete,
