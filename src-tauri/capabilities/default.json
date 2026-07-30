@@ -4,7 +4,8 @@
   "description": "Capability for the main window (与 terax-ai 上游对齐; 曾被裁剪成 P0 最小集导致 window.show 被权限拦截、窗口永不可见)",
   "windows": [
     "main",
-    "settings"
+    "settings",
+    "settings-*"
   ],
   "permissions": [
     "core:default",
