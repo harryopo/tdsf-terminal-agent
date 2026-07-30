@@ -1214,3 +1214,44 @@ python .tdsf-data\test_strands_e2e.py
 2. 测试基线变化时必须同步更新 §7.1 / §7.5 / §12 脚本
 3. CLAUDE.md / AGENTS.md 改动时必须双向检查本规范引用是否一致
 
+---
+
+## 十七、交接章（2026-07-30 · 设置按钮点击无反应修复 — 并行 agent B 产出）
+
+> 本节由**并行 agent B**（与主线 Strands/规范 agent 并行）产出。改动范围只有 `lib.rs` 的 `open_settings_window` + capabilities 两个 json，**不碰** Strands / sidecar / ssh / 前端主线文件，与主线零冲突。
+
+### 症状
+点击顶栏设置按钮（Header settings-button → `invoke("open_settings_window")`）没有任何反应：无报错、无窗口。
+
+### 双层根因（均已源码级实证）
+
+1. **第一层（直接触发）：WebView2 browser args 不一致 → settings webview 创建必败**
+   - TDSF 魔改在 `tauri.conf.json:27` / `tauri.windows.conf.json:12` 给 **main** 窗口加了 `additionalBrowserArgs: "--remote-debugging-port=9222 --remote-allow-origins=*"`（CDP 实测用）
+   - `open_settings_window` 建的 settings 窗口**不带**这些 args → WebView2 拒绝在同一 user-data 目录下用不同 browser args 建第二个 webview，报 `0x8007139F ERROR_INVALID_STATE`（日志：`[tauri_runtime_wry][ERROR] failed to create webview: WebView2 error: 0x8007139F 组或资源的状态不是执行请求操作的正确状态`）
+   - **即：魔改加上 CDP 端口后，settings 窗口从来就没成功打开过**
+2. **第二层（放大成永久静默失败）：僵尸 label 卡死注册表 + 错误全被吞**
+   - webview 创建失败后，窗口死亡但 tauri 注册表的 `settings` label **永不清除**（tauri 2.11.5 只在 `Destroyed` 事件时移除 label：app.rs:2544 → manager/mod.rs:653 `on_window_close`；僵尸已错过该事件），且 `prepare_window` 拒绝重复 label → 进程内无法自愈
+   - 此后每次点击都命中旧代码 `get_webview_window("settings")` 存在分支 → 对死句柄 `show()/set_focus()`，错误被 `let _ =` 全部吞掉 → 返回 Ok，前端无感知
+   - 实验证据：JS `destroy()` 返回 OK 但 label 仍在（`before: main,settings | destroy: OK | after: main,settings`）；对僵尸调 `isVisible()` 报 `failed to receive message from webview`
+
+### 修复内容
+
+- **`src-tauri/src/lib.rs`**：
+  - `open_settings_window` 重写：先对所有 settings 族窗口做**存活探测**（`is_visible().is_err()` = 僵尸）；活窗口才复用 show/focus/emit（失败改 `log::warn!` 不再静默）；全是僵尸则 `next_settings_label` 选下一个空闲 label（`settings-1`、`settings-2`…）重建（死 label 无法复用，见第二层根因）
+  - 新建 builder **继承 main 窗口的 `additional_browser_args`**（从 `app.config()` 实时读取，非硬编码）——修第一层根因
+  - macOS setup 关闭联动改为遍历 settings 族 label
+  - 新增 `is_settings_label` / `next_settings_label` 纯函数 + 4 个单元测试（`settings_label_tests`）
+- **`src-tauri/capabilities/default.json` / `desktop.json`**：windows 数组加 `"settings-*"` glob，替补窗口权限与原窗口一致
+
+### 门禁 + 实测（全过）
+
+- cargo test --lib ✅ 298（含新增 4）/ cargo check ✅ / pnpm typecheck ✅ / lint ✅ / test ✅ 832/832 / build:web ✅
+- tauri:dev + CDP 9222 实测：`openSettingsWindow()` → CDP 出现 `Terax — Settings` target、`settings visible=true`、设置 UI 完整渲染（通用/编辑器/主题/快捷键/AI 模型/智能体/TDSF 引擎/后端日志/关于 9 个 tab）；重复打开正确复用（target 数=1）；destroy 后重开恢复正常
+
+### ⚠️ 对主线 agent 的提示
+
+1. **tauri:dev 实例被重启过**（修 Rust 必须重启；已获用户批准）。现在 9222/9300 上跑的是**含本修复的新构建**。
+2. **vite reload 风暴隐患**：`docs/` 下写 .md 会触发 vite 全页 reload（vite 默认 watch 项目根），主线批量写报告时曾出现 reload 风暴把 vite 打崩（`beforeDevCommand terminated`，dev 整个退出）。建议在 `vite.config.ts` 加 `server.watch.ignored: ['**/docs/**']`（本次未改，避免越界）。
+3. 本修复的 commit 只含上述 4 个文件 + 本交接章，**未提交**主线工作区中的其他未跟踪/已改文件（`docs/reports/*2026-07-30.md`、`docs/竞赛/` 等），它们仍归主线所有。
+
+

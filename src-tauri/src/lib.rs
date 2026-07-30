@@ -77,6 +77,31 @@ fn parse_launch_target() -> LaunchTarget {
     resolve_launch_target(entries)
 }
 
+/// True for the settings window family: "settings", "settings-1", "settings-2", …
+fn is_settings_label(label: &str) -> bool {
+    label == "settings"
+        || label
+            .strip_prefix("settings-")
+            .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Pick the first free settings label. A dead settings window keeps its label
+/// registered forever (tauri only frees a label on the `Destroyed` event, which
+/// a zombie already missed), so recovery must rebuild under a fresh label.
+fn next_settings_label(existing: &[String]) -> String {
+    if !existing.iter().any(|l| l == "settings") {
+        return "settings".to_string();
+    }
+    let mut n: u32 = 1;
+    loop {
+        let candidate = format!("settings-{n}");
+        if !existing.iter().any(|l| l == &candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 #[tauri::command]
 async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Result<(), String> {
     let url_path = match tab.as_deref() {
@@ -84,10 +109,29 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         _ => "settings.html".to_string(),
     };
 
-    if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.set_always_on_top(true);
-        let _ = window.show();
-        let _ = window.set_focus();
+    // TDSF fix (2026-07-30): a settings window whose native window/webview died
+    // (e.g. failed WebView2 creation) stays registered as a zombie label — every
+    // dispatcher call fails with FailedToReceiveMessage and the old code
+    // swallowed those errors, so the button silently did nothing forever.
+    // Probe liveness first; only reuse a window that still answers.
+    let mut dead_labels: Vec<String> = Vec::new();
+    for (label, window) in app.webview_windows() {
+        if !is_settings_label(&label) {
+            continue;
+        }
+        if window.is_visible().is_err() {
+            dead_labels.push(label);
+            continue;
+        }
+        if let Err(e) = window.set_always_on_top(true) {
+            log::warn!("settings window '{label}': set_always_on_top failed: {e}");
+        }
+        if let Err(e) = window.show() {
+            log::warn!("settings window '{label}': show failed: {e}");
+        }
+        if let Err(e) = window.set_focus() {
+            log::warn!("settings window '{label}': set_focus failed: {e}");
+        }
         if let Some(t) = tab.as_deref().filter(|s| !s.is_empty()) {
             // emit() serializes via JSON — no string-escape footgun, unlike
             // eval() with format!(). Frontend listens via Tauri event API.
@@ -95,8 +139,15 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         }
         return Ok(());
     }
+    if !dead_labels.is_empty() {
+        log::warn!(
+            "open_settings_window: dead settings window(s) {dead_labels:?} still registered; building a replacement"
+        );
+    }
 
-    let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App(url_path.into()))
+    let existing: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let label = next_settings_label(&existing);
+    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url_path.into()))
         .title("Settings")
         .inner_size(900.0, 700.0)
         .min_inner_size(820.0, 620.0)
@@ -105,6 +156,22 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         // Keep settings above the main app window so it doesn't get hidden
         // when the user clicks back into the editor or terminal (#33).
         .always_on_top(true);
+
+    // TDSF fix (2026-07-30): the main window ships custom additionalBrowserArgs
+    // (CDP --remote-debugging-port). WebView2 refuses to create a second webview
+    // in the same user-data dir with different browser args (0x8007139F
+    // ERROR_INVALID_STATE), so the settings webview must inherit them.
+    let main_browser_args = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .and_then(|w| w.additional_browser_args.clone());
+    let builder = match &main_browser_args {
+        Some(args) => builder.additional_browser_args(args),
+        None => builder,
+    };
 
     // Tie lifecycle to the main window so settings minimizes/closes with it.
     // macOS: skip parent() — child + always_on_top leaves the settings webview
@@ -216,8 +283,10 @@ pub fn run() {
                         event,
                         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
                     ) {
-                        if let Some(settings) = handle.get_webview_window("settings") {
-                            let _ = settings.close();
+                        for (label, settings) in handle.webview_windows() {
+                            if is_settings_label(&label) {
+                                let _ = settings.close();
+                            }
                         }
                     }
                 });
@@ -448,6 +517,42 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod settings_label_tests {
+    use super::{is_settings_label, next_settings_label};
+
+    #[test]
+    fn fresh_app_uses_base_label() {
+        assert_eq!(next_settings_label(&["main".into()]), "settings");
+    }
+
+    #[test]
+    fn zombie_base_label_falls_back_to_dash_one() {
+        let existing = vec!["main".into(), "settings".into()];
+        assert_eq!(next_settings_label(&existing), "settings-1");
+    }
+
+    #[test]
+    fn multiple_zombies_pick_next_free_suffix() {
+        let existing = vec![
+            "main".into(),
+            "settings".into(),
+            "settings-1".into(),
+            "settings-2".into(),
+        ];
+        assert_eq!(next_settings_label(&existing), "settings-3");
+    }
+
+    #[test]
+    fn label_matcher_accepts_base_and_suffixed_only() {
+        assert!(is_settings_label("settings"));
+        assert!(is_settings_label("settings-1"));
+        assert!(is_settings_label("settings-42"));
+        assert!(!is_settings_label("main"));
+        assert!(!is_settings_label("settingsx"));
+    }
 }
 
 #[cfg(test)]
