@@ -413,3 +413,139 @@ describe("sidecarStreamToUIMessageStream — UIMessageChunk 协议转换", () =>
     expect(types).toEqual(["start", "start-step", "finish-step", "finish"]);
   });
 });
+
+describe("sidecarStreamToUIMessageStream — reasoning / 工具行 part 转换", () => {
+  it("reasoning-delta → reasoning-start / reasoning-delta+ / reasoning-end", async () => {
+    const input: SidecarStreamPart[] = [
+      { type: "reasoning-delta", id: "r1", delta: "think" },
+      { type: "reasoning-delta", id: "r1", delta: "ing" },
+      { type: "finish", id: "s1" },
+    ];
+    const stream = sidecarStreamToUIMessageStream(
+      (async function* () {
+        for (const p of input) yield p;
+      })(),
+    );
+    const chunks = await readStream(stream);
+    const types = chunks.map((c) => c.type);
+
+    expect(types).toContain("reasoning-start");
+    expect(types.filter((t) => t === "reasoning-delta").length).toBe(2);
+    expect(types).toContain("reasoning-end");
+    // reasoning-end 必须在 finish 之前
+    expect(types.indexOf("reasoning-end")).toBeLessThan(types.indexOf("finish"));
+  });
+
+  it("tool-input → dynamic tool-input-available（含 toolName/input）", async () => {
+    const input: SidecarStreamPart[] = [
+      {
+        type: "tool-input",
+        toolCallId: "t-1",
+        toolName: "ssh_command",
+        input: { command: "uptime" },
+      },
+      { type: "finish", id: "s1" },
+    ];
+    const stream = sidecarStreamToUIMessageStream(
+      (async function* () {
+        for (const p of input) yield p;
+      })(),
+    );
+    const chunks = await readStream(stream);
+    const toolChunk = chunks.find((c) => c.type === "tool-input-available") as {
+      type: "tool-input-available";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      dynamic?: boolean;
+    };
+    expect(toolChunk).toBeDefined();
+    expect(toolChunk.toolCallId).toBe("t-1");
+    expect(toolChunk.toolName).toBe("ssh_command");
+    expect(toolChunk.input).toEqual({ command: "uptime" });
+    expect(toolChunk.dynamic).toBe(true);
+  });
+
+  it("tool-output（成功）→ tool-output-available；tool-output（错误）→ tool-output-error", async () => {
+    const input: SidecarStreamPart[] = [
+      {
+        type: "tool-input",
+        toolCallId: "t-1",
+        toolName: "ssh_command",
+        input: {},
+      },
+      {
+        type: "tool-output",
+        toolCallId: "t-1",
+        toolName: "ssh_command",
+        output: { stdout: "ok" },
+        isError: false,
+      },
+      {
+        type: "tool-input",
+        toolCallId: "t-2",
+        toolName: "sftp_read",
+        input: {},
+      },
+      {
+        type: "tool-output",
+        toolCallId: "t-2",
+        toolName: "sftp_read",
+        output: "boom",
+        isError: true,
+      },
+      { type: "finish", id: "s1" },
+    ];
+    const stream = sidecarStreamToUIMessageStream(
+      (async function* () {
+        for (const p of input) yield p;
+      })(),
+    );
+    const chunks = await readStream(stream);
+    const ok = chunks.find((c) => c.type === "tool-output-available") as {
+      type: "tool-output-available";
+      toolCallId: string;
+      output: unknown;
+    };
+    expect(ok).toBeDefined();
+    expect(ok.toolCallId).toBe("t-1");
+    expect(ok.output).toEqual({ stdout: "ok" });
+
+    const errChunk = chunks.find((c) => c.type === "tool-output-error") as {
+      type: "tool-output-error";
+      toolCallId: string;
+      errorText: string;
+    };
+    expect(errChunk).toBeDefined();
+    expect(errChunk.toolCallId).toBe("t-2");
+    expect(errChunk.errorText).toBe("boom");
+  });
+});
+
+describe("runSidecarStream — thinking 作为 reasoning part", () => {
+  it("invoke 返回 thinking → yield reasoning-delta（不是 text-delta）", async () => {
+    _setDevModeCheck(() => false);
+    mockInvoke.mockResolvedValue({
+      thinking: "let me think",
+      output: "answer",
+    });
+
+    const parts = await collect(
+      runSidecarStream({
+        agentId: "coder",
+        messages: makeMessages("hi"),
+        input: "hi",
+        live: makeLive(),
+      }),
+    );
+    const types = parts.map((p) => p.type);
+    // thinking 走 reasoning-delta，output 走 text-delta
+    expect(types).toContain("reasoning-delta");
+    expect(types).toContain("text-delta");
+    expect(types).toContain("finish");
+    // reasoning 段应排在 text 段之前（reasoning → tools → text 顺序）
+    const firstReasoning = types.indexOf("reasoning-delta");
+    const firstText = types.indexOf("text-delta");
+    expect(firstReasoning).toBeLessThan(firstText);
+  });
+});
