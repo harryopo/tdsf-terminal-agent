@@ -29,7 +29,7 @@ import {
   useChatStore,
   useSelectionAskAi,
 } from "@/modules/ai";
-import { TdsfAgentPanel } from "@/modules/ai/components/lazy";
+import { AiMiniWindow } from "@/modules/ai/components/lazy";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -1703,9 +1703,11 @@ export default function App() {
             </>
           ) : null}
 
-          {/* TDSF 魔改: 用 TdsfAgentPanel 替代 AiMiniWindow (TDSF 视觉风格) */}
+          {/* TDSF 魔改回退 (2026-07-30): 恢复上游 AiMiniWindow（Terax 视觉——
+              AgentStatusPill + Context 圆环统计 + SessionPicker + ai-elements
+              工具行/Reasoned 折叠），替代自研 TdsfAgentPanel（样式简陋已弃用）。 */}
           {hasComposer && miniPresence.mounted ? (
-            <TdsfAgentPanel state={miniPresence.state} />
+            <AiMiniWindow state={miniPresence.state} />
           ) : null}
           {askPresence.mounted ? (
             <SelectionAskAi
