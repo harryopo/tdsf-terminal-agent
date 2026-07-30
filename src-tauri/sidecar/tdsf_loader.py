@@ -563,15 +563,17 @@ def _create_change_callback(rust_notifier=None):
         except Exception as e:
             logger.warning(f"failed to publish tdsf.updated event: {e}")
         # 通知 Rust 侧（如果提供 notifier）
+        # 事件名用下划线（Tauri 不允许点号：only alphanumeric, '-', '/', ':', '_'）
+        # 修复 2026-07-30: 原 "tdsf.updated" 被 Tauri 拒绝，改为 "tdsf_updated"
         if rust_notifier is not None:
             try:
-                rust_notifier("tdsf.updated", {
+                rust_notifier("tdsf_updated", {
                     "has_global": tdsf.has_global,
                     "has_project": tdsf.has_project,
                     "combined_len": len(tdsf.combined_content),
                 })
             except Exception as e:
-                logger.warning(f"rust_notifier failed for tdsf.updated: {e}")
+                logger.warning(f"rust_notifier failed for tdsf_updated: {e}")
 
     return _on_tdsf_changed
 

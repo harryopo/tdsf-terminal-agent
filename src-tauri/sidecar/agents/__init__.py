@@ -90,6 +90,10 @@ __all__ = [
     "set_backend",
     "clear_backend",
     "BackendInvokeCallable",
+    # P1-NEW-v3-1 修复 (2026-07-30): Strands adapter 引用注入
+    # (agent.configure RPC 通过此引用调用 adapter.update_model)
+    "set_strands_adapter",
+    "get_strands_adapter",
 ]
 
 
@@ -128,6 +132,13 @@ _global_llm_call: LLMCallFunction | None = None
 # - 由 main.py 在 TDSF_AGENT_BACKEND=strands 时通过 set_backend(adapter.invoke) 注入
 # - 与现有 BaseAgent PAOR 主路径互斥，二选一（避免双路径并发竞态）
 _global_backend_override: BackendInvokeCallable | None = None
+
+# P1-NEW-v3-1 修复 (2026-07-30): 全局 Strands adapter 引用
+# - agent.configure RPC 重新配置 LLM 后, 需调用 adapter.update_model + clear_cache
+# - 否则 Strands 路径仍用旧 model, 前端误报 ok:true
+# - 由 main.py 在 set_backend 后调用 set_strands_adapter(adapter) 注入
+# - clear_backend / reset_for_test 时清空
+_global_strands_adapter: Any = None
 
 
 def configure_agents(
@@ -209,10 +220,41 @@ def clear_backend() -> None:
 
     用于运行时切换后端（如 Strands → LangGraph）或单元测试隔离。
     """
-    global _global_backend_override
+    global _global_backend_override, _global_strands_adapter
     if _global_backend_override is not None:
         _global_backend_override = None
         logger.info("backend override cleared")
+    # P1-NEW-v3-1 修复 (2026-07-30): 同步清空 Strands adapter 引用,
+    # 避免 agent.configure 误调已卸载的 adapter.update_model
+    if _global_strands_adapter is not None:
+        _global_strands_adapter = None
+        logger.info("strands adapter reference cleared")
+
+
+def set_strands_adapter(adapter: Any) -> None:
+    """注入 Strands adapter 引用（供 agent.configure RPC 调用 update_model）
+
+    P1-NEW-v3-1 修复 (2026-07-30):
+    - main.py 在 set_backend(...) 后调用此函数注入 adapter 引用
+    - agent.configure RPC 重新配置 LLM 后, 通过此引用调用 adapter.update_model
+    - 否则 Strands 路径仍用旧 model, 前端误报 ok:true (实际未生效)
+
+    Args:
+        adapter: StrandsAgentAdapter 实例 (有 update_model 方法)
+    """
+    global _global_strands_adapter
+    _global_strands_adapter = adapter
+    logger.info(
+        f"strands adapter reference set: type={type(adapter).__name__ if adapter else 'None'}"
+    )
+
+
+def get_strands_adapter() -> Any:
+    """获取当前注入的 Strands adapter（无则返回 None）
+
+    供 _rpc_agent_configure 判断是否走 Strands 配置热更新路径。
+    """
+    return _global_strands_adapter
 
 
 def get_agent(name: str) -> BaseAgent:
@@ -277,9 +319,17 @@ def invoke_agent(name: str, state: dict[str, Any]) -> dict[str, Any]:
 
 def reset_for_test() -> None:
     """重置全局状态（测试隔离用）"""
-    global _global_event_bus, _global_llm_call
+    # P1-NEW-v2-1 修复 (2026-07-30): 补清 _global_backend_override，
+    # 否则测试 A set_backend(mock) 后 reset_for_test 不清 override，
+    # 测试 B 的 invoke_agent 会走测试 A 的 mock（测试假阳性/阴性）。
+    # P1-NEW-v3-1 修复 (2026-07-30): 补清 _global_strands_adapter,
+    # 否则测试 A set_strands_adapter(mock) 后 reset_for_test 不清,
+    # 测试 B 的 agent.configure 会调测试 A 的 mock adapter.update_model。
+    global _global_event_bus, _global_llm_call, _global_backend_override, _global_strands_adapter
     _global_event_bus = None
     _global_llm_call = None
+    _global_backend_override = None
+    _global_strands_adapter = None
     _agent_instances.clear()
 
 
@@ -370,6 +420,29 @@ def _rpc_agent_configure(
                 _global_llm_call = new_llm_call
                 for agent in _agent_instances.values():
                     agent.llm_call = new_llm_call
+                # P1-NEW-v3-1 修复 (2026-07-30): Strands 后端配置热更新
+                # - 原版仅更新 LangGraph 路径 (_global_llm_call + BaseAgent.llm_call),
+                #   Strands adapter.strands_model 和 _agent_cache 未更新,
+                #   前端误报 ok:true 实际 Strands 仍用旧 model
+                # - 修复: 检查 _global_strands_adapter 是否注入, 有则调用
+                #   update_model (内部会 clear_cache 旧 Agent 实例)
+                # - create_strands_model 失败时不阻断 LangGraph 路径,
+                #   只记日志 (Strands 降级, LangGraph 正常)
+                if _global_strands_adapter is not None:
+                    try:
+                        from strands_backend.model_adapter import create_strands_model
+                        new_model = create_strands_model(llm_config)
+                        _global_strands_adapter.update_model(new_model)
+                        logger.info(
+                            f"Strands model hot-reloaded: "
+                            f"provider={llm_config.provider}, model={llm_config.model}, "
+                            f"model_available={new_model is not None}"
+                        )
+                    except Exception as se:
+                        # Strands 更新失败不阻断 LangGraph 路径, 只降级 Strands
+                        logger.warning(
+                            f"Strands model hot-reload failed (degraded): {se}"
+                        )
                 return {
                     "ok": True,
                     "llm_call_set": True,
