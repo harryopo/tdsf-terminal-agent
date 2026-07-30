@@ -243,7 +243,10 @@ function injectEnvIntoLastUser(
   return messages;
 }
 
-function formatEnvBlock(live: LiveSnapshot): string | null {
+// TDSF 修复 2026-07-30 (Bug 3): 导出 formatEnvBlock 供 CDP 调试验证 <env> 注入
+// 之前未 export, App.tsx 的 __TDSF_DBG__ 无法暴露此函数, CDP 没法验证
+// Python agent 收到的 input 是否含 <env> 块
+export function formatEnvBlock(live: LiveSnapshot): string | null {
   const lines: string[] = [];
   if (live.workspaceRoot) lines.push(`workspace_root: ${live.workspaceRoot}`);
   if (live.cwd) lines.push(`active_terminal_cwd: ${live.cwd}`);
