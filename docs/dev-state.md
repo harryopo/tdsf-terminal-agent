@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-30 · 魔改 agent P1 事件链路修复 + Strands P0 集成 **完成**：agent_switch 永久监听器 + llm_call_failed 60s dedup + MockLLMWarning 启动期补发 + Strands 4 处 CRITICAL 修复。接手请直接看 **§十二 交接指南**。
+> **最后更新**：2026-07-30 · P0-E 阶段 A 完成：Strands 1.50.2 真实包安装 + DeepSeek LLM 端到端实测全过（4/4 tests）。修复 Strands 1.50.2 移除 `max_iterations` 参数的真实 Bug。Critical Bug 修复链路在真实端到端路径中验证有效。接手请直接看 **§十五 交接指南**。
 
 ---
 
@@ -1017,5 +1017,127 @@ console.log("envBlock:", envBlock);  // 应含 "ssh_session_id: 123" 行
 
 // 4. 验证 Rust ssh_command 收到正确的 sessionId
 //    Rust 日志（如配置）应看到 "ssh_command: sessionId=123, command=..."
+```
+
+---
+
+## 十五、交接指南（2026-07-30 · P0-E 阶段 A 完成：Strands + DeepSeek 真实 LLM 端到端实测）
+
+### 一句话现状
+
+Strands + DeepSeek 真实 LLM 端到端调用工作正常：装好 strands-agents 1.50.2 后，`create_strands_model(load_config())` 成功创建 OpenAIModel，`StrandsAgentAdapter.invoke()` 调真实 DeepSeek API 返回结构化结果。Critical Bug 修复链路（参数名/类型/sshSessionId 注入）在真实端到端路径中验证有效。
+
+### 本 session 已完成
+
+#### 1. ✅ Strands 1.50.2 真实包安装 + import 验证
+- `pip install "strands-agents>=1.0,<2.0"` 安装到 `D:\Python\Lib\site-packages`（与项目 Python 3.13 一致）
+- 模块名是 `strands`（不是 `strands_agents`），包名是 `strands-agents`
+- `from strands import Agent; from strands.tools import tool; from strands.models.openai import OpenAIModel` imports OK
+- 依赖冲突警告（pre-existing）：`tdsf-linux 0.1.0 requires drain3/sqlite-utils/volcengine-python-sdk` — 与本 session 改动无关，环境性 pre-existing 问题
+
+#### 2. ✅ 发现并修复真实 Bug：Strands 1.50.2 移除 `max_iterations` 参数
+- **症状**：`StrandsAgentAdapter.invoke()` 报 `Agent.__init__() got an unexpected keyword argument 'max_iterations'`
+- **根因**：Strands 1.50.2 的 `Agent.__init__()` 已移除 `max_iterations` 参数（实测验证：参数列表含 model/tools/system_prompt/callback_handler/hooks/interventions 等，但**无 max_iterations**）
+- **新 API**：控制迭代次数改用 `hooks=[LimitToolCounts(max_tool_counts={...})]` 或自定义 HookProvider（见 Strands 官方文档 hooks.mdx）
+- **修复**：`strands_backend/adapter.py:507-521` 移除 `max_iterations=self.max_iterations` 参数，加注释说明 API 变更与未来扩展方向
+- **保留**：`self.max_iterations` 字段保留（用于未来加 LimitToolCounts hook 防死循环）
+
+#### 3. ✅ Python pytest 1276 全过（无回归）
+- 跑完整 pytest 套件（deselect pre-existing WinError 32 kb.db 文件锁测试）
+- `test_strands_model_adapter.py` 23 个全过（DeepSeek 配置加载 + OpenAIModel 创建路径）
+- 与 §十四 记录的 1276 passed / 1 deselected 完全一致
+
+#### 4. ✅ 端到端实测全过（`.tdsf-data/test_strands_e2e.py`）
+新建测试脚本，4 个测试全部通过：
+
+| 测试 | 验证内容 | 结果 |
+|------|----------|------|
+| 测试 1 | `create_strands_model(load_config())` 创建 OpenAIModel（DeepSeek 兼容路径） | ✅ `[OK] Strands Model created: OpenAIModel` |
+| 测试 2 | `configure_strands(llm_config=...)` 自动注入 strands_model（P0-C5） | ✅ `model_available=True, strands_available=True` |
+| 测试 3 | 端到端调真实 DeepSeek LLM，返回结构化结果 | ✅ LLM 返回：**"Linux 运维就是通过命令行工具、脚本和监控手段，对 Linux 服务器进行部署、配置、监控、故障排查和性能调优，确保系统稳定、安全、高效运行的一系列操作实践。"** |
+| 测试 4 | 无 SSH 会话时工具调用返回 `status="unavailable"`（验证 Critical Bug 修复链路在真实路径有效） | ✅ Strands 识别 unavailable，返回："当前未连接 SSH 会话...目前处于**只读模式**..." |
+
+#### 5. ✅ 顶部摘要漂移修正
+- `dev-state.md:5` 最后更新从"§十二 交接指南"改为"§十四 交接指南"（实际最新位置）
+
+### 全链路数据流（实测验证有效）
+
+```
+[.tdsf-data/llm_config.json]
+  ↓ provider=openai, api_key=sk-***, base_url=https://api.deepseek.com/v1, model=deepseek-v4-flash
+  ↓
+[core.llm_config.load_config()]
+  ↓ LLMConfig(is_configured=True, provider="openai", ...)
+  ↓
+[strands_backend.model_adapter.create_strands_model(config)]
+  ↓ _create_openai_model(config) → OpenAIModel(client_args={api_key, base_url}, model_id, params)
+  ↓
+[strands_backend.configure_strands(event_bus, rust_bridge=None, llm_config=config)]
+  ↓ StrandsAgentAdapter(strands_model=OpenAIModel, backend_enabled=True, ...)
+  ↓
+[adapter.invoke(agent_id="test", input="你好...", state={live:{sshSessionId:null}})]
+  ↓ _get_or_create_agent → _StrandsAgent(model=OpenAIModel, tools=[...], system_prompt, callback_handler)
+  ↓ agent(prompt) → 真实 DeepSeek API 调用 → 流式返回
+  ↓
+[返回结构化结果]
+  ↓ {observation: "Linux 运维就是...", mood: "done", next_step: "done"}
+```
+
+### 本 session 改动的文件（2 个）
+
+1. **`src-tauri/sidecar/strands_backend/adapter.py`** — `_get_or_create_agent` 移除 `max_iterations` 参数（Strands 1.50.2 API 变更修复），加详细注释说明未来用 `LimitToolCounts` hook 实现迭代限制
+2. **`docs/dev-state.md`** — 本节（§十五）交接指南 + 顶部摘要漂移修正
+
+### 新增的测试文件（1 个，测试脚本不参与 pytest 自动收集）
+
+3. **`.tdsf-data/test_strands_e2e.py`** — P0-E 阶段 A 端到端实测脚本（4 个测试），可直跑 `python .tdsf-data/test_strands_e2e.py` 或 pytest 运行
+
+### 五绿门禁状态
+
+```
+pnpm typecheck   ✅ 0 errors（无前端改动，门禁保持）
+pnpm lint        ✅ 0 errors 0 warnings
+pnpm test        ✅ 832/832 passed（前端测试套件无回归）
+pnpm build:web   ✅ success
+python pytest    ✅ 1276 passed / 1 deselected（pre-existing WinError 32）
+端到端实测       ✅ 4/4 tests passed（Strands + DeepSeek 真实 LLM）
+```
+
+### 接手下一步 backlog（按优先级）
+
+#### P0-E 阶段 B（待启动，需桌面端实测）
+- **目标**：在桌面端 tauri:dev 中验证 SSH 会话 + Strands 调 ssh_command 真实工作
+- 步骤：
+  1. 启动 `pnpm tauri:dev`（占用 9300 Vite + 9222 CDP）
+  2. app 自动登录 SSH `root@192.168.45.200`（已保存凭据）
+  3. CDP 9222 验证 `__TDSF_DBG__.getLive()` 返回值含 `sshSessionId: <number>`
+  4. 触发 agent.invoke 让 Strands 调 ssh_command（如 "检查 nginx 状态"）
+  5. 验证 sidecar 日志 `execute_via_ssh: session_id_int=<number>, command=...`
+  6. 验证 Rust ssh_command 返回 `{ ok: true, output, exit_code: 0 }`
+- 注意：阶段 A 已验证 LLM 调用 + 工具参数链路工作，阶段 B 主要验证桌面端集成
+
+#### P1-research（调研 backlog，与阶段 B 并行推进）
+- 调研运维 agent 开源项目（k8sgpt / OpenOps / robusta）+ Strands Agents 集成最佳实践
+- Review 多 agent 并行开发规范 v2.0（`docs/MULTI-AGENT-WORKFLOW.md`）
+
+#### P2（性能 + 远程 LSP + 文档清理，同 §十三~§十四 backlog）
+- 资源管理器按目录缓存
+- 远程 LSP over SSH（独立 PR）
+- 文档漂移清理
+
+### 关键技术决策沉淀（3 条）
+
+1. **Strands 1.50.2 移除 max_iterations 参数** — Agent 构造不再接受此参数，迭代次数控制改用 `hooks=[LimitToolCounts(max_tool_counts={...})]` 或自定义 HookProvider。当前先移除让 LLM 调用工作起来，未来用 hooks 实现防死循环。
+2. **`.tdsf-data/` 目录的 LLM 配置 + 测试脚本共存** — `llm_config.json` 是运行时 LLM 配置源（DeepSeek API key + base_url + model），`test_strands_e2e.py` 等测试脚本与之同级，方便快速验证 Strands 真实端到端工作。
+3. **测试脚本不参与 pytest 自动收集** — `.tdsf-data/test_strands_e2e.py` 放在 `.tdsf-data/` 而非 `src-tauri/sidecar/tests/`，避免影响 sidecar pytest 套件统计（保持 1276 passed / 1 deselected 基线）。
+
+### 实测法（同 §八~§十四，新增 P0-E 阶段 A 直跑命令）
+
+```bash
+# 不依赖桌面端，纯 Python 端验证 Strands + DeepSeek LLM 真实调用
+$env:TDSF_DATA_DIR = ".tdsf-data"
+$env:TDSF_AGENT_BACKEND = "strands"
+python .tdsf-data\test_strands_e2e.py
+# 期望：4 个测试全过，最后一行 "[ALL PASS] P0-E 阶段 A 端到端验证完成"
 ```
 
