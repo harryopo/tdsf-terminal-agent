@@ -373,6 +373,12 @@ function emitTerminalData(sessionId: string, bytes: Uint8Array): void {
       }
       pendingBuffer.set(sessionId, newBuf);
       cur = newBuf.reduce((s, c) => s + c.byteLength, 0);
+      // P2-NEW-v3-4 修复 (2026-07-30): 缓冲区溢出重建 newBuf 后,
+      // 局部变量 buf 必须同步指向 newBuf, 否则下方 buf.push(bytes)
+      // 会 push 到已被丢弃的旧数组 (pendingBuffer 已指向 newBuf),
+      // 导致新数据 bytes 直接丢失。修复前: 溢出后新数据全丢;
+      // 修复后: 新数据正确进入 newBuf。
+      buf = newBuf;
     }
     buf.push(bytes);
     bufferedSize.set(sessionId, cur + bytes.byteLength);

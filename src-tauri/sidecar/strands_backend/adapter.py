@@ -259,8 +259,11 @@ class StrandsAgentAdapter:
         self._strands_available = _STRANDS_AGENT_AVAILABLE and TOOL_DECORATOR_AVAILABLE
         self._model_available = strands_model is not None
 
-        # 缓存的 Strands Agent 实例（按 agent_id 缓存，避免每次 invoke 重建）
-        self._agent_cache: dict[str, Any] = {}
+        # 缓存的 Strands Agent 实例
+        # P1-NEW-v2-2 修复 (2026-07-30): 缓存 key 从 agent_id 改为 (agent_id, session_id)，
+        # 避免 multi-session 并发时 callback_handler 和工具闭包绑定的首次 session_id
+        # 导致事件路由到错误会话（needs_you 审批卡片错会话）。
+        self._agent_cache: dict[tuple[str, str], Any] = {}
 
         logger.info(
             f"StrandsAgentAdapter initialized: "
@@ -488,8 +491,9 @@ class StrandsAgentAdapter:
         Returns:
             Strands Agent 实例
         """
-        if agent_id in self._agent_cache:
-            return self._agent_cache[agent_id]
+        cache_key = (agent_id, ctx.session_id)
+        if cache_key in self._agent_cache:
+            return self._agent_cache[cache_key]
 
         # 构建 5 个运维工具（带 ctx 闭包）
         ops_tools = make_all_ops_tools(ctx)
@@ -520,9 +524,9 @@ class StrandsAgentAdapter:
             # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
         )
 
-        self._agent_cache[agent_id] = agent
+        self._agent_cache[cache_key] = agent
         logger.info(
-            f"Strands Agent created: agent_id={agent_id}, "
+            f"Strands Agent created: agent_id={agent_id}, session_id={ctx.session_id}, "
             f"tools={[t.__name__ if hasattr(t, '__name__') else str(t) for t in all_tools]}"
         )
         return agent
@@ -767,6 +771,32 @@ class StrandsAgentAdapter:
         self._agent_cache.clear()
         logger.info(f"Strands Agent cache cleared: {count} entries")
 
+    def update_model(self, new_model: Any) -> None:
+        """更新 LLM 模型并清空 Agent 缓存（agent.configure 调用时同步更新）
+
+        P1-NEW-v3-1 修复 (2026-07-30):
+        - 原版 _rpc_agent_configure 仅更新 _global_llm_call + BaseAgent.llm_call,
+          Strands adapter.strands_model 和 _agent_cache 未更新, 前端误报 ok:true
+        - 修复: agent.configure 在 Strands 模式下显式调用 adapter.update_model,
+          更新 strands_model + 清空 _agent_cache (旧 Agent 实例绑定了旧 model)
+        - 清空缓存是必须的: Strands Agent 在构造时绑定 model 闭包,
+          即使 adapter.strands_model 更新, 旧 Agent 实例仍用旧 model
+
+        Args:
+            new_model: 新的 Strands Model 实例 (OpenAIModel/AnthropicModel/LiteLLMModel);
+                       None 时表示降级 (走 mock_llm_active 路径)
+        """
+        old_available = self._model_available
+        self.strands_model = new_model
+        self._model_available = new_model is not None
+        # 必须清缓存: 旧 Agent 实例闭包绑定旧 model, 不清会用旧 model
+        self.clear_cache()
+        logger.info(
+            f"Strands model updated: "
+            f"old_available={old_available}, "
+            f"new_available={self._model_available}"
+        )
+
     def get_stats(self) -> dict[str, Any]:
         """获取适配层状态（调试用）"""
         return {
@@ -774,7 +804,9 @@ class StrandsAgentAdapter:
             "strands_available": self._strands_available,
             "model_available": self._model_available,
             "rust_bridge_type": type(self.rust_bridge).__name__,
-            "cached_agents": list(self._agent_cache.keys()),
+            "cached_agents": [
+                f"{a}:{s}" for (a, s) in self._agent_cache.keys()
+            ],
             "max_iterations": self.max_iterations,
             "extra_tools_count": len(self.extra_tools),
         }

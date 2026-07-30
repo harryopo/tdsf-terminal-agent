@@ -694,8 +694,8 @@ class TestInitializeOnStartup:
         )
         time.sleep(1.0)
 
-        # 应至少收到一次 tdsf.updated 通知
-        tdsf_events = [n for n in notifications if n[0] == "tdsf.updated"]
+        # 应至少收到一次 tdsf_updated 通知
+        tdsf_events = [n for n in notifications if n[0] == "tdsf_updated"]
         assert len(tdsf_events) >= 1
 
     def test_initialize_global_only(self, only_global_file):
