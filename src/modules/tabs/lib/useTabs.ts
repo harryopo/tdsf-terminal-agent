@@ -57,6 +57,14 @@ export type EditorTab = TabBase & {
    */
   preview: boolean;
   overrideLanguage?: string | null;
+  /**
+   * TDSF 魔改 2026-07-30: 远程文件标记。
+   * - undefined / null: 本地文件，走 fs_read_file/fs_write_file/fs_stat + 本地 watch + LSP。
+   * - { sessionId }: SSH 远程文件，走 sftpRead/sftpWrite/sftpStat，跳过本地 watch / LSP / 外部 formatter。
+   *   sessionId 是前端 UUID (sshStore.sessions[].id)，rustSessionId 在 useDocument 内实时查询，
+   *   避免 tab 打开后连接断开/重连导致 rustSessionId 失效。
+   */
+  remote?: { sessionId: string } | null;
 };
 
 export type PreviewTab = TabBase & {
@@ -617,80 +625,87 @@ export function useTabs(initial?: Partial<TerminalTab>) {
    *   reused: if a persistent tab for the path already exists it is activated;
    *   otherwise the current preview slot is replaced with the new path.
    */
-  const openFileTab = useCallback((path: string, pin = true) => {
-    let targetId: number | null = null;
-    setTabs((curr) => {
-      if (pin) {
-        // Persistent open: find any existing editor tab, pin it if needed.
-        const existing = curr.find(
-          (t) => t.kind === "editor" && t.path === path,
-        );
-        if (existing) {
-          targetId = existing.id;
-          if ((existing as EditorTab).preview) {
-            return curr.map((t) =>
-              t.id === existing.id ? { ...t, preview: false } : t,
-            );
+  const openFileTab = useCallback(
+    (path: string, pin = true, remote?: { sessionId: string }) => {
+      let targetId: number | null = null;
+      setTabs((curr) => {
+        // TDSF 魔改 2026-07-30: 去重 key 改为 path + remote?.sessionId，
+        // 避免本地/远程同名文件（如 /etc/hosts）撞车导致打开错误 tab。
+        const matchRemote = (t: Tab): boolean =>
+          t.kind === "editor" &&
+          t.path === path &&
+          (remote ? t.remote?.sessionId === remote.sessionId : !t.remote);
+        if (pin) {
+          // Persistent open: find any existing editor tab, pin it if needed.
+          const existing = curr.find(matchRemote);
+          if (existing) {
+            targetId = existing.id;
+            if ((existing as EditorTab).preview) {
+              return curr.map((t) =>
+                t.id === existing.id ? { ...t, preview: false } : t,
+              );
+            }
+            return curr;
           }
-          return curr;
-        }
-        const id = nextIdRef.current++;
-        targetId = id;
-        return [
-          ...curr,
-          {
+          const id = nextIdRef.current++;
+          targetId = id;
+          return [
+            ...curr,
+            {
+              id,
+              kind: "editor",
+              spaceId: activeSpaceIdRef.current,
+              title: basename(path),
+              path,
+              dirty: false,
+              preview: false,
+              remote: remote ?? null,
+            } satisfies EditorTab,
+          ];
+        } else {
+          // Preview open: persistent tab for this path takes priority.
+          const persistent = curr.find(
+            (t) => matchRemote(t) && !(t as EditorTab).preview,
+          );
+          if (persistent) {
+            targetId = persistent.id;
+            return curr;
+          }
+          // Reuse the slot if it already shows the same path.
+          const existingPreview = curr.find(
+            (t) => matchRemote(t) && (t as EditorTab).preview,
+          );
+          if (existingPreview) {
+            targetId = existingPreview.id;
+            return curr;
+          }
+          // Replace the current preview slot, or append a new one.
+          const previewIdx = curr.findIndex(
+            (t) => t.kind === "editor" && (t as EditorTab).preview,
+          );
+          const id = nextIdRef.current++;
+          targetId = id;
+          const tab: EditorTab = {
             id,
             kind: "editor",
             spaceId: activeSpaceIdRef.current,
             title: basename(path),
             path,
             dirty: false,
-            preview: false,
-          } satisfies EditorTab,
-        ];
-      } else {
-        // Preview open: persistent tab for this path takes priority.
-        const persistent = curr.find(
-          (t) =>
-            t.kind === "editor" && t.path === path && !(t as EditorTab).preview,
-        );
-        if (persistent) {
-          targetId = persistent.id;
-          return curr;
+            preview: true,
+            remote: remote ?? null,
+          };
+          if (previewIdx === -1) return [...curr, tab];
+          const next = [...curr];
+          next[previewIdx] = tab;
+          return next;
         }
-        // Reuse the slot if it already shows the same path.
-        const existingPreview = curr.find(
-          (t) =>
-            t.kind === "editor" && t.path === path && (t as EditorTab).preview,
-        );
-        if (existingPreview) {
-          targetId = existingPreview.id;
-          return curr;
-        }
-        // Replace the current preview slot, or append a new one.
-        const previewIdx = curr.findIndex(
-          (t) => t.kind === "editor" && (t as EditorTab).preview,
-        );
-        const id = nextIdRef.current++;
-        targetId = id;
-        const tab: EditorTab = {
-          id,
-          kind: "editor",
-          spaceId: activeSpaceIdRef.current,
-          title: basename(path),
-          path,
-          dirty: false,
-          preview: true,
-        };
-        if (previewIdx === -1) return [...curr, tab];
-        const next = [...curr];
-        next[previewIdx] = tab;
-        return next;
-      }
-    });
-    if (targetId !== null) setActiveId(targetId);
-    return targetId as number | null;
-  }, []);
+      });
+      if (targetId !== null) setActiveId(targetId);
+      return targetId as number | null;
+    },
+    [],
+  );
 
   /**
    * Promotes a preview tab to a persistent one. Called on double-click of the

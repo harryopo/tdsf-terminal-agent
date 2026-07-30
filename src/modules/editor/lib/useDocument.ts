@@ -1,5 +1,7 @@
+import { decodeUtf8, encodeUtf8, sftpRead, sftpStat, sftpWrite } from "@/lib/sftp-bridge";
 import { notifyDocumentSaved } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { useSshStore } from "@/modules/ssh-explorer";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -25,10 +27,15 @@ export type DocumentState =
 
 type Options = {
   path: string;
+  /**
+   * TDSF 魔改 2026-07-30: 远程文件标记，非空时 fs 调用分流到 sftp-bridge。
+   * undefined / null 走本地 fs_read_file/fs_write_file/fs_stat。
+   */
+  remote?: { sessionId: string } | null;
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-export function useDocument({ path, onDirtyChange }: Options) {
+export function useDocument({ path, remote, onDirtyChange }: Options) {
   const [doc, setDoc] = useState<DocumentState>({ status: "loading" });
   const [dirty, setDirty] = useState(false);
 
@@ -58,8 +65,36 @@ export function useDocument({ path, onDirtyChange }: Options) {
 
   const diskMtimeRef = useRef<number | null>(null);
 
+  // TDSF 魔改 2026-07-30: 实时取 rustSessionId（应对连接断开/重连后的状态迁移）。
+  // 绝不缓存到 ref——SSH 重连后 rustSessionId 会变，缓存会导致保存写到旧 session。
+  const getRustSessionId = useCallback((): number | null => {
+    if (!remote) return null;
+    const s = useSshStore.getState().sessions.find(
+      (it) => it.id === remote.sessionId,
+    );
+    return s?.rustSessionId ?? null;
+  }, [remote]);
+
   const writeToDisk = useCallback(async () => {
     const content = bufferRef.current;
+    // TDSF 魔改 2026-07-30: 远程文件分流到 sftpWrite。
+    // sftpWrite 不返回 mtime，需额外 sftpStat 补，作为下次冲突检测的 baseline。
+    if (remote) {
+      const sid = getRustSessionId();
+      if (sid === null) throw new Error("SSH session not connected");
+      await sftpWrite(
+        sid,
+        path,
+        encodeUtf8(restoreEol(content, eolRef.current)),
+      );
+      const attrs = await sftpStat(sid, path);
+      // SftpAttrs.modified 秒级 → 毫秒（与 FileStat.mtime 对齐）。
+      diskMtimeRef.current = attrs.modified * 1000;
+      savedRef.current = content;
+      setDirty(bufferRef.current !== content);
+      notifyDocumentSaved(path);
+      return;
+    }
     const mtime = await invoke<number>("fs_write_file", {
       path,
       content: restoreEol(content, eolRef.current),
@@ -71,18 +106,28 @@ export function useDocument({ path, onDirtyChange }: Options) {
     // Edits typed while the write was in flight must stay dirty.
     setDirty(bufferRef.current !== content);
     notifyDocumentSaved(path);
-  }, [path]);
+  }, [path, remote, getRustSessionId]);
 
   // False when the write was withheld because the file changed on disk
   // since load; overwriting is an explicit user action from the toast.
   const saveNow = useCallback(async (): Promise<boolean> => {
     const known = diskMtimeRef.current;
     if (known !== null) {
-      const stat = await invoke<FileStat>("fs_stat", {
-        path,
-        workspace: currentWorkspaceEnv(),
-      }).catch(() => null);
-      if (stat && stat.mtime !== known) {
+      // TDSF 魔改 2026-07-30: 远程用 sftpStat，mtime 秒级 *1000 转毫秒。
+      let mtime: number | null = null;
+      if (remote) {
+        const sid = getRustSessionId();
+        if (sid === null) throw new Error("SSH session not connected");
+        const attrs = await sftpStat(sid, path).catch(() => null);
+        mtime = attrs ? attrs.modified * 1000 : null;
+      } else {
+        const stat = await invoke<FileStat>("fs_stat", {
+          path,
+          workspace: currentWorkspaceEnv(),
+        }).catch(() => null);
+        mtime = stat?.mtime ?? null;
+      }
+      if (mtime !== null && mtime !== known) {
         const name = path.split(/[\\/]/).pop() ?? path;
         toast.warning("File changed on disk", {
           id: `save-conflict:${path}`,
@@ -94,7 +139,7 @@ export function useDocument({ path, onDirtyChange }: Options) {
     }
     await writeToDisk();
     return true;
-  }, [path, writeToDisk]);
+  }, [path, remote, writeToDisk, getRustSessionId]);
 
   // Notify parent of dirty transitions.
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -128,13 +173,49 @@ export function useDocument({ path, onDirtyChange }: Options) {
   }, []);
 
   const readFromDisk = useCallback(
-    (force: boolean) =>
-      invoke<ReadResult>("fs_read_file", {
+    (force: boolean): Promise<ReadResult> => {
+      // TDSF 魔改 2026-07-30: 远程用 sftpRead，需前端做 binary 检测 + sftpStat 补 mtime。
+      // force 参数远程分支忽略（sftpRead 全量读取，无 force 概念，openAnyway 行为一致）。
+      if (remote) {
+        const sid = getRustSessionId();
+        if (sid === null) {
+          return Promise.reject(new Error("SSH session not connected"));
+        }
+        return sftpRead(sid, path).then((bytes): Promise<ReadResult> => {
+          const size = bytes.length;
+          // binary 检测：前 8KB 内含 NUL 字节则判定为二进制（与 Rust 侧 fs_read_file 一致）。
+          let isBinary = false;
+          const probeLen = Math.min(size, 8192);
+          for (let i = 0; i < probeLen; i++) {
+            if (bytes[i] === 0) {
+              isBinary = true;
+              break;
+            }
+          }
+          if (isBinary) return Promise.resolve({ kind: "binary", size });
+          const limit = FORCE_READ_LIMIT;
+          if (size > limit) {
+            return Promise.resolve({ kind: "toolarge", size, limit });
+          }
+          const content = decodeUtf8(bytes);
+          // sftpRead 不返回 mtime，用 sftpStat 补（冲突检测需要）。
+          return sftpStat(sid, path).then(
+            (attrs): ReadResult => ({
+              kind: "text",
+              content,
+              size,
+              mtime: attrs.modified * 1000,
+            }),
+          );
+        });
+      }
+      return invoke<ReadResult>("fs_read_file", {
         path,
         workspace: currentWorkspaceEnv(),
         force,
-      }),
-    [path],
+      });
+    },
+    [path, remote, getRustSessionId],
   );
 
   // Load on path change.
