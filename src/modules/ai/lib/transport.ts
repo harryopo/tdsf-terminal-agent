@@ -49,6 +49,15 @@ type LiveSnapshot = {
   terminalPrivate: boolean;
   workspaceRoot: string | null;
   activeFile: string | null;
+  /**
+   * 当前活跃 SSH 会话的 Rust session_id (u32)。
+   *
+   * TDSF 魔改 2026-07-30: 从 Live.getSshRustSessionId() 取值，
+   * 注入到 state.live.sshSessionId，供 Python 侧 Strands 运维工具
+   * 通过 RustBridge 调 ssh_command / sftp_* 命令时使用。
+   * null 表示当前无活跃 SSH 会话（本地终端模式）。
+   */
+  sshSessionId: number | null;
 };
 
 type Deps = {
@@ -125,10 +134,14 @@ export function createContextAwareTransport(deps: Deps) {
       // active_terminal_mode</env> 前缀，main_agent.plan_task 的关键词路由
       // 能感知到当前终端上下文（之前 input 是裸文本，Python agent 看不到 cwd）。
       const input = extractLastUserText(messagesForRun);
+      // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文传给 Python agent
+      // SidecarStreamOptions.live 必填，Python 侧 _build_tool_context / _build_prompt
+      // 从 state.live 取 sshSessionId / cwd / activeFile 等
       const sidecarStream = runSidecarStream({
         agentId: tdsfAgent,
         messages: messagesForRun,
         input,
+        live,
         abortSignal: options.abortSignal,
         onStep: deps.onStep,
         onMood: deps.onMood,
@@ -252,6 +265,13 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
   if (live.cwd) lines.push(`active_terminal_cwd: ${live.cwd}`);
   if (live.activeFile) lines.push(`active_file: ${live.activeFile}`);
   if (live.terminalPrivate) lines.push("active_terminal_mode: private");
+  // TDSF 魔改 2026-07-30: 注入 ssh_session_id，让 Python agent 感知到当前
+  // 活跃 SSH 会话的 Rust session_id，Strands 运维工具据此调 ssh_command/sftp_*。
+  // 注：这里注入到 <env> 块只是给 LLM 看的提示信息（让 agent 知道有 SSH 会话），
+  // 真正传给 Rust 的 sessionId 通过 state.live.sshSessionId 单独走（见 runSidecarStream）。
+  if (live.sshSessionId !== null) {
+    lines.push(`ssh_session_id: ${live.sshSessionId}`);
+  }
   if (lines.length === 0) return null;
   return `<env>\n${lines.join("\n")}\n</env>`;
 }

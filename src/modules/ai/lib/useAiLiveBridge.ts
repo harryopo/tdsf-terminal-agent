@@ -1,4 +1,5 @@
 import { useManagedAgentsStore } from "@/modules/agents/store/managedAgentsStore";
+import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import type { Tab } from "@/modules/tabs";
 import {
   findLeafCwd,
@@ -163,6 +164,20 @@ export function useAiLiveBridge(params: Params) {
       readLeafBuffer: (leafId: number) => {
         const buf = terminalRefs.current.get(leafId)?.getBuffer(300);
         return buf ? redactSensitive(buf) : null;
+      },
+      // TDSF 魔改 2026-07-30: 暴露活跃 SSH 会话的 Rust session_id (u32)，
+      // 供 Strands 运维工具通过 RustBridge 调 ssh_command / sftp_* 命令。
+      // 取值逻辑与 useDocument.ts:getRustSessionId 一致：
+      //   - 实时查询 sshStore（不缓存，SSH 重连后 rustSessionId 会变）
+      //   - 仅返回 connected 且 rustSessionId 非 null 的会话
+      getSshRustSessionId: () => {
+        const state = useSshStore.getState();
+        const sess = state.sessions.find(
+          (s) => s.id === state.activeSessionId,
+        );
+        if (!sess) return null;
+        if (!isSessionConnected(sess)) return null;
+        return sess.rustSessionId;
       },
     });
   }, [setLive, terminalRefs]);

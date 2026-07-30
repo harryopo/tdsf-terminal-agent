@@ -109,9 +109,36 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     # TDSF 魔改 2026-07-30 P0-C4 修复:
     #   原 method 名 "sftp_read_file" 与 Rust 侧不匹配，
     #   Rust 实际命令为 "sftp_read"（mod.rs:416）。
+    # TDSF 修复 2026-07-30 (Critical Bug): 参数名对齐 Rust camelCase (sessionId)，
+    # 并把 str session_id 转为 int（Rust 侧期望 u32 via as_u64()）。
+    try:
+        session_id_int = int(session_id) if session_id else 0
+    except (ValueError, TypeError) as e:
+        logger.error(
+            f"remote_file invalid session_id: id={session_id!r}, error={e}"
+        )
+        return {
+            "status": "error",
+            "path": path,
+            "ssh_session_id": session_id,
+            "error": f"invalid session_id (expect int-convertible): {session_id!r}",
+        }
+
+    if session_id_int <= 0:
+        logger.warning(
+            f"remote_file no active ssh session: path={path}"
+        )
+        return {
+            "status": "unavailable",
+            "path": path,
+            "ssh_session_id": session_id,
+            "reason": "no_ssh_session",
+            "message": "无活跃 SSH 会话，请先连接 SSH 再读取远程文件",
+        }
+
     try:
         result = ctx.rust_bridge.ipc_invoke("sftp_read", {
-            "session_id": session_id,
+            "sessionId": session_id_int,
             "path": path,
             # 注：Rust sftp_read 当前签名未支持 max_size，传了也会被忽略；
             # 截断在 Python 侧 content 处理时做（见下方 truncated 逻辑）。
