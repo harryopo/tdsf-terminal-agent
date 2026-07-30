@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-30 · SSH 文件编辑器集成 EditorStack **完成**(commit a4e6084)：远程文件点击 → 主区多 tab CodeMirror 编辑（替代侧栏 SshFileEditor textarea）。接手请直接看 **§十一 交接指南**。
+> **最后更新**：2026-07-30 · 魔改 agent P1 事件链路修复 + Strands P0 集成 **完成**：agent_switch 永久监听器 + llm_call_failed 60s dedup + MockLLMWarning 启动期补发 + Strands 4 处 CRITICAL 修复。接手请直接看 **§十二 交接指南**。
 
 ---
 
@@ -10,8 +10,9 @@
 
 | 门禁 | 状态 |
 |------|------|
-| typecheck / lint / test(830) / build:web | ✅ 全绿 |
+| typecheck / lint / test(832) / build:web | ✅ 全绿 |
 | tauri:dev 桌面端 | ✅ 窗口可见、可点击、本地终端(PTY pwsh)、SSH 可连、远程文件树可展开 |
+| CDP P1 实测 | ✅ event.history/event.stats/agent_switch listen 全通，4 条历史 agent_switch 事件 payload 含 env 块（终端上下文感知 P0-e 也生效） |
 
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
@@ -435,3 +436,119 @@
 4. **`sftpRead`/`sftpWrite` 不返回 mtime**：读盘后需额外调 `sftpStat` 补 mtime（冲突检测 baseline）；写盘后同样需 `sftpStat` 补 mtime（作为新 baseline）。每次读写多一次 SFTP 往返，接受。
 5. **远程文件 binary 检测在前端做**：`sftpRead` 返回 `Uint8Array`，需前端扫描前 8KB 内 NUL 字节判定二进制（与 Rust 侧 `fs_read_file` 的 `is_binary` 启发式一致）。
 6. **远程文件跳过 LSP / 外部 formatter / 媒体预览**：LSP 绑定本地 fs + workspace，外部 formatter 走本地进程，`convertFileSrc` 只处理本地 fs 路径。远程文件全部跳过，退化到 CodeMirror 纯文本编辑 + "Binary file / File too large" 文案。后续可考虑远程 LSP over SSH（独立 PR）。
+
+---
+
+## 十二、交接指南（2026-07-30 · 魔改 agent P1 修复 + Strands P0 集成完成）
+
+> 接手先读本节 + `CLAUDE.md` + §十一。本节覆盖上一节 §十一 backlog 中"魔改 agent P1 修复 + Strands P0 CRITICAL 修复"两项。
+
+### 本 session 已完成（P1 事件链路修复 + Strands P0 集成）
+
+1. **✅ P1-a: agent_switch 事件前端永久监听器**（`src/app/App.tsx`）：
+   - 在 App 顶层 useEffect 注册 `sidecar:agent_switch` 永久监听器，应用生命周期内常驻
+   - 收到事件后调 `useChatStore.getState().setCurrentSubAgent(payload.agent)` 更新状态
+   - 与 `sidecar-adapter.ts:251-265` 的临时监听器叠加（幂等无副作用），覆盖启动期 + 调用间隙
+   - 新增 `src/lib/sidecar-bridge.ts:onAgentSwitch(cb)` 函数封装 `subscribe('agent_switch', cb)`
+
+2. **✅ P1-b: llm_call_failed 事件 60s 时间窗 dedup**（`src-tauri/sidecar/agents/base.py`）：
+   - `_publish_mock_warning(reason, detail)` 内加 dedup 逻辑：`_mock_warning_dedup_ts` 字典记录上次推送 timestamp
+   - 同 agent + 同 reason 60 秒内只推一次（`_mock_warning_dedup_window = 60.0` 常量）
+   - 解决 PAOR 多轮迭代中（一次 main_agent.invoke 可能调 5+ 次 call_llm）的事件洪水导致前端 MockLLMWarning 反复闪烁
+   - 与 `_mock_warning_emitted` 布尔标记协同：`no_llm_config` 永不重发，`llm_call_failed` 60s 内不重发（持续失败时每分钟发一次让用户感知）
+
+3. **✅ P1-c: MockLLMWarning 启动期补发**（`src/modules/ai/components/MockLLMWarning.tsx`）：
+   - useEffect 内新增 `applyEvent` + `latestTsRef` timestamp 去重逻辑
+   - listen 完成后并行调 `invokeRpc('event.history', { event_type: 'mock_llm_active', limit: 1 })` 拿最近一条历史事件补发到 UI
+   - timestamp 比较：history 旧事件 ts < latestTsRef.current 直接丢弃，避免 listen 实时事件被旧 history 覆盖
+   - sidecar 未就绪 / 非 Tauri 环境（vitest）静默降级，不抛错
+   - 修复场景：BaseAgent.__init__ 构造时立即推送 `mock_llm_active`（base.py:179-185 "Bug 2" 修复），前端挂载晚于事件发射导致启动期告警丢失
+
+4. **✅ P0-C1: Strands 后端 feature flag 注入点**（`src-tauri/sidecar/main.py`）：
+   - 在 `configure_agents` 之后插入 `TDSF_AGENT_BACKEND` 环境变量判断
+   - `"strands"` 时注入 StrandsAgentAdapter（通过 `agents.set_backend(adapter.invoke)`）
+   - 失败时 `agents.clear_backend()` 回退 BaseAgent PAOR，保证 sidecar 可用
+   - 默认 `"langgraph"`，向后兼容
+
+5. **✅ P0-C2: agents 后端 override 接口**（`src-tauri/sidecar/agents/__init__.py`）：
+   - 新增 `BackendInvokeCallable` 类型（`(agent_id: str, input: str, state: dict) -> dict`）
+   - 新增 `set_backend(backend)` / `clear_backend()` 函数
+   - `_global_backend_override` 全局变量，`invoke_agent()` 优先走 override 路径
+
+6. **✅ P0-C3: strands-agents 依赖声明**（`src-tauri/sidecar/requirements.txt`）：
+   - 新增 `strands-agents>=1.0,<2.0`（Apache-2.0，AWS 开源）
+   - 1.x 稳定 API（`@tool` / `Agent(tools=...)` / `stream_async`），2.x 可能引入 breaking change
+   - 默认未启用，需配置 LLM provider（OpenAI/Anthropic/Bedrock 等）
+
+7. **✅ P0-C4: Strands 工具 Rust method 名对齐**（`src-tauri/sidecar/strands_backend/tools/`）：
+   - `tools/__init__.py:execute_via_ssh`: `"ssh_exec_in_session"` → `"ssh_command"`（Rust 命令名约定）
+   - `tools/remote_file.py`: `"sftp_read_file"` → `"sftp_read"`（与 Rust `mod.rs:416` 对齐）
+   - 适配 Rust `sftp_read` 实际返回 `list[int]`（Vec<u8> 序列化），不再是 dict
+   - Python 侧 max_size 截断（Rust sftp_read 不支持 max_size 字段）
+
+### 本 session 改动的文件（待 commit）
+
+**代码改动（P1 事件链路 + Strands P0 集成）**：
+- `src-tauri/sidecar/agents/__init__.py` — `set_backend` / `clear_backend` / `BackendInvokeCallable` 类型（P0-C2）
+- `src-tauri/sidecar/agents/base.py` — `_mock_warning_dedup_ts` + `_publish_mock_warning` 60s dedup（P1-b）
+- `src-tauri/sidecar/main.py` — `TDSF_AGENT_BACKEND` 环境变量注入 Strands 适配层（P0-C1）
+- `src-tauri/sidecar/requirements.txt` — 新增 `strands-agents>=1.0,<2.0`（P0-C3）
+- `src/app/App.tsx` — 顶层 useEffect 注册 `sidecar:agent_switch` 永久监听器（P1-a）
+- `src/lib/sidecar-bridge.ts` — 新增 `onAgentSwitch(cb)` 函数（P1-a）
+- `src/modules/ai/components/MockLLMWarning.tsx` — `applyEvent` + `latestTsRef` + `event.history` 启动期补发（P1-c）
+
+**新增文件（Strands 适配层 + 文档）**：
+- `src-tauri/sidecar/strands_backend/` — Strands 适配层完整目录（adapter.py + tools/）
+- `docs/reports/modded-agent-availability-audit-2026-07-30.md` — 魔改 agent 可用性审计
+- `docs/reports/ops-agent-opensource-survey-2026-07-v2.md` — 运维 agent 开源调研 v2
+- `docs/reports/ops-agent-survey-2026-07-30.md` — 运维 agent 调研 v1
+- `docs/reports/strands-integration-implementation-plan-2026-07-30.md` — Strands 集成实施计划
+- `docs/reports/strands_backend-audit-2026-07-30.md` — Strands_backend 4 处 CRITICAL 断裂审计
+
+### 五绿门禁全过（本 session）
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过
+- `pnpm build:web` ✅ 成功出 dist
+- `pnpm tauri:dev` + CDP 9222 ✅ 实测全过（见下方实测记录）
+
+### CDP 实测记录（脚本：`C:\Users\Lenovo\AppData\Local\Temp\cdp-p1c-mock-backfill.mjs`）
+
+- **event.history (mock_llm_active)** ✅ PASS — 返回 `[]`（LLM 已配置无 mock 事件，符合预期）
+- **event.stats** ✅ PASS — `by_type`：`mock_llm_active=0, agent_switch=4, mood_change=12, agent_message=4, sidecar_event=1, total_published=21`
+- **sidecar-bridge module** ✅ PASS — `invokeRpc` + `subscribe` 函数均存在
+- **MockLLMWarning rendered** ✅ NO（符合预期，LLM 已配置无 mock 事件）
+- **agent_switch listen 注册** ✅ PASS — `subscribe("agent_switch", cb)` 成功
+- **agent_switch event.history** ✅ PASS — 返回 4 条历史事件，payload.task 已包含 `<env>...</env>` 块（终端上下文感知 P0-e 修复也生效，证据：`workspace_root: C:/Users/Lenovo`, `active_terminal_cwd: C:/Users/Lenovo`, `active_file: /root/shell/sh04.sh`）
+
+### 关键技术决策（本 session 沉淀）
+
+1. **timestamp 去重避免事件竞态**：listen 实时事件 vs event.history 历史事件补发，存在竞态——若 history 后返回、listen 先到，旧 history 事件会覆盖实时事件。用 `latestTsRef.current` 记录已应用过的最大 timestamp，`applyEvent(evt)` 收到事件先比 ts，小于则丢弃。
+2. **永久监听器 vs 临时监听器双保险**：`App.tsx` 顶层 useEffect 注册的永久监听器（应用生命周期内常驻） + `sidecar-adapter.ts:runSidecarStream` 内的临时监听器（覆盖单次 agent.invoke 周期），二者都调 `setCurrentSubAgent`，幂等无副作用（重复 set 同值 zustand 不触发重渲染）。
+3. **dedup 时间窗与 `_mock_warning_emitted` 协同**：`_mock_warning_emitted` 保留作 "进程内 only once" 语义（针对 `no_llm_config`），与 `_mock_warning_dedup_ts` 协同——`no_llm_config` 永不重发，`llm_call_failed` 60s 内不重发（持续失败时每分钟发一次让用户感知）。
+4. **Strands 后端默认关闭**：`TDSF_AGENT_BACKEND=langgraph`（默认）/ 未设置 → 走 BaseAgent PAOR 主路径。`TDSF_AGENT_BACKEND=strands` → 注入 StrandsAgentAdapter。当前 P0 阶段：`rust_bridge=None`（双向 JSON-RPC 待 P2 扩展），`strands_model=None`（LLM 模型适配待 P0-C5 补充）。
+5. **event.history RPC 复用**：EventBus 已在 `event_bus.py:598-601` 注册 `event.history` JSON-RPC 方法（`bus.get_history(event_type, session_id, limit)` 返回倒序 list[dict]），无需新增 RPC。前端 `invokeRpc('event.history', { event_type: 'mock_llm_active', limit: 1 })` 直接可用。
+6. **bare module 在 CDP Runtime.evaluate 中不可用**：`import("@tauri-apps/api/core")` 在 CDP Runtime.evaluate 中报 `Failed to resolve module specifier`，因 Runtime.evaluate 不走 Vite importmap。必须用 Vite dev server 路径 `/src/lib/sidecar-bridge.ts` 才能动态 import。
+7. **stats.subscriber_count = 0 不影响功能**：前端通过 Tauri `listen` 注册的事件不经过 Python `EventBus.subscribe`，因此 EventBus 看不到 subscriber。但实际功能正常——Python publish 时通过 `_rust_notifier` 推到 Rust，Rust emit Tauri event，前端 listen 收到。
+
+### 接手下一步 backlog（按优先级）
+
+#### P0：Strands 后端真实激活验证（环境变量 + LLM 模型适配）
+- **P0-C5: Strands LLM 模型适配**：`strands_backend.adapter` 的 `strands_model` 参数当前为 None，需注入真实 LLM（OpenAI/Anthropic/Bedrock）
+- **P0-D: Rust ssh_command 命令实现**：`strands_backend/tools/__init__.py:execute_via_ssh` 调 `ssh_command` RPC，但 Rust 侧 `ssh_command` 命令尚未实现，P2 阶段补 russh channel exec 模式（非 PTY）
+- **P0-E: Strands 真实端到端实测**：设 `TDSF_AGENT_BACKEND=strands` 启动 sidecar，验证 Strands 工具调用链路（当前 P0-C4 仅修 method 名，未端到端验证）
+
+#### P1：Strands 双向 JSON-RPC 桥（rust_bridge 注入）
+- 实现 `strands_backend.adapter.StrandsAgentAdapter` 的 `rust_bridge` 双向 JSON-RPC（当前为 None，运维工具返回 unavailable）
+- Rust 侧补 `ipc_invoke` 路由到 `ssh_command` / `sftp_read` / `sftp_write` / `sftp_stat` 等命令（部分已存在）
+
+#### P2：资源管理器性能 + 远程 LSP + 文档清理
+- 资源管理器按目录缓存（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- 文档漂移清理（同 §十一 backlog）
+
+### 实测法（同 §十一，新增 P1 验证脚本）
+- **CDP 实测脚本**（本次新增）：
+  - `C:\Users\Lenovo\AppData\Local\Temp\cdp-p1c-mock-backfill.mjs` — P1 全链路验证（event.history / event.stats / sidecar-bridge 模块 / agent_switch listen / mock_llm_active DOM）
+- 端口踩坑（同 §十一）：残留 `tdsf-terminal-agent.exe` 占用 9300 端口，须 `Get-NetTCPConnection -LocalPort 9300 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }` 清理

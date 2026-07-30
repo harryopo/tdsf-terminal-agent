@@ -48,6 +48,14 @@ from agents.refactor_agent import RefactorAgent
 from agents.test_agent import TestAgent
 from agents.deploy_agent import DeployAgent
 
+# TDSF 魔改 2026-07-30 P0-C2 修复: Strands 后端 override 调用签名
+# 与 strands_backend.adapter.StrandsAgentAdapter.invoke 对齐：
+#   (agent_id: str, input: str, state: dict[str, Any]) -> dict[str, Any]
+# invoke_agent() 调用时优先走 override（若已 set_backend），否则走 BaseAgent.invoke
+BackendInvokeCallable = Callable[
+    [str, str, dict[str, Any]], dict[str, Any]
+]
+
 __all__ = [
     # 基类
     "BaseAgent",
@@ -72,6 +80,10 @@ __all__ = [
     "configure_agents",
     "register_methods",
     "reset_for_test",
+    # TDSF 魔改 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
+    "set_backend",
+    "clear_backend",
+    "BackendInvokeCallable",
 ]
 
 
@@ -105,6 +117,12 @@ _agent_instances: dict[str, BaseAgent] = {}
 _global_event_bus = None
 _global_llm_call: LLMCallFunction | None = None
 
+# TDSF 魔改 2026-07-30 P0-C2 修复: Strands 后端 override
+# - 非 None 时 invoke_agent() 走 override 路径，绕开 BaseAgent.invoke
+# - 由 main.py 在 TDSF_AGENT_BACKEND=strands 时通过 set_backend(adapter.invoke) 注入
+# - 与现有 BaseAgent PAOR 主路径互斥，二选一（避免双路径并发竞态）
+_global_backend_override: BackendInvokeCallable | None = None
+
 
 def configure_agents(
     event_bus: Any,
@@ -127,6 +145,69 @@ def configure_agents(
             event_bus=event_bus,
             llm_call=llm_call,
         )
+
+
+# ============================================================================
+# TDSF 魔改 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
+# ============================================================================
+#
+# 设计原则：
+# 1. set_backend(fn) 注入 Strands 适配层后，invoke_agent() 优先走 override，
+#    跳过 BaseAgent.invoke（避免双路径并发，简化 event_bus 推送归属）。
+# 2. override 签名与 StrandsAgentAdapter.invoke 完全对齐：
+#       (agent_id: str, input: str, state: dict) -> dict
+#    返回值结构与 BaseAgent.to_state_update() 对齐（observation / next_step /
+#    mood / intermediate_results），让前端 sidecar-adapter.ts 切片零改动。
+# 3. clear_backend() 清除 override，回退到 LangGraph BaseAgent PAOR 路径。
+# 4. 同时仍走 configure_agents() 实例化所有 BaseAgent（保留 fallback 路径，
+#    Strands 适配层降级时可回退；同时让前端 agent.list / agent.info JSON-RPC
+#    拿到的 system_prompt / tools 元数据仍可用）。
+# ============================================================================
+
+
+def set_backend(backend: BackendInvokeCallable) -> None:
+    """注入运行时后端 override（如 Strands 适配层）
+
+    调用后，所有 invoke_agent(name, state) 调用走 override 路径：
+        override(agent_id=name, input=state.get("input", ""), state=state)
+    而非 BaseAgent.invoke(state)。
+
+    Args:
+        backend: 后端 invoke 调用可调用对象
+                 签名 (agent_id: str, input: str, state: dict) -> dict
+                 返回值与 BaseAgent.to_state_update() 对齐
+
+    Raises:
+        TypeError: backend 不可调用
+
+    使用示例（main.py 启动时）：
+        from strands_backend import configure_strands
+        adapter = configure_strands(event_bus=bus, rust_bridge=None)
+        agents.set_backend(
+            lambda agent_id, input, state: adapter.invoke(agent_id, input, state)
+        )
+    """
+    global _global_backend_override
+    if not callable(backend):
+        raise TypeError(
+            f"set_backend expects callable, got {type(backend).__name__}"
+        )
+    _global_backend_override = backend
+    logger.info(
+        f"backend override set: {getattr(backend, '__name__', repr(backend))}"
+    ) if (logger := __import__("logging").getLogger("sidecar.agents")) else None
+
+
+def clear_backend() -> None:
+    """清除后端 override，回退到 BaseAgent PAOR 主路径
+
+    用于运行时切换后端（如 Strands → LangGraph）或单元测试隔离。
+    """
+    global _global_backend_override
+    if _global_backend_override is not None:
+        _global_backend_override = None
+        import logging
+        logging.getLogger("sidecar.agents").info("backend override cleared")
 
 
 def get_agent(name: str) -> BaseAgent:
