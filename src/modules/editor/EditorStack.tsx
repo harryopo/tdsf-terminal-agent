@@ -115,6 +115,7 @@ export function EditorStack({
                 ref={getRefCallback(t.id)}
                 path={t.path}
                 overrideLanguage={t.overrideLanguage}
+                remote={t.remote ?? null}
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
               />
