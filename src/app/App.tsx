@@ -108,6 +108,9 @@ import {
 } from "@/modules/terminal";
 // TDSF debug (#20): 仅用于 CDP 实测诊断（只读不改业务）
 import { getRendererPoolDebug } from "@/modules/terminal/lib/rendererPool";
+// TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
+// 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
+// getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
@@ -395,6 +398,34 @@ export default function App() {
       // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
       // getRendererPoolDebug 是只读函数, 不改业务逻辑
       rendererPool: () => getRendererPoolDebug(),
+      // TDSF 修复 2026-07-30 (Bug 3): 暴露 getLive / getEnvBlock
+      // 供 CDP 验证 Python agent 终端上下文感知 (<env> 块注入) 是否生效
+      // 之前只挂了 rendererPool, CDP 没法验证 <env> 块是否注入到 messagesForRun
+      // 注意: formatEnvBlock 逻辑内联 (不静态 import transport.ts, 避免 @ai-sdk 污染启动包)
+      getLive: () => {
+        const live = useChatStore.getState().live;
+        return {
+          cwd: live.getCwd(),
+          terminalPrivate: live.isActiveTerminalPrivate(),
+          workspaceRoot: live.getWorkspaceRoot(),
+          activeFile: live.getActiveFile(),
+        };
+      },
+      getEnvBlock: () => {
+        const live = useChatStore.getState().live;
+        const lines: string[] = [];
+        const workspaceRoot = live.getWorkspaceRoot();
+        const cwd = live.getCwd();
+        const activeFile = live.getActiveFile();
+        const terminalPrivate = live.isActiveTerminalPrivate();
+        if (workspaceRoot) lines.push(`workspace_root: ${workspaceRoot}`);
+        if (cwd) lines.push(`active_terminal_cwd: ${cwd}`);
+        if (activeFile) lines.push(`active_file: ${activeFile}`);
+        if (terminalPrivate) lines.push("active_terminal_mode: private");
+        return lines.length === 0
+          ? null
+          : `<env>\n${lines.join("\n")}\n</env>`;
+      },
     };
   }
 

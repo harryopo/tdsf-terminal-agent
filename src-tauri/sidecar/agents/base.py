@@ -155,6 +155,21 @@ class BaseAgent:
             f"has_event_bus={event_bus is not None}, has_llm={llm_call is not None}"
         )
 
+        # TDSF 修复 2026-07-30 (Bug 2): 构造时立即推送 mock LLM 告警
+        # 之前 _publish_mock_warning 只在 call_llm() 内触发, 而整个 sidecar
+        # 只有 teach_agent.py 一处调用 call_llm(), 其余 8 个 Agent 路径
+        # (main/coding/explore/history/debug/refactor/test/deploy) 永远走不到
+        # 告警分支, 前端永远看不到红色 Pill。
+        # 修复: 在 __init__ 构造时检测 llm_call=None, 立即推送告警,
+        # 覆盖所有 Agent 路径。event_bus 已在 main.py:350 注入, 可安全调用。
+        if llm_call is None and self.event_bus is not None:
+            self._publish_mock_warning(
+                "no_llm_config",
+                f"Agent '{self.name}' 构造时未注入 llm_call, "
+                f"请检查 .tdsf-data/llm_config.json 或 TDSF_LLM_API_KEY",
+            )
+            self._mock_warning_emitted = True
+
     # ========================================================================
     # 模板方法（不可重写）：invoke — 执行 PAOR 单轮
     # ========================================================================
