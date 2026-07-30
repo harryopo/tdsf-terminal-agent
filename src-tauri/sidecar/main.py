@@ -350,6 +350,53 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
             event_bus=event_bus.get_global_bus(),
             llm_call=llm_call,
         )
+
+        # TDSF 魔改 2026-07-30 P0-C1: Strands 后端 feature flag 注入点
+        # ---------------------------------------------------------------
+        # 通过环境变量 TDSF_AGENT_BACKEND 切换 Agent 后端实现：
+        #   - "langgraph"（默认）/ 未设置 / 其他值：走 BaseAgent PAOR 主路径
+        #   - "strands"：注入 StrandsAgentAdapter，invoke_agent() 走 override
+        #
+        # 集成点对齐方案文档 §4.2 与 strands_backend/adapter.py docstring：
+        #   - configure_strands 便捷构造 StrandsAgentAdapter
+        #   - agents.set_backend() 注入 override（agents/__init__.py P0-C2 提供）
+        #   - 失败时 clear_backend() 回退到 BaseAgent PAOR（保证 sidecar 可用）
+        #
+        # 当前限制（P0 阶段）：
+        #   - rust_bridge=None（双向 JSON-RPC 待 P2 扩展），运维工具返回 unavailable
+        #   - strands_model=None（LLM 模型适配待 P0-C5 补充），Strands 调用走降级路径
+        #   - 即便如此，注入后端仍优于未注入：前端 agent_switch 事件链路可工作，
+        #     Strands 工具元数据可被 agent.list / agent.info 返回
+        # ---------------------------------------------------------------
+        _tdsf_backend = os.environ.get("TDSF_AGENT_BACKEND", "langgraph").lower()
+        if _tdsf_backend == "strands":
+            try:
+                from strands_backend import configure_strands
+                _strands_adapter = configure_strands(
+                    event_bus=event_bus.get_global_bus(),
+                    rust_bridge=None,  # P2 阶段注入真实 send_request
+                )
+                agents.set_backend(
+                    lambda agent_id, input, state: _strands_adapter.invoke(
+                        agent_id, input, state
+                    )
+                )
+                logger.info(
+                    f"Strands backend activated (TDSF_AGENT_BACKEND=strands): "
+                    f"{_strands_adapter.get_stats()}"
+                )
+            except Exception as se:
+                # Strands 注入失败：清空 override（防残留半初始化状态），回退 PAOR
+                logger.exception(
+                    f"failed to activate Strands backend, "
+                    f"fallback to BaseAgent PAOR: {se}"
+                )
+                agents.clear_backend()
+        else:
+            logger.info(
+                f"agent backend: {_tdsf_backend} (default BaseAgent PAOR)"
+            )
+
         logger.info(
             f"agents methods registered + configured: "
             f"{agents.list_agents()}"

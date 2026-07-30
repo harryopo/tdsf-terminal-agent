@@ -279,6 +279,24 @@ export async function onMoodChange(
 }
 
 /**
+ * 订阅子 Agent 路由切换（sidecar:agent_switch）
+ *
+ * TDSF 魔改 2026-07-30 P1-a: 之前 Python 端 emit_agent_switch 已发布，
+ * 但前端无监听者，导致 AgentStatusPill 无法实时显示当前路由到的子 Agent。
+ *
+ * 主 Agent 在 PAOR 循环中路由到子 Agent（coding/explore/teach/debug 等）时
+ * 推送此事件，payload 结构：
+ *   { agent: "coding" | "explore" | ... | "main", task?: "当前子任务描述" }
+ *
+ * 前端订阅后应调用 chatStore.setCurrentSubAgent(payload.agent) 更新状态。
+ */
+export async function onAgentSwitch(
+  cb: NotificationCallback
+): Promise<UnlistenFn> {
+  return subscribe('agent_switch', cb);
+}
+
+/**
  * 订阅 Sidecar 崩溃事件（sidecar:crashed）
  *
  * Sidecar 进程崩溃且重启次数超限时触发

@@ -43,6 +43,20 @@ chromadb>=0.5.0
 asyncio-atexit>=1.0  # Python 3.13 异步清理
 
 # ----------------------------------------------------------------------------
+# Strands Agents SDK（TDSF 魔改 2026-07-30 P0-C3 修复）
+# -----------------------------------------------------------------------------
+# Apache-2.0 协议，AWS 开源 Agent 框架，由 strands_backend/ 适配层封装。
+# - 条件依赖：strands_backend/__init__.py try/except ImportError 优雅降级
+# - 激活方式：环境变量 TDSF_AGENT_BACKEND=strands 时 main.py 注入适配层
+# - 版本约束：1.x 稳定 API（@tool / Agent(tools=...) / stream_async）
+#   2.x 可能引入 breaking change，故 <2.0
+# - 默认未启用：保持 LangGraph BaseAgent PAOR 主路径，Strands 作为可选后端
+# - 安装后还需配置 LLM provider（OpenAI/Anthropic/Bedrock 等），
+#   通过 strands_backend.adapter 的 strands_model 参数注入
+# -----------------------------------------------------------------------------
+strands-agents>=1.0,<2.0
+
+# ----------------------------------------------------------------------------
 # 测试（pytest）
 # ----------------------------------------------------------------------------
 pytest>=8.0
