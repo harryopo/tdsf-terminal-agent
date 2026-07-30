@@ -1254,4 +1254,31 @@ python .tdsf-data\test_strands_e2e.py
 2. **vite reload 风暴隐患**：`docs/` 下写 .md 会触发 vite 全页 reload（vite 默认 watch 项目根），主线批量写报告时曾出现 reload 风暴把 vite 打崩（`beforeDevCommand terminated`，dev 整个退出）。建议在 `vite.config.ts` 加 `server.watch.ignored: ['**/docs/**']`（本次未改，避免越界）。
 3. 本修复的 commit 只含上述 4 个文件 + 本交接章，**未提交**主线工作区中的其他未跟踪/已改文件（`docs/reports/*2026-07-30.md`、`docs/竞赛/` 等），它们仍归主线所有。
 
+---
+
+## 十八、交接章（2026-07-30 · Command Palette 汉化 — 并行 agent B 产出）
+
+> 续 §十七。改动范围只有 `src/modules/command-palette/` 下 3 个文件，不碰主线（Strands/sidecar/ssh/docs 报告）。
+
+### 症状与根因
+
+Command Palette（Ctrl+P）内容全英文（占位符/分组 General/Spaces/Tabs/命令 Open settings 等）。**根因**：本项目没有 i18n 系统（`translate` 模块是终端选词离线词典，与 UI 语言无关），汉化方式=源码直接写中文（如 SettingsApp 的"通用/编辑器"），而 command-palette 模块是上游 terax 遗留、从未被汉化。
+
+### 改动（与项目既有汉化方式一致）
+
+- `src/modules/command-palette/commands.ts` — `COMMAND_GROUPS` 8 组名 + 全部 22 条命令 title + disabledReason hints（无终端标签页/窗格已达上限/最后一个标签页/当前空间/无工作区根目录/无可搜索视图）改中文；**keywords 保留原英文并追加英文原 title + 拼音**，英文/拼音模糊搜索仍可用
+- `src/modules/command-palette/CommandPalette.tsx` — 4 态占位符、dialog title/description（无障碍）、分组 heading（主题/文件内容/命令历史/搜索模式）、状态文案（返回/没有主题/至少输入 2 个字符/无匹配结果/打开一个终端以使用历史命令/没有历史记录/搜索失败/重试/搜索中.../未找到命令）全部中文
+- `src/modules/command-palette/lib/mode.ts` — `MODE_HINTS` 两条标签中文
+
+### 门禁 + 实测（全过）
+
+- typecheck ✅ / lint ✅ / test ✅ 832/832 / build:web ✅（Rust 零改动）
+- CDP 9222 实测（HMR 热更后 Ctrl+P）：placeholder=「输入命令，> 搜历史，# 搜文件内容」，headings=[常规/空间/标签页/窗格/Git/搜索/视图/AI]，命令项全部中文（打开设置/切换主题.../新建终端…），快捷键徽标正常
+
+### 备注
+
+- "切换到 Space 2" 中 "Space 2" 是用户空间名（spaces 模块数据），非 UI 文案，不在汉化范围
+- palette 模糊搜索兼容：中文 title + 英文 keywords + 拼音均可命中（rankCommands 用 title/group/keywords 三路打分）
+
+
 
