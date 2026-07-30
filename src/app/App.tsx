@@ -608,6 +608,40 @@ export default function App() {
     mruRef.current = mruRef.current.filter((id) => live.has(id));
   }, [tabs]);
 
+  // TDSF 魔改 2026-07-30 P1-a: 永久订阅 sidecar:agent_switch 事件
+  // -------------------------------------------------------------------
+  // 之前 sidecar-adapter.ts:251-265 已在 runSidecarStream 内订阅，但监听器在
+  // finally unlisten()，仅覆盖一次 agent.invoke 调用周期，启动期 / 调用间隙
+  // 的 agent_switch 事件会丢失。
+  //
+  // 这里注册永久监听器（应用生命周期内常驻），作为双保险：
+  //   - 启动期 main_agent 推送的 "main" agent_switch 也能被收到
+  //   - 多次 agent.invoke 调用间隙不丢失事件
+  //   - 与 sidecar-adapter.ts 内的临时监听器叠加，二者都调 setCurrentSubAgent，
+  //     幂等无副作用（重复 set 同值 zustand 不触发重渲染）
+  // 监听失败不致命（非 Tauri 环境如 vitest 跑测试时 listen 会 reject）。
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{ agent?: string; task?: string }>(
+      "sidecar:agent_switch",
+      (e) => {
+        const agent = e.payload?.agent;
+        if (agent) {
+          useChatStore.getState().setCurrentSubAgent(agent);
+        }
+      },
+    )
+      .then((un) => {
+        unlisten = un;
+      })
+      .catch(() => {
+        // 非 Tauri 环境（vitest）或 sidecar 未就绪，静默跳过
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const getSwitcherOrder = useCallback(() => {
     const space = activeSpaceId ?? DEFAULT_SPACE_ID;
     const inSpace = tabsRef.current

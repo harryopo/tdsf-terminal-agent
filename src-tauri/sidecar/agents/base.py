@@ -150,6 +150,20 @@ class BaseAgent:
         # 若未注入真实 LLM, 在第一次 invoke 时推送告警给前端
         self._mock_warning_emitted: bool = False
 
+        # TDSF 魔改 2026-07-30 P1-b: mock_llm_active 事件 60s 时间窗 dedup
+        # ----------------------------------------------------------------
+        # 之前每次 LLM 调用失败都会触发 _publish_mock_warning("llm_call_failed", ...)
+        # 在 PAOR 多轮迭代中（main_agent.invoke 一次循环可能调 5+ 次 call_llm），
+        # 同一 agent + 同一 reason 会事件洪水，前端 MockLLMWarning 反复闪烁。
+        # dedup 策略：key=reason，value=上次推送时间戳，
+        # 60s 内同 reason 直接跳过（仅 logger.debug，不发事件）。
+        # _mock_warning_emitted 布尔标记保留作"进程内 only once"语义（针对
+        # no_llm_config），与 dedup_ts 协同：no_llm_config 永不重发，
+        # llm_call_failed 60s 内不重发（持续失败时每分钟发一次，让用户感知）。
+        self._mock_warning_dedup_ts: dict[str, float] = {}
+        # dedup 时间窗（秒），常量化便于测试覆盖时调小
+        self._mock_warning_dedup_window: float = 60.0
+
         logger.debug(
             f"agent initialized: name={name}, role={role}, tools={tools}, "
             f"has_event_bus={event_bus is not None}, has_llm={llm_call is not None}"
