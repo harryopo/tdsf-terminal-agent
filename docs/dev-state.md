@@ -1999,3 +1999,136 @@ const r = await window.__TAURI_INTERNALS__.invoke('ipc_invoke', {
 - CDP 实测关键突破：`window.__TAURI_INTERNALS__.invoke('ipc_invoke', {method, params})`
 - 本 session **无代码改动**，纯验证 + commit + 文档记录，dev-state.md §二十四 为本次新增
 - 本 session 接手声明：main agent，无 subagent，场景 C（主线验证 + 文档）
+
+---
+
+## 二十五、交接章（2026-07-30 · 开发经验沉淀体系建立 — 知识体系总索引 + 项目交接文档）
+
+> 续 §二十四。本 session 完成知识沉淀体系 L3 层建立：① 创建 `docs/KNOWLEDGE-INDEX.md` 知识体系总索引（9 大类文档分类导航 + 7 种场景检索指南 + 版本控制信息 + 文档维护规则 + 4 层知识沉淀体系）② 创建 `docs/HANDOVER.md` 项目交接文档（开发环境配置 + 代码架构说明 + 关键功能实现原理 + 已知问题及解决方案 + 10 类开发经验沉淀 + 接手 checklist + 运行时状态快照）③ 在本节沉淀开发经验体系。
+
+### 一句话现状
+
+知识沉淀体系 L3 层建立完成。`KNOWLEDGE-INDEX.md`（项目所有文档统一导航入口）+ `HANDOVER.md`（全面交接文档）双文档固化，任何 AI 或人接手项目按 `AGENTS.md → CLAUDE.md → MULTI-AGENT-WORKFLOW.md → dev-state.md 末尾交接章 → KNOWLEDGE-INDEX.md → HANDOVER.md` 顺序阅读即可快速进入工作状态。本项目知识沉淀体系由 4 层组成：L1 规范层 / L2 进度层 / L3 知识层 / L4 归档层。
+
+### 本 session 已完成（3 项）
+
+| # | 任务 | 完成情况 | 证据 |
+|---|------|---------|------|
+| 1 | 创建 `docs/KNOWLEDGE-INDEX.md` 知识体系总索引 | ✅ | 9 大类文档分类导航（规范/进度/架构/API/审查/调研/比赛/教程/历史归档）+ 7 种场景检索指南 + 4 层知识沉淀体系定义 |
+| 2 | 创建 `docs/HANDOVER.md` 项目交接文档 | ✅ | 8 大章（环境配置 + 代码架构 + 关键功能原理 + 已知问题 + 10 类开发经验沉淀 + 决策边界 + 接手 checklist + 运行时快照），23500 字节 |
+| 3 | 在本节沉淀开发经验体系 | ✅ | 提炼散落于 §一~§二十四 的经验为结构化知识（见下文「开发经验沉淀总览」） |
+
+### 知识沉淀 4 层体系（本次建立）
+
+| 层 | 载体 | 作用 | 维护频率 |
+|----|------|------|----------|
+| **L1 规范层** | AGENTS.md / CLAUDE.md / MULTI-AGENT-WORKFLOW.md | 开发规范 + 防污染红线 + 协作规则 | 重大变更才改 |
+| **L2 进度层** | dev-state.md（§<N> 交接章，本节为 §二十五） | 唯一进度记忆源，每次 session 追加 | 每次 session |
+| **L3 知识层** | KNOWLEDGE-INDEX.md + HANDOVER.md | 文档导航 + 交接文档 + 经验沉淀 | 里程碑更新 |
+| **L4 归档层** | docs/reports/ + docs/reports/legacy/ | 审查报告 + 调研报告 + 历史归档 | 产出即归档 |
+
+**沉淀流程**：session 工作 → dev-state.md §<N> 交接章（L2）→ 里程碑更新 KNOWLEDGE-INDEX.md + HANDOVER.md（L3）→ 审查/调研报告归档（L4）
+
+### 开发经验沉淀总览（10 类，散落于 §一~§二十四，本次提炼）
+
+#### 1. 防污染红线（CLAUDE.md §3，8 条血泪教训）
+
+1. 0 字节源文件 = 被污染清空信号，先从 .bak/上游/git 历史恢复
+2. 禁止 `git checkout/reset/restore` 已跟踪文件（曾丢 65 个依赖）
+3. 改依赖只用 `pnpm add/remove` + `pnpm install`，绝不 `git checkout package.json`
+4. useEffect 依赖数组禁止包含"effect 自身 setState 会替换的值"（50 万次/秒卡死根因）
+5. Context Provider value 用 `useMemo`，回调用 `useCallback`
+6. zustand selector 别返回新引用，用 `useShallow`
+7. 启动/窗口/无边框/权限问题先比对上游 terax
+8. 五绿门禁全过 + `pnpm tauri:dev` 桌面端实测
+
+#### 2. 诊断方法论（CLAUDE.md §5）
+
+应用卡死/CPU 爆高几乎都是 React 无限重渲染：
+1. CDP 连 9222（`curl http://127.0.0.1:9222/json`）
+2. 截图仍可用（`Page.captureScreenshot` 走合成线程）
+3. CPU Profiler 热点全是 `measure` → useEffect 无限循环
+4. `performance.measure` name 计数定位组件
+5. 无 "Maximum update depth exceeded" = 自反依赖循环
+6. `el.click()` DOM 层验证（CDP `Input.dispatchMouseEvent` 在 Tauri 不等同真实鼠标）
+7. 运行时受阻时派 general-purpose agent 静态通读顶层组件
+
+#### 3. CDP 9222 调试技巧
+
+- **正确调用 Tauri 命令**：`window.__TAURI_INTERNALS__.invoke('ipc_invoke', {method, params})`（非 `__TAURI__.core.invoke`，非 `sidecar_invoke`）
+- **截图优先**：不受主线程卡死影响
+- **DOM 层触发 React**：`el.click()` 而非 `Input.dispatchMouseEvent`
+- **纯 Python WebSocket 客户端**：避免依赖 Node.js（`.tdsf-data/cdp_*.py` 归档脚本）
+- **`returnByValue: true` + `awaitPromise: true`**：拿异步结果
+
+#### 4. Strands 适配层经验
+
+- 缓存 key 用 `(agent_id, session_id)`：避免会话串台（P1-NEW-v2-2）
+- `update_model` + `clear_cache`：配置热更新必走（P1-NEW-v3-1）
+- `invoke_agent` override 路径：检测 `_global_backend_override` 优先走（6bc17b7）
+- 线程池 `shutdown(wait=False)` + `os._exit(0)`：避免 atexit join 卡死（P1-NEW-v2-6 + v3-4）
+- `_backend_status` 7 字段契约：三路径推送（4c5640f）
+- `agent.configure` 查询模式：传 `config=null` 仅查询不重配
+
+#### 5. SSH 文件编辑器经验（§十一）
+
+- `rustSessionId` 实时查询：SSH 重连后会变
+- `path + sessionId` 去重 key：避免本地/远程同名文件撞车
+- `sftpStat` mtime * 1000：秒级转毫秒与 FileStat 对齐
+- binary 检测在前端：NUL 字节扫描前 8KB
+- 远程文件跳过 LSP/formatter/媒体预览：用 CodeMirror 替代 Monaco
+
+#### 6. SSH 终端集成经验（§七/§九）
+
+- `terminal_modes` 必须空 `&[]`（畸形 TTY_OP_END 让 OpenSSH 硬关 TCP）
+- 主机审批 5min 超时（P1-NEW-v3-3，避免 `rx.await` 永久挂起）
+- 数据 fan-out 在 zustand store 内做，避免每个组件独立 listen
+- `emitTerminalData` 缓冲区 `buf = newBuf`（P2-NEW-v3-4）
+
+#### 7. 多 agent 协作规范（MULTI-AGENT-WORKFLOW.md）
+
+- **A/B/C 三场景分层**：A 主线串行 / B 并行子任务 / C 主线 + 调研审查
+- **文件锁矩阵**：每个 subagent 声明改哪些文件，main 协调避免冲突
+- **接手声明模板**：角色 + 场景 + 改动文件 + 不改动文件 + 验证方式
+
+#### 8. 五绿门禁（CLAUDE.md §4）
+
+```
+pnpm typecheck   # tsc -p tsconfig.app.json && tsconfig.node.json，0 错误
+pnpm lint        # eslint . --max-warnings 0
+pnpm test        # vitest run，832+ 全过
+pnpm build:web   # tsc -p app + vite build
+pnpm tauri:dev   # 桌面端实测：窗口可见 + 能点击 + 目标功能真的工作
+```
+
+- 豁免只能在 `eslint.config.js` 显式配置并注明理由
+- tsconfig 用 per-project `-p`（incremental 非 composite）
+
+#### 9. commit 规范
+
+- `fix(<scope>):` / `feat(<scope>):` / `refactor(<scope>):` / `docs(<scope>):` / `docs(reports):`
+- 全绿且可运行的里程碑要立即 git commit 固化（安全回滚点）
+- 禁止 `git reset/checkout/restore` 已跟踪文件（防污染红线 2）
+
+#### 10. 记忆保存机制
+
+- **强制保存时机**：用户说"保存记忆/接手/今天到此"、完成可运行里程碑、遇到无法自解阻塞、发现新污染/踩坑
+- **保存内容**：做了什么（文件级）+ 遇到什么问题+根因+解法 + 用户确认的决策 + 下一步
+- **唯一记忆源**：dev-state.md（L2）+ KNOWLEDGE-INDEX.md/HANDOVER.md（L3），不再使用任何项目外记忆
+
+### 关键技术决策沉淀（3 条）
+
+1. **L3 层双文档分工**：KNOWLEDGE-INDEX.md 是「文档全貌导航」（按分类+场景检索），HANDOVER.md 是「全面交接文档」（环境+架构+原理+问题+经验+checklist）。两者互补，不重复。
+2. **4 层知识沉淀体系**：L1 规范层（变更少）/ L2 进度层（每次 session）/ L3 知识层（里程碑）/ L4 归档层（产出即归档）。维护频率递减，但都不可或缺。
+3. **Write 工具超时但文件已写入**：本次创建 HANDOVER.md 时 Write 工具报 "IDE Command timeout"，但文件实际已完整写入（23500 字节 / 374+ 行）。后续遇到此情况应先验证文件是否实际创建，勿盲目重试。
+
+### 接手下一步 backlog（按优先级，沿用 §二十四 + 本次无新增）
+
+本次为纯文档 session，backlog 与 §二十四 完全一致，不重复列出。接手请直接看 §二十四「接手下一步 backlog」。
+
+### 备注
+
+- tauri:dev 进程仍在运行（9222 CDP / 9300 Vite），TDSF_AGENT_BACKEND=strands 已激活
+- 本次新增文档：`docs/KNOWLEDGE-INDEX.md` + `docs/HANDOVER.md`（待 commit）
+- 本次无代码改动，纯文档沉淀
+- 本 session 接手声明：main agent，无 subagent，场景 C（主线文档沉淀）
