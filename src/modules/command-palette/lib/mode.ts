@@ -22,6 +22,6 @@ export function parseQuery(raw: string): ParsedQuery {
 }
 
 export const MODE_HINTS: ReadonlyArray<{ sigil: string; label: string }> = [
-  { sigil: ">", label: "Search command history" },
-  { sigil: "#", label: "Find text in files" },
+  { sigil: ">", label: "搜索命令历史" },
+  { sigil: "#", label: "在文件中查找文本" },
 ];
