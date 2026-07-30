@@ -247,6 +247,11 @@ subagent-<ID>:
 | `src/modules/theme/` | 模块互斥 + 高风险 | 曾因 useThemeFileEditing effect 自反循环卡死 50 万次/秒 | 同改 = 极易触发无限渲染（CLAUDE.md §3 红线 4） |
 | `src/modules/ai/lib/composer.tsx` | 模块互斥 + 高风险 | AiComposerProvider 最外层 Provider，TERAX.md 警告无条件挂载 | 同改 = 整树重挂载 |
 | `src/lib/ssh-bridge.ts` / `sftp-bridge.ts` / `pty-bridge.ts` | 模块互斥 | invoke 桥，被多处依赖 | 同改 = 终端/SSH 联动断裂 |
+| `src-tauri/sidecar/strands_backend/` 目录内 | 模块互斥 | Strands 适配器（adapter.py / model_adapter.py）+ 5 个运维工具（log_analyzer / network_diagnostic / process_inspector / remote_file / ssh_command） | 同改 = agent 行为不一致（dev-state §十二~§十五 已集成） |
+| `src-tauri/sidecar/strands_backend/tools/ssh_command.py` | 模块互斥 + 高风险 | SSH 远程命令执行工具（高危命令经 RiskChecker + emit_needs_you 审批；通过 rust_bridge.ipc_invoke("ssh_command") 调 Rust） | 同改 = 审批链路断 / 高危命令误执行 |
+| `src-tauri/sidecar/rust_bridge.py` | 模块互斥 | sidecar → Rust 反向 JSON-RPC 桥（Python 阻塞等 Rust 响应 30s，ID 1,000,000+ 与 Rust 1+ 隔离） | 同改 = SSH/SFTP/PTY 调用链断（所有 strands_backend/tools/ 调 Rust 必经此桥） |
+| `src-tauri/sidecar/event_bus.py` | 模块互斥 | 事件总线（EventType 枚举 + pub-sub + emit_mock_warning/emit_agent_switch/emit_needs_you 便捷方法） | 同改 = 事件发布/订阅断裂（前端 MockLLMWarning / AgentStatusPill / needs-you 全失效） |
+| `src-tauri/sidecar/agents/` 目录内 | 模块互斥 | 9 个内置 agent 定义（main / coding / debug / deploy / explore / history / refactor / teach / test，继承 BaseAgent PAOR） | 同改 = agent 切换行为不一致 |
 
 **互斥级别含义**：
 - **严格互斥**：整个 session 独占，场景 A/B 的 subagent **一律禁止碰**，场景 C 只有主 agent 可改
@@ -290,7 +295,7 @@ subagent-<ID>:
 
 ### 4.1 前端模块依赖图（基于上游架构报告 + 本项目魔改）
 
-本项目前端模块（共 23 个，上游 20 + 魔改独有 3）：
+本项目前端模块（共 24 个，上游 20 + 魔改独有 4）：
 
 ```
 上游模块（20）：
@@ -298,8 +303,8 @@ agents / ai / command-palette / editor / explorer / git-history / header
 lsp / markdown / preview / settings / shortcuts / sidebar / source-control
 spaces / statusbar / tabs / terminal / theme / updater / workspace
 
-魔改独有模块（3）：
-translate / ssh-explorer / skills
+魔改独有模块（4）：
+translate / ssh-explorer / skills / strands-integration（虚拟节点：前端 ai 模块通过 sidecar-adapter.ts + chatRuntime.ts 调用后端 Python Strands backend，dev-state §十二~§十五 集成）
 ```
 
 依赖关系（→ 表示依赖，被依赖方改动时依赖方需重新验证）：
@@ -339,10 +344,18 @@ App.tsx（顶层壳）──────────────┼─→ 几乎
                               │       ←─ agents（外部 agent 通知）
                               │       ←─ composer.tsx（AiComposerProvider 最外层）
                               │       ←─ terminal（agent 工具调用）
+                              │       ←─ strands-integration（虚拟节点：sidecar-adapter.ts + chatRuntime.ts.getSshRustSessionId + transport.ts LiveSnapshot.sshSessionId 注入）
                               │
                               ├─→ agents ←─ ai（agent 通知桥）
                               │
                               ├─→ skills（魔改独有，依赖 ai 的工具调用）
+                              │
+                              ├─→ strands-integration（魔改独有虚拟节点，非独立目录）
+                              │       ←─ ai（sidecar-adapter.ts 桥接 Python sidecar）
+                              │       ←─ Python strands_backend（adapter + tools，dev-state §十二~§十五）
+                              │       ←─ Python rust_bridge（反向 JSON-RPC 调 Rust ssh_command/sftp_*）
+                              │       ←─ Rust ssh::ssh_command（exec 模式，dev-state §十三 集成）
+                              │       ←─ Rust ssh（sessionId 由 chatRuntime.getSshRustSessionId 实时查）
                               │
                               ├─→ translate（魔改独有，独立，仅依赖 Radix Popover）
                               │
@@ -382,9 +395,12 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
   ├─→ pty（portable-pty，CONPTY_LIFECYCLE_LOCK，Job Object）←─ 前端 terminal
   │
   ├─→ ssh（魔改独有，russh 0.61 + russh-sftp 2.1）←─ 前端 ssh-explorer
-  │       └─→ secrets（建议复用，service=terax-ssh）
+  │       ├─→ secrets（建议复用，service=terax-ssh）
+  │       └─→ ssh_command Tauri 命令（exec 模式，非 PTY，dev-state §十三 P0-D 集成）
+  │              ←─ Python rust_bridge.ipc_invoke("ssh_command", {sessionId, command, timeout})
+  │              ←─ Python strands_backend/tools/ssh_command.py（高危命令经 RiskChecker + emit_needs_you 审批）
   │
-  ├─→ sidecar（魔改独有，Python 进程管理）←─ 前端 ai（可选）
+  ├─→ sidecar（魔改独有，Python 进程管理，P0 指数退避已修 commit 2091e2f：MAX_RETRY 3→5 / 1·2·4·8·16·32·60s + cancel_tx + child.kill+wait 失败路径）←─ 前端 ai（可选）
   │
   ├─→ sandbox（魔改独有，命令沙箱执行）←─ sidecar / shell（高危命令拦截）
   │
@@ -405,6 +421,72 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
   └─→ history（suggest/commands/record/list）←─ 前端 terminal
 ```
 
+#### 4.2.1 Python sidecar 内部模块依赖图（魔改独有，dev-state §十二~§十五 集成）
+
+Python sidecar（`src-tauri/sidecar/`）是魔改独有的 AI 引擎，由 Rust `sidecar` 模块 spawn 为子进程。内部模块（共 7 类）：
+
+```
+main.py（JSON-RPC 入口 + agent 注册 + TDSF_AGENT_BACKEND feature flag 注入）
+  │
+  ├─→ agents/（9 个内置 agent：main/coding/debug/deploy/explore/history/refactor/teach/test）
+  │       └─→ base.py（BaseAgent PAOR 主路径，_publish_mock_warning / _mock_warning_dedup_ts 60s dedup）
+  │
+  ├─→ strands_backend/（Strands 适配层，TDSF_AGENT_BACKEND=strands 时注入，dev-state §十二~§十五）
+  │       ├─→ adapter.py（StrandsAgentAdapter：封装 Strands Agent 创建/工具注册/invoke；
+  │       │              Strands 1.50.2 已移除 max_iterations，改用 hooks=[LimitToolCounts]）
+  │       │       └─→ model_adapter.py（create_strands_model：LLMConfig → OpenAIModel/AnthropicModel/LiteLLMModel，
+  │       │                              优雅降级：未配置/未安装/异常返回 None）
+  │       │
+  │       └─→ tools/（5 个运维工具，@tool 装饰，Strands 不可用时退化为 passthrough）
+  │              ├─→ ssh_command.py（高危命令经 RiskChecker + emit_needs_you 审批；rust_bridge.ipc_invoke("ssh_command")）
+  │              ├─→ log_analyzer.py
+  │              ├─→ network_diagnostic.py
+  │              ├─→ process_inspector.py
+  │              └─→ remote_file.py
+  │
+  ├─→ rust_bridge.py（Python→Rust 反向 JSON-RPC 桥，dev-state §十三 P1-3 集成）
+  │       ├─→ send_request_to_rust(method, params) 阻塞等响应 30s
+  │       ├─→ ID 1,000,000+ 与 Rust 1+ 隔离（避免冲突）
+  │       └─→ 被 strands_backend/tools/* 调用（ssh_command / sftp_read / sftp_write / sftp_stat）
+  │
+  ├─→ event_bus.py（事件总线，EventType 枚举 + pub-sub + 历史保留）
+  │       ├─→ emit_mock_warning（MockLLMWarning，dev-state §十二 P1-c 修复）
+  │       ├─→ emit_agent_switch（AgentStatusPill，dev-state §十二 P1-a 修复）
+  │       ├─→ emit_needs_you（审批事件，被 ssh_command.py 高危命令触发）
+  │       └─→ event.history JSON-RPC 方法（前端补发查询）
+  │
+  ├─→ core/（LLMConfig / RiskEngine / Confidence / DecisionEngine 等基础设施工具）
+  ├─→ byoa/（Bring-Your-Own-Agent 适配器：aider/claude/codex/cursor/continue）
+  ├─→ graph/ / knowledge/ / observability/ / skills/（图引擎/知识库/可观测/Skills 系统）
+  └─→ tools/（confidence/credibility/decision/ground/history/risk/rlm_fanout/rpc_methods/steer_inject/worktree_fanout）
+```
+
+**关键调用链**（Strands backend 启用时，dev-state §十五 实测验证）：
+
+```
+前端 ai 模块（sidecar-adapter.ts + chatRuntime.ts）
+  ↓ JSON-RPC agent.invoke
+main.py（dispatch）
+  ↓ agents.set_backend(adapter.invoke)（TDSF_AGENT_BACKEND=strands 时）
+strands_backend/adapter.py（StrandsAgentAdapter.invoke）
+  ↓ _get_or_create_agent → Strands Agent（model + tools + system_prompt）
+  ↓ agent(prompt) → 真实 LLM API（DeepSeek/OpenAI/Anthropic，由 model_adapter 创建）
+  ↓ 工具调用（如 ssh_command）
+strands_backend/tools/ssh_command.py（RiskChecker 检测高危命令）
+  ↓ rust_bridge.send_request("ssh_command", {sessionId, command, timeout})
+rust_bridge.py（阻塞等响应 30s，ID 1,000,000+）
+  ↓ JSON-RPC 反向请求
+Rust ssh::ssh_command Tauri 命令（exec 模式）
+  ↓ russh channel exec
+SSH 远程主机
+  ↓ 返回 SshCommandResult{ok, output, exit_code, stderr, duration}
+rust_bridge.py（dispatch_response 唤醒 pending Event）
+  ↓ 返回结构化 dict
+strands_backend/tools/ssh_command.py（返回 {status:"success", ...}）
+  ↓ event_bus.emit_tool_call / emit_agent_message
+前端 ai 模块（流式渲染）
+```
+
 ### 4.3 可并行模块对（基于依赖图）
 
 下列模块对**没有直接依赖关系**，可由不同 subagent 同时改动（前提：都不碰 §3.1 的严格互斥文件）：
@@ -420,6 +502,11 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
 | `Rust pty` / `Rust ssh` | 本地 PTY vs SSH 远程（注意：dev-state §七 计划并入 rendererPool 后会紧耦合） |
 | `docs` / 任何代码模块 | 文档独立 |
 | `translate` / `skills` | 两个魔改独有模块，互不依赖 |
+| `Python strands_backend` / `Rust ssh::ssh_command` | Python 适配层 vs Rust 命令实现，独立语言/crate（注意：参数 + 返回结构契约需同步，改任一方需在 §4.5 表中核对） |
+| `Python strands_backend/model_adapter.py` / `Rust ssh` | LLM 模型适配 vs SSH 后端，完全独立（model_adapter 不调 ssh_command） |
+| `Python event_bus.py` / `Python agents/base.py`（除 emit_mock_warning 外） | 事件总线 vs agent 基类，仅在 emit_mock_warning 签名处耦合，改其他部分可并行 |
+| `Python strands_backend` / `Python byoa/` | Strands 适配层 vs BYOA 适配器，独立 agent 后端 |
+| `Python strands_backend/tools/log_analyzer.py` / `strands_backend/tools/network_diagnostic.py` | 5 个运维工具之间无直接依赖，可并行改（共享 ToolContext 但接口稳定） |
 
 ### 4.4 不可并行模块对（紧耦合）
 
@@ -439,6 +526,12 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
 | `ai` / `agents` | agents 的通知桥依赖 ai |
 | `ai` / `skills` | skills 依赖 ai 的工具调用 |
 | `Rust sidecar` / `Rust sandbox` | sandbox 被 sidecar 调用做高危命令拦截 |
+| `Python strands_backend/adapter.py` / `Python rust_bridge.py` | adapter.invoke 的工具调用经 rust_bridge.send_request 阻塞等响应，紧耦合（dev-state §十三 P1-3） |
+| `Python strands_backend/adapter.py` / `Python strands_backend/model_adapter.py` | adapter._get_or_create_agent 用 model_adapter.create_strands_model 注入 model，紧耦合 |
+| `Python strands_backend/tools/ssh_command.py` / `Rust ssh::ssh_command` | 参数（sessionId/command/timeout）+ 返回结构（SshCommandResult）契约紧耦合，改任一方需同步 |
+| `Python event_bus.py` / `Python agents/base.py` | base._publish_mock_warning 调 event_bus.emit_mock_warning，签名 + EventType 枚举紧耦合（dev-state §十二 P1-b 修复） |
+| `Python strands_backend/tools/ssh_command.py` / `Python event_bus.py` | ssh_command.py 高危命令调 emit_needs_you 推送审批事件，EventType + payload 结构紧耦合 |
+| `Python rust_bridge.py` / `Rust lib.rs`（ipc_invoke 路由） | rust_bridge.send_request 调用的 method 名需在 Rust 侧 ipc_invoke 路由注册，紧耦合 |
 
 ### 4.5 改动影响分析表（改 X 文件会影响哪些文件）
 
@@ -454,7 +547,7 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
 | `src/modules/terminal/lib/rendererPool.ts` | `TerminalPane` / `useTerminalSession` / 待并入的 `SshTerminalHost` | App.tsx | tauri:dev 本地终端 + SSH 终端 |
 | `src/modules/terminal/lib/useTerminalSession.ts` | `TerminalPane` / `TerminalStack` / `pty-bridge` | tabs | 五绿 + tauri:dev 本地终端回归 |
 | `src/modules/terminal/lib/pty-bridge.ts` | `useTerminalSession` | rendererPool | typecheck + tauri:dev |
-| `src/modules/ssh-explorer/sshStore.ts` | `SshExplorer` / `SshFileTree` / `SshFileEditor` / `SshTerminalHost` / `useRemoteFileTree` | App.tsx | 五绿 + tauri:dev SSH 自动连 + 文件树展开 |
+| `src/modules/ssh-explorer/sshStore.ts` | `SshExplorer` / `SshFileTree` / `SshTerminalHost` / `useRemoteFileTree` / `EditorStack`（远程 tab 透传 sessionId）/ `useDocument`（getRustSessionId 实时查 sessions） | App.tsx | 五绿 + tauri:dev SSH 自动连 + 文件树展开 + 远程文件可编辑（commit a4e6084 后 SshFileEditor 已删，远程编辑走 EditorStack） |
 | `src/modules/ssh-explorer/SshTerminalHost.tsx` | `WorkspaceSurface` / `rendererPool`（深度集成后） | tabs | tauri:dev SSH 终端可见可交互 |
 | `src/modules/explorer/lib/useRemoteFileTree.ts` | `FileExplorer` | App.tsx | tauri:dev 远程文件树展开（5316 项压力测试） |
 | `src/modules/explorer/FileExplorer.tsx` | `useFileTree` / `useRemoteFileTree` / App.tsx | tabs | tauri:dev 本地 + 远程文件树 |
@@ -464,7 +557,7 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
 | `src/modules/ai/lib/composer.tsx` | 所有 ai 子组件（`AiComposerProvider`） | 全树 | 五绿 + tauri:dev AI 面板 |
 | `src/modules/shortcuts/shortcuts.ts` | `useGlobalShortcuts` → 所有模块 | 全树 | 五绿 + tauri:dev 验证快捷键 |
 | `src/lib/ssh-bridge.ts` | `sshStore` / `SshConnectDialog` / `SshTerminalHost` | App.tsx | 五绿 + tauri:dev SSH 连接 |
-| `src/lib/sftp-bridge.ts` | `sshStore` / `useRemoteFileTree` / `SshFileEditor` | explorer | tauri:dev SFTP 读写 |
+| `src/lib/sftp-bridge.ts` | `sshStore` / `useRemoteFileTree` / `useDocument`（按 `tab.remote` 分流 `sftpRead`/`sftpWrite`/`sftpStat`）/ `EditorPane` | explorer | tauri:dev SFTP 读写 + 远程文件编辑（commit a4e6084 后远程编辑已并入 `EditorStack`，不再走 `SshFileEditor`） |
 | `src/lib/pty-bridge.ts` | `useTerminalSession` | terminal | typecheck + tauri:dev 本地终端 |
 | `src/store/runtime.tsx` | 凡引用 `SshSessionStateValue` 等类型处 | 全树 | typecheck |
 
@@ -482,6 +575,16 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
 | `src-tauri/src/modules/secrets.rs` | `ssh-bridge` / `ai` 的 keyring | sshStore | cargo check + tauri:dev 凭据 |
 | `src-tauri/tauri.conf.json` | 启动链（窗口/devUrl/CSP/CDP） | 全前端 | tauri:dev 重启验证窗口可见 |
 | `src-tauri/capabilities/default.json` | 所有 invoke（权限） | 全前端 | tauri:dev 验证 show() 不被拦截 |
+
+#### Python sidecar 关键文件影响表（魔改独有，dev-state §十二~§十五 集成）
+
+| 改动的文件 | 直接影响（必须重新验证） | 间接影响（建议重新验证） | 验证手段 |
+|-----------|----------------------|----------------------|---------|
+| `src-tauri/sidecar/strands_backend/adapter.py` | `strands_backend/tools/*`（全部 5 个工具的 ctx 注入 + make_all_ops_tools）/ `strands_backend/model_adapter.py`（model 注入）/ `main.py`（set_backend 注册段） | 前端 ai 模块（流式响应）/ `event_bus.emit_agent_message` | pytest（test_strands_model_adapter）+ `TDSF_AGENT_BACKEND=strands python .tdsf-data/test_strands_e2e.py` |
+| `src-tauri/sidecar/strands_backend/model_adapter.py` | `adapter.py`（_get_or_create_agent 用 strands_model）/ `strands_backend/__init__.py`（configure_strands 自动注入） | 所有 `strands_backend/tools/`（LLM 调用链路）/ `core/llm_config.py`（LLMConfig 共享） | pytest（test_strands_model_adapter 23 测试）+ 端到端 LLM 调用验证 |
+| `src-tauri/sidecar/strands_backend/tools/ssh_command.py` | `rust_bridge.py`（ipc_invoke("ssh_command") 调用签名需同步）/ `event_bus.emit_needs_you`（高危命令审批协议） | 前端 `AiToolApproval.tsx`（审批协议需同步）/ Rust `ssh::ssh_command` 命令（参数 + 返回结构需同步） | pytest（test_tools）+ 改 Rust 时加 cargo check + tauri:dev SSH 工具调用实测 |
+| `src-tauri/sidecar/rust_bridge.py` | 所有 `strands_backend/tools/`（ssh_command / remote_file 等调 Rust 必经此桥）/ `main.py`（dispatch_response 路由） | Rust 侧 `ipc_invoke` 路由（ssh_command / sftp_read / sftp_write / sftp_stat） | pytest（test_rust_bridge）+ 端到端 Strands 工具调用验证 |
+| `src-tauri/sidecar/event_bus.py` | `agents/base.py`（emit_mock_warning / emit_needs_you）/ `strands_backend/adapter.py`（emit_agent_message / emit_tool_call）/ `MockLLMWarning.tsx` + `AgentStatusPill` + needs-you listener | 未来 ApprovalHook（dev-state §十五 backlog）/ `event.history` JSON-RPC 方法 | pytest（test_event_bus）+ tauri:dev 验证前端事件订阅 |
 
 #### 配置文件影响表
 
