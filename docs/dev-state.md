@@ -242,20 +242,96 @@
 ### 接手下一步 backlog（按优先级）
 
 #### P0：魔改 agent 修复（方案已就绪，待实施）
-- **sidecar.rs 指数退避**：详见 `docs/reports/sidecar-p0-fix-plan.md`（7 段 diff，治本方案：MAX_RETRY 3→5、指数退避 1/2/4/8/16/32/60s、移除 `:307` 无条件重置、新增 cancel_tx 用户可中断、start() 失败路径补 child.kill()+wait()）
-- **mock_llm_active 事件链路**（三重断裂）：详见 `docs/reports/modded-agent-deep-audit.md`（EventType 追加 + base.py 改用 Event 对象 + MockLLMWarning.tsx:58 加 `sidecar:` 前缀）
-- **Python agent 终端上下文感知**：`transport.ts:122` 从 `messagesForRun` 取 input（含 `<env>` 块），短期 1 行改；长期扩展 `agent.invoke` 的 `state.live_context`
+- ~~**sidecar.rs 指数退避**~~ ✅ **已完成（2026-07-30，commit 2091e2f）**：MAX_RETRY 3→5、指数退避 1/2/4/8/16/32/60s、移除 `:307` 无条件重置、新增 cancel_tx 用户可中断、start() 失败路径补 child.kill()+wait()。详见 `docs/reports/sidecar-p0-fix-plan.md`
+- ~~**mock_llm_active 事件链路**（三重断裂）~~ ✅ **已完成（2026-07-30，commit fcb3596）**：event_bus.py 加 MOCK_LLM_ACTIVE EventType + emit_mock_warning 便捷方法；base.py 改用 emit_mock_warning（原 publish 调用签名错误 TypeError 被静默吞掉）；MockLLMWarning.tsx:62 加 `sidecar:` 前缀；except 后 logger.debug → logger.exception
+- ~~**Python agent 终端上下文感知**~~ ✅ **已完成（2026-07-30，commit fcb3596）**：`transport.ts:127` 从 `messagesForRun`（含 `<env>` 块）取 input，Python agent.invoke 现能感知 cwd/activeFile/terminalPrivate。长期扩展 `state.live_context` 结构化字段（P1-c 范畴）
 
 #### P1：运维 agent 集成（方案已就绪，待实施）
 - **Strands Agents sub-package**：详见 `docs/reports/ops-agent-strands-integration-plan.md`（`strands_backend/` 适配层 + 5 个运维工具 + feature flag 灰度切换）
+- **新增调研（2026-07-30）**：详见 `docs/reports/ops-agent-opensource-survey-2026-07.md`（870 行，11 个项目对比）。**结论**：Strands Agents 1.48.0 仍是首选（AWS 生产验证 + 周发版 + Apache 2.0），新增 PydanticAI v2.13.0 作为轻量级备选（触发条件：Strands 依赖冲突或需更强类型安全）
 - 落地路线：P0（适配层 + 2 基础工具）+ P1（3 高级工具 + 测试）+ P2（真实 RustBridge + 双向 JSON-RPC）= 3 人日
 
 #### P2：SSH 文件编辑器 + 性能优化
-- SSH 文件 → 走 `EditorStack`/CodeMirror 标签（见 §七-2）
+- **SSH 文件 → 走 `EditorStack`/CodeMirror 标签**：实施方案详见 `docs/reports/ssh-editor-integration-plan.md`（2026-07-30 新增，824 行，6 阶段步骤带验证与回滚，EditorTab 加 remote 字段 + useDocument 3 处 fs 调用按 remote 分流 sftp-bridge）
 - 资源管理器性能（`sftpEntryToDirEntry` 按目录缓存）
 - 文档漂移清理（`ipc.rs`/`sidecar-bridge.ts` 旧示例）
 
-### 实测法（同 §八，不变）
+---
+
+## 十、交接指南（2026-07-30 · P0+P1 修复完成，魔改 agent 可用）
+
+> 接手先读本节 + `CLAUDE.md` + `docs/MULTI-AGENT-WORKFLOW.md`（v2.0 多 agent 规范）。
+
+### 本 session 已完成（魔改 agent P0+P1 全部修复）
+
+1. **✅ P0 sidecar.rs 指数退避（commit 2091e2f）**：
+   - 修复「发 ready 后即崩」场景下无限快速重启循环（CPU/日志双爆）
+   - MAX_RETRY 3→5、指数退避 1/2/4/8/16/32/60s（上限 60s）
+   - 移除 `start():307` 无条件 retry_count 重置；改为 exit_watcher 的「运行冷却」机制（运行 ≥60s 后崩溃才重置，偶发不累积；快速崩溃持续递增直至 MAX_RETRY）
+   - 新增 cancel_tx channel，stop() 发送，restart_loop 退避 sleep 期间 select! 监听，用户可中断
+   - start() 失败路径补 child.kill()+wait() 修复场景 B 的 child 句柄泄漏
+   - 单元测试：`test_backoff_calculation` + `test_max_retry_is_five`（cargo test 全过）
+
+2. **✅ P1-a mock_llm_active 三重断裂修复（commit fcb3596）**：
+   - **第一重**：`event_bus.py:48-64` EventType 追加 `MOCK_LLM_ACTIVE = "mock_llm_active"`
+   - **第三重（根因）**：`event_bus.py:514-551` 新增 `emit_mock_warning` 便捷方法（与 emit_mood_change/emit_agent_switch 同模式）；`base.py:537-562` 改用 `emit_mock_warning` 而非直接调用 `publish(event_type_str, dict, source=...)`（原签名错误 TypeError 被静默吞掉，事件连 EventBus 都进不去）
+   - **第二重**：`MockLLMWarning.tsx:62` listen 事件名加 `sidecar:` 前缀（原 `"mock_llm_active"` 永远监听不到，Rust `sidecar.rs:805 format!("sidecar:{}", method)` 会给所有 Python 事件加前缀）
+   - except 后 `logger.debug` → `logger.exception`（异常不再静默，便于诊断）
+   - **效果**：用户未配置 LLM 时前端红色告警 Pill 终于能显示，不再误以为 AI 在工作
+
+3. **✅ P1-b Python agent 终端上下文感知（commit fcb3596）**：
+   - `transport.ts:127` 从 `messagesForRun`（已注入 `<env>` 块）取 input，而非 `options.messages`（裸用户文本）
+   - Python agent.invoke 收到的 input 现包含 `<env>workspace_root/active_terminal_cwd/active_file/active_terminal_mode</env>` 前缀
+   - main_agent.plan_task 关键词路由能感知当前终端 cwd/activeFile（之前完全看不到）
+   - 短期 1 行改治标；长期应扩展 `agent.invoke` 的 `state.live_context` 结构化字段（P1-c 范畴）
+
+4. **✅ 调研报告产出（2 份并行 subagent）**：
+   - `docs/reports/ops-agent-opensource-survey-2026-07.md`（870 行）：11 个 2026 年运维/通用 AI Agent 开源项目深度对比，确认 Strands Agents 仍是首选
+   - `docs/reports/ssh-editor-integration-plan.md`（824 行）：SSH 文件编辑器集成 EditorStack 6 阶段实施方案
+
+### 本 session 改动的文件（已 commit）
+
+**commit 2091e2f（sidecar P0）**：
+- `src-tauri/src/modules/sidecar.rs`（+129/-7）
+- `docs/reports/ops-agent-opensource-survey-2026-07.md`（新增）
+- `docs/reports/ssh-editor-integration-plan.md`（新增）
+
+**commit fcb3596（P1-a + P1-b）**：
+- `src-tauri/sidecar/event_bus.py`（EventType + emit_mock_warning）
+- `src-tauri/sidecar/agents/base.py`（_publish_mock_warning 改用 emit_mock_warning）
+- `src/modules/ai/components/MockLLMWarning.tsx`（listen 加 sidecar: 前缀）
+- `src/modules/ai/lib/transport.ts`（input 从 messagesForRun 取）
+
+### 五绿门禁状态（2026-07-30 实测）
+
+| 门禁 | 状态 |
+|------|------|
+| `pnpm typecheck` | ✅ 0 错误 |
+| `pnpm lint` | ✅ 0 错误 0 警告 |
+| `pnpm test` | ✅ 830/830 全过 |
+| `pnpm build:web` | ✅ 成功出 dist |
+| Python ast.parse | ✅ event_bus.py + base.py 语法验证通过 |
+| `cargo test` | ✅ test_backoff_calculation + test_max_retry_is_five 全过 |
+| `pnpm tauri:dev` 桌面端实测 | ⏳ 待用户实测（确认 MockLLMWarning Pill 在未配置 LLM 时显示 + 终端上下文感知生效） |
+
+### 接手下一步 backlog（按优先级）
+
+#### P0：tauri:dev 桌面端实测验证（必做）
+1. 起 `pnpm tauri:dev`，确认 sidecar 不再无限重启（指数退避生效）
+2. 未配置 LLM 时，前端 status bar 应显示红色「未配置 LLM」告警 Pill（MockLLMWarning）
+3. 与 AI 对话时，Python agent 应能感知当前终端 cwd（input 含 `<env>` 块）
+4. 本地终端 + SSH 终端回归（不能因 P1 改动 break）
+
+#### P1：运维 agent 集成（方案已就绪）
+- Strands Agents sub-package 落地（适配层 + 2 基础工具，2.5 人日）
+- 详见 `docs/reports/ops-agent-strands-integration-plan.md` + `docs/reports/ops-agent-opensource-survey-2026-07.md`
+
+#### P2：SSH 文件编辑器 + 性能优化
+- SSH 文件 → 走 EditorStack/CodeMirror 标签（详见 `docs/reports/ssh-editor-integration-plan.md`，6 阶段步骤）
+- 资源管理器性能（`sftpEntryToDirEntry` 按目录缓存）
+- 文档漂移清理（`ipc.rs`/`sidecar-bridge.ts` 旧示例）
+
+### 实测法（同 §八/§九，不变）
 - 起 dev：`pnpm tauri:dev`（app 开机自动连 `root@192.168.45.200`）
 - 读运行态：`node C:\Users\Lenovo\AppData\Local\Temp\cdp-read.mjs`（主题/DOM/颜色）+ `cdp-pool.mjs`（rendererPool 字体/buffer）+ `cdp-regr.mjs`（SFTP/本地终端回归）
 - **端口踩坑**（本次再次遇到）：残留 `tdsf-terminal-agent.exe` 占用导致 `cargo build` 失败 `os error 5 拒绝访问`，须 `tasklist | findstr tdsf-terminal-agent` + `taskkill /F /T /PID` 清理
