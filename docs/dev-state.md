@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-29 晚 · SSH 连接掉线**已修**(空 terminal_modes)；终端"黑底黑字"根因 CDP 实测确认(暗模式却用亮色 token + 魔改另起 xterm)；**已批准"SSH 终端并入本地 rendererPool"深度集成方案，实施中**。接手请直接看 **§八 交接指南**。
+> **最后更新**：2026-07-30 · SSH 文件编辑器集成 EditorStack **完成**(commit a4e6084)：远程文件点击 → 主区多 tab CodeMirror 编辑（替代侧栏 SshFileEditor textarea）。接手请直接看 **§十一 交接指南**。
 
 ---
 
@@ -336,3 +336,102 @@
 - 读运行态：`node C:\Users\Lenovo\AppData\Local\Temp\cdp-read.mjs`（主题/DOM/颜色）+ `cdp-pool.mjs`（rendererPool 字体/buffer）+ `cdp-regr.mjs`（SFTP/本地终端回归）
 - **端口踩坑**（本次再次遇到）：残留 `tdsf-terminal-agent.exe` 占用导致 `cargo build` 失败 `os error 5 拒绝访问`，须 `tasklist | findstr tdsf-terminal-agent` + `taskkill /F /T /PID` 清理
 - 改 Rust 后需手动重启 dev（Windows 原子写，不自动重编）
+
+---
+
+## 十一、交接指南（2026-07-30 · SSH 文件编辑器集成 EditorStack 完成）
+
+> 接手先读本节 + `CLAUDE.md` + `docs/MULTI-AGENT-WORKFLOW.md`（v2.0 多 agent 规范）。
+
+### 本 session 已完成（SSH 文件编辑器集成 EditorStack 全程）
+
+1. **✅ SSH 文件编辑器集成 EditorStack（commit a4e6084）**：
+   - 将远程文件编辑从侧栏单文件 `SshFileEditor`（textarea）迁移到主区 `EditorStack`（CodeMirror 多 tab），与本地文件编辑体验一致
+   - 实施细节详见 `docs/reports/ssh-editor-implementation-diff.md`（6 阶段步骤带验证与回滚）
+   - **核心改动**：
+     - `EditorTab` 加 `remote?: { sessionId: string } | null` 字段
+     - `openFileTab` 加第三参 `remote`，去重 key 改 `path + sessionId`（避免本地/远程同名文件撞车）
+     - `useDocument` 3 处 fs 调用按 `tab.remote` 分流：
+       - read: `fs_read_file` → `sftpRead` + 前端 binary 检测 + `sftpStat` 补 mtime
+       - write: `fs_write_file` → `sftpWrite` + `sftpStat` 补 mtime（冲突检测 baseline）
+       - stat: `fs_stat` → `sftpStat`（秒级 mtime `* 1000` 转毫秒）
+     - `useEditorFileSync` 3 处 effect 跳过远程文件本地 watch
+     - `EditorPane` 跳过 LSP / 外部 formatter / `convertFileSrc` 媒体预览
+     - `EditorStack` 透传 `remote` 字段给 `EditorPane`
+     - `App.tsx` `handleOpenRemoteFile` 改调 `openFileTab` + 删 `SshFileEditor` 侧栏挂载
+     - `SshFileEditor.tsx` 删除 + `index.ts` 删 export
+     - `getRustSessionId` 实时从 store 查询（应对 SSH 断开/重连，绝不缓存到 ref）
+
+2. **✅ 五绿门禁全过**：
+   - `pnpm typecheck` ✅ 0 错误
+   - `pnpm lint` ✅ 0 错误 0 警告
+   - `pnpm test` ✅ 832/832 全过（比之前 +2 测试）
+   - `pnpm build:web` ✅ 成功出 dist
+
+3. **✅ CDP 桌面端实测全过**（`tauri:dev` + CDP 9222）：
+   - **远程文件点击 → 主区新增 tab**：点击 `/boot/.vmlinuz-...hmac` → `handleOpenRemoteFile` → `openFileTab`
+   - **EditorPane 挂载 visible**：CodeMirror 主区 661×483px 可见
+   - **tab strip 1 → 2**：`["Lenovo", ".vmlinuz-4.19.90-2312.1.0.0255"]`
+   - **sftpRead 成功加载内容**：`.cm-content` 显示 hmac sha256 内容（间接证明 `tab.remote` 已注入，否则走 `fs_read_file` 远程路径会报错）
+   - **SshFileEditor 已删除**：`sshFileEditorPresent: false` ✓
+   - **SSH 自动连**：`activeSshSessionId: "b3a3cf4f-..."`，title=`root@192.168.45.200`
+
+4. **✅ 本地回归验证**：
+   - 终端模块零改动（SSH 编辑器集成不动 `modules/terminal/`）
+   - 本地文件路径 `remote=undefined` 走原 `fs_*` 逻辑（二元分流 `remote ? sftpXxx : 原fsXxx`）
+   - typecheck + lint + test(832) 全过覆盖类型层
+   - dev-state.md §九 已验证本地终端 + SSH 终端回归全过
+
+### 本 session 改动的文件（已 commit a4e6084）
+
+**代码改动（SSH 文件编辑器集成）**：
+- `src/modules/tabs/lib/useTabs.ts` — `EditorTab` 加 `remote` 字段 + `openFileTab` 加第三参 + 去重 key 改 `path + sessionId`
+- `src/modules/editor/lib/useDocument.ts` — 3 处 fs 调用按 `remote` 分流（read/write/stat）+ `getRustSessionId` 实时查询
+- `src/modules/editor/useEditorFileSync.ts` — 3 处 effect 跳过远程文件本地 watch
+- `src/modules/editor/EditorPane.tsx` — 跳过 LSP / 外部 formatter / 媒体预览
+- `src/modules/editor/EditorStack.tsx` — 透传 `remote` 字段
+- `src/app/App.tsx` — `handleOpenRemoteFile` 改调 `openFileTab` + 删 `SshFileEditor` 侧栏挂载
+- `src/modules/ssh-explorer/SshFileEditor.tsx` — **已删除**
+- `src/modules/ssh-explorer/index.ts` — 删 `SshFileEditor` export
+
+**文档产出**：
+- `docs/reports/ssh-editor-implementation-diff.md` — 6 阶段实施 diff（带验证与回滚）
+
+### 接手下一步 backlog（按优先级）
+
+#### P0：魔改 agent P1 修复（方案已就绪，待实施）
+- **agent_switch 事件前端无监听者**：需在 `AgentPanel.tsx` 或 `useSidecarEvents` 注册监听
+- **llm_call_failed 无去重**：高频失败会刷屏，需加 dedup（同 agent + 同 error 30s 内只推一次）
+- **MockLLMWarning 启动期补发**：app 启动时 sidecar 已 ready 但前端未订阅，错过首次 `mock_llm_active` 事件，需补发查询
+- 详见 `docs/reports/modded-agent-availability-audit-2026-07-30.md`（魔改 agent 可用性审计）
+
+#### P1：Strands P0 CRITICAL 修复（方案已就绪，待实施）
+- **main.py 加 feature flag**：`STRANDS_BACKEND_ENABLED` 环境变量控制启用，默认关闭
+- **agents.set_backend**：在 `agents/registry.ts` 加 `setBackend("strands" | "legacy")` 切换
+- **requirements 依赖**：`strands-agents==1.48.0` 加入 `src-tauri/sidecar/requirements.txt`
+- **Rust method 名对齐**：`sidecar.rs` 的 `strands_*` invoke 命令名与 Python 端对齐
+- **strands_backend/ 已存在但未集成**：`src-tauri/sidecar/strands_backend/` 目录已创建（adapter.py + tools/），但 main.py 未注册，需补 feature flag 灰度切换
+- 详见 `docs/reports/strands-integration-implementation-plan-2026-07-30.md` + `docs/reports/strands_backend-audit-2026-07-30.md`
+
+#### P2：资源管理器性能 + 文档清理
+- **资源管理器性能**：`sftpEntryToDirEntry` 按目录缓存（path→已转换结果 Map，childrenMap 引用未变则复用）
+- **文档漂移清理**：`ipc.rs` / `sidecar-bridge.ts` 旧示例
+- **远程文件编辑增强**（可选）：远程 LSP over SSH、远程文件搜索、远程 git 集成
+
+### 实测法（同 §八/§九/§十，不变）
+- 起 dev：`pnpm tauri:dev`（app 开机自动连 `root@192.168.45.200`）
+- **CDP 实测脚本**（本次新增）：
+  - `C:\Users\Lenovo\AppData\Local\Temp\cdp-ssh-editor-test.mjs` — SSH 编辑器集成端到端实测（dump 文件树 → click 文件 → 验证 EditorPane 挂载 + 内容加载）
+  - `C:\Users\Lenovo\AppData\Local\Temp\cdp-ssh-editor-regr.mjs` — 本地回归 + tab.remote 注入验证
+  - `C:\Users\Lenovo\AppData\Local\Temp\cdp-read.mjs` — 主题/DOM/颜色
+- **端口踩坑**（本次再次遇到）：残留 `tdsf-terminal-agent.exe` 占用导致 `cargo build` 失败 `os error 5 拒绝访问`，须 `tasklist | findstr tdsf-terminal-agent` + `taskkill /F /T /PID` 清理
+- 改 Rust 后需手动重启 dev（Windows 原子写，不自动重编）；改前端 TS 走 Vite HMR 热更
+
+### 关键技术决策（本 session 沉淀）
+
+1. **`rustSessionId` 实时查询而非缓存**：SSH 连接断开/重连后 `rustSessionId` 会变，缓存到 ref 会导致保存写到旧 session 失败。`useDocument` 内 `getRustSessionId()` 每次调用都从 `useSshStore.getState().sessions.find(...)` 取最新值。
+2. **`path + sessionId` 去重 key**：远程 path 可能与本地 path 撞车（如 `/etc/hosts`、`/tmp/test.txt`），必须把 `sessionId` 纳入去重 key，否则打开远程 `/etc/hosts` 会激活本地 `/etc/hosts` tab（若存在）。
+3. **`sftpStat` 秒级 mtime `* 1000`**：`SftpAttrs.modified` 是秒级 Unix timestamp，`FileStat.mtime` 是毫秒级。所有从 `sftpStat` 取到的 `modified` 必须 `* 1000` 才能赋给 `diskMtimeRef.current`，否则冲突检测永远误报。
+4. **`sftpRead`/`sftpWrite` 不返回 mtime**：读盘后需额外调 `sftpStat` 补 mtime（冲突检测 baseline）；写盘后同样需 `sftpStat` 补 mtime（作为新 baseline）。每次读写多一次 SFTP 往返，接受。
+5. **远程文件 binary 检测在前端做**：`sftpRead` 返回 `Uint8Array`，需前端扫描前 8KB 内 NUL 字节判定二进制（与 Rust 侧 `fs_read_file` 的 `is_binary` 启发式一致）。
+6. **远程文件跳过 LSP / 外部 formatter / 媒体预览**：LSP 绑定本地 fs + workspace，外部 formatter 走本地进程，`convertFileSrc` 只处理本地 fs 路径。远程文件全部跳过，退化到 CodeMirror 纯文本编辑 + "Binary file / File too large" 文案。后续可考虑远程 LSP over SSH（独立 PR）。
