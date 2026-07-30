@@ -1141,3 +1141,76 @@ python .tdsf-data\test_strands_e2e.py
 # 期望：4 个测试全过，最后一行 "[ALL PASS] P0-E 阶段 A 端到端验证完成"
 ```
 
+---
+
+## 十六、交接指南（2026-07-30 · 多 agent 规范 v2.0 审查 4 个 Critical 漂移修复）
+
+### 一句话现状
+
+`docs/MULTI-AGENT-WORKFLOW.md` v2.0 审查报告发现的 4 个 Critical 漂移问题全部修复并 commit 固化（4fc248f）。入口文件（AGENTS.md / CLAUDE.md）现已双向引用本规范，测试基线 830→832 全局对齐，红线 13 自相矛盾已通过「授权例外」条款化解。前三绿全过（typecheck/lint/test 832），纯文档改动不影响代码。
+
+### 本 session 已完成（4 个 Critical 全修）
+
+| Critical | 症状 | 修复点 |
+|----------|------|--------|
+| **Critical-1** | AGENTS.md 必读列表只列 2 项，缺 MULTI-AGENT-WORKFLOW.md | `AGENTS.md` 行 5-8 加第 3 项 `docs/MULTI-AGENT-WORKFLOW.md` |
+| **Critical-2** | CLAUDE.md §6 记忆文档表只列 4 行，未含本规范 | `CLAUDE.md` §6 表追加「多 agent 协作规范」行（接手必读第三文档） |
+| **Critical-3** | 测试基线 830 vs 实际 832 漂移（6 处） | `CLAUDE.md` §4 行 108 + `MULTI-AGENT-WORKFLOW.md` 7 处 830→832 全局替换 |
+| **Critical-4** | §13 红线 13「subagent 不改本规范」vs §9.5「subagent-C 撰写本规范」自相矛盾 | 3 处协调一致：§3.1 行 240 加「subagent 经授权可改」+ §13 红线 13 加「授权例外」条款 + §9.5 实例开头加「例外说明」 |
+
+### 本 session 改动的文件（commit 4fc248f）
+
+- **保留 `AGENTS.md`**：必读列表加第 3 项 MULTI-AGENT-WORKFLOW.md
+- **保留 `CLAUDE.md`**：§6 记忆文档表加行 + §4 行 108 测试基线 830→832
+- **保留 `docs/MULTI-AGENT-WORKFLOW.md`**：7 处 830→832 + §3.1/§9.5/§13 三处自相矛盾协调
+- **新增 `docs/reports/multi-agent-workflow-review-2026-07-30.md`**：审查报告（本次修复的依据，subagent 产出）
+
+### 验证
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过（与基线一致）
+- 纯文档改动，按 §7.5 场景 A 不跑 build:web / tauri:dev
+
+### 接手下一步
+
+审查报告还有 **7 个 Major + 9 个 Minor** 待处理（P1/P2 优先级）：
+
+**P1（Major，短期补充）**：
+1. Major-5：Strands / rust_bridge / ssh_command 等新模块未纳入 §4 模块依赖图 + §3.1 互斥矩阵 + §4.5 影响表
+2. Major-6：§4.5 行 457 仍引用已删除的 SshFileEditor（应改 EditorStack/EditorPane/useDocument）
+3. Major-7：§10 追加 §10.5 多 commit 回滚策略（git revert + LIFO + 重跑五绿）
+4. Major-8：§9 追加 §9.6 subagent 中途失败/超时处理
+5. Major-9：§7.3 追加多 subagent 集成顺序规则（依赖倒序 + 风险等级 + 完成时间）
+6. Major-10：§6.3 追加场景切换判定标准 + 切换流程
+7. Major-11：规范 §0 与 CLAUDE.md §0 对 dev-state.md 优先级对齐（第二必读 vs 第四位）
+
+**P2（Minor，中期优化）**：
+- Minor-12：plan 文件路径过时（§9.5 still-crest-linnet.md 已完成）
+- Minor-13：subagent 数量超限处理
+- Minor-14：§14 案例库补充 §十~§十五 共 6 个 session
+- Minor-15：§6.5 数据契约 8 字段落地位置
+- Minor-16：§3.2 锁文件检查时机
+- Minor-17：术语表（主工作树/集成/反向编辑/让渡/软约束）
+- Minor-18：§4.2 sidecar P0 已修注记
+- Minor-19：§4.3/4.4 Strands 可并行/不可并行模块对
+- Minor-20：§7.5 门禁责任矩阵加 pytest 列
+
+**主线 backlog（与规范修复并行）**：
+- P0-E 阶段 B：启动 tauri:dev + CDP 9222 端到端实测（SSH 会话 + Strands 调运维工具）
+- P2：资源管理器按目录缓存性能优化（同 §十一 backlog）
+- P2：远程 LSP over SSH（独立 PR）
+
+### 实测法（同 §八~§十五）
+
+- 起 dev：`pnpm tauri:dev`（app 开机自动连 `root@192.168.45.200`）
+- 读运行态：`node C:\Users\Lenovo\AppData\Local\Temp\cdp-read.mjs`（连 CDP 9222）
+- 端口清理：`taskkill //F //T //PID <PID>` 清 9300/9222 残留
+
+### 防漂移机制建议（审查报告 §7.4）
+
+为防止规范再次漂移，建议在 §16 演进章节追加**强制同步触发点**（本 session 已修 Critical，但 Major/Minor 仍待补，建议下个 session 处理 P1 时一并加入）：
+1. 每完成一个 session（dev-state.md 追加新交接章）时，主 agent 必须检查本规范是否需要同步更新
+2. 测试基线变化时必须同步更新 §7.1 / §7.5 / §12 脚本
+3. CLAUDE.md / AGENTS.md 改动时必须双向检查本规范引用是否一致
+
