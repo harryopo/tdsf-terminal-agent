@@ -1692,3 +1692,28 @@ PASS: agent.invoke 返回成功响应
 - 代码审查报告：`docs/reports/modded-agent-code-review-2026-07-30.md`（445 行，0 P0 + 4 P1 + 6 P2）
 
 
+
+---
+
+## 二十二、交接章（2026-07-30 · sidecar 流协议：工具行 + Reasoned 渲染 — 并行 agent B）
+
+> 承接主线 bf7e68c（换回 AiMiniWindow）。本节纯前端隔离，只改 `src/modules/ai/lib/sidecar-adapter.ts(+.test.ts)`，未碰任何后端文件。第一次撞车（换面板）已和解，本次经用户批准「前端隔离」方案。
+
+### 背景
+sidecar 路径（`TDSF_AGENT_BACKEND=strands`）此前只把 agent.invoke 的 dict 切片成纯 text chunk：工具调用只在顶栏显示一行「Calling X」文字（且旧代码取错字段 `p.tool`，后端实际发 `tool_name`，等于没显示），thinking 混进正文——AiChat 的 Tool / Reasoned 组件全被饿死，所以「工具调用/回复呈现简陋」。
+
+### 改动（commit 见 git log fix(ai): sidecar 流协议）
+- `SidecarStreamPart` 扩展：新增 `reasoning-delta` / `tool-input` / `tool-output`。
+- `registerSidecarListeners` 加 `onToolCall`，改为消费真实 `sidecar:tool_call` payload（`{tool_name, params, status, result}`）；started 时顶栏提示「调用 X」，并转发 payload。
+- `runSidecarStream`：收集工具事件（`toolIdByName` 按 tool_name 配对 started/completed 到同一 toolCallId），invoke 完成后留 30ms drain 窗口，按 **reasoning(thinking) → 工具行 → 正文(observation)** 顺序 yield（与上游 Terax 消息内顺序一致）；thinking 改走 `reasoning-delta`。
+- `sidecarStreamToUIMessageStream`：加 reasoning-start/delta/end、tool-input-available（`dynamic:true` → dynamic-tool part，AiChat RenderedTool 渲染）、tool-output-available / tool-output-error 分支；text/reasoning 流互斥关闭。
+
+### 门禁 + 验证
+- typecheck ✅ / lint ✅ / test ✅ **836**（sidecar-adapter.test.ts 16，新增 4：reasoning/tool-input/tool-output 转换 + thinking→reasoning 顺序）/ build:web ✅
+- CDP：app reload 后存活、console 无 error（HMR 热更 sidecar-adapter 无运行时错误）。
+- ⚠️ **验证边界（诚实说明）**：转换逻辑已单测全覆盖，但「真实工具调用触发时工具行的视觉渲染」**未做端到端实测**——需 AI 真实触发工具调用（依赖 LLM 决策 + SSH 会话），且 dev 实例是主线在跑，未强行发消息干扰。建议在真实对话里发一条运维指令（如「检查磁盘使用」「列出 /etc 下文件」）确认工具行外观。
+
+### 备注 / 已知限制
+- toolCallId 按 tool_name 配对，假设 sidecar PAOR 串行执行；并行同名工具会配对错乱（MVP 接受）。
+- 工具图标：AiChat 的 TOOL_META 按 Vercel 工具名（read_file/list_directory…）映射；sidecar 工具名（ssh_command/sftp_read…）不在表内 → 走通用 ToolsIcon 兜底（仍有完整工具行 + 名称 + 参数，仅图标通用）。后续可给 tool.tsx TOOL_META 补 sidecar 工具名映射（那是共用 ai-elements，改前需与主线协调）。
+- 前置成果：AiMiniWindow 面板汉化 + 会话默认标题「新会话」（commit 251fa03）。
