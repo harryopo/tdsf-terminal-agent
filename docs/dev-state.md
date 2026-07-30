@@ -1867,3 +1867,135 @@ SSH 终端问题 **CDP 9222 实测确认已解决**：1 个 `.xterm` 元素 + "s
 - v2/v3 审查报告：`docs/reports/modded-agent-code-review-2026-07-30-v2.md`（6 P1 + 9 P2） + `modded-agent-code-review-2026-07-30-v3.md`（4 P1 + 4 P2）
 - Strands 后端激活的环境变量：`TDSF_AGENT_BACKEND=strands`（PowerShell: `$env:TDSF_AGENT_BACKEND="strands"` 后重启 tauri:dev）
 - 本 session **无代码改动**，纯调研 + 实测 + 核查，无需 git commit
+
+---
+
+## 二十四、交接章（2026-07-30 · v3 修复 commit 固化 + CDP 实测验证 + window.__TAURI_INTERNALS__ 突破）
+
+> 续 §二十三。本 session 接手前序 AI 留下的未提交 v3 修复改动（git status 显示 9 文件 modified），完成：① 前四绿基线验证 ② CDP 9222 实测验证 v3 修复路径可达 ③ commit 642a4d0 固化安全回滚点 ④ 修正 §二十三 "无代码改动" 与 git status 矛盾。
+
+### 一句话现状
+
+v3 修复批次（9 项 P1/P2）**五绿全过 + CDP 实测路径可达 + commit 642a4d0 固化**。CDP 突破：用 `window.__TAURI_INTERNALS__.invoke('ipc_invoke', {method, params})` 替代失败的 `import('@tauri-apps/api/core')`，成功调通 sidecar.health（backend_type=strands, backend_activated=true, agents_count=9）+ agent.configure（P1-NEW-v3-1 路径可达）。SSH 终端渲染 §二十三 已确认（xterm=1），本次 active tab 是编辑器（cold tab 设计，非回归）。
+
+### 本 session 已完成（4 项）
+
+| # | 任务 | 完成情况 | 证据 |
+|---|------|---------|------|
+| 1 | 前四绿基线验证 | ✅ 全过 | typecheck 0错 / lint 0错0警 / pnpm test 836/836 / pytest 1279/1280 (1 预存 kb.db 锁跳过) / build:web 31.80s |
+| 2 | CDP 9222 实测 v3 修复路径 | ✅ 路径可达 | sidecar.health 返回 backend_activated=true + strands_available=true + agents_count=9; agent.configure 返回 ok=true llm_call_set=true |
+| 3 | commit v3 修复固化回滚点 | ✅ 642a4d0 | 16 文件 / 4459 insertions / 34 deletions |
+| 4 | 修正 §二十三 矛盾 | ✅ 本节 | §二十三 说"无代码改动"但 git status 有 v3 修复，本节记录实际是前序 AI 留下未 commit，本 session 验证 + commit |
+
+### CDP 9222 实测结果（window.__TAURI_INTERNALS__ 突破）
+
+**关键技术突破**：§二十三 沉淀的"CDP 脚本应直接调 `window.__TAURI__.core.invoke`"方向**错误**——Tauri 2 实际注入到 `window.__TAURI_INTERNALS__.invoke`（非 `__TAURI__`），且 Tauri 命令名是 `ipc_invoke`（非 `sidecar_invoke`）。
+
+**正确调用方式**：
+```javascript
+// CDP Runtime.evaluate 中（awaitPromise: true, returnByValue: true）
+const r = await window.__TAURI_INTERNALS__.invoke('ipc_invoke', {
+    method: 'sidecar.health',  // JSON-RPC method
+    params: {}                  // JSON-RPC params
+});
+```
+
+**实测输出**：
+```
+=== sidecar.health ===
+{
+  "ok": true,
+  "r": {
+    "activate_time": 1785420162.42,
+    "agents_count": 9,
+    "agents_list": ["main","coding","explore","history","teach","debug","refactor","test","deploy"],
+    "backend_activated": true,
+    "backend_type": "strands",
+    "fallback_reason": null,
+    "llm_configured": true,
+    "platform": "win32",
+    "python_version": "3.13.7",
+    "rust_bridge_active": true,
+    "startup_time": 1785420158.54,
+    "strands_available": true,
+    "uptime_seconds": 236.15
+  }
+}
+
+=== agent.configure (查询模式, 验证 P1-NEW-v3-1 路径可达) ===
+{"ok": true, "r": {"llm_call_set": true, "ok": true}}
+
+=== DOM 状态 ===
+{
+  "xterm_count": 0,                    ← active tab 是 index2.html 编辑器 (cold tab 设计, 非回归)
+  "tab_count": 4,
+  "tab_texts": ["shell","index.html","SELinux_learn.html","index2.html"],
+  "active_tab_text": "index2.html",
+  "title": "root@192.168.45.200: — index2.html"   ← SSH 会话仍连着
+}
+```
+
+**验证结论**：
+- ✅ sidecar.health 完整返回：Strands 后端完全激活（backend_activated + strands_available + rust_bridge_active + llm_configured 全 true，agents_count=9）
+- ✅ agent.configure 路径可达（P1-NEW-v3-1 set_strands_adapter + update_model 基础设施就绪，传 config=null 仅查询不触发 update_model，但路径无异常）
+- ⚠️ xterm_count=0 是 cold tab 设计（§二十一 已记录），SSH 终端渲染 §二十三 已 CDP 实测确认（xterm=1, active_tab=shell），本次非回归
+
+### v3 修复 commit 642a4d0 内容（9 项）
+
+| 修复 ID | 文件 | 内容 |
+|---------|------|------|
+| P1-NEW-v2-2 | adapter.py | _agent_cache key 从 agent_id 改为 (agent_id, session_id) |
+| P1-NEW-v2-4 | BackendPill.tsx | subscribe then 回调内检查 cancelled，避免 Tauri listener 泄漏 |
+| P1-NEW-v2-5 | main.py | clear_backend 后重置 backend_type="langgraph" |
+| P1-NEW-v2-6 | main.py | executor.shutdown(wait=False) |
+| P1-NEW-v3-1 | adapter.py + agents/__init__.py + main.py | Strands 配置热更新（update_model + set_strands_adapter + _rpc_agent_configure override 路径） |
+| P1-NEW-v3-3 | handler.rs | SSH 主机审批 5min 超时（tokio::time::timeout） |
+| P1-NEW-v3-4 | main.py | os._exit(0) 强制退出跳过 atexit |
+| P2-NEW-v3-4 | sshStore.ts | emitTerminalData 缓冲区溢出 buf = newBuf |
+| Tauri 事件名 | tdsf_loader.py + test | tdsf.updated → tdsf_updated（Tauri 不允许点号） |
+
+### 关键技术决策沉淀（3 条）
+
+1. **Tauri 2 CDP 调用正确路径**：`window.__TAURI_INTERNALS__.invoke('ipc_invoke', {method, params})`（非 `window.__TAURI__.core.invoke`，非 `import('@tauri-apps/api/core')`，非 `sidecar_invoke` 命令）。`__TAURI_INTERNALS__` 是 object，含 `invoke` function 和 `plugins` key。CDP `Runtime.evaluate` 在浏览器原生 ESM context 中无法 `import` Tauri 模块（Tauri 是 IPC 注入非 ESM）。
+2. **v3 修复归属修正**：§二十三 说"本 session 无代码改动"是 §二十三 调研 session 的视角，但 v3 修复是 §二十三 之前的 session 做的且未 commit。本 session 接手时 git status 显示 9 文件 modified，验证 + commit 642a4d0 固化。
+3. **agent.configure 查询模式验证**：传 `config: null` 走 `_rpc_agent_configure` 查询路径（不重配 LLM，不触发 update_model），返回 `{ok: true, llm_call_set: true}` 证明：① Python sidecar 接收到 RPC ② _rpc_agent_configure 函数可调用 ③ 无异常抛出。要真实验证 update_model 路径需传真实 config（会改 LLM 配置，本 session 不做避免干扰运行中 sidecar）。
+
+### 接手下一步 backlog（按优先级，沿用 §二十三 + 本次更新）
+
+#### P1（影响核心功能，建议优先修复）
+
+1. **P1-NEW-v2-3**：Strands 工具调用无 fix-loop 保护（adapter.py:519-525）
+   - 修复：加 `hooks=[LimitToolCounts(max_tool_counts={"ssh_command": 20})]`（Strands 1.50.2 新 API）
+2. **P1-NEW-v2-4**：Strands 模式下 main_agent PAOR 路由失效（agents/__init__.py:310-315 + adapter.py:280-406）
+   - 修复：adapter.invoke 内检测 agent_id=="main"，调 MainAgent.invoke 路由逻辑
+3. **P1-NEW-v2-7**：exec_command Failure 后浪费 30s 超时（session.rs:749-757）
+   - 修复：ChannelMsg::Failure 时 break 立即跳出
+4. **P1-NEW-v3-2**：sidecar 流协议按 tool_name 配对在 Strands 并发同名工具调用时错乱（sidecar-adapter.ts:376-403）
+   - 修复：改用 FIFO 队列按 tool_name 配对，或 Python 端发 tool_call_id
+5. **P1-v5-1 Headroom MCP Server 接入**：60-95% token 节省（0.5 人日）
+6. **P1-v5-2 OPENDEV schema-level safety**：安全约束从 instruct → remove+schema（1 人日）
+7. **P1-v5-3 5 级 context compaction**：峰值 context 降 50%+（1-2 人日）
+8. **P1-v5-4 4 级权限 + execpolicy**：覆盖中间地带（1 人日）
+9. **P1-v5-5 ssh_command explain+side_effect+脱敏**：命令意图清晰 + 凭据零暴露（0.5 人日）
+10. **P1-v5-6 asciicast v2 会话录制**：教学回放（0.5 人日）
+
+#### P2（改进建议，按需推进）
+
+11. **P2-NEW-v2-5**：_agent_cache 无 LRU 淘汰（内存泄漏风险）
+12. **P2-NEW-v2-6**：Strands invoke 异常时 needs_you 事件洪水（无 dedup）
+13. **P2-NEW-v2-13**：Strands invoke 不推 agent_switch 事件（UX 退化）
+14. **P2-NEW-v2-1**：os._exit(0) 前显式 logging.shutdown()（日志丢失风险）
+15. **P2-NEW-v2-2**：wait=False 与 §17.4 红线冲突（更新规范或恢复 wait=True）
+16. **P2-NEW-v2-10**：exec_command 超时返回 Ok 而非 Err（API 设计不一致）
+17. **痛点 7**：sidecar 未运行时错误文案优化
+18. 资源管理器按目录缓存性能优化（同 §十一 backlog）
+19. 远程 LSP over SSH（独立 PR）
+20. Strands 工具 0.8.5 4 个新工具注入（read_remote_file / analyze_logs / inspect_processes / network_diagnose 完整接入）
+
+### 备注
+
+- tauri:dev 进程仍在运行（9222 CDP / 9300 Vite），TDSF_AGENT_BACKEND=strands 已激活
+- v3 修复 commit：**642a4d0**（16 文件 / 4459 insertions / 34 deletions）
+- CDP 实测关键突破：`window.__TAURI_INTERNALS__.invoke('ipc_invoke', {method, params})`
+- 本 session **无代码改动**，纯验证 + commit + 文档记录，dev-state.md §二十四 为本次新增
+- 本 session 接手声明：main agent，无 subagent，场景 C（主线验证 + 文档）
