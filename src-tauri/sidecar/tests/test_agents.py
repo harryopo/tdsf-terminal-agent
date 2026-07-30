@@ -85,6 +85,8 @@ from agents import (
     invoke_agent,
     register_methods,
     reset_for_test,
+    set_backend,
+    clear_backend,
 )
 
 
@@ -1182,6 +1184,75 @@ class TestAgentRegistry:
         update = invoke_agent("main", state)
         assert isinstance(update, dict)
         assert "next_step" in update
+
+    def test_invoke_agent_uses_backend_override(self, configured_agents):
+        """invoke_agent 优先走 _global_backend_override 路径（TDSF P0-E 修复回归测试）
+
+        场景：set_backend() 注入 Strands 适配层后，invoke_agent 必须调 override
+        而非 BaseAgent.invoke。验证：
+        1. override 被调用时收到正确的 (agent_id, input, state) 三参
+        2. invoke_agent 返回 override 的返回值，不走 BaseAgent.invoke
+        3. clear_backend() 后回退到 BaseAgent PAOR 主路径
+        """
+        # 准备：构造一个可追踪调用参数的 override
+        call_log: list[dict] = []
+
+        def fake_override(agent_id: str, input: str, state: dict) -> dict:
+            call_log.append({
+                "agent_id": agent_id,
+                "input": input,
+                "state_keys": sorted(state.keys()),
+            })
+            return {
+                "observation": f"strands-handled: {input}",
+                "next_step": "done",
+                "mood": "done",
+                "intermediate_results": [],
+            }
+
+        # 注入 override
+        set_backend(fake_override)
+        try:
+            state = {
+                "input": "检查 nginx 状态",
+                "session_id": "sess-strands-1",
+                "iteration": 0,
+            }
+            update = invoke_agent("main", state)
+
+            # 断言 1：override 被调用，参数正确
+            assert len(call_log) == 1
+            assert call_log[0]["agent_id"] == "main"
+            assert call_log[0]["input"] == "检查 nginx 状态"
+            assert "input" in call_log[0]["state_keys"]
+            assert "session_id" in call_log[0]["state_keys"]
+
+            # 断言 2：返回值来自 override，而非 BaseAgent
+            assert update["observation"] == "strands-handled: 检查 nginx 状态"
+            assert update["next_step"] == "done"
+            assert update["mood"] == "done"
+        finally:
+            clear_backend()
+
+        # 断言 3：clear_backend 后回退到 BaseAgent PAOR
+        state2 = {"input": "回退测试", "session_id": "sess-2", "iteration": 0}
+        update2 = invoke_agent("main", state2)
+        assert isinstance(update2, dict)
+        assert "next_step" in update2
+        # 不应包含 override 的标记
+        assert update2.get("observation") != "strands-handled: 回退测试"
+
+    def test_set_backend_rejects_non_callable(self):
+        """set_backend 拒绝非可调用对象"""
+        with pytest.raises(TypeError, match="callable"):
+            set_backend("not a callable")  # type: ignore[arg-type]
+
+    def test_clear_backend_idempotent(self):
+        """clear_backend 在未设置时也安全（幂等）"""
+        # 确保未设置
+        clear_backend()
+        # 再次清除不应抛错
+        clear_backend()
 
     def test_reset_for_test_clears_instances(self, configured_agents):
         """reset_for_test 清除实例"""

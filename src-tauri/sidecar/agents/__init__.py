@@ -241,13 +241,31 @@ def list_agents() -> list[str]:
 def invoke_agent(name: str, state: dict[str, Any]) -> dict[str, Any]:
     """统一 Agent 调用入口（供 graph/nodes.py 的 act_node 使用）
 
+    优先级：
+        1. 若已 set_backend() 注入 override（如 Strands 适配层），走 override 路径
+           override(agent_id=name, input=state.get("input", ""), state=state)
+           返回值结构与 BaseAgent.to_state_update() 对齐
+        2. 否则走 BaseAgent.invoke(state) PAOR 主路径
+
     Args:
         name: Agent 名
         state: AgentState（dict 形式）
 
     Returns:
         部分状态更新（与 LangGraph 节点返回值兼容）
+
+    TDSF 魔改 2026-07-30 P0-E 修复:
+        原版直接调 get_agent(name).invoke(state)，忽略 _global_backend_override，
+        导致 set_backend() 注入的 Strands 适配层永远不会被调用，Strands 后端
+        处于"已激活但未被调用"的"幽灵状态"。修复后优先走 override，让
+        TDSF_AGENT_BACKEND=strands 真正生效。
     """
+    if _global_backend_override is not None:
+        return _global_backend_override(
+            agent_id=name,
+            input=state.get("input", ""),
+            state=state,
+        )
     agent = get_agent(name)
     return agent.invoke(state)
 
