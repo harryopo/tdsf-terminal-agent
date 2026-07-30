@@ -325,11 +325,17 @@ export function Header({
       {IS_MAC && <span className="mr-1 h-full w-px shrink-0 bg-border/70" />}
 
       {/* ===== 中间: SpaceSwitcher + TabBar ===== */}
+      {/* TDSF 魔改 2026-07-30: 多 space 时防止 TabBar 溢出遮住左侧工作区
+          - 容器加 overflow-hidden, 内部 TabBar 用 overflow-x-auto 横向滚动
+          - SpaceSwitcher 允许 shrink 并收窄 (max-w-24) 在空间不足时让位
+          - 移除末尾的 flex-1 占位 div, 改为 min-w-0 让容器真正受父级 flex-1 约束 */}
       <div
-        className="flex min-w-0 flex-1 items-center gap-2"
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden"
         data-tauri-drag-region
       >
-        {spaceSwitcher}
+        <div className="min-w-0 shrink">
+          {spaceSwitcher}
+        </div>
         <TabBar
           tabs={tabs}
           activeId={activeId}
@@ -348,7 +354,7 @@ export function Header({
           onOverrideLanguage={onOverrideLanguage}
           compact={compact}
         />
-        <div data-tauri-drag-region className="h-full min-w-2 flex-1" />
+        <div data-tauri-drag-region className="h-full min-w-1 flex-1" />
       </div>
 
       <SearchInline ref={searchRef} target={searchTarget} compact={compact} />

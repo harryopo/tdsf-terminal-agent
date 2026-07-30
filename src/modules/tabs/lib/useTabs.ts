@@ -42,6 +42,17 @@ export type TerminalTab = TabBase & {
   private?: boolean;
   /** User-set label that overrides the cwd-derived name. Survives cd. */
   customTitle?: string;
+  /**
+   * TDSF 魔改 2026-07-30: 绑定到 SSH 会话的前端 UUID。
+   * - undefined / null: 本地 PTY tab，工作区渲染 TerminalStack
+   * - string: SSH 终端 tab，工作区渲染 SshTerminalHost（仅当会话仍 connected）
+   *
+   * 修复"切到 editor tab 再切回 shell tab 变成本地 shell"的 bug：
+   * 原实现只用全局 activeSshSession 判定，导致 SSH 连接后所有 terminal tab
+   * 都被强行替换为 SSH 终端；而新建的本地 shell tab 在 SSH 断开后又变回本地。
+   * 现在按 tab 维度绑定，每个 terminal tab 明确自己是本地还是 SSH。
+   */
+  sshSessionId?: string | null;
 };
 
 export type EditorTab = TabBase & {
@@ -146,6 +157,13 @@ export type TabPatch = Partial<{
   /** Empty string resets a terminal tab to its cwd-derived name. */
   customTitle: string;
   overrideLanguage: string | null;
+  /**
+   * TDSF 魔改 2026-07-30: 绑定/解绑 terminal tab 到 SSH 会话。
+   * - string: 绑定到该 SSH 会话（前端 UUID），工作区渲染 SshTerminalHost
+   * - null: 显式解绑，回退到本地 PTY
+   * - undefined: 不变更现有绑定
+   */
+  sshSessionId: string | null;
 }>;
 
 export type GitDiffOpenInput = {
@@ -1030,6 +1048,10 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             ...(patch.customTitle !== undefined && {
               customTitle:
                 patch.customTitle === "" ? undefined : patch.customTitle,
+            }),
+            // TDSF 魔改 2026-07-30: SSH 会话绑定（显式 null 也能解绑）
+            ...(patch.sshSessionId !== undefined && {
+              sshSessionId: patch.sshSessionId,
             }),
           };
         }

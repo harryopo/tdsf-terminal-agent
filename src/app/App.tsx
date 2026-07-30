@@ -188,6 +188,10 @@ export default function App() {
   // (e.g. cdInNewTab) read the latest pane state instead of a stale closure.
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  // TDSF 魔改 2026-07-30: activeId 也镜像到 ref, 供 SSH 会话绑定的副作用
+  // (useEffect 内订阅 zustand) 读取最新值, 避免闭包过期。
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
 
   const activeTerminalTab = useMemo(() => {
     const t = tabs.find((x) => x.id === activeId);
@@ -380,11 +384,32 @@ export default function App() {
   // 但此时 Rust SSH 握手/认证/SFTP 还未就绪, 提前切视图会导致
   // FileExplorer 加载远程失败 + 按钮无法点击。
   const showNoTerminalEmptyState = isDefaultColdTab && !isConnectedSsh;
-  // SSH 终端接管: 任何 terminal tab + SSH 真正 connected 才显示
-  const showSshTerminalInWorkspace = isTerminalTab && isConnectedSsh;
-  // 只有真正 connected 时, WorkspaceSurface 才拿到 sshSessionId,
-  // 避免 connecting/failed 状态提前渲染 SshTerminalPane。
-  const workspaceSshSessionId = isConnectedSsh ? activeSshSessionId : null;
+  // TDSF 魔改 2026-07-30: SSH 终端接管改为按 tab 维度绑定
+  // ---------------------------------------------------------------
+  // 修复"SSH 连接后打开文件再切回 shell tab 变成本地 shell"的 bug。
+  // 原实现: showSshTerminalInWorkspace = isTerminalTab && isConnectedSsh
+  //   → 只要全局 SSH 连接存在, 任何 terminal tab 都被替换为 SshTerminalHost,
+  //     但 tab 本身没记录 SSH 绑定, 切到 editor 再切回时行为不确定。
+  // 新实现: 按 active terminal tab 的 sshSessionId 字段判定:
+  //   - tab.sshSessionId 存在且对应会话仍 connected → 渲染 SshTerminalHost
+  //   - tab.sshSessionId 为 null/undefined → 渲染本地 TerminalStack
+  // SSH 连接成功后, 会自动把当前 active terminal tab 的 sshSessionId 设为会话 id
+  // (见下方 useEffect)。用户也可手动"新建本地 shell tab"获得本地终端。
+  // 复用上方 useMemo 计算的 activeTerminalTab (TerminalTab | null)
+  const activeTabSshSessionId = activeTerminalTab?.sshSessionId ?? null;
+  // 响应式查询该会话是否仍 connected (会话状态变化时触发重渲染)
+  const activeTabSshSession = useSshStore((s) =>
+    activeTabSshSessionId
+      ? s.sessions.find(
+          (sess) => sess.id === activeTabSshSessionId && sess.state === "connected",
+        ) ?? null
+      : null,
+  );
+  const showSshTerminalInWorkspace =
+    isTerminalTab && !!activeTabSshSession && !!activeTabSshSessionId;
+  const workspaceSshSessionId = showSshTerminalInWorkspace
+    ? activeTabSshSessionId
+    : null;
   // TDSF 调试: 输出关键判定值
   if (typeof window !== "undefined") {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
@@ -486,34 +511,92 @@ export default function App() {
     };
   }, [launchCwdResolved]);
 
-  // === TDSF 魔改 2026-07-29: SSH 连接成功后左侧保持 explorer 视图 ===
+  // === TDSF 魔改 2026-07-30: SSH 连接成功后绑定 terminal tab + 左侧 explorer 视图 ===
   // ---------------------------------------------------------------
-  // 用户明确需求: "SSH 板块只是一个连接的板块; 连接后左侧 Files 面板应
-  // 显示服务器的文件资源管理器, 效果跟本地一模一样"。
+  // 用户明确需求:
+  //   1. "SSH 板块只是一个连接的板块; 连接后左侧 Files 面板应显示服务器
+  //       的文件资源管理器, 效果跟本地一模一样"
+  //   2. "SSH 连接后打开文件再切回 shell tab 应仍是 SSH 服务器的 shell,
+  //       而不是 Windows 本地 shell"
   //
-  // 实现: SSH 一旦连通, 左侧 sidebar 保持在 explorer 视图, 但
-  // FileExplorer 的 source 动态切换为 "ssh"、rootPath 使用远程当前
-  // 目录, 这样左侧就是远程文件资源管理器, 与本地交互一致。
-  // 如果用户当前在 ssh/source-control/skills 等其它视图, 首次连接
-  // 成功时切回 explorer, 确保"连接哪里 files 就显示在哪里"。
+  // 实现 (2026-07-30 重构, 按会话维度绑定 tab):
+  //   - 维护 boundSshSessionsRef: Set<sessionId> 记录已绑定过 tab 的会话
+  //   - 每当有新会话变为 connected:
+  //     a) 把当前 active terminal tab (若无则新建一个) 的 sshSessionId 绑定为该会话 id
+  //     b) 首次连接成功时切回 explorer 视图
+  //   - 当某会话从 connected 变为 disconnected/failed:
+  //     a) 找到所有 sshSessionId === 该会话 id 的 terminal tab
+  //     b) 解绑 (置 sshSessionId = null), 工作区自动回退到本地 TerminalStack
+  //   - 全局无 connected 会话时, 重置 hasConnectedSshRef 让下次连接再切视图
   const hasConnectedSshRef = useRef(false);
+  const boundSshSessionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const unsub = useSshStore.subscribe((state) => {
-      const hasConnected = state.sessions.some(
+      const connectedSessions = state.sessions.filter(
         (s) => s.state === "connected" && s.handle !== null,
       );
-      if (hasConnected && !hasConnectedSshRef.current) {
-        hasConnectedSshRef.current = true;
+      const hasConnected = connectedSessions.length > 0;
+
+      // 处理新连接成功的会话: 绑定到当前 active terminal tab
+      for (const session of connectedSessions) {
+        if (boundSshSessionsRef.current.has(session.id)) continue;
+        boundSshSessionsRef.current.add(session.id);
+
         // 首次连接成功: 切回 explorer 视图, 让 FileExplorer 显示远程文件
-        if (sidebarView !== "explorer") {
-          persistSidebarView("explorer");
+        if (!hasConnectedSshRef.current) {
+          hasConnectedSshRef.current = true;
+          if (sidebarView !== "explorer") {
+            persistSidebarView("explorer");
+          }
         }
-      } else if (!hasConnected) {
+
+        // 把当前 active terminal tab 绑定到该 SSH 会话
+        // 如果当前 active tab 不是 terminal, 找第一个 terminal tab; 都没有就 newTab()
+        const currentTabs = tabsRef.current;
+        const currentActiveId = activeIdRef.current;
+        let targetTab = currentTabs.find(
+          (t) =>
+            t.id === currentActiveId &&
+            t.kind === "terminal" &&
+            (!t.sshSessionId || t.sshSessionId === session.id),
+        );
+        if (!targetTab) {
+          targetTab = currentTabs.find(
+            (t) =>
+              t.kind === "terminal" &&
+              (!t.sshSessionId || t.sshSessionId === session.id),
+          );
+        }
+        if (targetTab) {
+          updateTab(targetTab.id, { sshSessionId: session.id });
+          // 切到该 tab, 让用户立即看到 SSH 终端
+          if (targetTab.id !== currentActiveId) {
+            setActiveId(targetTab.id);
+          }
+        }
+        // 如果没有任何可绑定的 terminal tab, 不强制新建 (用户可能正在看 editor)
+      }
+
+      // 处理断开的会话: 解绑对应的 terminal tab
+      const connectedIds = new Set(connectedSessions.map((s) => s.id));
+      for (const sessionId of Array.from(boundSshSessionsRef.current)) {
+        if (connectedIds.has(sessionId)) continue;
+        // 该会话已断开, 解绑所有绑定的 tab
+        boundSshSessionsRef.current.delete(sessionId);
+        const currentTabs = tabsRef.current;
+        for (const tab of currentTabs) {
+          if (tab.kind === "terminal" && tab.sshSessionId === sessionId) {
+            updateTab(tab.id, { sshSessionId: null });
+          }
+        }
+      }
+
+      if (!hasConnected) {
         hasConnectedSshRef.current = false;
       }
     });
     return () => unsub();
-  }, [persistSidebarView, sidebarView]);
+  }, [persistSidebarView, sidebarView, updateTab, setActiveId]);
 
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
@@ -1058,7 +1141,18 @@ export default function App() {
         if (editor) editor.openSearch();
         else searchInlineRef.current?.focus();
       },
-      "ai.toggle": togglePanelAndFocus,
+      // TDSF 魔改 2026-07-30: 统一 AI 入口 — Ctrl+I 和 Main 按钮都打开浮动小窗
+      // 原实现: Ctrl+I 打开右侧面板 (panelOpen), Main 打开浮动小窗 (mini.open),
+      // 两个独立状态会同时存在两个对话框, 用户困惑。
+      // 现统一: Ctrl+I / Ctrl+Shift+I / Main 按钮都走 toggleMini, 打开同一个浮动小窗。
+      "ai.toggle": () => {
+        if (!hasComposer) {
+          void openSettingsWindow("models");
+          return;
+        }
+        toggleMini();
+        focusInput(null);
+      },
       "ai.toggleMini": () => {
         if (!hasComposer) {
           void openSettingsWindow("models");
@@ -1102,8 +1196,8 @@ export default function App() {
       swapActivePane,
       toggleSourceControl,
       hasComposer,
-      togglePanelAndFocus,
       toggleMini,
+      focusInput,
       askFromSelection,
       toggleSidebar,
       toggleExplorerFocus,
@@ -1678,11 +1772,20 @@ export default function App() {
               onCd={sendCd}
               onWorkspaceChange={handleWorkspaceChange}
               onOpenMini={openMini}
-              onOpenAi={togglePanelAndFocus}
+              onOpenAi={() => {
+                // TDSF 魔改 2026-07-30: 统一 AI 入口, onOpenAi 也走 mini
+                if (!hasComposer) {
+                  void openSettingsWindow("models");
+                  return;
+                }
+                openMini();
+                focusInput(null);
+              }}
               hasComposer={hasComposer}
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
+              sshLocation={sshLocationLabel}
             />
           )}
 
