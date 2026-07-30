@@ -1281,4 +1281,82 @@ Command Palette（Ctrl+P）内容全英文（占位符/分组 General/Spaces/Tab
 - palette 模糊搜索兼容：中文 title + 英文 keywords + 拼音均可命中（rankCommands 用 title/group/keywords 三路打分）
 
 
+## 十九、交接章（2026-07-30 · P0-E Strands override 修复 + Critical-2 后端可观测性）
+
+> 续 §十八。本 session 接续 P0-E 阶段 B 实测，修复 1 个 Critical Bug + 实现后端可观测性基础设施。两个 commit 固化（6bc17b7 + 4c5640f）。
+
+### 一句话现状
+
+`invoke_agent` Critical Bug 修复（6bc17b7）：原版直接调 `BaseAgent.invoke` 忽略 `_global_backend_override`，导致 Strands 适配层"已激活但未调用"的幽灵状态。CDP 9222 端到端实测确凿证据：`agent.invoke('ping')` 返回 `has_strands_response=true` + `agent_id="main"` + `duration=2.606s`，证明 override 路径完整工作。Critical-2 后端可观测性（4c5640f）：新增 `sidecar.health` JSON-RPC + `backend_status` 事件推送，前端 BackendPill 留下一个 AI。
+
+### 本 session 已完成（2 个 commit）
+
+| Commit | 范围 | 内容 |
+|--------|------|------|
+| **6bc17b7** | P0-E Critical Bug 修复 | `invoke_agent()` 优先走 `_global_backend_override`（Strands 适配层），绕开 BaseAgent.invoke；新增 3 个回归测试；清理 `strands_backend/tools/__init__.py` 中关于 ssh_command "Rust 侧未实现" 的过时注释（P0-D 已实现） |
+| **4c5640f** | Critical-2 后端可观测性 | `main.py` 新增 `_backend_status` 全局字典跟踪 7 字段；Strands 注入段（成功/失败/langgraph 三路径）均推送 `sidecar:backend_status` 事件；新增 `sidecar.health` JSON-RPC 方法返回完整后端状态 |
+
+### 关键技术决策沉淀（4 条）
+
+1. **invoke_agent override 路径**：注入 `_global_backend_override` 后优先走 override，跳过 `BaseAgent.invoke`，避免双路径并发竞态；签名 `(agent_id, input, state) -> dict` 与 `StrandsAgentAdapter.invoke` 对齐
+2. **CDP 9222 实测验证**：用纯 Python 实现简易 WebSocket 客户端（无第三方依赖），通过 `Runtime.evaluate` 执行 JS 调 `invokeRpc('agent.invoke')`，检查返回的 `intermediate_results[0].result.strands_response` 字段（adapter.py:366 注入）确认 override 被调用
+3. **`_backend_status` 7 字段**：backend_type / backend_activated / strands_available / rust_bridge_active / llm_configured / fallback_reason / activate_time；前端 BackendPill 据此渲染颜色（Strands 绿/LangGraph 黄/降级红）
+4. **`sidecar:backend_status` 事件**：Strands 注入三路径（成功激活/失败 fallback/langgraph 默认）均推送，前端监听后实时更新 Pill；启动时另调 `sidecar.health` 拉初始状态
+
+### CDP 9222 实测脚本
+
+- `.tdsf-data/cdp_strands_status.py` — Strands 后端激活状态端到端实测（agent.list + agent.invoke）
+- `.tdsf-data/cdp_verify_fix.py` — invoke_agent 修复验证（has_strands_response/has_agent_id/duration 三字段断言）
+
+### 改动文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `src-tauri/sidecar/agents/__init__.py` | `invoke_agent()` 加 override 路径分支 + 完整 docstring |
+| `src-tauri/sidecar/strands_backend/tools/__init__.py` | `RustBridge` 协议 docstring 更新（ssh_command 已实现，P0-D/P0-E 注） |
+| `src-tauri/sidecar/tests/test_agents.py` | 新增 3 个测试：`test_invoke_agent_uses_backend_override` / `test_set_backend_rejects_non_callable` / `test_clear_backend_idempotent` |
+| `src-tauri/sidecar/main.py` | 新增 `_backend_status` 全局字典（7 字段）；Strands 注入段三路径写状态+推事件；新增 `sidecar.health` JSON-RPC 方法 |
+
+### 门禁 + 实测（全过）
+
+- typecheck ✅ 0 错误
+- lint ✅ 0 错误 0 警告
+- pytest ✅ 176 相关测试全过（test_agents + test_rust_bridge + test_strands_model_adapter）
+- pnpm test ✅ 832/832 全过
+- build:web ✅ 45.79s 成功
+- CDP 9222 ✅ Strands override 路径完整工作（has_strands_response=true, agent_id="main", duration=2.606s）
+
+### 接手下一步（按优先级）
+
+**P0（高优先级，前端补齐可观测性 UI）**
+1. **前端 BackendPill 组件**（Critical-2 收尾）：与 `AgentStatusPill` 并列渲染
+   - 启动时调 `sidecar.health` 拉初始状态
+   - 监听 `sidecar:backend_status` 事件实时更新
+   - 配色：Strands 绿色（`var(--color-success)`）/ LangGraph 黄色（`var(--color-warning)`）/ 降级红色（`var(--color-error)`）
+   - tooltip 显示 `fallback_reason`（如 Strands 启动失败）
+   - 推荐位置：`src/modules/ai/components/BackendPill.tsx`，挂载到 `AgentPanel.tsx` header 旁边
+2. **Critical-3 文档漂移修复**：`src/modules/ai/agents/registry.ts` 注释说"与 Python Sidecar AGENT_REGISTRY 一一对应"不准确（前端 5 个 / 后端 9 个），改为"前端 5 个是用户可手动切换的顶层 agent，main 自动路由到后端 9 个子 agent"
+
+**P1（中优先级，subagent-B 审计报告其他项）**
+- 痛点 6（前端 5 agent 模型切换不可用）：检查 `AgentPanel` 模型切换 UI 状态
+- 痛点 7（agent.invoke 调用前 sidecar 未运行无引导）：`handleSubmit` 已有 `isRunning` 检查，但错误提示可以更友好（引导用户重启应用而非仅"请等待启动"）
+
+**P2（低优先级，长期 backlog）**
+- 资源管理器按目录缓存性能优化（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- Strands ApprovalHook + LimitToolCounts Hook（subagent-A 的 0.8.5 实施方案）
+- Strands 工具 0.8.5 4 个新工具注入（read_remote_file / analyze_logs / inspect_processes / network_diagnose 完整接入）
+
+### 防漂移机制建议
+
+1. **invoke_agent override 路径测试已固化**：`test_invoke_agent_uses_backend_override` 验证 override 注入+清除+回退三路径，未来改动若误删 override 分支会立即测试失败
+2. **`_backend_status` 字段契约**：前端 BackendPill 实现后，应在 `MULTI-AGENT-WORKFLOW.md §6.5` 数据契约表中记录 7 字段，避免后续改动漂移
+3. **CDP 实测脚本归档**：`.tdsf-data/cdp_*.py` 已包含完整 docstring + 断言，下一个 AI 接手时直接 `python .tdsf-data/cdp_verify_fix.py` 即可验证 Strands 后端是否激活
+
+### 备注
+
+- 本 session 未碰 docs/竞赛、docs/教程、docs/合规目录的 modified 文件（前 session 遗留改动，不属于本 session 范围）
+- tauri:dev 进程仍在运行（PID 11524 sidecar / 9222 CDP / 9300 Vite），下一个 AI 可直接复用做 CDP 实测
+- Strands 后端激活的环境变量：`TDSF_AGENT_BACKEND=strands`（PowerShell: `$env:TDSF_AGENT_BACKEND="strands"` 后重启 tauri:dev）
+
 
