@@ -50,22 +50,22 @@ import { TodoStrip } from "./TodoStrip";
 
 const SUGGESTIONS = [
   {
-    label: "Explain the last error",
-    hint: "Read the terminal buffer",
+    label: "解释上一个错误",
+    hint: "读取终端缓冲区",
     icon: AlertCircleIcon,
-    text: "Explain the last error in the terminal.",
+    text: "解释终端里的上一个错误。",
   },
   {
-    label: "Generate a command",
-    hint: "Tell me what you want to do",
+    label: "生成一条命令",
+    hint: "告诉我你想做什么",
     icon: TerminalIcon,
-    text: "Give me a command to ",
+    text: "给我一条命令来 ",
   },
   {
-    label: "Summarize buffer",
-    hint: "Recap recent activity",
+    label: "总结缓冲区",
+    hint: "回顾最近的活动",
     icon: FilterIcon,
-    text: "Summarize what just happened in the terminal.",
+    text: "总结一下终端里刚刚发生了什么。",
   },
 ];
 
@@ -228,9 +228,9 @@ function PlanModeStrip() {
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/40 px-3 py-1.5">
       <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />
-      <span className="text-[11px] font-medium text-foreground">Plan mode</span>
+      <span className="text-[11px] font-medium text-foreground">规划模式</span>
       <span className="text-[11px] text-muted-foreground">
-        {queueLen > 0 ? `· ${queueLen} queued` : "· no edits queued"}
+        {queueLen > 0 ? `· ${queueLen} 项排队` : "· 无待应用编辑"}
       </span>
       <span className="flex-1" />
       <button
@@ -238,7 +238,7 @@ function PlanModeStrip() {
         onClick={() => disable()}
         className="rounded px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
-        Exit
+        退出
       </button>
     </div>
   );
@@ -263,7 +263,7 @@ function EmptyShell({
         onHeaderPointerDown={onHeaderPointerDown}
       />
       <div className="flex flex-1 items-center justify-center text-[11px] text-muted-foreground">
-        Loading sessions…
+        正在加载会话…
       </div>
     </>
   );
@@ -301,7 +301,7 @@ function Header({
         {isBusy ? (
           <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
             <Spinner className="size-2.5" />
-            <span className="max-w-32 truncate">{step ?? "Thinking…"}</span>
+            <span className="max-w-32 truncate">{step ?? "思考中…"}</span>
           </span>
         ) : null}
         <SessionPicker />
@@ -311,8 +311,8 @@ function Header({
           variant="ghost"
           onClick={onClose}
           className="size-5"
-          aria-label="Close"
-          title="Close (Esc)"
+          aria-label="关闭"
+          title="关闭 (Esc)"
         >
           <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={1.75} />
         </Button>
@@ -467,9 +467,9 @@ function SessionPicker() {
             "text-[11px] text-muted-foreground transition-colors",
             "hover:bg-accent hover:text-foreground",
           )}
-          title="Switch session"
+          title="切换会话"
         >
-          <span className="truncate">{active.title || "New chat"}</span>
+          <span className="truncate">{active.title || "新会话"}</span>
           <HugeiconsIcon
             icon={ArrowDown01Icon}
             size={10}
@@ -484,7 +484,7 @@ function SessionPicker() {
           className="gap-2 text-xs"
         >
           <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={1.75} />
-          New session
+          新建会话
         </DropdownMenuItem>
         {sorted.length > 0 ? <DropdownMenuSeparator /> : null}
         {sorted.map((s) => (
@@ -529,7 +529,7 @@ function SessionRow({
       )}
     >
       <span className="min-w-0 flex-1 truncate">
-        {session.title || "New chat"}
+        {session.title || "新会话"}
       </span>
       <button
         type="button"
@@ -538,7 +538,7 @@ function SessionRow({
           e.stopPropagation();
           onDelete();
         }}
-        title="Delete session"
+        title="删除会话"
         className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
       >
         <HugeiconsIcon icon={Delete02Icon} size={11} strokeWidth={1.75} />
@@ -557,10 +557,10 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
       />
       <div className="space-y-1.5">
         <p className="text-[14px] font-semibold tracking-tight">
-          Ask TDSF anything
+          向 TDSF 提问
         </p>
         <p className="max-w-[18rem] text-[11.5px] leading-relaxed text-muted-foreground">
-          TDSF sees the active terminal — cwd, recent commands, and output.
+          TDSF 能感知当前终端 —— 工作目录、最近命令与输出。
         </p>
       </div>
       <div className="flex w-full flex-col gap-2.5">
