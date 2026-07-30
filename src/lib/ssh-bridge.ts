@@ -454,6 +454,54 @@ export async function sshTest(params: SshConnectParams): Promise<SshTestResult> 
   });
 }
 
+// === TDSF 魔改 P0-D: SSH exec 命令执行（运维 Agent 用） ========================
+//
+// 设计（与 src-tauri/src/modules/ssh/mod.rs:SshCommandResult 对齐, camelCase）:
+//   - 复用现有 SSH 会话的 Handle 开新 channel
+//   - 用 channel.exec() (RFC 4254 6.4) 执行单条命令, 非 PTY
+//   - 返回 { ok, output, stderr, exitCode, duration }
+//   - Python sidecar 经 rust_bridge.ipc_invoke("ssh_command", {...}) 调用 (P1 桥接后)
+//   - 前端直接 invoke('ssh_command', {...}) 用于 CDP 测试 / 调试 / 未来 UI 集成
+
+/** ssh_command 命令返回值（与 Rust SshCommandResult 对齐, camelCase） */
+export interface SshCommandResult {
+  /** 命令执行链路是否正常 (true=完成, false=异常) */
+  ok: boolean;
+  /** stdout 文本（UTF-8 解码, lossy） */
+  output: string;
+  /** stderr 文本（UTF-8 解码, lossy; 超时含说明） */
+  stderr: string;
+  /** 退出码（0=成功, 1-255=Unix 标准, -1=超时/未收到 ExitStatus） */
+  exitCode: number;
+  /** 执行耗时（秒, f64） */
+  duration: number;
+}
+
+/**
+ * 执行单条 SSH 命令并返回结构化结果（exec 模式, 非 PTY）
+ *
+ * 适用场景:
+ * - 运维 Agent 执行一次性命令（uptime / systemctl status nginx / df -h 等）
+ * - 远端 /bin/sh -c <command>, 支持管道 / 重定向 / 链式
+ * - 与 PTY 交互解耦, 各自独立 channel, 并发不冲突
+ *
+ * @param sessionId SSH 会话 ID（ssh_connect 返回值）
+ * @param command 要执行的命令
+ * @param timeoutSecs 超时秒数（默认 30s）
+ * @returns 结构化结果（ok=false 时 stderr 含错误信息）
+ */
+export async function sshCommand(
+  sessionId: number,
+  command: string,
+  timeoutSecs?: number,
+): Promise<SshCommandResult> {
+  return invoke<SshCommandResult>('ssh_command', {
+    sessionId,
+    command,
+    timeout: timeoutSecs ?? null,
+  });
+}
+
 // === TDSF 魔改: SSH 凭据持久化（永久保存密钥 + 自动登录） =======================
 //
 // 设计（与 src-tauri/src/modules/ssh/credentials.rs 对齐）:

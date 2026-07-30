@@ -333,11 +333,15 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     # 必须在 event_bus 之后注册（Agent 通过 event_bus 推送 mood/message 事件）
     try:
         import agents
-        # TDSF 魔改 P0-3: 注入真实 LLM 调用（取代 llm_call=None 的 mock 模式）
-        # 从环境变量 / .tdsf-data/llm_config.json 加载配置
-        # 未配置时返回 None，Agent 降级到 mock LLM（保持离线可用）
-        from core.llm_config import make_llm_call
-        llm_call = make_llm_call()
+        # TDSF 魔改 P0-3 + P0-C5: LLM 配置加载与共享
+        # ---------------------------------------------------------------
+        # 从环境变量 / .tdsf-data/llm_config.json 加载 LLMConfig，
+        # 同一份 config 同时供给 LangGraph 路径（make_llm_call）和 Strands 路径
+        # （configure_strands → create_strands_model），避免双套配置导致行为分裂。
+        # 未配置时 llm_call=None，Agent 降级到 mock LLM（保持离线可用）。
+        from core.llm_config import load_config, make_llm_call
+        llm_config = load_config()
+        llm_call = make_llm_call(llm_config)
         if llm_call is not None:
             logger.info("LLM configured, agents will use real LLM")
         else:
@@ -351,7 +355,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
             llm_call=llm_call,
         )
 
-        # TDSF 魔改 2026-07-30 P0-C1: Strands 后端 feature flag 注入点
+        # TDSF 魔改 2026-07-30 P0-C1 + P0-C5: Strands 后端 feature flag 注入点
         # ---------------------------------------------------------------
         # 通过环境变量 TDSF_AGENT_BACKEND 切换 Agent 后端实现：
         #   - "langgraph"（默认）/ 未设置 / 其他值：走 BaseAgent PAOR 主路径
@@ -362,11 +366,18 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         #   - agents.set_backend() 注入 override（agents/__init__.py P0-C2 提供）
         #   - 失败时 clear_backend() 回退到 BaseAgent PAOR（保证 sidecar 可用）
         #
-        # 当前限制（P0 阶段）：
-        #   - rust_bridge=None（双向 JSON-RPC 待 P2 扩展），运维工具返回 unavailable
-        #   - strands_model=None（LLM 模型适配待 P0-C5 补充），Strands 调用走降级路径
-        #   - 即便如此，注入后端仍优于未注入：前端 agent_switch 事件链路可工作，
-        #     Strands 工具元数据可被 agent.list / agent.info 返回
+        # P0-C5（2026-07-30 完成）：strands_model 自动注入
+        #   - configure_strands(strands_model=None) 内部自动调用
+        #     create_strands_model(llm_config) 创建 Strands Model（OpenAI/Anthropic/LiteLLM）
+        #   - 与 LangGraph 路径共享同一份 LLMConfig，前端 agent.configure RPC
+        #     重新配置后下次 sidecar 启动自动生效（运行时切换待 P1 双向 JSON-RPC 桥）
+        #   - LLM 未配置 / Strands 未安装 / provider 不支持时 strands_model 仍为 None，
+        #     adapter.invoke 走降级路径（_check_degraded → emit_needs_you）
+        #
+        # 当前限制（P1/P2 阶段补充）：
+        #   - rust_bridge=None（双向 JSON-RPC 待 P1 扩展），运维工具返回 unavailable
+        #   - Strands 真实端到端实测待 P0-E（设 TDSF_AGENT_BACKEND=strands 启动验证）
+        #   - Rust ssh_command 命令实现待 P0-D（russh channel exec 模式）
         # ---------------------------------------------------------------
         _tdsf_backend = os.environ.get("TDSF_AGENT_BACKEND", "langgraph").lower()
         if _tdsf_backend == "strands":
@@ -374,7 +385,8 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 from strands_backend import configure_strands
                 _strands_adapter = configure_strands(
                     event_bus=event_bus.get_global_bus(),
-                    rust_bridge=None,  # P2 阶段注入真实 send_request
+                    rust_bridge=None,  # P1 阶段注入真实 send_request
+                    llm_config=llm_config,  # P0-C5: 共享同一份 LLMConfig
                 )
                 agents.set_backend(
                     lambda agent_id, input, state: _strands_adapter.invoke(

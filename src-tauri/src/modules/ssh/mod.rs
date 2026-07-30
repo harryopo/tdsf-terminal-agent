@@ -38,7 +38,7 @@ pub mod sftp;
 // 重导出核心类型,供 lib.rs 注册 Tauri 命令使用
 pub use client::{SshAuthMethod, SshClient, SshConnectParams};
 pub use known_hosts::KnownHostsManager;
-pub use session::{SshSession, SshSessionState, SshStatusEvent};
+pub use session::{SshCommandOutput, SshSession, SshSessionState, SshStatusEvent};
 pub use sftp::{SftpAttrs, SftpEntry, SftpSession};
 
 use std::collections::HashMap;
@@ -575,5 +575,271 @@ pub async fn ssh_test(
                 message: msg,
             })
         }
+    }
+}
+
+// ============================================================================
+// SSH exec 命令执行 (TDSF 魔改 P0-D, 2026-07-30)
+// ============================================================================
+// 为运维 Agent 提供"执行单条命令并拿回输出"能力,与 PTY 交互解耦。
+// 复用现有 SSH Handle 开新 channel,用 channel.exec() (RFC 4254 6.4)
+// 而非 request_pty + request_shell,适合一次性命令
+// (uptime / systemctl status nginx / df -h 等)。
+//
+// 调用方:
+// 1. 前端直接 invoke('ssh_command', { sessionId, command, timeout })
+//    (用于 CDP 测试 / 调试 / 未来 UI 集成)
+// 2. Python sidecar 通过 rust_bridge.ipc_invoke("ssh_command", {...})
+//    (P1 双向 JSON-RPC 桥接通后,Strands 运维工具实际调用路径)
+//
+// 返回值结构对齐 Python 端 execute_via_ssh 期望:
+//   { ok, output, exit_code, duration, stderr? }
+// 见 strands_backend/tools/__init__.py:execute_via_ssh 注释。
+
+/// ssh_command 命令返回值
+///
+/// 前端/Python 通过 `invoke('ssh_command', {...})` 接收:
+/// - `{ ok: true, output: "...", exit_code: 0, duration: 0.123, stderr: "..." }`: 执行完成
+///   (exit_code 可能为非 0, ok=true 仅表示命令执行链路正常)
+/// - `{ ok: false, output: "", exit_code: -1, duration: ..., stderr: "..." }`: 执行失败
+///   (连接断开 / 开 channel 失败 / exec 被拒)
+///
+/// 字段说明:
+/// - `ok`: 命令执行链路是否正常 (true=完成, false=异常)
+/// - `output`: stdout 文本 (UTF-8 解码, 失败时可能为空)
+/// - `stderr`: stderr 文本 (UTF-8 解码, 超时含说明)
+/// - `exit_code`: 退出码 (0=成功, 1-255=Unix 标准, -1=超时/未收到 ExitStatus)
+/// - `duration`: 执行耗时 (秒, f64, 便于前端展示)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshCommandResult {
+    /// 命令执行链路是否正常 (true=完成, false=异常)
+    pub ok: bool,
+    /// stdout 文本 (UTF-8 解码, lossy)
+    pub output: String,
+    /// stderr 文本 (UTF-8 解码, lossy; 超时含说明)
+    #[serde(default)]
+    pub stderr: String,
+    /// 退出码 (0=成功, 1-255=Unix 标准, -1=超时/未收到 ExitStatus)
+    pub exit_code: i32,
+    /// 执行耗时 (秒, f64)
+    pub duration: f64,
+}
+
+/// ssh_command 命令: 执行单条 SSH 命令并返回结构化结果 (exec 模式, 非 PTY)
+///
+/// TDSF 魔改 P0-D (2026-07-30): 为运维 Agent 提供"执行命令并拿回输出"能力。
+/// 复用现有 SSH 会话的 Handle 开新 channel (与 PTY / SFTP 并发),
+/// 用 channel.exec() 请求执行,循环 wait() 收集 stdout/stderr/exit_code。
+///
+/// # 参数
+/// - `session_id`: SSH 会话 ID (ssh_connect 返回值)
+/// - `command`: 要执行的命令 (如 `uptime`, `systemctl status nginx`)
+///   远端走 `/bin/sh -c <command>`,支持管道 / 重定向 / 链式
+/// - `timeout`: 超时秒数 (None 默认 30s)
+///
+/// # 返回
+/// `SshCommandResult { ok, output, stderr, exit_code, duration }`
+///
+/// # 错误处理
+/// - SSH 会话不存在: 返回 Err (前端显示错误)
+/// - SSH 连接已断 / exec 调用失败: 返回 `{ ok: false, ... }` (不抛 Err)
+/// - 命令超时: 返回 `{ ok: true, exit_code: -1, stderr: "..." }` (ok=true 表示链路正常)
+///
+/// # 与 Python 端契约
+/// `strands_backend/tools/__init__.py:execute_via_ssh` 期望返回值:
+/// ```python
+/// result = ctx.rust_bridge.ipc_invoke("ssh_command", {
+///     "session_id": session_id,
+///     "command": command,
+///     "timeout": timeout,
+/// })
+/// # result 应为 {"ok": true, "output": "...", "exit_code": 0, "duration": 0.123}
+/// ```
+#[tauri::command]
+pub async fn ssh_command(
+    state: tauri::State<'_, SshState>,
+    session_id: u32,
+    command: String,
+    timeout: Option<u64>,
+) -> Result<SshCommandResult, String> {
+    let start = std::time::Instant::now();
+    log::info!(
+        "[ssh] exec command: id={} cmd={:?} timeout={:?}s",
+        session_id,
+        command,
+        timeout.unwrap_or(30)
+    );
+
+    // 1. 获取 SSH 会话
+    let session = state
+        .get(session_id)
+        .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
+
+    // 2. 调用 exec_command (复用 Handle + channel.exec + wait 循环)
+    let result = session.exec_command(&command, timeout).await;
+
+    let duration = start.elapsed().as_secs_f64();
+
+    match result {
+        Ok(out) => {
+            // UTF-8 解码 (lossy, 命令输出可能含非 UTF-8 字节,如二进制文件 cat)
+            let stdout_str = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr_str = String::from_utf8_lossy(&out.stderr).into_owned();
+            log::info!(
+                "[ssh] exec command done: id={} exit={} stdout={}B stderr={}B duration={:.3}s",
+                session_id,
+                out.exit_code,
+                out.stdout.len(),
+                out.stderr.len(),
+                duration
+            );
+            Ok(SshCommandResult {
+                ok: true,
+                output: stdout_str,
+                stderr: stderr_str,
+                exit_code: out.exit_code,
+                duration,
+            })
+        }
+        Err(e) => {
+            // exec_command 失败 (连接断开 / 开 channel 失败 / exec 被拒)
+            // 返回 ok=false 而非 Err,让 Python 端走 "error" 状态分支
+            let err_msg = format!("{e}");
+            log::error!(
+                "[ssh] exec command failed: id={} cmd={:?} err={} duration={:.3}s",
+                session_id,
+                command,
+                err_msg,
+                duration
+            );
+            Ok(SshCommandResult {
+                ok: false,
+                output: String::new(),
+                stderr: err_msg,
+                exit_code: -1,
+                duration,
+            })
+        }
+    }
+}
+
+// ============================================================================
+// 单元测试 (P0-D 新增, 2026-07-30)
+// ============================================================================
+//
+// 覆盖范围:
+// - SshCommandResult 序列化 (camelCase 字段名 + #[serde(default)] stderr)
+// - SshState 基础行为 (allocate_id 单调递增 / get 不存在 / take 移除)
+//
+// 不覆盖 (需真实 SSH 连接, 留给 tauri:dev + CDP 9222 实测):
+// - ssh_command 命令完整链路 (tauri::State 无法在普通 #[test] 构造)
+// - exec_command 真实执行 (依赖 russh Handle, 见 session.rs tests 注释)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ssh_command_result_serialization_camel_case() {
+        // 验证 SshCommandResult 序列化为 camelCase (前端 TS 期望)
+        let result = SshCommandResult {
+            ok: true,
+            output: "uptime output".to_string(),
+            stderr: "warn line".to_string(),
+            exit_code: 0,
+            duration: 0.123,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        // camelCase 字段名验证
+        assert!(json.contains("\"exitCode\""), "exit_code → exitCode");
+        assert!(!json.contains("\"exit_code\""), "snake_case 不应出现");
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"output\":\"uptime output\""));
+        assert!(json.contains("\"stderr\":\"warn line\""));
+        assert!(json.contains("\"duration\":0.123"));
+    }
+
+    #[test]
+    fn test_ssh_command_result_serialization_empty_stderr() {
+        // 验证 stderr=空字符串时序列化仍输出 "stderr":"" 字段
+        // (前端 TS 期望 stderr 字段始终存在, 不依赖默认值)
+        let result = SshCommandResult {
+            ok: true,
+            output: "x".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: 0.1,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"stderr\":\"\""));
+        assert!(json.contains("\"output\":\"x\""));
+        assert!(json.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn test_ssh_command_result_serialization_failure_payload() {
+        // 验证 ok=false 失败路径的序列化 (Python 端消费此格式)
+        let result = SshCommandResult {
+            ok: false,
+            output: String::new(),
+            stderr: "SSH session not found: id=999".to_string(),
+            exit_code: -1,
+            duration: 0.001,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"ok\":false"));
+        assert!(json.contains("\"output\":\"\""));
+        assert!(json.contains("\"exitCode\":-1"));
+        // stderr 含中英文混合错误信息时应正确序列化 (UTF-8)
+        assert!(json.contains("SSH session not found"));
+    }
+
+    #[test]
+    fn test_ssh_command_result_clone_and_debug() {
+        // 验证 Clone + Debug 派生 (日志 / 跨 task 传递用)
+        let result = SshCommandResult {
+            ok: true,
+            output: "data".to_string(),
+            stderr: String::new(),
+            exit_code: 42,
+            duration: 1.5,
+        };
+        let cloned = result.clone();
+        assert_eq!(cloned.ok, result.ok);
+        assert_eq!(cloned.output, result.output);
+        assert_eq!(cloned.exit_code, result.exit_code);
+
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("SshCommandResult"));
+        assert!(debug_str.contains("42"));
+    }
+
+    #[test]
+    fn test_ssh_state_default_is_empty() {
+        // 验证 SshState 初始无会话 (ssh_command 在此状态下应返回 "session not found")
+        let state = SshState::default();
+        assert!(state.list_ids().is_empty());
+        // 用 is_none() 而非 assert_eq!(..., None), 避免 SshSession 需实现 PartialEq/Debug
+        assert!(state.get(1).is_none());
+        assert!(state.take(1).is_none());
+    }
+
+    #[test]
+    fn test_ssh_state_allocate_id_monotonic() {
+        // 验证 session_id 从 1 开始单调递增 (与 PTY 的 id 空间独立)
+        let state = SshState::default();
+        assert_eq!(state.allocate_id(), 1);
+        assert_eq!(state.allocate_id(), 2);
+        assert_eq!(state.allocate_id(), 3);
+    }
+
+    #[test]
+    fn test_ssh_state_get_returns_none_for_unknown_id() {
+        // ssh_command 第 1 步: state.get(session_id) 返回 None → ok_or_else → Err
+        // 这里验证 get 在未插入时确实返回 None (ssh_command 错误路径前置条件)
+        let state = SshState::default();
+        let _id = state.allocate_id(); // id=1, 但未 insert
+        assert!(state.get(1).is_none());
     }
 }

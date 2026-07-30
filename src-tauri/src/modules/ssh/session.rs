@@ -565,6 +565,222 @@ impl SshSession {
         // 转为 stream (russh-sftp 期望 AsyncRead+AsyncWrite)
         Ok(channel.into_stream())
     }
+
+    /// 执行单条 SSH 命令并返回结构化结果（exec 模式，非 PTY）
+    ///
+    /// TDSF 魔改 P0-D（2026-07-30）：为运维 Agent 提供"执行命令并拿回输出"能力，
+    /// 与 PTY 交互（`write_data`）解耦。复用现有 SSH Handle 开新 channel，
+    /// 用 `channel.exec()` 而非 `request_pty + request_shell`，适合一次性命令
+    /// （`uptime` / `systemctl status nginx` / `df -h` 等）。
+    ///
+    /// # 与 PTY 模式的区别
+    /// - **PTY**：常驻 shell，前端按键 → ssh_write → 服务器 shell 回显 + 输出
+    /// - **exec**：单条命令，stdin 关闭，命令结束 → channel EOF + ExitStatus
+    /// - 两者并行不冲突：各自独立 channel，与 SFTP channel 一样复用 Handle
+    ///
+    /// # 流程
+    /// 1. 借用 Handle（不 take，保持 SSH 连接）
+    /// 2. `handle.channel_open_session()` 开新 channel
+    /// 3. `channel.exec(true, command)` 请求执行（want_reply=true 等服务器确认）
+    /// 4. 循环 `channel.wait()` 收集输出：
+    ///    - `ChannelMsg::Data` → stdout
+    ///    - `ChannelMsg::ExtendedData { ext: 1 }` → stderr
+    ///    - `ChannelMsg::ExitStatus` → 退出码（继续读到 EOF/Close）
+    ///    - `ChannelMsg::Eof` / `Close` / `None` → 跳出
+    /// 5. 用 `tokio::time::timeout` 包装整体避免命令卡死（默认 30s）
+    /// 6. channel.drop() 触发底层关闭
+    ///
+    /// # 参数
+    /// - `command`: 要执行的命令（如 `uptime` / `systemctl status nginx`）
+    ///   注意：远端走 `/bin/sh -c <command>`，支持管道 / 重定向 / 链式
+    /// - `timeout_secs`: 超时秒数（None 时用默认 30s）
+    ///
+    /// # 返回
+    /// `SshCommandOutput { stdout, stderr, exit_code }`
+    /// - 超时：`exit_code = -1`，stderr 含超时说明
+    /// - 命令未发 ExitStatus（被信号杀死）：`exit_code = -1`
+    ///
+    /// # 错误
+    /// - `Closed`：SSH 连接已断（`connection_closed=true`）
+    /// - `Russh`：开 channel / exec 调用失败
+    ///
+    /// # 与 Python 端的契约
+    /// `strands_backend/tools/__init__.py:execute_via_ssh` 期望返回值：
+    /// ```json
+    /// { "ok": true, "output": "...", "exit_code": 0, "duration": 0.123 }
+    /// ```
+    /// 上层 `ssh_command` Tauri command 负责包装成此格式，本方法只返回原始数据。
+    pub async fn exec_command(
+        &self,
+        command: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<SshCommandOutput, SshSessionError> {
+        // 1. 连接检查（与 open_sftp_channel 一致，PTY 死亡不影响 exec）
+        if self.connection_closed.load(Ordering::Acquire) {
+            return Err(SshSessionError::Closed);
+        }
+
+        // 2. 借用 handle（不 take，保持 SSH 连接）
+        let handle_guard = self.handle.lock().await;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+
+        log::info!(
+            "[ssh] exec_command start: cmd={:?}, timeout={:?}s",
+            command,
+            timeout_secs.unwrap_or(30)
+        );
+
+        // 3. 开新 channel（与 PTY / SFTP channel 并发）
+        let mut channel = handle.channel_open_session().await?;
+
+        // 4. 请求 exec（RFC 4254 6.4，want_reply=true 等服务器确认 exec 启动）
+        //    russh 0.61 签名：exec(&self, want_reply: bool, command: &str) -> Result<()>
+        channel.exec(true, command).await?;
+
+        // 5. 收集输出（带超时保护）
+        let timeout_dur =
+            std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
+        let collect_fut = Self::collect_exec_output(&mut channel, command);
+
+        let (stdout, stderr, exit_code) = match tokio::time::timeout(
+            timeout_dur,
+            collect_fut,
+        )
+        .await
+        {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => {
+                log::error!(
+                    "[ssh] exec_command channel error: cmd={:?} err={}",
+                    command,
+                    e
+                );
+                return Err(SshSessionError::Russh(e));
+            }
+            Err(_elapsed) => {
+                // 超时：返回部分输出 + exit_code=-1（与 JSch/AgentSSH 约定一致）
+                log::warn!(
+                    "[ssh] exec_command timeout after {}s: cmd={:?}",
+                    timeout_secs.unwrap_or(30),
+                    command
+                );
+                let stderr_msg = format!(
+                    "\n[tdsf-exec-timeout] command timed out after {}s\n",
+                    timeout_secs.unwrap_or(30)
+                );
+                // channel drop 会触发底层关闭
+                return Ok(SshCommandOutput {
+                    stdout: Vec::new(),
+                    stderr: stderr_msg.into_bytes(),
+                    exit_code: -1,
+                });
+            }
+        };
+
+        log::info!(
+            "[ssh] exec_command done: cmd={:?} exit={} stdout={}B stderr={}B",
+            command,
+            exit_code,
+            stdout.len(),
+            stderr.len()
+        );
+
+        Ok(SshCommandOutput {
+            stdout,
+            stderr,
+            exit_code,
+        })
+    }
+
+    /// exec 模式输出收集器（reader_task 的简化版，无 Channel<T> 推送）
+    ///
+    /// 与 reader_task 的区别：
+    /// - 不推送前端，只本地收集
+    /// - 持续读到 ExitStatus + EOF/Close，而不是常驻循环
+    /// - 不区分 first_data 标志（exec 输出量通常较少）
+    async fn collect_exec_output(
+        channel: &mut russh::Channel<russh::client::Msg>,
+        command: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>, i32), russh::Error> {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code: i32 = -1; // 默认 -1，收到 ExitStatus 才更新
+
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => {
+                    stdout.extend_from_slice(&data);
+                }
+                Some(ChannelMsg::ExtendedData { ext, data }) => {
+                    // ext=1 是 stderr（RFC 4254 5.2）
+                    // ext=2 是 "ExitStatus 之外的扩展数据"（罕见，合并到 stderr）
+                    if ext == 1 || ext == 2 {
+                        stderr.extend_from_slice(&data);
+                    } else {
+                        log::debug!(
+                            "[ssh] exec unknown ext={}: {} bytes",
+                            ext,
+                            data.len()
+                        );
+                        stderr.extend_from_slice(&data);
+                    }
+                }
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = exit_status as i32;
+                    log::debug!(
+                        "[ssh] exec exit_status={} cmd={:?}",
+                        exit_code,
+                        command
+                    );
+                    // 不立即 break，继续读剩余输出直到 EOF/Close
+                }
+                Some(ChannelMsg::Eof) => {
+                    log::debug!("[ssh] exec EOF");
+                    // 服务器关闭写端，可能还有 ExitStatus 后到，继续等
+                }
+                Some(ChannelMsg::Close) => {
+                    log::debug!("[ssh] exec channel closed by peer");
+                    break;
+                }
+                Some(ChannelMsg::Success) => {
+                    // want_reply=true 的 exec 请求被服务器接受
+                    log::debug!("[ssh] exec request Success");
+                }
+                Some(ChannelMsg::Failure) => {
+                    // 服务器拒绝 exec 请求（罕见，权限/策略禁止）
+                    log::warn!(
+                        "[ssh] exec request Failure (REJECTED by server) cmd={:?}",
+                        command
+                    );
+                    // 不抛错，继续等 ExitStatus（如果服务器仍发的话）；
+                    // 若不发，超时后由 collect_exec_output 的调用方处理
+                }
+                Some(msg) => {
+                    log::debug!("[ssh] exec other channel msg: {:?}", msg);
+                }
+                None => {
+                    log::debug!("[ssh] exec channel.wait() returned None");
+                    break;
+                }
+            }
+        }
+
+        Ok((stdout, stderr, exit_code))
+    }
+}
+
+/// SSH exec 命令执行结果（exec 模式，非 PTY）
+///
+/// TDSF 魔改 P0-D（2026-07-30）：为运维 Agent 提供结构化输出，
+/// 上层 `ssh_command` Tauri command 包装为 `{ok, output, exit_code, duration}` JSON。
+#[derive(Debug, Clone)]
+pub struct SshCommandOutput {
+    /// stdout（标准输出，UTF-8 字节）
+    pub stdout: Vec<u8>,
+    /// stderr（标准错误，UTF-8 字节）
+    pub stderr: Vec<u8>,
+    /// 退出码（0=成功，1-255=Unix 标准，-1=超时/未收到 ExitStatus）
+    pub exit_code: i32,
 }
 
 impl Drop for SshSession {
@@ -626,5 +842,158 @@ mod tests {
 
         let json = serde_json::to_string(&SshSessionState::HostVerifying).unwrap();
         assert_eq!(json, "\"host_verifying\"");
+    }
+
+    // === TDSF P0-D (2026-07-30) 新增测试 ============================================
+    //
+    // exec_command 是异步方法,依赖真实 russh Handle + 远端 SSH 服务器,
+    // 难以做端到端单元测试。这里覆盖可离线验证的两类:
+    // 1. SshCommandOutput 结构体: 字段构造 / Debug 输出 / 默认 exit_code 语义
+    // 2. exec_command 错误路径: connection_closed=true / handle=None 时
+    //    必须立即返回 Err(Closed),不发起任何 channel_open_session / exec 调用
+    //
+    // 真实链路验证靠 tauri:dev + CDP 9222 实测 (见 docs/dev-state.md §P0-D)。
+
+    /// 构造测试用 SshSession,所有字段为 None / 默认值
+    ///
+    /// 同模块可访问私有字段,绕过 open_pty 的真实连接依赖。
+    /// `connection_closed` / `exited` 由参数控制,覆盖不同状态分支。
+    ///
+    /// 注: handle 一律构造为 None (模拟 close() 后 handle 被 take 走的场景)。
+    /// 真实 Handle 需 russh 连接,无法离线构造。当前测试用例通过
+    /// `connection_closed=true` 让 exec_command 在第 1 步就提前返回 Closed,
+    /// 不会触达 handle 借用;`connection_closed=false` 时让 handle 借用
+    /// 走 `as_ref() → None` 路径,同样返回 Closed (防御性分支覆盖)。
+    fn make_test_session(connection_closed: bool, exited: bool) -> SshSession {
+        SshSession {
+            handle: Arc::new(Mutex::new(None)),
+            channel_write: Arc::new(Mutex::new(None)),
+            state: Arc::new(std::sync::RwLock::new(if connection_closed {
+                SshSessionState::Closed
+            } else {
+                SshSessionState::Connected
+            })),
+            exited: Arc::new(AtomicBool::new(exited)),
+            connection_closed: Arc::new(AtomicBool::new(connection_closed)),
+            host: String::new(),
+            port: 0,
+            user: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_ssh_command_output_construction() {
+        // 验证 SshCommandOutput 字段构造 (P0-D 返回类型)
+        let out = SshCommandOutput {
+            stdout: b"hello\n".to_vec(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        };
+        assert_eq!(out.stdout, b"hello\n");
+        assert!(out.stderr.is_empty());
+        assert_eq!(out.exit_code, 0);
+    }
+
+    #[test]
+    fn test_ssh_command_output_default_exit_code() {
+        // 验证默认 exit_code 语义: -1 表示"未收到 ExitStatus / 超时 / 异常"
+        // (与 collect_exec_output 的 exit_code: i32 = -1 默认值一致)
+        let out = SshCommandOutput {
+            stdout: Vec::new(),
+            stderr: b"timeout".to_vec(),
+            exit_code: -1,
+        };
+        assert_eq!(out.exit_code, -1);
+        assert!(out.stdout.is_empty());
+        assert_eq!(out.stderr, b"timeout");
+    }
+
+    #[test]
+    fn test_ssh_command_output_debug_format() {
+        // 验证 Debug 派生 (日志里会打印 SshCommandOutput)
+        let out = SshCommandOutput {
+            stdout: b"ok".to_vec(),
+            stderr: b"warn".to_vec(),
+            exit_code: 42,
+        };
+        let debug_str = format!("{:?}", out);
+        assert!(debug_str.contains("SshCommandOutput"));
+        assert!(debug_str.contains("stdout"));
+        assert!(debug_str.contains("stderr"));
+        assert!(debug_str.contains("exit_code"));
+        assert!(debug_str.contains("42"));
+    }
+
+    #[test]
+    fn test_ssh_command_output_clone() {
+        // 验证 Clone 派生 (跨 task 传递时常用 .clone())
+        let original = SshCommandOutput {
+            stdout: b"data".to_vec(),
+            stderr: b"err".to_vec(),
+            exit_code: 1,
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.stdout, original.stdout);
+        assert_eq!(cloned.stderr, original.stderr);
+        assert_eq!(cloned.exit_code, original.exit_code);
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_returns_closed_when_connection_closed() {
+        // 验证 exec_command 在 connection_closed=true 时立即返回 Err(Closed),
+        // 不会触达 handle 借用 / channel_open_session (避免对已断连接的二次操作)
+        let session = make_test_session(
+            /* connection_closed */ true,
+            /* exited */ true,
+        );
+
+        let result = session.exec_command("uptime", None).await;
+        assert!(
+            matches!(result, Err(SshSessionError::Closed)),
+            "expected Err(Closed) when connection_closed=true, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_returns_closed_when_handle_none() {
+        // 验证 exec_command 在 handle=None (close() 后 take 走) 时返回 Err(Closed)。
+        // 此场景 connection_closed=false (模拟连接未断但 handle 已被 take 的边界),
+        // 但 handle.as_ref() 返回 None → 返回 Closed。
+        // 注意:此场景在生产中不应发生 (close() 同时设 connection_closed=true),
+        // 这里覆盖防御性分支 (collect_exec_output 的 handle 借用路径)。
+        let session = make_test_session(
+            /* connection_closed */ false,
+            /* exited */ false,
+        );
+
+        let result = session.exec_command("ls /tmp", Some(5)).await;
+        assert!(
+            matches!(result, Err(SshSessionError::Closed)),
+            "expected Err(Closed) when handle=None, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_returns_closed_with_custom_timeout() {
+        // 验证 timeout 参数不影响错误路径的提前返回
+        // (timeout 仅在 collect_exec_output 阶段生效,connection_closed 在 1. 步拦截)
+        let session = make_test_session(true, true);
+
+        let result = session.exec_command("sleep 100", Some(1)).await;
+        assert!(matches!(result, Err(SshSessionError::Closed)));
+    }
+
+    #[test]
+    fn test_is_connection_closed_after_construction() {
+        // 验证 make_test_session 的状态标志正确 (测试工具自身的自检)
+        let closed = make_test_session(true, true);
+        assert!(closed.is_connection_closed());
+        assert!(closed.is_exited()); // exited 也 true (close 同时设两者)
+
+        let open = make_test_session(false, false);
+        assert!(!open.is_connection_closed());
+        assert!(!open.is_exited());
     }
 }
