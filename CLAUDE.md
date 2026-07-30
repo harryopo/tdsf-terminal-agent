@@ -105,7 +105,7 @@ src/main.tsx  ← 入口。按上游 terax 重写：
 ```bash
 pnpm typecheck        # tsc -p tsconfig.app.json && tsc -p tsconfig.node.json，0 错误
 pnpm lint             # eslint . --max-warnings 0，0 错误 0 警告
-pnpm test             # vitest run，当前 830 全过
+pnpm test             # vitest run，当前 832 全过
 pnpm build:web        # tsc -p app + vite build，成功出 dist
 pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功能真的工作
 ```
@@ -138,6 +138,7 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 |------|------|------|
 | **AI 入口** | `AGENTS.md` | 一句话指路（自动加载） |
 | **开发规范总纲** | `CLAUDE.md`（本文件） | 身份铁律 + 架构地图 + 防污染红线 + 五绿门禁 + 诊断方法论 |
+| **多 agent 协作规范** | `docs/MULTI-AGENT-WORKFLOW.md` | A/B/C 三场景分层 + 文件锁矩阵 + 改动影响分析表 + 接手声明模板 + 自检报告模板（接手必读第三文档） |
 | **当前状态/进度/已知问题** | `docs/dev-state.md` | ⭐**唯一进度记忆源**：当前状态、已知问题及调研结论、本轮改动文件、恢复经验时间线、下一步 |
 | **开源许可与魔改说明** | `docs/OPEN-SOURCE-AND-MODIFICATIONS.md` | 上游 Apache-2.0 义务 + 本项目原创贡献（比赛/合规用） |
 

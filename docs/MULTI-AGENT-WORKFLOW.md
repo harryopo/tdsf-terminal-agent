@@ -141,7 +141,7 @@ subagent-<ID>:
 - [ ] `git log -1` 最新 commit 与 dev-state.md 描述一致？
 - [ ] `pnpm typecheck` 0 错误？
 - [ ] `pnpm lint` 0 错误 0 警告？
-- [ ] `pnpm test` 830 全过（或与 dev-state.md 记录数一致）？
+- [ ] `pnpm test` 832 全过（或与 dev-state.md 记录数一致）？
 - [ ] dev-state.md 末尾「§<N> 接手下一步」明确？
 - [ ] 已知踩坑已读？（CLAUDE.md §3 防污染红线 8 条 + dev-state.md §四 大恢复经验）
 - [ ] 当前任务边界清晰？（互斥文件清单见 §3.1，改动影响见 §4.5）
@@ -237,7 +237,7 @@ subagent-<ID>:
 | `vite.config.ts` | 严格互斥 | Vite 配置（端口 9300 strictPort） | 同改 = dev server 起不来 |
 | `eslint.config.js` / `biome.json` | 严格互斥 | lint 配置 | 同改 = 门禁不一致 |
 | `docs/dev-state.md` | 协调互斥 | 唯一进度记忆源 | 写入前先读最新 → 追加新章节 → 立即 commit（不覆盖历史章节） |
-| `docs/MULTI-AGENT-WORKFLOW.md`（本文件） | 协调互斥 | 多 agent 规范 | 改动需主 agent 独占 + 用户确认 |
+| `docs/MULTI-AGENT-WORKFLOW.md`（本文件） | 协调互斥 | 多 agent 规范 | 改动需主 agent 独占 + 用户确认；**subagent 经主 agent 派发授权 + 用户确认后可改**（见 §9.5 实例 + §13 红线 13 例外条款） |
 | `AGENTS.md` / `CLAUDE.md` | 协调互斥 | 顶层规范，改动需主 agent 独占 + 用户确认 | 同改 = 规范混乱 |
 | `src/modules/<module>/` 目录内 | 模块互斥 | 同一模块内多文件改动需独占（例如改 `terminal/` 时不可有另一 agent 同时改 `terminal/lib/rendererPool.ts`） | 同改 = 模块内部状态不一致 |
 | `src-tauri/src/modules/<module>/` 目录内 | 模块互斥 | 同上（Rust 侧） | 同改 = cargo check 失败 |
@@ -653,7 +653,7 @@ subagent 不持有运行态，只做：
 ```bash
 pnpm typecheck   # tsc -p tsconfig.app.json && tsc -p tsconfig.node.json，0 错误
 pnpm lint        # eslint . --max-warnings 0，0 错误 0 警告（注：上游用 biome，本项目魔改保留 eslint）
-pnpm test        # vitest run，当前 830 全过
+pnpm test        # vitest run，当前 832 全过
 pnpm build:web   # tsc -p app + vite build，成功出 dist
 pnpm tauri:dev   # 桌面端实测：窗口可见 + 能点击 + 目标功能真的工作
 ```
@@ -860,7 +860,7 @@ Rust 日志（来自 dev-state.md §八）：
 ## 验证（自检报告必填，见 §9.4）
 - `pnpm typecheck`：必须 0 错误
 - `pnpm lint`：必须 0 错误 0 警告
-- `pnpm test`：必须 830 全过（或与基线一致）
+- `pnpm test`：必须 832 全过（或与基线一致）
 - `pnpm build:web`：可选（如改了构建相关）
 - `cargo check`：改 Rust 时必跑
 - `pnpm tauri:dev`：**不要跑**（主 agent 持有运行态）
@@ -908,7 +908,7 @@ Rust 日志（来自 dev-state.md §八）：
 ### 2. 跑的门禁
 - pnpm typecheck：<通过/失败，失败附错误>
 - pnpm lint：<通过/失败，失败附错误>
-- pnpm test：<通过/失败，失败附用例>（基线 830 全过，本次 <N> 全过）
+- pnpm test：<通过/失败，失败附用例>（基线 832 全过，本次 <N> 全过）
 - pnpm build:web：<未跑/通过/失败>（subagent 可选）
 - cargo check：<未跑/通过/失败>（仅改 Rust 时必跑）
 - pnpm tauri:dev：<未跑>（subagent 不持有运行态，由主 agent 验证）
@@ -936,6 +936,8 @@ Rust 日志（来自 dev-state.md §八）：
 ```
 
 ### 9.5 派发实例（本项目 2026-07-30 实际案例）
+
+> **例外说明**：本规范本身由 subagent-C 撰写（v2.0），这是 §13 红线 13「subagent 不直接改本规范」的**授权例外**——经主 agent 派发 + 用户确认后，subagent 在场景 A 撰写/更新本规范是允许的。此实例即该例外的真实案例。
 
 主 agent 派发本规范撰写任务（场景 A）的实例：
 
@@ -1052,7 +1054,7 @@ feat(ssh): fix pty terminal_modes causing early eof
 - handler.rs add disconnected() override (catch disconnect reason)
 
 Verified:
-- typecheck/lint/test(830) all pass
+- typecheck/lint/test(832) all pass
 - tauri:dev: shell常驻、SFTP可用、reader first data: 129 bytes
 - log: channel request Success (pty/shell accepted), no early eof
 
@@ -1070,7 +1072,7 @@ Multi-agent collaboration (scenario B):
 - subagent-B: added useTerminalSession openTransport injection + remote guard
 
 Verified:
-- typecheck/lint/test(830)/build:web all pass
+- typecheck/lint/test(832)/build:web all pass
 - tauri:dev: SSH terminal visible, monospace font, local terminal regression ok
 - CDP: --terminal-foreground/#1a1a1a → matched local token
 
@@ -1203,7 +1205,7 @@ Write-Host "=== 检查完成，对照 §2.2 接手检查清单逐项确认 ===" 
 10. **subagent 不连 CDP 9222**（主 agent 持有，§8.1）
 11. **subagent 不直接 commit**（主 agent 集成时 commit，§11.3）
 12. **subagent 不改 docs/dev-state.md**（记忆源由主 agent 统一更新，§6.2）
-13. **subagent 不改 docs/MULTI-AGENT-WORKFLOW.md**（规范由主 agent 独占）
+13. **subagent 不直接改 `docs/MULTI-AGENT-WORKFLOW.md`**（规范默认由主 agent 独占；**例外**：经主 agent 派发授权 + 用户确认后，subagent 可在场景 A 撰写/更新本规范，§9.5 实例即此例外的真实案例）
 14. **subagent 自检报告必填**（§9.4，不填 = 任务未完成）
 15. **subagent 接手声明必填**（§2.4，未声明就改 = 越界）
 16. **改 Rust 后 subagent 只跑 cargo check**，重启 dev 由主 agent 做（§8.5）
@@ -1271,7 +1273,7 @@ Write-Host "=== 检查完成，对照 §2.2 接手检查清单逐项确认 ===" 
 - 发现新的多 agent 协作踩坑（追加到 §13 红线表）
 - 业界有新的最佳实践值得借鉴（追加到 §15 引用表）
 - 本项目架构调整（如新增模块、移除模块 → 更新 §4 依赖图与 §4.5 影响表）
-- 五绿门禁阈值变化（如 test 数从 830 变更 → 更新 §7.1 / §7.5 / §12 脚本）
+- 五绿门禁阈值变化（如 test 数从 832 变更 → 更新 §7.1 / §7.5 / §12 脚本）
 - 协作场景扩展（如新增场景 D：跨 IDE 协作）
 
 更新方式：直接 Edit 本文件 + 在 dev-state.md 记录变更原因。
