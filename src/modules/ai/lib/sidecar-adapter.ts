@@ -43,6 +43,13 @@ const STREAM_CHUNK_SIZE = 24;
 /** 模拟流式输出的 chunk 间隔（ms，让 useChat 能逐 chunk 渲染） */
 const STREAM_CHUNK_DELAY_MS = 8;
 
+/**
+ * invoke 完成后等待 in-flight `sidecar:tool_call` 事件 drain 的窗口（ms）。
+ * agent.invoke 返回即 PAOR 循环结束，工具事件应已发完，但 Tauri event
+ * 跨进程传输有微小延迟，留一个短窗口避免漏掉最后一个 completed 事件。
+ */
+const TOOL_DRAIN_MS = 30;
+
 /** Tauri event 名（与 src-tauri/src/modules/ipc.rs:329-339 对齐） */
 const EVENT_MOOD_CHANGE = "sidecar:mood_change";
 const EVENT_TOOL_CALL = "sidecar:tool_call";
@@ -100,6 +107,20 @@ export interface SidecarStreamOptions {
  */
 export type SidecarStreamPart =
   | { type: "text-delta"; id: string; delta: string }
+  | { type: "reasoning-delta"; id: string; delta: string }
+  | {
+      type: "tool-input";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+    }
+  | {
+      type: "tool-output";
+      toolCallId: string;
+      toolName: string;
+      output: unknown;
+      isError: boolean;
+    }
   | { type: "finish"; id: string }
   | { type: "error"; error: string };
 
@@ -139,6 +160,21 @@ interface AgentInvokeResult {
   mood?: string;
   /** token 使用量 */
   tokens?: { input?: number; output?: number };
+}
+
+/**
+ * `sidecar:tool_call` 事件 payload（与 Python event_bus.emit_tool_call 对齐）
+ *
+ * event_bus.py:emit_tool_call 发布结构:
+ *   { tool_name, params, status: "started"|"completed"|"error", result? }
+ * 每个工具调用发两次：started（带 params）+ completed/error（带 result）。
+ * 前端据此配对成 tool-input（started）→ tool-output（completed/error）part。
+ */
+interface ToolCallPayload {
+  tool_name?: string;
+  params?: unknown;
+  status?: string;
+  result?: unknown;
 }
 
 // === 内部工具函数 ============================================================
@@ -205,14 +241,14 @@ function mapToPythonName(agentId: TdsfAgentId): string {
 async function* streamText(
   text: string,
   id: string,
+  kind: "text" | "reasoning" = "text",
 ): AsyncIterable<SidecarStreamPart> {
   if (!text) return;
   for (let i = 0; i < text.length; i += STREAM_CHUNK_SIZE) {
-    yield {
-      type: "text-delta",
-      id,
-      delta: text.slice(i, i + STREAM_CHUNK_SIZE),
-    };
+    const delta = text.slice(i, i + STREAM_CHUNK_SIZE);
+    yield kind === "reasoning"
+      ? { type: "reasoning-delta", id, delta }
+      : { type: "text-delta", id, delta };
     // 让出事件循环，让 useChat 有机会渲染当前 chunk
     await new Promise((r) => setTimeout(r, STREAM_CHUNK_DELAY_MS));
   }
@@ -234,6 +270,7 @@ async function* streamText(
 async function registerSidecarListeners(
   onMood?: (mood: string) => void,
   onStep?: (step: string | null) => void,
+  onToolCall?: (payload: ToolCallPayload) => void,
 ): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [];
 
@@ -251,15 +288,18 @@ async function registerSidecarListeners(
     }
   }
 
-  // 工具调用事件（用于显示 step 进度）
-  if (onStep) {
+  // 工具调用事件：既驱动顶栏 step 文字提示（started 时），又转发完整 payload
+  // 给 onToolCall 供 runSidecarStream 收集成 tool part（工具行渲染）。
+  // payload 结构与 event_bus.emit_tool_call 对齐：{tool_name, params, status, result}。
+  if (onStep || onToolCall) {
     try {
       unlisteners.push(
-        await listen<{ step?: string; tool?: string }>(EVENT_TOOL_CALL, (e) => {
+        await listen<ToolCallPayload>(EVENT_TOOL_CALL, (e) => {
           const p = e.payload;
           if (!p) return;
-          if (p.step) onStep(p.step);
-          else if (p.tool) onStep(`Calling ${p.tool}`);
+          const name = p.tool_name;
+          if (name && p.status === "started") onStep?.(`调用 ${name}`);
+          if (name) onToolCall?.(p);
         }),
       );
     } catch {
@@ -329,8 +369,41 @@ export async function* runSidecarStream(
   // TDSF 魔改: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
   const teachingId = `${streamId}-teaching`;
 
+  // 工具调用收集：sidecar:tool_call 事件在 invoke 期间实时到达，先收集成
+  // tool part，待 invoke 完成后按序 yield（reasoning → 工具行 → 文本），
+  // 与上游 Terax 消息内顺序一致。toolIdByName 把同一工具的 started/completed
+  // 两个事件配对到同一 toolCallId（sidecar PAOR 串行执行，按 tool_name 配对即可）。
+  const collectedTools: SidecarStreamPart[] = [];
+  const toolIdByName = new Map<string, string>();
+  let toolSeq = 0;
+  const onToolCall = (p: ToolCallPayload) => {
+    const name = p.tool_name;
+    if (!name) return;
+    if (p.status === "started") {
+      const toolCallId = `${streamId}-tool-${++toolSeq}`;
+      toolIdByName.set(name, toolCallId);
+      collectedTools.push({
+        type: "tool-input",
+        toolCallId,
+        toolName: name,
+        input: p.params ?? {},
+      });
+    } else if (p.status === "completed" || p.status === "error") {
+      const toolCallId =
+        toolIdByName.get(name) ?? `${streamId}-tool-${++toolSeq}`;
+      toolIdByName.delete(name);
+      collectedTools.push({
+        type: "tool-output",
+        toolCallId,
+        toolName: name,
+        output: p.result ?? null,
+        isError: p.status === "error",
+      });
+    }
+  };
+
   // 1. 注册事件监听器
-  const unlisten = await registerSidecarListeners(onMood, onStep);
+  const unlisten = await registerSidecarListeners(onMood, onStep, onToolCall);
 
   try {
     onStep?.("调用 Sidecar Agent");
@@ -411,10 +484,20 @@ export async function* runSidecarStream(
       });
     }
 
-    // 7. 流式输出 thinking（如有，作为前置 reasoning 段）
+    // 7. 流式输出 thinking（如有）作为 reasoning 折叠段（Reasoned）
     if (result.thinking) {
       onStep?.("Thinking");
-      yield* streamText(result.thinking, thinkingId);
+      yield* streamText(result.thinking, thinkingId, "reasoning");
+    }
+
+    // 7.5 工具调用行：invoke 已返回 = agent PAOR 循环结束，工具事件应已到齐；
+    // 留 TOOL_DRAIN_MS 窗口让最后一个 in-flight 事件落地，再按序 yield 成
+    // tool-input / tool-output part（AiChat 渲染成 Terax 工具行）。
+    if (!abortSignal?.aborted) {
+      await new Promise((r) => setTimeout(r, TOOL_DRAIN_MS));
+      for (const toolPart of collectedTools) {
+        yield toolPart;
+      }
     }
 
     // TDSF 魔改: 字段对齐 Python 实际返回
@@ -489,8 +572,23 @@ export function sidecarStreamToUIMessageStream(
     async start(controller) {
       const messageId = `msg-${Date.now()}`;
       let currentTextId: string | null = null;
+      let currentReasoningId: string | null = null;
       let finished = false;
       let errored = false;
+
+      // 关闭当前开着的 text / reasoning 流（切到工具行或另一种流之前必须先关）。
+      const closeText = () => {
+        if (currentTextId) {
+          controller.enqueue({ type: "text-end", id: currentTextId });
+          currentTextId = null;
+        }
+      };
+      const closeReasoning = () => {
+        if (currentReasoningId) {
+          controller.enqueue({ type: "reasoning-end", id: currentReasoningId });
+          currentReasoningId = null;
+        }
+      };
 
       try {
         // 消息开始
@@ -499,11 +597,10 @@ export function sidecarStreamToUIMessageStream(
 
         for await (const part of source) {
           if (part.type === "text-delta") {
-            // 切换 text stream id 时关闭旧的、开启新的
+            // 文本段开始前先关闭 reasoning 段
+            closeReasoning();
             if (currentTextId !== part.id) {
-              if (currentTextId) {
-                controller.enqueue({ type: "text-end", id: currentTextId });
-              }
+              closeText();
               currentTextId = part.id;
               controller.enqueue({ type: "text-start", id: part.id });
             }
@@ -512,21 +609,61 @@ export function sidecarStreamToUIMessageStream(
               id: part.id,
               delta: part.delta,
             });
-          } else if (part.type === "finish") {
-            // 关闭当前 text stream（如有）
-            if (currentTextId) {
-              controller.enqueue({ type: "text-end", id: currentTextId });
-              currentTextId = null;
+          } else if (part.type === "reasoning-delta") {
+            // reasoning 段（Reasoned 折叠）开始前先关闭 text 段
+            closeText();
+            if (currentReasoningId !== part.id) {
+              closeReasoning();
+              currentReasoningId = part.id;
+              controller.enqueue({ type: "reasoning-start", id: part.id });
             }
+            controller.enqueue({
+              type: "reasoning-delta",
+              id: part.id,
+              delta: part.delta,
+            });
+          } else if (part.type === "tool-input") {
+            // 工具行输入：独立 part 边界，先关掉当前 text / reasoning 流。
+            // dynamic:true → 成为 dynamic-tool part，AiChat 的 RenderedTool 能渲染。
+            closeText();
+            closeReasoning();
+            controller.enqueue({
+              type: "tool-input-available",
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              input: part.input,
+              dynamic: true,
+            });
+          } else if (part.type === "tool-output") {
+            closeText();
+            closeReasoning();
+            if (part.isError) {
+              controller.enqueue({
+                type: "tool-output-error",
+                toolCallId: part.toolCallId,
+                errorText:
+                  typeof part.output === "string"
+                    ? part.output
+                    : JSON.stringify(part.output),
+                dynamic: true,
+              });
+            } else {
+              controller.enqueue({
+                type: "tool-output-available",
+                toolCallId: part.toolCallId,
+                output: part.output,
+                dynamic: true,
+              });
+            }
+          } else if (part.type === "finish") {
+            closeText();
+            closeReasoning();
             controller.enqueue({ type: "finish-step" });
             controller.enqueue({ type: "finish", finishReason: "stop" });
             finished = true;
           } else if (part.type === "error") {
-            // 关闭当前 text stream（如有）
-            if (currentTextId) {
-              controller.enqueue({ type: "text-end", id: currentTextId });
-              currentTextId = null;
-            }
+            closeText();
+            closeReasoning();
             controller.enqueue({ type: "finish-step" });
             const errorText = options.onError
               ? options.onError(new Error(part.error))
@@ -538,17 +675,15 @@ export function sidecarStreamToUIMessageStream(
 
         // 兜底: source 结束但没显式 yield finish / error
         if (!finished && !errored) {
-          if (currentTextId) {
-            controller.enqueue({ type: "text-end", id: currentTextId });
-          }
+          closeText();
+          closeReasoning();
           controller.enqueue({ type: "finish-step" });
           controller.enqueue({ type: "finish", finishReason: "stop" });
         }
       } catch (err) {
         // 兜底异常处理（如 source 抛错）
-        if (currentTextId) {
-          controller.enqueue({ type: "text-end", id: currentTextId });
-        }
+        closeText();
+        closeReasoning();
         const errorText = options.onError
           ? options.onError(err)
           : err instanceof Error
