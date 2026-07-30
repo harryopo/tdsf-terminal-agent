@@ -33,7 +33,13 @@ JSON-RPC 方法注册（main.py 调用）：
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
+
+# TDSF P1-NEW-2 修复 (2026-07-30): 模块级 logger，替代 set_backend 中的
+# walrus + __import__("logging") hack 和 clear_backend 中的函数内 import。
+# 统一用 sidecar.agents 命名空间，与 main.py / base.py 日志可追溯。
+logger = logging.getLogger("sidecar.agents")
 
 # === 子模块导入（按 spec 顺序）===
 from agents.base import BaseAgent, AgentResult, LLMCallFunction
@@ -195,7 +201,7 @@ def set_backend(backend: BackendInvokeCallable) -> None:
     _global_backend_override = backend
     logger.info(
         f"backend override set: {getattr(backend, '__name__', repr(backend))}"
-    ) if (logger := __import__("logging").getLogger("sidecar.agents")) else None
+    )
 
 
 def clear_backend() -> None:
@@ -206,8 +212,7 @@ def clear_backend() -> None:
     global _global_backend_override
     if _global_backend_override is not None:
         _global_backend_override = None
-        import logging
-        logging.getLogger("sidecar.agents").info("backend override cleared")
+        logger.info("backend override cleared")
 
 
 def get_agent(name: str) -> BaseAgent:

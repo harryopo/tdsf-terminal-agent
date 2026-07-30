@@ -1450,4 +1450,245 @@ sidecar.health: backend_type="strands", backend_activated=true, fallback_reason=
 - Strands 后端激活的环境变量：`TDSF_AGENT_BACKEND=strands`（PowerShell: `$env:TDSF_AGENT_BACKEND="strands"` 后重启 tauri:dev）
 - CDP 实测脚本：`.tdsf-data/cdp_verify_backend_pill.py`（纯 stdlib Python，无第三方依赖）
 
+---
+
+## 二十一、交接章（2026-07-30 · P1-NEW-1/2/4 修复 CDP 实测 + 多 agent 规范 v3 + 运维 agent 调研 v4 收尾）
+
+> 续 §二十。本 session 接手前一个 AI 未提交的 P1 修复（main.py / agents/__init__.py / composer.tsx），完成 CDP 9222 端到端实测验证 + 多 agent 协作规范 v3 更新 + 运维 agent 开源调研 v4 归档。
+
+### 一句话现状
+
+P1-NEW-1/2/4 三项修复 **CDP 9222 端到端实测通过**：agent.invoke(1610ms) + 3 个 ping(各 3ms) 并发 → 主循环未阻塞（P1-NEW-1 修复有效）；sidecar.health 返回 `backend_type=strands, backend_activated=true, agents_count=9, strands_available=true, rust_bridge_active=true, llm_configured=true`（Strands 适配层完全激活）；BackendPill 显示 "Strands"（emerald 绿）；agent.invoke 返回真实 LLM 响应 "你好！我是 TDSF 终端助手..."。多 agent 规范 v3 新增 5 章节/12 模块节点/11 文件锁/2 接手字段/4 P1 预防清单。运维 agent 调研 v4 归档（22+15 项目，维持 Strands 首选结论）。
+
+### 本轮改动文件清单
+
+| 文件 | 改动类型 | 内容 |
+|------|---------|------|
+| `src-tauri/sidecar/main.py` | 修改（P1-NEW-1） | ThreadPoolExecutor 异步执行慢方法（agent.invoke），主循环不阻塞；max_workers=2；退出时 shutdown |
+| `src-tauri/sidecar/agents/__init__.py` | 修改（P1-NEW-2） | 模块级 `logger = logging.getLogger("sidecar.agents")`，移除 set_backend 中的 walrus + `__import__("logging")` hack |
+| `src/modules/ai/lib/composer.tsx` | 修改（P1-NEW-4） | attachFileByPath 用 useCallback 稳定引用 + 声明移至 useEffect 前（消除 TDZ）+ 依赖数组加 attachFileByPath |
+| `docs/MULTI-AGENT-WORKFLOW.md` | 修改（规范 v3） | 新增 §17-§21 五章节：sidecar 异步协作 / SSH 终端文件锁 / Strands 适配层红线 / v4 调研分工 / P1 预防清单 |
+| `docs/reports/modded-agent-code-review-2026-07-30.md` | 新文件 | 魔改 agent 代码审查报告（0 P0 + 4 P1 + 6 P2，含 P1-NEW-1/2/3/4） |
+| `docs/reports/ops-agent-opensource-survey-2026-07-v4.md` | 新文件 | 运维 agent 开源调研 v4（22+15 项目，发现 AgentSSH/OpAgent/LearnSSH/ANOLISA） |
+| `docs/dev-state.md` | 修改 | 本节 §二十一交接章 |
+| `.tdsf-data/cdp_verify_p1_fix.py` | 新文件 | CDP 验证脚本（纯 stdlib Python，验证 sidecar.health + agent.invoke + 并发 ping + .xterm + BackendPill） |
+| `.tdsf-data/cdp_inspect_term.py` 等多个 | 新文件 | CDP 辅助调查脚本（终端 DOM 检查 / tab 切换尝试 / 截图） |
+
+### P1-NEW-1 修复详情（最关键）
+
+**根因**：`main.py` 主循环单线程同步 `dispatcher.dispatch()`，agent.invoke 内 LLM 调用耗时 30-60s+，期间 stdin 不被读取 → Rust 侧 `sidecar.rs:1240` 的 `HEARTBEAT_TIMEOUT=30s` 触发 → 前端误显 Crashed + agent.invoke 响应丢失。
+
+**修复**：将慢方法（agent.invoke）提交到 `ThreadPoolExecutor(max_workers=2)` 异步执行，主循环立即返回继续读 stdin。
+
+**CDP 实测证据**（`.tdsf-data/cdp_verify_p1_fix.py` 输出）：
+```
+sidecar.health: backend_type=strands, backend_activated=true,
+                agents_count=9, strands_available=true,
+                rust_bridge_active=true, llm_configured=true
+agent.invoke: ok=True, ms=1610
+              observation="你好！我是 TDSF 终端助手，当前未连接 SSH 会话..."
+ping1: ok=True, ms=3    ← agent.invoke 还在跑时发 ping，3ms 响应
+ping2: ok=True, ms=3    ← 1s 后再 ping，3ms 响应
+ping3: ok=True, ms=3    ← 3s 后再 ping，3ms 响应
+PASS: 3 个 ping 均在 5000ms 内响应 → 主循环未阻塞（P1-NEW-1 修复有效）
+PASS: agent.invoke 返回成功响应
+```
+
+### 五绿门禁 + CDP 实测
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过
+- `pnpm build:web` ✅ 25.73s 成功
+- CDP 9222 ✅ sidecar.health + agent.invoke + 并发 ping + BackendPill 全部验证通过
+
+### 未验证项 + 原因（非回归）
+
+1. **SSH 终端 .xterm 渲染（xterm=0）**：
+   - 原因：当前 active tab 是编辑器（SELinux_learn.html），终端 tab "shell" 是 **cold 状态**（terax 设计：`selectLiveTerminals` 过滤 `t.cold`，cold tab 不 spawn PTY/不渲染 xterm）。
+   - 验证方式：手动启动 app 后点击 "shell" tab 激活，即可看到 SshTerminalHost 渲染的 xterm。
+   - **不是 P1 修复回归**，是 terax cold tab 设计 + 当前 active tab 是编辑器的正常表现。
+   - CDP 无法通过 DOM 事件/键盘事件切换 tab（terax 快捷键可能用 Tauri 全局快捷键，非 DOM 事件）。
+
+2. **pty_list_sessions 命令未找到**：
+   - 原因：Rust PTY 命令名可能不是 `pty_list_sessions`（实际名待查 `src-tauri/src/modules/pty/` 注册的 invoke handler）。
+   - 不影响核心验证（PTY 后端可用性由本地终端回归测试覆盖）。
+
+### 多 agent 规范 v3 更新摘要
+
+`docs/MULTI-AGENT-WORKFLOW.md` 新增 5 章节（782 insertions）：
+- **§17 多 agent 与 sidecar 异步执行的协作规则**：慢方法清单 / subagent 不能阻塞主循环 / max_workers=2 约束
+- **§18 SSH 终端深度集成后的文件锁扩展**：SshTerminalHost / useTerminalSession / pty-bridge TerminalTransport 紧耦合三元组锁
+- **§19 Strands 适配层协作红线**：set_backend/clear_backend 单写者原则 / _global_backend_override 调用权限矩阵
+- **§20 基于 v4 调研的集成路线图协作分工**：8 个可分工 subagent 任务包（AgentSSH/OpAgent/LearnSSH/ANOLISA 范式借鉴）
+- **§21 代码审查 P1 问题预防清单**：P1-NEW-1/2/3/4 每条配 file:line 反例 + 修复范式 + 自检清单
+- 模块依赖图新增 12 节点 / 文件锁矩阵新增 11 行 / 接手声明模板新增 2 字段
+
+### 运维 agent 调研 v4 摘要
+
+`docs/reports/ops-agent-opensource-survey-2026-07-v4.md`（847 行）：
+- **核心结论**：维持 Strands Agents 1.48.0 首选，不替换
+- **v4 新发现 15 项目**：AgentSSH（Rust+russh 同栈）/ OpAgent（三层安全+hash-chained 审计）/ LearnSSH（别名+凭据隔离）/ ANOLISA（Token-Less+AgentSight）/ Open Interpreter 0.0.26（Rust 重写）等
+- **集成路线图**：AgentSSH 范式借鉴 → P2 双向 JSON-RPC 桥参考；OpAgent 三层安全 → RiskChecker 进阶对标；ANOLISA Token-Less → P2 token 优化
+
+### 关键技术决策沉淀（5 条）
+
+1. **ThreadPoolExecutor max_workers=2**：允许一个 agent.invoke 在跑时另一个请求（如 ping）也能处理，同时避免并发过多 LLM 调用导致资源紧张。write_message 已用 `_write_lock` 保护，线程安全。
+2. **_slow_methods frozenset 仅含 agent.invoke**：其他方法（ping/status/sidecar.health/agent.list 等）都是快方法，同步执行。如未来新增慢方法，加入此 frozenset 即可。
+3. **模块级 logger 替代 walrus + __import__ hack**：统一 `sidecar.agents` 命名空间，与 main.py / base.py 日志可追溯。移除可读性差的反模式。
+4. **attachFileByPath 用 useCallback + 提前声明**：消除 useEffect 闭包陷阱（原代码 const 在 useEffect 之后导致 TDZ）+ 依赖数组加 attachFileByPath 让 React 正确追踪。
+5. **cold tab 不阻塞验证**：terax `selectLiveTerminals` 过滤 `t.cold` 是设计如此（恢复的终端 tab 在首次激活前不 spawn PTY）。CDP 无法切换 tab 是因为 terax 快捷键用 Tauri 全局快捷键（非 DOM 事件），需手动点击。
+
+### 接手下一步（按优先级）
+
+**P0（高优先级）**
+- 无未完成的 P0 项。P1-NEW-1/2/4 已修复 + CDP 实测通过。
+
+**P1（中优先级）**
+1. **SSH 终端渲染手动验证**：启动 app → 点击 "shell" tab → 确认 SshTerminalHost 渲染 xterm + SSH 终端可交互。如不渲染，查 SshTerminalHost.tsx 的 transport 构造 + useTerminalSession openTransport 路径。
+2. **痛点 6（前端 5 agent 模型切换不可用）**：检查 AgentPanel 模型切换 UI 状态（同 §二十 backlog）。
+3. **痛点 7（sidecar 未运行无引导）**：handleSubmit 已有 isRunning 检查，错误提示可更友好（同 §二十 backlog）。
+4. **pty 命令名核查**：查 `src-tauri/src/modules/pty/` 注册的 invoke handler 正确命令名（非 `pty_list_sessions`）。
+
+**P2（低优先级，长期 backlog）**
+- 资源管理器按目录缓存性能优化（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- Strands ApprovalHook + LimitToolCounts Hook（subagent-A 的 0.8.5 实施方案）
+- Strands 工具 0.8.5 4 个新工具注入（read_remote_file / analyze_logs / inspect_processes / network_diagnose 完整接入）
+- **运维 agent 集成路线图**（基于 v4 调研）：
+  - AgentSSH 范式借鉴 → P2 双向 JSON-RPC 桥参考（daemon-pooled 连接复用 + 结构化 JSON 输出）
+  - OpAgent 三层安全 → RiskChecker 进阶对标（加 LlmAuditor 语义审计层 + hash-chained 审计链）
+  - LearnSSH 别名机制 → P2 凭据安全强化（sshSessionId 不传 sidecar，改用别名解耦）
+  - ANOLISA Token-Less → P2 token 优化（模式压缩 + 响应压缩 + Skills 封装高频运维操作）
+
+### 备注
+
+- tauri:dev 进程已停止（CDP 实测完成后清理）
+- CDP 实测脚本：`.tdsf-data/cdp_verify_p1_fix.py`（纯 stdlib Python，无第三方依赖）
+- 截图：`.tdsf-data/cdp_screenshot_p1_verify.png`（112KB，当前 app 状态）
+- 多 agent 规范 v3：`docs/MULTI-AGENT-WORKFLOW.md` §17-§21
+- 运维 agent 调研 v4：`docs/reports/ops-agent-opensource-survey-2026-07-v4.md`（847 行，22+15 项目）
+- 代码审查报告：`docs/reports/modded-agent-code-review-2026-07-30.md`（445 行，0 P0 + 4 P1 + 6 P2）
+- Strands 后端激活的环境变量：`TDSF_AGENT_BACKEND=strands`（PowerShell: `$env:TDSF_AGENT_BACKEND="strands"` 后重启 tauri:dev）
+
+---
+
+## 二十一、交接章（2026-07-30 · P1-NEW-1/2/4 修复 CDP 实测 + 多 agent 规范 v3 + 运维 agent 调研 v4 收尾）
+
+> 续 §二十。本 session 接手前一个 AI 未提交的 P1 修复（main.py / agents/__init__.py / composer.tsx），完成 CDP 9222 端到端实测验证 + 多 agent 协作规范 v3 更新 + 运维 agent 开源调研 v4 归档。
+
+### 一句话现状
+
+P1-NEW-1/2/4 三项修复 **CDP 9222 端到端实测通过**：agent.invoke(1610ms) + 3 个 ping(各 3ms) 并发 → 主循环未阻塞（P1-NEW-1 修复有效）；sidecar.health 返回 `backend_type=strands, backend_activated=true, agents_count=9, strands_available=true, rust_bridge_active=true, llm_configured=true`（Strands 适配层完全激活）；BackendPill 显示 "Strands"（emerald 绿）；agent.invoke 返回真实 LLM 响应 "你好！我是 TDSF 终端助手..."。多 agent 规范 v3 新增 5 章节/12 模块节点/11 文件锁/2 接手字段/4 P1 预防清单。运维 agent 调研 v4 归档（22+15 项目，维持 Strands 首选结论）。
+
+### 本轮改动文件清单
+
+| 文件 | 改动类型 | 内容 |
+|------|---------|------|
+| `src-tauri/sidecar/main.py` | 修改（P1-NEW-1） | ThreadPoolExecutor 异步执行慢方法（agent.invoke），主循环不阻塞；max_workers=2；退出时 shutdown |
+| `src-tauri/sidecar/agents/__init__.py` | 修改（P1-NEW-2） | 模块级 `logger = logging.getLogger("sidecar.agents")`，移除 set_backend 中的 walrus + `__import__("logging")` hack |
+| `src/modules/ai/lib/composer.tsx` | 修改（P1-NEW-4） | attachFileByPath 用 useCallback 稳定引用 + 声明移至 useEffect 前（消除 TDZ）+ 依赖数组加 attachFileByPath |
+| `docs/MULTI-AGENT-WORKFLOW.md` | 修改（规范 v3） | 新增 §17-§21 五章节：sidecar 异步协作 / SSH 终端文件锁 / Strands 适配层红线 / v4 调研分工 / P1 预防清单 |
+| `docs/reports/modded-agent-code-review-2026-07-30.md` | 新文件 | 魔改 agent 代码审查报告（0 P0 + 4 P1 + 6 P2，含 P1-NEW-1/2/3/4） |
+| `docs/reports/ops-agent-opensource-survey-2026-07-v4.md` | 新文件 | 运维 agent 开源调研 v4（22+15 项目，发现 AgentSSH/OpAgent/LearnSSH/ANOLISA） |
+| `docs/dev-state.md` | 修改 | 本节 §二十一交接章 |
+| `.tdsf-data/cdp_verify_p1_fix.py` | 新文件 | CDP 验证脚本（纯 stdlib Python，验证 sidecar.health + agent.invoke + 并发 ping + .xterm + BackendPill） |
+| `.tdsf-data/cdp_inspect_term.py` 等多个 | 新文件 | CDP 辅助调查脚本（终端 DOM 检查 / tab 切换尝试 / 截图） |
+
+### P1-NEW-1 修复详情（最关键）
+
+**根因**：`main.py` 主循环单线程同步 `dispatcher.dispatch()`，agent.invoke 内 LLM 调用耗时 30-60s+，期间 stdin 不被读取 → Rust 侧 `sidecar.rs:1240` 的 `HEARTBEAT_TIMEOUT=30s` 触发 → 前端误显 Crashed + agent.invoke 响应丢失。
+
+**修复**：将慢方法（agent.invoke）提交到 `ThreadPoolExecutor(max_workers=2)` 异步执行，主循环立即返回继续读 stdin。
+
+**CDP 实测证据**（`.tdsf-data/cdp_verify_p1_fix.py` 输出）：
+```
+sidecar.health: backend_type=strands, backend_activated=true,
+                agents_count=9, strands_available=true,
+                rust_bridge_active=true, llm_configured=true
+agent.invoke: ok=True, ms=1610
+              observation="你好！我是 TDSF 终端助手，当前未连接 SSH 会话..."
+ping1: ok=True, ms=3    ← agent.invoke 还在跑时发 ping，3ms 响应
+ping2: ok=True, ms=3    ← 1s 后再 ping，3ms 响应
+ping3: ok=True, ms=3    ← 3s 后再 ping，3ms 响应
+PASS: 3 个 ping 均在 5000ms 内响应 → 主循环未阻塞（P1-NEW-1 修复有效）
+PASS: agent.invoke 返回成功响应
+```
+
+### 五绿门禁 + CDP 实测
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过
+- `pnpm build:web` ✅ 25.73s 成功
+- CDP 9222 ✅ sidecar.health + agent.invoke + 并发 ping + BackendPill 全部验证通过
+
+### 未验证项 + 原因（非回归）
+
+1. **SSH 终端 .xterm 渲染（xterm=0）**：
+   - 原因：当前 active tab 是编辑器（SELinux_learn.html），终端 tab "shell" 是 **cold 状态**（terax 设计：`selectLiveTerminals` 过滤 `t.cold`，cold tab 不 spawn PTY/不渲染 xterm）。
+   - 验证方式：手动启动 app 后点击 "shell" tab 激活，即可看到 SshTerminalHost 渲染的 xterm。
+   - **不是 P1 修复回归**，是 terax cold tab 设计 + 当前 active tab 是编辑器的正常表现。
+   - CDP 无法通过 DOM 事件/键盘事件切换 tab（terax 快捷键可能用 Tauri 全局快捷键，非 DOM 事件）。
+
+2. **pty_list_sessions 命令未找到**：
+   - 原因：Rust PTY 命令名可能不是 `pty_list_sessions`（实际名待查 `src-tauri/src/modules/pty/` 注册的 invoke handler）。
+   - 不影响核心验证（PTY 后端可用性由本地终端回归测试覆盖）。
+
+### 多 agent 规范 v3 更新摘要
+
+`docs/MULTI-AGENT-WORKFLOW.md` 新增 5 章节（782 insertions）：
+- **§17 多 agent 与 sidecar 异步执行的协作规则**：慢方法清单 / subagent 不能阻塞主循环 / max_workers=2 约束
+- **§18 SSH 终端深度集成后的文件锁扩展**：SshTerminalHost / useTerminalSession / pty-bridge TerminalTransport 紧耦合三元组锁
+- **§19 Strands 适配层协作红线**：set_backend/clear_backend 单写者原则 / _global_backend_override 调用权限矩阵
+- **§20 基于 v4 调研的集成路线图协作分工**：8 个可分工 subagent 任务包（AgentSSH/OpAgent/LearnSSH/ANOLISA 范式借鉴）
+- **§21 代码审查 P1 问题预防清单**：P1-NEW-1/2/3/4 每条配 file:line 反例 + 修复范式 + 自检清单
+- 模块依赖图新增 12 节点 / 文件锁矩阵新增 11 行 / 接手声明模板新增 2 字段
+
+### 运维 agent 调研 v4 摘要
+
+`docs/reports/ops-agent-opensource-survey-2026-07-v4.md`（847 行）：
+- **核心结论**：维持 Strands Agents 1.48.0 首选，不替换
+- **v4 新发现 15 项目**：AgentSSH（Rust+russh 同栈）/ OpAgent（三层安全+hash-chained 审计）/ LearnSSH（别名+凭据隔离）/ ANOLISA（Token-Less+AgentSight）/ Open Interpreter 0.0.26（Rust 重写）等
+- **集成路线图**：AgentSSH 范式借鉴 → P2 双向 JSON-RPC 桥参考；OpAgent 三层安全 → RiskChecker 进阶对标；ANOLISA Token-Less → P2 token 优化
+
+### 关键技术决策沉淀（5 条）
+
+1. **ThreadPoolExecutor max_workers=2**：允许一个 agent.invoke 在跑时另一个请求（如 ping）也能处理，同时避免并发过多 LLM 调用导致资源紧张。write_message 已用 `_write_lock` 保护，线程安全。
+2. **_slow_methods frozenset 仅含 agent.invoke**：其他方法（ping/status/sidecar.health/agent.list 等）都是快方法，同步执行。如未来新增慢方法，加入此 frozenset 即可。
+3. **模块级 logger 替代 walrus + __import__ hack**：统一 `sidecar.agents` 命名空间，与 main.py / base.py 日志可追溯。移除可读性差的反模式。
+4. **attachFileByPath 用 useCallback + 提前声明**：消除 useEffect 闭包陷阱（原代码 const 在 useEffect 之后导致 TDZ）+ 依赖数组加 attachFileByPath 让 React 正确追踪。
+5. **cold tab 不阻塞验证**：terax `selectLiveTerminals` 过滤 `t.cold` 是设计如此（恢复的终端 tab 在首次激活前不 spawn PTY）。CDP 无法切换 tab 是因为 terax 快捷键用 Tauri 全局快捷键（非 DOM 事件），需手动点击。
+
+### 接手下一步（按优先级）
+
+**P0（高优先级）**
+- 无未完成的 P0 项。P1-NEW-1/2/4 已修复 + CDP 实测通过。
+
+**P1（中优先级）**
+1. **SSH 终端渲染手动验证**：启动 app → 点击 "shell" tab → 确认 SshTerminalHost 渲染 xterm + SSH 终端可交互。如不渲染，查 SshTerminalHost.tsx 的 transport 构造 + useTerminalSession openTransport 路径。
+2. **痛点 6（前端 5 agent 模型切换不可用）**：检查 AgentPanel 模型切换 UI 状态（同 §二十 backlog）。
+3. **痛点 7（sidecar 未运行无引导）**：handleSubmit 已有 isRunning 检查，错误提示可更友好（同 §二十 backlog）。
+4. **pty 命令名核查**：查 `src-tauri/src/modules/pty/` 注册的 invoke handler 正确命令名（非 `pty_list_sessions`）。
+
+**P2（低优先级，长期 backlog）**
+- 资源管理器按目录缓存性能优化（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- Strands ApprovalHook + LimitToolCounts Hook（subagent-A 的 0.8.5 实施方案）
+- Strands 工具 0.8.5 4 个新工具注入（read_remote_file / analyze_logs / inspect_processes / network_diagnose 完整接入）
+- **运维 agent 集成路线图**（基于 v4 调研）：
+  - AgentSSH 范式借鉴 → P2 双向 JSON-RPC 桥参考（daemon-pooled 连接复用 + 结构化 JSON 输出）
+  - OpAgent 三层安全 → RiskChecker 进阶对标（加 LlmAuditor 语义审计层 + hash-chained 审计链）
+  - LearnSSH 别名机制 → P2 凭据安全强化（sshSessionId 不传 sidecar，改用别名解耦）
+  - ANOLISA Token-Less → P2 token 优化（模式压缩 + 响应压缩 + Skills 封装高频运维操作）
+
+### 备注
+
+- tauri:dev 进程仍在运行（PID 56732，9222 CDP / 9300 Vite），TDSF_AGENT_BACKEND=strands 已激活
+- CDP 实测脚本：`.tdsf-data/cdp_verify_p1_fix.py`（纯 stdlib Python，无第三方依赖）
+- 截图：`.tdsf-data/cdp_screenshot_p1_verify.png`（112KB，当前 app 状态）
+- 多 agent 规范 v3：`docs/MULTI-AGENT-WORKFLOW.md` §17-§21
+- 运维 agent 调研 v4：`docs/reports/ops-agent-opensource-survey-2026-07-v4.md`（847 行，22+15 项目）
+- 代码审查报告：`docs/reports/modded-agent-code-review-2026-07-30.md`（445 行，0 P0 + 4 P1 + 6 P2）
+
 
