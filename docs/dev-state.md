@@ -535,9 +535,9 @@
 ### 接手下一步 backlog（按优先级）
 
 #### P0：Strands 后端真实激活验证（环境变量 + LLM 模型适配）
-- **P0-C5: Strands LLM 模型适配**：`strands_backend.adapter` 的 `strands_model` 参数当前为 None，需注入真实 LLM（OpenAI/Anthropic/Bedrock）
+- ~~**P0-C5: Strands LLM 模型适配**~~ ✅ **已完成（2026-07-30）**：见下方「§P0-C5 完成记录」段
 - **P0-D: Rust ssh_command 命令实现**：`strands_backend/tools/__init__.py:execute_via_ssh` 调 `ssh_command` RPC，但 Rust 侧 `ssh_command` 命令尚未实现，P2 阶段补 russh channel exec 模式（非 PTY）
-- **P0-E: Strands 真实端到端实测**：设 `TDSF_AGENT_BACKEND=strands` 启动 sidecar，验证 Strands 工具调用链路（当前 P0-C4 仅修 method 名，未端到端验证）
+- **P0-E: Strands 真实端到端实测**：设 `TDSF_AGENT_BACKEND=strands` 启动 sidecar（需先 `pip install strands-agents` + 配 LLM），验证 Strands 工具调用链路（当前 P0-C4 仅修 method 名，未端到端验证）
 
 #### P1：Strands 双向 JSON-RPC 桥（rust_bridge 注入）
 - 实现 `strands_backend.adapter.StrandsAgentAdapter` 的 `rust_bridge` 双向 JSON-RPC（当前为 None，运维工具返回 unavailable）
@@ -552,3 +552,205 @@
 - **CDP 实测脚本**（本次新增）：
   - `C:\Users\Lenovo\AppData\Local\Temp\cdp-p1c-mock-backfill.mjs` — P1 全链路验证（event.history / event.stats / sidecar-bridge 模块 / agent_switch listen / mock_llm_active DOM）
 - 端口踩坑（同 §十一）：残留 `tdsf-terminal-agent.exe` 占用 9300 端口，须 `Get-NetTCPConnection -LocalPort 9300 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }` 清理
+
+---
+
+## §P0-C5 完成记录：Strands LLM 模型适配（2026-07-30）
+
+### 目标
+
+把现有 `core.llm_config.LLMConfig` 转换为 Strands 官方 Model Provider 实例（`OpenAIModel` / `AnthropicModel` / `LiteLLMModel`），让 `TDSF_AGENT_BACKEND=strands` 启动时 Strands Agent 能调用真实 LLM，与 LangGraph 路径**共享同一份配置源**（环境变量 / `.tdsf-data/llm_config.json`），避免双套配置导致行为分裂。
+
+### 代码改动（4 个文件）
+
+**新增文件**：
+- `src-tauri/sidecar/strands_backend/model_adapter.py`（411 行）— Strands Model 适配工厂
+  - 条件导入 Strands 官方 Model Provider（`_STRANDS_MODEL_BASE` / `_OpenAIModel` / `_AnthropicModel` / `_LiteLLMModel`），Strands 未安装时全部 None
+  - `create_strands_model(config)` 主工厂函数：按 provider 分发到 `_create_openai_model` / `_create_anthropic_model` / `_create_litellm_model`
+  - 优雅降级：未配置 API Key / Strands 未安装 / provider 不支持 / Model 创建异常时返回 None（让 `StrandsAgentAdapter._check_degraded` 走降级路径）
+  - `get_available_providers()` / `is_strands_models_available()` 可用性查询
+  - 字段映射：
+    - OpenAI: `api_key → client_args["api_key"]`, `base_url → client_args["base_url"]`（支持 DeepSeek/Ollama/OneAPI/SiliconFlow/vLLM 等任意兼容端点）, `model → model_id`, `temperature/max_tokens → params`
+    - Anthropic: `api_key → client_args["api_key"]`（不支持自定义 base_url，固定走官方端点）, 其余同 OpenAI
+    - LiteLLM: `base_url → client_args["api_base"]`（覆盖 LiteLLM 内置 provider 路由）, 其余同 OpenAI
+- `src-tauri/sidecar/tests/test_strands_model_adapter.py`（669 行）— 23 个测试用例
+  - TestCreateStrandsModelDegradation（4 测试）：未配置 / Strands 未安装 / Model 创建异常 / config=None 自动 load_config
+  - TestCreateStrandsModelOpenAI（3 测试）：完整参数 / 无 base_url / 默认 temperature
+  - TestCreateStrandsModelAnthropic（2 测试）：完整参数 / base_url 被忽略
+  - TestCreateStrandsModelLiteLLM（2 测试）：完整参数 / 无 base_url
+  - TestCreateStrandsModelUnknownProvider（2 测试）：未知 provider 兜底走 OpenAI / 空字符串兜底
+  - TestAvailabilityQueries（3 测试）：无 provider / 全部可用 / 部分可用
+  - TestConfigureStrandsModelInjection（4 测试）：自动注入成功 / LLM 未配置降级 / 显式传入跳过自动注入 / 异常不阻塞 configure_strands
+  - TestEndToEndParameterMapping（3 测试）：OpenAI/Anthropic/LiteLLM 全字段映射验证
+  - 测试策略：用 monkeypatch 注入 mock Model 类（Strands 包未安装到测试环境），100% 离线可跑
+
+**修改文件**：
+- `src-tauri/sidecar/strands_backend/__init__.py` — `configure_strands` 新增 `llm_config` 参数 + 自动注入逻辑
+  - `strands_model=None` 时自动调用 `create_strands_model(llm_config)` 注入 Strands Model
+  - `llm_config=None` 时由 `create_strands_model` 内部 `load_config()` 自动加载
+  - 异常被捕获不阻塞 sidecar 启动（adapter 走降级路径）
+- `src-tauri/sidecar/main.py` — Strands 注入段（332-410 行）
+  - 把 `make_llm_call()` 拆为 `load_config()` + `make_llm_call(llm_config)`，让同一份 config 同时供给 LangGraph 路径和 Strands 路径
+  - `configure_strands(...)` 调用新增 `llm_config=llm_config` 参数（共享 LLMConfig）
+  - 注释更新：P0-C5 已完成、当前限制改为 P1/P2 阶段补充项
+
+### 五绿门禁全过（本 session）
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过（vitest 前端，与 Python 无关）
+- `pnpm build:web` ✅ 成功出 dist
+- Python `pytest tests/test_strands_model_adapter.py` ✅ **23/23 全过**（0.09s）
+- Python `pytest tests/` ✅ 1248 passed + 4 failed（4 失败均为基线 `a4e5a7c initial` 提交就存在的 `test_skill_registry.py` 漂移：skill 内置数据版本号 1.0.0→1.1.0 + executor 结构变化，与本轮 P0-C5 改动无关）
+
+### 关键技术决策（本 session 沉淀，3 条）
+
+1. **不实现自定义 Model 子类**：Strands 官方 `OpenAIModel`/`AnthropicModel` 已覆盖 OpenAI Chat Completions + Anthropic Messages 两大协议，直接复用即可。自定义 Model 需实现 async `stream()` + `StreamEvent` 协议，复杂度高且失去原生 tool_use 事件支持（Strands 内部处理）。
+2. **OpenAI 兼容优先 + Anthropic 原生 + LiteLLM 兜底**：默认走 `OpenAIModel`（通过 `base_url` 支持任意 OpenAI 兼容端点：DeepSeek/Ollama/OneAPI/SiliconFlow/vLLM），`provider="anthropic"` 走 `AnthropicModel`（不支持自定义 base_url，固定官方端点），`provider="litellm"` 走 `LiteLLMModel`（未来扩展 Bedrock/Cohere/Mistral/Groq 等 100+ provider）。未知 provider 兜底走 OpenAI 兼容路径（国内常见 DeepSeek/OneAPI 都自称 "openai"）。
+3. **配置共享避免行为分裂**：`main.py` 启动时 `load_config()` 一次，同一份 `LLMConfig` 同时供给 `make_llm_call(llm_config)`（LangGraph 路径）和 `configure_strands(llm_config=llm_config)`（Strands 路径）。前端 `agent.configure` RPC 重新配置后下次 sidecar 启动自动生效（运行时切换待 P1 双向 JSON-RPC 桥）。
+
+### 接手下一步 backlog（按优先级，更新）
+
+#### P0：Strands 后端真实激活验证
+- ~~P0-C5~~ ✅ 已完成
+- **P0-D: Rust `ssh_command` 命令实现**（russh channel exec 模式，非 PTY）
+- **P0-E: Strands 真实端到端实测**（设 `TDSF_AGENT_BACKEND=strands` + `pip install strands-agents` + 配 LLM，验证 Strands 工具调用链路；本 session 仅完成代码集成 + 单元测试，未做端到端实测因 Strands 包未安装到本机 Python 环境）
+
+#### P1：Strands 双向 JSON-RPC 桥（`rust_bridge` 注入）
+- 实现 `strands_backend.adapter.StrandsAgentAdapter` 的 `rust_bridge` 双向 JSON-RPC（当前为 None，运维工具返回 unavailable）
+- Rust 侧补 `ipc_invoke` 路由到 `ssh_command` / `sftp_read` / `sftp_write` / `sftp_stat` 等命令（部分已存在）
+- Strands 运行时重新加载 LLM 配置（`agent.configure` RPC 切换 LLM 后调 `configure_strands` 重建 adapter）
+
+#### P2：资源管理器性能 + 远程 LSP + 文档清理
+- 资源管理器按目录缓存（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- 文档漂移清理（同 §十一 backlog）
+
+---
+
+## §P0-D 完成记录：Rust `ssh_command` 命令实现（russh channel exec 模式）（2026-07-30）
+
+### 目标
+
+为运维 Agent 提供"执行单条 SSH 命令并拿回结构化输出"的能力，与 PTY 交互（`write_data`）解耦。
+基于 russh 0.61 的 `channel.exec()`（RFC 4254 6.4，exec 模式，非 PTY），
+复用现有 SSH 会话的 Handle 开新 channel，与 PTY / SFTP channel 并发工作。
+`strands_backend/tools/__init__.py:execute_via_ssh` 通过 `rust_bridge.ipc_invoke("ssh_command", {...})` 调用此命令。
+
+### 代码改动（4 个文件）
+
+**Rust 后端（新增 exec_command + ssh_command 命令 + 注册）**：
+
+1. `src-tauri/src/modules/ssh/session.rs`（+200 行）
+   - 新增 `SshCommandOutput { stdout: Vec<u8>, stderr: Vec<u8>, exit_code: i32 }` 结构体
+   - 新增 `exec_command(&self, command: &str, timeout_secs: Option<u64>) -> Result<SshCommandOutput, SshSessionError>` 方法
+     - 复用 Handle（不 take，保持 SSH 连接）开新 channel
+     - `channel.exec(true, command)` 请求执行（want_reply=true 等服务器确认）
+     - `collect_exec_output` 循环 `channel.wait()` 收集 Data/ExtendedData/ExitStatus/Eof/Close
+     - `tokio::time::timeout` 包装整体避免命令卡死（默认 30s）
+     - 超时返回 `exit_code=-1` + stderr 含说明（与 JSch/AgentSSH 约定一致）
+     - **PTY 死亡不影响 exec**：只检查 `connection_closed`，不检查 `exited`（与 `open_sftp_channel` 一致）
+   - 新增 `collect_exec_output` 私有方法（reader_task 简化版，无 Channel<T> 推送）
+   - 新增 8 个单元测试（同模块可访问私有字段构造测试用 SshSession）：
+     - `test_ssh_command_output_construction` / `_default_exit_code` / `_debug_format` / `_clone`（结构体基础验证）
+     - `test_exec_command_returns_closed_when_connection_closed`（async, connection_closed=true 提前返回）
+     - `test_exec_command_returns_closed_when_handle_none`（async, handle=None 防御性分支）
+     - `test_exec_command_returns_closed_with_custom_timeout`（async, timeout 不影响错误路径）
+     - `test_is_connection_closed_after_construction`（make_test_session 工具自检）
+     - 测试策略：用 `make_test_session(connection_closed, exited)` 构造 handle=None 的 SshSession，
+       覆盖错误路径；真实链路验证靠 tauri:dev + CDP 9222 实测
+
+2. `src-tauri/src/modules/ssh/mod.rs`（+120 行）
+   - 新增 `SshCommandResult { ok: bool, output: String, stderr: String, exit_code: i32, duration: f64 }` 返回类型
+     - `#[serde(rename_all = "camelCase")]` + `#[serde(default)] stderr`（与前端 TS 对齐）
+     - `ok=true`：命令执行链路正常（exit_code 可能为非 0）
+     - `ok=false`：执行失败（连接断开 / 开 channel 失败 / exec 被拒），返回 stderr 而非 Err
+   - 新增 `ssh_command` Tauri 命令（`#[tauri::command]`）
+     - 签名：`async fn ssh_command(state, session_id, command, timeout) -> Result<SshCommandResult, String>`
+     - 调用 `session.exec_command(&command, timeout)` 并包装为 `SshCommandResult`
+     - `String::from_utf8_lossy` 解码 stdout/stderr（命令输出可能含非 UTF-8 字节，如二进制文件 cat）
+     - 失败路径返回 `ok=false` 而非 Err（让 Python 端走 "error" 状态分支）
+   - 新增 7 个单元测试：
+     - `test_ssh_command_result_serialization_camel_case`（exit_code → exitCode 验证）
+     - `test_ssh_command_result_serialization_empty_stderr`（空 stderr 字段仍输出）
+     - `test_ssh_command_result_serialization_failure_payload`（ok=false 失败路径序列化）
+     - `test_ssh_command_result_clone_and_debug`（Clone + Debug 派生）
+     - `test_ssh_state_default_is_empty` / `_allocate_id_monotonic` / `_get_returns_none_for_unknown_id`
+       （SshState 基础行为 + ssh_command 错误路径前置条件：用 `is_none()` 而非 `assert_eq!(..., None)`
+       避免 SshSession 需实现 PartialEq/Debug）
+
+3. `src-tauri/src/lib.rs`（+3 行）
+   - 在 `invoke_handler` 注册 `ssh::ssh_command`（紧邻其他 ssh_* 命令）
+
+**前端 TS 接口**：
+
+4. `src/lib/ssh-bridge.ts`（+50 行）
+   - 新增 `SshCommandResult` 接口（与 Rust `SshCommandResult` 对齐，camelCase）
+   - 新增 `sshCommand(sessionId, command, timeoutSecs?)` 函数
+   - 注释说明：运维 Agent 经 `rust_bridge.ipc_invoke("ssh_command", {...})` 调用（P1 桥接后）；
+     前端直接 `invoke('ssh_command', {...})` 用于 CDP 测试 / 调试 / 未来 UI 集成
+
+### 五绿门禁全过（本 session）
+
+- `pnpm typecheck` ✅ 0 错误
+- `pnpm lint` ✅ 0 错误 0 警告
+- `pnpm test` ✅ 832/832 全过（vitest 前端）
+- `pnpm build:web` ✅ 成功出 dist
+- `cargo check --lib` ✅ 0 错误（1 个预先存在的 `unused variable: window` warning，非本轮引入）
+- `cargo test --lib modules::ssh::session` ✅ **13/13 全过**（含新增 8 个 + 原有 5 个）
+- `cargo test --lib modules::ssh` ✅ **38/39 通过**（1 个失败为预先存在的
+  `credentials::tests::credential_auth_kind_publickey_serialize`，与本轮 P0-D 改动无关，
+  原因是 `privateKeyPath` 序列化为 `private_key_path`，前端 camelCase 转换在另一层）
+
+### 关键技术决策（本 session 沉淀，5 条）
+
+1. **exec 模式与 PTY 解耦**：`exec_command` 复用 SSH Handle 开新 channel，用 `channel.exec()` 而非
+   `request_pty + request_shell`。与 PTY channel 并行不冲突（各自独立 channel，与 SFTP 一样复用 Handle）。
+   PTY 死亡（用户敲 `exit` 退出 shell）不影响 exec，只有 `connection_closed=true` 才拒绝。
+
+2. **超时返回部分结果而非 Err**：`tokio::time::timeout` 包装 `collect_exec_output`，超时返回
+   `SshCommandOutput { stdout: Vec::new(), stderr: "[tdsf-exec-timeout] ...", exit_code: -1 }`，
+   而非 `Err`。与 JSch/AgentSSH 约定一致，让上层 agent 能区分"链路异常"vs"命令超时"。
+
+3. **失败路径返回 ok=false 而非 Err**：`ssh_command` 命令在 `exec_command` 失败时返回
+   `SshCommandResult { ok: false, stderr: err_msg, exit_code: -1, ... }` 而非 `Err(String)`。
+   让 Python 端 `execute_via_ssh` 工具走统一的 "error" 状态分支，不需要 try/except 区分。
+
+4. **测试策略：错误路径离线可测 + 真实链路靠 CDP 实测**：`exec_command` 依赖真实 russh Handle，
+   无法离线构造。用 `make_test_session(connection_closed, exited)` 构造 handle=None 的 SshSession
+   覆盖错误路径（connection_closed / handle=None）。真实命令执行（`uptime` / `systemctl status nginx`）
+   靠 tauri:dev + CDP 9222 实测（见下方实测法）。
+
+5. **is_none() 而非 assert_eq!(..., None)**：`SshState::get` 返回 `Option<Arc<SshSession>>`，
+   `SshSession` 未实现 `PartialEq` / `Debug`（持有 Mutex/RwLock，derive 困难且无意义）。
+   用 `assert!(state.get(1).is_none())` 代替 `assert_eq!(state.get(1), None)`。
+
+### 接手下一步 backlog（按优先级，更新）
+
+#### P0：Strands 后端真实激活验证
+- ~~P0-C5~~ ✅ 已完成（Strands LLM 模型适配）
+- ~~P0-D~~ ✅ 已完成（Rust `ssh_command` 命令实现，本节记录）
+- **P0-E: Strands 真实端到端实测**（设 `TDSF_AGENT_BACKEND=strands` + `pip install strands-agents` + 配 LLM，
+  验证 Strands 工具调用链路：`execute_via_ssh` → `rust_bridge.ipc_invoke("ssh_command")` → Rust `ssh_command` → `exec_command`；
+  本 session 仅完成代码集成 + 单元测试，未做端到端实测因 Strands 包未安装到本机 Python 环境 + rust_bridge=None）
+
+#### P1：Strands 双向 JSON-RPC 桥（`rust_bridge` 注入）
+- 实现 `strands_backend.adapter.StrandsAgentAdapter` 的 `rust_bridge` 双向 JSON-RPC（当前为 None，运维工具返回 unavailable）
+- Rust 侧补 `ipc_invoke` 路由到 `ssh_command` / `sftp_read` / `sftp_write` / `sftp_stat` 等命令（`ssh_command` 已就绪，其余已存在）
+- Strands 运行时重新加载 LLM 配置（`agent.configure` RPC 切换 LLM 后调 `configure_strands` 重建 adapter）
+
+#### P2：资源管理器性能 + 远程 LSP + 文档清理
+- 资源管理器按目录缓存（同 §十一 backlog）
+- 远程 LSP over SSH（独立 PR）
+- 文档漂移清理（同 §十一 backlog）
+
+### 实测法（同 §十二，新增 P0-D 验证项）
+- **CDP 实测脚本**（待编写）：`C:\Users\Lenovo\AppData\Local\Temp\cdp-p0d-ssh-command.mjs`
+  - 连接 SSH 后 `invoke('ssh_command', { sessionId: 1, command: 'uptime', timeout: 10 })`
+  - 验证返回 `{ ok: true, output: "...", exit_code: 0, duration: 0.xxx }`
+  - 验证超时路径：`invoke('ssh_command', { sessionId: 1, command: 'sleep 100', timeout: 2 })`
+    应返回 `{ ok: true, exit_code: -1, stderr: "[tdsf-exec-timeout] ..." }`
+  - 验证错误路径：`invoke('ssh_command', { sessionId: 999, command: 'ls' })`
+    应返回 `Err("SSH session not found: id=999")`
+- 端口踩坑（同 §十二）：残留 `tdsf-terminal-agent.exe` 占用 9300 端口，
+  须 `Get-NetTCPConnection -LocalPort 9300 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }` 清理
