@@ -537,6 +537,11 @@ class BaseAgent:
     def _publish_mock_warning(self, reason: str, detail: str) -> None:
         """TDSF 魔改 (P2-2): 推送 mock LLM 告警到 event_bus
 
+        v2026-07-30 P1-a 修复: 之前直接调用 publish(event_type_str, dict, source=...)
+        传 3 参数，但 publish 签名只接受单个 Event 对象，TypeError 被静默吞掉，
+        导致事件连 EventBus 都进不去（三重断裂之一）。改用 emit_mock_warning
+        便捷方法，与 emit_mood_change/emit_agent_switch 同模式。
+
         Args:
             reason: 告警原因 (no_llm_config / llm_call_failed)
             detail: 详细描述
@@ -547,18 +552,14 @@ class BaseAgent:
         )
         if self.event_bus is not None:
             try:
-                self.event_bus.publish(
-                    "mock_llm_active",
-                    {
-                        "agent": self.name,
-                        "reason": reason,
-                        "detail": detail[:200],
-                        "timestamp": time.time(),
-                    },
+                self.event_bus.emit_mock_warning(
+                    agent=self.name,
+                    reason=reason,
+                    detail=detail,
                     source=f"{self.name}_agent",
                 )
             except Exception as e:
-                logger.debug(f"_publish_mock_warning: event_bus publish failed: {e}")
+                logger.exception(f"_publish_mock_warning: emit_mock_warning failed: {e}")
 
     def _mock_llm(self, messages: list[dict[str, Any]]) -> str:
         """Mock LLM（无真实 LLM 时的回退实现）

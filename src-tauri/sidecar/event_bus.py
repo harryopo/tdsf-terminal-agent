@@ -57,6 +57,11 @@ class EventType(str, Enum):
     # v2026-07-29: 主 Agent 路由子 Agent 事件
     # main_agent 在 PAOR 循环中路由到子 Agent 时推送，前端 AgentStatusPill 实时显示
     AGENT_SWITCH = "agent_switch"
+    # v2026-07-30 P1-a 修复: Mock LLM 告警事件
+    # agents/base.py._publish_mock_warning 推送，前端 MockLLMWarning.tsx 实时显示红色 Pill
+    # 之前因 EventType 缺失 + base.py 调用 publish 签名错误（传 3 参数而非 Event 对象）
+    # 导致事件连 EventBus 都进不去，前端永远不显示告警（三重断裂）
+    MOCK_LLM_ACTIVE = "mock_llm_active"
 
 
 # 所有合法的事件类型字符串
@@ -500,6 +505,45 @@ class EventBus:
         return self.publish(
             Event(
                 event_type=EventType.AGENT_SWITCH.value,
+                payload=payload,
+                session_id=session_id,
+                source=source,
+            )
+        )
+
+    def emit_mock_warning(
+        self,
+        agent: str,
+        reason: str,
+        detail: str,
+        session_id: str | None = None,
+        source: str | None = None,
+    ) -> int:
+        """发布 mock_llm_active 事件（v2026-07-30 P1-a 修复新增）
+
+        当 BaseAgent 未注入 llm_call 或 llm_call 抛异常降级到 mock 时，
+        通过此方法推送告警事件，前端 MockLLMWarning.tsx 实时显示红色 Pill。
+
+        之前因 base.py 直接调用 publish("mock_llm_active", dict, source=...) 传 3 参数，
+        而 publish 签名只接受单个 Event 对象，TypeError 被静默吞掉，
+        导致 mock LLM 告警事件连 EventBus 都进不去（三重断裂的第一重）。
+
+        Args:
+            agent: Agent 名称（如 "main" / "coding"）
+            reason: 告警原因（"no_llm_config" / "llm_call_failed"）
+            detail: 详细描述（截断到 200 字符）
+            session_id: 会话 ID
+            source: 来源（通常是 "{agent}_agent"）
+        """
+        payload = {
+            "agent": agent,
+            "reason": reason,
+            "detail": detail[:200],
+            "timestamp": time.time(),
+        }
+        return self.publish(
+            Event(
+                event_type=EventType.MOCK_LLM_ACTIVE.value,
                 payload=payload,
                 session_id=session_id,
                 source=source,
