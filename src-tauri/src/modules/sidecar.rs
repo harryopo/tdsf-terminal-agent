@@ -659,7 +659,14 @@ impl SidecarManager {
             .stderr(Stdio::piped())
             .env("TDSF_SIDECAR_LOG", "INFO")
             .env("PYTHONUNBUFFERED", "1") // 强制 unbuffered
-            .env("PYTHONDONTWRITEBYTECODE", "1"); // 不生成 .pyc
+            .env("PYTHONDONTWRITEBYTECODE", "1") // 不生成 .pyc
+            // TDSF 魔改 2026-07-30 P0-E 收尾：默认启用 Strands 适配层
+            // 用户可通过外部 TDSF_AGENT_BACKEND 环境变量覆盖（如 =langgraph 回退）
+            // Strands 启动失败时 Python 侧会 fallback 到 langgraph + 推送 backend_status 事件
+            .env(
+                "TDSF_AGENT_BACKEND",
+                std::env::var("TDSF_AGENT_BACKEND").unwrap_or_else(|_| "strands".to_string()),
+            );
 
         // Windows: 隐藏控制台窗口
         // tokio::process::Command 在 Windows 上有固有方法 creation_flags（无需 import trait）

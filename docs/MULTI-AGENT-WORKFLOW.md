@@ -180,6 +180,20 @@ subagent-<ID>:
 - [ ] plan 文件：<路径或「无」>
 - [ ] 上游参考：<文件或「未对照」>
 
+## 已读最新调研报告（v2.1 新增，必填）
+- [x] `docs/reports/ops-agent-opensource-survey-2026-07-v4.md`（v4，37 项目，Strands 首选确认 + AgentSSH/OpAgent/LearnSSH/ANOLISA 发现）
+- [x] `docs/reports/modded-agent-code-review-2026-07-30.md`（P1-NEW-1/2/3/4 + P2-NEW-1~6，含修复状态）
+- [ ] 其他相关报告：<路径或「无」>
+
+## 当前 sidecar 异步执行状态（v2.1 新增，改 sidecar 必填）
+- `_slow_methods` / `_main_executor` 是否已注入：<是/否/未确认>
+  - 证据：`src-tauri/sidecar/main.py:129` `_slow_methods: frozenset[str] = frozenset({"agent.invoke"})` + `main.py:130` `_main_executor: ThreadPoolExecutor | None = None`
+  - 初始化：`main.py:782-787` `ThreadPoolExecutor(max_workers=2, thread_name_prefix="sidecar-async")`
+  - 派发：`main.py:842-851` 慢方法走 `_main_executor.submit(_dispatch_in_executor, ...)`
+  - 关闭：`main.py:877-882` `_main_executor.shutdown(wait=True, cancel_futures=True)`
+- 若改 `main.py` 主循环 / `_slow_methods` / `_main_executor`，必须先读 §17 多 agent 与 sidecar 异步执行协作规则
+- 若改 `agents/__init__.py` 的 `set_backend` / `clear_backend` / `_global_backend_override`，必须先读 §19 Strands 适配层协作红线
+
 ## 我将修改的文件清单（文件锁，其他人不得触碰）
 - <绝对路径 1> —— <改动说明>
 - <绝对路径 2> —— <改动说明>
@@ -252,6 +266,17 @@ subagent-<ID>:
 | `src-tauri/sidecar/rust_bridge.py` | 模块互斥 | sidecar → Rust 反向 JSON-RPC 桥（Python 阻塞等 Rust 响应 30s，ID 1,000,000+ 与 Rust 1+ 隔离） | 同改 = SSH/SFTP/PTY 调用链断（所有 strands_backend/tools/ 调 Rust 必经此桥） |
 | `src-tauri/sidecar/event_bus.py` | 模块互斥 | 事件总线（EventType 枚举 + pub-sub + emit_mock_warning/emit_agent_switch/emit_needs_you 便捷方法） | 同改 = 事件发布/订阅断裂（前端 MockLLMWarning / AgentStatusPill / needs-you 全失效） |
 | `src-tauri/sidecar/agents/` 目录内 | 模块互斥 | 9 个内置 agent 定义（main / coding / debug / deploy / explore / history / refactor / teach / test，继承 BaseAgent PAOR） | 同改 = agent 切换行为不一致 |
+| `src/modules/ssh-explorer/SshTerminalHost.tsx` | 模块互斥 + 高风险 | SSH 终端宿主组件（`SshTerminalHost.tsx:47` 接收 `{sessionId, allocId, className}`，`SshTerminalHost.tsx:72-77` 构造 `TerminalTransport` 注入 `useTerminalSession`；深度集成 rendererPool 后紧耦合） | 同改 = SSH 终端无法挂载 / transport 工厂断裂（§18） |
+| `src/modules/terminal/lib/useTerminalSession.ts` | 模块互斥 + 高风险 | 终端会话 hook（`useTerminalSession.ts:33` import `TerminalTransport`，`:76` `pty: TerminalTransport \| null`，`:81`/`:1014` `openTransport` 工厂签名；本地 PTY 与远程 SSH 共用此 hook） | 同改 = 本地 + SSH 终端同时断裂（§18） |
+| `src/modules/terminal/lib/pty-bridge.ts`（含 `TerminalTransport` 接口） | 模块互斥 + 高风险 | `TerminalTransport` 接口定义源（被 `useTerminalSession.ts:33` / `SshTerminalHost.tsx:31` / `TerminalPane.tsx` 共同 import；`useTerminalSession.ts:524` 注释 resize 返回 `Promise<void>\|void`） | 同改 = 本地 PTY + SSH 终端 transport 契约全断（§18） |
+| `src/modules/ai/components/BackendPill.tsx` | 模块互斥 | 后端状态指示器（订阅 `sidecar:backend_status` 事件，显示 Strands / Mock / PydanticAI 等后端类型；P0-E 新增） | 同改 = 后端状态不显示 / 事件订阅断裂 |
+| `src-tauri/sidecar/main.py`（主循环 + `_main_executor`） | 模块互斥 + 高风险 | sidecar 入口（`main.py:129` `_slow_methods` / `:130` `_main_executor` / `:782-787` 初始化 `ThreadPoolExecutor(max_workers=2)` / `:842-851` 慢方法走线程池 / `:877-882` shutdown；P1-NEW-1 修复） | 同改 = 主循环阻塞回退 / health_check 误判 Crashed（§17） |
+| `src-tauri/sidecar/agents/__init__.py`（`set_backend` / `clear_backend` / `_global_backend_override`） | 模块互斥 + 高风险 | 后端注入接口（`agents/__init__.py:168-210` set_backend/clear_backend；`_global_backend_override` 单写者；P1-NEW-2 修复 walrus hack） | 同改 = Strands 后端注入断裂 / 多 agent 后端不一致（§19） |
+| `src-tauri/sidecar/agents/base.py` | 模块互斥 + 高风险 | BaseAgent PAOR 模板方法（`base.py:191` invoke / `:584` emit_mock_warning / `:163` `_mock_warning_dedup_ts` 60s dedup；400+ 行核心逻辑无单元测试，T3 缺口） | 同改 = 全部 9 个 Agent 行为不一致 |
+| `src-tauri/sidecar/strands_backend/adapter.py` | 模块互斥 + 高风险 | StrandsAgentAdapter（封装 Strands Agent 创建/工具注册/invoke；`Strands 1.50.2` 已移除 `max_iterations`，改用 `hooks=[LimitToolCounts]`；`_get_or_create_agent` 用 model_adapter 注入 model） | 同改 = Strands 后端 invoke 链断（§19） |
+| `src-tauri/sidecar/strands_backend/model_adapter.py` | 模块互斥 | `create_strands_model(config)`（LLMConfig → OpenAIModel/AnthropicModel/LiteLLMModel；优雅降级返回 None；23 测试覆盖） | 同改 = LLM 调用链断 / 多 provider 切换失效 |
+| `src-tauri/src/modules/ipc.rs` | 模块互斥 | Rust JSON-RPC 协议层（`ipc_invoke` Tauri 命令 + 反向请求路由；`ipc.rs:269-272` JSDoc 文档漂移残留 P2-NEW-4） | 同改 = 前端 ↔ sidecar 通信全断 / 反向请求路由失效 |
+| `src-tauri/src/modules/sidecar.rs`（`HEARTBEAT_TIMEOUT` / `send_request` / `health_check`） | 模块互斥 + 高风险 | Rust 进程管理（`sidecar.rs:55` `REQUEST_TIMEOUT=30s` / `:1240-1258` `HEARTBEAT_TIMEOUT=30s` 检查 / `:551-602` send_request 30s 超时 / `:835-917` reader_task 反向响应路由 / `:979,1001,...` 共 8 处 `as u32` 截断 P2-NEW-3） | 同改 = health_check 误判 / 进程重启循环失效 / 反向请求路由错乱 |
 
 **互斥级别含义**：
 - **严格互斥**：整个 session 独占，场景 A/B 的 subagent **一律禁止碰**，场景 C 只有主 agent 可改
@@ -327,6 +352,20 @@ App.tsx（顶层壳）──────────────┼─→ 几乎
                               │             ←─ tabs（visibility 保活）
                               │             ←─ Rust pty（pty-bridge）
                               │             ←─ ai（agent 工具调用终端，魔改加）
+                              │             │
+                              │             ├─→ pty-bridge.ts（TerminalTransport 接口定义源，被 4 处 import）
+                              │             │       ←─ useTerminalSession.ts:33 import { TerminalTransport }
+                              │             │       ←─ SshTerminalHost.tsx:31 import type { TerminalTransport }
+                              │             │       ←─ TerminalPane.tsx import
+                              │             │       ←─ useTerminalSession.ts:524 注释 resize 返回 Promise<void>|void
+                              │             │
+                              │             ├─→ useTerminalSession.ts（终端会话 hook，本地 PTY 与远程 SSH 共用）
+                              │             │       ←─ pty-bridge.ts（TerminalTransport 类型 + openPty 工厂）
+                              │             │       ←─ rendererPool.ts（xterm 实例复用池，含 ResizeObserver 防抖 fit）
+                              │             │       ←─ tabs（openTransport 注入，:81/:1014 工厂签名）
+                              │             │       ←─ SshTerminalHost.tsx（远程分支：:72-77 构造 TerminalTransport 注入）
+                              │             │
+                              │             └─→ rendererPool.ts（xterm 实例复用池，深度集成后 SSH 终端并入）
                               │
                               ├─→ explorer ←─ Rust fs（useFileTree）
                               │             ←─ git（useGitStatus）
@@ -337,6 +376,13 @@ App.tsx（顶层壳）──────────────┼─→ 几乎
                               │                  ←─ explorer（远程分支复用 FileExplorer）
                               │                  ←─ terminal（待并入 rendererPool，见 dev-state §七）
                               │                  ←─ theme（终端 token）
+                              │                  │
+                              │                  └─→ SshTerminalHost.tsx（SSH 终端宿主，:47 接收 {sessionId, allocId, className}）
+                              │                          ←─ terminal/lib/pty-bridge.ts（TerminalTransport 接口，:31 import）
+                              │                          ←─ terminal/lib/useTerminalSession.ts（:32 import disposeSession）
+                              │                          ←─ sshStore.ts（:33 useSshStore，sessionId 源）
+                              │                          ←─ TerminalPane.tsx（:30 复用本地终端渲染组件）
+                              │                          ←─ WorkspaceSurface.tsx（挂载点，tab 切换时 invisible 保活）
                               │
                               ├─→ ai ←─ Rust net（HTTP 代理 + SSRF 防御）
                               │       ←─ Rust secrets（API key）
@@ -345,6 +391,21 @@ App.tsx（顶层壳）──────────────┼─→ 几乎
                               │       ←─ composer.tsx（AiComposerProvider 最外层）
                               │       ←─ terminal（agent 工具调用）
                               │       ←─ strands-integration（虚拟节点：sidecar-adapter.ts + chatRuntime.ts.getSshRustSessionId + transport.ts LiveSnapshot.sshSessionId 注入）
+                              │       │
+                              │       ├─→ BackendPill.tsx（后端状态指示器，订阅 sidecar:backend_status 事件）
+                              │       │       ←─ event_bus.py（BACKEND_STATUS EventType，P0-E 新增）
+                              │       │       ←─ sidecar-bridge.ts（onBackendStatus 订阅函数）
+                              │       │       ←─ main.py（_backend_status 字段 + _sidecar_health 返回）
+                              │       │
+                              │       ├─→ composer.tsx（AiComposerProvider 最外层 + attachFileByPath 闭包）
+                              │       │       ←─ useChatStore（zustand）
+                              │       │       ←─ sidecar-adapter.ts（runSidecarStream）
+                              │       │       ←─ attachFileByPath（:173-207，P1-NEW-4 修复：需 useCallback 稳定引用）
+                              │       │
+                              │       └─→ sidecar-adapter.ts + chatRuntime.ts（strands-integration 桥接层）
+                              │               ←─ sidecar-bridge.ts（ipc_invoke 桥）
+                              │               ←─ Python main.py（agent.invoke JSON-RPC）
+                              │               ←─ Python strands_backend/adapter.py（StrandsAgentAdapter）
                               │
                               ├─→ agents ←─ ai（agent 通知桥）
                               │
@@ -401,6 +462,18 @@ lib.rs（命令注册中心，80+ 命令）───────── 所有模
   │              ←─ Python strands_backend/tools/ssh_command.py（高危命令经 RiskChecker + emit_needs_you 审批）
   │
   ├─→ sidecar（魔改独有，Python 进程管理，P0 指数退避已修 commit 2091e2f：MAX_RETRY 3→5 / 1·2·4·8·16·32·60s + cancel_tx + child.kill+wait 失败路径）←─ 前端 ai（可选）
+  │       ├─→ sidecar.rs（进程管理 + 重启循环 + health_check + 反向请求路由）
+  │       │       ├─→ HEARTBEAT_TIMEOUT=30s（:1240-1258，30s 无 ping 响应判 Crashed，P1-NEW-1 根因）
+  │       │       ├─→ REQUEST_TIMEOUT=30s（:55，send_request 30s 超时，与 rust_bridge.py:68 DEFAULT_TIMEOUT=30 叠加，K9 未修）
+  │       │       ├─→ reader_task（:835-917，反向响应路由：id<1M → Rust pending；id≥1M → Python pending）
+  │       │       ├─→ handle_reverse_request（:958-1148，8 个 method 分支：ssh_command/sftp_read/write/stat/list/mkdir/remove/rename，K8 无单元测试）
+  │       │       ├─→ exit_watcher_task（:1366-1372，运行冷却判断，P0 重启循环已修 K1）
+  │       │       └─→ as u32 截断（:979,1001,1021,... 共 8 处，P2-NEW-3 未修）
+  │       │
+  │       └─→ ipc.rs（JSON-RPC 协议层，ipc_invoke Tauri 命令）
+  │               ├─→ ipc_invoke（:278-286，前端 → Python 请求转发）
+  │               ├─→ IPCError 转换（:347-414，8 测试）
+  │               └─→ JSDoc 文档漂移（:269-272 仍写 {input:'...'}，实际契约 {name,state:{input,messages,live}}，P2-NEW-4 未修）
   │
   ├─→ sandbox（魔改独有，命令沙箱执行）←─ sidecar / shell（高危命令拦截）
   │
@@ -428,8 +501,20 @@ Python sidecar（`src-tauri/sidecar/`）是魔改独有的 AI 引擎，由 Rust 
 ```
 main.py（JSON-RPC 入口 + agent 注册 + TDSF_AGENT_BACKEND feature flag 注入）
   │
+  ├─→ _main_executor / _slow_methods（P1-NEW-1 修复，2026-07-30）
+  │       ├─→ _slow_methods: frozenset[str] = frozenset({"agent.invoke"})（:129，慢方法清单）
+  │       ├─→ _main_executor: ThreadPoolExecutor | None = None（:130，线程池单例）
+  │       ├─→ 初始化：ThreadPoolExecutor(max_workers=2, thread_name_prefix="sidecar-async")（:782-787）
+  │       ├─→ 派发：_main_executor.submit(_dispatch_in_executor, ...)（:842-851，慢方法走线程池）
+  │       └─→ 关闭：_main_executor.shutdown(wait=True, cancel_futures=True)（:877-882，退出时清理）
+  │           ※ 详见 §17 多 agent 与 sidecar 异步执行协作规则
+  │
   ├─→ agents/（9 个内置 agent：main/coding/debug/deploy/explore/history/refactor/teach/test）
-  │       └─→ base.py（BaseAgent PAOR 主路径，_publish_mock_warning / _mock_warning_dedup_ts 60s dedup）
+  │       ├─→ __init__.py（:168-210 set_backend/clear_backend + _global_backend_override 单写者，P1-NEW-2 修复 walrus hack）
+  │       │       ├─→ set_backend(backend): _global_backend_override = backend（仅 main.py 启动段调用，§19 红线）
+  │       │       ├─→ clear_backend(): _global_backend_override = None（仅 main.py 退出段调用，§19 红线）
+  │       │       └─→ invoke_agent(name, state): 优先用 _global_backend_override，否则走 BaseAgent.invoke
+  │       └─→ base.py（BaseAgent PAOR 主路径，:191 invoke / :584 emit_mock_warning / :163 _mock_warning_dedup_ts 60s dedup）
   │
   ├─→ strands_backend/（Strands 适配层，TDSF_AGENT_BACKEND=strands 时注入，dev-state §十二~§十五）
   │       ├─→ adapter.py（StrandsAgentAdapter：封装 Strands Agent 创建/工具注册/invoke；
@@ -453,6 +538,7 @@ main.py（JSON-RPC 入口 + agent 注册 + TDSF_AGENT_BACKEND feature flag 注�
   │       ├─→ emit_mock_warning（MockLLMWarning，dev-state §十二 P1-c 修复）
   │       ├─→ emit_agent_switch（AgentStatusPill，dev-state §十二 P1-a 修复）
   │       ├─→ emit_needs_you（审批事件，被 ssh_command.py 高危命令触发）
+  │       ├─→ BACKEND_STATUS EventType（P0-E 新增，前端 BackendPill.tsx 订阅 sidecar:backend_status）
   │       └─→ event.history JSON-RPC 方法（前端补发查询）
   │
   ├─→ core/（LLMConfig / RiskEngine / Confidence / DecisionEngine 等基础设施工具）
@@ -1383,6 +1469,700 @@ Write-Host "=== 检查完成，对照 §2.2 接手检查清单逐项确认 ===" 
 
 ---
 
-> **最后更新**：2026-07-30 · v2.0 · 新增 A/B/C 三场景分层、接手声明模板、改动影响分析表、CDP 实测责任章节、commit 拆分策略。
+## 17. 多 agent 与 sidecar 异步执行的协作规则
+
+> **背景**：P1-NEW-1（`docs/reports/modded-agent-code-review-2026-07-30.md` §2）修复后，sidecar 主循环引入 `ThreadPoolExecutor` 异步执行慢方法。本节定义多 agent 改 sidecar 时的协作硬约束，避免回退到「单线程主循环阻塞 ping → health_check 误判 Crashed」的旧坑。
+> **适用范围**：任何 agent（主 / sub）改 `src-tauri/sidecar/main.py` 主循环、`_slow_methods`、`_main_executor`、或新增 JSON-RPC method 时必读。
+
+### 17.1 慢方法清单（`_slow_methods`）
+
+**当前清单**（`main.py:129`）：
+
+```python
+_slow_methods: frozenset[str] = frozenset({"agent.invoke"})
+```
+
+**判定标准**（新方法是否应加入 `_slow_methods`）：
+
+| 判定 | 加入 `_slow_methods` | 留在同步派发 |
+|------|---------------------|-------------|
+| 调用 LLM API（HTTP 请求，30-60s+） | ✅ `agent.invoke` 已在 | — |
+| 调用 `rust_bridge.send_request`（阻塞等 Rust 响应 30s） | ✅ 应加入（如未来把工具调用直接暴露为 RPC method） | — |
+| 调用 `strands_backend/adapter.py` invoke 链 | ✅ 间接经 agent.invoke | — |
+| 纯内存操作（dict 查找 / 状态读取） | — | ✅ `ping` / `agent.list` / `sidecar.health` |
+| event_bus.publish（pub-sub，微秒级） | — | ✅ |
+| 文件读写（配置加载，<100ms） | — | ✅ |
+
+**红线**：新加 JSON-RPC method 时，若该方法**可能耗时 >5s**（LLM 调用 / rust_bridge 阻塞 / 大文件读写），**必须**加入 `_slow_methods`，否则将回退到 P1-NEW-1 的主循环阻塞问题。
+
+### 17.2 subagent 不能阻塞主循环
+
+**主循环职责分离**（`main.py:790-871` 修复后）：
+
+```
+主循环（主线程）          _main_executor（worker 线程，max_workers=2）
+─────────────────         ─────────────────────────────────────
+读 stdin（阻塞）           agent.invoke 执行
+  ↓                         ↓
+解析 JSON-RPC              call_llm（HTTP 30-60s+）
+  ↓                         ↓
+慢方法？→ submit 到 executor    Strands Agent 工具调用
+快方法？→ 同步 dispatch           ↓
+  ↓                         rust_bridge.send_request（阻塞 30s）
+写 stdout（_write_lock 保护）    ↓
+  ↓                         send_response（_write_lock 保护）
+继续读 stdin（不阻塞）         ↓
+                          完成
+```
+
+**多 agent 协作规则**：
+
+1. **subagent 改 sidecar 时，不得把慢方法改回同步派发**。若需移除 `_main_executor`（如重构为 asyncio），必须先在自检报告中说明替代方案，主 agent 审核后才可改。
+2. **subagent 不得在主循环内直接调用 `agent.invoke` / `call_llm` / `rust_bridge.send_request`**（即使是在 `try/except` 内），这些必须走 `_main_executor.submit` 或经 `agent.invoke` 间接调用。
+3. **subagent 新增的 JSON-RPC method 若调用了上述慢路径**，必须同步加入 `_slow_methods`（§17.1 判定标准）。
+
+### 17.3 并发 `max_workers=2` 的约束
+
+**当前值**（`main.py:783-784`）：
+
+```python
+_main_executor = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="sidecar-async",
+)
+```
+
+**为什么是 2**（来自 `main.py:127-128` 注释）：
+
+- 允许一个 `agent.invoke` 在跑时，另一个工作线程处理同时到达的慢方法（罕见但可能，如前端并发发两个 agent.invoke）
+- 同时避免并发过多 LLM 调用导致资源紧张（LLM API 通常有 RPM 限制，DeepSeek 默认 60 RPM）
+
+**多 agent 协作规则**：
+
+1. **subagent 不得擅自调高 `max_workers`**（如改成 4/8）。调高会导致：
+   - LLM API 限流（DeepSeek 60 RPM，4 并发易触发）
+   - `_write_lock` 争用加剧（多个 worker 同时写 stdout）
+   - Strands Agent 实例并发创建（`adapter._get_or_create_agent` 非线程安全部分可能出问题）
+2. **subagent 不得擅自调低 `max_workers`**（如改成 1）。调低会回退到 P1-NEW-1 的阻塞问题（一个 agent.invoke 跑时，第二个慢方法排队等待，主循环的 ping 仍能响应，但第二个 agent.invoke 会等第一个完成才开始）。
+3. **若业务确需调整 `max_workers`**（如新增批量 agent.invoke 场景），subagent 必须在自检报告中说明：
+   - 调整后的值
+   - 理由（为什么 2 不够）
+   - 验证方案（LLM RPM 限制测试 + 并发写 stdout 压测）
+   - 主 agent 审核后才可改
+
+### 17.4 退出清理的协作规则
+
+**当前退出清理**（`main.py:877-882`）：
+
+```python
+if _main_executor is not None:
+    try:
+        _main_executor.shutdown(wait=True, cancel_futures=True)
+        logger.info("slow method executor shutdown complete")
+    except Exception as e:
+        logger.debug(f"executor shutdown on exit: {e}")
+```
+
+**多 agent 协作规则**：
+
+1. **subagent 不得移除 `_main_executor.shutdown` 调用**。移除会导致 worker 线程在主进程退出时被强杀，正在执行的 agent.invoke 响应丢失（前端收到 timeout 而非正常错误）。
+2. **subagent 不得把 `wait=True` 改为 `wait=False`**。`wait=False` 会立即返回，不等待正在执行的 agent.invoke 完成，响应丢失。
+3. **若 subagent 改了退出清理逻辑**，必须在自检报告中验证：
+   - 启动 sidecar → 发 agent.invoke → 立即 stop sidecar → 确认前端收到 error 响应（非 timeout）
+
+### 17.5 异步执行状态的健康检查
+
+**接手时必查**（配合 §2.4 接手声明的「当前 sidecar 异步执行状态」字段）：
+
+```bash
+# 确认 _slow_methods / _main_executor 已注入
+grep -n "_slow_methods\|_main_executor" src-tauri/sidecar/main.py
+# 预期输出：
+# :48:from concurrent.futures import ThreadPoolExecutor
+# :129:_slow_methods: frozenset[str] = frozenset({"agent.invoke"})
+# :130:_main_executor: ThreadPoolExecutor | None = None
+# :782:    global _main_executor
+# :783:    _main_executor = ThreadPoolExecutor(
+# :784:        max_workers=2,
+# :842:            if _main_executor is not None and method in _slow_methods:
+# :877:    if _main_executor is not None:
+# :879:            _main_executor.shutdown(wait=True, cancel_futures=True)
+```
+
+若上述 grep 无输出 = 异步执行被回退 = **立即停止开发**，用 AskUserQuestion 报告主 agent。
+
+---
+
+## 18. SSH 终端深度集成后的文件锁扩展
+
+> **背景**：SSH 终端深度集成（dev-state §七~§九，plan `still-crest-linnet.md` #15-#20）引入了 `SshTerminalHost.tsx` / `TerminalTransport` 接口 / `useTerminalSession` 远程分支。这些文件形成紧耦合三元组，多 agent 改动时需特别协调。
+> **适用范围**：任何 agent 改 `src/modules/ssh-explorer/SshTerminalHost.tsx` / `src/modules/terminal/lib/useTerminalSession.ts` / `src/modules/terminal/lib/pty-bridge.ts`（含 `TerminalTransport` 接口）时必读。
+
+### 18.1 紧耦合三元组的锁规则
+
+**三元组关系**（基于 §4.1 依赖图）：
+
+```
+TerminalTransport 接口（pty-bridge.ts）
+        ↑                   ↑
+        │                   │
+useTerminalSession.ts ──── SshTerminalHost.tsx
+（消费接口，本地+远程共用）   （远程分支，构造 transport 注入）
+```
+
+**锁规则**：
+
+| 改动场景 | 锁定文件 | 理由 |
+|---------|---------|------|
+| 改 `TerminalTransport` 接口签名（如加方法 / 改返回类型） | `pty-bridge.ts` + `useTerminalSession.ts` + `SshTerminalHost.tsx` **三文件同时锁** | 接口变更，所有实现 + 消费者都要同步改 |
+| 改 `useTerminalSession` 的 `openTransport` 工厂签名（`:81`/`:1014`） | `useTerminalSession.ts` + `SshTerminalHost.tsx`（远程分支） | 工厂签名变更，远程构造处要同步 |
+| 改 `SshTerminalHost` 的 transport 构造逻辑（`:72-77`） | 仅 `SshTerminalHost.tsx` | 不影响接口，可独立改 |
+| 改 `useTerminalSession` 的本地 PTY 分支 | 仅 `useTerminalSession.ts` | 不影响远程分支，可独立改 |
+| 改 `rendererPool` 的 xterm 实例复用逻辑 | 仅 `rendererPool.ts` | 但需验证本地 + SSH 终端都不回归（§4.5 影响表） |
+
+### 18.2 多 agent 并行改三元组的判定
+
+**不可并行**（紧耦合）：
+
+| 不可并行模块对 A / B | 理由 |
+|--------------------|------|
+| `pty-bridge.ts`（接口）/ `useTerminalSession.ts` | 接口变更需同步消费者 |
+| `pty-bridge.ts`（接口）/ `SshTerminalHost.tsx` | 接口变更需同步远程实现 |
+| `useTerminalSession.ts` / `SshTerminalHost.tsx`（深度集成后） | SSH 终端并入 rendererPool 后紧耦合（§4.4 已列） |
+
+**可并行**（独立）：
+
+| 可并行模块对 A / B | 理由 |
+|------------------|------|
+| `useTerminalSession.ts`（本地分支）/ `SshTerminalHost.tsx`（远程分支，不改 transport 工厂） | 分支独立，仅共享接口 |
+| `rendererPool.ts`（xterm 复用）/ `SshTerminalHost.tsx`（transport 构造） | 不同层，rendererPool 不关心 transport 来源 |
+
+### 18.3 改动影响验证清单
+
+改三元组任一文件后，subagent 自检报告中必须验证：
+
+- [ ] **本地终端回归**：`pnpm tauri:dev` → 打开本地终端 → 输入命令 → 确认正常
+- [ ] **SSH 终端回归**：`pnpm tauri:dev` → 连 SSH → 打开 SSH 终端 → 输入命令 → 确认正常
+- [ ] **tab 切换不卸载**：本地终端 + SSH 终端同时开 → 切换 tab → 切回 → 确认终端内容不丢
+- [ ] **resize 回归**：调整窗口大小 → 确认本地 + SSH 终端都正确 fit（`useTerminalSession.ts:524` 注释 resize 返回 `Promise<void>|void`）
+
+**注**：subagent 不持有 dev server，上述 tauri:dev 验证由主 agent 在集成时做。subagent 只跑 typecheck + lint + test，并在自检报告「改动影响」节标注「需主 agent tauri:dev 验证本地 + SSH 终端回归」。
+
+### 18.4 TerminalTransport 接口变更的协议
+
+若 subagent 需改 `TerminalTransport` 接口（如加 `suspend` / `resume` 方法以支持 AgentSSH 范式借鉴，见 §20）：
+
+1. **先报告主 agent**（不直接改），说明：
+   - 加什么方法
+   - 为什么需要（哪个借鉴项目 / 哪个 P2 任务）
+   - 本地 PTY 分支如何实现（`pty-bridge.ts` 的 `openPty` 工厂）
+   - 远程 SSH 分支如何实现（`SshTerminalHost.tsx` 的 transport 构造）
+2. 主 agent 用 AskUserQuestion 询问用户确认
+3. 用户确认后，主 agent 派发场景 B 任务：一个 subagent 改 `pty-bridge.ts`（接口 + 本地实现），另一个 subagent 改 `SshTerminalHost.tsx`（远程实现）
+4. 两个 subagent 完成后，主 agent 集成 + tauri:dev 实测
+
+---
+
+## 19. Strands 适配层协作红线
+
+> **背景**：Strands 适配层（`src-tauri/sidecar/strands_backend/` + `agents/__init__.py` 的 `set_backend`/`clear_backend`）是 sidecar 的核心后端注入点。P1-NEW-2 修复了 `set_backend` 的 walrus hack，但 `_global_backend_override` 的单写者原则仍需明确。
+> **适用范围**：任何 agent 改 `src-tauri/sidecar/agents/__init__.py` 的 `set_backend` / `clear_backend` / `_global_backend_override`、或 `strands_backend/adapter.py`、或 `main.py` 启动段的后端注入逻辑时必读。
+
+### 19.1 `set_backend` / `clear_backend` 调用权限
+
+**当前实现**（`agents/__init__.py:168-210`，P1-NEW-2 修复后）：
+
+```python
+_global_backend_override: BackendInvokeCallable | None = None
+
+def set_backend(backend: BackendInvokeCallable) -> None:
+    global _global_backend_override
+    if not callable(backend):
+        raise TypeError(f"set_backend expects callable, got {type(backend).__name__}")
+    _global_backend_override = backend
+    logger.info(f"backend override set: {getattr(backend, '__name__', repr(backend))}")
+
+def clear_backend() -> None:
+    global _global_backend_override
+    if _global_backend_override is not None:
+        _global_backend_override = None
+        logger.info("backend override cleared")
+```
+
+**调用权限矩阵**：
+
+| 调用方 | `set_backend` | `clear_backend` | 理由 |
+|--------|:---:|:---:|------|
+| `main.py` 启动段（`TDSF_AGENT_BACKEND=strands` 时，`:428-502` feature flag 分支） | ✅ 允许 | ❌ 不调 | 仅启动时注入一次 |
+| `main.py` 退出段（`:877-882` 之后） | ❌ 不调 | ✅ 允许 | 退出时清理 |
+| `strands_backend/adapter.py` | ❌ 禁止 | ❌ 禁止 | adapter 只提供 callable，不直接调 set_backend |
+| `strands_backend/model_adapter.py` | ❌ 禁止 | ❌ 禁止 | model_adapter 只创建 model，不碰后端注入 |
+| `strands_backend/tools/*.py` | ❌ 禁止 | ❌ 禁止 | 工具只读后端状态，不写 |
+| `agents/base.py` | ❌ 禁止 | ❌ 禁止 | BaseAgent 只读 `_global_backend_override`（经 `invoke_agent`） |
+| `event_bus.py` | ❌ 禁止 | ❌ 禁止 | 事件总线不碰后端注入 |
+| subagent（任何场景） | ❌ 禁止 | ❌ 禁止 | 后端注入是主 agent 独占职责 |
+
+**红线**：
+
+1. **subagent 不得在任何文件中调用 `set_backend` / `clear_backend`**。这两个函数是 `main.py` 启动/退出段的独占职责。
+2. **subagent 不得在 `strands_backend/adapter.py` / `model_adapter.py` / `tools/*.py` 中 import `set_backend` / `clear_backend`**。若需传递后端 callable，应通过函数参数（如 `StrandsAgentAdapter(adapter_invoke_callable)`），不通过全局变量。
+3. **若 subagent 需新增后端类型**（如 PydanticAI 备选），必须：
+   - 在 `strands_backend/` 旁边新建 `pydanticai_backend/` 目录（不混入 strands_backend）
+   - 实现 `PydanticAIAgentAdapter`（提供 callable）
+   - 在 `main.py` 启动段加 `TDSF_AGENT_BACKEND=pydanticai` 分支（**此分支由主 agent 改**，subagent 只提供 adapter 实现）
+
+### 19.2 `_global_backend_override` 单写者原则
+
+**当前单写者**：`main.py` 启动段（`set_backend`）+ 退出段（`clear_backend`）。
+
+**多 agent 协作规则**：
+
+1. **`_global_backend_override` 是全局变量，单写者**（`main.py` 主线程）。subagent 不得在 worker 线程（`_main_executor` 的 worker）中读写此变量。
+2. **`invoke_agent`（`agents/__init__.py:300-302`）读取 `_global_backend_override` 是线程安全的**（Python GIL 保护单条赋值语句），但 subagent 不得在 `invoke_agent` 之外的地方读 `_global_backend_override`。
+3. **subagent 不得把 `_global_backend_override` 改成 `dict` / `list` 等可变容器**（如 `{name: callable}` 按 agent 名切换后端）。当前设计是「全局单一后端」，改为多后端会破坏 `invoke_agent` 的优先级逻辑。
+
+### 19.3 Strands `tools/` 与 Rust `ssh_command` 的依赖图
+
+**当前依赖链**（基于 §4.2.1）：
+
+```
+strands_backend/tools/ssh_command.py
+  ↓ rust_bridge.ipc_invoke("ssh_command", {sessionId, command, timeout})
+rust_bridge.py（send_request_to_rust，阻塞 30s）
+  ↓ JSON-RPC 反向请求
+Rust sidecar.rs（handle_reverse_request，:958-1148）
+  ↓ 路由到 ssh_command Tauri 命令
+Rust ssh::ssh_command（exec 模式，非 PTY）
+  ↓ russh channel exec
+SSH 远程主机
+  ↓ 返回 SshCommandResult{ok, output, exit_code, stderr, duration}
+rust_bridge.py（dispatch_response 唤醒 pending Event）
+  ↓ 返回结构化 dict
+strands_backend/tools/ssh_command.py（返回 {status:"success", ...}）
+```
+
+**契约紧耦合点**（改任一方需同步）：
+
+| 契约点 | Python 侧 | Rust 侧 | 同步要求 |
+|--------|-----------|---------|---------|
+| 参数名 | `sessionId` / `command` / `timeout`（camelCase） | `ssh_command(session_id, command, timeout)` | 改任一方参数名必须同步（K2 已修） |
+| 返回结构 | `{"ok":bool,"status":str,"exit_code":int,"stdout":str,"stderr":str}` | `SshCommandResult{ok, output, exit_code, stderr, duration}` | 字段名 + 类型必须同步 |
+| 超时 | `rust_bridge.py:68` `DEFAULT_TIMEOUT=30.0` | `sidecar.rs:55` `REQUEST_TIMEOUT=30s` | 叠加超时问题 K9 未修，改任一方需考虑叠加 |
+| 高危命令审批 | `ssh_command.py` RiskChecker + `emit_needs_you` | 无（Rust 侧无 RiskChecker） | LearnSSH 借鉴 P2 任务需在 Rust 侧加一层（§20） |
+
+**多 agent 协作规则**：
+
+1. **subagent 改 `strands_backend/tools/ssh_command.py` 的参数 / 返回结构时，必须同步改 Rust `ssh::ssh_command`**。这是 §4.4 已列的不可并行模块对。
+2. **subagent 改 `rust_bridge.py` 的 `send_request` 签名 / 超时 / ID 范围时，必须同步改 Rust `sidecar.rs` 的 `handle_reverse_request` + `reader_task`**。
+3. **subagent 不得单独改 Python 侧或 Rust 侧的契约**（如只改 Python 参数名不改 Rust），会导致 `rust_bridge.send_request` 返回后 `dispatch_response` 找不到字段。
+
+### 19.4 Strands 适配层改动的自检清单
+
+subagent 改 `strands_backend/` 或 `agents/__init__.py` 后，自检报告中必须验证：
+
+- [ ] **`set_backend` / `clear_backend` 未被 subagent 改动**（若改了，说明越界，§19.1 红线）
+- [ ] **`_global_backend_override` 仍是单写者**（`main.py` 启动 + 退出段）
+- [ ] **`adapter.py` 的 `invoke` 链路完整**：`_get_or_create_agent` → Strands Agent → `agent(prompt)` → 工具调用 → 返回
+- [ ] **`model_adapter.py` 的优雅降级**：未配置 LLMConfig / 未安装 strands / 异常时返回 `None`，不抛
+- [ ] **`tools/*.py` 的 passthrough 降级**：Strands 不可用时退化为 passthrough（不报错）
+- [ ] **pytest 通过**：`test_strands_model_adapter`（23 测试）+ `test_tools` + `test_rust_bridge`（25 测试）+ `test_event_bus`
+
+---
+
+## 20. 基于 v4 调研的集成路线图协作分工
+
+> **背景**：`docs/reports/ops-agent-opensource-survey-2026-07-v4.md` §8 给出了更新后的 P0/P1/P2/P3 集成路线图（v3 的 12 + v4 的 6 = 18 借鉴项目）。本节把 v4 新增的借鉴点（AgentSSH / OpAgent / LearnSSH / ANOLISA / Open Interpreter / OpenSquilla）转化为可分工的 subagent 任务包，供主 agent 派发时参考。
+> **适用范围**：主 agent 规划 P1/P2 阶段任务时，按本节任务包派发 subagent。
+
+### 20.1 P1 阶段任务包（v4 新增 3 项）
+
+#### 任务包 P1-v4-1：OpAgent 三层安全借鉴
+
+**来源**：v4 报告 §5.2 + §8.1 P1 第 8 项
+
+**目标**：扩展 `RiskChecker` 正则 + 新增 `LlmAuditor` 语义审计层 + Fail-safe 机制
+
+**subagent 任务边界**（场景 B）：
+
+| subagent | 可写文件 | 任务 |
+|----------|---------|------|
+| subagent-A | `src-tauri/sidecar/strands_backend/tools/ssh_command.py`（RiskChecker 扩展） + `src-tauri/sidecar/core/risk.py`（若存在） | 扩展 RiskChecker 正则到 OpAgent PolicyGuard 全集（含破坏性 SQL + 保护路径 /etc/shadow/~/.ssh//proc//sys//dev//boot） |
+| subagent-B | `src-tauri/sidecar/strands_backend/llm_auditor.py`（新建） | 新增 LlmAuditor 语义审计层（检测变量间接/混淆/外泄/提权，LLM 只能升级不能降级，出错 fail-safe 升级 needs_you） |
+| 主 agent | `src-tauri/sidecar/strands_backend/tools/ssh_command.py`（集成 LlmAuditor） + `src-tauri/sidecar/main.py`（注册 LlmAuditor） | 集成：RiskChecker → LlmAuditor → needs_you 三层链路 |
+
+**不可并行**：subagent-A 和 subagent-B 都改 `ssh_command.py` 的审批链路，但 subagent-A 改 RiskChecker 部分，subagent-B 新建 llm_auditor.py，**集成由主 agent 做**（subagent 不直接改集成点）。
+
+**验收标准**：
+- RiskChecker 正则从 10 条扩展到 OpAgent PolicyGuard 全集
+- LlmAuditor 检测 4 类语义攻击（变量间接/混淆/外泄/提权）
+- Fail-safe：LlmAuditor 出错时升级到 needs_you，不降级
+- pytest 覆盖 4 类语义攻击 + Fail-safe 路径
+
+#### 任务包 P1-v4-2：OpenSquilla 自我验证借鉴
+
+**来源**：v4 报告 §5.5 + §8.1 P1 第 9 项
+
+**目标**：在 `fix_loop` 模块新增「红绿回归证据链」
+
+**subagent 任务边界**（场景 B）：
+
+| subagent | 可写文件 | 任务 |
+|----------|---------|------|
+| subagent-A | `src-tauri/sidecar/agents/debug.py`（若存在 fix_loop）或 `src-tauri/sidecar/tools/fix_loop.py` | 新增红绿回归证据链：先写注定失败的测试 → 修功能让测试由红转绿 → 过项目原有回归测试 |
+| 主 agent | 集成 + tauri:dev 实测 | 验证 debug_agent 的验证闭环 |
+
+**验收标准**：
+- fix_loop 模块新增红绿回归证据链
+- debug_agent 在修复后自动跑回归测试
+- 证据链记录到 event_bus（前端可查看）
+
+#### 任务包 P1-v4-3：OpenHarness 工具集规模参考
+
+**来源**：v4 报告 §3.8 + §8.1 P1 第 10 项
+
+**目标**：评估从 5 运维 @tool 扩展到 43 工具的优先级排序
+
+**subagent 任务边界**（场景 A，调研类）：
+
+| subagent | 可写文件 | 任务 |
+|----------|---------|------|
+| subagent-A | `docs/reports/tool-expansion-priority-2026-07-30.md`（新建） | 参考 OpenHarness Toolkit 43 工具分类，给出 TDSF 从 5 工具扩展到 N 工具的优先级排序 + 实现计划 |
+
+**验收标准**：
+- 报告含 43 工具分类法
+- 报告含 TDSF 现有 5 工具的差距分析
+- 报告含 P1/P2/P3 分批实现计划
+
+### 20.2 P2 阶段任务包（v4 新增 5 项）
+
+#### 任务包 P2-v4-1：AgentSSH 架构借鉴（最重要）
+
+**来源**：v4 报告 §5.1 + §8.1 P2 第 8 项
+
+**目标**：SSH 连接池 + 结构化 JSON 输出 + 长命令 suspend + expect-respond
+
+**subagent 任务边界**（场景 B + 场景 C 混合）：
+
+| subagent / 主 agent | 可写文件 | 任务 | 场景 |
+|---------------------|---------|------|------|
+| subagent-A | `src-tauri/src/modules/ssh/pool.rs`（新建） | 实现 daemon-pooled 连接池（参考 AgentSSH） | B |
+| subagent-B | `src-tauri/sidecar/rust_bridge.py`（返回值格式统一） | `send_request()` 返回值统一为 `{"ok":bool,"status":str,"exit_code":int,"stdout":str,"stderr":str}` JSON 格式 | B |
+| subagent-C | `src-tauri/sidecar/strands_backend/tools/ssh_command.py`（suspend_timeout 参数） | 新增 `suspend_timeout` 参数（默认 30s），超时返回 `session_id` 供后续读取 | B |
+| 主 agent | `src/modules/ssh-explorer/SshTerminalHost.tsx`（expect-respond）+ `src-tauri/src/modules/ssh/`（集成连接池） | 集成连接池 + SshTerminalPane 的 sudo 交互参考 expect-respond | C |
+
+**不可并行**：
+- subagent-B 改 `rust_bridge.py` 返回值格式 = subagent-C 改 `ssh_command.py` 参数 = 契约紧耦合（§19.3），**必须主 agent 协调同步改**
+- 主 agent 改 `SshTerminalHost.tsx` = §18 三元组锁定
+
+**验收标准**：
+- SSH 连接池实现，`ssh_command` 不再每次重建连接
+- `rust_bridge.send_request` 返回 AgentSSH JSON 格式
+- 长命令（>30s）suspend 返回 session_id，后续可读取
+- SshTerminalHost 的 sudo 交互支持 expect-respond
+
+#### 任务包 P2-v4-2：OpAgent hash-chained 审计链借鉴
+
+**来源**：v4 报告 §5.2 + §8.1 P2 第 9 项
+
+**目标**：所有工具调用决策 + 结果写入 `~/.tdsf-data/audit.db`（SQLite），sha256 前后链
+
+**subagent 任务边界**（场景 B）：
+
+| subagent | 可写文件 | 任务 |
+|----------|---------|------|
+| subagent-A | `src-tauri/sidecar/audit_chain.py`（新建） | 实现 hash-chained 审计链（SQLite + sha256 前后链，异步写入 + 批量提交） |
+| subagent-B | `src-tauri/sidecar/strands_backend/tools/*.py`（所有工具调用点加审计写入） | 在每个工具调用前后写审计记录 |
+| 主 agent | 前端审计查看 UI（`/audit list` / `/audit verify`） | 集成审计查看界面 |
+
+**验收标准**：
+- `~/.tdsf-data/audit.db` SQLite 数据库
+- sha256 前后链，任何事后篡改都会断链
+- 异步写入，不影响工具调用性能
+- 前端可查看审计记录 + 验证链完整性
+
+#### 任务包 P2-v4-3：LearnSSH 别名机制借鉴
+
+**来源**：v4 报告 §5.3 + §8.1 P2 第 10 项
+
+**目标**：服务器别名层 + 凭据零暴露 + Rust 侧双层 RiskChecker
+
+**subagent 任务边界**（场景 B + C 混合）：
+
+| subagent / 主 agent | 可写文件 | 任务 | 场景 |
+|---------------------|---------|------|------|
+| subagent-A | `src-tauri/sidecar/strands_backend/tools/ssh_command.py`（别名接收） | sidecar 工具只接收别名（如「教学服务器-1」），不接收 sessionId | B |
+| subagent-B | `src-tauri/src/modules/ssh/alias.rs`（新建） | Rust 侧 keyring 按别名解析凭据，返回 sessionId | B |
+| 主 agent | `src-tauri/src/modules/ssh/command.rs`（Rust 侧 RiskChecker） + 集成别名层 | Rust 侧 ssh_command 加一层 RiskChecker（双层拦截）+ 别名层兼容 sessionId | C |
+
+**不可并行**：subagent-A 和 subagent-B 是契约紧耦合（别名 → sessionId 解析协议），**必须主 agent 协调同步改**。
+
+**验收标准**：
+- sidecar 工具只接收别名，不接触凭据
+- Rust 侧 keyring 按别名解析凭据
+- Rust 侧 ssh_command 加 RiskChecker（双层拦截）
+- 别名层兼容现有 sessionId（P2 先兼容，P3 再完全切换）
+
+#### 任务包 P2-v4-4：ANOLISA Token-Less 借鉴
+
+**来源**：v4 报告 §5.4 + §8.1 P2 第 11 项
+
+**目标**：模式压缩 + 响应压缩 + AgentSight 可观测
+
+**subagent 任务边界**（场景 B）：
+
+| subagent | 可写文件 | 任务 |
+|----------|---------|------|
+| subagent-A | `src-tauri/sidecar/strands_backend/tools/system_info.py`（新建） | 模式压缩：把高频环境探索（pwd/whoami/uname/ls/cat /etc/os-release）封装为 `get_system_info()` 单工具 |
+| subagent-B | `src-tauri/sidecar/strands_backend/tools/log_analyzer.py`（响应压缩） | 响应压缩：长输出自动截断 + 摘要（前 50 行 + 统计 + 关键行） |
+| subagent-C | `src-tauri/sidecar/strands_backend/adapter.py`（AgentSight） | AgentSight：在 `TdsfStrandsCallbackHandler` 新增工具调用链 + token 消耗分布 + 延迟采集 |
+
+**可并行**：三个 subagent 改不同文件，无直接依赖。
+
+**验收标准**：
+- `get_system_info()` 单工具替代 13 轮 ls/cat/whoami 探索
+- `analyze_logs` 长输出自动截断 + 摘要
+- AgentSight 采集工具调用链 + token 消耗 + 延迟
+- token 消耗降低 30%+
+
+#### 任务包 P2-v4-5：Open Interpreter harness 切换借鉴
+
+**来源**：v4 报告 §5.5 + §8.1 P2 第 12 项
+
+**目标**：模型感知的 agent 配置 + 运行时 harness 切换 UI
+
+**subagent 任务边界**（场景 A，调研类，P2 评估阶段）：
+
+| subagent | 可写文件 | 任务 |
+|----------|---------|------|
+| subagent-A | `docs/reports/harness-switch-evaluation-2026-07-30.md`（新建） | 评估模型感知 agent 配置（不同模型用不同 system_prompt + 工具格式）的可行性与实现方案 |
+
+**验收标准**：
+- 报告含 Open Interpreter harness 切换范式分析
+- 报告含 TDSF `model_adapter.py` 现状差距分析
+- 报告含 harness 切换 UI 设计方案
+- 报告含 P3 实现计划
+
+### 20.3 任务包派发的协作规则
+
+1. **P2-v4-1（AgentSSH）是最重要的 P2 任务**，涉及 §18 三元组 + §19 Strands tools 契约，**必须由主 agent 主导**（场景 C），subagent 只做独立子模块（连接池 / 返回值格式 / suspend 参数）。
+2. **P2-v4-2（hash-chained 审计链）和 P2-v4-4（ANOLISA Token-Less）可并行**（不同文件，无依赖）。
+3. **P2-v4-3（LearnSSH 别名机制）依赖 P2-v4-1（AgentSSH 连接池）**（别名解析后需走连接池），不可并行，需顺序执行。
+4. **所有 P2 任务包的 subagent 自检报告中**，必须额外验证：
+   - 是否改了 `set_backend` / `clear_backend`（§19.1 红线，应为「未碰」）
+   - 是否改了 `_global_backend_override`（应为「未碰」）
+   - 是否改了 `TerminalTransport` 接口（§18.4，若改了需主 agent 确认）
+   - 是否改了 Python↔Rust 契约（§19.3，若改了需同步改两侧）
+
+---
+
+## 21. 代码审查 P1 问题预防清单
+
+> **背景**：`docs/reports/modded-agent-code-review-2026-07-30.md` 新发现 4 个 P1 问题（P1-NEW-1/2/3/4），均已修复。本节把每个 P1 沉淀为「提交前自检清单」，每条配 file:line 反例 + 修复范式，供 subagent 自检 + 主 agent 集成时核对。
+> **适用范围**：所有 subagent 自检报告（§9.4）+ 主 agent 集成验证（§7.3）必填。
+
+### 21.1 P1-NEW-1：主循环阻塞 → health_check 误判 Crashed
+
+**问题**：Python sidecar 单线程主循环 + 长耗时 `agent.invoke` 阻塞 ping 响应 → `health_check` 30s 无响应判定 Crashed。
+
+**反例 file:line**（修复前）：
+
+```python
+# main.py:782（修复前，同步派发）
+result = dispatcher.dispatch(method, params)  # agent.invoke 内 call_llm 耗时 30-60s+
+if not is_notification:
+    send_response(result, req_id)
+# 期间主循环卡在 dispatch，不读 stdin，Rust 侧 ping 请求堆积
+# → sidecar.rs:1240-1258 HEARTBEAT_TIMEOUT=30s 触发，标记 Crashed
+```
+
+**修复范式**（修复后，`main.py:842-851`）：
+
+```python
+# 慢方法走线程池，主循环立即继续读 stdin
+if _main_executor is not None and method in _slow_methods:
+    _main_executor.submit(
+        _dispatch_in_executor,
+        dispatcher,
+        method,
+        params,
+        req_id,
+        is_notification,
+    )
+    continue  # 主循环不阻塞，继续读 stdin
+```
+
+**自检清单**：
+
+- [ ] 新增 JSON-RPC method 时，若可能耗时 >5s（LLM 调用 / rust_bridge 阻塞 / 大文件读写），**必须**加入 `_slow_methods`（`main.py:129`）
+- [ ] 不得在主循环内直接调用 `agent.invoke` / `call_llm` / `rust_bridge.send_request`（即使 try/except 包裹）
+- [ ] `max_workers=2` 不得擅自调整（§17.3）
+- [ ] `_main_executor.shutdown(wait=True, cancel_futures=True)` 不得移除（§17.4）
+- [ ] 接手时 grep 确认 `_slow_methods` / `_main_executor` 已注入（§17.5）
+
+### 21.2 P1-NEW-2：set_backend walrus + __import__ hack
+
+**问题**：`agents/__init__.py:196-198` 用 `logger.info(...) if (logger := __import__("logging").getLogger(...)) else None` 反模式，模块顶部未 import logging。
+
+**反例 file:line**（修复前）：
+
+```python
+# agents/__init__.py:196-198（修复前，walrus + __import__ hack）
+def set_backend(backend: BackendInvokeCallable) -> None:
+    ...
+    _global_backend_override = backend
+    logger.info(
+        f"backend override set: {getattr(backend, '__name__', repr(backend))}"
+    ) if (logger := __import__("logging").getLogger("sidecar.agents")) else None
+    # 问题：模块顶部未 import logging，用 __import__ hack 绕过
+    # walrus 操作符在表达式内赋值，logger 作用域仅限该表达式
+    # 三元 if ... else None 反模式，写法极度怪异
+```
+
+**修复范式**（修复后）：
+
+```python
+# 顶部加（模块级）
+import logging
+logger = logging.getLogger("sidecar.agents")
+
+# set_backend 内改为（正常调用）
+def set_backend(backend: BackendInvokeCallable) -> None:
+    global _global_backend_override
+    if not callable(backend):
+        raise TypeError(f"set_backend expects callable, got {type(backend).__name__}")
+    _global_backend_override = backend
+    logger.info(f"backend override set: {getattr(backend, '__name__', repr(backend))}")
+```
+
+**自检清单**：
+
+- [ ] 不得在函数内用 `__import__("...")` hack 绕过 import（应在模块顶部 import）
+- [ ] 不得用 walrus `:=` 在表达式内赋值 logger（应在模块顶部 `logger = logging.getLogger(...)`）
+- [ ] 不得用 `if ... else None` 三元反模式包裹函数调用（直接调用即可）
+- [ ] `set_backend` / `clear_backend` 的调用权限遵循 §19.1 矩阵（仅 main.py 启动/退出段）
+- [ ] `_global_backend_override` 单写者原则（§19.2）
+
+### 21.3 P1-NEW-3：主循环异常后 pending 不清理
+
+**问题**：`main.py:780-793` 主循环 except 分支虽有 `send_error`，但若 `send_response` / `send_error` 本身抛异常（stdout 写入失败），或 `dispatcher.dispatch` 内 `call_llm` 因网络异常卡住（socket hang，不抛异常），主循环阻塞，Rust 侧 30s 超时后清理 pending，Python 侧无响应。
+
+**反例 file:line**（修复前，`main.py:780-793`）：
+
+```python
+# 修复前：同步派发，dispatch 内 call_llm 卡住时主循环阻塞
+try:
+    result = dispatcher.dispatch(method, params)  # call_llm 可能 socket hang，不抛异常
+    if not is_notification:
+        send_response(result, req_id)  # 若 stdout 写入失败，这里抛异常
+except JSONRPCError as e:
+    ...
+    if not is_notification:
+        send_error(e.code, e.message, req_id, e.data)
+except Exception as e:
+    logger.exception(f"unexpected error in method {method}")
+    if not is_notification:
+        send_error(ERR_INTERNAL_ERROR, str(e), req_id)  # 若 send_error 也抛，主循环外层 except 捕获，但已无法响应
+```
+
+**修复范式**（P1-NEW-1 修复后，慢方法走线程池，主循环不阻塞）：
+
+```python
+# P1-NEW-1 修复后：慢方法走 _main_executor，主循环不阻塞
+# _dispatch_in_executor 内的异常由 worker 线程的 try/except 捕获，调 send_error
+# 主循环的 except 仅处理快方法的异常（快方法不会长时间阻塞）
+def _dispatch_in_executor(dispatcher, method, params, req_id, is_notification):
+    try:
+        result = dispatcher.dispatch(method, params)
+        if not is_notification:
+            send_response(result, req_id)
+    except JSONRPCError as e:
+        if not is_notification:
+            send_error(e.code, e.message, req_id, e.data)
+    except Exception as e:
+        logger.exception(f"unexpected error in method {method}")
+        if not is_notification:
+            send_error(ERR_INTERNAL_ERROR, str(e), req_id)
+```
+
+**自检清单**：
+
+- [ ] 慢方法（`agent.invoke`）走 `_main_executor`，不在主循环同步派发（§17.2）
+- [ ] `_dispatch_in_executor` 内有完整 try/except，异常时调 `send_error`（不静默吞）
+- [ ] `send_response` / `send_error` 用 `_write_lock` 保护（线程安全）
+- [ ] 若 `send_error` 本身抛异常，worker 线程的 except 捕获并 log（不导致主循环崩溃）
+- [ ] 主循环的 except（`main.py:869-871`）仅处理快方法异常 + IO 异常，不处理慢方法异常
+
+### 21.4 P1-NEW-4：composer.tsx useEffect 闭包陷阱
+
+**问题**：`composer.tsx:104-113` 的 useEffect 依赖数组为 `[]`，但闭包了 `attachFileByPath`（每次 render 重新创建），监听器闭包了首次 render 的 `attachFileByPath`。当前不会读旧 state（`attachFileByPath` 内部只用 `setFiles` + `invoke` + `useChatStore.getState()`，都稳定），但未来若在 `attachFileByPath` 里读 `value` 或 `files` state，会读到 mount 时的旧值。
+
+**反例 file:line**（修复前，`composer.tsx:104-113`）：
+
+```typescript
+// 修复前：useEffect 依赖 []，闭包了首次 render 的 attachFileByPath
+useEffect(() => {
+  const onAttach = (e: Event) => {
+    const path = (e as CustomEvent<string>).detail;
+    if (typeof path === "string" && path.length > 0) {
+      void attachFileByPath(path);  // ← 闭包了 attachFileByPath（每次 render 重新创建）
+    }
+  };
+  window.addEventListener("tdsf:ai-attach-file", onAttach);
+  return () => window.removeEventListener("tdsf:ai-attach-file", onAttach);
+}, []);  // ← 空依赖数组，只在 mount 时注册
+// biome-ignore 注释声称"closes over setFiles only"是当前正确但脆弱的假设
+```
+
+**修复范式**（修复后）：
+
+```typescript
+// 修复后：attachFileByPath 用 useCallback 稳定引用
+const attachFileByPath = useCallback(async (path: string) => {
+  // ... 现有实现（只用 setFiles / invoke / useChatStore.getState()）
+}, []);  // 显式声明依赖为空
+
+useEffect(() => {
+  const onAttach = (e: Event) => {
+    const path = (e as CustomEvent<string>).detail;
+    if (typeof path === "string" && path.length > 0) {
+      void attachFileByPath(path);
+    }
+  };
+  window.addEventListener("tdsf:ai-attach-file", onAttach);
+  return () => window.removeEventListener("tdsf:ai-attach-file", onAttach);
+}, [attachFileByPath]);  // 依赖 attachFileByPath（useCallback 稳定，不会每次 render 触发 re-register）
+```
+
+**自检清单**：
+
+- [ ] useEffect 依赖数组不得为 `[]`（若闭包了非 stable 引用）
+- [ ] 闭包的函数引用若是普通函数声明，**必须**改为 `useCallback`（CLAUDE.md §3 红线 5）
+- [ ] 不得用 `biome-ignore lint/correctness/useExhaustiveDependencies` 掩盖闭包陷阱（除非确认真 stable，如 `setFiles` / `invoke` / `useChatStore.getState()`）
+- [ ] 顶层 Provider（AiComposerProvider / ThemeProvider）的 value 用 `useMemo`，回调用 `useCallback`（CLAUDE.md §3 红线 5）
+- [ ] 改 `composer.tsx` 后，tauri:dev 验证：拖文件到 AI 面板 → 确认 attach 事件触发 → 确认读到当前 state（非 mount 时旧值）
+
+### 21.5 P1 预防清单的强制使用
+
+**subagent 自检报告**（§9.4）必须额外附「P1 预防清单核对」节：
+
+```markdown
+### 8. P1 预防清单核对（§21，必填）
+
+- [ ] P1-NEW-1：慢方法走 `_main_executor`，未在主循环同步派发（§21.1）
+- [ ] P1-NEW-2：未用 `__import__` hack / walrus / `if...else None` 反模式（§21.2）
+- [ ] P1-NEW-3：`_dispatch_in_executor` 内有完整 try/except，异常时调 send_error（§21.3）
+- [ ] P1-NEW-4：useEffect 依赖数组正确，闭包的函数引用用 useCallback（§21.4）
+
+若任一项未通过，说明原因 + 修复方案。
+```
+
+**主 agent 集成验证**（§7.3）必须核对所有 subagent 的 P1 预防清单，未通过的 subagent 改动**不集成**，退回修复。
+
+---
+
+> **最后更新**：2026-07-30 · v2.1 · 整合 v4 调研报告（37 项目，Strands 首选确认）+ 魔改 agent 代码审查报告（P1-NEW-1/2/3/4 修复），新增 §17~§21 五章节（sidecar 异步执行协作 / SSH 终端文件锁扩展 / Strands 适配层红线 / v4 路线图分工 / P1 预防清单），更新 §2.4 接手声明模板（+2 字段）、§3.1 文件锁矩阵（+11 行）、§4 模块依赖图（+12 新节点）。
 > **维护者**：主 agent（subagent 不直接改本文件，建议通过主 agent）。
 > **上游参考**：https://github.com/crynta/terax-ai（架构基线，非多 agent 规范来源）。
+> **配套调研报告**：
+> - `docs/reports/ops-agent-opensource-survey-2026-07-v4.md`（v4，37 项目，Strands 首选 + AgentSSH/OpAgent/LearnSSH/ANOLISA 发现）
+> - `docs/reports/modded-agent-code-review-2026-07-30.md`（P1-NEW-1/2/3/4 + P2-NEW-1~6，含修复状态）
