@@ -45,6 +45,7 @@ import signal
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -112,6 +113,52 @@ _stdout = sys.stdout
 
 # 启动时间（用于 uptime 计算）
 START_TIME = time.time()
+
+# TDSF P1-NEW-1 修复 (2026-07-30): 慢方法异步派发线程池
+# ---------------------------------------------------------------
+# 背景：原主循环单线程同步 dispatch，agent.invoke 内 call_llm 可能耗时 30-60s+，
+# 期间 stdin 不被读取，Rust 侧 ping 请求堆积 → health_check 30s 无响应判定
+# Sidecar Crashed（误报）+ agent.invoke 响应丢失。
+#
+# 修复：将慢方法（agent.invoke）提交到线程池异步执行，主循环立即返回继续读 stdin。
+# - write_message 已用 _write_lock 保护，线程安全
+# - MethodDispatcher 仅 dict 查找 + 调用，注册期完成后只读，线程安全
+# - event_bus / rust_bridge 内部均有锁，线程安全
+# - max_workers=2：允许一个 agent.invoke 在跑时另一个请求（如 ping）也能处理，
+#   同时避免并发过多 LLM 调用导致资源紧张
+_slow_methods: frozenset[str] = frozenset({"agent.invoke"})
+_main_executor: ThreadPoolExecutor | None = None
+
+
+def _dispatch_in_executor(
+    dispatcher: "MethodDispatcher",
+    method: str,
+    params: Any,
+    req_id: Any,
+    is_notification: bool,
+) -> None:
+    """线程池中执行慢方法（agent.invoke），完成后发送响应
+
+    主循环调用此函数将慢方法提交到线程池，立即返回继续读 stdin。
+    线程内完成 dispatch 后，通过线程安全的 write_message 发送响应。
+
+    异常处理与主循环同步派发路径一致：
+    - JSONRPCError → send_error(code, message, req_id, data)
+    - Exception → send_error(ERR_INTERNAL_ERROR, str(e), req_id)
+    """
+    global _shutdown_flag
+    try:
+        result = dispatcher.dispatch(method, params)
+        if not is_notification:
+            send_response(result, req_id)
+    except JSONRPCError as e:
+        logger.warning(f"JSONRPCError in async {method}: {e.message}")
+        if not is_notification:
+            send_error(e.code, e.message, req_id, e.data)
+    except Exception as e:
+        logger.exception(f"unexpected error in async method {method}")
+        if not is_notification:
+            send_error(ERR_INTERNAL_ERROR, str(e), req_id)
 
 # 全局 shutdown 标志（由 shutdown 方法或信号处理设置）
 _shutdown_flag = False
@@ -728,6 +775,17 @@ def main() -> None:
     )
     logger.info("ready notification sent, entering main loop")
 
+    # TDSF P1-NEW-1 修复 (2026-07-30): 初始化慢方法线程池
+    # max_workers=2：允许一个 agent.invoke 在跑时，另一个工作线程处理
+    # 同时到达的慢方法（罕见但可能），同时避免并发过多 LLM 调用。
+    # 快方法（ping 等）仍在主线程同步执行，不经过线程池。
+    global _main_executor
+    _main_executor = ThreadPoolExecutor(
+        max_workers=2,
+        thread_name_prefix="sidecar-async",
+    )
+    logger.info("slow method executor initialized (max_workers=2)")
+
     # 4. 主循环：逐行读取 stdin
     while not _shutdown_flag:
         try:
@@ -778,6 +836,20 @@ def main() -> None:
             is_notification = req_id is None
 
             # 分发方法调用
+            # TDSF P1-NEW-1 修复 (2026-07-30): 慢方法（agent.invoke）提交到线程池
+            # 异步执行，主循环立即继续读 stdin，保证 ping 响应不被 LLM 调用阻塞。
+            # 快方法（ping / status / agent.list / sidecar.health 等）仍同步派发。
+            if _main_executor is not None and method in _slow_methods:
+                _main_executor.submit(
+                    _dispatch_in_executor,
+                    dispatcher,
+                    method,
+                    params,
+                    req_id,
+                    is_notification,
+                )
+                continue
+
             try:
                 result = dispatcher.dispatch(method, params)
                 if not is_notification:
@@ -799,8 +871,17 @@ def main() -> None:
             time.sleep(0.1)  # 避免忙循环消耗 CPU
 
     # 5. 退出清理
-    # 5.0 TDSF P1-3 (2026-07-30): 关闭 RustBridge，唤醒所有 pending 请求
-    #     避免主线程退出时悬挂在 Event.wait 的工具调用永远阻塞
+    # 5.0 TDSF P1-NEW-1 (2026-07-30): 关闭慢方法线程池
+    #     等待正在执行的 agent.invoke 完成（最多 5s），避免响应丢失。
+    #     不阻塞过久以免 Rust 侧 SIGTERM 强杀。
+    if _main_executor is not None:
+        try:
+            _main_executor.shutdown(wait=True, cancel_futures=True)
+            logger.info("slow method executor shutdown complete")
+        except Exception as e:
+            logger.debug(f"executor shutdown on exit: {e}")
+    # 5.0.1 TDSF P1-3 (2026-07-30): 关闭 RustBridge，唤醒所有 pending 请求
+    #       避免主线程退出时悬挂在 Event.wait 的工具调用永远阻塞
     if _rust_bridge is not None:
         try:
             _rust_bridge.stop()
