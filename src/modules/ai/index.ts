@@ -1,4 +1,5 @@
 export { AgentStatusPill } from "./components/AgentStatusPill";
+export { BackendPill, type BackendStatus } from "./components/BackendPill";
 export { LocalAgentNotificationsBridge } from "./components/LocalAgentNotificationsBridge";
 export {
   AgentRunBridge,
