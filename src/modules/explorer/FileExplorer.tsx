@@ -675,7 +675,10 @@ export const FileExplorer = memo(
                   </div>
                 )}
                 {root?.status === "error" && (
-                  <div className="px-3 py-2 text-[11px] text-destructive">
+                  // TDSF 修复 (Phase 4): root 读取失败（如 cd 后目录已被删除/无权限）
+                  // 从红色错误降级为中性提示 —— 静默容错，不打断用户，等下次
+                  // cwd 变化自动刷新到可读目录。子目录错误仍走 error tone（buildRows）。
+                  <div className="px-3 py-2 text-[11px] text-muted-foreground">
                     {root.message}
                   </div>
                 )}

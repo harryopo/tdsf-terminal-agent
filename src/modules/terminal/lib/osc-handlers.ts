@@ -144,7 +144,14 @@ function parseOsc7(data: string): string | null {
   // /C:/Users/foo -> C:/Users/foo so it's a valid Windows path.
   if (/^\/[A-Za-z]:/.test(path)) {
     path = path.slice(1);
-  } else if (IS_WINDOWS) {
+  }
+  if (IS_WINDOWS) {
+    // Windows 路径大小写不敏感：统一盘符大写。否则 shell 报小写盘符
+    // （如 `cd c:\users` 后的 `c:/Users`）会让 rootPath 与 Explorer 缓存的
+    // `C:/Users` 比较不等，触发整树重建、丢失展开状态（Phase 4 容错）。
+    if (/^[a-z]:/.test(path)) {
+      path = path[0].toUpperCase() + path.slice(1);
+    }
     // git-bash (MSYS) reports cwd as /c/Users/foo; map it to C:/Users/foo.
     const drive = path.match(/^\/([A-Za-z])(\/.*)?$/);
     if (drive) path = `${drive[1].toUpperCase()}:${drive[2] ?? "/"}`;
