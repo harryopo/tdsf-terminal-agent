@@ -50,16 +50,22 @@ export function registerCwdHandler(
 // 安全策略与 registerCwdHandler 一致：
 //   - 拒绝命令运行期间发出的 OSC 7（untrusted command output）
 //   - 复用同一个 ShellIntegrationState（inCommand 标志）
+//
+// 关键约束（TDSF 2026-07-31 修复）：本 handler 必须返回 **false**。
+// xterm OscParser.end() 从后往前遍历 handler，遇到第一个返回 true 的就 break，
+// 因此先注册的 registerCwdHandler 会被后注册且返回 true 的 handler 短路，
+// 导致 onCwd 永不触发（Phase 3 本地 cwd 同步失效的根因）。teach trigger
+// 只是"观察者"，不应消费 OSC 7 事件，返回 false 让 cwdHandler 继续执行。
 export function registerOsc7TeachTrigger(
   term: Terminal,
   onTrigger: (cwd: string) => void,
   state?: ShellIntegrationState,
 ): () => void {
   const d = term.parser.registerOscHandler(7, (data) => {
-    if (state?.inCommand) return true;
+    if (state?.inCommand) return false;
     const cwd = parseOsc7(data);
     if (cwd) onTrigger(cwd);
-    return true;
+    return false;
   });
   return () => d.dispose();
 }
