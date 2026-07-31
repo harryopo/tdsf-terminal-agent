@@ -497,11 +497,12 @@ def execute_via_ssh(
 
 # 延迟导入避免循环依赖，提供模块级便捷访问
 def _import_tool_functions() -> None:
-    """延迟导入 6 个工具的工厂函数 + invoke 函数
+    """延迟导入 7 个工具的工厂函数 + invoke 函数
 
     在 __init__.py 末尾调用，确保 from strands_backend.tools import make_ssh_command_tool 可用
 
     TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具导入
+    TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具导入
     """
     from strands_backend.tools.ssh_command import (  # noqa: F401
         invoke_ssh_command_tool,
@@ -527,10 +528,15 @@ def _import_tool_functions() -> None:
         invoke_skill_tool,
         make_skill_invoke_tool,
     )
+    from strands_backend.tools.suggest_command import (  # noqa: F401
+        invoke_suggest_command_tool,
+        make_suggest_command_tool,
+    )
 
 
 # 工具名注册表（供适配层枚举注册）
 # TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具
+# TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具
 OPS_TOOL_NAMES: list[str] = [
     "ssh_command",
     "remote_file",
@@ -538,15 +544,19 @@ OPS_TOOL_NAMES: list[str] = [
     "process_inspector",
     "network_diagnostic",
     "skill_invoke",
+    "suggest_command",
 ]
 
 
 def make_all_ops_tools(ctx: ToolContext) -> list:
-    """构建全部 6 个工具（5 个运维 + 1 个 Skill 调用，带 ctx 闭包）
+    """构建全部 7 个工具（5 个运维 + Skill 调用 + 命令建议，带 ctx 闭包）
 
     TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具，让 Strands Agent
     能在 agentic loop 中主动调用已注册的 Skill（linux-ops / docker-management /
     selinux-baseline / ssh-troubleshoot / python-debug），增强领域知识。
+
+    TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具，让 Strands Agent
+    能根据用户意图生成可执行的 Linux 命令，并通过前端工具卡片展示 Insert 按钮。
 
     Args:
         ctx: ToolContext 运行时上下文
@@ -560,6 +570,7 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
     from strands_backend.tools.process_inspector import make_process_inspector_tool
     from strands_backend.tools.network_diagnostic import make_network_diagnostic_tool
     from strands_backend.tools.skill_invoke import make_skill_invoke_tool
+    from strands_backend.tools.suggest_command import make_suggest_command_tool
 
     return [
         make_ssh_command_tool(ctx),
@@ -568,6 +579,7 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
         make_process_inspector_tool(ctx),
         make_network_diagnostic_tool(ctx),
         make_skill_invoke_tool(ctx),
+        make_suggest_command_tool(ctx),
     ]
 
 
