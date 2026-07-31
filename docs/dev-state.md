@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 3 完成并 commit（`ccb1af4`）：本地终端 OSC 7 cwd 同步（根因 = xterm OscParser 短路，teach trigger 返回 true 吞掉 cwd handler）。五绿门禁全绿，CDP `cdp_phase3_final.py` 实测通过。接手请直接看 **§三十三**（阶段 4 收尾见 **§三十四**）。
+> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 0-5 全部完成并 commit（`14de3c5`）+ 知识管理收尾（§三十五）。本地+SSH 双链路 OSC 7 cwd 同步全通，五绿门禁 852/852。接手请直接看 **§三十四**（重构收尾）+ **§三十五**（下一步规划）。
 
 ---
 
@@ -2785,3 +2785,53 @@ SSH 终端执行 cd /tmp
 - **阶段 5 人工桌面补测**（可选）：本地/SSH 双 Space 切换、远程文件树展开、cwd 切换的手动目测（CDP 已覆盖核心链路）。
 - **规划文档后续阶段**：`docs/reports/terminal-space-refactor-plan.md` 阶段 0-5 已全部落地，重构主线完成。
 - 协作声明不变：未修改任何 agent 模块文件。
+
+---
+
+## 三十五、知识管理收尾 + 下一步工作规划（2026-07-31）
+
+> 本节由主线 AI 写入，记录本次「数据与知识管理」任务成果 + 制定下一步工作规划。
+
+### 35.1 本次知识管理成果（已 commit）
+
+| 类别 | 内容 | 文件 |
+|------|------|------|
+| 工作区清理 | 删除根目录 4 张诊断截图、`scripts/` 下 20 个一次性 CDP 脚本、Word 锁文件 | — |
+| .gitignore | 新增 `output/`（参赛 PPT 生成工作流中间产物不入库） | `.gitignore` |
+| 文档更新 | KNOWLEDGE-INDEX v1.0 → v1.1（登记 4 份新报告 + commit 节点补全到 14de3c5） | `docs/KNOWLEDGE-INDEX.md` |
+| 文档更新 | HANDOVER v1.0 → v1.1（新增 §3.7 终端/Space 重构章节 + Bug 表/排查表/commit 节点更新） | `docs/HANDOVER.md` |
+
+### 35.2 当前状态确认（终端/Space 重构主线收尾）
+
+- 终端/Space 重构阶段 0-5 **全部落地**（commit `6a89ddc` → `9ec558e` → `ccb1af4` → `14de3c5`）
+- 本地 + SSH 双链路 OSC 7 cwd 同步全通，五绿门禁 852/852
+- 用户反馈的 8 项终端/UI 问题：已修复 6 项，剩余 2 项为「SSH 断开重连后终端仍显示本地终端」的稳定性问题（属 SSH 会话生命周期管理，见 backlog）
+
+### 35.3 下一步工作规划
+
+**目标**：在已固化的终端/Space 重构基线上，补齐比赛交付 + 稳定性 + AI 侧遗留，最终达成「可交付比赛 + 可演示」状态。
+
+**任务分解（按优先级）**：
+
+| # | 任务 | 类型 | 依赖 | 说明 |
+|---|------|------|------|------|
+| 1 | **比赛材料同步**（`docs/竞赛/` 交付物核对 + 13 项冲突中 4 项 P0 修正） | 文档 | 无 | 参考 `docs/reports/contest-materials-integration-2026-07-31.md`；由另一 AI 主责，本 AI 提供代码事实 |
+| 2 | **阶段 5 人工桌面补测**（可选） | 验收 | 9300 端口释放 | 本地/SSH 双 Space 切换 + 远程文件树展开 + cwd 切换手动目测 |
+| 3 | **SSH 断开重连稳定性**（`SshSession.exited` 与 PTY 解耦、`close()` 优雅忽略 Channel send error） | 修复 | 无 | 解决「退出 SSH 重连后终端仍显示本地终端」 |
+| 4 | **AI 侧 backlog P1**（fix-loop 保护 / main_agent PAOR 路由 / toolCallId 错乱 / exec_command 超时） | 修复 | 无 | 详见 HANDOVER §4.2 |
+| 5 | **P1-v5 系列**（Headroom MCP / OPENDEV / context compaction / 权限 / ssh_command 脱敏 / asciicast 录制） | 增强 | #4 | 详见 HANDOVER §4.2 |
+| 6 | **sidecar 崩溃修复**（restart 加退避 + 手动跑看 traceback） | 修复 | 无 | P2-5，AI 后端可用性 |
+| 7 | **资源管理器性能**（`sftpEntryToDirEntry` 按目录缓存 + no-op 守卫） | 优化 | 无 | P0-2 残留隐患 |
+| 8 | **用户偏好待办**：AI 对话 Main/Ctrl+I 合并、主题按钮联动终端主题、翻译卡片 SSH 终端选词 | UI | 无 | 详见 project_memory 用户偏好 |
+
+**时间节点建议**：
+- 短期（本轮之后 1-2 个会话）：任务 1 + 2 + 3（比赛收口 + 稳定性）
+- 中期（下一个里程碑）：任务 4 + 6（AI 侧 P1 + sidecar 可用）
+- 长期（版本发布前）：任务 5 + 7 + 8（增强 + 体验）
+
+**资源需求**：
+- **9300 端口空闲**（做 tauri:dev 完整桌面实测，另一 AI 会话占用中）
+- **SSH 测试机** `root@192.168.45.200`（开机自动连，验证 SSH 链路）
+- **大模型 API Key**（Strands + DeepSeek 真实 LLM 端到端验证）
+
+**验收标准**：每项任务完成 = 五绿门禁全过 + tauri:dev 桌面实测 + git commit 固化。

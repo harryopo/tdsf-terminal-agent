@@ -253,6 +253,62 @@ const r = await window.__TAURI_INTERNALS__.invoke('ipc_invoke', {
 - CDP `Runtime.evaluate` 在浏览器原生 ESM context 中无法 `import` Tauri 模块
 - `Input.dispatchMouseEvent` 在 Tauri WebView2 里不等同真实鼠标，用 `el.click()` 才能真触发 React onClick
 
+### 3.7 终端 / Space 架构重构（2026-07-31，阶段 0-5 全部落地）
+
+**背景**：用户反馈 8 项终端/UI 问题（新建 terminal 默认本地 Windows 终端、资源管理器不随 `cd` 刷新、SSH 后终端不显示 hostname、SSH 浮动卡片等）。主规划文档 `docs/reports/terminal-space-refactor-plan.md`，按阶段 0-5 实施。
+
+**阶段划分**：
+
+| 阶段 | 内容 | commit |
+|------|------|--------|
+| 0 | UI 占位清理：移除 StatusBar SSH 浮动卡片、Header 地址栏 + "Main" 品牌区、AgentStatusPill 占位文字 | 6a89ddc（并入） |
+| 1 | Space/SSH 集成：`WorkspaceEnv` 新增 `ssh` 变体；`SpaceCreateDialog` 支持本地/SSH 选择；SSH 连接后当前 Space 升级为 SSH Space；`FileExplorer` 按 Space 传 `sshSession` | 6a89ddc |
+| 2 | SSH OSC 7 cwd 同步：`sshStore.setCurrentPath(sessionId, path)` + `handleTerminalCwd` 按 tab 绑定隔离同步远程 cwd → 左侧远程资源管理器自动刷新 | 9ec558e |
+| 3 | 本地 OSC 7 cwd 同步：根因 = xterm `OscParser.end()` 短路语义（后注册 handler 返回 `true` 会 break 掉先注册的 handler）+ `registerOsc7TeachTrigger` 永远返回 `true` → 改返回 `false` | ccb1af4 |
+| 4 | 容错收尾：`parseOsc7` Windows 盘符大小写归一化（`c:` → `C:`）；FileExplorer root 读取失败静默化（红 → 中性灰） | 14de3c5 |
+| 5 | 完整验收回归：本地 + SSH 双链路 CDP 实测 + 五绿门禁 852/852 | 14de3c5 |
+
+**核心架构变更**：
+
+```typescript
+// WorkspaceEnv 新增 ssh 变体（src/modules/workspace/env.ts）
+type WorkspaceEnv =
+  | { kind: "local" }
+  | { kind: "wsl"; distro: string }
+  | { kind: "ssh"; host: string; user: string; port: number; sessionId: string; label: string };
+```
+
+**关键数据流（终端 cd → 资源管理器刷新）**：
+
+```
+终端执行 cd /tmp
+  → shell 集成脚本发 OSC 7（ESC]7;file://host/path）
+  → registerCwdHandler 解析 cwd
+  → useTerminalSession 回调 onCwd(leafId, "/tmp")
+  → App.handleTerminalCwd
+      ├─ setLeafCwd(leafId, "/tmp")                     // 更新 tab.cwd
+      └─ (SSH Space) sshStore.setCurrentPath(sessionId, "/tmp")
+  → effectiveExplorerRoot 变化
+  → FileExplorer rootPath 变化
+  → useRemoteFileTree/useFileTree 刷新左侧文件树
+```
+
+**阶段 3 根因（重点教训）**：xterm `OscParser` 对同一 OSC ident 支持多 handler，`start()/put()` 全执行，但 `end()` **从后往前遍历、遇第一个返回 `true` 的 handler 即 break**。本地分支注册顺序 cwd handler（先）→ teach trigger（后），teach trigger 永远返回 `true` → cwd handler 的 `end()` 被吞。修复：`registerOsc7TeachTrigger` 改返回 `false`（观察者语义）。
+
+**关键文件**：
+- `src/modules/workspace/env.ts`（WorkspaceEnv ssh 变体）
+- `src/modules/spaces/components/SpaceCreateDialog.tsx`（本地/SSH Space 创建）
+- `src/modules/terminal/lib/osc-handlers.ts`（OSC 7 解析 + 盘符归一化 + teach trigger 短路修复）
+- `src/modules/explorer/FileExplorer.tsx`（`sshSession` prop + root 失败静默化）
+- `src/modules/tabs/lib/useWorkspaceCwd.ts`（`spaceRoot` 回退）
+- `src/app/App.tsx`（Space 切换同步 SSH 会话 + handleTerminalCwd 分流）
+
+**经验沉淀**：
+1. **PowerShell cd 失败天然保持 cwd**：`Set-Location` 到不存在路径报错且 `$PWD` 不变——"cd 到不存在目录"不会产生非法 explorerRoot，错误静默化只是防御性兜底
+2. **SSH 自动连接只在启动时触发一次**（App 顶层 effect）：断开后需重启 tauri:dev 才能恢复 SSH 场景
+3. **Windows 路径大小写归一化只需盘符**：完整路径大小写不能乱改（文件系统真实大小写），盘符是唯一确定大小写不敏感的部分
+4. **模块级状态改源码后必须重启 tauri:dev**：vite HMR 会分裂模块实例（`sessions` Map 分叉导致 `writeToSession` 返回 false 的迷惑现象）
+
 ---
 
 ## 4. 已知问题及解决方案
@@ -274,7 +330,7 @@ const r = await window.__TAURI_INTERNALS__.invoke('ipc_invoke', {
 | P1-NEW-v3-3 | P1 | SSH 主机审批无超时 | `rx.await` 永久挂起 | 642a4d0 |
 | P1-NEW-v3-4 | P1 | 线程池退出仍卡死 | 非 daemon 线程 atexit join | 642a4d0 |
 
-### 4.2 当前 backlog（按优先级，详见 dev-state.md §二十四）
+### 4.2 当前 backlog（按优先级，详见 dev-state.md §三十四/§三十五）
 
 #### P1（影响核心功能，建议优先修复）
 
@@ -414,10 +470,18 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 - `docs(<scope>):` 文档变更（含 dev-state.md 交接章）
 - `docs(reports):` 调研/审查报告
 
-### 5.10 关键 commit 节点（2026-07-30）
+### 5.10 关键 commit 节点（2026-07-30 ~ 2026-07-31）
 
 | commit | 内容 |
 |--------|------|
+| `14de3c5` | 终端/Space 重构 Phase 4+5（cwd 容错 + 完整验收回归） |
+| `ccb1af4` | 终端/Space 重构 Phase 3（本地 OSC 7 cwd 同步，短路根因修复） |
+| `9ec558e` | 终端/Space 重构 Phase 2（SSH OSC 7 cwd 同步） |
+| `6a89ddc` | 终端/Space 重构 Stage 1（Space 支持 SSH + UI 占位清理） |
+| `9ede372` | P1-P4 全面修复（AI 流式 + 深度思考 + Skill 调用 + 主题浅色 + 翻译深浅色） |
+| `f65150c` | 产品落地页 |
+| `dac90d2` | 删除 TDSFPanelSection 死代码 |
+| `64e9694` | 知识沉淀体系 L3 层建立（KNOWLEDGE-INDEX + HANDOVER） |
 | `ac8ec99` | dev-state §二十四交接章（v3 修复固化 + CDP 突破） |
 | `642a4d0` | v3 修复批次（9 项 P1/P2）+ v2/v3 审查报告 + v5 运维 agent 调研 |
 | `d72e1ad` | sidecar 流协议发 reasoning/工具行 part（前端隔离） |
@@ -453,7 +517,7 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 - [ ] 1. 读 `AGENTS.md`（一句话指路）
 - [ ] 2. 读 `CLAUDE.md`（规范总纲 + 防污染红线 + 五绿门禁 + 诊断方法论）
 - [ ] 3. 读 `docs/MULTI-AGENT-WORKFLOW.md`（多 agent 协作规范）
-- [ ] 4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §二十四）
+- [ ] 4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §三十四）
 - [ ] 5. 读 `docs/KNOWLEDGE-INDEX.md`（文档全貌导航）
 - [ ] 6. 读本文件（HANDOVER.md）
 - [ ] 7. `git status` + `git log --oneline -10` 确认当前代码状态
@@ -462,22 +526,24 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 - [ ] 10. `pnpm typecheck && pnpm lint && pnpm test && pnpm build:web` 前四绿验证
 - [ ] 11. `pnpm tauri:dev` 桌面端实测（窗口可见 + 本地终端 + SSH 可连）
 - [ ] 12. CDP 9222 实测（`curl http://127.0.0.1:9222/json`）验证 sidecar.health
-- [ ] 13. 按 dev-state.md §二十四 backlog 选任务推进
+- [ ] 13. 终端/Space 实测：本地终端 `cd` 后左侧资源管理器跟随刷新；SSH Space `cd /tmp` 后远程文件树刷新
+- [ ] 14. 按 dev-state.md §三十四/§三十五 backlog 选任务推进
 
 ---
 
-## 8. 运行时状态快照（2026-07-30）
+## 8. 运行时状态快照（2026-07-31）
 
 | 项目 | 状态 |
 |------|------|
-| typecheck / lint / test(832+) / build:web | ✅ 全绿 |
-| pytest（176+） | ✅ 全过 |
+| typecheck / lint / test(852) / build:web | ✅ 全绿 |
+| pytest | ✅ 全过 |
 | tauri:dev 桌面端 | ✅ 窗口可见 + 本地终端 + SSH 可连 + 远程文件树 |
-| CDP 9222 实测 | ✅ sidecar.health 返回 backend_activated=true + strands_available=true + agents_count=9 |
+| 终端/Space 重构 | ✅ 阶段 0-5 全部落地（Space 支持 SSH / OSC 7 cwd 同步 / 容错收尾） |
+| CDP 9222 实测 | ✅ 本地 + SSH 双链路 OSC 7 同步全过 |
 | Strands 后端 | ✅ TDSF_AGENT_BACKEND=strands 已激活 |
-| 最新 commit | `ac8ec99`（dev-state §二十四） |
+| 最新 commit | `14de3c5`（终端/Space 重构 Phase 4+5） |
 | v3 修复 commit | `642a4d0`（9 项 P1/P2，16 文件 / 4459 insertions） |
 
 ---
 
-> **最后更新**：2026-07-30 · v1.0 · 知识沉淀体系建立。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-07-31 · v1.1 · 终端/Space 重构完成 + 报告登记。上游参考：https://github.com/crynta/terax-ai

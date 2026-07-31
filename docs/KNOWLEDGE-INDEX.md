@@ -2,7 +2,7 @@
 
 > **位置**：`docs/KNOWLEDGE-INDEX.md`
 > **作用**：本项目所有文档的统一导航入口。任何 AI 或人接手项目，先读本文件了解文档全貌，再按需深入。
-> **版本**：v1.0（2026-07-30 · 知识沉淀体系建立）
+> **版本**：v1.1（2026-07-31 · 终端/Space 重构完成 + 报告登记）
 > **维护规则**：新增文档必须在此登记；文档废弃移入 `docs/reports/legacy/` 并在此标注
 > **上游参考**：https://github.com/crynta/terax-ai
 
@@ -32,12 +32,13 @@
 
 | 文档 | 路径 | 作用 | 当前版本 |
 |------|------|------|----------|
-| **当前状态/进度/已知问题** | `docs/dev-state.md` | ⭐**唯一进度记忆源**：§一到§二十四交接章，接手看末尾「§<N> 交接指南」 | §二十四（2026-07-30） |
+| **当前状态/进度/已知问题** | `docs/dev-state.md` | ⭐**唯一进度记忆源**：§一到§三十四交接章，接手看末尾「§<N> 交接指南」 | §三十四（2026-07-31） |
 
 **关键章节速查**：
 - §一~§七：项目初始状态 + 已知问题 + 大恢复经验 + SSH 集成真相
-- §八~§二十三：历次交接章（SSH 终端深度集成 / P0+P1 修复 / Strands 集成 / CDP 实测）
-- §二十四：最新交接章（v3 修复 commit 642a4d0 + CDP window.__TAURI_INTERNALS__ 突破）
+- §八~§二十四：历次交接章（SSH 终端深度集成 / P0+P1 修复 / Strands 集成 / CDP 实测）
+- §二十五~§二十九：知识沉淀体系 + 死代码清理 / P1-P4 AI 全面修复
+- §三十~§三十四：**终端/Space 架构重构全流程**（阶段 0 UI 清理 → 阶段 1 Space/SSH 集成 → 阶段 2 SSH OSC 7 cwd 同步 → 阶段 3 本地 OSC 7 cwd 同步 → 阶段 4+5 容错收尾 + 完整验收）
 
 ### 1.3 架构文档类（理解系统设计）
 
@@ -93,6 +94,10 @@
 | sidecar P0 修复方案 | `docs/reports/sidecar-p0-fix-plan.md` | sidecar P0 修复计划 | 已实施 |
 | 技术栈参考 | `docs/reports/tech-stack-references.md` | 技术栈官方文档索引 | 参考 |
 | 运维 agent 研究 | `docs/reports/ops-agent-research-2026-07-30.md` / `ops-agent-survey-2026-07-30.md` / `ops-agent-strands-integration-plan.md` / `ops-agent-tool-examples.md` | 早期运维 agent 研究 | 已被 v5 取代 |
+| **终端/Space 重构规划** | `docs/reports/terminal-space-refactor-plan.md` | 终端/Space 架构重构主规划（阶段 0-5） | ✅ 已全部实施 |
+| 终端问题根因分析 | `docs/reports/terminal-problem-analysis.md` | 终端问题清单 + 根因分析（OSC 7 / OscParser 短路等） | 参考 |
+| AI 流式/主题/翻译调研 | `docs/reports/ai-theme-translate-streaming-research-2026-07-31.md` | P1-P4 修复前综合调研（流式/深思考/浅色模式/翻译） | 已实施 |
+| 比赛材料冲突分析 | `docs/reports/contest-materials-integration-2026-07-31.md` | 比赛材料与实现 13 项冲突（4 项 P0） | 参考 |
 
 ### 1.7 比赛文档类
 
@@ -126,17 +131,19 @@
 1. 读 `AGENTS.md`（一句话指路）
 2. 读 `CLAUDE.md`（规范总纲 + 防污染红线 + 五绿门禁）
 3. 读 `docs/MULTI-AGENT-WORKFLOW.md`（多 agent 协作规范）
-4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §二十四）
+4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §三十四）
 5. 读本索引了解文档全貌
 6. 按需深入：架构问题看 §1.3，协议问题看 §1.4，bug 修复看 §1.5，运维 agent 集成看 §1.6
 
-### 2.2 我要修 SSH 终端相关 bug
+### 2.2 我要修 SSH 终端 / 终端-Space 相关 bug
 
-1. `docs/dev-state.md` §七（SSH 集成架构真相）+ §九（SSH 终端深度集成收尾）
-2. `docs/architecture/terminal-renderer-pool.md`（渲染池机制）
-3. `docs/architecture/pty-shell-integration.md`（PTY 集成）
-4. `docs/reports/upstream-terax-architecture.md`（上游对照）
-5. `CLAUDE.md` §2 架构地图（关键文件定位）
+1. `docs/dev-state.md` §七（SSH 集成架构真相）+ §九（SSH 终端深度集成收尾）+ §三十~§三十四（终端/Space 重构全流程）
+2. `docs/reports/terminal-space-refactor-plan.md`（终端/Space 重构主规划，阶段 0-5）
+3. `docs/reports/terminal-problem-analysis.md`（终端问题根因分析）
+4. `docs/architecture/terminal-renderer-pool.md`（渲染池机制）
+5. `docs/architecture/pty-shell-integration.md`（PTY 集成）
+6. `docs/reports/upstream-terax-architecture.md`（上游对照）
+7. `CLAUDE.md` §2 架构地图（关键文件定位）
 
 ### 2.3 我要改 AI Agent / Strands 后端
 
@@ -194,10 +201,18 @@
 - `docs(<scope>):` 文档变更（含 dev-state.md 交接章）
 - `docs(reports):` 调研/审查报告
 
-### 3.3 关键 commit 节点（2026-07-30）
+### 3.3 关键 commit 节点（2026-07-30 ~ 2026-07-31）
 
 | commit | 内容 |
 |--------|------|
+| `14de3c5` | **终端/Space 重构 Phase 4+5**：cwd 容错（盘符归一化 + root 静默化）+ 完整验收回归 |
+| `ccb1af4` | **终端/Space 重构 Phase 3**：本地终端 OSC 7 cwd 同步（OscParser 短路根因修复） |
+| `9ec558e` | **终端/Space 重构 Phase 2**：SSH Space OSC 7 cwd 同步 |
+| `6a89ddc` | **终端/Space 重构 Stage 1**：Space 环境支持 SSH（Space 级终端/资源管理器/cwd 隔离 + UI 占位清理） |
+| `9ede372` | P1-P4 全面修复（AI 流式 + 深度思考 + Skill 调用 + 主题浅色 + 翻译深浅色） |
+| `f65150c` | 产品落地页（promotional landing page） |
+| `dac90d2` | 删除 TDSFPanelSection 死代码 + 注释引用更新 |
+| `64e9694` | 知识沉淀体系 L3 层建立（KNOWLEDGE-INDEX + HANDOVER + dev-state §二十五） |
 | `ac8ec99` | dev-state §二十四交接章（v3 修复固化 + CDP 突破） |
 | `642a4d0` | v3 修复批次（9 项 P1/P2）+ v2/v3 审查报告 + v5 运维 agent 调研 |
 | `d72e1ad` | sidecar 流协议发 reasoning/工具行 part（前端隔离） |
@@ -236,4 +251,4 @@
 
 ---
 
-> **最后更新**：2026-07-30 · v1.0 · 知识沉淀体系建立。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-07-31 · v1.1 · 终端/Space 重构完成 + 调研报告登记。上游参考：https://github.com/crynta/terax-ai
