@@ -894,14 +894,45 @@ class TestTdsfStrandsCallbackHandler(unittest.TestCase):
         bus.emit_mood_change.assert_called_once()
         self.assertEqual(bus.emit_mood_change.call_args.kwargs["mood"], "error")
 
-    def test_current_tool_use_emits_tool_call(self):
-        """current_tool_use 事件应触发 emit_tool_call"""
+    def test_current_tool_use_does_not_emit_tool_call(self):
+        """current_tool_use 事件不应触发 emit_tool_call（2026-07-31 修复）
+
+        Strands 的 current_tool_use 是流式中途态（input 为残缺 JSON 字符串），
+        转发会产生 input={} 的空参数工具行；完整参数由工具实现内部 emit。
+        """
         bus = make_mock_event_bus()
         handler = TdsfStrandsCallbackHandler(bus, agent_name="main")
         handler(current_tool_use={"name": "ssh_command", "input": {"command": "ls"}})
-        bus.emit_tool_call.assert_called_once()
-        kwargs = bus.emit_tool_call.call_args.kwargs
-        self.assertEqual(kwargs["tool_name"], "ssh_command")
+        bus.emit_tool_call.assert_not_called()
+
+    def test_reasoning_text_emits_thinking(self):
+        """reasoningText 事件应触发 emit_agent_message(type=thinking)"""
+        bus = make_mock_event_bus()
+        handler = TdsfStrandsCallbackHandler(bus, agent_name="main", session_id="s1")
+        handler(reasoningText="让我先分析一下")
+        bus.emit_agent_message.assert_called_once()
+        kwargs = bus.emit_agent_message.call_args.kwargs
+        self.assertEqual(kwargs["content"], "让我先分析一下")
+        self.assertEqual(kwargs["message_type"], "thinking")
+
+    def test_strip_env_block(self):
+        """_strip_env_block 应剥离 <env> 块（thinking 展示不泄漏内部上下文）"""
+        from strands_backend.adapter import _strip_env_block
+
+        # 头部 env 块
+        text = "<env>\nworkspace_root: /\nactive_terminal_cwd: C:/Users/Lenovo\n</env>\n\n帮我看看负载"
+        self.assertEqual(_strip_env_block(text), "帮我看看负载")
+        # 无 env 块原样返回
+        self.assertEqual(_strip_env_block("普通问题"), "普通问题")
+        # 空串安全
+        self.assertEqual(_strip_env_block(""), "")
+        # 未闭合 env 块（防御）
+        self.assertEqual(_strip_env_block("<env>abc"), "")
+        # 中间 env 块
+        self.assertEqual(
+            _strip_env_block("前缀<env>x</env>后缀"),
+            "前缀后缀",
+        )
 
     def test_no_event_bus_does_not_raise(self):
         """event_bus=None 时不应抛错"""

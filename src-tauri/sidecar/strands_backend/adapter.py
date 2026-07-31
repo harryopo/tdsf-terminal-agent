@@ -94,6 +94,28 @@ _DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+def _strip_env_block(text: str) -> str:
+    """剥离前端注入的 <env>...</env> 上下文块
+
+    前端 transport.ts 会把 <env>workspace_root/active_terminal_cwd/...</env>
+    前缀注入到 input，只用于 LLM 上下文提示。若直接显示给用户（如 thinking
+    提示"开始处理: ..."）会泄漏内部上下文。此 helper 在展示前剥离该块。
+    """
+    if not text:
+        return text
+    stripped = text
+    while True:
+        start = stripped.find("<env>")
+        if start == -1:
+            break
+        end = stripped.find("</env>", start)
+        if end == -1:
+            stripped = stripped[:start].rstrip()
+            break
+        stripped = (stripped[:start] + stripped[end + len("</env>") :]).strip()
+    return stripped
+
+
 # ============================================================================
 # TdsfStrandsCallbackHandler — Strands 事件 → event_bus 转发
 # ============================================================================
@@ -128,7 +150,6 @@ class TdsfStrandsCallbackHandler:
         self.event_bus = event_bus
         self.agent_name = agent_name
         self.session_id = session_id
-        self._current_tool: str | None = None
         # 统计（调试用）
         self._stats = {
             "events_received": 0,
@@ -146,14 +167,19 @@ class TdsfStrandsCallbackHandler:
             logger.exception(f"callback handler error: {e}")
 
     def _handle_event(self, event: dict) -> None:
-        """处理单个 Strands 事件"""
-        # 工具调用开始
-        current_tool_use = event.get("current_tool_use")
-        if isinstance(current_tool_use, dict) and current_tool_use.get("name"):
-            tool_name = current_tool_use.get("name", "")
-            if tool_name and tool_name != self._current_tool:
-                self._current_tool = tool_name
-                self._emit_tool_call(tool_name, current_tool_use.get("input", {}))
+        """处理单个 Strands 事件
+
+        注意（2026-07-31 修复）：不在此处转发 current_tool_use 事件——
+        Strands 的 current_tool_use 是**流式中途态**（streaming.py 里 input
+        是逐 delta 拼接的残缺 JSON 字符串，block 结束才 json.loads），
+        直接 emit 会产生 input={} 的空参数工具行（前端显示 "Input {}"）。
+        工具实现内部（strands_backend/tools/*.py）会在拿到完整参数后
+        自行 emit started/completed，此处转发是冗余且错误的。
+        """
+        # 深度思考流（模型 reasoningContent 增量）→ thinking 消息
+        reasoning_text = event.get("reasoningText")
+        if reasoning_text and isinstance(reasoning_text, str):
+            self._emit_agent_message(reasoning_text, msg_type="thinking")
 
         # 文本增量 → agent_message（流式推送）
         data = event.get("data")
@@ -353,7 +379,7 @@ class StrandsAgentAdapter:
             self._emit_agent_message(
                 agent_id=agent_id,
                 session_id=session_id,
-                content=f"开始处理: {input[:100]}",
+                content=f"开始处理: {_strip_env_block(input)[:100]}",
                 msg_type="thinking",
             )
 
