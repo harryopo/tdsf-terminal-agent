@@ -1208,7 +1208,7 @@ async fn stderr_reader_task(stderr: tokio::process::ChildStderr) {
         // Python 日志格式: [sidecar] 2026-07-26 10:00:00 LEVEL name: message
         // 直接转发到 Rust log（避免日志丢失）
         log::info!("[python] {}", line);
-        // TDSF 魔改 P2-3: 同时写入全局日志缓冲区供前端 TDSFPanelSection 查看
+        // TDSF 魔改 P2-3: 同时写入全局日志缓冲区供前端设置页查看
         push_log(&format!("[python] {}", line));
     }
 
@@ -1543,7 +1543,7 @@ fn push_log(line: &str) {
     }
 }
 
-/// 读取 Sidecar 日志 (前端 TDSFPanelSection 调用)
+/// 读取 Sidecar 日志 (前端设置页调用)
 #[tauri::command]
 pub async fn sidecar_logs(
     limit: Option<usize>,
