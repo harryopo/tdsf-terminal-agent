@@ -2377,4 +2377,48 @@ CDP 截图归档：`.tdsf-data/cdp_p0_verify.png`
 - tauri:dev 运行中（PID 51332，CDP 9222 可用，TDSF_AGENT_BACKEND=strands 已激活）
 - CDP 实测脚本归档：`.tdsf-data/cdp_p0_verify.py` + `.tdsf-data/cdp_theme_check.py`
 - 比赛材料整合分析报告归档：`docs/reports/contest-materials-integration-2026-07-31.md`
-- 本 session 接手声明：main agent + 2 subagent，场景 B（并行子任务）+ 场景 C（主线 tauri:dev + CDP）
+
+---
+
+## §二十八 · 宣传页创建与 GitHub Pages 部署（2026-07-31）
+
+### 背景
+
+为 TDSF Terminal Agent 制作独立宣传页，并部署到个人 GitHub Pages，便于比赛/作品展示时直接分享链接。
+
+### 产物
+
+| 文件 | 说明 |
+|------|------|
+| `website/index.html` | 宣传页主文件（Hero + Features + Architecture + Gallery + Stack + CTA） |
+| `website/style.css` | 视觉样式：深渊暗系 + emerald 强调色 + 网格背景 + 滚动揭示动画 |
+| `website/script.js` | 终端打字机效果 + 滚动动画 + stagger 入场 |
+| `website/assets/logo.svg` | 项目 Logo |
+| `website/assets/screenshots/*.png` | 4 张界面截图（terminal / ssh-explorer / ai-panel / agent-teach） |
+| `website/assets/MapleMonoNF-Regular.ttf` | 等宽字体 |
+
+### 设计要点
+
+- 风格：Terax-ai 暗系 UI + emerald 强调色，与用户偏好一致
+- 布局：单页长滚动，无过度卡片堆叠，首屏为全幅 Hero
+- 动效：终端命令逐字打印、滚动 reveal、特性卡片 stagger 入场
+- 响应式：适配桌面与移动端
+
+### 部署
+
+- 目标仓库：`harryopo/harryopo.github.io`
+- 子目录：`/tdsf-terminal-agent/`
+- 访问地址：https://harryopo.github.io/tdsf-terminal-agent/
+- 首页导航：已在 `harryopo.github.io/index.html` 的 NAV 区新增入口卡片
+- 提交：`2c0f04c deploy(website): add TDSF Terminal Agent landing page`
+
+### 验证
+
+- 首页 https://harryopo.github.io/ 可访问，新卡片已显示
+- 子页 https://harryopo.github.io/tdsf-terminal-agent/ 可访问，标题正确
+- Playwright 全页截图已捕获（初始 404 为 Pages 缓存延迟，30 秒后正常）
+
+### 备注
+
+- 主仓库宣传页源码已在 `f65150c feat(website): add promotional landing page for TDSF Terminal Agent` 提交
+- 当前主仓库未提交改动（`src-tauri/sidecar/main.py` 等）与宣传页无关，由后续 session 处理
