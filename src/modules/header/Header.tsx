@@ -82,9 +82,6 @@ type Props = {
   spaceSwitcher: ReactNode;
   searchTarget: SearchTarget;
   searchRef: RefObject<SearchInlineHandle | null>;
-  // TDSF 魔改: 新增可选 props 用于整合 TdsfTitlebar 功能
-  /** 项目名（显示在 TDSF logo 右侧） */
-  projectName?: string;
   /** 当前 TDSF Agent（不传则从 chatStore 读取） */
   agentId?: TdsfAgentId;
   /** 切换 TDSF Agent（不传则用 chatStore 的 setter） */
@@ -118,7 +115,6 @@ export function Header({
   spaceSwitcher,
   searchTarget,
   searchRef,
-  projectName,
   agentId: agentIdProp,
   onAgentChange: onAgentChangeProp,
 }: Props) {
@@ -195,28 +191,6 @@ export function Header({
         >
           <HugeiconsIcon icon={SidebarLeftIcon} size={18} strokeWidth={1.75} />
         </Button>
-
-        {/* TDSF 魔改 2026-07-31: 顶栏左上角只显示工作区名, 对齐上游 terax。
-            产品 logo/名称移入窗口标题栏, 避免占用宝贵的水平空间。 */}
-        {projectName && !compact && (
-          <div
-            className="flex shrink-0 items-center gap-1 px-2"
-            data-tauri-drag-region
-          >
-            <img
-              src="/logo.svg"
-              alt=""
-              draggable={false}
-              className="size-4 shrink-0 rounded-[3px]"
-            />
-            <span
-              className="max-w-[120px] truncate text-[12px] font-medium text-foreground"
-              title={projectName}
-            >
-              {projectName}
-            </span>
-          </div>
-        )}
 
         {/* TDSF 魔改: Agent 状态指示器（v2026-07-29 改造：只读显示）
             - 旧版是 4 Agent Segmented Control，让用户手动切换

@@ -1143,11 +1143,29 @@ export function isSessionConnected(state: SshSessionInfo): boolean {
   return state.state === 'connected' && state.rustSessionId !== null;
 }
 
+/** 按 id 获取会话 (不存在时返回 null) */
+export function selectSessionById(
+  state: SshExplorerState,
+  id: string | null | undefined,
+): SshSessionInfo | null {
+  if (!id) return null;
+  return state.sessions.find((s) => s.id === id) ?? null;
+}
+
 /** 获取当前活跃会话的远程当前目录 (无活跃会话或未记录时返回 null) */
 export function selectActiveSessionCurrentPath(
   state: SshExplorerState,
 ): string | null {
   const id = state.activeSessionId;
+  if (!id) return null;
+  return state.currentPathBySession[id] ?? null;
+}
+
+/** 按 id 获取会话的远程当前目录 */
+export function selectSessionCurrentPath(
+  state: SshExplorerState,
+  id: string | null | undefined,
+): string | null {
   if (!id) return null;
   return state.currentPathBySession[id] ?? null;
 }

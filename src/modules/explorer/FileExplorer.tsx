@@ -12,6 +12,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
 import {
   selectActiveSession,
+  type SshSessionInfo,
   useSshStore,
 } from "@/modules/ssh-explorer/sshStore";
 import type { TerminalPathDropTarget } from "@/modules/terminal";
@@ -69,6 +70,8 @@ type Props = {
   gitStatus?: GitStatusSnapshot | null;
   /** TDSF 魔改 2026-07-29: 文件数据源, ssh 时复用 FileExplorer 显示远程文件 */
   source?: "local" | "ssh";
+  /** TDSF 修复 2026-07-31: 指定 SSH 会话, 优先于全局 active session */
+  sshSession?: SshSessionInfo | null;
 };
 
 type Row =
@@ -208,17 +211,19 @@ export const FileExplorer = memo(
       pathDropTarget,
       gitStatus,
       source = "local",
+      sshSession,
     },
     ref,
   ) {
     const activeSshSession = useSshStore(selectActiveSession);
-    const isRemote = source === "ssh" && activeSshSession !== null;
+    const resolvedSshSession = sshSession ?? activeSshSession;
+    const isRemote = source === "ssh" && resolvedSshSession !== null;
     const localTree = useFileTree(isRemote ? null : rootPath, {
       onPathRenamed,
       onPathDeleted,
     });
     const remoteTree = useRemoteFileTree(
-      isRemote ? activeSshSession : null,
+      isRemote ? resolvedSshSession : null,
       isRemote ? rootPath : null,
       { onPathRenamed, onPathDeleted },
     );
