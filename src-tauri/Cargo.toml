@@ -99,7 +99,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # git2 0.19: libgit2 1.8 绑定,提供 init_bare / commit / reset / blob / tree 全套 API
 # sha2 0.10: SHA-256 计算项目绝对路径哈希(用作影子仓库目录名)
 git2 = "0.19"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # T-P2-08: Docker 沙箱 (DEC-V321-10, bollard 0.17 稳定版)
 # bollard 0.17: 异步 Docker Daemon API 客户端,支持 Unix socket + Windows Named Pipe
