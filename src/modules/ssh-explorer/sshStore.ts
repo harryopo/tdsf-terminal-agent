@@ -160,6 +160,14 @@ interface SshExplorerState {
 
   // 文件树 actions
   listDir: (sessionId: string, path: string) => Promise<void>;
+  /**
+   * 仅更新当前目录路径，不触发网络请求。
+   *
+   * TDSF 修复 2026-07-31: 用于 SSH 终端 OSC 7 cwd 同步——终端里 cd
+   * 时先写路径，再由 useRemoteFileTree 的 rootPath effect 触发 listDir
+   * 刷新左侧资源管理器，避免与 navigateTo 重复请求后端。
+   */
+  setCurrentPath: (sessionId: string, path: string) => void;
   navigateTo: (sessionId: string, path: string) => Promise<void>;
   /**
    * 切换目录的展开/折叠状态。
@@ -623,6 +631,12 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       }));
       throw e;
     }
+  },
+
+  setCurrentPath: (sessionId, path) => {
+    set((s) => ({
+      currentPathBySession: { ...s.currentPathBySession, [sessionId]: path },
+    }));
   },
 
   navigateTo: async (sessionId, path) => {

@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-30 · P0-E 阶段 A 完成：Strands 1.50.2 真实包安装 + DeepSeek LLM 端到端实测全过（4/4 tests）。修复 Strands 1.50.2 移除 `max_iterations` 参数的真实 Bug。Critical Bug 修复链路在真实端到端路径中验证有效。接手请直接看 **§十五 交接指南**。
+> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 2 完成：OSC 7 cwd 同步实现，SSH 终端 `cd` 时左侧资源管理器自动刷新。五绿门禁前四门全过，`tauri:dev` 独立实测因另一 AI 占用 9300 端口待补。接手请直接看 **§三十二**。
 
 ---
 
@@ -2620,3 +2620,62 @@ CDP 截图归档：`.tdsf-data/cdp_p0_verify.png`
 - 本 AI 仅负责终端/Space 重构，**不修改 agent 模块文件**。
 - 阶段 0+1 改动未触及另一个 AI 正在完善的 agent 代码。
 - 进度将持续写入本文件，便于另一 AI 读取。
+
+## §三十二、终端/Space 架构重构 — 阶段 2 OSC 7 cwd 同步完成（2026-07-31）
+
+> 本节继续由负责终端重构的 AI 写入，记录阶段 2 实施结果：实现终端 `cd` 时左侧资源管理器自动刷新，对齐 Terax 原生行为。
+
+### 背景
+
+阶段 1 完成后，SSH Space 已能按 Space 隔离会话、文件树和 cwd，但终端里执行 `cd /tmp` 时左侧远程资源管理器不会跟随刷新——因为 `effectiveExplorerRoot` 读取的是 `sshStore.currentPathBySession`，而该值只在用户点击文件树/面包屑时才通过 `navigateTo` 更新，终端 OSC 7 cwd 事件没有写进去。
+
+### 阶段 2 改动文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/modules/ssh-explorer/sshStore.ts` | 新增 `setCurrentPath(sessionId, path)` action：仅更新 `currentPathBySession`，不触发网络请求。 |
+| `src/app/App.tsx` | `handleTerminalCwd` 在 `setLeafCwd` 之后，查找包含该 leaf 的 terminal tab；若 tab 已绑定 SSH 会话，则调用 `sshStore.setCurrentPath` 同步远程 cwd。本地路径仍走 `workspaceAuthorize`。 |
+
+### 数据流
+
+```
+SSH 终端执行 cd /tmp
+  → shell 集成脚本发出 OSC 7
+  → registerCwdHandler 解析出 /tmp
+  → useTerminalSession 回调 onCwd(leafId, "/tmp")
+  → App.handleTerminalCwd
+      ├─ setLeafCwd(leafId, "/tmp")  // 更新 tab.cwd
+      └─ sshStore.setCurrentPath(sessionId, "/tmp")  // 更新 currentPathBySession
+  → spaceSshCurrentPath 变化
+  → effectiveExplorerRoot 变化
+  → FileExplorer rootPath 变化
+  → useRemoteFileTree useEffect 触发 navigateTo(sessionId, "/tmp")
+  → 左侧远程资源管理器刷新为 /tmp
+```
+
+### 设计要点
+
+- **避免重复请求后端**：`setCurrentPath` 只改状态，真正的 `sftpList` 由 `useRemoteFileTree` 的 `rootPath` effect 统一触发一次。
+- **本地终端行为不变**：本地 tab 的 `sshSessionId` 为 `null`，仍走原 `workspaceAuthorize` 路径。
+- **按 tab 绑定隔离**：通过 `tabsRef.current.find(...hasLeaf(...))` 找到 leaf 所属 tab，再取 `tab.sshSessionId`，不依赖全局 active session，支持多 Space/多终端场景。
+
+### 五绿门禁状态（2026-07-31 实测）
+
+| 门禁 | 状态 |
+|------|------|
+| `pnpm typecheck` | ✅ 0 错误 |
+| `pnpm lint` | ✅ 0 错误 0 警告 |
+| `pnpm test` | ✅ 851/851 全过 |
+| `pnpm build:web` | ✅ 成功出 dist |
+| `pnpm tauri:dev` 桌面端实测 | ⚠️ 另一 AI 会话仍占用 9300 端口，独立启动失败；已通过 CDP 9222 连接其运行中的窗口，确认标题 `root@192.168.45.200: — /` 且 `.xterm` 容器正常存在。完整的「cd /tmp → 左侧刷新」实测待端口释放后补做。 |
+
+### 遗留与下一步
+
+- **端口占用**：`node.exe:36148` 仍占用 9300，为另一 AI 会话的 `tauri dev`；按用户要求不打扰，待释放后补做完整桌面实测。
+- **阶段 1 补测**：SSH Space/远程文件树/cwd 切换 + 阶段 2 的 OSC 7 同步，合并做一次完整实测。
+
+### 协作声明
+
+- 本 AI 仅负责终端/Space 重构，**不修改 agent 模块文件**。
+- 阶段 0+1+2 改动未触及另一个 AI 正在完善的 agent 代码。
+- 进度已写入本文件，便于另一 AI 读取。
