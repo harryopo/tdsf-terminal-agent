@@ -2967,3 +2967,24 @@ SSH 终端执行 cd /tmp
 | 2 | dev-log 增加 Rust 侧日志（tauri_plugin_log LogDir target）+ 时间线关联 | 待做 |
 | 3 | 工具行 Input 详情展示优化（ssh_command 等工具 renderInputPreview） | 待做 |
 | 4 | 既有 21 个 test_tools.py 单跑失败（全量跑通过，Strands mock 环境差异） | 待查 |
+
+### 37.7 SSH 状态不一致修复（终端已连 vs store 未连，2026-08-01）
+
+**现象**：SSH 终端正常工作（服务器 shell），但 SSH 侧边栏显示未连接、AI 对话称"未连接 SSH 会话"拒绝执行远程命令；手动点击连接后一切正常。
+
+**根因**（CDP 实测 + reload 复现，证据链）：
+1. Space env **持久化携带上个应用生命周期的旧 session UUID**（如 ac6b9165，store 里已不存在）
+2. 启动时 Space effect（App.tsx:289）无条件 `setActiveSession(旧 UUID)` → activeSessionId 指向**幽灵 session**
+3. 自动连接创建新 session（b96b4966）→ subscribe 只更新 Space env（setEnv）**从不修正 activeSessionId**
+4. `selectActiveSession` 找不到幽灵 session → null；`getSshRustSessionId`（useAiLiveBridge）查 activeSessionId → null → **AI env 块无 ssh_session_id**；SSH 面板同源误显未连接
+
+**修复**（3 处，治本+兜底）：
+1. `App.tsx` subscribe 新连接分支：setEnv 后**同步 setActiveSession(session.id)**——activeSessionId 与 Space/终端同源
+2. `App.tsx` Space effect：setActiveSession 加**存在性守卫**（sessions 里没有该 id 则跳过）
+3. `useAiLiveBridge.getSshRustSessionId`：activeSessionId 无效时**回退任意 connected session**
+
+**验证**（CDP reload 采样 + 真实 LLM 对话）：
+- reload 后 `activeId == spaceSsh == wsSsh`（同一 session）✓
+- env 块含 `ssh_session_id: 12` ✓
+- AI 对话"通过SSH查看服务器负载"→ 自动调用 inspect_processes/ssh_command，返回真实远程数据（load 0.00 / 446Mi 内存 / 12 在线用户）✓
+- 五绿门禁全过（typecheck/lint/vitest 853）
