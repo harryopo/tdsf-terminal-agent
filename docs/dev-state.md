@@ -2684,3 +2684,71 @@ SSH 终端执行 cd /tmp
 - 本 AI 仅负责终端/Space 重构，**不修改 agent 模块文件**。
 - 阶段 0+1+2 改动未触及另一个 AI 正在完善的 agent 代码。
 - 进度已写入本文件，便于另一 AI 读取。
+
+## §三十三、终端/Space 架构重构 — 阶段 3 本地终端 OSC 7 cwd 同步完成（2026-07-31）
+
+> 本节由负责终端重构的 AI 写入。阶段 3 目标：本地 PowerShell 终端执行 `cd` 后，左侧本地资源管理器根路径跟随刷新（对齐 Terax 原生行为）。**已达成**。
+
+### 背景与卡点
+
+阶段 2 只解决了 SSH Space（远程 cwd 写 `sshStore.currentPathBySession`）。本地终端理论上已注册 `registerCwdHandler`（`useTerminalSession.ts` 本地分支），但实测 `cd` 后 `leafCwd` 始终为 `null`，`onCwd` 从未触发。
+
+### 根因（源码级实证，Phase 3 最大收获）
+
+**xterm `OscParser.end()` 的"短路"语义 + `registerOsc7TeachTrigger` 返回 `true` 的组合 bug**：
+
+1. `OscParser` 对同一 OSC ident 支持**多 handler 并存**（数组），`start()`/`put()` 会全部执行；但 `end()` **从后往前遍历，遇到第一个返回 `true` 的 handler 就 `break`**（[OscParser.ts L145-183](file:///d:/ai/linux教学一体/tdsf-terminal-agent-clone/node_modules/@xterm/xterm/src/common/parser/OscParser.ts)）。
+2. 本地分支注册顺序：`registerCwdHandler`（先）→ `registerOsc7TeachTrigger`（后）。teach trigger 后注册 → 在 `end()` 循环中**先执行**，且**永远返回 `true`** → cwd handler 的 `end()` 被跳过，`onCwd` 永不触发。
+3. 阶段 2 的 SSH 分支只注册了 `registerCwdHandler` 一个 handler，无短路问题，所以 SSH 同步正常——本地分支"多了一个 teach trigger"就坏了。
+
+### 修复
+
+- `src/modules/terminal/lib/osc-handlers.ts`：`registerOsc7TeachTrigger` 回调**返回值改为 `false`**（不消费 OSC 7 事件），让先注册的 `registerCwdHandler` 继续执行。teach trigger 语义上只是"观察者"，返回 `false` 更正确。
+
+### 排查方法论（沉淀）
+
+1. **CDP 挂临时 OSC handler 探针**（`term.parser.registerOscHandler(7, ...)`）验证数据是否到达 parser——`osc7Probe` 收到 `file://HARRYOPO/C%3A/Users/Lenovo/TDSF_Phase3`，证明数据链路通、问题在 handler 链。
+2. **探针返回 `false` 实验**：probe 收到数据但 `leafCwd` 仍 null → 定位到"后注册 handler 短路先注册 handler"。
+3. **HMR 陷阱**：修改模块级状态（`sessions` Map）的源码后，vite HMR 会分裂出两份 Map（新模块 `writeToSession` 找不到旧 leaf）→ `writeToSession` 返回 `false` 的迷惑现象。**模块级状态场景必须重启 tauri:dev 验证**，不能靠 HMR。
+
+### 阶段 3 改动文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/modules/terminal/lib/osc-handlers.ts` | `registerOsc7TeachTrigger` 回调返回 `false`（不短路 `registerCwdHandler`），补注释说明 OscParser 短路语义。 |
+
+### CDP 实测记录（`cdp_phase3_final.py`，重启后的干净实例）
+
+```
+[4.cd-chain] {"ok1":true,"c1":"C:/Users/Lenovo","ok2":true,
+              "c2":"C:/Users/Lenovo/TDSF_Phase3",
+              "explorerRoot":"C:/Users/Lenovo/TDSF_Phase3",
+              "effective":"C:/Users/Lenovo/TDSF_Phase3"}
+[5.dom-evidence] {"dataRootPath":"C:/Users/Lenovo/TDSF_Phase3", ...}
+```
+
+- `cd C:/Users/Lenovo` → `leafCwd` 立即更新为 `C:/Users/Lenovo`
+- `cd C:/Users/Lenovo/TDSF_Phase3` → `leafCwd` 继续更新
+- `explorerRoot` / `effectiveExplorerRoot` / DOM `data-root-path` 三者全部同步 → 左侧资源管理器跟随刷新 ✅
+
+### 五绿门禁状态（2026-07-31 实测）
+
+| 门禁 | 状态 |
+|------|------|
+| `pnpm typecheck` | ✅ 0 错误 |
+| `pnpm lint` | ✅ 0 错误 0 警告 |
+| `pnpm test` | ✅ 851/851 全过（含 `osc-handlers.test.ts` 14 项） |
+| `pnpm build:web` | ✅ 成功出 dist |
+| `pnpm tauri:dev` 桌面端实测 | ✅ 重启干净实例，CDP 验证本地终端 `cd` 后 explorerRoot 三处同步 |
+
+### 遗留与下一步
+
+- **阶段 4 候选**（规划文档 `docs/reports/terminal-space-refactor-plan.md`）：cwd → Explorer 联动的收尾（如目录不存在时静默忽略、路径大小写归一化等边界）。
+- **阶段 1+2+3 合并补测**：待端口释放后做一轮「本地 + SSH 双 Space 人工桌面实测」。
+- 注意：SSH 自动连接（App 顶层 effect）在 tauri:dev 启动后会自动抢占 Space 并升级为 SSH Space——CDP 验证脚本已用 `disconnect()` 规避；若后续做人工桌面实测需留意此行为是否要改。
+
+### 协作声明
+
+- 本 AI 仅负责终端/Space 重构，**不修改 agent 模块文件**。
+- 阶段 3 改动仅 1 个文件（`osc-handlers.ts`），未触及另一个 AI 正在完善的 agent 代码。
+- 进度已写入本文件，便于另一 AI 读取。
