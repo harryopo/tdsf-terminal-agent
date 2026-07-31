@@ -609,8 +609,19 @@ export async function* runSidecarStream(
         input: p.params ?? {},
       });
     } else if (p.status === "completed" || p.status === "error") {
-      const toolCallId =
-        toolIdByName.get(name) ?? `${streamId}-tool-${++toolSeq}`;
+      const toolCallId = toolIdByName.get(name);
+      // 孤儿 completed 事件（无对应 started）：通常是上一次 invoke 的尾部
+      // tool_call 事件迟到，被新 invoke 的全局监听器捕获。若 fallback 生成
+      // 新 ID 会产出无 tool-input 配对的 tool-output，AI SDK 找不到对应
+      // tool invocation 直接抛错（"No tool invocation found for tool call ID"），
+      // 长对话连续发送时频繁复现。正确做法：忽略，不产生 part。
+      if (!toolCallId) {
+        console.info(
+          "[sidecar-adapter] tool_call completed without matching started, ignoring",
+          name,
+        );
+        return;
+      }
       toolIdByName.delete(name);
       queue.push({
         type: "tool-output",
