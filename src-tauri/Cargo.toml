@@ -50,7 +50,7 @@ log = "0.4"
 env_logger = "0.11"
 
 # HTTP 客户端 (AI 请求)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "stream"] }
 bytes = "1"
 futures-util = "0.3"
 
