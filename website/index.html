@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台</title>
+  <meta name="description" content="TDSF Terminal Agent 是一款面向 Linux 运维教学场景的桌面应用，集成本地终端、SSH 远程管理、AI Agent 与离线知识库。" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="grid-bg" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="#" class="brand">
+        <img src="assets/logo.svg" alt="TDSF" class="brand-logo" />
+        <span class="brand-text">TDSF Terminal Agent</span>
+      </a>
+      <nav class="main-nav" aria-label="主导航">
+        <a href="#features">核心能力</a>
+        <a href="#architecture">架构</a>
+        <a href="#gallery">界面</a>
+        <a href="#stack">技术栈</a>
+      </nav>
+      <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">GitHub</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-inner">
+        <div class="hero-copy">
+          <div class="eyebrow">
+            <span class="status-dot"></span>
+            基于 crynta/terax-ai v0.8.6 魔改
+          </div>
+          <h1 class="hero-title">
+            终端优先的<br />
+            <span class="accent">Linux 运维 AI 工作台</span>
+          </h1>
+          <p class="hero-lead">
+            本地终端、SSH 远程管理、AI Agent 智能辅助与离线知识库，全部整合在一款桌面应用中。为 Linux 运维教学打造，让“学、练、查、管”无缝衔接。
+          </p>
+          <div class="hero-actions">
+            <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener" class="btn btn-primary">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              查看源码
+            </a>
+            <a href="#features" class="btn btn-ghost">了解更多</a>
+          </div>
+          <div class="hero-meta">
+            <span><strong>105+</strong> IPC 命令</span>
+            <span><strong>9</strong> 个专职 Agent</span>
+            <span><strong>16</strong> 套主题</span>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="terminal-window">
+            <div class="terminal-titlebar">
+              <span class="terminal-dot red"></span>
+              <span class="terminal-dot yellow"></span>
+              <span class="terminal-dot green"></span>
+              <span class="terminal-title">tdsf — zsh</span>
+            </div>
+            <div class="terminal-body">
+              <div class="terminal-line">
+                <span class="prompt">$</span>
+                <span class="command typed" data-text="tdsf --about"></span>
+                <span class="cursor" aria-hidden="true"></span>
+              </div>
+              <div class="terminal-output">
+                <p>TDSF Terminal Agent v4.0.0</p>
+                <p>Linux 运维教学 · AI 工作台</p>
+                <p>本地 PTY / SSH / Agent / Knowledge</p>
+                <p class="output-line"><span class="accent">→</span> 就绪</p>
+              </div>
+              <div class="terminal-line">
+                <span class="prompt">$</span>
+                <span class="command typed" data-text="ssh root@lab-server"></span>
+                <span class="cursor" aria-hidden="true"></span>
+              </div>
+            </div>
+          </div>
+          <div class="glow" aria-hidden="true"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="features section">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="section-eyebrow">核心能力</p>
+          <h2 class="section-title">一个工作台，打通运维全流程</h2>
+          <p class="section-desc">从本地命令练习到远程服务器管理，从 AI 答疑到知识沉淀，无需在多个工具间来回切换。</p>
+        </div>
+
+        <div class="feature-list">
+          <article class="feature-item reveal">
+            <div class="feature-icon" aria-hidden="true">>_</div>
+            <div class="feature-content">
+              <h3>终端渲染池</h3>
+              <p>基于 xterm.js 6 的高性能终端，5 槽位渲染池 + DormantRing 回收机制，本地 PTY 与 SSH 远程终端统一渲染、切换保活。</p>
+            </div>
+          </article>
+          <article class="feature-item reveal">
+            <div class="feature-icon" aria-hidden="true">~</div>
+            <div class="feature-content">
+              <h3>SSH 远程管理</h3>
+              <p>纯 Rust SSH 客户端（russh 0.61），支持密码 / 公钥认证、SFTP 文件浏览与编辑、TOFU 主机密钥审批，凭据存入系统密钥库。</p>
+            </div>
+          </article>
+          <article class="feature-item reveal">
+            <div class="feature-icon" aria-hidden="true">✦</div>
+            <div class="feature-content">
+              <h3>AI Agent 系统</h3>
+              <p>9 个专职 Agent + PAOR 监督循环（Plan-Act-Observe-Reflect），主 Agent 自动分发任务，变更操作需审批，安全可控。</p>
+            </div>
+          </article>
+          <article class="feature-item reveal">
+            <div class="feature-icon" aria-hidden="true">⚲</div>
+            <div class="feature-content">
+              <h3>离线知识库</h3>
+              <p>ChromaDB 向量检索 + SQLite FTS5 关键词检索双路并行，断网也能即时检索运维知识与历史案例。</p>
+            </div>
+          </article>
+          <article class="feature-item reveal">
+            <div class="feature-icon" aria-hidden="true">◎</div>
+            <div class="feature-content">
+              <h3>安全审批机制</h3>
+              <p>4 层风险评估管道（L0-L4），AI 工具调用分级审批；SSRF 防护、路径拒绝列表、keyring 密钥存储守护安全边界。</p>
+            </div>
+          </article>
+          <article class="feature-item reveal">
+            <div class="feature-icon" aria-hidden="true">◐</div>
+            <div class="feature-content">
+              <h3>主题与个性化</h3>
+              <p>16 套精心调校的主题，基于 CSS 变量的主题系统，终端配色与 UI 主题联动，支持亮/暗模式无缝切换。</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture" class="architecture section alt">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="section-eyebrow">系统架构</p>
+          <h2 class="section-title">三进程分离，职责清晰</h2>
+          <p class="section-desc">Rust 主进程负责系统级操作，React 前端专注 UI，Python Sidecar 承载 AI 推理，彼此通过标准化协议松耦合通信。</p>
+        </div>
+
+        <div class="arch-grid">
+          <div class="arch-card reveal">
+            <div class="arch-head">
+              <span class="arch-badge rust">Rust</span>
+              <h3>Tauri 主进程</h3>
+            </div>
+            <ul class="arch-list">
+              <li>105+ Tauri IPC 命令注册表</li>
+              <li>PTY 管理（portable-pty）</li>
+              <li>SSH 客户端（russh + russh-sftp）</li>
+              <li>文件系统 / Git / 密钥管理</li>
+              <li>Sidecar 进程管理</li>
+            </ul>
+          </div>
+          <div class="arch-card reveal">
+            <div class="arch-head">
+              <span class="arch-badge react">React</span>
+              <h3>WebView 前端</h3>
+            </div>
+            <ul class="arch-list">
+              <li>React 19 + TypeScript 5.7</li>
+              <li>xterm.js 渲染池</li>
+              <li>CodeMirror 编辑器</li>
+              <li>25 个独立模块</li>
+              <li>zustand 状态管理</li>
+            </ul>
+          </div>
+          <div class="arch-card reveal">
+            <div class="arch-head">
+              <span class="arch-badge python">Python</span>
+              <h3>AI Sidecar</h3>
+            </div>
+            <ul class="arch-list">
+              <li>LangGraph PAOR 状态图</li>
+              <li>9 个 Agent + 9 个 MCP 工具</li>
+              <li>ChromaDB / FTS5 双路检索</li>
+              <li>JSON-RPC 2.0 over stdio</li>
+              <li>风险评估与决策引擎</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="protocol-flow reveal">
+          <div class="flow-step">
+            <span class="flow-label">前端</span>
+            <code>invoke()</code>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <span class="flow-label">Rust</span>
+            <code>Tauri IPC</code>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <span class="flow-label">Python</span>
+            <code>JSON-RPC</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="gallery" class="gallery section">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="section-eyebrow">界面预览</p>
+          <h2 class="section-title">原生桌面体验</h2>
+          <p class="section-desc">无边框窗口、自绘窗控、终端渲染池与 AI 面板在同一界面内协同工作。</p>
+        </div>
+
+        <div class="gallery-grid">
+          <figure class="gallery-item reveal wide">
+            <div class="gallery-frame">
+              <img src="assets/screenshots/terminal.png" alt="TDSF Terminal Agent 主界面" loading="lazy" />
+            </div>
+            <figcaption>主界面 · 终端 + 文件资源管理器</figcaption>
+          </figure>
+          <figure class="gallery-item reveal">
+            <div class="gallery-frame">
+              <img src="assets/screenshots/ai-panel.png" alt="AI Agent 面板" loading="lazy" />
+            </div>
+            <figcaption>AI Agent 面板</figcaption>
+          </figure>
+          <figure class="gallery-item reveal">
+            <div class="gallery-frame">
+              <img src="assets/screenshots/agent-teach.png" alt="教学 Agent" loading="lazy" />
+            </div>
+            <figcaption>Teach 教学模式</figcaption>
+          </figure>
+          <figure class="gallery-item reveal wide">
+            <div class="gallery-frame">
+              <img src="assets/screenshots/ssh-explorer.png" alt="SSH 资源管理器" loading="lazy" />
+            </div>
+            <figcaption>SSH 远程主机管理</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="stack" class="stack section alt">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="section-eyebrow">技术栈</p>
+          <h2 class="section-title">现代、安全、可扩展</h2>
+        </div>
+        <div class="stack-grid reveal">
+          <div class="stack-group">
+            <h4>桌面壳</h4>
+            <div class="stack-tags">
+              <span class="tag">Tauri 2</span>
+              <span class="tag">Rust</span>
+              <span class="tag">WebView2</span>
+            </div>
+          </div>
+          <div class="stack-group">
+            <h4>前端</h4>
+            <div class="stack-tags">
+              <span class="tag">React 19</span>
+              <span class="tag">TypeScript 5.7</span>
+              <span class="tag">Vite 6</span>
+              <span class="tag">Tailwind CSS 4</span>
+              <span class="tag">Radix UI</span>
+              <span class="tag">xterm.js 6</span>
+            </div>
+          </div>
+          <div class="stack-group">
+            <h4>后端 / 系统</h4>
+            <div class="stack-tags">
+              <span class="tag">portable-pty</span>
+              <span class="tag">russh 0.61</span>
+              <span class="tag">russh-sftp 2.1</span>
+              <span class="tag">keyring 3.6</span>
+              <span class="tag">git2 0.19</span>
+            </div>
+          </div>
+          <div class="stack-group">
+            <h4>AI 引擎</h4>
+            <div class="stack-tags">
+              <span class="tag">LangGraph</span>
+              <span class="tag">LangChain</span>
+              <span class="tag">ChromaDB</span>
+              <span class="tag">SQLite FTS5</span>
+              <span class="tag">Pydantic 2</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta section">
+      <div class="container">
+        <div class="cta-box reveal">
+          <h2>开始探索 TDSF Terminal Agent</h2>
+          <p>基于 terax-ai 开源基线持续演进，面向 Linux 运维教学场景打造。</p>
+          <div class="cta-actions">
+            <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener" class="btn btn-primary btn-lg">访问 GitHub</a>
+            <a href="#" class="btn btn-ghost btn-lg" onclick="event.preventDefault(); alert('下载功能待发布，请先访问 GitHub 源码。');">下载体验</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <img src="assets/logo.svg" alt="" class="footer-logo" />
+        <span>TDSF Terminal Agent</span>
+      </div>
+      <p class="footer-copy">基于 crynta/terax-ai v0.8.6 魔改 · 开源许可 Apache-2.0</p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
