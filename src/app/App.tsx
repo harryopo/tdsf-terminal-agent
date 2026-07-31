@@ -1440,7 +1440,16 @@ export default function App() {
   const handleTerminalCwd = useCallback(
     (leafId: number, cwd: string) => {
       setLeafCwd(leafId, cwd);
-      if (cwd && !authorizedCwds.current.has(cwd)) {
+
+      // TDSF 修复 2026-07-31 (Phase 2): SSH 终端 cd 时同步
+      // sshStore.currentPathBySession，让左侧远程资源管理器跟随终端 cwd
+      // 自动刷新。本地路径仍走 workspaceAuthorize 申请文件系统权限。
+      const tab = tabsRef.current.find(
+        (t) => t.kind === "terminal" && hasLeaf(t.paneTree, leafId),
+      );
+      if (tab?.kind === "terminal" && tab.sshSessionId && cwd) {
+        useSshStore.getState().setCurrentPath(tab.sshSessionId, cwd);
+      } else if (cwd && !authorizedCwds.current.has(cwd)) {
         authorizedCwds.current.add(cwd);
         native.workspaceAuthorize(cwd).catch(() => {
           authorizedCwds.current.delete(cwd);
