@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TDSF Logo 2026-07-28 v2 — 真正灰色重设计
+  =================================================================
+  Outsider Review P0-3 修复: 原版用 #0ea5e9/#38bdf8 钢蓝 + #10b981 绿色,
+  与用户要求"重设计灰色 logo"不符. v2 全部用灰色 (slate-200~900) 系,
+  无任何彩色.
+
+  设计目标:
+    - 纯灰色系, 替代原 emerald 绿色
+    - 体现"终端 + 智能体"双重属性: 终端窗口 + 提示符 >_
+    - 现代科技感, 接近 VSCode / Cursor / Linear 审美
+    - 适配 light/dark mode (中性灰在两种背景下都协调)
+
+  颜色方案 (全部 slate/gray 系):
+    - 背景渐变:  #1f2937 → #0f172a (slate-800 → slate-900)
+    - 终端窗口:   #f1f5f9 → #cbd5e1 (slate-100 → slate-300)
+    - 标题栏:     #475569 → #334155 (slate-600 → slate-700)
+    - 提示符/光标: #cbd5e1 (slate-300, 高亮灰)
+    - 文字:        #1e293b (slate-800)
+    - 状态点:      #94a3b8 (slate-400, 灰色)
+    - 装饰光晕:    #94a3b8 (slate-400, 0.08 透明度)
+
+  尺寸: 1024x1024 viewBox
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- 背景渐变: 深邃暗灰 -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f2937"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <!-- 终端窗口渐变: 浅灰 -->
+    <linearGradient id="windowGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f1f5f9"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </linearGradient>
+
+    <!-- 标题栏渐变: 中灰 -->
+    <linearGradient id="titleBarGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#475569"/>
+      <stop offset="100%" stop-color="#334155"/>
+    </linearGradient>
+
+    <!-- 提示符渐变: 高亮灰 (替代原 sky 钢蓝) -->
+    <linearGradient id="promptGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#94a3b8"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </linearGradient>
+
+    <!-- 阴影 -->
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="4" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.4"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 圆角方形背景 -->
+  <rect x="0" y="0" width="1024" height="1024" rx="200" ry="200" fill="url(#bgGrad)"/>
+
+  <!-- 装饰: 灰色光晕 (替代原 sky 钢蓝光晕) -->
+  <circle cx="180" cy="180" r="80" fill="#94a3b8" fill-opacity="0.08"/>
+  <circle cx="860" cy="860" r="100" fill="#cbd5e1" fill-opacity="0.06"/>
+
+  <!-- 终端窗口主体 -->
+  <g transform="translate(192 256)" filter="url(#softShadow)">
+    <!-- 窗口外框 -->
+    <rect x="0" y="0" width="640" height="512" rx="56" ry="56" fill="url(#windowGrad)"/>
+
+    <!-- 标题栏 -->
+    <path d="M 0 56 Q 0 0 56 0 L 584 0 Q 640 0 640 56 L 640 96 L 0 96 Z" fill="url(#titleBarGrad)"/>
+
+    <!-- 三个圆点: 灰色窗口控制按钮 -->
+    <circle cx="48" cy="48" r="14" fill="#64748b" fill-opacity="0.5"/>
+    <circle cx="92" cy="48" r="14" fill="#64748b" fill-opacity="0.5"/>
+    <circle cx="136" cy="48" r="14" fill="#64748b" fill-opacity="0.5"/>
+
+    <!-- 分隔线 -->
+    <line x1="0" y1="96" x2="640" y2="96" stroke="#94a3b8" stroke-width="2" stroke-opacity="0.5"/>
+
+    <!-- 终端内容: 命令行提示符 -->
+    <!-- 提示符 1: $ ls -->
+    <g transform="translate(56 200)">
+      <text x="0" y="0"
+            font-family="-apple-system, BlinkMacSystemFont, 'JetBrains Mono', monospace"
+            font-size="56"
+            font-weight="700"
+            fill="url(#promptGrad)">$</text>
+      <text x="56" y="0"
+            font-family="-apple-system, BlinkMacSystemFont, 'JetBrains Mono', monospace"
+            font-size="56"
+            font-weight="500"
+            fill="#1e293b">linux</text>
+    </g>
+
+    <!-- 提示符 2: $ ssh -->
+    <g transform="translate(56 296)">
+      <text x="0" y="0"
+            font-family="-apple-system, BlinkMacSystemFont, 'JetBrains Mono', monospace"
+            font-size="56"
+            font-weight="700"
+            fill="url(#promptGrad)">$</text>
+      <text x="56" y="0"
+            font-family="-apple-system, BlinkMacSystemFont, 'JetBrains Mono', monospace"
+            font-size="56"
+            font-weight="500"
+            fill="#1e293b">deploy</text>
+    </g>
+
+    <!-- 提示符 3: > AI 提示符 + 闪烁光标 -->
+    <g transform="translate(56 392)">
+      <text x="0" y="0"
+            font-family="-apple-system, BlinkMacSystemFont, 'JetBrains Mono', monospace"
+            font-size="56"
+            font-weight="700"
+            fill="url(#promptGrad)">&gt;</text>
+      <rect x="56" y="-44" width="36" height="56" rx="4" fill="url(#promptGrad)">
+        <animate attributeName="opacity" values="1;0;1" dur="1.2s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+
+    <!-- 角落状态点: 灰色 (替代原 emerald 绿) -->
+    <circle cx="592" cy="464" r="14" fill="#94a3b8"/>
+    <circle cx="592" cy="464" r="22" fill="none" stroke="#94a3b8" stroke-width="3" stroke-opacity="0.4">
+      <animate attributeName="r" values="14;28;14" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- TDSF 文字标记 (左下角) -->
+  <g transform="translate(80 920)">
+    <text x="0" y="0"
+          font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif"
+          font-size="48"
+          font-weight="700"
+          letter-spacing="-1"
+          fill="#f1f5f9">TDSF</text>
+  </g>
+
+  <!-- 副标题: 智能体 (右下角) -->
+  <g transform="translate(944 936)" text-anchor="end">
+    <text x="0" y="0"
+          font-family="-apple-system, BlinkMacSystemFont, 'Inter', sans-serif"
+          font-size="32"
+          font-weight="500"
+          fill="#64748b">Linux Agent</text>
+  </g>
+</svg>
