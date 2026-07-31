@@ -2835,3 +2835,135 @@ SSH 终端执行 cd /tmp
 - **大模型 API Key**（Strands + DeepSeek 真实 LLM 端到端验证）
 
 **验收标准**：每项任务完成 = 五绿门禁全过 + tauri:dev 桌面实测 + git commit 固化。
+
+---
+
+## 三十六、双问题修复（AI 调用失败 + 选词翻译）+ sidecar 编码契约闭环（2026-07-31）
+
+> 本节由主线 AI 写入。内容：①用户反馈的 2 个运行时问题全链路修复；②sidecar 的 **GBK/UTF-8 线协议不匹配**（stdout+stdin 双向）三层排查闭环；③better-harness（代码分析）同期修复识别；④下一步规划。
+
+### 36.1 用户反馈问题与修复
+
+| 问题 | 根因 | 修复 | 状态 |
+|------|------|------|------|
+| AI 对话报 "sidecar not running" | stdout GBK/UTF-8 不匹配（36.2） | UTF-8 三通道 + Rust 宽容解码 + write_message 容错 | ✅ 验证 |
+| AI 对话间歇性失败（30s 超时） | **stdin 方向**：Rust 写 UTF-8 → Python 按 gbk 解码 → 中文变 surrogate → Strands 序列化炸（36.2 补充） | stdin 也 reconfigure UTF-8 | ✅ 3/3 稳定 |
+| 终端划词不显示翻译卡片（SSH） | `SshTerminalHost` 未给 TerminalPane 传 ref → getSelection 未注册 | registerHandle prop + callback ref 上报 | ✅ 代码完成，待实测 |
+| 翻译开关默认关且不持久化 | enabled 默认 false、无 persist | localStorage 持久化 + 首次默认开启 | ✅ |
+| confidence.score 调用报错 | 前端传 message/history，后端签名 text/evidences | 后端加 message/history 兼容参数 | ✅ 验证 |
+
+### 36.2 sidecar 编码契约——最终根因（重要架构知识）
+
+**现象**：冷启动后 sidecar 每次都在 `registered method: status` 后静默死亡（AI 报 not_running / 一直查询后端状态）。
+
+**三层排查（每层硬证据）**：
+1. **第一层（误判）**：探针发现每次 `_stdout.write()` 报 `OSError(22) EINVAL` → 误判管道坏 → 加 write_message 容错。
+2. **第二层（纠偏）**：用户重启后仍崩且无容错日志；文件探针（不经管道）显示死亡点随机 + 无 faulthandler dump + 无 WER 事件 → **被 TerminateProcess**；Python 父进程同条件 spawn 成功 → 锁 Rust/tokio 侧。
+3. **第三层（真根因）**：独立 tokio 小程序复现 `InvalidData: stream did not contain valid UTF-8`。**因果链**：Windows 中文系统 → Python stdout 编码 **gbk** → `write_message(ensure_ascii=False)` 写含中文路径的 **gbk 字节** → Rust `BufReader::lines()` 严格 UTF-8 → InvalidData → reader 静默退出 → 误判 EOF → Crashed → **kill 子进程**（死亡点随机 = 中文行位置；写 EINVAL 是滞后现象）。
+
+**stdin 方向补充（AI 间歇性失败的根因）**：修复 stdout 后 AI 对话仍间歇 30s 超时（`UnicodeEncodeError: surrogates not allowed in position 1390`）。证据链：ASCII input 成功、中文 input 稳定失败、**纯 Python 进程（同 adapter 同 input）成功** → 锁定 **Rust→Python stdin**：Rust 写 UTF-8 请求行 → Python stdin 按 gbk 解码 → 中文被破坏成孤立 surrogate → Strands `create()` 请求序列化 utf-8 encode 抛错 → invoke 失败。
+
+**修复（三通道 + 双保险）**：
+
+| 层 | 修复 | 文件 |
+|----|------|------|
+| 正根 | `sys.stdin/stdout/stderr.reconfigure(encoding="utf-8")`（**三通道**） | main.py |
+| 防线 | Rust reader 改 `read_until(b'\n')` + `from_utf8_lossy`；EOF 打印子进程存活探针 | sidecar.rs |
+| 加固 | write_message 用 `buffer.write(line.encode("utf-8", errors="replace"))`（surrogate 不再丢消息）+ OSError/ValueError 容错 | main.py |
+| 加固 | `start()` 新增 Starting 并发守卫 + spawn 失败复位 Crashed | sidecar.rs |
+
+**验证**：独立 tokio 复现 GOT READY；应用内 restart 即恢复；**3/3 连续中文 invoke 全部 mood:done 完整回复**。
+
+**经验沉淀**：
+1. **跨语言 stdio 线协议必须三通道统一 UTF-8**（stdin/stdout/stderr 双向）：Python(gbk)↔Rust(UTF-8) 任何单向不匹配都会伪装成"进程崩溃/管道损坏/LLM 未配置"。
+2. `BufReader::lines()` 严格 UTF-8，读子进程输出用 `read_until + from_utf8_lossy`。
+3. 排查"进程死了"先分 kill vs crash：无 faulthandler dump + 无 WER + 死亡点随机 = TerminateProcess；文件探针是绕开管道疑云的关键。
+4. **AI 对话失败不要只看 LLM 配置**：先 ASCII/中文 input 对照 + 纯 Python 进程对照，快速定位编码通道问题。
+5. **写文件禁止 'w' 模式直接写可能含 surrogate 的字符串**（会截断清空文件）——本次 dev-state.md 被脚本截断为 0 字节，已从 git HEAD 恢复。
+
+### 36.3 better-harness（代码分析）同期修复识别（未提交）
+
+| 类别 | 修复 | 状态 |
+|------|------|------|
+| CI 门禁引用不存在脚本（High） | `check-types`→`typecheck`；删 `size`/`knip`；CONTRIBUTING/testing.md 同步 | ✅ |
+| Python 测试路径指向旧目录（High） | `test:python`→`src-tauri/sidecar`；.gitignore 路径修正 | ✅ |
+| 协作契约脱节（Medium） | `.agent-collaboration/` 归档至 `docs/archive/`；标注唯一准绳 | ✅ |
+| 约 19.5MB 未提交文档噪音（Medium） | docs/screenshots 67 项删除待提交 | ⚠️ 待提交 |
+| Python CI 作业评估 | `docs/reports/python-ci-job-evaluation-2026-07-31.md`（含 yaml 模板） | 📋 待实施 |
+
+**比赛材料（untracked）**：`docs/竞赛/项目说明书.md` + docx/pptx 生成脚本 + charts/。
+
+### 36.4 当前状态确认（2026-07-31 23:20）
+
+- sidecar：✅ running（strands + llm_configured=true + 中文 invoke 3/3 稳定）
+- 翻译：✅ 代码完成（SSH handle 注册 + 开关默认开/持久化），SSH 划词实测待用户
+- 门禁：✅ pytest 1284 / typecheck / lint / vitest 852 / build:web / cargo check
+- 未提交：本 session 6 文件 + harness 8 文件 + 67 删除 + 竞赛材料
+
+### 36.5 下一步规划
+
+| # | 任务 | 状态 |
+|---|------|------|
+| 0 | 分组提交固化（sidecar 编码修复 + 翻译 + harness CI 修复 + 截图删除 + 竞赛材料） | 待用户确认 |
+| 1 | 比赛材料收口 | untracked |
+| 2 | CI 增加 Python 作业（评估报告 yaml 模板） | 待实施 |
+| 3 | SSH 划词翻译人工实测（192.168.45.200） | 待验证 |
+| 4 | AI 侧 backlog P1（fix-loop / PAOR / toolCallId / exec_command） | 待做 |
+| 5 | P1-v5 系列增强 | 待做 |
+
+---
+
+## 三十七、AI 面板双问题修复 + 后端日志诊断系统（2026-08-01）
+
+> 本节由主线 AI 写入。内容：①SSH 工具行 "Input {}" 根因与修复；②深度思考 UI 泄漏 `<env>` 块根因与修复；③sidecar 日志落盘 + dev-log 诊断工具（后端检查测试系统 v1）。
+
+### 37.1 问题 1：SSH 工具行显示 "Input {}"（已修）
+
+**根因**（源码级实证）：Strands 的 `current_tool_use` 事件是**流式中途态**——`strands/event_loop/streaming.py` 里 input 是逐 delta 拼接的**残缺 JSON 字符串**（block 结束才 `json.loads`），且首个 delta 到达时 input 往往为 `""`。`strands_backend/adapter.py` 的 `TdsfStrandsCallbackHandler` 却直接 `current_tool_use.get("input", {})` emit started → `event_bus.emit_tool_call(params="" or {})` → 前端 tool-input input={} → 渲染 "Input {}"。
+
+**叠加问题**：同一工具会收到**两次 started**（handler 的残缺版 + 工具实现内部的完整版 `strands_backend/tools/*.py`），前端按 tool_name 配对（toolIdByName Map 覆盖）→ 产生一个永远无 output 的空工具行。
+
+**修复**（`strands_backend/adapter.py`）：handler **不再转发 current_tool_use** 事件——7 个 Strands 运维工具（ssh_command/remote_file/process_inspector/network_diagnostic/skill_invoke/suggest_command/log_analyzer）内部均已 emit 完整 params 的 started/completed，handler 转发是冗余且错误的。
+
+### 37.2 问题 2：深度思考 UI 显示 "开始处理: <env>..."（已修）
+
+**根因**：`adapter.py` invoke 里 `_emit_agent_message(content=f"开始处理: {input[:100]}", msg_type="thinking")`——input 含前端注入的 `<env>` 上下文块，被原样推送给思考 UI。
+
+**修复**：
+1. 新增 `_strip_env_block()` 剥离 `<env>...</env>` 块（展示前清理）
+2. handler 新增 **`reasoningText` 事件处理**（Strands `ReasoningTextStreamEvent`）→ `emit_agent_message(msg_type="thinking")` → **真实模型深度思考流**（CDP 实测生效：Reasoned 段显示模型真实推理）
+
+### 37.3 后端日志诊断系统 v1（已建）
+
+**动机**：sidecar 日志此前只走 stderr → Rust 转发 → 终端输出，进程退出即丢；排障只能现场抓。且 Python/Rust 两侧日志分散。
+
+**交付物**：
+1. **日志落盘**（`sidecar/main.py`）：RotatingFileHandler → `.tdsf-data/sidecar.log`（5MB × 3 轮转，UTF-8）。stderr 输出保留。
+2. **离线分析器**（`sidecar/devlog.py`，纯函数可测）：10 条诊断规则（P0 崩溃/被杀/编码 → P1 重启循环/LLM 未配置/invoke 失败/Strands 错误/sidecar not running → P2 超时/工具事件异常）+ 会话统计（就绪次数/invoke 数/tool_call 数）。
+3. **CLI**（`scripts/dev-log.py`）：`python scripts/dev-log.py`（分析）/ `--raw`（原始）/ `--follow`（tail -f）/ `--tail N` / `--log <path>`。
+4. **测试**：`sidecar/tests/test_devlog.py`（13 项规则验证）；pytest 1297 全过。
+
+**用法**：改 Python 代码后重启 dev → `python scripts/dev-log.py` 看诊断报告。
+
+### 37.4 实测结论（CDP，真实 LLM deepseek-v4-flash）
+
+- 发"查看一下这台服务器的负载情况"→ 工具行无 "Input {}"（Suggest 行摘要正常）✅
+- Reasoned 段显示模型真实思考（不再泄漏 `<env>`）✅
+- 遗留观察：agent 回复称"未连接 SSH 会话"，但 app 实际已连 root@192.168.45.200——`live.sshSessionId` 注入链待查（backlog）
+
+### 37.5 门禁状态
+
+| 门禁 | 状态 |
+|------|------|
+| pytest | ✅ 1297/1297（+13 devlog） |
+| typecheck / lint / vitest | ✅ 853/853 |
+| tauri:dev 桌面实测 | ✅ CDP 验证双修复生效 |
+
+### 37.6 下一步 backlog
+
+| # | 任务 | 状态 |
+|---|------|------|
+| 1 | live.sshSessionId 注入调查（agent 误判"未连接 SSH"） | 待查 |
+| 2 | dev-log 增加 Rust 侧日志（tauri_plugin_log LogDir target）+ 时间线关联 | 待做 |
+| 3 | 工具行 Input 详情展示优化（ssh_command 等工具 renderInputPreview） | 待做 |
+| 4 | 既有 21 个 test_tools.py 单跑失败（全量跑通过，Strands mock 环境差异） | 待查 |

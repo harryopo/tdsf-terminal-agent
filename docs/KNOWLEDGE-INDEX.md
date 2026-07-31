@@ -2,7 +2,7 @@
 
 > **位置**：`docs/KNOWLEDGE-INDEX.md`
 > **作用**：本项目所有文档的统一导航入口。任何 AI 或人接手项目，先读本文件了解文档全貌，再按需深入。
-> **版本**：v1.1（2026-07-31 · 终端/Space 重构完成 + 报告登记）
+> **版本**：v1.2（2026-07-31 · sidecar 编码契约 + 双问题修复 + better-harness 识别）
 > **维护规则**：新增文档必须在此登记；文档废弃移入 `docs/reports/legacy/` 并在此标注
 > **上游参考**：https://github.com/crynta/terax-ai
 
@@ -32,13 +32,15 @@
 
 | 文档 | 路径 | 作用 | 当前版本 |
 |------|------|------|----------|
-| **当前状态/进度/已知问题** | `docs/dev-state.md` | ⭐**唯一进度记忆源**：§一到§三十四交接章，接手看末尾「§<N> 交接指南」 | §三十四（2026-07-31） |
+| **当前状态/进度/已知问题** | `docs/dev-state.md` | ⭐**唯一进度记忆源**：§一到§三十七交接章，接手看末尾「§<N> 交接指南」 | §三十七（2026-08-01） |
 
 **关键章节速查**：
 - §一~§七：项目初始状态 + 已知问题 + 大恢复经验 + SSH 集成真相
 - §八~§二十四：历次交接章（SSH 终端深度集成 / P0+P1 修复 / Strands 集成 / CDP 实测）
 - §二十五~§二十九：知识沉淀体系 + 死代码清理 / P1-P4 AI 全面修复
 - §三十~§三十四：**终端/Space 架构重构全流程**（阶段 0 UI 清理 → 阶段 1 Space/SSH 集成 → 阶段 2 SSH OSC 7 cwd 同步 → 阶段 3 本地 OSC 7 cwd 同步 → 阶段 4+5 容错收尾 + 完整验收）
+- §三十六：**双问题修复 + sidecar GBK/UTF-8 根因闭环**（AI not_running / 选词翻译 / better-harness 识别）
+- §三十七：**AI 面板双问题修复（Input {} / thinking 泄漏 env）+ 后端日志诊断系统**（sidecar.log 落盘 + `scripts/dev-log.py`）
 
 ### 1.3 架构文档类（理解系统设计）
 
@@ -98,6 +100,7 @@
 | 终端问题根因分析 | `docs/reports/terminal-problem-analysis.md` | 终端问题清单 + 根因分析（OSC 7 / OscParser 短路等） | 参考 |
 | AI 流式/主题/翻译调研 | `docs/reports/ai-theme-translate-streaming-research-2026-07-31.md` | P1-P4 修复前综合调研（流式/深思考/浅色模式/翻译） | 已实施 |
 | 比赛材料冲突分析 | `docs/reports/contest-materials-integration-2026-07-31.md` | 比赛材料与实现 13 项冲突（4 项 P0） | 参考 |
+| Python CI 作业评估 | `docs/reports/python-ci-job-evaluation-2026-07-31.md` | 是否在 ci.yml 增加 Python 作业（含 yaml 模板 + 风险清单） | 建议实施 |
 
 ### 1.7 比赛文档类
 
@@ -131,7 +134,7 @@
 1. 读 `AGENTS.md`（一句话指路）
 2. 读 `CLAUDE.md`（规范总纲 + 防污染红线 + 五绿门禁）
 3. 读 `docs/MULTI-AGENT-WORKFLOW.md`（多 agent 协作规范）
-4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §三十四）
+4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §三十六）
 5. 读本索引了解文档全貌
 6. 按需深入：架构问题看 §1.3，协议问题看 §1.4，bug 修复看 §1.5，运维 agent 集成看 §1.6
 
@@ -251,4 +254,4 @@
 
 ---
 
-> **最后更新**：2026-07-31 · v1.1 · 终端/Space 重构完成 + 调研报告登记。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-07-31 · v1.2 · sidecar 编码契约 + 双问题修复 + better-harness 识别。上游参考：https://github.com/crynta/terax-ai
