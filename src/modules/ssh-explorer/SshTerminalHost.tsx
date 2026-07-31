@@ -143,21 +143,23 @@ export function SshTerminalHost({ sessionId, allocId, className, onLeafId }: Pro
               const dir = (cdMatch[1] ?? "~").trim() || "~";
               // 仅拦截简单的 cd 参数（不含 shell 元字符），防止误改复合命令。
               if (!/[;&|`$(){}[\]<>!"\\]/.test(dir)) {
-                // 让 shell 执行 cd 后发出 OSC 7；使用单引号包裹参数，避免简单空格问题。
-                // 采用八进制转义 \\033 / \\007，兼容 bash/dash 等更多默认 shell，
-                // 原 \\e / \\a 在 dash 等 shell 中不被识别。
-                // TDSF 修复 2026-07-31: 用固定 host "localhost" + $PWD 构造 OSC 7 URL。
-                // 实测 $HOSTNAME 在部分远端 shell 中未定义，导致 printf 输出不完整、
-                // xterm 无法识别为有效 OSC 7；$PWD 在 cd 后立即更新且始终为绝对路径。
-                const safeDir = dir.replace(/'/g, "'\\''");
-                const osc7 = `cd '${safeDir}' && printf '\\033]7;file://localhost%s\\007' "$PWD"\r`;
+                // TDSF 修复 2026-07-31: 合并为一行写入，确保 cd 与 printf
+                // 在同一 shell 进程中顺序执行；用 pwd -P 获取绝对真实路径，
+                // 避免 $PWD 在某些远端 shell/PTY 下未及时更新导致 cwd 滞后。
+                // ~ / - 是 shell 特殊参数，不包单引号以保留展开语义。
+                const isShellSpecial =
+                  dir === "~" || dir === "-" || dir.startsWith("~");
+                const safeDir = isShellSpecial
+                  ? dir
+                  : `'${dir.replace(/'/g, "'\\''")}'`;
+                const cmd = `cd ${safeDir}; printf '\\033]7;file://localhost%s\\007' "$(pwd -P)"\r`;
                 log?.push({
                   source: "SshTerminalHost.transport.write.cdRewrite",
-                  osc7,
+                  cmd,
                   dir,
                   safeDir,
                 });
-                return handle.write(osc7);
+                return handle.write(cmd);
               }
             }
           } else {

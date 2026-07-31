@@ -119,6 +119,15 @@ export function poolSize(): number {
   return slots.length;
 }
 
+// TDSF debug (Phase 2): 暴露指定 leafId 的 xterm Terminal 实例，供 CDP
+// 直接注入 OSC 7 字节，验证 xterm 解析链路。
+export function getSlotTerm(leafId: number): Terminal | null {
+  for (const s of slots) {
+    if (s.currentLeafId === leafId) return s.term;
+  }
+  return null;
+}
+
 // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
 // 只读不改业务逻辑，仅在 window.__TDSF_DBG__ 调用时执行
 export function getRendererPoolDebug(): {
