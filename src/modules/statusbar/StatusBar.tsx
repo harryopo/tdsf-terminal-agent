@@ -6,10 +6,7 @@ import {
 import { useChatStore } from "@/modules/ai";
 import { AgentStatusPill } from "@/modules/ai/components/AgentStatusPill";
 import { BackendPill } from "@/modules/ai/components/BackendPill";
-import {
-  AiOpenButton,
-  AiStatusBarControls,
-} from "@/modules/ai/components/AiStatusBarControls";
+import { AiStatusBarControls } from "@/modules/ai/components/AiStatusBarControls";
 import { MockLLMWarning } from "@/modules/ai/components/MockLLMWarning";
 import { LspStatusPill } from "@/modules/lsp";
 import type { WorkspaceEnv } from "@/modules/workspace";
@@ -65,8 +62,6 @@ type Props = {
   onCd: (path: string) => void;
   onWorkspaceChange: (env: WorkspaceEnv) => void;
   onOpenMini: () => void;
-  /** Opens the panel, or Settings > Models when no API key is loaded. */
-  onOpenAi: () => void;
   /** Only rendered when the AI panel is open and a key is loaded. */
   hasComposer: boolean;
   privateActive: boolean;
@@ -84,7 +79,6 @@ export function StatusBar({
   onCd,
   onWorkspaceChange,
   onOpenMini,
-  onOpenAi,
   hasComposer,
   privateActive,
   sshLocation,
@@ -124,15 +118,13 @@ export function StatusBar({
           </Tooltip>
         ) : null}
       </div>
+      {/* TDSF 魔改 2026-07-31: 统一 AI 入口为 Ctrl+I, 右下角只保留 AgentStatusPill。
+          点击 pill 打开 AI 面板, Ctrl+I 切换面板。移除重复的 "Open AI agent" 按钮。 */}
       <div className="flex shrink-0 items-center gap-1.5">
         <MockLLMWarning />
         <BackendPill />
-        <AgentStatusPill onClick={onOpenMini} />
-        {panelOpen && hasComposer ? (
-          <AiStatusBarControls />
-        ) : (
-          <AiOpenButton onOpen={onOpenAi} />
-        )}
+        <AgentStatusPill data-testid="statusbar-agent-status-pill" onClick={onOpenMini} />
+        {panelOpen && hasComposer ? <AiStatusBarControls /> : null}
       </div>
     </footer>
   );

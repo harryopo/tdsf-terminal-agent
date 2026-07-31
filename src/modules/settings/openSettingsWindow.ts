@@ -7,7 +7,6 @@ export type SettingsTab =
   | "shortcuts"
   | "models"
   | "agents"
-  | "tdsf" // TDSF 自研模块面板（T2.4 阶段新增）
   | "logs" // TDSF 魔改 (2026-07-28): 后端日志独立通路 - 子审查 agent 专用
   | "about";
 

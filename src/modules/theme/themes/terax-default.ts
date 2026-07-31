@@ -11,7 +11,7 @@ import type { Theme } from "../types";
 
 export const teraxDefault: Theme = {
   id: "terax-default",
-  name: "TDSF Default",
+  name: "Terax Default",
   description: "原生暗色/亮色主题 — 干净简洁的默认外观",
   variants: {
     light: {},

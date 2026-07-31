@@ -53,6 +53,11 @@ type Props = {
    * 来自 useTabs.allocId（共享 nextIdRef 计数器，与本地 leaf 不撞号）。
    */
   allocId?: () => number;
+  /**
+   * 2026-07-31 翻译模块修复: SSH 终端挂载时上报 leafId，App 层用于
+   * captureActiveSelection 感知 SSH 终端（SSH 终端不在 tab.paneTree 里）。
+   */
+  onSshLeafId?: (leafId: number) => void;
 };
 
 /**
@@ -85,6 +90,7 @@ export function WorkspaceSurface({
   onSwitchToSshFromEmptyState,
   sshSessionId,
   allocId,
+  onSshLeafId,
 }: Props) {
   const kind = activeTab?.kind;
   const isTerminalTab = kind === "terminal";
@@ -142,6 +148,7 @@ export function WorkspaceSurface({
             sessionId={sshSessionId}
             allocId={allocId}
             className="h-full w-full overflow-hidden rounded-md border border-border/40"
+            onLeafId={onSshLeafId}
           />
         </div>
       ) : null}

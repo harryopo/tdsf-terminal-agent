@@ -89,9 +89,11 @@ export const ICONS: Record<AgentIconId, typeof CodeIcon> = {
 export function AgentStatusPill({
   isMiniWindow,
   onClick,
+  "data-testid": dataTestId,
 }: {
   isMiniWindow?: boolean;
   onClick?: () => void;
+  "data-testid"?: string;
 }) {
   const currentSubAgent = useChatStore((s) => s.currentSubAgent);
   const status = useChatStore((s) => s.agentMeta.status);
@@ -105,6 +107,7 @@ export function AgentStatusPill({
 
   return (
     <Button
+      data-testid={dataTestId}
       size="xs"
       variant="ghost"
       disabled={!onClick}

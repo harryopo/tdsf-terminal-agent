@@ -342,17 +342,19 @@ export function TabBar({
                       ? "text-foreground dark:text-foreground"
                       : "text-muted-foreground hover:text-foreground/80 dark:text-muted-foreground",
                     draggingId === t.id && "opacity-50",
+                    // TDSF 魔改 2026-07-31: tab 内边距收窄, 同样空间容纳更多标签
                     compact
-                      ? "px-1.5!"
+                      ? "px-1!"
                       : tabs.length === 1
-                        ? "px-2!"
-                        : "ps-2! pe-1!",
+                        ? "px-1.5!"
+                        : "ps-1.5! pe-0.5!",
                   )}
                 >
                   <span
                     className={cn(
                       "flex min-w-0 items-center gap-1.5",
-                      compact ? "max-w-48" : "max-w-80",
+                      // TDSF 魔改 2026-07-31: tab 标签最大宽度收窄, 多页面时不易挤占工作区
+                      compact ? "max-w-32" : "max-w-48",
                     )}
                   >
                     {t.kind === "editor" ? (

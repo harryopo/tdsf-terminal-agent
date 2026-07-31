@@ -25,7 +25,7 @@ import {
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { COMMAND_GROUPS } from "./commands";
 import { useCommandHistory } from "./hooks/useCommandHistory";
 import {
@@ -182,10 +182,18 @@ export function CommandPalette({
     [insertCommand, runAfterClose],
   );
 
+  // TDSF 修复 2026-07-31: cmdk CommandItem 在部分环境下点击不触发 onSelect,
+  //   导致命令面板"切换主题"点击无反应。用 ref 锁防止 onSelect + onClick 重复提交。
+  const committingThemeRef = useRef(false);
   const commitTheme = useCallback(
     (id: string) => {
+      if (committingThemeRef.current) return;
+      committingThemeRef.current = true;
       setThemeId(id);
       handleOpenChange(false);
+      window.setTimeout(() => {
+        committingThemeRef.current = false;
+      }, 200);
     },
     [setThemeId, handleOpenChange],
   );
@@ -253,6 +261,7 @@ export function CommandPalette({
                     key={t.id}
                     value={`theme:${t.id}`}
                     onSelect={() => commitTheme(t.id)}
+                    onClick={() => commitTheme(t.id)}
                     className="text-[12.5px]"
                   >
                     <span className="truncate">{t.name}</span>

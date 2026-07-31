@@ -44,6 +44,7 @@ type Props = {
 
 export const SearchInline = forwardRef<SearchInlineHandle, Props>(
   function SearchInline({ target, compact }, ref) {
+    const wrapperTestId = "header-search";
     const [q, setQ] = useState("");
     // In compact mode the field is hidden behind an icon until activated.
     // In normal mode the field is always present.
@@ -134,8 +135,10 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
 
     return (
       <div
+        data-testid={wrapperTestId}
+        // TDSF 魔改 2026-07-31: 搜索框宽度从 152 收窄到 120, 给 tab 栏更多空间
         className="relative h-7 shrink-0 transition-[width] duration-200 ease-out"
-        style={{ width: expanded ? 192 : 28 }}
+        style={{ width: expanded ? 120 : 28 }}
       >
         {expanded ? (
           <div className="absolute inset-0 animate-in fade-in-0 duration-150">
