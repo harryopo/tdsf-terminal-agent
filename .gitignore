@@ -105,3 +105,6 @@ src-tauri/sidecar/_*.py
 src-tauri/sidecar/err.txt
 src-tauri/sidecar/out.txt
 src-tauri/sidecar/nul_input.txt
+
+# 参赛 PPT 生成工作流中间产物 (dashi-ppt 输出, 体积大不入库, 2026-07-31)
+output/
