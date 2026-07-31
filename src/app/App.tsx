@@ -111,7 +111,10 @@ import {
   writeToSession,
 } from "@/modules/terminal";
 // TDSF debug (#20): 仅用于 CDP 实测诊断（只读不改业务）
-import { getRendererPoolDebug } from "@/modules/terminal/lib/rendererPool";
+import {
+  getRendererPoolDebug,
+  getSlotTerm,
+} from "@/modules/terminal/lib/rendererPool";
 // TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
@@ -483,6 +486,9 @@ export default function App() {
       // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
       // getRendererPoolDebug 是只读函数, 不改业务逻辑
       rendererPool: () => getRendererPoolDebug(),
+      // TDSF debug (Phase 2): 暴露 xterm Terminal 实例，供 CDP 直接注入
+      // OSC 7 字节，隔离 xterm 解析层与 SSH 传输层。
+      getSlotTerm: (leafId: number) => getSlotTerm(leafId),
       // TDSF 修复 2026-07-30 (Bug 3): 暴露 getLive / getEnvBlock
       // 供 CDP 验证 Python agent 终端上下文感知 (<env> 块注入) 是否生效
       // 之前只挂了 rendererPool, CDP 没法验证 <env> 块是否注入到 messagesForRun
