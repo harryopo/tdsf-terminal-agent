@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 2 完成：OSC 7 cwd 同步实现，SSH 终端 `cd` 时左侧资源管理器自动刷新。五绿门禁前四门全过，`tauri:dev` 独立实测因另一 AI 占用 9300 端口待补。接手请直接看 **§三十二**。
+> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 2 完成并 commit（`9ec558e`）：OSC 7 cwd 同步实现，SSH 终端 `cd` 时左侧资源管理器自动刷新。五绿门禁全绿，`tauri:dev` + CDP `cdp_verify_osc7_sync_v3.py` 实测通过。接手请直接看 **§三十二**。
 
 ---
 
@@ -2667,12 +2667,17 @@ SSH 终端执行 cd /tmp
 | `pnpm lint` | ✅ 0 错误 0 警告 |
 | `pnpm test` | ✅ 851/851 全过 |
 | `pnpm build:web` | ✅ 成功出 dist |
-| `pnpm tauri:dev` 桌面端实测 | ⚠️ 另一 AI 会话仍占用 9300 端口，独立启动失败；已通过 CDP 9222 连接其运行中的窗口，确认标题 `root@192.168.45.200: — /` 且 `.xterm` 容器正常存在。完整的「cd /tmp → 左侧刷新」实测待端口释放后补做。 |
+| `pnpm tauri:dev` 桌面端实测 | ✅ 窗口可见、SSH 自动连上 `root@192.168.45.200`；CDP `cdp_verify_osc7_sync_v3.py` 通过：先 `cd /` 再 `cd /tmp` 后，左侧资源管理器 `data-root-path` 同步为 `/tmp`，文件条目路径均位于 `/tmp` 下。 |
+
+### 提交信息
+
+- **commit**: `9ec558e` — `feat(terminal): Phase 2 OSC 7 cwd sync for SSH Space`
+- **改动文件**: `src/app/App.tsx`、`src/modules/ssh-explorer/SshTerminalHost.tsx`、`src/modules/terminal/lib/rendererPool.ts`、`src/modules/ai/lib/sidecar-adapter.ts`（仅两条 `console.info` 调试日志）。
 
 ### 遗留与下一步
 
-- **端口占用**：`node.exe:36148` 仍占用 9300，为另一 AI 会话的 `tauri dev`；按用户要求不打扰，待释放后补做完整桌面实测。
-- **阶段 1 补测**：SSH Space/远程文件树/cwd 切换 + 阶段 2 的 OSC 7 同步，合并做一次完整实测。
+- **阶段 1+2 合并补测**：在释放的端口上做一轮完整的「新建 SSH Space → 远程文件树展开 → 终端 `cd /var/log` → 左侧刷新」人工桌面实测。
+- **阶段 3 候选**：本地终端同样接入 OSC 7 cwd 同步（目前仅 SSH Space 生效，本地路径仍走 `workspaceAuthorize`）。
 
 ### 协作声明
 
