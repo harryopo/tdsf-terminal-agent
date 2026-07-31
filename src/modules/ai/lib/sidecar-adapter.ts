@@ -78,6 +78,35 @@ const TOOL_DRAIN_MS = 30;
 const EVENT_MOOD_CHANGE = "sidecar:mood_change";
 const EVENT_TOOL_CALL = "sidecar:tool_call";
 const EVENT_AGENT_SWITCH = "sidecar:agent_switch"; // v2026-07-29: 主 Agent 路由子 Agent 事件
+
+// ============================================================================
+// 事件 payload 解包
+// ============================================================================
+
+/**
+ * 解包 Python event_bus 发送的事件 payload。
+ *
+ * Python 侧通过 JSON-RPC notification 推送的是 Event.to_dict()：
+ *   { event_type, payload, session_id, timestamp, source }
+ * Rust sidecar.rs 直接把这个 dict 作为 params 转发给前端，
+ * 因此前端 `e.payload` 是外层 Event dict，真正的业务数据在 `e.payload.payload`。
+ *
+ * 本 helper 统一处理两种形态（已包装 / 裸 payload），避免每个 listener 重复解包。
+ */
+function unwrapEventPayload<T>(payload: unknown): T | undefined {
+  if (payload == null) return undefined;
+  if (typeof payload !== "object") return payload as T;
+  const obj = payload as Record<string, unknown>;
+  // Python Event.to_dict 一定有 event_type + payload 字段
+  if (
+    "event_type" in obj &&
+    typeof obj.event_type === "string" &&
+    "payload" in obj
+  ) {
+    return obj.payload as T;
+  }
+  return payload as T;
+}
 /**
  * TDSF 修复 2026-07-31 (P1): 新增 agent_message 事件订阅。
  *
@@ -234,6 +263,7 @@ interface ToolCallPayload {
 interface AgentMessagePayload {
   content?: string;
   type?: string; // "thinking" | "output" | "tool_call" | "working"
+  message_type?: string; // 兼容旧字段名（event_bus 早期使用 message_type）
   agent?: string;
   [k: string]: unknown;
 }
@@ -413,8 +443,9 @@ async function registerSidecarListeners(
   if (onMood) {
     try {
       unlisteners.push(
-        await listen<{ mood?: string }>(EVENT_MOOD_CHANGE, (e) => {
-          const mood = e.payload?.mood;
+        await listen<unknown>(EVENT_MOOD_CHANGE, (e) => {
+          const p = unwrapEventPayload<{ mood?: string }>(e.payload);
+          const mood = p?.mood;
           if (mood) onMood(mood);
         }),
       );
@@ -429,8 +460,8 @@ async function registerSidecarListeners(
   if (onStep || onToolCall) {
     try {
       unlisteners.push(
-        await listen<ToolCallPayload>(EVENT_TOOL_CALL, (e) => {
-          const p = e.payload;
+        await listen<unknown>(EVENT_TOOL_CALL, (e) => {
+          const p = unwrapEventPayload<ToolCallPayload>(e.payload);
           if (!p) return;
           const name = p.tool_name;
           if (name && p.status === "started") onStep?.(`调用 ${name}`);
@@ -450,8 +481,8 @@ async function registerSidecarListeners(
   if (onAgentMessage) {
     try {
       unlisteners.push(
-        await listen<AgentMessagePayload>(EVENT_AGENT_MESSAGE, (e) => {
-          const p = e.payload;
+        await listen<unknown>(EVENT_AGENT_MESSAGE, (e) => {
+          const p = unwrapEventPayload<AgentMessagePayload>(e.payload);
           if (!p) return;
           onAgentMessage(p);
         }),
@@ -467,8 +498,11 @@ async function registerSidecarListeners(
   // 当前路由到的子 Agent（Teach / Coding / Debug / ...）。
   try {
     unlisteners.push(
-      await listen<{ agent?: string; task?: string }>(EVENT_AGENT_SWITCH, (e) => {
-        const agent = e.payload?.agent;
+      await listen<unknown>(EVENT_AGENT_SWITCH, (e) => {
+        const p = unwrapEventPayload<{ agent?: string; task?: string }>(
+          e.payload,
+        );
+        const agent = p?.agent;
         if (agent) {
           // 动态 import 避免循环依赖
           import("../store/chatStore").then((mod) => {
@@ -593,10 +627,14 @@ export async function* runSidecarStream(
   const onAgentMessage = (p: AgentMessagePayload) => {
     // TDSF debug 2026-07-31: 记录 agent_message 事件到 console，便于 CDP 排障
     // 生产环境日志量极小（每条消息一次），不影响性能
-    console.info("[sidecar-adapter] agent_message", p.type, p.content?.slice(0, 80));
+    const msgType = p.type ?? p.message_type ?? "output";
+    console.info(
+      "[sidecar-adapter] agent_message",
+      msgType,
+      p.content?.slice(0, 80),
+    );
     const content = p.content;
     if (!content) return;
-    const msgType = p.type ?? "output";
     if (msgType === "thinking") {
       // Agent 思考过程 → reasoning-delta（Reasoning 折叠段）
       streamedThinking += content;
