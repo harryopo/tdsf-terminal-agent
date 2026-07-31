@@ -434,7 +434,7 @@ pub fn run() {
             sidecar::sidecar_stop,
             sidecar::sidecar_restart,
             sidecar::sidecar_status,
-            // TDSF 魔改 P2-3: Sidecar 日志查看 (前端 TDSFPanelSection 调用)
+            // TDSF 魔改 P2-3: Sidecar 日志查看 (前端设置页调用)
             sidecar::sidecar_logs,
             sidecar::sidecar_logs_clear,
             ipc::ipc_invoke,
