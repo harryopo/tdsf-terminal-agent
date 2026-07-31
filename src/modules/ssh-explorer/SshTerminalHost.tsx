@@ -42,13 +42,21 @@ type Props = {
   allocId: () => number;
   /** 外层容器 className（border / rounded / overflow 等） */
   className?: string;
+  /**
+   * 2026-07-31 翻译模块修复: 挂载时上报分配的 leafId，让 App 层
+   * captureActiveSelection 能感知 SSH 终端的 leafId（SSH 终端不在
+   * tab.paneTree 里，tab.activeLeafId 指向本地终端，无法选中 SSH 文本）。
+   */
+  onLeafId?: (leafId: number) => void;
 };
 
-export function SshTerminalHost({ sessionId, allocId, className }: Props) {
+export function SshTerminalHost({ sessionId, allocId, className, onLeafId }: Props) {
   // 挂载时分配稳定 leafId，整个组件生命周期内不变（不放进 deps 防重订阅）
   const leafIdRef = useRef<number | null>(null);
   if (leafIdRef.current === null) {
     leafIdRef.current = allocId();
+    // 上报给 App 层（用于翻译/AI 选中捕获）
+    onLeafId?.(leafIdRef.current);
   }
   const leafId = leafIdRef.current;
 

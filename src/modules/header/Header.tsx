@@ -38,24 +38,13 @@ import {
   type SearchTarget,
 } from "./SearchInline";
 
-// === TDSF Agent 类型 + SUB_AGENT_DISPLAY（v2026-07-29 改造：统一主 Agent 入口）
-// 旧版：让用户手动切换 4 Agent Tab
-// 新版：所有消息统一走 'main' 入口，main_agent 自动路由到 8 个子 Agent
-// 顶部只读显示当前路由到的子 Agent 名
-type TdsfAgentId = "main" | "coder" | "explore" | "history" | "teach";
+// TDSF 魔改 2026-07-31: Header 内 Agent 状态 pill 直接复用 AgentStatusPill,
+// 与右下角状态栏风格统一, 去除独立彩色标签, 节省水平空间。
+import { AgentStatusPill } from "@/modules/ai/components/AgentStatusPill";
 
-/** 后端 agent name → 前端 label 映射（agent_switch 事件用） */
-const SUB_AGENT_DISPLAY: Record<string, { label: string; tone: string }> = {
-  main: { label: "Main", tone: "var(--color-foreground, currentColor)" },
-  coding: { label: "Coding", tone: "var(--color-emerald-500, #10b981)" },
-  explore: { label: "Explore", tone: "var(--color-sky-500, #0ea5e9)" },
-  history: { label: "History", tone: "var(--color-amber-500, #f59e0b)" },
-  teach: { label: "Teach", tone: "var(--color-violet-500, #8b5cf6)" },
-  debug: { label: "Debug", tone: "var(--color-rose-500, #f43f5e)" },
-  refactor: { label: "Refactor", tone: "var(--color-cyan-500, #06b6d4)" },
-  test: { label: "Test", tone: "var(--color-lime-500, #84cc16)" },
-  deploy: { label: "Deploy", tone: "var(--color-orange-500, #f97316)" },
-};
+// 新版：所有消息统一走 'main' 入口，main_agent 自动路由到 8 个子 Agent。
+// 顶部只读显示当前路由到的子 Agent 名（通过 AgentStatusPill）。
+type TdsfAgentId = "main" | "coder" | "explore" | "history" | "teach";
 
 // === mood 表情映射（与原 TdsfTitlebar 一致） ===============================
 const MOOD_FACE: Record<string, string> = {
@@ -137,13 +126,12 @@ export function Header({
   const [compact, setCompact] = useState(false);
   const [narrow, setNarrow] = useState(false);
 
-  // TDSF 魔改: 从 chatStore 读取 agent 状态（统一 Main 入口 + 子 Agent 路由状态 + mood）
+  // TDSF 魔改: 从 chatStore 读取 agent 状态（mood）
   const agentMeta = useChatStore((s) => s.agentMeta);
   const storeAgentId = useChatStore((s) => s.tdsfAgentId);
   const storeSetAgent = useChatStore((s) => s.setTdsfAgent);
-  const currentSubAgent = useChatStore((s) => s.currentSubAgent);
-  // v2026-07-29: 统一主 Agent 入口后，agentId/onAgentChange 仅作为 prop 兼容入口保留
-  // （保留对外 API 兼容性，但当前 Header 内部不再切换 Agent，统一只读显示 currentSubAgent）
+  // v2026-07-29: 统一主 Agent 入口后，agentId/onAgentChange 仅作为 prop 兼容入口保留。
+  // 子 Agent 路由状态由 AgentStatusPill 内部读取，Header 不再直接订阅 currentSubAgent。
   const agentId = agentIdProp ?? storeAgentId;
   const onAgentChange = onAgentChangeProp ?? storeSetAgent;
   void agentId;
@@ -208,10 +196,11 @@ export function Header({
           <HugeiconsIcon icon={SidebarLeftIcon} size={18} strokeWidth={1.75} />
         </Button>
 
-        {/* TDSF 魔改: 品牌区域（logo.svg + 产品名 + 项目名），简约灰色风格 */}
+        {/* TDSF 魔改 2026-07-31: 顶栏左上角只显示工作区名, 对齐上游 terax。
+            产品 logo/名称移入窗口标题栏, 避免占用宝贵的水平空间。 */}
         {projectName && !compact && (
           <div
-            className="flex shrink-0 items-center gap-2 px-2"
+            className="flex shrink-0 items-center gap-1 px-2"
             data-tauri-drag-region
           >
             <img
@@ -221,14 +210,7 @@ export function Header({
               className="size-4 shrink-0 rounded-[3px]"
             />
             <span
-              className="text-[12px] font-semibold tracking-tight text-foreground"
-              title="TDSF Terminal Agent"
-            >
-              TDSF Terminal
-            </span>
-            <span className="text-[10px] text-muted-foreground/40">/</span>
-            <span
-              className="max-w-[120px] truncate text-[11px] text-muted-foreground"
+              className="max-w-[120px] truncate text-[12px] font-medium text-foreground"
               title={projectName}
             >
               {projectName}
@@ -240,56 +222,9 @@ export function Header({
             - 旧版是 4 Agent Segmented Control，让用户手动切换
             - 新版是只读 pill，显示 main_agent 当前路由到的子 Agent
             - 用户无需选择，main_agent 在 Python 端根据意图自动路由 */}
-        {!narrow && (
-          <div
-            className="flex shrink-0 items-center gap-0.5 rounded-full p-0.5 mx-1"
-            style={{
-              background: "var(--color-muted, rgba(0,0,0,0.06))",
-              height: "22px",
-            }}
-            data-testid="header-agent-status"
-          >
-            {(() => {
-              const routed = currentSubAgent
-                ? SUB_AGENT_DISPLAY[currentSubAgent] ?? SUB_AGENT_DISPLAY.main
-                : SUB_AGENT_DISPLAY.main;
-              const isRouted = currentSubAgent && currentSubAgent !== "main";
-              const isBusy = mood === "thinking" || mood === "streaming";
-              return (
-                <div
-                  className="flex items-center gap-1.5 rounded-full px-2 font-mono"
-                  style={{
-                    height: "18px",
-                    fontSize: "10px",
-                    fontWeight: 600,
-                    color: routed.tone,
-                    background: isRouted
-                      ? "color-mix(in srgb, currentColor 12%, transparent)"
-                      : "var(--color-background, transparent)",
-                    cursor: "default",
-                  }}
-                  title={
-                    isRouted
-                      ? `主 Agent 正在调度 ${routed.label} Agent`
-                      : "统一主 Agent（自动路由到子 Agent）"
-                  }
-                  data-testid="header-agent-status-pill"
-                >
-                  <span
-                    className="inline-block size-1.5 rounded-full"
-                    style={{
-                      background: routed.tone,
-                      animation: isBusy
-                        ? "pulse 1.4s ease-in-out infinite"
-                        : "none",
-                    }}
-                  />
-                  {routed.label}
-                </div>
-              );
-            })()}
-          </div>
-        )}
+        {/* TDSF 魔改 2026-07-31: 复用 AgentStatusPill, 与右下角状态栏风格统一,
+            去除 Header 独立的彩色标签, 节省水平空间。 */}
+        {!narrow && <AgentStatusPill data-testid="header-agent-status-pill" />}
 
         {/* mood 表情（紧凑显示） */}
         {!narrow && (

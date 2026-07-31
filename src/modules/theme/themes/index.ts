@@ -21,7 +21,6 @@ import { nord } from "./nord";
 import { rosePine } from "./rose-pine";
 import { sage } from "./sage";
 import { solarized } from "./solarized";
-import { tdsfDefault } from "./tdsf-default";
 import { teraxDefault } from "./terax-default";
 import { tide } from "./tide";
 import { tokyoNight } from "./tokyo-night";
@@ -29,7 +28,6 @@ import { tokyoNight } from "./tokyo-night";
 /** 内置主题列表 */
 const BUILTIN: Theme[] = [
   teraxDefault,
-  tdsfDefault,
   tokyoNight,
   catppuccin,
   dracula,

@@ -19,6 +19,7 @@ import {
   useState,
 } from "react";
 import { applyTheme, clearTheme } from "./applyTheme";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { getBuiltinTheme, getDefaultTheme, listBuiltinThemes } from "./themes";
 import { listCustomThemes, onCustomThemesChange } from "./customThemes";
 import type { Theme } from "./types";
@@ -163,6 +164,19 @@ export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderP
     applyTheme(activeTheme, resolvedMode);
   }, [effectiveId, activeTheme, resolvedMode]);
 
+  // TDSF 修复 2026-07-31: 设置窗口修改 themeId 后, ThemeProvider 需与 preferences store 同步。
+  //   ThemeProvider 用 localStorage, 设置页用 tauri store, 两套存储不互通导致"点击主题按钮无反应"。
+  //   这里订阅 preferences store 的 themeId, 变化时覆盖本地状态并持久化到 localStorage。
+  const prefsThemeId = usePreferencesStore((s) => s.themeId);
+  const prefsHydrated = usePreferencesStore((s) => s.hydrated);
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    if (prefsThemeId && prefsThemeId !== themeId) {
+      setThemeIdState(prefsThemeId);
+      writeLS(LS_KEY_THEME_ID, prefsThemeId);
+    }
+  }, [prefsThemeId, prefsHydrated, themeId]);
+
   const setMode = useCallback((next: ThemeModePref) => {
     setModeState(next);
     writeLS(LS_KEY_MODE, next);
@@ -172,7 +186,17 @@ export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderP
     setPreviewId(null);
     setThemeIdState(id);
     writeLS(LS_KEY_THEME_ID, id);
-  }, []);
+    // TDSF 修复 2026-07-31: 主题切换需立即生效。
+    //   设置窗口与主窗口是独立 webview, 仅靠 useEffect 监听 preferences store
+    //   可能因 hydrate 竞态/引用未变导致不触发 applyTheme; 这里显式应用一次。
+    const resolved =
+      mode === "system" ? (systemDark ? "dark" : "light") : mode;
+    if (id === DEFAULT_THEME_ID) {
+      clearTheme();
+    } else {
+      applyTheme(resolveTheme(id, customThemes), resolved);
+    }
+  }, [mode, systemDark, customThemes]);
 
   const previewThemeId = useCallback((id: string | null) => {
     setPreviewId(id);
