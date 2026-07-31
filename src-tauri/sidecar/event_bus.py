@@ -398,8 +398,19 @@ class EventBus:
             message_type: 消息类型（thinking / working / output）
             session_id: 会话 ID
             source: 来源 Agent
+
+        TDSF 修复 2026-07-31 (P4): payload 字段名从 ``message_type`` 改为 ``type``，
+        与 ``agents/base.py::_emit_message`` 和前端 ``sidecar-adapter.ts`` 期望对齐。
+
+        之前字段名不一致导致：
+        - Strands 后端通过 ``emit_agent_message`` 推送的消息全部被前端误判为 output
+        - 深度思考 UI（thinking）无法显示
+        - LLM 文本流式输出全部走 output 通道（虽然能显示，但语义错乱）
+
+        base.py 的 ``_emit_message`` 直接 ``publish(Event(...))`` 用 ``"type"`` 字段，
+        本方法与之对齐，确保两条路径（LangGraph + Strands）的 payload 结构一致。
         """
-        payload = {"content": content, "message_type": message_type}
+        payload = {"content": content, "type": message_type}
         return self.publish(
             Event(
                 event_type=EventType.AGENT_MESSAGE.value,

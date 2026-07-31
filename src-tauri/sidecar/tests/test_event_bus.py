@@ -249,9 +249,11 @@ class TestEmitHelpers:
         bus.emit_agent_message(
             content="hello", message_type="thinking", source="main_agent"
         )
+        # TDSF 修复 2026-07-31 (P4): payload 字段名从 message_type 改为 type，
+        # 与 agents/base.py::_emit_message 和前端 sidecar-adapter.ts 期望对齐
         assert received[0].payload == {
             "content": "hello",
-            "message_type": "thinking",
+            "type": "thinking",
         }
 
     def test_emit_tool_call_started(self, bus: EventBus) -> None:
