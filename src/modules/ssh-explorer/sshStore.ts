@@ -37,6 +37,21 @@ import {
   joinRemotePath,
 } from '@/lib/sftp-bridge';
 
+// TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
+type Osc7LogEntry = Record<string, unknown>;
+
+declare global {
+  interface Window {
+    __TDSF_OSC7_LOG__?: Osc7LogEntry[];
+  }
+}
+
+function getOsc7Log(): Osc7LogEntry[] | null {
+  if (typeof window === "undefined") return null;
+  if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
+  return window.__TDSF_OSC7_LOG__;
+}
+
 // === 类型定义 ================================================================
 
 /** SSH 会话信息 (前端管理) */
@@ -634,6 +649,8 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   },
 
   setCurrentPath: (sessionId, path) => {
+    const log = getOsc7Log();
+    log?.push({ source: "sshStore.setCurrentPath", sessionId, path });
     set((s) => ({
       currentPathBySession: { ...s.currentPathBySession, [sessionId]: path },
     }));
