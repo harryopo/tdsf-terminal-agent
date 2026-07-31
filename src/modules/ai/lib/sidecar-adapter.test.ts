@@ -25,6 +25,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import type { UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   _setDevModeCheck,
   runSidecarStream,
@@ -547,5 +548,73 @@ describe("runSidecarStream — thinking 作为 reasoning part", () => {
     const firstReasoning = types.indexOf("reasoning-delta");
     const firstText = types.indexOf("text-delta");
     expect(firstReasoning).toBeLessThan(firstText);
+  });
+});
+
+describe("runSidecarStream — 孤儿 tool_call completed 事件忽略", () => {
+  it("completed 无对应 started → 不产生 tool-output（防止 SDK 'No tool invocation found'）", async () => {
+    _setDevModeCheck(() => false);
+    const listeners = new Map<string, (e: unknown) => void>();
+    vi.mocked(listen).mockImplementation(
+      ((event: string, cb: (e: unknown) => void) => {
+        listeners.set(event, cb);
+        return Promise.resolve(() => {
+          listeners.delete(event);
+        });
+      }) as never,
+    );
+    // 可控 invoke：先挂起，等事件触发后再 resolve，保证事件到达时 queue 未 close
+    let resolveInvoke!: (v: unknown) => void;
+    mockInvoke.mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolveInvoke = r;
+        }),
+    );
+
+    const stream = runSidecarStream({
+      agentId: "main",
+      messages: makeMessages("hi"),
+      input: "hi",
+      live: makeLive(),
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    // 启动执行（注册监听器 + 启动 invoke）
+    const first = iterator.next();
+
+    // 等监听器注册 + invoke 启动完成
+    await vi.waitFor(() =>
+      expect(listeners.has("sidecar:tool_call")).toBe(true),
+    );
+    await vi.waitFor(() => expect(typeof resolveInvoke).toBe("function"));
+    const toolCallCb = listeners.get("sidecar:tool_call")!;
+
+    // 1. started 事件 → 正常产生 tool-input
+    toolCallCb({
+      payload: {
+        event_type: "tool_call",
+        payload: { tool_name: "read_file", status: "started", params: {} },
+      },
+    });
+    // 2. 孤儿 completed（无对应 started，模拟上轮 invoke 尾部事件迟到串台）
+    toolCallCb({
+      payload: {
+        event_type: "tool_call",
+        payload: { tool_name: "read_file", status: "completed", result: "ok" },
+      },
+    });
+    resolveInvoke({ observation: "done", mood: "done" });
+
+    const parts: SidecarStreamPart[] = [];
+    parts.push((await first).value as SidecarStreamPart);
+    for (;;) {
+      const r = await iterator.next();
+      if (r.done) break;
+      parts.push(r.value);
+    }
+
+    expect(parts.some((p) => p.type === "tool-input")).toBe(true);
+    // 修复前：completed 会 fallback 新 ID 产生无配对的 tool-output；修复后：忽略
+    expect(parts.some((p) => p.type === "tool-output")).toBe(false);
   });
 });
