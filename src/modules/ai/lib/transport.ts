@@ -134,12 +134,17 @@ export function createContextAwareTransport(deps: Deps) {
       // active_terminal_mode</env> 前缀，main_agent.plan_task 的关键词路由
       // 能感知到当前终端上下文（之前 input 是裸文本，Python agent 看不到 cwd）。
       const input = extractLastUserText(messagesForRun);
+      // TDSF 修复 2026-07-31 (P2): 长对话消息裁剪
+      // 完整 messages 数组可能几十条，JSON 序列化后几 MB，导致 sidecar 传输慢 +
+      // LLM token 超限 + 长对话"卡住不回复"。保留最近 20 条，避免 token 爆炸。
+      // input 已从完整 messages 提取最后一条 user text，裁剪不影响 input。
+      const trimmedMessages = trimMessagesForSidecar(messagesForRun);
       // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文传给 Python agent
       // SidecarStreamOptions.live 必填，Python 侧 _build_tool_context / _build_prompt
       // 从 state.live 取 sshSessionId / cwd / activeFile 等
       const sidecarStream = runSidecarStream({
         agentId: tdsfAgent,
-        messages: messagesForRun,
+        messages: trimmedMessages,
         input,
         live,
         abortSignal: options.abortSignal,
@@ -224,6 +229,37 @@ function extractLastUserText(messages: UIMessage[]): string {
     }
   }
   return "";
+}
+
+/**
+ * TDSF 修复 2026-07-31 (P2): 长对话消息裁剪
+ *
+ * 问题：长对话（几十轮）时，完整 messages 数组通过 JSON-RPC 传给 Python
+ * sidecar，JSON 序列化后可能几 MB，导致：
+ *   1. JSON-RPC 传输慢
+ *   2. Python 端 json.loads 慢
+ *   3. LLM token 超限（多模型上下文窗口 8K-32K tokens）
+ *   4. 长对话"卡住不回复"（Python 端处理超时或 LLM 拒绝）
+ *
+ * 裁剪策略：保留最近 N 条消息（默认 20），避免长对话 token 爆炸。
+ *   - 消息总数 <= maxMessages → 不裁剪
+ *   - 消息总数 > maxMessages → 取最后 maxMessages 条
+ *   - 保留最后一条 user 消息（extractLastUserText 依赖它）
+ *
+ * 注意：这里只裁剪传给 sidecar 的 messages（用于 Python agent 上下文），
+ * 不影响 input 字段（已从完整 messages 提取最后一条 user text）。
+ *
+ * @param messages 完整对话历史
+ * @param maxMessages 最大保留条数（默认 20）
+ * @returns 裁剪后的 messages（如果是原数组的子数组，引用不变）
+ */
+function trimMessagesForSidecar(
+  messages: UIMessage[],
+  maxMessages: number = 20,
+): UIMessage[] {
+  if (messages.length <= maxMessages) return messages;
+  // 取最后 maxMessages 条（保留最近的对话上下文）
+  return messages.slice(messages.length - maxMessages);
 }
 
 function injectEnvIntoLastUser(

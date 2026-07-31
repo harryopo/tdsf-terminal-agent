@@ -34,19 +34,43 @@ import { TDSF_AGENTS, type TdsfAgentId } from "../agents/registry";
 
 // === 常量 ====================================================================
 
-/** Sidecar 调用超时（30s，与 PLANS 验收点一致） */
-const SIDECAR_TIMEOUT_MS = 30_000;
-
-/** 模拟流式输出的 chunk 大小（字符数） */
-const STREAM_CHUNK_SIZE = 24;
-
-/** 模拟流式输出的 chunk 间隔（ms，让 useChat 能逐 chunk 渲染） */
-const STREAM_CHUNK_DELAY_MS = 8;
+/**
+ * Sidecar 调用超时（60s）。
+ *
+ * TDSF 修复 2026-07-31 (P2): 从 30s 提升到 60s。
+ * 30s 超时对 Strands 后端 agentic loop（多轮工具调用 + LLM 推理）太紧，
+ * 导致长对话/复杂任务频繁超时。60s 给 Strands Agent 足够时间完成
+ * 3-5 轮工具调用的 agentic loop。
+ */
+const SIDECAR_TIMEOUT_MS = 60_000;
 
 /**
- * invoke 完成后等待 in-flight `sidecar:tool_call` 事件 drain 的窗口（ms）。
- * agent.invoke 返回即 PAOR 循环结束，工具事件应已发完，但 Tauri event
- * 跨进程传输有微小延迟，留一个短窗口避免漏掉最后一个 completed 事件。
+ * 模拟流式输出的 chunk 大小（字符数）。
+ *
+ * TDSF 修复 2026-07-31 (P1): 从 24 提升到 96。
+ * 24 字符/chunk 对长文本（5000+ 字符）会产生 200+ chunks，
+ * 每个 chunk 走一次 useChat 的 state 更新 + React 重渲染，
+ * 累积延迟明显（5000 字符 = 200 chunks × 8ms = 1.6s 额外延迟）。
+ * 96 字符/chunk 减少 75% 的 chunk 数，配合 delay=0 让伪流式接近实时。
+ */
+const STREAM_CHUNK_SIZE = 96;
+
+/**
+ * 模拟流式输出的 chunk 间隔（ms，让 useChat 能逐 chunk 渲染）。
+ *
+ * TDSF 修复 2026-07-31 (P1): 从 8ms 降为 0ms。
+ * 8ms 延迟累积起来对长文本很显著（200 chunks × 8ms = 1.6s）。
+ * 0ms 仍会通过 `await new Promise(r => setTimeout(r, 0))` 让出事件循环
+ * （让 React 有机会渲染当前 chunk），但不引入额外延迟。
+ */
+const STREAM_CHUNK_DELAY_MS = 0;
+
+/**
+ * invoke 完成后等待 in-flight `sidecar:tool_call` / `sidecar:agent_message`
+ * 事件 drain 的窗口（ms）。
+ *
+ * agent.invoke 返回即 PAOR 循环结束，事件应已发完，但 Tauri event
+ * 跨进程传输有微小延迟，留一个短窗口避免漏掉最后一个事件。
  */
 const TOOL_DRAIN_MS = 30;
 
@@ -54,6 +78,17 @@ const TOOL_DRAIN_MS = 30;
 const EVENT_MOOD_CHANGE = "sidecar:mood_change";
 const EVENT_TOOL_CALL = "sidecar:tool_call";
 const EVENT_AGENT_SWITCH = "sidecar:agent_switch"; // v2026-07-29: 主 Agent 路由子 Agent 事件
+/**
+ * TDSF 修复 2026-07-31 (P1): 新增 agent_message 事件订阅。
+ *
+ * Python 端 Strands 后端 TdsfStrandsCallbackHandler 把 Strands 的 `data`
+ * 事件（LLM 文本增量）通过 event_bus.emit_agent_message 实时推送，
+ * 前端订阅此事件实现**真正流式输出**（替代伪流式切片）。
+ *
+ * 同时 base.py BaseAgent._emit_message 在 plan/act/observe 各阶段推送
+ * thinking 类型消息，前端订阅后实现**深度思考 UI**（Reasoning 折叠段）。
+ */
+const EVENT_AGENT_MESSAGE = "sidecar:agent_message";
 
 // === 类型 ====================================================================
 
@@ -177,6 +212,32 @@ interface ToolCallPayload {
   result?: unknown;
 }
 
+/**
+ * `sidecar:agent_message` 事件 payload（与 Python event_bus.emit_agent_message 对齐）
+ *
+ * TDSF 修复 2026-07-31 (P1): 新增。
+ *
+ * event_bus.py:emit_agent_message 发布结构:
+ *   { content, type, agent, [tool], [params], ... }
+ *
+ * type 字段语义:
+ *   - "thinking": Agent 思考过程（plan/act/observe 各阶段）→ 前端 reasoning-delta
+ *   - "output":   LLM 文本增量（Strands callback_handler data 事件）→ 前端 text-delta
+ *   - "tool_call":工具调用描述（已被 sidecar:tool_call 覆盖，这里忽略）
+ *   - "working":  工作中状态（已被 sidecar:mood_change 覆盖，这里忽略）
+ *
+ * Strands 后端 TdsfStrandsCallbackHandler._emit_agent_message 把 LLM `data`
+ * 事件（文本增量）以 type="output" 推送，前端订阅后实现真正流式输出。
+ * BaseAgent._emit_message 在 plan 阶段推送 type="thinking"，前端订阅后
+ * 实现深度思考 UI（Reasoning 折叠段）。
+ */
+interface AgentMessagePayload {
+  content?: string;
+  type?: string; // "thinking" | "output" | "tool_call" | "working"
+  agent?: string;
+  [k: string]: unknown;
+}
+
 // === 内部工具函数 ============================================================
 
 /**
@@ -228,6 +289,77 @@ function mapToPythonName(agentId: TdsfAgentId): string {
 }
 
 /**
+ * 简单的 async queue（生产者-消费者模式）
+ *
+ * TDSF 修复 2026-07-31 (P1): 新增。
+ *
+ * 用途：解决"async generator 在 await invoke() 期间无法 yield"的矛盾。
+ *
+ * 架构问题：
+ *   - runSidecarStream 是 async generator，主流程 `await invoke(...)` 阻塞
+ *     等待完整结果
+ *   - sidecar:agent_message / sidecar:tool_call 事件在 invoke 期间实时到达，
+ *     需要实时 yield 给 useChat 渲染
+ *   - 但 async generator 不能在 await 期间 yield
+ *
+ * 解决方案：AsyncQueue
+ *   - 事件监听器（生产者）把 SidecarStreamPart push 到 queue
+ *   - 主流程（消费者）用 Promise.race 在 invoke 和 queue.next() 之间竞争
+ *   - queue 有 item → yield item
+ *   - invoke 完成 → close queue，drain 剩余 items，处理最终 result
+ *
+ * 这样实现**真正流式输出**：Strands 后端的 LLM 文本增量、工具调用、
+ * 思考过程都实时推送到前端，不再等 invoke 完成后一次性 yield。
+ */
+function createAsyncQueue<T>() {
+  const items: T[] = [];
+  const waiters: Array<(v: IteratorResult<T>) => void> = [];
+  let closed = false;
+
+  return {
+    /** 生产者：push 一个 item 到 queue，唤醒等待的消费者 */
+    push(item: T): void {
+      if (closed) return;
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter({ value: item, done: false });
+      } else {
+        items.push(item);
+      }
+    },
+    /** 消费者：取下一个 item（如果没有就等待，queue close 后返回 done） */
+    next(): Promise<IteratorResult<T>> {
+      if (items.length > 0) {
+        return Promise.resolve({ value: items.shift()!, done: false });
+      }
+      if (closed) {
+        return Promise.resolve({ value: undefined as never, done: true });
+      }
+      return new Promise<IteratorResult<T>>((resolve) => {
+        waiters.push(resolve);
+      });
+    },
+    /** 关闭 queue：所有等待的消费者收到 done */
+    close(): void {
+      if (closed) return;
+      closed = true;
+      while (waiters.length > 0) {
+        const waiter = waiters.shift()!;
+        waiter({ value: undefined as never, done: true });
+      }
+    },
+    /** 当前 queue 中的 item 数（不含已消费的） */
+    get size(): number {
+      return items.length;
+    },
+    /** queue 是否已关闭 */
+    get isClosed(): boolean {
+      return closed;
+    },
+  };
+}
+
+/**
  * 把长文本切成若干 chunk 流式 yield（模拟真实 LLM 流式输出）
  *
  * Python 端 `agent.invoke` 是同步返回完整 dict，不是流式。
@@ -255,13 +387,15 @@ async function* streamText(
 }
 
 /**
- * 注册 Tauri event 监听器，把 Python event_bus 推送的 mood/step 事件
+ * 注册 Tauri event 监听器，把 Python event_bus 推送的 mood/step/tool/message 事件
  * 转发给上层回调
  *
  * 监听的事件:
  *   - sidecar:mood_change: Agent 心情变化（如 thinking → streaming）
- *   - sidecar:tool_call:   Agent 调用工具（用于显示 step 进度）
- *   - sidecar:agent_message: Agent 中途推送的消息片段（暂不处理，预留）
+ *   - sidecar:tool_call:   Agent 调用工具（用于显示 step 进度 + 工具行渲染）
+ *   - sidecar:agent_message: Agent 中途推送的消息片段（thinking/output 流式）
+ *     TDSF 修复 2026-07-31 (P1): 新增订阅，实现真正流式输出 + 深度思考 UI
+ *   - sidecar:agent_switch: 主 Agent 路由子 Agent 事件
  *
  * 监听失败不致命（如非 Tauri 环境运行测试时），主流程继续。
  *
@@ -271,6 +405,7 @@ async function registerSidecarListeners(
   onMood?: (mood: string) => void,
   onStep?: (step: string | null) => void,
   onToolCall?: (payload: ToolCallPayload) => void,
+  onAgentMessage?: (payload: AgentMessagePayload) => void,
 ): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [];
 
@@ -300,6 +435,25 @@ async function registerSidecarListeners(
           const name = p.tool_name;
           if (name && p.status === "started") onStep?.(`调用 ${name}`);
           if (name) onToolCall?.(p);
+        }),
+      );
+    } catch {
+      // 同上
+    }
+  }
+
+  // TDSF 修复 2026-07-31 (P1): agent_message 事件订阅
+  // Strands 后端 TdsfStrandsCallbackHandler 把 LLM `data` 事件（文本增量）
+  // 以 type="output" 推送，BaseAgent._emit_message 在 plan 阶段推送 type="thinking"。
+  // 前端订阅后实时 yield 为 text-delta / reasoning-delta，实现真正流式 +
+  // 深度思考 UI（替代伪流式切片 + 无 thinking 的旧方案）。
+  if (onAgentMessage) {
+    try {
+      unlisteners.push(
+        await listen<AgentMessagePayload>(EVENT_AGENT_MESSAGE, (e) => {
+          const p = e.payload;
+          if (!p) return;
+          onAgentMessage(p);
         }),
       );
     } catch {
@@ -343,20 +497,44 @@ async function registerSidecarListeners(
 /**
  * 调用 Sidecar Agent 并以 AsyncIterable 形式返回流式输出
  *
+ * TDSF 修复 2026-07-31 (P1): 重构为 AsyncQueue 模式，实现真正流式输出。
+ *
+ * 旧方案问题：
+ *   - `await invoke(...)` 阻塞等待完整结果，期间 sidecar:agent_message /
+ *     sidecar:tool_call 事件实时到达但无法 yield（async generator 限制）
+ *   - invoke 完成后才一次性 yield 所有工具调用 + 切片 output（伪流式）
+ *   - 无深度思考 UI（result.thinking 通常为空，event 推送的 thinking 被丢弃）
+ *
+ * 新方案（AsyncQueue）：
+ *   1. 创建 AsyncQueue<SidecarStreamPart>
+ *   2. 事件监听器（生产者）：
+ *      - onToolCall → push tool-input/tool-output part（工具实时流式）
+ *      - onAgentMessage type="thinking" → push reasoning-delta（深度思考 UI）
+ *      - onAgentMessage type="output" → push text-delta（LLM 文本实时流式）
+ *   3. 主流程（消费者）：
+ *      - 启动 invoke（不 await，用 Promise）
+ *      - Promise.race([invokePromise, queue.next()])
+ *        - queue 有 item → yield item（实时流式）
+ *        - invoke 完成 → break
+ *      - close queue，drain 剩余 items
+ *   4. invoke 完成后处理最终 result：
+ *      - 如果 event 推送了 output（streamedOutput 非空）→ 跳过 result.observation 切片（避免重复）
+ *      - 否则 → 走伪流式切片 result.observation（LangGraph 后端兼容）
+ *      - yield result.teaching_content（TeachAgent 专属，event 不推送）
+ *   5. yield finish
+ *
  * 协议:
  *   1. 映射 agentId → Python AGENT_REGISTRY key（如 coder → coding）
- *   2. 注册 Tauri event 监听器（mood / tool_call）
- *   3. 调用 invoke('ipc_invoke', {method:'agent.invoke', params:{name, state:{input, messages}}})
- *      带 30s 超时保护
- *   4. 拿到 dict 结果后，把 thinking + output 切片流式 yield
- *   5. 错误时:
- *      - 开发模式 + invoke 失败 → 降级到 mock 响应（不抛错，让 UI 继续）
+ *   2. 注册 Tauri event 监听器（mood / tool_call / agent_message）
+ *   3. 调用 invoke('ipc_invoke', {method:'agent.invoke', params:{name, state:{input, messages, live}}})
+ *      带 60s 超时保护
+ *   4. 错误时:
  *      - 生产模式 + invoke 失败 → yield error
  *      - 任意模式 + 超时 → yield error
- *   6. abortSignal 触发时立即返回（已 yield 的 chunk 保留）
+ *   5. abortSignal 触发时立即返回（已 yield 的 chunk 保留）
  *
  * @param opts 调用参数（agentId / messages / input / abortSignal / 回调）
- * @yields SidecarStreamPart（text-delta / finish / error）
+ * @yields SidecarStreamPart（text-delta / reasoning-delta / tool-input / tool-output / finish / error）
  */
 export async function* runSidecarStream(
   opts: SidecarStreamOptions,
@@ -369,20 +547,27 @@ export async function* runSidecarStream(
   // TDSF 魔改: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
   const teachingId = `${streamId}-teaching`;
 
-  // 工具调用收集：sidecar:tool_call 事件在 invoke 期间实时到达，先收集成
-  // tool part，待 invoke 完成后按序 yield（reasoning → 工具行 → 文本），
-  // 与上游 Terax 消息内顺序一致。toolIdByName 把同一工具的 started/completed
-  // 两个事件配对到同一 toolCallId（sidecar PAOR 串行执行，按 tool_name 配对即可）。
-  const collectedTools: SidecarStreamPart[] = [];
+  // === AsyncQueue：生产者（事件监听器）push part，消费者（主流程）yield ===
+  const queue = createAsyncQueue<SidecarStreamPart>();
+
+  // 跟踪 event 推送的 thinking/output（用于 invoke 完成后去重，避免与 result 重复）
+  let streamedThinking = "";
+  let streamedOutput = "";
+
+  // 工具调用配对：toolIdByName 把同一工具的 started/completed 两个事件
+  // 配对到同一 toolCallId（sidecar PAOR 串行执行，按 tool_name 配对即可）。
   const toolIdByName = new Map<string, string>();
   let toolSeq = 0;
+
+  // onToolCall 回调：把工具事件转成 tool-input/tool-output part，push 到 queue
+  // （TDSF 修复 2026-07-31 P1: 实时流式，不再收集到数组等 invoke 完成）
   const onToolCall = (p: ToolCallPayload) => {
     const name = p.tool_name;
     if (!name) return;
     if (p.status === "started") {
       const toolCallId = `${streamId}-tool-${++toolSeq}`;
       toolIdByName.set(name, toolCallId);
-      collectedTools.push({
+      queue.push({
         type: "tool-input",
         toolCallId,
         toolName: name,
@@ -392,7 +577,7 @@ export async function* runSidecarStream(
       const toolCallId =
         toolIdByName.get(name) ?? `${streamId}-tool-${++toolSeq}`;
       toolIdByName.delete(name);
-      collectedTools.push({
+      queue.push({
         type: "tool-output",
         toolCallId,
         toolName: name,
@@ -402,130 +587,187 @@ export async function* runSidecarStream(
     }
   };
 
-  // 1. 注册事件监听器
-  const unlisten = await registerSidecarListeners(onMood, onStep, onToolCall);
+  // onAgentMessage 回调：把 agent_message 事件转成 reasoning-delta/text-delta part
+  // （TDSF 修复 2026-07-31 P1: 实现深度思考 UI + LLM 文本真正流式）
+  const onAgentMessage = (p: AgentMessagePayload) => {
+    const content = p.content;
+    if (!content) return;
+    const msgType = p.type ?? "output";
+    if (msgType === "thinking") {
+      // Agent 思考过程 → reasoning-delta（Reasoning 折叠段）
+      streamedThinking += content;
+      queue.push({ type: "reasoning-delta", id: thinkingId, delta: content });
+    } else if (msgType === "output") {
+      // LLM 文本增量 → text-delta（assistant message 主体）
+      streamedOutput += content;
+      queue.push({ type: "text-delta", id: outputId, delta: content });
+    }
+    // type="tool_call" / "working" 已被 sidecar:tool_call / sidecar:mood_change 覆盖，忽略
+  };
+
+  // 1. 注册事件监听器（传入 onAgentMessage 订阅 sidecar:agent_message）
+  const unlisten = await registerSidecarListeners(
+    onMood,
+    onStep,
+    onToolCall,
+    onAgentMessage,
+  );
 
   try {
     onStep?.("调用 Sidecar Agent");
 
-    // 2. 调用 Python agent.invoke（带 30s 超时）
-    let result: AgentInvokeResult | null = null;
+    // 2. 启动 invoke（不 await，用 Promise 在 race 中竞争）
     let invokeError: string | null = null;
+    let invokeResolve: ((v: AgentInvokeResult | null) => void) | null = null;
+    const invokePromise = new Promise<AgentInvokeResult | null>((resolve) => {
+      invokeResolve = resolve;
+    });
 
-    try {
-      const timeout = new Promise<never>((_, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error("Sidecar 调用超时（30s）")),
-          SIDECAR_TIMEOUT_MS,
-        );
-        // 让 abortSignal 触发时能立即 reject（避免 Promise 泄漏）
-        abortSignal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(new Error("用户取消"));
-          },
-          { once: true },
-        );
-      });
+    // 超时 + abort 保护
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Sidecar 调用超时（${SIDECAR_TIMEOUT_MS / 1000}s）`)),
+        SIDECAR_TIMEOUT_MS,
+      );
+      abortSignal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("用户取消"));
+        },
+        { once: true },
+      );
+    });
 
-      // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
-      // Python 端 StrandsAgentAdapter._build_tool_context() 从 state.live 取 sshSessionId
-      // 填充 ToolContext.ssh_session_id（运维工具据此调 ssh_command/sftp_*），
-      // _build_prompt() 从 state.live 取 cwd/activeFile 注入 <live_context> 块给 LLM。
-      //
-      // 注意：sshSessionId 在 JSON 序列化时 number 会被 Python json 解析为 int，
-      // null 会被解析为 None。Python 侧 _build_tool_context 用 live.get("sshSessionId", "")
-      // or "" 转 str，工具内部再 int(session_id) 转回 int 调 Rust。
-      // （JSON round-trip 后 sshSessionId 已是 Python int，or "" 仅在 None 时兜底为 str）
-      const raw = await Promise.race([
-        invoke<AgentInvokeResult>("ipc_invoke", {
-          method: "agent.invoke",
-          params: {
-            name: pythonName,
-            state: { input, messages, live },
-          },
-        }),
-        timeout,
+    // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
+    // Python 端 StrandsAgentAdapter._build_tool_context() 从 state.live 取 sshSessionId
+    // 填充 ToolContext.ssh_session_id（运维工具据此调 ssh_command/sftp_*），
+    // _build_prompt() 从 state.live 取 cwd/activeFile 注入 <live_context> 块给 LLM。
+    const invokeTask = (async () => {
+      try {
+        const raw = await Promise.race([
+          invoke<AgentInvokeResult>("ipc_invoke", {
+            method: "agent.invoke",
+            params: {
+              name: pythonName,
+              state: { input, messages, live },
+            },
+          }),
+          timeout,
+        ]);
+        return raw;
+      } catch (err) {
+        invokeError = err instanceof Error ? err.message : String(err);
+        return null;
+      }
+    })();
+    // invokeTask 完成后 resolve invokePromise
+    invokeTask.then((r) => invokeResolve?.(r));
+
+    // 3. 消费循环：Promise.race 在 invoke 和 queue.next() 之间竞争
+    //    - queue 有 item → yield item（实时流式）
+    //    - invoke 完成 → break
+    let invokeDone = false;
+    while (!invokeDone) {
+      if (abortSignal?.aborted) {
+        queue.close();
+        return;
+      }
+      // 等待 queue 有 item 或 invoke 完成
+      const queueNext = queue.next();
+      const result = await Promise.race([
+        invokePromise.then((r) => ({ kind: "invoke" as const, value: r })),
+        queueNext.then((r) => ({ kind: "queue" as const, value: r })),
       ]);
-      result = raw;
-    } catch (err) {
-      invokeError = err instanceof Error ? err.message : String(err);
+      if (result.kind === "queue") {
+        // queue 有 item → yield
+        if (result.value.done) {
+          // queue 被 close（不应发生在 invoke 完成前，防御性 break）
+          break;
+        }
+        yield result.value.value;
+      } else {
+        // invoke 完成 → 标记 done，继续 drain queue 剩余 items
+        invokeDone = true;
+      }
     }
 
-    // 3. 中断信号检查（用户取消时直接返回）
+    // 4. invoke 完成，close queue（让 queue.next() 不再阻塞）
+    //    留 TOOL_DRAIN_MS 窗口让最后一个 in-flight 事件落地
+    await new Promise((r) => setTimeout(r, TOOL_DRAIN_MS));
+    queue.close();
+
+    // drain queue 剩余 items（invoke 完成前 push 但未被消费的 part）
+    while (true) {
+      const next = await queue.next();
+      if (next.done) break;
+      yield next.value;
+    }
+
+    // 5. 中断信号检查（用户取消时直接返回）
     if (abortSignal?.aborted) {
       return;
     }
 
-    // 4. 错误处理: sidecar 不可用
-    if (!result && invokeError) {
+    // 6. 获取 invoke 结果
+    const invokeResult = await invokePromise;
+
+    // 7. 错误处理: sidecar 不可用
+    if (!invokeResult && invokeError) {
       // TDSF 魔改 P0-3: 移除 mock 降级，直接报错让用户看到真实问题
-      // 原 mock 模式会让用户误以为 AI 在工作（[mock:coding]），实际 sidecar 调用已失败
       const hint = `Sidecar Agent 调用失败: ${invokeError}\n\n可能原因：\n1) LLM 未配置 — 请到设置 → AI 模型配置 API Key\n2) Sidecar 未启动 — 请检查 sidecar 日志\n3) Agent 名称错误 — 当前调用: ${pythonName}`;
       yield { type: "error", error: hint };
       return;
     }
 
-    // 5. result 为空但无 error（异常情况）
-    if (!result) {
+    // 8. result 为空但无 error（异常情况）
+    if (!invokeResult) {
       yield { type: "error", error: "Sidecar 返回空结果" };
       return;
     }
 
-    // 6. 处理 mood / tokens 回调
-    if (result.mood) {
-      onMood?.(result.mood);
+    // 9. 处理 mood / tokens 回调
+    if (invokeResult.mood) {
+      onMood?.(invokeResult.mood);
     }
-    if (result.tokens) {
+    if (invokeResult.tokens) {
       onUsage?.({
-        inputTokens: result.tokens.input ?? 0,
-        outputTokens: result.tokens.output ?? 0,
+        inputTokens: invokeResult.tokens.input ?? 0,
+        outputTokens: invokeResult.tokens.output ?? 0,
       });
     }
 
-    // 7. 流式输出 thinking（如有）作为 reasoning 折叠段（Reasoned）
-    if (result.thinking) {
+    // 10. 处理 thinking：如果 event 未推送 thinking（LangGraph 后端），走伪流式
+    //     如果 event 已推送（Strands 后端），跳过避免重复
+    if (!streamedThinking && invokeResult.thinking) {
       onStep?.("Thinking");
-      yield* streamText(result.thinking, thinkingId, "reasoning");
+      yield* streamText(invokeResult.thinking, thinkingId, "reasoning");
     }
 
-    // 7.5 工具调用行：invoke 已返回 = agent PAOR 循环结束，工具事件应已到齐；
-    // 留 TOOL_DRAIN_MS 窗口让最后一个 in-flight 事件落地，再按序 yield 成
-    // tool-input / tool-output part（AiChat 渲染成 Terax 工具行）。
-    if (!abortSignal?.aborted) {
-      await new Promise((r) => setTimeout(r, TOOL_DRAIN_MS));
-      for (const toolPart of collectedTools) {
-        yield toolPart;
-      }
-    }
-
-    // TDSF 魔改: 字段对齐 Python 实际返回
-    // Python BaseAgent.invoke() 通过 AgentResult.to_state_update() 返回 `observation` 字段
-    // （agents/base.py:89），而非 `output`。优先读 observation，回退到 output 兼容旧测试。
-    // TeachAgent 还会返回 teaching_content（结构化教学内容），追加到主输出后展示。
-    const outputText = result.observation ?? result.output ?? "";
-
-    // 8. 流式输出 output（必填字段，作为 assistant message 主体）
-    if (outputText) {
+    // 11. 处理 output：如果 event 未推送 output（LangGraph 后端），走伪流式切片
+    //     如果 event 已推送（Strands 后端），跳过避免重复
+    //     Python BaseAgent.invoke() 返回 `observation` 字段（非 `output`），
+    //     优先读 observation，回退到 output 兼容旧测试。
+    const outputText = invokeResult.observation ?? invokeResult.output ?? "";
+    if (!streamedOutput && outputText) {
       onStep?.("Streaming");
       yield* streamText(outputText, outputId);
     }
 
-    // TDSF 魔改: TeachAgent.teaching_content 追加输出
-    // TeachAgent.reflect_on_result() 在最后一步生成结构化教学内容
-    // （教程 + 知识卡 + 学习路径），通过 BaseAgent.invoke() 的 extra_update 传给前端。
-    // 这里追加到主输出之后，作为独立 text stream 段（与 thinking/output 同级）。
-    if (result.teaching_content) {
+    // 12. TeachAgent.teaching_content 追加输出
+    //     TeachAgent.reflect_on_result() 在最后一步生成结构化教学内容
+    //     （教程 + 知识卡 + 学习路径），event 不推送，这里走伪流式切片。
+    if (invokeResult.teaching_content) {
       onStep?.("Teaching");
-      yield* streamText(result.teaching_content, teachingId);
+      yield* streamText(invokeResult.teaching_content, teachingId);
     }
 
-    // 9. finish
+    // 13. finish
     onStep?.(null);
     yield { type: "finish", id: streamId };
   } finally {
-    // 无论成功失败，都取消事件监听，避免内存泄漏
+    // 无论成功失败，都取消事件监听 + close queue，避免内存泄漏
+    queue.close();
     unlisten();
   }
 }

@@ -575,7 +575,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         logger.exception(f"failed to register sandbox_proxy: {e}")
 
     # TDSF 魔改 P0-3: 前端可直调的 risk/confidence/decision JSON-RPC
-    # 原因: riskClient.ts / 前端设置页 / 风险评估面板都直接调
+    # 原因: riskClient.ts / TDSFPanelSection / 风险评估面板都直接调
     #       "risk.evaluate" / "confidence.score" / "decision.list"
     # 旧版只有 invoke_*_tool 内部入口（graph/nodes.py tool_call_node 用），
     # 前端 fail-open 回退到本地 TS 评估，丢失了 Python 端的真实实现。

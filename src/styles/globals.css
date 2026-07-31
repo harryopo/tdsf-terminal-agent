@@ -86,6 +86,15 @@
     --sidebar-accent-foreground: #1a1a1a;
     --sidebar-border: #e5e5e5;
     --sidebar-ring: #404040;
+    /* TDSF 修复 2026-07-31 (P3): 翻译未命中提示的语义色（浅色模式）
+     * 用 amber 系列表达"警告/未命中"，在白色背景下保证对比度:
+     *   - --warning-bg:    淡 amber 背景（10% 透明度，配合 backdrop-blur）
+     *   - --warning-border: amber 边框（40% 透明度，柔和）
+     *   - --warning-fg:    amber-700 文字（在淡 amber 背景上对比度 4.5:1+，WCAG AA 合规）
+     */
+    --warning-bg: rgba(245, 158, 11, 0.1);
+    --warning-border: rgba(245, 158, 11, 0.45);
+    --warning-fg: #b45309;
 }
 
 /* TDSF 魔改: 中性灰 dark mode fallback */
@@ -121,6 +130,13 @@
     --sidebar-accent-foreground: #e4e4e4;
     --sidebar-border: #2d2d2d;
     --sidebar-ring: #6b7280;
+    /* TDSF 修复 2026-07-31 (P3): 翻译未命中提示的语义色（暗色模式）
+     * 在 #1a1a1a 背景下用 amber-400 文字（对比度 7:1+，WCAG AAA），
+     * 边框和背景用更亮的 amber 让提示在暗色下也醒目。
+     */
+    --warning-bg: rgba(251, 191, 36, 0.12);
+    --warning-border: rgba(251, 191, 36, 0.5);
+    --warning-fg: #fbbf24;
 }
 
 @layer base {
