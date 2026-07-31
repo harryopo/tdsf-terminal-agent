@@ -78,6 +78,17 @@ export function useSpacesBoot({
           return;
         }
 
+        // TDSF 迁移：旧版默认 space 名为 "Main"，现统一改为 "Default"
+        for (const space of spaces) {
+          if (space.id === DEFAULT_SPACE_ID && space.name === "Main") {
+            space.name = "Default";
+            space.updatedAt = Date.now();
+          }
+        }
+        if (spaces.some((s) => s.id === DEFAULT_SPACE_ID && s.name === "Default")) {
+          await saveSpacesList(spaces);
+        }
+
         const restored: Tab[] = [];
         for (const space of spaces) {
           const st = states.get(space.id);

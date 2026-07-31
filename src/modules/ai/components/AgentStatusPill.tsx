@@ -15,7 +15,7 @@
 //   - 思考中时 pulse 动画 + 圆点
 //
 // 状态映射（与 Python AGENT_REGISTRY 对齐）：
-//   - null / "main" → "Main"（统一入口，调度中）
+//   - null / "main" → 不显示文字（统一入口已合并到 Ctrl+I，顶部无需占位标签）
 //   - "coding"      → "Coding"
 //   - "explore"     → "Explore"
 //   - "history"     → "History"
@@ -99,11 +99,14 @@ export function AgentStatusPill({
   const status = useChatStore((s) => s.agentMeta.status);
   const isBusy = status === "thinking" || status === "streaming";
 
-  // 路由到的子 Agent 信息
+  // 路由到的子 Agent 信息；main / null 时不显示占位文字
   const routed = currentSubAgent
-    ? SUB_AGENT_LABEL[currentSubAgent] ?? SUB_AGENT_LABEL.main
-    : SUB_AGENT_LABEL.main;
-  const isRouted = currentSubAgent && currentSubAgent !== "main";
+    ? SUB_AGENT_LABEL[currentSubAgent] ?? null
+    : null;
+  const isRouted = !!routed;
+
+  // 非路由且不可点击时（如 Header 占位），不渲染任何元素
+  if (!isRouted && !onClick) return null;
 
   return (
     <Button
@@ -121,7 +124,7 @@ export function AgentStatusPill({
       title={
         isRouted
           ? `主 Agent 正在调度 ${routed.label} Agent`
-          : "统一主 Agent（自动路由到子 Agent）"
+          : "统一主 Agent入口（Ctrl+I）"
       }
     >
       {/* 状态圆点：busy 时 emerald pulse, 空闲时 muted 灰 */}
@@ -145,9 +148,11 @@ export function AgentStatusPill({
         strokeWidth={1.75}
         className="text-muted-foreground"
       />
-      <span className="max-w-[7rem] truncate text-muted-foreground">
-        {routed.label}
-      </span>
+      {routed && (
+        <span className="max-w-[7rem] truncate text-muted-foreground">
+          {routed.label}
+        </span>
+      )}
     </Button>
   );
 }

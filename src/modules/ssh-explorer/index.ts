@@ -15,6 +15,8 @@ export {
   useSshStore,
   selectActiveSession,
   selectActiveSessionCurrentPath,
+  selectSessionById,
+  selectSessionCurrentPath,
   isSessionConnected,
   type SshSessionInfo,
   type SshEditingFile,

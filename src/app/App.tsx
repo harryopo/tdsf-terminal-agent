@@ -69,7 +69,9 @@ import {
   useSourceControlContext,
 } from "@/modules/source-control";
 import {
+  SpaceCreateDialog,
   SpaceSwitcher,
+  type SpaceMeta,
   useSpacePersistence,
   useSpaces,
   useSpacesBoot,
@@ -79,7 +81,8 @@ import {
   isSessionConnected,
   SshExplorer,
   selectActiveSession,
-  selectActiveSessionCurrentPath,
+  selectSessionById,
+  selectSessionCurrentPath,
   useSshStore,
 } from "@/modules/ssh-explorer";
 // TDSF 魔改 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
@@ -285,10 +288,15 @@ export default function App() {
     setActiveSpaceForNewTabs(activeSpaceId);
     const prev = prevSpaceRef.current;
     prevSpaceRef.current = activeSpaceId;
-    if (prev === null || prev === activeSpaceId) return;
     const meta = useSpaces
       .getState()
       .spaces.find((s) => s.id === activeSpaceId);
+    // TDSF 修复 2026-07-31: 切到 SSH Space 时同步切换 sshStore 的 activeSessionId，
+    // 让左侧资源管理器/底部 cwd/窗口标题都跟随当前 Space。
+    if (meta?.env.kind === "ssh" && meta.env.sessionId) {
+      useSshStore.getState().setActiveSession(meta.env.sessionId);
+    }
+    if (prev === null || prev === activeSpaceId) return;
     if (meta) void adoptWorkspaceEnv(meta.env);
     const inSpace = tabsRef.current.filter((t) => t.spaceId === activeSpaceId);
     if (inSpace.length === 0) return;
@@ -306,6 +314,7 @@ export default function App() {
   ]);
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [spaceCreateOpen, setSpaceCreateOpen] = useState(false);
 
   const spaceTabs = useMemo(
     () => tabs.filter((t) => t.spaceId === (activeSpaceId ?? DEFAULT_SPACE_ID)),
@@ -368,14 +377,27 @@ export default function App() {
   // 原条件 isDefaultColdTab 太严格, SSH 自动连接完成后用户切到任何 terminal tab,
   // 右侧都应该显示 SSH 终端, 而不是本地 PTY。这里把条件放宽为
   // "active tab 是 terminal 且有活跃 SSH session" 即接管。
+  // TDSF 修复 2026-07-31: SSH 状态按当前 Space 隔离，避免多个 SSH Space
+  // 切换时左侧资源管理器/底部 cwd 仍停留在上一个 Space。
+  const activeSpace = useSpaces((s) =>
+    s.spaces.find((sp) => sp.id === activeSpaceId),
+  );
+  const spaceSshSessionId =
+    activeSpace?.env.kind === "ssh" ? activeSpace.env.sessionId ?? null : null;
+  const spaceSshSession = useSshStore((s) =>
+    selectSessionById(s, spaceSshSessionId),
+  );
+  const spaceSshCurrentPath = useSshStore((s) =>
+    selectSessionCurrentPath(s, spaceSshSessionId),
+  );
+  const isSpaceSshConnected =
+    !!spaceSshSession && isSessionConnected(spaceSshSession);
+  // 保留全局 active SSH session 用于非 Space 场景（自动登录、SshExplorer 视图）
   const activeSshSession = useSshStore(selectActiveSession);
   const activeSshSessionId = activeSshSession?.id ?? null;
-  const activeSshCurrentPath = useSshStore(selectActiveSessionCurrentPath);
-  const isConnectedSsh = activeSshSession
-    ? isSessionConnected(activeSshSession)
-    : false;
-  // SSH 连通时左侧 Files 面板切换为远程文件资源管理器
-  const explorerSource: "local" | "ssh" = isConnectedSsh ? "ssh" : "local";
+  // Space 环境决定左侧 Files 面板来源：SSH Space 用远程文件资源管理器，
+  // 本地/WSL Space 用本地文件资源管理器。
+  const explorerSource: "local" | "ssh" = isSpaceSshConnected ? "ssh" : "local";
   const isDefaultColdTab =
     !!activeTab &&
     activeTab.kind === "terminal" &&
@@ -386,7 +408,7 @@ export default function App() {
   // 而不是 sessionId 一创建就切换。自动连接开始后 sessionId 立即生成,
   // 但此时 Rust SSH 握手/认证/SFTP 还未就绪, 提前切视图会导致
   // FileExplorer 加载远程失败 + 按钮无法点击。
-  const showNoTerminalEmptyState = isDefaultColdTab && !isConnectedSsh;
+  const showNoTerminalEmptyState = isDefaultColdTab && !isSpaceSshConnected;
   // TDSF 魔改 2026-07-30: SSH 终端接管改为按 tab 维度绑定
   // ---------------------------------------------------------------
   // 修复"SSH 连接后打开文件再切回 shell tab 变成本地 shell"的 bug。
@@ -408,10 +430,15 @@ export default function App() {
         ) ?? null
       : null,
   );
+  // SSH Space 下只要有活跃 SSH 会话就显示 SSH 终端；本地 tab 显式绑定 SSH 时也显示。
+  // TDSF 修复 2026-07-31: 优先使用当前 Space 的 SSH session，确保切 Space 时
+  // 右侧终端跟随切换，而不是显示全局 active session 或其他 Space 的 shell。
   const showSshTerminalInWorkspace =
-    isTerminalTab && !!activeTabSshSession && !!activeTabSshSessionId;
+    isTerminalTab &&
+    (isSpaceSshConnected ||
+      (!!activeTabSshSession && !!activeTabSshSessionId));
   const workspaceSshSessionId = showSshTerminalInWorkspace
-    ? activeTabSshSessionId
+    ? (isSpaceSshConnected ? spaceSshSessionId : activeTabSshSessionId)
     : null;
   // 2026-07-31 翻译模块修复: SSH 终端不显示时清除 leafId ref
   // （避免切到本地终端后 captureActiveSelection 仍走 SSH leafId）
@@ -552,6 +579,28 @@ export default function App() {
         if (boundSshSessionsRef.current.has(session.id)) continue;
         boundSshSessionsRef.current.add(session.id);
 
+        // TDSF 修复 2026-07-31: SSH 在当前 Space 内连接成功后,
+        // 把当前 Space 升级为 SSH Space, 让左侧 Files 面板/底部 cwd 跟随远程。
+        const currentSpaceId = useSpaces.getState().activeId;
+        const currentSpace = useSpaces
+          .getState()
+          .spaces.find((s) => s.id === currentSpaceId);
+        if (
+          currentSpaceId &&
+          currentSpace &&
+          (currentSpace.env.kind !== "ssh" ||
+            currentSpace.env.sessionId !== session.id)
+        ) {
+          useSpaces.getState().setEnv(currentSpaceId, {
+            kind: "ssh",
+            host: session.params.host,
+            user: session.params.user,
+            port: session.params.port ?? 22,
+            sessionId: session.id,
+            label: `${session.params.user}@${session.params.host}`,
+          });
+        }
+
         // 首次连接成功: 切回 explorer 视图, 让 FileExplorer 显示远程文件
         if (!hasConnectedSshRef.current) {
           hasConnectedSshRef.current = true;
@@ -562,14 +611,22 @@ export default function App() {
 
         // 把当前 active terminal tab 绑定到该 SSH 会话
         // 如果当前 active tab 不是 terminal, 找第一个 terminal tab; 都没有就 newTab()
+        // TDSF 修复 2026-07-31: 优先绑定已经预绑定该 session 的 tab（SpaceCreateDialog
+        // 创建 SSH Space 时会预先把 tab.sshSessionId 设为 session.id），避免用户
+        // 切到其它 Space 后新连接误绑到错误 Space 的 terminal tab。
         const currentTabs = tabsRef.current;
         const currentActiveId = activeIdRef.current;
         let targetTab = currentTabs.find(
-          (t) =>
-            t.id === currentActiveId &&
-            t.kind === "terminal" &&
-            (!t.sshSessionId || t.sshSessionId === session.id),
+          (t) => t.kind === "terminal" && t.sshSessionId === session.id,
         );
+        if (!targetTab) {
+          targetTab = currentTabs.find(
+            (t) =>
+              t.id === currentActiveId &&
+              t.kind === "terminal" &&
+              (!t.sshSessionId || t.sshSessionId === session.id),
+          );
+        }
         if (!targetTab) {
           targetTab = currentTabs.find(
             (t) =>
@@ -629,24 +686,28 @@ export default function App() {
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
 
+  // TDSF 修复 2026-07-31: useWorkspaceCwd 增加 spaceRoot fallback，
+  // 切 Space 时若当前 terminal tab 无 cwd 则显示 Space 的 root 目录。
   const { explorerRoot, inheritedCwdForNewTab } = useWorkspaceCwd(
     activeTab,
     tabs,
     launchCwd ?? home,
+    activeSpace?.root ?? null,
   );
-  // SSH 连通时左侧 Files 面板根路径使用远程当前目录
+  // SSH 连通时左侧 Files 面板根路径使用当前 Space 的远程当前目录
   const effectiveExplorerRoot =
-    explorerSource === "ssh" ? activeSshCurrentPath : explorerRoot;
+    explorerSource === "ssh" && activeSpace?.env.kind === "ssh"
+      ? (spaceSshCurrentPath ?? activeSpace.root ?? `/home/${activeSpace.env.user}`)
+      : explorerRoot;
 
   // TDSF 修复 2026-07-29: SSH 连接后, 窗口标题/状态栏路径显示 SSH 远程位置。
   // TDSF 修复 2026-07-31: 顶栏项目名固定显示本地工作区, 不显示 SSH 地址
   //   (地址已在左下角 StatusBar 展示, 避免顶栏重复且拥挤)。
+  // 按当前 Space 的 SSH session 生成位置标签，切 Space 时标题同步切换。
   const sshLocationLabel =
-    isConnectedSsh && activeSshSession
-      ? `${activeSshSession.params.user}@${activeSshSession.params.host}:${activeSshCurrentPath ?? "/"}`
+    isSpaceSshConnected && spaceSshSession && activeSpace?.env.kind === "ssh"
+      ? `${spaceSshSession.params.user}@${spaceSshSession.params.host}:${spaceSshCurrentPath ?? "/"}`
       : null;
-  const headerProjectName = explorerRoot ?? launchCwd ?? "local";
-
   useWindowTitle(activeTab, sshLocationLabel ?? effectiveExplorerRoot);
 
   useEffect(() => {
@@ -871,17 +932,48 @@ export default function App() {
     enabled: translateEnabled,
   });
 
+  const bindTabToSshSpace = useCallback(
+    (tabId: number, spaceId: string) => {
+      const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
+      if (space?.env.kind === "ssh" && space.env.sessionId) {
+        updateTab(tabId, {
+          sshSessionId: space.env.sessionId,
+          customTitle: `${space.env.user}@${space.env.host}`,
+        });
+      }
+    },
+    [updateTab],
+  );
+
   const openNewTab = useCallback(() => {
-    newTab(inheritedCwdForNewTab());
-  }, [newTab, inheritedCwdForNewTab]);
+    const tabId = newTab(inheritedCwdForNewTab());
+    bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
+  }, [
+    newTab,
+    inheritedCwdForNewTab,
+    bindTabToSshSpace,
+    activeSpaceId,
+  ]);
 
   const openNewPrivateTab = useCallback(() => {
-    newPrivateTab(inheritedCwdForNewTab());
-  }, [newPrivateTab, inheritedCwdForNewTab]);
+    const tabId = newPrivateTab(inheritedCwdForNewTab());
+    bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
+  }, [
+    newPrivateTab,
+    inheritedCwdForNewTab,
+    bindTabToSshSpace,
+    activeSpaceId,
+  ]);
 
   const openNewBlockTab = useCallback(() => {
-    newBlockTab(inheritedCwdForNewTab());
-  }, [newBlockTab, inheritedCwdForNewTab]);
+    const tabId = newBlockTab(inheritedCwdForNewTab());
+    bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
+  }, [
+    newBlockTab,
+    inheritedCwdForNewTab,
+    bindTabToSshSpace,
+    activeSpaceId,
+  ]);
 
   const launchAgentGroup = useCallback(
     (request: AgentLaunchRequest) => {
@@ -927,14 +1019,15 @@ export default function App() {
       // TDSF 修复 2026-07-29: SSH 模式下状态栏路径显示远程位置,
       // 但本地 terminalRefs 对应的是隐藏的本地终端, 点击 breadcrumb 不应
       // 把 cd 命令写入错误终端。SSH 目录切换由用户在 SSH 终端内操作。
-      if (isConnectedSsh) return;
+      // TDSF 修复 2026-07-31: 按当前 Space 判定，避免本地 Space 仍受全局 SSH 连接影响。
+      if (isSpaceSshConnected) return;
       if (activeLeafId === null) return;
       const term = terminalRefs.current.get(activeLeafId);
       if (!term) return;
       term.write(`cd ${quoteShellArg(path)}\r`);
       term.focus();
     },
-    [activeLeafId, isConnectedSsh],
+    [activeLeafId, isSpaceSshConnected],
   );
 
   const cdInNewTab = useCallback(
@@ -968,10 +1061,13 @@ export default function App() {
   // pin = false 与本地单击行为一致（preview tab，二次单击其他文件替换槽位）。
   const handleOpenRemoteFile = useCallback(
     (path: string) => {
-      if (!activeSshSessionId) return;
-      openFileTab(path, false, { sessionId: activeSshSessionId });
+      // TDSF 修复 2026-07-31: 远程文件打开使用当前 Space 的 SSH sessionId，
+      // 切 Space 后点击远程文件不会串到其它 session。
+      const sessionId = spaceSshSessionId ?? activeSshSessionId;
+      if (!sessionId) return;
+      openFileTab(path, false, { sessionId });
     },
-    [activeSshSessionId, openFileTab],
+    [spaceSshSessionId, activeSshSessionId, openFileTab],
   );
 
   // "Open With" files arrive via the event (warm start) and get_launch_files
@@ -1021,9 +1117,10 @@ export default function App() {
       : null;
 
   // TDSF 修复 2026-07-29: 状态栏/输入栏 cwd 在 SSH 连接后显示远程路径。
+  // TDSF 修复 2026-07-31: 按当前 Space 的 SSH session 显示路径，切 Space 时同步切换。
   const statusBarCwd =
-    isConnectedSsh && isTerminalTab
-      ? (activeSshCurrentPath ?? "/")
+    isSpaceSshConnected && isTerminalTab
+      ? (spaceSshCurrentPath ?? "/")
       : activeTerminalLeafCwd;
 
   const activeFilePath = (() => {
@@ -1426,17 +1523,34 @@ export default function App() {
   const activeCwd = activeTerminalLeafCwd;
 
   const handleNewSpace = useCallback(() => {
-    const { spaces, create, setActive } = useSpaces.getState();
-    const meta = create({
-      name: `Space ${spaces.length + 1}`,
-      root: activeCwd ?? home ?? null,
-      env: workspaceEnv,
-    });
-    setActiveSpaceForNewTabs(meta.id);
-    newTab(activeCwd ?? undefined);
-    setActive(meta.id);
-    return meta.id;
-  }, [activeCwd, home, workspaceEnv, newTab, setActiveSpaceForNewTabs]);
+    setSpaceCreateOpen(true);
+  }, []);
+
+  const handleSpaceCreated = useCallback(
+    (space: SpaceMeta, sshSessionId?: string) => {
+      setActiveSpaceForNewTabs(space.id);
+      if (space.env.kind === "ssh" && sshSessionId) {
+        const tabId = newTabInSpace(space.id, space.root ?? undefined);
+        updateTab(tabId, {
+          sshSessionId,
+          customTitle: `${space.env.user}@${space.env.host}`,
+        });
+        setActiveId(tabId);
+      } else {
+        const tabId = newTab(activeCwd ?? space.root ?? undefined);
+        setActiveId(tabId);
+      }
+      useSpaces.getState().setActive(space.id);
+    },
+    [
+      activeCwd,
+      newTab,
+      newTabInSpace,
+      setActiveId,
+      setActiveSpaceForNewTabs,
+      updateTab,
+    ],
+  );
 
   const handleDeleteSpace = useCallback(
     (id: string) => {
@@ -1471,12 +1585,17 @@ export default function App() {
 
   const handleNewTabInSpace = useCallback(
     (spaceId: string) => {
-      const root = useSpaces
-        .getState()
-        .spaces.find((s) => s.id === spaceId)?.root;
-      newTabInSpace(spaceId, root ?? undefined);
+      const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
+      const root = space?.root;
+      const tabId = newTabInSpace(spaceId, root ?? undefined);
+      if (space?.env.kind === "ssh" && space.env.sessionId) {
+        updateTab(tabId, {
+          sshSessionId: space.env.sessionId,
+          customTitle: `${space.env.user}@${space.env.host}`,
+        });
+      }
     },
-    [newTabInSpace],
+    [newTabInSpace, updateTab],
   );
 
   const jumpToTab = useCallback(
@@ -1632,7 +1751,6 @@ export default function App() {
               searchTarget={searchTarget}
               searchRef={searchInlineRef}
               onOverrideLanguage={setOverrideLanguage}
-              projectName={headerProjectName}
             />
           )}
 
@@ -1814,7 +1932,6 @@ export default function App() {
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
-              sshLocation={sshLocationLabel}
             />
           )}
 
@@ -1870,6 +1987,14 @@ export default function App() {
             onOpenChange={setNewEditorOpen}
             rootPath={explorerRoot ?? home}
             onCreated={(path) => openFileTab(path)}
+          />
+
+          <SpaceCreateDialog
+            open={spaceCreateOpen}
+            onOpenChange={setSpaceCreateOpen}
+            defaultEnv={workspaceEnv}
+            defaultRoot={activeCwd ?? home ?? null}
+            onCreated={handleSpaceCreated}
           />
 
           <UpdaterDialog />

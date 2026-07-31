@@ -10,6 +10,7 @@ export function useWorkspaceCwd(
   activeTab: Tab | undefined,
   tabs: Tab[],
   home: string | null,
+  spaceRoot?: string | null,
 ): Result {
   const lastTerminalCwd = useRef<string | null>(null);
 
@@ -24,16 +25,18 @@ export function useWorkspaceCwd(
     if (lastTerminalCwd.current) return lastTerminalCwd.current;
     const anyTerm = tabs.find((t) => t.kind === "terminal" && t.cwd);
     if (anyTerm?.kind === "terminal" && anyTerm.cwd) return anyTerm.cwd;
-    return home;
-  }, [activeTab, tabs, home]);
+    // TDSF 修复 2026-07-31: 切 Space 时若没有任何 terminal cwd，
+    // 优先回退到当前 Space 的 root 目录，再回退到 home。
+    return spaceRoot ?? home;
+  }, [activeTab, tabs, home, spaceRoot]);
 
   const inheritedCwdForNewTab = useCallback((): string | undefined => {
     if (activeTab?.kind === "terminal" && activeTab.cwd) return activeTab.cwd;
     // Editor tabs inherit the last terminal's cwd (or workspace home), not
     // the file's folder — opening a new terminal from a file shouldn't
     // hijack the user's working directory context.
-    return lastTerminalCwd.current ?? home ?? undefined;
-  }, [activeTab, home]);
+    return lastTerminalCwd.current ?? spaceRoot ?? home ?? undefined;
+  }, [activeTab, home, spaceRoot]);
 
   return { explorerRoot, inheritedCwdForNewTab };
 }
