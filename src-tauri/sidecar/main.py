@@ -60,8 +60,23 @@ _TDSF_DATA_DIR = Path(__file__).resolve().parent.parent.parent / ".tdsf-data"
 _TDSF_DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("TDSF_DATA_DIR", str(_TDSF_DATA_DIR))
 
+# 2026-07-31 根因修复: 强制 stdio 为 UTF-8（Windows 中文系统默认 gbk）。
+# JSON-RPC 线协议按行传给 Rust 侧，Rust 用 UTF-8 解析；若 Python 以 gbk 编码写出
+# 含中文的行（如带中文路径的日志），Rust BufReader::lines() 报 InvalidData 退出
+# reader → 误判子进程死亡 → TerminateProcess，sidecar 启动即被杀。stderr 同步
+# 重配避免日志乱码（Rust stderr reader 同样按 UTF-8 转发）。
+# stdin 方向同样关键：Rust 以 UTF-8 写请求行，Python 若按 gbk 解码，中文 input
+# 会被破坏成孤立 surrogate → Strands 请求序列化抛 UnicodeEncodeError → invoke 失败。
+for _stream_name in ("stdin", "stdout", "stderr"):
+    try:
+        getattr(sys, _stream_name).reconfigure(encoding="utf-8")
+    except Exception:
+        pass  # 非 TTY/重配失败时保持默认，不阻断启动
+
+
 # ============================================================================
-# 日志配置（输出到 stderr，避免污染 stdout JSON-RPC 流）
+# 日志配置（stderr + 文件双通道）
+# stderr 输出保留（Rust reader 转发到终端）；文件落盘供 dev-log.py 诊断。
 # ============================================================================
 logging.basicConfig(
     stream=sys.stderr,
@@ -69,6 +84,28 @@ logging.basicConfig(
     format="[sidecar] %(asctime)s %(levelname)s %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+# 2026-07-31: 日志落盘到 .tdsf-data/sidecar.log（5MB × 3 轮转）。
+# 此前日志只走 stderr → Rust 转发 → 终端输出，进程退出即丢，排障只能现场抓。
+# 落盘后 scripts/dev-log.py 可离线分析（崩溃/编码/超时/重启循环等）。
+try:
+    from logging.handlers import RotatingFileHandler
+
+    _log_file_handler = RotatingFileHandler(
+        _TDSF_DATA_DIR / "sidecar.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    _log_file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    logging.getLogger().addHandler(_log_file_handler)
+except Exception as e:
+    sys.stderr.write(f"[sidecar] log file handler install failed: {e}\n")
 logger = logging.getLogger("sidecar.main")
 
 # ============================================================================
@@ -110,6 +147,9 @@ class JSONRPCError(Exception):
 # ============================================================================
 _write_lock = threading.Lock()
 _stdout = sys.stdout
+# 2026-07-31 加固：stdout 管道写失败去重标志。stdout 写失败（读端关闭/EINVAL/
+# 管道损坏）时只向 stderr 记录一次，避免刷屏；下次写成功自动清零。
+_stdout_broken = False
 
 # 启动时间（用于 uptime 计算）
 START_TIME = time.time()
@@ -207,10 +247,37 @@ def write_message(msg: dict) -> None:
 
     Rust 侧按行读取（BufRead::read_line），因此每条消息必须以 \\n 结尾
     """
+    global _stdout_broken
     line = json.dumps(msg, ensure_ascii=False)
     with _write_lock:
-        _stdout.write(line + "\n")
-        _stdout.flush()
+        try:
+            # 2026-07-31: 用 errors="replace" 编码。LLM 流式输出偶发含孤立
+            # surrogate（httpx surrogateescape 解码非法 UTF-8 字节产生），
+            # 严格 UTF-8 编码抛 UnicodeEncodeError → 消息被丢弃 → Rust 30s
+            # 超时挂死。replace 保证任何消息都能送达（非法字符替换为 U+FFFD）。
+            buffer = getattr(_stdout, "buffer", None)
+            if buffer is not None:
+                buffer.write(line.encode("utf-8", errors="replace") + b"\n")
+                buffer.flush()
+            else:
+                _stdout.write(line + "\n")
+                _stdout.flush()
+            _stdout_broken = False
+        except (OSError, ValueError) as e:
+            # stdout 管道写失败（读端关闭 / Windows EINVAL / 管道损坏 / 已关闭）。
+            # 绝不让写失败冒泡：否则 ready 通知或 RPC 响应的写异常会杀死进程，
+            # Rust 侧判 "crashed during startup" 并反复重启，形成自我延续的崩溃循环。
+            # stderr 是独立 handle，去重记录一次即可，避免刷屏。
+            if not _stdout_broken:
+                _stdout_broken = True
+                try:
+                    sys.stderr.write(
+                        f"[sidecar] stdout write failed ({e!r}); message dropped, "
+                        f"will keep retrying on next write\n"
+                    )
+                    sys.stderr.flush()
+                except Exception:
+                    pass
 
 
 def send_response(result: Any, req_id: Any) -> None:
@@ -354,7 +421,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         logger.info("project_service methods registered")
     except Exception as e:
         logger.exception(f"failed to register project_service: {e}")
-
+    
     # T-P1-04: 事件总线（pub-sub + Rust 推送）
     try:
         import event_bus
@@ -367,7 +434,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         logger.info("event_bus methods registered (with rust notifier)")
     except Exception as e:
         logger.exception(f"failed to register event_bus: {e}")
-
+    
     # T-P1-10: needs-you 协调服务（4 类型 + 优先级 + 30s 超时）
     # 必须在 event_bus 之后注册（依赖 emit_needs_you 推送事件到前端）
     try:
@@ -381,7 +448,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         logger.info("needs_you methods registered + service started (timeout scanner running)")
     except Exception as e:
         logger.exception(f"failed to register needs_you: {e}")
-
+    
     # T-P2-12.2: Fix-loop max_retry=3（DEC-V321-11）
     # 必须在 event_bus + needs_you 之后注册：
     # - 依赖 event_bus 发布 fix_loop near_limit/exhausted 事件
