@@ -9,9 +9,9 @@ import { homeDir } from "@tauri-apps/api/path";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 
 async function resolveEnvHome(env: WorkspaceEnv): Promise<string> {
-  return env.kind === "wsl"
-    ? getWslHome(env.distro)
-    : (await homeDir()).replace(/\\/g, "/");
+  if (env.kind === "wsl") return getWslHome(env.distro);
+  if (env.kind === "ssh") return `/home/${env.user}`;
+  return (await homeDir()).replace(/\\/g, "/");
 }
 
 type Params = {
@@ -73,11 +73,18 @@ export function useWorkspaceSwitcher({
 
   const switchWorkspace = useCallback(
     async (env: WorkspaceEnv): Promise<boolean> => {
-      if (
+      const sameEnv =
         env.kind === workspaceEnv.kind &&
         (env.kind === "local" ||
-          (workspaceEnv.kind === "wsl" && env.distro === workspaceEnv.distro))
-      ) {
+          (env.kind === "wsl" &&
+            workspaceEnv.kind === "wsl" &&
+            env.distro === workspaceEnv.distro) ||
+          (env.kind === "ssh" &&
+            workspaceEnv.kind === "ssh" &&
+            env.host === workspaceEnv.host &&
+            env.user === workspaceEnv.user &&
+            env.port === workspaceEnv.port));
+      if (sameEnv) {
         return false;
       }
       const dirty = tabsRef.current.some((t) => t.kind === "editor" && t.dirty);

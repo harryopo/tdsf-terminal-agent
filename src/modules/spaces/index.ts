@@ -4,3 +4,4 @@ export { useSpaces } from "./lib/useSpaces";
 export { useSpacesBoot } from "./lib/useSpacesBoot";
 export { SpaceAvatar } from "./SpaceAvatar";
 export { SpaceSwitcher } from "./SpaceSwitcher";
+export { SpaceCreateDialog } from "./components/SpaceCreateDialog";
