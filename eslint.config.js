@@ -15,6 +15,8 @@ export default tseslint.config(
       '**/coverage',
       // TDSF 魔改: 上游开源项目源码克隆（仅供调研参考，不参与 lint/typecheck）
       'opensource-reference/**',
+      // TDSF 运行时数据目录（SQLite/CDP 脚本/临时备份），不参与 lint
+      '.tdsf-data/**',
     ],
   },
   {

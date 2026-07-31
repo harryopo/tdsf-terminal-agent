@@ -1,6 +1,7 @@
 // TDSF 魔改: 接入 RiskEngine 前端拦截 (T2.2)
 // 命令提交前调 evaluateRiskSync 快速拦截 L3+ 命令，命中后暂存并触发 listeners，
 // UI 层订阅 pendingRiskCommand 弹出 RiskGuardDialog，用户确认后才执行。
+// TDSF 2026-07-31: invalidate vite transform cache (Phase 2 remote cwd fix)
 
 import { ensureMonoFontsLoaded } from "@/lib/fonts";
 import type { RiskRpcAssessment } from "@/lib/risk-engine/riskClient";
@@ -62,6 +63,22 @@ import {
   recordSubmittedCommand,
 } from "./teach-trigger";
 import { useTerminalFont } from "./useTerminalFont";
+
+// TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
+// 通过 window.__TDSF_OSC7_LOG__ 收集，CDP 实测可读取。
+type Osc7LogEntry = Record<string, unknown>;
+
+declare global {
+  interface Window {
+    __TDSF_OSC7_LOG__?: Osc7LogEntry[];
+  }
+}
+
+function getOsc7Log(): Osc7LogEntry[] | null {
+  if (typeof window === "undefined") return null;
+  if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
+  return window.__TDSF_OSC7_LOG__;
+}
 
 type Callbacks = {
   onSearchReady?: (addon: SearchAddon) => void;
@@ -794,38 +811,68 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           },
         ];
       }
-      // Shared in-command flag — see osc-handlers.ts. The prompt tracker
-      // flips it on OSC 133 B/C/D/A; the cwd handler reads it to ignore OSC
-      // 7 emitted by untrusted command output (remote SSH, `cat` of an
-      // attacker file, etc.).
-      const shellState = createShellIntegrationState();
-      const prompt = registerPromptTracker(term, shellState, (running) =>
-        onLeafCommandState(leafId, running),
-      );
-      const cwd = registerCwdHandler(
-        term,
-        (next) => {
-          markSessionReady(leafId);
-          if (s.lastCwd === next) return;
-          s.lastCwd = next;
-          s.callbacks.onCwd?.(next);
-        },
-        shellState,
-      );
-      // TDSF 魔改 (P4-T4.3): 注册第二个 OSC 7 处理器，专用于 teach 触发。
-      // 与上面的 registerCwdHandler 并存：cwd handler 仅在 cwd 变化时回调，
-      // teach trigger 对每次合法 OSC 7 都回调（shell 在每条命令结束后都发 OSC 7），
-      // 由 notifyCommandExecuted 内部做降频（默认每 3 条触发一次）。
-      const teachTrigger = registerOsc7TeachTrigger(
-        term,
-        (oscCwd) => {
-          const cmd = getLastSubmittedCommand();
-          void notifyCommandExecuted(cmd, oscCwd);
-        },
-        shellState,
-      );
+      // For remote transports (SSH) the remote shell may not emit OSC 133
+      // integration markers, and SshTerminalHost injects a trusted OSC 7
+      // sequence right after `cd` commands from the transport seam. Use the
+      // cwd handler without the in-command guard so our injected OSC 7 is
+      // honored, and skip the local teach trigger for remote shells.
+      const disposers: (() => void)[] = [];
+      if (!s.remote) {
+        // Shared in-command flag — see osc-handlers.ts. The prompt tracker
+        // flips it on OSC 133 B/C/D/A; the cwd handler reads it to ignore OSC
+        // 7 emitted by untrusted command output (`cat` of an attacker file, etc.).
+        const shellState = createShellIntegrationState();
+        const prompt = registerPromptTracker(term, shellState, (running) =>
+          onLeafCommandState(leafId, running),
+        );
+        disposers.push(prompt.dispose);
+        const cwd = registerCwdHandler(
+          term,
+          (next) => {
+            markSessionReady(leafId);
+            if (s.lastCwd === next) return;
+            s.lastCwd = next;
+            s.callbacks.onCwd?.(next);
+          },
+          shellState,
+        );
+        disposers.push(cwd);
+        // TDSF 魔改 (P4-T4.3): 注册第二个 OSC 7 处理器，专用于 teach 触发。
+        // 与上面的 registerCwdHandler 并存：cwd handler 仅在 cwd 变化时回调，
+        // teach trigger 对每次合法 OSC 7 都回调（shell 在每条命令结束后都发 OSC 7），
+        // 由 notifyCommandExecuted 内部做降频（默认每 3 条触发一次）。
+        const teachTrigger = registerOsc7TeachTrigger(
+          term,
+          (oscCwd) => {
+            const cmd = getLastSubmittedCommand();
+            void notifyCommandExecuted(cmd, oscCwd);
+          },
+          shellState,
+        );
+        disposers.push(teachTrigger);
+      } else {
+        const cwd = registerCwdHandler(
+          term,
+          (next) => {
+            const log = getOsc7Log();
+            log?.push({
+              source: "useTerminalSession.registerCwdHandler",
+              cwd: next,
+              leafId,
+              remote: s.remote,
+            });
+            markSessionReady(leafId);
+            if (s.lastCwd === next) return;
+            s.lastCwd = next;
+            s.callbacks.onCwd?.(next);
+          },
+          undefined,
+        );
+        disposers.push(cwd);
+      }
       const osc52 = registerOsc52ClipboardHandler(term);
-      return [prompt.dispose, cwd, teachTrigger, osc52];
+      disposers.push(osc52);
+      return disposers;
     },
     onSearchReady: (addon) => s.callbacks.onSearchReady?.(addon),
   });
