@@ -98,7 +98,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # T-P2-07: side-git 影子仓库 (libgit2 绑定 + sha256 项目哈希)
 # git2 0.19: libgit2 1.8 绑定,提供 init_bare / commit / reset / blob / tree 全套 API
 # sha2 0.10: SHA-256 计算项目绝对路径哈希(用作影子仓库目录名)
-git2 = "0.19"
+git2 = "0.21"
 sha2 = "0.10"
 
 # T-P2-08: Docker 沙箱 (DEC-V321-10, bollard 0.17 稳定版)
