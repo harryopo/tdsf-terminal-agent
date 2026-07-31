@@ -108,7 +108,7 @@ sha2 = "0.10"
 #   - ssl feature: 通过 rustls 支持 HTTPS 连接(可选,本地连接不需要)
 # 注: bollard-stubs 由 bollard 内部自动传递依赖(bollard-stubs 0.17 不存在,
 #     实际版本是 1.45.0-rc.x 格式), 无需显式声明
-bollard = { version = "0.17", features = ["ssl"] }
+bollard = { version = "0.21", features = ["ssl"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
