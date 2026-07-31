@@ -2132,3 +2132,129 @@ pnpm tauri:dev   # 桌面端实测：窗口可见 + 能点击 + 目标功能真�
 - 本次新增文档：`docs/KNOWLEDGE-INDEX.md` + `docs/HANDOVER.md`（待 commit）
 - 本次无代码改动，纯文档沉淀
 - 本 session 接手声明：main agent，无 subagent，场景 C（主线文档沉淀）
+
+---
+
+## 二十六、交接章（2026-07-31 · 接手昨晚 AI 的开发进度 — 翻译模块修复 + 主题回归 + UI 对齐上游 + 污染事件恢复）
+
+> 续 §二十五。本 session 接手用户描述的"昨晚上别的 AI 开发了很久"的工作。完成：① 识别昨晚 AI 的全部产出（1 个已提交 commit + 22 个未提交改动 + 2 个新增测试 + 1 个新增方案书）② 恢复被清空的 KNOWLEDGE-INDEX.md（污染事件）③ 五绿门禁验证未提交改动 ④ 本节沉淀昨晚 AI 的工作记录 + 下一步规划。
+
+### 一句话现状
+
+昨晚 AI 完成两批工作：(1) commit `ed38fa4` 已提交（P0-1~P0-5 功能 bug 修复 + AI 对话框风格对齐上游 terax，9 文件 / 269 insertions）；(2) 22 个未提交改动（翻译模块 missing 状态修复 + SSH 终端 leafId 上报 + 主题模块回归 terax-default + UI 移除自研彩色元素 + 新增 2 个翻译测试文件 + 新增项目可行性分析方案书）。**前四绿全过**（typecheck/lint/test 851/build:web 25.70s）。**污染事件**：KNOWLEDGE-INDEX.md 被清空（239→1 行），已从 commit `64e9694` 恢复。**违规**：昨晚 AI 未更新 dev-state.md 交接章、未 commit 大量改动、清空了已 commit 的文档。
+
+### 昨晚 AI 工作识别（commit ed38fa4 + 未提交改动）
+
+#### A. 已提交 commit ed38fa4（2026-07-31 00:00:49，9 文件 / 269 insertions / 93 deletions）
+
+| 修复 ID | 文件 | 内容 |
+|---------|------|------|
+| P0-1 | useTabs.ts + App.tsx | TerminalTab 新增 sshSessionId 字段；SSH 连接绑定到当前活跃 terminal tab，断开解绑；工作区 shell 显示基于 activeTabSshSession |
+| P0-2 | StatusBar.tsx + App.tsx | 新增 SshLocationPill 组件（emerald 色 + tooltip）；SSH 连接时右下角显示服务器地址 |
+| P0-3 | Header.tsx | 中间容器 overflow-hidden + SpaceSwitcher 包裹 shrink-0；gap-2→gap-1；多工作区不再遮住左侧 |
+| P0-4 | App.tsx | ai.toggle 快捷键 togglePanelAndFocus→toggleMini；StatusBar onOpenAi openPanel→openMini；Ctrl+I/Ctrl+Shift+I/Main 按钮统一触发 toggleMini |
+| P0-5 | tool.tsx + AiChat.tsx + globals.css + AgentStatusPill.tsx + AiMiniWindow.tsx | ConfidenceMarker 重构（移除彩色边框+emoji，改低调灰字徽章）；tdsf-collapsible-*→terax-collapsible-*（7 处）；AgentStatusPill 移除 8 种彩色统一灰字；SUGGESTIONS 文案优化 |
+
+#### B. 未提交改动（22 modified + 1 deleted + 2 新增 test + 1 新增方案书）
+
+**B1. 翻译模块修复（核心功能 bug，7 文件）**：
+- `translateStore.ts`：新增 `missing` 状态（词典未命中时显示简洁提示，避免用户以为开关坏了）+ `showMissing` 方法 + DEV 调试暴露 `__tdsfTranslateStore`
+- `TranslateTooltip.tsx`：增加"未找到"提示渲染（amber 色）+ z-index 提升到 `z-[10000]`（高于 SelectionAskAi 的 z-50）+ 限制最大宽度 280px + 风格对齐 Terax（bg-card/95 + backdrop-blur-md + fade-in 动画）
+- `useTranslateSelection.ts`：适配 missing 状态，发 `tdsf:translate-hit/miss` 事件
+- `useSelectionAskAi.ts`：监听 `tdsf:translate-enabled/disabled/hit/miss` 事件，翻译开关开启时 AskTDSF 不自动弹，避免双重弹窗
+- `App.tsx`：SSH 终端 leafId 上报（`sshActiveLeafIdRef` + `onSshLeafId` 回调），captureActiveSelection 优先用 SSH leafId（SSH 终端不在 tab.paneTree 里）
+- `WorkspaceSurface.tsx`：新增 `onSshLeafId` prop 透传
+- `SshTerminalHost.tsx`：新增 `onLeafId` prop，挂载时上报分配的 leafId
+
+**B2. 主题模块回归上游（5 文件 + 1 删除）**：
+- 删除 `src/modules/theme/themes/tdsf-default.ts`（自研主题，140 行）
+- `themes/index.ts`：移除 tdsfDefault 导入和注册
+- `terax-default.ts`：name 从 "TDSF Default" 改回 "Terax Default"
+- `settings/store.ts`：DEFAULT_THEME_ID 从 "tdsf-default" 改回 "terax-default"
+- `ThemeProvider.tsx`：订阅 preferences store themeId（解决设置窗口改主题主窗口不生效）+ setThemeId 立即 applyTheme（解决 hydrate 竞态）
+- `CommandPalette.tsx`：commitTheme 加 ref 锁防重复 + onClick 兜底（cmdk CommandItem 点击不触发 onSelect 的修复）
+
+**B3. UI 风格对齐上游（移除自研彩色元素，6 文件）**：
+- `Header.tsx`：移除 SUB_AGENT_DISPLAY 8 种彩色标签（-47 行），复用 AgentStatusPill；顶栏项目名固定显示本地工作区（不显示 SSH 地址，避免重复）
+- `StatusBar.tsx`：移除 AiOpenButton + onOpenAi prop，统一 AgentStatusPill（移除重复的"Open AI agent"按钮）
+- `SshExplorer.tsx`：移除 ConnectedHint 居中大卡片（-18 行，连接信息已在 SessionSwitcher 和 StatusBar 展示）
+- `TabBar.tsx`：tab 内边距收窄（px-2→px-1.5, max-w-80→max-w-48），容纳更多标签
+- `SettingsApp.tsx`：移除 TDSF 引擎 tab（TDSFPanelSection）— ⚠️ 文件仍存在但未引用（死代码）
+- `AgentStatusPill.tsx`：小幅修改（+3 行）
+
+**B4. 其他（3 文件）**：
+- `openSettingsWindow.ts`：小幅修改（-1 行）
+- `SearchInline.tsx`：小幅修改（+5/-1 行）
+- `src/modules/ai/components/AgentStatusPill.tsx`：+3 行
+
+**B5. 文档（2 文件）**：
+- `docs/KNOWLEDGE-INDEX.md`：**被清空**（239→1 行）⚠️ 污染事件，已从 commit `64e9694` 恢复
+- 新增 `docs/竞赛/项目可行性分析方案书.md`（49604 字节，比赛材料，v1.0）
+
+**B6. 新增测试（2 文件）**：
+- `src/modules/translate/translateApi.test.ts`（2306 字节）
+- `src/modules/translate/translateStore.test.ts`（3012 字节）
+- 测试总数从 836 增至 851（+15）
+
+### 污染事件记录（KNOWLEDGE-INDEX.md 被清空）
+
+**现象**：昨晚 AI 把 `docs/KNOWLEDGE-INDEX.md` 从 239 行清空到 1 行（只剩 `# TDSF Terminal Agent` 标题）
+**违反**：CLAUDE.md §3 防污染红线 1（0 字节/被污染清空信号）
+**恢复**：用 `git show 64e9694:docs/KNOWLEDGE-INDEX.md > docs/KNOWLEDGE-INDEX.md` 恢复（非 git checkout，符合红线 2）
+**根因推测**：昨晚 AI 可能试图重写 KNOWLEDGE-INDEX.md 但 Write 工具超时只写了第一行（与 §二十五 记录的"Write 工具超时但文件已写入"现象一致，但本次未写入完整内容）
+**教训**：Write/Edit 工具超时后必须验证文件完整性，不能假设"超时但已写入"
+
+### 五绿门禁验证（本次）
+
+| 门禁 | 状态 | 证据 |
+|------|------|------|
+| typecheck | ✅ 0 错 | `tsc --noEmit -p tsconfig.app.json && tsconfig.node.json` |
+| lint | ✅ 0 错 0 警 | `eslint . --max-warnings 0` |
+| test | ✅ 851/851 | 比 §二十四 的 836 多 15 个（翻译模块新增测试）|
+| build:web | ✅ 25.70s | 成功出 dist |
+| tauri:dev | ⚠️ 进程在运行（terax PID 2648）但 CDP 9222 不可用 | 可能是昨晚启动的旧进程，需重启加载最新改动 |
+
+### 关键技术决策沉淀（5 条）
+
+1. **翻译 missing 状态设计**：词典未命中时显示 amber 色"未找到"提示（非红色错误），避免用户以为翻译开关坏了。`result`（命中）和 `missing`（未命中）互斥，`showTooltip` 清 missing，`showMissing` 清 result。
+2. **SSH 终端 leafId 上报机制**：SSH 终端不在 tab.paneTree 里，tab.activeLeafId 指向本地终端。通过 `SshTerminalHost.onLeafId` 回调上报 leafId 到 App 层 `sshActiveLeafIdRef`，captureActiveSelection 优先用 SSH leafId。切到本地终端时 useEffect 清除 ref（避免 stale closure）。
+3. **主题双存储同步**：ThemeProvider 用 localStorage，设置页用 tauri store，两套存储不互通导致"点击主题按钮无反应"。修复：ThemeProvider 订阅 preferences store themeId，变化时覆盖本地状态并持久化到 localStorage；setThemeId 显式 applyTheme 一次（解决 hydrate 竞态）。
+4. **cmdk CommandItem 点击不触发 onSelect**：用 ref 锁防重复 + onClick 兜底。`committingThemeRef` 锁 200ms，onSelect 和 onClick 都调 commitTheme，但锁防止重复提交。
+5. **UI 对齐上游 terax 方向**：移除自研彩色元素（SUB_AGENT_DISPLAY 8 色 / AgentStatusPill 8 色 / ConfidenceMarker 彩色边框 / ConnectedHint 大卡片 / tdsf-default 自研主题 / TDSFPanelSection 自研 tab），统一低调灰字风格。符合用户偏好"不喜欢 AI 味设计"。
+
+### 接手下一步 backlog（按优先级）
+
+#### P0（本次识别的新问题，建议立即处理）
+
+1. **CDP 9222 不可用**：terax 进程在运行但 CDP 拒绝连接。需重启 `pnpm tauri:dev` 加载最新改动 + 重新开启 CDP 调试。重启后需 CDP 实测验证翻译 missing 状态 + SSH 终端 leafId 上报 + 主题切换 + UI 风格对齐。
+2. **TDSFPanelSection.tsx 死代码**：SettingsApp.tsx 已移除引用但文件仍存在（140+ 行）。决策：删除文件（对齐上游方向）或恢复引用（保留 TDSF 引擎配置面板）。**建议删除**（符合"对齐上游"方向，TDSF 引擎配置可在 Models/Agents tab 完成）。
+3. **commit 固化未提交改动**：22 个未提交改动前四绿全过，应 commit 固化为安全回滚点。建议分 3 个 commit：(1) 翻译模块修复 + SSH leafId (2) 主题回归 + UI 对齐 (3) 方案书 + KNOWLEDGE-INDEX 恢复。
+
+#### P1（沿用 §二十四，未修复的核心功能 bug）
+
+4. **P1-NEW-v2-3**：Strands 工具调用无 fix-loop 保护 → 加 `LimitToolCounts` Hook
+5. **P1-NEW-v2-4**：Strands 模式下 main_agent PAOR 路由失效 → adapter.invoke 内检测 agent_id=="main"
+6. **P1-NEW-v2-7**：exec_command Failure 后浪费 30s 超时 → ChannelMsg::Failure 时 break
+7. **P1-NEW-v3-2**：sidecar 流协议 toolCallId 错乱 → 改 FIFO 队列或 Python 端发 tool_call_id
+8. **P1-v5-1~v5-6**：Headroom MCP / OPENDEV schema / context compaction / 4 级权限 / ssh_command 脱敏 / asciicast 录制
+
+#### P2（改进建议，按需推进）
+
+9-20. 详见 §二十四 backlog 列表
+
+### 本 session 已完成（4 项）
+
+| # | 任务 | 完成情况 | 证据 |
+|---|------|---------|------|
+| 1 | 识别昨晚 AI 全部产出 | ✅ | commit ed38fa4（9 文件）+ 22 未提交改动 + 2 新测试 + 1 方案书 |
+| 2 | 恢复 KNOWLEDGE-INDEX.md | ✅ | `git show 64e9694:docs/KNOWLEDGE-INDEX.md > docs/KNOWLEDGE-INDEX.md`，239 行恢复 |
+| 3 | 五绿门禁验证未提交改动 | ✅ 前四绿 | typecheck 0错 / lint 0错0警 / test 851/851 / build:web 25.70s |
+| 4 | 本节沉淀 + 下一步规划 | ✅ | §二十六 交接章 + backlog 优先级 |
+
+### 备注
+
+- tauri:dev 进程在运行（terax PID 2648）但 CDP 9222 不可用，需重启加载最新改动
+- 本次未提交改动前四绿全过，待 commit 固化（建议分 3 个 commit）
+- KNOWLEDGE-INDEX.md 已从 commit `64e9694` 恢复（污染事件）
+- TDSFPanelSection.tsx 死代码待处理（建议删除）
+- 本 session 接手声明：main agent，无 subagent，场景 C（主线进度识别 + 文档恢复 + 规划）
