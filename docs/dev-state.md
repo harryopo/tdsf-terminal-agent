@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 2 完成并 commit（`9ec558e`）：OSC 7 cwd 同步实现，SSH 终端 `cd` 时左侧资源管理器自动刷新。五绿门禁全绿，`tauri:dev` + CDP `cdp_verify_osc7_sync_v3.py` 实测通过。接手请直接看 **§三十二**。
+> **最后更新**：2026-07-31 · 终端/Space 架构重构阶段 3 完成并 commit（`ccb1af4`）：本地终端 OSC 7 cwd 同步（根因 = xterm OscParser 短路，teach trigger 返回 true 吞掉 cwd handler）。五绿门禁全绿，CDP `cdp_phase3_final.py` 实测通过。接手请直接看 **§三十三**（阶段 4 收尾见 **§三十四**）。
 
 ---
 
@@ -2752,3 +2752,36 @@ SSH 终端执行 cd /tmp
 - 本 AI 仅负责终端/Space 重构，**不修改 agent 模块文件**。
 - 阶段 3 改动仅 1 个文件（`osc-handlers.ts`），未触及另一个 AI 正在完善的 agent 代码。
 - 进度已写入本文件，便于另一 AI 读取。
+
+---
+
+## 三十四、终端/Space 架构重构 — 阶段 4+5 完成（2026-07-31）
+
+> 阶段 4「cwd → Explorer 联动」核心已在阶段 2（SSH）+ 阶段 3（本地）完成，本阶段做**容错边界收尾** + 阶段 5 完整验收回归。
+
+### 阶段 4 改动（容错边界）
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/modules/terminal/lib/osc-handlers.ts` | `parseOsc7` 增加 **Windows 盘符大小写归一化**：小写盘符（`c:/Users`）统一转大写（`C:/Users`）。避免 shell 报 `c:` 而 Explorer 缓存 `C:` 导致 rootPath 变化触发整树重建、丢失展开状态。git-bash `/c/` 已有大写转换，此处补 `/C:/` 与 `c:` 分支。 |
+| `src/modules/explorer/FileExplorer.tsx` | root 读取失败（目录被并发删除/无权限等）的提示从 `text-destructive`（红色）降级为 `text-muted-foreground`（中性灰）——**静默容错**，不打断用户，等下次 cwd 变化自动刷新。子目录错误仍保留 error tone。 |
+| `src/modules/terminal/lib/osc-handlers.test.ts` | 新增单测「uppercases a lowercase Windows drive letter (Phase 4)」：`file:///c:/Users/me/project` → `C:/Users/me/project`。 |
+
+### 阶段 5 验收回归结果（2026-07-31 桌面实测）
+
+1. **本地 OSC 7 链路**（`cdp_phase4_fault_tolerance.py`）：`cd TDSF_Phase3` → explorerRoot 同步；`cd C:/NoSuchDir_Phase4` → PowerShell 拒绝、**cwd 保持原目录**（真实链路天然静默容错，错误条场景是防御性兜底）；`cd C:/Users/Lenovo` → explorerRoot 恢复 ✅
+2. **SSH OSC 7 链路**（`cdp_verify_osc7_sync_v3.py`，重启后启动自动连 `root@192.168.45.200`）：SSH leaf=9 挂载，`cd /tmp` → spaceSshCurrentPath/effectiveExplorerRoot/DOM header 全同步 `/tmp`，远程文件树条目来自 `/tmp` ✅（阶段 1+2 回归无损）
+3. **五绿门禁全过**：typecheck 0 错误 / lint 0 警告 / test 851+1=852 全过 / build:web 成功 / tauri:dev 桌面实测（本地+SSH 双链路）
+4. **诊断脚本清理**：删除 `.tdsf-data/` 下本次会话的一次性诊断脚本（`cdp_phase3_diag*.py` ×7、`cdp_phase3_screenshot.py`、`cdp_phase3_debug_*.py` ×2、`cdp_phase3_probe_spaces.py`、`cdp_phase3_identify_leaf.py`、`cdp_phase3_newtab.py`、`cdp_phase5_probe_ssh.py`），保留正式验收脚本（`cdp_phase3_final.py`、`cdp_phase3_local_osc7.py`、`cdp_phase4_fault_tolerance.py`、`cdp_verify_osc7_sync_v3.py`）
+
+### 经验沉淀
+
+- **PowerShell cd 失败天然保持 cwd**：`Set-Location` 到不存在路径会报错且 `$PWD` 不变，OSC 7 仍报原目录——"cd 到不存在目录"在真实链路不会产生不存在的 explorerRoot。错误条静默化只兜底"目录并发删除/无权限"等 fs 层失败。
+- **SSH 自动连接只在启动时触发一次**：断开后不会自动重连（App 顶层 effect 仅启动时跑）。CDP 测试中断开 SSH 后需**重启 tauri:dev** 才能恢复 SSH 场景验证。
+- **Windows 路径大小写归一化只需盘符**：完整路径大小写不能乱改（文件系统真实大小写），盘符是唯一确定大小写不敏感的部分。
+
+### 遗留与下一步
+
+- **阶段 5 人工桌面补测**（可选）：本地/SSH 双 Space 切换、远程文件树展开、cwd 切换的手动目测（CDP 已覆盖核心链路）。
+- **规划文档后续阶段**：`docs/reports/terminal-space-refactor-plan.md` 阶段 0-5 已全部落地，重构主线完成。
+- 协作声明不变：未修改任何 agent 模块文件。

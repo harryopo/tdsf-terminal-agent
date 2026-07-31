@@ -118,6 +118,19 @@ describe("OSC 7 cwd handler — gated by OSC 133 in-command state", () => {
     handlers.get(7)?.("file:///C:/Users/me/project");
     expect(onCwd).toHaveBeenCalledWith("C:/Users/me/project");
   });
+
+  it("uppercases a lowercase Windows drive letter (Phase 4)", () => {
+    // Windows paths are case-insensitive: a shell reporting `c:/Users/me`
+    // must normalize to `C:/Users/me`, otherwise rootPath churn (vs the
+    // Explorer's cached `C:/...`) rebuilds the whole tree and drops
+    // expansion state.
+    const { term, handlers } = makeFakeTerm();
+    const onCwd = vi.fn();
+    registerCwdHandler(term, onCwd);
+
+    handlers.get(7)?.("file:///c:/Users/me/project");
+    expect(onCwd).toHaveBeenCalledWith("C:/Users/me/project");
+  });
 });
 
 describe("OSC 133 command-state tracking", () => {
