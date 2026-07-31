@@ -170,14 +170,18 @@ export function useAiLiveBridge(params: Params) {
       // 取值逻辑与 useDocument.ts:getRustSessionId 一致：
       //   - 实时查询 sshStore（不缓存，SSH 重连后 rustSessionId 会变）
       //   - 仅返回 connected 且 rustSessionId 非 null 的会话
+      // TDSF 修复 2026-08-01: activeSessionId 可能指向已删除的幽灵 session
+      // （Space 持久化旧 UUID / 断连后未清理），此时回退到任意 connected
+      // 会话，保证 AI 至少拿到一个可用的 ssh_session_id，而不是误判
+      // "未连接 SSH" 而拒绝执行远程命令。
       getSshRustSessionId: () => {
         const state = useSshStore.getState();
-        const sess = state.sessions.find(
+        const active = state.sessions.find(
           (s) => s.id === state.activeSessionId,
         );
-        if (!sess) return null;
-        if (!isSessionConnected(sess)) return null;
-        return sess.rustSessionId;
+        if (active && isSessionConnected(active)) return active.rustSessionId;
+        const fallback = state.sessions.find((s) => isSessionConnected(s));
+        return fallback ? fallback.rustSessionId : null;
       },
     });
   }, [setLive, terminalRefs]);
