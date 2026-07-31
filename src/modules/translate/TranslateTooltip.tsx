@@ -9,6 +9,12 @@
  * - 限制最大宽度，避免长文本撑爆视口
  * - UI 风格对齐上游 Terax: bg-card/95 + backdrop-blur-md + fade-in 动画
  *   （参考 SelectionAskAi.tsx 的视觉语言，保持开源项目整体风格一致）
+ *
+ * 2026-07-31 P3 修复（深浅色适配）：
+ * - 未命中提示从硬编码 amber 改为 CSS 变量 --warning-* 系列
+ * - 在 globals.css 中定义 --warning-border / --warning-bg / --warning-fg
+ *   分别对应浅色/暗色两套值，确保两种模式下都有足够对比度
+ * - 命中提示继续用 bg-card/95 + text-foreground（已通过 CSS 变量自动适配）
  */
 import { useEffect, useRef, useState } from "react";
 import { useTranslateStore } from "./translateStore";
@@ -44,7 +50,7 @@ export function TranslateTooltip() {
   if (missing) {
     return (
       <div
-        className={`${baseClass} border-amber-500/40 bg-amber-500/10 ${
+        className={`${baseClass} border-[var(--warning-border)] bg-[var(--warning-bg)] ${
           visible
             ? "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1"
             : "opacity-0"
@@ -52,7 +58,10 @@ export function TranslateTooltip() {
         style={{ left: pos.current.left, top: pos.current.top }}
         data-testid="translate-tooltip-missing"
       >
-        <div className="mb-0.5 font-mono font-semibold text-amber-600 dark:text-amber-400">
+        <div
+          className="mb-0.5 font-mono font-semibold"
+          style={{ color: "var(--warning-fg)" }}
+        >
           {missing}
         </div>
         <div className="text-muted-foreground">

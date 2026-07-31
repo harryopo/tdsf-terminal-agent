@@ -168,6 +168,7 @@ export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderP
   //   ThemeProvider 用 localStorage, 设置页用 tauri store, 两套存储不互通导致"点击主题按钮无反应"。
   //   这里订阅 preferences store 的 themeId, 变化时覆盖本地状态并持久化到 localStorage。
   const prefsThemeId = usePreferencesStore((s) => s.themeId);
+  const prefsTheme = usePreferencesStore((s) => s.theme);
   const prefsHydrated = usePreferencesStore((s) => s.hydrated);
   useEffect(() => {
     if (!prefsHydrated) return;
@@ -177,9 +178,34 @@ export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderP
     }
   }, [prefsThemeId, prefsHydrated, themeId]);
 
+  // TDSF 修复 2026-07-31 (P3): 浅色模式缺失根因 — 设置页"外观模式"按钮调用
+  //   setTheme("light"/"dark"/"system") 写入 preferences store 的 theme 字段,
+  //   但 ThemeProvider 之前只读 localStorage, 完全忽略 preferences.theme,
+  //   导致用户在设置页切换浅色后主窗口毫无反应。
+  //   这里订阅 prefsTheme, 变化时同步到本地 mode 并持久化到 localStorage。
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    if (
+      prefsTheme &&
+      (prefsTheme === "light" || prefsTheme === "dark" || prefsTheme === "system") &&
+      prefsTheme !== mode
+    ) {
+      setModeState(prefsTheme);
+      writeLS(LS_KEY_MODE, prefsTheme);
+    }
+  }, [prefsTheme, prefsHydrated, mode]);
+
   const setMode = useCallback((next: ThemeModePref) => {
     setModeState(next);
     writeLS(LS_KEY_MODE, next);
+    // TDSF 修复 2026-07-31 (P3): 反向同步 — Header 顶栏切换主题时也写入
+    //   preferences store, 让设置页"外观模式"按钮保持一致选中状态。
+    //   setTheme 是异步的, 失败不影响主流程（localStorage 已写入）。
+    void import("@/modules/settings/store")
+      .then(({ setTheme }) => setTheme(next))
+      .catch(() => {
+        /* dev 模式下 tauri store 不可用, 忽略 */
+      });
   }, []);
 
   const setThemeId = useCallback((id: string) => {
