@@ -296,8 +296,19 @@ export default function App() {
       .spaces.find((s) => s.id === activeSpaceId);
     // TDSF 修复 2026-07-31: 切到 SSH Space 时同步切换 sshStore 的 activeSessionId，
     // 让左侧资源管理器/底部 cwd/窗口标题都跟随当前 Space。
-    if (meta?.env.kind === "ssh" && meta.env.sessionId) {
-      useSshStore.getState().setActiveSession(meta.env.sessionId);
+    // TDSF 修复 2026-08-01: 加存在性守卫——Space env 持久化可能携带上个
+    // 应用生命周期的旧 session UUID（store 里已不存在），直接 setActiveSession
+    // 会让 activeSessionId 指向幽灵 session，selectActiveSession 返回 null，
+    // SSH 面板误显未连接 + AI 拿不到 ssh_session_id。
+    const metaSshSessionId =
+      meta && meta.env.kind === "ssh" ? meta.env.sessionId : null;
+    if (
+      metaSshSessionId &&
+      useSshStore
+        .getState()
+        .sessions.some((s) => s.id === metaSshSessionId)
+    ) {
+      useSshStore.getState().setActiveSession(metaSshSessionId);
     }
     if (prev === null || prev === activeSpaceId) return;
     if (meta) void adoptWorkspaceEnv(meta.env);
@@ -455,6 +466,9 @@ export default function App() {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
       // TDSF debug (AI mini window): 暴露 chatStore 供 CDP 诊断 AI 入口问题
       getChatStore: () => useChatStore,
+      // TDSF debug (2026-08-01): 暴露 sshStore 内部状态供 CDP 排查
+      // "终端已连但 SSH 面板/activeSessionId 未连" 的状态不一致问题
+      getSshStore: () => useSshStore,
       isDefaultColdTab,
       isTerminalTab,
       activeSshSessionId,
@@ -628,6 +642,15 @@ export default function App() {
             label: `${session.params.user}@${session.params.host}`,
           });
         }
+
+        // TDSF 修复 2026-08-01: 新连接成功时同步 activeSessionId。
+        // 此前只有 Space effect（依赖 activeSpaceId 变化）会 setActiveSession，
+        // 而 Space 升级（setEnv）不改 activeSpaceId → activeSessionId 停留在
+        // 持久化恢复的旧 UUID（上个生命周期已删除的 session）→
+        // selectActiveSession 返回 null → SSH 面板显示未连接 + AI live
+        // sshSessionId 注入 null（agent 误判"未连接 SSH"）。此处与 Space
+        // env 一起更新，保证 activeSessionId 与终端实际使用的 session 同源。
+        useSshStore.getState().setActiveSession(session.id);
 
         // 首次连接成功: 切回 explorer 视图, 让 FileExplorer 显示远程文件
         if (!hasConnectedSshRef.current) {
