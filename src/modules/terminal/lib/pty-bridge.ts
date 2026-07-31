@@ -1,5 +1,21 @@
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import {
+  currentWorkspaceEnv,
+  LOCAL_WORKSPACE,
+  type WorkspaceEnv,
+} from "@/modules/workspace";
 import { Channel, invoke } from "@tauri-apps/api/core";
+
+/**
+ * TDSF 修复 2026-07-31 (Phase 2 收尾): 本地 PTY 只能跑在本地环境。
+ * 当用户在 SSH Space 中新建本地终端时，currentWorkspaceEnv() 可能返回
+ * { kind: 'ssh' }；Rust 端 WorkspaceEnv 枚举没有 ssh 变体，直接传会
+ * 导致 pty_open 反序列化失败。此处把 ssh fallback 为 local，语义正确
+ * 且保持后端接口不变。
+ */
+function ptyWorkspaceEnv(): WorkspaceEnv {
+  const env = currentWorkspaceEnv();
+  return env.kind === "ssh" ? LOCAL_WORKSPACE : env;
+}
 
 const textEncoder = new TextEncoder();
 
@@ -65,7 +81,7 @@ export async function openPty(
     cols,
     rows,
     cwd: cwd ?? null,
-    workspace: currentWorkspaceEnv(),
+    workspace: ptyWorkspaceEnv(),
     blocks: blocks ?? false,
     shell: shell ?? null,
     onData,

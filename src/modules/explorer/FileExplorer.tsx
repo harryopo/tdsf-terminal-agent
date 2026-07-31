@@ -542,6 +542,8 @@ export const FileExplorer = memo(
           <span
             className="flex flex-1 items-center truncate text-xs font-medium text-foreground/80"
             title={rootPath ?? undefined}
+            data-root-path={rootPath ?? ""}
+            data-is-remote={String(isRemote)}
           >
             <img
               src={folderIconUrl(basename(rootPath ?? ""), false)}

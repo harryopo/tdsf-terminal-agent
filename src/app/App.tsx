@@ -450,6 +450,8 @@ export default function App() {
   // TDSF 调试: 输出关键判定值
   if (typeof window !== "undefined") {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
+      // TDSF debug (AI mini window): 暴露 chatStore 供 CDP 诊断 AI 入口问题
+      getChatStore: () => useChatStore,
       isDefaultColdTab,
       isTerminalTab,
       activeSshSessionId,
@@ -458,6 +460,26 @@ export default function App() {
       activeTabCold: activeTab?.cold,
       showSshTerminalInWorkspace,
       showNoTerminalEmptyState,
+      // TDSF debug (Phase 2): 暴露 SSH cwd / Space session / leafId 供 OSC 7 同步实测
+      spaceSshSessionId,
+      workspaceSshSessionId,
+      sshActiveLeafId: () => sshActiveLeafIdRef.current,
+      spaceSshCurrentPath,
+      getEffectiveExplorerRoot: () => effectiveExplorerRoot,
+      getExplorerRoot: () => explorerRoot,
+      // TDSF debug (Phase 2): 通过 shell printf 输出 OSC 7 序列到 SSH 终端，
+      // 验证从 xterm 解析 -> registerCwdHandler -> sshStore.setCurrentPath 的完整链路。
+      // 注意：直接 writeToSession 写入 ESC 序列只是发给远端 shell 的输入，不会被回显到终端，
+      // 必须让 shell 执行 printf 才能产生终端输出。
+      writeToSession,
+      injectSshOsc7: (cwd: string) => {
+        const lid = sshActiveLeafIdRef.current;
+        if (lid == null) return { ok: false, reason: "no ssh leaf" };
+        const safeCwd = cwd.replace(/'/g, "'\\''");
+        const seq = `printf '\\033]7;file://localhost${safeCwd}\\007'\r`;
+        writeToSession(lid, seq);
+        return { ok: true, leafId: lid, cwd };
+      },
       // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
       // getRendererPoolDebug 是只读函数, 不改业务逻辑
       rendererPool: () => getRendererPoolDebug(),
@@ -1800,6 +1822,7 @@ export default function App() {
                             ref={explorerRef}
                             rootPath={effectiveExplorerRoot}
                             source={explorerSource}
+                            sshSession={spaceSshSession ?? undefined}
                             gitStatus={
                               explorerSource === "local" &&
                               explorerGitDecorations

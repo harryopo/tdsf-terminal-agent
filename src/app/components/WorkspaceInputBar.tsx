@@ -3,6 +3,7 @@ import { AiInputBarConnect } from "@/modules/ai";
 import { Chip } from "@/modules/ai/components/Chip";
 import { ChipsRow } from "@/modules/ai/components/ChipsRow";
 import { useComposer } from "@/modules/ai/lib/composer";
+import { useChatStore } from "@/modules/ai/store/chatStore";
 import { useBlockController } from "@/modules/terminal/lib/blockController";
 import { focusLeafInput } from "@/modules/terminal/lib/useTerminalSession";
 import {
@@ -53,6 +54,11 @@ export function WorkspaceInputBar({
   const c = useComposer();
   const { os, shell } = useSystemInfo();
 
+  // TDSF 修复 2026-07-31 (P0): 统一 AI 入口后，底部输入条需跟随 mini 浮动窗显示。
+  // 原逻辑只监听 panelOpen，导致 Ctrl+I 仅打开 mini 窗时底部输入条保持关闭，
+  // 用户无法在底部输入框打字。现增加 mini.open 作为输入条展开条件。
+  const miniOpen = useChatStore((s) => s.mini.open);
+
   const controller = useBlockController(isBlockTab ? activeLeafId : null);
   const blockMode = controller?.blockMode ?? "prompt";
 
@@ -72,7 +78,7 @@ export function WorkspaceInputBar({
   const effectiveMode = !isBlockTab ? "ai" : hasComposer ? mode : "shell";
 
   const mounted = keysLoaded || isBlockTab;
-  const open = isBlockTab || (keysLoaded && panelOpen);
+  const open = isBlockTab || (keysLoaded && (panelOpen || miniOpen));
 
   const [aiLoaded, setAiLoaded] = useState(false);
   useEffect(() => {

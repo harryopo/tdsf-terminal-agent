@@ -235,7 +235,7 @@ pip install -r requirements.txt
 
 ### 4.4 代码编辑器
 
-基于 Monaco Editor（VS Code 同款编辑器内核）。
+基于 Monaco Editor（Trae 同款编辑器内核）。
 
 - **打开文件**：在文件资源管理器中点击文件
 - **编辑**：支持语法高亮、代码折叠、查找替换
