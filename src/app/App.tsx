@@ -204,6 +204,9 @@ export default function App() {
     useState<SearchAddon | null>(null);
   const searchInlineRef = useRef<SearchInlineHandle | null>(null);
   const terminalRefs = useRef<Map<number, TerminalPaneHandle>>(new Map());
+  // 2026-07-31 翻译模块修复: SSH 终端的 leafId（SSH 终端不在 tab.paneTree 里，
+  // captureActiveSelection 需要优先用这个 leafId 查 terminalRefs）
+  const sshActiveLeafIdRef = useRef<number | null>(null);
   const editorRefs = useRef<Map<number, EditorPaneHandle>>(new Map());
   const previewRefs = useRef<Map<number, PreviewPaneHandle>>(new Map());
   const [activeEditorHandle, setActiveEditorHandle] =
@@ -410,6 +413,13 @@ export default function App() {
   const workspaceSshSessionId = showSshTerminalInWorkspace
     ? activeTabSshSessionId
     : null;
+  // 2026-07-31 翻译模块修复: SSH 终端不显示时清除 leafId ref
+  // （避免切到本地终端后 captureActiveSelection 仍走 SSH leafId）
+  useEffect(() => {
+    if (!showSshTerminalInWorkspace) {
+      sshActiveLeafIdRef.current = null;
+    }
+  }, [showSshTerminalInWorkspace]);
   // TDSF 调试: 输出关键判定值
   if (typeof window !== "undefined") {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
@@ -568,7 +578,17 @@ export default function App() {
           );
         }
         if (targetTab) {
-          updateTab(targetTab.id, { sshSessionId: session.id });
+          // TDSF 修复 2026-07-31: 绑定 SSH 会话时同步设置 tab 标题为 user@host,
+          //   并把 cwd 设为远程当前路径, 这样 tab 标签会显示服务器标识。
+          const sshHostLabel = `${session.params.user}@${session.params.host}`;
+          // 在 subscribe 回调里用 getState() 读取最新远程路径, 避免 stale closure
+          const remoteCwd =
+            useSshStore.getState().currentPathBySession[session.id] ?? "/";
+          updateTab(targetTab.id, {
+            sshSessionId: session.id,
+            customTitle: sshHostLabel,
+            cwd: remoteCwd,
+          });
           // 切到该 tab, 让用户立即看到 SSH 终端
           if (targetTab.id !== currentActiveId) {
             setActiveId(targetTab.id);
@@ -577,16 +597,24 @@ export default function App() {
         // 如果没有任何可绑定的 terminal tab, 不强制新建 (用户可能正在看 editor)
       }
 
-      // 处理断开的会话: 解绑对应的 terminal tab
-      const connectedIds = new Set(connectedSessions.map((s) => s.id));
+      // 处理真正断开的会话: 解绑对应的 terminal tab, 并清除 SSH 自定义标题。
+      // TDSF 修复 2026-07-31: reconnecting 状态不解绑 ——
+      //   重连期间仍保持 tab 绑定 SSH, 避免用户切回 shell 时看到本地终端/主机名丢失。
+      const disconnectedSessions = state.sessions.filter(
+        (s) => s.state === "closed" || s.state === "failed",
+      );
+      const disconnectedIds = new Set(disconnectedSessions.map((s) => s.id));
       for (const sessionId of Array.from(boundSshSessionsRef.current)) {
-        if (connectedIds.has(sessionId)) continue;
-        // 该会话已断开, 解绑所有绑定的 tab
+        if (!disconnectedIds.has(sessionId)) continue;
+        // 该会话已彻底断开, 解绑所有绑定的 tab
         boundSshSessionsRef.current.delete(sessionId);
         const currentTabs = tabsRef.current;
         for (const tab of currentTabs) {
           if (tab.kind === "terminal" && tab.sshSessionId === sessionId) {
-            updateTab(tab.id, { sshSessionId: null });
+            updateTab(tab.id, {
+              sshSessionId: null,
+              customTitle: "",
+            });
           }
         }
       }
@@ -610,14 +638,14 @@ export default function App() {
   const effectiveExplorerRoot =
     explorerSource === "ssh" ? activeSshCurrentPath : explorerRoot;
 
-  // TDSF 修复 2026-07-29: SSH 连接后, 窗口标题/顶栏项目名/状态栏路径
-  // 都应显示 SSH 远程位置, 而不是本地工作区路径。
+  // TDSF 修复 2026-07-29: SSH 连接后, 窗口标题/状态栏路径显示 SSH 远程位置。
+  // TDSF 修复 2026-07-31: 顶栏项目名固定显示本地工作区, 不显示 SSH 地址
+  //   (地址已在左下角 StatusBar 展示, 避免顶栏重复且拥挤)。
   const sshLocationLabel =
     isConnectedSsh && activeSshSession
       ? `${activeSshSession.params.user}@${activeSshSession.params.host}:${activeSshCurrentPath ?? "/"}`
       : null;
-  const headerProjectName =
-    sshLocationLabel ?? explorerRoot ?? launchCwd ?? "local";
+  const headerProjectName = explorerRoot ?? launchCwd ?? "local";
 
   useWindowTitle(activeTab, sshLocationLabel ?? effectiveExplorerRoot);
 
@@ -762,6 +790,12 @@ export default function App() {
     const t = tabs.find((x) => x.id === activeId);
     if (!t) return null;
     if (t.kind === "terminal") {
+      // 2026-07-31 翻译模块修复: SSH 终端接管右侧工作区时，优先用 SSH leafId
+      // （SSH 终端不在 tab.paneTree 里，tab.activeLeafId 指向本地终端）
+      const sshLid = sshActiveLeafIdRef.current;
+      if (sshLid !== null && terminalRefs.current.has(sshLid)) {
+        return terminalRefs.current.get(sshLid)?.getSelection() ?? null;
+      }
       const lid = t.activeLeafId;
       return terminalRefs.current.get(lid)?.getSelection() ?? null;
     }
@@ -1745,6 +1779,10 @@ export default function App() {
                       // 2026-07-30 (#19): 透传 allocId 给 SshTerminalHost 分配稳定 leafId。
                       sshSessionId={workspaceSshSessionId}
                       allocId={allocId}
+                      // 2026-07-31 翻译模块修复: SSH 终端 leafId 上报
+                      onSshLeafId={(lid) => {
+                        sshActiveLeafIdRef.current = lid;
+                      }}
                     />
                   </div>
 
@@ -1772,15 +1810,6 @@ export default function App() {
               onCd={sendCd}
               onWorkspaceChange={handleWorkspaceChange}
               onOpenMini={openMini}
-              onOpenAi={() => {
-                // TDSF 魔改 2026-07-30: 统一 AI 入口, onOpenAi 也走 mini
-                if (!hasComposer) {
-                  void openSettingsWindow("models");
-                  return;
-                }
-                openMini();
-                focusInput(null);
-              }}
               hasComposer={hasComposer}
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true

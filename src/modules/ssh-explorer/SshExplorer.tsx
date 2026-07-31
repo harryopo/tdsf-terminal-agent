@@ -180,7 +180,10 @@ export function SshExplorer({ className }: Props) {
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeSession ? (
           isSessionConnected(activeSession) ? (
-            <ConnectedHint session={activeSession} />
+            // TDSF 魔改 2026-07-31: 已连接状态不再显示居中大卡片
+            // 原因: 该卡片在深色/浅色主题下形成明显色块, 与整体风格冲突;
+            // 当前连接信息已在顶部 SessionSwitcher 和底部 StatusBar 展示, 无需重复。
+            null
           ) : (
             <SessionStatusView session={activeSession} />
           )
@@ -386,24 +389,6 @@ function EmptyState({ onConnect }: { onConnect: () => void }) {
         <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={1.75} />
         新建连接
       </Button>
-    </div>
-  );
-}
-
-// === 子组件: 已连接提示 =====================================================
-
-function ConnectedHint({ session }: { session: SshSessionInfo }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center">
-      <SshStatusDot state={session.state} className="size-4" />
-      <div className="space-y-1">
-        <p className="text-[13px] font-medium text-foreground">
-          {session.params.user}@{session.params.host}
-        </p>
-        <p className="text-[11px] text-muted-foreground">
-          已连接。请切回左侧 Files 面板浏览远程文件。
-        </p>
-      </div>
     </div>
   );
 }
