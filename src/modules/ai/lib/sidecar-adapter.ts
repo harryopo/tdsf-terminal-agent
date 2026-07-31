@@ -562,6 +562,7 @@ export async function* runSidecarStream(
   // onToolCall 回调：把工具事件转成 tool-input/tool-output part，push 到 queue
   // （TDSF 修复 2026-07-31 P1: 实时流式，不再收集到数组等 invoke 完成）
   const onToolCall = (p: ToolCallPayload) => {
+    console.info("[sidecar-adapter] tool_call", p.tool_name, p.status);
     const name = p.tool_name;
     if (!name) return;
     if (p.status === "started") {
@@ -590,6 +591,9 @@ export async function* runSidecarStream(
   // onAgentMessage 回调：把 agent_message 事件转成 reasoning-delta/text-delta part
   // （TDSF 修复 2026-07-31 P1: 实现深度思考 UI + LLM 文本真正流式）
   const onAgentMessage = (p: AgentMessagePayload) => {
+    // TDSF debug 2026-07-31: 记录 agent_message 事件到 console，便于 CDP 排障
+    // 生产环境日志量极小（每条消息一次），不影响性能
+    console.info("[sidecar-adapter] agent_message", p.type, p.content?.slice(0, 80));
     const content = p.content;
     if (!content) return;
     const msgType = p.type ?? "output";
