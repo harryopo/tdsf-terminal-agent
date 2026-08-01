@@ -162,6 +162,11 @@ class NeedsYouRequest:
     responded_at: float | None = None
     responded_by: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    # P1-1 (2026-08-01): 等待-唤醒事件。respond/超时 时 set，
+    # 工具侧 wait_for_response 阻塞等待（实现真实 HITL 闭环）。
+    _event: threading.Event = field(
+        default_factory=threading.Event, init=False, repr=False
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """转为 dict（用于 JSON 序列化 / event_bus payload）"""
@@ -561,6 +566,12 @@ class NeedsYouService:
             f"by={responded_by}"
         )
 
+        # P1-1: 唤醒等待该请求的工具线程（真实 HITL 闭环）
+        try:
+            req._event.set()
+        except Exception as e:
+            logger.debug(f"needs_you wake event set failed: {e}")
+
         # 发布事件
         self._emit_event(event_name="responded", req=req)
 
@@ -581,6 +592,39 @@ class NeedsYouService:
             response={"approved": False, "reason": reason},
             responded_by=responded_by,
         )
+
+    def wait_for_response(
+        self,
+        req_id: str,
+        timeout: float | None = None,
+    ) -> NeedsYouRequest | None:
+        """阻塞等待用户响应（P1-1，真实 HITL 闭环）
+
+        工具侧在高危命令触发审批后调用：
+            1. 请求已非 pending（已响应/已超时）→ 立即返回
+            2. 请求 pending → 阻塞等待 respond / 超时扫描 唤醒
+            3. 返回最终状态的 NeedsYouRequest（None = 请求不存在）
+
+        Args:
+            req_id: 请求 ID
+            timeout: 最大等待秒数（None 用默认审批超时 30s）
+
+        Returns:
+            最终状态的 NeedsYouRequest；请求不存在返回 None
+        """
+        with self._lock:
+            req = self._requests.get(req_id)
+            if req is None:
+                logger.warning(f"needs_you.wait_for_response: id={req_id} not found")
+                return None
+            if not req.is_pending:
+                return req
+            event = req._event
+        wait_seconds = timeout if timeout is not None else self._approval_timeout
+        event.wait(wait_seconds)
+        with self._lock:
+            req = self._requests.get(req_id)
+            return req
 
     def _infer_status_from_response(
         self,
@@ -799,6 +843,11 @@ class NeedsYouService:
                 f"needs_you timeout: id={req.id}, type={req.type.value}, "
                 f"deadline={req.deadline}"
             )
+            # P1-1: 唤醒等待该请求的工具线程（超时视为拒绝）
+            try:
+                req._event.set()
+            except Exception as e:
+                logger.debug(f"needs_you timeout wake failed: {e}")
             self._emit_event(event_name="timeout", req=req)
 
         return len(timed_out)

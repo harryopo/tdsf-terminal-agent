@@ -48,6 +48,8 @@ export interface NeedsYouItem {
   detail: string;
   createdAt: number;
   resolved: boolean;
+  /** P1-1: 后端 needs_you 服务 req_id（审批按钮 RPC 回传用） */
+  reqId?: string;
 }
 
 // === 5. Agent 消息 + 工具调用（P2-A 新增）=====================================
@@ -343,7 +345,7 @@ export type RuntimeAction =
   | { type: 'set-mode'; mode: Mode }
   | { type: 'set-perm-mode'; mode: PermMode }
   | { type: 'set-perm-level'; level: RiskLevel; mode: PermMode }
-  | { type: 'add-needs-you'; item: Omit<NeedsYouItem, 'id' | 'createdAt' | 'resolved'> }
+  | { type: 'add-needs-you'; item: Omit<NeedsYouItem, 'createdAt' | 'resolved'> }
   | { type: 'resolve-needs-you'; id: string }
   | { type: 'set-net'; net: 'online' | 'offline' }
   | { type: 'set-tokens'; tokens: number }
@@ -458,6 +460,8 @@ function reducer(state: RuntimeState, action: RuntimeAction): RuntimeState {
         createdAt: Date.now(),
         resolved: false,
         ...action.item,
+        // P1-1: 后端 req_id 映射到 reqId 字段（id 保留前端唯一标识）
+        reqId: action.item.reqId ?? action.item.id,
       };
       return { ...state, needsYou: [item, ...state.needsYou] };
     }
