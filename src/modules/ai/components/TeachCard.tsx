@@ -2,19 +2,24 @@
  * TeachCard.tsx — Teach 教学卡片（P2-1）
  * -----------------------------------------------------------------------------
  * teach 子 agent 输出结构化 markdown（6 大板块教学法）：
- *   💡 概念与原理 / 📂 路径拆解 / 🏛️ Linux 设计哲学 /
- *   📝 操作示例 / ⚠️ 易错点与考点 / ✏️ 练习
+ *   概念与原理 / 路径拆解 / Linux 设计哲学 /
+ *   操作示例 / 易错点与考点 / 练习
  *
  * 本组件解析该结构，渲染为 Terax 风格的分区教学卡片：
  *   - 头部：Teach Agent 徽标 + 主题
  *   - 分区卡片：概念（原理卡）/ 示例（命令块 + 复制 + 插入终端）/
  *     易错（警示卡）/ 练习（练习卡 + 追问）
  *   - 命令块复用 suggest_command 的 Insert 机制（只插入不执行）
+ * 设计规范：不使用 emoji，图标统一 HugeiconsIcon，UI 组件用项目
+ * 组件库（Badge/Button/Separator）。
  */
 
 import { memo, useEffect, useMemo, useState } from "react";
 import { useChatStore } from "../store/chatStore";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import {
   BookOpen01Icon,
   BulbIcon,
@@ -79,12 +84,15 @@ export const TeachCard = memo(
           <span className="text-[11.5px] font-semibold text-foreground">
             Teach Agent
           </span>
-          <span className="rounded bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
             {topic.length > 30 ? topic.slice(0, 30) + "…" : topic}
           </span>
-          <span className="ml-auto rounded bg-emerald-500/10 px-1.5 py-px text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+          <Badge
+            variant="secondary"
+            className="shrink-0 border-emerald-500/30 bg-emerald-500/10 px-1.5 py-px text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+          >
             教学
-          </span>
+          </Badge>
         </div>
 
         {/* 分区 */}
@@ -96,26 +104,26 @@ export const TeachCard = memo(
 
         {/* 追问 */}
         {onAsk && (
-          <div className="border-t border-border/50 px-3 py-2">
-            <button
-              type="button"
-              data-testid="teach-ask"
-              onClick={() => {
-                setAsked(true);
-                onAsk(content);
-              }}
-              disabled={asked}
-              className={cn(
-                "flex h-6 w-full items-center justify-center gap-1.5 rounded-md border border-border/50",
-                "text-[11px] text-muted-foreground transition-colors",
-                "hover:border-border hover:bg-accent hover:text-foreground",
-                asked && "opacity-60",
-              )}
-            >
-              <HugeiconsIcon icon={SparklesIcon} size={11} strokeWidth={1.75} />
-              {asked ? "已发送给 AI" : "没懂？Ask TDSF 追问"}
-            </button>
-          </div>
+          <>
+            <Separator />
+            <div className="px-3 py-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                data-testid="teach-ask"
+                onClick={() => {
+                  setAsked(true);
+                  onAsk(content);
+                }}
+                disabled={asked}
+                className={cn("h-6 w-full gap-1.5 text-[11px]", asked && "opacity-60")}
+              >
+                <HugeiconsIcon icon={SparklesIcon} size={11} strokeWidth={1.75} />
+                {asked ? "已发送给 AI" : "没懂？Ask TDSF 追问"}
+              </Button>
+            </div>
+          </>
         )}
       </div>
     );
