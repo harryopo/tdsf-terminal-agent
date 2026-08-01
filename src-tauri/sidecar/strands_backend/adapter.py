@@ -42,6 +42,7 @@ strands_backend/adapter.py — Strands Agent 适配层
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Callable
 
@@ -119,6 +120,93 @@ def _strip_env_block(text: str) -> str:
 # ============================================================================
 # TdsfStrandsCallbackHandler — Strands 事件 → event_bus 转发
 # ============================================================================
+
+# Strands hooks 条件导入（P1-NEW-v2-3 fix-loop 保护用）
+try:
+    from strands.hooks.events import (  # type: ignore[import]
+        AfterToolCallEvent,
+        BeforeToolCallEvent,
+    )
+
+    _STRANDS_HOOKS_AVAILABLE = True
+except ImportError:
+    AfterToolCallEvent = None  # type: ignore[assignment]
+    BeforeToolCallEvent = None  # type: ignore[assignment]
+    _STRANDS_HOOKS_AVAILABLE = False
+
+
+class ToolCallLimitHook:
+    """Strands HookProvider：工具调用次数保护（P1-NEW-v2-3，fix-loop 近似）
+
+    LangGraph 路径有 BaseAgent._check_fix_loop 防重试风暴；Strands override
+    路径的工具调用由 Strands event loop 驱动，绕过该保护。本 hook 用
+    Strands 公共 Hook API（Before/AfterToolCallEvent）实现同等语义：
+    - 单次 invoke 总工具调用数超过 max_tool_calls → 取消后续调用（防死循环）
+    - 同一工具连续失败 max_failures 次 → 取消该工具的后续调用
+      （成功调用重置该工具失败计数，与 fix_loop 的 reset 语义一致）
+
+    注意：LimitToolCounts 在当前 strands 版本不存在（构造处旧注释过时），
+    此为自实现等价物。hook 实例按 (agent_id, session_id) 缓存于 adapter，
+    跨 invoke 累计计数（与 fix_loop 跨会话保护一致）。
+    """
+
+    def __init__(
+        self,
+        max_tool_calls: int = 12,
+        max_failures: int = 3,
+        agent_name: str = "main",
+    ) -> None:
+        self.max_tool_calls = max_tool_calls
+        self.max_failures = max_failures
+        self.agent_name = agent_name
+        self.total_calls = 0
+        self.failures_by_tool: dict[str, int] = {}
+        self.cancelled = False
+
+    def register_hooks(self, registry: Any) -> None:
+        """HookProvider 协议：注册 Before/AfterToolCallEvent 回调"""
+        if not _STRANDS_HOOKS_AVAILABLE:
+            return
+        registry.add_callback(BeforeToolCallEvent, self._before_tool_call)
+        registry.add_callback(AfterToolCallEvent, self._after_tool_call)
+
+    def _tool_name(self, event: Any) -> str:
+        tool_use = getattr(event, "tool_use", None)
+        if isinstance(tool_use, dict):
+            return str(tool_use.get("name", "?"))
+        return str(getattr(tool_use, "get", lambda k, d=None: d)("name", "?"))
+
+    def _before_tool_call(self, event: Any) -> None:
+        if self.cancelled:
+            event.cancel_tool = True
+            return
+        self.total_calls += 1
+        if self.total_calls > self.max_tool_calls:
+            self.cancelled = True
+            event.cancel_tool = (
+                f"工具调用次数超过上限（{self.max_tool_calls}），已终止任务"
+            )
+            return
+        name = self._tool_name(event)
+        if self.failures_by_tool.get(name, 0) >= self.max_failures:
+            event.cancel_tool = (
+                f"工具 {name} 连续失败 {self.max_failures} 次，已停止调用该工具"
+            )
+
+    def _after_tool_call(self, event: Any) -> None:
+        name = self._tool_name(event)
+        failed = getattr(event, "exception", None) is not None
+        if failed:
+            self.failures_by_tool[name] = self.failures_by_tool.get(name, 0) + 1
+        else:
+            self.failures_by_tool[name] = 0
+
+    def reset(self) -> None:
+        """重置计数（agent 缓存清理时调用）"""
+        self.total_calls = 0
+        self.failures_by_tool.clear()
+        self.cancelled = False
+
 
 class TdsfStrandsCallbackHandler:
     """Strands callback_handler 协议实现：把 Strands 事件转发到 event_bus
@@ -249,6 +337,31 @@ class TdsfStrandsCallbackHandler:
 # StrandsAgentAdapter — 适配层核心
 # ============================================================================
 
+# P1-NEW-v2-4: main_agent 关键词路由 → Strands prompt 角色指令
+# （Strands override 路径无 BaseAgent PAOR，用路由意图引导回答风格）
+_ROUTE_PROMPT_HINTS: dict[str, str] = {
+    "teach": (
+        "用户请求教学讲解。请以教学口吻输出：先讲清概念与原理，"
+        "再给出可执行的 Linux 命令/配置示例，最后留一个练习或思考题。"
+    ),
+    "coding": (
+        "用户请求代码修改。请定位问题、给出修改方案，"
+        "并说明每个改动点的原因。"
+    ),
+    "explore": (
+        "用户请求查找/定位。请先明确搜索目标，再逐步定位并说明依据。"
+    ),
+    "debug": (
+        "用户请求排查故障。请按根因分析流程：收集现象 → 假设 → "
+        "用工具验证 → 给出修复建议。"
+    ),
+    "history": "用户查询历史/之前的内容。请基于已有上下文回答。",
+    "refactor": "用户请求重构。请说明重构动机、改动范围与验证方式。",
+    "test": "用户请求测试。请给出测试用例与执行方式。",
+    "deploy": "用户请求部署/发布。请给出部署步骤与验证命令。",
+}
+
+
 class StrandsAgentAdapter:
     """Strands Agent 适配层
 
@@ -297,6 +410,9 @@ class StrandsAgentAdapter:
         self._strands_available = _STRANDS_AGENT_AVAILABLE and TOOL_DECORATOR_AVAILABLE
         self._model_available = strands_model is not None
 
+        # P1-NEW-v2-4: main_agent 路由单例缓存
+        self._main_agent_singleton = None
+
         # 缓存的 Strands Agent 实例
         # P1-NEW-v2-2 修复 (2026-07-30): 缓存 key 从 agent_id 改为 (agent_id, session_id)，
         # 避免 multi-session 并发时 callback_handler 和工具闭包绑定的首次 session_id
@@ -314,6 +430,54 @@ class StrandsAgentAdapter:
     # ========================================================================
     # 主入口：invoke
     # ========================================================================
+
+    # P1-NEW-v2-4: 路由角色 → prompt 角色指令（Strands main 按风格回答）
+    def _route_main_agent(
+        self, agent_id: str, input: str, session_id: str
+    ) -> str | None:
+        """恢复 main_agent 关键词路由意图（Strands override 路径）
+
+        返回路由到的子 Agent 名（teach/coding/...），未路由返回 None。
+        路由结果会 emit agent_switch 事件（前端 Pill 显示）。
+        """
+        if agent_id != "main" or not input:
+            return None
+        try:
+            from agents.main_agent import MainAgent  # 延迟 import 防循环
+
+            agent = self._main_agent_instance()
+            plan = agent.plan_task(input, {})
+            if not plan:
+                return None
+            m = re.match(r"\[(\w+)\]", str(plan[0]))
+            routed = m.group(1) if m else None
+            if routed not in _ROUTE_PROMPT_HINTS:
+                return None
+            self._emit_agent_switch(routed, session_id)
+            return routed
+        except Exception as e:
+            logger.debug(f"main agent routing unavailable: {e}")
+            return None
+
+    def _main_agent_instance(self) -> Any:
+        """模块级缓存的 MainAgent 实例（plan_task 只依赖输入，构造一次即可）"""
+        import agents.main_agent as _ma
+
+        if self._main_agent_singleton is None:
+            self._main_agent_singleton = _ma.MainAgent()
+        return self._main_agent_singleton
+
+    def _emit_agent_switch(self, agent: str, session_id: str) -> None:
+        if self.event_bus is None:
+            return
+        try:
+            self.event_bus.emit_agent_switch(
+                agent=agent,
+                session_id=session_id or None,
+                source="main_agent.strands_route",
+            )
+        except Exception as e:
+            logger.debug(f"emit_agent_switch failed: {e}")
 
     def invoke(
         self,
@@ -371,6 +535,18 @@ class StrandsAgentAdapter:
 
             # 5. 构建 prompt（注入 live 上下文）
             prompt = self._build_prompt(input, state)
+
+            # TDSF 修复 2026-08-01 (P1-NEW-v2-4): Strands 路径恢复 main_agent
+            # 关键词路由的"路由意图"。Strands override 绕过 BaseAgent PAOR
+            # 后 plan_task 不再执行，教学/编码等请求失去角色化处理。此处：
+            #   ① 跑 plan_task 解析路由（teach/coding/...）
+            #   ② emit agent_switch（前端 AgentStatusPill 显示子 Agent）
+            #   ③ 把角色指令注入 prompt（Strands main 以对应风格回答）
+            routed_agent = self._route_main_agent(agent_id, input, session_id)
+            if routed_agent:
+                role_hint = _ROUTE_PROMPT_HINTS.get(routed_agent)
+                if role_hint:
+                    prompt = f"{prompt}\n\n[路由到 {routed_agent}]\n{role_hint}"
 
             # 6. 推送 mood=working
             self._emit_mood("working", agent_id, session_id)
@@ -554,11 +730,16 @@ class StrandsAgentAdapter:
         #   或自定义 HookProvider（见 Strands 官方文档 hooks.mdx）。
         #   当前先移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
         #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
+        # TDSF 修复 2026-08-01 (P1-NEW-v2-3): 接入自实现 ToolCallLimitHook
+        #   （LimitToolCounts 在当前 strands 版本不存在），实现工具调用次数
+        #   上限 + 单工具连续失败保护（fix-loop 近似语义，绕过 BaseAgent
+        #   _check_fix_loop 的 Strands override 路径从此有保护）。
         agent = _StrandsAgent(  # type: ignore[misc]
             model=self.strands_model,
             tools=all_tools,
             system_prompt=self.system_prompt,
             callback_handler=handler,
+            hooks=[ToolCallLimitHook(agent_name=agent_id)],
             # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
         )
 

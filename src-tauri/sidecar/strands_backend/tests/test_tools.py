@@ -975,3 +975,144 @@ class TestPackageImport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ============================================================================
+# ToolCallLimitHook 测试（P1-NEW-v2-3 fix-loop 保护）
+# ============================================================================
+
+class TestToolCallLimitHook(unittest.TestCase):
+    """工具调用次数保护 hook（不依赖 Strands 真实执行）"""
+
+    def _make_event(self, name="ssh_command", exception=None):
+        event = MagicMock()
+        event.tool_use = {"name": name}
+        event.cancel_tool = False
+        event.exception = exception
+        return event
+
+    def test_register_hooks_registers_callbacks(self):
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook()
+        registry = MagicMock()
+        hook.register_hooks(registry)
+        self.assertEqual(registry.add_callback.call_count, 2)
+
+    def test_total_calls_limit_cancels(self):
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook(max_tool_calls=2)
+        e1 = self._make_event()
+        hook._before_tool_call(e1)
+        self.assertFalse(e1.cancel_tool)
+        e2 = self._make_event()
+        hook._before_tool_call(e2)
+        self.assertFalse(e2.cancel_tool)
+        e3 = self._make_event()
+        hook._before_tool_call(e3)
+        self.assertTrue(e3.cancel_tool)
+        self.assertTrue(hook.cancelled)
+
+    def test_consecutive_failures_cancel_same_tool(self):
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook(max_failures=3)
+        for i in range(3):
+            before = self._make_event("ssh_command")
+            hook._before_tool_call(before)
+            self.assertFalse(before.cancel_tool, f"call {i} should pass")
+            after = self._make_event("ssh_command", exception=RuntimeError("boom"))
+            hook._after_tool_call(after)
+        # 第 4 次调用同工具应被取消
+        before = self._make_event("ssh_command")
+        hook._before_tool_call(before)
+        self.assertTrue(before.cancel_tool)
+
+    def test_success_resets_failure_count(self):
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook(max_failures=2)
+        hook._after_tool_call(self._make_event("ssh_command", exception=RuntimeError("e")))
+        hook._after_tool_call(self._make_event("ssh_command", exception=RuntimeError("e")))
+        # 成功调用重置
+        hook._after_tool_call(self._make_event("ssh_command", exception=None))
+        before = self._make_event("ssh_command")
+        hook._before_tool_call(before)
+        self.assertFalse(before.cancel_tool)
+
+    def test_different_tools_independent_failures(self):
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook(max_failures=1)
+        hook._after_tool_call(self._make_event("ssh_command", exception=RuntimeError("e")))
+        # 另一工具不受影响
+        before = self._make_event("sftp_read")
+        hook._before_tool_call(before)
+        self.assertFalse(before.cancel_tool)
+
+    def test_reset_clears_state(self):
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook(max_tool_calls=1)
+        hook._before_tool_call(self._make_event())
+        hook._before_tool_call(self._make_event())
+        self.assertTrue(hook.cancelled)
+        hook.reset()
+        self.assertFalse(hook.cancelled)
+        self.assertEqual(hook.total_calls, 0)
+
+
+# ============================================================================
+# main_agent 路由恢复测试（P1-NEW-v2-4）
+# ============================================================================
+
+class TestMainAgentRouting(unittest.TestCase):
+    """Strands 路径恢复 main_agent 关键词路由意图"""
+
+    def _adapter_with_mock_agent(self):
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        bus = make_mock_event_bus()
+        adapter = StrandsAgentAdapter(event_bus=bus, backend_enabled=True)
+        mock_response = MagicMock()
+        mock_response.__str__ = MagicMock(return_value="回答内容")
+        mock_response.metrics = {}
+        mock_agent = MagicMock(return_value=mock_response)
+        adapter._agent_cache[("main", "s1")] = mock_agent
+        adapter._strands_available = True
+        adapter._model_available = True
+        return adapter, bus, mock_agent
+
+    def test_teach_request_routes_and_injects_hint(self):
+        adapter, bus, mock_agent = self._adapter_with_mock_agent()
+        adapter.invoke("main", "解释一下什么是负载均衡", {"session_id": "s1"})
+        prompt = mock_agent.call_args[0][0]
+        self.assertIn("路由到 teach", prompt)
+        self.assertIn("教学口吻", prompt)
+        # agent_switch 事件应发出
+        bus.emit_agent_switch.assert_called_once()
+        self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "teach")
+
+    def test_ops_request_no_routing(self):
+        adapter, bus, mock_agent = self._adapter_with_mock_agent()
+        # 注意: "查看 nginx 状态" 含单字 "查" 会被 plan_task 路由到 explore（既有语义），
+        # 运维类用例用无歧义表述
+        adapter.invoke("main", "nginx 服务状态如何", {"session_id": "s1"})
+        prompt = mock_agent.call_args[0][0]
+        self.assertNotIn("路由到", prompt)
+        bus.emit_agent_switch.assert_not_called()
+
+    def test_non_main_agent_no_routing(self):
+        adapter, bus, mock_agent = self._adapter_with_mock_agent()
+        adapter._agent_cache[("coding", "s1")] = mock_agent
+        adapter.invoke("coding", "解释一下什么是负载均衡", {"session_id": "s1"})
+        bus.emit_agent_switch.assert_not_called()
+
+    def test_route_main_agent_direct(self):
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        adapter = StrandsAgentAdapter(event_bus=None, backend_enabled=False)
+        self.assertEqual(adapter._route_main_agent("main", "讲解一下进程", "s1"), "teach")
+        self.assertIsNone(adapter._route_main_agent("main", "随便聊聊", "s1"))
+        self.assertIsNone(adapter._route_main_agent("coding", "讲解一下", "s1"))

@@ -3058,3 +3058,12 @@ SSH 终端执行 cd /tmp
 
 **验证**：pytest 1375 全过（+6 Rust 解析测试）；`python scripts/dev-log.py` 合并分析正常，raw 时间线对齐。
 **经验**：① tauri_plugin_log 的 Folder/Stdout 时间基准不同（UTC vs 本地）；② 测试 import 主模块会触发其副作用（日志/资源），需显式隔离。
+
+### 37.12 AI 侧 backlog P1 四项修复（2026-08-01）
+
+1. **P1-NEW-v2-7（exec_command Failure 浪费 30s）**：`session.rs` collect_exec_output 的 ChannelMsg::Failure 分支此前"继续等 ExitStatus"——服务器拒绝 exec 后不会再发，wait() 挂到超时（默认 30s）。修：立即 break + stderr 写入 `[tdsf-exec-rejected]` 标记（与超时区分，两者 exit_code 均 -1）。
+2. **P1-NEW-v2-3（Strands 工具无 fix-loop 保护）**：新增 `ToolCallLimitHook`（Strands HookProvider，Before/AfterToolCallEvent）：总工具调用上限（12，防死循环）+ 单工具连续失败上限（3，成功重置，fix-loop 近似语义）。接入 _get_or_create_agent 的 hooks。**注**：构造处旧注释引用的 LimitToolCounts 在当前 strands 版本不存在，此为自实现等价物。
+3. **P1-NEW-v2-4（Strands main_agent PAOR 路由失效）**：adapter.invoke 对 agent_id=="main" 跑 main_agent.plan_task 关键词路由 → emit agent_switch（前端 Pill 显示子 Agent）+ 路由角色指令注入 prompt（teach/coding/debug 等 8 角色 hint）。延迟 import 防循环 + 单例缓存。
+4. **P1-NEW-v3-2（toolCallId 错乱）**：上轮已修（孤儿 completed 忽略 + handler 不再发残缺 started，见 §37.1），本轮验证单测覆盖。
+
+**验证**：pytest 1385（+10：hook 6 + 路由 4）；test_tools 82/82；cargo check / typecheck / vitest 853 全过。
