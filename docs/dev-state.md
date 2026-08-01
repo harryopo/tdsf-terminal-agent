@@ -3219,3 +3219,24 @@ CDP 全新状态实测通过。commit 见上。
 - 下一步：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 重启 → 用户点击 → chrome-devtools-mcp 抓 console 错误
 
 **测试**：前端 930 / 后端 knowledge 15 全过；tsc/eslint 干净。
+
+### 37.22 全量工程推进：图标/透明窗口/词库/P4 收敛/打包（2026-08-01 深夜自主开发）
+
+**用户指令**：设立 goal 全量开发（质量优先、不砍工作量、调研先行、循环工程、每轮审查、无确认自主推进）。用户补充：图标丑+启动蓝块、打开透明窗口问题一并修复。
+
+**T1 图标（c76be91）**：根因=所有图标纯色 #818CF8 单像素（32x32 仅 104B）。Python PIL 生成简洁终端风格（深炭黑圆角底+绿色 >_ 提示符），全部尺寸+ICO，几何验证通过。
+
+**T2 透明窗口（b59b3a8）**：根因=visible:false + setTimeout(show,50ms) 在 React 首帧前 show（App 初始化重首帧 >500ms）。三层修复：窗口 backgroundColor(#1a1a1a) 渲染前即不透明 + 双 rAF 首帧后 show + 2s 兜底（主窗+Settings 统一）。
+
+**T3 词库（5a78456）**：ECDICT 子集 81557 条（计算机标记+COCA 前2万+考试词，5.4MB）+ lemma 反向表 101909 组（2.4MB）——翻译链升级为 10 级（命令→linux→programming→ECDICT→lemma→模糊→复合词），gave→give/teeth→tooth 全通。误提交 65MB 原始 csv 已清理。
+
+**T4 稳定化+打包**：
+- **关键教训**：pnpm build 严格类型检查（tsconfig.app.json）暴露 8+ 真实错误（此前 tsconfig.json 宽松检查漏掉）——AsciicastPanel 回放解构顺序 bug（delay 拿到 data，setTimeout(NaN) 时序全乱）、LookupResult 缺字段、NeedsYouItem id 连锁。全部修复。
+- dist 111MB→54MB（sourcemap 关闭）；安装包 17MB（0.1.0，比旧 4.0.0 22MB 小）
+- 移除 tauri.conf 硬编码 CDP 端口（调试改环境变量注入）
+
+**P4 单框架收敛（69ec9c0）**：确认 graph/ 死代码（main 仅注释引用）→ 删除 2184 行 + langgraph/langchain 5 依赖。后端 1431 全过。
+
+**T5 ROADMAP**：决策库自动沉淀（b22051b：排障成功自动 add_case，md5 去重）；资源管理器性能债=上游已按目录缓存（无需做）；长对话虚拟化评估后不做（教学对话量小、复杂度高）；P3 生态项（Headroom/沙箱）待用户确认外部依赖。
+
+**进行中**：sidecar PyInstaller 打包（发布必需——release exe 需要独立 sidecar）。
