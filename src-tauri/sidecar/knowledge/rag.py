@@ -363,6 +363,29 @@ class RagIndex:
                 )
             return results
 
+    def list_entries(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """列出条目（按入库时间倒序，浏览模式用）"""
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            rows = conn.execute(
+                "SELECT * FROM entries ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "source": r["source"],
+                    "title": r["title"],
+                    "content": r["content"],
+                    "url": r["url"],
+                    "tags": _json_loads(r["tags"]),
+                    "created_at": r["created_at"],
+                    "match_type": "list",
+                }
+                for r in rows
+            ]
+
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:

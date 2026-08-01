@@ -82,6 +82,19 @@ async function getKnowledge(id: string): Promise<KnowledgeHit | null> {
   }
 }
 
+async function listKnowledge(limit = 50): Promise<KnowledgeHit[]> {
+  try {
+    const { invokeRpc } = await import("@/lib/sidecar-bridge");
+    const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
+      "knowledge.list",
+      { limit, offset: 0 },
+    );
+    return res?.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
 // ============================================================================
 // KnowledgePanel — 左侧栏内嵌面板（搜索 + 列表）
 // ============================================================================
@@ -96,8 +109,12 @@ export function KnowledgePanel() {
   const search = useCallback(async (q: string) => {
     const keyword = q.trim();
     if (!keyword) {
-      setResults([]);
+      // 空查询 → 回到浏览模式（列出全部）
+      setLoading(true);
+      const hits = await listKnowledge(50);
+      setResults(hits);
       setSearched(false);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -105,6 +122,14 @@ export function KnowledgePanel() {
     const hits = await searchKnowledge(keyword);
     setResults(hits);
     setLoading(false);
+  }, []);
+
+  // 打开即浏览（像文件列表：列出全部条目，点击查看 md）
+  useEffect(() => {
+    void listKnowledge(50).then((hits) => {
+      setResults(hits);
+      setLoading(false);
+    });
   }, []);
 
   return (
@@ -164,11 +189,11 @@ export function KnowledgePanel() {
             可导入文档或沉淀案例扩充知识库。
           </div>
         )}
-        {!loading && !searched && (
+        {!loading && !searched && results.length === 0 && (
           <div className="py-6 text-center text-[11px] leading-relaxed text-muted-foreground">
-            输入关键词检索内置教学知识库
+            知识库为空。
             <br />
-            （命令 / 概念 / 哲学 / 排障案例）
+            可导入文档或沉淀案例扩充知识库。
           </div>
         )}
         <div className="space-y-1.5">
