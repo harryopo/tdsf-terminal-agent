@@ -3012,3 +3012,18 @@ SSH 终端执行 cd /tmp
 - 门禁：typecheck/lint/vitest 853 全过
 
 **新发现（backlog）**：SSH Space 的 root 字段残留本地路径（D:/），导致新建 SSH tab 继承 cwd=本地路径；幽灵 SSH Space env（session 已删但 env.kind=ssh）应自动降级/清理。
+
+### 37.9 自动连接归属 + 新建 tab 远程 cwd + 幽灵 env（2026-08-01）
+
+**新发现（37.8 实测暴露）**：
+1. **自动连接抢占当前 Space**：subscribe 的 setEnv 无条件升级"当前活跃 Space"——本地 Space 活跃时自动连接会把它升级成 SSH 并**误绑其 terminal tab**（CDP 实测：本地 tab 全被绑上 sshSessionId，8 个 session 堆积）。
+2. **SSH Space 新建 tab 继承本地 cwd**：openNewTab 用 inheritedCwdForNewTab（fallback 到本地 spaceRoot D:/）。
+3. **幽灵 SSH Space env**（session 已删但 env.kind=ssh）在自动连接失败时不降级。
+
+**修复**（App.tsx）：
+1. subscribe 目标 Space 按来源区分：自动连接（autoConnectSessionId 标记）只升级 **host/user 匹配的既有 SSH Space**（恢复上次 SSH 工作区），不抢占本地 Space；手动连接保持"升级当前 Space"需求。tab 绑定查找范围限定 targetSpace.id。
+2. 渲染守卫：activeTabSshSession 要求 tab.spaceId === activeSpaceId（历史误绑的跨 Space 绑定视为无效）。
+3. openNewTab/openNewPrivateTab/openNewBlockTab：SSH Space 用 spaceSshCurrentPath 继承。
+4. 自动连接失败时幽灵 SSH Space env 降级 local。
+
+**CDP 实测**（清污染 + reload）：本地 Space 保持 local ✓、root@ Space 升级新 session ✓、无 session 堆积 ✓、SSH tab cwd=/（远程）✓；typecheck/lint/vitest 853 全过。
