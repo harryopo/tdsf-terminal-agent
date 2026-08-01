@@ -2042,6 +2042,30 @@ export default function App() {
                        等组件在 mock 模式抛错时把整个 root 清空. */}
                     <ErrorBoundary>
                       {sidebarView === "explorer" ? (
+                        // TDSF 修复 2026-08-01: 无任何工作区时资源管理器显示
+                        // "新建工作区"引导（保留侧栏骨架，用户可看清整体功能）
+                        spaceCount === 0 ? (
+                          <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
+                            <div className="text-[13px] font-medium text-foreground">
+                              暂无工作区
+                            </div>
+                            <p className="text-[12px] leading-relaxed text-muted-foreground">
+                              点击右侧工作区的「新建本地工作区」或「连接 SSH
+                              服务器」开始使用；也可使用 Skills 面板与 AI
+                              智能体。
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSpaceCreateMode("local");
+                                setSpaceCreateOpen(true);
+                              }}
+                              className="mt-1 rounded-md border border-border bg-card px-3 py-1.5 text-[12px] text-foreground transition-colors hover:bg-muted"
+                            >
+                              新建工作区
+                            </button>
+                          </div>
+                        ) : (
                         <div className="flex h-full min-h-0 flex-col">
                           <div className="min-h-0 flex-1">
                           <FileExplorer
@@ -2094,6 +2118,7 @@ export default function App() {
                              远程文件点击改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程），
                              侧栏只保留 FileExplorer（文件树），不再内嵌 SshFileEditor。 */}
                         </div>
+                        )
                       ) : sidebarView === "source-control" ? (
                         <SourceControlPanel
                           open
@@ -2120,6 +2145,20 @@ export default function App() {
               <ResizablePanel id="workspace" defaultSize="78%" minSize="30%">
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="relative min-h-0 flex-1">
+                    {/* TDSF 修复 2026-08-01: 无工作区时终端区域显示欢迎（保留
+                        侧栏/顶栏/状态栏，用户可看清整体功能）；否则正常工作区 */}
+                    {spaceCount === 0 ? (
+                      <WelcomeScreen
+                        onCreateLocal={() => {
+                          setSpaceCreateMode("local");
+                          setSpaceCreateOpen(true);
+                        }}
+                        onCreateSsh={() => {
+                          setSpaceCreateMode("ssh");
+                          setSpaceCreateOpen(true);
+                        }}
+                      />
+                    ) : (
                     <WorkspaceSurface
                       tabs={tabs}
                       activeId={activeId}
@@ -2159,6 +2198,7 @@ export default function App() {
                         sshActiveLeafIdRef.current = lid;
                       }}
                     />
+                    )}
                   </div>
 
                   <WorkspaceInputBar
@@ -2279,33 +2319,6 @@ export default function App() {
       </TooltipProvider>
     </ThemeProvider>
   );
-
-  // TDSF 修复 2026-08-01: 无任何工作区 → 欢迎界面（首次启动/全部删除后）
-  if (spacesHydrated && spaceCount === 0) {
-    return (
-      <ThemeProvider>
-        <WelcomeScreen
-          onCreateLocal={() => {
-            setSpaceCreateMode("local");
-            setSpaceCreateOpen(true);
-          }}
-          onCreateSsh={() => {
-            setSpaceCreateMode("ssh");
-            setSpaceCreateOpen(true);
-          }}
-        />
-        {/* 欢迎界面下创建对话框必须在本分支内渲染（主 UI shell 不在此分支） */}
-        <SpaceCreateDialog
-          open={spaceCreateOpen}
-          onOpenChange={setSpaceCreateOpen}
-          defaultEnv={workspaceEnv}
-          defaultRoot={activeCwd ?? home ?? null}
-          initialMode={spaceCreateMode}
-          onCreated={handleSpaceCreated}
-        />
-      </ThemeProvider>
-    );
-  }
 
   return <AiComposerProvider>{shell}</AiComposerProvider>;
 }
