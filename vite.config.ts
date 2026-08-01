@@ -53,7 +53,9 @@ export default defineConfig({
   build: {
     target: 'esnext',     // Tauri WebView 2 支持 ES2022+
     minify: 'esbuild',
-    sourcemap: true,
+    // T4 稳定化: 生产关闭 sourcemap——dist 中 .map 占 ~40-50MB（打包体积大头），
+    // 且生产无需调试映射
+    sourcemap: false,
     outDir: 'dist',
     emptyOutDir: true,
     // Monaco Editor worker 单独分包 (避免主 bundle 过大)

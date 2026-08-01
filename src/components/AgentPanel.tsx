@@ -186,7 +186,7 @@ export function AgentPanel({ open, onClose }: AgentPanelProps) {
         dispatch({
           type: 'add-needs-you',
           item: {
-            id: p.id, // 后端 req_id（approve/reject RPC 用）
+            id: p.id ?? `needs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, // 后端 req_id（approve/reject RPC 用）
             type: type as 'approval' | 'error' | 'question' | 'handoff',
             title: p.title,
             detail,

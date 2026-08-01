@@ -24,8 +24,7 @@
         "visible": false,
         "center": true,
         "dragDropEnabled": true,
-        "devtools": true,
-        "additionalBrowserArgs": "--remote-debugging-port=9222 --remote-allow-origins=*"
+        "devtools": true
       }
     ],
     "security": {
