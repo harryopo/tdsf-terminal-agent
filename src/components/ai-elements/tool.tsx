@@ -287,6 +287,32 @@ function renderInputPreview(
       </div>
     );
   }
+  // TDSF 2026-08-01: SSH 运维工具 Input 预览（命令 + 会话 + 超时摘要，
+  // 替代裸 JSON——ssh_command 等工具的 input 主要价值在命令本身）
+  if (
+    toolName === "ssh_command" ||
+    toolName === "sftp_read" ||
+    toolName === "sftp_write"
+  ) {
+    const cmd = str("command") ?? str("path");
+    if (!cmd) return null;
+    const session = str("ssh_session_id") ?? str("sshSessionId");
+    const timeout = i.timeout != null ? String(i.timeout) : null;
+    return (
+      <div className="space-y-1 font-mono text-[11px]">
+        <pre className="overflow-auto rounded bg-muted/40 p-2 leading-relaxed">
+          {cmd}
+        </pre>
+        {session || timeout ? (
+          <div className="text-[10px] text-muted-foreground">
+            {session ? `session ${session}` : null}
+            {session && timeout ? " · " : null}
+            {timeout ? `${timeout}s` : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
   if (
     toolName === "read_file" ||
     toolName === "list_directory" ||
