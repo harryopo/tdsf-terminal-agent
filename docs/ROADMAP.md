@@ -12,15 +12,16 @@
 | **P0** | Strands 多 agent（B 方案）/ 真流式 / 超时可配置 / 降级 UI / 补测试 | ✅ 完成 | dev-state §37.17 |
 | **P0-6** | Agent 全链路：main 统一入口 + 自主委派 + 调用可视化 | ✅ 完成 | dev-state §37.18 |
 | **P1** | HITL 真实审批闭环 / 会话证据链 / hash 审计链 | ✅ 完成 | dev-state §37.19 |
-| **P2** | 教学闭环：Teach 结构化输出、asciicast 回放 UI、工具集 7→15、决策库、资源管理器性能债 | 🔄 部分完成 | 翻译模块重构（本次） |
+| **P2** | 教学闭环：Teach 结构化输出、asciicast 回放 UI、工具集扩展、决策库、资源管理器性能债 | 🔄 部分完成 | 翻译重构 + 知识库落地（本次） |
 | **P3** | 生态：Headroom MCP（需确认外部依赖）、实训沙箱（Docker）、Profile 教学配置 | ⏳ 未开始 | 需用户确认外部依赖 |
 | **P4** | 单框架收敛：删除 LangGraph 遗产代码与 graph/ 目录 | ⏳ 未开始 | 需 B 方案稳定后再做 |
 
 **P2 剩余子任务**：
-- [ ] Teach 结构化输出字段（teaching_content）→ 前端教学卡片渲染
+- [ ] Teach 结构化输出字段（teaching_content）→ 前端教学卡片渲染（知识库已可支撑教学）
 - [ ] asciicast 录制 → 回放 UI + 导出分享（录制器已实现，UI 待接）
 - [ ] 工具集 7→15（service/package/firewall/security/performance 管理）
-- [ ] 决策库（Decision Library：SQLite + 向量，检索增强自进化）
+- [ ] 决策库完善（会话案例沉淀雏形已完成 knowledge.add_case，检索增强待接）
+- [ ] 知识库管理 UI（浏览/导入页面，RPC 已就绪 knowledge.import_docs 等）
 - [ ] 资源管理器 O(全量) 重建性能债（按目录缓存）
 
 **P1 剩余**：
@@ -40,7 +41,7 @@
 
 | # | 任务 | 类型 | 预估 | 依赖 |
 |---|------|------|------|------|
-| 1 | **P2-1 Teach 结构化输出**：teach 子 agent 输出含 teaching_content 结构（教程/知识卡/分水平）→ 前端教学卡片渲染 | 功能 | 中 | 无 |
+| 1 | **P2-1 Teach 教学卡片**：teach 结构化输出（teaching_content）+ 前端 TeachCard（Terax 风格，含 Linux 哲学/命令插入/追问） | 功能 | 中 | 知识库已可支撑 |
 | 2 | **P2-2 asciicast 回放 UI**：录制 → 回放面板 + 导出（教学复盘刚需） | 功能 | 中 | 录制器已就绪 |
 | 3 | **实测验证**：真实 LLM 委派行为 + SSH 终端翻译/审批全链路 | 验收 | 需用户 | API key + SSH 服务器 |
 | 4 | **P2-3 工具集扩展**：service/package/firewall/security/performance 5 工具 | 功能 | 中 | 无 |
