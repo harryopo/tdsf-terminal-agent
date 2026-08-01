@@ -1658,3 +1658,67 @@ class TestExtendedOpsTools(unittest.TestCase):
         # 只读扩展保留
         self.assertIn("security_audit", names)
         self.assertIn("performance_analyze", names)
+
+
+# ============================================================================
+# P2-4 自动案例沉淀测试
+# ============================================================================
+
+class TestAutoSinkCase(unittest.TestCase):
+    def _adapter(self):
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        return StrandsAgentAdapter(event_bus=None, backend_enabled=False)
+
+    def test_sink_case_when_troubleshooting_with_evidence(self):
+        from knowledge.rag import get_global_rag
+
+        rag = get_global_rag()
+        before = rag.count()
+        adapter = self._adapter()
+        # 注入证据（模拟会话有工具调用）
+        from strands_backend.evidence import get_global_tracker
+
+        tracker = get_global_tracker()
+        tracker.record(
+            session_id="sink-s1",
+            tool_name="ssh_command",
+            status="completed",
+            detail="nginx -t",
+            result={"ok": True, "output": "syntax is ok"},
+            agent="main",
+        )
+        adapter._auto_sink_case(
+            "main",
+            "nginx 502 排障怎么处理",
+            "根因是 php-fpm socket 权限问题，修复方案：检查 listen.owner 并 chown socket 文件，然后 systemctl reload php-fpm 验证。",
+            "sink-s1",
+        )
+        after = rag.count()
+        self.assertGreater(after, before)
+        # 去重：同输入再次沉淀不增加
+        adapter._auto_sink_case(
+            "main",
+            "nginx 502 排障怎么处理",
+            "根因是 php-fpm socket 权限问题，修复方案：检查 listen.owner 并 chown socket 文件，然后 systemctl reload php-fpm 验证。",
+            "sink-s1",
+        )
+        self.assertEqual(rag.count(), after)
+
+    def test_no_sink_without_evidence(self):
+        from knowledge.rag import get_global_rag
+
+        rag = get_global_rag()
+        before = rag.count()
+        adapter = self._adapter()
+        adapter._auto_sink_case("main", "nginx 502 排障", "结论", "sink-s2")
+        self.assertEqual(rag.count(), before)
+
+    def test_no_sink_for_normal_chat(self):
+        from knowledge.rag import get_global_rag
+
+        rag = get_global_rag()
+        before = rag.count()
+        adapter = self._adapter()
+        adapter._auto_sink_case("main", "你好呀", "今天天气不错。", "sink-s3")
+        self.assertEqual(rag.count(), before)
