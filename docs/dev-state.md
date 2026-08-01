@@ -3091,3 +3091,13 @@ SSH 终端执行 cd /tmp
 - 实测（全新状态）：欢迎界面 ✓ → 新建本地 → 主 UI ✓ → 全删 → 欢迎界面 ✓ → SSH 服务器（已保存回填/连接）→ SSH Space connected ✓
 
 **commit**：31fa409（+ 之前 b9591fd 的对话框交互增强）
+
+### 37.15 欢迎界面内嵌主 UI 调整（2026-08-01）
+
+用户反馈：全屏欢迎遮住整体风貌。调整为**终端工作区内嵌欢迎**：
+- 主 UI 骨架（Header/侧栏/状态栏/底部 Strands/agent）在无工作区时常渲染
+- 工作区（WorkspaceSurface 区域）显示 WelcomeScreen（新建本地/连接服务器）
+- 侧栏 explorer 显示"暂无工作区 + 新建工作区"引导（保留 Skills/Source Control）
+- 删除全屏欢迎 return 分支
+
+CDP 全新状态实测通过。commit 见上。
