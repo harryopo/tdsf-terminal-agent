@@ -166,7 +166,9 @@ class MainAgent(BaseAgent):
             return [f"[debug] {user_input}"]
 
         # 探索任务
-        if any(kw in user_input for kw in ["查找", "搜索", "查", "找", "定位"]) or \
+        # TDSF 修复 2026-08-01: 移除 "查" 家族单字/口语（"查看 nginx 状态"、
+        # "查一下磁盘占用" 等运维语境被误路由 explore）。只保留强探索词。
+        if any(kw in user_input for kw in ["查找", "搜索", "定位"]) or \
            any(kw in input_lower for kw in ["search", "find", "locate"]):
             return [f"[explore] {user_input}"]
 
