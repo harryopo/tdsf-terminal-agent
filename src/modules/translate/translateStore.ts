@@ -10,6 +10,31 @@
 import { create } from "zustand";
 import type { TranslationResult } from "./translateApi";
 
+// 2026-07-31 修复：翻译总开关持久化 + 默认开启。
+// 此前 enabled 默认 false 且不落盘，每次重启都要重新点「译」，用户以为坏了。
+const ENABLED_KEY = "tdsf.translate.enabled";
+
+function readEnabled(): boolean {
+  try {
+    if (typeof window === "undefined") return true;
+    const raw = window.localStorage.getItem(ENABLED_KEY);
+    if (raw === null) return true; // 首次使用默认开启
+    return raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+function persistEnabled(value: boolean): void {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ENABLED_KEY, value ? "1" : "0");
+    }
+  } catch {
+    // 忽略（隐私模式 / storage 被禁用），不影响运行时开关
+  }
+}
+
 interface TranslateTooltipState {
   /** 翻译结果（null = 不显示翻译命中） */
   result: TranslationResult | null;
@@ -31,23 +56,28 @@ interface TranslateState extends TranslateTooltipState {
   hideTooltip: () => void;
 }
 
-export const useTranslateStore = create<TranslateState>((set) => ({
-  enabled: false,
+export const useTranslateStore = create<TranslateState>((set, get) => ({
+  enabled: readEnabled(),
   result: null,
   missing: null,
   x: 0,
   y: 0,
-  toggleEnabled: () =>
+  toggleEnabled: () => {
+    const next = !get().enabled;
+    persistEnabled(next);
     set((s) => ({
-      enabled: !s.enabled,
-      result: s.enabled ? null : s.result,
-      missing: s.enabled ? null : s.missing,
-    })),
-  setEnabled: (enabled) =>
+      enabled: next,
+      result: next ? s.result : null,
+      missing: next ? s.missing : null,
+    }));
+  },
+  setEnabled: (enabled) => {
+    persistEnabled(enabled);
     set({
       enabled,
       ...(enabled ? {} : { result: null, missing: null }),
-    }),
+    });
+  },
   showTooltip: (result, x, y) => set({ result, missing: null, x, y }),
   showMissing: (text, x, y) => set({ result: null, missing: text, x, y }),
   hideTooltip: () => set({ result: null, missing: null }),
