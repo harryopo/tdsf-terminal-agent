@@ -1098,8 +1098,11 @@ class TestAgentSwitchEmission(unittest.TestCase):
     def test_invoke_main_emits_agent_switch_main(self):
         adapter, bus, _ = self._adapter_with_mock_agent("main")
         adapter.invoke("main", "nginx 服务状态如何", {"session_id": "s1"})
-        bus.emit_agent_switch.assert_called_once()
-        self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "main")
+        # P0-6: main invoke 发 2 次 agent_switch（开始 + 结束归位到 main）
+        calls = bus.emit_agent_switch.call_args_list
+        self.assertGreaterEqual(len(calls), 1)
+        self.assertEqual(calls[0].kwargs["agent"], "main")
+        self.assertEqual(calls[-1].kwargs["agent"], "main")
 
     def test_invoke_coding_no_role_hint_in_prompt(self):
         adapter, bus, mock_agent = self._adapter_with_mock_agent("coding")
