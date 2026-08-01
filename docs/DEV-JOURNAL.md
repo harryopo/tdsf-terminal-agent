@@ -299,3 +299,30 @@
 - ✅ 零新依赖方案（复用 fs 命令 + xterm）比加 dialog 插件更稳（不碰 capabilities 安全面）
 - ✅ 教学闭环成形：录制 → 保存 .cast → 回放（课后复盘）+ 未来可导出分享
 - 📌 xterm 回放与真实终端同渲染器，视觉一致
+
+---
+
+## 2026-08-01 · P2-5 终端翻译四修复（调研驱动）
+
+**任务**：用户报告 4 个问题——SSH 选中不触发/卡片不消失/橙色样式不符/词库查不到+斜杠。要求先调研再修。
+
+**调研（3 路）**：
+- 网上：SSH 根因 = 远程程序鼠标上报模式（DECSET 1000+）下 xterm.js 默认禁用文本选择（PR #5953 确认）；点击清空选区不触发 onSelectionChange（#3193）；消失最佳实践 = mousedown 外部+Esc+blur；词库方案 = ECDICT/tldr/linux-command
+- 上级目录 v140：**2279 条成品词典**（654KB，1911 command+250 option+33 error+85 term，含 example/syntax/detail）+ 7 级策略链（path→option→exact-phrase→command→word）+ category 守卫
+- 本地自查：hideTooltip 无调用方（消失 bug 根因）、纯符号无过滤
+
+**修复（cb4cd1b）**：
+1. 词库：并入 2279 条词典 + 7 级策略链（路径含斜杠逐段/选项容错/短语/命令/单词/复合词）+ 纯符号过滤
+2. 消失：mousedown 外部 + Esc + window blur 三重兜底
+3. 样式：Terax 灰黑/白灰卡片（bg-card/95 + 词头等宽 + 示例/详细徽章分区）
+4. SSH：xterm mouseEventsRequireAlt: true（鼠标上报模式下选择可用）
+
+**报错与修改**：
+- missing 分支与底部追问区重复 Ask 按钮（重复 testid）→ 统一底部
+- 新图标导入前 node ESM 验证（本批无新图标）
+
+**复盘**：
+- ✅ 调研三路交叉验证根因（网上 xterm 机制 + 上级目录成品 + 本地代码审计）——一次修对
+- ✅ 2279 条成品词典直接并入（654KB JSON import），比重建词库管线快一个数量级
+- ✅ mouseEventsRequireAlt 是 SSH 选中问题的标准解（Cursor cloud 同方案）
+- 📌 待实测：SSH 会话在 vim/htop 中拖选翻译（需真实服务器）；ECDICT 扩展 + lemma 还原为后续增强
