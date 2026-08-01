@@ -21,7 +21,7 @@
 - [ ] asciicast 录制 → 回放 UI + 导出分享（录制器已实现，UI 待接）
 - [ ] 工具集 7→15（service/package/firewall/security/performance 管理）
 - [ ] 决策库完善（会话案例沉淀雏形已完成 knowledge.add_case，检索增强待接）
-- [ ] 知识库管理 UI（浏览/导入页面，RPC 已就绪 knowledge.import_docs 等）
+- [x] 知识库管理 UI（左侧栏浏览/搜索/详情弹窗，knowledge.list/search/get）
 - [ ] 资源管理器 O(全量) 重建性能债（按目录缓存）
 
 **P1 剩余**：
@@ -41,7 +41,8 @@
 
 | # | 任务 | 类型 | 预估 | 依赖 |
 |---|------|------|------|------|
-| 1 | **P2-1 Teach 教学卡片**：teach 结构化输出（teaching_content）+ 前端 TeachCard（Terax 风格，含 Linux 哲学/命令插入/追问） | 功能 | 中 | 知识库已可支撑 |
+| 1 | **黑屏修复**：左下角 agent 打开黑屏（CDP 抓 console 根因） | 修复 | 中 | 无 |
+| 2 | **P2-1 Teach 教学卡片**：teach 结构化输出（teaching_content）+ 前端 TeachCard（Terax 风格，含 Linux 哲学/命令插入/追问） | 功能 | 中 | 知识库已可支撑 |
 | 2 | **P2-2 asciicast 回放 UI**：录制 → 回放面板 + 导出（教学复盘刚需） | 功能 | 中 | 录制器已就绪 |
 | 3 | **实测验证**：真实 LLM 委派行为 + SSH 终端翻译/审批全链路 | 验收 | 需用户 | API key + SSH 服务器 |
 | 4 | **P2-3 工具集扩展**：service/package/firewall/security/performance 5 工具 | 功能 | 中 | 无 |
