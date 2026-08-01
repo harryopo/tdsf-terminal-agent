@@ -274,8 +274,17 @@ impl SidecarManager {
         // 1. 更新状态为 Starting
         {
             let mut state = self.state.write().await;
-            if state.status == SidecarStatus::Running {
-                log::warn!("[sidecar] already running, skip start");
+            if state.status == SidecarStatus::Running
+                || state.status == SidecarStatus::Starting
+            {
+                // TDSF 2026-07-31 加固：Starting 期间（spawn + 等 ready，最长 10s）
+                // 再次进入 start() 直接跳过，避免 restart_loop 与手动 restart 并发
+                // 触发双 spawn——双 spawn 会让先前的 reader_task 与新 child 的 stdout
+                // 读端错配，子进程写 stdout 得到 EINVAL、每写必崩，进入自我延续的崩溃循环。
+                log::warn!(
+                    "[sidecar] already {:?}, skip concurrent start",
+                    state.status
+                );
                 return Ok(());
             }
             state.status = SidecarStatus::Starting;
@@ -283,7 +292,16 @@ impl SidecarManager {
         }
 
         // 2. spawn Python 进程
-        let (child, stdin, stdout) = self.spawn_python().await?;
+        // TDSF 2026-07-31 加固：spawn 失败时把状态从 Starting 复位为 Crashed，
+        // 否则新增的 Starting 守卫会让后续所有 start() 被永久跳过（wedge）。
+        let (child, stdin, stdout) = match self.spawn_python().await {
+            Ok(v) => v,
+            Err(e) => {
+                let mut state = self.state.write().await;
+                state.status = SidecarStatus::Crashed;
+                return Err(e);
+            }
+        };
 
         // 记录 PID
         let pid = child.id();
@@ -825,10 +843,45 @@ async fn reader_task(
     stdin_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
 ) {
     log::debug!("[sidecar:reader] started");
-    let reader = BufReader::new(stdout);
-    let mut lines = reader.lines();
+    let mut reader = BufReader::new(stdout);
 
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
+        // TDSF 2026-07-31 根因修复: 按字节读行 + from_utf8_lossy 宽容解码。
+        // 此前 lines() 严格按 UTF-8 解析，Python 以 gbk 编码写出含中文的行时
+        // 报 InvalidData 使 reader 退出 → 误判子进程死亡 → kill。
+        let line = {
+            let mut buf = Vec::new();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => {
+                    // EOF: 记录子进程存活状态（区分真退出与管道误判）
+                    let pid = {
+                        let s = state.read().await;
+                        s.pid
+                    };
+                    log::warn!(
+                        "[sidecar:reader] stdout EOF (child pid={:?}, alive check below)",
+                        pid
+                    );
+                    if let Some(pid_num) = pid {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let alive = is_process_alive(pid_num).await;
+                            log::warn!(
+                                "[sidecar:reader] child pid={} alive={} (1=alive,0=dead)",
+                                pid_num,
+                                alive
+                            );
+                        }
+                    }
+                    break;
+                }
+                Ok(_n) => String::from_utf8_lossy(&buf).into_owned(),
+                Err(e) => {
+                    log::error!("[sidecar:reader] read error: {:?}", e);
+                    break;
+                }
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -941,6 +994,40 @@ async fn reader_task(
     {
         state_guard.status = SidecarStatus::Crashed;
     }
+}
+
+/// TDSF 2026-07-31 诊断: 判断进程是否存活（EOF 误判排查用）
+#[cfg(target_os = "windows")]
+async fn is_process_alive(pid: u32) -> u32 {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    tokio::task::spawn_blocking(move || unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return 0; // 无法打开 = 已退出
+        }
+        let mut code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        if ok == 0 {
+            return 2; // 查询失败
+        }
+        if code as i32 == STILL_ACTIVE {
+            1
+        } else {
+            0
+        }
+    })
+    .await
+    .unwrap_or(2)
+}
+
+/// TDSF 2026-07-31 诊断: 非 Windows 平台占位（恒 2=未查询）
+#[cfg(not(target_os = "windows"))]
+async fn is_process_alive(_pid: u32) -> u32 {
+    2
 }
 
 /// TDSF P1（2026-07-30）: 处理 Python→Rust 反向 JSON-RPC 请求
