@@ -43,6 +43,13 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { SLASH_COMMANDS, TDSF_CMD_RE } from "../lib/slashCommands";
 import { sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
+// P1-2: 会话证据面板
+import {
+  evidenceLabel,
+  evidenceTime,
+  fetchEvidence,
+  type EvidenceItem,
+} from "../lib/evidence";
 import { AiToolApproval } from "./AiToolApproval";
 
 function CommandSnippet({ name }: { name: string }) {
@@ -268,11 +275,105 @@ export function AiChatView({
             </button>
           </div>
         )}
+        {/* P1-2: 会话证据面板（AI 依据的真实工具调用，可核验） */}
+        <EvidencePanel />
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
   );
 }
+
+// ============================================================================
+// EvidencePanel — 会话证据折叠区（P1-2）
+// ============================================================================
+
+const EvidencePanel = memo(function EvidencePanel() {
+  const sessionId = useChatStore((s) => s.activeSessionId);
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<EvidenceItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!open || loaded) return;
+    setLoaded(true);
+    void fetchEvidence(sessionId).then((evs) => setItems(evs));
+  }, [open, loaded, sessionId]);
+
+  if (!sessionId) return null;
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="not-prose"
+    >
+      <CollapsibleTrigger
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md border border-border/40",
+          "bg-card/40 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground",
+          "transition-colors hover:bg-muted/40",
+        )}
+      >
+        <span className="size-1.5 shrink-0 rounded-full bg-sky-500/70" />
+        <span className="font-medium">证据</span>
+        {!open && items.length > 0 && (
+          <span className="tabular-nums">（{items.length} 条工具调用）</span>
+        )}
+        <span className="ml-auto">{open ? "收起" : "展开"}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1 space-y-1">
+        {items.length === 0 && (
+          <div className="rounded-md border border-border/30 bg-muted/20 px-2.5 py-2 text-[11px] text-muted-foreground/80">
+            本次会话暂无工具调用记录（纯问答无需工具）。
+          </div>
+        )}
+        {items.map((ev, i) => (
+          <div
+            key={`${ev.timestamp}-${i}`}
+            className="rounded-md border border-border/30 bg-muted/20 px-2.5 py-1.5"
+          >
+            <div className="flex items-center gap-1.5 text-[10.5px]">
+              <span
+                className={cn(
+                  "size-1 rounded-full",
+                  ev.status === "error" || ev.status === "rejected"
+                    ? "bg-destructive"
+                    : ev.status === "started"
+                      ? "bg-amber-500"
+                      : "bg-emerald-500",
+                )}
+              />
+              <span className="font-medium text-foreground">
+                {evidenceLabel(ev.tool_name)}
+              </span>
+              {ev.status !== "completed" && (
+                <span className="text-muted-foreground/70">{ev.status}</span>
+              )}
+              {ev.agent && ev.agent !== "main" && (
+                <span className="rounded bg-muted px-1 py-px text-[9.5px] text-muted-foreground">
+                  {ev.agent}
+                </span>
+              )}
+              <span className="ml-auto tabular-nums text-muted-foreground/60">
+                {evidenceTime(ev.timestamp)}
+              </span>
+            </div>
+            {ev.detail && (
+              <code className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                {ev.detail}
+              </code>
+            )}
+            {ev.result && (
+              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground/80">
+                {ev.result}
+              </div>
+            )}
+          </div>
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});
 
 const CompactionNotice = memo(function CompactionNotice({
   droppedCount,

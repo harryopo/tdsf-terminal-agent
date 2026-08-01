@@ -432,6 +432,21 @@ class TdsfStrandsCallbackHandler:
             self._stats["agent_calls_emitted"] += 1
         except Exception as e:
             logger.debug(f"emit agent call completed failed: {e}")
+        # P1-2: 子 agent 委派也记录为会话证据（AI 依据了专家子 agent 的输出）
+        try:
+            from strands_backend.evidence import get_global_tracker
+
+            get_global_tracker().record(
+                session_id=self.session_id or "",
+                tool_name=f"agent:{name}",
+                status="completed" if status == "success" else "error",
+                detail=f"委派 {name} Agent",
+                result=result_text or str(tool_result)[:200],
+                agent=self.agent_name,
+                source="agent_as_tool",
+            )
+        except Exception as e:
+            logger.debug(f"evidence record failed: {e}")
 
     def _emit_agent_switch(self, agent: str) -> None:
         if self.event_bus is None:
