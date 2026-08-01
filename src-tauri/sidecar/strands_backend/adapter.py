@@ -767,6 +767,14 @@ class StrandsAgentAdapter:
         """
         live = state.get("live") or {}
 
+        # P1-v5-4: 4 级权限（1=免确认 2=仅高危 3=高危+写操作 4=全部确认）。
+        # 前端 live.permissionLevel 注入（默认 2，保持原行为）；非法值夹取到 1-4。
+        try:
+            permission_level = int(live.get("permissionLevel", 2))
+        except (TypeError, ValueError):
+            permission_level = 2
+        permission_level = max(1, min(4, permission_level))
+
         return ToolContext(
             event_bus=self.event_bus,
             rust_bridge=self.rust_bridge,
@@ -774,6 +782,7 @@ class StrandsAgentAdapter:
             session_id=session_id,
             user_id=state.get("user_id", "") or "",
             ssh_session_id=live.get("sshSessionId", "") or "",
+            permission_level=permission_level,
         )
 
     # ========================================================================
