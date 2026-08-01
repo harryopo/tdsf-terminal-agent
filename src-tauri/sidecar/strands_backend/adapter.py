@@ -826,6 +826,10 @@ class StrandsAgentAdapter:
             # 8. 提取最终输出
             observation = self._extract_response_text(response)
 
+            # P2-4 决策库: AI 排障成功自动沉淀案例（教学复盘/历史检索）
+            # 条件: 会话有工具调用证据 + 有结论输出 + 输入像排障请求
+            self._auto_sink_case(agent_id, input, observation, session_id)
+
             self._emit_mood("done", agent_id, session_id)
             # P0-6: main 委派结束后 Pill 归位到主 agent（委派期间显示子 agent）
             if agent_id == "main":
@@ -1359,6 +1363,80 @@ class StrandsAgentAdapter:
     # ========================================================================
     # 缓存管理
     # ========================================================================
+
+    def _auto_sink_case(
+        self,
+        agent_id: str,
+        user_input: str,
+        observation: str,
+        session_id: str,
+    ) -> None:
+        """P2-4 决策库: AI 排障成功自动沉淀案例
+
+        条件（防噪音）：
+        - 输入像排障/问题请求（含排障/查/修/怎么/why/error/502/失败 等）
+        - 会话有工具调用证据（说明真执行了操作）
+        - 输出有实质结论（>60 字符）
+        去重：按输入 hash 生成稳定 id（同一问题只沉淀一次）。
+
+        失败静默（沉淀是加分项，不影响主流程）。
+        """
+        try:
+            if len(observation or "") < 60:
+                return
+            if len(user_input or "") < 6:
+                return
+            # 输入像排障请求
+            probe = user_input.lower()
+            if not any(
+                k in probe
+                for k in ("排障", "查", "修", "怎么", "为什么", "error", "502", "失败",
+                          "无法", "不行", "挂了", "连不上", "启动", "重启")
+            ):
+                return
+            # 会话有工具调用证据
+            try:
+                from strands_backend.evidence import get_global_tracker
+
+                evs = get_global_tracker().list(session_id or "")
+                if not evs:
+                    return
+            except Exception:
+                return
+            # 沉淀（稳定 id 去重：md5(输入)）
+            import hashlib
+
+            case_id = "case-" + hashlib.md5(user_input.encode("utf-8")).hexdigest()[:12]
+            from knowledge.fts5 import KnowledgeEntry
+            from knowledge.rag import get_global_rag
+
+            rag = get_global_rag()
+            detail_lines = []
+            for ev in evs[-5:]:
+                if ev.get("tool_name", "").startswith("agent:"):
+                    detail_lines.append(f"[委派] {ev.get('detail', '')}")
+                elif ev.get("tool_name"):
+                    detail_lines.append(
+                        f"[{ev.get('tool_name')}] {str(ev.get('detail', ''))[:80]}"
+                    )
+            content = (
+                f"## 现象\n{user_input[:200]}\n\n"
+                f"## 诊断过程\n"
+                + ("\n".join(detail_lines) if detail_lines else "（无工具记录）")
+                + f"\n\n## 结论\n{observation[:600]}"
+            )
+            rag.add(
+                KnowledgeEntry(
+                    id=case_id,
+                    source="auto-case",
+                    title=f"案例：{user_input[:50]}",
+                    content=content,
+                    tags=["自动沉淀", "排障"],
+                )
+            )
+            logger.info(f"auto case sunk: {case_id} ({agent_id})")
+        except Exception as e:
+            logger.debug(f"auto sink case skipped: {e}")
 
     def clear_cache(self) -> None:
         """清空 Agent 缓存（配置变更后调用）"""
