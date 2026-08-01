@@ -232,6 +232,11 @@ function termOptions() {
     scrollback: prefs.terminalScrollback,
     allowProposedApi: true,
     minimumContrastRatio: bgActive(prefs) ? MCR_BG_ACTIVE : MCR_BG_INACTIVE,
+    // P2-5 修复（SSH 选中）：远程程序（vim/htop/less --mouse 等）启用鼠标
+    // 上报模式后 xterm.js 默认禁用文本选择——SSH 里无法拖选翻译。
+    // mouseEventsRequireAlt: 需按 Alt 才把鼠标事件转发给远程程序，
+    // 平时拖动选择始终可用（Cursor cloud terminal 同方案）。
+    mouseEventsRequireAlt: true,
   };
 }
 
