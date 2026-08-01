@@ -26,6 +26,8 @@ import abc
 import hashlib
 import json
 import logging
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,8 +41,14 @@ logger = logging.getLogger("sidecar.knowledge.crawlers.base")
 # 常量定义
 # ============================================================================
 
-# 默认缓存根目录（python-sidecar/data/crawlers-cache/）
-_DEFAULT_CACHE_ROOT: Path = Path(__file__).parent.parent.parent / "data" / "crawlers-cache"
+# 默认缓存根目录（dev: python-sidecar/data/crawlers-cache/; frozen: 数据目录下）
+if getattr(sys, "frozen", False):
+    _DEFAULT_CACHE_ROOT: Path = (
+        Path(os.environ.get("TDSF_DATA_DIR", str(Path(sys.executable).resolve().parent / ".tdsf-data")))
+        / "crawlers-cache"
+    )
+else:
+    _DEFAULT_CACHE_ROOT: Path = Path(__file__).parent.parent.parent / "data" / "crawlers-cache"
 
 # 默认 User-Agent（避免被反爬虫机制拒绝）
 _DEFAULT_USER_AGENT: str = (

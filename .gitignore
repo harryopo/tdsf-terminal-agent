@@ -125,3 +125,9 @@ docs/竞赛/
 scripts/dict-import/*.csv
 scripts/dict-import/lemma.en.txt
 .qoder/
+
+# PyInstaller sidecar 打包产物（发布资源 exe 100MB+, 不入库; spec 源码入库）
+src-tauri/sidecar/dist-sidecar/
+src-tauri/sidecar/build-sidecar/
+src-tauri/sidecar/tdsf-sidecar.exe
+src-tauri/sidecar/tdsf-sidecar/

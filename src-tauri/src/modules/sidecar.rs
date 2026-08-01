@@ -229,8 +229,12 @@ pub struct SidecarManager {
     /// Tauri AppHandle（用于 emit event 到前端）
     app_handle: Arc<Mutex<Option<AppHandle>>>,
 
-    /// Python 脚本路径（python-sidecar/main.py）
+    /// Python 脚本路径（python-sidecar/main.py 或打包 sidecar exe）
     script_path: Arc<Mutex<PathBuf>>,
+
+    /// ready 等待超时（打包 exe 冷启动 744MB 依赖实测 15-30s, 需放宽到 60s;
+    /// python 脚本模式保持 READY_TIMEOUT=10s）
+    ready_timeout: Arc<Mutex<Duration>>,
 
     /// 重启信号发送端（exit_watcher_task 发送 → restart_loop 接收）
     /// 解耦设计：避免 exit_watcher_task 直接调用 start() 形成循环依赖
@@ -245,6 +249,18 @@ pub struct SidecarManager {
 impl SidecarManager {
     /// 创建新的 SidecarManager（不启动进程）
     pub fn new(script_path: PathBuf) -> Self {
+        // PyInstaller onedir exe 冷启动（744MB 依赖 + 杀软扫描）实测 15-30s,
+        // 远超 python 脚本模式的 10s ready 超时, 按运行目标动态设置。
+        let is_packaged_exe = script_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false);
+        let ready_timeout = if is_packaged_exe {
+            Duration::from_secs(60)
+        } else {
+            READY_TIMEOUT
+        };
         Self {
             state: Arc::new(RwLock::new(SidecarState::default())),
             stdin_tx: Arc::new(Mutex::new(None)),
@@ -254,6 +270,7 @@ impl SidecarManager {
             retry_count: Arc::new(AtomicU32::new(0)),
             app_handle: Arc::new(Mutex::new(None)),
             script_path: Arc::new(Mutex::new(script_path)),
+            ready_timeout: Arc::new(Mutex::new(ready_timeout)),
             restart_tx: Arc::new(Mutex::new(None)),
             cancel_tx: Arc::new(Mutex::new(None)),
         }
@@ -676,19 +693,41 @@ impl SidecarManager {
             guard.clone()
         };
 
-        if !script.exists() {
-            return Err(SidecarError::SpawnFailed(format!(
-                "sidecar script not found: {:?}",
-                script
-            )));
-        }
-        log::info!("[sidecar] script: {:?}", script);
+        // 3. 判定运行目标: PyInstaller onefile 产物自带入口, 不接受 -u/script 参数
+        //    - TDSF_SIDECAR_PYTHON 指向打包 exe（python 即 exe）
+        //    - 发布模式下 script_path 即打包 exe（lib.rs locate_sidecar_script 探测）
+        let python_is_exe = python
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false);
+        let script_is_exe = script
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false);
 
-        // 3. spawn Python 进程
-        let mut command = tokio::process::Command::new(&python);
+        let mut command = if python_is_exe || script_is_exe {
+            // 打包 exe 冷启动慢（744MB 依赖）, ready 等待放宽到 60s
+            *self.ready_timeout.lock().await = Duration::from_secs(60);
+            let exe = if python_is_exe { python } else { script.clone() };
+            log::info!("[sidecar] running packaged sidecar exe: {:?}", exe);
+            tokio::process::Command::new(&exe)
+        } else {
+            if !script.exists() {
+                return Err(SidecarError::SpawnFailed(format!(
+                    "sidecar script not found: {:?}",
+                    script
+                )));
+            }
+            log::info!("[sidecar] script: {:?}", script);
+            let mut cmd = tokio::process::Command::new(&python);
+            cmd.arg("-u") // unbuffered（确保 stdout 即时 flush）
+                .arg(&script);
+            cmd
+        };
+
         command
-            .arg("-u") // unbuffered（确保 stdout 即时 flush）
-            .arg(&script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -781,17 +820,18 @@ impl SidecarManager {
         )))
     }
 
-    /// 等待 ready 通知（10s 超时）
+    /// 等待 ready 通知（python 脚本 10s / 打包 exe 60s 超时）
     /// ready 是 notification，由 reader_task 直接处理并更新 state 为 Running
     async fn wait_for_ready(&self) -> SidecarResult<()> {
-        log::info!("[sidecar] waiting for ready notification...");
+        let timeout = *self.ready_timeout.lock().await;
+        log::info!("[sidecar] waiting for ready notification ({timeout:?} timeout)...");
 
-        let deadline = Instant::now() + READY_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         loop {
             if Instant::now() >= deadline {
                 let mut state = self.state.write().await;
                 state.status = SidecarStatus::Crashed;
-                return Err(SidecarError::ReadyTimeout(READY_TIMEOUT));
+                return Err(SidecarError::ReadyTimeout(timeout));
             }
 
             // 检查状态是否变为 Running
