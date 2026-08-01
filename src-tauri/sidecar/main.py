@@ -54,9 +54,25 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # TDSF 魔改: 数据目录移到 src-tauri/ 之外，避免 Tauri dev watcher 检测到
 # SQLite WAL 文件（.db-shm/.db-wal）变化导致循环重启（窗口反复弹出关闭）
-# 路径: <项目根目录>/.tdsf-data/（在 src-tauri/ 之外，Tauri dev watcher 不会监听）
+# 路径: dev = <项目根目录>/.tdsf-data/; frozen (PyInstaller) = 用户数据目录
+# （frozen 时 __file__ 指向 _MEIPASS 临时解压目录, 进程退出即删, 不能作为数据根;
+#   数据放 %APPDATA%/tdsf-terminal-agent/, 不随安装目录/临时目录清理）
 # 各模块通过 os.environ["TDSF_DATA_DIR"] 读取此路径，回退到原 sidecar/data/
-_TDSF_DATA_DIR = Path(__file__).resolve().parent.parent.parent / ".tdsf-data"
+if getattr(sys, "frozen", False):
+    if os.name == "nt":
+        _TDSF_DATA_DIR = (
+            Path(os.environ.get("APPDATA", str(Path(sys.executable).resolve().parent)))
+            / "tdsf-terminal-agent"
+            / ".tdsf-data"
+        )
+    else:
+        _TDSF_DATA_DIR = (
+            Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+            / "tdsf-terminal-agent"
+            / ".tdsf-data"
+        )
+else:
+    _TDSF_DATA_DIR = Path(__file__).resolve().parent.parent.parent / ".tdsf-data"
 _TDSF_DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("TDSF_DATA_DIR", str(_TDSF_DATA_DIR))
 

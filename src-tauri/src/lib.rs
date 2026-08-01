@@ -312,10 +312,12 @@ pub fn run() {
             // ====================================================================
             // T2.1: 启动 Python Sidecar（TDSF Agent 引擎桥接）
             // ====================================================================
-            // Sidecar 脚本路径: <app_root>/sidecar/main.py
-            // 在 dev 模式下: <workspace>/tdsf-terminal-agent-clone/src-tauri/sidecar/main.py
-            // 在 prod 模式下: 通过 tauri resource 打包（后续 task 处理）
-            let sidecar_script = locate_sidecar_script();
+            // Sidecar 运行目标:
+            //   - 发布模式: <resource_dir>/sidecar/tdsf-sidecar.exe（PyInstaller onefile,
+            //     tauri.conf.json bundle.resources 打包, 安装后随程序分发）
+            //   - dev 模式: <workspace>/tdsf-terminal-agent-clone/src-tauri/sidecar/main.py
+            //     由系统 python 解释器运行
+            let sidecar_script = locate_sidecar_script(_app);
             log::info!("[setup] sidecar script path: {:?}", sidecar_script);
 
             let sidecar_manager = sidecar::SidecarManager::new(sidecar_script);
@@ -621,15 +623,45 @@ mod launch_target_tests {
     }
 }
 
-/// 定位 Python Sidecar 脚本路径
+/// 定位 Python Sidecar 运行目标
 ///
 /// 查找顺序:
-/// 1. 开发模式: <workspace_root>/sidecar/main.py
+/// 1. 发布模式: <resource_dir>/sidecar/tdsf-sidecar.exe（PyInstaller onefile 打包产物,
+///    由 tauri.conf.json bundle.resources 分发, 安装后位于程序资源目录）
+/// 2. 开发模式: <workspace_root>/sidecar/main.py
 ///    - workspace_root 通过 CARGO_MANIFEST_DIR 推导 (即 src-tauri/ 父目录)
-/// 2. 兜底: 同样返回 dev 路径（启动时若文件不存在会报错并写日志）
-fn locate_sidecar_script() -> PathBuf {
+/// 3. 兜底: 同样返回 dev 路径（启动时若文件不存在会报错并写日志）
+fn locate_sidecar_script(app: &tauri::App) -> PathBuf {
+    // 发布模式: 打包 sidecar exe 的两个候选位置
+    //   - <resource_dir>/sidecar/tdsf-sidecar/tdsf-sidecar.exe (安装后, bundle 信息 patch
+    //     使 resource_dir = <install>/resources)
+    //   - <exe_dir>/sidecar/tdsf-sidecar/tdsf-sidecar.exe (便携/手动部署布局)
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(
+            resource_dir
+                .join("sidecar")
+                .join("tdsf-sidecar")
+                .join("tdsf-sidecar.exe"),
+        );
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(
+                exe_dir
+                    .join("sidecar")
+                    .join("tdsf-sidecar")
+                    .join("tdsf-sidecar.exe"),
+            );
+        }
+    }
+    for packaged in candidates {
+        if packaged.exists() {
+            log::info!("[setup] packaged sidecar exe found: {:?}", packaged);
+            return packaged;
+        }
+    }
     // 开发模式: sidecar 目录直接位于 src-tauri/sidecar/（与 Cargo.toml 同级）
-    // prod 模式: 通过 tauri resource 打包（后续 task 处理）
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir.join("sidecar").join("main.py")
 }
