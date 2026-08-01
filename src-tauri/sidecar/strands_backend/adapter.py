@@ -793,6 +793,9 @@ class StrandsAgentAdapter:
             observation = self._extract_response_text(response)
 
             self._emit_mood("done", agent_id, session_id)
+            # P0-6: main 委派结束后 Pill 归位到主 agent（委派期间显示子 agent）
+            if agent_id == "main":
+                self._emit_agent_switch("main", session_id)
             duration = time.time() - start_time
 
             logger.info(
