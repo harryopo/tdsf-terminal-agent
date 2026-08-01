@@ -115,6 +115,11 @@ import {
   getRendererPoolDebug,
   getSlotTerm,
 } from "@/modules/terminal/lib/rendererPool";
+// P1-v5-6: asciicast 会话录制（命令面板 record.start/stop）
+import {
+  AsciicastRecorder,
+  castFileName,
+} from "@/modules/recorder/asciicast";
 // TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
@@ -1756,6 +1761,55 @@ export default function App() {
     [moveTabToSpace],
   );
 
+  // === P1-v5-6: asciicast 会话录制（命令面板 record.start/stop）===
+  const recorderRef = useRef<AsciicastRecorder | null>(null);
+  const startRecording = useCallback(() => {
+    if (recorderRef.current) {
+      toast.warning("录制已在进行中，请先停止");
+      return;
+    }
+    const term = activeLeafId !== null ? getSlotTerm(activeLeafId) : null;
+    if (!term) {
+      toast.warning("无活动终端可录制");
+      return;
+    }
+    const rec = new AsciicastRecorder();
+    rec.attach(term, `leaf-${activeLeafId}`);
+    recorderRef.current = rec;
+    toast.success("录制开始（命令面板 → 停止录制并导出）");
+  }, [activeLeafId]);
+
+  const stopRecording = useCallback(async () => {
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    if (!rec) {
+      toast.warning("当前没有进行中的录制");
+      return;
+    }
+    const term = activeLeafId !== null ? getSlotTerm(activeLeafId) : null;
+    const width = term?.cols ?? 80;
+    const height = term?.rows ?? 24;
+    const cast = rec.stop(width, height);
+    const stats = rec.stats;
+    const fileName = castFileName();
+    // 最小可用版：复制 asciicast v2 JSON 到剪贴板（避免新增 fs 依赖与权限）。
+    // 大录制（>1MB）剪贴板可能失败，控制台始终保留完整输出。
+    console.info(`[asciicast] ${fileName} (${stats.events} events, ${stats.bytes}B)\n${cast}`);
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(cast);
+      copied = true;
+    } catch {
+      // 剪贴板不可用（权限/大小），控制台兜底
+    }
+    toast.success(
+      copied
+        ? `已导出 ${fileName}（${stats.events} 事件）到剪贴板`
+        : `已导出 ${fileName}（${stats.events} 事件），完整内容在控制台`,
+      { duration: 6000 },
+    );
+  }, [activeLeafId]);
+
   const handleReorderTab = useCallback(
     (tabId: number, targetTabId: number, edge: "top" | "bottom") => {
       if (reorderTab(tabId, targetTabId, edge)) {
@@ -1838,6 +1892,8 @@ export default function App() {
             activeSpaceId,
             // TDSF 修复 2026-08-01: SSH 空间隐藏本地专属命令（网页预览）
             isSshSpace: activeSpace?.env.kind === "ssh",
+            recordStart: startRecording,
+            recordStop: () => void stopRecording(),
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),
@@ -1864,6 +1920,8 @@ export default function App() {
       activeSpaceId,
       handleNewSpace,
       activeSpace,
+      startRecording,
+      stopRecording,
     ],
   );
 
