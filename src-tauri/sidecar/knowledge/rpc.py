@@ -226,6 +226,19 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.get", _get)
     dispatcher.register("knowledge.count", _count)
 
+    # P2-4: 浏览模式（打开即列出，不依赖搜索词）
+    def _list(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        """列出知识条目（按入库时间倒序，供浏览模式）"""
+        from knowledge.rag import get_global_rag
+
+        rag = get_global_rag()
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+        rows = rag.list_entries(limit=limit, offset=offset)
+        return {"results": rows, "total": rag.count(), "limit": limit, "offset": offset}
+
+    dispatcher.register("knowledge.list", _list)
+
     # P2-4: 内容源管道
     def _import_docs(directory: str, source: str = "imported-docs") -> dict[str, Any]:
         """文档导入：扫描目录 .md/.txt 分块入库"""
