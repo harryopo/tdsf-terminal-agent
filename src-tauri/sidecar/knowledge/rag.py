@@ -48,12 +48,43 @@ _embed_model = None
 _embed_lock = threading.Lock()
 
 
+def _model_cached() -> bool:
+    """BGE 模型是否已缓存（离线可用）
+
+    检查 fastembed 缓存目录下是否存在模型文件。不存在时跳过加载
+    ——否则每次加载尝试连接 HF 会阻塞 30s（启动/测试卡顿根源）。
+    """
+    try:
+        model_dir = Path(_MODEL_CACHE) / "models--Qdrant--bge-small-zh-v1.5"
+        if not model_dir.exists():
+            return False
+        # 实际 ONNX 文件存在才算缓存完整
+        for p in model_dir.rglob("model_optimized.onnx"):
+            if p.is_file() and p.stat().st_size > 1_000_000:
+                return True
+        return False
+    except OSError:
+        return False
+
+
 def _load_embed_model():
-    """加载 BGE embedding 模型（fastembed 优先，失败返回 None）"""
+    """加载 BGE embedding 模型（fastembed 优先，失败返回 None）
+
+    离线优先：模型未缓存时直接返回 None（hash 兜底），不尝试联网下载
+    ——否则每次加载 30s 网络超时。模型可通过 HF_ENDPOINT 镜像预下载到
+    _MODEL_CACHE（见 docs/ROADMAP P2-4 说明）。
+    """
     global _embed_model
     with _embed_lock:
         if _embed_model is not None:
             return _embed_model
+        if not _model_cached():
+            logger.info(
+                "BGE 模型未缓存（离线降级 hash 向量）——"
+                f"预下载到 {_MODEL_CACHE} 后启用语义检索"
+            )
+            _embed_model = None
+            return None
         try:
             from fastembed import TextEmbedding
 
