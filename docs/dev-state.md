@@ -3166,3 +3166,27 @@ CDP 全新状态实测通过。commit 见上。
 **验收**：后端 1414 全过（含 main→委派 teach→收尾 全链路 e2e：started 恰 1 次/completed 带全文/Pill 联动/增量转发/不递归嵌套）；前端 897 全过（Tool agent 卡片 5 用例 + adapter agent 事件 1 用例）；tsc/eslint/cargo check 干净。
 
 **遗留**：真实 LLM 的委派行为依赖模型对 `_MAIN_SUB_AGENT_PROMPT` 的理解（机制已通，模型能力待真实环境实测）；流式展示子 agent 增量（tool-input-delta）为增强项。
+
+### 37.19 P1 可信与安全：真实审批闭环 + 证据链 + 审计链（2026-08-01）
+
+**P1-1 HITL 真实审批闭环**（139fc21）：
+- 背景：原审批是显示层摆设——工具返回 needs_approval 后命令永不执行，前端"批准"按钮只消除本地卡片（无 RPC 回传），且事件字段名不匹配（needs_type vs type）导致卡片可能不显示
+- needs_you.py：NeedsYouRequest 加 threading.Event 等待-唤醒；respond/超时扫描 set event；新增 wait_for_response 阻塞等待
+- tools：request_approval_and_wait（登记服务 + 发事件（字段对齐前端）+ 阻塞等待）；execute_via_ssh 决策：APPROVED→真正执行 / REJECTED→返回 rejected / TIMEOUT→保持 needs_approval；多行命令风险行合并单次审批
+- 前端：NeedsYouCard 批准/拒绝 → needs_you.approve/reject RPC（req_id 回传）
+- 测试：wait-wake 5 用例 + 工具决策 3 场景 + 真实服务全链路 2 用例（线程模拟用户，0.9s 完成）
+
+**P1-2 会话证据链可视化**（4cc840e）：
+- evidence.py：EvidenceTracker 会话级证据（工具名/状态/命令/结果摘要，按 session 隔离，脱敏+截断，200 条/会话上限）
+- 接入：execute_via_ssh 成功执行 + 子 agent 委派完成（agent:teach）→ 证据
+- RPC：evidence.list/clear/stats（main.py 注册）
+- 前端：AiChat 对话流底部"证据"折叠区（状态点 + 工具标签 + 命令 + 结果摘要 + 时间 + agent 徽标）
+- 设计决策：证据 = 真实工具调用记录（不依赖 LLM 输出格式），AI 结论可核验
+
+**P1-3 hash-chained 审计链**（f35659f）：
+- audit_chain.py：sha256 前后链（prev_hash + canonical entry → hash），JSONL 落盘（.tdsf-data/audit-chain.jsonl），重启恢复尾部，verify() 检测篡改（hash 失配/seq 不连续）
+- 接入：command_executed / approval rejected/timeout 决策入链，命令先脱敏
+- conftest：autouse fixture 隔离全局链（防测试污染真实文件）
+- 已知限制：截断尾部（删最后记录）不可检测——hash chain 固有限制，篡改中间记录可检测
+
+**测试**：后端 1441（+17：wait-wake 5 / 审批决策 5 / 审计 8 / 证据 9，含测试提速 90s→0.8s）；前端 906（+15：evidence lib 9 / 审批相关 6）。tsc/eslint 干净。
