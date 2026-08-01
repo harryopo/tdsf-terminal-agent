@@ -51,8 +51,11 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// 心跳丢失判定阈值（30s 无响应判定死锁）
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 请求超时（30s）
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// 请求超时（默认 60s）
+/// TDSF 修复 2026-08-01 (P0-3): 30s → 60s，与前端 SIDECAR_TIMEOUT_MS 默认值对齐。
+/// 30s 对 Strands agentic loop（多轮工具调用 + LLM 推理）太紧，
+/// 复杂任务频繁超时；前端可传 timeoutMs 覆盖（见 send_request_with_timeout）。
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 优雅退出等待时间（3s，超时后 SIGKILL）
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -565,8 +568,22 @@ impl SidecarManager {
         self.start().await
     }
 
-    /// 发送请求（等待响应，30s 超时）
+    /// 发送请求（等待响应，60s 默认超时，可用 send_request_with_timeout 覆盖）
     pub async fn send_request(&self, method: &str, params: Value) -> SidecarResult<Value> {
+        self.send_request_with_timeout(method, params, REQUEST_TIMEOUT)
+            .await
+    }
+
+    /// 发送请求（自定义超时）
+    ///
+    /// TDSF 修复 2026-08-01 (P0-3): 前端 agent.invoke 可传 timeoutMs
+    /// （长任务/复杂诊断放宽到 120s+），由 ipc_invoke 解析 params 后调用。
+    pub async fn send_request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> SidecarResult<Value> {
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
 
         // 1. 注册 pending request（oneshot channel）
@@ -585,8 +602,8 @@ impl SidecarManager {
         });
         self.send_raw(serde_json::to_string(&msg)?).await?;
 
-        // 3. 等待响应（30s 超时）
-        match timeout(REQUEST_TIMEOUT, rx).await {
+        // 3. 等待响应（可配置超时）
+        match timeout(timeout, rx).await {
             Ok(Ok(result)) => {
                 // 检查响应是否包含 error
                 if let Some(err) = result.get("error") {
@@ -614,7 +631,7 @@ impl SidecarManager {
                 // 超时
                 let mut pending = self.pending_requests.lock().await;
                 pending.remove(&id);
-                Err(SidecarError::RequestTimeout(REQUEST_TIMEOUT))
+                Err(SidecarError::RequestTimeout(timeout))
             }
         }
     }
