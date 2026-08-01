@@ -162,6 +162,8 @@ class ToolContext:
     session_id: str = ""
     user_id: str = ""
     ssh_session_id: str = ""
+    # P1-v5-4: 4 级权限（1=免确认 2=仅高危 3=高危+写操作 4=全部确认）
+    permission_level: int = 2
 
 
 # ============================================================================
@@ -241,6 +243,17 @@ class RiskChecker:
     - 适配层可二选一或叠加使用（推荐叠加：先 RiskChecker 快速拦，再 risk_tool 精评）
     """
 
+    # 写操作模式（P1-v5-4）：修改状态但未必破坏——L3 权限下需要审批
+    # 元组顺序与 _HIGH_RISK_PATTERNS 一致：(name, pattern, reason)
+    _WRITE_PATTERNS: list[tuple[str, str, str]] = [
+        ("file_mutation", r"\b(?:mv|cp|ln|chmod|chown|touch|mkdir)\s", "文件/属性修改"),
+        ("inplace_edit", r"\b(?:sed|perl|awk)\s+.*\-i\b", "原地编辑文件"),
+        ("redirect_write", r">>?\s*/", "重定向写文件"),
+        ("file_editor", r"\b(?:vi|vim|nano|tee)\b", "编辑器/tee 写入"),
+        ("process_control", r"\b(?:kill|pkill|killall|systemctl\s+(?:restart|stop|start|reload))\b", "进程/服务操作"),
+        ("delete", r"\b(?:rm|rmdir)\s", "删除操作"),
+    ]
+
     @staticmethod
     def check(command: str) -> dict[str, Any]:
         """检测命令是否高危
@@ -255,6 +268,7 @@ class RiskChecker:
             matched_rules: list[str], 命中的规则名
             reason: str, 风险原因（拼接所有命中规则的原因）
             require_approval: bool, 是否需要用户审批
+            write: bool, 是否写操作（P1-v5-4：L3 权限下需审批）
         """
         matched: list[str] = []
         reasons: list[str] = []
@@ -267,21 +281,31 @@ class RiskChecker:
                 # 正则本身错误（理论上不会发生），跳过该规则
                 logger.exception(f"RiskChecker regex error: rule={name}")
 
-        if not matched:
+        write_rules: list[str] = []
+        for name, pattern, reason in RiskChecker._WRITE_PATTERNS:
+            try:
+                if re.search(pattern, command, re.IGNORECASE):
+                    write_rules.append(name)
+            except re.error:
+                logger.exception(f"RiskChecker write regex error: rule={name}")
+
+        if not matched and not write_rules:
             return {
                 "high_risk": False,
                 "level": "L0",
                 "matched_rules": [],
                 "reason": "",
                 "require_approval": False,
+                "write": False,
             }
 
         return {
-            "high_risk": True,
-            "level": "L4",
+            "high_risk": bool(matched),
+            "level": "L4" if matched else "L1",
             "matched_rules": matched,
             "reason": "; ".join(reasons),
-            "require_approval": True,
+            "require_approval": bool(matched),
+            "write": bool(write_rules),
         }
 
     @staticmethod
@@ -381,9 +405,12 @@ def execute_via_ssh(
     """
     session_id = ssh_session_id or ctx.ssh_session_id
 
-    # 1. 风险评估
+    # 1. 风险评估（P1-v5-4: 4 级权限决策）
+    #    L1 免确认 / L2 仅高危（默认，原行为）/ L3 高危+写操作 / L4 全部确认
     risk = RiskChecker.check(command)
-    if risk["high_risk"]:
+    permission_level = getattr(ctx, "permission_level", 2)
+    needs_approval = permission_needs_approval(risk, permission_level)
+    if needs_approval:
         RiskChecker.emit_needs_you(
             event_bus=ctx.event_bus,
             command=command,
@@ -393,8 +420,9 @@ def execute_via_ssh(
             tool_name=tool_name,
         )
         logger.warning(
-            f"execute_via_ssh blocked (high risk): tool={tool_name}, "
-            f"command={command[:80]}, rules={risk['matched_rules']}"
+            f"execute_via_ssh blocked (permission L{permission_level}): tool={tool_name}, "
+            f"command={command[:80]}, high_risk={risk['high_risk']}, "
+            f"write={risk.get('write')}"
         )
         return {
             "status": "needs_approval",
@@ -523,6 +551,24 @@ _SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(://[^:/\s]+:)[^@/\s]+(@)"), r"\1***\2"),
     (re.compile(r"(?i)(authorization:\s*bearer\s+)\S+"), r"\1***"),
 ]
+
+
+def permission_needs_approval(
+    risk: dict[str, Any], permission_level: int
+) -> bool:
+    """4 级权限决策（P1-v5-4）
+
+    L1 免确认 / L2 仅高危（默认）/ L3 高危+写操作 / L4 全部确认。
+    execute_via_ssh 与各工具多行检测共用，保证决策一致。
+    """
+    level = max(1, min(4, int(permission_level)))
+    if level >= 4:
+        return True
+    if risk.get("high_risk"):
+        return True
+    if level >= 3 and risk.get("write"):
+        return True
+    return False
 
 
 def redact_sensitive(text: str) -> str:

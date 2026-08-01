@@ -1178,3 +1178,59 @@ class TestRedactSensitive(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertNotIn("hunter2", result["output"])
         self.assertIn("uptime ok", result["output"])
+
+
+# ============================================================================
+# 4 级权限测试（P1-v5-4）
+# ============================================================================
+
+class TestFourLevelPermission(unittest.TestCase):
+    """execute_via_ssh 按 permission_level 决策审批"""
+
+    def _run(self, command, level, output="ok"):
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.return_value = {
+            "ok": True, "output": output, "exit_code": 0, "duration": 0.1,
+        }
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        ctx.permission_level = level
+        return execute_via_ssh(ctx=ctx, command=command, ssh_session_id="1", timeout=10, tool_name="ssh_command")
+
+    def test_l1_read_auto(self):
+        r = self._run("uptime", 1)
+        self.assertEqual(r["status"], "success")
+
+    def test_l1_write_auto(self):
+        # L1 免确认：写操作也直接执行
+        r = self._run("mv /a /b", 1)
+        self.assertEqual(r["status"], "success")
+
+    def test_l2_high_risk_approval_default(self):
+        r = self._run("rm -rf /tmp/x", 2)
+        self.assertEqual(r["status"], "needs_approval")
+
+    def test_l2_write_auto(self):
+        # L2 仅高危：写操作（非高危）自动执行（原行为）
+        r = self._run("mv /a /b", 2)
+        self.assertEqual(r["status"], "success")
+
+    def test_l3_write_requires_approval(self):
+        r = self._run("mv /a /b", 3)
+        self.assertEqual(r["status"], "needs_approval")
+
+    def test_l4_all_requires_approval(self):
+        r = self._run("uptime", 4)
+        self.assertEqual(r["status"], "needs_approval")
+
+    def test_context_reads_permission_level_from_live(self):
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        adapter = StrandsAgentAdapter(event_bus=None, backend_enabled=False)
+        ctx = adapter._build_tool_context("main", "s1", {"live": {"permissionLevel": "3"}})
+        self.assertEqual(ctx.permission_level, 3)
+        ctx2 = adapter._build_tool_context("main", "s1", {"live": {}})
+        self.assertEqual(ctx2.permission_level, 2)
+        ctx3 = adapter._build_tool_context("main", "s1", {"live": {"permissionLevel": "99"}})
+        self.assertEqual(ctx3.permission_level, 4)

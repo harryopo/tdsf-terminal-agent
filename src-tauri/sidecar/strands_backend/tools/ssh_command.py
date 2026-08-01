@@ -47,6 +47,7 @@ from strands_backend.tools import (
     RiskChecker,
     ToolContext,
     execute_via_ssh,
+    permission_needs_approval,
     tool,
 )
 
@@ -83,13 +84,14 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     timeout = int(params.get("timeout", 30))
 
     # 多行命令拆分检测（每行都过 RiskChecker）
+    # P1-v5-4: 按 4 级权限决策（L3 起写操作行也需审批）
     if "\n" in command.strip():
         for line in command.strip().splitlines():
             line_stripped = line.strip()
             if not line_stripped or line_stripped.startswith("#"):
                 continue
             risk = RiskChecker.check(line_stripped)
-            if risk["high_risk"]:
+            if permission_needs_approval(risk, ctx.permission_level):
                 RiskChecker.emit_needs_you(
                     event_bus=ctx.event_bus,
                     command=line_stripped,
@@ -105,7 +107,8 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                     "risk": risk,
                     "explanation": explanation,
                     "message": (
-                        f"多行命令中第 '{line_stripped[:60]}' 触发高危规则 "
+                        f"多行命令中第 '{line_stripped[:60]}' 触发"
+                        f"{'高危' if risk['high_risk'] else '写操作'}规则 "
                         f"{risk['matched_rules']}，已发起 needs_you 审批，未执行"
                     ),
                 }
