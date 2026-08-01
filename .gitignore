@@ -121,3 +121,6 @@ docs/竞赛/
 ~$*.docx
 ~$*.pptx
 *.bak2
+# ECDICT 原始数据（大文件，不提交；生成脚本产出子集即可）
+scripts/dict-import/*.csv
+scripts/dict-import/lemma.en.txt
