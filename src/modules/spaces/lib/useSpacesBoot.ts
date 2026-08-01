@@ -1,13 +1,12 @@
 import { native } from "@/modules/ai/lib/native";
-import { usePreferencesStore } from "@/modules/settings/preferences";
+import type { WorkspaceEnv } from "@/modules/workspace";
 import type { Tab } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import { isLeaf, type PaneNode } from "@/modules/terminal/lib/panes";
-import { parseWorkspaceScopeKey, type WorkspaceEnv } from "@/modules/workspace";
 import { useEffect, useRef } from "react";
 import { activeSpaceEnv, freshTabCwd } from "./activeSpace";
 import { freshTerminalTab, hydrateTabs } from "./serialize";
-import { loadAll, type SpaceMeta, saveActiveId, saveSpacesList } from "./store";
+import { loadAll, saveSpacesList } from "./store";
 import { useSpaces } from "./useSpaces";
 
 type Params = {
@@ -55,26 +54,10 @@ export function useSpacesBoot({
         const { spaces, activeId, states } = await loadAll();
 
         if (spaces.length === 0) {
-          const root = launchCwd ?? home ?? null;
-          // Hydrate prefs before reading the saved workspace env.
-          await usePreferencesStore
-            .getState()
-            .init()
-            .catch(() => {});
-          const meta: SpaceMeta = {
-            id: DEFAULT_SPACE_ID,
-            name: "Default",
-            root,
-            env: parseWorkspaceScopeKey(
-              usePreferencesStore.getState().defaultWorkspaceEnv,
-            ),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
-          await saveSpacesList([meta]);
-          await saveActiveId(DEFAULT_SPACE_ID);
-          setActiveSpaceForNewTabs(DEFAULT_SPACE_ID);
-          useSpaces.getState().hydrate([meta], DEFAULT_SPACE_ID);
+          // TDSF 修复 2026-08-01: 无任何工作区时进入欢迎界面，不再自动创建
+          // Default Space。首次启动 / 全部删除后由用户通过欢迎界面显式创建
+          // （本地工作区或 SSH 服务器），登录统一走"新建工作区"流程。
+          useSpaces.getState().hydrate([], null);
           return;
         }
 

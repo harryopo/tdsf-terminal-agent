@@ -75,11 +75,11 @@ import {
   useSpacePersistence,
   useSpaces,
   useSpacesBoot,
+  WelcomeScreen,
 } from "@/modules/spaces";
 // TDSF 魔改 (P4-T4.1): SSH 远程资源管理器
 import {
   isSessionConnected,
-  SshExplorer,
   selectActiveSession,
   selectSessionById,
   selectSessionCurrentPath,
@@ -163,6 +163,7 @@ export default function App() {
     reorderTabByGap,
     newTabInSpace,
     removeTabsForSpace,
+    clearTabs,
     markBooted,
     setActiveSpaceForNewTabs,
     warmUpTab,
@@ -261,6 +262,8 @@ export default function App() {
 
   const activeSpaceId = useSpaces((s) => s.activeId);
   const spacesHydrated = useSpaces((s) => s.hydrated);
+  // TDSF 修复 2026-08-01: 工作区数量（0 = 欢迎界面）
+  const spaceCount = useSpaces((s) => s.spaces.length);
 
   const handleWorkspaceChange = useCallback(
     async (env: WorkspaceEnv) => {
@@ -334,6 +337,8 @@ export default function App() {
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [spaceCreateOpen, setSpaceCreateOpen] = useState(false);
+  // TDSF 修复 2026-08-01: 创建对话框初始模式（欢迎界面预设 local/ssh）
+  const [spaceCreateMode, setSpaceCreateMode] = useState<"local" | "ssh">("local");
 
   const spaceTabs = useMemo(
     () => tabs.filter((t) => t.spaceId === (activeSpaceId ?? DEFAULT_SPACE_ID)),
@@ -576,8 +581,11 @@ export default function App() {
   // 但应用启动默认视图是 "explorer", 导致自动登录不执行, 用户反馈"SSH 未自动连接".
   // 修复: 把自动登录提升到 App 顶层, launchCwdResolved 后即触发, 不依赖 SshExplorer 挂载.
   // SshExplorer.tsx 中的重复逻辑已移除, 避免双重登录.
+  // TDSF 修复 2026-08-01: 欢迎界面（无任何工作区）下不自动连接——用户尚未选择
+  // 工作区，登录统一走"新建工作区"流程（SSH Space 创建时显式连接）。
   useEffect(() => {
-    if (!launchCwdResolved) return;
+    if (!launchCwdResolved || !spacesHydrated) return;
+    if (useSpaces.getState().spaces.length === 0) return;
     let cancelled = false;
     void (async () => {
       await useSshStore.getState().loadSavedConnections();
@@ -641,7 +649,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [launchCwdResolved]);
+  }, [launchCwdResolved, spacesHydrated]);
 
   // TDSF 修复 2026-08-01: 幽灵 SSH Space 启动清理。
   // 自动连接"无保存凭据"时不会触发 connectWithSaved 的失败分支（§37.9 的
@@ -1743,13 +1751,17 @@ export default function App() {
   const handleDeleteSpace = useCallback(
     (id: string) => {
       const nextSpaceId = useSpaces.getState().remove(id);
-      if (!nextSpaceId) return;
+      if (!nextSpaceId) {
+        // TDSF 修复 2026-08-01: 最后一个工作区删除 → 清空 tabs 进入欢迎界面
+        clearTabs();
+        return;
+      }
       const root = useSpaces
         .getState()
         .spaces.find((s) => s.id === nextSpaceId)?.root;
       removeTabsForSpace(id, nextSpaceId, root ?? undefined);
     },
-    [removeTabsForSpace],
+    [removeTabsForSpace, clearTabs],
   );
 
   const handleMoveTab = useCallback(
@@ -2091,9 +2103,6 @@ export default function App() {
                           onOpenFile={handleOpenFile}
                           onNavigateToPath={cdInNewTab}
                         />
-                      ) : sidebarView === "ssh" ? (
-                        // TDSF 魔改 (P4-T4.1): SSH 远程资源管理器视图
-                        <SshExplorer />
                       ) : sidebarView === "skills" ? (
                         // TDSF 魔改 (P4-T4.4): Skill 管理面板
                         <SkillsPanel />
@@ -2134,9 +2143,11 @@ export default function App() {
                       showNoTerminalEmptyState={showNoTerminalEmptyState}
                       onWarmUpColdTab={warmUpTab}
                       onOpenAgentFromEmptyState={togglePanelAndFocus}
-                      onSwitchToSshFromEmptyState={() =>
-                        persistSidebarView("ssh")
-                      }
+                      onSwitchToSshFromEmptyState={() => {
+                        // TDSF 修复 2026-08-01: SSH 登录统一走新建工作区流程
+                        setSpaceCreateMode("ssh");
+                        setSpaceCreateOpen(true);
+                      }}
                       // TDSF 魔改 2026-07-28 (P1-D): SSH 终端接管右侧工作区
                       // 2026-07-30 修复: 只传 workspaceSshSessionId,
                       // 保证 connecting/failed 时不提前渲染 SSH 终端。
@@ -2240,6 +2251,7 @@ export default function App() {
             onOpenChange={setSpaceCreateOpen}
             defaultEnv={workspaceEnv}
             defaultRoot={activeCwd ?? home ?? null}
+            initialMode={spaceCreateMode}
             onCreated={handleSpaceCreated}
           />
 
@@ -2267,6 +2279,33 @@ export default function App() {
       </TooltipProvider>
     </ThemeProvider>
   );
+
+  // TDSF 修复 2026-08-01: 无任何工作区 → 欢迎界面（首次启动/全部删除后）
+  if (spacesHydrated && spaceCount === 0) {
+    return (
+      <ThemeProvider>
+        <WelcomeScreen
+          onCreateLocal={() => {
+            setSpaceCreateMode("local");
+            setSpaceCreateOpen(true);
+          }}
+          onCreateSsh={() => {
+            setSpaceCreateMode("ssh");
+            setSpaceCreateOpen(true);
+          }}
+        />
+        {/* 欢迎界面下创建对话框必须在本分支内渲染（主 UI shell 不在此分支） */}
+        <SpaceCreateDialog
+          open={spaceCreateOpen}
+          onOpenChange={setSpaceCreateOpen}
+          defaultEnv={workspaceEnv}
+          defaultRoot={activeCwd ?? home ?? null}
+          initialMode={spaceCreateMode}
+          onCreated={handleSpaceCreated}
+        />
+      </ThemeProvider>
+    );
+  }
 
   return <AiComposerProvider>{shell}</AiComposerProvider>;
 }

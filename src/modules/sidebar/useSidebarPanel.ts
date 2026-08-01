@@ -37,12 +37,11 @@ function readSidebarWidth(): number {
 function readSidebarView(): SidebarViewId {
   try {
     const stored = window.localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY);
-    // TDSF 魔改 (P4-T4.1): 新增 "ssh" 视图
     // TDSF 魔改 (P4-T4.4): 新增 "skills" 视图
+    // TDSF 修复 2026-08-01: 移除 "ssh" 视图（登录统一走新建工作区）
     if (
       stored === "explorer" ||
       stored === "source-control" ||
-      stored === "ssh" ||
       stored === "skills"
     )
       return stored;

@@ -28,9 +28,8 @@ type Props = {
   /** 唤起 AI Agent 面板 */
   onOpenAgent: () => void;
   /**
-   * 切换侧栏到 "ssh" 视图 (从 App.tsx 传入 persistSidebarView).
-   * 不能在本组件直接调用 useSidebarPanel(), 因为 hook 实例 state 隔离,
-   * 而 App.tsx 才是 sidebarView 的 single source of truth.
+   * TDSF 修复 2026-08-01: 打开"新建 SSH 工作区"对话框（SSH 登录统一走
+   * 新建工作区流程，左侧 SSH 面板已移除）。
    */
   onSwitchToSsh: () => void;
 };
@@ -41,7 +40,6 @@ export function NoTerminalEmptyState({
   onOpenAgent,
   onSwitchToSsh,
 }: Props) {
-  const openConnectDialog = useSshStore((s) => s.openConnectDialog);
   const hasSshSession = useSshStore((s) => s.sessions.length > 0);
 
   // 副标题文案
@@ -52,10 +50,9 @@ export function NoTerminalEmptyState({
     return "未连接 SSH 服务器, 终端保持空白以避免空跑 shell.";
   }, [hasSshSession]);
 
-  // 处理"连接 SSH"按钮: 切到 SSH 面板 + 弹连接对话框
+  // TDSF 修复 2026-08-01: "连接 SSH"按钮 → 打开新建 SSH 工作区对话框
   const handleConnectSsh = () => {
     onSwitchToSsh();
-    openConnectDialog();
   };
 
   // 处理"打开本地终端"按钮: 强制把默认 cold tab 变 warm, 启动本地 shell
