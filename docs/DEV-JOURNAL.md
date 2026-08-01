@@ -279,3 +279,23 @@
 - ✅ 工具统一走 execute_via_ssh = 安全机制自动继承（审批/脱敏/审计零重复代码）
 - ✅ schema-level safety 在"权限维度 + 工具维度"双层生效（L1 裁写工具 + 子 agent 裁角色工具）
 - 📌 agent 工具矩阵需显式设计（main 全量 / coding 运维写 / explore 只读 / teach 教学）——避免一刀切
+
+---
+
+## 2026-08-01 · P2-2 asciicast 回放 UI（保存 + xterm 时间轴回放）
+
+**任务**：录制器已有（命令面板 record.start/stop，最小版只复制剪贴板），补齐保存 .cast 文件 + 回放 UI（教学复盘闭环）。
+
+**实现**（49dd7d0）：
+- AsciicastPanel：保存区（停止后预填文件名 → fs_write_file 到 ~/.tdsf-data/recordings/）+ 回放列表（fs_read_dir 过滤 .cast）+ CastPlayer（xterm 按 asciicast v2 事件时间轴重放 + 进度条）
+- 复用现有 Rust 命令（fs_write_file/fs_read_dir/fs_read_file）——零新依赖
+- 命令面板 record.play 入口；stopRecording 改为打开面板预填保存
+
+**报错与修改**：
+- **icon 存在性坑（第 3 次踩）**：Record01Icon/Save02Icon/RestoreIcon 均不存在（grep 计数会误报——源码字符串出现 ≠ 导出）。这次用 node ESM 精确验证（`import * as icons` + typeof 检查），替换为 RefreshIcon/ArrowLeft01Icon 等已验证图标
+- 教训固化：**新图标导入前必须 node ESM 验证**（grep 不可靠）
+
+**复盘**：
+- ✅ 零新依赖方案（复用 fs 命令 + xterm）比加 dialog 插件更稳（不碰 capabilities 安全面）
+- ✅ 教学闭环成形：录制 → 保存 .cast → 回放（课后复盘）+ 未来可导出分享
+- 📌 xterm 回放与真实终端同渲染器，视觉一致
