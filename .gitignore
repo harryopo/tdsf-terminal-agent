@@ -113,6 +113,9 @@ docs/竞赛/*.docx
 docs/竞赛/*.pptx
 docs/竞赛/charts/*.png
 
+# 比赛材料整体（比赛已结束，不入库；2026-08-01 用户确认保留在 docs/竞赛/ 供查阅）
+docs/竞赛/
+
 # Office 临时/锁定文件与通用备份产物 (全局)
 ~WRL*.tmp
 ~$*.docx
