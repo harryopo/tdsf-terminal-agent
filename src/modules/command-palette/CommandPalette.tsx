@@ -83,7 +83,9 @@ export function CommandPalette({
 
   const rankedCommands = useMemo(() => {
     if (inThemes || parsed.mode !== "commands") return [];
-    return rankCommands(commandItems, parsed.term, mru);
+    // TDSF 修复 2026-08-01: 过滤 hidden 项（SSH 空间的本地预览等）
+    const visible = commandItems.filter((i) => !i.hidden);
+    return rankCommands(visible, parsed.term, mru);
   }, [commandItems, parsed.term, parsed.mode, inThemes, mru]);
 
   const themes = useMemo(() => {

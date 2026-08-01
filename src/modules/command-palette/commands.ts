@@ -60,6 +60,8 @@ export type CommandPaletteActionContext = {
   openSpacesOverview: () => void;
   newSpace: () => void;
   switchSpace: (id: string) => void;
+  /** TDSF 修复 2026-08-01: 当前 Space 是 SSH 时隐藏本地专属命令（网页预览等） */
+  isSshSpace?: boolean;
 };
 
 const noop = () => {};
@@ -184,6 +186,9 @@ export function createCommandItems(
       keywords: ["browser", "web", "localhost", "preview", "new web preview"],
       icon: Globe02Icon,
       shortcutId: "tab.newPreview",
+      // TDSF 修复 2026-08-01: SSH 空间无本地网页预览（预览指向本地 localhost 服务），
+      // 隐藏该命令避免用户误操作。
+      hidden: ctx.isSshSpace === true,
       run: ctx.openNewPreview,
     },
     {

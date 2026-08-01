@@ -13,6 +13,8 @@ export type PaletteItem = {
   shortcutId?: ShortcutId;
   trailing?: string;
   disabledReason?: string;
+  /** TDSF 修复 2026-08-01: 当前上下文不适用时从命令面板隐藏（如 SSH 空间的本地预览） */
+  hidden?: boolean;
   run: () => void;
 };
 

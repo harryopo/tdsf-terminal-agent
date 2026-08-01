@@ -19,10 +19,25 @@ import {
   swapLeafInDirection,
 } from "@/modules/terminal/lib/panes";
 import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
+// TDSF 修复 2026-08-01: newTab/newTabInSpace 需要读目标 Space 的 env 来绑定
+// SSH 会话。useSpaces 本体不依赖 tabs（依赖方只有 App 层 hook），无循环依赖。
+import { useSpaces } from "@/modules/spaces";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // Matches the renderer slot pool size — over this we'd evict an active leaf.
 export const MAX_PANES_PER_TAB = 4;
+
+/** 目标 Space 是 SSH 且绑定了 session 时返回该 sessionId，否则 undefined */
+function sshSessionIdForSpace(spaceId: string | null): string | undefined {
+  if (!spaceId) return undefined;
+  const space = useSpaces
+    .getState()
+    .spaces.find((s) => s.id === spaceId);
+  if (space?.env.kind === "ssh" && space.env.sessionId) {
+    return space.env.sessionId;
+  }
+  return undefined;
+}
 
 type TabBase = {
   spaceId: string;
@@ -435,9 +450,12 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
   // Appends a cold terminal tab to a space without stealing focus, so the
   // overview can populate a space in place; it spawns when first opened.
+  // TDSF 修复 2026-08-01: 目标 Space 是 SSH 时绑定 sshSessionId，
+  // 新建的 terminal tab 直接渲染服务器 shell，而非本地 Windows shell。
   const newTabInSpace = useCallback((spaceId: string, cwd?: string) => {
     const tabId = nextIdRef.current++;
     const leafId = nextIdRef.current++;
+    const sshSessionId = sshSessionIdForSpace(spaceId);
     setTabs((curr) => [
       ...curr,
       {
@@ -447,6 +465,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         cold: true,
         title: cwd ? basename(cwd) : "shell",
         cwd,
+        sshSessionId,
         paneTree: { kind: "leaf", id: leafId, cwd },
         activeLeafId: leafId,
       },
@@ -532,9 +551,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [],
   );
 
+  // TDSF 修复 2026-08-01: 当前 Space 是 SSH 时绑定 sshSessionId，
+  // 新建 terminal tab 直接渲染服务器 shell（此前只依赖 isSpaceSshConnected
+  // 全局条件，会话状态异常时新 tab 会显示本地终端）。
   const newTab = useCallback((cwd?: string) => {
     const tabId = nextIdRef.current++;
     const leafId = nextIdRef.current++;
+    const sshSessionId = sshSessionIdForSpace(activeSpaceIdRef.current);
     setTabs((t) => [
       ...t,
       {
@@ -543,6 +566,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         spaceId: activeSpaceIdRef.current,
         title: "shell",
         cwd,
+        sshSessionId,
         paneTree: { kind: "leaf", id: leafId, cwd },
         activeLeafId: leafId,
       },
