@@ -26,6 +26,7 @@ import type {
   SshConnectParams,
   SshCredentialProfile,
 } from "@/lib/ssh-bridge";
+import { sshCredentialsGetSecret } from "@/lib/ssh-bridge";
 import { cn } from "@/lib/utils";
 import {
   Cancel01Icon,
@@ -70,6 +71,9 @@ export function SpaceCreateDialog({
   const createSpace = useSpaces((s) => s.create);
   const connectSsh = useSshStore((s) => s.connect);
   const saveConnection = useSshStore((s) => s.saveConnection);
+  const testConnection = useSshStore((s) => s.testConnection);
+  const savedConnections = useSshStore((s) => s.savedConnections);
+  const loadSavedConnections = useSshStore((s) => s.loadSavedConnections);
 
   // === 通用状态 ===
   const [mode, setMode] = useState<Mode>("local");
@@ -87,12 +91,17 @@ export function SpaceCreateDialog({
   const [passphrase, setPassphrase] = useState("");
   const [saveKey, setSaveKey] = useState(true);
 
+  // === 测试连接状态（P1 2026-08-01: 对齐主界面 SSH 面板交互）===
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
+  const [testMessage, setTestMessage] = useState("");
+
   const defaultName = useMemo(() => {
     if (mode === "ssh") return host.trim() ? `${user.trim()}@${host.trim()}` : "";
     return `Space ${spaces.length + 1}`;
   }, [mode, host, user, spaces.length]);
 
-  // 打开时重置表单; 切模式时自动回填默认名
+  // 打开时重置表单; 切模式时自动回填默认名; 打开时加载已保存连接
   useEffect(() => {
     if (!open) {
       setMode("local");
@@ -107,10 +116,14 @@ export function SpaceCreateDialog({
       setPrivateKeyPath("");
       setPassphrase("");
       setSaveKey(true);
+      setTesting(false);
+      setTestResult(null);
+      setTestMessage("");
       return;
     }
     setName(defaultName);
-  }, [open, defaultName]);
+    void loadSavedConnections();
+  }, [open, defaultName, loadSavedConnections]);
 
   useEffect(() => {
     setName(defaultName);
@@ -127,6 +140,79 @@ export function SpaceCreateDialog({
     if (!port.trim()) setPort("22");
   };
 
+  // P1 2026-08-01: 测试连接（走 Rust ssh_test，不保留会话，与主界面 SSH 面板一致）
+  const handleTestConnection = async () => {
+    const params = validateSsh();
+    if (!params) return;
+    let resolved: typeof params;
+    try {
+      resolved = await resolveAuth(params);
+    } catch (e) {
+      setTestResult("fail");
+      setTestMessage(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    setTestMessage("");
+    try {
+      const r = await testConnection(resolved);
+      setTestResult(r.ok ? "ok" : "fail");
+      setTestMessage(r.message);
+    } catch (e) {
+      setTestResult("fail");
+      setTestMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // P1 2026-08-01: 已保存连接密码/口令为空时从系统密钥库取密
+  const resolveAuth = async (
+    params: Omit<SshConnectParams, "port"> & { port: number },
+  ): Promise<Omit<SshConnectParams, "port"> & { port: number }> => {
+    if (params.auth.type === "password" && !params.auth.password) {
+      const secret = await sshCredentialsGetSecret(
+        makeProfileId(params.host, params.port, params.user),
+      );
+      if (!secret) {
+        throw new Error("密码为空且系统密钥库中无已保存凭据，请输入密码");
+      }
+      return { ...params, auth: { type: "password", password: secret } };
+    }
+    if (params.auth.type === "publickey" && !params.auth.passphrase) {
+      const secret = await sshCredentialsGetSecret(
+        makeProfileId(params.host, params.port, params.user),
+      );
+      if (secret) {
+        return {
+          ...params,
+          auth: { ...params.auth, passphrase: secret },
+        };
+      }
+    }
+    return params;
+  };
+
+  // P1 2026-08-01: 从已保存连接回填表单（非敏感字段；密码/口令留空走 keyring）
+  const applySavedProfile = (p: SshCredentialProfile) => {
+    setHost(p.host);
+    setPort(String(p.port ?? 22));
+    setUser(p.user);
+    if (p.auth.type === "password") {
+      setAuthKind("password");
+      setPassword("");
+    } else {
+      setAuthKind("publickey");
+      setPrivateKeyPath(p.auth.privateKeyPath ?? "");
+      setPassphrase("");
+    }
+    setError(null);
+    setTestResult(null);
+    setTestMessage("");
+    setName(`${p.user}@${p.host}`);
+  };
+
   const validateSsh = (): (Omit<SshConnectParams, "port"> & { port: number }) | null => {
     if (!host.trim() || !user.trim()) {
       setError("主机和用户名为必填项");
@@ -140,10 +226,7 @@ export function SpaceCreateDialog({
 
     let auth: SshAuthMethod;
     if (authKind === "password") {
-      if (!password) {
-        setError("密码不能为空");
-        return null;
-      }
+      // 密码可空：已保存连接由 resolveAuth 从系统密钥库取密
       auth = { type: "password", password };
     } else {
       if (!privateKeyPath.trim()) {
@@ -187,6 +270,9 @@ export function SpaceCreateDialog({
     setError(null);
 
     try {
+      // P1 2026-08-01: 已保存连接密码/口令从系统密钥库取密
+      const resolved = await resolveAuth(params);
+
       // 可选: 先保存凭据, 失败不阻塞连接
       if (saveKey) {
         const profile: SshCredentialProfile = {
@@ -207,16 +293,20 @@ export function SpaceCreateDialog({
           createdAt: Date.now(),
         };
         try {
-          await saveConnection(
-            profile,
-            authKind === "password" ? password : passphrase || null,
-          );
+          // P1 2026-08-01: 密码/口令为空时用 keyring 取到的值保存
+          let savedSecret: string | null = null;
+          if (resolved.auth.type === "password") {
+            savedSecret = password || resolved.auth.password || null;
+          } else {
+            savedSecret = passphrase || resolved.auth.passphrase || null;
+          }
+          await saveConnection(profile, savedSecret);
         } catch (saveErr) {
           console.warn("[SpaceCreateDialog] saveConnection failed:", saveErr);
         }
       }
 
-      const sessionId = await connectSsh(params);
+      const sessionId = await connectSsh(resolved);
       if (!sessionId) {
         setError("SSH 连接失败, 请检查参数或网络");
         return;
@@ -313,6 +403,31 @@ export function SpaceCreateDialog({
 
           {mode === "ssh" && (
             <>
+              {/* P1 2026-08-01: 已保存服务器列表（点击回填表单） */}
+              {savedConnections.length > 0 && (
+                <div className="grid gap-1.5">
+                  <Label>已保存的服务器</Label>
+                  <div className="max-h-28 overflow-auto rounded-md border border-border/60">
+                    {savedConnections.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => applySavedProfile(p)}
+                        disabled={submitting}
+                        className="flex w-full items-center justify-between gap-2 border-b border-border/40 px-2.5 py-1.5 text-left text-[12px] last:border-b-0 hover:bg-muted/60 disabled:opacity-50"
+                      >
+                        <span className="truncate font-medium text-foreground">
+                          {p.alias || `${p.user}@${p.host}`}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {p.auth.type === "password" ? "密码" : "公钥"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* 主机 + 端口 */}
               <div className="grid grid-cols-[1fr_120px] gap-3">
                 <div className="grid gap-1.5">
@@ -443,6 +558,40 @@ export function SpaceCreateDialog({
                 />
                 <span>永久保存密钥到本机（下次自动登录）</span>
               </label>
+
+              {/* P1 2026-08-01: 测试连接（与主界面 SSH 面板一致，不保留会话） */}
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleTestConnection()}
+                  disabled={submitting || testing || !host.trim() || !user.trim()}
+                >
+                  {testing && (
+                    <HugeiconsIcon
+                      icon={Loading03Icon}
+                      size={12}
+                      strokeWidth={1.75}
+                      className="animate-spin"
+                    />
+                  )}
+                  测试连接
+                </Button>
+                {testResult && (
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-[11px]",
+                      testResult === "ok"
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-destructive",
+                    )}
+                  >
+                    {testResult === "ok" ? "连接成功" : "连接失败"}
+                    {testMessage ? `：${testMessage}` : ""}
+                  </span>
+                )}
+              </div>
             </>
           )}
 
