@@ -785,7 +785,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response.metrics = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1")] = mock_agent  # cache 键为 (agent_id, session_id) 元组
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent  # cache 键为 (agent_id, session_id) 元组
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -805,7 +805,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="ok")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1")] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -828,7 +828,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         adapter = StrandsAgentAdapter(event_bus=bus, backend_enabled=True)
 
         mock_agent = MagicMock(side_effect=RuntimeError("strands internal error"))
-        adapter._agent_cache[("main", "s1")] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -848,7 +848,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="done")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1")] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1079,7 +1079,7 @@ class TestMainAgentRouting(unittest.TestCase):
         mock_response.__str__ = MagicMock(return_value="回答内容")
         mock_response.metrics = {}
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1")] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
         return adapter, bus, mock_agent
@@ -1105,7 +1105,7 @@ class TestMainAgentRouting(unittest.TestCase):
 
     def test_non_main_agent_no_routing(self):
         adapter, bus, mock_agent = self._adapter_with_mock_agent()
-        adapter._agent_cache[("coding", "s1")] = mock_agent
+        adapter._agent_cache[("coding", "s1", 2)] = mock_agent
         adapter.invoke("coding", "解释一下什么是负载均衡", {"session_id": "s1"})
         bus.emit_agent_switch.assert_not_called()
 
@@ -1234,3 +1234,35 @@ class TestFourLevelPermission(unittest.TestCase):
         self.assertEqual(ctx2.permission_level, 2)
         ctx3 = adapter._build_tool_context("main", "s1", {"live": {"permissionLevel": "99"}})
         self.assertEqual(ctx3.permission_level, 4)
+
+
+# ============================================================================
+# schema-level safety 测试（P1-v5-2）
+# ============================================================================
+
+class TestSchemaLevelToolFilter(unittest.TestCase):
+    """L1 免确认权限下执行类工具从 registry 移除"""
+
+    def test_l1_removes_execution_tools(self):
+        ctx = make_ctx()
+        ctx.permission_level = 1
+        tools = make_all_ops_tools(ctx)
+        names = {getattr(t, "__name__", "") for t in tools}
+        self.assertNotIn("ssh_command", names)
+        self.assertNotIn("skill_invoke", names)
+        self.assertIn("read_remote_file", names)
+        self.assertIn("suggest_command", names)
+        self.assertEqual(len(tools), 5)
+
+    def test_l2_keeps_all_tools(self):
+        ctx = make_ctx()
+        ctx.permission_level = 2
+        tools = make_all_ops_tools(ctx)
+        names = {getattr(t, "__name__", "") for t in tools}
+        self.assertIn("ssh_command", names)
+        self.assertEqual(len(tools), 7)
+
+    def test_default_level_keeps_all_tools(self):
+        ctx = make_ctx()
+        tools = make_all_ops_tools(ctx)
+        self.assertEqual(len(tools), 7)
