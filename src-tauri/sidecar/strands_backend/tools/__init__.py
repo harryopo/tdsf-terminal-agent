@@ -815,6 +815,11 @@ OPS_TOOL_NAMES: list[str] = [
     "skill_invoke",
     "suggest_command",
     "knowledge_search",
+    "service_manage",
+    "package_manage",
+    "firewall_manage",
+    "security_audit",
+    "performance_analyze",
 ]
 
 # P1-v5-2 schema-level safety: L1（免确认）只保留只读工具
@@ -825,6 +830,9 @@ _L1_READONLY_TOOL_NAMES = {
     "inspect_processes",
     "network_diagnose",
     "suggest_command",
+    # P2-3: 只读扩展工具（L1 免确认下保留）
+    "security_audit",
+    "performance_analyze",
 }
 
 
@@ -865,6 +873,7 @@ def make_all_ops_tools(
     from strands_backend.tools.skill_invoke import make_skill_invoke_tool
     from strands_backend.tools.suggest_command import make_suggest_command_tool
     from strands_backend.tools.knowledge_search import make_knowledge_search_tool
+    from strands_backend.tools.ops_extended import EXTENDED_TOOL_FACTORIES
 
     tools = [
         make_ssh_command_tool(ctx),
@@ -876,6 +885,11 @@ def make_all_ops_tools(
         make_suggest_command_tool(ctx),
         make_knowledge_search_tool(ctx),
     ]
+    # P2-3: 扩展运维工具（按 tool_names 白名单过滤——L1 只读下写工具被裁掉）
+    for _name, _factory in EXTENDED_TOOL_FACTORIES.items():
+        if tool_names is not None and _name not in tool_names:
+            continue
+        tools.append(_factory(ctx))
 
     if getattr(ctx, "permission_level", 2) <= 1:
         tools = [
