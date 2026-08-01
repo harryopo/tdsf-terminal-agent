@@ -288,6 +288,10 @@ export type SidecarStreamPart =
  * - 前端为兼容旧测试与未来扩展，两个字段都接受：优先 observation，回退 output
  */
 interface AgentInvokeResult {
+  /** P0-4: 运行时失败/降级标志 */
+  degraded?: boolean;
+  degraded_reason?: string;
+  degraded_message?: string;
   /** Agent 内部思考过程（可选，作为 reasoning 显示） */
   thinking?: string;
   /**

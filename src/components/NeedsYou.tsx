@@ -33,6 +33,7 @@ export function NeedsYou() {
       dispatch({
         type: 'add-needs-you',
         item: {
+          id: 't-ny-demo',
           type: 'approval',
           title: '需要批准: 重启 nginx',
           detail: '命令: sudo systemctl restart nginx\n风险等级: L3 (必须确认)',

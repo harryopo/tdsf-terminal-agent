@@ -1,0 +1,2 @@
+{"type":"started","key":"v2:96e659f77698f932fd5922208f9f4086c01223fca61d43cb19058563291a6bdb","timestamp":1785553620122}
+{"type":"event","key":"v2:96e659f77698f932fd5922208f9f4086c01223fca61d43cb19058563291a6bdb","event":{"kind":"attempt_started","attempt":1,"maxAttempts":6},"timestamp":1785553620151}
