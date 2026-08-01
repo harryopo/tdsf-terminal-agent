@@ -48,7 +48,9 @@
 
 | 文档 | 路径 | 作用 |
 |------|------|------|
-| AI 子系统 | `docs/architecture/ai-subsystem.md` | 9 Agent + PAOR 监督循环 + MCP 工具 + 知识库架构 |
+| **Agent 架构说明书** | `docs/Agent架构说明书.md` | ⭐**当前 Agent 架构权威**（P0-6 后）：main 统一入口 + 自主委派 + 工具卡片可视化 + 事件协议 + 安全体系 + 流程图 |
+| 产品与技术方案书 | `docs/方案书-v1.0.md` | 项目"做大做强"总纲（定位/选型/路线图/风险），Agent 架构 B 方案拍板 |
+| AI 子系统 | `docs/architecture/ai-subsystem.md` | 9 Agent + PAOR 监督循环 + MCP 工具 + 知识库架构（**历史，与当前 Strands 主路径不同，对照阅读**） |
 | 终端渲染池 | `docs/architecture/terminal-renderer-pool.md` | xterm.js 5 槽位 + DR 复用 + 主题/字体管理 |
 | PTY Shell 集成 | `docs/architecture/pty-shell-integration.md` | portable-pty + spawn pwsh/bash + 数据流 |
 | 安全模型 | `docs/architecture/security-model.md` | TOFU 主机审批 + 工具审批 + SSRF 防护 + 路径校验 |
