@@ -752,8 +752,14 @@ impl SshSession {
                         "[ssh] exec request Failure (REJECTED by server) cmd={:?}",
                         command
                     );
-                    // 不抛错，继续等 ExitStatus（如果服务器仍发的话）；
-                    // 若不发，超时后由 collect_exec_output 的调用方处理
+                    // TDSF 修复 2026-08-01 (P1-NEW-v2-7): 服务器拒绝 exec 后
+                    // 不会再发 ExitStatus/数据，继续等会挂到超时（默认 30s）
+                    // 白白浪费时间。立即 break，并把拒绝标记写入 stderr，
+                    // 让上层能区分"被拒"与"超时"（两者 exit_code 均为 -1）。
+                    stderr.extend_from_slice(
+                        b"\n[tdsf-exec-rejected] exec request rejected by server\n",
+                    );
+                    break;
                 }
                 Some(msg) => {
                     log::debug!("[ssh] exec other channel msg: {:?}", msg);
