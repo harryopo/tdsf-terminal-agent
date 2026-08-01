@@ -1,14 +1,24 @@
 /**
- * 翻译 API 层 — 三层词典降级查询
+ * 翻译 API 层 — 七级策略链（P2-5 升级）
  *
- * 查询优先级：
- * 1. Linux 终端专用词典（linuxDictionary.ts）
- * 2. 编程语言词典（programmingDictionary.ts）
- * 3. 复合词拆分（camelCase / snake_case / kebab-case）
+ * 查询优先级（参考旧版 translator.ts，category 守卫防误匹配）：
+ * 1. 路径 path（/usr/local、/etc、~/ 整体识别 + 逐段）
+ * 2. 选项 option（-l、--version）
+ * 3. 精确短语 exact-phrase（error/phrase 类别，含空格）
+ * 4. 命令 command（字母开头）
+ * 5. 短语贪心 phrase-greedy（最长短语）
+ * 6. 单词 word（linux + programming 词典）
+ * 7. 复合词拆分
+ *
+ * 词典合并：
+ * - linux-commands-zh.json（2279 条：1911 command + 250 option + 33 error +
+ *   85 term，字段含 example/syntax/detail/category/level）
+ * - linuxDictionary.ts（现有）
+ * - programmingDictionary.ts（编程术语，旧词典不含）
  *
  * 设计：
  * - 零网络依赖，纯本地词典
- * - 支持精确匹配 + 小写降级 + 复合词拆分
+ * - 路径/选项/短语精确匹配，category 守卫
  * - 调用方只需传入文本，返回翻译结果
  */
 
@@ -22,6 +32,7 @@ import {
   PROGRAMMING_DICT,
   PROGRAMMING_DICT_SIZE,
 } from "./programmingDictionary";
+import zhDictJson from "./dict/linux-commands-zh.json";
 
 /** 翻译结果 */
 export interface TranslationResult {
@@ -101,62 +112,200 @@ function lookupProgramming(word: string): LookupResult[] {
 }
 
 /**
- * 翻译英文文本为中文
+ * 翻译英文文本为中文（P2-5 七级策略链）
  *
- * 三层降级查询：
- * 1. Linux 终端词典（精确匹配 + 小写降级 + 复合词拆分）
- * 2. 编程词典（精确匹配 + 小写降级）
- * 3. 返回空（未找到）
+ * 1. 路径 path（含 / 斜杠整体识别 + 逐段）
+ * 2. 选项 option（-l / --version）
+ * 3. 精确短语（error/phrase 类别，含空格）
+ * 4. 命令（字母开头，2279 条词典）
+ * 5. 短语贪心
+ * 6. 单词（linux + programming 词典）
+ * 7. 复合词拆分
+ *
+ * 纯符号（如 "/" 单独）不翻译——用户选中斜杠时返回空。
  *
  * @param text 要翻译的文本
  * @returns 翻译结果
  */
 export function translateText(text: string): TranslationResult {
-  if (!text || !text.trim()) {
-    return {
-      source: text,
-      target: "",
-      success: true,
-      entries: [],
-    };
+  const raw = text ?? "";
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { source: text, target: "", success: true, entries: [] };
   }
 
-  // 第一层：Linux 终端词典
-  let entries = lookupLinux(text);
+  let entries: LookupResult[] = [];
 
-  // 第二层：编程词典（降级，支持复合词拆分）
-  if (entries.length === 0) {
-    entries = lookupProgramming(text.trim());
+  // 纯符号/单字符符号过滤（如 "/" "." ":"）——无翻译价值
+  if (/^[^\w\u4e00-\u9fff]+$/.test(trimmed) && !trimmed.startsWith("-")) {
+    return { source: text, target: "", success: false, entries: [] };
   }
 
-  // 第三层：复合词拆分（同时查Linux词典和编程词典）
+  // 1. 路径（含前导斜杠/波浪号：/usr/local、~/config、/etc）
+  if (trimmed.startsWith("/") || trimmed.startsWith("~")) {
+    entries = lookupZhPath(trimmed);
+    if (entries.length > 0) {
+      return finishTranslate(text, entries);
+    }
+  }
+
+  // 2. 选项（-l / --version）
+  if (trimmed.startsWith("-")) {
+    entries = lookupZhOption(trimmed);
+    if (entries.length > 0) {
+      return finishTranslate(text, entries);
+    }
+  }
+
+  // 3. 精确短语（error/phrase 类别，含空格）
+  if (trimmed.includes(" ")) {
+    entries = lookupZhPhrase(trimmed);
+    if (entries.length > 0) {
+      return finishTranslate(text, entries);
+    }
+  }
+
+  // 4. 命令 / 术语（2279 条词典精确 + 小写降级）
+  entries = lookupZhCommand(trimmed);
+  if (entries.length > 0) {
+    return finishTranslate(text, entries);
+  }
+
+  // 5-6. 单词（linux + programming 词典）
+  entries = lookupLinux(trimmed);
   if (entries.length === 0) {
-    const words = splitCompoundWord(text.trim());
-    if (words.length > 1) {
-      for (const w of words) {
-        // 先查Linux词典
-        const linuxResults = lookupLinux(w);
-        if (linuxResults.length > 0) {
-          entries.push(...linuxResults.map((r) => ({ ...r, exact: false })));
-        } else {
-          // 再查编程词典（支持复合词拆分）
-          const progResults = lookupProgramming(w);
-          if (progResults.length > 0) {
-            entries.push(...progResults.map((r) => ({ ...r, exact: false })));
-          }
+    entries = lookupProgramming(trimmed);
+  }
+  if (entries.length > 0) {
+    return finishTranslate(text, entries);
+  }
+
+  // 7. 复合词拆分
+  const words = splitCompoundWord(trimmed);
+  if (words.length > 1) {
+    for (const w of words) {
+      const linuxResults = lookupLinux(w);
+      if (linuxResults.length > 0) {
+        entries.push(...linuxResults.map((r) => ({ ...r, exact: false })));
+      } else {
+        const progResults = lookupProgramming(w);
+        if (progResults.length > 0) {
+          entries.push(...progResults.map((r) => ({ ...r, exact: false })));
         }
       }
     }
   }
 
-  const target = formatLookupResult(entries);
+  return finishTranslate(text, entries);
+}
 
+function finishTranslate(source: string, entries: LookupResult[]): TranslationResult {
   return {
-    source: text,
-    target,
+    source,
+    target: formatLookupResult(entries),
     success: entries.length > 0,
     entries,
   };
+}
+
+// ============================================================================
+// 2279 条词典查询（linux-commands-zh.json）
+// ============================================================================
+
+type ZhEntry = {
+  zh: string;
+  pos?: string;
+  example?: string;
+  syntax?: string;
+  detail?: string;
+  category?: "command" | "option" | "term" | "error" | "phrase";
+  level?: string;
+};
+
+const ZH_DICT = zhDictJson.entries as Record<string, ZhEntry>;
+
+function toResult(
+  word: string,
+  e: ZhEntry,
+  exact: boolean,
+  tag = e.category ?? "linux",
+): LookupResult {
+  return {
+    word,
+    zh: e.zh,
+    pos: e.pos,
+    tag,
+    exact,
+    example: e.example,
+    syntax: e.syntax,
+    detail: e.detail,
+    category: e.category,
+  };
+}
+
+/** 命令/术语查询（精确 → 小写降级，category 守卫：跳过 option） */
+function lookupZhCommand(word: string): LookupResult[] {
+  if (!/^[a-zA-Z]/.test(word)) return [];
+  const exact = ZH_DICT[word];
+  if (exact && exact.category !== "option") {
+    return [toResult(word, exact, true)];
+  }
+  const lower = word.toLowerCase();
+  if (lower !== word) {
+    const e = ZH_DICT[lower];
+    if (e && e.category !== "option") {
+      return [toResult(lower, e, true)];
+    }
+  }
+  return [];
+}
+
+/** 选项查询（-l / --version，含 "l" → "-l" 容错） */
+function lookupZhOption(word: string): LookupResult[] {
+  const keys = [word, word.toLowerCase()];
+  if (!word.startsWith("-")) {
+    keys.unshift(`-${word}`);
+  }
+  for (const k of keys) {
+    const e = ZH_DICT[k];
+    if (e) return [toResult(k, e, k === word || k === word.toLowerCase())];
+  }
+  return [];
+}
+
+/** 精确短语（error/phrase/term 类别，含空格的多词条目） */
+function lookupZhPhrase(word: string): LookupResult[] {
+  const keys = [word, word.toLowerCase()];
+  for (const k of keys) {
+    const e = ZH_DICT[k];
+    if (e && (e.category === "error" || e.category === "phrase" || e.category === "term")) {
+      return [toResult(k, e, true)];
+    }
+  }
+  return [];
+}
+
+/** 路径翻译（/etc → 整体 + 逐段） */
+function lookupZhPath(path: string): LookupResult[] {
+  const results: LookupResult[] = [];
+  // 1. 整体匹配（如 "/etc" 是词条）
+  const whole = ZH_DICT[path];
+  if (whole) {
+    results.push(toResult(path, whole, true));
+    return results;
+  }
+  const wholeLower = ZH_DICT[path.toLowerCase()];
+  if (wholeLower) {
+    results.push(toResult(path.toLowerCase(), wholeLower, true));
+    return results;
+  }
+  // 2. 逐段翻译（/usr/local → /usr + local）
+  const segments = path.split("/").filter(Boolean);
+  for (const seg of segments) {
+    const e = ZH_DICT[seg] ?? ZH_DICT[seg.toLowerCase()];
+    if (e) results.push(toResult(seg, e, false));
+  }
+  return results;
 }
 
 /**
