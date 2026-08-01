@@ -63,9 +63,10 @@ export type CommandPaletteActionContext = {
   switchSpace: (id: string) => void;
   /** TDSF 修复 2026-08-01: 当前 Space 是 SSH 时隐藏本地专属命令（网页预览等） */
   isSshSpace?: boolean;
-  /** P1-v5-6: asciicast 会话录制（开始/停止导出） */
+  /** P1-v5-6 / P2-2: asciicast 会话录制（开始/停止/回放面板） */
   recordStart: () => void;
   recordStop: () => void;
+  recordPlay?: () => void;
 };
 
 const noop = () => {};
@@ -299,11 +300,19 @@ export function createCommandItems(
     },
     {
       id: "record.stop",
-      title: "停止录制并导出 (asciicast v2)",
+      title: "停止录制并保存回放 (asciicast v2)",
       group: "录制",
       keywords: ["record", "stop", "export", "cast", "asciicast", "daochu"],
       icon: SidebarLeftIcon,
       run: ctx.recordStop,
+    },
+    {
+      id: "record.play",
+      title: "打开录制回放 (asciicast)",
+      group: "录制",
+      keywords: ["record", "play", "replay", "cast", "asciicast", "huifang"],
+      icon: SidebarLeftIcon,
+      run: ctx.recordPlay ?? noop,
     },
     {
       id: "ai.toggle",
