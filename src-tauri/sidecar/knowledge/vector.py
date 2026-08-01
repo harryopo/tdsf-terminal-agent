@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -40,8 +42,14 @@ logger = logging.getLogger("sidecar.knowledge.vector")
 # 常量定义
 # ============================================================================
 
-# 默认数据路径（python-sidecar/data/chroma/）
-_DEFAULT_CHROMA_PATH: Path = Path(__file__).parent.parent / "data" / "chroma"
+# 默认数据路径（dev: python-sidecar/data/chroma/; frozen: 数据目录下）
+if getattr(sys, "frozen", False):
+    _DEFAULT_CHROMA_PATH: Path = (
+        Path(os.environ.get("TDSF_DATA_DIR", str(Path(sys.executable).resolve().parent / ".tdsf-data")))
+        / "chroma"
+    )
+else:
+    _DEFAULT_CHROMA_PATH: Path = Path(__file__).parent.parent / "data" / "chroma"
 
 # 默认 collection 名称
 _DEFAULT_COLLECTION: str = "tdsf_knowledge"

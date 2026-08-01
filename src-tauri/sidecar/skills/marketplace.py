@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -43,11 +45,23 @@ logger = logging.getLogger("sidecar.skills.marketplace")
 # 常量定义
 # ============================================================================
 
-# 默认缓存根目录（python-sidecar/data/skills-cache/）
-_DEFAULT_CACHE_ROOT: Path = Path(__file__).parent.parent / "data" / "skills-cache"
+# 可写目录统一落到数据目录（frozen 打包后 __file__ 指向只读 _MEIPASS）
+if getattr(sys, "frozen", False):
+    _DATA_ROOT: Path = Path(
+        os.environ.get("TDSF_DATA_DIR", str(Path(sys.executable).resolve().parent / ".tdsf-data"))
+    )
+else:
+    _DATA_ROOT: Path = Path(__file__).parent.parent / "data"
 
-# 默认安装目录（python-sidecar/skills/installed/）
-_DEFAULT_INSTALL_DIR: Path = Path(__file__).parent / "installed"
+# 默认缓存根目录（python-sidecar/data/skills-cache/）
+_DEFAULT_CACHE_ROOT: Path = _DATA_ROOT / "skills-cache"
+
+# 默认安装目录（dev: python-sidecar/skills/installed/; frozen: 数据目录下）
+_DEFAULT_INSTALL_DIR: Path = (
+    _DATA_ROOT / "skills-installed"
+    if getattr(sys, "frozen", False)
+    else Path(__file__).parent / "installed"
+)
 
 # skills.sh 协议 base URL（mock，实际不存在）
 _SKILLS_SH_BASE_URL: str = "https://skills.sh/api/v1/skills"
