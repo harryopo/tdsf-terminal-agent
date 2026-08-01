@@ -118,6 +118,7 @@ import {
 } from "@/modules/terminal/lib/rendererPool";
 // P1-v5-6: asciicast 会话录制（命令面板 record.start/stop）
 import {
+  AsciicastPanel,
   AsciicastRecorder,
   castFileName,
 } from "@/modules/recorder/asciicast";
@@ -1799,8 +1800,13 @@ export default function App() {
     [moveTabToSpace],
   );
 
-  // === P1-v5-6: asciicast 会话录制（命令面板 record.start/stop）===
+  // === P1-v5-6 / P2-2: asciicast 会话录制（命令面板 record.start/stop + 回放面板）===
   const recorderRef = useRef<AsciicastRecorder | null>(null);
+  const [asciicastOpen, setAsciicastOpen] = useState(false);
+  const [pendingRecording, setPendingRecording] = useState<{
+    name: string;
+    content: string;
+  } | null>(null);
   const startRecording = useCallback(() => {
     if (recorderRef.current) {
       toast.warning("录制已在进行中，请先停止");
@@ -1830,23 +1836,20 @@ export default function App() {
     const cast = rec.stop(width, height);
     const stats = rec.stats;
     const fileName = castFileName();
-    // 最小可用版：复制 asciicast v2 JSON 到剪贴板（避免新增 fs 依赖与权限）。
-    // 大录制（>1MB）剪贴板可能失败，控制台始终保留完整输出。
-    console.info(`[asciicast] ${fileName} (${stats.events} events, ${stats.bytes}B)\n${cast}`);
-    let copied = false;
-    try {
-      await navigator.clipboard.writeText(cast);
-      copied = true;
-    } catch {
-      // 剪贴板不可用（权限/大小），控制台兜底
-    }
+    // P2-2: 打开回放面板预填保存（替代剪贴板导出——支持大录制 + 回放）
+    setPendingRecording({ name: fileName, content: cast });
+    setAsciicastOpen(true);
     toast.success(
-      copied
-        ? `已导出 ${fileName}（${stats.events} 事件）到剪贴板`
-        : `已导出 ${fileName}（${stats.events} 事件），完整内容在控制台`,
-      { duration: 6000 },
+      `已停止录制（${stats.events} 事件，${formatBytes(stats.bytes)}），可保存并回放`,
+      { duration: 5000 },
     );
   }, [activeLeafId]);
+
+  const formatBytes = (n: number): string => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  };
 
   const handleReorderTab = useCallback(
     (tabId: number, targetTabId: number, edge: "top" | "bottom") => {
@@ -1932,6 +1935,7 @@ export default function App() {
             isSshSpace: activeSpace?.env.kind === "ssh",
             recordStart: startRecording,
             recordStop: () => void stopRecording(),
+            recordPlay: () => setAsciicastOpen(true),
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),
@@ -2331,6 +2335,14 @@ export default function App() {
           {/* TDSF 魔改 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位）
               P2: 卡片带「Ask TDSF」操作，把选中词/代码片段发给 AI 深入解释 */}
           <TranslateTooltip onAsk={onAskWithSelection} />
+
+          {/* P2-2: asciicast 录制回放面板 */}
+          <AsciicastPanel
+            open={asciicastOpen}
+            onOpenChange={setAsciicastOpen}
+            home={home}
+            pendingRecording={pendingRecording}
+          />
 
           <CloseDialogs
             tabs={tabs}
