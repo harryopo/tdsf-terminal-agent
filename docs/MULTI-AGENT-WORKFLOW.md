@@ -5,6 +5,7 @@
 > **版本**：v2.0（2026-07-30 · 新增 A/B/C 三场景分层、接手声明模板、改动影响分析表、CDP 实测责任、commit 拆分策略）
 > **依据**：业界多 agent 协作最佳实践（Anthropic Claude Code subagents / OpenAI Agents SDK Handoffs / AWS AGENTOPS01-BP02 / GALDUR 体系 / Loop Engineering / `dispatching-parallel-agents` skill）+ 本项目 `CLAUDE.md` 防污染红线 + `docs/dev-state.md` 已知踩坑 + `docs/reports/upstream-terax-architecture.md` 模块依赖。
 > **优先级**：本规范与 `CLAUDE.md` 同级，是 AI 接手必读第二文档（在 `CLAUDE.md` 之后、`docs/dev-state.md` 之前）。
+> **唯一准绳**：本规范是项目内多 agent 协作的**唯一现行规范**。早期的 `.agent-collaboration/`（CONTRACT.md + file-ownership.json，2026-07-28 建立）已于 2026-07-31 废弃归档至 `docs/archive/agent-collaboration-20260728/`，不再执行；锁机制以 §3.2 的 `docs/.agent-locks.md` 为准。
 
 ---
 

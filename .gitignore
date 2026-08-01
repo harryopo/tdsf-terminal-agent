@@ -79,11 +79,11 @@ htmlcov/
 .tox/
 
 # Python sidecar runtime data (SQLite/Chroma/Langfuse 等)
-python-sidecar/data/
-python-sidecar/.coverage
+src-tauri/sidecar/data/
+src-tauri/sidecar/.coverage
 
 # Auto-generated Skills (KEPA 自动生成，不入库)
-python-sidecar/skills/auto-generated/
+src-tauri/sidecar/skills/auto-generated/
 
 # IDE / Trae 临时
 .trae/specs/p5-advanced-ai/__pycache__/
@@ -94,7 +94,6 @@ lint-*.txt
 .tmp-*
 .codegraph/
 .tdsf-data/
-.agent-collaboration/
 .claude/
 
 # 上游 terax-ai 全量源码克隆 (仅本机调研参考, 体积大不入库)
@@ -108,3 +107,14 @@ src-tauri/sidecar/nul_input.txt
 
 # 参赛 PPT 生成工作流中间产物 (dashi-ppt 输出, 体积大不入库, 2026-07-31)
 output/
+
+# 参赛文档二进制产物: docx/pptx/图表 png 均为生成物, 源在 *.py/*.svg/*.yaml (2026-07-31)
+docs/竞赛/*.docx
+docs/竞赛/*.pptx
+docs/竞赛/charts/*.png
+
+# Office 临时/锁定文件与通用备份产物 (全局)
+~WRL*.tmp
+~$*.docx
+~$*.pptx
+*.bak2

@@ -8,7 +8,7 @@ The canonical commands are what CI runs (`.github/workflows/ci.yml`):
 
 ```bash
 pnpm lint
-pnpm check-types
+pnpm typecheck
 pnpm test
 
 cd src-tauri

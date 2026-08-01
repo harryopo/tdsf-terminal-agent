@@ -1,0 +1,25 @@
+{
+  "claims": [
+    {
+      "session_id": "trae-audit-20260728-001",
+      "agent_name": "Trae (审计对话)",
+      "task": "agent 功能审计与多 agent 协作规范建立",
+      "files": [
+        ".agent-collaboration/CONTRACT.md",
+        ".agent-collaboration/file-ownership.json",
+        "docs/reports/AGENT-FEATURES-AUDIT.md"
+      ],
+      "started_at": "2026-07-28T21:50:00+08:00",
+      "expected_finish": "2026-07-28T23:00:00+08:00"
+    }
+  ],
+  "locked_dirs": [
+    {
+      "dir": "src/modules/translate/",
+      "owner_session": "trae-translate-20260728",
+      "owner_agent": "Trae (翻译模块对话)",
+      "reason": "翻译模块正在开发，其他 agent 禁止触碰",
+      "locked_at": "2026-07-28T20:00:00+08:00"
+    }
+  ]
+}

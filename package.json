@@ -16,7 +16,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css,md}\" \"docs/**/*.md\" \"specs/**/*.md\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:python": "cd python-sidecar && python -m pytest -v --tb=short",
+    "test:python": "cd src-tauri/sidecar && python -m pytest -v --tb=short",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium",
