@@ -3240,3 +3240,24 @@ CDP 全新状态实测通过。commit 见上。
 **T5 ROADMAP**：决策库自动沉淀（b22051b：排障成功自动 add_case，md5 去重）；资源管理器性能债=上游已按目录缓存（无需做）；长对话虚拟化评估后不做（教学对话量小、复杂度高）；P3 生态项（Headroom/沙箱）待用户确认外部依赖。
 
 **进行中**：sidecar PyInstaller 打包（发布必需——release exe 需要独立 sidecar）。
+
+### 37.23 sidecar 打包发布闭环 + 黑屏根因修复（2026-08-01 全量工程收尾）
+
+**sidecar PyInstaller 打包（onedir）**：
+- onefile 248MB 冷启动 30-60s 超 Rust READY_TIMEOUT=10s（实测）→ 改 **onedir**（启动 2-6s）
+- frozen 数据目录：%APPDATA%/tdsf-terminal-agent/.tdsf-data（不随安装目录/临时目录清理）
+- 4 个可写目录模块 frozen 重定向（self_evolution/marketplace/crawlers/vector），dev/pytest 零回归（1281 全过）
+- spec datas：config/corpus/builtin 只读资源进包；excludes：chromadb/torch/matplotlib（rag 主链路 FTS5）；numpy 保留
+
+**Rust 适配**：
+- locate_sidecar_script：resource_dir + exe 目录双候选探测
+- spawn_python：exe 判定 → 直接运行；ready_timeout：exe 60s / 脚本 10s
+- tauri.conf.json resources: ["sidecar/tdsf-sidecar/"]；targets: ["nsis"]（Wix 对 264MB MSI 失败）
+
+**黑屏根因（修复）**：tauri.windows/linux.conf.json 残留 terax `transparent: true` 平台配置（按 label 合并覆盖主配置）→ 透明窗口 → AI 浮层触发 WebView2 合成 bug = 黑屏。平台配置清理后 CDP 实测：打开 agent 面板正常渲染、console 零错误、截图非黑——**无法复现**。
+
+**L5 安装冒烟（全通过）**：402MB NSIS 安装包 → 静默安装（PowerShell 方式，bash 直跑被 MSYS 参数转义破坏）→ 启动：packaged sidecar exe 命中 → ready → 页面 tauri.localhost 加载 → UI 正常。installer-hooks.nsh 修复 terax 残留（terax.exe/OpenInTerax）。
+
+**门禁**：前端 typecheck ✓ 946 测试 ✓；后端 1281 ✓；Rust cargo check/build ✓；安装版实测 ✓。
+
+**待用户验证**：安装版真实使用（用户电脑上安装体验、黑屏是否彻底消失、SSH/翻译/agent 全链路）。

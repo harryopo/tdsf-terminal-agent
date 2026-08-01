@@ -326,3 +326,38 @@
 - ✅ 2279 条成品词典直接并入（654KB JSON import），比重建词库管线快一个数量级
 - ✅ mouseEventsRequireAlt 是 SSH 选中问题的标准解（Cursor cloud 同方案）
 - 📌 待实测：SSH 会话在 vim/htop 中拖选翻译（需真实服务器）；ECDICT 扩展 + lemma 还原为后续增强
+
+---
+
+## 2026-08-01 · sidecar 打包发布全链路 + 黑屏根因修复（全量工程收尾）
+
+**任务**：L5 发布验证闭环——sidecar PyInstaller 打包、Rust 启动适配、安装冒烟、黑屏根因。
+
+**sidecar 打包（onedir 决策）**：
+- 初试 onefile 248MB：独立运行验证通过（ready/ping/status/shutdown + %APPDATA% 数据落盘），但**冷启动 30-60s**（解压到临时目录）远超 Rust READY_TIMEOUT=10s → 改用 **onedir**（启动 2-6s，冷启动 19.7s 也能在 60s 超时内）
+- frozen 适配：main.py 数据目录 = %APPDATA%/tdsf-terminal-agent/.tdsf-data（Windows）/ XDG（Linux）；4 个可写目录模块（self_evolution/marketplace/crawlers/vector）frozen 分支重定向 TDSF_DATA_DIR；dev/pytest 行为零变化（1281 测试全过）
+- spec：datas 打包 config/corpus/builtin 只读资源；excludes 保留 chromadb/torch/matplotlib（rag 主链路 FTS5 不需要），numpy 保留（fastembed/sqlite_vec 依赖）
+
+**Rust 侧适配**：
+- lib.rs locate_sidecar_script：探测 resource_dir + exe 目录两个候选（安装版/便携布局都覆盖）
+- sidecar.rs spawn_python：exe 判定（python 或 script 是 .exe）→ 直接运行（PyInstaller 自带入口不接受 -u/script）
+- sidecar.rs ready_timeout：打包 exe 60s / python 脚本 10s（动态字段）
+- tauri.conf.json resources: ["sidecar/tdsf-sidecar/"]（onedir 整目录）
+
+**黑屏根因（重大发现）**：
+- tauri.windows.conf.json / tauri.linux.conf.json 残留 terax 上游 `transparent: true` + `decorations: false` + `shadow: false` + title: "Terax" + 硬编码 CDP——平台配置按 label 合并**覆盖主配置** → 透明窗口 → 打开 AI 浮层时 WebView2 透明合成 bug = 黑屏
+- 修复：平台配置清理（只留 label）+ 硬编码 CDP 改为编译期附加参数（tauri 平台配置不支持 ${env:} 变量替换，实测确认）
+- 验证：CDP 实测（9222）点击"统一主 Agent入口" → mini window 500x600 正常渲染、bodyLen 正常、console 零错误、截图主色 #1a1a1a（主题底色非黑屏）——**黑屏无法复现**
+- 此前调查方向（AiChatView/TeachCard/EvidencePanel）全部排除——根因是透明窗口配置
+
+**L5 安装冒烟**：
+- 静默安装坑：Git Bash 直接跑 `setup.exe /S` 会被 MSYS 路径转换破坏参数（进程消失）；**PowerShell Start-Process -ArgumentList 正确**
+- 安装包 402MB（含 747MB onedir sidecar，NSIS LZMA 压缩）→ 安装 → 启动：packaged sidecar exe 命中 → started successfully → 页面加载 tauri.localhost（打包资源）→ UI 正常
+- targets "all" 改 ["nsis"]：Wix light 对 264MB+ 大包失败（MSI 不需要）
+- installer-hooks.nsh：修复 terax 残留（terax.exe → tdsf-terminal-agent.exe，OpenInTerax → OpenInTDSF，卸载清理旧注册表）
+
+**复盘**：
+- ✅ onefile→onedir 决策来自实测（冷启动计时 19.7s vs 超时 10s）——打包方案必须实测，不能只看文档
+- ✅ 黑屏根因是配置残留而非组件代码——排查方向曾误导（AiChat 组件审查），平台配置合并优先级是盲区
+- 📌 MSYS 参数转义：Windows 下跑带 / 参数的程序用 PowerShell，不用 bash
+- 📌 tauri 平台配置（tauri.windows.conf.json）按 label 合并主配置——残留配置会静默覆盖主配置，必须清理

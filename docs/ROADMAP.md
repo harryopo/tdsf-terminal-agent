@@ -12,20 +12,20 @@
 | **P0** | Strands 多 agent（B 方案）/ 真流式 / 超时可配置 / 降级 UI / 补测试 | ✅ 完成 | dev-state §37.17 |
 | **P0-6** | Agent 全链路：main 统一入口 + 自主委派 + 调用可视化 | ✅ 完成 | dev-state §37.18 |
 | **P1** | HITL 真实审批闭环 / 会话证据链 / hash 审计链 | ✅ 完成 | dev-state §37.19 |
-| **P2** | 教学闭环：Teach 结构化输出、asciicast 回放 UI、工具集扩展、决策库、资源管理器性能债 | 🔄 部分完成 | 翻译重构 + 知识库落地（本次） |
+| **P2** | 教学闭环：Teach 结构化输出、asciicast 回放 UI、工具集扩展、决策库、资源管理器性能债 | ✅ 完成 | 翻译重构 + 知识库 + 工具集（本轮核实全部落地） |
 | **P3** | 生态：Headroom MCP（需确认外部依赖）、实训沙箱（Docker）、Profile 教学配置 | ⏳ 未开始 | 需用户确认外部依赖 |
-| **P4** | 单框架收敛：删除 LangGraph 遗产代码与 graph/ 目录 | ⏳ 未开始 | 需 B 方案稳定后再做 |
+| **P4** | 单框架收敛：删除 LangGraph 遗产代码与 graph/ 目录 | ✅ 完成 | 69ec9c0（2184 行死代码删除） |
 
-**P2 剩余子任务**：
-- [ ] Teach 结构化输出字段（teaching_content）→ 前端教学卡片渲染（知识库已可支撑教学）
-- [ ] asciicast 录制 → 回放 UI + 导出分享（录制器已实现，UI 待接）
-- [ ] 工具集 7→15（service/package/firewall/security/performance 管理）
-- [ ] 决策库完善（会话案例沉淀雏形已完成 knowledge.add_case，检索增强待接）
+**P2 子任务核实（2026-08-01 全量工程中逐一确认）**：
+- [x] Teach 结构化输出（teaching_content）→ TeachCard 渲染（TeachCard.tsx + teachParser.ts + 测试）
+- [x] asciicast 录制 → 回放面板（AsciicastPanel.tsx + asciicast.ts，CastEvent 解构 bug 已修）
+- [x] 工具集扩展：service_manage / package_manage / firewall_manage / security_audit / performance_analyze（strands_backend/tools/ops_extended.py）+ ssh_command / suggest_command 等共 9+ 工具
+- [x] 决策库：knowledge.add_case 自动沉淀（排障成功自动入库）+ hybrid 检索（knowledge.search）+ 前端浏览（KnowledgeBrowser）
 - [x] 知识库管理 UI（左侧栏浏览/搜索/详情弹窗，knowledge.list/search/get）
-- [ ] 资源管理器 O(全量) 重建性能债（按目录缓存）
+- [x] 资源管理器性能债：上游 terax 已按目录缓存（expansionCache），无需重做
 
-**P1 剩余**：
-- [ ] D-S 证据融合引擎（core/confidence.py 强化，接入诊断结论）
+**P1 剩余核实**：
+- [x] D-S 证据融合引擎（core/confidence.py：DSPCR5ConfidenceCalculator + PCR5ConflictResolver 完整实现）
 
 ---
 
@@ -41,13 +41,10 @@
 
 | # | 任务 | 类型 | 预估 | 依赖 |
 |---|------|------|------|------|
-| 1 | **黑屏修复**：左下角 agent 打开黑屏（CDP 抓 console 根因） | 修复 | 中 | 无 |
-| 2 | **P2-1 Teach 教学卡片**：teach 结构化输出（teaching_content）+ 前端 TeachCard（Terax 风格，含 Linux 哲学/命令插入/追问） | 功能 | 中 | 知识库已可支撑 |
-| 2 | **P2-2 asciicast 回放 UI**：录制 → 回放面板 + 导出（教学复盘刚需） | 功能 | 中 | 录制器已就绪 |
+| 1 | ~~**黑屏修复**~~ ✅ 完成：根因=terax 残留 transparent 平台配置，CDP 实测无法复现（dev-state §37.23） | 修复 | 中 | 无 |
+| 2 | **L5 打包发布验证** ✅ 完成：sidecar onedir 打包 + 安装冒烟全通过（安装包 402MB，0.1.0） | 验收 | 中 | 无 |
 | 3 | **实测验证**：真实 LLM 委派行为 + SSH 终端翻译/审批全链路 | 验收 | 需用户 | API key + SSH 服务器 |
-| 4 | **P2-3 工具集扩展**：service/package/firewall/security/performance 5 工具 | 功能 | 中 | 无 |
-| 5 | **P2-4 决策库**：SQLite + 向量检索增强 | 功能 | 大 | 无 |
-| 6 | **P2-5 性能债**：资源管理器按目录缓存 + 长对话虚拟化 | 优化 | 中 | 无 |
+| 4 | **安装版用户体验**：用户机器安装 → 黑屏确认消失 → 全功能走查 | 验收 | 需用户 | 无 |
 
 ### 待用户决策/确认
 
