@@ -52,7 +52,8 @@ import {
 } from "../lib/evidence";
 import { AiToolApproval } from "./AiToolApproval";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
-import { isTeachMessage, TeachCard } from "./TeachCard";
+import { isTeachMessage } from "./teachParser";
+import { TeachCard } from "./TeachCard";
 
 function CommandSnippet({ name }: { name: string }) {
   const meta = SLASH_COMMANDS[name];

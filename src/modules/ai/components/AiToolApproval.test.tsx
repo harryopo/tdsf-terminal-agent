@@ -13,7 +13,7 @@ import { AiToolApproval } from "./AiToolApproval";
 
 function makePart(input: Record<string, unknown>) {
   return {
-    type: "tool" as const,
+    type: "tool-bash_run" as const,
     state: "approval-requested" as const,
     toolCallId: "call-1",
     toolName: "bash_run",

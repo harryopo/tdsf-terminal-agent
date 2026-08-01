@@ -456,11 +456,10 @@ function reducer(state: RuntimeState, action: RuntimeAction): RuntimeState {
       };
     case 'add-needs-you': {
       const item: NeedsYouItem = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt: Date.now(),
         resolved: false,
         ...action.item,
-        // P1-1: 后端 req_id 映射到 reqId 字段（id 保留前端唯一标识）
+        // P1-1: 后端 req_id 映射到 reqId 字段（无 reqId 时用前端 id 兜底）
         reqId: action.item.reqId ?? action.item.id,
       };
       return { ...state, needsYou: [item, ...state.needsYou] };

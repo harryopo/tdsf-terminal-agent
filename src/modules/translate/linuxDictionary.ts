@@ -1541,6 +1541,14 @@ export interface LookupResult {
   tag?: string;
   /** 是否精确匹配 */
   exact: boolean;
+  /** 示例（P2-5 扩展：2279 条词典 / ECDICT） */
+  example?: string;
+  /** 语法说明 */
+  syntax?: string;
+  /** 详细说明 */
+  detail?: string;
+  /** 分类（command/option/term/error/phrase） */
+  category?: string;
 }
 
 /**

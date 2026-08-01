@@ -582,7 +582,7 @@ impl SidecarManager {
         &self,
         method: &str,
         params: Value,
-        timeout: Duration,
+        timeout_duration: Duration,
     ) -> SidecarResult<Value> {
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
 
@@ -603,7 +603,7 @@ impl SidecarManager {
         self.send_raw(serde_json::to_string(&msg)?).await?;
 
         // 3. 等待响应（可配置超时）
-        match timeout(timeout, rx).await {
+        match timeout(timeout_duration, rx).await {
             Ok(Ok(result)) => {
                 // 检查响应是否包含 error
                 if let Some(err) = result.get("error") {
@@ -631,7 +631,7 @@ impl SidecarManager {
                 // 超时
                 let mut pending = self.pending_requests.lock().await;
                 pending.remove(&id);
-                Err(SidecarError::RequestTimeout(timeout))
+                Err(SidecarError::RequestTimeout(timeout_duration))
             }
         }
     }

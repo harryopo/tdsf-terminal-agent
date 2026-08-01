@@ -308,7 +308,7 @@ function CastPlayer({
 
       // 时间轴回放
       let total = 0;
-      for (const [, delay] of cast.events) total += delay;
+      for (const [delay] of cast.events) total += delay;
       let elapsed = 0;
       let idx = 0;
       const step = () => {
@@ -316,7 +316,7 @@ function CastPlayer({
           setPlaying(false);
           return;
         }
-        const [, delay, data] = cast.events[idx];
+        const [delay, , data] = cast.events[idx];
         idx += 1;
         elapsed += delay;
         setProgress(total ? Math.min(1, elapsed / total) : 1);

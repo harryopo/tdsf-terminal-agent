@@ -266,6 +266,7 @@ describe('StatusBar', () => {
     dispatch({
       type: 'add-needs-you',
       item: {
+        id: 't-approval-0',
         type: 'approval',
         title: '需要审批',
         detail: '执行 rm -rf 操作',
@@ -280,15 +281,15 @@ describe('StatusBar', () => {
     const { dispatch } = renderStatusBarWithDispatch();
     dispatch({
       type: 'add-needs-you',
-      item: { type: 'approval', title: '审批1', detail: 'detail1' },
+      item: { id: 't-approval-1', type: 'approval', title: '审批1', detail: 'detail1' },
     });
     dispatch({
       type: 'add-needs-you',
-      item: { type: 'error', title: '错误1', detail: 'detail2' },
+      item: { id: 't-error-1', type: 'error', title: '错误1', detail: 'detail2' },
     });
     dispatch({
       type: 'add-needs-you',
-      item: { type: 'question', title: '问题1', detail: 'detail3' },
+      item: { id: 't-question-1', type: 'question', title: '问题1', detail: 'detail3' },
     });
     const statusbar = screen.getByTestId('tdsf-statusbar');
     expect(statusbar.textContent).toContain('3 pending');
@@ -299,11 +300,11 @@ describe('StatusBar', () => {
     // 添加 2 个 needs-you
     dispatch({
       type: 'add-needs-you',
-      item: { type: 'approval', title: '审批1', detail: 'd1' },
+      item: { id: 't-approval-2', type: 'approval', title: '审批1', detail: 'd1' },
     });
     dispatch({
       type: 'add-needs-you',
-      item: { type: 'approval', title: '审批2', detail: 'd2' },
+      item: { id: 't-approval-3', type: 'approval', title: '审批2', detail: 'd2' },
     });
     // 此时应有 2 pending
     expect(screen.getByTestId('tdsf-statusbar').textContent).toContain('2 pending');
