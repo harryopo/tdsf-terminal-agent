@@ -269,6 +269,23 @@ pub fn run() {
                 // JetBrainsMono 等宽字体 + 暗模式 token 正确), 诊断期结束, 还原 russh 为 Info.
                 // 排查 SSH 问题临时开 Debug: 把下行注释解除即可, 不需改 RUST_LOG (无效).
                 // .level_for("russh", tauri_plugin_log::log::LevelFilter::Debug)
+                // TDSF 2026-08-01: Rust 日志落盘 <项目根>/.tdsf-data/rust.log
+                // （dev 模式 current_dir 即项目根；打包后为 exe 所在目录），
+                // 与 sidecar.log 同目录，scripts/dev-log.py 可统一离线分析
+                // （崩溃/重启/SSH 连接等 Rust 侧事件与 Python 侧时间线对照）。
+                .targets([
+                    tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Stdout,
+                    ),
+                    tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Folder {
+                            path: std::env::current_dir()
+                                .unwrap_or_default()
+                                .join(".tdsf-data"),
+                            file_name: Some("rust.log".into()),
+                        },
+                    ),
+                ])
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())

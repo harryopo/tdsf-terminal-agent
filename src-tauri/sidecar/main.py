@@ -88,22 +88,28 @@ logging.basicConfig(
 # 2026-07-31: 日志落盘到 .tdsf-data/sidecar.log（5MB × 3 轮转）。
 # 此前日志只走 stderr → Rust 转发 → 终端输出，进程退出即丢，排障只能现场抓。
 # 落盘后 scripts/dev-log.py 可离线分析（崩溃/编码/超时/重启循环等）。
+# 2026-08-01: pytest 运行会 import main.py（test_main_register_methods 等），
+# 若不加隔离，测试日志会混入运行时 sidecar.log 污染诊断。pytest 加载时
+# sys.modules 已有 pytest，据此跳过文件 handler（stderr 输出保留）。
 try:
     from logging.handlers import RotatingFileHandler
 
-    _log_file_handler = RotatingFileHandler(
-        _TDSF_DATA_DIR / "sidecar.log",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=3,
-        encoding="utf-8",
-    )
-    _log_file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
+    if "pytest" in sys.modules:
+        sys.stderr.write("[sidecar] pytest environment detected, file log disabled\n")
+    else:
+        _log_file_handler = RotatingFileHandler(
+            _TDSF_DATA_DIR / "sidecar.log",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
         )
-    )
-    logging.getLogger().addHandler(_log_file_handler)
+        _log_file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(name)s: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        logging.getLogger().addHandler(_log_file_handler)
 except Exception as e:
     sys.stderr.write(f"[sidecar] log file handler install failed: {e}\n")
 logger = logging.getLogger("sidecar.main")

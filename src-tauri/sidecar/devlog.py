@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ============================================================================
@@ -61,19 +62,51 @@ _LINE_RE = re.compile(
     r"(?P<logger>[\w.]+): (?P<message>.*)$"
 )
 
+# tauri_plugin_log 行格式: [2026-07-31][16:08:25][module][INFO] [target] message
+_RUST_LINE_RE = re.compile(
+    r"^\[(?P<date>\d{4}-\d{2}-\d{2})\]\[(?P<time>\d{2}:\d{2}:\d{2})\]"
+    r"\[(?P<logger>[^\]]+)\]\[(?P<level>DEBUG|INFO|WARNING|ERROR|TRACE)\] "
+    r"(?:\[[^\]]*\] )?(?P<message>.*)$"
+)
+
+# 时区实测（2026-08-01）：sidecar.log = 本地时间（logging asctime 默认）；
+# rust.log（tauri_plugin_log Folder target）= UTC（与 Stdout 终端本地时间不同）。
+# 仅 rust.log 需归一化到本地，sidecar.log 保持原样，两者才能对齐对照。
+_LOCAL_TZ = datetime.now().astimezone().tzinfo
+
+
+def _utc_to_local(ts: str) -> str:
+    """把 'YYYY-MM-DD HH:MM:SS'（UTC）转本地时区同格式"""
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ts
+
 
 def parse_line(line: str) -> LogEntry | None:
-    """解析一条日志行，格式不符返回 None（如多行堆栈的延续行）"""
+    """解析一条日志行（sidecar 或 Rust 格式），格式不符返回 None"""
     m = _LINE_RE.match(line.rstrip("\n"))
-    if not m:
-        return None
-    return LogEntry(
-        raw=line.rstrip("\n"),
-        ts=m.group("ts"),
-        level=m.group("level"),
-        logger=m.group("logger"),
-        message=m.group("message"),
-    )
+    if m:
+        return LogEntry(
+            raw=line.rstrip("\n"),
+            # sidecar.log 是本地时间（logging asctime 默认），保持原样
+            ts=m.group("ts"),
+            level=m.group("level"),
+            logger=m.group("logger"),
+            message=m.group("message"),
+        )
+    m = _RUST_LINE_RE.match(line.rstrip("\n"))
+    if m:
+        return LogEntry(
+            raw=line.rstrip("\n"),
+            # rust.log 实测 UTC（与 Stdout 终端本地时间不同），归一化对齐
+            ts=_utc_to_local(f"{m.group('date')} {m.group('time')}"),
+            level=m.group("level"),
+            logger=m.group("logger"),
+            message=m.group("message"),
+        )
+    return None
 
 
 # ============================================================================
@@ -105,7 +138,10 @@ _RULES: list[tuple[str, str, re.Pattern[str], str]] = [
     (
         "restart_loop",
         "P1",
-        re.compile(r"restart|MAX_RETRY|retry_count"),
+        re.compile(
+            r"restart_loop|starting Python Sidecar|MAX_RETRY|"
+            r"sidecar.*restart|restart.*sidecar"
+        ),
         "sidecar 重启循环。检查是否触发了指数退避上限（MAX_RETRY=5），"
         "以及崩溃原因（见同区间 crash_* 规则）。",
     ),
@@ -151,6 +187,27 @@ _RULES: list[tuple[str, str, re.Pattern[str], str]] = [
         re.compile(r"sidecar not running|not_running"),
         "前端报 sidecar 未运行。查本报告 crash_*/restart_loop/encoding 规则定位根因。",
     ),
+    # === Rust 侧规则（tauri_plugin_log 落盘 .tdsf-data/rust.log）===
+    (
+        "ssh_connect_loop",
+        "P2",
+        re.compile(r"connect success|starting Python Sidecar"),
+        "SSH 连接/应用重启次数过多。若 connect success 密集出现且间隔短，"
+        "检查是否有多次连接源（自动连接/手动/组件重挂载）或应用重启循环。",
+    ),
+    (
+        "ssh_auth_failure",
+        "P1",
+        re.compile(r"authentication failed|auth.*fail|Permission denied"),
+        "SSH 认证失败。检查凭据（keyring 密码/密钥路径）或服务器端策略。",
+    ),
+    (
+        "ssh_early_eof",
+        "P0",
+        re.compile(r"early eof|channel.*closed|connection_closed"),
+        "SSH 连接被服务器提前关闭（畸形 pty 请求 / 并发限制 / 服务器策略）。"
+        "历史上 terminal_modes 畸形会导致 OpenSSH 硬关 TCP。",
+    ),
 ]
 
 
@@ -161,7 +218,11 @@ def analyze_lines(lines: list[str]) -> list[Finding]:
         e = parse_line(line)
         if e:
             entries.append(e)
+    return analyze_entries(entries)
 
+
+def analyze_entries(entries: list[LogEntry]) -> list[Finding]:
+    """对已解析条目跑全部规则（sidecar + Rust 合并时间线）"""
     findings: list[Finding] = []
     for rule, severity, pattern, advice in _RULES:
         hits = [e for e in entries if pattern.search(e.message)]
@@ -209,6 +270,11 @@ def default_log_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / ".tdsf-data" / "sidecar.log"
 
 
+def default_rust_log_path() -> Path:
+    """定位 <项目根>/.tdsf-data/rust.log（tauri_plugin_log Folder target 落盘）"""
+    return Path(__file__).resolve().parent.parent.parent / ".tdsf-data" / "rust.log"
+
+
 def read_log(path: Path | None = None, tail: int | None = None) -> list[str]:
     """读取日志文件全部行（或尾部 tail 行）。文件不存在返回空列表"""
     p = path or default_log_path()
@@ -219,6 +285,20 @@ def read_log(path: Path | None = None, tail: int | None = None) -> list[str]:
     if tail is not None and tail > 0:
         lines = lines[-tail:]
     return lines
+
+
+def collect_entries(
+    paths: list[Path], tail: int | None = None
+) -> list[LogEntry]:
+    """合并多个日志文件的解析条目（sidecar UTC 已归一化本地时区）"""
+    entries: list[LogEntry] = []
+    for p in paths:
+        for line in read_log(p, tail=tail):
+            e = parse_line(line)
+            if e:
+                entries.append(e)
+    entries.sort(key=lambda e: e.ts)
+    return entries
 
 
 # ============================================================================
@@ -249,28 +329,42 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="dev-log",
-        description="TDSF sidecar 日志诊断工具",
+        description="TDSF sidecar + Rust 日志诊断工具",
     )
-    parser.add_argument("--log", help="日志文件路径（默认 .tdsf-data/sidecar.log）")
+    parser.add_argument("--log", help="只分析指定日志文件（默认合并 sidecar.log + rust.log）")
     parser.add_argument("--tail", type=int, default=2000, help="分析最近的 N 行（默认 2000）")
     parser.add_argument("--follow", action="store_true", help="tail -f 跟随新日志")
     parser.add_argument("--raw", action="store_true", help="直接输出原始日志（不做分析）")
+    parser.add_argument("--all", action="store_true", help="--raw 时合并 sidecar + rust 并按时间排序")
     args = parser.parse_args(argv)
 
-    path = Path(args.log) if args.log else default_log_path()
-    if not path.exists():
-        print(f"日志文件不存在: {path}\n（sidecar 启动后自动生成）", file=sys.stderr)
+    paths: list[Path]
+    if args.log:
+        paths = [Path(args.log)]
+    else:
+        paths = [default_log_path(), default_rust_log_path()]
+    existing = [p for p in paths if p.exists()]
+    if not existing:
+        print(
+            f"日志文件不存在: {[str(p) for p in paths]}\n"
+            "（sidecar 启动后自动生成 sidecar.log；Rust 日志 rust.log 需应用重启后生成）",
+            file=sys.stderr,
+        )
         return 1
 
     if args.follow:
-        return _follow(path)
+        return _follow(existing[0])
 
     if args.raw:
-        for line in read_log(path, tail=args.tail):
-            print(line, end="")
+        if args.all or len(existing) > 1:
+            for e in collect_entries(existing, tail=args.tail):
+                print(f"{e.ts} [{e.level}] {e.logger}: {e.message}")
+        else:
+            for line in read_log(existing[0], tail=args.tail):
+                print(line, end="")
         return 0
 
-    findings = analyze_lines(read_log(path, tail=args.tail))
+    findings = analyze_entries(collect_entries(existing, tail=args.tail))
     print(render_report(findings))
     return 0
 

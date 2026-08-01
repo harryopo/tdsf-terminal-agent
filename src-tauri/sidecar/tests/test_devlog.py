@@ -20,6 +20,7 @@ class TestParseLine:
     def test_parses_standard_line(self):
         e = parse_line(_line("hello world"))
         assert e is not None
+        # sidecar.log 是本地时间，保持原样
         assert e.ts == "2026-07-31 23:53:17"
         assert e.level == "INFO"
         assert e.message == "hello world"
@@ -95,3 +96,73 @@ class TestLogPath:
         p = default_log_path()
         assert p.name == "sidecar.log"
         assert ".tdsf-data" in p.parts
+
+
+class TestRustLogParsing:
+    """tauri_plugin_log（Rust 侧）行解析与时区归一化"""
+
+    def test_parses_rust_line(self):
+        e = parse_line(
+            '[2026-07-31][16:08:25][tdsf_terminal_agent_lib::modules::ssh][INFO] [ssh] connect success: id=4'
+        )
+        assert e is not None
+        assert e.level == "INFO"
+        assert "connect success" in e.message
+        assert "tdsf_terminal_agent_lib" in e.logger
+        # rust.log 是 UTC（16:08 UTC → 本地 +8 = 次日 00:08）
+        assert e.ts == "2026-08-01 00:08:25"
+
+    def test_rust_line_without_target(self):
+        e = parse_line(
+            '[2026-07-31][16:08:25][tdsf_terminal_agent_lib][WARNING] sidecar restarting'
+        )
+        assert e is not None
+        assert e.level == "WARNING"
+        assert "restarting" in e.message
+
+    def test_sidecar_ts_kept_as_local(self):
+        # sidecar.log 是本地时间（logging asctime 默认），不转换
+        e = parse_line("2026-07-31 00:08:25 INFO sidecar.main: ready notification sent")
+        assert e is not None
+        assert e.ts == "2026-07-31 00:08:25"
+
+    def test_rust_ssh_connect_rule_detected(self):
+        from devlog import analyze_entries
+
+        e = parse_line(
+            '[2026-07-31][16:08:25][tdsf_terminal_agent_lib::modules::ssh][INFO] [ssh] connect success: id=4'
+        )
+        findings = analyze_entries([e])
+        assert any(f.rule == "ssh_connect_loop" for f in findings)
+
+    def test_rust_auth_failure_rule_detected(self):
+        from devlog import analyze_entries
+
+        e = parse_line(
+            '[2026-07-31][16:09:00][tdsf_terminal_agent_lib::modules::ssh][ERROR] [ssh] authentication failed'
+        )
+        findings = analyze_entries([e])
+        assert any(f.rule == "ssh_auth_failure" for f in findings)
+
+
+class TestCollectEntries:
+    def test_merges_and_sorts(self, tmp_path):
+        from devlog import collect_entries
+
+        a = tmp_path / "a.log"
+        b = tmp_path / "b.log"
+        a.write_text(
+            "2026-07-31 08:10:00 INFO sidecar.main: b-msg\n"
+            "2026-07-31 08:08:00 INFO sidecar.main: a-msg\n",
+            encoding="utf-8",
+        )
+        b.write_text(
+            "[2026-07-31][08:09:00][tdsf_terminal_agent_lib][INFO] rust-msg\n",
+            encoding="utf-8",
+        )
+        entries = collect_entries([a, b])
+        # 按时间排序
+        times = [e.ts for e in entries]
+        assert times == sorted(times)
+        msgs = [e.message for e in entries]
+        assert "a-msg" in msgs and "b-msg" in msgs and "rust-msg" in msgs
