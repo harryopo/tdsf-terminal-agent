@@ -85,33 +85,52 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
 
     # 多行命令拆分检测（每行都过 RiskChecker）
     # P1-v5-4: 按 4 级权限决策（L3 起写操作行也需审批）
+    # P1-1 (2026-08-01): 命中审批 → 真实等待用户响应，批准后整条执行
     if "\n" in command.strip():
+        risk_lines: list[tuple[str, dict[str, Any]]] = []
         for line in command.strip().splitlines():
             line_stripped = line.strip()
             if not line_stripped or line_stripped.startswith("#"):
                 continue
             risk = RiskChecker.check(line_stripped)
             if permission_needs_approval(risk, ctx.permission_level):
-                RiskChecker.emit_needs_you(
-                    event_bus=ctx.event_bus,
-                    command=line_stripped,
-                    risk_result=risk,
-                    agent_name=ctx.agent_name,
-                    session_id=ctx.session_id,
-                    tool_name="ssh_command",
+                risk_lines.append((line_stripped, risk))
+        if risk_lines:
+            from strands_backend.tools import (
+                NeedsYouStatus,
+                request_approval_and_wait,
+            )
+
+            first_line, first_risk = risk_lines[0]
+            req = request_approval_and_wait(
+                ctx,
+                command,
+                first_risk,
+                tool_name="ssh_command",
+            )
+            if req is None or req.status != NeedsYouStatus.APPROVED:
+                message = (
+                    f"多行命令中第 '{first_line[:60]}' 触发"
+                    f"{'高危' if first_risk['high_risk'] else '写操作'}规则 "
+                    f"{first_risk['matched_rules']}，已发起审批"
+                    + (
+                        "，用户已拒绝，未执行"
+                        if req is not None and req.status == NeedsYouStatus.REJECTED
+                        else "，超时未响应，未执行"
+                    )
                 )
                 return {
-                    "status": "needs_approval",
+                    "status": "rejected" if req is not None and req.status == NeedsYouStatus.REJECTED else "needs_approval",
                     "command": command,
                     "ssh_session_id": ssh_session_id or ctx.ssh_session_id,
-                    "risk": risk,
+                    "risk": first_risk,
                     "explanation": explanation,
-                    "message": (
-                        f"多行命令中第 '{line_stripped[:60]}' 触发"
-                        f"{'高危' if risk['high_risk'] else '写操作'}规则 "
-                        f"{risk['matched_rules']}，已发起 needs_you 审批，未执行"
-                    ),
+                    "message": message,
                 }
+            logger.info(
+                f"multiline command approved by user: {len(risk_lines)} risk lines, "
+                f"command={command[:80]}"
+            )
 
     # 推送 tool_call 事件（前端 AgentStatusPill + 工具调用面板展示）
     if ctx.event_bus is not None:

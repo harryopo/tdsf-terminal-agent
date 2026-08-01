@@ -169,20 +169,27 @@ export function AgentPanel({ open, onClose }: AgentPanelProps) {
     }).then((un) => unlistens.push(un));
 
     // needs_you: 用户审批/问题/错误/handoff
+    // P1-1 (2026-08-01): 后端事件带 id（needs_you 服务 req_id），
+    // 卡片按钮据此调 needs_you.approve/reject RPC 实现真实审批闭环
     subscribe('needs_you', (payload) => {
       const p = payload as {
         type?: 'approval' | 'error' | 'question' | 'handoff';
         title?: string;
         detail?: string;
         id?: string;
+        needs_type?: string;
+        description?: string;
       };
-      if (p.type && p.title) {
+      const type = p.type ?? p.needs_type;
+      const detail = p.detail ?? p.description ?? '';
+      if (type && p.title) {
         dispatch({
           type: 'add-needs-you',
           item: {
-            type: p.type,
+            id: p.id, // 后端 req_id（approve/reject RPC 用）
+            type: type as 'approval' | 'error' | 'question' | 'handoff',
             title: p.title,
-            detail: p.detail ?? '',
+            detail,
           },
         });
       }
@@ -1146,6 +1153,32 @@ function NeedsYouCard({ item, onResolve }: NeedsYouCardProps) {
     handoff: '接管',
   };
 
+  // P1-1 (2026-08-01): 审批按钮真实调用 needs_you.approve/reject RPC，
+  // 后端唤醒等待中的工具线程 → 批准后命令真正执行。
+  // 之前的实现两个按钮都只消除本地卡片（无 RPC 回传），审批是摆设。
+  const respondApproval = useCallback(
+    (approved: boolean) => {
+      if (!item.reqId) {
+        console.warn('[NeedsYouCard] 无 reqId，无法回传审批结果（旧事件格式）');
+        onResolve();
+        return;
+      }
+      void import('@/lib/sidecar-bridge')
+        .then(({ invokeRpc }) =>
+          approved
+            ? invokeRpc('needs_you.approve', { req_id: item.reqId })
+            : invokeRpc('needs_you.reject', { req_id: item.reqId, reason: '用户拒绝' }),
+        )
+        .then(() => onResolve())
+        .catch((e) => {
+          console.error('[NeedsYouCard] 审批回传失败:', e);
+          // 回传失败仍消除卡片，避免卡片残留阻塞 UI
+          onResolve();
+        });
+    },
+    [item.reqId, onResolve],
+  );
+
   return (
     <div
       className="rounded-md p-2.5 mb-1.5"
@@ -1188,7 +1221,7 @@ function NeedsYouCard({ item, onResolve }: NeedsYouCardProps) {
         {item.type === 'approval' && (
           <>
             <button
-              onClick={onResolve}
+              onClick={() => respondApproval(true)}
               className="px-3 py-1 rounded font-medium text-[11px] transition-colors"
               style={{
                 background: 'var(--color-success)',
@@ -1199,7 +1232,7 @@ function NeedsYouCard({ item, onResolve }: NeedsYouCardProps) {
               批准
             </button>
             <button
-              onClick={onResolve}
+              onClick={() => respondApproval(false)}
               className="px-3 py-1 rounded font-medium text-[11px] transition-colors"
               style={{
                 border: '1px solid var(--color-border-strong)',

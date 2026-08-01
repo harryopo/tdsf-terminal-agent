@@ -1276,3 +1276,68 @@ class TestSpecScenarios:
             assert req.response["timeout"] is True
         finally:
             fast_service.stop()
+
+
+# ============================================================================
+# 8. P1-1 等待-唤醒测试（真实 HITL 闭环）
+# ============================================================================
+
+
+class TestWaitForResponse:
+    """wait_for_response 阻塞等待-唤醒"""
+
+    def test_wait_wakes_on_approve(self, service):
+        """respond(approve) 应唤醒等待中的 wait_for_response"""
+        import threading
+
+        req = service.request_approval(title="a", description="d")
+
+        def respond_later():
+            time.sleep(0.3)
+            service.approve(req.id)
+
+        t = threading.Thread(target=respond_later, daemon=True)
+        t.start()
+        resolved = service.wait_for_response(req.id, timeout=5.0)
+        t.join(timeout=5.0)
+        assert resolved is not None
+        assert resolved.status == NeedsYouStatus.APPROVED
+
+    def test_wait_wakes_on_reject(self, service):
+        """respond(reject) 应唤醒等待中的 wait_for_response"""
+        import threading
+
+        req = service.request_approval(title="a", description="d")
+
+        def reject_later():
+            time.sleep(0.3)
+            service.reject(req.id, reason="no")
+
+        t = threading.Thread(target=reject_later, daemon=True)
+        t.start()
+        resolved = service.wait_for_response(req.id, timeout=5.0)
+        t.join(timeout=5.0)
+        assert resolved is not None
+        assert resolved.status == NeedsYouStatus.REJECTED
+
+    def test_wait_wakes_on_timeout(self, fast_service):
+        """超时扫描器应唤醒等待中的 wait_for_response（超时视为拒绝）"""
+        fast_service.start()
+        try:
+            req = fast_service.request_approval(title="a", description="d")
+            resolved = fast_service.wait_for_response(req.id, timeout=5.0)
+            assert resolved is not None
+            assert resolved.status == NeedsYouStatus.TIMEOUT
+        finally:
+            fast_service.stop()
+
+    def test_wait_returns_immediately_if_resolved(self, service):
+        """请求已响应时 wait_for_response 立即返回"""
+        req = service.request_approval(title="a", description="d")
+        service.approve(req.id)
+        resolved = service.wait_for_response(req.id, timeout=0.01)
+        assert resolved.status == NeedsYouStatus.APPROVED
+
+    def test_wait_unknown_id_returns_none(self, service):
+        """未知请求 ID 返回 None"""
+        assert service.wait_for_response("ny-unknown", timeout=0.01) is None
