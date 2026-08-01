@@ -197,3 +197,26 @@
 - 📌 用户 16 条准则已固化 CLAUDE.md §6.5（skill 优先/环境前置/调研先行/自动记忆沉淀）
 
 **下一步**：TeachCard 需真实 LLM 输出验证（teach agent 是否按 6 大板块输出）；知识库管理 UI；决策库移植。
+
+---
+
+## 2026-08-01 · 知识库可视化（左侧栏）+ 右下角卡死黑屏调查
+
+**任务**：①知识库界面移到左侧 skill 旁（用户要求）；②点击右下角 AI 入口卡死黑屏（用户报告）。
+
+**实现**（1de85b0）：
+- SidebarRail 新增 knowledge 视图（BookOpen01Icon，Skills 旁）
+- KnowledgeBrowser 重构：KnowledgePanel（内嵌面板：搜索+列表，lazy 加载满足启动预算测试）+ KnowledgeDetailDialog（点击条目弹窗，MessageResponse md 渲染像看本地文件）
+- TdsfAgentPanel 清理：发现该组件已被弃用（App 实际用 AiMiniWindow），移除其中知识库挂载（死代码）
+
+**卡死调查（systematic-debugging Phase 1-3）**：
+- 证据：sidecar 日志无错误、Rust 无 panic、terax 进程消失（窗口已关）
+- 发现：KnowledgeBrowser 原挂在弃用组件 TdsfAgentPanel 上——不影响实际 UI，排除为卡死根因
+- 浏览器（vite dev）无法完全复现（web 模式 isTauri=false 降级）
+- 可疑改动已清理（死组件挂载移除）；AiChat 的 EvidencePanel/TeachCard 改动审查无渲染循环风险
+- **待用户验证**：重启应用后点击右下角是否仍卡死；若仍卡死需提供：卡死时控制台报错（F12/CDP）或复现步骤
+
+**复盘**：
+- ✅ lazy 加载约束（eager-budget 测试）拦截了 App 静态 import markdown 栈——启动预算测试有真实价值
+- ✅ 弃用组件（TdsfAgentPanel）上继续加功能是错误——先确认组件是否实际使用再改
+- 📌 桌面 GUI 卡死无法远程复现时，需用户配合收集 WebView 控制台证据
