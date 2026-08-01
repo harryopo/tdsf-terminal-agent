@@ -3101,3 +3101,28 @@ SSH 终端执行 cd /tmp
 - 删除全屏欢迎 return 分支
 
 CDP 全新状态实测通过。commit 见上。
+
+### 37.16 会话收尾：架构现状澄清 + 下一步规划（2026-08-01）
+
+**重要认知修正（对项目现状的诚实评估）**：
+- **当前主路径实际 = 1 个 Strands main agent + 7 个运维工具**（ssh_command/remote_file/log_analyzer/process_inspector/network_diagnostic/skill_invoke/suggest_command）
+- **9-Agent（LangGraph 遗产）未在主路径集成**：Strands override 替换 BaseAgent.invoke 后，PAOR 循环、plan_task 路由、invoke_agent 子 agent 调用全被绕过；coding/teach 等的 Strands 实例从不被创建
+- §37.12 的"main_agent 路由恢复"是**轻量模拟**（关键词→prompt 角色提示 + Pill 显示），非真正调用子 agent，teach 的结构化教学输出（teaching_content）不会产生
+- 项目"看起来完善"但部分方案未落地——**这是历史叠加（LangGraph 时代 + Strands 时代）的必然结果**
+
+**本轮已完成**（见 §37.14/37.15）：
+- 删除左侧 SSH 面板，登录统一走新建工作区（测试连接/已保存/keyring 取密）
+- Space 可全删（canDelete 放开）+ 全删进欢迎界面（内嵌主 UI：保留侧栏/状态栏/底部 agent）
+- 全新初始状态测试规范（清 %APPDATA%/com.tdsf.terminal-agent/tdsf-spaces.json + localStorage + 重启 app）
+
+**下一步规划（按优先级）**：
+
+| # | 任务 | 类型 | 说明 |
+|---|------|------|------|
+| 1 | **9-Agent 集成决策**（需用户拍板）：A 收敛表述（文档/UI 改为"1 个运维 agent+工具"）vs B Strands 多 agent 真集成（teach/coding 独立 agent，前端按意图路由） | 决策+实施 | A 快（文档+Pill 文案），B 中等（Strands multiagent） |
+| 2 | **前端 agent UI 与真实后端对齐**：AgentStatusPill 显示 Teach/Coding 但后端没真调——要么真集成要么改显示 | 修复 | 避免误导 |
+| 3 | **单框架收敛**（长期）：删 LangGraph 双跑，只留 Strands——降低复杂度/内存/维护面 | 重构 | 需评估降级路径依赖 |
+| 4 | 既有 backlog：4 级权限前端 UI 接入（引擎已就绪）、Headroom MCP（需用户确认外部依赖）、比赛材料已归档 | 待办 | — |
+| 5 | 全新状态回归：上述改动后用 §37.14 规范全流程实测 | 验收 | — |
+
+**遗留观察**：plan_task 单字"查"已修；SSH 划词翻译实测待用户；dev-log 工具（§37.10/37.11）可继续用于排障。
