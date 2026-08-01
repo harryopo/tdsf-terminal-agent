@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { KnowledgeBrowser } from "./KnowledgeBrowser";
+import { KnowledgePanel } from "./KnowledgeBrowser";
 
 vi.mock("@/lib/sidecar-bridge", () => ({
   invokeRpc: vi.fn(),
@@ -33,22 +33,22 @@ beforeEach(() => {
 
 describe("KnowledgeBrowser — 知识库浏览器", () => {
   it("打开时渲染搜索框与提示", () => {
-    render(<KnowledgeBrowser open onOpenChange={() => {}} />);
-    expect(screen.getByPlaceholderText(/搜索 Linux/)).toBeTruthy();
+    render(<KnowledgePanel />);
+    expect(screen.getByPlaceholderText(/搜索命令/)).toBeTruthy();
   });
 
   it("搜索调用 RPC 并渲染结果列表", async () => {
     vi.mocked(invokeRpc).mockResolvedValue({ results: [HIT] });
-    render(<KnowledgeBrowser open onOpenChange={() => {}} />);
+    render(<KnowledgePanel />);
 
-    const input = screen.getByPlaceholderText(/搜索 Linux/);
+    const input = screen.getByPlaceholderText(/搜索命令/);
     fireEvent.change(input, { target: { value: "ls" } });
-    fireEvent.click(screen.getByText("检索"));
+    fireEvent.click(screen.getByRole("button", { name: "检索" }));
 
     expect(await screen.findByText("ls — 列出目录内容")).toBeTruthy();
     expect(invokeRpc).toHaveBeenCalledWith("knowledge.search", {
       query: "ls",
-      limit: 20,
+      limit: 30,
       method: "hybrid",
     });
   });
@@ -58,11 +58,11 @@ describe("KnowledgeBrowser — 知识库浏览器", () => {
     vi.mocked(invokeRpc).mockResolvedValueOnce({
       entry: { ...HIT, content: "## 详细内容\nls 的详细讲解……" },
     });
-    render(<KnowledgeBrowser open onOpenChange={() => {}} />);
+    render(<KnowledgePanel />);
 
-    const input = screen.getByPlaceholderText(/搜索 Linux/);
+    const input = screen.getByPlaceholderText(/搜索命令/);
     fireEvent.change(input, { target: { value: "ls" } });
-    fireEvent.click(screen.getByText("检索"));
+    fireEvent.click(screen.getByRole("button", { name: "检索" }));
     fireEvent.click(await screen.findByText("ls — 列出目录内容"));
 
     expect(await screen.findByText("ls — 列出目录内容")).toBeTruthy();
@@ -74,25 +74,25 @@ describe("KnowledgeBrowser — 知识库浏览器", () => {
     vi.mocked(invokeRpc).mockResolvedValueOnce({
       entry: { ...HIT, content: "详细内容" },
     });
-    render(<KnowledgeBrowser open onOpenChange={() => {}} />);
+    render(<KnowledgePanel />);
 
-    const input = screen.getByPlaceholderText(/搜索 Linux/);
+    const input = screen.getByPlaceholderText(/搜索命令/);
     fireEvent.change(input, { target: { value: "ls" } });
-    fireEvent.click(screen.getByText("检索"));
+    fireEvent.click(screen.getByRole("button", { name: "检索" }));
     fireEvent.click(await screen.findByText("ls — 列出目录内容"));
     await screen.findByText("详细内容");
 
     fireEvent.click(screen.getByText("返回"));
-    expect(screen.getByPlaceholderText(/搜索 Linux/)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/搜索命令/)).toBeTruthy();
   });
 
   it("无结果时显示空态", async () => {
     vi.mocked(invokeRpc).mockResolvedValue({ results: [] });
-    render(<KnowledgeBrowser open onOpenChange={() => {}} />);
+    render(<KnowledgePanel />);
 
-    const input = screen.getByPlaceholderText(/搜索 Linux/);
+    const input = screen.getByPlaceholderText(/搜索命令/);
     fireEvent.change(input, { target: { value: "qqxxzz" } });
-    fireEvent.click(screen.getByText("检索"));
+    fireEvent.click(screen.getByRole("button", { name: "检索" }));
 
     expect(await screen.findByText(/未找到相关条目/)).toBeTruthy();
   });
