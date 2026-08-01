@@ -220,3 +220,24 @@
 - ✅ lazy 加载约束（eager-budget 测试）拦截了 App 静态 import markdown 栈——启动预算测试有真实价值
 - ✅ 弃用组件（TdsfAgentPanel）上继续加功能是错误——先确认组件是否实际使用再改
 - 📌 桌面 GUI 卡死无法远程复现时，需用户配合收集 WebView 控制台证据
+
+---
+
+## 2026-08-01 · 知识库浏览模式修复 + 左下角 agent 黑屏调查（进行中）
+
+**任务**：①知识库打开即显示（浏览模式）；②左下角 agent 按钮黑屏卡死（用户复现）。
+
+**完成（bd5a58c）**：
+- 后端 knowledge.list RPC + RagIndex.list_entries（按入库倒序分页）
+- KnowledgePanel 挂载即自动加载列表（像文件列表），空查询回浏览模式，点击条目弹详情（md 渲染）
+
+**卡死调查进展（systematic-debugging）**：
+- 路径已确认：左下角 AiOpenButton → openMini → **AiMiniWindow → AiChatView**（本会话改动：EvidencePanel + TeachCard 分支）→ 黑屏
+- 已排除：sidecar 日志正常、Rust 无 panic、TdsfAgentPanel 死组件（已清理）
+- 待办：WebView2 CDP（WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 重启 tauri dev）→ 用户点击复现 → chrome-devtools-mcp 抓 console 错误定位根因
+- 高嫌疑：AiChatView 的 EvidencePanel 挂载位置（ConversationContent 内）或 TeachCard 分支渲染
+
+**复盘**：
+- ✅ 用户两次复现（右下角/左下角）→ 打开 AI 面板路径稳定触发，CDP 抓错是正解
+- ✅ 知识库"打开即浏览"是正确 UX——搜索前置会让人觉得"没内容"
+- 📌 下一轮优先：CDP 抓 console → 根因 → 修复 → 用户验证
