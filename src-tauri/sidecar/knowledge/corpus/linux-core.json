@@ -1,0 +1,86 @@
+[
+  {
+    "id": "cmd-ls",
+    "source": "builtin-corpus",
+    "title": "ls — 列出目录内容",
+    "content": "ls 是 Linux 最常用的命令，用于列出目录内容。哲学：『一切皆文件』——目录本质也是文件，ls 就是读这个文件的目录项列表。常用参数：-l（长格式，含权限/属主/大小/时间）、-a（显示隐藏文件，以 . 开头）、-h（人类可读大小）、-t（按时间排序）。组合：ls -lah /var/log。易错点：ls 不会告诉你文件内容，看内容用 cat/less；权限不足时目录可能列不出（需要目录的 r 权限）。练习：用 ls -lt 找出目录中最近修改的文件。",
+    "tags": ["命令", "文件系统", "入门"]
+  },
+  {
+    "id": "cmd-grep",
+    "source": "builtin-corpus",
+    "title": "grep — 文本搜索",
+    "content": "grep 在文本中搜索匹配行，是『组合小工具』哲学的典型代表：单一职责（只做搜索），通过管道与其他工具组合（grep pattern file | head）。哲学：Linux 工具哲学——每个工具做好一件事，通过管道组合成强大工作流。常用参数：-i（忽略大小写）、-v（反选）、-r（递归目录）、-n（显示行号）、-E（扩展正则）。实战：grep -rn 'listen' /etc/nginx/ 找出所有 listen 配置行。易错点：正则特殊字符需要转义或引号包裹（grep 'a.b' 中 . 是任意字符）。练习：在 /var/log 下递归搜索 error 关键字。",
+    "tags": ["命令", "文本处理", "正则"]
+  },
+  {
+    "id": "cmd-systemctl",
+    "source": "builtin-corpus",
+    "title": "systemctl — systemd 服务管理",
+    "content": "systemctl 是 systemd 的服务管理命令，现代 Linux 发行版（CentOS 7+/Ubuntu 16+）的标准。哲学：systemd 统一了『启动、停止、状态、开机自启』的管理入口——之前 SysV 时代每个脚本各自为政，systemd 用 unit 文件（.service）声明化描述服务。常用：systemctl status nginx（状态）、start/stop/restart（启停）、enable/disable（开机自启）、daemon-reload（重载配置）。易错点：restart 是停止再启动（有中断），reload 是平滑重载（不中断连接，nginx -s reload 同义）；改配置文件后要先 daemon-reload 再 restart/reload。练习：查看 nginx 服务状态并解释每一行。",
+    "tags": ["命令", "服务管理", "systemd"]
+  },
+  {
+    "id": "cmd-nginx-conf",
+    "source": "builtin-corpus",
+    "title": "nginx.conf — Nginx 主配置结构",
+    "content": "nginx.conf 是 Nginx 的主配置文件，采用层级块结构：events {} 控制连接处理，http {} 包含 server 块（虚拟主机），server 内含 location 块（URL 匹配规则）。哲学：配置即声明——用层级块描述『什么请求走什么处理』，而非命令式脚本。排障流程：改配置后 nginx -t 检查语法 → 报错有行号 → 修复 → reload。常见错误：忘记分号、location 正则优先级混淆（^~ > 正则 > 前缀 > /）、server_name 与 listen 冲突。练习：在 server 块新增一个 location /api/ 反向代理到 127.0.0.1:8080。",
+    "tags": ["nginx", "配置", "排障"]
+  },
+  {
+    "id": "cmd-chmod",
+    "source": "builtin-corpus",
+    "title": "chmod — 文件权限",
+    "content": "chmod 修改文件权限，权限模型是 Linux 安全哲学的核心：rwx 三组（属主 u / 属组 g / 其他 o）。哲学：最小权限原则——只给需要的权限，多一个权限多一分风险。数字法：r=4 w=2 x=1 相加（755 = 属主全部 + 组读执行 + 其他读执行）。常用：chmod 755 file、chmod -R 644 dir（递归）。易错点：脚本执行不了先看是否有 x 权限；对目录 x 是『进入』权限（没有 x 无法 cd 进去）；sudo 也不解决权限不足（看属主）。练习：把脚本设置成只有属主可读写执行（700）。",
+    "tags": ["命令", "权限", "安全"]
+  },
+  {
+    "id": "concept-pipe",
+    "source": "builtin-corpus",
+    "title": "管道 — Linux 组合哲学",
+    "content": "管道 | 把前一个命令的输出作为后一个命令的输入，是 Unix 哲学『组合小工具』的具象化。哲学：每个工具只做一件事并做好，通过管道组合出强大工作流——这与面向对象『大而全』相反，是 Unix 几十年的设计智慧。经典组合：ps aux | grep nginx（找进程）、dmesg | tail（看内核日志尾部）、cat access.log | awk '{print $1}' | sort | uniq -c | sort -rn（统计访问 IP 前 N）。易错点：管道是单向的（输出→输入），双向交互用 tee；管道下游命令失败不影响上游。练习：统计 /var/log 下最大的 5 个日志文件。",
+    "tags": ["概念", "哲学", "入门"]
+  },
+  {
+    "id": "concept-everything-file",
+    "source": "builtin-corpus",
+    "title": "一切皆文件 — Unix 设计哲学",
+    "content": "『一切皆文件』是 Unix/Linux 最核心的设计哲学：设备、进程、网络连接、配置都抽象为文件接口，用统一的 open/read/write 操作。体现：/dev/ 设备文件、/proc/ 进程与内核信息（ps 本质读 /proc）、/sys/ 内核参数、socket 也是文件描述符。好处：统一接口让工具可以组合（cat /proc/cpuinfo、echo 1 > /proc/sys/vm/drop_caches）。哲学意义：抽象统一性降低了学习成本——学会文件操作就学会了大半系统。易错点：/proc 与 /dev 是虚拟文件系统，内容实时生成、不占磁盘。练习：用 cat 查看 /proc/meminfo 并解释关键字段。",
+    "tags": ["概念", "哲学", "核心"]
+  },
+  {
+    "id": "cmd-ps",
+    "source": "builtin-corpus",
+    "title": "ps — 进程查看",
+    "content": "ps 查看进程快照。哲学：进程是系统资源的载体——每个进程有 PID、属主、CPU/内存占用、状态。常用：ps aux（BSD 风格全量，a=所有用户 u=详细 x=无终端）、ps -ef（System V 风格）、ps aux --sort=-%mem | head（内存占用 TOP）。结合 grep 找进程：ps aux | grep nginx。易错点：grep 自己也会出现在结果里（用 grep [n]ginx 技巧）；ps 是快照，实时监控用 top/htop。练习：找出占用内存最高的 3 个进程及其 PID。",
+    "tags": ["命令", "进程", "排障"]
+  },
+  {
+    "id": "trouble-nginx-502",
+    "source": "builtin-corpus",
+    "title": "排障：nginx 502 Bad Gateway",
+    "content": "502 Bad Gateway 表示 Nginx 无法从上游（如 PHP-FPM/后端应用）获得有效响应。排障流程（根因分析）：1. 确认后端服务是否存活（systemctl status php-fpm / ps aux | grep fpm）2. 检查后端监听端口（ss -tlnp | grep 9000）3. 看 Nginx 错误日志（tail -f /var/log/nginx/error.log）4. 常见根因：后端进程崩溃、socket 文件权限不对（www-data 无法连接）、后端超时（fastcgi_read_timeout）。哲学：排障从『最近变更』入手——改了什么配置/部署了什么代码导致 502。练习：模拟一个 502 场景，按流程定位根因。",
+    "tags": ["排障", "nginx", "案例"]
+  },
+  {
+    "id": "trouble-disk-full",
+    "source": "builtin-corpus",
+    "title": "排障：磁盘空间不足",
+    "content": "磁盘满的症状：写入失败、服务异常、日志报 No space left on device。排障流程：1. df -h（哪个分区满）2. du -sh /var/* | sort -rh | head（逐层找大目录）3. 清理：日志轮转（logrotate）、清空大日志（truncate -s 0 file 而非 rm——进程句柄还开着）、yum clean、删除旧备份。易错点：df 显示满但 du 加不满——可能是已删除但仍被进程占用的文件（lsof +L1 查看）；inode 满（df -i）是另一种『空间不足』。哲学：日志是根因线索，不是删除对象——先轮转归档再删旧。练习：找出 /var 下最大的 3 个文件并给出清理建议。",
+    "tags": ["排障", "磁盘", "案例"]
+  },
+  {
+    "id": "cmd-ss",
+    "source": "builtin-corpus",
+    "title": "ss — 网络连接查看",
+    "content": "ss 查看网络 socket，替代已废弃的 netstat。哲学：网络问题先『看连接状态』再动手——LISTEN（监听）、ESTABLISHED（已建立）、TIME_WAIT（主动关闭后等待）。常用：ss -tlnp（监听端口+进程）、ss -s（汇总统计）、ss -tn state established（已建立连接）。排障：服务连不上先确认是否监听（ss -tlnp | grep 8080）、防火墙是否放行（firewall-cmd --list-all）。易错点：监听在 127.0.0.1 只本机可访问，0.0.0.0 才是所有网卡；TIME_WAIT 大量堆积常见于短连接服务。练习：找出当前机器监听的端口及其对应进程。",
+    "tags": ["命令", "网络", "排障"]
+  },
+  {
+    "id": "concept-logrotate",
+    "source": "builtin-corpus",
+    "title": "logrotate — 日志轮转",
+    "content": "logrotate 是日志管理核心工具，定时按规则轮转/压缩/删除旧日志。哲学：日志是运维排障的第一手证据，但无限增长会撑爆磁盘——轮转是『保留证据 + 控制体积』的平衡。配置：/etc/logrotate.conf 全局 + /etc/logrotate.d/ 按应用配置（daily/weekly、rotate N、compress、copytruncate）。常用命令：logrotate -f /etc/logrotate.conf（强制轮转）、logrotate -d（调试模式 dry-run）。易错点：不配 logrotate 的应用日志迟早撑满磁盘；copytruncate 解决『进程句柄占用』问题（先复制后清空而非 rename）。练习：为 nginx 日志写一个 daily + 保留 7 份 + 压缩的轮转配置。",
+    "tags": ["概念", "日志", "运维"]
+  }
+]

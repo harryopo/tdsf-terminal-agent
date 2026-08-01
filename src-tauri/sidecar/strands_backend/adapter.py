@@ -82,7 +82,9 @@ _DEFAULT_SYSTEM_PROMPT = (
     "需要查阅权威操作步骤时、需要执行预定义脚本时\n"
     "- suggest_command(intent, target_os): 根据用户意图生成一条可执行的 Linux 命令及解释\n"
     "  何时使用: 用户想要执行某个操作但不知道具体命令时（如\"查看系统负载\"\"列出当前目录\"）\n"
-    "  注意: 生成命令后不要自动执行，等待用户确认；前端会展示 Insert 按钮供用户一键插入终端\n\n"
+    "  注意: 生成命令后不要自动执行，等待用户确认；前端会展示 Insert 按钮供用户一键插入终端\n"
+    "- knowledge_search(query, limit): 检索内置 Linux 教学知识库（命令/概念/哲学/排障案例）\n"
+    "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n\n"
     "Constraints:\n"
     "- 高危命令（rm -rf / reboot / shutdown / mkfs / dd 等）会触发 needs_you 审批，不要试图绕过。\n"
     "- 工具返回 status=unavailable 时，说明 RustBridge 未配置（P2 双向 JSON-RPC 未启用），"
@@ -530,6 +532,7 @@ _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "inspect_processes",
             "network_diagnose",
             "suggest_command",
+            "knowledge_search",
         },
         "system_prompt": (
             "You are the Explore Agent of TDSF Terminal Agent, a read-only "
@@ -548,6 +551,7 @@ _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "analyze_logs",
             "skill_invoke",
             "suggest_command",
+            "knowledge_search",
         },
         "system_prompt": (
             "You are the Teach Agent of TDSF Terminal Agent, a Linux "
@@ -587,6 +591,7 @@ _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
         "tool_names": {
             "suggest_command",
             "skill_invoke",
+            "knowledge_search",
         },
         "system_prompt": (
             "You are the History Agent of TDSF Terminal Agent. "

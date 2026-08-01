@@ -814,6 +814,7 @@ OPS_TOOL_NAMES: list[str] = [
     "network_diagnostic",
     "skill_invoke",
     "suggest_command",
+    "knowledge_search",
 ]
 
 # P1-v5-2 schema-level safety: L1（免确认）只保留只读工具
@@ -863,6 +864,7 @@ def make_all_ops_tools(
     from strands_backend.tools.network_diagnostic import make_network_diagnostic_tool
     from strands_backend.tools.skill_invoke import make_skill_invoke_tool
     from strands_backend.tools.suggest_command import make_suggest_command_tool
+    from strands_backend.tools.knowledge_search import make_knowledge_search_tool
 
     tools = [
         make_ssh_command_tool(ctx),
@@ -872,6 +874,7 @@ def make_all_ops_tools(
         make_network_diagnostic_tool(ctx),
         make_skill_invoke_tool(ctx),
         make_suggest_command_tool(ctx),
+        make_knowledge_search_tool(ctx),
     ]
 
     if getattr(ctx, "permission_level", 2) <= 1:
