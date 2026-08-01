@@ -18,3 +18,13 @@ def _isolate_audit_chain(tmp_path):
     reset_global_chain(path=str(tmp_path / "audit-test.jsonl"))
     yield
     reset_global_chain()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_knowledge(tmp_path):
+    """T3/P2-4: 隔离知识库全局 rag（防测试污染真实 rag.db）"""
+    from knowledge.rag import reset_global_rag
+
+    reset_global_rag(db_path=str(tmp_path / "rag-test.db"))
+    yield
+    reset_global_rag()
