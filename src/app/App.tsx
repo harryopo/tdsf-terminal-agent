@@ -452,8 +452,12 @@ export default function App() {
   // 复用上方 useMemo 计算的 activeTerminalTab (TerminalTab | null)
   const activeTabSshSessionId = activeTerminalTab?.sshSessionId ?? null;
   // 响应式查询该会话是否仍 connected (会话状态变化时触发重渲染)
+  // TDSF 修复 2026-08-01: 加 spaceId 归属守卫——历史版本自动连接可能把
+  // 其它 Space（本地工作区）的 terminal tab 误绑为 SSH，渲染时若 tab 不
+  // 属于当前 Space 则视为无效绑定（回退本地终端），防止跨 Space 误显。
   const activeTabSshSession = useSshStore((s) =>
-    activeTabSshSessionId
+    activeTabSshSessionId &&
+    activeTab?.spaceId === activeSpaceId
       ? s.sessions.find(
           (sess) => sess.id === activeTabSshSessionId && sess.state === "connected",
         ) ?? null
@@ -583,6 +587,30 @@ export default function App() {
           if (id) {
             useSshStore.setState({ autoConnectSessionId: id });
           } else {
+            // TDSF 修复 2026-08-01: 自动连接失败时把当前 Space 的幽灵 SSH env
+            // 降级为 local——Space env 持久化可能引用已不存在的 session UUID
+            //（上个生命周期遗留），若一直保持 env.kind=ssh 会导致该 Space
+            // 显示异常（左侧文件树/终端行为按 SSH 判定但无可用会话）。
+            const spaceId = useSpaces.getState().activeId;
+            const space = spaceId
+              ? useSpaces
+                  .getState()
+                  .spaces.find((s) => s.id === spaceId)
+              : undefined;
+            const ghostSshSessionId =
+              space && space.env.kind === "ssh" ? space.env.sessionId : null;
+            if (
+              ghostSshSessionId &&
+              !useSshStore
+                .getState()
+                .sessions.some((s) => s.id === ghostSshSessionId)
+            ) {
+              useSpaces.getState().setEnv(spaceId!, { kind: "local" });
+              console.warn(
+                "[App] auto-connect failed, downgraded ghost SSH space to local",
+                space?.name,
+              );
+            }
             // connectWithSaved 返回 null 常见于 keyring 中找不到该 profile 的敏感字段
             toast.warning("自动登录失败", {
               description: `${profile.alias || `${profile.user}@${profile.host}`}: 凭据缺失或已过期, 请重新配置`,
@@ -641,19 +669,36 @@ export default function App() {
         if (boundSshSessionsRef.current.has(session.id)) continue;
         boundSshSessionsRef.current.add(session.id);
 
-        // TDSF 修复 2026-07-31: SSH 在当前 Space 内连接成功后,
-        // 把当前 Space 升级为 SSH Space, 让左侧 Files 面板/底部 cwd 跟随远程。
-        const currentSpaceId = useSpaces.getState().activeId;
-        const currentSpace = useSpaces
-          .getState()
-          .spaces.find((s) => s.id === currentSpaceId);
+        // TDSF 修复 2026-08-01: 目标 Space 按连接来源区分——
+        //   - 自动连接（connectWithSaved，state.autoConnectSessionId 标记）：
+        //     只升级 host/user 匹配的既有 SSH Space（恢复上次的 SSH 工作区），
+        //     绝不抢占当前活跃的本地 Space（此前自动连接会把本地 Space 升级
+        //     成 SSH 并误绑其 terminal tab，造成"本地工作区变远程"混乱）。
+        //   - 手动连接（对话框/列表一键登录）：保持"连接成功后当前 Space
+        //     升级为 SSH Space"的用户需求。
+        const isAutoConnect = state.autoConnectSessionId === session.id;
+        const spaces = useSpaces.getState();
+        const currentSpaceId = spaces.activeId;
+        const currentSpace = spaces.spaces.find(
+          (s) => s.id === currentSpaceId,
+        );
+        let targetSpace =
+          currentSpaceId && currentSpace ? currentSpace : null;
+        if (isAutoConnect) {
+          targetSpace =
+            spaces.spaces.find(
+              (s) =>
+                s.env.kind === "ssh" &&
+                s.env.host === session.params.host &&
+                s.env.user === session.params.user,
+            ) ?? null;
+        }
         if (
-          currentSpaceId &&
-          currentSpace &&
-          (currentSpace.env.kind !== "ssh" ||
-            currentSpace.env.sessionId !== session.id)
+          targetSpace &&
+          (targetSpace.env.kind !== "ssh" ||
+            targetSpace.env.sessionId !== session.id)
         ) {
-          useSpaces.getState().setEnv(currentSpaceId, {
+          useSpaces.getState().setEnv(targetSpace.id, {
             kind: "ssh",
             host: session.params.host,
             user: session.params.user,
@@ -680,19 +725,26 @@ export default function App() {
           }
         }
 
-        // 把当前 active terminal tab 绑定到该 SSH 会话
+        // 把目标 Space 内的 terminal tab 绑定到该 SSH 会话
         // 如果当前 active tab 不是 terminal, 找第一个 terminal tab; 都没有就 newTab()
         // TDSF 修复 2026-07-31: 优先绑定已经预绑定该 session 的 tab（SpaceCreateDialog
         // 创建 SSH Space 时会预先把 tab.sshSessionId 设为 session.id），避免用户
         // 切到其它 Space 后新连接误绑到错误 Space 的 terminal tab。
+        // TDSF 修复 2026-08-01: 查找范围限定 targetSpace.id 内的 tab，
+        // 防止自动连接把其它 Space（如本地工作区）的 terminal tab 误绑成 SSH。
+        const targetSpaceId = targetSpace ? targetSpace.id : currentSpaceId;
         const currentTabs = tabsRef.current;
         const currentActiveId = activeIdRef.current;
         let targetTab = currentTabs.find(
-          (t) => t.kind === "terminal" && t.sshSessionId === session.id,
+          (t) =>
+            t.spaceId === targetSpaceId &&
+            t.kind === "terminal" &&
+            t.sshSessionId === session.id,
         );
         if (!targetTab) {
           targetTab = currentTabs.find(
             (t) =>
+              t.spaceId === targetSpaceId &&
               t.id === currentActiveId &&
               t.kind === "terminal" &&
               (!t.sshSessionId || t.sshSessionId === session.id),
@@ -701,6 +753,7 @@ export default function App() {
         if (!targetTab) {
           targetTab = currentTabs.find(
             (t) =>
+              t.spaceId === targetSpaceId &&
               t.kind === "terminal" &&
               (!t.sshSessionId || t.sshSessionId === session.id),
           );
@@ -1020,33 +1073,55 @@ export default function App() {
   );
 
   const openNewTab = useCallback(() => {
-    const tabId = newTab(inheritedCwdForNewTab());
+    // TDSF 修复 2026-08-01: SSH Space 新建终端继承远程 cwd（spaceSshCurrentPath），
+    // 而非本地 spaceRoot 残留路径（此前新建 SSH tab 的 cwd 是本地 D:/）。
+    const isSshSpace = activeSpace?.env.kind === "ssh";
+    const cwd = isSshSpace
+      ? (spaceSshCurrentPath ?? "/")
+      : inheritedCwdForNewTab();
+    const tabId = newTab(cwd);
     bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
   }, [
     newTab,
     inheritedCwdForNewTab,
     bindTabToSshSpace,
     activeSpaceId,
+    activeSpace,
+    spaceSshCurrentPath,
   ]);
 
   const openNewPrivateTab = useCallback(() => {
-    const tabId = newPrivateTab(inheritedCwdForNewTab());
+    // TDSF 修复 2026-08-01: SSH Space 的隐私终端同样继承远程 cwd
+    const isSshSpace = activeSpace?.env.kind === "ssh";
+    const cwd = isSshSpace
+      ? (spaceSshCurrentPath ?? "/")
+      : inheritedCwdForNewTab();
+    const tabId = newPrivateTab(cwd);
     bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
   }, [
     newPrivateTab,
     inheritedCwdForNewTab,
     bindTabToSshSpace,
     activeSpaceId,
+    activeSpace,
+    spaceSshCurrentPath,
   ]);
 
   const openNewBlockTab = useCallback(() => {
-    const tabId = newBlockTab(inheritedCwdForNewTab());
+    // TDSF 修复 2026-08-01: SSH Space 的块状终端同样继承远程 cwd
+    const isSshSpace = activeSpace?.env.kind === "ssh";
+    const cwd = isSshSpace
+      ? (spaceSshCurrentPath ?? "/")
+      : inheritedCwdForNewTab();
+    const tabId = newBlockTab(cwd);
     bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
   }, [
     newBlockTab,
     inheritedCwdForNewTab,
     bindTabToSshSpace,
     activeSpaceId,
+    activeSpace,
+    spaceSshCurrentPath,
   ]);
 
   const launchAgentGroup = useCallback(
