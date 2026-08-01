@@ -28,6 +28,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { TerminalPane } from "@/modules/terminal/TerminalPane";
+import type { TerminalPaneHandle } from "@/modules/terminal/TerminalPane";
 import type { TerminalTransport } from "@/modules/terminal/lib/pty-bridge";
 import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
 import { useSshStore } from "./sshStore";
@@ -64,9 +65,22 @@ type Props = {
    * tab.paneTree 里，tab.activeLeafId 指向本地终端，无法选中 SSH 文本）。
    */
   onLeafId?: (leafId: number) => void;
+  /**
+   * 2026-07-31 翻译模块修复: 把 SSH 终端的 TerminalPaneHandle 注册进
+   * App.terminalRefs（key=leafId）。此前 SshTerminalHost 未给 TerminalPane
+   * 传 ref，导致 getSelection 从未注册，captureActiveSelection 回退到被隐藏的
+   * 本地终端（选区恒空）→ 选词翻译卡片永不显示。
+   */
+  registerHandle?: (leafId: number, handle: TerminalPaneHandle | null) => void;
 };
 
-export function SshTerminalHost({ sessionId, allocId, className, onLeafId }: Props) {
+export function SshTerminalHost({
+  sessionId,
+  allocId,
+  className,
+  onLeafId,
+  registerHandle,
+}: Props) {
   // 挂载时分配稳定 leafId，整个组件生命周期内不变（不放进 deps 防重订阅）
   const leafIdRef = useRef<number | null>(null);
   if (leafIdRef.current === null) {
@@ -75,6 +89,17 @@ export function SshTerminalHost({ sessionId, allocId, className, onLeafId }: Pro
     onLeafId?.(leafIdRef.current);
   }
   const leafId = leafIdRef.current;
+
+  // 2026-07-31 翻译模块修复: 把 TerminalPane handle 以稳定 leafId 注册进
+  // App.terminalRefs。callback ref 在挂载时收到 handle、卸载时收到 null，
+  // 与本地终端 PaneTreeView 的 ref={b.setRef} 注册路径一致。
+  const paneHandleRef = useCallback(
+    (handle: TerminalPaneHandle | null) => {
+      const lid = leafIdRef.current;
+      if (lid !== null) registerHandle?.(lid, handle);
+    },
+    [registerHandle],
+  );
 
   // 订阅 SSH 会话状态（用于诊断；onExit 走 PTY channel，不靠 state 派生）
   const session = useSshStore((s) =>
@@ -196,6 +221,7 @@ export function SshTerminalHost({ sessionId, allocId, className, onLeafId }: Pro
   return (
     <div className={className ?? "h-full w-full overflow-hidden"}>
       <TerminalPane
+        ref={paneHandleRef}
         leafId={leafId}
         visible={true}
         focused={true}

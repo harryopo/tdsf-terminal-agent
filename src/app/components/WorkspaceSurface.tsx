@@ -149,6 +149,7 @@ export function WorkspaceSurface({
             allocId={allocId}
             className="h-full w-full overflow-hidden rounded-md border border-border/40"
             onLeafId={onSshLeafId}
+            registerHandle={registerTerminalHandle}
           />
         </div>
       ) : null}
