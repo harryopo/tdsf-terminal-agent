@@ -34,6 +34,8 @@ type Props = {
   onNewEditor: () => void;
   onNewGitGraph: () => void;
   onLaunchAgents: (request: AgentLaunchRequest) => void;
+  /** TDSF 修复 2026-08-01: SSH 空间隐藏"新建网页预览"（预览指向本地服务） */
+  showPreview?: boolean;
 };
 
 export function NewTabMenu({
@@ -44,6 +46,7 @@ export function NewTabMenu({
   onNewEditor,
   onNewGitGraph,
   onLaunchAgents,
+  showPreview = true,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [launcherOpen, setLauncherOpen] = useState(false);
@@ -151,17 +154,19 @@ export function NewTabMenu({
                   {fmtShortcut(MOD_KEY, "E")}
                 </span>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={onNewPreview}>
-                <HugeiconsIcon
-                  icon={Globe02Icon}
-                  size={14}
-                  strokeWidth={1.75}
-                />
-                <span className="flex-1">Preview</span>
-                <span className="text-xs text-muted-foreground">
-                  {fmtShortcut(MOD_KEY, "P")}
-                </span>
-              </DropdownMenuItem>
+              {showPreview && (
+                <DropdownMenuItem onSelect={onNewPreview}>
+                  <HugeiconsIcon
+                    icon={Globe02Icon}
+                    size={14}
+                    strokeWidth={1.75}
+                  />
+                  <span className="flex-1">Preview</span>
+                  <span className="text-xs text-muted-foreground">
+                    {fmtShortcut(MOD_KEY, "P")}
+                  </span>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={onNewGitGraph}>
                 <HugeiconsIcon
                   icon={GitBranchIcon}
