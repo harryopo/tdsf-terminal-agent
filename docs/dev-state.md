@@ -3190,3 +3190,18 @@ CDP 全新状态实测通过。commit 见上。
 - 已知限制：截断尾部（删最后记录）不可检测——hash chain 固有限制，篡改中间记录可检测
 
 **测试**：后端 1441（+17：wait-wake 5 / 审批决策 5 / 审计 8 / 证据 9，含测试提速 90s→0.8s）；前端 906（+15：evidence lib 9 / 审批相关 6）。tsc/eslint 干净。
+
+### 37.20 翻译模块重构：统一选中浮层（P2，2026-08-01）
+
+**用户需求**：翻译模块 UI 完善；本地/SSH 终端都能翻译；服务器终端选中单词或代码片段可 ask agent，同时弹翻译卡片选项；适配 Space 重构后的终端交互。
+
+**实现**（a2aa150）：
+- **SelectionAskAi 双按钮浮层**：[📖 翻译 | ✨ Ask TDSF ⌘L]——翻译按钮按开关显示，点击触发离线词典翻译
+- **TranslateTooltip 升级**：词典 tag 徽标 + 底部「Ask TDSF 解释这段」（词典查不到的代码片段一键问 AI）；未命中提示同样带 Ask
+- **删除旧"退让"协调**：tdsf:translate-enabled/disabled/hit/miss 事件与 useSelectionAskAi 的 translateActiveRef 全部移除——翻译与 Ask 共存于同一浮层
+- **删除 useTranslateSelection**（自动翻译 hook），翻译由浮层按钮触发（App.onTranslateSelection 查词典）
+- 本地/SSH 终端统一走 captureActiveSelection（tab/leafId/sshActiveLeafId）
+
+**验收**：前端 914 全过（SelectionAskAi 4 + TranslateTooltip 4 用例）；tsc/eslint 干净；SSH 终端实测待用户。
+
+**记忆机制（本次建立）**：docs/DEV-JOURNAL.md（开发日志）+ docs/ROADMAP.md（短/长期规划）+ CLAUDE.md §6 任务收尾三件事规范——此后每任务完成自动沉淀。
