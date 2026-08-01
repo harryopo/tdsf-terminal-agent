@@ -638,6 +638,31 @@ export default function App() {
     };
   }, [launchCwdResolved]);
 
+  // TDSF 修复 2026-08-01: 幽灵 SSH Space 启动清理。
+  // 自动连接"无保存凭据"时不会触发 connectWithSaved 的失败分支（§37.9 的
+  // 降级逻辑只覆盖"尝试连接但失败"），持久化的 SSH Space（env.sessionId
+  // 是上个生命周期的旧 UUID，store 里不存在）会一直保持 env.kind=ssh 却
+  // 无可用会话 → 该 Space 显示异常。此处等自动连接 settle（成功或跳过）
+  // 后统一扫描降级。
+  useEffect(() => {
+    if (!launchCwdResolved) return;
+    const timer = window.setTimeout(() => {
+      const spaces = useSpaces.getState();
+      const sessions = useSshStore.getState().sessions;
+      for (const sp of spaces.spaces) {
+        const sshSessionId = sp.env.kind === "ssh" ? sp.env.sessionId : null;
+        if (!sshSessionId) continue;
+        if (sessions.some((s) => s.id === sshSessionId)) continue;
+        console.warn(
+          "[App] ghost SSH space detected at startup, downgrading to local:",
+          sp.name,
+        );
+        useSpaces.getState().setEnv(sp.id, { kind: "local" });
+      }
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [launchCwdResolved]);
+
   // === TDSF 魔改 2026-07-30: SSH 连接成功后绑定 terminal tab + 左侧 explorer 视图 ===
   // ---------------------------------------------------------------
   // 用户明确需求:
