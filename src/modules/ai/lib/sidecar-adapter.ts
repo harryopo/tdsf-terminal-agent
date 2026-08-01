@@ -45,18 +45,106 @@ import { TDSF_AGENTS, type TdsfAgentId } from "../agents/registry";
 const SIDECAR_TIMEOUT_MS = 60_000;
 
 /**
- * 模拟流式输出的 chunk 大小（字符数）。
+ * 读取 Sidecar 调用超时（ms）。
+ *
+ * P0-3 (2026-08-01): 超时可配置——localStorage `tdsf.sidecarTimeoutMs`
+ * 覆盖默认 60s（夹取 10s-600s，防误配）。同时把值传给 Rust 侧
+ * ipc_invoke 的 timeoutMs（Rust 默认 60s，长任务可放宽）。
+ */
+const SIDECAR_TIMEOUT_MIN_MS = 10_000;
+const SIDECAR_TIMEOUT_MAX_MS = 600_000;
+const SIDECAR_TIMEOUT_STORAGE_KEY = "tdsf.sidecarTimeoutMs";
+
+export function getSidecarTimeoutMs(): number {
+  if (typeof localStorage === "undefined") return SIDECAR_TIMEOUT_MS;
+  try {
+    const raw = localStorage.getItem(SIDECAR_TIMEOUT_STORAGE_KEY);
+    if (!raw) return SIDECAR_TIMEOUT_MS;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return SIDECAR_TIMEOUT_MS;
+    return Math.min(SIDECAR_TIMEOUT_MAX_MS, Math.max(SIDECAR_TIMEOUT_MIN_MS, parsed));
+  } catch {
+    return SIDECAR_TIMEOUT_MS;
+  }
+}
+
+/**
+ * 构建结构化 Sidecar 错误提示（P0-4）。
+ *
+ * 按错误特征区分文案与行动建议：超时 / Sidecar 未运行 / Strands 降级 /
+ * LLM 配置 / 其他。替代旧的静态模板（三种可能原因堆在一起，排障成本高）。
+ *
+ * @param rawError 原始错误文本（invokeError 或 degraded_message）
+ * @param pythonName 调用的后端 agent 名
+ * @param isDegraded 是否来自后端 degraded 标志
+ */
+export function buildSidecarErrorHint(
+  rawError: string,
+  pythonName: string,
+  isDegraded = false,
+): string {
+  if (isDegraded) {
+    return [
+      "AI 后端降级运行（当前无法完成本次调用）。",
+      rawError ? `详情：${rawError}` : "",
+      "",
+      "建议：1) 检查 AI 模型配置（设置 → AI 模型）2) 检查 Strands 依赖安装",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  const lower = rawError.toLowerCase();
+  if (lower.includes("超时") || lower.includes("timeout")) {
+    return [
+      `AI 任务超时未完成：${rawError}`,
+      "",
+      "建议：1) 复杂任务可到设置调大 AI 调用超时 2) 简化问题描述后重试",
+    ].join("\n");
+  }
+  if (
+    lower.includes("not running") ||
+    lower.includes("not_running") ||
+    lower.includes("sidecar")
+  ) {
+    return [
+      `AI Sidecar 未就绪：${rawError}`,
+      "",
+      "建议：重启应用后重试；若反复出现，查看 sidecar 日志",
+    ].join("\n");
+  }
+  if (lower.includes("llm") || lower.includes("api key") || lower.includes("model")) {
+    return [
+      `AI 模型调用失败：${rawError}`,
+      "",
+      "建议：到设置 → AI 模型检查 API Key 与模型配置",
+    ].join("\n");
+  }
+  return [
+    `Sidecar Agent 调用失败：${rawError}`,
+    "",
+    `当前调用: ${pythonName}；建议检查 sidecar 日志定位原因`,
+  ].join("\n");
+}
+
+/**
+ * 兜底切片流式（仅 LangGraph 后端 / 无事件推送时使用）的 chunk 大小（字符数）。
  *
  * TDSF 修复 2026-07-31 (P1): 从 24 提升到 96。
+ * P0-2 (2026-08-01) 说明：Strands 后端（默认主路径）已通过
+ * `sidecar:agent_message` 事件实现**真流式**（LLM data 增量实时推送，
+ * 见 runSidecarStream 第 3 步消费循环），streamText 仅作兜底——当
+ * invokeResult 返回了 observation 但事件未推送 output 时（如 LangGraph
+ * 后端），按块切片让 UI 逐块渲染。
  * 24 字符/chunk 对长文本（5000+ 字符）会产生 200+ chunks，
  * 每个 chunk 走一次 useChat 的 state 更新 + React 重渲染，
  * 累积延迟明显（5000 字符 = 200 chunks × 8ms = 1.6s 额外延迟）。
- * 96 字符/chunk 减少 75% 的 chunk 数，配合 delay=0 让伪流式接近实时。
+ * 96 字符/chunk 减少 75% 的 chunk 数，配合 delay=0 让兜底切片接近实时。
  */
 const STREAM_CHUNK_SIZE = 96;
 
 /**
- * 模拟流式输出的 chunk 间隔（ms，让 useChat 能逐 chunk 渲染）。
+ * 兜底切片流式的 chunk 间隔（ms，让 useChat 能逐 chunk 渲染）。
  *
  * TDSF 修复 2026-07-31 (P1): 从 8ms 降为 0ms。
  * 8ms 延迟累积起来对长文本很显著（200 chunks × 8ms = 1.6s）。
@@ -390,12 +478,12 @@ function createAsyncQueue<T>() {
 }
 
 /**
- * 把长文本切成若干 chunk 流式 yield（模拟真实 LLM 流式输出）
+ * 把长文本切成若干 chunk 流式 yield（兜底路径：LangGraph 后端 / 无事件推送）
  *
- * Python 端 `agent.invoke` 是同步返回完整 dict，不是流式。
- * 为了让 useChat 能像消费 Vercel SDK 流一样逐 chunk 渲染（避免一次性
- * 渲染长文本造成 UI 卡顿），这里按 STREAM_CHUNK_SIZE 字符切片，
- * 每个 chunk 之间 await STREAM_CHUNK_DELAY_MS 让出事件循环。
+ * P0-2 (2026-08-01) 说明：Strands 后端（默认主路径）走事件真流式
+ * （sidecar:agent_message → text-delta 实时渲染），此函数仅用于
+ * `agent.invoke` 同步返回完整 dict 的后端（LangGraph）或事件缺失时兜底，
+ * 避免一次性渲染长文本造成 UI 卡顿。
  *
  * @param text 待流式输出的完整文本
  * @param id   text stream id（同一 id 的 chunk 会被合并到同一个 text part）
@@ -677,10 +765,12 @@ export async function* runSidecarStream(
     });
 
     // 超时 + abort 保护
+    // P0-3 (2026-08-01): 超时可配置（getSidecarTimeoutMs，默认 60s）
+    const timeoutMs = getSidecarTimeoutMs();
     const timeout = new Promise<never>((_, reject) => {
       const timer = setTimeout(
-        () => reject(new Error(`Sidecar 调用超时（${SIDECAR_TIMEOUT_MS / 1000}s）`)),
-        SIDECAR_TIMEOUT_MS,
+        () => reject(new Error(`Sidecar 调用超时（${timeoutMs / 1000}s）`)),
+        timeoutMs,
       );
       abortSignal?.addEventListener(
         "abort",
@@ -705,6 +795,9 @@ export async function* runSidecarStream(
               name: pythonName,
               state: { input, messages, live },
             },
+            // P0-3: 把可配置超时传给 Rust 侧（Rust 默认 60s 硬超时，
+            // 不传则长任务仍可能在 Rust 层被掐断）
+            timeoutMs,
           }),
           timeout,
         ]);
@@ -768,14 +861,23 @@ export async function* runSidecarStream(
     // 7. 错误处理: sidecar 不可用
     if (!invokeResult && invokeError) {
       // TDSF 魔改 P0-3: 移除 mock 降级，直接报错让用户看到真实问题
-      const hint = `Sidecar Agent 调用失败: ${invokeError}\n\n可能原因：\n1) LLM 未配置 — 请到设置 → AI 模型配置 API Key\n2) Sidecar 未启动 — 请检查 sidecar 日志\n3) Agent 名称错误 — 当前调用: ${pythonName}`;
-      yield { type: "error", error: hint };
+      // P0-4 (2026-08-01): 结构化错误提示——按错误类型区分文案与行动建议
+      yield { type: "error", error: buildSidecarErrorHint(invokeError, pythonName) };
       return;
     }
 
     // 8. result 为空但无 error（异常情况）
     if (!invokeResult) {
       yield { type: "error", error: "Sidecar 返回空结果" };
+      return;
+    }
+
+    // 8.5 P0-4: 后端返回 degraded 标志（Strands 运行时降级）→ 友好提示
+    if (invokeResult.degraded) {
+      yield {
+        type: "error",
+        error: buildSidecarErrorHint(invokeResult.degraded_message ?? "", pythonName, true),
+      };
       return;
     }
 

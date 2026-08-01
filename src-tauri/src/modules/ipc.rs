@@ -38,8 +38,8 @@ use super::sidecar::{SidecarError, SidecarManager, SidecarStateSnapshot};
 // 常量
 // ============================================================================
 
-/// 默认请求超时（30s，与 sidecar.rs REQUEST_TIMEOUT 对齐）
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// 默认请求超时（60s，与 sidecar.rs REQUEST_TIMEOUT 对齐）
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // ============================================================================
 // IPC 错误类型（类型化，前端可精确处理）
@@ -182,7 +182,7 @@ impl IPCClient {
         Self { manager }
     }
 
-    /// 发送 JSON-RPC 请求（默认 30s 超时）
+    /// 发送 JSON-RPC 请求（默认 60s 超时）
     ///
     /// 流程:
     ///   1. 调用 SidecarManager::send_request
@@ -192,7 +192,7 @@ impl IPCClient {
     ///
     /// 错误:
     ///   - NotRunning: Sidecar 未运行
-    ///   - Timeout: 30s 无响应
+    ///   - Timeout: 60s 无响应
     ///   - RemoteError: Python 侧返回 JSON-RPC error
     pub async fn invoke(&self, method: &str, params: Value) -> Result<Value, IPCError> {
         self.invoke_with_timeout(method, params, DEFAULT_REQUEST_TIMEOUT)
@@ -201,16 +201,19 @@ impl IPCClient {
 
     /// 发送 JSON-RPC 请求（自定义超时）
     ///
-    /// 注意: SidecarManager::send_request 内部固定 30s 超时，
-    /// 此处仅作语义层标记，实际超时由 REQUEST_TIMEOUT 控制。
-    /// 后续如需更细粒度超时控制，可扩展 SidecarManager。
+    /// TDSF 修复 2026-08-01 (P0-3): 让自定义超时真正生效——
+    /// 原来 SidecarManager::send_request 内部固定 30s，invoke_with_timeout
+    /// 的 timeout 参数被忽略；现转发到 send_request_with_timeout。
     pub async fn invoke_with_timeout(
         &self,
         method: &str,
         params: Value,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Value, IPCError> {
-        let response = self.manager.send_request(method, params).await?;
+        let response = self
+            .manager
+            .send_request_with_timeout(method, params, timeout)
+            .await?;
 
         // 解析响应
         if let Some(err) = response.get("error") {
@@ -266,7 +269,8 @@ impl IPCClient {
 ///   ```typescript
 ///   const result = await invoke<string>('ipc_invoke', {
 ///     method: 'agent.invoke',
-///     params: { input: 'nginx 启动失败' }
+///     params: { input: 'nginx 启动失败' },
+///     timeoutMs: 120_000, // 可选：覆盖默认 60s 超时（P0-3）
 ///   });
 ///   const data = JSON.parse(result); // { thinking: '...', output: '...' }
 ///   ```
@@ -279,10 +283,20 @@ pub async fn ipc_invoke(
     sidecar: tauri::State<'_, SidecarManager>,
     method: String,
     params: Option<Value>,
+    timeout_ms: Option<u64>,
 ) -> Result<Value, IPCError> {
     let client = IPCClient::new(sidecar.inner().clone());
     let params = params.unwrap_or(json!({}));
-    client.invoke(&method, params).await
+    match timeout_ms {
+        // P0-3: 前端显式传 timeoutMs 时覆盖默认（夹取 10s-10min，防误配）
+        Some(ms) => {
+            let secs = (ms.max(10_000).min(600_000) as u64) / 1000;
+            client
+                .invoke_with_timeout(&method, params, Duration::from_secs(secs))
+                .await
+        }
+        None => client.invoke(&method, params).await,
+    }
 }
 
 /// ipc_notify: 前端向 Python Sidecar 发送通知（无响应）

@@ -620,11 +620,16 @@ class StrandsAgentAdapter:
             self._emit_mood("error", agent_id, session_id)
             self._emit_needs_you_for_error(agent_id, session_id, input, e)
 
+            # P0-4 (2026-08-01): 运行时失败返回 degraded 标志，
+            # 前端据此显示友好降级提示（而非把错误当正常输出流式显示）
             return {
                 "observation": f"Strands Agent 执行出错: {e}",
                 "next_step": "error",
                 "mood": "error",
                 "error": str(e),
+                "degraded": True,
+                "degraded_reason": "invoke_error",
+                "degraded_message": f"Strands Agent 执行出错: {e}",
                 "intermediate_results": [{
                     "task": input,
                     "result": {"error": str(e)},
