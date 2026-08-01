@@ -348,6 +348,21 @@ export default function App() {
     toggleExplorerFocus,
   } = useSidebarPanel(explorerRef);
 
+  const prevSpaceForViewRef = useRef(activeSpaceId);
+  useEffect(() => {
+    // TDSF 修复 2026-08-01: 真正的 Space 切换（非首次挂载）时左侧跟随
+    // 切换为文件资源管理器，避免左侧停留在上一个 Space 的视图（ssh 列表等）
+    // 导致"切换工作区后资源管理器不显示"。
+    if (
+      prevSpaceForViewRef.current !== null &&
+      prevSpaceForViewRef.current !== activeSpaceId &&
+      sidebarView !== "explorer"
+    ) {
+      persistSidebarView("explorer");
+    }
+    prevSpaceForViewRef.current = activeSpaceId;
+  }, [activeSpaceId, sidebarView, persistSidebarView]);
+
   const [newEditorOpen, setNewEditorOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [paletteInitialMode, setPaletteInitialMode] = useState<
@@ -469,6 +484,11 @@ export default function App() {
       // TDSF debug (2026-08-01): 暴露 sshStore 内部状态供 CDP 排查
       // "终端已连但 SSH 面板/activeSessionId 未连" 的状态不一致问题
       getSshStore: () => useSshStore,
+      // TDSF debug (2026-08-01): 暴露 spaces/tabs/newTab 供 CDP 实测
+      // Space 切换联动（Explorer 跟随 / SSH Space 新建 tab 绑定）
+      getSpaces: () => useSpaces,
+      getTabs: () => tabs,
+      newTab: (cwd?: string) => newTab(cwd ?? inheritedCwdForNewTab()),
       isDefaultColdTab,
       isTerminalTab,
       activeSshSessionId,
@@ -739,11 +759,14 @@ export default function App() {
 
   // TDSF 修复 2026-07-31: useWorkspaceCwd 增加 spaceRoot fallback，
   // 切 Space 时若当前 terminal tab 无 cwd 则显示 Space 的 root 目录。
+  // TDSF 修复 2026-08-01: 传 spaceId，cwd 记忆按 Space 隔离，
+  // 避免 SSH Space 的远程 cwd 泄漏到本地 Space 的 explorerRoot。
   const { explorerRoot, inheritedCwdForNewTab } = useWorkspaceCwd(
     activeTab,
     tabs,
     launchCwd ?? home,
     activeSpace?.root ?? null,
+    activeSpaceId,
   );
   // SSH 连通时左侧 Files 面板根路径使用当前 Space 的远程当前目录
   const effectiveExplorerRoot =
@@ -1713,6 +1736,8 @@ export default function App() {
             openKeyboardShortcuts: () => void openSettingsWindow("shortcuts"),
             spaces: useSpaces.getState().spaces,
             activeSpaceId,
+            // TDSF 修复 2026-08-01: SSH 空间隐藏本地专属命令（网页预览）
+            isSshSpace: activeSpace?.env.kind === "ssh",
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),
@@ -1738,6 +1763,7 @@ export default function App() {
       askFromSelection,
       activeSpaceId,
       handleNewSpace,
+      activeSpace,
     ],
   );
 
@@ -1795,6 +1821,7 @@ export default function App() {
               onNewBlock={openNewBlockTab}
               onNewPrivate={openNewPrivateTab}
               onNewPreview={() => openPreviewTab("")}
+              showPreview={activeSpace?.env.kind !== "ssh"}
               onNewEditor={() => setNewEditorOpen(true)}
               onNewGitGraph={openGitGraphFromContext}
               onLaunchAgents={launchAgentGroup}

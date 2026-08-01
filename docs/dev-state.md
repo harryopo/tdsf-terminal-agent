@@ -2988,3 +2988,27 @@ SSH 终端执行 cd /tmp
 - env 块含 `ssh_session_id: 12` ✓
 - AI 对话"通过SSH查看服务器负载"→ 自动调用 inspect_processes/ssh_command，返回真实远程数据（load 0.00 / 446Mi 内存 / 12 在线用户）✓
 - 五绿门禁全过（typecheck/lint/vitest 853）
+
+### 37.8 Space 切换联动修复（P1-P4，2026-08-01）
+
+**用户反馈**：①切工作区后左侧资源管理器不显示/不刷新；②SSH Space 新建 terminal 应直接是服务器 shell；③SSH Space 应删除"新建网页预览"等本地选项；④本地↔SSH 切 Space 时 cd/Explorer 不跟随。
+
+**根因**：
+- P1/P4（核心）：`useWorkspaceCwd` 的 `lastTerminalCwd` ref 与 `tabs.find` **跨 Space 泄漏**——SSH Space 终端 cd 到 /root 后切回本地 Space，explorerRoot 命中远程 cwd → 本地 Explorer 加载远程路径失败 → 空白。另：Space 切换不切 sidebarView（停留在 ssh 列表等视图）。
+- P2：`newTab`/`newTabInSpace` 创建 terminal tab 不绑定 sshSessionId，SSH 显示依赖全局 isSpaceSshConnected 条件（会话状态异常时回落本地 shell）。
+- P3：命令面板 `tab.newPreview` 与 NewTabMenu Preview 项无上下文判断。
+
+**修复**：
+1. `useWorkspaceCwd` 按 Space 隔离（lastTerminalCwdBySpace: Map + spaceTabs 过滤 + spaceId 参数），App 传 activeSpaceId
+2. `useTabs.newTab/newTabInSpace`：目标 Space 是 SSH 时绑定 sshSessionId（useSpaces 无循环依赖）
+3. Space 切换 effect（prevSpaceForViewRef）：真正切换 Space 时左侧自动切回 explorer 视图
+4. 命令面板：PaletteItem 加 hidden，`tab.newPreview` 在 SSH Space 隐藏；NewTabMenu 加 showPreview，App 在 SSH Space 传 false
+
+**CDP 实测**（reload + 切 Space 序列）：
+- P2：SSH Space newTab → tab.sshSessionId=d3401e 绑定 ✓
+- P1：切本地 Space → effRoot/sidebarRoot=C:/Users/Lenovo（修复前泄漏 "/"）✓
+- P4：切回 SSH → 跟随；再切本地 → 稳定无泄漏 ✓
+- P3：SSH Space 命令面板无"新建网页预览" ✓
+- 门禁：typecheck/lint/vitest 853 全过
+
+**新发现（backlog）**：SSH Space 的 root 字段残留本地路径（D:/），导致新建 SSH tab 继承 cwd=本地路径；幽灵 SSH Space env（session 已删但 env.kind=ssh）应自动降级/清理。
