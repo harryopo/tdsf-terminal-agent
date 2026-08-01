@@ -135,11 +135,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 // TDSF 魔改 2026-07-29: 终端选词翻译（离线词典），模块已恢复
-import {
-  TranslateTooltip,
-  useTranslateSelection,
-  useTranslateStore,
-} from "@/modules/translate";
+// P2 (2026-08-01): 触发方式改为选中浮层点「翻译」按钮（SelectionAskAi），
+// useTranslateSelection 自动翻译逻辑已移除
+import { TranslateTooltip, useTranslateStore } from "@/modules/translate";
+import { translateText } from "@/modules/translate/translateApi";
 
 import { CloseDialogs } from "./components/CloseDialogs";
 import {
@@ -1091,11 +1090,37 @@ export default function App() {
   const askPresence = usePresence(Boolean(askPopup), 120);
 
   // TDSF 魔改 2026-07-29: 终端选词翻译（与 SelectionAskAi 并列，使用相同的事件机制）
+  // P2 (2026-08-01) 重构: 选中浮层点「翻译」按钮 → 这里查离线词典并展示卡片。
+  // 本地终端与 SSH 终端统一（captureActiveSelection 已按 tab/leafId/SSH leafId 取文本）
   const translateEnabled = useTranslateStore((s) => s.enabled);
-  useTranslateSelection({
-    captureActiveSelection,
-    enabled: translateEnabled,
-  });
+  const onTranslateSelection = useCallback(
+    (x: number, y: number) => {
+      const text = captureActiveSelection()?.trim() ?? "";
+      if (!text || text.length > 64) {
+        useTranslateStore.getState().hideTooltip();
+        return;
+      }
+      const result = translateText(text);
+      if (result.success && result.entries.length > 0) {
+        useTranslateStore.getState().showTooltip(result, x, y);
+      } else {
+        useTranslateStore.getState().showMissing(text, x, y);
+      }
+    },
+    [captureActiveSelection],
+  );
+  const onAskWithSelection = useCallback(
+    (text: string) => {
+      if (!hasComposer) {
+        void openSettingsWindow("models");
+        return;
+      }
+      attachSelection(text, activeTab?.kind === "editor" ? "editor" : "terminal");
+      openPanel();
+      focusInput(null);
+    },
+    [hasComposer, attachSelection, activeTab?.kind, openPanel, focusInput],
+  );
 
   const bindTabToSshSpace = useCallback(
     (tabId: number, spaceId: string) => {
@@ -2262,6 +2287,8 @@ export default function App() {
               y={askPopup?.y ?? 0}
               onAsk={onAskFromSelection}
               onDismiss={() => setAskPopup(null)}
+              showTranslate={translateEnabled}
+              onTranslate={onTranslateSelection}
             />
           ) : null}
 
@@ -2297,8 +2324,9 @@ export default function App() {
 
           <UpdaterDialog />
 
-          {/* TDSF 魔改 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位） */}
-          <TranslateTooltip />
+          {/* TDSF 魔改 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位）
+              P2: 卡片带「Ask TDSF」操作，把选中词/代码片段发给 AI 深入解释 */}
+          <TranslateTooltip onAsk={onAskWithSelection} />
 
           <CloseDialogs
             tabs={tabs}
