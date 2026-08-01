@@ -1405,6 +1405,9 @@ class TestFourLevelPermission(unittest.TestCase):
     """execute_via_ssh 按 permission_level 决策审批"""
 
     def _run(self, command, level, output="ok"):
+        from unittest.mock import patch
+
+        from needs_you import NeedsYouStatus
         from strands_backend.tools import execute_via_ssh
 
         bridge = make_mock_rust_bridge()
@@ -1413,7 +1416,12 @@ class TestFourLevelPermission(unittest.TestCase):
         }
         ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
         ctx.permission_level = level
-        return execute_via_ssh(ctx=ctx, command=command, ssh_session_id="1", timeout=10, tool_name="ssh_command")
+        # P1-1: 审批等待 mock 为 TIMEOUT（语义 = 需审批但未响应 → needs_approval）
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.TIMEOUT),
+        ):
+            return execute_via_ssh(ctx=ctx, command=command, ssh_session_id="1", timeout=10, tool_name="ssh_command")
 
     def test_l1_read_auto(self):
         r = self._run("uptime", 1)
