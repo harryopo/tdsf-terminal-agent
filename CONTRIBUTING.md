@@ -77,7 +77,7 @@ A 10-minute conversation saves a 500-line PR that doesn't fit the roadmap.
 Terax positions itself as **lightweight, fast, production-grade**. Every PR is reviewed against:
 
 - `pnpm lint` clean
-- `pnpm check-types` clean
+- `pnpm typecheck` clean
 - `pnpm test` clean
 - `cargo clippy --all-targets --locked -- -D warnings` clean
 - `cargo nextest run --locked` clean (or `cargo test --locked`)

@@ -17,6 +17,8 @@ export default tseslint.config(
       'opensource-reference/**',
       // TDSF 运行时数据目录（SQLite/CDP 脚本/临时备份），不参与 lint
       '.tdsf-data/**',
+      // better-harness 机器产物目录（report.canvas.tsx 等由所有者生成），不参与 lint
+      '.qoder/**',
     ],
   },
   {
