@@ -258,3 +258,24 @@
 - ✅ 系统化排查排除了应用 bug（日志/CDP/代码审查三路证据）——黑屏确系外部操作（误杀）所致
 - ✅ CDP 捕获脚本（node + WebSocket 连 WebView2）是 Tauri 桌面调试的有效工具，保留复用
 - 📌 用户环境有同名进程时，操作前先确认归属
+
+---
+
+## 2026-08-01 · P2-3 运维工具集 7→12 扩展
+
+**任务**：方案书 §4.3 工具扩展路线——新增 service/package/firewall/security/performance 5 个运维工具。
+
+**实现**（8184067）：
+- ops_extended.py：5 个工具（同构：参数校验 + 命令构造 + execute_via_ssh 统一风险检测/审批/脱敏/审计）
+- 写操作（start/stop/restart/install/remove/add_port）自动走 4 级权限审批（L3+ 写操作审批）；只读（security_audit/performance_analyze）直接执行
+- 挂载矩阵：main 全 5 / coding 5 / explore 只读 2（teach/history 保持轻量不引入）；L1 免确认下写工具从注册表移除（schema-level safety）
+- 前端 Tool 组件标签：服务/包管理/防火墙/安全审计/性能
+
+**报错与修改**：
+- _L1_READONLY_TOOL_NAMES 未含只读扩展 → L1 下 security_audit 被误裁 → 补充
+- 工具数断言连锁更新（8→13→17：main 含子 agent 工具与扩展）
+
+**复盘**：
+- ✅ 工具统一走 execute_via_ssh = 安全机制自动继承（审批/脱敏/审计零重复代码）
+- ✅ schema-level safety 在"权限维度 + 工具维度"双层生效（L1 裁写工具 + 子 agent 裁角色工具）
+- 📌 agent 工具矩阵需显式设计（main 全量 / coding 运维写 / explore 只读 / teach 教学）——避免一刀切
