@@ -28,6 +28,8 @@ from typing import Any
 from knowledge.fts5 import KnowledgeEntry, get_global_index
 from knowledge.vector import generate_embedding, get_global_vector
 
+from knowledge.rag import get_global_rag
+
 logger = logging.getLogger("sidecar.knowledge.rpc")
 
 
@@ -97,11 +99,15 @@ def register_methods(dispatcher: Any) -> None:
     """向 JSON-RPC dispatcher 注册 knowledge.* 方法
 
     注册的方法：
-    - knowledge.search:   检索知识库
+    - knowledge.search:   检索知识库（P2-4 起默认走 RAG 混合检索引擎）
     - knowledge.add:      增加一条知识
     - knowledge.rebuild:  全量重建索引
     - knowledge.get:      按 ID 获取单条知识
     - knowledge.count:    返回知识库条目数
+    - knowledge.import_docs:  文档导入（目录扫描分块）
+    - knowledge.add_case:     会话案例沉淀（决策库雏形）
+    - knowledge.crawl:        在线爬取入库
+    - knowledge.stats:        知识库统计
     """
 
     def _search(
@@ -128,7 +134,8 @@ def register_methods(dispatcher: Any) -> None:
         elif method_lower == "vector":
             results = _search_vector(query, limit=limit)
         else:
-            results = _search_hybrid(query, limit=limit)
+            # P2-4: hybrid 走统一 RAG 引擎（sqlite-vec + FTS5 + RRF）
+            results = get_global_rag().hybrid_search(query, top_k=limit)
 
         return {
             "results": results,
@@ -218,4 +225,35 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.rebuild", _rebuild)
     dispatcher.register("knowledge.get", _get)
     dispatcher.register("knowledge.count", _count)
-    logger.info("knowledge.* methods registered (5 methods)")
+
+    # P2-4: 内容源管道
+    def _import_docs(directory: str, source: str = "imported-docs") -> dict[str, Any]:
+        """文档导入：扫描目录 .md/.txt 分块入库"""
+        from knowledge.sources import import_docs
+
+        return import_docs(directory, source)
+
+    def _add_case(title: str, content: str, tags: list[str] | None = None) -> dict[str, Any]:
+        """会话案例沉淀（决策库雏形）"""
+        from knowledge.sources import add_case
+
+        case_id = add_case(title=title, content=content, tags=tags or [])
+        return {"ok": True, "id": case_id}
+
+    def _crawl(source: str, url: str | None = None) -> dict[str, Any]:
+        """在线爬取文档入库"""
+        from knowledge.sources import crawl_and_index
+
+        return crawl_and_index(source, url)
+
+    def _stats() -> dict[str, Any]:
+        """知识库统计（总数/embedding 状态）"""
+        from knowledge.sources import knowledge_stats
+
+        return knowledge_stats()
+
+    dispatcher.register("knowledge.import_docs", _import_docs)
+    dispatcher.register("knowledge.add_case", _add_case)
+    dispatcher.register("knowledge.crawl", _crawl)
+    dispatcher.register("knowledge.stats", _stats)
+    logger.info("knowledge.* methods registered (9 methods, RAG hybrid)")
