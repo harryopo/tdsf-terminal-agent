@@ -3067,3 +3067,10 @@ SSH 终端执行 cd /tmp
 4. **P1-NEW-v3-2（toolCallId 错乱）**：上轮已修（孤儿 completed 忽略 + handler 不再发残缺 started，见 §37.1），本轮验证单测覆盖。
 
 **验证**：pytest 1385（+10：hook 6 + 路由 4）；test_tools 82/82；cargo check / typecheck / vitest 853 全过。
+
+### 37.13 P1-v5-5 ssh_command 输出脱敏（2026-08-01）
+
+- explain 参数已存在（透传事件/结果），本轮补**输出脱敏**：`redact_sensitive()` 统一作用于 execute_via_ssh 成功返回（output 字段）。
+- 模式覆盖：SSH 私钥块、password/secret/token/api_key 赋值、mysql 内联 `-pXXX`、AWS AKIA key、URL 内嵌凭据、Authorization Bearer。保守原则（宁可多脱敏）。
+- 测试 +8（含 execute_via_ssh 集成）；pytest 1393 全过。
+- **注**：多 agent 工作流连续两轮首个 agent 卡住（无产出，~10min/轮），已停止并改为主 agent 直接实施；工作流脚本保留（scripts/dev-loop-*.js），待环境排查后复用。

@@ -481,14 +481,61 @@ def execute_via_ssh(
         }
 
     # Rust 后端返回的成功结果（假设结构：{ok, output, exit_code, duration}）
+    # TDSF 修复 2026-08-01 (P1-v5-5): 返回前统一脱敏，防止密码/密钥/token
+    # 泄漏到前端工具行、LLM 上下文与日志。
     return {
         "status": "success",
         "command": command,
         "ssh_session_id": session_id,
-        "output": result.get("output", "") if isinstance(result, dict) else str(result),
+        "output": redact_sensitive(
+            result.get("output", "") if isinstance(result, dict) else str(result)
+        ),
         "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
     }
+
+
+# ============================================================================
+# 输出脱敏（P1-v5-5）
+# ============================================================================
+
+# 敏感内容模式 → 替换。保守原则：宁可多脱敏，不可泄漏。
+# 覆盖：SSH 私钥块、password/secret/token/api_key 赋值、AWS access key、
+# URL 内嵌凭据（://user:pass@）、Authorization Bearer。
+_SENSITIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            re.DOTALL,
+        ),
+        "-----BEGIN PRIVATE KEY-----[REDACTED]-----END PRIVATE KEY-----",
+    ),
+    (
+        re.compile(
+            r"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)"
+            r"\s*[:=]\s*['\"]?[^\s'\"&|;]+"
+        ),
+        r"\1=***",
+    ),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA***"),
+    # mysql 风格内联密码：-pS3cretPw（-p 后无空格直接跟密码）
+    (re.compile(r"(?<!\S)-p\S+"), "-p***"),
+    (re.compile(r"(://[^:/\s]+:)[^@/\s]+(@)"), r"\1***\2"),
+    (re.compile(r"(?i)(authorization:\s*bearer\s+)\S+"), r"\1***"),
+]
+
+
+def redact_sensitive(text: str) -> str:
+    """替换命令输出中的敏感内容（密码/密钥/token 等）
+
+    用于 ssh_command 等工具结果返回前统一脱敏，防止敏感信息
+    进入前端工具行 / LLM 上下文 / 日志。
+    """
+    if not text:
+        return text
+    for pattern, repl in _SENSITIVE_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
 
 
 # ============================================================================
