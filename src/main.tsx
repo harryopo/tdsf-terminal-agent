@@ -46,11 +46,16 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 );
 
 // 上游窗口显示逻辑: visible:false 创建 → 首帧后 show()
-// 双保险 50ms/500ms, 避免慢机器首帧未渲染完出现白屏/透明闪烁
+// T2 透明窗口修复: 原 setTimeout(50/500ms) 在 React 首帧渲染前 show——
+// App 初始化重（sidecar/workspace boot）时首帧可能 >500ms，窗口显示时
+// WebView 未绘制 → 透明。改为：
+//   1. 双 requestAnimationFrame：首帧真正绘制后再 show（标准做法）
+//   2. 2s 兜底：极端慢机器保证最终显示
+//   3. 窗口级 backgroundColor 已兜底（tauri.conf）——渲染前即不透明
 const showWindow = () => {
   getCurrentWindow()
     .show()
     .catch((e) => console.error("window.show failed:", e));
 };
-setTimeout(showWindow, 50);
-setTimeout(showWindow, 500);
+requestAnimationFrame(() => requestAnimationFrame(showWindow));
+setTimeout(showWindow, 2000);
