@@ -203,3 +203,107 @@ class TestJSONRPCError:
         assert main.ERR_SERVER_GENERIC == -32000
         assert main.ERR_TIMEOUT == -32001
         assert main.ERR_WRITE_LEASE == -32002
+
+
+# ============================================================================
+# write_message 容错测试（2026-07-31 加固）
+# ============================================================================
+
+
+class _RaisingStdout:
+    """模拟 stdout 写入失败（Windows 管道 EINVAL / 读端关闭）"""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+        self.write_calls = 0
+
+    def write(self, _data: str) -> int:
+        self.write_calls += 1
+        raise self._exc
+
+    def flush(self) -> None:  # pragma: no cover - 不会到达
+        raise self._exc
+
+
+class _RecordingStderr:
+    def __init__(self) -> None:
+        self.buffer = ""
+
+    def write(self, data: str) -> int:
+        self.buffer += data
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+
+class _OkStdout:
+    def __init__(self) -> None:
+        self.data = ""
+
+    def write(self, data: str) -> int:
+        self.data += data
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+
+class TestWriteMessageResilience:
+    """write_message 对 stdout 管道写失败的容错
+
+    根因：Tauri spawn 下 sidecar 每次 stdout 写都得到 OSError(22) EINVAL，
+    ready 通知写失败未捕获 → 进程退出 → Rust 判 "crashed during startup"。
+    加固后写失败不再冒泡崩溃，降级到 stderr 记录一次。
+    """
+
+    def test_oserror_einval_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        raising = _RaisingStdout(OSError(22, "Invalid argument"))
+        stderr = _RecordingStderr()
+        monkeypatch.setattr(main, "_stdout", raising)
+        monkeypatch.setattr(main, "_stdout_broken", False)
+        monkeypatch.setattr(main.sys, "stderr", stderr)
+
+        # 不应抛出（否则会杀死 sidecar）
+        main.write_message({"jsonrpc": "2.0", "method": "ready", "params": {"x": 1}})
+        assert raising.write_calls == 1
+        assert "stdout write failed" in stderr.buffer
+
+    def test_valueerror_closed_file_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raising = _RaisingStdout(ValueError("I/O operation on closed file"))
+        stderr = _RecordingStderr()
+        monkeypatch.setattr(main, "_stdout", raising)
+        monkeypatch.setattr(main, "_stdout_broken", False)
+        monkeypatch.setattr(main.sys, "stderr", stderr)
+
+        main.write_message({"jsonrpc": "2.0", "method": "ping"})
+        assert "stdout write failed" in stderr.buffer
+
+    def test_stderr_logged_once_then_deduped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raising = _RaisingStdout(OSError(22, "Invalid argument"))
+        stderr = _RecordingStderr()
+        monkeypatch.setattr(main, "_stdout", raising)
+        monkeypatch.setattr(main, "_stdout_broken", False)
+        monkeypatch.setattr(main.sys, "stderr", stderr)
+
+        for _ in range(5):
+            main.write_message({"jsonrpc": "2.0", "method": "sidecar:log"})
+        # 5 次写失败，但 stderr 只记录一次（去重）
+        assert stderr.buffer.count("stdout write failed") == 1
+
+    def test_recovery_resets_broken_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ok = _OkStdout()
+        monkeypatch.setattr(main, "_stdout", ok)
+        monkeypatch.setattr(main, "_stdout_broken", True)  # 之前处于失败态
+        monkeypatch.setattr(main.sys, "stderr", _RecordingStderr())
+
+        main.write_message({"jsonrpc": "2.0", "method": "ping"})
+        # 写成功后应复位 broken 标志，且内容真正写出
+        assert main._stdout_broken is False
+        assert '"ping"' in ok.data
