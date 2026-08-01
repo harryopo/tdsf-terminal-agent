@@ -33,6 +33,9 @@ import {
   PROGRAMMING_DICT_SIZE,
 } from "./programmingDictionary";
 import zhDictJson from "./dict/linux-commands-zh.json";
+// T3 词库增强（ECDICT 子集 + lemma 词形还原）
+import ecdictCommonJson from "./dict/ecdict-common.json";
+import lemmaReverseJson from "./dict/lemma-reverse.json";
 
 /** 翻译结果 */
 export interface TranslationResult {
@@ -180,7 +183,25 @@ export function translateText(text: string): TranslationResult {
     return finishTranslate(text, entries);
   }
 
-  // 7. 复合词拆分
+  // 7. ECDICT 通用/计算机词库（8.1 万条：give/database/network/algorithm…）
+  entries = lookupEcdictCommon(trimmed);
+  if (entries.length > 0) {
+    return finishTranslate(text, entries);
+  }
+
+  // 8. lemma 词形还原（gave→give / teeth→tooth）→ 再查全部词库
+  const restored = lookupLemmaRestored(trimmed);
+  if (restored.length > 0) {
+    return finishTranslate(text, restored);
+  }
+
+  // 9. 模糊兜底：前缀匹配（输入是长词/复合词时提示最接近词）
+  const fuzzy = lookupFuzzyPrefix(trimmed);
+  if (fuzzy.length > 0) {
+    return finishTranslate(text, fuzzy);
+  }
+
+  // 10. 复合词拆分
   const words = splitCompoundWord(trimmed);
   if (words.length > 1) {
     for (const w of words) {
@@ -197,6 +218,92 @@ export function translateText(text: string): TranslationResult {
   }
 
   return finishTranslate(text, entries);
+}
+
+// ============================================================================
+// ECDICT 通用词库查询（8.1 万条）
+// ============================================================================
+
+const ECDICT_COMMON = ecdictCommonJson.entries as Record<
+  string,
+  { zh: string; pos?: string; tag?: string }
+>;
+const LEMMA_REVERSE = lemmaReverseJson.entries as Record<string, string>;
+
+/** ECDICT 通用词查询（精确 → 小写降级） */
+function lookupEcdictCommon(word: string): LookupResult[] {
+  if (!/^[a-zA-Z]/.test(word)) return [];
+  const exact = ECDICT_COMMON[word];
+  if (exact) {
+    return [
+      { word, zh: exact.zh, pos: exact.pos, tag: exact.tag ?? "common", exact: true },
+    ];
+  }
+  const lower = word.toLowerCase();
+  if (lower !== word) {
+    const e = ECDICT_COMMON[lower];
+    if (e) {
+      return [
+        { word: lower, zh: e.zh, pos: e.pos, tag: e.tag ?? "common", exact: true },
+      ];
+    }
+  }
+  return [];
+}
+
+/** lemma 词形还原：form→lemma → 查 zhDict/ECDICT */
+function lookupLemmaRestored(word: string): LookupResult[] {
+  const lower = word.toLowerCase();
+  const lemma = LEMMA_REVERSE[lower];
+  if (!lemma || lemma === lower) return [];
+  // 还原后查 ECDICT 与命令词典
+  const e = ECDICT_COMMON[lemma];
+  if (e) {
+    return [
+      {
+        word: `${lower}（${lemma}）`,
+        zh: e.zh,
+        pos: e.pos,
+        tag: "词形还原",
+        exact: false,
+        detail: `原形：${lemma}`,
+      },
+    ];
+  }
+  const z = ZH_DICT[lemma];
+  if (z) {
+    return [
+      { word: `${lower}（${lemma}）`, zh: z.zh, pos: z.pos, tag: "词形还原", exact: false },
+    ];
+  }
+  return [];
+}
+
+/** 模糊前缀匹配（长词/未收录词 → 提示最接近的 ECDICT 词） */
+function lookupFuzzyPrefix(word: string): LookupResult[] {
+  if (word.length < 4) return [];
+  const lower = word.toLowerCase();
+  const hits: LookupResult[] = [];
+  // 前缀匹配（前 50 条内找 3 个）
+  let count = 0;
+  for (const [k, e] of Object.entries(ECDICT_COMMON)) {
+    if (k.startsWith(lower) && k !== lower) {
+      hits.push({ word: k, zh: e.zh, pos: e.pos, tag: "近似", exact: false });
+      count += 1;
+      if (count >= 3) break;
+    }
+  }
+  // 前缀无果 → 包含匹配（词内含输入）
+  if (hits.length === 0) {
+    for (const [k, e] of Object.entries(ECDICT_COMMON)) {
+      if (k.includes(lower) && k.length > lower.length) {
+        hits.push({ word: k, zh: e.zh, pos: e.pos, tag: "近似", exact: false });
+        count += 1;
+        if (count >= 2) break;
+      }
+    }
+  }
+  return hits;
 }
 
 function finishTranslate(source: string, entries: LookupResult[]): TranslationResult {
