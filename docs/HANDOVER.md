@@ -2,7 +2,7 @@
 
 > **位置**：`docs/HANDOVER.md`
 > **作用**：面向新接手 AI / 开发者的全面交接文档，与 `KNOWLEDGE-INDEX.md` 共同构成知识沉淀 L3 层
-> **版本**：v1.0（2026-07-30 · 知识沉淀体系建立）
+> **版本**：v1.2（2026-07-31 · sidecar 编码契约 + 双问题修复 + better-harness 识别）
 > **接手顺序**：`AGENTS.md` → `CLAUDE.md` → `docs/MULTI-AGENT-WORKFLOW.md` → `docs/dev-state.md` 末尾交接章 → `docs/KNOWLEDGE-INDEX.md` → 本文件
 > **上游参考**：https://github.com/crynta/terax-ai
 
@@ -309,6 +309,32 @@ type WorkspaceEnv =
 3. **Windows 路径大小写归一化只需盘符**：完整路径大小写不能乱改（文件系统真实大小写），盘符是唯一确定大小写不敏感的部分
 4. **模块级状态改源码后必须重启 tauri:dev**：vite HMR 会分裂模块实例（`sessions` Map 分叉导致 `writeToSession` 返回 false 的迷惑现象）
 
+### 3.8 跨语言 stdio 编码契约（sidecar 线协议，2026-07-31 重大教训）
+
+**症状**：sidecar 每次启动都在注册早期静默死亡（日志停在 `registered method: status`），AI 面板报 -32000 not_running。
+
+**根因链（三层排查闭环）**：
+```
+Windows 中文系统 → Python sys.stdout 编码 gbk
+  → write_message(ensure_ascii=False) 把含中文路径的日志写 gbk 字节
+  → Rust BufReader::lines() 按 UTF-8 严格解析 → InvalidData
+  → reader 静默退出（while let Ok(Some(line)) 吞 Err）
+  → 误判 EOF → state=Crashed → wait_for_ready 提前返回 Err
+  → start() 杀子进程（TerminateProcess，死亡点随机）
+  → 子进程死后写 stdout 得 EINVAL（OSError 22 是滞后现象，曾误导为管道问题）
+```
+
+**契约（必须遵守）**：
+1. **Python sidecar 启动第一件事**：`sys.stdin/stdout/stderr.reconfigure(encoding="utf-8")`（**三通道缺一不可**——stdin 漏配时 Rust 写 UTF-8 请求行、Python 按 gbk 解码，中文 input 被破坏成孤立 surrogate，Strands 请求序列化抛 UnicodeEncodeError，AI 对话间歇性 30s 超时，症状伪装成"LLM 未配置"）
+2. **Rust 读子进程输出**：用 `read_until(b'\n')` + `from_utf8_lossy`，**禁用 `BufReader::lines()`**（严格 UTF-8，一行坏编码杀整个 reader）
+3. **write_message 容错**：stdout 写失败（OSError/ValueError）不冒泡，去重记录 stderr 一次
+4. **Rust start() 并发守卫**：`Starting` 状态跳过并发 start（防双 spawn 句柄错配）；spawn 失败复位 Crashed（防 wedge）
+
+**排查方法论**（区分 kill vs crash）：
+- 无 faulthandler dump + 无 Windows WER 事件 + 死亡点随机 = **TerminateProcess（外部杀）**；有 dump = native crash
+- **文件探针**（不经管道）是绕开"管道疑云"的关键手段：`sidecar_probe2.log` 逐行标记
+- **独立 tokio 小程序复现**（`/tmp/tokio_pipe_test` 同款 spawn 配置）可区分"tokio 通用问题" vs "Tauri 环境特有"
+
 ---
 
 ## 4. 已知问题及解决方案
@@ -329,6 +355,9 @@ type WorkspaceEnv =
 | P1-NEW-v3-2 | P1 | toolCallId 配对错乱 | 按 tool_name 配对，同名工具覆盖 | **未修**（backlog P1） |
 | P1-NEW-v3-3 | P1 | SSH 主机审批无超时 | `rx.await` 永久挂起 | 642a4d0 |
 | P1-NEW-v3-4 | P1 | 线程池退出仍卡死 | 非 daemon 线程 atexit join | 642a4d0 |
+| — | P0 | sidecar 启动即崩（AI 报 not_running） | **gbk 写 stdout → Rust lines() UTF-8 InvalidData → reader 退出 → 误判 EOF → kill 子进程** | 未提交（§3.8 契约） |
+| — | P1 | SSH 终端划词翻译不显示 | `SshTerminalHost` 未给 TerminalPane 传 ref，getSelection 未注册进 terminalRefs | 未提交 |
+| — | P2 | 翻译开关不持久化 | enabled 默认 false 且无 persist | 未提交 |
 
 ### 4.2 当前 backlog（按优先级，详见 dev-state.md §三十四/§三十五）
 
@@ -491,6 +520,8 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 | `8dbed20` | dev-state §十九交接章（P0-E Strands override 修复） |
 | `4c5640f` | sidecar.health RPC + backend_status 事件 |
 | `6bc17b7` | invoke_agent 优先走 _global_backend_override 路径 |
+| **未提交** | sidecar GBK/UTF-8 根因修复（§3.8）+ SSH 翻译 handle 注册 + 翻译开关持久化（§36） |
+| **未提交** | better-harness：CI 脚本修复（check-types→typecheck）/ .gitignore 路径 / 协作契约归档 / Python CI 评估报告（§36.3） |
 
 ---
 
@@ -531,19 +562,21 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 
 ---
 
-## 8. 运行时状态快照（2026-07-31）
+## 8. 运行时状态快照（2026-07-31 22:50）
 
 | 项目 | 状态 |
 |------|------|
 | typecheck / lint / test(852) / build:web | ✅ 全绿 |
-| pytest | ✅ 全过 |
-| tauri:dev 桌面端 | ✅ 窗口可见 + 本地终端 + SSH 可连 + 远程文件树 |
-| 终端/Space 重构 | ✅ 阶段 0-5 全部落地（Space 支持 SSH / OSC 7 cwd 同步 / 容错收尾） |
-| CDP 9222 实测 | ✅ 本地 + SSH 双链路 OSC 7 同步全过 |
-| Strands 后端 | ✅ TDSF_AGENT_BACKEND=strands 已激活 |
-| 最新 commit | `14de3c5`（终端/Space 重构 Phase 4+5） |
-| v3 修复 commit | `642a4d0`（9 项 P1/P2，16 文件 / 4459 insertions） |
+| pytest（1284，含 +4 write_message 容错） | ✅ 全过 |
+| cargo check | ✅ 通过 |
+| sidecar | ✅ **running**（strands 激活 + llm_configured=true + 9 agents + 99 方法） |
+| AI 对话 | ✅ 已恢复（GBK/UTF-8 根因修复即时生效，无需重启 tauri:dev） |
+| 终端/Space 重构 | ✅ 阶段 0-5 全部落地（§3.7） |
+| SSH 划词翻译 | ⏳ 代码修复完成（handle 注册 + 开关持久化），待 SSH 实测 |
+| 翻译开关 | ✅ 默认开启 + localStorage 持久化 |
+| 最新 commit | `c3e2954`（docs）— 本 session 修复**未提交**（§36.5 待分组提交） |
+| 交接章 | dev-state §三十六（2026-07-31） |
 
 ---
 
-> **最后更新**：2026-07-31 · v1.1 · 终端/Space 重构完成 + 报告登记。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-07-31 · v1.2 · sidecar GBK/UTF-8 根因修复（§3.8 编码契约）+ 翻译修复 + better-harness 识别。上游参考：https://github.com/crynta/terax-ai
