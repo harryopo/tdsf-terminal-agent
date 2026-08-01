@@ -89,7 +89,7 @@ def make_ctx(
     rust_bridge: Any = _RUST_BRIDGE_UNSET,
     agent_name: str = "main",
     session_id: str = "test-session",
-    ssh_session_id: str = "ssh-1",
+    ssh_session_id: str = "1",
 ) -> ToolContext:
     """构建测试用 ToolContext
 
@@ -99,7 +99,9 @@ def make_ctx(
                      显式传 None 时保留 None（用于测试 unavailable 路径）
         agent_name: Agent 名
         session_id: 会话 ID
-        ssh_session_id: SSH 会话 ID
+        ssh_session_id: SSH 会话 ID（Rust 侧期望 int-convertible u32，
+                        2026-08-01 修正默认值：旧 "ssh-1" 会被 execute_via_ssh
+                        的 int 校验拒绝）
     """
     return ToolContext(
         event_bus=event_bus or make_mock_event_bus(),
@@ -242,7 +244,7 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertIn("output", result)
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
-            {"session_id": "ssh-1", "command": "ls -la /tmp", "timeout": 30},
+            {"sessionId": 1, "command": "ls -la /tmp", "timeout": 30},
         )
 
     def test_high_risk_command_needs_approval(self):
@@ -312,7 +314,7 @@ class TestRemoteFileTool(unittest.TestCase):
         self.assertFalse(result["truncated"])
         bridge.ipc_invoke.assert_called_once_with(
             "sftp_read",
-            {"session_id": "ssh-1", "path": "/etc/hosts", "max_size": 1048576},
+            {"sessionId": 1, "path": "/etc/hosts", "max_size": 1048576},
         )
 
     def test_read_binary_file_detected(self):
@@ -657,22 +659,24 @@ class TestNetworkDiagnosticTool(unittest.TestCase):
 class TestMakeAllOpsTools(unittest.TestCase):
     """make_all_ops_tools 批量构建测试"""
 
-    def test_returns_5_tools(self):
-        """make_all_ops_tools 应返回 5 个工具"""
+    def test_returns_7_tools(self):
+        """make_all_ops_tools 应返回 7 个工具（2026-08-01: +skill_invoke/suggest_command）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 5)
+        self.assertEqual(len(tools), 7)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应包含 5 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 5)
+        """OPS_TOOL_NAMES 应包含 7 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 7)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
         self.assertIn("process_inspector", OPS_TOOL_NAMES)
         self.assertIn("network_diagnostic", OPS_TOOL_NAMES)
+        self.assertIn("skill_invoke", OPS_TOOL_NAMES)
+        self.assertIn("suggest_command", OPS_TOOL_NAMES)
 
 
 # ============================================================================
@@ -781,7 +785,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response.metrics = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache["main"] = mock_agent  # 跳过 _get_or_create_agent
+        adapter._agent_cache[("main", "s1")] = mock_agent  # cache 键为 (agent_id, session_id) 元组
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -801,7 +805,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="ok")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache["main"] = mock_agent
+        adapter._agent_cache[("main", "s1")] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -824,7 +828,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         adapter = StrandsAgentAdapter(event_bus=bus, backend_enabled=True)
 
         mock_agent = MagicMock(side_effect=RuntimeError("strands internal error"))
-        adapter._agent_cache["main"] = mock_agent
+        adapter._agent_cache[("main", "s1")] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -844,7 +848,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="done")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache["main"] = mock_agent
+        adapter._agent_cache[("main", "s1")] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
