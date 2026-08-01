@@ -114,3 +114,29 @@
 - ✅ 方案书先诚实披露"9-Agent 未在主路径集成"的事实，再定方向——避免继续漂移
 - ✅ 用户"先定方案书再实施"的顺序正确：方案书是后续所有工作的对齐基准
 - 📌 文档漂移是系统性风险：方案书 = 唯一权威，竞赛材料冻结归档
+
+---
+
+## 2026-08-01 · P2-4 知识库完整落地（sqlite-vec + BGE + FTS5 混合检索）
+
+**任务**：用户要求——知识库真实落地（调研发现原知识库四缺：空库/embedding 降级 hash/主路径未接入/无内容源），集成主流开源 RAG 方案，教学解释要讲 Linux 哲学。
+
+**方案**：
+- 三路调研：本地代码审计（四缺铁证）+ 上级目录（旧版已选 BGE-small-zh + sqlite-vec，选型正确可继承）+ 网上调研（11 项目对比：RAGFlow/Dify 平台化不采用，sqlite-vec 单文件零服务最适合桌面端）
+- 选型：sqlite-vec（vec0 KNN）+ BGE-small-zh-v1.5（fastembed ONNX，512 维，中文优化）+ FTS5（jieba 分词）双路 RRF 融合
+- 内容源四路：内置教学语料（12 条，含 Linux 哲学）自动索引 / 文档导入分块 / 会话案例沉淀（决策库雏形）/ 在线爬取
+- Strands 接入：knowledge_search 工具（main/teach/history/explore），main prompt 加知识库指引
+
+**报错与修改（重要）**：
+- **rowid 不一致导致检索回查为空**：entries 表自增 rowid 与 FTS5/vec0 的确定性 rowid（md5(entry_id)）不匹配 → hybrid_search 按 rowid 查元数据全空。修复：三表统一确定性 rowid
+- **fastembed 模型加载 30s 超时**：测试环境每次 add 尝试下载模型（WinError 10060）。修复：knowledge/tests/conftest.py 跳过真实模型（hash 兜底），测试 127s → 2s
+- **jieba 上下文分词不一致**："php-fpm" 切分随上下文变化 → FTS5 查询偶发不命中。教训：测试用稳定词；未来可考虑 trigram tokenizer 兜底
+- HF 下载超时 → HF_ENDPOINT=https://hf-mirror.com 镜像下载成功（模型已缓存 .tdsf-data/models）
+
+**复盘**：
+- ✅ 上级目录旧选型（BGE+sqlite-vec）与 2026 网上调研一致——历史调研结论可以继承，不必重复选型
+- ✅ "先审计现状再实现"再次验证：空库/hash 降级这些事实不查代码永远不知道
+- ✅ 三表 rowid 统一是 SQLite 混合检索的关键细节（FTS5/vec0 都要显式 rowid）
+- 📌 测试隔离（conftest 跳过模型加载）是知识库测试的必备项——真实模型下载会让测试不可重复
+- 📌 教学语料每条含"哲学"维度（一切皆文件/组合小工具/最小权限）——呼应"教学解释到 Linux 哲学"需求
+- 📌 待办：知识库管理 UI（浏览/导入页面）、TeachCard 教学卡片渲染（P2-1）
