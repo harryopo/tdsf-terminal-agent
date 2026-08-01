@@ -513,6 +513,15 @@ def execute_via_ssh(
                 f"execute_via_ssh rejected by user: tool={tool_name}, "
                 f"command={command[:80]}, reason={reason}"
             )
+            _audit_append(
+                event="approval",
+                decision="rejected",
+                tool=tool_name,
+                command=command,
+                session_id=session_id,
+                agent=ctx.agent_name,
+                reason=reason,
+            )
             return {
                 "status": "rejected",
                 "command": command,
@@ -524,6 +533,14 @@ def execute_via_ssh(
             logger.warning(
                 f"execute_via_ssh approval not answered: "
                 f"status={req.status.value}, tool={tool_name}, command={command[:80]}"
+            )
+            _audit_append(
+                event="approval",
+                decision="timeout",
+                tool=tool_name,
+                command=command,
+                session_id=session_id,
+                agent=ctx.agent_name,
             )
             return {
                 "status": "needs_approval",
@@ -612,16 +629,37 @@ def execute_via_ssh(
     # Rust 后端返回的成功结果（假设结构：{ok, output, exit_code, duration}）
     # TDSF 修复 2026-08-01 (P1-v5-5): 返回前统一脱敏，防止密码/密钥/token
     # 泄漏到前端工具行、LLM 上下文与日志。
+    output_text = redact_sensitive(
+        result.get("output", "") if isinstance(result, dict) else str(result)
+    )
+    # P1-3: 命令执行成功入审计链（命令已脱敏）
+    _audit_append(
+        event="command_executed",
+        tool=tool_name,
+        command=command,
+        session_id=session_id,
+        agent=ctx.agent_name,
+        exit_code=result.get("exit_code", 0) if isinstance(result, dict) else 0,
+    )
     return {
         "status": "success",
         "command": command,
         "ssh_session_id": session_id,
-        "output": redact_sensitive(
-            result.get("output", "") if isinstance(result, dict) else str(result)
-        ),
+        "output": output_text,
         "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
     }
+
+
+def _audit_append(**entry: Any) -> None:
+    """追加审计记录（敏感字段先脱敏；审计失败不影响主流程）"""
+    try:
+        from strands_backend.audit_chain import get_global_chain
+
+        entry["command"] = redact_sensitive(str(entry.get("command", "")))
+        get_global_chain().append(entry)
+    except Exception as e:
+        logger.debug(f"audit append failed: {e}")
 
 
 # ============================================================================
