@@ -3126,3 +3126,24 @@ CDP 全新状态实测通过。commit 见上。
 | 5 | 全新状态回归：上述改动后用 §37.14 规范全流程实测 | 验收 | — |
 
 **遗留观察**：plan_task 单字"查"已修；SSH 划词翻译实测待用户；dev-log 工具（§37.10/37.11）可继续用于排障。
+
+### 37.17 方案书 v1.0 定稿：Agent 架构拍板 B 方案（2026-08-01）
+
+**产出**：`docs/方案书-v1.0.md`（产品与技术方案书 v1.0，项目"做大做强"总纲，7 章：现状诊断/产品定位/技术选型定论/总体架构/工程治理/路线图/风险）。
+
+**编写依据**：
+- 上一级目录（D:\ai\linux教学一体\）的旧文档为 **Electron 时代污染源**，技术栈结论全部作废，仅采纳与本项目 DNA 一致的思想（人机协同定位、D-S 可信度、教学痛点）；不将其纳入方案书
+- 有效调研源：项目内 12 份审计/可用性报告 + 54 项目开源调研基线（ops-agent 系列 v3-v5）+ strands 集成系列方案
+
+**用户已拍板决策**：
+1. **Agent 架构 = B 方案**：Strands 多 agent 真集成（main + explore/teach/coding/history 四个专家子 agent，Agents-as-Tools 模式），替代现状"1 agent + 关键词模拟"；§37.16 规划 #1 关闭
+2. **P0 全做**：B 方案多 agent + 真流式（Strands stream 事件→Vercel AI SDK）+ 超时可配置 + 运行时 fallback/降级 UI + 前端补测试
+
+**P0 实施清单（对应方案书 §6 P0）**：
+- [ ] P0-1 Strands 多 agent（main + explore/teach/coding/history，子 agent 独立工具集 → 天然 schema-level safety）
+- [ ] P0-2 真流式接入（消灭伪流式 A1：24 字符/8ms 切片）
+- [ ] P0-3 超时可配置（SIDECAR_TIMEOUT_MS 硬编码 → 可配置/放宽，A2）
+- [ ] P0-4 运行时失败 fallback + 降级 UI（A7）
+- [ ] P0-5 前端 4 文件补测试 + Strands 真实 e2e
+
+**验收标准**：teach 输出含 teaching_content 结构化字段；Pill 显示与实际 agent 一一对应；路由由模型自主决定而非关键词。
