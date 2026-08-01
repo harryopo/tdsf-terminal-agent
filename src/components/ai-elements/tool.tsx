@@ -72,11 +72,37 @@ const STATUS_LABEL: Record<ToolPart["state"], string> = {
   "output-error": "error",
 };
 
+function getToolMeta(toolName: string): { label: string; icon: typeof File01Icon } {
+  // P0-6: agent:<name> 前缀 → 子 agent 委派卡片（main 统一入口委派专家）
+  if (toolName.startsWith("agent:")) {
+    const agentName = toolName.slice("agent:".length);
+    const label =
+      agentName === "teach"
+        ? "Teach Agent"
+        : agentName === "coding"
+          ? "Coding Agent"
+          : agentName === "explore"
+            ? "Explore Agent"
+            : agentName === "history"
+              ? "History Agent"
+              : `${agentName} Agent`;
+    return { label, icon: RobotIcon };
+  }
+  return TOOL_META[toolName] ?? { label: toolName, icon: ToolsIcon };
+}
+
 function deriveSummary(toolName: string, input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const i = input as Record<string, unknown>;
   const str = (k: string) =>
     typeof i[k] === "string" ? (i[k] as string) : null;
+
+  // P0-6: agent:<name> → 委派输入文本（截断展示）
+  if (toolName.startsWith("agent:")) {
+    const task = str("input") ?? str("task");
+    if (!task) return null;
+    return task.length > 60 ? `${task.slice(0, 60)}…` : task;
+  }
 
   switch (toolName) {
     case "read_file":
@@ -144,9 +170,9 @@ const ToolImpl = ({
   defaultOpen,
   ...props
 }: ToolProps) => {
-  const meta = TOOL_META[toolName];
-  const Icon = meta?.icon ?? ToolsIcon;
-  const label = meta?.label ?? toolName;
+  const meta = getToolMeta(toolName);
+  const Icon = meta.icon;
+  const label = meta.label;
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
   const open = defaultOpen ?? isError;

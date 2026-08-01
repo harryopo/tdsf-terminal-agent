@@ -591,14 +591,7 @@ describe("runSidecarStream — 孤儿 tool_call completed 事件忽略", () => {
     await vi.waitFor(() => expect(typeof resolveInvoke).toBe("function"));
     const toolCallCb = listeners.get("sidecar:tool_call")!;
 
-    // 1. started 事件 → 正常产生 tool-input
-    toolCallCb({
-      payload: {
-        event_type: "tool_call",
-        payload: { tool_name: "read_file", status: "started", params: {} },
-      },
-    });
-    // 2. 孤儿 completed（无对应 started，模拟上轮 invoke 尾部事件迟到串台）
+    // 孤儿 completed（无对应 started，模拟上轮 invoke 尾部事件迟到串台）
     toolCallCb({
       payload: {
         event_type: "tool_call",
@@ -615,8 +608,93 @@ describe("runSidecarStream — 孤儿 tool_call completed 事件忽略", () => {
       parts.push(r.value);
     }
 
-    expect(parts.some((p) => p.type === "tool-input")).toBe(true);
-    // 修复前：completed 会 fallback 新 ID 产生无配对的 tool-output；修复后：忽略
+    // 孤儿 completed 被忽略：既无 tool-input 也无 tool-output
+    // （原测试先发 started 再发 completed，两者配对成功会产出 tool-output——
+    //   旧版因 queue shift 丢失 bug 假通过；P0-6 修复后改为纯孤儿场景）
+    expect(parts.some((p) => p.type === "tool-input")).toBe(false);
     expect(parts.some((p) => p.type === "tool-output")).toBe(false);
+  });
+});
+
+describe("runSidecarStream — agent 委派工具事件（P0-6）", () => {
+  it("agent:teach started → tool-input part；completed → tool-output part", async () => {
+    _setDevModeCheck(() => false);
+    const listeners = new Map<string, (e: unknown) => void>();
+    vi.mocked(listen).mockImplementation(
+      ((event: string, cb: (e: unknown) => void) => {
+        listeners.set(event, cb);
+        return Promise.resolve(() => {
+          listeners.delete(event);
+        });
+      }) as never,
+    );
+    let resolveInvoke!: (v: unknown) => void;
+    mockInvoke.mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolveInvoke = r;
+        }),
+    );
+
+    const stream = runSidecarStream({
+      agentId: "main",
+      messages: makeMessages("帮我讲 nginx"),
+      input: "帮我讲 nginx",
+      live: makeLive(),
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    const first = iterator.next();
+
+    await vi.waitFor(() =>
+      expect(listeners.has("sidecar:tool_call")).toBe(true),
+    );
+    await vi.waitFor(() => expect(typeof resolveInvoke).toBe("function"));
+    const toolCallCb = listeners.get("sidecar:tool_call")!;
+
+    // main 委派 teach：started（含委派输入）
+    toolCallCb({
+      payload: {
+        event_type: "tool_call",
+        payload: {
+          tool_name: "agent:teach",
+          status: "started",
+          params: { input: "讲一下 nginx" },
+        },
+      },
+    });
+    // completed（子 agent 全文）
+    toolCallCb({
+      payload: {
+        event_type: "tool_call",
+        payload: {
+          tool_name: "agent:teach",
+          status: "completed",
+          result: "## 1. 概念\nnginx 是反向代理服务器",
+        },
+      },
+    });
+    resolveInvoke({ observation: "main 总结", mood: "done" });
+
+    const parts: SidecarStreamPart[] = [];
+    parts.push((await first).value as SidecarStreamPart);
+    for (;;) {
+      const r = await iterator.next();
+      if (r.done) break;
+      parts.push(r.value);
+    }
+
+    const toolInput = parts.find((p) => p.type === "tool-input") as
+      | { type: "tool-input"; toolName: string; input: unknown }
+      | undefined;
+    expect(toolInput).toBeTruthy();
+    expect(toolInput!.toolName).toBe("agent:teach");
+    expect(toolInput!.input).toEqual({ input: "讲一下 nginx" });
+
+    const toolOutput = parts.find((p) => p.type === "tool-output") as
+      | { type: "tool-output"; toolName: string; output: unknown }
+      | undefined;
+    expect(toolOutput).toBeTruthy();
+    expect(toolOutput!.toolName).toBe("agent:teach");
+    expect(toolOutput!.output).toContain("nginx 是反向代理服务器");
   });
 });
