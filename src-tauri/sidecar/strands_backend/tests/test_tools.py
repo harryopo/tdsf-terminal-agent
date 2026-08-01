@@ -247,18 +247,58 @@ class TestSshCommandTool(unittest.TestCase):
             {"sessionId": 1, "command": "ls -la /tmp", "timeout": 30},
         )
 
-    def test_high_risk_command_needs_approval(self):
-        """高危命令应返回 needs_approval 并触发 emit_needs_you"""
+    def test_high_risk_command_approved_executes(self):
+        """P1-1: 高危命令用户批准 → 真实执行"""
+        from needs_you import NeedsYouStatus
+        from unittest.mock import patch
+
         bus = make_mock_event_bus()
         bridge = make_mock_rust_bridge()
         ctx = make_ctx(event_bus=bus, rust_bridge=bridge)
-        result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
-        self.assertEqual(result["status"], "needs_approval")
-        self.assertIn("rm_rf_root", result["risk"]["matched_rules"])
-        # RustBridge 不应被调用
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+        ):
+            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+        self.assertEqual(result["status"], "success")
+        # 批准后命令真正执行（RustBridge 被调用）
+        bridge.ipc_invoke.assert_called_once()
+
+    def test_high_risk_command_rejected(self):
+        """P1-1: 高危命令用户拒绝 → 返回 rejected，不执行"""
+        from needs_you import NeedsYouStatus
+        from unittest.mock import patch
+
+        bus = make_mock_event_bus()
+        bridge = make_mock_rust_bridge()
+        ctx = make_ctx(event_bus=bus, rust_bridge=bridge)
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(
+                status=NeedsYouStatus.REJECTED, response={"reason": "测试拒绝"}
+            ),
+        ):
+            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("拒绝", result["message"])
         bridge.ipc_invoke.assert_not_called()
-        # emit_needs_you 应被调用
-        bus.emit_needs_you.assert_called_once()
+
+    def test_high_risk_command_timeout_keeps_needs_approval(self):
+        """P1-1: 审批超时 → 保持 needs_approval（旧行为兜底）"""
+        from needs_you import NeedsYouStatus
+        from unittest.mock import patch
+
+        bus = make_mock_event_bus()
+        bridge = make_mock_rust_bridge()
+        ctx = make_ctx(event_bus=bus, rust_bridge=bridge)
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.TIMEOUT),
+        ):
+            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+        self.assertEqual(result["status"], "needs_approval")
+        self.assertIn("超时", result["message"])
+        bridge.ipc_invoke.assert_not_called()
 
     def test_no_rust_bridge_unavailable(self):
         """RustBridge=None 时应返回 unavailable"""
@@ -274,13 +314,37 @@ class TestSshCommandTool(unittest.TestCase):
             invoke_ssh_command_tool({}, ctx)
 
     def test_multiline_with_high_risk_blocked(self):
-        """多行命令包含高危行应被拦截"""
+        """多行命令包含高危行 → 发起审批；超时未响应保持 needs_approval"""
+        from needs_you import NeedsYouStatus
+        from unittest.mock import patch
+
         bus = make_mock_event_bus()
         ctx = make_ctx(event_bus=bus)
-        result = invoke_ssh_command_tool(
-            {"command": "ls\nrm -rf /\nuname -a"}, ctx
-        )
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.TIMEOUT),
+        ):
+            result = invoke_ssh_command_tool(
+                {"command": "ls\nrm -rf /\nuname -a"}, ctx
+            )
         self.assertEqual(result["status"], "needs_approval")
+
+    def test_multiline_approved_executes_whole(self):
+        """P1-1: 多行命令批准后整条执行"""
+        from needs_you import NeedsYouStatus
+        from unittest.mock import patch
+
+        bridge = make_mock_rust_bridge()
+        ctx = make_ctx(rust_bridge=bridge)
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+        ):
+            result = invoke_ssh_command_tool(
+                {"command": "ls\nrm -rf /tmp/x\nuname -a"}, ctx
+            )
+        self.assertEqual(result["status"], "success")
+        bridge.ipc_invoke.assert_called_once()
 
     def test_factory_returns_callable(self):
         """make_ssh_command_tool 应返回可调用对象"""
@@ -289,6 +353,80 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertTrue(callable(tool_fn))
         result = tool_fn(command="ls")
         self.assertIn("status", result)
+
+    def test_real_approval_flow_approve_executes(self):
+        """P1-1 全链路：真实 needs_you 服务，用户批准 → 高危命令真正执行
+
+        不 mock 审批等待——真实 request_approval_and_wait 阻塞，
+        线程模拟用户在 0.3s 后点「批准」（needs_you.approve），
+        工具被唤醒并执行命令。
+        """
+        import threading
+        import time
+
+        from needs_you import (
+            get_global_service,
+            start_global_service,
+            stop_global_service,
+        )
+        from strands_backend.tools import execute_via_ssh
+
+        start_global_service()
+        try:
+            bridge = make_mock_rust_bridge()
+            ctx = make_ctx(rust_bridge=bridge)
+
+            def approve_later():
+                time.sleep(0.3)
+                svc = get_global_service()
+                pending = [r for r in svc.list_all() if r.get("status") == "pending"]
+                if pending:
+                    svc.approve(pending[0]["id"])
+
+            t = threading.Thread(target=approve_later, daemon=True)
+            t.start()
+            result = execute_via_ssh(ctx, "rm -rf /")
+            t.join(timeout=5.0)
+
+            self.assertEqual(result["status"], "success")
+            bridge.ipc_invoke.assert_called_once()
+        finally:
+            stop_global_service()
+
+    def test_real_approval_flow_reject_blocks(self):
+        """P1-1 全链路：真实服务，用户拒绝 → 命令不执行"""
+        import threading
+        import time
+
+        from needs_you import (
+            get_global_service,
+            start_global_service,
+            stop_global_service,
+        )
+        from strands_backend.tools import execute_via_ssh
+
+        start_global_service()
+        try:
+            bridge = make_mock_rust_bridge()
+            ctx = make_ctx(rust_bridge=bridge)
+
+            def reject_later():
+                time.sleep(0.3)
+                svc = get_global_service()
+                pending = [r for r in svc.list_all() if r.get("status") == "pending"]
+                if pending:
+                    svc.reject(pending[0]["id"], reason="测试拒绝")
+
+            t = threading.Thread(target=reject_later, daemon=True)
+            t.start()
+            result = execute_via_ssh(ctx, "rm -rf /")
+            t.join(timeout=5.0)
+
+            self.assertEqual(result["status"], "rejected")
+            self.assertIn("拒绝", result["message"])
+            bridge.ipc_invoke.assert_not_called()
+        finally:
+            stop_global_service()
 
 
 # ============================================================================

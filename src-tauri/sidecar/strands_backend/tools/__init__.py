@@ -33,6 +33,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
+# P1-1 (2026-08-01): 审批状态枚举（真实 HITL 闭环），供 ssh_command 等工具使用
+# 局部导入避免模块加载期依赖（needs_you 无反向依赖，安全）
+from needs_you import NeedsYouStatus  # noqa: F401
+
 logger = logging.getLogger("sidecar.strands_backend.tools")
 
 # ============================================================================
@@ -365,6 +369,77 @@ class RiskChecker:
 # execute_via_ssh — 统一 SSH 命令执行辅助函数
 # ============================================================================
 
+def request_approval_and_wait(
+    ctx: ToolContext,
+    command: str,
+    risk_result: dict[str, Any],
+    tool_name: str = "ssh_command",
+) -> Any | None:
+    """发起审批请求并阻塞等待用户响应（P1-1，真实 HITL 闭环）
+
+    之前的实现只 emit_needs_you 事件 + 返回 needs_approval，前端"批准"
+    按钮无 RPC 回传，命令永远不会执行——审批是显示层摆设。
+    现在：登记到 needs_you 服务（拿 req_id）→ 发事件（前端可解析）→
+    阻塞等待 respond/超时 唤醒 → 返回最终状态请求对象。
+
+    Returns:
+        最终状态的 NeedsYouRequest；请求创建失败返回 None
+    """
+    from needs_you import get_global_service
+
+    service = get_global_service()
+    matched = risk_result.get("matched_rules", ["unknown"])
+    title = f"高危命令审批请求: {matched[0] if matched else 'unknown'}"
+    description = (
+        f"Agent {ctx.agent_name} 试图通过工具 {tool_name} 执行高危命令:\n"
+        f"  命令: {command[:200]}\n"
+        f"  风险等级: {risk_result.get('level', 'L4')}\n"
+        f"  原因: {risk_result.get('reason', '')}\n"
+        f"  选择「批准」执行、「拒绝」不执行（30s 无响应自动拒绝）"
+    )
+    try:
+        req = service.request_approval(
+            title=title,
+            description=description,
+            session_id=ctx.session_id or None,
+            source=f"{ctx.agent_name}_agent.strands_tool.{tool_name}",
+            command=command,
+            risk=risk_result,
+            tool_name=tool_name,
+            agent=ctx.agent_name,
+        )
+    except Exception as e:
+        logger.exception(f"request_approval failed: {e}")
+        return None
+
+    # 前端审批卡片事件（字段对齐 AgentPanel 解析：type/detail/id）
+    if ctx.event_bus is not None:
+        try:
+            ctx.event_bus.emit_needs_you(
+                needs_type="approval",
+                title=req.title,
+                description=req.description,
+                session_id=ctx.session_id or None,
+                source=req.source,
+                priority="high",
+                id=req.id,
+                type="approval",
+                detail=req.description,
+                command=command,
+                risk_level=risk_result.get("level", "L4"),
+                agent=ctx.agent_name,
+                tool_name=tool_name,
+            )
+        except Exception as e:
+            logger.debug(f"emit_needs_you failed: {e}")
+
+    logger.info(
+        f"approval requested: id={req.id}, session={ctx.session_id}, "
+        f"tool={tool_name}, command={command[:80]}"
+    )
+    return service.wait_for_response(req.id)
+
+
 def execute_via_ssh(
     ctx: ToolContext,
     command: str,
@@ -407,30 +482,56 @@ def execute_via_ssh(
 
     # 1. 风险评估（P1-v5-4: 4 级权限决策）
     #    L1 免确认 / L2 仅高危（默认，原行为）/ L3 高危+写操作 / L4 全部确认
+    # P1-1 (2026-08-01): 命中审批 → 真实等待用户响应（approve 执行 /
+    #   reject 拒绝 / 超时保持 needs_approval），不再是显示层摆设。
     risk = RiskChecker.check(command)
     permission_level = getattr(ctx, "permission_level", 2)
     needs_approval = permission_needs_approval(risk, permission_level)
     if needs_approval:
-        RiskChecker.emit_needs_you(
-            event_bus=ctx.event_bus,
-            command=command,
-            risk_result=risk,
-            agent_name=ctx.agent_name,
-            session_id=ctx.session_id,
-            tool_name=tool_name,
-        )
-        logger.warning(
-            f"execute_via_ssh blocked (permission L{permission_level}): tool={tool_name}, "
-            f"command={command[:80]}, high_risk={risk['high_risk']}, "
-            f"write={risk.get('write')}"
-        )
-        return {
-            "status": "needs_approval",
-            "command": command,
-            "ssh_session_id": session_id,
-            "risk": risk,
-            "message": "高危命令已触发 needs_you 审批，未执行",
-        }
+        req = request_approval_and_wait(ctx, command, risk, tool_name)
+        if req is None:
+            return {
+                "status": "needs_approval",
+                "command": command,
+                "ssh_session_id": session_id,
+                "risk": risk,
+                "message": "审批请求创建失败，未执行",
+            }
+        from needs_you import NeedsYouStatus
+
+        if req.status == NeedsYouStatus.APPROVED:
+            logger.info(
+                f"execute_via_ssh approved by user: tool={tool_name}, "
+                f"command={command[:80]}"
+            )
+            # 用户批准 → 继续执行（不再重复检测）
+        elif req.status == NeedsYouStatus.REJECTED:
+            reason = ""
+            if isinstance(req.response, dict):
+                reason = str(req.response.get("reason", ""))
+            logger.warning(
+                f"execute_via_ssh rejected by user: tool={tool_name}, "
+                f"command={command[:80]}, reason={reason}"
+            )
+            return {
+                "status": "rejected",
+                "command": command,
+                "ssh_session_id": session_id,
+                "risk": risk,
+                "message": f"用户拒绝执行该命令{('（' + reason + '）') if reason else ''}",
+            }
+        else:  # TIMEOUT / CANCELLED / 未知
+            logger.warning(
+                f"execute_via_ssh approval not answered: "
+                f"status={req.status.value}, tool={tool_name}, command={command[:80]}"
+            )
+            return {
+                "status": "needs_approval",
+                "command": command,
+                "ssh_session_id": session_id,
+                "risk": risk,
+                "message": "审批超时未响应，未执行（可让用户重新触发）",
+            }
 
     # 2. 检查 RustBridge 配置
     if ctx.rust_bridge is None:
