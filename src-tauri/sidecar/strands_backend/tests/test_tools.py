@@ -1116,3 +1116,65 @@ class TestMainAgentRouting(unittest.TestCase):
         self.assertEqual(adapter._route_main_agent("main", "讲解一下进程", "s1"), "teach")
         self.assertIsNone(adapter._route_main_agent("main", "随便聊聊", "s1"))
         self.assertIsNone(adapter._route_main_agent("coding", "讲解一下", "s1"))
+
+
+# ============================================================================
+# 输出脱敏测试（P1-v5-5）
+# ============================================================================
+
+class TestRedactSensitive(unittest.TestCase):
+    """ssh 命令输出脱敏"""
+
+    def _redact(self, text):
+        from strands_backend.tools import redact_sensitive
+
+        return redact_sensitive(text)
+
+    def test_private_key_block_redacted(self):
+        out = self._redact(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nabc123secret\n-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        self.assertNotIn("abc123secret", out)
+        self.assertIn("[REDACTED]", out)
+
+    def test_password_assignment_redacted(self):
+        out = self._redact("mysql -u root -pS3cretPw\nDB_PASSWORD=hunter2\n")
+        self.assertNotIn("S3cretPw", out)
+        self.assertNotIn("hunter2", out)
+
+    def test_aws_access_key_redacted(self):
+        out = self._redact("AKIAIOSFODNN7EXAMPLE\n")
+        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", out)
+
+    def test_url_embedded_credentials_redacted(self):
+        out = self._redact("git clone https://user:pass123@example.com/repo.git\n")
+        self.assertNotIn("pass123", out)
+        self.assertIn("user:***@", out)
+
+    def test_bearer_token_redacted(self):
+        out = self._redact("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc\n")
+        self.assertNotIn("eyJhbGciOiJIUzI1NiJ9", out)
+
+    def test_normal_output_untouched(self):
+        out = self._redact("load average: 0.08, 0.03, 0.05\n")
+        self.assertEqual(out, "load average: 0.08, 0.03, 0.05\n")
+
+    def test_empty_and_none_safe(self):
+        self.assertEqual(self._redact(""), "")
+        self.assertEqual(self._redact(None), None)
+
+    def test_ssh_command_result_redacted(self):
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.return_value = {
+            "ok": True,
+            "output": "DB_PASSWORD=hunter2\nuptime ok",
+            "exit_code": 0,
+            "duration": 0.1,
+        }
+        ctx = make_ctx(rust_bridge=bridge)
+        result = execute_via_ssh(ctx=ctx, command="cat .env", ssh_session_id="1", timeout=10, tool_name="ssh_command")
+        self.assertEqual(result["status"], "success")
+        self.assertNotIn("hunter2", result["output"])
+        self.assertIn("uptime ok", result["output"])
