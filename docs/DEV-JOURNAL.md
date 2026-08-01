@@ -169,3 +169,31 @@
 - ✅ 防污染红线与继承不矛盾：不引代码、引资产（表结构/规则/语料/教学法）
 - ✅ 教学素材入库直接受益 Teach（词源/哲学/90 命令档案是分水平讲解的数据源）
 - 📌 后续每个 P 阶段先查上级目录是否有现成资产，再动手
+
+---
+
+## 2026-08-01 · P2-1 Teach 教学卡片 + 16 条工作准则
+
+**任务**：teach 教学卡片（Terax 风格 6 大板块分区渲染）；用户补充 16 条工作准则并要求用上前后端 skill。
+
+**实现**（7aa2909）：
+- TeachCard.tsx：教学卡片（头部 Teach 徽标 + 分区卡片 + 命令行复制/插入终端 + 追问）
+- teachParser.ts：教学 markdown 解析（emoji 板块/## N. 标题 → 分节，代码块提取命令）——纯函数与 UI 分离（react-refresh 规范）
+- AiChat：流式完成后 isTeachMessage 检测 → TeachCard
+- frontend-ui skill 激活：按规则审查（组件 memo、语义 token、MessageResponse 复用、touch target 项目一致性）
+
+**报错与修改（重要）**：
+- **emoji 代理对正则问题**：`[💡📂...]` 字符类在 JS 按 UTF-16 单元匹配，replace 后残留低代理位（"\udca1 为什么"）→ 改 startsWith 逐 emoji 匹配
+- **TerminalSquareIcon 不存在**：导入不存在的 icon → HugeiconsIcon 渲染崩溃（currentIcon is not iterable）→ 换 TerminalIcon（验证存在性再导入）
+- **isTeachMessage 长度门槛挡住短教学标题**：`## 1. 概念与原理`（<20 字符）被误拦 → 标题正则优先，长度门槛只用于 emoji 检测
+- **heredoc 转义写入真实换行**：python 写 TS 文件时 `\n` 被转成真实换行 → 用 Edit 工具逐处修复
+- **detectSectionType 正则要求 # 前缀**：传入的 title 已剥离 # → 正则改为纯关键词
+
+**复盘**：
+- ✅ frontend-ui skill 的 react-refresh 规范（组件/函数分离）避免了热更新问题——skill 用上了
+- ✅ 图标导入必须验证存在性（icon 拼写错误在运行时崩溃，测试才暴露）
+- ✅ emoji 处理要小心代理对（startsWith 逐字匹配最稳）
+- ✅ 测试驱动暴露了 3 个真实 bug（icon 缺失/长度门槛/类型判定）
+- 📌 用户 16 条准则已固化 CLAUDE.md §6.5（skill 优先/环境前置/调研先行/自动记忆沉淀）
+
+**下一步**：TeachCard 需真实 LLM 输出验证（teach agent 是否按 6 大板块输出）；知识库管理 UI；决策库移植。
