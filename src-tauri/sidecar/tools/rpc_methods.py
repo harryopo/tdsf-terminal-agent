@@ -55,21 +55,27 @@ def register_methods(dispatcher: Any) -> None:
         text: str | None = None,
         method: str = "D-S+PCR5",
         evidences: list[dict] | None = None,
+        message: str | None = None,
+        history: list | None = None,
     ) -> dict[str, Any]:
         """计算 AI 文本的置信度
 
         TDSF 魔改: 支持两种调用方式
-        1. 简单模式: 直接传 text，用启发式规则构造 evidence
+        1. 简单模式: 直接传 text（或前端别名 message），用启发式规则构造 evidence
         2. 完整模式: 传 evidences 列表（与 invoke_confidence_tool 一致）
 
         Args:
             text: 待评估的 AI 文本（简单模式）
             method: 融合方法 baseline/D-S/D-S+PCR5
             evidences: 完整证据列表（完整模式）
+            message: 前端 scoreConfidenceRpc 传的字段名（text 的别名，取其一）
+            history: 前端传入的历史消息（当前仅兼容接受，不参与评分）
 
         Returns:
             置信度评分结果
         """
+        if text is None:
+            text = message
         # 完整模式: 透传 evidences
         if evidences is not None:
             try:
