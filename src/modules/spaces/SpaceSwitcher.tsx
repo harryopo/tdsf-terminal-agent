@@ -270,7 +270,8 @@ export function SpaceSwitcher({
               space={sp}
               tabs={tabsBySpace.get(sp.id) ?? []}
               isActive={sp.id === activeId}
-              canDelete={spaces.length > 1}
+              // TDSF 修复 2026-08-01: 允许全部删除（全删后进入欢迎界面）
+              canDelete={spaces.length >= 1}
               expanded={expanded.has(sp.id)}
               editing={editingId === sp.id}
               dragging={dragging}
