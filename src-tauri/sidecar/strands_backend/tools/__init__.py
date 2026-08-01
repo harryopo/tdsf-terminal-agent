@@ -641,6 +641,17 @@ def execute_via_ssh(
         agent=ctx.agent_name,
         exit_code=result.get("exit_code", 0) if isinstance(result, dict) else 0,
     )
+    # P1-2: 记录会话证据（前端证据面板展示 AI 依据的真实操作）
+    # 注意：证据归属**对话会话**（ctx.session_id），不是 SSH 会话 id
+    _track_evidence(
+        session_id=ctx.session_id,
+        tool_name=tool_name,
+        status="completed",
+        detail=command,
+        result=result,
+        agent=ctx.agent_name,
+        source="strands_tool",
+    )
     return {
         "status": "success",
         "command": command,
@@ -660,6 +671,32 @@ def _audit_append(**entry: Any) -> None:
         get_global_chain().append(entry)
     except Exception as e:
         logger.debug(f"audit append failed: {e}")
+
+
+def _track_evidence(
+    session_id: str,
+    tool_name: str,
+    status: str,
+    detail: str = "",
+    result: Any = None,
+    agent: str = "main",
+    source: str = "",
+) -> None:
+    """记录会话证据（P1-2；失败不影响主流程）"""
+    try:
+        from strands_backend.evidence import get_global_tracker
+
+        get_global_tracker().record(
+            session_id=session_id,
+            tool_name=tool_name,
+            status=status,
+            detail=detail,
+            result=result,
+            agent=agent,
+            source=source,
+        )
+    except Exception as e:
+        logger.debug(f"evidence record failed: {e}")
 
 
 # ============================================================================
