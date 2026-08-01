@@ -533,6 +533,8 @@ _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "network_diagnose",
             "suggest_command",
             "knowledge_search",
+            "security_audit",
+            "performance_analyze",
         },
         "system_prompt": (
             "You are the Explore Agent of TDSF Terminal Agent, a read-only "
@@ -582,6 +584,11 @@ _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "ssh_command",
             "read_remote_file",
             "suggest_command",
+            "service_manage",
+            "package_manage",
+            "firewall_manage",
+            "security_audit",
+            "performance_analyze",
         },
         "system_prompt": (
             "You are the Coding Agent of TDSF Terminal Agent, focused on "
@@ -1006,6 +1013,23 @@ class StrandsAgentAdapter:
                         f"failed to create sub agent tool '{sub_name}': {e}"
                     )
             system_prompt = system_prompt + _MAIN_SUB_AGENT_PROMPT
+
+        # P2-3: 扩展运维工具（service/package/firewall/security/performance）
+        try:
+            from strands_backend.tools.ops_extended import (
+                AGENT_EXTENDED_TOOLS,
+                EXTENDED_TOOL_FACTORIES,
+            )
+
+            for ext_name in AGENT_EXTENDED_TOOLS.get(agent_id, set()):
+                if tool_names is not None and ext_name not in tool_names:
+                    continue
+                factory = EXTENDED_TOOL_FACTORIES.get(ext_name)
+                if factory:
+                    all_tools.append(factory(ctx))
+                    sub_agent_names.discard(ext_name)
+        except Exception as e:
+            logger.warning(f"extended tools attach failed for {agent_id}: {e}")
 
         # 构建 callback_handler（main 转发子 agent 事件；子 agent 用静默）
         handler = (

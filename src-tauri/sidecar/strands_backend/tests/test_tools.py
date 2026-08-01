@@ -801,13 +801,13 @@ class TestMakeAllOpsTools(unittest.TestCase):
         """make_all_ops_tools 应返回 7 个工具（2026-08-01: +skill_invoke/suggest_command）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 8)
+        self.assertEqual(len(tools), 13)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
         """OPS_TOOL_NAMES 应包含 7 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 8)
+        self.assertEqual(len(OPS_TOOL_NAMES), 13)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1319,7 +1319,7 @@ class TestSubAgentToolWhitelist(unittest.TestCase):
             tool_names=_SUB_AGENT_SPECS["main"]["tool_names"],
         )
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 8)
+        self.assertEqual(len(tools), 13)
         self.assertIn("ssh_command", names)
 
     def test_whitelist_composes_with_l1_readonly(self):
@@ -1332,7 +1332,7 @@ class TestSubAgentToolWhitelist(unittest.TestCase):
         )
         names = self._tool_names(tools)
         self.assertNotIn("ssh_command", names)
-        self.assertLessEqual(len(tools), 5)
+        self.assertLessEqual(len(tools), 7)
 
 
 # ============================================================================
@@ -1477,7 +1477,9 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertNotIn("skill_invoke", names)
         self.assertIn("read_remote_file", names)
         self.assertIn("suggest_command", names)
-        self.assertEqual(len(tools), 5)
+        # P2-3: 5 基础只读 + 2 扩展只读（security_audit/performance_analyze）
+        self.assertIn("security_audit", names)
+        self.assertEqual(len(tools), 7)
 
     def test_l2_keeps_all_tools(self):
         ctx = make_ctx()
@@ -1485,12 +1487,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         tools = make_all_ops_tools(ctx)
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
-        self.assertEqual(len(tools), 8)
+        self.assertEqual(len(tools), 13)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 8)
+        self.assertEqual(len(tools), 13)
 
 
 # ============================================================================
@@ -1550,3 +1552,109 @@ class TestKnowledgeSearchTool(unittest.TestCase):
         tools = make_all_ops_tools(ctx)
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("knowledge_search", names)
+
+
+# ============================================================================
+# P2-3 扩展运维工具测试（ops_extended）
+# ============================================================================
+
+class TestExtendedOpsTools(unittest.TestCase):
+    """5 个扩展运维工具"""
+
+    def _ctx(self, level=2):
+        bridge = make_mock_rust_bridge()
+        return make_ctx(rust_bridge=bridge, ssh_session_id="1"), bridge
+
+    def test_service_manage_status(self):
+        from strands_backend.tools.ops_extended import invoke_service_manage_tool
+
+        ctx, bridge = self._ctx()
+        r = invoke_service_manage_tool({"action": "status", "service": "nginx"}, ctx)
+        self.assertEqual(r["status"], "success")
+        bridge.ipc_invoke.assert_called_once_with(
+            "ssh_command",
+            {"sessionId": 1, "command": "systemctl status nginx --no-pager -l", "timeout": 30},
+        )
+
+    def test_service_manage_invalid_action(self):
+        from strands_backend.tools.ops_extended import invoke_service_manage_tool
+
+        r = invoke_service_manage_tool({"action": "hack", "service": "nginx"}, self._ctx()[0])
+        self.assertEqual(r["status"], "error")
+
+    def test_package_manage_install(self):
+        from strands_backend.tools.ops_extended import invoke_package_manage_tool
+
+        ctx, bridge = self._ctx()
+        r = invoke_package_manage_tool({"action": "install", "package": "nginx"}, ctx)
+        self.assertEqual(r["status"], "success")
+        bridge.ipc_invoke.assert_called_once_with(
+            "ssh_command",
+            {"sessionId": 1, "command": "dnf install -y nginx", "timeout": 120},
+        )
+
+    def test_package_manage_apt(self):
+        from strands_backend.tools.ops_extended import invoke_package_manage_tool
+
+        ctx, bridge = self._ctx()
+        r = invoke_package_manage_tool(
+            {"action": "install", "package": "nginx", "package_manager": "apt"}, ctx
+        )
+        self.assertEqual(r["status"], "success")
+        bridge.ipc_invoke.assert_called_once_with(
+            "ssh_command",
+            {"sessionId": 1, "command": "apt install -y nginx", "timeout": 120},
+        )
+
+    def test_firewall_manage_add_port(self):
+        from strands_backend.tools.ops_extended import invoke_firewall_manage_tool
+
+        ctx, bridge = self._ctx()
+        r = invoke_firewall_manage_tool({"action": "add_port", "port": "8080"}, ctx)
+        self.assertEqual(r["status"], "success")
+        cmd = bridge.ipc_invoke.call_args.args[1]["command"]
+        self.assertIn("firewall-cmd --permanent --add-port=8080/tcp", cmd)
+
+    def test_firewall_manage_invalid_port(self):
+        from strands_backend.tools.ops_extended import invoke_firewall_manage_tool
+
+        r = invoke_firewall_manage_tool({"action": "add_port", "port": "abc"}, self._ctx()[0])
+        self.assertEqual(r["status"], "error")
+
+    def test_security_audit_ssh_config(self):
+        from strands_backend.tools.ops_extended import invoke_security_audit_tool
+
+        ctx, bridge = self._ctx()
+        r = invoke_security_audit_tool({"scope": "ssh_config"}, ctx)
+        self.assertEqual(r["status"], "success")
+        cmd = bridge.ipc_invoke.call_args.args[1]["command"]
+        self.assertIn("sshd_config", cmd)
+
+    def test_performance_analyze_cpu(self):
+        from strands_backend.tools.ops_extended import invoke_performance_analyze_tool
+
+        ctx, bridge = self._ctx()
+        r = invoke_performance_analyze_tool({"metric": "cpu"}, ctx)
+        self.assertEqual(r["status"], "success")
+        cmd = bridge.ipc_invoke.call_args.args[1]["command"]
+        self.assertIn("top -bn1", cmd)
+
+    def test_factories_registered_in_make_all_ops_tools(self):
+        ctx = make_ctx()
+        tools = make_all_ops_tools(ctx)
+        names = {getattr(t, "__name__", "") for t in tools}
+        for n in ("service_manage", "package_manage", "firewall_manage",
+                  "security_audit", "performance_analyze"):
+            self.assertIn(n, names)
+
+    def test_write_tools_filtered_at_l1(self):
+        """L1 免确认：写类扩展工具（service/package/firewall）从注册表移除"""
+        ctx = make_ctx()
+        ctx.permission_level = 1
+        tools = make_all_ops_tools(ctx)
+        names = {getattr(t, "__name__", "") for t in tools}
+        self.assertNotIn("service_manage", names)
+        self.assertNotIn("package_manage", names)
+        # 只读扩展保留
+        self.assertIn("security_audit", names)
+        self.assertIn("performance_analyze", names)

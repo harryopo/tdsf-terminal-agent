@@ -20,6 +20,7 @@ import {
   FolderOpenIcon,
   GlobalSearchIcon,
   RobotIcon,
+  ShieldUserIcon,
   SparklesIcon,
   TerminalIcon,
   ToolsIcon,
@@ -53,6 +54,12 @@ const TOOL_META: Record<string, { label: string; icon: typeof File01Icon }> = {
   todo_write: { label: "Todos", icon: CheckListIcon },
   // P2-4: 知识库检索（RAG 混合检索工具）
   knowledge_search: { label: "知识库", icon: BookOpen01Icon },
+  // P2-3: 扩展运维工具
+  service_manage: { label: "服务", icon: TerminalIcon },
+  package_manage: { label: "包管理", icon: TerminalIcon },
+  firewall_manage: { label: "防火墙", icon: ShieldUserIcon },
+  security_audit: { label: "安全审计", icon: ShieldUserIcon },
+  performance_analyze: { label: "性能", icon: TerminalIcon },
 };
 
 const STATUS_DOT: Record<ToolPart["state"], string> = {
