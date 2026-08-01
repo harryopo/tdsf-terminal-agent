@@ -1,6 +1,5 @@
 import { cn } from "@/lib/utils";
 import {
-  CloudServerIcon,
   FolderGitTwoIcon,
   FolderTreeIcon,
   SparklesIcon,
@@ -34,7 +33,7 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
       icon: FolderGitTwoIcon,
       badge: changedCount,
     },
-    { id: "ssh", label: "SSH", icon: CloudServerIcon },
+
     { id: "skills", label: "Skills", icon: SparklesIcon },
   ];
 

@@ -551,6 +551,19 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [],
   );
 
+  // TDSF 修复 2026-08-01: 清空全部 tab（最后一个 Space 删除后进入欢迎界面）
+  const clearTabs = useCallback(() => {
+    let toDispose: number[] = [];
+    setTabs((curr) => {
+      toDispose = curr
+        .filter((t) => t.kind === "terminal")
+        .flatMap((t) => leafIds((t as TerminalTab).paneTree));
+      return [];
+    });
+    setActiveId(0);
+    for (const lid of toDispose) disposeSession(lid);
+  }, []);
+
   // TDSF 修复 2026-08-01: 当前 Space 是 SSH 时绑定 sshSessionId，
   // 新建 terminal tab 直接渲染服务器 shell（此前只依赖 isSpaceSshConnected
   // 全局条件，会话状态异常时新 tab 会显示本地终端）。
@@ -1318,6 +1331,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     reorderTabByGap,
     newTabInSpace,
     removeTabsForSpace,
+    clearTabs,
     markBooted,
     setActiveSpaceForNewTabs,
     warmUpTab,

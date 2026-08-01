@@ -44,6 +44,8 @@ import type { WorkspaceEnv } from "@/modules/workspace";
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** TDSF 2026-08-01: 初始模式（欢迎界面可预设 local/ssh） */
+  initialMode?: Mode;
   /** 本地 Space 默认使用的环境 (local 或当前 WSL) */
   defaultEnv: WorkspaceEnv;
   /** 本地 Space 默认根目录 */
@@ -66,6 +68,7 @@ export function SpaceCreateDialog({
   defaultEnv,
   defaultRoot,
   onCreated,
+  initialMode = "local",
 }: Props) {
   const spaces = useSpaces((s) => s.spaces);
   const createSpace = useSpaces((s) => s.create);
@@ -104,7 +107,7 @@ export function SpaceCreateDialog({
   // 打开时重置表单; 切模式时自动回填默认名; 打开时加载已保存连接
   useEffect(() => {
     if (!open) {
-      setMode("local");
+      setMode(initialMode);
       setName("");
       setSubmitting(false);
       setError(null);
@@ -121,9 +124,11 @@ export function SpaceCreateDialog({
       setTestMessage("");
       return;
     }
+    // TDSF 2026-08-01: 打开时应用初始模式（欢迎界面预设 local/ssh）
+    setMode(initialMode);
     setName(defaultName);
     void loadSavedConnections();
-  }, [open, defaultName, loadSavedConnections]);
+  }, [open, defaultName, loadSavedConnections, initialMode]);
 
   useEffect(() => {
     setName(defaultName);
