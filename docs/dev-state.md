@@ -3140,10 +3140,10 @@ CDP 全新状态实测通过。commit 见上。
 2. **P0 全做**：B 方案多 agent + 真流式（Strands stream 事件→Vercel AI SDK）+ 超时可配置 + 运行时 fallback/降级 UI + 前端补测试
 
 **P0 实施清单（对应方案书 §6 P0）**：
-- [ ] P0-1 Strands 多 agent（main + explore/teach/coding/history，子 agent 独立工具集 → 天然 schema-level safety）
+- [x] P0-1 Strands 多 agent（main + explore/teach/coding/history，子 agent 独立工具集 → 天然 schema-level safety）
 - [ ] P0-2 真流式接入（消灭伪流式 A1：24 字符/8ms 切片）
 - [ ] P0-3 超时可配置（SIDECAR_TIMEOUT_MS 硬编码 → 可配置/放宽，A2）
 - [ ] P0-4 运行时失败 fallback + 降级 UI（A7）
 - [ ] P0-5 前端 4 文件补测试 + Strands 真实 e2e
 
-**验收标准**：teach 输出含 teaching_content 结构化字段；Pill 显示与实际 agent 一一对应；路由由模型自主决定而非关键词。
+**验收标准**：Pill 显示与实际 agent 一一对应（agent_switch 按真实 agent_id 发出）；每个子 agent 是真实 Strands 实例（独立 prompt + 工具白名单，explore/teach 无 ssh_command）；teach 输出结构化教学 markdown（teaching_content 结构化字段归 P2 教学闭环）。

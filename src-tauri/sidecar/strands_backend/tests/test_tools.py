@@ -1064,13 +1064,18 @@ class TestToolCallLimitHook(unittest.TestCase):
 
 
 # ============================================================================
-# main_agent 路由恢复测试（P1-NEW-v2-4）
+# P0-1 多 agent 测试（方案书 B 方案，2026-08-01）
 # ============================================================================
 
-class TestMainAgentRouting(unittest.TestCase):
-    """Strands 路径恢复 main_agent 关键词路由意图"""
+class TestAgentSwitchEmission(unittest.TestCase):
+    """P0-1: invoke 按真实 agent 发 agent_switch（前端 Pill 与后端一致）
 
-    def _adapter_with_mock_agent(self):
+    取代旧 TestMainAgentRouting（关键词路由模拟已删除）：无论调用哪个
+    agent_id，都 emit agent_switch(该 agent_id)——Pill 显示的就是真实
+    正在运行的 Strands Agent。
+    """
+
+    def _adapter_with_mock_agent(self, agent_id: str = "main"):
         from strands_backend.adapter import StrandsAgentAdapter
 
         bus = make_mock_event_bus()
@@ -1079,43 +1084,114 @@ class TestMainAgentRouting(unittest.TestCase):
         mock_response.__str__ = MagicMock(return_value="回答内容")
         mock_response.metrics = {}
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2)] = mock_agent
+        adapter._agent_cache[(agent_id, "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
         return adapter, bus, mock_agent
 
-    def test_teach_request_routes_and_injects_hint(self):
-        adapter, bus, mock_agent = self._adapter_with_mock_agent()
-        adapter.invoke("main", "解释一下什么是负载均衡", {"session_id": "s1"})
-        prompt = mock_agent.call_args[0][0]
-        self.assertIn("路由到 teach", prompt)
-        self.assertIn("教学口吻", prompt)
-        # agent_switch 事件应发出
+    def test_invoke_teach_emits_agent_switch_teach(self):
+        adapter, bus, _ = self._adapter_with_mock_agent("teach")
+        adapter.invoke("teach", "解释一下什么是负载均衡", {"session_id": "s1"})
         bus.emit_agent_switch.assert_called_once()
         self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "teach")
 
-    def test_ops_request_no_routing(self):
-        adapter, bus, mock_agent = self._adapter_with_mock_agent()
-        # 注意: "查看 nginx 状态" 含单字 "查" 会被 plan_task 路由到 explore（既有语义），
-        # 运维类用例用无歧义表述
+    def test_invoke_main_emits_agent_switch_main(self):
+        adapter, bus, _ = self._adapter_with_mock_agent("main")
         adapter.invoke("main", "nginx 服务状态如何", {"session_id": "s1"})
-        prompt = mock_agent.call_args[0][0]
-        self.assertNotIn("路由到", prompt)
-        bus.emit_agent_switch.assert_not_called()
+        bus.emit_agent_switch.assert_called_once()
+        self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "main")
 
-    def test_non_main_agent_no_routing(self):
-        adapter, bus, mock_agent = self._adapter_with_mock_agent()
-        adapter._agent_cache[("coding", "s1", 2)] = mock_agent
+    def test_invoke_coding_no_role_hint_in_prompt(self):
+        adapter, bus, mock_agent = self._adapter_with_mock_agent("coding")
         adapter.invoke("coding", "解释一下什么是负载均衡", {"session_id": "s1"})
-        bus.emit_agent_switch.assert_not_called()
+        prompt = mock_agent.call_args[0][0]
+        # 关键词路由模拟已移除：prompt 不再含"路由到 X"注入
+        self.assertNotIn("路由到", prompt)
+        self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "coding")
 
-    def test_route_main_agent_direct(self):
-        from strands_backend.adapter import StrandsAgentAdapter
+    def test_unknown_agent_falls_back_to_main(self):
+        adapter, bus, mock_agent = self._adapter_with_mock_agent("main")
+        adapter.invoke("not_exist", "hello", {"session_id": "s1"})
+        self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "not_exist")
 
-        adapter = StrandsAgentAdapter(event_bus=None, backend_enabled=False)
-        self.assertEqual(adapter._route_main_agent("main", "讲解一下进程", "s1"), "teach")
-        self.assertIsNone(adapter._route_main_agent("main", "随便聊聊", "s1"))
-        self.assertIsNone(adapter._route_main_agent("coding", "讲解一下", "s1"))
+
+class TestSubAgentToolWhitelist(unittest.TestCase):
+    """P0-1: 子 agent 工具白名单（schema-level safety，OPENDEV 范式）
+
+    explore/teach 无 ssh_command（LLM 无法调用不存在于 schema 的执行
+    工具）；coding 有 ssh_command；main 全量 7 工具。
+    """
+
+    def _ctx(self, level: int = 2):
+        return ToolContext(
+            event_bus=None,
+            rust_bridge=make_mock_rust_bridge(),
+            agent_name="x",
+            session_id="s1",
+            permission_level=level,
+        )
+
+    def _tool_names(self, tools) -> set[str]:
+        return {getattr(t, "__name__", str(t)) for t in tools}
+
+    def test_explore_is_readonly_no_ssh_command(self):
+        from strands_backend.adapter import _SUB_AGENT_SPECS
+
+        tools = make_all_ops_tools(
+            self._ctx(),
+            tool_names=_SUB_AGENT_SPECS["explore"]["tool_names"],
+        )
+        names = self._tool_names(tools)
+        self.assertNotIn("ssh_command", names)
+        self.assertNotIn("skill_invoke", names)
+        self.assertIn("read_remote_file", names)
+        self.assertIn("suggest_command", names)
+
+    def test_teach_no_ssh_command_has_skill_invoke(self):
+        from strands_backend.adapter import _SUB_AGENT_SPECS
+
+        tools = make_all_ops_tools(
+            self._ctx(),
+            tool_names=_SUB_AGENT_SPECS["teach"]["tool_names"],
+        )
+        names = self._tool_names(tools)
+        self.assertNotIn("ssh_command", names)
+        self.assertIn("skill_invoke", names)
+        self.assertIn("analyze_logs", names)
+
+    def test_coding_has_ssh_command(self):
+        from strands_backend.adapter import _SUB_AGENT_SPECS
+
+        tools = make_all_ops_tools(
+            self._ctx(),
+            tool_names=_SUB_AGENT_SPECS["coding"]["tool_names"],
+        )
+        names = self._tool_names(tools)
+        self.assertIn("ssh_command", names)
+        self.assertIn("read_remote_file", names)
+
+    def test_main_gets_all_tools(self):
+        from strands_backend.adapter import _SUB_AGENT_SPECS
+
+        tools = make_all_ops_tools(
+            self._ctx(),
+            tool_names=_SUB_AGENT_SPECS["main"]["tool_names"],
+        )
+        names = self._tool_names(tools)
+        self.assertEqual(len(tools), 7)
+        self.assertIn("ssh_command", names)
+
+    def test_whitelist_composes_with_l1_readonly(self):
+        # L1（免确认）+ explore 白名单：ssh_command 仍未出现，且总数 ≤ 只读 5
+        from strands_backend.adapter import _SUB_AGENT_SPECS
+
+        tools = make_all_ops_tools(
+            self._ctx(level=1),
+            tool_names=_SUB_AGENT_SPECS["explore"]["tool_names"],
+        )
+        names = self._tool_names(tools)
+        self.assertNotIn("ssh_command", names)
+        self.assertLessEqual(len(tools), 5)
 
 
 # ============================================================================
