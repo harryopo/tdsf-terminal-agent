@@ -140,3 +140,32 @@
 - 📌 测试隔离（conftest 跳过模型加载）是知识库测试的必备项——真实模型下载会让测试不可重复
 - 📌 教学语料每条含"哲学"维度（一切皆文件/组合小工具/最小权限）——呼应"教学解释到 Linux 哲学"需求
 - 📌 待办：知识库管理 UI（浏览/导入页面）、TeachCard 教学卡片渲染（P2-1）
+
+---
+
+## 2026-08-01 · 上级目录挖掘与继承（知识库为样例，系统性继承）
+
+**任务**：用户指示"以知识库为例，充分挖掘上级目录内容，看能否被本项目继承优化"。
+
+**挖掘成果**（2 个并行 agent 调研 projects/ + 旧版实现）：
+- **projects/**（火山杯 TDSF-Linux 完整仓库）：decision_cards 表结构（8 态状态机/card_json 契约/FTS5/audit_logs）、risk_rules.yaml（4 级风险规则库 low19/medium10/high7/deny3）、grounding/confidence/sampling 算法、error_handler 8 类错误模式库、local-linux-agent knowledge_base 9 份教学 md、SKILL.md 6 大板块教学法、learned_commands 90 命令档案、rollback_manager 检查点回滚
+- **旧版实现**（tdsf-linux-desktop）：触发器式 vec0/FTS5 自动同步、回填服务（断点续传/ETA）、FTS 查询转义、来源标记（fts/vec/both）、BGE 中英前缀切换、教程内容管线（质量过滤/稳定 ID）、UI 设计（knowledge-detail 教学分段/man-page 风格/置信度环）
+- **防污染红线**：src/tdsf 整体代码不引入（自研 v4.0.0 已废弃），只继承数据资产/算法/设计思想
+
+**已落地**（4 提交）：
+1. 9 份教学素材 md 入库（90 命令档案/概念图谱/词源/FHS/哲学等）→ 内置语料 516 条
+2. RAG 增强：FTS5 查询转义（引号包裹防注入）+ BGE 中英前缀自动切换 + RRF 来源标记（fts/vec/both + rrf_score 支撑 UI 匹配徽章）
+3. Teach prompt 升级：继承 SKILL.md 6 大板块教学法（💡原理/📂路径拆解/🏛️哲学/📝示例/⚠️易错/✏️先想再敲）+ 强制先查知识库再讲解
+4. 测试修正（hash 向量降级下 empty-kb 语义变化）
+
+**待落地**（后续按方案书推进）：
+- 决策库：decision_cards 表结构移植（add_case 升级为完整决策卡：根因/证据链/修复/回滚/成功率）
+- risk_rules.yaml 迁移为 RiskChecker 规则源（4 级规则）
+- 触发器式 vec0/FTS5 自动同步（替代手动三写）
+- 知识库管理 UI（knowledge-detail 教学分段设计）
+
+**复盘**：
+- ✅ 上级目录是金矿：旧项目完整实现了方案书大部分蓝图（决策卡/可信度/风险引擎），代码不能引入但结构/算法/数据资产可直接继承——"继承优化"比"从零重造"快一个数量级
+- ✅ 防污染红线与继承不矛盾：不引代码、引资产（表结构/规则/语料/教学法）
+- ✅ 教学素材入库直接受益 Teach（词源/哲学/90 命令档案是分水平讲解的数据源）
+- 📌 后续每个 P 阶段先查上级目录是否有现成资产，再动手
