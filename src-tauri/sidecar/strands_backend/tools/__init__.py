@@ -651,7 +651,10 @@ _L1_READONLY_TOOL_NAMES = {
 }
 
 
-def make_all_ops_tools(ctx: ToolContext) -> list:
+def make_all_ops_tools(
+    ctx: ToolContext,
+    tool_names: set[str] | list[str] | None = None,
+) -> list:
     """构建全部 7 个工具（5 个运维 + Skill 调用 + 命令建议，带 ctx 闭包）
 
     TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具，让 Strands Agent
@@ -666,8 +669,13 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
     registry 移除——LLM 无法调用不存在于 schema 的工具（remove 优于
     instruct+intercept），从根源杜绝免确认模式下执行任意命令。
 
+    TDSF 修复 2026-08-01 (P0-1 多 agent): 新增 tool_names 白名单参数，
+    供子 Agent（explore/teach/coding/history）按角色裁剪工具集——
+    schema-level safety 在 agent 维度生效（如 explore 无 ssh_command）。
+
     Args:
         ctx: ToolContext 运行时上下文
+        tool_names: @tool 装饰后函数名的白名单（None = 全量，按角色过滤用）
 
     Returns:
         Strands @tool 装饰后的工具函数列表（Strands 不可用时为 passthrough 装饰）
@@ -694,6 +702,11 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
         tools = [
             t for t in tools
             if getattr(t, "__name__", "") in _L1_READONLY_TOOL_NAMES
+        ]
+    if tool_names is not None:
+        allowed = set(tool_names)
+        tools = [
+            t for t in tools if getattr(t, "__name__", "") in allowed
         ]
     return tools
 

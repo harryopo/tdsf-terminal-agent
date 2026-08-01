@@ -1,42 +1,29 @@
 // ============================================================================
-// TDSF Agent 注册表（前端 5 个用户可手动切换的顶层 Agent）
+// TDSF Agent 注册表（前端 5 个用户可切换的 Agent）
 // ============================================================================
 //
-// TDSF 魔改 2026-07-30 P0-E 注（Critical-3 文档漂移修复）:
-//   前端 TDSF_AGENTS 仅列 5 个**用户可手动切换**的顶层 Agent：
-//     main（统一入口）/ coder / explore / history / teach
-//   后端 Python AGENT_REGISTRY 有 9 个（多出 debug / refactor / test / deploy 4 个子 Agent）。
-//   前端不暴露后 4 个，由 main_agent 在 Python 端根据意图自动路由调度。
-//   两者**并非一一对应**——前端是用户视角的"入口集合"，后端是"执行池"。
-//   完整后端 Agent 列表可通过 sidecar.health JSON-RPC 的 agents_list 字段查询。
-//
-// v2026-07-29 改造：统一主 Agent 入口
-//   - 新增 'main' 顶层 Agent：作为 PAOR 监督者，自动根据用户意图路由到 8 个子Agent
-//   - 前端不再让用户手动切换 4 个 Tab，DEFAULT_TDSF_AGENT = 'main'
-//   - 用户视角看是"一个统一的 AI"，实际由 main_agent 在 Python 端做智能调度
-//   - 后端 main_agent.invoke() 会在 PAOR 循环中推送 agent_switch 事件，
-//     前端 AgentStatusPill 实时显示"正在使用 Teach/Coding/Debug..."
-//
-// 映射关系（前端 id ↔ Python AGENT_REGISTRY key，仅列前端 5 个）:
-//   main    ↔ main     (MainAgent — PAOR 监督 + 智能路由到 8 个子 Agent)
-//   coder   ↔ coding   (CodingAgent  — 子Agent，被 main 调度)
-//   explore ↔ explore  (ExploreAgent — 子Agent，被 main 调度)
-//   history ↔ history  (HistoryAgent — 子Agent，被 main 调度)
-//   teach   ↔ teach    (TeachAgent   — 子Agent，被 main 调度)
-//   （后端另有 debug / refactor / test / deploy 4 个子 Agent，前端不暴露，
-//    由 main_agent 自动路由；AgentStatusPill 收到 agent_switch 事件时仍能正确显示）
+// P0-1 (2026-08-01, 方案书 B 方案): 前后端对齐 — 每个前端入口对应一个
+// **真实** Strands Agent 实例（strands_backend/adapter.py _SUB_AGENT_SPECS）：
+//   前端 id   ↔ 后端 agent key（pythonName）↔ Strands Agent 实例
+//   main    ↔ main     （全量 7 工具，通用入口）
+//   coder   ↔ coding   （ssh_command + read_remote_file + suggest_command）
+//   explore ↔ explore  （只读 5 工具，无 ssh_command）
+//   history ↔ history  （suggest_command + skill_invoke）
+//   teach   ↔ teach    （只读 + skill_invoke，结构化教学输出）
+// 旧版"main 在 Python 端按关键词路由到 8 个子 Agent"的模拟已移除：
+// 用户选哪个 Tab，后端就跑哪个真实 Agent；AgentStatusPill 显示与之一致。
 //
 // 设计原则:
 //   - 前端 id 用业务语义命名（coder），与 Python key（coding 动词形式）解耦
 //   - pythonName 字段作为 RPC 调用时传入的 agent name（agent.invoke 的 params.name）
-//   - 简短 systemPrompt 仅用于前端 Tab tooltip 展示，实际 prompt 由 Python 端 BaseAgent.build_system_prompt 生成
+//   - 简短 systemPrompt 仅用于前端 Tab tooltip 展示，实际 prompt 由 Python 端构建
 //
 // 与现有 SUBAGENTS 的区别:
 //   - SUBAGENTS 是 Vercel AI SDK 内部 subagent（run_subagent 工具的白名单），仅 fallback 路径用
-//   - TDSF_AGENTS 是顶层 Agent 集合，其中 'main' 是统一入口，走 Python Sidecar 路径
+//   - TDSF_AGENTS 是顶层 Agent 集合，走 Python Sidecar（Strands）路径
 //   - 两者互不冲突，可并存
 
-/** TDSF 顶层 Agent 的 id（前端 5 个用户可手动切换的入口，后端另有 4 个由 main 自动路由） */
+/** TDSF 顶层 Agent 的 id（前端 5 个可切换入口，每个对应后端一个真实 Strands Agent） */
 export type TdsfAgentId = "main" | "coder" | "explore" | "history" | "teach";
 
 /** TDSF Agent 定义（前端 Tab + Python RPC 调用所需元数据） */
@@ -61,53 +48,53 @@ export type TdsfAgentDef = {
  * 用 Record<TdsfAgentId, TdsfAgentDef> 保证 id 字段与 key 严格一一对应，
  * TypeScript 编译期就能发现遗漏或拼写错误。
  *
- * v2026-07-29：'main' 作为统一入口，由 main_agent 自动路由到子Agent。
+ * P0-1：每个入口对应后端一个真实 Strands Agent（见 adapter.py _SUB_AGENT_SPECS）。
  */
 export const TDSF_AGENTS: Record<TdsfAgentId, TdsfAgentDef> = {
   main: {
     id: "main",
     label: "Main",
     mode: "MAIN",
-    desc: "统一主 Agent（PAOR 监督 + 智能路由到 8 个子 Agent）",
+    desc: "通用主 Agent（全量 7 工具：SSH 执行/文件/日志/进程/网络/技能/命令建议）",
     pythonName: "main",
     systemPrompt:
-      "Main Agent：PAOR 监督循环主 Agent。根据用户意图自动路由到 8 个子 Agent（coding / explore / history / teach / debug / refactor / test / deploy）。用户无需手动选择。",
+      "Main Agent：通用 Linux 运维助手，可执行 SSH 命令、读写文件、分析日志、诊断网络。",
   },
   coder: {
     id: "coder",
     label: "Coder",
     mode: "CODE",
-    desc: "代码生成与重构",
+    desc: "代码与配置修改（SSH 执行 + 读文件 + 命令建议）",
     pythonName: "coding",
     systemPrompt:
-      "Coding Agent：负责代码生成、修改、Bug 修复。调用 risk/decision/confidence 工具评估方案。",
+      "Coding Agent：定位并修复远程主机上的代码/配置问题，高危命令触发审批。",
   },
   explore: {
     id: "explore",
     label: "Explore",
     mode: "SCAN",
-    desc: "代码库扫描与索引",
+    desc: "只读探索（文件/日志/进程/网络，不执行命令）",
     pythonName: "explore",
     systemPrompt:
-      "Explore Agent：只读分析代码库架构、追踪调用链、生成文档。不修改文件。",
+      "Explore Agent：只读分析远程主机（读文件/日志/进程/网络诊断），不执行命令。",
   },
   history: {
     id: "history",
     label: "History",
     mode: "HIST",
-    desc: "命令历史与回放",
+    desc: "历史与知识（基于会话上下文复盘 + 领域知识卡）",
     pythonName: "history",
     systemPrompt:
-      "History Agent：检索过往会话、命令历史、错误模式，辅助复盘与教学。",
+      "History Agent：基于会话上下文回答历史操作/命令/排障模式，可查阅领域知识卡。",
   },
   teach: {
     id: "teach",
     label: "Teach",
     mode: "TEACH",
-    desc: "Linux 运维教学",
+    desc: "Linux 运维教学（概念+示例+易错点+练习，不执行命令）",
     pythonName: "teach",
     systemPrompt:
-      "Teach Agent：基于知识库 + tldr-pages 解释命令原理、给出易错点与考点。",
+      "Teach Agent：结构化教学（概念原理/操作示例/易错点/练习），只读 + 知识卡，不执行命令。",
   },
 };
 

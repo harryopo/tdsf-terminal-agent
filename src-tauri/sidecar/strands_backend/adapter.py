@@ -42,7 +42,6 @@ strands_backend/adapter.py — Strands Agent 适配层
 from __future__ import annotations
 
 import logging
-import re
 import time
 from typing import Any, Callable
 
@@ -337,28 +336,94 @@ class TdsfStrandsCallbackHandler:
 # StrandsAgentAdapter — 适配层核心
 # ============================================================================
 
-# P1-NEW-v2-4: main_agent 关键词路由 → Strands prompt 角色指令
-# （Strands override 路径无 BaseAgent PAOR，用路由意图引导回答风格）
-_ROUTE_PROMPT_HINTS: dict[str, str] = {
-    "teach": (
-        "用户请求教学讲解。请以教学口吻输出：先讲清概念与原理，"
-        "再给出可执行的 Linux 命令/配置示例，最后留一个练习或思考题。"
-    ),
-    "coding": (
-        "用户请求代码修改。请定位问题、给出修改方案，"
-        "并说明每个改动点的原因。"
-    ),
-    "explore": (
-        "用户请求查找/定位。请先明确搜索目标，再逐步定位并说明依据。"
-    ),
-    "debug": (
-        "用户请求排查故障。请按根因分析流程：收集现象 → 假设 → "
-        "用工具验证 → 给出修复建议。"
-    ),
-    "history": "用户查询历史/之前的内容。请基于已有上下文回答。",
-    "refactor": "用户请求重构。请说明重构动机、改动范围与验证方式。",
-    "test": "用户请求测试。请给出测试用例与执行方式。",
-    "deploy": "用户请求部署/发布。请给出部署步骤与验证命令。",
+# P0-1 (2026-08-01, 方案书 B 方案): 多 Agent 注册表。
+# 前端显式选择 agent（main/coder/explore/history/teach，见前端
+# src/modules/ai/agents/registry.ts），后端为每个 agent 创建**真实**的
+# Strands Agent 实例：独立 system prompt + 按角色裁剪的工具集
+# （schema-level safety：explore/teach 无 ssh_command，LLM 无法调用
+# 不存在于其 schema 的执行工具）。
+# 注意：工具白名单用 @tool 装饰后的函数名（见 tools/__init__.py
+# _L1_READONLY_TOOL_NAMES 的说明），与 OPS_TOOL_NAMES 注册名不同。
+_SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
+    "main": {
+        "tool_names": None,  # 全量 7 工具
+        "system_prompt": None,  # 用构造时默认 prompt
+    },
+    "explore": {
+        "tool_names": {
+            "read_remote_file",
+            "analyze_logs",
+            "inspect_processes",
+            "network_diagnose",
+            "suggest_command",
+        },
+        "system_prompt": (
+            "You are the Explore Agent of TDSF Terminal Agent, a read-only "
+            "Linux system explorer.\n"
+            "You locate information: read files, analyze logs, inspect "
+            "processes, diagnose network, and suggest commands.\n\n"
+            "Constraints:\n"
+            "- 你是只读 Agent，没有执行命令的工具；需要用户执行时用 "
+            "suggest_command 生成命令并说明作用，等待用户确认。\n"
+            "- 回答用中文，先给结论，再给依据（文件路径/日志行/命令输出）。"
+        ),
+    },
+    "teach": {
+        "tool_names": {
+            "read_remote_file",
+            "analyze_logs",
+            "skill_invoke",
+            "suggest_command",
+        },
+        "system_prompt": (
+            "You are the Teach Agent of TDSF Terminal Agent, a Linux "
+            "operations instructor for beginners.\n"
+            "You explain concepts, commands and troubleshooting steps in a "
+            "structured teaching style.\n\n"
+            "Teaching format:\n"
+            "1. 概念与原理：用生活化比喻讲清是什么、为什么。\n"
+            "2. 操作示例：给出可执行的 Linux 命令/配置，逐条解释参数含义。\n"
+            "3. 易错点与考点：列出初学者常犯错误。\n"
+            "4. 练习：留 1 个练习或思考题。\n\n"
+            "Constraints:\n"
+            "- 你是教学 Agent，不执行命令；需要演示时用 suggest_command "
+            "生成命令并提示用户可点击 Insert 插入终端。\n"
+            "- 可用 skill_invoke 查阅领域知识（linux-ops / ssh-troubleshoot 等）。\n"
+            "- 回答用中文，内容分节清晰（Markdown 标题 + 列表）。"
+        ),
+    },
+    "coding": {
+        "tool_names": {
+            "ssh_command",
+            "read_remote_file",
+            "suggest_command",
+        },
+        "system_prompt": (
+            "You are the Coding Agent of TDSF Terminal Agent, focused on "
+            "locating, explaining and fixing code/config issues on the "
+            "connected Linux host.\n\n"
+            "Working style:\n"
+            "- 先复现/定位问题（read_remote_file 读配置、ssh_command 跑只读命令），"
+            "再给出修改方案。\n"
+            "- 每个改动点说明原因；高危命令会触发审批，不要试图绕过。\n"
+            "- 回答用中文，给出可执行建议。"
+        ),
+    },
+    "history": {
+        "tool_names": {
+            "suggest_command",
+            "skill_invoke",
+        },
+        "system_prompt": (
+            "You are the History Agent of TDSF Terminal Agent. "
+            "You answer questions about past operations, commands, and "
+            "troubleshooting patterns based on the conversation context.\n\n"
+            "Constraints:\n"
+            "- 无历史检索工具时，基于当前会话上下文回答，并诚实说明。\n"
+            "- 可用 skill_invoke 查阅领域知识卡。\n"
+            "- 回答用中文。"
+        ),
+    },
 }
 
 
@@ -410,9 +475,6 @@ class StrandsAgentAdapter:
         self._strands_available = _STRANDS_AGENT_AVAILABLE and TOOL_DECORATOR_AVAILABLE
         self._model_available = strands_model is not None
 
-        # P1-NEW-v2-4: main_agent 路由单例缓存
-        self._main_agent_singleton = None
-
         # 缓存的 Strands Agent 实例
         # P1-NEW-v2-2 修复 (2026-07-30): 缓存 key 从 agent_id 改为 (agent_id, session_id)，
         # 避免 multi-session 并发时 callback_handler 和工具闭包绑定的首次 session_id
@@ -431,42 +493,6 @@ class StrandsAgentAdapter:
     # 主入口：invoke
     # ========================================================================
 
-    # P1-NEW-v2-4: 路由角色 → prompt 角色指令（Strands main 按风格回答）
-    def _route_main_agent(
-        self, agent_id: str, input: str, session_id: str
-    ) -> str | None:
-        """恢复 main_agent 关键词路由意图（Strands override 路径）
-
-        返回路由到的子 Agent 名（teach/coding/...），未路由返回 None。
-        路由结果会 emit agent_switch 事件（前端 Pill 显示）。
-        """
-        if agent_id != "main" or not input:
-            return None
-        try:
-            from agents.main_agent import MainAgent  # 延迟 import 防循环
-
-            agent = self._main_agent_instance()
-            plan = agent.plan_task(input, {})
-            if not plan:
-                return None
-            m = re.match(r"\[(\w+)\]", str(plan[0]))
-            routed = m.group(1) if m else None
-            if routed not in _ROUTE_PROMPT_HINTS:
-                return None
-            self._emit_agent_switch(routed, session_id)
-            return routed
-        except Exception as e:
-            logger.debug(f"main agent routing unavailable: {e}")
-            return None
-
-    def _main_agent_instance(self) -> Any:
-        """模块级缓存的 MainAgent 实例（plan_task 只依赖输入，构造一次即可）"""
-        import agents.main_agent as _ma
-
-        if self._main_agent_singleton is None:
-            self._main_agent_singleton = _ma.MainAgent()
-        return self._main_agent_singleton
-
     def _emit_agent_switch(self, agent: str, session_id: str) -> None:
         if self.event_bus is None:
             return
@@ -474,7 +500,7 @@ class StrandsAgentAdapter:
             self.event_bus.emit_agent_switch(
                 agent=agent,
                 session_id=session_id or None,
-                source="main_agent.strands_route",
+                source=f"{agent}_agent.strands",
             )
         except Exception as e:
             logger.debug(f"emit_agent_switch failed: {e}")
@@ -536,17 +562,10 @@ class StrandsAgentAdapter:
             # 5. 构建 prompt（注入 live 上下文）
             prompt = self._build_prompt(input, state)
 
-            # TDSF 修复 2026-08-01 (P1-NEW-v2-4): Strands 路径恢复 main_agent
-            # 关键词路由的"路由意图"。Strands override 绕过 BaseAgent PAOR
-            # 后 plan_task 不再执行，教学/编码等请求失去角色化处理。此处：
-            #   ① 跑 plan_task 解析路由（teach/coding/...）
-            #   ② emit agent_switch（前端 AgentStatusPill 显示子 Agent）
-            #   ③ 把角色指令注入 prompt（Strands main 以对应风格回答）
-            routed_agent = self._route_main_agent(agent_id, input, session_id)
-            if routed_agent:
-                role_hint = _ROUTE_PROMPT_HINTS.get(routed_agent)
-                if role_hint:
-                    prompt = f"{prompt}\n\n[路由到 {routed_agent}]\n{role_hint}"
+            # P0-1 (2026-08-01, 方案书 B 方案): 前端显式选择 agent → 真实
+            # Strands Agent。不再做关键词路由模拟——Pill 显示的就是正在
+            # 运行的 agent（emit agent_switch 让前端 AgentStatusPill 同步）。
+            self._emit_agent_switch(agent_id, session_id)
 
             # 6. 推送 mood=working
             self._emit_mood("working", agent_id, session_id)
@@ -698,6 +717,11 @@ class StrandsAgentAdapter:
     def _get_or_create_agent(self, agent_id: str, ctx: ToolContext) -> Any:
         """获取或创建 Strands Agent 实例（按 agent_id 缓存）
 
+        P0-1 (2026-08-01, 方案书 B 方案): 按 _SUB_AGENT_SPECS 为每个
+        agent_id 创建**真实** Strands Agent——独立 system prompt +
+        按角色裁剪的工具集（schema-level safety）。main 用默认 prompt
+        + 全量工具，其余 agent 用角色 prompt + 工具白名单。
+
         Args:
             agent_id: Agent 标识
             ctx: ToolContext（用于构建工具）
@@ -711,8 +735,12 @@ class StrandsAgentAdapter:
         if cache_key in self._agent_cache:
             return self._agent_cache[cache_key]
 
-        # 构建 5 个运维工具（带 ctx 闭包）
-        ops_tools = make_all_ops_tools(ctx)
+        spec = _SUB_AGENT_SPECS.get(agent_id) or _SUB_AGENT_SPECS["main"]
+        tool_names = spec.get("tool_names")
+        system_prompt = spec.get("system_prompt") or self.system_prompt
+
+        # 构建运维工具（带 ctx 闭包 + 角色白名单过滤）
+        ops_tools = make_all_ops_tools(ctx, tool_names=tool_names)
         all_tools = ops_tools + self.extra_tools
 
         # 构建 callback_handler
@@ -739,7 +767,7 @@ class StrandsAgentAdapter:
         agent = _StrandsAgent(  # type: ignore[misc]
             model=self.strands_model,
             tools=all_tools,
-            system_prompt=self.system_prompt,
+            system_prompt=system_prompt,
             callback_handler=handler,
             hooks=[ToolCallLimitHook(agent_name=agent_id)],
             # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
