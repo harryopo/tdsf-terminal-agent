@@ -20,6 +20,7 @@
         "minHeight": 280,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "backgroundColor": "#1a1a1a",
         "visible": false,
         "center": true,
         "dragDropEnabled": true,

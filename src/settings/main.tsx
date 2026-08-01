@@ -25,12 +25,13 @@ ReactDOM.createRoot(
 );
 
 // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 show window 调用
+// T2 透明窗口修复: 双 rAF 首帧绘制后 show + 2s 兜底（同主窗口）
 if (isTauriRuntime()) {
   const showWindow = () => {
     getCurrentWindow()
       .show()
       .catch((e) => console.error("settings show failed:", e));
   };
-  setTimeout(showWindow, 50);
-  setTimeout(showWindow, 500);
+  requestAnimationFrame(() => requestAnimationFrame(showWindow));
+  setTimeout(showWindow, 2000);
 }
