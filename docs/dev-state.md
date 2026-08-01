@@ -3141,9 +3141,9 @@ CDP 全新状态实测通过。commit 见上。
 
 **P0 实施清单（对应方案书 §6 P0）**：
 - [x] P0-1 Strands 多 agent（main + explore/teach/coding/history，子 agent 独立工具集 → 天然 schema-level safety）
-- [ ] P0-2 真流式接入（消灭伪流式 A1：24 字符/8ms 切片）
-- [ ] P0-3 超时可配置（SIDECAR_TIMEOUT_MS 硬编码 → 可配置/放宽，A2）
-- [ ] P0-4 运行时失败 fallback + 降级 UI（A7）
-- [ ] P0-5 前端 4 文件补测试 + Strands 真实 e2e
+- [x] P0-2 真流式接入（Strands 事件流式为主路径已确认；切片降级为 LangGraph 兜底并更新文档）
+- [x] P0-3 超时可配置（前端 localStorage `tdsf.sidecarTimeoutMs` + Rust per-request timeoutMs，Rust 默认 30s→60s）
+- [x] P0-4 运行时失败 fallback + 降级 UI（buildSidecarErrorHint 结构化提示 + invoke 异常返回 degraded 标志）
+- [x] P0-5 前端补测试（transport/AiToolApproval/MockLLMWarning/TdsfAgentPanel 4 文件 25 用例）+ Strands 真实 e2e（4 用例：真实 Agent + Fake Model + mock bridge 验证 teach 工具调用全链路）
 
 **验收标准**：Pill 显示与实际 agent 一一对应（agent_switch 按真实 agent_id 发出）；每个子 agent 是真实 Strands 实例（独立 prompt + 工具白名单，explore/teach 无 ssh_command）；teach 输出结构化教学 markdown（teaching_content 结构化字段归 P2 教学闭环）。

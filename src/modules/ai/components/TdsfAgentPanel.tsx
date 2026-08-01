@@ -699,7 +699,10 @@ function LoadingShell({
   onResizeMouseDown: (dir: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw") => (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   return (
-    <>
+    <div
+      data-testid="tdsf-agent-panel-shell"
+      className="flex h-full w-full flex-col"
+    >
       <div
         className="flex h-10 shrink-0 cursor-grab items-center justify-between border-b border-border/60 px-3 active:cursor-grabbing"
         onMouseDown={onHeaderMouseDown}
@@ -749,7 +752,7 @@ function LoadingShell({
         className="absolute bottom-0 right-0 z-[51] cursor-nwse-resize"
         style={{ width: "14px", height: "14px", background: "transparent" }}
       />
-    </>
+    </div>
   );
 }
 
