@@ -3205,3 +3205,17 @@ CDP 全新状态实测通过。commit 见上。
 **验收**：前端 914 全过（SelectionAskAi 4 + TranslateTooltip 4 用例）；tsc/eslint 干净；SSH 终端实测待用户。
 
 **记忆机制（本次建立）**：docs/DEV-JOURNAL.md（开发日志）+ docs/ROADMAP.md（短/长期规划）+ CLAUDE.md §6 任务收尾三件事规范——此后每任务完成自动沉淀。
+
+### 37.21 知识库可视化（左侧栏）+ 左下角 agent 黑屏调查中（2026-08-01）
+
+**知识库可视化（1de85b0 + bd5a58c）**：
+- 左侧栏新增"知识库"视图（Skill 旁，BookOpen01Icon），KnowledgePanel 挂载即列出全部条目（浏览模式像文件列表，knowledge.list RPC），搜索过滤（混合检索），点击条目弹 KnowledgeDetailDialog（md 渲染像看本地文件）
+- 移除 TdsfAgentPanel 死组件中的旧挂载（该组件已弃用，App 实际用 AiMiniWindow）
+
+**黑屏卡死调查（进行中，需 CDP 抓错）**：
+- 复现路径：左下角 AiOpenButton → openMini → AiMiniWindow → AiChatView → 黑屏
+- 已排除：sidecar/Rust 日志正常；TdsfAgentPanel 死组件
+- 高嫌疑：AiChatView 本会话改动（EvidencePanel 挂载 + TeachCard 分支）
+- 下一步：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 重启 → 用户点击 → chrome-devtools-mcp 抓 console 错误
+
+**测试**：前端 930 / 后端 knowledge 15 全过；tsc/eslint 干净。
