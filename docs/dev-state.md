@@ -3027,3 +3027,18 @@ SSH 终端执行 cd /tmp
 4. 自动连接失败时幽灵 SSH Space env 降级 local。
 
 **CDP 实测**（清污染 + reload）：本地 Space 保持 local ✓、root@ Space 升级新 session ✓、无 session 堆积 ✓、SSH tab cwd=/（远程）✓；typecheck/lint/vitest 853 全过。
+
+### 37.10 测试系统修复：strands_backend 测试纳入全量（2026-08-01）
+
+**发现**：pytest `testpaths=["tests"]` 只收集 tests/，`strands_backend/tests/`（72 个测试）从未被全量覆盖——单跑 21 个失败一直是"隐藏红灯"。
+
+**根因**（逐个）：
+1. `make_ctx` 默认 `ssh_session_id="ssh-1"`（非 int）→ execute_via_ssh 的 int 校验拒绝（Rust 侧 u32 契约）
+2. 工具调用断言过时：实际输出 `sessionId`（camelCase+int），断言期望 `session_id`（snake+str）
+3. adapter 测试 `_agent_cache["main"]` 键错误——实际键是 `(agent_id, session_id)` 元组 → 永远 miss → 创建真实 Strands Agent（默认 Bedrock 无凭据 → NoCredentialsError）
+4. `make_all_ops_tools` 工具数断言 5（实际 7：+skill_invoke/suggest_command）
+
+**修复**：test_tools.py 4 类问题 + `pyproject.toml` testpaths 加 `strands_backend/tests`。
+**结果**：test_tools.py 72/72 单跑全过；全量 pytest **1284 → 1369**（dev-state 之前记录的门禁数字已过时，以此为准）。
+
+**经验**：testpaths 白名单会静默排除子目录测试——新增测试目录必须同步登记，且"全量绿"不等于"所有测试绿"。
