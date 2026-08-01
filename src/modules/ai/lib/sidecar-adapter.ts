@@ -743,6 +743,9 @@ export async function* runSidecarStream(
       streamedOutput += content;
       queue.push({ type: "text-delta", id: outputId, delta: content });
     }
+    // P0-6: agent_call = 子 agent 委派增量（main 委派子 agent 时由
+    // handler 转发）。子 agent 全文已在 agent:xxx 工具行的 completed
+    // result 中展示，此处忽略避免污染主输出流。
     // type="tool_call" / "working" 已被 sidecar:tool_call / sidecar:mood_change 覆盖，忽略
   };
 
@@ -807,17 +810,31 @@ export async function* runSidecarStream(
         return null;
       }
     })();
-    // invokeTask 完成后 resolve invokePromise
-    invokeTask.then((r) => invokeResolve?.(r));
+    // invokeTask 完成后 resolve invokePromise + 标记完成（供消费循环预检）
+    let invokeResolved = false;
+    invokeTask.then((r) => {
+      invokeResolved = true;
+      invokeResolve?.(r);
+    });
 
     // 3. 消费循环：Promise.race 在 invoke 和 queue.next() 之间竞争
     //    - queue 有 item → yield item（实时流式）
     //    - invoke 完成 → break
+    // TDSF 修复 2026-08-01 (P0-6): invoke 已 resolve 时**不再**调用
+    // queue.next()——否则 next() 会 shift 掉一个 item，而 race 因 invoke
+    // 先 settle 取 invoke 分支，被 shift 的 item（如工具 completed 的
+    // tool-output）永久丢失（drain 阶段只剩空 queue）。
     let invokeDone = false;
     while (!invokeDone) {
       if (abortSignal?.aborted) {
         queue.close();
         return;
+      }
+      // P0-6: invoke 已完成 → 不再创建 queue.next()（防 shift 丢失），
+      // 退出循环让 drain 阶段消费剩余 items
+      if (invokeResolved) {
+        invokeDone = true;
+        break;
       }
       // 等待 queue 有 item 或 invoke 完成
       const queueNext = queue.next();
