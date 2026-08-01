@@ -801,13 +801,13 @@ class TestMakeAllOpsTools(unittest.TestCase):
         """make_all_ops_tools 应返回 7 个工具（2026-08-01: +skill_invoke/suggest_command）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 7)
+        self.assertEqual(len(tools), 8)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
         """OPS_TOOL_NAMES 应包含 7 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 7)
+        self.assertEqual(len(OPS_TOOL_NAMES), 8)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1319,7 +1319,7 @@ class TestSubAgentToolWhitelist(unittest.TestCase):
             tool_names=_SUB_AGENT_SPECS["main"]["tool_names"],
         )
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 7)
+        self.assertEqual(len(tools), 8)
         self.assertIn("ssh_command", names)
 
     def test_whitelist_composes_with_l1_readonly(self):
@@ -1485,9 +1485,66 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         tools = make_all_ops_tools(ctx)
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
-        self.assertEqual(len(tools), 7)
+        self.assertEqual(len(tools), 8)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 7)
+        self.assertEqual(len(tools), 8)
+
+
+# ============================================================================
+# knowledge_search 工具测试（P2-4）
+# ============================================================================
+
+class TestKnowledgeSearchTool(unittest.TestCase):
+    """知识库检索工具"""
+
+    def _populate(self):
+        """向全局 RAG 注入测试语料（隔离由 conftest 提供）"""
+        from knowledge.fts5 import KnowledgeEntry
+        from knowledge.rag import get_global_rag
+
+        rag = get_global_rag()
+        rag.add(KnowledgeEntry(
+            title="systemctl 服务管理",
+            content="systemctl 是 systemd 的服务管理命令，restart 停止再启动，reload 平滑重载。",
+            source="test",
+            tags=["systemd"],
+        ))
+        rag.add(KnowledgeEntry(
+            title="nginx 配置",
+            content="server 块监听端口，location 匹配 URL 规则。",
+            source="test",
+            tags=["nginx"],
+        ))
+        return rag
+
+    def test_search_success(self):
+        from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+        self._populate()
+        result = invoke_knowledge_search_tool({"query": "systemctl 服务"})
+        self.assertEqual(result["status"], "success")
+        self.assertGreaterEqual(result["count"], 1)
+        self.assertTrue(any("systemctl" in r["title"] for r in result["results"]))
+
+    def test_search_empty_query_error(self):
+        from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+        result = invoke_knowledge_search_tool({"query": "  "})
+        self.assertEqual(result["status"], "error")
+
+    def test_search_empty_kb(self):
+        from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+        result = invoke_knowledge_search_tool({"query": "不存在的主题xyzabc"})
+        self.assertEqual(result["status"], "empty")
+
+    def test_factory_returns_callable(self):
+        from strands_backend.tools import make_all_ops_tools
+
+        ctx = make_ctx()
+        tools = make_all_ops_tools(ctx)
+        names = {getattr(t, "__name__", "") for t in tools}
+        self.assertIn("knowledge_search", names)

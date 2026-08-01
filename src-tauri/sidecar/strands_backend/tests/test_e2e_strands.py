@@ -202,8 +202,8 @@ class TestStrandsRealE2E(unittest.TestCase):
         self.assertIn("ssh_command", tool_names)
         self.assertIn("skill_invoke", tool_names)
         # P0-6: main 额外挂载 4 个子 agent 工具
-        self.assertEqual(len(tool_names), 11)
-        for sub in ("teach", "coding", "explore", "history"):
+        self.assertEqual(len(tool_names), 12)
+        for sub in ("teach", "coding", "explore", "history", "knowledge_search"):
             self.assertIn(sub, tool_names)
 
     def test_invoke_unknown_agent_falls_back_main_toolset(self):
