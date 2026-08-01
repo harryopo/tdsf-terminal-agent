@@ -3074,3 +3074,20 @@ SSH 终端执行 cd /tmp
 - 模式覆盖：SSH 私钥块、password/secret/token/api_key 赋值、mysql 内联 `-pXXX`、AWS AKIA key、URL 内嵌凭据、Authorization Bearer。保守原则（宁可多脱敏）。
 - 测试 +8（含 execute_via_ssh 集成）；pytest 1393 全过。
 - **注**：多 agent 工作流连续两轮首个 agent 卡住（无产出，~10min/轮），已停止并改为主 agent 直接实施；工作流脚本保留（scripts/dev-loop-*.js），待环境排查后复用。
+
+### 37.14 交互重构：删除左侧 SSH 面板 + Space 全删 + 欢迎界面（2026-08-01）
+
+**用户需求**：①SSH 登录统一走"新建工作区"（删除左侧 SSH 面板）；②工作区可全部删除；③全删后显示欢迎界面（可选本地/服务器）；④测试以全新初始状态进行。
+
+**实施**：
+1. 移除左侧 SSH 视图（SidebarRail/types/useSidebarPanel/App 挂载）——sshStore 核心保留（connect/testConnection/saveConnection/savedConnections 供 SpaceCreateDialog）
+2. Space 全删：SpaceSwitcher `canDelete` 放开（原 `spaces.length > 1` 隐藏最后删除按钮——用户"没法全删"的根因）+ handleDeleteSpace 全删分支 clearTabs（useTabs 新 action）
+3. 欢迎界面（WelcomeScreen）：首次启动/全部删除后全屏显示；SpaceCreateDialog 加 initialMode 预设
+4. useSpacesBoot 空 Space 不再自动创建 Default；欢迎界面下跳过 SSH 自动连接
+
+**测试规范（任务 19，以后所有修改按此测试）**：
+- 全新初始状态 = 备份+删除 `%APPDATA%/com.tdsf.terminal-agent/tdsf-spaces.json` + CDP `localStorage.clear()` + **重启 app**（Rust 进程持有 store 内存，仅 reload 不够）
+- 从欢迎界面开始走流程（不基于已连接状态）；凭据（keyring/savedConnections）保留（非状态污染）
+- 实测（全新状态）：欢迎界面 ✓ → 新建本地 → 主 UI ✓ → 全删 → 欢迎界面 ✓ → SSH 服务器（已保存回填/连接）→ SSH Space connected ✓
+
+**commit**：31fa409（+ 之前 b9591fd 的对话框交互增强）
