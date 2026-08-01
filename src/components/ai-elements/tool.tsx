@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   ArrowRight01Icon,
+  BookOpen01Icon,
   CheckListIcon,
   Edit02Icon,
   EyeIcon,
@@ -50,6 +51,8 @@ const TOOL_META: Record<string, { label: string; icon: typeof File01Icon }> = {
   open_preview: { label: "Preview", icon: EyeIcon },
   run_subagent: { label: "Subagent", icon: RobotIcon },
   todo_write: { label: "Todos", icon: CheckListIcon },
+  // P2-4: 知识库检索（RAG 混合检索工具）
+  knowledge_search: { label: "知识库", icon: BookOpen01Icon },
 };
 
 const STATUS_DOT: Record<ToolPart["state"], string> = {
@@ -124,6 +127,8 @@ function deriveSummary(toolName: string, input: unknown): string | null {
       return str("pattern");
     case "suggest_command":
       return str("intent") ?? str("description");
+    case "knowledge_search":
+      return str("query") ?? str("intent");
     case "open_preview":
       return str("path") ?? str("url");
     case "run_subagent":
