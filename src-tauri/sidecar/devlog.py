@@ -271,8 +271,26 @@ def default_log_path() -> Path:
 
 
 def default_rust_log_path() -> Path:
-    """定位 <项目根>/.tdsf-data/rust.log（tauri_plugin_log Folder target 落盘）"""
-    return Path(__file__).resolve().parent.parent.parent / ".tdsf-data" / "rust.log"
+    """定位 rust.log（tauri_plugin_log Folder target 落盘）
+
+    注意：Folder target 的 path 基于 std::env::current_dir()，dev 启动时
+    工作目录不稳定（实测有时项目根、有时 src-tauri/），因此返回候选列表
+    中**第一个存在**的（由 rust_log_candidates 保证）。
+    """
+    cands = rust_log_candidates()
+    for c in cands:
+        if c.exists():
+            return c
+    return cands[0]
+
+
+def rust_log_candidates() -> list[Path]:
+    """rust.log 可能位置（按优先级）"""
+    root = Path(__file__).resolve().parent.parent.parent  # <项目根>
+    return [
+        root / ".tdsf-data" / "rust.log",
+        root / "src-tauri" / ".tdsf-data" / "rust.log",
+    ]
 
 
 def read_log(path: Path | None = None, tail: int | None = None) -> list[str]:
