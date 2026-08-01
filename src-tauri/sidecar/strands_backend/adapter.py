@@ -215,6 +215,8 @@ class TdsfStrandsCallbackHandler:
     - init_event_loop / start_event_loop / start / message / complete / force_stop
     - current_tool_use（含 name + input）
     - data（文本增量）
+    - tool_stream（agent-as-tool 子 agent 工具流事件，P0-6 新增）
+    - message 含 toolResult（子 agent 完成回填，P0-6 新增）
 
     转发策略：
     - data（文本增量）→ event_bus.emit_agent_message（流式推送）
@@ -222,6 +224,14 @@ class TdsfStrandsCallbackHandler:
     - start → event_bus.emit_mood_change("thinking")
     - complete → event_bus.emit_mood_change("working")
     - force_stop → event_bus.emit_mood_change("error")
+    - tool_stream（子 agent）→ emit_tool_call("agent:<name>", started)
+    - 子 agent data → emit_agent_message(msg_type="agent_call") + agent_switch
+    - message.toolResult（子 agent 完成）→ emit_tool_call("agent:<name>", completed)
+
+    P0-6 (2026-08-01): main agent 委派子 agent（agent-as-tool）可视化。
+    子 agent 的中间事件以 tool_stream / data+agent 形式到达**main**的 handler
+    （子 agent 自身用静默 handler 防文本污染），此处统一转发为前端可渲染的
+    agent 调用工具行事件。
 
     用法：
         handler = TdsfStrandsCallbackHandler(event_bus, agent_name="main", session_id="...")
@@ -233,16 +243,23 @@ class TdsfStrandsCallbackHandler:
         event_bus: Any,
         agent_name: str = "main",
         session_id: str = "",
+        sub_agent_names: set[str] | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.agent_name = agent_name
         self.session_id = session_id
+        # P0-6: 子 agent 名集合（识别 agent-as-tool 中间事件）
+        self.sub_agent_names = set(sub_agent_names or [])
+        # 已发起 agent 调用事件（tool_use_id → agent 名），避免重复 emit
+        self._agent_call_started: dict[str, str] = {}
+        self._agent_switch_emitted: set[str] = set()
         # 统计（调试用）
         self._stats = {
             "events_received": 0,
             "messages_emitted": 0,
             "tool_calls_emitted": 0,
             "mood_changes_emitted": 0,
+            "agent_calls_emitted": 0,
         }
 
     def __call__(self, **kwargs: Any) -> None:
@@ -262,7 +279,16 @@ class TdsfStrandsCallbackHandler:
         直接 emit 会产生 input={} 的空参数工具行（前端显示 "Input {}"）。
         工具实现内部（strands_backend/tools/*.py）会在拿到完整参数后
         自行 emit started/completed，此处转发是冗余且错误的。
+
+        P0-6 (2026-08-01)：新增 agent-as-tool 子 agent 事件转发
+        （tool_stream / data+agent / message.toolResult），不涉及
+        current_tool_use 的缺陷。
         """
+        # --- P0-6: agent-as-tool 子 agent 事件（优先处理，避免被 data 分支吞掉）---
+        if self.sub_agent_names:
+            if self._handle_sub_agent_events(event):
+                return
+
         # 深度思考流（模型 reasoningContent 增量）→ thinking 消息
         reasoning_text = event.get("reasoningText")
         if reasoning_text and isinstance(reasoning_text, str):
@@ -288,6 +314,139 @@ class TdsfStrandsCallbackHandler:
                 f"strands force_stop: agent={self.agent_name}, "
                 f"reason={event.get('force_stop_reason', 'unknown')}"
             )
+
+    # ========================================================================
+    # P0-6: agent-as-tool 子 agent 事件处理
+    # ========================================================================
+
+    def _handle_sub_agent_events(self, event: dict) -> bool:
+        """处理子 agent 相关事件（tool_stream / data+agent / toolResult）
+
+        Returns:
+            True = 事件已被消费（无需继续处理）；False = 非子 agent 事件
+        """
+        # 1. tool_stream 事件：子 agent 工具流（tool_use 含 name/input，
+        #    data 内嵌子 agent 的 data 增量——子 agent 用静默 handler，
+        #    其文本增量只经此包装到达 main）
+        if event.get("type") == "tool_stream":
+            tse = event.get("tool_stream_event") or {}
+            tool_use = tse.get("tool_use") or {}
+            name = tool_use.get("name", "")
+            if name in self.sub_agent_names:
+                self._emit_agent_call_started(name, tool_use)
+                data = tse.get("data") or {}
+                if isinstance(data, dict):
+                    inner = data.get("data")
+                    if isinstance(inner, str) and inner:
+                        self._emit_agent_call_delta(name, inner)
+                return True
+
+        # 2. data + agent 对象：子 agent 文本增量（agent 是子 agent 实例）
+        data = event.get("data")
+        if data and isinstance(data, str):
+            agent_obj = event.get("agent")
+            sub_name = getattr(agent_obj, "name", "") if agent_obj else ""
+            if sub_name in self.sub_agent_names:
+                self._emit_agent_call_delta(sub_name, data)
+                return True
+
+        # 3. message 含 toolResult：子 agent 完成（toolUseId 回填给 main）
+        msg = event.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    tr = block.get("toolResult") if isinstance(block, dict) else None
+                    if not tr:
+                        continue
+                    tool_use_id = tr.get("toolUseId", "")
+                    name = self._agent_call_started.get(tool_use_id)
+                    if name in self.sub_agent_names:
+                        self._emit_agent_call_completed(name, tool_use_id, tr)
+                        return True
+
+        return False
+
+    def _emit_agent_call_started(self, name: str, tool_use: dict) -> None:
+        """子 agent 调用开始 → agent 工具行 started（按 tool_use_id 去重）"""
+        tool_use_id = tool_use.get("toolUseId", "") or f"agent-{name}-{len(self._agent_call_started)}"
+        if tool_use_id in self._agent_call_started:
+            return
+        self._agent_call_started[tool_use_id] = name
+        self._emit_agent_switch(name)
+        if self.event_bus is None:
+            return
+        try:
+            self.event_bus.emit_tool_call(
+                tool_name=f"agent:{name}",
+                params=tool_use.get("input") or {"input": ""},
+                status="started",
+                session_id=self.session_id or None,
+                source=f"{self.agent_name}_agent.strands.agent_as_tool",
+            )
+            self._stats["agent_calls_emitted"] += 1
+        except Exception as e:
+            logger.debug(f"emit agent call started failed: {e}")
+
+    def _emit_agent_call_delta(self, name: str, data: str) -> None:
+        """子 agent 文本增量 → agent_message(msg_type=agent_call)
+
+        前端不把 agent_call 渲染进主输出流（子 agent 全文在 completed 的
+        tool output 中展示），此事件主要供调试/日志与未来流式增强。
+        """
+        if not self._agent_switch_emitted:
+            self._emit_agent_switch(name)
+        if self.event_bus is None or not data:
+            return
+        try:
+            self.event_bus.emit_agent_message(
+                content=data,
+                message_type="agent_call",
+                session_id=self.session_id or None,
+                source=f"{self.agent_name}_agent.strands.agent_as_tool",
+            )
+        except Exception as e:
+            logger.debug(f"emit agent call delta failed: {e}")
+
+    def _emit_agent_call_completed(self, name: str, tool_use_id: str, tool_result: dict) -> None:
+        """子 agent 完成 → agent 工具行 completed（结果 = 子 agent 最终文本）"""
+        if self.event_bus is None:
+            return
+        # 提取子 agent 最终文本（content[0].text）
+        result_text = ""
+        content = tool_result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("text"):
+                    result_text += str(block["text"])
+        status = tool_result.get("status", "success")
+        try:
+            self.event_bus.emit_tool_call(
+                tool_name=f"agent:{name}",
+                params={},
+                status="completed" if status == "success" else "error",
+                result=result_text or tool_result,
+                session_id=self.session_id or None,
+                source=f"{self.agent_name}_agent.strands.agent_as_tool",
+            )
+            self._stats["agent_calls_emitted"] += 1
+        except Exception as e:
+            logger.debug(f"emit agent call completed failed: {e}")
+
+    def _emit_agent_switch(self, agent: str) -> None:
+        if self.event_bus is None:
+            return
+        if agent in self._agent_switch_emitted:
+            return
+        self._agent_switch_emitted.add(agent)
+        try:
+            self.event_bus.emit_agent_switch(
+                agent=agent,
+                session_id=self.session_id or None,
+                source=f"{self.agent_name}_agent.strands.agent_as_tool",
+            )
+        except Exception as e:
+            logger.debug(f"emit_agent_switch failed: {e}")
 
     def _emit_mood(self, mood: str) -> None:
         if self.event_bus is None:
@@ -426,6 +585,53 @@ _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
     },
 }
 
+# P0-6 (2026-08-01, main 统一入口 + 自主委派): 子 agent 工具描述
+# （main agent 的 as_tool 描述，让 LLM 理解何时委派哪个专家）
+_SUB_AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "teach": (
+        "教学讲解 Agent：用户请求讲解概念/命令/排障原理时委派。"
+        "输入教学主题，返回结构化教学文本（概念/示例/易错点/练习）。"
+        "只读，不执行命令。"
+    ),
+    "coding": (
+        "代码/配置修改 Agent：用户请求定位或修复代码/配置文件时委派。"
+        "输入问题描述，返回修改方案与原因。"
+    ),
+    "explore": (
+        "只读探索 Agent：需要查找文件/分析日志/检查进程/诊断网络时委派。"
+        "输入探索目标，返回发现与依据。"
+    ),
+    "history": (
+        "历史/知识 Agent：用户询问过往操作或需要领域知识卡时委派。"
+        "输入问题，返回基于上下文的回答。"
+    ),
+}
+
+# main agent 委派说明（追加到 main 的 system_prompt，让 LLM 知道可委派）
+_MAIN_SUB_AGENT_PROMPT = (
+    "\n\nSub-agents (委派专家):\n"
+    "- teach(input): 用户请求教学讲解时调用（概念/示例/易错点/练习）\n"
+    "- coding(input): 用户请求定位/修复代码或配置时调用\n"
+    "- explore(input): 需要只读探索（文件/日志/进程/网络）时调用\n"
+    "- history(input): 用户询问过往操作/领域知识时调用\n"
+    "委派原则：识别用户意图后调用最合适的子 agent，把子 agent 的返回"
+    "整合进你的最终回答。普通运维操作（执行命令/读文件）直接自己用工具，"
+    "不需要委派。"
+)
+
+
+class _SilentCallbackHandler:
+    """静默 callback_handler：子 agent 用，防止其文本污染 main 输出流
+
+    子 agent 的中间事件会以 tool_stream / data+agent 形式经 AgentAsToolStreamEvent
+    到达 **main** 的 handler（TdsfStrandsCallbackHandler 统一转发），
+    因此子 agent 自身的 handler 必须静默，避免同一文本被 emit 两次。
+    子 agent 内部工具调用的 emit_tool_call 由工具代码直接发（不受此影响）。
+    """
+
+    def __call__(self, **kwargs: Any) -> None:
+        pass
+
 
 class StrandsAgentAdapter:
     """Strands Agent 适配层
@@ -480,6 +686,9 @@ class StrandsAgentAdapter:
         # 避免 multi-session 并发时 callback_handler 和工具闭包绑定的首次 session_id
         # 导致事件路由到错误会话（needs_you 审批卡片错会话）。
         self._agent_cache: dict[tuple[str, str], Any] = {}
+
+        # P0-6: 子 agent 工具缓存（agent-as-tool，按 (agent_id, session_id, perm)）
+        self._sub_agent_cache: dict[tuple[str, str, int], Any] = {}
 
         logger.info(
             f"StrandsAgentAdapter initialized: "
@@ -727,6 +936,11 @@ class StrandsAgentAdapter:
         按角色裁剪的工具集（schema-level safety）。main 用默认 prompt
         + 全量工具，其余 agent 用角色 prompt + 工具白名单。
 
+        P0-6 (2026-08-01, main 统一入口): main 的工具集额外挂载 4 个
+        子 agent 工具（Agent.as_tool）——main 识别用户意图后自主委派。
+        子 agent 内部用静默 handler（防文本污染），其中间事件经
+        tool_stream / data+agent 到达 main 的 handler 统一转发。
+
         Args:
             agent_id: Agent 标识
             ctx: ToolContext（用于构建工具）
@@ -748,11 +962,31 @@ class StrandsAgentAdapter:
         ops_tools = make_all_ops_tools(ctx, tool_names=tool_names)
         all_tools = ops_tools + self.extra_tools
 
-        # 构建 callback_handler
-        handler = TdsfStrandsCallbackHandler(
-            event_bus=self.event_bus,
-            agent_name=agent_id,
-            session_id=ctx.session_id,
+        # P0-6: main agent 挂载子 agent 工具（agent-as-tool 委派）
+        sub_agent_names = set()
+        if agent_id == "main" or agent_id not in _SUB_AGENT_SPECS:
+            for sub_name in _SUB_AGENT_TOOL_DESCRIPTIONS:
+                try:
+                    all_tools.append(
+                        self._create_sub_agent_tool(sub_name, ctx)
+                    )
+                    sub_agent_names.add(sub_name)
+                except Exception as e:
+                    logger.warning(
+                        f"failed to create sub agent tool '{sub_name}': {e}"
+                    )
+            system_prompt = system_prompt + _MAIN_SUB_AGENT_PROMPT
+
+        # 构建 callback_handler（main 转发子 agent 事件；子 agent 用静默）
+        handler = (
+            TdsfStrandsCallbackHandler(
+                event_bus=self.event_bus,
+                agent_name=agent_id,
+                session_id=ctx.session_id,
+                sub_agent_names=sub_agent_names,
+            )
+            if agent_id == "main" or agent_id not in _SUB_AGENT_SPECS
+            else _SilentCallbackHandler()
         )
 
         # 创建 Strands Agent
@@ -775,6 +1009,7 @@ class StrandsAgentAdapter:
             system_prompt=system_prompt,
             callback_handler=handler,
             hooks=[ToolCallLimitHook(agent_name=agent_id)],
+            name=agent_id,
             # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
         )
 
@@ -784,6 +1019,49 @@ class StrandsAgentAdapter:
             f"tools={[t.__name__ if hasattr(t, '__name__') else str(t) for t in all_tools]}"
         )
         return agent
+
+    def _create_sub_agent_tool(self, sub_agent_id: str, ctx: ToolContext) -> Any:
+        """创建子 agent 并包装为 Agent 工具（agent-as-tool，P0-6）
+
+        子 agent 按 _SUB_AGENT_SPECS 构造（独立 prompt + 工具白名单），
+        缓存于 _sub_agent_cache，避免每次 main 重建时重复构造。
+
+        Args:
+            sub_agent_id: 子 agent 名（teach/coding/explore/history）
+            ctx: 与 main 相同的 ToolContext（共享 session/权限/桥）
+
+        Returns:
+            Strands Agent.as_tool() 包装的工具对象
+        """
+        cache_key = (sub_agent_id, ctx.session_id, ctx.permission_level)
+        cached = self._sub_agent_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        spec = _SUB_AGENT_SPECS.get(sub_agent_id) or _SUB_AGENT_SPECS["main"]
+        tools = make_all_ops_tools(ctx, tool_names=spec.get("tool_names"))
+        system_prompt = spec.get("system_prompt") or self.system_prompt
+
+        sub_agent = _StrandsAgent(  # type: ignore[misc]
+            model=self.strands_model,
+            tools=tools,
+            system_prompt=system_prompt,
+            callback_handler=_SilentCallbackHandler(),
+            hooks=[ToolCallLimitHook(agent_name=sub_agent_id)],
+            name=sub_agent_id,
+        )
+        tool = sub_agent.as_tool(
+            name=sub_agent_id,
+            description=_SUB_AGENT_TOOL_DESCRIPTIONS.get(
+                sub_agent_id, f"委派给 {sub_agent_id} Agent"
+            ),
+        )
+        self._sub_agent_cache[cache_key] = tool
+        logger.info(
+            f"Sub-agent tool created: {sub_agent_id}, "
+            f"tools={[getattr(t, '__name__', str(t)) for t in tools]}"
+        )
+        return tool
 
     # ========================================================================
     # 工具上下文构建
@@ -1032,7 +1310,13 @@ class StrandsAgentAdapter:
         """清空 Agent 缓存（配置变更后调用）"""
         count = len(self._agent_cache)
         self._agent_cache.clear()
-        logger.info(f"Strands Agent cache cleared: {count} entries")
+        # P0-6: 子 agent 工具也绑定 model，需一并清理
+        sub_count = len(self._sub_agent_cache)
+        self._sub_agent_cache.clear()
+        logger.info(
+            f"Strands Agent cache cleared: {count} entries, "
+            f"{sub_count} sub-agent tools"
+        )
 
     def update_model(self, new_model: Any) -> None:
         """更新 LLM 模型并清空 Agent 缓存（agent.configure 调用时同步更新）

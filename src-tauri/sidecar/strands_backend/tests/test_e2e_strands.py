@@ -192,15 +192,19 @@ class TestStrandsRealE2E(unittest.TestCase):
         self.assertIsNot(agent, main_agent)
 
     def test_main_agent_has_full_toolset(self):
-        """main：真实 Strands Agent 全量 7 工具"""
+        """main：真实 Strands Agent 全量 7 运维工具 + 4 子 agent 工具（P0-6）"""
         model = FakeStrandsModel(file_content=b"", final_text="ok")
         adapter, _ = self._make_adapter(model)
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
         agent = adapter._get_or_create_agent("main", ctx)
         tool_names = set(agent.tool_names)
-        self.assertEqual(len(tool_names), 7)
+        # 7 运维工具
         self.assertIn("ssh_command", tool_names)
         self.assertIn("skill_invoke", tool_names)
+        # P0-6: main 额外挂载 4 个子 agent 工具
+        self.assertEqual(len(tool_names), 11)
+        for sub in ("teach", "coding", "explore", "history"):
+            self.assertIn(sub, tool_names)
 
     def test_invoke_unknown_agent_falls_back_main_toolset(self):
         """未知 agent_id：工具集回退 main 全量（兼容旧调用方）"""
@@ -210,6 +214,157 @@ class TestStrandsRealE2E(unittest.TestCase):
         agent = adapter._get_or_create_agent("not_exist", ctx)
         tool_names = set(agent.tool_names)
         self.assertIn("ssh_command", tool_names)
+
+
+@unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
+class TestAgentAsToolDelegation(unittest.TestCase):
+    """P0-6: main 统一入口 + 自主委派子 agent（agent-as-tool）全链路
+
+    真实 Strands：main agent 工具集含 4 个子 agent 工具，模型（FakeModel
+    脚本）第一轮委派 teach，teach 输出教学文本，main 第三轮收尾。
+    验证事件可视化链路：
+    - agent:teach started 恰好 1 次（去重）
+    - agent:teach completed 1 次，result = 子 agent 全文
+    - agent_switch: main → teach（Pill 联动）
+    - agent_call 增量转发（msg_type=agent_call）
+    """
+
+    def _make_adapter(self):
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        bus = MagicMock()
+        bus.emit_agent_message = MagicMock(return_value=1)
+        bus.emit_mood_change = MagicMock(return_value=1)
+        bus.emit_tool_call = MagicMock(return_value=1)
+        bus.emit_needs_you = MagicMock(return_value=1)
+        bus.emit_agent_switch = MagicMock(return_value=1)
+        bridge = MagicMock()
+        bridge.ipc_invoke = MagicMock(return_value={"ok": True})
+        adapter = StrandsAgentAdapter(
+            event_bus=bus,
+            rust_bridge=bridge,
+            backend_enabled=True,
+            strands_model=DelegationModel(),
+        )
+        adapter._strands_available = True
+        adapter._model_available = True
+        return adapter, bus
+
+    def test_main_delegates_to_teach_agent(self):
+        adapter, bus = self._make_adapter()
+
+        result = adapter.invoke(
+            "main",
+            "帮我讲一下 nginx",
+            {"session_id": "e2e-del-1", "live": {"sshSessionId": "1"}},
+        )
+
+        # 1. main 最终回答成功
+        self.assertEqual(result["next_step"], "done")
+        self.assertIn("main 最终回答", result["observation"])
+
+        # 2. agent:teach 工具事件：started 1 次 + completed 1 次
+        agent_events = [
+            c.kwargs
+            for c in bus.emit_tool_call.call_args_list
+            if str(c.kwargs.get("tool_name", "")).startswith("agent:")
+        ]
+        started = [e for e in agent_events if e.get("status") == "started"]
+        completed = [e for e in agent_events if e.get("status") == "completed"]
+        self.assertEqual(len(started), 1, f"expected 1 started, got {len(started)}")
+        self.assertEqual(len(completed), 1)
+        # started 的 params 含委派输入
+        self.assertIn("讲 nginx", str(started[0].get("params")))
+        # completed 的 result 是子 agent 全文（教学文本）
+        self.assertIn("nginx 是反向代理服务器", str(completed[0].get("result")))
+
+        # 3. agent_switch: main → teach（Pill 联动）
+        switches = [
+            c.kwargs.get("agent") for c in bus.emit_agent_switch.call_args_list
+        ]
+        self.assertIn("teach", switches)
+
+        # 4. agent_call 增量转发（子 agent 文本增量经 main handler）
+        agent_call_deltas = [
+            c.kwargs.get("content")
+            for c in bus.emit_agent_message.call_args_list
+            if c.kwargs.get("message_type") == "agent_call"
+        ]
+        self.assertTrue(agent_call_deltas, "expected agent_call deltas")
+        self.assertTrue(
+            any("nginx" in (d or "") for d in agent_call_deltas),
+            "agent_call delta should carry sub-agent text",
+        )
+
+    def test_sub_agent_not_recursively_exposed(self):
+        """子 agent 工具集不嵌套 agent 工具（防无限递归委派）"""
+        adapter, _ = self._make_adapter()
+        ctx = adapter._build_tool_context("main", "e2e-del-2", {})
+        sub_tool = adapter._create_sub_agent_tool("teach", ctx)
+        # as_tool 包装暴露 agent 实例
+        from strands.types.tools import AgentTool
+
+        self.assertIsInstance(sub_tool, AgentTool)
+        self.assertEqual(sub_tool.tool_name, "teach")
+        self.assertEqual(sub_tool.tool_type, "agent")
+
+
+class DelegationModel(Model):
+    """共享 FakeModel：round1=main 委派 teach / round2=teach 输出 / round3=main 收尾"""
+
+    stateful = False
+
+    def __init__(self) -> None:
+        self.round = 0
+
+    def supports_tool_calls(self) -> bool:
+        return True
+
+    def get_config(self) -> dict:
+        return {"model": "fake"}
+
+    def update_config(self, **model_config) -> None:
+        pass
+
+    async def structured_output(self, output_model, prompt, system_prompt=None, **kwargs):
+        yield None
+
+    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs):
+        self.round += 1
+        if self.round == 1:
+            yield {"messageStart": {"role": "assistant"}}
+            yield {
+                "contentBlockStart": {
+                    "start": {"toolUse": {"name": "teach", "toolUseId": "tu-1"}}
+                }
+            }
+            yield {
+                "contentBlockDelta": {
+                    "delta": {
+                        "toolUse": {"input": json.dumps({"input": "讲 nginx"})}
+                    }
+                }
+            }
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "tool_use"}}
+        elif self.round == 2:
+            yield {"messageStart": {"role": "assistant"}}
+            yield {"contentBlockStart": {"start": {}}}
+            yield {
+                "contentBlockDelta": {
+                    "delta": {"text": "## 1. 概念\nnginx 是反向代理服务器\n## 2. 练习"}
+                }
+            }
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
+        else:
+            yield {"messageStart": {"role": "assistant"}}
+            yield {"contentBlockStart": {"start": {}}}
+            yield {
+                "contentBlockDelta": {"delta": {"text": "main 最终回答（整合教学）"}}
+            }
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
 
 
 if __name__ == "__main__":
