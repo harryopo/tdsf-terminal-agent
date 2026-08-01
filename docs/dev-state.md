@@ -3042,3 +3042,19 @@ SSH 终端执行 cd /tmp
 **结果**：test_tools.py 72/72 单跑全过；全量 pytest **1284 → 1369**（dev-state 之前记录的门禁数字已过时，以此为准）。
 
 **经验**：testpaths 白名单会静默排除子目录测试——新增测试目录必须同步登记，且"全量绿"不等于"所有测试绿"。
+
+### 37.11 日志系统 v2：Rust 侧落盘 + 双日志时间线关联（2026-08-01）
+
+**交付**：
+1. `lib.rs`：tauri_plugin_log 加 `TargetKind::Folder` → `.tdsf-data/rust.log`（Rust 侧日志落盘，与 sidecar.log 同目录）
+2. `devlog.py`：
+   - 解析两种格式（sidecar `YYYY-MM-DD HH:MM:SS LEVEL logger: msg` + Rust `[date][time][module][LEVEL] [target] msg`）
+   - **时区归一化**（实测：sidecar.log=本地时间，rust.log=UTC，仅 Rust 转本地）
+   - `collect_entries` 合并多文件按时间排序；新增 Rust 侧规则（ssh_connect_loop / ssh_auth_failure / ssh_early_eof）
+   - CLI：默认合并 sidecar.log+rust.log；`--raw --all` 输出对齐时间线
+3. `main.py`：pytest 环境跳过文件 handler（**pytest import main.py 会污染 sidecar.log**——实测发现，测试日志混入运行时日志）
+
+**修**：restart_loop 规则误报（原正则匹配 fix_loop 的 retries 日志）。
+
+**验证**：pytest 1375 全过（+6 Rust 解析测试）；`python scripts/dev-log.py` 合并分析正常，raw 时间线对齐。
+**经验**：① tauri_plugin_log 的 Folder/Stdout 时间基准不同（UTC vs 本地）；② 测试 import 主模块会触发其副作用（日志/资源），需显式隔离。
