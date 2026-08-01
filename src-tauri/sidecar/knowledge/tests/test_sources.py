@@ -47,11 +47,10 @@ class TestSources(unittest.TestCase):
         self.assertEqual(self.rag.count(), added)
 
     def test_load_builtin_corpus_idempotent(self):
-        """已有数据时跳过（幂等，不重复索引）"""
+        """重复调用不重复入库（json 幂等 + docs 幂等）"""
         load_builtin_corpus()
         first = self.rag.count()
-        again = load_builtin_corpus()
-        self.assertEqual(again, 0)
+        load_builtin_corpus()
         self.assertEqual(self.rag.count(), first)
 
     def test_corpus_searchable(self):
