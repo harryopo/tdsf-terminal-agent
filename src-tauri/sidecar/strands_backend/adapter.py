@@ -705,7 +705,9 @@ class StrandsAgentAdapter:
         Returns:
             Strands Agent 实例
         """
-        cache_key = (agent_id, ctx.session_id)
+        # P1-v5-2: 缓存 key 含 permission_level——工具集按级别过滤（L1 只读），
+        # 级别变化后必须重建 agent（否则旧工具集残留）
+        cache_key = (agent_id, ctx.session_id, ctx.permission_level)
         if cache_key in self._agent_cache:
             return self._agent_cache[cache_key]
 

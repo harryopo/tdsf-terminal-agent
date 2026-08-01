@@ -640,6 +640,16 @@ OPS_TOOL_NAMES: list[str] = [
     "suggest_command",
 ]
 
+# P1-v5-2 schema-level safety: L1（免确认）只保留只读工具
+# （@tool 装饰后的实际函数名，与 OPS_TOOL_NAMES 的注册名不同）
+_L1_READONLY_TOOL_NAMES = {
+    "read_remote_file",
+    "analyze_logs",
+    "inspect_processes",
+    "network_diagnose",
+    "suggest_command",
+}
+
 
 def make_all_ops_tools(ctx: ToolContext) -> list:
     """构建全部 7 个工具（5 个运维 + Skill 调用 + 命令建议，带 ctx 闭包）
@@ -650,6 +660,11 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
 
     TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具，让 Strands Agent
     能根据用户意图生成可执行的 Linux 命令，并通过前端工具卡片展示 Insert 按钮。
+
+    TDSF 修复 2026-08-01 (P1-v5-2, OPENDEV schema-level safety):
+    L1（免确认）权限下，执行/写类工具（ssh_command / skill_invoke）直接从
+    registry 移除——LLM 无法调用不存在于 schema 的工具（remove 优于
+    instruct+intercept），从根源杜绝免确认模式下执行任意命令。
 
     Args:
         ctx: ToolContext 运行时上下文
@@ -665,7 +680,7 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
     from strands_backend.tools.skill_invoke import make_skill_invoke_tool
     from strands_backend.tools.suggest_command import make_suggest_command_tool
 
-    return [
+    tools = [
         make_ssh_command_tool(ctx),
         make_remote_file_tool(ctx),
         make_log_analyzer_tool(ctx),
@@ -674,6 +689,13 @@ def make_all_ops_tools(ctx: ToolContext) -> list:
         make_skill_invoke_tool(ctx),
         make_suggest_command_tool(ctx),
     ]
+
+    if getattr(ctx, "permission_level", 2) <= 1:
+        tools = [
+            t for t in tools
+            if getattr(t, "__name__", "") in _L1_READONLY_TOOL_NAMES
+        ]
+    return tools
 
 
 __all__ = [
