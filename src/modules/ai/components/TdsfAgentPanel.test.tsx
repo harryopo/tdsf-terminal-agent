@@ -7,7 +7,7 @@
  *   3. ESC 键触发 closeMini（store 联动）
  *   4. chatStore currentSubAgent 状态一致性（P0-1 Pill 验收的状态层）
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useChatStore } from "../store/chatStore";
 import { TdsfAgentPanel } from "./TdsfAgentPanel";
