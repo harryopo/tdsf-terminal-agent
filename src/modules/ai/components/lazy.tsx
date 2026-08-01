@@ -58,6 +58,19 @@ export function SelectionAskAi(props: SelectionAskAiProps) {
 }
 
 // TDSF 魔改: 导出 lazy 包装的 TdsfAgentPanel，App.tsx 用此组件避免 eager 加载
+// P2-4: 知识库面板 lazy 包装（避免 eager 拉入 markdown 栈，启动预算约束）
+const KnowledgePanelInner = lazy(() =>
+  import("./KnowledgeBrowser").then((m) => ({ default: m.KnowledgePanel })),
+);
+
+export function KnowledgePanelLazy() {
+  return (
+    <Suspense fallback={null}>
+      <KnowledgePanelInner />
+    </Suspense>
+  );
+}
+
 export function TdsfAgentPanel({ state }: { state: PresenceState }) {
   return (
     <Suspense fallback={null}>

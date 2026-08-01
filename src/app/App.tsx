@@ -64,6 +64,7 @@ import {
 } from "@/modules/sidebar";
 // TDSF 魔改 (P4-T4.4): Skill 管理面板
 import { SkillsPanel } from "@/modules/skills";
+import { KnowledgePanelLazy } from "@/modules/ai/components/lazy";
 import {
   SourceControlPanel,
   useSourceControlContext,
@@ -2156,6 +2157,9 @@ export default function App() {
                       ) : sidebarView === "skills" ? (
                         // TDSF 魔改 (P4-T4.4): Skill 管理面板
                         <SkillsPanel />
+                      ) : sidebarView === "knowledge" ? (
+                        // P2-4: 知识库浏览器（搜索/列表/详情弹窗，lazy 加载）
+                        <KnowledgePanelLazy />
                       ) : null}
                     </ErrorBoundary>
                   </div>

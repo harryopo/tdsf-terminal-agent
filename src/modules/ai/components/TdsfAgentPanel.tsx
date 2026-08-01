@@ -27,10 +27,8 @@ import { cn } from "@/lib/utils";
 import { useChat, type UIMessage } from "@ai-sdk/react";
 import {
   ArrowUp01Icon,
-  BookOpen01Icon,
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
-import { KnowledgeBrowser } from "./KnowledgeBrowser";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { PresenceState } from "@/lib/usePresence";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -126,8 +124,6 @@ interface TdsfAgentPanelProps {
 export function TdsfAgentPanel({ state }: TdsfAgentPanelProps) {
   const closeMini = useChatStore((s) => s.closeMini);
   const sessionId = useChatStore((s) => s.activeSessionId);
-  // P2-4: 知识库浏览器
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
 
   // === TDSF 魔改 P1-1: 拖动 + resize 状态 ===
   const [geometry, setGeometry] = useState(loadGeometry);
@@ -308,8 +304,6 @@ export function TdsfAgentPanel({ state }: TdsfAgentPanelProps) {
         />
       )}
 
-      {/* P2-4: 知识库浏览器（全局弹窗） */}
-      <KnowledgeBrowser open={knowledgeOpen} onOpenChange={setKnowledgeOpen} />
     </div>
   );
 }
@@ -471,18 +465,6 @@ function Body({
           <Spinner className="size-2.5" data-testid="tdsf-agent-busy" />
         )}
         <div className="flex-1" />
-        {/* P2-4: 知识库浏览器入口 */}
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={() => setKnowledgeOpen(true)}
-          className="size-5 text-muted-foreground hover:bg-accent hover:text-foreground"
-          aria-label="知识库"
-          title="知识库 (搜索/浏览教学语料)"
-        >
-          <HugeiconsIcon icon={BookOpen01Icon} size={12} strokeWidth={1.75} />
-        </Button>
         {/* 关闭按钮 */}
         <Button
           type="button"

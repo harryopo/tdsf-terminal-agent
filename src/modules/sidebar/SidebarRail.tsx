@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import {
+  BookOpen01Icon,
   FolderGitTwoIcon,
   FolderTreeIcon,
   SparklesIcon,
@@ -35,6 +36,7 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
     },
 
     { id: "skills", label: "Skills", icon: SparklesIcon },
+    { id: "knowledge", label: "知识库", icon: BookOpen01Icon },
   ];
 
   return (
