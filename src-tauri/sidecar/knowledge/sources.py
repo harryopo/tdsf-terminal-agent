@@ -38,35 +38,63 @@ _CHUNK_OVERLAP = 50
 # ============================================================================
 
 def load_builtin_corpus() -> int:
-    """首次启动自动索引内置语料（幂等，按 id 覆盖）
+    """首次启动自动索引内置语料（幂等）
+
+    - corpus/*.json：结构化语料（命令/概念/哲学/排障），已有数据时跳过
+    - corpus/docs/*.md：精选教学文档（速查手册/备考资料），按文件分块
+      幂等索引（id = md5(文件名-块号)，重复运行无害）
 
     Returns:
         本次入库条数
     """
     rag = get_global_rag()
-    if rag.count() > 0:
-        return 0  # 已有数据（可能包含用户导入），跳过避免重复索引
     added = 0
-    if not _CORPUS_DIR.exists():
-        return 0
-    for f in sorted(_CORPUS_DIR.glob("*.json")):
-        try:
-            with open(f, encoding="utf-8") as fh:
-                items = json.load(fh)
-            for it in items:
-                entry = KnowledgeEntry(
-                    id=it.get("id") or f"corpus-{uuid.uuid4().hex[:12]}",
-                    source=it.get("source", "builtin-corpus"),
-                    title=it.get("title", ""),
-                    content=it.get("content", ""),
-                    url=it.get("url", ""),
-                    tags=it.get("tags", []),
-                )
-                rag.add(entry)
-                added += 1
-            logger.info(f"builtin corpus indexed: {f.name} ({len(items)} entries)")
-        except Exception as e:
-            logger.warning(f"corpus load failed {f.name}: {e}")
+
+    # 1. JSON 结构化语料（首次启动索引，已有数据跳过）
+    if rag.count() == 0 and _CORPUS_DIR.exists():
+        for f in sorted(_CORPUS_DIR.glob("*.json")):
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    items = json.load(fh)
+                for it in items:
+                    entry = KnowledgeEntry(
+                        id=it.get("id") or f"corpus-{uuid.uuid4().hex[:12]}",
+                        source=it.get("source", "builtin-corpus"),
+                        title=it.get("title", ""),
+                        content=it.get("content", ""),
+                        url=it.get("url", ""),
+                        tags=it.get("tags", []),
+                    )
+                    rag.add(entry)
+                    added += 1
+                logger.info(f"builtin corpus indexed: {f.name} ({len(items)} entries)")
+            except Exception as e:
+                logger.warning(f"corpus load failed {f.name}: {e}")
+
+    # 2. docs/*.md 精选教学文档（始终幂等索引）
+    docs_dir = _CORPUS_DIR / "docs"
+    if docs_dir.exists():
+        for f in sorted(docs_dir.glob("*.md")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore").strip()
+                if not text:
+                    continue
+                chunks = _chunk_text(text)
+                for i, chunk in enumerate(chunks):
+                    entry = KnowledgeEntry(
+                        id=f"doc-{uuid.uuid5(uuid.NAMESPACE_URL, str(f))}-{i}",
+                        source="builtin-docs",
+                        title=f"{f.stem}（第 {i + 1}/{len(chunks)} 节）" if len(chunks) > 1 else f.stem,
+                        content=chunk,
+                        url=str(f),
+                        tags=["教学文档"],
+                    )
+                    rag.add(entry)
+                added += len(chunks)
+                logger.info(f"builtin doc indexed: {f.name} ({len(chunks)} chunks)")
+            except Exception as e:
+                logger.warning(f"doc load failed {f.name}: {e}")
+
     return added
 
 
