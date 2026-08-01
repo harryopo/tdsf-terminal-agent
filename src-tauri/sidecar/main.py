@@ -470,6 +470,15 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register fix_loop: {e}")
 
+    # P1-2: 会话证据追踪器（evidence.list / .clear / .stats）
+    try:
+        from strands_backend.evidence import register_methods as register_evidence
+
+        register_evidence(dispatcher)
+        logger.info("evidence methods registered (evidence.list/clear/stats)")
+    except Exception as e:
+        logger.exception(f"failed to register evidence: {e}")
+
     # T-P1-09: TDSF.md 指令文件加载（启动加载 + watcher + system prompt 注入）
     try:
         import tdsf_loader
