@@ -3147,3 +3147,22 @@ CDP 全新状态实测通过。commit 见上。
 - [x] P0-5 前端补测试（transport/AiToolApproval/MockLLMWarning/TdsfAgentPanel 4 文件 25 用例）+ Strands 真实 e2e（4 用例：真实 Agent + Fake Model + mock bridge 验证 teach 工具调用全链路）
 
 **验收标准**：Pill 显示与实际 agent 一一对应（agent_switch 按真实 agent_id 发出）；每个子 agent 是真实 Strands 实例（独立 prompt + 工具白名单，explore/teach 无 ssh_command）；teach 输出结构化教学 markdown（teaching_content 结构化字段归 P2 教学闭环）。
+
+### 37.18 Agent 全链路打通：main 统一入口 + 自主委派 + 可视化（P0-6，2026-08-01）
+
+**用户需求**：以 main 为主对话入口，main 按任务自动调用不同子 agent；子 agent 调用可视化（参考 Terax run_subagent UI，像工具调用一样展示）；跑完全链路。
+
+**实现**：
+- **main 自主委派**：main agent 工具集 = 7 运维工具 + 4 个子 agent 工具（`Agent.as_tool()`，Strands 官方 agent-as-tool）。`_MAIN_SUB_AGENT_PROMPT` 注入委派说明，LLM 识别意图后自主调用 teach/coding/explore/history
+- **子 agent 隔离**：`_SilentCallbackHandler` 防文本污染；子 agent 中间事件经 `tool_stream`/`data+agent`/`toolResult` 到达 main handler 统一转发；`_sub_agent_cache` 独立缓存（clear_cache 一并清理）；子 agent 不递归嵌套（防无限委派）
+- **可视化事件协议**（前端复用现有工具行管道）：
+  - `sidecar:tool_call` tool_name=`agent:<name>` started（params=委派输入）/ completed（result=子 agent 全文，去重防重复）
+  - `sidecar:agent_switch`：main → 子 agent（Pill 联动），invoke 结束归位 main
+  - `sidecar:agent_message` msg_type=agent_call（子 agent 增量，前端忽略防污染）
+- **前端 UI**（参考 Terax run_subagent）：Tool 组件识别 `agent:` 前缀 → "<Name> Agent" 标签 + RobotIcon + 委派输入摘要（60 字符截断）；折叠展示子 agent 全文
+
+**真 bug 修复（测试暴露）**：sidecar-adapter 消费循环在 invoke 已 resolve 时仍调 `queue.next()`——next() shift 的 item 因 race 输给 invoke 分支而永久丢失（工具 completed 的 tool-output 静默丢失，影响所有工具）。修复：`invokeResolved` 预检后退出循环走 drain。孤儿测试原为 bug 掩盖下的假通过，改为纯孤儿场景。
+
+**验收**：后端 1414 全过（含 main→委派 teach→收尾 全链路 e2e：started 恰 1 次/completed 带全文/Pill 联动/增量转发/不递归嵌套）；前端 897 全过（Tool agent 卡片 5 用例 + adapter agent 事件 1 用例）；tsc/eslint/cargo check 干净。
+
+**遗留**：真实 LLM 的委派行为依赖模型对 `_MAIN_SUB_AGENT_PROMPT` 的理解（机制已通，模型能力待真实环境实测）；流式展示子 agent 增量（tool-input-delta）为增强项。
