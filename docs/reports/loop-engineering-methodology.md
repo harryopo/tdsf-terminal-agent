@@ -39,7 +39,7 @@ Plan → Research → Implement → Verify → Review → 收尾
 
 | 层 | 内容 | 通过标准 |
 |----|------|---------|
-| L1 静态 | tsc/eslint/ruff/clippy | 0 error 0 warning |
+| L1 静态 | **pnpm typecheck**（tsconfig.app.json 严格，build 同款）/ eslint / ruff / clippy | 0 error 0 warning（教训：tsconfig.json 宽松检查会漏真实类型错误，必须用 build 同款严格检查） |
 | L2 单测 | vitest/pytest | 全绿 + 覆盖率趋势 |
 | L3 集成 | Rust IPC + sidecar 真实启动 + 契约 | 关键链路不 mock |
 | L4 运行态 | 应用启动 + CDP 零 console 错误 + 核心交互 | 错误收集器为空 |
