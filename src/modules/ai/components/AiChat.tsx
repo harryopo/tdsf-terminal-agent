@@ -51,6 +51,8 @@ import {
   type EvidenceItem,
 } from "../lib/evidence";
 import { AiToolApproval } from "./AiToolApproval";
+// P2-1: teach 教学卡片（6 大板块分区渲染）
+import { isTeachMessage, TeachCard } from "./TeachCard";
 
 function CommandSnippet({ name }: { name: string }) {
   const meta = SLASH_COMMANDS[name];
@@ -767,10 +769,20 @@ const RenderedPart = memo(function RenderedPart({
   streaming: boolean;
 }) {
   if (part.type === "text") {
+    const text = (part as unknown as { text: string }).text;
+    // P2-1: teach 结构化教学输出 → 教学卡片（6 大板块分区渲染）
+    if (!streaming && isTeachMessage(text)) {
+      return (
+        <TeachCard
+          content={text}
+          onAsk={(t) =>
+            useChatStore.getState().attachSelection?.(t, "terminal")
+          }
+        />
+      );
+    }
     return (
-      <MessageResponse streaming={streaming}>
-        {(part as unknown as { text: string }).text}
-      </MessageResponse>
+      <MessageResponse streaming={streaming}>{text}</MessageResponse>
     );
   }
 
