@@ -32,6 +32,8 @@ logger = logging.getLogger("sidecar.knowledge.rag")
 
 _EMBED_DIM = 512  # BGE-small-zh-v1.5 固定 512 维
 _BGE_QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
+# 英文查询前缀（BGE 硬性要求：查询与文档用不同前缀，中英自动切换）
+_BGE_QUERY_PREFIX_EN = "Represent this sentence for searching relevant passages: "
 
 # fastembed 缓存目录（.tdsf-data/models）
 _MODEL_CACHE = str(
@@ -286,16 +288,17 @@ class RagIndex:
                            WHERE fts_entries MATCH ?
                            ORDER BY score
                            LIMIT ?""",
-                        (q_tokens, _FTS_TOP),
+                        (_escape_fts_query(q_tokens), _FTS_TOP),
                     )
                     for i, row in enumerate(cur):
                         fts_ranks[str(row["rowid"])] = i
             except Exception as e:
                 logger.debug(f"fts5 search failed: {e}")
 
-            # 2. 向量路（语义）
+            # 2. 向量路（语义）——BGE 查询前缀按中英文自动切换
             if self._vec_available:
-                vec = embed_text(_BGE_QUERY_PREFIX + query)
+                prefix = _BGE_QUERY_PREFIX if _contains_chinese(query) else _BGE_QUERY_PREFIX_EN
+                vec = embed_text(prefix + query)
                 if vec is not None:
                     q_bytes = _pack_vec(vec)
                     try:
@@ -312,19 +315,27 @@ class RagIndex:
                     except Exception as e:
                         logger.debug(f"vec search failed: {e}")
 
-            # 3. RRF 融合
-            merged: dict[str, float] = {}
+            # 3. RRF 融合（带来源标记：fts/vec/both）
+            merged: dict[str, dict[str, float]] = {}
             for rid, rank in fts_ranks.items():
-                merged[rid] = merged.get(rid, 0.0) + 1.0 / (_RRF_K + rank + 1)
+                merged.setdefault(rid, {"score": 0.0, "fts": 0.0, "vec": 0.0})[
+                    "score"
+                ] += 1.0 / (_RRF_K + rank + 1)
+                merged[rid]["fts"] += 1.0 / (_RRF_K + rank + 1)
             for rid, rank in vec_ranks.items():
-                merged[rid] = merged.get(rid, 0.0) + 1.0 / (_RRF_K + rank + 1)
+                merged.setdefault(rid, {"score": 0.0, "fts": 0.0, "vec": 0.0})[
+                    "score"
+                ] += 1.0 / (_RRF_K + rank + 1)
+                merged[rid]["vec"] += 1.0 / (_RRF_K + rank + 1)
 
             if not merged:
                 return []
 
             top_ids = [
                 int(rid)
-                for rid, _ in sorted(merged.items(), key=lambda kv: -kv[1])[:top_k]
+                for rid, _ in sorted(
+                    merged.items(), key=lambda kv: -kv[1]["score"]
+                )[:top_k]
             ]
 
             # 4. 回查元数据
@@ -335,6 +346,8 @@ class RagIndex:
                 ).fetchone()
                 if row is None:
                     continue
+                m = merged[str(rid)]
+                hit = "both" if m["fts"] > 0 and m["vec"] > 0 else ("fts" if m["fts"] > 0 else "vec")
                 results.append(
                     {
                         "id": row["id"],
@@ -344,7 +357,8 @@ class RagIndex:
                         "url": row["url"],
                         "tags": _json_loads(row["tags"]),
                         "created_at": row["created_at"],
-                        "match_type": "hybrid",
+                        "match_type": hit,
+                        "rrf_score": round(m["score"], 4),
                     }
                 )
             return results
@@ -366,6 +380,26 @@ def _pack_vec(vec: list[float]) -> bytes:
     import struct
 
     return struct.pack(f"<{len(vec)}f", *vec)
+
+
+def _contains_chinese(text: str) -> bool:
+    """检测是否含中文字符（BGE 查询前缀中英切换）"""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _escape_fts_query(tokens: str) -> str:
+    """FTS5 查询转义（继承旧版 hybrid-search 的经验）
+
+    按空白分词后，每个词用双引号包裹（短语化），过滤纯标点——
+    防止 FTS5 语法（OR/NOT/AND/引号）注入误解析。
+    """
+    parts = []
+    for tok in tokens.split():
+        # 过滤纯标点/空词
+        if not any(ch.isalnum() or "\u4e00" <= ch <= "\u9fff" for ch in tok):
+            continue
+        parts.append(f'"{tok}"')
+    return " ".join(parts)
 
 
 def _json_dumps(obj: Any) -> str:
