@@ -127,8 +127,8 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
     expect(parts[0].type).toBe("error");
     const err = parts[0] as { type: "error"; error: string };
     expect(err.error).toContain("sidecar not running");
-    // 错误提示应包含解决建议
-    expect(err.error).toContain("LLM 未配置");
+    // P0-4: 结构化错误提示——not_running 类型应包含重启建议
+    expect(err.error).toContain("重启应用后重试");
   });
 
   it("生产模式 + invoke 失败 → yield error（不降级）", async () => {
@@ -171,12 +171,14 @@ describe("runSidecarStream — Python agent name 映射", () => {
     );
 
     // TDSF 魔改 2026-07-30 (Bug 5): state 现在含 live 字段
+    // P0-3: invoke 额外携带 timeoutMs（可配置超时，默认 60000）
     expect(mockInvoke).toHaveBeenCalledWith("ipc_invoke", {
       method: "agent.invoke",
       params: {
         name: "coding",
         state: { input: "test", messages: makeMessages("test"), live },
       },
+      timeoutMs: 60000,
     });
   });
 
