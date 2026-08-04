@@ -94,7 +94,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "codemirror-languageserver": "^1.22.0",
-    "lucide-react": "^0.460.0",
+    "lucide-react": "^1.27.0",
     "monaco-editor": "^0.56.0",
     "radix-ui": "^1.6.7",
     "react": "^19.0.0",
