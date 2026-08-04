@@ -361,3 +361,26 @@
 - ✅ 黑屏根因是配置残留而非组件代码——排查方向曾误导（AiChat 组件审查），平台配置合并优先级是盲区
 - 📌 MSYS 参数转义：Windows 下跑带 / 参数的程序用 PowerShell，不用 bash
 - 📌 tauri 平台配置（tauri.windows.conf.json）按 label 合并主配置——残留配置会静默覆盖主配置，必须清理
+
+---
+
+## 2026-08-04 · dev 启动黑屏排查 + 启动方式教训（交接补充）
+
+**背景**：全量工程收尾后用户要求"启动服务看看"。启动 dev 后窗口黑屏。排查出两个启动方式级教训。
+
+**教训 1：长期运行命令禁止 `| head`/`| tail` 管道截断**：
+- `pnpm tauri dev 2>&1 | head -30` —— head 读到 30 行后关闭管道 → tauri dev 写 stdout 收到 EPIPE → 进程被杀 → vite 死、窗口黑屏
+- 构建类一次性命令（pyinstaller/tauri build）管道截断无害（命令会退出）；**dev/server 类长期进程必须完整重定向到文件**（`> log 2>&1`）
+
+**教训 2：target/debug/sidecar/ 残留导致 dev 误用打包 exe**：
+- tauri dev 构建时会把 resources（sidecar/tdsf-sidecar/ 747MB onedir）复制到 target/debug/
+- locate_sidecar_script 的 exe 目录候选命中它 → dev 模式跑打包 exe（冷启动 60s+ 含杀软扫描）而非 python main.py（几秒）→ 窗口长时间深色 = 黑屏
+- 修复：`rm -rf src-tauri/target/debug/sidecar` → dev 回退 main.py + python（10s 超时，几秒就绪）
+- 教训固化：**dev 模式下若 locate 命中打包 exe，优先删 target/debug/sidecar 恢复脚本模式**；打包链路验证用 release/安装版
+
+**验证**：删残留后 dev 正常（vite ready 448ms → python sidecar ready → CDP 9222 截图 bodyLen 114358、主色 #1a1a1a 主题底 + UI 元素，非黑屏）。
+
+**复盘**：
+- ✅ 黑屏排查路径：端口检查（9300/9222）→ 进程树 → locate 命中判定 → 删残留 → 恢复
+- ✅ dev 模式 CDP（9222）可用：debug build 编译时读平台配置 additionalBrowserArgs 硬编码 → WebView2 CDP 直连抓渲染
+- 📌 服务启动后必须 CDP 截图验证（bodyLen + 像素采样），不能只看"进程活着"
