@@ -3261,3 +3261,17 @@ CDP 全新状态实测通过。commit 见上。
 **门禁**：前端 typecheck ✓ 946 测试 ✓；后端 1281 ✓；Rust cargo check/build ✓；安装版实测 ✓。
 
 **待用户验证**：安装版真实使用（用户电脑上安装体验、黑屏是否彻底消失、SSH/翻译/agent 全链路）。
+
+### 37.24 dev 启动黑屏排查 + 交接状态（2026-08-04）
+
+**现象**：收尾后启动 `pnpm tauri dev` 窗口黑屏。两个启动方式级根因：
+1. `| head -30` 管道截断杀掉 tauri dev（EPIPE）→ vite 死 → 黑屏。**长期进程禁止管道截断**，用 `> log 2>&1` 完整重定向
+2. `target/debug/sidecar/` 残留（tauri dev 构建复制 resources）→ locate 命中 747MB 打包 exe → dev 误用打包模式（60s+ 冷启动）→ 窗口长时间深色。**修复：删 target/debug/sidecar** → dev 回退 python main.py 快启动
+
+**当前状态（交接基线）**：
+- 全量工程 P0-P4 全部完成；sidecar onedir 打包发布闭环（§37.23）；黑屏根因（transparent 平台配置）已修
+- dev 服务运行方式：`pnpm tauri dev > /tmp/tdsf-dev.log 2>&1`（后台任务，勿用管道）；CDP 9222 可抓 WebView2（debug build 编译平台配置）
+- 安装版在 `%LOCALAPPDATA%\TDSF Terminal Agent\`（402MB NSIS 0.1.0），用户可直接体验
+- 待用户验证：真实 LLM 委派（API key）、SSH 全链路、安装版体验；P3 生态项（Headroom MCP/沙箱）待确认
+
+**门禁基线**：前端 946 测试 / 后端 1281 / typecheck / cargo build 全绿；安装版实测通过。
