@@ -2,7 +2,7 @@
 
 > **位置**：`docs/HANDOVER.md`
 > **作用**：面向新接手 AI / 开发者的全面交接文档，与 `KNOWLEDGE-INDEX.md` 共同构成知识沉淀 L3 层
-> **版本**：v1.2（2026-07-31 · sidecar 编码契约 + 双问题修复 + better-harness 识别）
+> **版本**：v1.3（2026-08-04 · 同步 §37.14-37.24：P0-P4 全量工程 + sidecar 打包 + 交互重构 + 黑屏根因修复）
 > **接手顺序**：`AGENTS.md` → `CLAUDE.md` → `docs/MULTI-AGENT-WORKFLOW.md` → `docs/dev-state.md` 末尾交接章 → `docs/KNOWLEDGE-INDEX.md` → 本文件
 > **上游参考**：https://github.com/crynta/terax-ai
 
@@ -355,11 +355,11 @@ Windows 中文系统 → Python sys.stdout 编码 gbk
 | P1-NEW-v3-2 | P1 | toolCallId 配对错乱 | 按 tool_name 配对，同名工具覆盖 | **未修**（backlog P1） |
 | P1-NEW-v3-3 | P1 | SSH 主机审批无超时 | `rx.await` 永久挂起 | 642a4d0 |
 | P1-NEW-v3-4 | P1 | 线程池退出仍卡死 | 非 daemon 线程 atexit join | 642a4d0 |
-| — | P0 | sidecar 启动即崩（AI 报 not_running） | **gbk 写 stdout → Rust lines() UTF-8 InvalidData → reader 退出 → 误判 EOF → kill 子进程** | 未提交（§3.8 契约） |
-| — | P1 | SSH 终端划词翻译不显示 | `SshTerminalHost` 未给 TerminalPane 传 ref，getSelection 未注册进 terminalRefs | 未提交 |
-| — | P2 | 翻译开关不持久化 | enabled 默认 false 且无 persist | 未提交 |
+| — | P0 | sidecar 启动即崩（AI 报 not_running） | **gbk 写 stdout → Rust lines() UTF-8 InvalidData → reader 退出 → 误判 EOF → kill 子进程** | 已修（§3.8 契约，后续 commit 含入） |
+| — | P1 | SSH 终端划词翻译不显示 | `SshTerminalHost` 未给 TerminalPane 传 ref，getSelection 未注册进 terminalRefs | 已修（§37.20 翻译重构 a2aa150 含入） |
+| — | P2 | 翻译开关不持久化 | enabled 默认 false 且无 persist | 已修（§37.20 翻译重构 a2aa150 含入） |
 
-### 4.2 当前 backlog（按优先级，详见 dev-state.md §三十四/§三十五）
+### 4.2 当前 backlog（按优先级，详见 dev-state.md §37.24）
 
 #### P1（影响核心功能，建议优先修复）
 
@@ -520,8 +520,28 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 | `8dbed20` | dev-state §十九交接章（P0-E Strands override 修复） |
 | `4c5640f` | sidecar.health RPC + backend_status 事件 |
 | `6bc17b7` | invoke_agent 优先走 _global_backend_override 路径 |
-| **未提交** | sidecar GBK/UTF-8 根因修复（§3.8）+ SSH 翻译 handle 注册 + 翻译开关持久化（§36） |
-| **未提交** | better-harness：CI 脚本修复（check-types→typecheck）/ .gitignore 路径 / 协作契约归档 / Python CI 评估报告（§36.3） |
+| **已含入后续 commit** | sidecar GBK/UTF-8 根因修复（§3.8）+ SSH 翻译 handle 注册 + 翻译开关持久化（§36） |
+| **已含入后续 commit** | better-harness：CI 脚本修复（check-types→typecheck）/ .gitignore 路径 / 协作契约归档 / Python CI 评估报告（§36.3） |
+
+**2026-08-01 ~ 2026-08-04 关键 commit 节点（§37.14-37.24）**：
+
+| commit | 内容 |
+|--------|------|
+| `5450309` | dev-state §37.24 交接基线（dev 启动黑屏排查教训） |
+| `910285c` | dev-state §37.23 + 打包发布闭环与黑屏根因复盘 |
+| `7cb230d` | **sidecar onedir 打包发布闭环 + 黑屏根因修复**（NSIS 402MB + transparent 平台配置清理） |
+| `e4952e7` | dev-state §37.22 全量工程推进记录 |
+| `69ec9c0` | **P4 单框架收敛**：删除 LangGraph 遗产（graph/ 2184 行 + langgraph/langchain 5 依赖） |
+| `b22051b` | **P2-4 决策库**：AI 排障成功自动沉淀案例（md5 去重） |
+| `f7bdb02` | T4 稳定化：修复严格类型检查暴露的 8+ 真实错误 |
+| `5a78456` | **T3 词库增强**：ECDICT 8.1 万条 + lemma 词形还原 + 模糊兜底 |
+| `b59b3a8` | **T2 透明窗口系统性修复**：渲染前即不透明 + 首帧后 show |
+| `c76be91` | **T1 简洁终端图标**：修复纯蓝紫单色占位 |
+| `a2aa150` | **P2 翻译模块重构**：统一选中浮层（翻译 + Ask TDSF）|
+| `f35659f` | **P1-3 hash 审计链**：sha256 前后链 JSONL 落盘 + verify 篡改检测 |
+| `4cc840e` | **P1-2 会话证据链**：EvidenceTracker 会话级证据 + 前端折叠区 |
+| `139fc21` | **P1-1 HITL 真实审批闭环**：threading.Event 等待-唤醒 + 工具决策分支 |
+| `31fa409` | **交互重构**：删除左侧 SSH 面板 + Space 全删 + 欢迎界面内嵌 |
 
 ---
 
@@ -548,7 +568,7 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 - [ ] 1. 读 `AGENTS.md`（一句话指路）
 - [ ] 2. 读 `CLAUDE.md`（规范总纲 + 防污染红线 + 五绿门禁 + 诊断方法论）
 - [ ] 3. 读 `docs/MULTI-AGENT-WORKFLOW.md`（多 agent 协作规范）
-- [ ] 4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §三十四）
+- [ ] 4. 读 `docs/dev-state.md` 末尾「§<N> 交接指南」（当前是 §37.24）
 - [ ] 5. 读 `docs/KNOWLEDGE-INDEX.md`（文档全貌导航）
 - [ ] 6. 读本文件（HANDOVER.md）
 - [ ] 7. `git status` + `git log --oneline -10` 确认当前代码状态
@@ -558,25 +578,28 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 - [ ] 11. `pnpm tauri:dev` 桌面端实测（窗口可见 + 本地终端 + SSH 可连）
 - [ ] 12. CDP 9222 实测（`curl http://127.0.0.1:9222/json`）验证 sidecar.health
 - [ ] 13. 终端/Space 实测：本地终端 `cd` 后左侧资源管理器跟随刷新；SSH Space `cd /tmp` 后远程文件树刷新
-- [ ] 14. 按 dev-state.md §三十四/§三十五 backlog 选任务推进
+- [ ] 14. 按 dev-state.md §37.24 backlog 选任务推进
 
 ---
 
-## 8. 运行时状态快照（2026-07-31 22:50）
+## 8. 运行时状态快照（2026-08-04）
 
 | 项目 | 状态 |
 |------|------|
-| typecheck / lint / test(852) / build:web | ✅ 全绿 |
-| pytest（1284，含 +4 write_message 容错） | ✅ 全过 |
-| cargo check | ✅ 通过 |
-| sidecar | ✅ **running**（strands 激活 + llm_configured=true + 9 agents + 99 方法） |
-| AI 对话 | ✅ 已恢复（GBK/UTF-8 根因修复即时生效，无需重启 tauri:dev） |
+| typecheck / lint / test(**946**) / build:web | ✅ 全绿 |
+| pytest（**1281**） | ✅ 全过 |
+| cargo check / build | ✅ 通过 |
+| sidecar | ✅ **running**（strands 激活 + llm_configured=true + 5 agents + 7 运维工具） |
+| AI 对话 | ✅ 已恢复（GBK/UTF-8 根因修复 + LangGraph 死代码删除） |
 | 终端/Space 重构 | ✅ 阶段 0-5 全部落地（§3.7） |
-| SSH 划词翻译 | ⏳ 代码修复完成（handle 注册 + 开关持久化），待 SSH 实测 |
-| 翻译开关 | ✅ 默认开启 + localStorage 持久化 |
-| 最新 commit | `c3e2954`（docs）— 本 session 修复**未提交**（§36.5 待分组提交） |
-| 交接章 | dev-state §三十六（2026-07-31） |
+| 方案书 P0-P4 | ✅ **全部完成**（P0 多 agent 真集成 / P1 HITL 审批+证据链+审计链 / P2 翻译重构+知识库+决策库 / P4 单框架收敛） |
+| sidecar 打包 | ✅ onedir PyInstaller + NSIS 安装包（402MB, v0.1.0），安装冒烟全过 |
+| 翻译模块 | ✅ ECDICT 81557 词 + lemma 词形还原 + 统一浮层（翻译 + Ask TDSF） |
+| 黑屏根因 | ✅ transparent 平台配置残留已修（§37.23）；dev 启动黑屏根因已修（§37.24） |
+| SSH 划词翻译 | ⏳ 代码完成，待 SSH 实测 |
+| 最新 commit | `5450309`（docs: dev-state §37.24 交接基线） |
+| 交接章 | dev-state §37.24（2026-08-04） |
 
 ---
 
-> **最后更新**：2026-07-31 · v1.2 · sidecar GBK/UTF-8 根因修复（§3.8 编码契约）+ 翻译修复 + better-harness 识别。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-08-04 · v1.3 · 同步 §37.14-37.24 全量工程（P0-P4 + sidecar 打包 + 交互重构 + 黑屏修复）。上游参考：https://github.com/crynta/terax-ai

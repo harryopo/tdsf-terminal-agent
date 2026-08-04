@@ -3275,3 +3275,20 @@ CDP 全新状态实测通过。commit 见上。
 - 待用户验证：真实 LLM 委派（API key）、SSH 全链路、安装版体验；P3 生态项（Headroom MCP/沙箱）待确认
 
 **门禁基线**：前端 946 测试 / 后端 1281 / typecheck / cargo build 全绿；安装版实测通过。
+
+### 37.25 进度跟进 + 交接注意事项调研 + L3 文档同步 + 远程推送（2026-08-04）
+
+**任务**：用户要求详细阅读项目内容、明晰架构与进度，调研开发交接注意事项，进行进度跟进，并推送更新到 GitHub。
+
+**调研产出**：综合通用软件交接最佳实践（PingCode / ONES / Standish Group）+ AI agent 项目特殊交接点（Google Modular Prompt、Trunk RCA agent 经验、pi-handoff 结构化格式）+ Tauri 全栈 + 多 agent 协作特性，整理出 16 项交接注意事项清单。
+
+**发现的问题（3 项偏差）**：
+1. 🔴 **高风险**：97 commits 未 push 到远程（本地仓库损坏即全丢）→ 本次执行 push 修复
+2. 🟠 **中风险**：L3 知识层文档（HANDOVER/KNOWLEDGE-INDEX）停在 v1.2（2026-07-31），落后 §37.14-37.24 全量工程进度 → 本次同步到 v1.3
+3. 🟡 **低风险**：HANDOVER §4.1 多处"未提交"标注过时（实际已含入后续 commit）→ 本次修正标注
+
+**L3 文档同步（v1.2 → v1.3）**：
+- `HANDOVER.md`：头部版本 → v1.3；§8 运行时状态快照刷新（946 前端/1281 后端/5 agents/P0-P4 全完成/sidecar 打包/黑屏修复）；§4.1 bug 表"未提交"→"已修 @ commit"；§4.2 backlog 指针 → §37.24；§5.10 补充 §37.14-37.24 的 12 个关键 commit 节点；§7 接手 checklist 指针更新
+- `KNOWLEDGE-INDEX.md`：头部版本 → v1.3；§1.2 进度记忆类指针 → §37.24；关键章节速查补充 §37.17-37.24；§3.3 commit 节点补充；§2.1 检索指南指针更新
+
+**远程推送**：`git push origin terax-clone-v0`（97 → 0 commits ahead）。上游：`https://github.com/harryopo/tdsf-terminal-agent.git`
