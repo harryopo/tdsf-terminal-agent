@@ -1345,15 +1345,28 @@ async fn handle_notification(
 /// stderr reader task: 读 stderr，转发到 Rust log
 async fn stderr_reader_task(stderr: tokio::process::ChildStderr) {
     log::debug!("[sidecar:stderr] started");
-    let reader = BufReader::new(stderr);
-    let mut lines = reader.lines();
+    let mut reader = BufReader::new(stderr);
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        // Python 日志格式: [sidecar] 2026-07-26 10:00:00 LEVEL name: message
-        // 直接转发到 Rust log（避免日志丢失）
-        log::info!("[python] {}", line);
-        // TDSF 魔改 P2-3: 同时写入全局日志缓冲区供前端设置页查看
-        push_log(&format!("[python] {}", line));
+    loop {
+        // 与 reader_task 同方案: read_until + from_utf8_lossy 宽容解码。
+        // lines() 严格 UTF-8 在 Windows GBK 环境首个非 UTF-8 行就退出，丢失全部 stderr。
+        let line = {
+            let mut buf = Vec::new();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => String::from_utf8_lossy(&buf).into_owned(),
+                Err(e) => {
+                    log::error!("[sidecar:stderr] read error: {:?}", e);
+                    break;
+                }
+            }
+        };
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        log::info!("[python] {}", trimmed);
+        push_log(&format!("[python] {}", trimmed));
     }
 
     log::debug!("[sidecar:stderr] stopped");

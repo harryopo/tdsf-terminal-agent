@@ -478,21 +478,6 @@ class TdsfStrandsCallbackHandler:
         except Exception as e:
             logger.debug(f"emit_mood_change failed: {e}")
 
-    def _emit_tool_call(self, tool_name: str, tool_input: dict) -> None:
-        if self.event_bus is None:
-            return
-        try:
-            self.event_bus.emit_tool_call(
-                tool_name=tool_name,
-                params=tool_input,
-                status="started",
-                session_id=self.session_id or None,
-                source=f"{self.agent_name}_agent.strands",
-            )
-            self._stats["tool_calls_emitted"] += 1
-        except Exception as e:
-            logger.debug(f"emit_tool_call failed: {e}")
-
     def _emit_agent_message(self, text: str, msg_type: str = "output") -> None:
         if self.event_bus is None or not text:
             return

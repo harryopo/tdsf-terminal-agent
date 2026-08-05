@@ -6,6 +6,28 @@
 
 ---
 
+## 2026-08-04 · 全方位代码审查 + 修复 13 项发现（净减 9358 行）
+
+**任务**：基于 AI 代码审查最佳实践调研，对全项目 15 万行代码进行首次系统性代码审查并修复。
+
+**方案**：
+1. 调研 AI 代码审查最佳实践（ClackyAI/GitAutoReview/Metamindz/Sonar/ThoughtWorks）
+2. 激活 multi-reviewer-patterns skill，派 3 个子 agent 并行审查（前端/Rust/Python）
+3. 产出 41 项发现的分级报告，按优先级修复 13 项
+
+**报错与修改**：
+- **SFTP TOCTOU 修复第一次编译失败**：最初方案在 write 锁内创建 SFTP channel（`sftp_map` 跨 `.await`），但 `std::sync::RwLockWriteGuard` 不满足 `Send`，Tauri async 命令编译报错。改为"先创建后 double-check"模式——不持锁跨 await，创建完成后在 write 锁内再次检查是否已被并发请求创建。
+- **PT 文件正则替换副作用**：用 PowerShell `-replace` 批量替换 `.unwrap()` 时，`pty/session.rs` 中 `Condvar::wait_timeout().unwrap()` 返回的是 tuple 而非 Result，正则误匹配。手动恢复后保留原样（该路径 poisoning 直接 panic 是合理行为）。
+
+**复盘**：
+- ✅ **"删掉一半代码还能跑吗？"是审查 AI 代码最有效的一句话**——308KB 死代码就是这么发现的
+- ✅ **交叉核验法**：审查报告里的行号和代码引用都是子 agent 用 Grep/Read 实际读取的，不是臆测
+- ✅ **std::sync 锁在 async 上下文的 Send 问题**是 Rust 新手（和 AI）常犯的错误——持有 `std::sync` Guard 跨 `.await` 会编译报错，需要改用 `tokio::sync` 或重构为"不持锁跨 await"模式
+- 📌 **AI 代码审查的 6 类典型缺陷全部命中**：过度工程、幽灵代码、假注释、错误吞噬、结构侵蚀、并发不安全——说明本项目确实存在 AI 代码的系统性风险，本次审查修复了最高优先的 13 项
+- 📌 **审查报告归档价值**：`docs/reports/CODE-REVIEW-2026-08-04.md` 是活文档，剩余 28 项未修复发现可直接作为后续 backlog
+
+---
+
 ## 2026-08-04 · 进度跟进 + 交接注意事项调研 + L3 文档同步 + 远程推送
 
 **任务**：用户要求详细阅读项目、明晰架构与进度、调研开发交接注意事项、进行进度跟进、推送更新到 GitHub。

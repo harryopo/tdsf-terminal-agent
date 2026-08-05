@@ -82,14 +82,14 @@ impl SshState {
 
     /// 插入新会话
     pub fn insert(&self, id: u32, session: Arc<SshSession>) {
-        self.sessions.write().unwrap().insert(id, session);
+        self.sessions.write().unwrap_or_else(|e| e.into_inner()).insert(id, session);
     }
 
     /// 取出会话 (移除)
     /// 同时移除对应的 SFTP 会话 (T-P2-05)
     pub fn take(&self, id: u32) -> Option<Arc<SshSession>> {
         // 同步清理 SFTP 会话缓存
-        if let Some(sftp) = self.sftp_sessions.write().unwrap().remove(&id) {
+        if let Some(sftp) = self.sftp_sessions.write().unwrap_or_else(|e| e.into_inner()).remove(&id) {
             // 异步关闭 SFTP 会话 (不阻塞 SSH 断开流程)
             let sftp_clone = sftp.clone();
             tauri::async_runtime::spawn(async move {
@@ -98,17 +98,17 @@ impl SshState {
                 }
             });
         }
-        self.sessions.write().unwrap().remove(&id)
+        self.sessions.write().unwrap_or_else(|e| e.into_inner()).remove(&id)
     }
 
     /// 获取会话引用 (不移除)
     pub fn get(&self, id: u32) -> Option<Arc<SshSession>> {
-        self.sessions.read().unwrap().get(&id).cloned()
+        self.sessions.read().unwrap_or_else(|e| e.into_inner()).get(&id).cloned()
     }
 
     /// 列出所有会话 ID (用于 ssh_status 命令)
     pub fn list_ids(&self) -> Vec<u32> {
-        self.sessions.read().unwrap().keys().copied().collect()
+        self.sessions.read().unwrap_or_else(|e| e.into_inner()).keys().copied().collect()
     }
 
     // === SFTP 会话缓存管理 (T-P2-05 新增) ===
@@ -124,12 +124,16 @@ impl SshState {
         &self,
         session_id: u32,
     ) -> Result<Arc<SftpSession>, String> {
-        // 1. 检查缓存
-        if let Some(sftp) = self.sftp_sessions.read().unwrap().get(&session_id) {
+        // 2026-08-04 修复 TOCTOU 竞态: double-check 模式（不持锁跨 await）。
+        // 此前并发请求各自创建 SFTP channel 后无条件 insert，后者覆盖前者导致孤儿泄漏。
+        // 修复：创建后在 write 锁内再次检查，已有则用现有的、丢弃新建的。
+
+        // 1. 快速路径: read 锁检查
+        if let Some(sftp) = self.sftp_sessions.read().unwrap_or_else(|e| e.into_inner()).get(&session_id) {
             return Ok(sftp.clone());
         }
 
-        // 2. 缓存未命中,创建新 SFTP 会话
+        // 2. 缓存未命中，创建新 SFTP 会话（不持锁，避免 std::sync Guard 跨 await）
         let session = self
             .get(session_id)
             .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
@@ -141,11 +145,14 @@ impl SshState {
             .map_err(|e| format!("open SFTP channel failed: {e}"))?;
         let sftp = Arc::new(SftpSession::new(stream).await?);
 
-        // 3. 写入缓存
-        self.sftp_sessions
-            .write()
-            .unwrap()
-            .insert(session_id, sftp.clone());
+        // 3. write 锁 double-check: 防止并发请求重复创建
+        let mut sftp_map = self.sftp_sessions.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = sftp_map.get(&session_id) {
+            // 另一个并发请求已创建，用它的（新建的会随 Arc drop 被回收）
+            log::debug!("[sftp] race resolved: session {} already created by another request", session_id);
+            return Ok(existing.clone());
+        }
+        sftp_map.insert(session_id, sftp.clone());
 
         Ok(sftp)
     }
@@ -153,7 +160,7 @@ impl SshState {
     /// 移除 SFTP 会话 (用于主动关闭 SFTP)
     #[allow(dead_code)]
     pub fn remove_sftp(&self, session_id: u32) -> Option<Arc<SftpSession>> {
-        self.sftp_sessions.write().unwrap().remove(&session_id)
+        self.sftp_sessions.write().unwrap_or_else(|e| e.into_inner()).remove(&session_id)
     }
 }
 
@@ -342,7 +349,7 @@ pub async fn ssh_disconnect(
 pub async fn ssh_status(
     state: tauri::State<'_, SshState>,
 ) -> Result<Vec<(u32, SshSessionState)>, String> {
-    let sessions = state.sessions.read().unwrap();
+    let sessions = state.sessions.read().unwrap_or_else(|e| e.into_inner());
     let mut result = Vec::with_capacity(sessions.len());
     for (id, session) in sessions.iter() {
         result.push((*id, session.state()));

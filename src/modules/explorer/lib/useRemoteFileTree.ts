@@ -225,20 +225,14 @@ export function useRemoteFileTree(
   const deletePath = useCallback(
     async (path: string) => {
       if (!sessionId) return;
-      const entry = childrenMap[path]
-        ? undefined
-        : Object.values(childrenMap)
-            .flat()
-            .find((e) => e.path === path);
-      const isDir = entry?.isDir ?? false;
       try {
-        await deletePathAction(sessionId, path, isDir);
+        await deletePathAction(sessionId, path);
         options?.onPathDeleted?.(path);
       } catch (e) {
         console.error("[useRemoteFileTree] deletePath failed:", e);
       }
     },
-    [sessionId, deletePathAction, options, childrenMap],
+    [sessionId, deletePathAction, options],
   );
 
   const movePath = useCallback(

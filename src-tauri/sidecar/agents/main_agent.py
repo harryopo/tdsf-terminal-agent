@@ -47,7 +47,7 @@ import logging
 import time
 from typing import Any
 
-from agents.base import AgentResult, BaseAgent
+from agents.base import BaseAgent
 
 logger = logging.getLogger("sidecar.agents.main")
 
@@ -173,7 +173,7 @@ class MainAgent(BaseAgent):
             return [f"[explore] {user_input}"]
 
         # 历史任务
-        if any(kw in user_input for kw in ["历史", "上次", "之前", "之前"]) or \
+        if any(kw in user_input for kw in ["历史", "上次", "之前"]) or \
            any(kw in input_lower for kw in ["history", "previous", "last"]):
             return [f"[history] {user_input}"]
 
