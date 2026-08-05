@@ -148,7 +148,7 @@ class TeachAgent(BaseAgent):
         # 提取查询关键词
         query = self._extract_query(task, state)
 
-        if "可信度" in task and "credibility" in task_lower:
+        if "可信度" in task or "credibility" in task_lower:
             return {
                 "tool_name": "credibility",
                 "params": {
@@ -157,7 +157,7 @@ class TeachAgent(BaseAgent):
                 },
             }
 
-        if "可信度" in task and "confidence" in task_lower:
+        if "置信度" in task or "confidence" in task_lower:
             return {
                 "tool_name": "confidence",
                 "params": {
