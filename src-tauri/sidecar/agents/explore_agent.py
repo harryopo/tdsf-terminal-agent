@@ -84,7 +84,7 @@ class ExploreAgent(BaseAgent):
         input_lower = user_input.lower()
 
         # 复杂探索：先 ground 再 history 复用经验
-        if any(kw in user_input for kw in ["查找", "搜索", "找", "定位"]) or \
+        if any(kw in user_input for kw in ["查找", "搜索", "定位"]) or \
            any(kw in input_lower for kw in ["search", "find", "locate"]):
             return [
                 f"调用 ground 检索: {user_input[:60]}",

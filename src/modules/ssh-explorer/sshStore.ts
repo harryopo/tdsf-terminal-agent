@@ -219,7 +219,7 @@ interface SshExplorerState {
    *
    * 目录删除目前只支持空目录 (Rust sftp_remove_dir 未暴露), 非空会报错。
    */
-  deletePath: (sessionId: string, path: string, isDir: boolean) => Promise<void>;
+  deletePath: (sessionId: string, path: string) => Promise<void>;
 
   // 编辑器 actions
   openFile: (sessionId: string, path: string, name: string) => Promise<void>;
@@ -880,7 +880,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
    * 目录删除: 当前 Rust 端只暴露了 sftp_remove, 它通常只能删除空目录。
    * 非空目录会报错, 用户需先清空目录再删除。
    */
-  deletePath: async (sessionId, path, _isDir) => {
+  deletePath: async (sessionId, path) => {
     const session = get().sessions.find((s) => s.id === sessionId);
     if (!session?.rustSessionId) {
       throw new Error('SSH 会话未连接, 无法删除');

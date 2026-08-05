@@ -3274,7 +3274,31 @@ CDP 全新状态实测通过。commit 见上。
 - 安装版在 `%LOCALAPPDATA%\TDSF Terminal Agent\`（402MB NSIS 0.1.0），用户可直接体验
 - 待用户验证：真实 LLM 委派（API key）、SSH 全链路、安装版体验；P3 生态项（Headroom MCP/沙箱）待确认
 
-**门禁基线**：前端 946 测试 / 后端 1281 / typecheck / cargo build 全绿；安装版实测通过。
+**门禁基线**：前端 896 测试 / 后端 1281 / typecheck / cargo build 全绿；安装版实测通过。
+
+### 37.26 全方位代码审查 + 修复 13 项发现（2026-08-04）
+
+**任务**：基于 AI 代码审查最佳实践调研，对全项目 15 万行代码进行首次系统性代码审查并修复。
+
+**审查方法**：multi-reviewer-patterns skill（并行 Security/Performance/Architecture/Testing）+ 3 个子 agent（前端/Rust/Python）+ 调研（ClackyAI/Metamindz/GitAutoReview/Sonar/ThoughtWorks）。归档报告 `docs/reports/CODE-REVIEW-2026-08-04.md`（41 项发现：5C/12H/15M/9L）。
+
+**修复内容（13 项，按审查报告编号）**：
+
+| 编号 | 严重度 | 内容 | 文件 |
+|------|:---:|------|------|
+| FE-C1 | Critical | **删除 308KB v4.0.0 死代码**（23 文件，9358 行净减） | src/App.tsx + src/components/ 22 文件 |
+| Rust-C1 | Critical | **SFTP TOCTOU 竞态修复**（double-check 不持锁跨 await） | ssh/mod.rs:122-155 |
+| Rust-H3 | High | **stderr_reader 编码修复**（read_until + from_utf8_lossy） | sidecar.rs:1346-1368 |
+| Rust-H4/H5/C3 | High/Critical | **PTY+SSH 锁 unwrap 替换** unwrap_or_else(into_inner) | pty/mod.rs, pty/session.rs, ssh/mod.rs, ssh/session.rs |
+| Py-H2 | High | **TeachAgent 死路径修复**（AND→OR 条件） | teach_agent.py:151,160 |
+| Py-M1 | Medium | main_agent 关键词 `"之前"` 去重 | main_agent.py:176 |
+| Py-M3 | Medium | explore_agent 移除单字 `"找"` | explore_agent.py:87 |
+| Py-M5 | Medium | 删除 `_emit_tool_call` 幽灵方法 | adapter.py:481-494 |
+| Py-M6 | Medium | 移除冗余 import AgentResult | main_agent.py:49 |
+| FE-H3 | High | translateApi 注释同步（七级→十级） | translateApi.ts:117-132 |
+| FE-M1 | Medium | deletePath 移除未使用参数 `_isDir` + 调用方简化 | sshStore.ts + useRemoteFileTree.ts |
+
+**门禁验证**：typecheck ✅ / lint ✅ / test 896 ✅ / build:web ✅ / cargo check ✅ / pytest 1281 ✅ 全绿
 
 ### 37.25 进度跟进 + 交接注意事项调研 + L3 文档同步 + 远程推送（2026-08-04）
 

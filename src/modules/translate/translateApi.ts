@@ -115,15 +115,18 @@ function lookupProgramming(word: string): LookupResult[] {
 }
 
 /**
- * 翻译英文文本为中文（P2-5 七级策略链）
+ * 翻译英文文本为中文（十级策略链）
  *
  * 1. 路径 path（含 / 斜杠整体识别 + 逐段）
  * 2. 选项 option（-l / --version）
  * 3. 精确短语（error/phrase 类别，含空格）
  * 4. 命令（字母开头，2279 条词典）
- * 5. 短语贪心
- * 6. 单词（linux + programming 词典）
- * 7. 复合词拆分
+ * 5. 单词 linux 词典
+ * 6. 单词 programming 词典
+ * 7. ECDICT 81557 词
+ * 8. lemma 词形还原（复数/过去式/比较级等还原后重查）
+ * 9. 模糊前缀（startsWith 近似匹配）
+ * 10. 复合词拆分（空格/连字符分段后逐段查）
  *
  * 纯符号（如 "/" 单独）不翻译——用户选中斜杠时返回空。
  *

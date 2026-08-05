@@ -493,7 +493,7 @@ impl SshSession {
 
         // 3. 更新状态
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
             *state = SshSessionState::Closed;
         }
 
@@ -507,7 +507,7 @@ impl SshSession {
 
     /// 获取当前状态
     pub fn state(&self) -> SshSessionState {
-        self.state.read().unwrap().clone()
+        self.state.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 是否已退出 (PTY 通道退出 或 SSH 连接关闭)
