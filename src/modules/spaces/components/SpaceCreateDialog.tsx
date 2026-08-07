@@ -35,7 +35,7 @@ import {
   Square01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSshStore } from "../../ssh-explorer/sshStore";
 import type { SpaceMeta } from "../lib/store";
 import { useSpaces } from "../lib/useSpaces";
@@ -104,10 +104,15 @@ export function SpaceCreateDialog({
     return `Space ${spaces.length + 1}`;
   }, [mode, host, user, spaces.length]);
 
-  // 打开时重置表单; 切模式时自动回填默认名; 打开时加载已保存连接
+  // 打开时重置表单; 打开瞬间应用初始模式 + 加载已保存连接。
+  // TDSF 修复 2026-08-07: 原 effect 在 open 期间因依赖变化（defaultName /
+  // loadSavedConnections 异步完成）反复执行 setMode(initialMode), 用户点击
+  // ssh 选项卡后模式被强制重置回 local → 界面闪动且无法创建 SSH 工作区。
+  // 用 initializedRef 保证初始化块只在每次打开的瞬间执行一次。
+  const initializedRef = useRef(false);
   useEffect(() => {
     if (!open) {
-      setMode(initialMode);
+      initializedRef.current = false;
       setName("");
       setSubmitting(false);
       setError(null);
@@ -124,10 +129,13 @@ export function SpaceCreateDialog({
       setTestMessage("");
       return;
     }
-    // TDSF 2026-08-01: 打开时应用初始模式（欢迎界面预设 local/ssh）
-    setMode(initialMode);
-    setName(defaultName);
-    void loadSavedConnections();
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      // TDSF 2026-08-01: 打开时应用初始模式（欢迎界面预设 local/ssh）
+      setMode(initialMode);
+      setName(defaultName);
+      void loadSavedConnections();
+    }
   }, [open, defaultName, loadSavedConnections, initialMode]);
 
   useEffect(() => {
