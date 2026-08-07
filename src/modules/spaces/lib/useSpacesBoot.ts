@@ -1,128 +1,29 @@
-import { native } from "@/modules/ai/lib/native";
-import type { WorkspaceEnv } from "@/modules/workspace";
-import type { Tab } from "@/modules/tabs";
-import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
-import { isLeaf, type PaneNode } from "@/modules/terminal/lib/panes";
 import { useEffect, useRef } from "react";
-import { activeSpaceEnv, freshTabCwd } from "./activeSpace";
-import { freshTerminalTab, hydrateTabs } from "./serialize";
-import { loadAll, saveSpacesList } from "./store";
 import { useSpaces } from "./useSpaces";
 
 type Params = {
   ready: boolean;
-  launchCwd: string | null;
-  home: string | null;
-  allocId: () => number;
-  replaceTabs: (tabs: Tab[], activeId: number) => void;
   markBooted: () => void;
-  setActiveSpaceForNewTabs: (id: string) => void;
-  adoptWorkspaceEnv: (env: WorkspaceEnv) => Promise<string | null>;
 };
 
-function uniqueCwds(tabs: Tab[]): string[] {
-  const set = new Set<string>();
-  const walk = (n: PaneNode) => {
-    if (isLeaf(n)) {
-      if (n.cwd) set.add(n.cwd);
-      return;
-    }
-    for (const c of n.children) walk(c);
-  };
-  for (const t of tabs) if (t.kind === "terminal") walk(t.paneTree);
-  return [...set];
-}
-
-export function useSpacesBoot({
-  ready,
-  launchCwd,
-  home,
-  allocId,
-  replaceTabs,
-  markBooted,
-  setActiveSpaceForNewTabs,
-  adoptWorkspaceEnv,
-}: Params) {
+/**
+ * 启动引导：每次启动回到初始的选择/新建工作区界面。
+ *
+ * TDSF 修复 2026-08-07: 用户明确要求"重启后回到初始的选择/新建工作区界面,
+ * 不用记住"——SSH 服务器可能已关闭, 恢复持久化的 SSH Space 会携带上次
+ * 生命周期的幽灵 sessionId (应用重启后会话不存在), 导致终端显示本地、
+ * 资源管理器不接管。因此**忽略持久化数据**, 每次启动由用户通过欢迎界面
+ * 显式新建本地工作区或 SSH 服务器。持久化写入逻辑保留（LazyStore 仍会
+ * 保存），只是启动不再恢复。
+ */
+export function useSpacesBoot({ ready, markBooted }: Params) {
   const done = useRef(false);
 
   useEffect(() => {
     if (!ready || done.current) return;
     done.current = true;
 
-    void (async () => {
-      try {
-        const { spaces, activeId, states } = await loadAll();
-
-        if (spaces.length === 0) {
-          // TDSF 修复 2026-08-01: 无任何工作区时进入欢迎界面，不再自动创建
-          // Default Space。首次启动 / 全部删除后由用户通过欢迎界面显式创建
-          // （本地工作区或 SSH 服务器），登录统一走"新建工作区"流程。
-          useSpaces.getState().hydrate([], null);
-          return;
-        }
-
-        // TDSF 迁移：旧版默认 space 名为 "Main"，现统一改为 "Default"
-        for (const space of spaces) {
-          if (space.id === DEFAULT_SPACE_ID && space.name === "Main") {
-            space.name = "Default";
-            space.updatedAt = Date.now();
-          }
-        }
-        if (spaces.some((s) => s.id === DEFAULT_SPACE_ID && s.name === "Default")) {
-          await saveSpacesList(spaces);
-        }
-
-        const restored: Tab[] = [];
-        for (const space of spaces) {
-          const st = states.get(space.id);
-          if (!st) continue;
-          restored.push(...hydrateTabs(st.tabs, space.id, allocId));
-        }
-
-        const active =
-          activeId && spaces.some((s) => s.id === activeId)
-            ? activeId
-            : spaces[0].id;
-        setActiveSpaceForNewTabs(active);
-
-        // Apply the space's env+home before the fresh-tab fallback and spawns
-        // below; env is set synchronously so cwd resolution picks WSL vs local.
-        const env = activeSpaceEnv(spaces, active);
-        const restoredHome = await adoptWorkspaceEnv(env);
-
-        // Active space must never be empty, else its tab list shows nothing.
-        if (!restored.some((t) => t.spaceId === active)) {
-          const cwd = freshTabCwd(env, restoredHome, launchCwd, home);
-          restored.push(freshTerminalTab(active, cwd, allocId));
-        }
-
-        await Promise.allSettled(
-          uniqueCwds(restored).map((cwd) => native.workspaceAuthorize(cwd)),
-        );
-
-        const initialActiveIndex: Record<string, number> = {};
-        for (const [id, st] of states)
-          initialActiveIndex[id] = st.activeTabIndex;
-        useSpaces.getState().hydrate(spaces, active, initialActiveIndex);
-
-        const inActive = restored.filter((t) => t.spaceId === active);
-        const idx = states.get(active)?.activeTabIndex ?? 0;
-        const activeTab = inActive[idx] ?? inActive[0] ?? restored[0];
-        replaceTabs(restored, activeTab.id);
-      } catch (e) {
-        console.error("[tdsf] spaces boot failed:", e);
-      } finally {
-        markBooted();
-      }
-    })();
-  }, [
-    ready,
-    launchCwd,
-    home,
-    allocId,
-    replaceTabs,
-    markBooted,
-    setActiveSpaceForNewTabs,
-    adoptWorkspaceEnv,
-  ]);
+    useSpaces.getState().hydrate([], null);
+    markBooted();
+  }, [ready, markBooted]);
 }
