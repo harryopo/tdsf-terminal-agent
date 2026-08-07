@@ -1155,6 +1155,7 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_read: missing or invalid path")?
                 .to_string();
+            validate_remote_path("sftp_read", &path)?;
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             let content = crate::ssh::sftp_read(ssh_state, session_id, path).await?;
@@ -1175,6 +1176,7 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_write: missing or invalid path")?
                 .to_string();
+            validate_remote_path("sftp_write", &path)?;
             // content 应为 number[]（每项 0-255）
             let content_arr = params
                 .get("content")
@@ -1206,6 +1208,7 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_stat: missing or invalid path")?
                 .to_string();
+            validate_remote_path("sftp_stat", &path)?;
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             let attrs = crate::ssh::sftp_stat(ssh_state, session_id, path).await?;
@@ -1225,6 +1228,7 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_list: missing or invalid path")?
                 .to_string();
+            validate_remote_path("sftp_list", &path)?;
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             let entries = crate::ssh::sftp_list(ssh_state, session_id, path).await?;
@@ -1244,6 +1248,7 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_mkdir: missing or invalid path")?
                 .to_string();
+            validate_remote_path("sftp_mkdir", &path)?;
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             crate::ssh::sftp_mkdir(ssh_state, session_id, path).await?;
@@ -1262,6 +1267,7 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_remove: missing or invalid path")?
                 .to_string();
+            validate_remote_path("sftp_remove", &path)?;
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             crate::ssh::sftp_remove(ssh_state, session_id, path).await?;
@@ -1285,6 +1291,8 @@ async fn handle_reverse_request(
                 .and_then(|v| v.as_str())
                 .ok_or("sftp_rename: missing or invalid to")?
                 .to_string();
+            validate_remote_path("sftp_rename", &from)?;
+            validate_remote_path("sftp_rename", &to)?;
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             crate::ssh::sftp_rename(ssh_state, session_id, from, to).await?;
@@ -1296,6 +1304,34 @@ async fn handle_reverse_request(
             method
         )),
     }
+}
+
+/// 校验反向 RPC 的远程路径（TDSF 2026-08-04, Rust-M2）
+///
+/// 背景：反向 RPC 由 Python sidecar（AI 引擎）发起，LLM 输出可能被
+/// prompt-injection 引导，从而读写任意远程路径（如 `~/.ssh/authorized_keys`）。
+/// 规则：非空 + 绝对路径（以 `/` 开头）+ 无 null 字节 + 无 `..` 遍历段。
+/// 前端 SFTP 桥 / 远程文件树始终使用绝对路径，此规则不会破坏正常功能。
+fn validate_remote_path(method: &str, path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err(format!("{}: path is empty", method));
+    }
+    if !path.starts_with('/') {
+        return Err(format!(
+            "{}: path must be absolute (start with /): {:?}",
+            method, path
+        ));
+    }
+    if path.contains('\0') {
+        return Err(format!("{}: path contains null byte", method));
+    }
+    if path.split('/').any(|seg| seg == "..") {
+        return Err(format!(
+            "{}: path contains '..' traversal segment: {:?}",
+            method, path
+        ));
+    }
+    Ok(())
 }
 
 /// 处理 Python 侧发送的通知

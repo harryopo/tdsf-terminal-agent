@@ -11,6 +11,9 @@
 //!
 //! ## keepalive 配置 (russh 原生)
 //! ```rust
+//! use std::time::Duration;
+//! use russh::client;
+//!
 //! let config = client::Config {
 //!     keepalive_interval: Some(Duration::from_secs(15)),  // 15s 发一次 keepalive
 //!     keepalive_max: 3,                                    // 3 次无响应则断开

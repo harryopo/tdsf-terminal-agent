@@ -127,11 +127,20 @@ impl KnownHostsManager {
                 })
             }
             Err(e) => {
+                // 文件缺失 (从未学过任何主机) → 正常未知主机流程
+                let is_missing = matches!(
+                    &e,
+                    keys::Error::IO(io) if io.kind() == std::io::ErrorKind::NotFound
+                );
+                if is_missing {
+                    return Ok(false);
+                }
+                // TDSF 2026-08-04 (Rust-M5): 其他错误通常是 known_hosts 文件损坏,
+                // 不再静默吞掉——明确告警 TOFU 防 MITM 保护已降级, 但仍不阻断连接
                 log::warn!(
-                    "[ssh] check_known_hosts_path returned error: {} (treating as unknown)",
+                    "[ssh] known_hosts check failed: {} (known_hosts 文件可能损坏, TOFU 防 MITM 保护降级)",
                     e
                 );
-                // 其他错误 (文件格式错误/主机未找到等) 视为未知主机,不阻断连接
                 Ok(false)
             }
         }

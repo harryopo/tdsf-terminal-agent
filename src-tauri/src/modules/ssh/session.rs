@@ -551,12 +551,13 @@ impl SshSession {
             return Err(SshSessionError::Closed);
         }
 
-        // 借用 handle (不 take,保持 SSH 连接)
+        // 借用 handle 开 channel (不 take,保持 SSH 连接)
+        // TDSF 2026-08-04 (Rust-C2): 与 exec_command 一致, channel 建立后立即释放锁,
+        // 避免持锁阻塞同会话并发操作
         let handle_guard = self.handle.lock().await;
         let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
-
-        // 开新 channel (与 PTY channel 并发)
         let channel = handle.channel_open_session().await?;
+        drop(handle_guard);
 
         // 请求 sftp 子系统 (RFC 4254 6.5)
         // want_reply=true: 等待服务器确认子系统启动
@@ -620,18 +621,22 @@ impl SshSession {
             return Err(SshSessionError::Closed);
         }
 
-        // 2. 借用 handle（不 take，保持 SSH 连接）
+        // 2. 借用 handle 开 channel（锁只覆盖 channel 创建这一个 RTT）
+        //    TDSF 2026-08-04 (Rust-C2): 注意 russh 0.61 的 Handle **不实现 Clone**
+        //    (审查报告"Handle 实现 Clone"有误)。channel 一旦建立即独立于 handle,
+        //    因此立刻释放锁——后续 exec / 收集输出在锁外执行。
+        //    效果: 同一会话的 close()/其他 exec/open_sftp_channel 最多阻塞一个 RTT,
+        //    而非整个命令执行期(最长 30s)。
         let handle_guard = self.handle.lock().await;
         let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let mut channel = handle.channel_open_session().await?;
+        drop(handle_guard);
 
         log::info!(
             "[ssh] exec_command start: cmd={:?}, timeout={:?}s",
             command,
             timeout_secs.unwrap_or(30)
         );
-
-        // 3. 开新 channel（与 PTY / SFTP channel 并发）
-        let mut channel = handle.channel_open_session().await?;
 
         // 4. 请求 exec（RFC 4254 6.4，want_reply=true 等服务器确认 exec 启动）
         //    russh 0.61 签名：exec(&self, want_reply: bool, command: &str) -> Result<()>
