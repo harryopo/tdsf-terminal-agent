@@ -43,9 +43,10 @@ pub use sftp::{SftpAttrs, SftpEntry, SftpSession};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use tauri::ipc::Channel;
+use tokio::sync::RwLock;
 
 /// SSH 会话注册表 (全局,通过 Tauri State 注入)
 ///
@@ -81,15 +82,15 @@ impl SshState {
     }
 
     /// 插入新会话
-    pub fn insert(&self, id: u32, session: Arc<SshSession>) {
-        self.sessions.write().unwrap_or_else(|e| e.into_inner()).insert(id, session);
+    pub async fn insert(&self, id: u32, session: Arc<SshSession>) {
+        self.sessions.write().await.insert(id, session);
     }
 
     /// 取出会话 (移除)
     /// 同时移除对应的 SFTP 会话 (T-P2-05)
-    pub fn take(&self, id: u32) -> Option<Arc<SshSession>> {
+    pub async fn take(&self, id: u32) -> Option<Arc<SshSession>> {
         // 同步清理 SFTP 会话缓存
-        if let Some(sftp) = self.sftp_sessions.write().unwrap_or_else(|e| e.into_inner()).remove(&id) {
+        if let Some(sftp) = self.sftp_sessions.write().await.remove(&id) {
             // 异步关闭 SFTP 会话 (不阻塞 SSH 断开流程)
             let sftp_clone = sftp.clone();
             tauri::async_runtime::spawn(async move {
@@ -98,17 +99,17 @@ impl SshState {
                 }
             });
         }
-        self.sessions.write().unwrap_or_else(|e| e.into_inner()).remove(&id)
+        self.sessions.write().await.remove(&id)
     }
 
     /// 获取会话引用 (不移除)
-    pub fn get(&self, id: u32) -> Option<Arc<SshSession>> {
-        self.sessions.read().unwrap_or_else(|e| e.into_inner()).get(&id).cloned()
+    pub async fn get(&self, id: u32) -> Option<Arc<SshSession>> {
+        self.sessions.read().await.get(&id).cloned()
     }
 
     /// 列出所有会话 ID (用于 ssh_status 命令)
-    pub fn list_ids(&self) -> Vec<u32> {
-        self.sessions.read().unwrap_or_else(|e| e.into_inner()).keys().copied().collect()
+    pub async fn list_ids(&self) -> Vec<u32> {
+        self.sessions.read().await.keys().copied().collect()
     }
 
     // === SFTP 会话缓存管理 (T-P2-05 新增) ===
@@ -129,13 +130,14 @@ impl SshState {
         // 修复：创建后在 write 锁内再次检查，已有则用现有的、丢弃新建的。
 
         // 1. 快速路径: read 锁检查
-        if let Some(sftp) = self.sftp_sessions.read().unwrap_or_else(|e| e.into_inner()).get(&session_id) {
+        if let Some(sftp) = self.sftp_sessions.read().await.get(&session_id) {
             return Ok(sftp.clone());
         }
 
-        // 2. 缓存未命中，创建新 SFTP 会话（不持锁，避免 std::sync Guard 跨 await）
+        // 2. 缓存未命中，创建新 SFTP 会话（不持锁，避免 tokio::sync Guard 跨 await）
         let session = self
             .get(session_id)
+            .await
             .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
         log::info!("[sftp] creating new SFTP session for ssh_id={}", session_id);
@@ -146,7 +148,7 @@ impl SshState {
         let sftp = Arc::new(SftpSession::new(stream).await?);
 
         // 3. write 锁 double-check: 防止并发请求重复创建
-        let mut sftp_map = self.sftp_sessions.write().unwrap_or_else(|e| e.into_inner());
+        let mut sftp_map = self.sftp_sessions.write().await;
         if let Some(existing) = sftp_map.get(&session_id) {
             // 另一个并发请求已创建，用它的（新建的会随 Arc drop 被回收）
             log::debug!("[sftp] race resolved: session {} already created by another request", session_id);
@@ -159,8 +161,8 @@ impl SshState {
 
     /// 移除 SFTP 会话 (用于主动关闭 SFTP)
     #[allow(dead_code)]
-    pub fn remove_sftp(&self, session_id: u32) -> Option<Arc<SftpSession>> {
-        self.sftp_sessions.write().unwrap_or_else(|e| e.into_inner()).remove(&session_id)
+    pub async fn remove_sftp(&self, session_id: u32) -> Option<Arc<SftpSession>> {
+        self.sftp_sessions.write().await.remove(&session_id)
     }
 }
 
@@ -279,7 +281,7 @@ pub async fn ssh_connect(
     })?;
 
     // 3. 注册到全局 state
-    state.insert(session_id, Arc::new(session));
+    state.insert(session_id, Arc::new(session)).await;
 
     log::info!("[ssh] connect success: id={}", session_id);
     Ok(session_id)
@@ -297,6 +299,7 @@ pub async fn ssh_write(
 ) -> Result<(), String> {
     let session = state
         .get(session_id)
+        .await
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
     session.write_data(&data).await.map_err(|e| {
@@ -315,6 +318,7 @@ pub async fn ssh_resize(
 ) -> Result<(), String> {
     let session = state
         .get(session_id)
+        .await
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
     session.resize(cols, rows).await.map_err(|e| {
@@ -333,6 +337,7 @@ pub async fn ssh_disconnect(
 ) -> Result<(), String> {
     let session = state
         .take(session_id)
+        .await
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
     log::info!("[ssh] disconnect: id={}", session_id);
@@ -349,7 +354,7 @@ pub async fn ssh_disconnect(
 pub async fn ssh_status(
     state: tauri::State<'_, SshState>,
 ) -> Result<Vec<(u32, SshSessionState)>, String> {
-    let sessions = state.sessions.read().unwrap_or_else(|e| e.into_inner());
+    let sessions = state.sessions.read().await;
     let mut result = Vec::with_capacity(sessions.len());
     for (id, session) in sessions.iter() {
         result.push((*id, session.state()));
@@ -681,6 +686,7 @@ pub async fn ssh_command(
     // 1. 获取 SSH 会话
     let session = state
         .get(session_id)
+        .await
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
     // 2. 调用 exec_command (复用 Handle + channel.exec + wait 循环)
@@ -822,14 +828,14 @@ mod tests {
         assert!(debug_str.contains("42"));
     }
 
-    #[test]
-    fn test_ssh_state_default_is_empty() {
+    #[tokio::test]
+    async fn test_ssh_state_default_is_empty() {
         // 验证 SshState 初始无会话 (ssh_command 在此状态下应返回 "session not found")
         let state = SshState::default();
-        assert!(state.list_ids().is_empty());
+        assert!(state.list_ids().await.is_empty());
         // 用 is_none() 而非 assert_eq!(..., None), 避免 SshSession 需实现 PartialEq/Debug
-        assert!(state.get(1).is_none());
-        assert!(state.take(1).is_none());
+        assert!(state.get(1).await.is_none());
+        assert!(state.take(1).await.is_none());
     }
 
     #[test]
@@ -841,12 +847,12 @@ mod tests {
         assert_eq!(state.allocate_id(), 3);
     }
 
-    #[test]
-    fn test_ssh_state_get_returns_none_for_unknown_id() {
+    #[tokio::test]
+    async fn test_ssh_state_get_returns_none_for_unknown_id() {
         // ssh_command 第 1 步: state.get(session_id) 返回 None → ok_or_else → Err
         // 这里验证 get 在未插入时确实返回 None (ssh_command 错误路径前置条件)
         let state = SshState::default();
         let _id = state.allocate_id(); // id=1, 但未 insert
-        assert!(state.get(1).is_none());
+        assert!(state.get(1).await.is_none());
     }
 }

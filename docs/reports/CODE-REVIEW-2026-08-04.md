@@ -17,11 +17,11 @@
 | **合计** | **5** | **12** | **15** | **9** | **41** |
 
 **最高优先修复项（按影响排序）**：
-1. 🔴 FE-C1：308KB v4.0.0 死代码（违反防污染铁律）
-2. 🔴 Rust-C1：SFTP TOCTOU 竞态（SSH channel 泄漏）
-3. 🔴 Rust-C2：exec_command 持锁阻塞整个会话
-4. 🔴 FE-C2：App.tsx 2367 行上帝组件
-5. 🔴 Rust-C3：std::sync 锁在 async 上下文
+1. 🔴 FE-C1：308KB v4.0.0 死代码（违反防污染铁律） — ✅ 已修复（第一批，commit bd007aa）
+2. 🔴 Rust-C1：SFTP TOCTOU 竞态（SSH channel 泄漏） — ✅ 已修复（第一批 + 第三批加固，commit e9d9fa5）
+3. 🔴 Rust-C2：exec_command 持锁阻塞整个会话 — ✅ 已修复（第三批，commit e9d9fa5）
+4. 🔴 FE-C2：App.tsx 2367 行上帝组件 — ⏸ 暂缓（有明确需求再拆）
+5. 🔴 Rust-C3：std::sync 锁在 async 上下文 — ✅ 已修复（第四批，SshState 迁移 tokio::sync）
 
 ---
 
@@ -119,6 +119,7 @@
 - **位置**：`src-tauri/src/modules/ssh/mod.rs:58-64`
 - **问题**：`std::sync::RwLock` 的 `write().unwrap()` 是阻塞操作，在 async 上下文中可能阻塞 tokio 工作线程。锁 poisoning 会导致后续所有 SSH 操作 panic
 - **建议**：替换为 `tokio::sync::RwLock` 或 `parking_lot::RwLock`
+- **✅ 已修复（2026-08-07 第四批）**：`SshState` 的 `sessions` + `sftp_sessions` 迁移到 `tokio::sync::RwLock`；`insert/take/get/list_ids/remove_sftp` 5 个方法 async 化；6 个 Tauri 命令调用点 + 2 个测试改为 `.await`/`#[tokio::test]`。**调研后保留项**（临界区微秒级 / std 上下文 / 有意设计）：`ssh/session.rs:496,510` state（同步 state() 读）、`sidecar.rs:1690` LOG_BUFFER（注释明确"同步 Mutex 避免异步上下文开销"）、`shell/session.rs:14` cwd（run() 在 spawn_blocking 同步线程）、`history/sandbox/secrets/fs-watch`（冷路径）
 
 ### High
 
@@ -257,10 +258,10 @@
 9. **FE-M1**：deletePath 未使用参数移除
 
 ### 第四优先（高难度，需架构决策）
-10. **FE-C2**：App.tsx 2367 行拆分（先补测试再动）
-11. **Rust-C2/C3**：SSH 锁持有与 async 安全（需全局规划）
-12. **Py-H1**：双 Agent 系统收敛（需决策 LangGraph 是否保留）
-13. **Py-H4**：212 处 broad except 分级治理
+10. **FE-C2**：App.tsx 2367 行拆分（先补测试再动）— ⏸ 暂缓（用户拍板，有明确需求再拆）
+11. **Rust-C2/C3**：SSH 锁持有与 async 安全 — ✅ 已修复（C2 第三批 / C3 第四批）
+12. **Py-H1**：双 Agent 系统收敛 — ✅ 调研完成（2026-08-07）：`agents/` 是 override（Strands 主路径）+ fallback（BaseAgent 降级）+ 元数据源（agent.list/info）三层结构，非冗余；删除会破坏元数据供给与降级能力。结论：保留现状
+13. **Py-H4**：212 处 broad except 分级治理 — ✅ 调研完成（2026-08-07）：绝大部分是 logger.exception（尽力注册模式）或 logger.warning（明确降级策略），仅 3 处已精准治理（vector.py / adapter.py），余下预期行为不改
 
 ---
 
