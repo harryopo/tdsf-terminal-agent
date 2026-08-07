@@ -22,6 +22,7 @@ import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
 // TDSF 修复 2026-08-01: newTab/newTabInSpace 需要读目标 Space 的 env 来绑定
 // SSH 会话。useSpaces 本体不依赖 tabs（依赖方只有 App 层 hook），无循环依赖。
 import { useSpaces } from "@/modules/spaces";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // Matches the renderer slot pool size — over this we'd evict an active leaf.
@@ -34,7 +35,14 @@ function sshSessionIdForSpace(spaceId: string | null): string | undefined {
     .getState()
     .spaces.find((s) => s.id === spaceId);
   if (space?.env.kind === "ssh" && space.env.sessionId) {
-    return space.env.sessionId;
+    // TDSF 修复 2026-08-07: 幽灵 sessionId 校验——session 是运行时态,
+    // Space env 持久化可能携带上次生命周期的失效 id (服务器关闭/断线重连)。
+    // 失效时不绑定, 新 tab 保持本地 shell 欢迎页, 用户手动重连后再接管。
+    const sessionId = space.env.sessionId;
+    const sessions = useSshStore.getState().sessions;
+    if (sessions.some((s) => s.id === sessionId)) {
+      return sessionId;
+    }
   }
   return undefined;
 }
