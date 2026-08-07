@@ -555,3 +555,20 @@
 - ✅ 用户一句话决策（不记住）直接消除了持久化幽灵 id 这整个根因类——产品决策 > 技术补丁
 - ✅ 双 Explore agent 并行排查两链路，交汇点（绑定回调条件）就是 bug 点——链路图思维
 - 📌 教训再确认：python -c 内联多行 JS 必踩转义坑，一律写脚本文件（第 N 次）
+
+---
+
+## 2026-08-07 · SpaceCreateDialog 模式闪动修复（SSH 无法新建）
+
+**用户报告**：新建工作区对话框点 SSH 会闪，无法新建 SSH 工作区；点本地工作区弹出 SSH 界面感。
+
+**根因（读代码即定位，无需 CDP 复现）**：`SpaceCreateDialog.tsx:108-131` 的 effect 依赖 `[open, defaultName, loadSavedConnections, initialMode]`——打开期间用户输入 host → defaultName 变化 / loadSavedConnections 异步完成 → effect 重跑 → `setMode(initialMode)` **把用户选的 ssh 强制重置回 local** → 闪 + 无法 SSH。
+
+**修复（8bf3fa0）**：initializedRef 保证初始化块（setMode(initialMode) + setName + loadSavedConnections）只在每次 open 的瞬间执行一次；关闭重置逻辑不变。
+
+**验证**：CDP 实测——点"连接 SSH 服务器"→ ssh 激活 → 填 host/等 2.5s/再点 ssh 选项卡 → **模式全程保持**（修复前 t1 即重置）。
+
+**复盘**：
+- ✅ 用户描述的"闪"是模式重置的视觉表现——effect 依赖设计缺陷（初始化副作用混入响应式依赖）
+- ✅ 读代码定位比 CDP 复现更快：effect 依赖列表 + setState 在 open 期间执行 = 高危模式
+- 📌 教训：初始化副作用（setMode/setName/加载）必须与响应式重置分离，用 ref 门控一次性执行
