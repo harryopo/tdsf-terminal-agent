@@ -3315,6 +3315,30 @@ CDP 全新状态实测通过。commit 见上。
 
 **门禁验证**：typecheck ✅ / lint ✅ / test 896 ✅ / build:web ✅ / cargo check ✅ / pytest 1281 ✅ 全绿
 
+### 37.29 审查架构项收尾：Py-H1 调研 + Rust-C3 热路径锁迁移（2026-08-07）
+
+承接 §37.26-37.28，对审查报告第四优先的 3 个架构级项逐一收尾（用户 AskUserQuestion 拍板：Py-H1="先调研再定"、Rust-C3="只迁热路径"、FE-C2="暂缓"）。
+
+**Py-H1 双 Agent 系统调研结论（保留现状）**：
+- `agents/` 不是"两套并行且不一致"的冗余，而是三层结构：**override（Strands 主路径）** + **fallback（BaseAgent 降级路径）** + **元数据源（agent.list/agent.info 的 system_prompt/tools）**
+- 证据链：`main.py:518` import+configure_agents → `sidecar.health` 读 AGENT_REGISTRY（agents_count）；`sidecar-adapter.ts:800` 调 `agent.invoke`（前端热路径）；`set_backend()/clear_backend()` 显式二选一切换（`agents/__init__.py:130-134` 注释明确互斥）
+- 删除会破坏：元数据供给、Strands 降级回退能力、test_agents.py（1287 行）
+- **结论：保留现状**（不做代码改动，仅在审查报告标注职责边界）
+
+**Rust-C3 热路径锁迁移（已执行）**：
+- 全项目 14 处 `std::sync` 锁盘点，真正的 async 热路径靶点 = `SshState` 的 `sessions` + `sftp_sessions`（每个 ssh_*/sftp_* 命令都要查）
+- 迁移：两个字段 → `tokio::sync::RwLock`；`insert/take/get/list_ids/remove_sftp` 5 方法 async 化；6 个 Tauri 命令调用点 + 2 个测试改 `.await`/`#[tokio::test]`（ssh/mod.rs，11 处访问点全覆盖）
+- **调研后保留项**（各有明确理由，非疏漏）：
+  - `ssh/session.rs:496,510` state 锁：临界区枚举读写微秒级、`state()` 为同步方法，迁移需改签名收益极低
+  - `sidecar.rs:1690` LOG_BUFFER：注释明确"同步 Mutex 避免异步上下文开销"（有意设计）
+  - `shell/session.rs:14` cwd：`run()` 在 spawn_blocking 同步线程执行，用 tokio 锁反而错误
+  - `history/sandbox/secrets/fs-watch`：冷路径（历史查询/一次性初始化/keyring 阻塞 IO/独立线程）
+- 附带收益：tokio::sync::RwLock 无 poisoning 概念，poisoning panic 风险从 SshState 彻底消失（原 `unwrap_or_else(into_inner)` 兜底可移除）
+
+**门禁验证**：cargo check ✅（0 错误）/ cargo test ✅ 351 全绿（lib 298 + git_operations 25 + fs_search 27 + doc 1，含新增 2 个 tokio::test）
+
+**审查报告收尾状态**：41 项发现全部有处置结论——代码修复 20 项（FE-C1/Rust-C1/C2/C3 等）+ 调研定性 3 项（Py-H1/Py-H4/Rust-C3 保留项）+ 暂缓 1 项（FE-C2，有明确需求再拆）+ 余下 High/Medium/Low 项多为低风险留档
+
 ### 37.28 代码审查第三批修复（2026-08-04）
 
 承接 §37.27，修复 7 项（含 2 项遗留问题）：

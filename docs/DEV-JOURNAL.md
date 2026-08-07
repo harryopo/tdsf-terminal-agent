@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-08-07 · 审查架构项收尾（Py-H1 调研定性 + Rust-C3 热路径锁迁移）
+
+**任务**：对代码审查报告第四优先的 3 个架构级项收尾（用户拍板：Py-H1="先调研再定"、Rust-C3="只迁热路径"、FE-C2="暂缓"）。
+
+**方案**：
+- **Py-H1**：通读 `agents/__init__.py` 全文 + `main.py` 调用链 + 前端 `sidecar-adapter.ts` 热路径调用，实证双 Agent 系统是 override+fallback+元数据源三层结构 → 保留现状
+- **Rust-C3**：全项目 14 处 `std::sync` 锁盘点 → 只迁移真正的 async 热路径靶点 `SshState`（sessions + sftp_sessions，11 处访问点），其余有明确理由保留
+
+**报错与修改**：
+- **无编译错误**（一次通过，cargo check 0 错误 + cargo test 351 全绿）——区别于第三批的反复，主因是迁移前先穷尽盘点调用点（grep 全部 11 处 + 读全上下文），且测试同步改为 `#[tokio::test]`，没有遗漏调用点
+- **关键决策：tokio::sync 而非 parking_lot**——审查报告建议二选一。选 tokio::sync 理由：已在依赖中（session.rs 已用 tokio::sync::Mutex），符合项目"不新增依赖"约束；副作用是 5 个方法需 async 化（insert/take/get/list_ids/remove_sftp）+ 2 个测试改 tokio::test。若选 parking_lot 可零侵入，但需新增依赖（违反 CLAUDE.md 决策边界"新增重依赖先问用户"）
+
+**复盘**：
+- ✅ **"先调研再定"的正确打开方式**：Py-H1 审查报告评级"两套并行且不一致"看似严重，但读代码后发现是显式互斥的 override 切换（`set_backend` 注入后 `invoke_agent` 优先走 override），注释白纸黑字写明设计意图。**结论：审查报告的结构化评级是启发式线索，不是最终判决；删代码前必须沿数据流验证"谁在调用它"**
+- ✅ **锁迁移的正确粒度**：不是"所有 std::sync 锁都要换"。真正的 async 热路径 = 每个命令必经的查表锁（SshState）；其余（LOG_BUFFER 有意设计 / shell cwd 在 std 线程 / session state 微秒临界区 / 冷路径）保留反而更优。**换锁有成本（async 化 + 取消点语义变化），收益要与竞争强度匹配**
+- ✅ **async 化的取消点风险**：`get_or_create_sftp` 的 double-check 模式（write 锁内 get+insert）锁内无 await 点，cancellation safe；若锁内有 await 则 double-check 失效，需保持"锁内无 await"不变量
+- ⚠️ **教训（沿用第三批）**：审查报告对 russh 的结论（"Handle 实现 Clone"）已证明有误，本轮对 std::sync 锁分布也发现报告位置（`ssh/mod.rs:58-64`）与实际 14 处全貌有出入——**报告是地图，实地勘探（grep+Read）才算数**
+
+---
+
 ## 2026-08-04 · 代码审查第三批修复（Rust-C2 持锁 / SFTP 路径验证 / 遗留问题）
 
 **任务**：继续修复审查报告剩余项（高难度批），做好验证。
