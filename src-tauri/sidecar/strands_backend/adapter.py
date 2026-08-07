@@ -1200,6 +1200,7 @@ class StrandsAgentAdapter:
             if text and not text.startswith("<"):
                 return text
         except Exception:
+            # str() 对任意对象几乎不抛异常；若抛（罕见），继续走下方兼容字段兜底
             pass
 
         # 兼容字段
