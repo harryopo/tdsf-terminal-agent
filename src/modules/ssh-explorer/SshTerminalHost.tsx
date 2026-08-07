@@ -31,23 +31,9 @@ import { TerminalPane } from "@/modules/terminal/TerminalPane";
 import type { TerminalPaneHandle } from "@/modules/terminal/TerminalPane";
 import type { TerminalTransport } from "@/modules/terminal/lib/pty-bridge";
 import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
-import { useSshStore } from "./sshStore";
+import { useSshStore, getOsc7Log } from "./sshStore";
 
-// TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
-// 通过 window.__TDSF_OSC7_LOG__ 收集，CDP 实测可读取。
-type Osc7LogEntry = Record<string, unknown>;
-
-declare global {
-  interface Window {
-    __TDSF_OSC7_LOG__?: Osc7LogEntry[];
-  }
-}
-
-function getOsc7Log(): Osc7LogEntry[] | null {
-  if (typeof window === "undefined") return null;
-  if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
-  return window.__TDSF_OSC7_LOG__;
-}
+// OSC7 诊断日志统一从 sshStore 导入（消除两文件重复声明）
 
 type Props = {
   /** SSH 会话前端 UUID（sshStore.sessions[].id） */

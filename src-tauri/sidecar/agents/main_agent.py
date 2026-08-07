@@ -364,6 +364,10 @@ class MainAgent(BaseAgent):
 
             sub_agent_result: dict[str, Any] = {}
             observation = ""
+            # TDSF 2026-08-04: 预初始化，避免作用域依赖短路求值（Py-M2 修复）
+            _sub_steps = None
+            _teaching = None
+            _reflection = None
 
             if agent_prefix == "main":
                 # 主 Agent 自处理：调用 MCP tool

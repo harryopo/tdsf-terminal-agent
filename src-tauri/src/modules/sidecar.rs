@@ -1439,7 +1439,7 @@ async fn health_check_task(
         let send_result = {
             let stdin_guard = stdin_tx.lock().await;
             if let Some(tx) = stdin_guard.as_ref() {
-                tx.send(serde_json::to_string(&msg).unwrap() + "\n").await
+                tx.send(serde_json::to_string(&msg).unwrap_or_default() + "\n").await
             } else {
                 Err(tokio::sync::mpsc::error::SendError(String::new()))
             }
