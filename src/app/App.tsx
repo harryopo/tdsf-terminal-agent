@@ -157,7 +157,6 @@ export default function App() {
     activeId,
     setActiveId,
     allocId,
-    replaceTabs,
     moveTabToSpace,
     reorderTab,
     reorderTabByGap,
@@ -277,13 +276,7 @@ export default function App() {
 
   useSpacesBoot({
     ready: launchCwdResolved,
-    launchCwd,
-    home,
-    allocId,
-    replaceTabs,
     markBooted,
-    setActiveSpaceForNewTabs,
-    adoptWorkspaceEnv,
   });
 
   useSpacePersistence({
@@ -773,6 +766,17 @@ export default function App() {
         const targetSpaceId = targetSpace ? targetSpace.id : currentSpaceId;
         const currentTabs = tabsRef.current;
         const currentActiveId = activeIdRef.current;
+        // TDSF 修复 2026-08-07: tab 绑定条件放宽——绑定的 sessionId 若已失效
+        // (幽灵 id: 服务器关闭/断线后残留), 允许新会话重绑。此前要求
+        // `!t.sshSessionId || t.sshSessionId === session.id`, 断线重连后旧 tab
+        // 绑着失效 id 永远匹配不上 → 终端显示本地。
+        const sessionExists = (id: string | null | undefined) =>
+          !!id &&
+          useSshStore
+            .getState()
+            .sessions.some((s) => s.id === id);
+        const canRebind = (id: string | null | undefined) =>
+          !id || !sessionExists(id) || id === session.id;
         let targetTab = currentTabs.find(
           (t) =>
             t.spaceId === targetSpaceId &&
@@ -785,7 +789,7 @@ export default function App() {
               t.spaceId === targetSpaceId &&
               t.id === currentActiveId &&
               t.kind === "terminal" &&
-              (!t.sshSessionId || t.sshSessionId === session.id),
+              canRebind(t.sshSessionId),
           );
         }
         if (!targetTab) {
@@ -793,7 +797,7 @@ export default function App() {
             (t) =>
               t.spaceId === targetSpaceId &&
               t.kind === "terminal" &&
-              (!t.sshSessionId || t.sshSessionId === session.id),
+              canRebind(t.sshSessionId),
           );
         }
         if (targetTab) {
