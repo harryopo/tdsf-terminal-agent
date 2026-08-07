@@ -3391,3 +3391,19 @@ CDP 全新状态实测通过。commit 见上。
 - `KNOWLEDGE-INDEX.md`：头部版本 → v1.3；§1.2 进度记忆类指针 → §37.24；关键章节速查补充 §37.17-37.24；§3.3 commit 节点补充；§2.1 检索指南指针更新
 
 **远程推送**：`git push origin terax-clone-v0`（97 → 0 commits ahead）。上游：`https://github.com/harryopo/tdsf-terminal-agent.git`
+
+### 37.31 独立复验：审查后门禁全绿确认（2026-08-07）
+
+**背景**：审查修复（§37.26-37.30，7 commit：bd007aa→715b8cb）完成后，独立复验全部门禁（与审查方声明交叉验证）。
+
+**复验结果（全部通过）**：
+| 门禁 | 结果 | 说明 |
+|------|------|------|
+| pnpm typecheck | ✅ | tsc 严格模式（tsconfig.app.json + tsconfig.node.json）零错误 |
+| pnpm test | ✅ 896 passed | 102 测试文件 |
+| pytest | ✅ 1281 passed | 61.5s |
+| cargo test | ✅ 351 passed / 0 failed | 与审查方声明一致（此前 cargo test 从未全绿的历史已终结） |
+
+**结论**：审查修复工作可信，4 批修复（净减 ~9500 行）+ 经验固化（CODE-REVIEW-LESSONS.md + CLAUDE.md v2.1）与仓库实际状态一致。未发现新增回归。
+
+**当前基线（2026-08-07）**：P0-P4 全完成；41 项审查发现已处置（4 Critical 修复 / FE-C2 上帝组件暂缓待需求 / Py-H1 调研定性）；代码量净减 ~9500 行；远程已推送（97 commits → 0 ahead）。

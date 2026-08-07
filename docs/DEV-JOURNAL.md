@@ -509,3 +509,22 @@
 - ✅ 黑屏排查路径：端口检查（9300/9222）→ 进程树 → locate 命中判定 → 删残留 → 恢复
 - ✅ dev 模式 CDP（9222）可用：debug build 编译时读平台配置 additionalBrowserArgs 硬编码 → WebView2 CDP 直连抓渲染
 - 📌 服务启动后必须 CDP 截图验证（bodyLen + 像素采样），不能只看"进程活着"
+
+---
+
+## 2026-08-07 · 审查修复独立复验（验证者视角）
+
+**任务**：另一 AI 完成全面审查修复后，独立检查 + 复验门禁 + 更新进度。
+
+**检查发现（别的 AI 的产出）**：
+- 7 commits（bd007aa → 715b8cb）：41 项审查发现（5C/12H/15M/9L）→ 4 批修复净减 ~9500 行（含 308KB v4.0.0 死代码删除）
+- 归档：docs/reports/CODE-REVIEW-2026-08-04.md（41 项）+ docs/CODE-REVIEW-LESSONS.md（方法论 + 8 条红线 + 血泪案例表）+ CLAUDE.md v2.1
+- dev-state §37.25-37.30 完整记录；远程已推送
+
+**独立复验（我跑的，非信任声明）**：
+- typecheck ✅ / 前端 test 896 ✅ / pytest 1281 ✅ / cargo test 351 ✅（0 failed）
+- 注意：**cargo test 统计被我的 tail -5 截断，重跑全量才拿到 351**——又一次验证"验证命令不要截断"（CODE-REVIEW-LESSONS R6 同款）
+
+**复盘**：
+- ✅ 独立复验是交接可信度的关键一步——声明 vs 实测交叉验证
+- 📌 验证命令本身也要防截断（grep/tail 会丢统计）；完整统计用 awk 聚合
