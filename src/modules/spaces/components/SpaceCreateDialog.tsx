@@ -593,6 +593,7 @@ export function SpaceCreateDialog({
                 </Button>
                 {testResult && (
                   <span
+                    title={testMessage || undefined}
                     className={cn(
                       "min-w-0 flex-1 truncate text-[11px]",
                       testResult === "ok"
@@ -609,7 +610,7 @@ export function SpaceCreateDialog({
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <div className="max-h-28 overflow-y-auto break-words whitespace-normal rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
             </div>
           )}

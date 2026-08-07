@@ -483,21 +483,21 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
             </>
           )}
 
-          {/* 错误提示 */}
+          {/* 错误提示: break-words 防长错误文本撑宽对话框, 限高滚动 */}
           {error && (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <div className="max-h-28 overflow-y-auto break-words whitespace-normal rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
             </div>
           )}
 
           {/* TDSF 魔改: 测试连接结果提示 */}
           {testResult === "ok" && (
-            <div className="rounded-md bg-primary/10 px-3 py-2 text-sm text-foreground">
+            <div className="max-h-28 overflow-y-auto break-words whitespace-normal rounded-md bg-primary/10 px-3 py-2 text-xs text-foreground">
               ✓ {testMessage}
             </div>
           )}
           {testResult === "fail" && (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <div className="max-h-28 overflow-y-auto break-words whitespace-normal rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
               ✗ {testMessage}
             </div>
           )}
