@@ -3315,6 +3315,24 @@ CDP 全新状态实测通过。commit 见上。
 
 **门禁验证**：typecheck ✅ / lint ✅ / test 896 ✅ / build:web ✅ / cargo check ✅ / pytest 1281 ✅ 全绿
 
+### 37.28 代码审查第三批修复（2026-08-04）
+
+承接 §37.27，修复 7 项（含 2 项遗留问题）：
+
+| 编号 | 严重度 | 内容 | 文件 |
+|------|:---:|------|------|
+| Rust-C2 | Critical | **exec_command/open_sftp_channel 持锁 30s 阻塞**：russh 0.61 Handle 不实现 Clone（审查报告"实现 Clone"有误），改为锁内建 channel 后立即 `drop(guard)` 释放——channel 独立于 handle，后续 exec/收集在锁外。同会话 close()/并发命令最多阻塞一个 RTT | ssh/session.rs |
+| Rust-M2 | High | **反向 RPC SFTP 路径遍历验证**：新增 `validate_remote_path`（非空 + 绝对路径 + 无 null 字节 + 无 `..` 段），7 个 sftp_* 路由统一校验，防 prompt-injection 引导读写任意远程路径 | sidecar.rs |
+| Rust-L1 | Medium | pty/mod.rs 3 处 `spawn().expect()` → `if let Err` 日志降级 + 1 处裸 `.unwrap()` → `unwrap_or_else` | pty/mod.rs |
+| Rust-M5 | Medium | known_hosts 文件格式错误不再静默降级：区分 `IO(NotFound)`（正常未知主机）与其他错误（损坏 → 明确告警 TOFU 降级） | ssh/known_hosts.rs |
+| 遗留 1 | — | **4 个集成测试文件引用 `terax_lib` crate 名**（上游遗留）→ 改为 `tdsf_terminal_agent_lib`，cargo test 全量恢复 | tests/*.rs |
+| 遗留 2 | — | **client.rs doc test 缺 import**（E0433）→ 补 use 语句 | ssh/client.rs |
+| FE-L1 | Low | translateStore DEV 模式 window 暴露（调试残留）→ 移除 | translateStore.ts |
+
+**门禁验证**：cargo check ✅ / cargo test 全量 ✅（lib 298 + git_operations 25 + fs_search 27 + doc 1 = **351**）/ typecheck ✅ / lint ✅ / test 896 ✅ / build:web ✅ 全绿
+
+> **本次验证闭环要点**：修复后不仅跑 cargo check，还跑通**全量 cargo test**（此前因 terax_lib 遗留从未全绿过），顺手修掉 2 个遗留问题。
+
 ### 37.25 进度跟进 + 交接注意事项调研 + L3 文档同步 + 远程推送（2026-08-04）
 
 **任务**：用户要求详细阅读项目内容、明晰架构与进度，调研开发交接注意事项，进行进度跟进，并推送更新到 GitHub。

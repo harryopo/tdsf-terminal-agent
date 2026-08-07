@@ -83,9 +83,3 @@ export const useTranslateStore = create<TranslateState>((set, get) => ({
   hideTooltip: () => set({ result: null, missing: null }),
 }));
 
-// DEV 调试: 暴露 store 到 window，供 CDP 验证脚本使用 (参考 useTerminalSession __tdsfTerm)
-if (import.meta.env?.DEV && typeof window !== "undefined") {
-  (window as unknown as { __tdsfTranslateStore?: typeof useTranslateStore }).__tdsfTranslateStore =
-    useTranslateStore;
-}
-
