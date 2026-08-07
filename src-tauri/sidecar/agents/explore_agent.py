@@ -196,23 +196,4 @@ class ExploreAgent(BaseAgent):
     # 辅助方法
     # ========================================================================
 
-    def _extract_query(self, task: str, state: dict[str, Any]) -> str:
-        """从任务描述中提取查询关键词
-
-        优先级：
-        1. state.input（用户原始输入）
-        2. task 中冒号后的内容
-        3. task 原文
-        """
-        # 从 state.input 提取
-        user_input = state.get("input", "")
-        if user_input:
-            return user_input
-
-        # 从 task 提取冒号后内容
-        if ":" in task:
-            return task.split(":", 1)[1].strip()
-        if "：" in task:
-            return task.split("：", 1)[1].strip()
-
-        return task
+    # _extract_query 已提升到 BaseAgent（2026-08-04 消除重复代码）

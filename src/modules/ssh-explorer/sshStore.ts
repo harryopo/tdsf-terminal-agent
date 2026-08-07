@@ -38,7 +38,7 @@ import {
 } from '@/lib/sftp-bridge';
 
 // TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
-type Osc7LogEntry = Record<string, unknown>;
+export type Osc7LogEntry = Record<string, unknown>;
 
 declare global {
   interface Window {
@@ -46,10 +46,61 @@ declare global {
   }
 }
 
-function getOsc7Log(): Osc7LogEntry[] | null {
+export function getOsc7Log(): Osc7LogEntry[] | null {
   if (typeof window === "undefined") return null;
   if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
   return window.__TDSF_OSC7_LOG__;
+}
+
+// --- 内部工具函数 (消除 sshStore 内重复模式) ---
+
+/** 从 Record<sessionId, T> 中移除指定 session 的键 */
+function omitSessionKey<T>(record: Record<string, T>, sessionId: string): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([k]) => k !== sessionId),
+  );
+}
+
+/** 使指定父路径的 children 缓存失效并重新加载，同时刷新 cwd（如果匹配） */
+async function invalidateChildrenCache(
+  get: () => SshExplorerState,
+  set: (partial: Partial<SshExplorerState> | ((s: SshExplorerState) => Partial<SshExplorerState>)) => void,
+  sessionId: string,
+  parentPath: string,
+): Promise<void> {
+  set((s: SshExplorerState) => ({
+    childrenByPathBySession: {
+      ...s.childrenByPathBySession,
+      [sessionId]: {
+        ...(s.childrenByPathBySession[sessionId] ?? {}),
+        [parentPath]: [],
+      },
+    },
+  }));
+  await get().loadChildren(sessionId, parentPath);
+  if (get().currentPathBySession[sessionId] === parentPath) {
+    await get().listDir(sessionId, parentPath);
+  }
+}
+
+/** 折叠已展开但已失效的目录（重命名/删除后路径不再有效） */
+function collapseExpanded(
+  get: () => SshExplorerState,
+  set: (partial: Partial<SshExplorerState> | ((s: SshExplorerState) => Partial<SshExplorerState>)) => void,
+  sessionId: string,
+  path: string,
+): void {
+  const expanded = get().expandedPathsBySession[sessionId] ?? new Set<string>();
+  if (expanded.has(path)) {
+    const next = new Set(expanded);
+    next.delete(path);
+    set((s: SshExplorerState) => ({
+      expandedPathsBySession: {
+        ...s.expandedPathsBySession,
+        [sessionId]: next,
+      },
+    }));
+  }
 }
 
 // === 类型定义 ================================================================
@@ -551,34 +602,13 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           ? (s.sessions.find((x) => x.id !== sessionId)?.id ?? null)
           : s.activeSessionId,
       // TDSF 魔改: 完整清理会话相关状态, 避免残留影响重连或新会话
-      // 清理文件树状态
-      currentPathBySession: Object.fromEntries(
-        Object.entries(s.currentPathBySession).filter(
-          ([k]) => k !== sessionId,
-        ),
-      ),
-      entriesBySession: Object.fromEntries(
-        Object.entries(s.entriesBySession).filter(([k]) => k !== sessionId),
-      ),
-      loadingBySession: Object.fromEntries(
-        Object.entries(s.loadingBySession).filter(([k]) => k !== sessionId),
-      ),
-      expandedPathsBySession: Object.fromEntries(
-        Object.entries(s.expandedPathsBySession).filter(
-          ([k]) => k !== sessionId,
-        ),
-      ),
+      currentPathBySession: omitSessionKey(s.currentPathBySession, sessionId),
+      entriesBySession: omitSessionKey(s.entriesBySession, sessionId),
+      loadingBySession: omitSessionKey(s.loadingBySession, sessionId),
+      expandedPathsBySession: omitSessionKey(s.expandedPathsBySession, sessionId),
       // TDSF 魔改 2026-07-29: 树形展开所需的子树缓存也按会话清理
-      childrenByPathBySession: Object.fromEntries(
-        Object.entries(s.childrenByPathBySession).filter(
-          ([k]) => k !== sessionId,
-        ),
-      ),
-      loadingChildrenByPathBySession: Object.fromEntries(
-        Object.entries(s.loadingChildrenByPathBySession).filter(
-          ([k]) => k !== sessionId,
-        ),
-      ),
+      childrenByPathBySession: omitSessionKey(s.childrenByPathBySession, sessionId),
+      loadingChildrenByPathBySession: omitSessionKey(s.loadingChildrenByPathBySession, sessionId),
       // 清理传输任务 (会话已断开, 任务不再有意义)
       transferTasks: s.transferTasks.filter((t) => t.sessionId !== sessionId),
       // 清理选中状态: 断开的是活跃会话时, selectedPath 必然属于该会话, 应清空
@@ -769,21 +799,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     const path = joinRemotePath(parentPath, name);
     try {
       await sftpWrite(session.rustSessionId, path, encodeUtf8(''));
-      // 刷新父目录: 先清缓存再重新加载
-      set((s) => ({
-        childrenByPathBySession: {
-          ...s.childrenByPathBySession,
-          [sessionId]: {
-            ...(s.childrenByPathBySession[sessionId] ?? {}),
-            [parentPath]: [], // 占位, 下面 loadChildren 会重新填充
-          },
-        },
-      }));
-      await get().loadChildren(sessionId, parentPath);
-      // 同时刷新当前 cwd (如果父路径就是 cwd)
-      if (get().currentPathBySession[sessionId] === parentPath) {
-        await get().listDir(sessionId, parentPath);
-      }
+      await invalidateChildrenCache(get, set, sessionId, parentPath);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[sshStore] createFile failed:', path, msg);
@@ -803,19 +819,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     const path = joinRemotePath(parentPath, name);
     try {
       await sftpMkdir(session.rustSessionId, path);
-      set((s) => ({
-        childrenByPathBySession: {
-          ...s.childrenByPathBySession,
-          [sessionId]: {
-            ...(s.childrenByPathBySession[sessionId] ?? {}),
-            [parentPath]: [],
-          },
-        },
-      }));
-      await get().loadChildren(sessionId, parentPath);
-      if (get().currentPathBySession[sessionId] === parentPath) {
-        await get().listDir(sessionId, parentPath);
-      }
+      await invalidateChildrenCache(get, set, sessionId, parentPath);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[sshStore] createDir failed:', path, msg);
@@ -840,32 +844,10 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       const refreshParents = [fromParent];
       if (toParent !== fromParent) refreshParents.push(toParent);
       for (const p of refreshParents) {
-        set((s) => ({
-          childrenByPathBySession: {
-            ...s.childrenByPathBySession,
-            [sessionId]: {
-              ...(s.childrenByPathBySession[sessionId] ?? {}),
-              [p]: [],
-            },
-          },
-        }));
-        await get().loadChildren(sessionId, p);
-        if (get().currentPathBySession[sessionId] === p) {
-          await get().listDir(sessionId, p);
-        }
+        await invalidateChildrenCache(get, set, sessionId, p);
       }
       // 如果被重命名的是已展开目录, 需要折叠它 (路径失效)
-      const expanded = get().expandedPathsBySession[sessionId] ?? new Set<string>();
-      if (expanded.has(from)) {
-        const next = new Set(expanded);
-        next.delete(from);
-        set((s) => ({
-          expandedPathsBySession: {
-            ...s.expandedPathsBySession,
-            [sessionId]: next,
-          },
-        }));
-      }
+      collapseExpanded(get, set, sessionId, from);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[sshStore] renamePath failed:', from, '->', to, msg);
@@ -888,7 +870,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     const parent = path.slice(0, path.lastIndexOf('/') || 1);
     try {
       await sftpRemove(session.rustSessionId, path);
-      // 清理相关缓存
+      // 清理被删路径及其父目录的缓存
       set((s) => ({
         childrenByPathBySession: {
           ...s.childrenByPathBySession,
@@ -903,18 +885,8 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       if (get().currentPathBySession[sessionId] === parent) {
         await get().listDir(sessionId, parent);
       }
-      // 如果删除的是已展开目录, 清理展开状态
-      const expanded = get().expandedPathsBySession[sessionId] ?? new Set<string>();
-      if (expanded.has(path)) {
-        const next = new Set(expanded);
-        next.delete(path);
-        set((s) => ({
-          expandedPathsBySession: {
-            ...s.expandedPathsBySession,
-            [sessionId]: next,
-          },
-        }));
-      }
+      // 折叠已删除的展开目录
+      collapseExpanded(get, set, sessionId, path);
       // 如果当前选中的是被删除路径, 清空选中
       if (get().selectedPath === path) {
         set({ selectedPath: null });
