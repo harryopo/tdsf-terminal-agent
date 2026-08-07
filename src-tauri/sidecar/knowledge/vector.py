@@ -459,6 +459,7 @@ def reset_global_vector() -> None:
         if _global_vector is not None:
             try:
                 _global_vector.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭向量库失败可接受（析构场景），不阻断置空
+                logger.debug(f"vector global close failed: {e}")
         _global_vector = None
