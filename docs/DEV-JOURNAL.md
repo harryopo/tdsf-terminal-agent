@@ -528,3 +528,30 @@
 **复盘**：
 - ✅ 独立复验是交接可信度的关键一步——声明 vs 实测交叉验证
 - 📌 验证命令本身也要防截断（grep/tail 会丢统计）；完整统计用 awk 聚合
+
+---
+
+## 2026-08-07 · SSH 幽灵 sessionId 根因链 + 重启策略修复
+
+**用户报告**：工作区 SSH 进入服务器后终端显示本地、资源管理器不接管。
+
+**排查（双 Explore agent 并行）**：新建工作区（SpaceCreateDialog → connectSsh → createSpace → env.sessionId）+ 新建终端（openNewTab → sshSessionIdForSpace 绑定 → App 判定链 showSshTerminalInWorkspace）两条链路全排查。
+
+**根因链（完整）**：
+1. Space env.sessionId **持久化**（LazyStore）但 sshStore sessions 是**运行时态**
+2. 应用重启 → 恢复 SSH Space（幽灵 sessionId）+ 恢复绑定幽灵 id 的 tab
+3. 用户手动重连（新 session id）→ 绑定回调因 `!t.sshSessionId || t.sshSessionId === session.id` 匹配不上幽灵 tab → **终端永远本地**
+
+**用户决策**：重启后回到初始选择/新建工作区界面（服务器可能关闭，让用户选择才是正常思路）。
+
+**修复（4d0e8fd）**：
+1. useSpacesBoot 重写（-123 行）：忽略持久化，每次启动 hydrate([], null) 进欢迎界面
+2. sshSessionIdForSpace：session 存在性校验（失效 id 不绑新 tab）
+3. 绑定回调 canRebind 放宽：失效 id 的 tab 允许新会话重绑
+
+**验证**：typecheck/lint/test 896 全过；CDP 实测重启后显示"暂无工作区 + 新建本地/连接 SSH"欢迎界面。
+
+**复盘**：
+- ✅ 用户一句话决策（不记住）直接消除了持久化幽灵 id 这整个根因类——产品决策 > 技术补丁
+- ✅ 双 Explore agent 并行排查两链路，交汇点（绑定回调条件）就是 bug 点——链路图思维
+- 📌 教训再确认：python -c 内联多行 JS 必踩转义坑，一律写脚本文件（第 N 次）
