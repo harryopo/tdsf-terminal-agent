@@ -2,8 +2,8 @@
 
 use std::time::{Duration, Instant};
 
-use terax_lib::modules::shell::background;
-use terax_lib::modules::workspace::WorkspaceEnv;
+use tdsf_terminal_agent_lib::modules::shell::background;
+use tdsf_terminal_agent_lib::modules::workspace::WorkspaceEnv;
 
 fn wait_until<F: Fn() -> bool>(timeout: Duration, check: F) -> bool {
     let deadline = Instant::now() + timeout;

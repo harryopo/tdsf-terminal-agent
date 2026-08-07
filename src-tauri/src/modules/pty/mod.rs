@@ -76,16 +76,18 @@ pub async fn pty_open(
     let exited = state
         .sessions
         .read()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get(&id)
         .map(|s| s.exited.load(Ordering::Acquire))
         .unwrap_or(false);
     if exited {
         if let Some(s) = state.take(id) {
-            thread::Builder::new()
+            if let Err(e) = thread::Builder::new()
                 .name(format!("terax-pty-drop-{id}"))
                 .spawn(move || session::drop_session(s))
-                .expect("spawn pty drop thread");
+            {
+                log::warn!("pty_open: spawn drop thread failed id={id}: {e}");
+            }
         }
     }
     log::info!("pty opened id={id} cols={cols} rows={rows}");
@@ -179,7 +181,7 @@ pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
         log::info!("pty closed id={id}");
         // Detached: on Windows `ClosePseudoConsole` can block until conhost
         // drains, which would freeze this Tauri worker thread and stall IPC.
-        thread::Builder::new()
+        if let Err(e) = thread::Builder::new()
             .name(format!("terax-pty-drop-{id}"))
             .spawn(move || {
                 let t0 = std::time::Instant::now();
@@ -189,7 +191,9 @@ pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
                     t0.elapsed().as_millis()
                 );
             })
-            .expect("spawn pty drop thread");
+        {
+            log::warn!("pty_close: spawn drop thread failed id={id}: {e}");
+        }
     } else {
         log::debug!("pty_close: unknown id={id}");
     }
@@ -290,10 +294,12 @@ pub fn pty_close_all(state: tauri::State<PtyState>) -> Result<usize, String> {
         if let Err(e) = s.killer.lock().unwrap_or_else(|e| e.into_inner()).kill() {
             log::debug!("pty_close_all: kill id={id} returned {e}");
         }
-        thread::Builder::new()
+        if let Err(e) = thread::Builder::new()
             .name(format!("terax-pty-drop-{id}"))
             .spawn(move || session::drop_session(s))
-            .expect("spawn pty drop thread");
+        {
+            log::warn!("pty_close_all: spawn drop thread failed id={id}: {e}");
+        }
     }
     if count > 0 {
         log::info!("pty_close_all: reaped {count} orphaned session(s)");

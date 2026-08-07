@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-08-04 · 代码审查第三批修复（Rust-C2 持锁 / SFTP 路径验证 / 遗留问题）
+
+**任务**：继续修复审查报告剩余项（高难度批），做好验证。
+
+**方案**：修复 Rust-C2（exec 持锁 30s）、Rust-M2（SFTP 路径遍历）、Rust-L1（spawn expect）、Rust-M5（known_hosts 降级）、FE-L1（DEV 暴露）；顺手修 2 个遗留（terax_lib crate 名、doc test import）。
+
+**报错与修改**：
+- **E0597 handle_guard 生命周期**：审查报告称"russh Handle 实现 Clone"，实测 russh 0.61.2 的 `Handle` **只有 Drop、没有 Clone**（`impl<H: Handler> Drop` 存在，无 `impl Clone`）。`h.clone()` 解析为 `&Handle` 的 Clone → 引用逃逸 block → E0597。**教训：审查报告结论必须实测验证，不能直接信**。最终方案：锁内建 channel（只覆盖一个 RTT），建好立即 `drop(guard)`——channel 独立于 handle
+- **Edit 替换重复行**：两处相同 old_string 用 replace_all + 后续细化替换，造成重复 channel 创建行 + handle 释放后仍引用。**教训：连续多次 Edit 同区域要逐次 Read 确认**
+- **doc test 编译失败**：cargo test 全量跑出 doc test E0433（`Duration`/`client` 未导入）——此前从未跑过全量 cargo test，暴露 2 个遗留问题
+
+**复盘**：
+- ✅ **验证要跑全量**：cargo check ≠ cargo test，集成测试 + doc test 都是独立编译单元。本轮顺手修掉 terax_lib 遗留（4 文件）+ doc test import，cargo test 首次全绿（351 个）
+- ✅ **锁优化正确姿势**：不在 async 里跨 await 持锁；若对象不可 Clone，就缩小锁范围到"创建资源"这一步，资源独立后释放
+- ✅ **安全校验放边界**：反向 RPC 是可信边界外的入口（LLM 输出），路径校验（绝对路径 + 禁 `..`）应统一放入口
+
+---
+
 ## 2026-08-04 · 代码审查第二批修复（sshStore 去重 + 变量预初始化 + 方法提取）
 
 **任务**：修复审查报告剩余 6 项中难度发现。
