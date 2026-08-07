@@ -651,6 +651,20 @@ class BaseAgent:
                 "error": str(e),
             }
 
+    def _extract_query(self, task: str, state: dict[str, Any]) -> str:
+        """从任务描述中提取查询关键词
+
+        优先级：1. state.input（用户原始输入）2. task 冒号后内容 3. task 原文
+        """
+        user_input = state.get("input", "")
+        if user_input:
+            return user_input
+        if ":" in task:
+            return task.split(":", 1)[1].strip()
+        if "：" in task:
+            return task.split("：", 1)[1].strip()
+        return task
+
     def _emit_mood(self, mood: str, session_id: str = "") -> None:
         """发布 mood_change 事件到 event_bus
 

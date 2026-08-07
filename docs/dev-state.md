@@ -3276,6 +3276,21 @@ CDP 全新状态实测通过。commit 见上。
 
 **门禁基线**：前端 896 测试 / 后端 1281 / typecheck / cargo build 全绿；安装版实测通过。
 
+### 37.27 代码审查第二批修复（2026-08-04）
+
+承接 §37.26 审查报告的剩余项，修复 6 项（净减 ~120 行）：
+
+| 编号 | 严重度 | 内容 | 文件 |
+|------|:---:|------|------|
+| FE-H1 | High | **sshStore 重复模式抽取**：新增 `invalidateChildrenCache`/`collapseExpanded`/`omitSessionKey` 工具函数，createFile/createDir/renamePath/deletePath/disconnect 5 处重复代码统一调用（约 -100 行） | sshStore.ts |
+| FE-M2 | Medium | **OSC7 日志类型去重**：`Osc7LogEntry`/`getOsc7Log` 从 sshStore 导出，SshTerminalHost 导入复用（消除两文件重复声明） | sshStore.ts + SshTerminalHost.tsx |
+| Rust-M1 | Medium | sidecar 心跳 `serde_json::to_string().unwrap()` → `unwrap_or_default()` | sidecar.rs:1442 |
+| Py-M2 | Medium | main_agent 变量作用域预初始化（`_sub_steps` 等改为方法顶部初始化，消除短路求值依赖） | main_agent.py |
+| Py-L4 | Low | `_extract_query` 重复方法提取到 BaseAgent，explore/teach 删除各自重复实现 | base.py + explore_agent.py + teach_agent.py |
+| FE-M1 | Medium | 移除 `useRemoteFileTree` 中为 `_isDir` 白做工的 `find` 逻辑（已随 §37.26 参数移除完成） | useRemoteFileTree.ts |
+
+**门禁验证**：typecheck ✅ / lint ✅ / test 896 ✅ / build:web ✅ / cargo check ✅ / pytest 1281 ✅ 全绿
+
 ### 37.26 全方位代码审查 + 修复 13 项发现（2026-08-04）
 
 **任务**：基于 AI 代码审查最佳实践调研，对全项目 15 万行代码进行首次系统性代码审查并修复。
