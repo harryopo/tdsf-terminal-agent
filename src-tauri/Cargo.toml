@@ -42,6 +42,7 @@ shared_child = "1"
 
 # 序列化 / 异步 / 日志
 serde = { version = "1", features = ["derive"] }
+async-trait = "0.1"
 serde_json = "1"
 # tokio features 扩展：rt + process（子进程）+ io-util（stdin/stdout pipe）
 # + sync（Mutex/oneshot）+ time（timeout/interval）+ macros（spawn/await）

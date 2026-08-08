@@ -24,6 +24,9 @@ pub mod net;
 // 文件系统工具 (路径规范化 + 子模块)
 pub mod fs;
 
+// WorkspaceFs 后端抽象 (P2-1: trait + LocalFs; P2-2: SftpFs)
+pub mod fs_backend;
+
 // Git 操作 (libgit2 / 命令行混合)
 pub mod git;
 
