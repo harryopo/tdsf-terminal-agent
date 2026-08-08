@@ -593,7 +593,7 @@ export function SpaceCreateDialog({
                 </Button>
                 {testResult && (
                   <span
-                    title={testMessage || undefined}
+                    title={testResult === "ok" ? undefined : (testMessage || undefined)}
                     className={cn(
                       "min-w-0 flex-1 truncate text-[11px]",
                       testResult === "ok"
@@ -601,10 +601,9 @@ export function SpaceCreateDialog({
                         : "text-destructive",
                     )}
                   >
-                    {testResult === "ok" ? "连接成功" : "连接失败"}
-                    {testMessage ? `：${testMessage}` : ""}
-                    {testResult === "ok" &&
-                      "（点击下方「连接并创建」进入服务器）"}
+                    {testResult === "ok"
+                      ? "连接成功（点击下方「连接并创建」进入服务器）"
+                      : `连接失败${testMessage ? `：${testMessage}` : ""}`}
                   </span>
                 )}
               </div>
