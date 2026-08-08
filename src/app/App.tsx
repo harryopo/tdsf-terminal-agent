@@ -40,6 +40,7 @@ import {
   useEditorFileSync,
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
+import { useWorkspaceFsStore } from "@/modules/explorer/lib/workspaceFsStore";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
   Header,
@@ -839,6 +840,15 @@ export default function App() {
               customTitle: "",
             });
           }
+        }
+        // WorkspaceFs P2-4: 当前 Space 的 SSH 会话断开 → 明确降级提示
+        // (资源管理器显示 fatalError, 而非静默回退本地/空白)
+        const spacesState = useSpaces.getState();
+        const cur = spacesState.spaces.find((s) => s.id === spacesState.activeId);
+        if (cur?.env.kind === "ssh" && cur.env.sessionId === sessionId) {
+          useWorkspaceFsStore
+            .getState()
+            .setFatalError("SSH 连接已断开，请重新连接");
         }
       }
 

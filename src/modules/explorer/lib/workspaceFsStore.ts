@@ -78,6 +78,9 @@ type WorkspaceFsState = {
   rename: (from: string, to: string) => Promise<void>;
   remove: (path: string) => Promise<void>;
 
+  /** 会话断开等外部事件写入降级提示 (App 的 ssh 断开回调调用) */
+  setFatalError: (msg: string | null) => void;
+
   clear: () => void;
 };
 
@@ -200,6 +203,8 @@ export const useWorkspaceFsStore = create<WorkspaceFsState>((set, get) => ({
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";
     await get().navigate(parent);
   },
+
+  setFatalError: (msg) => set({ fatalError: msg }),
 
   clear: () =>
     set({

@@ -43,6 +43,7 @@ import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
 import { type FileTreeSource, useFileTree } from "./lib/useFileTree";
+import { useWorkspaceFsStore } from "./lib/workspaceFsStore";
 import { useGitStatus } from "./lib/useGitStatus";
 import { EntryRow, PendingRow, type RowActions, StatusRow } from "./TreeRow";
 
@@ -208,6 +209,7 @@ export const FileExplorer = memo(
   ) {
     // WorkspaceFs P2-3: 单一数据源 —— 一套树 + 后端原子切换, 无双轨中间态
     const isRemote = fsSource?.kind === "sftp";
+    const fatalError = useWorkspaceFsStore((s) => s.fatalError);
     const tree = useFileTree(rootPath, {
       onPathRenamed,
       onPathDeleted,
@@ -629,6 +631,16 @@ export const FileExplorer = memo(
                   setMenuNonce((n) => n + 1);
                 }}
               >
+                {fatalError && isRemote ? (
+                  // WorkspaceFs P2-4: 会话断开明确降级提示 (非静默回退本地)
+                  <div
+                    className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive"
+                    data-testid="explorer-fatal-error"
+                  >
+                    <span className="size-1.5 shrink-0 rounded-full bg-destructive" />
+                    {fatalError}
+                  </div>
+                ) : null}
                 {pendingAtRoot ? (
                   <div
                     className="flex h-6 w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
