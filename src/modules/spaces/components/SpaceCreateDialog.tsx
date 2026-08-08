@@ -603,6 +603,8 @@ export function SpaceCreateDialog({
                   >
                     {testResult === "ok" ? "连接成功" : "连接失败"}
                     {testMessage ? `：${testMessage}` : ""}
+                    {testResult === "ok" &&
+                      "（点击下方「连接并创建」进入服务器）"}
                   </span>
                 )}
               </div>
