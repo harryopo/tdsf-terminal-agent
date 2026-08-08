@@ -33,6 +33,10 @@ use crate::modules::ssh::handler::SshClientHandler;
 use crate::modules::ssh::known_hosts::KnownHostsManager;
 use crate::modules::ssh::session::SshStatusEvent;
 
+/// TCP + SSH 握手超时: 服务器不可达/端口未开放时快速失败
+/// (Windows TCP connect 默认 ~21s, 无显式超时会卡住用户等待)
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// SSH 认证方法
 ///
 /// 前端通过 JSON 传递,Rust 端 serde 反序列化。
@@ -78,6 +82,10 @@ pub enum SshClientError {
     /// russh 错误 (连接/认证/协议)
     #[error("russh error: {0}")]
     Russh(#[from] russh::Error),
+
+    /// TCP + SSH 握手超时 (服务器不可达/端口未开放)
+    #[error("SSH 连接超时({secs}s): 服务器不可达或端口未开放")]
+    HandshakeTimeout { secs: u64 },
 
     /// russh keys 错误 (私钥加载/解析)
     #[error("russh keys error: {0}")]
@@ -165,8 +173,16 @@ impl SshClient {
         //    a. TcpStream::connect((host, port))
         //    b. SSH 协议握手 (version exchange + kex)
         //    c. 调用 handler.check_server_key (TOFU)
-        let mut handle = client::connect(Arc::new(config), (host.as_str(), port), handler)
-            .await?;
+        //    TDSF 2026-08-08: 显式 15s 超时, 服务器不可达/端口关闭时快速失败
+        //    (TCP connect 系统默认 ~21s, 用户等待无反馈, 教学场景应快速提示)
+        let mut handle = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            client::connect(Arc::new(config), (host.as_str(), port), handler),
+        )
+        .await
+        .map_err(|_| SshClientError::HandshakeTimeout {
+            secs: HANDSHAKE_TIMEOUT.as_secs(),
+        })??;
 
         log::info!("[ssh] TCP+SSH handshake done, starting authentication");
 
