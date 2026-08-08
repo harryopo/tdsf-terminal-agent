@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{agent, fs, git, history, ipc, lsp, net, pty, secrets, shell, sidecar, ssh, workspace};
+use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, pty, secrets, shell, sidecar, ssh, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -367,6 +367,14 @@ pub fn run() {
         .manage(LaunchDir(Mutex::new(cli_dir)))
         .manage(LaunchFiles(Mutex::new(launch.files)))
         .invoke_handler(tauri::generate_handler![
+            fs_backend::commands::fsb_list,
+            fs_backend::commands::fsb_read,
+            fs_backend::commands::fsb_write,
+            fs_backend::commands::fsb_rename,
+            fs_backend::commands::fsb_delete,
+            fs_backend::commands::fsb_mkdir,
+            fs_backend::commands::fsb_stat,
+            fs_backend::commands::fsb_capabilities,
             pty::pty_open,
             pty::pty_write,
             pty::pty_resize,
