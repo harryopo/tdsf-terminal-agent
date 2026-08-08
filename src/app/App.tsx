@@ -2104,8 +2104,16 @@ export default function App() {
                           <FileExplorer
                             ref={explorerRef}
                             rootPath={effectiveExplorerRoot}
-                            source={explorerSource}
-                            sshSession={spaceSshSession ?? undefined}
+                            fsSource={
+                              explorerSource === "ssh" &&
+                              spaceSshSession?.rustSessionId != null
+                                ? {
+                                    kind: "sftp",
+                                    sessionId: spaceSshSession.rustSessionId,
+                                    root: spaceSshCurrentPath ?? "/",
+                                  }
+                                : { kind: "local" }
+                            }
                             gitStatus={
                               explorerSource === "local" &&
                               explorerGitDecorations
