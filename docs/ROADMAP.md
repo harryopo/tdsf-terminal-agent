@@ -48,8 +48,12 @@
 | 3 | **实测验证**：真实 LLM 委派行为 + SSH 终端翻译/审批全链路 | 验收 | 需用户 | API key + SSH 服务器 |
 | 4 | **安装版用户体验**：用户机器安装 → 黑屏确认消失 → 全功能走查 | 验收 | 需用户 | 无 |
 | 5 | **dev 启动规范**（§37.24 教训）：长期进程禁管道截断；dev 误用打包 exe 时删 target/debug/sidecar | 规范 | 无 | 无 |
-| 6 | **方案书集成度补齐**（启动验证发现的差距）：P1 HITL 四决策（edit/respond/trust）/ Strands teach 字段契约（teaching_content）/ 缺 3 工具（get_terminal_output·config_diff·backup_restore）/ 决策库完善（向量检索+history 检索）/ 可信度模块接入 Strands 主路径 | 开发 | 需用户 | 用户确认优先级 |
-| 7 | **方案书文档同步**：§1.1"7 个工具"过时（实际 13）、§4.3 扩展表状态、§4.8 asciicast"UI 待接"标注 | 文档 | 小 | 无 |
+| 6 | ~~**WorkspaceFs 文件系统视图重构**~~ ✅ 完成：FsBackend trait + LocalFs/SftpFs + 单 store（§37.33，双根因修复：双轨竞态 + OSC 7 泄漏，CDP 10/10 稳定） | 架构 | 大 | 无 |
+| 7 | **用户实测 WorkspaceFs**：创建 SSH Space → 远程树稳定无闪跳 → 断开降级横幅 | 验收 | 需用户 | 无 |
+| 8 | **命令行自动补全/预测**（用户 2026-08-08 意向）：xterm 输入补全 → 命令建议（历史 + 词典 + AI），先调研 yazi/terax 做法再规划 | 功能 | 中 | WorkspaceFs 实测后 |
+| 9 | **窗口标题跟随修复**（遗留）：SSH Space 下标题显示本地目录名（§37.32 后仍未验证） | 修复 | 小 | 无 |
+| 10 | **方案书集成度补齐**（启动验证发现的差距）：P1 HITL 四决策（edit/respond/trust）/ Strands teach 字段契约（teaching_content）/ 缺 3 工具（get_terminal_output·config_diff·backup_restore）/ 决策库完善（向量检索+history 检索）/ 可信度模块接入 Strands 主路径 | 开发 | 需用户 | 用户确认优先级 |
+| 11 | **方案书文档同步**：§1.1"7 个工具"过时（实际 13）、§4.3 扩展表状态、§4.8 asciicast"UI 待接"标注 | 文档 | 小 | 无 |
 
 ### 待用户决策/确认
 
