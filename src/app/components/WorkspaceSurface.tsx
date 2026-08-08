@@ -57,7 +57,7 @@ type Props = {
    * 2026-07-31 翻译模块修复: SSH 终端挂载时上报 leafId，App 层用于
    * captureActiveSelection 感知 SSH 终端（SSH 终端不在 tab.paneTree 里）。
    */
-  onSshLeafId?: (leafId: number) => void;
+  onSshLeafId?: (leafId: number | null) => void;
 };
 
 /**
