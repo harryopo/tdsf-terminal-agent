@@ -530,6 +530,10 @@ export default function App() {
       // TDSF debug (Phase 2): 暴露 xterm Terminal 实例，供 CDP 直接注入
       // OSC 7 字节，隔离 xterm 解析层与 SSH 传输层。
       getSlotTerm: (leafId: number) => getSlotTerm(leafId),
+      // TDSF debug (2026-08-08): 暴露 terminalRefs 注册状态, 诊断 SSH
+      // 选中捕获链路 (captureActiveSelection 依赖 terminalRefs.has(sshLid))
+      terminalHasLeaf: (leafId: number) => terminalRefs.current.has(leafId),
+      terminalRefsSize: () => terminalRefs.current.size,
       // TDSF 修复 2026-07-30 (Bug 3): 暴露 getLive / getEnvBlock
       // 供 CDP 验证 Python agent 终端上下文感知 (<env> 块注入) 是否生效
       // 之前只挂了 rendererPool, CDP 没法验证 <env> 块是否注入到 messagesForRun
