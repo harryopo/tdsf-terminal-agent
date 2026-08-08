@@ -10,11 +10,6 @@ import { cn } from "@/lib/utils";
 import type { GitStatusSnapshot } from "@/modules/ai/lib/native";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
-import {
-  selectActiveSession,
-  type SshSessionInfo,
-  useSshStore,
-} from "@/modules/ssh-explorer/sshStore";
 import type { TerminalPathDropTarget } from "@/modules/terminal";
 import {
   FileAddIcon,
@@ -47,9 +42,8 @@ import { fileIconUrl, folderIconUrl } from "./lib/iconResolver";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
-import { useFileTree } from "./lib/useFileTree";
+import { type FileTreeSource, useFileTree } from "./lib/useFileTree";
 import { useGitStatus } from "./lib/useGitStatus";
-import { useRemoteFileTree } from "./lib/useRemoteFileTree";
 import { EntryRow, PendingRow, type RowActions, StatusRow } from "./TreeRow";
 
 export type FileExplorerHandle = {
@@ -68,10 +62,8 @@ type Props = {
   onAttachToAgent?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
   gitStatus?: GitStatusSnapshot | null;
-  /** TDSF 魔改 2026-07-29: 文件数据源, ssh 时复用 FileExplorer 显示远程文件 */
-  source?: "local" | "ssh";
-  /** TDSF 修复 2026-07-31: 指定 SSH 会话, 优先于全局 active session */
-  sshSession?: SshSessionInfo | null;
+  /** WorkspaceFs P2-3: 文件数据源 (统一 useFileTree + 后端切换, 替代双轨) */
+  fsSource?: FileTreeSource;
 };
 
 type Row =
@@ -210,24 +202,17 @@ export const FileExplorer = memo(
       onAttachToAgent,
       pathDropTarget,
       gitStatus,
-      source = "local",
-      sshSession,
+      fsSource,
     },
     ref,
   ) {
-    const activeSshSession = useSshStore(selectActiveSession);
-    const resolvedSshSession = sshSession ?? activeSshSession;
-    const isRemote = source === "ssh" && resolvedSshSession !== null;
-    const localTree = useFileTree(isRemote ? null : rootPath, {
+    // WorkspaceFs P2-3: 单一数据源 —— 一套树 + 后端原子切换, 无双轨中间态
+    const isRemote = fsSource?.kind === "sftp";
+    const tree = useFileTree(rootPath, {
       onPathRenamed,
       onPathDeleted,
+      source: fsSource,
     });
-    const remoteTree = useRemoteFileTree(
-      isRemote ? resolvedSshSession : null,
-      isRemote ? rootPath : null,
-      { onPathRenamed, onPathDeleted },
-    );
-    const tree = isRemote ? remoteTree : localTree;
     const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
     const { lookup: lookupGitStatus } = useGitStatus(
       isRemote ? null : rootPath,
