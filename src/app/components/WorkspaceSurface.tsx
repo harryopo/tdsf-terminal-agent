@@ -157,8 +157,12 @@ export function WorkspaceSurface({
       <div
         className={cn(
           "absolute inset-0 px-3 pt-2 pb-2",
+          // TDSF 修复 2026-08-08: 隐藏必须叠加 opacity-0 —— TerminalPane
+          // 按内部 active 状态设 inline visibility:visible, 覆盖外层 invisible
+          // 类, 导致 SSH 终端接管时本地终端内容仍显示 (盖在 SSH 之上,
+          // 用户看到"本地桌面终端")。opacity 无继承覆盖问题, 强制整树透明。
           (!isTerminalTab || showEmptyState || showSshTerminal) &&
-            "invisible pointer-events-none",
+            "invisible opacity-0 pointer-events-none",
         )}
         aria-hidden={!isTerminalTab}
       >
