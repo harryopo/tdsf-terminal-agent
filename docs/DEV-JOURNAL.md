@@ -626,3 +626,25 @@
 - ✅ 调研报告直指"单一根因 + 运行时验证点"——先查链路再动手，避免了盲改
 - ✅ CDP 实测（ref=null）把"可能原因"收敛为"确定根因"
 - 📌 render 期副作用是 React 19 下的隐患模式（SshTerminalHost 原实现）——副作用一律 useEffect
+
+---
+
+## 2026-08-08 · SSH 选中翻译第二层调查（terminalRefs/slot 绑定）
+
+**承接**：0475d4d 修复 leafId 上报（useEffect 生命周期）后，用户实测选中仍不弹浮层。
+
+**调查链（CDP 运行时证据）**：
+1. leafId 修复生效：HMR 后 `terminalHasLeaf(5)=true`（terminalRefs 注册 ✓）
+2. 模拟拖选（用户操作路径）：xterm 有 selection（"@server ~]# ls"）但浮层不出现——**captureActiveSelection 返回空**
+3. 定位：`captureActiveSelection` SSH 分支 = terminalRefs.get(sshLid).getSelection() → session.getSelection() → **getSlotForLeaf(5)=null**（SSH 的 leafId 5 没有 rendererPool slot！pool 只有本地 leafId=4）
+4. **黑屏事件**：用户终端黑屏——检查发现**双 connected 会话**（rust=2 旧 + rust=3 新）+ `sshActiveLeafId=5` 但实际渲染 leafId=7——**ref 与渲染不同步**
+
+**当前结论**：
+- terminalRefs 注册问题已修复（useEffect）
+- **剩余：SSH session 的 slot 绑定不稳定**——bindLeafToSlot 条件 `if (!s.container) return`（useTerminalSession.ts:770），attachSession 在 TerminalPane 挂载时一次性调用（:908）——SSH 的 openTransport 异步（handle 就绪后 session 才创建）→ 时序上可能错过 attachSession → container 恒 null → 永不绑定 slot → getSelection 空 + 潜在黑屏
+
+**待验证**：用户重连 SSH（干净状态）——正常则收尾；失败则深挖 attachSession 时序。
+
+**复盘**：
+- ✅ CDP 诊断脚本（terminalHasLeaf/terminalRefsSize 只读暴露）是定位利器——三行暴露把"可能原因"收敛为"确定断点"
+- 📌 黑屏 = 多重连接/重挂的边角状态（开发期 HMR 干扰大），发布版无 HMR 但多会话场景仍需关注
