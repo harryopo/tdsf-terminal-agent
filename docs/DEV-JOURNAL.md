@@ -572,3 +572,21 @@
 - ✅ 用户描述的"闪"是模式重置的视觉表现——effect 依赖设计缺陷（初始化副作用混入响应式依赖）
 - ✅ 读代码定位比 CDP 复现更快：effect 依赖列表 + setState 在 open 期间执行 = 高危模式
 - 📌 教训：初始化副作用（setMode/setName/加载）必须与响应式重置分离，用 ref 门控一次性执行
+
+---
+
+## 2026-08-08 · WorkspaceFs 重构（P2-1~P2-4）— 用户导向的架构级修复
+
+**任务**：SSH 资源管理器闪跳/空白（用户实测：远程树闪一下→回跳本地→空白）。用户指定参考 yazi 文件管理器（Engine trait 抽象），先调研（GitHub API 实证 yazi 架构）后写方案书（WORKSPACE-FS-REFACTOR-PLAN.md）再动手。
+
+**关键决策**：
+- 借鉴 yazi 的 **Engine trait**（完整文件操作语义 + capabilities 能力声明 + 实现分层），但落地为 Rust FsBackend trait + 前端统一 store，不照搬
+- **树状态保留在 useFileTree**（UI 本地状态机 449 行，重写风险高），加 source 参数统一后端——**一套树 + 后端原子切换**，消除双轨 prop 切换的中间态（这是闪跳根因）
+- 发现 Rust WorkspaceEnv 无 Ssh 变体（SSH 是前端概念）——resolve_root 按后端自持路径处理
+
+**成果**：4 commits（672d9cc/27f2988/2e0844a/eff1755），Rust trait+双后端+统一命令 + 前端单 store + 降级 UI。门禁：前端 900 测试（+4 store）、cargo fs_backend 测试 3。
+
+**复盘**：
+- ✅ 用户两次纠偏价值巨大：①"不要自动操作界面"（R9 用户体验视角）②"参考 yazi 自成体系"（架构级方向）——重构从"打补丁"变成"正本清源"
+- ✅ 渐进迁移（Rust 打地基→后端→前端替换）控制住了 449 行树逻辑的重写风险
+- 📌 cargo test 全量被运行中应用锁住——大阶段验证需在应用重启窗口做

@@ -3424,3 +3424,17 @@ CDP 全新状态实测通过。commit 见上。
 **验证**：typecheck/lint/test 896 全过；CDP 实测重启显示"暂无工作区 + 新建本地工作区/连接 SSH 服务器"欢迎界面。
 
 **行为变更说明**：应用每次启动从空白开始，用户显式新建本地或 SSH 工作区。历史 Space 数据不再自动恢复（持久化写入保留，仅启动不读取恢复）。
+
+### 37.33 WorkspaceFs 重构 P2-1~P2-4 完成（2026-08-08）
+
+**背景**：SSH 资源管理器闪跳/空白根因（双轨 prop 切换时序竞态）——用户指定参考 yazi（Engine trait），方案书 docs/reports/WORKSPACE-FS-REFACTOR-PLAN.md。
+
+**P2-1（672d9cc）**：`fs_backend` 模块——FsBackend trait（kind/capabilities/resolve_root + async list/read/write/rename/delete/mkdir/stat）+ FsCapabilities 能力声明 + FsErrorCode 统一错误码 + LocalFs（tokio::fs，路径强制绝对）。3 单元测试。
+
+**P2-2（27f2988）**：SftpFs——封装 russh SftpSession，路径强制 / 开头，错误映射（NotFound/NotConnected/Denied），能力声明（无 trash/symlink）。接线点 SshState::get_or_create_sftp。
+
+**P2-3（2e0844a）**：前端单一数据源——`fsb_*` Tauri 命令（sessionId 路由 Local/Sftp）+ workspaceFsStore（Space 切换原子替换）+ useFileTree 加 source 参数（sftp 走 fsb_*，local 保持原行为）+ FileExplorer 删双轨。4 store 测试。前端 900 测试全过。
+
+**P2-4（eff1755）**：会话断开降级 UI——App 断开回调写 fatalError → FileExplorer 顶部红色横幅（非静默回退）。
+
+**待验证（用户视角 R9）**：创建 SSH Space → 资源管理器无闪跳直接远程树；断开会话 → 降级横幅。
