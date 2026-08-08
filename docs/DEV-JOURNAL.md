@@ -607,3 +607,22 @@
 - ✅ **路径语义保护（实现层拒绝跨源路径）直接暴露了泄漏源**——"边界拒绝"设计不仅防 bug 还辅助定位
 - ✅ 双根因（双轨竞态 + OSC 7 泄漏）都收敛于 WorkspaceFs 架构——用户"自成体系"判断正确
 - 📌 验证脚本的"连续采样"模式（10×2s）能捕获闪跳类时序 bug——一次性断言会漏
+
+---
+
+## 2026-08-08 · SSH 终端选中翻译/Ask 无反应（调研驱动修复）
+
+**现象**：SSH 终端选中内容不弹翻译卡片、不显示 Ask 按钮；本地终端正常。
+
+**调研**（Explore agent 全链路）：选中捕获唯一入口 = document mouseup → closest(".xterm") → captureActiveSelection（App.tsx:1029-1046）——SSH 场景先查 `sshActiveLeafIdRef`（且 terminalRefs 含该 leafId）→ getSelection()。SSH 与本地共用 TerminalPane/rendererPool，差异只在 leafId 上报链。
+
+**根因（CDP 实测 sshActiveLeafIdRef=null）**：
+1. SshTerminalHost 在 **render 期**执行 onLeafId（React 19 并发渲染下副作用不可靠）
+2. App "showSshTerminalInWorkspace 闪 false 即清 ref"——SSH 终端仍挂载时判定短暂闪烁误清 → ref 永久 null → captureActiveSelection 回退本地保活终端（选区恒空）
+
+**修复（0475d4d）**：onLeafId 移入 useEffect（挂载设/卸载传 null），删除 App 闪动清除——生命周期与组件严格一致。
+
+**复盘**：
+- ✅ 调研报告直指"单一根因 + 运行时验证点"——先查链路再动手，避免了盲改
+- ✅ CDP 实测（ref=null）把"可能原因"收敛为"确定根因"
+- 📌 render 期副作用是 React 19 下的隐患模式（SshTerminalHost 原实现）——副作用一律 useEffect
