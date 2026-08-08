@@ -479,11 +479,10 @@ export default function App() {
     : null;
   // 2026-07-31 翻译模块修复: SSH 终端不显示时清除 leafId ref
   // （避免切到本地终端后 captureActiveSelection 仍走 SSH leafId）
-  useEffect(() => {
-    if (!showSshTerminalInWorkspace) {
-      sshActiveLeafIdRef.current = null;
-    }
-  }, [showSshTerminalInWorkspace]);
+  // TDSF 修复 2026-08-08: 移除"判定闪动即清 sshActiveLeafIdRef"——
+  // SshTerminalHost 现在用 useEffect 管理 (挂载设/卸载清), 与组件生命周期
+  // 严格一致。此前的清除会在 SSH 终端仍挂载时因判定短暂 false 误清 ref,
+  // 导致选中捕获回退本地终端 (翻译/Ask 无反应)。
   // TDSF 调试: 输出关键判定值
   if (typeof window !== "undefined") {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {

@@ -50,7 +50,8 @@ type Props = {
    * captureActiveSelection 能感知 SSH 终端的 leafId（SSH 终端不在
    * tab.paneTree 里，tab.activeLeafId 指向本地终端，无法选中 SSH 文本）。
    */
-  onLeafId?: (leafId: number) => void;
+  /** SSH 终端 leafId 上报 (挂载时设值, 卸载时传 null) */
+  onLeafId?: (leafId: number | null) => void;
   /**
    * 2026-07-31 翻译模块修复: 把 SSH 终端的 TerminalPaneHandle 注册进
    * App.terminalRefs（key=leafId）。此前 SshTerminalHost 未给 TerminalPane
@@ -71,10 +72,18 @@ export function SshTerminalHost({
   const leafIdRef = useRef<number | null>(null);
   if (leafIdRef.current === null) {
     leafIdRef.current = allocId();
-    // 上报给 App 层（用于翻译/AI 选中捕获）
-    onLeafId?.(leafIdRef.current);
   }
   const leafId = leafIdRef.current;
+
+  // TDSF 修复 2026-08-08: onLeafId 上报移入 useEffect——
+  // 原实现是 render 期副作用, React 19 并发渲染下可能被丢弃/重跑,
+  // 且 App 层"判定闪动即清 ref"会在 SSH 终端仍挂载时误清
+  // (sshActiveLeafIdRef=null → 选中捕获回退本地终端 → 翻译/Ask 无反应)。
+  // 现在: 挂载时设置、卸载时清空, 生命周期与组件严格一致。
+  useEffect(() => {
+    onLeafId?.(leafId);
+    return () => onLeafId?.(null);
+  }, [leafId, onLeafId]);
 
   // 2026-07-31 翻译模块修复: 把 TerminalPane handle 以稳定 leafId 注册进
   // App.terminalRefs。callback ref 在挂载时收到 handle、卸载时收到 null，
