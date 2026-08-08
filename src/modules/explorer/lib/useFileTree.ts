@@ -79,13 +79,53 @@ function sameDirListing(a: DirEntry[], b: DirEntry[]): boolean {
 type Options = {
   onPathRenamed?: (from: string, to: string) => void;
   onPathDeleted?: (path: string) => void;
+  /**
+   * WorkspaceFs P2-3: 数据源 (后端统一入口 fsb_*)。
+   * 缺省 = local (保持旧行为: fs_read_dir + watch + git 装饰)。
+   * sftp = fsb_* 命令 + sessionId, 无 watch/git。
+   */
+  source?: FileTreeSource;
 };
 
+export type FileTreeSource =
+  | { kind: "local" }
+  | { kind: "sftp"; sessionId: number; root: string };
+
+/** sftp 分支的 fsb_* 公共参数 */
+function sftpArgs(source: FileTreeSource | undefined) {
+  return source?.kind === "sftp"
+    ? { sessionId: source.sessionId, root: source.root }
+    : null;
+}
+
+/** fsb_list 的 FsEntry → 树 DirEntry 映射 (sftp 无 gitignored) */
+function toDirEntries(entries: Array<{
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  mtime: number;
+}>): DirEntry[] {
+  return entries.map((e) => ({
+    name: e.name,
+    kind: e.is_dir ? ("dir" as const) : ("file" as const),
+    size: e.size,
+    mtime: e.mtime,
+    gitignored: false,
+  }));
+}
+
 export function useFileTree(rootPath: string | null, options?: Options) {
+  const source = options?.source;
+  const sourceRef = useRef(source);
   const showHidden = usePreferencesStore((s) => s.showHidden);
   const showHiddenRef = useRef(showHidden);
   const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
   const gitDecorationsRef = useRef(gitDecorations);
+
+  useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
   const [nodes, setNodes] = useState<TreeState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
@@ -129,12 +169,26 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       setNodes((s) => ({ ...s, [path]: { status: "loading" } }));
     }
     try {
-      const entries = await invoke<DirEntry[]>("fs_read_dir", {
-        path,
-        showHidden: showHiddenRef.current,
-        gitDecorations: gitDecorationsRef.current,
-        workspace: currentWorkspaceEnv(),
-      });
+      const sftp = sftpArgs(sourceRef.current);
+      let entries: DirEntry[];
+      if (sftp) {
+        // WorkspaceFs P2-3: sftp 走统一 fsb_list (无 watch/git 装饰)
+        const raw = await invoke<Array<{
+          name: string;
+          path: string;
+          is_dir: boolean;
+          size: number;
+          mtime: number;
+        }>>("fsb_list", { ...sftp, path });
+        entries = toDirEntries(raw);
+      } else {
+        entries = await invoke<DirEntry[]>("fs_read_dir", {
+          path,
+          showHidden: showHiddenRef.current,
+          gitDecorations: gitDecorationsRef.current,
+          workspace: currentWorkspaceEnv(),
+        });
+      }
 
       const prev = nodesRef.current[path];
       if (prev?.status === "loaded" && sameDirListing(prev.entries, entries)) {
@@ -338,13 +392,22 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         return;
       }
       const path = joinPath(pendingCreate.parentPath, trimmed);
-      const cmd =
-        pendingCreate.kind === "dir" ? "fs_create_dir" : "fs_create_file";
+      const sftp = sftpArgs(sourceRef.current);
       try {
-        await invoke(cmd, { path, workspace: currentWorkspaceEnv() });
+        if (sftp) {
+          if (pendingCreate.kind === "dir") {
+            await invoke("fsb_mkdir", { ...sftp, path });
+          } else {
+            await invoke("fsb_write", { ...sftp, path, data: [] });
+          }
+        } else {
+          const cmd =
+            pendingCreate.kind === "dir" ? "fs_create_dir" : "fs_create_file";
+          await invoke(cmd, { path, workspace: currentWorkspaceEnv() });
+        }
         await fetchChildren(pendingCreate.parentPath);
       } catch (e) {
-        console.error(`${cmd} failed:`, e);
+        console.error("create failed:", e);
       } finally {
         setPendingCreate(null);
       }
@@ -371,15 +434,20 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       }
       const to = joinPath(parent, trimmed);
       try {
-        await invoke("fs_rename", {
-          from: renaming,
-          to,
-          workspace: currentWorkspaceEnv(),
-        });
+        const sftp = sftpArgs(sourceRef.current);
+        if (sftp) {
+          await invoke("fsb_rename", { ...sftp, from: renaming, to });
+        } else {
+          await invoke("fs_rename", {
+            from: renaming,
+            to,
+            workspace: currentWorkspaceEnv(),
+          });
+        }
         options?.onPathRenamed?.(renaming, to);
         await fetchChildren(parent);
       } catch (e) {
-        console.error("fs_rename failed:", e);
+        console.error("rename failed:", e);
       } finally {
         setRenaming(null);
       }
@@ -390,11 +458,16 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   const deletePath = useCallback(
     async (path: string) => {
       try {
-        await invoke("fs_delete", { path, workspace: currentWorkspaceEnv() });
+        const sftp = sftpArgs(sourceRef.current);
+        if (sftp) {
+          await invoke("fsb_delete", { ...sftp, path });
+        } else {
+          await invoke("fs_delete", { path, workspace: currentWorkspaceEnv() });
+        }
         options?.onPathDeleted?.(path);
         await fetchChildren(dirname(path));
       } catch (e) {
-        console.error("fs_delete failed:", e);
+        console.error("delete failed:", e);
       }
     },
     [fetchChildren, options],
@@ -414,15 +487,20 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         return;
       }
       try {
-        await invoke("fs_rename", {
-          from,
-          to,
-          workspace: currentWorkspaceEnv(),
-        });
+        const sftp = sftpArgs(sourceRef.current);
+        if (sftp) {
+          await invoke("fsb_rename", { ...sftp, from, to });
+        } else {
+          await invoke("fs_rename", {
+            from,
+            to,
+            workspace: currentWorkspaceEnv(),
+          });
+        }
         options?.onPathRenamed?.(from, to);
         await Promise.all([fetchChildren(dirname(from)), fetchChildren(toDir)]);
       } catch (e) {
-        console.error("fs_rename (move) failed:", e);
+        console.error("move failed:", e);
       }
     },
     [fetchChildren, options],
