@@ -490,10 +490,10 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
             </div>
           )}
 
-          {/* TDSF 魔改: 测试连接结果提示 */}
+          {/* TDSF 魔改: 测试连接结果提示 (成功不显示 message 防长文本溢出) */}
           {testResult === "ok" && (
             <div className="max-h-28 overflow-y-auto break-words whitespace-normal rounded-md bg-primary/10 px-3 py-2 text-xs text-foreground">
-              ✓ {testMessage}
+              ✓ 连接成功
             </div>
           )}
           {testResult === "fail" && (
