@@ -10,11 +10,13 @@
 // 消除 FileExplorer source prop 切换两套树的时序竞态 (SSH 闪跳/空白根因)。
 
 mod local;
+pub mod sftp;
 
 use serde::Serialize;
 use std::fmt;
 
 pub use local::LocalFs;
+pub use sftp::SftpFs;
 
 /// 后端类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
