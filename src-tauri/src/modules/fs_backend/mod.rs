@@ -10,6 +10,7 @@
 // 消除 FileExplorer source prop 切换两套树的时序竞态 (SSH 闪跳/空白根因)。
 
 mod local;
+pub mod commands;
 pub mod sftp;
 
 use serde::Serialize;

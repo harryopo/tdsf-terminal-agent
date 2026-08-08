@@ -42,8 +42,9 @@ use tokio::time::timeout;
 // 常量
 // ============================================================================
 
-/// ready 通知等待超时（10s）
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// ready 通知等待超时（python 脚本模式; jieba 词典重建 + 语料索引冷启动
+/// 实测 15-25s, 10s 会误杀; 打包 exe 模式在 new() 中显式 60s）
+const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 心跳间隔（每 5s 发送 ping）
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -232,8 +233,8 @@ pub struct SidecarManager {
     /// Python 脚本路径（python-sidecar/main.py 或打包 sidecar exe）
     script_path: Arc<Mutex<PathBuf>>,
 
-    /// ready 等待超时（打包 exe 冷启动 744MB 依赖实测 15-30s, 需放宽到 60s;
-    /// python 脚本模式保持 READY_TIMEOUT=10s）
+    /// ready 等待超时（打包 exe 冷启动 744MB 依赖实测 15-30s, 放宽到 60s;
+    /// python 脚本模式 READY_TIMEOUT=30s: jieba 词典重建 + 语料索引冷启动 15-25s）
     ready_timeout: Arc<Mutex<Duration>>,
 
     /// 重启信号发送端（exit_watcher_task 发送 → restart_loop 接收）
