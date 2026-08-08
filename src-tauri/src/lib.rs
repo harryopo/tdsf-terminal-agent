@@ -626,12 +626,22 @@ mod launch_target_tests {
 /// 定位 Python Sidecar 运行目标
 ///
 /// 查找顺序:
-/// 1. 发布模式: <resource_dir>/sidecar/tdsf-sidecar.exe（PyInstaller onefile 打包产物,
-///    由 tauri.conf.json bundle.resources 分发, 安装后位于程序资源目录）
-/// 2. 开发模式: <workspace_root>/sidecar/main.py
-///    - workspace_root 通过 CARGO_MANIFEST_DIR 推导 (即 src-tauri/ 父目录)
-/// 3. 兜底: 同样返回 dev 路径（启动时若文件不存在会报错并写日志）
+/// 1. 发布模式: <resource_dir>/sidecar/tdsf-sidecar/tdsf-sidecar.exe（PyInstaller
+///    onefile 打包产物, 由 tauri.conf.json bundle.resources 分发, 安装后位于程序
+///    资源目录; 便携/手动部署布局则位于 exe 同目录）
+/// 2. 开发模式: <workspace_root>/sidecar/main.py（**永远走 python 脚本**——
+///    tauri dev 构建会把 bundle.resources 复制到 target/debug, 若不跳过探测,
+///    dev 会误用打包 exe: 冷启动慢 + 数据目录变 %APPDATA% 读不到项目根
+///    .tdsf-data/llm_config.json 等配置）
 fn locate_sidecar_script(app: &tauri::App) -> PathBuf {
+    #[cfg(dev)]
+    {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let dev_script = manifest_dir.join("sidecar").join("main.py");
+        log::info!("[setup] dev mode: using python script {:?}", dev_script);
+        return dev_script;
+    }
+
     // 发布模式: 打包 sidecar exe 的两个候选位置
     //   - <resource_dir>/sidecar/tdsf-sidecar/tdsf-sidecar.exe (安装后, bundle 信息 patch
     //     使 resource_dir = <install>/resources)
