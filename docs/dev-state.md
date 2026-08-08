@@ -3438,3 +3438,15 @@ CDP 全新状态实测通过。commit 见上。
 **P2-4（eff1755）**：会话断开降级 UI——App 断开回调写 fatalError → FileExplorer 顶部红色横幅（非静默回退）。
 
 **待验证（用户视角 R9）**：创建 SSH Space → 资源管理器无闪跳直接远程树；断开会话 → 降级横幅。
+
+### 37.34 SSH 选中翻译深层调查 + 黑屏事件（2026-08-08 进行中）
+
+**修复**（0475d4d）：leafId 上报改 useEffect 生命周期（render 期副作用 + App 闪动误清 → 挂载设/卸载清）。CDP 验证 terminalRefs 注册 ✓。
+
+**未解问题（进行中）**：
+1. **SSH session 无 rendererPool slot**：getSlotForLeaf(sshLid)=null → captureActiveSelection 取 selection 空 → 浮层不弹。嫌疑：attachSession（useTerminalSession.ts:908，TerminalPane 挂载时一次性）与 SSH 异步 openTransport（session 晚创建）时序 → container 恒 null → bindLeafToSlot 跳过（:770）
+2. **黑屏事件**：双 connected 会话（旧/新）+ sshActiveLeafId 与渲染 leafId 不同步 → 终端失联黑屏（重启恢复）
+
+**待验证**：用户重连 SSH（干净状态）——正常则收尾；失败则深挖 attachSession 时序（session 创建后补 attach/bind）。
+
+**门禁**：typecheck/test 900 全过（0475d4d 后）。
