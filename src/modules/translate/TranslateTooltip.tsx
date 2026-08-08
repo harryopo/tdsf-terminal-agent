@@ -138,23 +138,13 @@ export function TranslateTooltip({ onAsk }: Props) {
                   {entry.zh}
                 </div>
 
-                {/* 示例（左边框徽章） */}
+                {/* 示例（左边框徽章）— 核心命令解释 + 作用/效果, 精简展示 */}
                 {entry.example && (
                   <div className="mt-1 border-l-2 border-sky-500/60 bg-sky-500/5 py-0.5 pl-2 text-[11px] leading-relaxed text-muted-foreground">
                     <span className="mr-1 rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/70">
                       示例
                     </span>
                     {entry.example}
-                  </div>
-                )}
-
-                {/* 详细说明 */}
-                {entry.detail && (
-                  <div className="mt-1 border-l-2 border-border/60 bg-muted/20 py-0.5 pl-2 text-[11px] leading-relaxed text-muted-foreground">
-                    <span className="mr-1 rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/70">
-                      详细
-                    </span>
-                    {entry.detail}
                   </div>
                 )}
               </div>
