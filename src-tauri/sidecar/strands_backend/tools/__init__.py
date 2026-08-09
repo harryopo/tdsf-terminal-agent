@@ -168,6 +168,8 @@ class ToolContext:
     ssh_session_id: str = ""
     # P1-v5-4: 4 级权限（1=免确认 2=仅高危 3=高危+写操作 4=全部确认）
     permission_level: int = 2
+    # TDSF 魔改 (2026-08-09): 终端执行模式——True 时 ssh_command 自动设 visible=True
+    auto_execute_in_terminal: bool = False
 
 
 # ============================================================================

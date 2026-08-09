@@ -120,6 +120,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         // transport.ts formatTerminalContextBlock 会注入 <terminal-context> 块，
         // 让 agent 每轮自动看到用户最近的终端输出，无需额外工具调用。
         terminalOutput: live.getTerminalContext(),
+        // TDSF 魔改 (2026-08-09): 终端执行模式开关传给 Python sidecar
+        autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
       };
     },
     getPlanMode: () => usePlanStore.getState().active,
