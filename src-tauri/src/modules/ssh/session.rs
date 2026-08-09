@@ -259,6 +259,30 @@ impl SshSession {
         // 这里假设 SshClient::connect 已经设置了正确的 host/port/user
         // 通过 on_status 最后一次推送 Connected 事件
 
+        // 1.5 方案 A (2026-08-09): 远端 shell 静默注入 OSC 7 (cwd) 钩子。
+        //    背景: 此前前端 SshTerminalHost 用"行缓冲 + cd 命令改写"在本地伪造
+        //    `cd; printf OSC7`——行缓冲残留 + 元字符黑名单缺 `*`/`?`, 导致用户
+        //    `yum install httpd* -y` 被误判为 cd 命令而被整体丢弃改写, 终端"弹出
+        //    别的字眼"(用户报告 #18)。现改为行业标准做法 (VS Code / Tabby / Warp):
+        //    认证后探测远端 shell 类型 → 写最小注入脚本到 /tmp → PTY exec 启动
+        //    注入 shell, 让远端 shell 在命令间隙自动发 OSC 7, 前端输入原样透传。
+        //    任何一步失败都降级为 request_shell (仅失去 cwd 同步, 绝不篡改输入)。
+        let mut launch_cmd: Option<String> = None;
+        match probe_remote_shell(&handle).await {
+            Ok(kind) => match write_shell_integration(&handle, kind).await {
+                Ok(cmd) => {
+                    log::info!("[ssh] shell integration ready: {cmd}");
+                    launch_cmd = Some(cmd);
+                }
+                Err(e) => log::warn!(
+                    "[ssh] shell integration write failed, fallback to request_shell: {e}"
+                ),
+            },
+            Err(e) => {
+                log::warn!("[ssh] shell probe failed, fallback to request_shell: {e}");
+            }
+        }
+
         // 2. 开 channel
         log::debug!("[ssh] opening session channel");
         let channel = handle.channel_open_session().await?;
@@ -293,10 +317,18 @@ impl SshSession {
             )
             .await?;
 
-        // 5. 请求 shell
-        log::info!("[ssh] requesting interactive shell");
-        // want_reply=true: 同上,捕获 shell 请求的 Success/Failure
-        channel_write.request_shell(true).await?;
+        // 5. 启动 shell: 优先 exec 注入 shell (方案 A), 失败降级 request_shell
+        //    want_reply=true: 同上, 捕获 shell/exec 请求的 Success/Failure
+        match &launch_cmd {
+            Some(cmd) => {
+                log::info!("[ssh] exec injected shell: {cmd}");
+                channel_write.exec(true, cmd.as_str()).await?;
+            }
+            None => {
+                log::info!("[ssh] requesting interactive shell");
+                channel_write.request_shell(true).await?;
+            }
+        }
 
         // 6. 启动 reader task
         //    reader task 在后台运行,通过 on_data 推送输出
@@ -778,6 +810,190 @@ impl SshSession {
 
         Ok((stdout, stderr, exit_code))
     }
+}
+
+// ==== 远端 shell 注入 (方案 A, 2026-08-09) ======================================
+// 在 open_pty 里探测远端默认登录 shell, 写入最小 OSC 7 注入脚本, 再用
+// PTY exec 启动注入 shell, 让远端 shell 在命令间隙自动上报 cwd。
+//
+// 设计约束 (综合优化, 不破坏既有功能):
+//   - 只发 OSC 7 (cwd), 不发 OSC 133 / 不碰 PS1: SSH 终端 blocks=false,
+//     前端无 OSC 133 消费方, 且不触碰用户 prompt 样式
+//   - 注入脚本先 source 用户原 rc (bashrc/zshrc/zshenv), 保留用户配置
+//   - 脚本写入用带引号 heredoc (`<<'TDSF_OSC7'`), 内容原样落盘, 无转义风险
+//   - 任何失败显式 log 并降级 request_shell (仅失去 cwd 同步, 绝不篡改输入)
+
+/// 远端 shell 类型 (探测结果)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteShellKind {
+    Bash,
+    Zsh,
+    Fish,
+    Other,
+}
+
+impl RemoteShellKind {
+    fn from_path(path: &str) -> Self {
+        match path.trim().rsplit('/').next().unwrap_or("") {
+            "bash" => Self::Bash,
+            "zsh" => Self::Zsh,
+            "fish" => Self::Fish,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// 远端 bash 注入脚本: 恢复用户 .bashrc + PROMPT_COMMAND 钩子 (仅 OSC 7)
+const BASH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH cwd integration (bash)
+if [ -z "${__TDSF_OSC7_LOADED:-}" ]; then
+  __TDSF_OSC7_LOADED=1
+  [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
+  _tdsf_osc7_precmd() {
+    printf '\033]7;file://localhost%s\007' "$(pwd -P)"
+  }
+  case ":${PROMPT_COMMAND:-}:" in
+    *":_tdsf_osc7_precmd:"*) ;;
+    *) PROMPT_COMMAND="_tdsf_osc7_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+  esac
+fi
+"#;
+
+/// 远端 zsh 注入脚本 (.zshenv): 保留用户原 .zshenv
+const ZSH_ZSENV_SCRIPT: &str = r#"# TDSF SSH cwd integration (zsh) - zshenv
+[[ -f "$HOME/.zshenv" ]] && source "$HOME/.zshenv"
+"#;
+
+/// 远端 zsh 注入脚本 (.zshrc): 恢复用户 .zshrc + precmd 钩子 (仅 OSC 7)
+const ZSH_ZSHRC_SCRIPT: &str = r#"# TDSF SSH cwd integration (zsh) - zshrc
+if [[ -z "${__TDSF_OSC7_LOADED:-}" ]]; then
+  __TDSF_OSC7_LOADED=1
+  [[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
+  _tdsf_osc7_precmd() {
+    printf '\033]7;file://localhost%s\007' "$(pwd -P)"
+  }
+  autoload -Uz add-zsh-hook 2>/dev/null
+  (( $+functions[add-zsh-hook] )) && add-zsh-hook precmd _tdsf_osc7_precmd
+fi
+"#;
+
+/// 远端 fish 注入脚本: 包装 fish_prompt 发 OSC 7 (fish 自动读 config.fish, -C 最后执行)
+const FISH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH cwd integration (fish)
+if not set -q __TDSF_OSC7_LOADED
+  set -g __TDSF_OSC7_LOADED 1
+  function __tdsf_urlencode_path
+    set -l parts (string split '/' -- $argv[1])
+    set -l out
+    for p in $parts
+      if test -n "$p"
+        set out $out (string escape --style=url -- $p)
+      else
+        set out $out ""
+      end
+    end
+    string join '/' $out
+  end
+  function __tdsf_restore_status
+    return $argv[1]
+  end
+  if not functions -q __tdsf_user_prompt
+    functions -c fish_prompt __tdsf_user_prompt 2>/dev/null
+  end
+  function fish_prompt
+    set -l __tdsf_status $status
+    printf '\033]7;file://localhost%s\007' (__tdsf_urlencode_path "$PWD")
+    __tdsf_restore_status $__tdsf_status
+    if functions -q __tdsf_user_prompt
+      __tdsf_user_prompt
+    end
+  end
+end
+"#;
+
+/// 执行一条单次命令并返回 stdout 文本 (探测/写脚本用, 非 PTY, 10s 超时)
+async fn exec_simple(
+    handle: &Handle<SshClientHandler>,
+    cmd: &str,
+) -> Result<String, SshSessionError> {
+    let mut channel = handle.channel_open_session().await?;
+    channel.exec(true, cmd).await?;
+
+    let mut out: Vec<u8> = Vec::new();
+    let collect = async {
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => out.extend_from_slice(&data),
+                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+                _ => {} // ExitStatus/Success/Failure/ExtendedData 忽略
+            }
+        }
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), collect)
+        .await
+        .map_err(|_| SshSessionError::Other(format!("exec timeout: {cmd}")))?;
+
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// 探测远端默认登录 shell
+async fn probe_remote_shell(
+    handle: &Handle<SshClientHandler>,
+) -> Result<RemoteShellKind, SshSessionError> {
+    // exec 模式的命令由用户默认 shell 的 -c 执行。优先 $SHELL 环境变量,
+    // 兜底 getent passwd (id -u) 第 7 字段 (getent 缺失时输出为空)。
+    let probe = "echo \"${SHELL:-$(getent passwd $(id -u) 2>/dev/null | cut -d: -f7)}\"";
+    let path = exec_simple(handle, probe).await?;
+    let kind = RemoteShellKind::from_path(&path);
+    log::info!("[ssh] remote shell probe: path={path:?} kind={kind:?}");
+    Ok(kind)
+}
+
+/// 按 shell 类型写入注入脚本, 返回 PTY 启动命令
+async fn write_shell_integration(
+    handle: &Handle<SshClientHandler>,
+    kind: RemoteShellKind,
+) -> Result<String, SshSessionError> {
+    // uuid simple (32 hex 无连字符), 避免并发连接共享同名临时文件
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let tmp = format!("/tmp/tdsf-osc7-{id}");
+
+    let (write_cmd, launch_cmd) = match kind {
+        RemoteShellKind::Bash => {
+            let script = format!(
+                "cat > {tmp}.bash <<'TDSF_OSC7'\n{BASH_INTEGRATION_SCRIPT}TDSF_OSC7"
+            );
+            let launch = format!("exec bash --rcfile {tmp}.bash -i");
+            (script, launch)
+        }
+        RemoteShellKind::Zsh => {
+            // zdotdir 方式: ZDOTDIR 替换整个 dotfile 目录, 需要 .zshenv + .zshrc
+            let script = format!(
+                "mkdir -p {tmp}.zdotdir\n\
+                 cat > {tmp}.zdotdir/.zshenv <<'TDSF_OSC7'\n{ZSH_ZSENV_SCRIPT}TDSF_OSC7\n\
+                 cat > {tmp}.zdotdir/.zshrc <<'TDSF_OSC7_2'\n{ZSH_ZSHRC_SCRIPT}TDSF_OSC7_2"
+            );
+            let launch = format!("exec env ZDOTDIR={tmp}.zdotdir zsh -i");
+            (script, launch)
+        }
+        RemoteShellKind::Fish => {
+            let script = format!(
+                "cat > {tmp}.fish <<'TDSF_OSC7'\n{FISH_INTEGRATION_SCRIPT}TDSF_OSC7"
+            );
+            let launch = format!("exec fish -C 'source {tmp}.fish' -i");
+            (script, launch)
+        }
+        RemoteShellKind::Other => {
+            // 非 bash/zsh/fish (csh/tcsh/ash 等): 不支持注入, 降级 request_shell
+            log::info!("[ssh] unsupported remote shell kind, skip integration");
+            return Err(SshSessionError::Other(
+                "unsupported remote shell for integration".to_string(),
+            ));
+        }
+    };
+
+    // 写脚本 (非 PTY exec, 失败不影响 PTY 建立——降级 request_shell)
+    exec_simple(handle, &write_cmd).await?;
+    Ok(launch_cmd)
 }
 
 /// SSH exec 命令执行结果（exec 模式，非 PTY）

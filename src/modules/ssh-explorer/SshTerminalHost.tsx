@@ -119,12 +119,12 @@ export function SshTerminalHost({
     [sessionId],
   );
 
-  // TDSF 修复 2026-07-31 (Phase 2): SSH 终端 cd cwd 同步兜底。
-  // 远端 shell 未必配置了 OSC 7 shell integration；我们在本层拦截简单的
-  // `cd <dir>` 命令，追加一个 printf 让远端 shell 主动发出 OSC 7 序列，
-  // xterm 解析后触发 registerCwdHandler → SshTerminalHost.handleCwd →
-  // sshStore.setCurrentPath，左侧远程资源管理器即可跟随刷新。
-  const inputBufferRef = useRef("");
+  // TDSF 修复 2026-08-09: 删除 cd 拦截 hack (Rust 端方案 A 取代)。
+  // 原实现 (2026-07-31) 在本层拦截 `cd <dir>` 追加 printf 伪造 OSC 7,
+  // 有三个致命 bug: 行缓冲残留不清理 → 与新输入拼接 → 误判 cd → 用户整条
+  // 命令被丢弃改写 (如 `yum install httpd* -y` 变成 `cd ...; printf OSC7`)。
+  // 现由 Rust open_pty 探测远端 shell 并静默注入 PROMPT_COMMAND/precmd 钩子,
+  // 远端 shell 在命令间隙自动发 OSC 7, 前端输入原样透传, 不再有任何改写。
 
   // openTransport 工厂：构建 SSH transport 注入 useTerminalSession
   // 仅依赖 sessionId + subscribeTerminalData（都是稳定引用），不重创建
@@ -150,41 +150,8 @@ export function SshTerminalHost({
             return;
           }
 
-          // 追加到行缓冲，用于识别完整的 cd 命令
-          inputBufferRef.current += data;
-          const buf = inputBufferRef.current;
-          const crIndex = buf.search(/[\r\n]/);
-          if (crIndex >= 0) {
-            const line = buf.slice(0, crIndex).trim();
-            inputBufferRef.current = buf.slice(crIndex + 1);
-            const cdMatch = line.match(/^cd(?:\s+(.+))?$/);
-            log?.push({ source: "SshTerminalHost.transport.write", data, line, matched: !!cdMatch });
-            if (cdMatch) {
-              const dir = (cdMatch[1] ?? "~").trim() || "~";
-              // 仅拦截简单的 cd 参数（不含 shell 元字符），防止误改复合命令。
-              if (!/[;&|`$(){}[\]<>!"\\]/.test(dir)) {
-                // TDSF 修复 2026-07-31: 合并为一行写入，确保 cd 与 printf
-                // 在同一 shell 进程中顺序执行；用 pwd -P 获取绝对真实路径，
-                // 避免 $PWD 在某些远端 shell/PTY 下未及时更新导致 cwd 滞后。
-                // ~ / - 是 shell 特殊参数，不包单引号以保留展开语义。
-                const isShellSpecial =
-                  dir === "~" || dir === "-" || dir.startsWith("~");
-                const safeDir = isShellSpecial
-                  ? dir
-                  : `'${dir.replace(/'/g, "'\\''")}'`;
-                const cmd = `cd ${safeDir}; printf '\\033]7;file://localhost%s\\007' "$(pwd -P)"\r`;
-                log?.push({
-                  source: "SshTerminalHost.transport.write.cdRewrite",
-                  cmd,
-                  dir,
-                  safeDir,
-                });
-                return handle.write(cmd);
-              }
-            }
-          } else {
-            log?.push({ source: "SshTerminalHost.transport.write", data, matched: false });
-          }
+          // 2026-08-09: 输入原样透传 (方案 A 后不再做任何行缓冲/命令改写,
+          // 用户敲什么就发什么, 由远端 shell 的注入钩子负责 OSC 7 cwd 上报)
           return handle.write(data);
         },
         resize: (cols: number, rows: number) => {

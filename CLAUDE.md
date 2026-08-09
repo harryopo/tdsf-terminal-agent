@@ -2,7 +2,7 @@
 
 > **位置**：`d:\ai\linux教学一体\tdsf-terminal-agent-clone\CLAUDE.md`
 > **作用**：本文件是任何 AI（或人）接手本项目的**唯一入口规范**。定义项目身份、架构地图、防污染红线、五绿门禁、诊断方法论。
-> **版本**：v2.1（2026-08-07 · 审查经验固化：新增 §3.5 AI 代码质量红线 + CODE-REVIEW-LESSONS.md，基于 2026-07-30 大恢复后 v2.0）
+> **版本**：v2.2（2026-08-09 · 终端改动教训固化：新增 §3 红线 9 —— SSH 终端静默注入方案 A，取代前端 cd 拦截 hack）
 
 ---
 
@@ -97,6 +97,7 @@ src/main.tsx  ← 入口。按上游 terax 重写：
 6. **zustand selector 别返回新引用**（`s => s.arr.filter()` / `s => ({...})`），必要时用 `useShallow`。
 7. **启动/窗口/无边框/权限问题先比对上游 terax**，不自创。
 8. **五绿门禁全过才算完成**，且必须 `pnpm tauri:dev` 桌面端实测（浏览器 dev 不等于 Tauri，很多 bug 只在 Tauri 首屏暴露）。
+9. **终端/SSH 改动 = 牵一发动全身**（2026-08-09 教训固化：SSH 终端 cd 拦截 hack 把用户 `yum install httpd* -y` 改写成了 `cd...; printf OSC7`）：终端链路横跨本地 PTY、SSH PTY、xterm 解析、OSC 7/133、翻译选词、Teach 触发、cwd 同步、SFTP 联动等模块，改任何一处前必须 grep 全部调用点 + 通读相关 effect，**综合优化**而非局部补丁；**禁止**在前端输入路径做行缓冲/命令改写等"聪明"逻辑（远端 shell 行为交给远端注入脚本，见 `session.rs` 方案 A 静默注入 PROMPT_COMMAND/precmd）；改动后必须实测 SSH 终端 + 翻译 + 选词 + 文件树联动全链路。
 
 ---
 
@@ -201,4 +202,4 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 
 ---
 
-> **最后更新**：2026-08-07 · v2.1 · 审查经验固化（新增 §3.5 AI 代码质量红线 + CODE-REVIEW-LESSONS.md）。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-08-09 · v2.2 · 终端改动教训固化（新增 §3 红线 9：SSH 终端静默注入方案 A，禁止前端命令改写）。上游参考：https://github.com/crynta/terax-ai
