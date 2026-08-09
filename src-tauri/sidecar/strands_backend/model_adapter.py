@@ -243,10 +243,13 @@ def _create_openai_model(config: Any) -> Any:
         client_args["base_url"] = config.base_url
 
     # 构建 params（OpenAI Chat Completions 接口参数）
+    # TDSF 魔改 (2026-08-09): max_tokens <= 0 时不传 → 模型自行决定停止（无上限）
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": getattr(config, "max_tokens", 8192),
     }
+    max_tokens = getattr(config, "max_tokens", 8192)
+    if max_tokens > 0:
+        params["max_tokens"] = max_tokens
 
     model = _OpenAIModel(
         client_args=client_args,
@@ -257,7 +260,7 @@ def _create_openai_model(config: Any) -> Any:
     logger.info(
         f"OpenAIModel created: model_id={config.model}, "
         f"base_url={'custom' if config.base_url else 'default'}, "
-        f"temperature={params['temperature']}, max_tokens={params['max_tokens']}"
+        f"temperature={params['temperature']}, max_tokens={params.get('max_tokens', 'unlimited')}"
     )
     return model
 
@@ -295,9 +298,11 @@ def _create_anthropic_model(config: Any) -> Any:
         "api_key": config.api_key,
     }
 
+    # TDSF 魔改 (2026-08-09): Anthropic max_tokens 是必填参数（必须正整数）
+    # max_tokens <= 0（无上限语义）时兜底为 8192
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": getattr(config, "max_tokens", 8192),
+        "max_tokens": max(getattr(config, "max_tokens", 8192), 1) if getattr(config, "max_tokens", 8192) > 0 else 8192,
     }
 
     model = _AnthropicModel(
@@ -354,10 +359,13 @@ def _create_litellm_model(config: Any) -> Any:
     if config.base_url:
         client_args["api_base"] = config.base_url
 
+    # TDSF 魔改 (2026-08-09): max_tokens <= 0 时不传 → 无上限（同 OpenAI 路径）
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": getattr(config, "max_tokens", 8192),
     }
+    max_tokens = getattr(config, "max_tokens", 8192)
+    if max_tokens > 0:
+        params["max_tokens"] = max_tokens
 
     model = _LiteLLMModel(
         client_args=client_args,
@@ -368,7 +376,7 @@ def _create_litellm_model(config: Any) -> Any:
     logger.info(
         f"LiteLLMModel created: model_id={config.model}, "
         f"api_base={'custom' if config.base_url else 'default'}, "
-        f"temperature={params['temperature']}, max_tokens={params['max_tokens']}"
+        f"temperature={params['temperature']}, max_tokens={params.get('max_tokens', 'unlimited')}"
     )
     return model
 
