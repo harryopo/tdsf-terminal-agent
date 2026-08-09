@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { resolveFontFamily } from "./fonts";
 
-// 上游 terax-ai v0.8.5 的 FALLBACK_CHAIN —— 任何修改都要谨慎，
-// 偏离上游的字体回退链会让终端显示与 terax 社区的视觉基准不一致。
-const FALLBACK = '"JetBrains Mono", SFMono-Regular, Menlo, monospace';
+// 上游 terax-ai v0.8.5 的 FALLBACK_CHAIN + TDSF 魔改（2026-08-09）：
+// monospace 前插入无衬线中文字体链（微软雅黑/苹方/思源黑体），
+// 避免 Windows 下 monospace 中文回退到宋体（衬线）。
+const FALLBACK =
+  '"JetBrains Mono", SFMono-Regular, Menlo, "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", monospace';
 
 describe("resolveFontFamily", () => {
   it("quotes a bare family and appends the platform fallback", () => {

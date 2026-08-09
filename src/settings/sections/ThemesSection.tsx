@@ -7,6 +7,7 @@
 
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   EDITOR_THEME_AUTO,
@@ -21,24 +22,14 @@ import {
   setEditorTheme,
   setThemeId,
 } from "@/modules/settings/store";
-import { listBuiltinThemes, type Theme } from "@/modules/theme";
+import { listBuiltinThemes, useTheme } from "@/modules/theme";
 import { useThemeFileEditing } from "@/modules/theme/useThemeFileEditing";
 import { SectionHeader } from "../components/SectionHeader";
 import { SettingRow } from "../components/SettingRow";
 
-const THEME_GROUPS: { label: string; items: Theme[] }[] = (() => {
-  const all = listBuiltinThemes();
-  const light: Theme[] = [];
-  const dark: Theme[] = [];
-  for (const t of all) {
-    if (t.variants?.light) light.push(t);
-    if (t.variants?.dark) dark.push(t);
-  }
-  return [
-    { label: "深色", items: dark },
-    { label: "浅色", items: light },
-  ];
-})();
+// TDSF 魔改 2026-08-09 (用户要求): 主题列表不再按深/浅色分组展示,
+// 合并成一个网格; 明暗切换独立成"显示模式"按钮 (点击直接切换)。
+const THEMES = listBuiltinThemes();
 
 export function ThemesSection() {
   const themeId = usePreferencesStore((s) => s.themeId);
@@ -48,6 +39,9 @@ export function ThemesSection() {
   const backgroundOpacity = usePreferencesStore((s) => s.backgroundOpacity);
   const backgroundBlur = usePreferencesStore((s) => s.backgroundBlur);
 
+  // 明暗模式切换 (点击直接切换, 不区分主题分组)
+  const { resolvedMode, setMode } = useTheme();
+
   const { availableImages, pickCustomImage, clearCustomImage } =
     useThemeFileEditing();
 
@@ -55,50 +49,79 @@ export function ThemesSection() {
     <div className="flex flex-col gap-6">
       <SectionHeader
         title="主题"
-        description="应用主题色板、编辑器配色与背景图。"
+        description="显示模式、应用主题色板、编辑器配色与背景图。"
       />
 
-      {/* === 应用主题 === */}
+      {/* === 显示模式 (深色/浅色一键切换) === */}
+      <div className="flex flex-col gap-2">
+        <Label>显示模式</Label>
+        <SettingRow
+          title="深色 / 浅色"
+          description="点击按钮直接切换整个应用的明暗模式。"
+        >
+          <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-card p-1">
+            <button
+              type="button"
+              onClick={() => setMode("light")}
+              className={cn(
+                "h-7 rounded-md px-4 text-[11.5px] font-medium transition-colors",
+                resolvedMode === "light"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              浅色
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("dark")}
+              className={cn(
+                "h-7 rounded-md px-4 text-[11.5px] font-medium transition-colors",
+                resolvedMode === "dark"
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              深色
+            </button>
+          </div>
+        </SettingRow>
+      </div>
+
+      {/* === 应用主题 (合并成一个网格, 不再分深/浅色两组) === */}
       <div className="flex flex-col gap-2">
         <Label>应用主题</Label>
-        {THEME_GROUPS.map((group) => (
-          <div key={group.label} className="flex flex-col gap-1.5">
-            <span className="text-[10.5px] uppercase tracking-wide text-muted-foreground">
-              {group.label}
-            </span>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-              {group.items.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => void setThemeId(t.id)}
-                  className={
-                    "flex h-16 items-center gap-2 rounded-lg border bg-card px-3 text-left transition-all " +
-                    (themeId === t.id
-                      ? "border-foreground/60 ring-1 ring-foreground/20"
-                      : "border-border/60 hover:border-border")
-                  }
-                >
-                  <div
-                    aria-hidden
-                    className="h-10 w-10 shrink-0 rounded-md border border-border/40"
-                    style={{
-                      background: `linear-gradient(135deg, var(--tdsf-theme-preview-from, #1f2937) 0%, var(--tdsf-theme-preview-to, #0f172a) 100%)`,
-                    }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium">
-                      {t.name}
-                    </div>
-                    <div className="truncate font-mono text-[10px] text-muted-foreground">
-                      {t.id}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => void setThemeId(t.id)}
+              className={
+                "flex h-16 items-center gap-2 rounded-lg border bg-card px-3 text-left transition-all " +
+                (themeId === t.id
+                  ? "border-foreground/60 ring-1 ring-foreground/20"
+                  : "border-border/60 hover:border-border")
+              }
+            >
+              <div
+                aria-hidden
+                className="h-10 w-10 shrink-0 rounded-md border border-border/40"
+                style={{
+                  background: `linear-gradient(135deg, var(--tdsf-theme-preview-from, #1f2937) 0%, var(--tdsf-theme-preview-to, #0f172a) 100%)`,
+                }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px] font-medium">
+                  {t.name}
+                </div>
+                <div className="truncate font-mono text-[10px] text-muted-foreground">
+                  {t.id}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* === 编辑器配色 === */}
