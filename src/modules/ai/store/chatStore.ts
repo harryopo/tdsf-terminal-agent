@@ -152,6 +152,16 @@ type StoreState = {
   setTdsfAgent: (id: TdsfAgentId) => void;
 
   /**
+   * 终端执行模式开关（TDSF 魔改 2026-08-09）
+   *
+   * 打开后，agent 建议的命令自动注入终端并执行（加换行符），
+   * 用户在终端上实时看到命令执行和输出回显。
+   * 关闭时（默认），命令只生成卡片等用户点击 Insert。
+   */
+  autoExecuteInTerminal: boolean;
+  setAutoExecuteInTerminal: (on: boolean) => void;
+
+  /**
    * 当前由 main_agent 路由到的子 Agent 名称（只读状态，由后端推送）
    *
    * 例如：用户说"如何用 systemctl" → main_agent 路由到 teach → 前端显示 'teach'
@@ -284,6 +294,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
   // TDSF Agent: 默认 'main'，统一入口（v2026-07-29 改造）
   tdsfAgentId: DEFAULT_TDSF_AGENT,
   setTdsfAgent: (id) => set({ tdsfAgentId: id }),
+
+  autoExecuteInTerminal: false,
+  setAutoExecuteInTerminal: (on) => set({ autoExecuteInTerminal: on }),
 
   // 当前由 main_agent 路由到的子 Agent 名称（由后端 agent_switch 事件推送）
   currentSubAgent: null,
