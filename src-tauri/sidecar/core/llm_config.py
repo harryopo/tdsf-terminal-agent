@@ -55,7 +55,7 @@ class LLMConfig:
         base_url: str = "",
         model: str = "gpt-4o-mini",
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
     ) -> None:
         self.provider = provider      # "openai" / "anthropic"
         self.api_key = api_key
@@ -132,7 +132,7 @@ def load_config() -> LLMConfig:
                     base_url=data.get("base_url", ""),
                     model=data.get("model", "gpt-4o-mini"),
                     temperature=data.get("temperature", 0.7),
-                    max_tokens=data.get("max_tokens", 2048),
+                    max_tokens=data.get("max_tokens", 8192),
                 )
         except (json.JSONDecodeError, KeyError, OSError) as e:
             logger.warning(f"Failed to load LLM config from {config_path}: {e}")
