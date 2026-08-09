@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-08-08 · 交接记忆：其他 AI 优化 30 commits 复核 + 远程推送
+
+**任务**：用户要求"阅读保存更新记忆，更新开发文档进度，做好规划"（当天让其他 AI 做了优化，需复核接管）。
+
+**复核结果**（git log 715b8cb..d815eec = 30 commits，三大主题）：
+1. **SSH 会话修复**：幽灵 sessionId 根因（4d0e8fd，重启回欢迎界面）/ SpaceCreateDialog 模式闪动（8bf3fa0）/ 握手 15s 显式超时（be58879）/ 本地终端叠层隐藏失效（2114ccb）/ sidecar dev 强制 python 脚本（c8a2f79）/ 测试连接文案溢出（f9f04bf）
+2. **WorkspaceFs 重构 P2-1~P2-4**（672d9cc→eff1755 + 补交 c1a5ed6/5824c6b）：FsBackend trait + LocalFs/SftpFs + fsb_* 命令 + workspaceFsStore 前端单源 + 断开降级 UI；**双根因**（双轨 prop 竞态 + OSC 7 路径泄漏 792b620）收敛；方案书新增 WORKSPACE-FS-REFACTOR-PLAN.md
+3. **SSH 选中翻译修复**：leafId 上报 render 期副作用 → useEffect 生命周期（0475d4d）+ 第二层调查（§37.34 进行中：SSH session 晚创建导致 slot 绑定跳过，captureActiveSelection 取选区空；另黑屏 = 双 connected 会话 ref 不同步）
+
+**动作**：30 commits 已 push（117b59d..d815eec → origin，远程 0 ahead）；dev-state 头部"最后更新"同步到 §37.34（修复文档漂移）；DEV-JOURNAL 本条目按顶部倒序追加（统一格式）。
+
+**复盘**：
+- ✅ **文档漂移再次验证 R8**：其他 AI 更新了 dev-state 内容（§37.31-37.34）但漏同步头部"最后更新"行——接手者第一眼读到的还是 §37.30 过时信息。教训：**内容更新必须连带头部时间戳 + 指引行一起改**
+- ✅ **R9（用户体验视角验证）已沉淀进 CODE-REVIEW-LESSONS.md**：验收 = 用户看到的界面，不为自动化加后门——WorkspaceFs 重构全程用 CDP 用户操作路径采样（10×2s）验证
+- 📌 **DEV-JOURNAL 追加方向约定**：统一顶部倒序（新条目放最前）——本轮其他 AI 的 8 条 append 在尾部，格式不统一已在本条修正，后续照此
+
+---
+
 ## 2026-08-07 · 保存记忆：审查经验固化为开发规范（CODE-REVIEW-LESSONS.md + CLAUDE.md v2.1）
 
 **任务**：用户要求"先保存记忆做好规划，之前花了很长时间审查修复代码，以后开发不要再犯错"——把 2026-08-04~07 四批审查修复（41 项发现，20 项修复）的血泪经验固化为可复用开发规范。
