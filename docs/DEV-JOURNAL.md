@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-08-09 · SSH 终端划词翻译 / Ask 浮层不弹（根因：修剪 effect 误删 SSH leaf handle）
+
+**任务**：用户反馈"SSH 进入服务器的终端后划词翻译不显示、AskAgent 没弹出"。
+
+**调查**（CDP 9222 运行时实测，SSH 已连 192.168.45.130）：
+- 链路：SSH 终端（SshTerminalHost → TerminalPane，rendererPool slot）选区 → `useSelectionAskAi`（document mouseup on `.xterm`）→ `captureActiveSelection` → 浮层（翻译 + Ask TDSF）→ 翻译卡片 / AI 面板
+- 实测证据：`sshActiveLeafId=5` 但 `terminalHasLeaf(5)=false`（terminalRefs 无 SSH leaf）；rendererPool slots 含 leaf 5（slot 绑定正常、term.select 成功）→ `captureActiveSelection` 的 SSH 分支（`terminalRefs.has(sshLid)`）恒 false → 回退被隐藏的本地终端（选区恒空）→ 返回 null → 浮层永不弹出
+
+**根因**：`App.tsx:941-956` 修剪 effect 只把 `tab.paneTree` 的 leafId 视为"存活"；SSH 终端 leafId 不在 paneTree（SshTerminalHost 由 WorkspaceSurface 独立挂载），每次 tabs 变化都被修剪掉 terminalRefs handle + searchAddon，并误调 `disposeSession`。SshTerminalHost 挂载后 callback ref 不会重新触发 → handle 无法自行恢复。
+
+**修改**（2 处）：
+1. `App.tsx` 修剪 effect：把 `sshActiveLeafIdRef.current` 纳入 live 集合（防 handle/searchAddon 被删、session 被误 dispose）
+2. `App.tsx` `captureActiveSelection`：SSH 分支改 `leafGridSelection(sshLid)`（rendererPool slot 直读，slot 绑定与组件生命周期一致，天然自愈，不再依赖 terminalRefs 注册时机）；`src/modules/terminal/index.ts` 导出 `leafGridSelection`
+
+**验证**（CDP 全链路实测）：HMR 后 sshActiveLeafId=6 → `terminalHasLeaf(6)=true`（修剪 effect 重跑后保留）；`term.select` → mouseup → 浮层 `open`（翻译 + Ask TDSF 按钮都在）；点「翻译」→ 卡片命中离线词典（`last` 命令 + 示例 `last -10`）；点卡片内「Ask TDSF 解释这段」→ AI 面板 open。门禁：typecheck / lint / test 900 全过 / build:web 出 dist。
+
+**复盘**：
+- 上一轮调查（§37.34）猜"SSH session 无 rendererPool slot"（`getSlotForLeaf=null`）是根因——本次实测 slot 正常存在，真根因在 terminalRefs 修剪。**现象一致 ≠ 根因一致，必须 CDP 实测逐环验证**（符合 R2）
+- `captureActiveSelection` 依赖"外部注册的 handle 表"（terminalRefs）是脆弱设计：SSH 独立挂载组件 + 修剪 effect 共同违反"注册/修剪生命周期一致"假设；改 slot 直读（leafGridSelection）从根上消除该依赖
+- 合成鼠标拖选无法在 WebGL canvas 下产生选区（合成事件发到 `.xterm` 根，canvas listener 收不到），验证只能靠程序化 `term.select` + 真实用户复测
+
+---
+
 ## 2026-08-08 · 交接记忆：其他 AI 优化 30 commits 复核 + 远程推送
 
 **任务**：用户要求"阅读保存更新记忆，更新开发文档进度，做好规划"（当天让其他 AI 做了优化，需复核接管）。
