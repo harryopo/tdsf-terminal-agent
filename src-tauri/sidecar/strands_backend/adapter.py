@@ -94,6 +94,12 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- skill_invoke 返回 content 字段时是知识卡模式（参考内容），返回 stdout 字段时是 executor 模式（已执行）。\n"
     "- 使用 suggest_command 后，向用户说明命令作用并提示可点击 Insert 插入终端执行。\n"
     "- 回答用中文，简洁明了，给出可执行建议。\n"
+    "\n"
+    "Task planning:\n"
+    "- 遇到多步骤任务（≥3 步）时，先用 todo_write 工具创建任务列表，让用户看到你的规划。\n"
+    "- 开始一个步骤时标记为 in_progress，完成后标记为 completed 并推进下一个。\n"
+    "- 任务全部完成后简要总结结果。\n"
+    "- 不确定下一步时，向用户提问而不是自行假设。\n"
 )
 
 
@@ -1000,6 +1006,13 @@ class StrandsAgentAdapter:
         # 构建运维工具（带 ctx 闭包 + 角色白名单过滤）
         ops_tools = make_all_ops_tools(ctx, tool_names=tool_names)
         all_tools = ops_tools + self.extra_tools
+
+        # TDSF 魔改 (2026-08-09): 所有 agent 都挂载 todo_write 工具（任务规划 UI 联动）
+        try:
+            from strands_backend.tools.todo_write import make_todo_write_tool
+            all_tools.append(make_todo_write_tool(ctx))
+        except Exception as e:
+            logger.warning(f"todo_write tool attach failed: {e}")
 
         # P0-6: main agent 挂载子 agent 工具（agent-as-tool 委派）
         sub_agent_names = set()
