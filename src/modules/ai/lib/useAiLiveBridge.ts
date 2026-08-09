@@ -10,6 +10,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { type RefObject, useEffect, useRef } from "react";
 import type { Live } from "../store/chatStore";
+import { useChatStore } from "../store/chatStore";
 import { redactSensitive } from "./redact";
 
 type TuiWaitResult = "ready" | "gone" | "timeout";
@@ -65,6 +66,9 @@ export function useAiLiveBridge(params: Params) {
   ref.current = params;
 
   useEffect(() => {
+    // TDSF 魔改 (2026-08-09): 保存 injectIntoActivePty 引用，供 inject_terminal 事件监听器调用
+    let injectFn: (text: string) => boolean = () => false;
+
     const findCwd = () => {
       const { activeId, tabs, explorerRoot, launchCwd, home } = ref.current;
       // TDSF 魔改 (2026-08-09): SSH 终端优先——
@@ -134,28 +138,24 @@ export function useAiLiveBridge(params: Params) {
         return t?.kind === "terminal" && t.private === true;
       },
       injectIntoActivePty: (text) => {
-        // TDSF 魔改 (2026-08-09): SSH 终端优先——
-        // SSH 终端不在 tabs 数组里，原实现只查 tabs 导致 SSH 场景命令注入失败。
-        // 优先通过 getSshLeafId 读 SSH 终端的 TerminalPaneHandle。
-        const sshLeafId = ref.current.getSshLeafId?.();
-        if (sshLeafId !== null && sshLeafId !== undefined) {
-          const term = terminalRefs.current.get(sshLeafId);
-          if (term) {
-            term.write(text);
-            term.focus();
-            return true;
+        // TDSF 魔改 (2026-08-09): 提取核心注入逻辑为共享函数，
+        // 同时供 inject_terminal 事件监听器复用。
+        const injectCore = (t: string): boolean => {
+          const sshLeafId = ref.current.getSshLeafId?.();
+          if (sshLeafId !== null && sshLeafId !== undefined) {
+            const term = terminalRefs.current.get(sshLeafId);
+            if (term) { term.write(t); term.focus(); return true; }
+            return false;
           }
-          return false;
-        }
-        // 本地终端
-        const { activeId, tabs } = ref.current;
-        const t = tabs.find((x) => x.id === activeId);
-        if (t?.kind !== "terminal") return false;
-        const term = terminalRefs.current.get(t.activeLeafId);
-        if (!term) return false;
-        term.write(text);
-        term.focus();
-        return true;
+          const { activeId, tabs } = ref.current;
+          const tab = tabs.find((x) => x.id === activeId);
+          if (tab?.kind !== "terminal") return false;
+          const term = terminalRefs.current.get(tab.activeLeafId);
+          if (!term) return false;
+          term.write(t); term.focus(); return true;
+        };
+        injectFn = injectCore; // 保存引用供 sidecar:inject_terminal 事件复用
+        return injectCore(text);
       },
       getWorkspaceRoot: () => {
         const { explorerRoot, launchCwd, home } = ref.current;
@@ -239,5 +239,31 @@ export function useAiLiveBridge(params: Params) {
         return fallback ? fallback.rustSessionId : null;
       },
     });
+
+    // TDSF 魔改 (2026-08-09): 监听 sidecar inject_terminal notification
+    // 当 ssh_command(visible=True) 时，Python sidecar 发 notification → Rust 转发为
+    // sidecar:inject_terminal 事件 → 这里监听并注入到前端终端（用户可见）
+    let unlistenInject: (() => void) | null = null;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenInject = await listen<{ command: string; sessionId?: string }>(
+        "sidecar:inject_terminal",
+        (event) => {
+          const { command } = event.payload;
+          if (!command) return;
+          // 终端执行模式开启时加换行符自动执行
+          const autoExec = useChatStore.getState().autoExecuteInTerminal;
+          const text = autoExec ? command + "\n" : command;
+          // 复用 injectIntoActivePty 逻辑（SSH 优先 + 本地回退）
+          injectFn(text);
+        },
+      );
+    })().catch((e) => {
+      console.warn("[tdsf] inject_terminal listen failed:", e);
+    });
+
+    return () => {
+      if (unlistenInject) unlistenInject();
+    };
   }, [setLive, terminalRefs]);
 }

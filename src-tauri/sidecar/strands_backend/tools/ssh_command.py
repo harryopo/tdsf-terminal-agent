@@ -67,6 +67,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             - ssh_session_id (str, 可选): SSH 会话 ID，空则用 ctx.ssh_session_id
             - explanation (str, 可选): 命令解释（前端展示用）
             - timeout (int, 可选): 超时秒数，默认 30
+            - visible (bool, 可选): 是否同时注入前端终端（用户可见执行），默认 False
         ctx: ToolContext 运行时上下文
 
     Returns:
@@ -82,6 +83,10 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     ssh_session_id = params.get("ssh_session_id", "") or ""
     explanation = params.get("explanation", "") or ""
     timeout = int(params.get("timeout", 30))
+    visible = bool(params.get("visible", False))
+    # TDSF 魔改 (2026-08-09): 前端开关 auto_execute_in_terminal 开启时自动设 visible
+    if ctx.auto_execute_in_terminal:
+        visible = True
 
     # 多行命令拆分检测（每行都过 RiskChecker）
     # P1-v5-4: 按 4 级权限决策（L3 起写操作行也需审批）
@@ -145,6 +150,18 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         except Exception as e:
             logger.debug(f"emit_tool_call started failed: {e}")
 
+    # TDSF 魔改 (2026-08-09): visible 模式——通知前端把命令注入终端（用户可见）
+    # 在后台 exec 执行前，先通知前端把命令写到终端屏幕上让用户看到。
+    # 后台 exec 仍然执行以拿到结构化结果返回给 LLM。
+    if visible and ctx.rust_bridge is not None:
+        try:
+            ctx.rust_bridge.send_notification("inject_terminal", {
+                "command": command,
+                "sessionId": ssh_session_id or ctx.ssh_session_id or "",
+            })
+        except Exception as e:
+            logger.debug(f"inject_terminal notification failed: {e}")
+
     # 执行（内部已含 RiskChecker + RustBridge 调用）
     result = execute_via_ssh(
         ctx=ctx,
@@ -193,6 +210,7 @@ def make_ssh_command_tool(ctx: ToolContext):
         ssh_session_id: str = "",
         explanation: str = "",
         timeout: int = 30,
+        visible: bool = False,
     ) -> dict:
         """在 SSH 会话上执行 shell 命令。
 
@@ -205,6 +223,7 @@ def make_ssh_command_tool(ctx: ToolContext):
             ssh_session_id (str): SSH 会话 ID，空则用上下文默认会话。
             explanation (str): 命令解释，前端展示用（可选）。
             timeout (int): 超时秒数，默认 30。
+            visible (bool): 为 True 时同时把命令注入前端终端（用户可见执行）。默认 False。
 
         Returns:
             dict: 结构化结果，含 status / command / output / exit_code / risk 等字段。
@@ -216,6 +235,7 @@ def make_ssh_command_tool(ctx: ToolContext):
                 "ssh_session_id": ssh_session_id,
                 "explanation": explanation,
                 "timeout": timeout,
+                "visible": visible,
             },
             ctx=ctx,
         )
