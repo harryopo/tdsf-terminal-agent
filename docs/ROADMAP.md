@@ -60,14 +60,14 @@
 | 8 | **命令行自动补全/预测**（用户 2026-08-08 意向）：xterm 输入补全 → 命令建议（历史 + 词典 + AI），先调研 yazi/terax 做法再规划 | 功能 | 中 | WorkspaceFs 实测后 |
 | 8.5 | **SSH 选中翻译链路收尾**（§37.34/37.35）：✅ 已修复并 CDP 全链路实测（根因 = 修剪 effect 误删 SSH leaf handle → live 集合纳入 sshLid + captureActiveSelection 改 rendererPool slot 直读，见 §37.35） | ✅ 完成 | 中 | 2026-08-09 |
 | 9 | **窗口标题跟随修复**（遗留）：SSH Space 下标题显示本地目录名（§37.32 后仍未验证） | 修复 | 小 | 无 |
-| 10 | **方案书集成度补齐**（启动验证发现的差距）：P1 HITL 四决策（edit/respond/trust）/ Strands teach 字段契约（teaching_content）/ 缺 3 工具（get_terminal_output·config_diff·backup_restore）/ 决策库完善（向量检索+history 检索）/ 可信度模块接入 Strands 主路径 | 开发 | 需用户 | 用户确认优先级 |
+| 10 | **方案书集成度补齐**（启动验证发现的差距）：P1 HITL 四决策（edit/respond/trust）/ Strands teach 字段契约（teaching_content）/ ~~缺 3 工具（get_terminal_output·config_diff·backup_restore）~~ / 决策库完善（向量检索+history 检索）/ ~~可信度模块接入 Strands 主路径~~ | 部分完成 | 缺 3 工具 + 可信度接入已完成（commit a5be217）；剩 P1 HITL + teach 字段契约 + 决策库 |
 | 11 | **方案书文档同步**：§1.1"7 个工具"过时（实际 13）、§4.3 扩展表状态、§4.8 asciicast"UI 待接"标注 | 文档 | 小 | 无 |
 | 12 | **SSH 终端 cwd 同步 UI 复验**（§37.36 方案 A + §37.39 清理后）：真实挂载终端 → `cd` 后文件树跟随 + 翻译/选词未破坏 + `ll` 无垃圾文件 | 验收 | 需用户 | 连 192.168.45.130（残留已清理，新建会话即可实测） |
 | 13 | **SSH 终端"续行模式"用户提示优化**（可选调研）：bash 未闭合引号进入 PS2 `>` 时，终端能否给出可辨识提示（如提示栏闪烁/标题标记），降低用户误判"终端卡死" | 功能 | 需调研 | 先调研 xterm/上游做法再定 |
 | 14 | **Agent 深度进化 P0**（方案文档 `PLAN-AGENT-DEEP-EVOLUTION.md`）：max_tokens 条件传参（OpenAI 不传=无上限）/ 对话压缩增强（Sidecar 复用 compact.ts 5 级策略）/ maxMessages 20→40 | ✅ 已完成 | commit 87175dd；model_adapter.py 3 处条件传参 + transport.ts 两阶段压缩（tool-result elide + 尾部截断 40） |
 | 15 | **Agent 深度进化 P1**：SSH 工具 visible 模式（ssh_command 加 visible 参数 → sidecar→前端 injectTerminal 通道 → xterm 可见执行）/ 任务完成感知 system prompt 强化 | ✅ 已完成 | commit af32091；三步链路：Python send_notification + ssh_command visible + 前端 listen sidecar:inject_terminal → injectIntoActivePty |
 | 16 | **Agent 深度进化 P2**：TodoStrip 双轨联动（Sidecar 路径驱动前端 TodoStrip UI） | ✅ 已完成 | commit 3e11abc；Python todo_write.py + adapter 挂载 + system_prompt 任务规划指令 + 前端 listen sidecar:update_todos |
-| 17 | **Agent 深度进化 P3**：LLM 自动摘要（long_context.py 重写为真 LLM 摘要替代 hash 模拟） | 开发 | 高 | long_context.py + feature_flags |
+| 17 | **Agent 深度进化 P3**：LLM 自动摘要（long_context.py 重写为真 LLM 摘要替代 hash 模拟） | ✅ 已完成 | commit a5be217；summarize 优先调 LLM（OpenAI 兼容接口），失败回退 hash 截断；输入预处理首尾各 40% |
 
 ### 待用户决策/确认
 

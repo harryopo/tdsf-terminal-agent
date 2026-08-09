@@ -3641,3 +3641,28 @@ CDP 全新状态实测通过。commit 见上。
   - 前端 `useAiLiveBridge.ts` 监听 `sidecar:update_todos` → `useTodosStore.setTodos`
 - **数据流**：LLM 调 todo_write → rust_bridge notification → Rust emit `sidecar:update_todos` → 前端 listen → TodoStrip 渲染
 - **效果**：Sidecar 路径的 agent 现在也能驱动前端 TodoStrip UI，用户能看到 agent 的任务规划和进度
+
+---
+
+### 37.45 Agent 深度进化 P3 + 方案书 #10 完成（2026-08-09 ✅ 完成）
+
+**P3（commit a5be217）— LLM 自动摘要**：
+- `long_context.py` `summarize` 从 hash 模拟重写为真 LLM 调用
+- 优先调 OpenAI 兼容接口生成摘要；LLM 不可用时回退 hash 截断（离线可用）
+- 输入预处理：超长文本取首尾各 40% + 中间省略标注
+
+**方案书 #10 集成度补齐（commit a5be217）— 4 个新工具 + 可信度接入**：
+| 新工具 | 文件 | 功能 |
+|--------|------|------|
+| `get_terminal_output` | `tools/get_terminal_output.py` | 读终端 scrollback（对齐前端 Vercel SDK 契约） |
+| `config_diff` | `tools/config_diff.py` | 配置文件 diff -u 对比（SSH 远端执行） |
+| `backup_restore` | `tools/backup_restore.py` | 配置文件备份/恢复（SSH 远端 cp） |
+| `assess_confidence` | `tools/confidence_tool.py` | 可信度评估（包装 D-S+PCR5 计算器） |
+
+- 4 个工具全部注册到 `adapter.py` 所有 agent（main/teach/coding/ops/explain/lab/general）
+- `assess_confidence` 复用 `core/confidence.py` 的 `DSPCR5ConfidenceCalculator`（通过 `sidecar/tools/confidence.py` 的 `invoke_confidence_tool`）
+
+**方案书 #10 剩余项**（未做）：
+- P1 HITL 四决策（edit/respond/trust）
+- Strands teach 字段契约（teaching_content）
+- 决策库完善（向量检索 + history 检索）
