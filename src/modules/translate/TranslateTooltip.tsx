@@ -14,7 +14,7 @@
 
 import { BookOpen01Icon, SparklesIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useTranslateStore } from "./translateStore";
@@ -24,26 +24,55 @@ type Props = {
   onAsk?: (text: string) => void;
 };
 
+/** 卡片与选中点的间隙（px） */
+const GAP = 12;
+/** 卡片距视口边缘的最小边距（px） */
+const EDGE = 8;
+
 export function TranslateTooltip({ onAsk }: Props) {
   const result = useTranslateStore((s) => s.result);
   const missing = useTranslateStore((s) => s.missing);
   const x = useTranslateStore((s) => s.x);
   const y = useTranslateStore((s) => s.y);
 
-  const pos = useRef({ top: 0, left: 0 });
+  const cardRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  // 卡片相对选中点的方向：below=下方(默认)；above=下方空间不足时翻转上方
+  const [dir, setDir] = useState<"below" | "above">("below");
 
+  // 阶段 1：估算下方位置先渲染（实际高度未知，layout effect 再修正/翻转）
   useEffect(() => {
     if (!result && !missing) {
       setVisible(false);
       return;
     }
-    pos.current = {
-      top: y + 12,
-      left: Math.min(x + 8, window.innerWidth - 340),
-    };
+    setPos({
+      top: y + GAP,
+      left: Math.max(EDGE, Math.min(x + EDGE, window.innerWidth - 320 - EDGE)),
+    });
+    setDir("below");
     setVisible(true);
   }, [result, missing, x, y]);
+
+  // 阶段 2：测量实际卡片尺寸，底部空间不足 → 智能翻转到选中点上方（layout 阶段，
+  // paint 前同步修正，无闪跳）。左右边界一并收进视口内留 EDGE 边距。
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const el = cardRef.current;
+    if (!el) return;
+    const h = el.offsetHeight;
+    const w = el.offsetWidth;
+    let top = y + GAP;
+    let nextDir: "below" | "above" = "below";
+    if (top + h > window.innerHeight - EDGE) {
+      top = Math.max(EDGE, y - h - GAP);
+      nextDir = "above";
+    }
+    const left = Math.max(EDGE, Math.min(x + EDGE, window.innerWidth - w - EDGE));
+    setPos((prev) => (prev.top === top && prev.left === left ? prev : { top, left }));
+    setDir((prev) => (prev === nextDir ? prev : nextDir));
+  }, [visible, y, x]);
 
   // P2-5: 消失逻辑——点击卡片外部 / Esc 隐藏
   useEffect(() => {
@@ -79,15 +108,19 @@ export function TranslateTooltip({ onAsk }: Props) {
 
   return (
     <div
+      ref={cardRef}
       data-translate-tooltip
       className={cn(
         "fixed z-[10000] w-[320px] max-w-[320px] overflow-hidden rounded-lg border shadow-lg backdrop-blur-md",
         "border-border/60 bg-card/95",
         visible
-          ? "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-150"
+          ? cn(
+              "animate-in fade-in-0 zoom-in-95 duration-150",
+              dir === "above" ? "slide-in-from-top-1" : "slide-in-from-bottom-1",
+            )
           : "opacity-0",
       )}
-      style={{ left: pos.current.left, top: pos.current.top }}
+      style={{ left: pos.left, top: pos.top }}
     >
       {missing ? (
         /* 未命中：中性提示（Ask 按钮由底部统一追问区提供） */
