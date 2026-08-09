@@ -42,6 +42,7 @@ strands_backend/adapter.py — Strands Agent 适配层
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable
 
@@ -709,6 +710,11 @@ class StrandsAgentAdapter:
         # P0-6: 子 agent 工具缓存（agent-as-tool，按 (agent_id, session_id, perm)）
         self._sub_agent_cache: dict[tuple[str, str, int], Any] = {}
 
+        # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
+        # Strands Agent 有内部状态（"already processing a request"），
+        # 用户停止+立即重发会导致前后请求竞态崩溃。锁确保排队等待。
+        self._agent_locks: dict[tuple[str, str, int], threading.RLock] = {}
+
         logger.info(
             f"StrandsAgentAdapter initialized: "
             f"backend_enabled={backend_enabled}, "
@@ -784,8 +790,13 @@ class StrandsAgentAdapter:
             # 3. 构建工具上下文
             ctx = self._build_tool_context(agent_id, session_id, state)
 
-            # 4. 获取或创建 Strands Agent
+            # 4. 获取或创建 Strands Agent + per-agent 锁
             strands_agent = self._get_or_create_agent(agent_id, ctx)
+            # TDSF 修复 2026-08-09: 防并发崩溃——Strands Agent 有内部状态，
+            # 同一实例被并发调用会抛 "already processing a request"。
+            # 用 per-(agent, session, perm) RLock 确保排队等待。
+            lock_key = (agent_id, ctx.session_id, ctx.permission_level)
+            agent_lock = self._agent_locks.setdefault(lock_key, threading.RLock())
 
             # 5. 构建 prompt（注入 live 上下文）
             prompt = self._build_prompt(input, state)
@@ -799,6 +810,7 @@ class StrandsAgentAdapter:
             self._emit_mood("working", agent_id, session_id)
 
             # 7. 调用 Strands Agent（同步，agentic loop 内部触发 callback_handler）
+            # TDSF 修复 2026-08-09: 用锁保护 agent 调用——防止并发崩溃
             self._emit_agent_message(
                 agent_id=agent_id,
                 session_id=session_id,
@@ -806,7 +818,8 @@ class StrandsAgentAdapter:
                 msg_type="thinking",
             )
 
-            response = strands_agent(prompt)
+            with agent_lock:
+                response = strands_agent(prompt)
 
             # 8. 提取最终输出
             observation = self._extract_response_text(response)
@@ -1428,6 +1441,8 @@ class StrandsAgentAdapter:
         """清空 Agent 缓存（配置变更后调用）"""
         count = len(self._agent_cache)
         self._agent_cache.clear()
+        # TDSF 修复 2026-08-09: 一并清空锁字典
+        self._agent_locks.clear()
         # P0-6: 子 agent 工具也绑定 model，需一并清理
         sub_count = len(self._sub_agent_cache)
         self._sub_agent_cache.clear()
