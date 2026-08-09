@@ -264,7 +264,7 @@ function extractLastUserText(messages: UIMessage[]): string {
 }
 
 /**
- * TDSF 修复 2026-07-31 (P2): 长对话消息裁剪
+ * TDSF 修复 2026-07-31 (P2): 长对话消息裁剪 + 压缩
  *
  * 问题：长对话（几十轮）时，完整 messages 数组通过 JSON-RPC 传给 Python
  * sidecar，JSON 序列化后可能几 MB，导致：
@@ -273,25 +273,65 @@ function extractLastUserText(messages: UIMessage[]): string {
  *   3. LLM token 超限（多模型上下文窗口 8K-32K tokens）
  *   4. 长对话"卡住不回复"（Python 端处理超时或 LLM 拒绝）
  *
- * 裁剪策略：保留最近 N 条消息（默认 20），避免长对话 token 爆炸。
- *   - 消息总数 <= maxMessages → 不裁剪
- *   - 消息总数 > maxMessages → 取最后 maxMessages 条
- *   - 保留最后一条 user 消息（extractLastUserText 依赖它）
+ * TDSF 魔改 (2026-08-09): 两阶段压缩策略
+ *   阶段 1 — tool-result elide：遍历消息，对超过 1024 字符的 tool-result
+ *            内容截断到 512 字符 + "…[已压缩 N 字符]"标注，保留首尾
+ *            （最近的 tool-result 不动，保护最新上下文）
+ *   阶段 2 — 尾部截断：保留最近 maxMessages 条（默认 40，从 20 提高）
  *
  * 注意：这里只裁剪传给 sidecar 的 messages（用于 Python agent 上下文），
  * 不影响 input 字段（已从完整 messages 提取最后一条 user text）。
  *
  * @param messages 完整对话历史
- * @param maxMessages 最大保留条数（默认 20）
- * @returns 裁剪后的 messages（如果是原数组的子数组，引用不变）
+ * @param maxMessages 最大保留条数（默认 40）
+ * @returns 裁剪+压缩后的 messages
  */
 function trimMessagesForSidecar(
   messages: UIMessage[],
-  maxMessages: number = 20,
+  maxMessages: number = 40,
 ): UIMessage[] {
-  if (messages.length <= maxMessages) return messages;
-  // 取最后 maxMessages 条（保留最近的对话上下文）
-  return messages.slice(messages.length - maxMessages);
+  // 阶段 1: tool-result elide（压缩大 tool 输出）
+  const ELIDE_THRESHOLD = 1024; // 超过此字符数的 tool-result 被压缩
+  const ELIDE_KEEP = 512;       // 压缩后保留的字符数（首尾各半）
+  const PROTECT_RECENT = 3;     // 最近 N 条消息的 tool-result 不压缩
+
+  let elided = messages;
+  if (messages.length > PROTECT_RECENT) {
+    const protectStart = messages.length - PROTECT_RECENT;
+    elided = messages.map((msg, i) => {
+      // 保护最近的消息不被压缩
+      if (i >= protectStart) return msg;
+      // 深度遍历 parts，找 tool-result part 做截断
+      if (!msg.parts) return msg;
+      let modified = false;
+      const newParts = msg.parts.map((part) => {
+        if (
+          typeof part === "object" &&
+          part !== null &&
+          part.type === "tool-result"
+        ) {
+          // tool-result part 的输出字段是 output（string 或 JSONObject）
+          const output = (part as { output?: unknown }).output;
+          if (typeof output === "string" && output.length > ELIDE_THRESHOLD) {
+            modified = true;
+            const head = output.slice(0, ELIDE_KEEP / 2);
+            const tail = output.slice(output.length - ELIDE_KEEP / 2);
+            const saved = output.length - ELIDE_KEEP;
+            return {
+              ...part,
+              output: `${head}\n…[已压缩 ${saved} 字符]\n${tail}`,
+            } as typeof part;
+          }
+        }
+        return part;
+      });
+      return modified ? { ...msg, parts: newParts } : msg;
+    });
+  }
+
+  // 阶段 2: 尾部截断
+  if (elided.length <= maxMessages) return elided;
+  return elided.slice(elided.length - maxMessages);
 }
 
 function injectEnvIntoLastUser(
