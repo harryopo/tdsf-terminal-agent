@@ -6,6 +6,42 @@
 
 ---
 
+## 2026-08-09 · SSH 终端输入被 cd 拦截 hack 改写（根因：行缓冲残留 + 元字符黑名单缺 `*`/`?`）→ 方案 A 远端静默注入 OSC 7
+
+**任务**：用户报告"SSH 终端输入命令会弹出别的字眼"，例如输入 `yum install httpd* -y` 终端却显示 `yum install httpdyum install httpd* -y'; printf '\033]7;file://localhost%s\007' "$(pwd -P)"`。问：为什么 / 当前终端逻辑是什么 / 有没有开源方案。
+
+**根因**（grep 全项目 OSC 7 相关代码 + 通读 SshTerminalHost.tsx 确认）：2026-07-31 起前端 `SshTerminalHost` 用"行缓冲 + cd 命令改写"在本地伪造 OSC 7（拦截 `cd <dir>` 追加 `printf OSC7`）。三个致命 bug：
+1. `inputBufferRef.current += data` 后**无换行输入永不清理** → 逐键输入/粘贴分片永久堆积
+2. 残留 + 新输入拼接 → 误判 `/^cd(?:\s+(.+))?$/` → 用户整条命令被丢弃改写
+3. 元字符黑名单 `[;&|`$(){}[\]<>!"\\]` **缺 `*` `?` 通配符** → `yum install httpd* -y` 可绕过 → 整条被替换成 `cd ...; printf OSC7`
+
+**开源方案调研**（报告：`docs/research-ssh-cwd-sync.md`）：OSC 7 cwd 上报是终端行业标准（VS Code / Tabby / Warp 同款），本地终端用 `--rcfile`/`ZDOTDIR`/`-C` 注入钩子；**SSH 端因 request_shell 无法传参**，需认证后探测远端 shell 类型 → 写最小注入脚本到 /tmp → exec 启动注入 shell。前端伪造方案在真实终端产品中不存在。
+
+**方案 A（用户拍板）**：
+- `session.rs` open_pty：认证后 `probe_remote_shell`（bash/zsh/fish 探测）→ `write_shell_integration`（heredoc 原样写脚本到 /tmp，免 base64 crate；bash 版先 source `~/.bashrc` 再设 PROMPT_COMMAND 发 OSC 7，zsh 用 ZDOTDIR 两个文件，fish 用 `-C source`）→ PTY `exec bash --rcfile ...` 启动注入 shell；**任何一步失败降级 request_shell**（仅失去 cwd 同步，绝不篡改输入）
+- `SshTerminalHost.tsx`：删除行缓冲 + cd 改写，输入原样透传
+- `CLAUDE.md` v2.2 新增 §3 红线 9（终端/SSH 改动 = 牵一发动全身，禁止前端输入路径做行缓冲/命令改写，改动后实测全链路）
+
+**报错与修改**：
+1. `channel_write.exec(true, cmd)` 报 E0277（`Vec<u8>: From<&String>`）→ 改 `cmd.as_str()`
+2. cargo test 被旧实例 `tdsf-terminal-agent.exe`（PID 36020）占 target 文件 → `Stop-Process` 后重跑
+3. 用户提供的实测 IP `192.168.45.300` 非法（段 >255，报"不知道这样的主机"）→ `arp -a` 发现 192.168.45.130（VMware VM），`Test-NetConnection -Port 22` 确认开放；root/123 凭据实测有效
+
+**实测**（CDP 9222 + sshStore 订阅，192.168.45.130 root，RHEL 10 系 Rocky Linux）：
+- 连接 1 秒 connected（方案 A 注入链路通）；远端自动发 OSC 7（capture 含 `\x1b]7;file://localhost/root\x07`）
+- `echo TDSF_MARK_1` 原样回显；`cd /etc; pwd` 后远端自动发 `\x1b]7;file://localhost/etc\x07`（PROMPT_COMMAND precmd 生效）
+- `yum install httpd* -y` **原样回显并真正执行**（yum 开始解析安装），`has OLD rewritten pattern: false` ✓
+- xterm 解析层（registerCwdHandler）：`file://localhost/etc` → 回调 `/etc`，`not-a-url` 被忽略 ✓
+- 门禁：cargo check / cargo test（27+1 doc）/ typecheck / lint / vitest 900 / build:web 全绿
+
+**复盘**：
+- ✅ **"聪明"的前端命令改写 = 反模式**：任何在输入路径做字符串匹配/改写的逻辑，一旦遇上无法枚举的输入（通配符、粘贴分片、多字节），必然出错。远端 shell 行为应交给远端注入脚本，前端只管透传——这正是 VS Code 等产品的做法
+- ✅ **调研报告与实施偏差已记录**：报告原拟 base64 写入 /tmp，实际因 Cargo.toml 无 base64 crate 改 heredoc 原样落盘（更安全，免转义）；报告对 sshd 调 bash 的 login 类型假设有误，实际用 `exec bash --rcfile`（login shell 由 sshd 正常 source `/etc/profile`，`--rcfile` 只覆盖交互式 rc）——**实现细节以代码注释 + CLAUDE.md 约定为准**
+- ✅ **实测 IP 校验教训**：用户给的主机 IP 也值得先校验（段值 >255 非法），ARP 扫描 + 端口探测比反复重试高效
+- 📌 **降级路径是底线**：方案 A 任何一步失败都降级 request_shell——产品承诺"输入绝不被篡改"，即使失去 cwd 同步
+
+---
+
 ## 2026-08-09 · SSH 终端划词翻译 / Ask 浮层不弹（根因：修剪 effect 误删 SSH leaf handle）
 
 **任务**：用户反馈"SSH 进入服务器的终端后划词翻译不显示、AskAgent 没弹出"。

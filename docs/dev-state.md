@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · SSH 选中翻译链路收尾完成（§37.35：修剪 effect 误删 SSH leaf handle 已修 + CDP 全链路实测）。接手请直接看 **§37.35**（最新交接）+ **§37.34**（前序调查）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · SSH 终端输入改写修复完成（§37.36：方案 A 远端静默注入 OSC 7，取代前端 cd 拦截 hack，实测 192.168.45.130 全链路）。接手请直接看 **§37.36**（最新交接）+ **§37.35**（SSH 选中翻译）+ **§37.34**（前序调查）+ **§37.33**（WorkspaceFs）。
 
 ---
 
@@ -3468,3 +3468,27 @@ CDP 全新状态实测通过。commit 见上。
 **门禁**：typecheck ✓ / lint ✓ / test 900 全过 ✓ / build:web 出 dist ✓ / tauri:dev 运行时 CDP 实测 ✓。
 
 **下一步**：用户真机拖选复测（合成拖选因 WebGL canvas 事件目标限制无法模拟，但程序化 select + App 链路已全覆盖）；黑屏事件（§37.34-2）与本次无直接关联，另行跟踪。
+
+### 37.36 SSH 终端输入被 cd 拦截 hack 改写 — 方案 A 远端静默注入 OSC 7（2026-08-09 ✅ 完成）
+
+**现象（用户报告 #18）**：SSH 终端输入 `yum install httpd* -y` 却弹出 `yum install httpdyum install httpd* -y'; printf '\033]7;file://localhost%s\007' "$(pwd -P)"`。
+
+**根因**：前端 `SshTerminalHost.tsx`（2026-07-31 加的）用"行缓冲 + cd 命令改写"伪造 OSC 7。三缺陷：① 无换行输入残留永不清理 → 逐键/粘贴分片永久堆积；② 残留+新输入拼接误判 `/^cd/` → 整条命令丢弃改写；③ 元字符黑名单缺 `*`/`?` → `httpd*` 绕过 → 整条被替换成 `cd...; printf OSC7`。
+
+**开源调研**：`docs/research-ssh-cwd-sync.md`。OSC 7 cwd 上报 = VS Code/Tabby/Warp 行业标准；本地用 `--rcfile`/ZDOTDIR 注入，SSH 端因 request_shell 无法传参 → 认证后探测远端 shell → 写注入脚本到 /tmp → exec 启动注入 shell。**前端伪造方案在真实产品中不存在**。
+
+**修改（commit 55dc6ce，4 文件 +390/-47）**：
+1. `src-tauri/src/modules/ssh/session.rs` open_pty：`probe_remote_shell`（bash/zsh/fish）→ `write_shell_integration`（heredoc 原样写脚本到 /tmp，免 base64 crate）→ PTY `exec` 启动注入 shell；**任何失败降级 request_shell**（仅失 cwd 同步，绝不篡改输入）。bash 注入脚本：source `~/.bashrc` + PROMPT_COMMAND 前缀挂 `_tdsf_osc7_precmd`；zsh：ZDOTDIR 双文件（.zshenv source 原 + .zshrc add-zsh-hook precmd）；fish：`-C source` 包装 `fish_prompt`
+2. `src/modules/ssh-explorer/SshTerminalHost.tsx`：删除行缓冲 + cd 改写，transport.write **输入原样透传**
+3. `CLAUDE.md` v2.2：新增 §3 红线 9（终端/SSH 改动 = 牵一发动全身；禁止前端输入路径行缓冲/命令改写；改动后实测全链路：SSH 终端 + 翻译 + 选词 + 文件树联动）
+
+**实测**（CDP 9222 + sshStore 订阅，192.168.45.130 root，Rocky Linux 10）：
+- 连接 1s connected（注入链路通）；远端自动发 OSC 7（capture 含 `\x1b]7;file://localhost/root\x07`）
+- `echo TDSF_MARK_1` 原样回显；`cd /etc; pwd` 后远端自动发 `\x1b]7;file://localhost/etc\x07`（PROMPT_COMMAND precmd 生效）
+- `yum install httpd* -y` **原样回显并真正执行**，`has OLD rewritten pattern: false` ✓
+- xterm 解析层（registerCwdHandler）：`file://localhost/etc` → 回调 `/etc`，非法 URL 忽略 ✓
+- 门禁：cargo check ✓ / cargo test（27+1 doc）✓ / typecheck ✓ / lint ✓ / vitest 900 ✓ / build:web ✓
+
+**未验证项（转 ROADMAP #12）**：真实挂载 UI 终端下的 `cd` → 文件树跟随 + 翻译/选词复验（本测试走 sshStore 订阅层，未挂载 SshTerminalPane；handleCwd→setCurrentPath 代码未动，风险低，仍建议用户实测）。
+
+**经验**：① 输入路径做字符串改写 = 反模式，遇无法枚举输入必炸；② 用户给的实测 IP 也要先校验（192.168.45.300 段 >255 非法，ARP 扫描发现 192.168.45.130 VMware VM）；③ 调研报告与实现偏差（base64→heredoc、bash login 假设）以代码注释 + CLAUDE.md 为准。
