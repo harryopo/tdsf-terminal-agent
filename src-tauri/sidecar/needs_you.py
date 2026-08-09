@@ -86,6 +86,9 @@ class NeedsYouStatus(str, Enum):
     REJECTED = "rejected"        # 用户拒绝（主要用于 approval 类型）
     RESOLVED = "resolved"        # 用户已解决（用于 question / error / handoff）
     TIMEOUT = "timeout"          # 超时自动拒绝（仅 approval）
+    # TDSF 魔改 (2026-08-09): 方案书 HITL 四决策
+    EDITED = "edited"            # 用户修改了参数后放行（edit 决策）
+    RESPONDED = "responded"      # 用户替工具回了结果（respond 决策）
     CANCELLED = "cancelled"      # Agent 主动取消
 
 
@@ -631,10 +634,26 @@ class NeedsYouService:
         needs_type: NeedsYouType,
         response: Any,
     ) -> NeedsYouStatus:
-        """根据请求类型和响应内容推断新状态"""
+        """根据请求类型和响应内容推断新状态
+
+        TDSF 魔改 (2026-08-09): 支持方案书 HITL 四决策
+        - approve → APPROVED
+        - reject → REJECTED
+        - edit（改参数放行）→ EDITED
+        - respond（人替工具回结果）→ RESPONDED
+        - trust（本会话不再询问）→ APPROVED + 会话级 trust 标记
+        """
         if needs_type == NeedsYouType.APPROVAL:
-            # approval: 检查 response 中的 approved 字段
             if isinstance(response, dict):
+                # TDSF: 新的决策字段
+                decision = str(response.get("decision", "")).lower()
+                if decision == "edit":
+                    return NeedsYouStatus.EDITED
+                elif decision == "respond":
+                    return NeedsYouStatus.RESPONDED
+                elif decision == "trust":
+                    return NeedsYouStatus.APPROVED  # trust 走 approved + 会话标记
+                # 兼容旧格式：approved: bool
                 approved = response.get("approved", False)
             elif isinstance(response, bool):
                 approved = response

@@ -671,7 +671,7 @@ export async function* runSidecarStream(
   const thinkingId = `${streamId}-thinking`;
   const outputId = `${streamId}-output`;
   // TDSF 魔改: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
-  const teachingId = `${streamId}-teaching`;
+  // TDSF 魔改 (2026-08-09): teachingId 不再需要（teach 走 observation 不走独立字段）
 
   // === AsyncQueue：生产者（事件监听器）push part，消费者（主流程）yield ===
   const queue = createAsyncQueue<SidecarStreamPart>();
@@ -930,13 +930,10 @@ export async function* runSidecarStream(
       yield* streamText(outputText, outputId);
     }
 
-    // 12. TeachAgent.teaching_content 追加输出
-    //     TeachAgent.reflect_on_result() 在最后一步生成结构化教学内容
-    //     （教程 + 知识卡 + 学习路径），event 不推送，这里走伪流式切片。
-    if (invokeResult.teaching_content) {
-      onStep?.("Teaching");
-      yield* streamText(invokeResult.teaching_content, teachingId);
-    }
+    // TDSF 魔改 (2026-08-09): teach 字段契约清理 — 删除 teaching_content 死代码
+    // Strands 路径走 observation 字段（已在上面处理），不产 teaching_content。
+    // 旧 LangGraph teach_agent.py 的 3 板块 teaching_content 已成孤儿，
+    // 此分支永远不可达，删除避免误导。
 
     // 13. finish
     onStep?.(null);
