@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Terminal as XTerm } from "@xterm/xterm";
-import { predictCommands, type CommandDictEntry } from "./command-dictionary";
+import { getSuggestEngine, type SuggestionResult } from "./suggest-engine";
 
 // ============================================================================
 // 类型
@@ -33,7 +33,7 @@ export interface UseSshCompletionParams {
 
 export interface PredictionPopupState {
   visible: boolean;
-  items: CommandDictEntry[];
+  items: SuggestionResult[];
   selectedIndex: number;
   prefix: string;
 }
@@ -72,7 +72,8 @@ export function useSshCompletion({ xtermRef, onWrite }: UseSshCompletionParams) 
       setPopup((s) => (s.visible ? { ...s, visible: false } : s));
       return;
     }
-    const items = predictCommands(prefix, 5);
+    const engine = getSuggestEngine();
+    const items = engine.getSuggestions(prefix, 5);
     if (items.length === 0) {
       setPopup((s) => (s.visible ? { ...s, visible: false } : s));
     } else {
@@ -82,12 +83,14 @@ export function useSshCompletion({ xtermRef, onWrite }: UseSshCompletionParams) 
 
   // 接受预测：写入补全的剩余部分
   const acceptPrediction = useCallback(
-    (entry: CommandDictEntry) => {
+    (entry: SuggestionResult) => {
       const prefix = getCurrentPrefix();
       const remaining = entry.command.slice(prefix.length);
       if (remaining) {
         onWrite(remaining);
       }
+      // 添加到历史
+      getSuggestEngine().addHistory(entry.command);
       setPopup((s) => ({ ...s, visible: false }));
     },
     [getCurrentPrefix, onWrite],
@@ -154,11 +157,17 @@ export function useSshCompletion({ xtermRef, onWrite }: UseSshCompletionParams) 
         return true;
       }
 
-      // Enter = 选择当前高亮项（如果有弹窗）
+      // Enter = 选择当前高亮项 + 执行 + 记录历史
       if (event.key === "Enter" && event.type === "keydown") {
         if (current.visible && current.items.length > 0) {
           acceptPrediction(current.items[current.selectedIndex]);
           // 不拦截 Enter——让命令正常执行
+        } else {
+          // 没有用预测 → 记录实际输入到历史
+          const prefix = getCurrentPrefix();
+          if (prefix.trim()) {
+            getSuggestEngine().addHistory(prefix.trim());
+          }
         }
         setPopup((s) => ({ ...s, visible: false }));
         return true;
@@ -188,7 +197,7 @@ export function useSshCompletion({ xtermRef, onWrite }: UseSshCompletionParams) 
 
       return true; // 所有其他键透传
     },
-    [xtermRef, acceptPrediction, updatePredictions],
+    [xtermRef, acceptPrediction, updatePredictions, getCurrentPrefix],
   );
 
   // 鼠标点击选择
