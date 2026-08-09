@@ -50,14 +50,27 @@ type LiveSnapshot = {
   workspaceRoot: string | null;
   activeFile: string | null;
   /**
-   * 当前活跃 SSH 会话的 Rust session_id (u32)。
+   * 活跃 SSH 会话的 Rust session_id (u32)。
    *
    * TDSF 魔改 2026-07-30: 从 Live.getSshRustSessionId() 取值，
    * 注入到 state.live.sshSessionId，供 Python 侧 Strands 运维工具
    * 通过 RustBridge 调 ssh_command / sftp_* 命令时使用。
    * null 表示当前无活跃 SSH 会话（本地终端模式）。
+   *
+   * 注意：此字段是内部实现细节（Rust u32），绝不暴露给 LLM/用户。
+   * 见 sshConnection（友好格式 user@host，面向 LLM 的 <env> 块）。
    */
   sshSessionId: number | null;
+  /**
+   * 活跃 SSH 会话的友好标识（如 "root@192.168.45.130"）。
+   *
+   * TDSF 魔改 (2026-08-09): 用户反馈 agent 向用户暴露 "SSH 会话 #15"
+   * （即 sshSessionId 数字）——这是实现细节，不应让最终用户看到。
+   * 现改为 <env> 块注入 friendly 的 connected_to 字段，让 LLM 自然表达
+   * "你已连接到 root@192.168.45.130"，而不是泄露内部 id。
+   * null 表示无 SSH 会话。
+   */
+  sshConnection: string | null;
   /**
    * 活跃终端的 scrollback 尾部摘要（已脱敏）。
    *
@@ -320,12 +333,13 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
   if (live.cwd) lines.push(`active_terminal_cwd: ${live.cwd}`);
   if (live.activeFile) lines.push(`active_file: ${live.activeFile}`);
   if (live.terminalPrivate) lines.push("active_terminal_mode: private");
-  // TDSF 魔改 2026-07-30: 注入 ssh_session_id，让 Python agent 感知到当前
-  // 活跃 SSH 会话的 Rust session_id，Strands 运维工具据此调 ssh_command/sftp_*。
-  // 注：这里注入到 <env> 块只是给 LLM 看的提示信息（让 agent 知道有 SSH 会话），
+  // TDSF 魔改 (2026-08-09): 不再向 <env> 块注入 ssh_session_id 数字。
+  // 原实现 (2026-07-30) 把 Rust 内部 session u32 注入到 env 块，
+  // LLM 把它当成"SSH 会话 #15"直接告诉用户——内部实现细节泄露。
+  // 现改为 friendly 的 connected_to 字段（user@host），让 LLM 自然表达。
   // 真正传给 Rust 的 sessionId 通过 state.live.sshSessionId 单独走（见 runSidecarStream）。
-  if (live.sshSessionId !== null) {
-    lines.push(`ssh_session_id: ${live.sshSessionId}`);
+  if (live.sshConnection) {
+    lines.push(`connected_to: ${live.sshConnection}`);
   }
   if (lines.length === 0) return null;
   return `<env>\n${lines.join("\n")}\n</env>`;
