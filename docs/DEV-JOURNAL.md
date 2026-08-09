@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-08-09 · 翻译卡片底部划词被遮住 → 智能翻转定位（两阶段测量）
+
+**任务**：用户反馈"底端的命令行划词翻译，卡片出现在底端显示不全被遮住，要智能调整位置——底部划词时卡片出现在词的上方"。
+
+**根因**：`TranslateTooltip.tsx` 定位固定 `top = y + 12`（永远在选中点下方），底部划词时 `y + 12 + 卡片高度` 超出视口被窗口边缘遮住。
+
+**方案**（两阶段定位，无闪跳）：
+- 阶段 1（useEffect）：按下方估算位置先渲染
+- 阶段 2（useLayoutEffect）：实测卡片 `offsetHeight/offsetWidth`，若 `top + h > innerHeight - 8` 则翻转到选中点上方（`y - h - 12`）；左右边界一并收进视口留 8px；滑入动画按方向切换（`slide-in-from-top-1` / `slide-in-from-bottom-1`）；用 functional setState 避免依赖循环
+
+**验证**：新增 2 个单测（底部翻转 above / 中部默认 below）；CDP 实测 3 场景全过——底部 y=766 → 卡片 top=632 完整可见且 `slideTop`；中部 y=413 → 默认下方；右侧 x=1384 → 卡片 right=1386 收进视口。门禁：typecheck / lint / vitest 902 / build:web 全绿。commit cc631c1。
+
+**复盘**：
+- ✅ **定位类 UI 必须"测了再说"**：固定偏移看似简单，实际溢出场景（底部/右侧）用户一划就露馅。用 layout effect 实测真实尺寸再决定方向是通用解法
+- ✅ **先估算渲染 + layout 阶段修正**避免闪跳：paint 前同步改位置，用户无感知
+- 📌 窗口 resize 后卡片不重新定位（沿用原行为，未扩 scope）；如需可监听 resize 重算
+
+---
+
 ## 2026-08-09 · SSH 终端输入被 cd 拦截 hack 改写（根因：行缓冲残留 + 元字符黑名单缺 `*`/`?`）→ 方案 A 远端静默注入 OSC 7
 
 **任务**：用户报告"SSH 终端输入命令会弹出别的字眼"，例如输入 `yum install httpd* -y` 终端却显示 `yum install httpdyum install httpd* -y'; printf '\033]7;file://localhost%s\007' "$(pwd -P)"`。问：为什么 / 当前终端逻辑是什么 / 有没有开源方案。
