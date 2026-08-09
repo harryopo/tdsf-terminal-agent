@@ -99,6 +99,10 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         workspaceRoot: live.getWorkspaceRoot(),
         activeFile: live.getActiveFile(),
         sshSessionId: live.getSshRustSessionId(),
+        // TDSF 魔改 (2026-08-09): 活跃终端 scrollback 尾部摘要（已脱敏），
+        // transport.ts formatTerminalContextBlock 会注入 <terminal-context> 块，
+        // 让 agent 每轮自动看到用户最近的终端输出，无需额外工具调用。
+        terminalOutput: live.getTerminalContext(),
       };
     },
     getPlanMode: () => usePlanStore.getState().active,

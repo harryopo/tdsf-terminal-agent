@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTEXT_BLOCK_RE,
   formatEnvBlock,
+  formatTerminalContextBlock,
   stripContextBlock,
 } from "./transport";
 
@@ -19,6 +20,7 @@ type LiveSnapshot = {
   workspaceRoot: string | null;
   activeFile: string | null;
   sshSessionId: number | null;
+  terminalOutput: string | null;
 };
 
 const makeLive = (over: Partial<LiveSnapshot> = {}): LiveSnapshot => ({
@@ -27,6 +29,7 @@ const makeLive = (over: Partial<LiveSnapshot> = {}): LiveSnapshot => ({
   workspaceRoot: null,
   activeFile: null,
   sshSessionId: null,
+  terminalOutput: null,
   ...over,
 });
 
@@ -63,6 +66,33 @@ describe("formatEnvBlock — env 上下文块生成", () => {
   it("sshSessionId 为 null 时不注入", () => {
     const block = formatEnvBlock(makeLive({ cwd: "/tmp", sshSessionId: null }));
     expect(block).not.toContain("ssh_session_id");
+  });
+});
+
+describe("formatTerminalContextBlock — 终端尾部输出注入", () => {
+  it("空 terminalOutput 返回 null", () => {
+    expect(formatTerminalContextBlock(makeLive())).toBeNull();
+  });
+
+  it("短输出原样注入 <terminal-context> 块", () => {
+    const block = formatTerminalContextBlock(
+      makeLive({ terminalOutput: "$ ls\nfile1 file2" }),
+    );
+    expect(block).toContain("<terminal-context>");
+    expect(block).toContain("$ ls");
+    expect(block).toContain("file1 file2");
+    expect(block).toContain("</terminal-context>");
+  });
+
+  it("超过 30 行截取尾部", () => {
+    const long = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
+    const block = formatTerminalContextBlock(
+      makeLive({ terminalOutput: long }),
+    );
+    expect(block).toContain("line 49");
+    expect(block).toContain("line 20");
+    expect(block).not.toContain("line 19");
+    expect(block).not.toContain("line 0");
   });
 });
 
