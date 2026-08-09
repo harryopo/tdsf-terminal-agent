@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · SSH 终端"异常输出"真相取证 + 清理 hack 残留垃圾文件（§37.39）。接手请直接看 **§37.39**（最新）+ **§37.38**（终端字体/主题）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · SSH 连接进度界面（取代空状态页）（§37.40）。接手请直接看 **§37.40**（最新）+ **§37.39**（终端异常取证）+ **§37.38**（终端字体/主题）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
 
 ---
 
@@ -3534,3 +3534,25 @@ CDP 全新状态实测通过。commit 见上。
 - ✅ **文件名带分号的删除要 `--` + 单引号**：`rm -f -- '/root/;' /root/HTTP`，否则 `;` 被 shell 当命令分隔符
 - 📌 **用户当前会话仍在续行模式**：需先 Ctrl+C（或输入闭合 `'`）退出 `>` 提示符再操作；新建 SSH 会话则直接是干净环境
 - 📌 ROADMAP #12（SSH cwd 同步 UI 复验）仍遗留：可在 192.168.45.130 上 `cd /etc` 看文件树跟随 + 翻译/选词未破坏
+
+### 37.40 SSH 连接进度界面 → 握手期间显示美观 5 步进度（取代空状态页）（2026-08-09 ✅ 完成）
+
+**现象（用户反馈）**："资源管理器和终端的同步会卡，资源管理器没加载好终端就不显示。终端的稳定和流畅是最优先的，资源管理器异步加载不阻塞终端。"
+
+**调研（两轮 search agent 深度取证）**——**文件树不阻塞终端（代码层面已确认）**：
+1. WorkspaceSurface 左右面板是 ResizablePanelGroup 兄弟节点，FileExplorer 加载纯异步（`void fetchChildren`），`explorerSource` 不进入终端渲染链路
+2. **真正延迟源 = SSH connecting 数秒**：SSH 连接需 TCP→握手→认证→PTY 建立（`await open_pty`），数秒内 `isSpaceSshConnected=false` → 终端区显示 NoTerminalEmptyState 空状态引导页（用户误以为"终端坏了"）
+3. **另一延迟源 = cold tab**：本地默认 tab `cold:true` 被 `selectLiveTerminals` 过滤 → TerminalPane 未挂载（用户未选"本地终端自动启动"，未改）
+4. **用户误关联**：文件树在 SSH connected 后才开始加载（`navigateTo` 在 `sshConnect` await 之后），与终端同时出现 → 用户看到"文件树转圈 + 终端没出来"误以为因果关系
+
+**修改（commit ee43dde）**：
+1. **新增 `SshConnectingOverlay.tsx`**：美观的 5 步进度界面（建立连接→SSH 握手→验证主机→身份认证→启动终端）；当前步骤 amber 脉冲 + 扩散环动画，已完成步骤 primary 色 + Tick02Icon；服务器信息卡片（`user@host:port`）；磨砂背景
+2. **改 `WorkspaceSurface.tsx`**：新增 `sshConnectingInfo` prop + `showSshConnecting` 判定；渲染优先级 `空状态页 < connecting overlay < SSH 终端`（后者覆盖前者）；终端栈隐藏条件新增 `showSshConnecting`
+3. **改 `App.tsx`**：新增 `SSH_CONNECTING_STATES` 集合 + `isSpaceSshConnecting` + `sshConnectingInfo`；`showNoTerminalEmptyState` 新增 `!isSpaceSshConnecting`（SSH 连接中不显示空状态页）
+
+**验证**：门禁 typecheck / lint / vitest 902 / build:web 全绿。桌面端实测待用户验证（connecting 只在握手几秒内出现）。
+
+**复盘**：
+- ✅ **先取证再下结论**（继承 §37.39 教训）：两轮 search agent 五方向交叉验证（渲染链路/布局/CSS/ErrorBoundary/cold tab），确认文件树不阻塞终端后才定位真正延迟源
+- ✅ **渲染优先级天然正确**：connecting overlay 在空状态页之后、SSH 终端之前渲染——SSH 连上后 `showSshTerminal=true → showSshConnecting=false`（条件 `!showSshTerminal`），SshTerminalHost 在上层接管，无需额外切换逻辑
+- 📌 **cold tab 机制未改**：用户只选了"SSH 连接进度"，未选"本地终端自动启动"。本地终端仍需手动 warmUp。如需改进可后续做（方案：启动后自动 warmUp active tab 或 SSH Space 不 warmUp 走 connecting overlay）
