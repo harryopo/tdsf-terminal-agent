@@ -1014,6 +1014,31 @@ class StrandsAgentAdapter:
         except Exception as e:
             logger.warning(f"todo_write tool attach failed: {e}")
 
+        # TDSF 魔改 (2026-08-09): 方案书集成度补齐 — 4 个新工具
+        try:
+            from strands_backend.tools.get_terminal_output import make_get_terminal_output_tool
+            all_tools.append(make_get_terminal_output_tool(ctx))
+        except Exception as e:
+            logger.warning(f"get_terminal_output tool attach failed: {e}")
+
+        try:
+            from strands_backend.tools.config_diff import make_config_diff_tool
+            all_tools.append(make_config_diff_tool(ctx))
+        except Exception as e:
+            logger.warning(f"config_diff tool attach failed: {e}")
+
+        try:
+            from strands_backend.tools.backup_restore import make_backup_restore_tool
+            all_tools.append(make_backup_restore_tool(ctx))
+        except Exception as e:
+            logger.warning(f"backup_restore tool attach failed: {e}")
+
+        try:
+            from strands_backend.tools.confidence_tool import make_confidence_tool
+            all_tools.append(make_confidence_tool(ctx))
+        except Exception as e:
+            logger.warning(f"confidence tool attach failed: {e}")
+
         # P0-6: main agent 挂载子 agent 工具（agent-as-tool 委派）
         sub_agent_names = set()
         if agent_id == "main" or agent_id not in _SUB_AGENT_SPECS:
