@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · 终端中文字体无衬线化 + 主题设置合并明暗切换（§37.38）。接手请直接看 **§37.38**（最新）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · SSH 终端"异常输出"真相取证 + 清理 hack 残留垃圾文件（§37.39）。接手请直接看 **§37.39**（最新）+ **§37.38**（终端字体/主题）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
 
 ---
 
@@ -3516,3 +3516,21 @@ CDP 全新状态实测通过。commit 见上。
 **验证**：CDP——`resolveFontFamily("")` 含 `"Microsoft YaHei"`；设置窗口（settings.html?tab=themes）无分组标题、显示模式按钮存在、点击深色 → root class light→dark 翻转 + 激活态正确。门禁：typecheck/lint/vitest 902/build:web 全绿。
 
 **注意**：改 FALLBACK_CHAIN 同时影响编辑器（Monaco detectMonoFontFamily 同源），综合效果一致（无衬线中文）。明暗模式持久化在 localStorage `tdsf-theme-mode`（ThemeProvider 处理）。
+
+### 37.39 SSH 终端"异常输出"真相取证 + 清理 hack 残留垃圾文件（2026-08-09 ✅ 完成）
+
+**现象（用户反馈）**：SSH 终端 `ll` 显示目录里有奇怪文件 `';'`（18 字节）和 `HTTP`（6 字节）；输入 `ls'` 后进入 `>` 多行提示符，后续输入"没反应"，用户怀疑"终端交互渲染展示还是有问题"。
+
+**取证（真相）**——**不是渲染问题，代码已干净**：
+1. **后端注入脚本干净**：`/tmp/tdsf-osc7-*.bash`（4 个，389 字节 644）cat dump 完全正常，只有 OSC 7 cwd 钩子；`.bashrc` 无 PROMPT_COMMAND/osc7 异常
+2. **前端输入链路干净**：`SshTerminalHost.tsx` 通读确认——`transport.write` 原样透传 `handle.write(data)`，cd 拦截 hack 已删（2026-08-09 方案 A 取代）
+3. **`';'` 和 `HTTP` 是真实存在的文件**（非显示错误）：`/root/;` 内容 od dump = `-geten hosts`（18B）、`/root/HTTP` = `- \`（6B）——8月7日 hack 时代"cd 拦截 hack"把 `yum install httpd* -y` 改写为 `cd '...'; printf ...; yum install httpdyum install httpd* -y` 时 shell 解析碎片误创建；`.bash_history` 佐证（残留 `cd /varcd '/var'; printf...` 等坏命令）
+4. **`ls'` 后的 `>` 是 bash 正常续行行为**（非卡死）：单引号未闭合 → PS2 多行模式；后续输入都是同一条未完成命令的续行内容；`> ls` 后的命令列表是 Tab 补全
+
+**解决**：paramiko（192.168.45.130 root/123）远程执行 `rm -f -- '/root/;' /root/HTTP` → 验证 `ls -la /root` 只剩正常文件（anaconda-ks.cfg 等）。临时脚本已删，无仓库残留。无代码改动 → 无需 commit。
+
+**复盘**：
+- ✅ **"异常输出"先取证再下结论**：用户直觉"渲染有问题"，实际是服务器真实残留文件 + bash 正常行为。三处独立证据链（注入脚本 dump / 前端源码通读 / 服务器文件 od dump）交叉验证后才向用户下结论
+- ✅ **文件名带分号的删除要 `--` + 单引号**：`rm -f -- '/root/;' /root/HTTP`，否则 `;` 被 shell 当命令分隔符
+- 📌 **用户当前会话仍在续行模式**：需先 Ctrl+C（或输入闭合 `'`）退出 `>` 提示符再操作；新建 SSH 会话则直接是干净环境
+- 📌 ROADMAP #12（SSH cwd 同步 UI 复验）仍遗留：可在 192.168.45.130 上 `cd /etc` 看文件树跟随 + 翻译/选词未破坏
