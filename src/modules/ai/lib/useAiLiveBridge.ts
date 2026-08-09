@@ -262,8 +262,27 @@ export function useAiLiveBridge(params: Params) {
       console.warn("[tdsf] inject_terminal listen failed:", e);
     });
 
+    // TDSF 魔改 (2026-08-09): 监听 sidecar update_todos notification
+    // Python todo_write 工具 → rust_bridge notification → Rust 转发 → 这里更新 TodoStore
+    let unlistenTodos: (() => void) | null = null;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const { useTodosStore } = await import("../store/todoStore");
+      unlistenTodos = await listen<{
+        sessionId: string;
+        todos: Array<{ id: string; title: string; description?: string; status: string }>;
+      }>("sidecar:update_todos", (event) => {
+        const { sessionId, todos } = event.payload;
+        if (!sessionId || !Array.isArray(todos)) return;
+        useTodosStore.getState().setTodos(sessionId, todos as never);
+      });
+    })().catch((e) => {
+      console.warn("[tdsf] update_todos listen failed:", e);
+    });
+
     return () => {
       if (unlistenInject) unlistenInject();
+      if (unlistenTodos) unlistenTodos();
     };
   }, [setLive, terminalRefs]);
 }
