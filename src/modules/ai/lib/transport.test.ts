@@ -20,6 +20,7 @@ type LiveSnapshot = {
   workspaceRoot: string | null;
   activeFile: string | null;
   sshSessionId: number | null;
+  sshConnection: string | null;
   terminalOutput: string | null;
 };
 
@@ -29,6 +30,7 @@ const makeLive = (over: Partial<LiveSnapshot> = {}): LiveSnapshot => ({
   workspaceRoot: null,
   activeFile: null,
   sshSessionId: null,
+  sshConnection: null,
   terminalOutput: null,
   ...over,
 });
@@ -58,14 +60,20 @@ describe("formatEnvBlock — env 上下文块生成", () => {
     expect(block).toContain("active_terminal_mode: private");
   });
 
-  it("sshSessionId 注入 ssh_session_id（LLM 感知 SSH 会话）", () => {
-    const block = formatEnvBlock(makeLive({ sshSessionId: 7 }));
-    expect(block).toContain("ssh_session_id: 7");
+  it("sshConnection 注入 connected_to（友好格式 user@host）", () => {
+    const block = formatEnvBlock(
+      makeLive({ sshConnection: "root@192.168.45.130" }),
+    );
+    expect(block).toContain("connected_to: root@192.168.45.130");
+    // 不应再泄露内部 session id 数字
+    expect(block).not.toContain("ssh_session_id");
   });
 
-  it("sshSessionId 为 null 时不注入", () => {
-    const block = formatEnvBlock(makeLive({ cwd: "/tmp", sshSessionId: null }));
-    expect(block).not.toContain("ssh_session_id");
+  it("sshConnection 为 null 时不注入 connected_to", () => {
+    const block = formatEnvBlock(
+      makeLive({ cwd: "/tmp", sshConnection: null }),
+    );
+    expect(block).not.toContain("connected_to");
   });
 });
 

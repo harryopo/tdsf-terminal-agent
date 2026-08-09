@@ -1,4 +1,5 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { Chat, type UIMessage } from "@ai-sdk/react";
 import {
   type ChatTransport,
@@ -99,6 +100,22 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         workspaceRoot: live.getWorkspaceRoot(),
         activeFile: live.getActiveFile(),
         sshSessionId: live.getSshRustSessionId(),
+        // TDSF 魔改 (2026-08-09): 友好的 SSH 连接标识（user@host），
+        // 替代原先注入到 <env> 的 ssh_session_id 数字（实现细节泄露）。
+        // 从 sshStore 取活跃 connected 会话的 params.host/user 组装。
+        sshConnection: (() => {
+          const sshState = useSshStore.getState();
+          const active = sshState.sessions.find(
+            (s) => s.id === sshState.activeSessionId,
+          );
+          const session =
+            active && isSessionConnected(active)
+              ? active
+              : sshState.sessions.find((s) => isSessionConnected(s));
+          if (!session) return null;
+          const { user, host } = session.params;
+          return `${user}@${host}`;
+        })(),
         // TDSF 魔改 (2026-08-09): 活跃终端 scrollback 尾部摘要（已脱敏），
         // transport.ts formatTerminalContextBlock 会注入 <terminal-context> 块，
         // 让 agent 每轮自动看到用户最近的终端输出，无需额外工具调用。
