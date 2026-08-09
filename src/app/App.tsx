@@ -442,7 +442,33 @@ export default function App() {
   // 而不是 sessionId 一创建就切换。自动连接开始后 sessionId 立即生成,
   // 但此时 Rust SSH 握手/认证/SFTP 还未就绪, 提前切视图会导致
   // FileExplorer 加载远程失败 + 按钮无法点击。
-  const showNoTerminalEmptyState = isDefaultColdTab && !isSpaceSshConnected;
+  // TDSF 魔改 (2026-08-09): SSH 连接进度——connecting 态显示进度界面而非空状态页。
+  // 用户反馈"资源管理器没加载好终端就不显示"——真相是 SSH 握手期间 (数秒)
+  // 终端区域显示 NoTerminalEmptyState 空状态引导页, 用户误以为"终端坏了"。
+  // 改为连接过程中显示美观的 5 步进度界面, 连接成功后无缝切换到 SSH 终端。
+  // 核心原则："终端流畅最优先, 资源管理器异步加载不阻塞终端"。
+  const SSH_CONNECTING_STATES = new Set<string>([
+    "connecting",
+    "handshaking",
+    "host_verifying",
+    "authenticating",
+    "authenticated",
+    "reconnecting",
+  ]);
+  const isSpaceSshConnecting =
+    !!spaceSshSession &&
+    !isSpaceSshConnected &&
+    SSH_CONNECTING_STATES.has(spaceSshSession.state);
+  const sshConnectingInfo = isSpaceSshConnecting
+    ? {
+        host: spaceSshSession.params?.host ?? "",
+        port: spaceSshSession.params?.port ?? 22,
+        user: spaceSshSession.params?.user ?? "",
+        state: spaceSshSession.state,
+      }
+    : null;
+  const showNoTerminalEmptyState =
+    isDefaultColdTab && !isSpaceSshConnected && !isSpaceSshConnecting;
   // TDSF 魔改 2026-07-30: SSH 终端接管改为按 tab 维度绑定
   // ---------------------------------------------------------------
   // 修复"SSH 连接后打开文件再切回 shell tab 变成本地 shell"的 bug。
@@ -2272,6 +2298,7 @@ export default function App() {
                       // 保证 connecting/failed 时不提前渲染 SSH 终端。
                       // 2026-07-30 (#19): 透传 allocId 给 SshTerminalHost 分配稳定 leafId。
                       sshSessionId={workspaceSshSessionId}
+                      sshConnectingInfo={sshConnectingInfo}
                       allocId={allocId}
                       // 2026-07-31 翻译模块修复: SSH 终端 leafId 上报
                       onSshLeafId={(lid) => {
