@@ -255,19 +255,14 @@ class LongContextManager:
         return "\n\n".join(chunks)
 
     # ----------------------------------------------------------
-    # summarize — 摘要（hash 模拟，无 LLM 依赖）
+    # summarize — 摘要（TDSF 魔改 2026-08-09: 真 LLM 调用 + hash 回退）
     # ----------------------------------------------------------
 
     def summarize(self, text: str, max_tokens: int = 0) -> str:
-        """生成文本摘要（用 hash 模拟，无真实 LLM）。
+        """生成文本摘要（优先用 LLM，回退到 hash 截断）。
 
-        策略（enabled=True 时）：
-        1. 取前 N 字符（N = max_tokens × _CHARS_PER_TOKEN）
-        2. 附加 hash 指纹（用于溯源）
-        3. 标注 "[summary]"
-
-        策略（enabled=False 时）：
-        - 直接取前 N 字符（无 hash 标注）
+        TDSF 魔改 (2026-08-09): 从 hash 模拟重写为真 LLM 摘要。
+        当 LLM 配置可用时调用模型生成摘要；不可用时回退到截断+hash。
 
         Args:
             text: 待摘要的文本
@@ -282,20 +277,83 @@ class LongContextManager:
         effective_max: int = max_tokens if max_tokens > 0 else self.summary_max_tokens
         max_chars: int = int(effective_max * _CHARS_PER_TOKEN)
 
-        # 关闭状态 → 简化路径
+        # 关闭状态 → 简化路径（截断）
         if not self.enabled:
             return text[:max_chars]
 
-        # 启用状态 → hash 摘要
-        # 取前 N 字符 + 末尾 hash 指纹
+        # 文本未超长 → 直接返回原文
+        if len(text) <= max_chars:
+            return text
+
+        # TDSF 魔改: 尝试 LLM 摘要
+        summary = self._llm_summarize(text, effective_max)
+        if summary:
+            return summary
+
+        # 回退: hash 截断（离线可用）
         text_hash: str = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         truncated: str = text[:max_chars]
+        return f"[summary] {truncated}... [hash={text_hash}]"
 
-        # 如果文本被截断，附加省略号 + hash
-        if len(text) > max_chars:
-            return f"[summary] {truncated}... [hash={text_hash}]"
-        # 文本未超长 → 直接返回原文（加 hash 标注）
-        return f"[summary] {truncated} [hash={text_hash}]"
+    def _llm_summarize(self, text: str, max_tokens: int) -> str | None:
+        """用已配置的 LLM 生成摘要（失败返回 None）。
+
+        TDSF 魔改 (2026-08-09): 从 sidecar 的 LLMConfig 取模型，
+        发一个简单摘要请求。失败时静默返回 None 让上层回退到 hash。
+        """
+        try:
+            from core.llm_config import load_config
+
+            config = load_config()
+            if not config.is_configured:
+                return None
+
+            # 限制输入大小（取首尾各 40% 中间省略）
+            input_max = int(max_tokens * _CHARS_PER_TOKEN * 4)  # 4x 摘要目标
+            if len(text) > input_max:
+                head = text[:int(input_max * 0.4)]
+                tail = text[-int(input_max * 0.4):]
+                truncated = f"{head}\n\n…[中间内容省略 {len(text) - input_max} 字符]…\n\n{tail}"
+            else:
+                truncated = text
+
+            prompt = (
+                f"请将以下内容压缩为 {max_tokens} tokens 以内的摘要，"
+                f"保留关键信息、命令和结论，去除冗余细节：\n\n{truncated}"
+            )
+
+            # 用 httpx 直调 OpenAI 兼容接口（不依赖 openai SDK）
+            import json as _json
+            import urllib.request
+
+            url = f"{config.base_url or 'https://api.openai.com/v1'}/chat/completions"
+            payload = _json.dumps({
+                "model": config.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {config.api_key}",
+                },
+                method="POST",
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = _json.loads(resp.read().decode("utf-8"))
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if content:
+                    return f"[LLM 摘要] {content.strip()}"
+
+            return None
+        except Exception as e:
+            logger.debug(f"LLM summarize failed, falling back to hash: {e}")
+            return None
 
     # ----------------------------------------------------------
     # 元数据
