@@ -6,6 +6,38 @@
 
 ---
 
+## 2026-08-09 · Agent 深度进化调研（并发修复 + max_tokens + 双模式 SSH + 任务规划 + 压缩）
+
+**任务（用户反馈）**：
+1. 长 agent 对话报错 "Agent is already processing a request. Concurrent invocations are not supported"
+2. 教学 agent 报错 "Model stopped generating due to maximum token limit"（MaxTokensReachedException）
+3. 大方向需求：max_tokens 无上限 + 任务规划 UI + 对话压缩 + SSH 工具前台/后台双模式 + 参考开源架构
+
+**调研（三路并行 search agent）**：
+- **SSH 工具链路**：`ssh_command` 走后台独立 exec channel（session.rs:646），用户不可见；`suggest_command` 走 `injectIntoActivePty` → xterm，用户可见。两条链路并行互不相通
+- **任务规划**：前端已有完整 TodoStrip UI（来自 terax），但只在 Vercel SDK 路径生效；Sidecar 路径不装配 `todo_write` 工具
+- **对话压缩**：前端有 5 级分级压缩（compact.ts），Sidecar 只是截断最近 20 条，无 LLM 自动摘要
+- **max_tokens**：OpenAI 可不传实现无上限，Anthropic 必须传正整数
+
+**已修复（本轮 commit）**：
+1. **并发崩溃**（commit e1b64c2）：per-(agent, session, perm) `threading.RLock` 保护 `strands_agent(prompt)` 调用
+2. **max_tokens 截断**（commit d535e8f）：默认值 2048→8192（5 处）
+3. **教学 UI 5 大改进**（commit 3f562b3）：移除工具上限 / 基于 agent id 切换 / 移除疑问按钮 / SSH 命令注入修复 / 预测回显
+4. **终端执行模式开关**（commit cbc6c22）：chatStore + SuggestCommandCard + TdsfAgentPanel 开关按钮
+5. **SSH cwd 显示修复**（commit 35c7377）：getTerminalContext SSH 优先
+6. **session_id 泄露修复**（commit 7816f3f）：env 块移除内部数字 id
+
+**方案文档**：`docs/PLAN-AGENT-DEEP-EVOLUTION.md`（6 个子方向 + 实施路线图 P0-P3）
+
+**复盘**：
+- ✅ **并发 bug 定位精准**：`_agent_cache` 缓存的 Strands Agent 有内部状态，用户停止+重发竞态直接崩溃。RLock 是最小侵入解法
+- ✅ **max_tokens 2048 太保守**：这个默认值来自早期配置，教学 agent 6 板块内容轻松超出。8192 是合理中间值，后续方案建议条件传参
+- ✅ **双模式 SSH 不需要两个工具**：调研确认一个 `ssh_command(visible=true/false)` 参数即可，LLM 不需要决策走哪个——开关由前端控制
+- 📌 **TodoStrip 双轨联动是高复杂度任务**：需要 sidecar↔前端协议层新增工具回调通道，建议独立里程碑
+- 📌 **对话压缩增强是低悬果实**：transport.ts 的 trimMessagesForSidecar 可以直接复用 compact.ts 策略，P0 优先
+
+---
+
 ## 2026-08-09 · 教学 Agent 5 大改进（工具上限/渲染时机/疑问按钮/SSH命令注入/预测回显）
 
 **任务（用户反馈）**：用户切到 agent 模块后发现 5 个问题：

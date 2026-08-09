@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · Agent 终端上下文自动注入（每轮对话携带 scrollback 尾部）（§37.41）。接手请直接看 **§37.41**（最新）+ **§37.40**（SSH 连接进度）+ **§37.39**（终端异常取证）+ **§37.38**（终端字体/主题）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · Agent 深度进化调研 + 6 commit 修复（并发/max_tokens/教学改进/终端执行/SSH cwd/session_id）（§37.42）。接手请直接看 **§37.42**（最新）+ **§37.41**（终端上下文注入）+ **§37.40**（SSH 连接进度）+ **§37.39**（终端异常取证）+ **§37.38**（终端字体/主题）+ **§37.36**（SSH 方案 A）。
 
 ---
 
@@ -3585,3 +3585,28 @@ CDP 全新状态实测通过。commit 见上。
 - 📌 **自动注入 vs 工具调用**：自动注入（30 行）满足用户核心诉求"agent 能看到终端"；`get_terminal_output` 工具仍保留作为"读更多历史"补充
 - 📌 **脱敏已覆盖**：`getTerminalContext` 内部调用 `redactSensitive(buf)`，密码/密钥不会泄漏给 LLM
 - 📌 **下一步**：用户可能需要在桌面端 `pnpm tauri:dev` 实测验证 agent 是否能正确引用终端上下文
+
+---
+
+### 37.42 Agent 深度进化：6 commit 修复 + 方案文档（2026-08-09 ✅ 完成）
+
+**本轮 commit 列表**：
+| commit | 内容 |
+|--------|------|
+| `7816f3f` | env 块移除 ssh_session_id 数字 → 新增 connected_to 友好字段 + system prompt 禁泄露内部 id |
+| `35c7377` | getTerminalContext/findCwd SSH 优先（SSH 场景不再读到隐藏的本地 PowerShell） |
+| `3f562b3` | 教学 agent 5 大改进：移除工具上限 / 基于 agent id 切换 UI / 移除疑问按钮 / SSH 命令注入 / 预测回显 |
+| `cbc6c22` | 终端执行模式开关：chatStore autoExecuteInTerminal + SuggestCommandCard 自动执行 + TdsfAgentPanel 开关按钮 |
+| `e1b64c2` | 并发崩溃修复：per-(agent, session, perm) threading.RLock 保护 strands_agent(prompt) |
+| `d535e8f` | max_tokens 默认值 2048→8192（LLMConfig + model_adapter 5 处） |
+
+**方案文档**：`docs/PLAN-AGENT-DEEP-EVOLUTION.md`
+- 6 个子方向（max_tokens 无上限 / 任务完成感知 / 对话压缩 / 任务规划 UI / SSH 双模式 / 开源架构参考）
+- 实施路线图 P0-P3（按依赖排序）
+- SSH 工具双模式核心决策：不新增第二个工具，ssh_command 加 `visible` 参数 + sidecar→前端 injectTerminal 新通道
+
+**下一步**（ROADMAP #14-#17）：
+1. **P0 低悬果实**：max_tokens 条件传参 + 对话压缩增强（Sidecar 复用 compact.ts）
+2. **P1 中复杂度**：SSH 工具 visible 模式（3 步链路：Python→Rust→前端）+ 任务完成感知 prompt
+3. **P2 高复杂度**：TodoStrip 双轨联动（Sidecar 驱动前端 todo UI）
+4. **P3 高复杂度**：LLM 自动摘要（long_context.py 重写）
