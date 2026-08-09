@@ -58,6 +58,17 @@ type LiveSnapshot = {
    * null 表示当前无活跃 SSH 会话（本地终端模式）。
    */
   sshSessionId: number | null;
+  /**
+   * 活跃终端的 scrollback 尾部摘要（已脱敏）。
+   *
+   * TDSF 魔改 (2026-08-09): 用户反馈"agent 看不到终端，不知道我在干啥"。
+   * 根因：Python Sidecar 路径的 <env> 块只注入元数据（cwd/sshSessionId），
+   * 没有终端屏幕内容 → agent 无上下文感知。
+   * 现在每轮自动注入终端尾部输出（截取 N 行），让 agent 收到消息时就能看到
+   * 用户最近在终端做了什么，无需额外工具调用。
+   * null = 无活跃终端 / 隐私模式。
+   */
+  terminalOutput: string | null;
 };
 
 type Deps = {
@@ -113,8 +124,16 @@ export function createContextAwareTransport(deps: Deps) {
     const live = deps.getLive();
     const projectMemory = await readTdsfMd(live.workspaceRoot);
     const envBlock = formatEnvBlock(live);
-    const messagesForRun = envBlock
-      ? injectEnvIntoLastUser(options.messages, envBlock)
+    // TDSF 魔改 (2026-08-09): 自动注入终端尾部输出到每轮对话，
+    // 让 agent 无需额外工具调用就能感知用户在终端做了什么。
+    // 双轨受益：Python Sidecar（<env>+<terminal-context> 注入 input）+
+    // Vercel SDK（注入 messagesForRun 最后一条 user message）。
+    const terminalBlock = formatTerminalContextBlock(live);
+    const contextBlock = [envBlock, terminalBlock]
+      .filter(Boolean)
+      .join("\n\n");
+    const messagesForRun = contextBlock
+      ? injectEnvIntoLastUser(options.messages, contextBlock)
       : options.messages;
 
     // === TDSF 阶段3: Sidecar 路由分支 =========================================
@@ -310,6 +329,31 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
   }
   if (lines.length === 0) return null;
   return `<env>\n${lines.join("\n")}\n</env>`;
+}
+
+/**
+ * 构建终端尾部输出上下文块，注入到每轮对话让 agent 自动感知终端状态。
+ *
+ * TDSF 魔改 (2026-08-09): 用户反馈"agent 看不到终端"。
+ * 上游 terax 的 <terminal-context> 标签已有 strip 正则（CONTEXT_BLOCK_RE），
+ * 说明原设计就有终端上下文注入的预留位——现在补全实现。
+ *
+ * 设计：
+ * - 截取尾部 MAX_LINES 行（避免 token 爆炸，30 行约 500-1500 tokens）
+ * - 隐私模式不注入（terminalPrivate 已在 getTerminalContext 中过滤）
+ * - 空终端不注入（返回 null）
+ * - 已脱敏（getTerminalContext 内部调 redactSensitive）
+ */
+const TERMINAL_CONTEXT_MAX_LINES = 30;
+
+export function formatTerminalContextBlock(live: LiveSnapshot): string | null {
+  if (!live.terminalOutput) return null;
+  const lines = live.terminalOutput.split("\n");
+  const tail =
+    lines.length > TERMINAL_CONTEXT_MAX_LINES
+      ? lines.slice(-TERMINAL_CONTEXT_MAX_LINES).join("\n")
+      : live.terminalOutput;
+  return `<terminal-context>\n${tail}\n</terminal-context>`;
 }
 
 export const CONTEXT_BLOCK_RE =

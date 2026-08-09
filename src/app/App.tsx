@@ -2070,6 +2070,9 @@ export default function App() {
     openPreviewTab,
     newAgentTab,
     terminalRefs,
+    // TDSF 魔改 (2026-08-09): 传 SSH 终端 leafId，让 getTerminalContext
+    // 在 SSH 场景下也能读到终端 scrollback（SSH 终端不在 tabs 数组里）
+    getSshLeafId: () => sshActiveLeafIdRef.current,
   });
 
   const shell = (
