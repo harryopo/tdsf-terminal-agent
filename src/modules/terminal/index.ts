@@ -20,6 +20,7 @@ export {
 export {
   clearFocusedTerminal,
   disposeSession,
+  leafGridSelection,
   leafHasForegroundProcess,
   leafIdForPty,
   navigateFocusedBlocks,

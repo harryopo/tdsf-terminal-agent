@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-08 · 其他 AI 优化 30 commits 已复核并推送远程（§37.31 门禁复验 / §37.32 幽灵 sessionId / §37.33 WorkspaceFs 重构 P2-1~P2-4 / §37.34 SSH 选中翻译调查进行中）。当前进行中：**§37.34 SSH 选中翻译链路收尾**（ROADMAP 8.5，待用户重连实测）。接手请直接看 **§37.34**（进行中）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · SSH 选中翻译链路收尾完成（§37.35：修剪 effect 误删 SSH leaf handle 已修 + CDP 全链路实测）。接手请直接看 **§37.35**（最新交接）+ **§37.34**（前序调查）+ **§37.33**（WorkspaceFs）。
 
 ---
 
@@ -3439,14 +3439,32 @@ CDP 全新状态实测通过。commit 见上。
 
 **待验证（用户视角 R9）**：创建 SSH Space → 资源管理器无闪跳直接远程树；断开会话 → 降级横幅。
 
-### 37.34 SSH 选中翻译深层调查 + 黑屏事件（2026-08-08 进行中）
+### 37.34 SSH 选中翻译深层调查 + 黑屏事件（2026-08-08 进行中 → 08-09 收尾）
 
 **修复**（0475d4d）：leafId 上报改 useEffect 生命周期（render 期副作用 + App 闪动误清 → 挂载设/卸载清）。CDP 验证 terminalRefs 注册 ✓。
 
-**未解问题（进行中）**：
+**未解问题（进行中 → 已由 §37.35 解决）**：
 1. **SSH session 无 rendererPool slot**：getSlotForLeaf(sshLid)=null → captureActiveSelection 取 selection 空 → 浮层不弹。嫌疑：attachSession（useTerminalSession.ts:908，TerminalPane 挂载时一次性）与 SSH 异步 openTransport（session 晚创建）时序 → container 恒 null → bindLeafToSlot 跳过（:770）
 2. **黑屏事件**：双 connected 会话（旧/新）+ sshActiveLeafId 与渲染 leafId 不同步 → 终端失联黑屏（重启恢复）
 
-**待验证**：用户重连 SSH（干净状态）——正常则收尾；失败则深挖 attachSession 时序（session 创建后补 attach/bind）。
+**收尾结论（2026-08-09，见 §37.35）**：实测 slot 正常存在（leaf 5 有 slot、term.select 成功），"无 slot"猜错；真根因是修剪 effect 误删 terminalRefs 中的 SSH handle。
 
-**门禁**：typecheck/test 900 全过（0475d4d 后）。
+### 37.35 SSH 划词翻译 / Ask 浮层不弹 — 根因与修复（2026-08-09 ✅ 完成）
+
+**现象**：SSH 进入服务器终端后，选中文本无「翻译 / Ask TDSF」浮层。
+
+**CDP 实测**（SSH 已连 192.168.45.130，ws://127.0.0.1:9222）：
+- `sshActiveLeafId=5`，`terminalHasLeaf(5)=false`（terminalRefs 无 SSH leaf）；rendererPool slots 含 leaf 5（slot 绑定正常，term.select 成功）
+- → `captureActiveSelection` SSH 分支 `terminalRefs.has(sshLid)` 恒 false → 回退本地终端（隐藏无选区）→ null → 浮层永不弹出
+
+**根因**：`App.tsx:941-956` 修剪 effect 只把 `tab.paneTree` 的 leafId 视为"存活"，SSH 终端 leafId（不在 paneTree，SshTerminalHost 由 WorkspaceSurface 独立挂载）在每次 tabs 变化时被修剪掉 terminalRefs handle + searchAddon，并误调 `disposeSession`；SshTerminalHost 已挂载、callback ref 不再触发 → handle 无法自行恢复。
+
+**修改**（2 处，见 git log 2026-08-09）：
+1. `App.tsx` 修剪 effect：`sshActiveLeafIdRef.current` 纳入 live 集合（防 handle/searchAddon 被删、session 被误 dispose）
+2. `App.tsx` `captureActiveSelection`：SSH 分支改 `leafGridSelection(sshLid)`（rendererPool slot 直读，slot 绑定与组件生命周期一致，天然自愈，不再依赖 terminalRefs 注册时机）；`src/modules/terminal/index.ts` 导出 `leafGridSelection`
+
+**CDP 全链路验证**：HMR 后 sshActiveLeafId=6 → `terminalHasLeaf(6)=true`（修剪 effect 重跑后保留）；`term.select` → mouseup → 浮层 `open`；点「翻译」→ 卡片命中离线词典（`last` 命令 + 示例 `last -10`）；点卡片内「Ask TDSF 解释这段」→ AI 面板 open。
+
+**门禁**：typecheck ✓ / lint ✓ / test 900 全过 ✓ / build:web 出 dist ✓ / tauri:dev 运行时 CDP 实测 ✓。
+
+**下一步**：用户真机拖选复测（合成拖选因 WebGL canvas 事件目标限制无法模拟，但程序化 select + App 链路已全覆盖）；黑屏事件（§37.34-2）与本次无直接关联，另行跟踪。
