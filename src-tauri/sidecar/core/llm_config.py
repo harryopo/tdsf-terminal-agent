@@ -55,7 +55,7 @@ class LLMConfig:
         base_url: str = "",
         model: str = "gpt-4o-mini",
         temperature: float = 0.7,
-        max_tokens: int = 8192,
+        max_tokens: int = 8192,  # <=0 表示无上限（OpenAI/LiteLLM 不传该参数；Anthropic 兜底 8192）
     ) -> None:
         self.provider = provider      # "openai" / "anthropic"
         self.api_key = api_key
