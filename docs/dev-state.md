@@ -3610,3 +3610,22 @@ CDP 全新状态实测通过。commit 见上。
 2. **P1 中复杂度**：SSH 工具 visible 模式（3 步链路：Python→Rust→前端）+ 任务完成感知 prompt
 3. **P2 高复杂度**：TodoStrip 双轨联动（Sidecar 驱动前端 todo UI）
 4. **P3 高复杂度**：LLM 自动摘要（long_context.py 重写）
+
+---
+
+### 37.43 Agent 深度进化 P0+P1 完成（2026-08-09 ✅ 完成）
+
+**P0（commit 87175dd）**：
+- **max_tokens 条件传参**：OpenAI/LiteLLM `max_tokens<=0` 时不传该参数 → 模型自行决定停止（无上限）；Anthropic `max_tokens<=0` 兜底 8192（API 必填正整数）；LLMConfig 注释更新
+- **对话压缩增强**：transport.ts `trimMessagesForSidecar` 两阶段策略——① tool-result elide（超 1024 字符截到 512 首尾保留，最近 3 条不动）；② maxMessages 20→40
+
+**P1（commit af32091）**：
+- **SSH 工具 visible 模式全链路**：
+  - Python `rust_bridge.py` 新增 `send_notification`（fire-and-forget，不阻塞不等响应）
+  - Python `ssh_command.py` 加 `visible` 参数 + `ctx.auto_execute_in_terminal` 自动覆盖
+  - Python `ToolContext` 加 `auto_execute_in_terminal: bool` 字段
+  - Python `adapter.py` `_build_tool_context` 从 `live.autoExecuteInTerminal` 读开关
+  - Rust `sidecar.rs` handle_notification 已自动转发 `sidecar:inject_terminal`（零改动）
+  - 前端 `useAiLiveBridge.ts` 监听 `sidecar:inject_terminal` → `injectFn` → xterm 可见
+  - 前端 `chatRuntime.ts` `getLive()` 增加 `autoExecuteInTerminal` 字段
+- **全链路**：前端开关 → chatRuntime live → Python ToolContext → ssh_command visible → send_notification → Rust emit → 前端 listen → xterm.write 可见
