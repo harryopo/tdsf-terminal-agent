@@ -18,15 +18,12 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { useChatStore } from "../store/chatStore";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
   BookOpen01Icon,
   BulbIcon,
   CheckListIcon,
   Alert02Icon,
   PencilEdit02Icon,
-  SparklesIcon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -52,9 +49,8 @@ const TYPE_META: Record<TeachSectionType, { label: string; icon: typeof BulbIcon
 };
 
 export const TeachCard = memo(
-  function TeachCard({ content, onAsk }: { content: string; onAsk?: (text: string) => void }) {
+  function TeachCard({ content }: { content: string }) {
     const sections = useMemo(() => parseTeachSections(content), [content]);
-    const [asked, setAsked] = useState(false);
 
     if (sections.length === 0) {
       return null;
@@ -101,34 +97,10 @@ export const TeachCard = memo(
             <TeachSectionBlock key={i} section={s} />
           ))}
         </div>
-
-        {/* 追问 */}
-        {onAsk && (
-          <>
-            <Separator />
-            <div className="px-3 py-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                data-testid="teach-ask"
-                onClick={() => {
-                  setAsked(true);
-                  onAsk(content);
-                }}
-                disabled={asked}
-                className={cn("h-6 w-full gap-1.5 text-[11px]", asked && "opacity-60")}
-              >
-                <HugeiconsIcon icon={SparklesIcon} size={11} strokeWidth={1.75} />
-                {asked ? "已发送给 AI" : "没懂？Ask TDSF 追问"}
-              </Button>
-            </div>
-          </>
-        )}
       </div>
     );
   },
-  (a, b) => a.content === b.content && a.onAsk === b.onAsk,
+  (a, b) => a.content === b.content,
 );
 
 // ============================================================================

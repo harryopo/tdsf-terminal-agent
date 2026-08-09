@@ -1042,16 +1042,16 @@ class StrandsAgentAdapter:
         #   或自定义 HookProvider（见 Strands 官方文档 hooks.mdx）。
         #   当前先移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
         #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
-        # TDSF 修复 2026-08-01 (P1-NEW-v2-3): 接入自实现 ToolCallLimitHook
-        #   （LimitToolCounts 在当前 strands 版本不存在），实现工具调用次数
-        #   上限 + 单工具连续失败保护（fix-loop 近似语义，绕过 BaseAgent
-        #   _check_fix_loop 的 Strands override 路径从此有保护）。
+        # TDSF 修复 2026-08-09: 移除工具调用上限（用户要求）。
+        #   原 ToolCallLimitHook(max_tool_calls=12) 会强制终止超过 12 次工具调用的
+        #   会话，用户反馈"本次排查已到达工具调用上限"影响教学体验。
+        #   现改为不挂 hook，让 agent 自由调用工具直到任务完成。
         agent = _StrandsAgent(  # type: ignore[misc]
             model=self.strands_model,
             tools=all_tools,
             system_prompt=system_prompt,
             callback_handler=handler,
-            hooks=[ToolCallLimitHook(agent_name=agent_id)],
+            hooks=[],
             name=agent_id,
             # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
         )
@@ -1090,7 +1090,7 @@ class StrandsAgentAdapter:
             tools=tools,
             system_prompt=system_prompt,
             callback_handler=_SilentCallbackHandler(),
-            hooks=[ToolCallLimitHook(agent_name=sub_agent_id)],
+            hooks=[],
             name=sub_agent_id,
         )
         tool = sub_agent.as_tool(
