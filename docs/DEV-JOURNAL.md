@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-08-09 · 终端中文显示宋体（衬线）→ fallback 链插无衬线中文字体 + 主题设置合并明暗切换
+
+**任务（用户两连需求）**：① 终端中文当前是宋体（衬线），改为微软雅黑（无衬线）；② 主题设置模块拆成"白色系/暗色系"两部分，合并成一个，点击直接切换明暗。
+
+**根因**：`src/lib/fonts.ts` 的 `FALLBACK_CHAIN` 以 `monospace` 收尾——Windows 的 monospace 中文映射是宋体（SimSun，衬线）。UI 全局字体 globals.css 早已用 `'Inter Variable', 'Microsoft YaHei', ...`（无衬线），唯独终端/编辑器走 fonts.ts 链缺中文字体 → 宋体。主题设置 `ThemesSection.tsx` 用 `THEME_GROUPS` 按 light/dark variant 分组展示两个卡片区，用户嫌繁琐。
+
+**修改（commit 7323276）**：
+1. `fonts.ts` FALLBACK_CHAIN：`'"JetBrains Mono", SFMono-Regular, Menlo, "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", monospace'`——CSS font 按字形逐字符回退：英文走 JetBrains Mono 等宽（代码对齐），中文自动落到微软雅黑等无衬线。同步更新 `fonts.test.ts` 的 FALLBACK 断言。上游对比注释注明 TDSF 魔改理由
+2. `ThemesSection.tsx`：删除深/浅色分组（THEME_GROUPS → THEMES 单网格）；顶部新增"显示模式"行——浅色/深色两档按钮（segmented control），用 `useTheme().setMode("light"|"dark")` 直接切换，激活态 `bg-foreground text-background`
+
+**验证**：CDP 实测——`resolveFontFamily("")` 返回链含 `"Microsoft YaHei"`；设置窗口（/settings.html?tab=themes）无分组标题、显示模式按钮存在、点击"深色"→ root class `light`→`dark` 翻转且激活态正确。门禁：typecheck / lint / vitest 902 / build:web 全绿。
+
+**复盘**：
+- ✅ **字体 fallback 链是"英文等宽 + 中文无衬线"双轨**：等宽字体不含中文字形，CSS 会自动跳到第一个含中文形体的字体；在 monospace 前插入微软雅黑/苹方/思源黑体即可三平台统一无衬线，无需自造字体
+- ✅ **明暗切换复用 ThemeProvider.setMode**：设置窗口本来就被 ThemeProvider 包裹（settings/main.tsx），直接用 context 无需新增状态；localStorage 持久化 `tdsf-theme-mode` 由 Provider 处理
+- 📌 注意：改 `FALLBACK_CHAIN` 同时影响编辑器（Monaco detectMonoFontFamily 同源）——综合效果一致（无衬线中文），符合用户预期
+
+---
+
 ## 2026-08-09 · 翻译卡片底部划词被遮住 → 智能翻转定位（两阶段测量）
 
 **任务**：用户反馈"底端的命令行划词翻译，卡片出现在底端显示不全被遮住，要智能调整位置——底部划词时卡片出现在词的上方"。

@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · SSH 终端输入改写修复（§37.36）+ 翻译卡片智能翻转定位（§37.37）。接手请直接看 **§37.37**（最新）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · 终端中文字体无衬线化 + 主题设置合并明暗切换（§37.38）。接手请直接看 **§37.38**（最新）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
 
 ---
 
@@ -3502,3 +3502,17 @@ CDP 全新状态实测通过。commit 见上。
 **修改（commit cc631c1）**：两阶段定位——useEffect 按下方估算先渲染 → useLayoutEffect 实测卡片 `offsetHeight/offsetWidth`，若 `top + h > innerHeight - 8` 则翻转到选中点上方（`y - h - 12`，`slide-in-from-top-1` 动画）；左右边界收进视口留 8px；functional setState 防依赖循环。
 
 **验证**：新增 2 单测（底部翻转/中部默认）；CDP 实测 3 场景全过（底部 y=766 → top=632 完整可见 slideTop；中部 y=413 → 下方；右缘 x=1384 → right=1386 收进视口）。门禁：typecheck/lint/vitest 902/build:web 全绿。
+
+### 37.38 终端中文字体无衬线化 + 主题设置合并明暗切换（2026-08-09 ✅ 完成）
+
+**需求（用户）**：① 终端中文显示宋体（衬线），改为微软雅黑（无衬线）；② 主题设置"白色系/暗色系"两部分合并成一个，点击直接切换明暗。
+
+**根因**：`src/lib/fonts.ts` FALLBACK_CHAIN 以 `monospace` 收尾 → Windows 下中文回退宋体（衬线）；UI 全局字体（globals.css）早已无衬线，唯独终端/编辑器链缺中文字体。主题设置 `ThemesSection.tsx` 按 light/dark variant 分组展示两组卡片。
+
+**修改（commit 7323276）**：
+1. `fonts.ts`：FALLBACK_CHAIN 插 `"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC"`（monospace 前）——CSS 按字形逐字符回退，英文 JetBrains Mono 等宽、中文自动无衬线；`fonts.test.ts` 同步断言
+2. `ThemesSection.tsx`：THEME_GROUPS → THEMES 单网格；新增"显示模式"行（浅色/深色 segmented 按钮，`useTheme().setMode` 切换）
+
+**验证**：CDP——`resolveFontFamily("")` 含 `"Microsoft YaHei"`；设置窗口（settings.html?tab=themes）无分组标题、显示模式按钮存在、点击深色 → root class light→dark 翻转 + 激活态正确。门禁：typecheck/lint/vitest 902/build:web 全绿。
+
+**注意**：改 FALLBACK_CHAIN 同时影响编辑器（Monaco detectMonoFontFamily 同源），综合效果一致（无衬线中文）。明暗模式持久化在 localStorage `tdsf-theme-mode`（ThemeProvider 处理）。
