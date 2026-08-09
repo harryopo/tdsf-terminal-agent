@@ -41,6 +41,13 @@ type Params = {
     title: string,
   ) => { tabId: number; leafId: number };
   terminalRefs: RefObject<Map<number, TerminalPaneHandle>>;
+  /**
+   * TDSF 魔改 (2026-08-09): 获取 SSH 终端的 leafId。
+   * SSH 终端（SshTerminalHost）不在 tabs 数组里，getTerminalContext
+   * 原本只查 tabs → SSH 场景返回 null → agent 看不到 SSH 终端内容。
+   * 现在增加回退：tabs 找不到活跃终端时，尝试用 SSH leafId 读 buffer。
+   */
+  getSshLeafId?: () => number | null;
 };
 
 /**
@@ -81,11 +88,23 @@ export function useAiLiveBridge(params: Params) {
       getCwd: findCwd,
       getTerminalContext: () => {
         const { activeId, tabs } = ref.current;
+        // 1. 先尝试 tabs 里的活跃终端 tab
         const t = tabs.find((x) => x.id === activeId);
-        if (t?.kind !== "terminal") return null;
-        if (t.private) return null;
-        const buf = terminalRefs.current.get(t.activeLeafId)?.getBuffer(300);
-        return buf ? redactSensitive(buf) : null;
+        if (t?.kind === "terminal") {
+          if (t.private) return null;
+          const buf = terminalRefs.current.get(t.activeLeafId)?.getBuffer(300);
+          return buf ? redactSensitive(buf) : null;
+        }
+        // 2. TDSF 魔改 (2026-08-09): SSH 终端回退——
+        // SSH 终端（SshTerminalHost）不在 tabs 数组里，
+        // 通过 getSshLeafId 获取其 leafId，从 terminalRefs 读 buffer。
+        // 这样 agent 在 SSH 场景下也能看到终端输出。
+        const sshLeafId = ref.current.getSshLeafId?.();
+        if (sshLeafId !== null && sshLeafId !== undefined) {
+          const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(300);
+          return buf ? redactSensitive(buf) : null;
+        }
+        return null;
       },
       isActiveTerminalPrivate: () => {
         const { activeId, tabs } = ref.current;
