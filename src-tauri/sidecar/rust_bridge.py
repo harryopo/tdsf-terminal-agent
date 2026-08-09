@@ -232,6 +232,37 @@ class RustBridge:
         # 7. 返回 result
         return entry.result
 
+    def send_notification(self, method: str, params: dict[str, Any]) -> None:
+        """发起反向 JSON-RPC notification（不等响应，fire-and-forget）
+
+        TDSF 魔改 (2026-08-09): 用于 inject_terminal — 通知前端把命令注入终端。
+        与 send_request 不同：不注册 pending entry、不带 id、不阻塞等待。
+
+        Args:
+            method: Rust 侧命令名（如 "inject_terminal"）
+            params: 命令参数（dict）
+
+        Raises:
+            RustBridgeShutdown: bridge 已 stop()
+            RustBridgeIOError: write_message 失败
+        """
+        if self._shutdown:
+            raise RustBridgeShutdown(f"rust_bridge is shutdown, cannot send: {method}")
+
+        msg = {
+            "jsonrpc": JSONRPC_VERSION,
+            "method": method,
+            "params": params,
+            # JSON-RPC notification 不带 id
+        }
+        try:
+            self._write_message(msg)
+        except Exception as e:
+            logger.error(f"rust_bridge notification failed: method={method} err={e}")
+            raise RustBridgeIOError(f"write_message failed: {e}") from e
+
+        logger.debug(f"rust_bridge notification sent: method={method}")
+
     def is_reverse_response(self, msg: dict) -> bool:
         """判定消息是否是 Rust 返回的反向请求响应
 

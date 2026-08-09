@@ -1152,6 +1152,8 @@ class StrandsAgentAdapter:
             user_id=state.get("user_id", "") or "",
             ssh_session_id=live.get("sshSessionId", "") or "",
             permission_level=permission_level,
+            # TDSF 魔改 (2026-08-09): 终端执行模式开关
+            auto_execute_in_terminal=bool(live.get("autoExecuteInTerminal", False)),
         )
 
     # ========================================================================
