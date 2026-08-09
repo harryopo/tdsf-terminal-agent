@@ -1,7 +1,8 @@
-// 原样照搬上游 terax-ai v0.8.5 的 fonts.ts：
-//   https://raw.githubusercontent.com/crynta/terax-ai/v0.8.5/src/lib/fonts.ts
-// 保持与上游一致是刻意的——TDSF clone 要尽可能贴近底座，避免自创的字体
-// fallback 链在开发者社区"普遍装 JetBrains Mono"的语境下显得不必要。
+// 基于上游 terax-ai v0.8.5 的 fonts.ts，TDSF 魔改 2026-08-09（用户要求）：
+// 原 fallback 链以 `monospace` 收尾，Windows 的 monospace 中文映射是宋体
+// （SimSun，衬线），导致终端/编辑器中文显示衬线。改为在 monospace 前插入
+// 无衬线中文字体链（微软雅黑 → 苹方 → 思源黑体），英文仍走 JetBrains Mono
+// 等宽（代码对齐），中文走无衬线（与 UI 全局字体 globals.css 一致）。
 // 终端用 JetBrains Mono（首选），没装就 SFMono-Regular → Menlo → 系统 monospace。
 const NERD_FONT_CANDIDATES = [
   "JetBrainsMono Nerd Font",
@@ -21,7 +22,10 @@ const NERD_FONT_CANDIDATES = [
   "Hasklug Nerd Font",
 ];
 
-const FALLBACK_CHAIN = '"JetBrains Mono", SFMono-Regular, Menlo, monospace';
+// 英文等宽在前（保证代码对齐），无衬线中文字体在后（中文用它们，避免宋体），
+// monospace 兜底。CSS font 回退按字形逐字符匹配，中文会跳过无中文字形的字体。
+const FALLBACK_CHAIN =
+  '"JetBrains Mono", SFMono-Regular, Menlo, "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", monospace';
 
 let detected: string | null = null;
 let monoReady: Promise<void> | null = null;
