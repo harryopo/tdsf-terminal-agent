@@ -3629,3 +3629,15 @@ CDP 全新状态实测通过。commit 见上。
   - 前端 `useAiLiveBridge.ts` 监听 `sidecar:inject_terminal` → `injectFn` → xterm 可见
   - 前端 `chatRuntime.ts` `getLive()` 增加 `autoExecuteInTerminal` 字段
 - **全链路**：前端开关 → chatRuntime live → Python ToolContext → ssh_command visible → send_notification → Rust emit → 前端 listen → xterm.write 可见
+
+---
+
+### 37.44 Agent 深度进化 P2 完成（2026-08-09 ✅ 完成）
+
+**P2（commit 3e11abc）**：
+- **TodoStrip 双轨联动**：
+  - Python 新建 `todo_write.py` 工具（发 `update_todos` notification → 前端 TodoStore）
+  - Python `adapter.py` 所有 agent 挂载 `todo_write` + system_prompt 增加 Task planning 指令
+  - 前端 `useAiLiveBridge.ts` 监听 `sidecar:update_todos` → `useTodosStore.setTodos`
+- **数据流**：LLM 调 todo_write → rust_bridge notification → Rust emit `sidecar:update_todos` → 前端 listen → TodoStrip 渲染
+- **效果**：Sidecar 路径的 agent 现在也能驱动前端 TodoStrip UI，用户能看到 agent 的任务规划和进度
