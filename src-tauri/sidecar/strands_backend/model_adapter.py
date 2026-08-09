@@ -245,7 +245,7 @@ def _create_openai_model(config: Any) -> Any:
     # 构建 params（OpenAI Chat Completions 接口参数）
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": getattr(config, "max_tokens", 2048),
+        "max_tokens": getattr(config, "max_tokens", 8192),
     }
 
     model = _OpenAIModel(
@@ -297,7 +297,7 @@ def _create_anthropic_model(config: Any) -> Any:
 
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": getattr(config, "max_tokens", 2048),
+        "max_tokens": getattr(config, "max_tokens", 8192),
     }
 
     model = _AnthropicModel(
@@ -356,7 +356,7 @@ def _create_litellm_model(config: Any) -> Any:
 
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": getattr(config, "max_tokens", 2048),
+        "max_tokens": getattr(config, "max_tokens", 8192),
     }
 
     model = _LiteLLMModel(
