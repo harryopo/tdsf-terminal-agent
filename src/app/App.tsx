@@ -104,6 +104,7 @@ import {
   disposeSession,
   findLeafCwd,
   hasLeaf,
+  leafGridSelection,
   leafIds,
   navigateFocusedBlocks,
   type PaneBounds,
@@ -945,6 +946,14 @@ export default function App() {
         for (const id of leafIds(t.paneTree)) live.add(id);
       }
     }
+    // TDSF 修复 2026-08-09: SSH 终端的 leafId 不在 tab.paneTree 里
+    // （SshTerminalHost 由 WorkspaceSurface 独立挂载），若不纳入 live 集合，
+    // 本 effect 的修剪会删除 SSH leaf 的 terminalRefs handle 与 searchAddon，
+    // 并误调 disposeSession —— 此后 captureActiveSelection 的 SSH 分支
+    // （terminalRefs.has(sshLid)）恒为 false，SSH 终端划词翻译/Ask 浮层永不弹出。
+    // SshTerminalHost 挂载后 callback ref 不再触发，被删的 handle 无法自行恢复。
+    const sshLid = sshActiveLeafIdRef.current;
+    if (sshLid !== null) live.add(sshLid);
     for (const id of liveLeavesRef.current) {
       if (!live.has(id)) disposeSession(id);
     }
@@ -1034,10 +1043,14 @@ export default function App() {
     if (!t) return null;
     if (t.kind === "terminal") {
       // 2026-07-31 翻译模块修复: SSH 终端接管右侧工作区时，优先用 SSH leafId
-      // （SSH 终端不在 tab.paneTree 里，tab.activeLeafId 指向本地终端）
+      // （SSH 终端不在 tab.paneTree 里，tab.activeLeafId 指向本地终端）。
+      // 2026-08-09 修复: 改从 rendererPool slot 直接读选区（leafGridSelection），
+      // 不再依赖 terminalRefs 注册 —— 修剪 effect 曾把 SSH leaf 的 handle 误删
+      // 且已挂载的 SshTerminalHost 不会重新触发 callback ref，导致 has(sshLid)
+      // 恒为 false、选区恒空。slot 绑定与组件生命周期一致，天然自愈。
       const sshLid = sshActiveLeafIdRef.current;
-      if (sshLid !== null && terminalRefs.current.has(sshLid)) {
-        return terminalRefs.current.get(sshLid)?.getSelection() ?? null;
+      if (sshLid !== null) {
+        return leafGridSelection(sshLid);
       }
       const lid = t.activeLeafId;
       return terminalRefs.current.get(lid)?.getSelection() ?? null;
