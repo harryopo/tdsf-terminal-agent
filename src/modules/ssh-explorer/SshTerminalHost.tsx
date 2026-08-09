@@ -27,10 +27,13 @@
  *   - blocks=false（远端 shell 不一定有 OSC 133 shell integration）
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import type { Terminal as XTerm } from "@xterm/xterm";
 import { TerminalPane } from "@/modules/terminal/TerminalPane";
 import type { TerminalPaneHandle } from "@/modules/terminal/TerminalPane";
 import type { TerminalTransport } from "@/modules/terminal/lib/pty-bridge";
 import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
+import { useSshCompletion } from "@/lib/use-ssh-completion";
+import { SshCompletionPopup } from "@/lib/SshCompletionPopup";
 import { useSshStore, getOsc7Log } from "./sshStore";
 
 // OSC7 诊断日志统一从 sshStore 导入（消除两文件重复声明）
@@ -180,8 +183,69 @@ export function SshTerminalHost({
     };
   }, []);
 
+  // TDSF 魔改 (2026-08-09): SSH 终端命令预测弹窗
+  // 通过 rendererPool 拿 xterm 实例，注入键盘拦截 + 实时预测
+  const containerRef = useRef<HTMLDivElement>(null);
+  const xtermRef = useRef<XTerm | null>(null);
+  const writeRef = useRef<(data: string) => void>(() => {});
+
+  // 定时尝试拿 xterm 实例（rendererPool 可能在 mount 后异步创建）
+  useEffect(() => {
+    let cancelled = false;
+    const tryGetXterm = () => {
+      if (cancelled) return;
+      // 动态 import 避免循环依赖
+      import("@/modules/terminal/lib/rendererPool").then(({ getSlotTerm }) => {
+        if (cancelled) return;
+        const term = getSlotTerm(leafId);
+        if (term) {
+          xtermRef.current = term;
+          // write 回调：写入到 SSH transport
+          const handle = handleRef.current;
+          if (handle) {
+            writeRef.current = (data: string) => handle.write(data);
+          }
+        } else {
+          // 还没创建，100ms 后重试
+          setTimeout(tryGetXterm, 100);
+        }
+      });
+    };
+    tryGetXterm();
+    return () => { cancelled = true; };
+  }, [leafId]);
+
+  const {
+    popup: completionPopup,
+    handleKeyEventHandler,
+    onPopupClick,
+    closePopup,
+  } = useSshCompletion({
+    xtermRef,
+    onWrite: (data) => writeRef.current(data),
+  });
+
+  // 容器级 keydown 拦截（不干扰 rendererPool 的 attachCustomKeyEventHandler）
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onKey = (e: KeyboardEvent) => {
+      const result = handleKeyEventHandler(e);
+      if (result === false) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    // capture 阶段拦截，比 xterm 的 listener 先执行
+    container.addEventListener("keydown", onKey, true);
+    return () => container.removeEventListener("keydown", onKey, true);
+  }, [handleKeyEventHandler]);
+
   return (
-    <div className={className ?? "h-full w-full overflow-hidden"}>
+    <div
+      ref={containerRef}
+      className={className ?? "relative h-full w-full overflow-hidden"}
+    >
       <TerminalPane
         ref={paneHandleRef}
         leafId={leafId}
@@ -191,6 +255,14 @@ export function SshTerminalHost({
         openTransport={openTransport}
         remote={true}
         onCwd={handleCwd}
+      />
+      {/* TDSF 魔改 (2026-08-09): SSH 终端命令预测弹窗 */}
+      <SshCompletionPopup
+        items={completionPopup.items}
+        visible={completionPopup.visible}
+        selectedIndex={completionPopup.selectedIndex}
+        onSelect={onPopupClick}
+        onClose={closePopup}
       />
     </div>
   );
