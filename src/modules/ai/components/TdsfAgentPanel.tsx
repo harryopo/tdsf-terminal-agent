@@ -28,6 +28,7 @@ import { useChat, type UIMessage } from "@ai-sdk/react";
 import {
   ArrowUp01Icon,
   Cancel01Icon,
+  TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { PresenceState } from "@/lib/usePresence";
@@ -352,6 +353,9 @@ function Body({
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const helpers = useChat<UIMessage>({ chat });
 
+  // TDSF 魔改 (2026-08-09): 终端执行模式开关状态
+  const autoExec = useChatStore((s) => s.autoExecuteInTerminal);
+  const setAutoExec = useChatStore((s) => s.setAutoExecuteInTerminal);
   // 消息更新时自动滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
@@ -613,6 +617,22 @@ function Body({
             命令
           </span>
           <div className="flex-1" />
+          {/* TDSF 魔改 (2026-08-09): 终端执行模式开关 */}
+          <button
+            type="button"
+            onClick={() => setAutoExec(!autoExec)}
+            className={cn(
+              "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+              autoExec
+                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            title="打开后 agent 建议的命令自动在终端执行（含回显）"
+            data-testid="tdsf-auto-exec-toggle"
+          >
+            <HugeiconsIcon icon={TerminalIcon} size={10} strokeWidth={1.75} />
+            <span>终端执行</span>
+          </button>
           <span>
             <span style={{ color: "var(--color-primary, #10b981)" }}>↵</span>{" "}
             发送
