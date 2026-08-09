@@ -3663,6 +3663,30 @@ CDP 全新状态实测通过。commit 见上。
 - `assess_confidence` 复用 `core/confidence.py` 的 `DSPCR5ConfidenceCalculator`（通过 `sidecar/tools/confidence.py` 的 `invoke_confidence_tool`）
 
 **方案书 #10 剩余项**（未做）：
-- P1 HITL 四决策（edit/respond/trust）
-- Strands teach 字段契约（teaching_content）
-- 决策库完善（向量检索 + history 检索）
+- ~~P1 HITL 四决策（edit/respond/trust）~~ → 见 §37.46
+- ~~Strands teach 字段契约（teaching_content）~~ → 见 §37.46
+- ~~决策库完善（向量检索 + history 检索）~~ → 见 §37.46
+
+---
+
+### 37.46 方案书 #10 全部完成 + SSH 终端命令补全（2026-08-09 ✅ 完成）
+
+**方案书 #10 剩余三项（commit 784252c）**：
+
+1. **P1 HITL 四决策**：
+   - 后端 `needs_you.py` 增加 `EDITED` / `RESPONDED` 状态 + `_infer_status_from_response` 识别 `decision: edit/respond/trust`
+   - 前端 `AiToolApproval.tsx` 增加 Edit / Respond / Trust 按钮（`onAdvancedRespond` 可选回调）
+
+2. **teach 字段契约清理**：
+   - 删除 `sidecar-adapter.ts` 中 `teaching_content` 死代码分支 + `teachingId` 声明
+   - Strands 路径统一走 `observation` 字段（已与前端 teachParser 6 板块对齐）
+
+3. **决策库接线**：
+   - 新增 `decision_history.py`：`search_history` 工具（复用 RAG 引擎向量+FTS5 检索）
+   - `adapter.py`：挂载 `search_history` + system prompt 加 Decision history 指令
+
+**SSH 终端命令补全（commit 784252c）**：
+- 新增 `use-ssh-completion.ts`：复用孤儿引擎 `completion.ts` Trie+Frecency + 130+ Linux 命令静态表
+- 新增 `SshCompletionPopup.tsx`：补全弹窗 UI（Frecency 排序 + 键盘导航）
+- Tab 键拦截逻辑：有匹配弹窗 / 唯一匹配直接补全 / 无匹配回退到远端 Tab 透传
+- **待接线**：SshTerminalHost 尚未 import useSshCompletion（需用户确认是否替换默认 Tab 透传行为）
