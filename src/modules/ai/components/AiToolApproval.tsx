@@ -18,6 +18,8 @@ type Props = {
   part: Extract<ToolUIPart, { state: "approval-requested" }>;
   toolName: string;
   onRespond: (approved: boolean) => void;
+  /** TDSF 魔改 (2026-08-09): 方案书 HITL 四决策 — 可选的高级回调 */
+  onAdvancedRespond?: (decision: "approve" | "deny" | "edit" | "respond" | "trust", payload?: unknown) => void;
 };
 
 const TOOL_META: Record<string, { label: string; icon: typeof FilePlusIcon }> =
@@ -30,7 +32,7 @@ const TOOL_META: Record<string, { label: string; icon: typeof FilePlusIcon }> =
     bash_background: { label: "Spawn background process", icon: TerminalIcon },
   };
 
-function AiToolApprovalImpl({ part, toolName, onRespond }: Props) {
+function AiToolApprovalImpl({ part, toolName, onRespond, onAdvancedRespond }: Props) {
   const meta = TOOL_META[toolName];
   const label = meta?.label ?? toolName;
   const Icon = meta?.icon ?? ToolsIcon;
@@ -66,6 +68,41 @@ function AiToolApprovalImpl({ part, toolName, onRespond }: Props) {
           <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
           Deny
         </Button>
+        {/* TDSF 魔改 (2026-08-09): 方案书 HITL 四决策 — Edit / Respond / Trust */}
+        {onAdvancedRespond && (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onAdvancedRespond("edit")}
+              className="h-7 gap-1.5 text-[11px] text-blue-600 dark:text-blue-400"
+              title="修改命令参数后放行"
+            >
+              <HugeiconsIcon icon={Edit02Icon} size={12} strokeWidth={2} />
+              Edit
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onAdvancedRespond("respond")}
+              className="h-7 gap-1.5 text-[11px] text-violet-600 dark:text-violet-400"
+              title="我来手动执行并填写结果"
+            >
+              <HugeiconsIcon icon={FileEditIcon} size={12} strokeWidth={2} />
+              Respond
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onAdvancedRespond("trust")}
+              className="h-7 gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400"
+              title="本会话不再询问此类操作"
+            >
+              <HugeiconsIcon icon={Tick02Icon} size={12} strokeWidth={2} />
+              Trust
+            </Button>
+          </>
+        )}
         <Button
           size="sm"
           variant="default"
