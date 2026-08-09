@@ -1,5 +1,5 @@
 import { useManagedAgentsStore } from "@/modules/agents/store/managedAgentsStore";
-import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { isSessionConnected, selectSessionCurrentPath, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import type { Tab } from "@/modules/tabs";
 import {
   findLeafCwd,
@@ -67,6 +67,25 @@ export function useAiLiveBridge(params: Params) {
   useEffect(() => {
     const findCwd = () => {
       const { activeId, tabs, explorerRoot, launchCwd, home } = ref.current;
+      // TDSF 魔改 (2026-08-09): SSH 终端优先——
+      // SSH 场景下 activeId 对应的 tab 是 cold + SSH 接管，
+      // 但 findLeafCwd 会读到本地终端的 cwd（如 C:\Users\Lenovo）。
+      // 优先从 sshStore 读 SSH 远端 cwd，避免 agent 收到错误的本地路径。
+      const sshLeafId = ref.current.getSshLeafId?.();
+      if (sshLeafId !== null && sshLeafId !== undefined) {
+        // 优先从 sshStore 读当前 SSH 会话的远端 cwd
+        const sshState = useSshStore.getState();
+        const cwd = selectSessionCurrentPath(sshState, sshState.activeSessionId);
+        if (cwd) return cwd;
+        // currentPath 未就绪时回退到 home 或 root
+        const active = sshState.sessions.find(
+          (s) => s.id === sshState.activeSessionId,
+        );
+        const fallback = active?.params?.user
+          ? `/home/${active.params.user}`
+          : "/";
+        return fallback;
+      }
       const active = tabs.find((x) => x.id === activeId);
       if (active?.kind === "terminal") {
         return (
@@ -87,21 +106,24 @@ export function useAiLiveBridge(params: Params) {
     setLive({
       getCwd: findCwd,
       getTerminalContext: () => {
+        // TDSF 魔改 (2026-08-09): SSH 终端优先——
+        // SSH 场景下 WorkspaceSurface 用 SshTerminalHost 覆盖本地终端栈，
+        // 但 activeId 对应的 tab 仍然是 terminal 类型（cold + SSH 接管）。
+        // 如果不优先判断 SSH，会读到被 invisible 隐藏的本地终端 buffer。
+        // 只有 SSH 终端没有内容时才回退到本地终端。
+        const sshLeafId = ref.current.getSshLeafId?.();
+        if (sshLeafId !== null && sshLeafId !== undefined) {
+          const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(300);
+          if (buf) return redactSensitive(buf);
+          // SSH leaf 存在但 buffer 还没准备好（刚连接），不回退本地
+          return null;
+        }
+        // 本地终端（无 SSH 会话活跃时）
         const { activeId, tabs } = ref.current;
-        // 1. 先尝试 tabs 里的活跃终端 tab
         const t = tabs.find((x) => x.id === activeId);
         if (t?.kind === "terminal") {
           if (t.private) return null;
           const buf = terminalRefs.current.get(t.activeLeafId)?.getBuffer(300);
-          return buf ? redactSensitive(buf) : null;
-        }
-        // 2. TDSF 魔改 (2026-08-09): SSH 终端回退——
-        // SSH 终端（SshTerminalHost）不在 tabs 数组里，
-        // 通过 getSshLeafId 获取其 leafId，从 terminalRefs 读 buffer。
-        // 这样 agent 在 SSH 场景下也能看到终端输出。
-        const sshLeafId = ref.current.getSshLeafId?.();
-        if (sshLeafId !== null && sshLeafId !== undefined) {
-          const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(300);
           return buf ? redactSensitive(buf) : null;
         }
         return null;
