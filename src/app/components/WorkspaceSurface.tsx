@@ -1,8 +1,10 @@
+import type { SshSessionStateValue } from "@/store/runtime";
 import { cn } from "@/lib/utils";
 import { AiDiffStack, EditorStack, GitDiffStack } from "@/modules/editor";
 import { GitHistoryStack } from "@/modules/git-history";
 import { MarkdownStack } from "@/modules/markdown";
 import { PreviewStack } from "@/modules/preview";
+import { SshConnectingOverlay } from "@/modules/ssh-explorer/SshConnectingOverlay";
 import { SshTerminalHost } from "@/modules/ssh-explorer/SshTerminalHost";
 import type { Tab } from "@/modules/tabs";
 import { TerminalStack } from "@/modules/terminal";
@@ -49,6 +51,19 @@ type Props = {
   /** 当前活跃的 SSH 会话前端 id */
   sshSessionId?: string | null;
   /**
+   * TDSF 魔改 (2026-08-09): SSH 连接进度信息。
+   * 当 SSH 会话处于 connecting/handshaking/authenticating 等中间状态时，
+   * 终端区域显示美观的连接进度界面（而非空状态引导页），
+   * 让用户明确知道"正在连接"而非"终端坏了"。
+   * SSH 连接成功后此值为 null，SshTerminalHost 接管渲染。
+   */
+  sshConnectingInfo?: {
+    host: string;
+    port: number;
+    user: string;
+    state: SshSessionStateValue;
+  } | null;
+  /**
    * TDSF 魔改 (#19): 分配稳定 leafId 的函数，透传给 SshTerminalHost。
    * 来自 useTabs.allocId（共享 nextIdRef 计数器，与本地 leaf 不撞号）。
    */
@@ -89,6 +104,7 @@ export function WorkspaceSurface({
   onOpenAgentFromEmptyState,
   onSwitchToSshFromEmptyState,
   sshSessionId,
+  sshConnectingInfo,
   allocId,
   onSshLeafId,
 }: Props) {
@@ -121,6 +137,10 @@ export function WorkspaceSurface({
   // 所以 SshTerminalPane 会立即接管右侧, 满足"打开就看到终端"的需求。
   const showSshTerminal = !!sshSessionId && isTerminalTab;
 
+  // TDSF 魔改 (2026-08-09): SSH 连接进度界面——仅在终端 tab 且 SSH 尚未连接时显示
+  const showSshConnecting =
+    !!sshConnectingInfo && isTerminalTab && !showSshTerminal;
+
   return (
     <div className="relative h-full min-h-0">
       {/* === TDSF 魔改 2026-07-28 (P1-A): 空状态页 (覆盖在 terminal 之上) === */}
@@ -135,6 +155,22 @@ export function WorkspaceSurface({
             onWarmUp={onWarmUpColdTab}
             onOpenAgent={onOpenAgentFromEmptyState}
             onSwitchToSsh={onSwitchToSshFromEmptyState}
+          />
+        </div>
+      ) : null}
+
+      {/* === TDSF 魔改 (2026-08-09): SSH 连接进度界面 === */}
+      {/* 渲染顺序：空状态页 → connecting overlay → SSH 终端 (后者覆盖前者)。
+          SSH 连接成功后 showSshTerminal=true → showSshConnecting 自动 false,
+          SshTerminalHost 在上层接管渲染, connecting overlay 自然被覆盖。
+          用户核心诉求："终端流畅最优先，资源管理器异步加载不阻塞终端"。 */}
+      {showSshConnecting && sshConnectingInfo ? (
+        <div className="absolute inset-0">
+          <SshConnectingOverlay
+            host={sshConnectingInfo.host}
+            port={sshConnectingInfo.port}
+            user={sshConnectingInfo.user}
+            state={sshConnectingInfo.state}
           />
         </div>
       ) : null}
@@ -161,7 +197,7 @@ export function WorkspaceSurface({
           // 按内部 active 状态设 inline visibility:visible, 覆盖外层 invisible
           // 类, 导致 SSH 终端接管时本地终端内容仍显示 (盖在 SSH 之上,
           // 用户看到"本地桌面终端")。opacity 无继承覆盖问题, 强制整树透明。
-          (!isTerminalTab || showEmptyState || showSshTerminal) &&
+          (!isTerminalTab || showEmptyState || showSshTerminal || showSshConnecting) &&
             "invisible opacity-0 pointer-events-none",
         )}
         aria-hidden={!isTerminalTab}
