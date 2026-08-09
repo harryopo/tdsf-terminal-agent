@@ -44,6 +44,7 @@
 | 7 | **SSH 终端"异常输出"真相取证 + 清理 hack 残留垃圾文件** | ✅ 已完成 | §37.39，`';'`/`HTTP` 是 8月7日 hack 时代残留真文件（非渲染问题）；`ls'` 后 `>` 是 bash 正常续行；paramiko 远程 `rm -f -- '/root/;' /root/HTTP` 清理完毕，无代码改动 |
 | 8 | **SSH 连接进度界面**（握手期间显示美观 5 步进度） | ✅ 已完成 | 调研真相：文件树不阻塞终端（兄弟节点并行），延迟源 = SSH connecting 数秒 + cold tab；新增 SshConnectingOverlay（TCP→握手→主机→认证→终端 5 步 amber 动画），commit ee43dde |
 | 9 | **Agent 终端上下文自动注入**（每轮对话自动携带 scrollback 尾部） | ✅ 已完成 | 调研：Python Sidecar 路径 <env> 块缺终端输出 + SSH 终端不在 tabs 里→getTerminalContext 返回 null；新增 formatTerminalContextBlock(截尾部30行注入 <terminal-context>)+SSH 回退+system prompt 更新，commit 24fb81c |
+| 10 | **Agent 深度进化（并发修复 + 教学 5 改进 + max_tokens + 终端执行模式 + session_id 隐藏）** | ✅ 已完成 | 并发 RLock（e1b64c2）/ 教学 UI 基于 agent id（3f562b3）/ max_tokens 2048→8192（d535e8f）/ 终端执行开关（cbc6c22）/ SSH cwd 优先（35c7377）/ session_id 移除（7816f3f）；方案文档 PLAN-AGENT-DEEP-EVOLUTION.md |
 
 ### 下一步（按优先级）
 
@@ -63,6 +64,10 @@
 | 11 | **方案书文档同步**：§1.1"7 个工具"过时（实际 13）、§4.3 扩展表状态、§4.8 asciicast"UI 待接"标注 | 文档 | 小 | 无 |
 | 12 | **SSH 终端 cwd 同步 UI 复验**（§37.36 方案 A + §37.39 清理后）：真实挂载终端 → `cd` 后文件树跟随 + 翻译/选词未破坏 + `ll` 无垃圾文件 | 验收 | 需用户 | 连 192.168.45.130（残留已清理，新建会话即可实测） |
 | 13 | **SSH 终端"续行模式"用户提示优化**（可选调研）：bash 未闭合引号进入 PS2 `>` 时，终端能否给出可辨识提示（如提示栏闪烁/标题标记），降低用户误判"终端卡死" | 功能 | 需调研 | 先调研 xterm/上游做法再定 |
+| 14 | **Agent 深度进化 P0**（方案文档 `PLAN-AGENT-DEEP-EVOLUTION.md`）：max_tokens 条件传参（OpenAI 不传=无上限）/ 对话压缩增强（Sidecar 复用 compact.ts 5 级策略）/ maxMessages 20→40 | 开发 | 低 | model_adapter.py + transport.ts |
+| 15 | **Agent 深度进化 P1**：SSH 工具 visible 模式（ssh_command 加 visible 参数 → sidecar→前端 injectTerminal 通道 → xterm 可见执行）/ 任务完成感知 system prompt 强化 | 开发 | 中 | ssh_command.py + rust_bridge.py + sidecar.rs + 前端 listen |
+| 16 | **Agent 深度进化 P2**：TodoStrip 双轨联动（Sidecar 路径驱动前端 TodoStrip UI） | 开发 | 高 | sidecar↔前端协议层新增工具回调通道 |
+| 17 | **Agent 深度进化 P3**：LLM 自动摘要（long_context.py 重写为真 LLM 摘要替代 hash 模拟） | 开发 | 高 | long_context.py + feature_flags |
 
 ### 待用户决策/确认
 
