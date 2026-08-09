@@ -6,6 +6,40 @@
 
 ---
 
+## 2026-08-09 · 教学 Agent 5 大改进（工具上限/渲染时机/疑问按钮/SSH命令注入/预测回显）
+
+**任务（用户反馈）**：用户切到 agent 模块后发现 5 个问题：
+1. 教学 UI 在输出内容后才开始排版（应该智能路由识别后切换）
+2. "没懂？Ask TDSF 追问"按钮鸡肋（点击只附加上下文，还需再打一句话）
+3. "本次排查已到达工具调用上限"——为什么有工具调用限制？
+4. agent 发送命令发送不到终端
+5. 命令应该一条一条给出，每个命令后面带预测回显
+
+**调研（search agent 深度取证）**：
+- 教学 UI 根因：`AiChat.tsx:775` 的 `!streaming` 条件 + `teachParser.ts` 内容关键词匹配——流式过程中显示纯文本，**流完后才整体替换为 TeachCard**
+- 疑问按钮：`TeachCard.tsx:105-127` 的 onAsk 按钮，点击调 `attachSelection`（只附加上下文，不发送）
+- 工具上限：Python `adapter.py:156` `ToolCallLimitHook(max_tool_calls=12)` 超过 12 次强制终止
+- 命令注入失败：`injectIntoActivePty` 只查 tabs → SSH 终端不在 tabs → 返回 false（和 getTerminalContext/findCwd 同一 bug 类型）
+- 预测回显缺失：suggest_command schema 只有 `{command, explanation}`，无 `predicted_output` 字段
+
+**修改（commit 3f562b3，8 文件 +144 -58 行）**：
+1. **Python adapter.py**：移除 `ToolCallLimitHook`——主 agent 和子 agent 都 `hooks=[]`
+2. **AiChat.tsx**：改为 `agentId === "teach" && isTeachMessage(text)` 判断——去掉 `!streaming`，流式过程中就渲染 TeachCard（基于 agent id 切换而非等输出完毕）
+3. **TeachCard.tsx**：移除疑问按钮（onAsk prop + 整块 JSX + 未使用 import 清理）
+4. **useAiLiveBridge.ts**：`injectIntoActivePty` 增加 SSH 优先——有 `getSshLeafId` 时先尝试 SSH 终端 handle
+5. **terminal.ts + tool.tsx + suggest_command.py**：增加 `predicted_output` 字段——前端 schema（LLM 可选提供）+ Python 启发式 `_predict_output`（40+ 常见命令映射表）+ 前端折叠卡片渲染（EyeIcon 切换显示/隐藏）
+
+**验证**：门禁 typecheck / lint / vitest 904 / build:web 全绿。
+
+**复盘**：
+- ✅ **SSH 优先模式**正在成为模式——`getTerminalContext`、`findCwd`、`injectIntoActivePty` 三个方法都有同一个 bug：SSH 终端不在 tabs 里导致只查 tabs 的逻辑失效。统一修复方案：有 `getSshLeafId` 时优先走 SSH 分支
+- ✅ **工具上限设计反思**：12 次限制对运维教学场景太紧（探查问题可能需要多次 grep/cat/systemctl）。移除后依赖 LLM 自行判断何时完成（Strands agent 有自然结束语义）
+- ✅ **预测回显双轨**：Vercel SDK 路径由 LLM 提供 predicted_output（精确但依赖 LLM 质量）；Python 路径由启发式映射表生成（粗粒度但零延迟）。用户可折叠查看
+- 📌 **可信度评分延后**：用户明确说"可信度保存待后面开发"，当前不处理置信度显示问题
+- 📌 **桌面端实测待做**：需要在 Tauri 环境下验证教学流式渲染 + SSH 命令注入 + 预测回显折叠效果
+
+---
+
 ## 2026-08-09 · Agent 终端上下文自动注入 → 每轮对话自动携带 scrollback 尾部摘要
 
 **任务（用户反馈）**："agent 看不到终端，不知道我在干啥或者预测我要干啥。terax 能看见当前终端还能调工具拆任务路由意图，先解决这个问题再深度开发！"
