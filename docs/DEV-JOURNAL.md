@@ -6,6 +6,53 @@
 
 ---
 
+## 2026-08-09 · Agent 终端上下文自动注入 → 每轮对话自动携带 scrollback 尾部摘要
+
+**任务（用户反馈）**："agent 看不到终端，不知道我在干啥或者预测我要干啥。terax 能看见当前终端还能调工具拆任务路由意图，先解决这个问题再深度开发！"
+
+**调研（两轮 search agent + 上级目录调研资料）**：
+1. **双轨架构**：默认走 Python Sidecar 路径（`tdsfAgentId='main'`），Vercel AI SDK 路径作为 fallback
+2. **Vercel SDK 路径**有 `get_terminal_output` 工具（读 scrollback 尾部 80 行），但需要 LLM 自主决定调用
+3. **Python Sidecar 路径**（默认）的 `<env>` 块只注入元数据（cwd/sshSessionId），**完全没有终端输出内容**
+4. **SSH 终端更严重**：`getTerminalContext()` 只查 `tabs` 数组，SSH 终端（SshTerminalHost）不在 tabs 里 → SSH 场景返回 null → agent 看不到 SSH 终端内容
+5. **上级调研资料佐证**：Cline 的 `TerminalOutput` 命令、Tabby 的"终端上下文感知 inline 集成"——行业标配是 agent 能看到终端
+
+**根因链路**：
+```
+用户终端操作 → xterm buffer（terminalRefs[leafId].getBuffer(300)）
+  ↓ （已有能力！）
+getTerminalContext()（useAiLiveBridge.ts:82）
+  ↓ （只查 tabs → SSH 场景断裂）
+LiveSnapshot（transport.ts:47）→ 无 terminalOutput 字段
+  ↓
+formatEnvBlock() → <env> 块只有元数据
+  ↓
+agent 收到的消息无终端屏幕内容 → "看不到终端"
+```
+
+**修改（commit 24fb81c，6 文件 +107 行）**：
+1. **`transport.ts`**：
+   - `LiveSnapshot` 增加 `terminalOutput: string | null` 字段
+   - 新增 `formatTerminalContextBlock(live)` 函数：截取尾部 30 行，用 `<terminal-context>` 标签包裹（上游 terax 已有此标签的 strip 正则 `CONTEXT_BLOCK_RE`，说明原设计就有预留位）
+   - `run()` 中合并 `<env>` + `<terminal-context>` 注入到最后一条 user message → **双轨受益**（Python Sidecar 的 input + Vercel SDK 的 messages）
+2. **`chatRuntime.ts`**：`getLive()` 调用 `live.getTerminalContext()` 填充 `terminalOutput`
+3. **`useAiLiveBridge.ts`**：`getTerminalContext` 增加 SSH 终端回退——tabs 找不到活跃终端时，通过 `getSshLeafId()` 读 SSH 终端的 `terminalRefs` buffer
+4. **`App.tsx`**：`useAiLiveBridge` 传 `getSshLeafId: () => sshActiveLeafIdRef.current`
+5. **`config.ts`**：system prompt 更新——描述 `<terminal-context>` 块自动携带终端尾部输出（~30行），`get_terminal_output` 只在需要更多历史时调用
+6. **`transport.test.ts`**：新增 3 测试用例（空输出返回 null / 短输出原样注入 / 50 行截取尾部 30 行）
+
+**验证**：门禁 typecheck / lint / vitest 905 / build:web 全绿。
+
+**复盘**：
+- ✅ **利用上游已有预留位**：发现 `<terminal-context>` 标签的 `CONTEXT_BLOCK_RE` 正则和 `stripContextBlock` 函数早已存在——上游 terax 原设计就有终端上下文注入的预留位，只是没完整实现。补全而非重造
+- ✅ **双轨受益设计**：注入点在 `createContextAwareTransport` 的 `run()` 函数里（两条路径共享），`messagesForRun` 同时被 Python Sidecar 和 Vercel SDK 使用——一处改动覆盖全部
+- ✅ **SSH 终端回退**：`getTerminalContext` 原本只查 tabs → SSH 场景断裂。增加 `getSshLeafId` 回退后，SSH 终端的 scrollback 也能被 agent 读到
+- ✅ **token 成本可控**：30 行约 500-1500 tokens，远小于一条完整终端缓冲（300 行）。system prompt 明确告知 LLM `get_terminal_output` 只在需要更多历史时调用
+- 📌 **自动注入 vs 工具调用**：自动注入让 agent 每轮都有基本感知（用户核心诉求），`get_terminal_output` 工具仍保留（Vercel SDK 路径）作为"读更多历史"的补充。两者互补而非互斥
+- 📌 **脱敏已覆盖**：`getTerminalContext` 内部调用 `redactSensitive(buf)`，密码/密钥等敏感信息不会泄漏给 LLM
+
+---
+
 ## 2026-08-09 · SSH 连接进度界面 → 握手期间显示美观 5 步进度（取代空状态页）
 
 **任务（用户反馈）**："资源管理器和终端的同步会卡，资源管理器没加载好终端就不显示。终端的稳定和流畅是最优先的，资源管理器异步加载不阻塞终端。"
