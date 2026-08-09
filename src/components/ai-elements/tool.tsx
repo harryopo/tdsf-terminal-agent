@@ -29,7 +29,7 @@ import { useChatStore } from "@/modules/ai/store/chatStore";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import type { ComponentProps, ReactNode } from "react";
-import { isValidElement, memo, useState } from "react";
+import { isValidElement, memo, useEffect, useState } from "react";
 
 
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
@@ -785,11 +785,21 @@ function SuggestCommandCard({
   const [inserted, setInserted] = useState(false);
   const [showPredicted, setShowPredicted] = useState(false);
   const onInsert = () => {
-    const ok = useChatStore
-      .getState()
-      .live.injectIntoActivePty(command);
+    const store = useChatStore.getState();
+    // TDSF 魔改 (2026-08-09): 终端执行模式——加换行符自动执行命令
+    const text = store.autoExecuteInTerminal ? command + "\n" : command;
+    const ok = store.live.injectIntoActivePty(text);
     if (ok) setInserted(true);
   };
+  // TDSF 魔改 (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
+  useEffect(() => {
+    if (inserted) return;
+    const { autoExecuteInTerminal, live } = useChatStore.getState();
+    if (!autoExecuteInTerminal) return;
+    const ok = live.injectIntoActivePty(command + "\n");
+    if (ok) setInserted(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在 command 变化时触发
+  }, [command]);
   return (
     <div className="space-y-1.5">
       {explanation ? (
