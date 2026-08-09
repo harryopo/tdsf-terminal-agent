@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · SSH 连接进度界面（取代空状态页）（§37.40）。接手请直接看 **§37.40**（最新）+ **§37.39**（终端异常取证）+ **§37.38**（终端字体/主题）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
+> **最后更新**：2026-08-09 · Agent 终端上下文自动注入（每轮对话携带 scrollback 尾部）（§37.41）。接手请直接看 **§37.41**（最新）+ **§37.40**（SSH 连接进度）+ **§37.39**（终端异常取证）+ **§37.38**（终端字体/主题）+ **§37.37**（翻译卡片翻转）+ **§37.36**（SSH 方案 A）+ **§37.35**（SSH 选中翻译）+ **§37.33**（WorkspaceFs）。
 
 ---
 
@@ -3556,3 +3556,32 @@ CDP 全新状态实测通过。commit 见上。
 - ✅ **先取证再下结论**（继承 §37.39 教训）：两轮 search agent 五方向交叉验证（渲染链路/布局/CSS/ErrorBoundary/cold tab），确认文件树不阻塞终端后才定位真正延迟源
 - ✅ **渲染优先级天然正确**：connecting overlay 在空状态页之后、SSH 终端之前渲染——SSH 连上后 `showSshTerminal=true → showSshConnecting=false`（条件 `!showSshTerminal`），SshTerminalHost 在上层接管，无需额外切换逻辑
 - 📌 **cold tab 机制未改**：用户只选了"SSH 连接进度"，未选"本地终端自动启动"。本地终端仍需手动 warmUp。如需改进可后续做（方案：启动后自动 warmUp active tab 或 SSH Space 不 warmUp 走 connecting overlay）
+
+### 37.41 Agent 终端上下文自动注入 → 每轮对话自动携带 scrollback 尾部摘要（2026-08-09 ✅ 完成）
+
+**现象（用户反馈）**："agent 看不到终端，不知道我在干啥或预测要干啥。terax 能看见当前终端还能调工具拆任务路由意图，先解决这个问题再深度开发！"
+
+**调研（两轮 search agent + 上级目录调研资料交叉验证）**——**根因 = Python Sidecar 路径缺终端输出 + SSH 终端不在 tabs 里**：
+1. **双轨架构**：默认 Python Sidecar（`tdsfAgentId='main'`），Vercel SDK 为 fallback
+2. **Python Sidecar 路径**：`<env>` 块只注入元数据（cwd/sshSessionId），**完全没有终端屏幕内容**
+3. **Vercel SDK 路径**：有 `get_terminal_output` 工具（读 scrollback 尾部 80 行），但需 LLM 自主调用
+4. **SSH 终端断裂**：`getTerminalContext()` 只查 `tabs` 数组，SSH 终端（SshTerminalHost）不在 tabs 里 → SSH 场景返回 null
+5. **上游预留位**：`CONTEXT_BLOCK_RE` 正则 + `stripContextBlock` 函数早已存在——上游 terax 原设计就有 `<terminal-context>` 标签的预留位
+
+**修改（commit 24fb81c，6 文件 +107 行）**：
+1. `transport.ts`：`LiveSnapshot` 增加 `terminalOutput` + 新增 `formatTerminalContextBlock`（截尾部 30 行注入 `<terminal-context>` 块）+ `run()` 合并 `<env>` + `<terminal-context>` 注入
+2. `chatRuntime.ts`：`getLive()` 调 `live.getTerminalContext()` 填充 `terminalOutput`
+3. `useAiLiveBridge.ts`：`getTerminalContext` 增加 SSH 回退（tabs 找不到时用 `getSshLeafId()` 读 SSH 终端 buffer）
+4. `App.tsx`：传 `getSshLeafId: () => sshActiveLeafIdRef.current`
+5. `config.ts`：system prompt 更新 `<terminal-context>` 块描述
+6. `transport.test.ts`：新增 3 测试（空输出 null / 短输出注入 / 50 行截取 30 行）
+
+**验证**：门禁 typecheck / lint / vitest 905 / build:web 全绿。
+
+**复盘**：
+- ✅ **补全上游预留位**：发现 `<terminal-context>` 标签 + `CONTEXT_BLOCK_RE` 正则早已存在 → 补全而非重造
+- ✅ **双轨受益**：注入点在 `createContextAwareTransport.run()` 里（两条路径共享 `messagesForRun`），一处改动覆盖 Python Sidecar + Vercel SDK
+- ✅ **SSH 回退**：`getTerminalContext` 增加 `getSshLeafId` 回退 → SSH 终端 scrollback 也能被 agent 读到
+- 📌 **自动注入 vs 工具调用**：自动注入（30 行）满足用户核心诉求"agent 能看到终端"；`get_terminal_output` 工具仍保留作为"读更多历史"补充
+- 📌 **脱敏已覆盖**：`getTerminalContext` 内部调用 `redactSensitive(buf)`，密码/密钥不会泄漏给 LLM
+- 📌 **下一步**：用户可能需要在桌面端 `pnpm tauri:dev` 实测验证 agent 是否能正确引用终端上下文
