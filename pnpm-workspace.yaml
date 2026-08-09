@@ -22,3 +22,6 @@ shamefullyHoist: true
 
 # 关闭 deps-status-check (避免每个 script 都先做 install)
 verifyDepsBeforeRun: false
+
+minimumReleaseAgeExclude:
+  - fuzzysort@4.0.0
