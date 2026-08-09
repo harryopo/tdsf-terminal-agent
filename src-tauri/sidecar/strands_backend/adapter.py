@@ -100,6 +100,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 开始一个步骤时标记为 in_progress，完成后标记为 completed 并推进下一个。\n"
     "- 任务全部完成后简要总结结果。\n"
     "- 不确定下一步时，向用户提问而不是自行假设。\n"
+    "\n"
+    "Decision history:\n"
+    "- 排障前先调 search_history 检索历史案例库，参考之前类似问题的解决方案。\n"
+    "- 给出建议后调 assess_confidence 评估可信度，让用户了解结论的可靠程度。\n"
 )
 
 
@@ -1038,6 +1042,13 @@ class StrandsAgentAdapter:
             all_tools.append(make_confidence_tool(ctx))
         except Exception as e:
             logger.warning(f"confidence tool attach failed: {e}")
+
+        # TDSF 魔改 (2026-08-09): 方案书 #10 决策库完善 — 历史案例检索工具
+        try:
+            from strands_backend.tools.decision_history import make_decision_history_tool
+            all_tools.append(make_decision_history_tool(ctx))
+        except Exception as e:
+            logger.warning(f"decision_history tool attach failed: {e}")
 
         # P0-6: main agent 挂载子 agent 工具（agent-as-tool 委派）
         sub_agent_names = set()
