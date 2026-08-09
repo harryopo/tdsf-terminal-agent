@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-08-09 · SSH 连接进度界面 → 握手期间显示美观 5 步进度（取代空状态页）
+
+**任务（用户反馈）**："资源管理器和终端的同步会卡，资源管理器没加载好终端就不显示。终端的稳定和流畅是最优先的，资源管理器异步加载不阻塞终端。"
+
+**调研（两轮深度取证）**：
+1. **代码层面文件树不阻塞终端**（两轮 search agent 确认）：WorkspaceSurface 左右面板是 ResizablePanelGroup 兄弟节点；FileExplorer 加载是纯异步（`void fetchChildren`）；`explorerSource` 不进入终端渲染链路；TerminalStack 无条件挂载（CSS 切显）
+2. **真正延迟源 = cold tab 机制 + SSH connecting 等待**：① 本地默认 tab `cold:true` 被 `selectLiveTerminals` 过滤 → TerminalPane 根本没挂载 → 显示 NoTerminalEmptyState 引导页；② SSH 连接需 TCP→握手→认证→PTY 建立（`await open_pty`），数秒内 `isSpaceSshConnected=false` → 终端区域被 NoTerminalEmptyState 或 invisible 覆盖
+3. **用户误关联**：文件树在 SSH connected 后才开始加载（`navigateTo` 在 `sshConnect` await 之后），与终端同时出现在 connected 瞬间 → 用户看到"文件树转圈 + 终端没出来"误以为因果关系
+
+**修改（commit ee43dde）**：
+1. **新增 `SshConnectingOverlay.tsx`**：美观的 5 步连接进度界面（建立连接→SSH 握手→验证主机→身份认证→启动终端）；当前步骤 amber 脉冲 + 扩散环动画，已完成步骤 primary 色 + Tick02Icon；服务器信息卡片（`user@host:port`）；磨砂背景 `bg-background/95 backdrop-blur-sm`
+2. **改 `WorkspaceSurface.tsx`**：新增 `sshConnectingInfo` prop + `showSshConnecting` 判定；渲染优先级 `空状态页 < connecting overlay < SSH 终端`（后者覆盖前者）；终端栈隐藏条件新增 `showSshConnecting`
+3. **改 `App.tsx`**：新增 `SSH_CONNECTING_STATES` 集合 + `isSpaceSshConnecting` + `sshConnectingInfo` 计算；`showNoTerminalEmptyState` 新增 `!isSpaceSshConnecting` 条件（SSH 连接中不显示空状态页）
+
+**验证**：门禁 typecheck / lint / vitest 902 / build:web 全绿。桌面端实测待用户在 SSH 自动连接场景下验证视觉效果（connecting 只在握手几秒内出现）。
+
+**复盘**：
+- ✅ **"异常输出"先取证再下结论**（继承上次教训）：两轮 search agent 交叉验证（注入脚本/前端源码/渲染链路/布局/CSS/ErrorBoundary 五方向），确认文件树不阻塞终端后再定位真正的延迟源
+- ✅ **渲染优先级天然正确**：connecting overlay 在空状态页之后、SSH 终端之前渲染——SSH 连上后 showSshTerminal=true → showSshConnecting 自动 false（条件 `!showSshTerminal`），SshTerminalHost 在上层接管，无需额外切换逻辑
+- ✅ **步骤进度映射 SSH 状态机**：`activeStepIndex(state)` 将 `connecting/handshaking/host_verifying/authenticating/authenticated` 精确映射到 0-4 步，`connected` 返回 5（全完成，此时已切到 SshTerminalHost）
+- 📌 **cold tab 机制未改**（用户未选"本地终端自动启动"）：本地终端仍需手动点击 warmUp。如需改进可后续做
+
+---
+
 ## 2026-08-09 · SSH 终端"异常输出"真相取证 → 非渲染问题，清理 hack 残留垃圾文件
 
 **任务（用户反馈）**：SSH 终端 `ll` 出现奇怪文件 `';'`（18B）和 `HTTP`（6B）；输入 `ls'` 进入 `>` 多行提示，后续输入"没反应"——用户怀疑"终端交互渲染展示还是有问题，请告诉我真相再解决"。
