@@ -134,6 +134,20 @@ export function useAiLiveBridge(params: Params) {
         return t?.kind === "terminal" && t.private === true;
       },
       injectIntoActivePty: (text) => {
+        // TDSF 魔改 (2026-08-09): SSH 终端优先——
+        // SSH 终端不在 tabs 数组里，原实现只查 tabs 导致 SSH 场景命令注入失败。
+        // 优先通过 getSshLeafId 读 SSH 终端的 TerminalPaneHandle。
+        const sshLeafId = ref.current.getSshLeafId?.();
+        if (sshLeafId !== null && sshLeafId !== undefined) {
+          const term = terminalRefs.current.get(sshLeafId);
+          if (term) {
+            term.write(text);
+            term.focus();
+            return true;
+          }
+          return false;
+        }
+        // 本地终端
         const { activeId, tabs } = ref.current;
         const t = tabs.find((x) => x.id === activeId);
         if (t?.kind !== "terminal") return false;

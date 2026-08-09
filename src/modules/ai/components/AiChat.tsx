@@ -771,16 +771,14 @@ const RenderedPart = memo(function RenderedPart({
 }) {
   if (part.type === "text") {
     const text = (part as unknown as { text: string }).text;
-    // P2-1: teach 结构化教学输出 → 教学卡片（6 大板块分区渲染）
-    if (!streaming && isTeachMessage(text)) {
-      return (
-        <TeachCard
-          content={text}
-          onAsk={(t) =>
-            useChatStore.getState().attachSelection?.(t, "terminal")
-          }
-        />
-      );
+    // TDSF 魔改 (2026-08-09): 教学卡片基于 agent id 切换，不等输出完毕。
+    //   原实现 `!streaming && isTeachMessage(text)` 导致流式过程中显示纯文本，
+    //   流完后才整体替换为 TeachCard——用户反馈"输出内容后才开始排版"。
+    //   现改为：当前活跃 agent 是 teach 时，流式过程中就用 TeachCard 渲染
+    //   （parseTeachSections 支持不完整 markdown，sections 会随流式增长）。
+    const agentId = useChatStore.getState().tdsfAgentId;
+    if (agentId === "teach" && isTeachMessage(text)) {
+      return <TeachCard content={text} />;
     }
     return (
       <MessageResponse streaming={streaming}>{text}</MessageResponse>

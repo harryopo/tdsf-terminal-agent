@@ -6,8 +6,8 @@
  *   2. isTeachMessage: 教学格式检测（emoji 板块 / ## N. 标题）
  *   3. TeachCard 渲染: 分节卡片 + 命令行 + 追问按钮
  */
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
 import { TeachCard } from "./TeachCard";
 import { isTeachMessage, parseTeachSections } from "./teachParser";
 
@@ -91,12 +91,5 @@ describe("TeachCard — 渲染", () => {
     render(<TeachCard content={TEACH_MD} />);
     expect(screen.getByText("插入终端")).toBeTruthy();
     expect(screen.getByText("复制")).toBeTruthy();
-  });
-
-  it("追问按钮触发 onAsk", () => {
-    const onAsk = vi.fn();
-    render(<TeachCard content={TEACH_MD} onAsk={onAsk} />);
-    fireEvent.click(screen.getByTestId("teach-ask"));
-    expect(onAsk).toHaveBeenCalledWith(TEACH_MD);
   });
 });

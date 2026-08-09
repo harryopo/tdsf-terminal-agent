@@ -133,6 +133,74 @@ def _build_fallback(intent: str) -> tuple[str, str]:
 
 
 # ============================================================================
+# 预测回显（TDSF 魔改 2026-08-09）
+# ============================================================================
+
+def _predict_output(command: str) -> str:
+    """根据命令前缀启发式生成预测回显摘要（1-3 行）。
+
+    让用户在执行前就能预期看到什么，增强可信度。
+    粗粒度匹配——不追求精确，只给方向性提示。
+    """
+    cmd = command.strip()
+    first_word = cmd.split()[0] if cmd.split() else ""
+
+    # 常见命令的预测回显
+    _PREDICTIONS: dict[str, str] = {
+        "ls": "列出当前目录下的文件和子目录",
+        "ll": "以长格式列出当前目录内容（权限/所有者/大小/时间）",
+        "uptime": "系统运行时间 + 1/5/15 分钟平均负载",
+        "top": "CPU/内存占用排行（实时刷新，q 退出）",
+        "free": "内存使用概况：total/used/free/shared/buff/cache/available",
+        "df": "各挂载点磁盘使用量：Size/Used/Avail/Use%",
+        "du": "指定目录的磁盘占用，按大小排序",
+        "ps": "进程快照（PID/TTY/TIME/CMD）",
+        "netstat": "网络连接/监听端口/路由表",
+        "ss": "socket 统计（替代 netstat，更快速）",
+        "systemctl": "服务状态（active/inactive/failed）",
+        "journalctl": "系统日志（按时间/优先级过滤）",
+        "cat": "输出文件完整内容",
+        "head": "输出文件前 N 行（默认 10）",
+        "tail": "输出文件末尾 N 行（默认 10，-f 实时跟踪）",
+        "grep": "匹配到的文本行（高亮关键词）",
+        "find": "匹配到的文件路径列表",
+        "who": "当前登录用户列表",
+        "w": "登录用户 + 其正在执行的命令",
+        "id": "当前用户 UID/GID/组信息",
+        "date": "当前系统日期和时间",
+        "pwd": "当前工作目录的绝对路径",
+        "uname": "内核/操作系统信息（-a 全部）",
+        "hostname": "当前主机名",
+        "ifconfig": "网络接口配置（IP/MAC/MTU/状态）",
+        "ip": "网络接口/地址/路由信息",
+        "ping": "ICMP 回显应答（时间/TTL，Ctrl+C 停止）",
+        "curl": "HTTP 响应（状态码/头部/正文）",
+        "wget": "下载进度条 + 保存路径",
+        "chmod": "（无输出表示成功，可通过 ls -l 验证权限变更）",
+        "chown": "（无输出表示成功，可通过 ls -l 验证所有者变更）",
+        "mkdir": "（无输出表示成功，可通过 ls 验证目录已创建）",
+        "touch": "（无输出表示成功，可通过 ls 验证文件已创建/时间已更新）",
+        "rm": "（无输出表示成功，文件/目录已删除）",
+        "cp": "（无输出表示成功，文件已复制）",
+        "mv": "（无输出表示成功，文件已移动/重命名）",
+        "echo": "回显参数内容到标准输出",
+    }
+
+    prediction = _PREDICTIONS.get(first_word)
+    if prediction:
+        return prediction
+
+    # 带管道的命令——基于第一个命令推断
+    if "|" in cmd:
+        pipe_first = cmd.split("|")[0].strip().split()[0]
+        prediction = _PREDICTIONS.get(pipe_first)
+        if prediction:
+            return f"{prediction}（经管道过滤后输出）"
+
+    return f"执行 {first_word} 命令（观察终端输出以确认结果）"
+
+
+# ============================================================================
 # 核心实现
 # ============================================================================
 
@@ -167,6 +235,7 @@ def invoke_suggest_command_tool(
         "status": "success",
         "command": command,
         "explanation": explanation,
+        "predicted_output": _predict_output(command),
         "target_os": target_os,
         "intent": intent,
     }

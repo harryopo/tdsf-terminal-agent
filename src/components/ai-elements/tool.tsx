@@ -503,8 +503,16 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     const cmd = typeof o.command === "string" ? o.command : null;
     const explanation =
       typeof o.explanation === "string" ? o.explanation : null;
+    const predictedOutput =
+      typeof o.predicted_output === "string" ? o.predicted_output : null;
     if (!cmd) return null;
-    return <SuggestCommandCard command={cmd} explanation={explanation} />;
+    return (
+      <SuggestCommandCard
+        command={cmd}
+        explanation={explanation}
+        predictedOutput={predictedOutput}
+      />
+    );
   }
 
   if (toolName === "grep") {
@@ -768,11 +776,14 @@ function CodeBlockMini({ code }: { code: string; language: string }) {
 function SuggestCommandCard({
   command,
   explanation,
+  predictedOutput,
 }: {
   command: string;
   explanation: string | null;
+  predictedOutput: string | null;
 }) {
   const [inserted, setInserted] = useState(false);
+  const [showPredicted, setShowPredicted] = useState(false);
   const onInsert = () => {
     const ok = useChatStore
       .getState()
@@ -809,6 +820,29 @@ function SuggestCommandCard({
           <span>{inserted ? "Inserted" : "Insert"}</span>
         </button>
       </div>
+      {/* TDSF 魔改 (2026-08-09): 预测回显——让用户提前知道命令执行后应看到什么 */}
+      {predictedOutput ? (
+        <div className="rounded border border-dashed border-border/50 bg-muted/20">
+          <button
+            type="button"
+            onClick={() => setShowPredicted((v) => !v)}
+            className="flex w-full items-center gap-1 px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-muted/40"
+          >
+            <HugeiconsIcon
+              icon={EyeIcon}
+              size={10}
+              strokeWidth={1.75}
+              className={showPredicted ? "opacity-40" : ""}
+            />
+            <span>{showPredicted ? "隐藏预测回显" : "预测回显"}</span>
+          </button>
+          {showPredicted ? (
+            <pre className="border-t border-dashed border-border/50 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed text-muted-foreground/80">
+              {predictedOutput}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

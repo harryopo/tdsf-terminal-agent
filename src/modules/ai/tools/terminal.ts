@@ -16,8 +16,14 @@ export function buildTerminalTools(ctx: ToolContext): Record<string, Tool> {
           .string()
           .optional()
           .describe("Optional one-line note shown beside the command."),
+        predicted_output: z
+          .string()
+          .optional()
+          .describe(
+            "Optional predicted terminal output for this command — a concise summary of what the user should see after running it, so they can verify the command worked. Keep it short (1-5 lines).",
+          ),
       }),
-      execute: async ({ command, explanation }) => {
+      execute: async ({ command, explanation, predicted_output }) => {
         const safety = checkShellCommand(command);
         if (!safety.ok) return { error: safety.reason };
         // Reject control bytes — the user inserts via click, but the rendered
@@ -28,7 +34,7 @@ export function buildTerminalTools(ctx: ToolContext): Record<string, Tool> {
             error: "command must be a single line without control bytes",
           };
         }
-        return { command, explanation };
+        return { command, explanation, predicted_output };
       },
     }),
 
