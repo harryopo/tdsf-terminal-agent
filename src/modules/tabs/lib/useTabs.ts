@@ -17,6 +17,7 @@ import {
   siblingLeafOf,
   splitLeaf,
   swapLeafInDirection,
+  effectiveLeafSsh,
 } from "@/modules/terminal/lib/panes";
 import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
 // TDSF 修复 2026-08-01: newTab/newTabInSpace 需要读目标 Space 的 env 来绑定
@@ -1221,6 +1222,15 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           const splitId = nextIdRef.current++;
           const leafId = nextIdRef.current++;
           newLeafId = leafId;
+          // TDSF 魔改 (2026-08-11): 新 leaf 继承 active leaf 的有效 SSH 会话——
+          // active 是 SSH（string）→ 新 pane 绑同会话（同一服务器双 pane）；
+          // active 是本地（null）→ 不写字段（undefined，继承 tab 或保持本地）。
+          // 这样「在 SSH 终端分屏」永远得到 SSH pane，而不是本地 shell。
+          const activeSsh = effectiveLeafSsh(
+            t.paneTree,
+            t.activeLeafId,
+            t.sshSessionId,
+          );
           const paneTree = splitLeaf(
             t.paneTree,
             t.activeLeafId,
@@ -1228,6 +1238,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             leafId,
             dir,
             t.cwd,
+            activeSsh ?? undefined,
           );
           return { ...t, paneTree, activeLeafId: leafId };
         }),

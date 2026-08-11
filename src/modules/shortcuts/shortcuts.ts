@@ -21,6 +21,11 @@ export type ShortcutId =
   | "space.overview"
   | "pane.splitRight"
   | "pane.splitDown"
+  // TDSF 魔改 (2026-08-11): iTerm2 风格分屏快捷键（Ctrl/Cmd+Shift+H/V）。
+  // 与 splitRight/splitDown 语义等价——splitActivePane 已自动继承 SSH 会话，
+  // 只是提供用户熟悉的按键组合（H=horizontal 左右 / V=vertical 上下）。
+  | "pane.splitSshRight"
+  | "pane.splitSshDown"
   | "pane.focusNext"
   | "pane.focusPrev"
   | "pane.swapLeft"
@@ -147,6 +152,20 @@ export const SHORTCUTS: Shortcut[] = [
     label: "Split pane down",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "d" }],
+  },
+  {
+    // TDSF 魔改 (2026-08-11): iTerm2 风格分屏（H=horizontal）。
+    id: "pane.splitSshRight",
+    label: "Split pane right (Ctrl+Shift+H)",
+    group: "Panes",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "h" }],
+  },
+  {
+    // TDSF 魔改 (2026-08-11): iTerm2 风格分屏（V=vertical）。
+    id: "pane.splitSshDown",
+    label: "Split pane down (Ctrl+Shift+V)",
+    group: "Panes",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "v" }],
   },
   {
     id: "pane.focusNext",
