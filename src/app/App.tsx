@@ -65,6 +65,8 @@ import {
 } from "@/modules/sidebar";
 // TDSF 魔改 (P4-T4.4): Skill 管理面板
 import { SkillsPanel } from "@/modules/skills";
+// TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段面板
+import { SnippetsPanel } from "@/modules/snippets";
 import { KnowledgePanelLazy } from "@/modules/ai/components/lazy";
 import {
   SourceControlPanel,
@@ -2070,6 +2072,18 @@ export default function App() {
     [isTerminalTab, activeLeafId],
   );
 
+  // TDSF 魔改 2026-08-11 (P2 代码片段管理): 片段插入终端回调
+  // 语义与 insertHistoryCommand 一致：写入当前活动终端 + 聚焦；无活动终端返回 false
+  const handleInsertSnippetCommand = useCallback(
+    (cmd: string): boolean => {
+      if (!isTerminalTab || activeLeafId === null) return false;
+      writeToSession(activeLeafId, cmd);
+      terminalRefs.current.get(activeLeafId)?.focus();
+      return true;
+    },
+    [isTerminalTab, activeLeafId],
+  );
+
   useAiLiveBridge({
     setLive,
     activeId,
@@ -2250,6 +2264,12 @@ export default function App() {
                       ) : sidebarView === "knowledge" ? (
                         // P2-4: 知识库浏览器（搜索/列表/详情弹窗，lazy 加载）
                         <KnowledgePanelLazy />
+                      ) : sidebarView === "snippets" ? (
+                        // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段面板
+                        <SnippetsPanel
+                          onInsertCommand={handleInsertSnippetCommand}
+                          currentCwd={activeTerminalLeafCwd ?? undefined}
+                        />
                       ) : null}
                     </ErrorBoundary>
                   </div>

@@ -5,7 +5,7 @@
  *
  * 适配:
  *   - 移除 settings store 依赖 → 用 localStorage 直接持久化
- *   - 移除编辑器主题支持 (TDSF 不集成 CodeMirror)
+ *   - 编辑器主题跟随 CodeMirror 6（@uiw/react-codemirror，见 modules/editor）
  *   - 简化 SurfaceLayer (保留背景图能力)
  *   - 保留完整主题切换 + 预览 + 自定义主题能力
  */
