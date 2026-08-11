@@ -39,6 +39,8 @@ import {
   setEditorWordWrap,
   setExplorerGitDecorations,
   setRestoreWindowState,
+  setServerMonitorInterval,
+  SERVER_MONITOR_INTERVAL_PRESETS,
   setShowHidden,
   setTerminalCursorBlink,
   setTerminalFontFamily,
@@ -96,6 +98,17 @@ const AUTOCOMPLETE_TRIGGER_OPTIONS: {
   { value: "manual", label: "手动 (按快捷键触发)" },
 ];
 
+const SERVER_MONITOR_INTERVAL_OPTIONS = SERVER_MONITOR_INTERVAL_PRESETS.map(
+  (ms) => ({
+    value: ms,
+    label:
+      ms === 2000 ? "2 秒 (高频)" :
+      ms === 3000 ? "3 秒 (推荐)" :
+      ms === 5000 ? "5 秒" :
+      "10 秒 (省电)",
+  }),
+);
+
 const FORMATTER_OPTIONS: { value: EditorFormatter; label: string }[] = [
   { value: "lsp", label: "LSP 服务器" },
   { value: "biome", label: "Biome" },
@@ -131,6 +144,9 @@ export function GeneralSection() {
   const autostart = usePreferencesStore((s) => s.autostart);
   const restoreWindowState = usePreferencesStore((s) => s.restoreWindowState);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
+  const serverMonitorInterval = usePreferencesStore(
+    (s) => s.serverMonitorInterval,
+  );
   const vimMode = usePreferencesStore((s) => s.vimMode);
   const editorFontSize = usePreferencesStore((s) => s.editorFontSize);
   const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
@@ -499,6 +515,31 @@ export function GeneralSection() {
             <SelectContent>
               {AUTOCOMPLETE_TRIGGER_OPTIONS.map((o) => (
                 <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingRow>
+      </div>
+
+      {/* === 服务器监控 === */}
+      <div className="flex flex-col gap-2">
+        <Label>服务器监控</Label>
+        <SettingRow
+          title="采集间隔"
+          description="SSH 服务器实时监控的数据刷新间隔。间隔越短越实时，但对服务器负载越高。"
+        >
+          <Select
+            value={String(serverMonitorInterval)}
+            onValueChange={(v) => void setServerMonitorInterval(Number(v))}
+          >
+            <SelectTrigger className="h-7 w-56 text-[11.5px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SERVER_MONITOR_INTERVAL_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={String(o.value)}>
                   {o.label}
                 </SelectItem>
               ))}

@@ -38,7 +38,7 @@ pub mod sftp;
 // 重导出核心类型,供 lib.rs 注册 Tauri 命令使用
 pub use client::{SshAuthMethod, SshClient, SshConnectParams};
 pub use known_hosts::KnownHostsManager;
-pub use session::{SshCommandOutput, SshSession, SshSessionState, SshStatusEvent};
+pub use session::{SshCommandOutput, SshReconnectConfig, SshSession, SshSessionState, SshStatusEvent};
 pub use sftp::{SftpAttrs, SftpEntry, SftpSession};
 
 use std::collections::HashMap;
@@ -255,7 +255,8 @@ pub async fn ssh_connect(
     };
 
     let app_handle_for_connect = app.clone();
-    let client = SshClient::connect(app_handle_for_connect, connect_params, Some(on_status.clone()))
+    // clone 一份用于自动重连配置 (SshClient::connect 会 move 走 connect_params)
+    let client = SshClient::connect(app_handle_for_connect, connect_params.clone(), Some(on_status.clone()))
         .await
         .map_err(|e| {
             let msg = format!("SSH connect failed: {e}");
@@ -269,9 +270,9 @@ pub async fn ssh_connect(
         params.cols,
         params.rows,
         params.term.clone(),
-        on_data,
-        on_status,
-        on_exit,
+        on_data.clone(),
+        on_status.clone(),
+        on_exit.clone(),
     )
     .await
     .map_err(|e| {
@@ -281,7 +282,30 @@ pub async fn ssh_connect(
     })?;
 
     // 3. 注册到全局 state
-    state.insert(session_id, Arc::new(session)).await;
+    let session_arc = Arc::new(session);
+
+    // P3 #20: 启用自动重连 (网络抖动/服务器重启自动恢复, 前端无需感知)。
+    // 凭据 (含密码/私钥路径) 保存在内存中供重连使用; 不持久化到磁盘。
+    session_arc
+        .enable_reconnect(SshReconnectConfig {
+            app_handle: app.clone(),
+            params: connect_params,
+            cols: params.cols,
+            rows: params.rows,
+            term: params.term,
+            on_data: on_data.clone(),
+            on_status: on_status.clone(),
+            on_exit: on_exit.clone(),
+        })
+        .await;
+    {
+        let s = session_arc.clone();
+        tokio::spawn(async move {
+            SshSession::reconnect_supervisor(s).await;
+        });
+    }
+
+    state.insert(session_id, session_arc).await;
 
     log::info!("[ssh] connect success: id={}", session_id);
     Ok(session_id)

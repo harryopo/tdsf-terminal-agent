@@ -2,7 +2,7 @@
 //! ============================================================================
 //! 封装 russh::client 的连接 + 认证流程,提供高层 API:
 //! - `SshClient::connect`: 建立连接 (含 TOFU) + 认证 (password/publickey)
-//! - 配置原生 keepalive (15s) + keepalive_max (3) + inactivity_timeout (30s)
+//! - 配置原生 keepalive (15s) + keepalive_max (3) + inactivity_timeout (300s)
 //! - 返回 russh::client::Handle 供 SshSession 使用
 //!
 //! ## 认证方法
@@ -17,7 +17,7 @@
 //! let config = client::Config {
 //!     keepalive_interval: Some(Duration::from_secs(15)),  // 15s 发一次 keepalive
 //!     keepalive_max: 3,                                    // 3 次无响应则断开
-//!     inactivity_timeout: Some(Duration::from_secs(30)),  // 30s 无数据则超时
+//!     inactivity_timeout: Some(Duration::from_secs(300)), // 300s 无数据则超时
 //!     ..<_>::default()
 //! };
 //! ```
@@ -71,9 +71,9 @@ pub struct SshConnectParams {
 ///
 /// 封装 russh::client::Handle,提供高层 API。
 /// connect 成功后,通过 `handle()` 获取 russh Handle 用于开 channel。
-pub struct SshClient {
+pub struct SshClient<R: tauri::Runtime = tauri::Wry> {
     /// russh 客户端 Handle (用于 channel_open_session 等)
-    handle: Handle<SshClientHandler>,
+    handle: Handle<SshClientHandler<R>>,
 }
 
 /// SSH 客户端错误
@@ -108,7 +108,7 @@ pub enum SshClientError {
     Other(String),
 }
 
-impl SshClient {
+impl<R: tauri::Runtime> SshClient<R> {
     /// 建立 SSH 连接 (含 TOFU + 认证)
     ///
     /// 流程:
@@ -123,7 +123,7 @@ impl SshClient {
     /// - `params`: 连接参数 (host/port/user/auth)
     /// - `on_status`: 状态推送 channel (可选; ssh_connect 传 Some, ssh_test 传 None)
     pub async fn connect(
-        app_handle: tauri::AppHandle,
+        app_handle: tauri::AppHandle<R>,
         params: SshConnectParams,
         on_status: Option<Channel<SshStatusEvent>>,
     ) -> Result<Self, SshClientError> {
@@ -149,9 +149,10 @@ impl SshClient {
             keepalive_interval: Some(Duration::from_secs(15)),
             // 3 次无响应则断开 (返回 Error::KeepaliveTimeout)
             keepalive_max: 3,
-            // 30s 无任何数据则超时 (返回 Error::InactivityTimeout)
-            // 注意: 这个比较严格,但适合教学场景 (及时发现问题)
-            inactivity_timeout: Some(Duration::from_secs(30)),
+            // 300s (5分钟) 无任何数据则超时 (返回 Error::InactivityTimeout)
+            // 交互式终端用户阅读输出需要时间,30s 太短容易误断; 5 分钟足够宽松,
+            // 同时 keepalive 机制仍能及时检测真正的连接中断
+            inactivity_timeout: Some(Duration::from_secs(300)),
             ..<_>::default()
         };
 
@@ -239,12 +240,12 @@ impl SshClient {
     ///
     /// 注意: Handle 内部是 Sender<Msg> + tokio mpsc,可多次 clone。
     /// 多 tab 共享 Handle 时,每个 tab 持有自己的 clone。
-    pub fn handle(self) -> Handle<SshClientHandler> {
+    pub fn handle(self) -> Handle<SshClientHandler<R>> {
         self.handle
     }
 
     /// 获取 Handle 引用 (用于 SshSession::open_pty 借用而非消费)
-    pub fn handle_ref(&self) -> &Handle<SshClientHandler> {
+    pub fn handle_ref(&self) -> &Handle<SshClientHandler<R>> {
         &self.handle
     }
 }
@@ -259,8 +260,8 @@ impl SshClient {
 /// 注意: russh 0.61 的 PrivateKeyWithHashAlg::new 签名为
 ///       `new(key: Arc<PrivateKey>, hash_alg: Option<HashAlg>) -> Self`
 ///       (直接返回 Self,非 Result;key 需用 Arc 包装)
-async fn authenticate_publickey(
-    handle: &mut Handle<SshClientHandler>,
+async fn authenticate_publickey<R: tauri::Runtime>(
+    handle: &mut Handle<SshClientHandler<R>>,
     user: &str,
     private_key_path: &str,
     passphrase: Option<&str>,

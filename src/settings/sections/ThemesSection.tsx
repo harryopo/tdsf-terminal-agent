@@ -129,7 +129,7 @@ export function ThemesSection() {
         <Label>编辑器配色</Label>
         <SettingRow
           title="编辑器配色方案"
-          description="Monaco 编辑器使用的主题。"
+          description="代码编辑器使用的主题。"
         >
           <div className="flex flex-col items-end gap-1">
             <select

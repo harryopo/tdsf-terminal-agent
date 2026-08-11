@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, pty, secrets, shell, sidecar, ssh, workspace};
+use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -250,12 +250,14 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // Skip restoring VISIBLE — frontend calls window.show() after first
-        // paint so the user never sees a transparent window-shadow flash on
-        // Windows/Linux.
+        // TDSF 永久修复 (2026-08-09): 恢复 VISIBLE 状态保存。
+        // 上游用 visible:false + 前端 JS show() 来避免 borderless 透明窗口闪烁。
+        // 我们已将 tauri.conf.json 改为 visible:true（窗口启动即可见），
+        // 所以不再需要跳过 VISIBLE 恢复。window_state 插件会记住用户上次
+        // 的窗口位置和大小，同时正确恢复可见性。
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .with_state_flags(StateFlags::all())
                 .build(),
         )
         .plugin(tauri_plugin_autostart::Builder::new().build())
@@ -290,6 +292,13 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
+            // TDSF 永久修复 (2026-08-09): 后端兜底确保窗口可见。
+            // 即使前端 JS 崩溃/HMR 重载导致 setFocus 失败，窗口也一定显示。
+            if let Some(main) = _app.get_webview_window("main") {
+                let _ = main.show();
+                let _ = main.set_focus();
+            }
+
             // macOS skips parent() for the settings window, so tie its lifecycle
             // to the main window here instead. Other platforms keep parent().
             #[cfg(target_os = "macos")]
@@ -384,6 +393,8 @@ pub fn run() {
             pty::pty_has_foreground_job,
             pty::pty_shell_name,
             pty::pty_list_shells,
+            // P0-2: 注册 shell history 读取命令（命令预测历史匹配层依赖）
+            shell_history::read_shell_history,
             fs::tree::list_subdirs,
             fs::tree::fs_read_dir,
             fs::file::fs_read_file,
