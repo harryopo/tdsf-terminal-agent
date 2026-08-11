@@ -6,6 +6,39 @@
 
 ---
 
+## 2026-08-11 · P2 SSH 隧道与端口转发（方案书 v1.1 §4）— 本地转发 direct-tcpip
+
+**任务**：方案书 v1.1 §4「SSH 隧道与端口转发」P2 部分——russh `direct-tcpip` 本地端口转发（DBA 连远程数据库免 VPN），P3 再做远程转发 + SOCKS5。
+
+**方案**：
+1. 后端 `tunnel.rs`：`SshTunnel<R>` 生命周期（start→Running→accept loop→stop 幂等），`stop_flag: Arc<AtomicBool>` + `stop_notify: Arc<Notify>` + 2s 超时防御；stop 先 take 再停（list 不显示停止中的隧道）
+2. 隧道 registry 挂 `SshState`：`tunnels: RwLock<HashMap<u32, Arc<SshTunnel>>>` + `AtomicU32` id；`port_in_use` 只查 Running；`ssh_disconnect` 先 `stop_tunnels_for_session` 清理再 close（释放端口）
+3. 前端 `tunnels/` 模块：TunnelPanel（工具栏 + 无会话引导 + 空状态 + 隧道行）+ CreateTunnelDialog（会话 Select 仅列已连接 + 端口校验）+ zustand store（dev 降级）+ 侧边栏「隧道」入口
+4. 序列化约定：TunnelSpec 反序列化 camelCase（`local_host` 默认 `127.0.0.1`）、TunnelInfo 序列化 camelCase、TunnelState 枚举 snake_case
+
+**报错与修改**：
+- `russh::Channel::wait()` 需 `&mut self`（cargo check E0596）→ `bridge_connection(mut stream, mut channel)`
+- session.rs 测试模块私有（cargo test E0603）→ `make_test_session`/`mod tests` 改 `pub(crate)`
+- cargo test 断言错：`make_test_tunnel` 的 `remote_port` 固定 3306，误断言 5432 → 改 `local_port 5432 / remote_port 3306`
+- `InfoIcon` 不存在（TS2724）→ 换全项目已验证 `InformationCircleIcon`
+- 无 jest-dom → `toBeDisabled` 改原生 `.disabled` 断言
+- mock `@tauri-apps/api/core` 后 ssh-explorer 模块副作用调 `listen` 抛 `transformCallback`（unhandled error）→ 测试文件追加 `vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }))`
+- busy 测试超时：tunnel_start 挂起 promise 被 refresh() 复用悬挂 → mock 区分首调（首调挂起、后续 `Promise.resolve([])`）
+- store 模块级单例跨测试保留 `loaded` → `beforeEach` 重置 `{tunnels:[],loaded:false,busy:false}`
+- act warning → `await waitFor(() => loaded === true)`
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test **969 全过**（新增 16）/ build:web ✅ / cargo check ✅ / **cargo test 315 全过**。
+
+**复盘**：
+- ✅ **关键技术决策：桥接选型**。方案书 §4.1 建议 `into_stream().split()` 已过时——实测 `make_reader`（&mut）/`make_writer`（&self）借用冲突无法同时持有；改用 russh 官方示例 `tokio::select` 双向桥接（`stream.read → channel.data()` / `channel.wait() → stream.write_all()`）。教训：russh API 变化快，**源码示例 > README/报告**（与 §3.5 红线 2「结论必须实测」一致），决策记录在 tunnel.rs 头部文档
+- ✅ **stop 幂等设计**：`stop_flag.swap(true, AcqRel)` 防重入 + drop listener 释放端口 + notify 唤醒 + 2s 超时防御——不依赖调用方顺序，天然安全
+- ✅ **端口冲突两级校验**：隧道间 `port_in_use`（只查 Running）→ 其他进程 `TcpListener::bind` 兜底
+- ⚠️ **测试 mock 传染**：mock `@tauri-apps/api/core` 会暴露 ssh-explorer 模块副作用的 `listen` 依赖——前端单测凡 mock core 的，**必须同时 mock event**（`transformCallback` 错误是典型信号）
+- ⚠️ **模块级单例 store 测试陷阱**：`loaded`/`busy` 跨测试保留导致后续测试跳过 refresh——每个测试文件 `beforeEach` 重置状态是铁律
+- 📌 待桌面端实测：连 SSH → 新建本地转发（127.0.0.1:3306 → db-host:3306）→ 本地 mysql 直连远程 → 停止释放端口
+
+---
+
 ## 2026-08-11 · 本地+SSH 混合分屏（ROADMAP #21）— SSH 终端迁入 PaneTree leaf
 
 **任务**：SSH 终端此前在 workspace 级独立渲染（SshTerminalHost），无法参与 PaneTree 分屏；借鉴 iShell Pro 分屏组合，实现「本地 + SSH 混合分屏」。

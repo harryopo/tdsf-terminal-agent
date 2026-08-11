@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-11 · P2 代码片段管理完成（§37.49，方案书 v1.1 §5）。接手请直接看 **§37.49**（最新）+ **§37.48**（分屏联动）+ **§37.47**（iShell 调研）
+> **最后更新**：2026-08-11 · P2 SSH 隧道（本地转发）完成（§37.50，方案书 v1.1 §4）。接手请直接看 **§37.50**（最新）+ **§37.49**（Snippets）+ **§37.48**（分屏联动）+ **§37.47**（iShell 调研）
 
 ---
 
@@ -3770,4 +3770,47 @@ CDP 全新状态实测通过。commit 见上。
 **接手下一步**：
 - 桌面端实测：侧栏「片段」→ 新建（带 `{{var}}`）→ 插入 SSH/本地终端 → 变量弹窗 → 文件树联动
 - P2 SSH 隧道与端口转发（方案书 v1.1 §4，russh direct-tcpip，📋 待启动）
+- #20 服务器实时监控仪表盘（📋 待启动）
+
+### 37.50 P2 SSH 隧道与端口转发（本地转发）完成（2026-08-11 ✅ 完成，方案书 v1.1 §4，ROADMAP #23）
+
+**背景**：方案书 v1.1 §4「SSH 隧道与端口转发」——P2 先做**本地端口转发**（russh `direct-tcpip`，DBA 连远程数据库免 VPN），P3 后做远程转发 + SOCKS5。
+
+**核心设计**：
+
+1. **后端 `src-tauri/src/modules/ssh/tunnel.rs`**（新建）：
+   - `TunnelState`（Starting/Running/Stopping/Stopped/Failed，snake_case 序列化）
+   - `TunnelSpec`（camelCase 反序列化，`local_host` 由 `default_local_host()` 提供默认 `"127.0.0.1"`）
+   - `TunnelInfo`（camelCase 序列化，含 `connections: AtomicU64` 计数、`created_at: i64`）
+   - `SshTunnel<R>`：`listener: Arc<Mutex<Option<TcpListener>>>` + `stop_flag: Arc<AtomicBool>` + `stop_notify: Arc<Notify>` + `task`；`start()` 绑定本地端口→Running→spawn accept loop；`accept_loop()` 用 `tokio::select!` 监听 `accept()` vs `wait_stop()`；每个入站连接开 direct-tcpip channel → spawn `bridge_connection`
+   - `stop()` **幂等**：`stop_flag.swap(true, Ordering::AcqRel)` 防重入，drop listener 释放端口，notify 唤醒，等待 task 结束（2s 超时防御）
+2. **桥接选型（关键技术决策）**：方案书 §4.1 建议的 `into_stream().split()` 已过时——`make_reader`（&mut）/`make_writer`（&self）借用冲突无法同时持有；改用 russh 官方示例 `client_open_direct_tcpip.rs` 的 **`tokio::select` 双向桥接**（`stream.read → channel.data()` / `channel.wait() → stream.write_all()`，BRIDGE_BUF_SIZE = 65536），并在 tunnel.rs 头部文档记录
+3. **隧道 registry**（`mod.rs`）：`SshState` 新增 `tunnels: RwLock<HashMap<u32, Arc<SshTunnel>>>` + `next_tunnel_id: AtomicU32`；`port_in_use`（只查 Running 状态）→ `TcpListener::bind` 兜底（其他进程占用）；`ssh_disconnect` 先 `stop_tunnels_for_session` 清理再 close（释放端口）
+4. **三条命令**：`tunnel_start`（校验会话存活 + 端口冲突 → allocate→new+start→insert）/ `tunnel_stop`（先 take 再 stop，停止期间 list 不显示）/ `tunnel_list`
+5. **`session.rs`**：新增 `open_tcpip_channel()`（锁只覆盖开 channel 一个 RTT，模式同 `open_sftp_channel`/`exec_command`）；`make_test_session`/`mod tests` 改为 `pub(crate)`
+6. **前端 `src/modules/tunnels/`**（新建）：`types.ts`（TUNNEL_STATE_META + isValidPort/isValidTunnelName）/ `lib/tunnelStore.ts`（zustand：refresh/startTunnel/stopTunnel，dev 降级提示）/ `CreateTunnelDialog.tsx`（SSH 会话 Select 仅列已连接 + 端口校验 + InformationCircleIcon 提示）/ `TunnelPanel.tsx`（工具栏 + 无会话引导 + 空状态 + 隧道行：名称/状态 badge/端点映射 mono/连接数/创建时间/hover 停止）
+7. **`src/lib/tunnel-bridge.ts`**：类型 + `tunnelStart`（手动拼 camelCase spec）/`tunnelStop`/`tunnelList`；`isTauriRuntime()` 降级
+8. **侧边栏集成**：`SidebarViewId` 新增 "tunnels"，SidebarRail 新增「隧道」入口（Router01Icon），App.tsx 新增渲染分支
+
+**改动文件**（本里程碑）：
+- 新增（后端）：`src-tauri/src/modules/ssh/tunnel.rs`（+5 测试）
+- 新增（前端）：`src/lib/tunnel-bridge.ts` / `src/modules/tunnels/`（types.ts / index.ts / TunnelPanel.tsx / CreateTunnelDialog.tsx / lib/tunnelStore.ts / lib/tunnelStore.test.ts 11 测试 / TunnelPanel.test.tsx 5 测试）
+- 修改：`src-tauri/src/modules/ssh/mod.rs`（registry + 3 命令 + 6 测试）、`session.rs`（open_tcpip_channel）、`src-tauri/src/lib.rs`（invoke_handler 注册）、`src/modules/sidebar/types.ts`、`SidebarRail.tsx`、`src/app/App.tsx`
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test **969 全过**（新增 16：tunnelStore 11 + TunnelPanel 5）/ build:web ✅ / cargo check ✅（0 错误）/ **cargo test 315 全过**（tunnel.rs 5 + mod.rs 隧道 registry 6）
+
+**报错与修复**：
+- `russh::Channel::wait()` 需 `&mut self`（cargo check E0596）→ `bridge_connection(mut stream, mut channel)`
+- session.rs 测试模块私有（cargo test E0603）→ `make_test_session`/`mod tests` 改 `pub(crate)`
+- cargo test 断言错（`remote_port` 固定 3306，误断言 5432）→ 改断言 `local_port 5432 / remote_port 3306`
+- `InfoIcon` 不存在（TS2724）→ 换 `InformationCircleIcon`
+- 无 jest-dom → `toBeDisabled` 改原生 `.disabled` 断言
+- mock `@tauri-apps/api/core` 后 ssh-explorer 模块副作用调 `listen` 抛 `transformCallback`（unhandled error）→ 测试文件追加 `vi.mock("@tauri-apps/api/event", ...)`
+- busy 测试超时（tunnel_start 挂起 promise 被 refresh 复用悬挂）→ mock 首调返回挂起、后续 `Promise.resolve([])`
+- store 为模块级单例 → `beforeEach` 重置 `{tunnels:[],loaded:false,busy:false}`
+- act warning → `await waitFor(loaded === true)`
+
+**接手下一步**：
+- 桌面端实测：连 SSH → 侧栏「隧道」→ 新建本地转发（如 127.0.0.1:3306 → db-host:3306）→ 本地 `mysql -h 127.0.0.1 -P 3306` 验证直连远程 → 停止释放端口
+- P3 远程转发（`tcpip_forward`）+ SOCKS5 动态转发（参考 chisel-rs）
 - #20 服务器实时监控仪表盘（📋 待启动）

@@ -67,6 +67,8 @@ import {
 import { SkillsPanel } from "@/modules/skills";
 // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段面板
 import { SnippetsPanel } from "@/modules/snippets";
+// TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
+import { TunnelPanel } from "@/modules/tunnels";
 import { KnowledgePanelLazy } from "@/modules/ai/components/lazy";
 import {
   SourceControlPanel,
@@ -2270,6 +2272,9 @@ export default function App() {
                           onInsertCommand={handleInsertSnippetCommand}
                           currentCwd={activeTerminalLeafCwd ?? undefined}
                         />
+                      ) : sidebarView === "tunnels" ? (
+                        // TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
+                        <TunnelPanel />
                       ) : null}
                     </ErrorBoundary>
                   </div>
