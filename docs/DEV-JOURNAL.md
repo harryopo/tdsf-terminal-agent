@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-08-11 · 文档滞后修正：ROADMAP #20 服务器监控早已完成（用户指出）
+
+**任务**：用户问"下一步是啥"，我按 ROADMAP 推荐 #20 监控仪表盘为待开发项；用户反问"仪表盘不是做完了吗，你的开发进度更新了吗？"——核实后确认用户完全正确。
+
+**核实**（只读证据）：
+- `src/modules/server-monitor/` 模块完整（types/parser/useServerMetrics/ServerMonitorEntry/ServerMonitorPanel/MiniSparkline + parser.test.ts 28 测试）
+- `App.tsx` 已集成 `ServerMonitorEntry`（:2446）
+- `git log --diff-filter=A -- src/modules/server-monitor` → **首次创建于 7602c73（2026-08-11 10:07，审计 P0-P2 修复）**
+- `useServerMetrics.ts` 实现完全符合 #20 定义：SSH 免 Agent 合并命令采集 + 3s 轮询 + 5 模块 + 断开/连败 3 次自动停止
+
+**根因**：7602c73（审计修复）落地监控功能时，ROADMAP #20 与 dev-state 多处"待启动"行未同步更新——**功能完成 ≠ 文档同步**。
+
+**修改**：仅文档，无代码。
+- `docs/ROADMAP.md` #20 → ✅ 已完成
+- `docs/dev-state.md`：§37.48/49/50/51 四处"接手下一步"的 #20 待启动行 → 完成注记；追加 §37.52 交接章；顶部摘要更新
+- 顺带修正 §37.49 的隧道"待启动"行（§37.50 已覆盖）
+
+**复盘**：
+- ✅ **git log --diff-filter=A 是定位"模块何时创建"的利器**——比翻交接章快且权威
+- ⚠️ **用户是对的，别急着开发**：我拿 ROADMAP 当现状读，但 ROADMAP 滞后于代码。今后推进新任务前先 `git log --diff-filter=A -- <模块路径>` + grep App.tsx 集成点，确认是否真的没做
+- 📌 **任务收尾三件事的文档同步不能只写"新章节"**，还要回头把 ROADMAP 上对应的"待启动"行翻成 ✅——本次就是漏了这一步
+
+---
+
 ## 2026-08-11 · 架构审计 P0-P3 全部收尾（ARCHITECTURE-AUDIT-2026-08-10）+ P2 #13 弹窗跟随光标
 
 **任务**：目标链最后一块——审计报告 23 项逐一复核处置结论；其中唯一未达审计描述的 **P2 #13 弹窗跟随终端光标定位** 补实现。
