@@ -6,6 +6,32 @@
 
 ---
 
+## 2026-08-11 · 本地+SSH 混合分屏（ROADMAP #21）— SSH 终端迁入 PaneTree leaf
+
+**任务**：SSH 终端此前在 workspace 级独立渲染（SshTerminalHost），无法参与 PaneTree 分屏；借鉴 iShell Pro 分屏组合，实现「本地 + SSH 混合分屏」。
+
+**方案**（per-leaf SSH 绑定模型）：
+1. `PaneNode.sshSessionId` 三态——`undefined`=继承 tab 绑定 / `null`=强制本地 / `string`=指定 SSH 会话；`effectiveLeafSsh(tree, leafId, tabSshSessionId)` 纯函数解析有效会话
+2. `PaneTreeView` 新增 `SshLeafPane`（复用 `useSshLeafTransport` 注入 transport + `handleCwd` 同步远端 cwd 到 sshStore），`TerminalPaneContent` 条件渲染本地/SSH leaf
+3. `splitActivePane` 让新 leaf 继承 active leaf 的有效 SSH 会话；快捷键 Ctrl/Cmd+Shift+H/V 水平/垂直分屏
+4. App.tsx 删除 workspace 级 SshTerminalHost 覆盖路径；`sshActiveLeafIdRef` 改为从 active tab + active leaf 派生（会话 connected 才有效）
+
+**报错与修改**：
+- **`effectiveLeafSsh` 语义 bug**：原 `tree.sshSessionId ?? tabSshSessionId` 把显式 `null`（强制本地）当 undefined → tab 绑定覆盖强制本地。修复：先判 `!== undefined` 再继承（测试覆盖：显式 null 在 SSH tab 内仍强制本地）
+- **typecheck/lint 抓测试文件**：`{ ...leaf1(), sshSessionId }` spread `PaneNode` 联合类型 → 对象字面量属性校验失败（sshSessionId 不在 split 变体）；`leaf2` 未使用。修复：改显式 `{ kind: "leaf", id: 1, sshSessionId }` + 删除未用工厂
+- **cargo check**：Rust 端零改动，通过（5 个既有 warning 与本次无关）
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test 936 全过（新增 10 个 SSH binding 测试）/ build:web ✅ / cargo check ✅。commit 84f2941。
+
+**复盘**：
+- ✅ 三态模型（undefined 继承 / null 强制本地 / string 绑定）比布尔 flag 表达力强——向后兼容（undefined 继承）同时支持「SSH tab 内强制本地」反例
+- ✅ `??` 与 `!== undefined` 语义差异是真坑：`null ?? x` = x，三态模型下必须用显式 undefined 判断
+- ✅ 纯函数（effectiveLeafSsh）+ 单测先行：数据模型正确性不依赖 React 渲染，门禁一次通过
+- ⚠️ SshTerminalHost 保留在 ssh-explorer export（openTransport 逻辑可复用），但已不再渲染使用——后续确认无引用后可清理
+- 📌 待桌面端实测：连 SSH → Ctrl+Shift+H 分屏 → 本地/SSH 混合 → 翻译/选词/文件树联动全链路
+
+---
+
 ## 2026-08-09 · Agent 深度进化调研（并发修复 + max_tokens + 双模式 SSH + 任务规划 + 压缩）
 
 **任务（用户反馈）**：
