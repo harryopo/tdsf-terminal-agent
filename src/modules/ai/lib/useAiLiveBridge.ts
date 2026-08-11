@@ -44,9 +44,9 @@ type Params = {
   terminalRefs: RefObject<Map<number, TerminalPaneHandle>>;
   /**
    * TDSF 魔改 (2026-08-09): 获取 SSH 终端的 leafId。
-   * SSH 终端（SshTerminalHost）不在 tabs 数组里，getTerminalContext
-   * 原本只查 tabs → SSH 场景返回 null → agent 看不到 SSH 终端内容。
-   * 现在增加回退：tabs 找不到活跃终端时，尝试用 SSH leafId 读 buffer。
+   * 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree（PaneTreeView 渲染），
+   * leafId 由 App 层从 active tab + active leaf 派生（会话 connected 才有效）。
+   * getTerminalContext 用它回退读取 SSH 终端的 scrollback。
    */
   getSshLeafId?: () => number | null;
 };
@@ -111,10 +111,9 @@ export function useAiLiveBridge(params: Params) {
       getCwd: findCwd,
       getTerminalContext: () => {
         // TDSF 魔改 (2026-08-09): SSH 终端优先——
-        // SSH 场景下 WorkspaceSurface 用 SshTerminalHost 覆盖本地终端栈，
-        // 但 activeId 对应的 tab 仍然是 terminal 类型（cold + SSH 接管）。
-        // 如果不优先判断 SSH，会读到被 invisible 隐藏的本地终端 buffer。
-        // 只有 SSH 终端没有内容时才回退到本地终端。
+        // 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，active tab 的 activeLeafId
+        // 就是当前 pane；getSshLeafId 返回其 leafId（会话 connected 时）。
+        // 优先读 SSH 终端的 scrollback，无内容时回退本地终端。
         const sshLeafId = ref.current.getSshLeafId?.();
         if (sshLeafId !== null && sshLeafId !== undefined) {
           const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(300);

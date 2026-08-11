@@ -113,6 +113,8 @@ import {
   whenSessionReady,
   writeToSession,
 } from "@/modules/terminal";
+// TDSF 魔改 (2026-08-11 #21): effectiveLeafSsh 用于派生 sshActiveLeafIdRef
+import { effectiveLeafSsh } from "@/modules/terminal/lib/panes";
 // TDSF debug (#20): 仅用于 CDP 实测诊断（只读不改业务）
 import {
   getRendererPoolDebug,
@@ -162,7 +164,8 @@ export default function App() {
     tabs,
     activeId,
     setActiveId,
-    allocId,
+    // TDSF 魔改 2026-08-11 (#21): allocId 原为 SshTerminalHost 分配游离 leafId，
+    // SSH 渲染迁入 PaneTree 后不再需要。
     moveTabToSpace,
     reorderTab,
     reorderTabByGap,
@@ -473,47 +476,22 @@ export default function App() {
     : null;
   const showNoTerminalEmptyState =
     isDefaultColdTab && !isSpaceSshConnected && !isSpaceSshConnecting;
-  // TDSF 魔改 2026-07-30: SSH 终端接管改为按 tab 维度绑定
-  // ---------------------------------------------------------------
+  // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView leaf 级。
+  // --------------------------------------------------------------------
+  // 此前 (2026-07-30): workspace 级 SshTerminalHost 覆盖右侧工作区, SSH 终端
+  // 不在 tab.paneTree 里, 用一个 allocId 分配的游离 leafId 渲染, 无法分屏。
+  // 现在: TerminalStack → PaneTreeView 直接渲染 SSH leaf ——
+  //   - 单 leaf SSH tab: leaf 继承 tab.sshSessionId → 全屏 SSH (行为不变)
+  //   - 分屏后: 每个 SSH leaf 复用 useSshLeafTransport 注入 openTransport,
+  //     与本地 leaf 共用 rendererPool / 保活 / 焦点 / 翻译 / AI buffer
+  //   - leaf 的「有效会话」计算见 lib/panes.effectiveLeafSsh:
+  //     leaf 显式绑定优先 (string=SSH / null=强制本地), 否则继承 tab 绑定
+  // sshActiveLeafIdRef 不再由 SshTerminalHost 上报, 改由下方 useEffect
+  // 从 active tab + active leaf 派生 (会话必须仍 connected 才算有效)。
+  // TDSF 魔改 2026-07-30 注释保留: 绑定仍按 tab 维度 (tab.sshSessionId),
   // 修复"SSH 连接后打开文件再切回 shell tab 变成本地 shell"的 bug。
-  // 原实现: showSshTerminalInWorkspace = isTerminalTab && isConnectedSsh
-  //   → 只要全局 SSH 连接存在, 任何 terminal tab 都被替换为 SshTerminalHost,
-  //     但 tab 本身没记录 SSH 绑定, 切到 editor 再切回时行为不确定。
-  // 新实现: 按 active terminal tab 的 sshSessionId 字段判定:
-  //   - tab.sshSessionId 存在且对应会话仍 connected → 渲染 SshTerminalHost
-  //   - tab.sshSessionId 为 null/undefined → 渲染本地 TerminalStack
   // SSH 连接成功后, 会自动把当前 active terminal tab 的 sshSessionId 设为会话 id
   // (见下方 useEffect)。用户也可手动"新建本地 shell tab"获得本地终端。
-  // 复用上方 useMemo 计算的 activeTerminalTab (TerminalTab | null)
-  const activeTabSshSessionId = activeTerminalTab?.sshSessionId ?? null;
-  // 响应式查询该会话是否仍 connected (会话状态变化时触发重渲染)
-  // TDSF 修复 2026-08-01: 加 spaceId 归属守卫——历史版本自动连接可能把
-  // 其它 Space（本地工作区）的 terminal tab 误绑为 SSH，渲染时若 tab 不
-  // 属于当前 Space 则视为无效绑定（回退本地终端），防止跨 Space 误显。
-  const activeTabSshSession = useSshStore((s) =>
-    activeTabSshSessionId &&
-    activeTab?.spaceId === activeSpaceId
-      ? s.sessions.find(
-          (sess) => sess.id === activeTabSshSessionId && sess.state === "connected",
-        ) ?? null
-      : null,
-  );
-  // SSH Space 下只要有活跃 SSH 会话就显示 SSH 终端；本地 tab 显式绑定 SSH 时也显示。
-  // TDSF 修复 2026-07-31: 优先使用当前 Space 的 SSH session，确保切 Space 时
-  // 右侧终端跟随切换，而不是显示全局 active session 或其他 Space 的 shell。
-  const showSshTerminalInWorkspace =
-    isTerminalTab &&
-    (isSpaceSshConnected ||
-      (!!activeTabSshSession && !!activeTabSshSessionId));
-  const workspaceSshSessionId = showSshTerminalInWorkspace
-    ? (isSpaceSshConnected ? spaceSshSessionId : activeTabSshSessionId)
-    : null;
-  // 2026-07-31 翻译模块修复: SSH 终端不显示时清除 leafId ref
-  // （避免切到本地终端后 captureActiveSelection 仍走 SSH leafId）
-  // TDSF 修复 2026-08-08: 移除"判定闪动即清 sshActiveLeafIdRef"——
-  // SshTerminalHost 现在用 useEffect 管理 (挂载设/卸载清), 与组件生命周期
-  // 严格一致。此前的清除会在 SSH 终端仍挂载时因判定短暂 false 误清 ref,
-  // 导致选中捕获回退本地终端 (翻译/Ask 无反应)。
   // TDSF 调试: 输出关键判定值
   if (typeof window !== "undefined") {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
@@ -533,11 +511,10 @@ export default function App() {
       activeTabId: activeTab?.id,
       activeTabKind: activeTab?.kind,
       activeTabCold: activeTab?.cold,
-      showSshTerminalInWorkspace,
       showNoTerminalEmptyState,
       // TDSF debug (Phase 2): 暴露 SSH cwd / Space session / leafId 供 OSC 7 同步实测
       spaceSshSessionId,
-      workspaceSshSessionId,
+      // TDSF debug (#21): SSH leafId 现由 active tab + active leaf 派生
       sshActiveLeafId: () => sshActiveLeafIdRef.current,
       spaceSshCurrentPath,
       getEffectiveExplorerRoot: () => effectiveExplorerRoot,
@@ -976,14 +953,9 @@ export default function App() {
         for (const id of leafIds(t.paneTree)) live.add(id);
       }
     }
-    // TDSF 修复 2026-08-09: SSH 终端的 leafId 不在 tab.paneTree 里
-    // （SshTerminalHost 由 WorkspaceSurface 独立挂载），若不纳入 live 集合，
-    // 本 effect 的修剪会删除 SSH leaf 的 terminalRefs handle 与 searchAddon，
-    // 并误调 disposeSession —— 此后 captureActiveSelection 的 SSH 分支
-    // （terminalRefs.has(sshLid)）恒为 false，SSH 终端划词翻译/Ask 浮层永不弹出。
-    // SshTerminalHost 挂载后 callback ref 不再触发，被删的 handle 无法自行恢复。
-    const sshLid = sshActiveLeafIdRef.current;
-    if (sshLid !== null) live.add(sshLid);
+    // TDSF 魔改 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree（PaneTreeView
+    // 直接渲染），leafIds 自然包含它们，无需再像 SshTerminalHost 时代那样
+    // 把游离的 sshLid 手动纳入 live 集合。
     for (const id of liveLeavesRef.current) {
       if (!live.has(id)) disposeSession(id);
     }
@@ -1068,22 +1040,51 @@ export default function App() {
     setActive(spaces[next].id);
   }, []);
 
+  // TDSF 魔改 (2026-08-11 #21): sshActiveLeafIdRef 派生自 active tab + active leaf。
+  // -----------------------------------------------------------------------------
+  // SshTerminalHost 时代由 onLeafId 上报（组件生命周期驱动）；现在 SSH leaf 就在
+  // tab.paneTree 里，本 effect 从 active terminal tab 的 active leaf 计算「有效 SSH
+  // 会话」，且会话必须仍 connected（断开自动回退本地渲染，ref 同步置 null）。
+  // 订阅 sshStore：连接/断开时无需等 App 重渲染即可同步 ref。
+  useEffect(() => {
+    const updateRef = () => {
+      const t = activeTerminalTab;
+      if (t && t.kind === "terminal" && activeLeafId !== null) {
+        const eff = effectiveLeafSsh(t.paneTree, activeLeafId, t.sshSessionId);
+        if (typeof eff === "string") {
+          const sess = useSshStore
+            .getState()
+            .sessions.find((s) => s.id === eff);
+          if (sess?.state === "connected" && sess.handle) {
+            sshActiveLeafIdRef.current = activeLeafId;
+            return;
+          }
+        }
+      }
+      sshActiveLeafIdRef.current = null;
+    };
+    updateRef();
+    const unsub = useSshStore.subscribe(updateRef);
+    return () => {
+      unsub();
+      sshActiveLeafIdRef.current = null;
+    };
+  }, [activeTerminalTab, activeLeafId]);
+
   const captureActiveSelection = useCallback((): string | null => {
     const t = tabs.find((x) => x.id === activeId);
     if (!t) return null;
     if (t.kind === "terminal") {
-      // 2026-07-31 翻译模块修复: SSH 终端接管右侧工作区时，优先用 SSH leafId
-      // （SSH 终端不在 tab.paneTree 里，tab.activeLeafId 指向本地终端）。
-      // 2026-08-09 修复: 改从 rendererPool slot 直接读选区（leafGridSelection），
-      // 不再依赖 terminalRefs 注册 —— 修剪 effect 曾把 SSH leaf 的 handle 误删
-      // 且已挂载的 SshTerminalHost 不会重新触发 callback ref，导致 has(sshLid)
-      // 恒为 false、选区恒空。slot 绑定与组件生命周期一致，天然自愈。
-      const sshLid = sshActiveLeafIdRef.current;
-      if (sshLid !== null) {
-        return leafGridSelection(sshLid);
-      }
+      // TDSF 魔改 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，activeLeafId
+      // 直接指向当前 pane（本地或 SSH 同路径），不再需要 SshTerminalHost 时代的
+      // sshActiveLeafIdRef 分支。优先从 rendererPool slot 读选区（leafGridSelection，
+      // 与组件生命周期一致、天然自愈），handle 未注册时兜底 terminalRefs。
       const lid = t.activeLeafId;
-      return terminalRefs.current.get(lid)?.getSelection() ?? null;
+      return (
+        leafGridSelection(lid) ??
+        terminalRefs.current.get(lid)?.getSelection() ??
+        null
+      );
     }
     if (t.kind === "editor") {
       return editorRefs.current.get(activeId)?.getSelection() ?? null;
@@ -1522,6 +1523,11 @@ export default function App() {
       "space.overview": () => setSwitcherOpen(true),
       "pane.splitRight": () => splitActivePaneInActiveTab("row"),
       "pane.splitDown": () => splitActivePaneInActiveTab("col"),
+      // TDSF 魔改 (2026-08-11): iTerm2 风格分屏快捷键（Ctrl/Cmd+Shift+H/V）。
+      // 与 splitRight/splitDown 共用 handler——splitActivePane 已自动继承
+      // 当前 pane 的有效 SSH 会话（SSH 终端分屏 → 新的 SSH pane）。
+      "pane.splitSshRight": () => splitActivePaneInActiveTab("row"),
+      "pane.splitSshDown": () => splitActivePaneInActiveTab("col"),
       "pane.focusNext": () => focusNextPaneInTab(activeId, 1),
       "pane.focusPrev": () => focusNextPaneInTab(activeId, -1),
       "pane.swapLeft": () => swapActivePane("left"),
@@ -2300,17 +2306,11 @@ export default function App() {
                         setSpaceCreateMode("ssh");
                         setSpaceCreateOpen(true);
                       }}
-                      // TDSF 魔改 2026-07-28 (P1-D): SSH 终端接管右侧工作区
-                      // 2026-07-30 修复: 只传 workspaceSshSessionId,
-                      // 保证 connecting/failed 时不提前渲染 SSH 终端。
-                      // 2026-07-30 (#19): 透传 allocId 给 SshTerminalHost 分配稳定 leafId。
-                      sshSessionId={workspaceSshSessionId}
+                      // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView
+                      // leaf 级（TerminalStack 透传 tab.sshSessionId），不再需要
+                      // workspace 级 SshTerminalHost 覆盖与 sshSessionId/allocId/
+                      // onSshLeafId 透传。sshActiveLeafIdRef 改由 App 层派生 effect 维护。
                       sshConnectingInfo={sshConnectingInfo}
-                      allocId={allocId}
-                      // 2026-07-31 翻译模块修复: SSH 终端 leafId 上报
-                      onSshLeafId={(lid) => {
-                        sshActiveLeafIdRef.current = lid;
-                      }}
                     />
                     )}
                   </div>

@@ -1,7 +1,10 @@
 import {
+  effectiveLeafSsh,
   firstLeafSlotId,
   leafIds,
   type PaneNode,
+  setLeafSshSession,
+  splitLeaf,
   swapLeafInDirection,
 } from "@/modules/terminal/lib/panes";
 import { describe, expect, it } from "vitest";
@@ -141,5 +144,110 @@ describe("swapLeafInDirection", () => {
   it("does nothing when the tree contains only one pane", () => {
     const tree: PaneNode = { kind: "leaf", id: 1 };
     expect(swapLeafInDirection(tree, 1, "left")).toBe(tree);
+  });
+});
+
+// TDSF 魔改 (2026-08-11 #21): 本地 + SSH 混合分屏数据模型测试
+describe("splitLeaf SSH binding", () => {
+  it("writes the SSH session id onto the new leaf when provided", () => {
+    const tree: PaneNode = { kind: "leaf", id: 1 };
+    const next = splitLeaf(tree, 1, 10, 2, "row", "/cwd", "sess-1");
+    expect(next).toEqual({
+      kind: "split",
+      id: 10,
+      dir: "row",
+      children: [
+        { kind: "leaf", id: 1 },
+        { kind: "leaf", id: 2, cwd: "/cwd", sshSessionId: "sess-1" },
+      ],
+    });
+  });
+
+  it("writes an explicit null to force a local shell when requested", () => {
+    const tree: PaneNode = { kind: "leaf", id: 1 };
+    const next = splitLeaf(tree, 1, 10, 2, "col", undefined, null);
+    expect(next).toEqual({
+      kind: "split",
+      id: 10,
+      dir: "col",
+      children: [
+        { kind: "leaf", id: 1 },
+        { kind: "leaf", id: 2, sshSessionId: null },
+      ],
+    });
+  });
+
+  it("omits the sshSessionId field when undefined (inherit tab binding)", () => {
+    const tree: PaneNode = { kind: "leaf", id: 1 };
+    const next = splitLeaf(tree, 1, 10, 2, "row", "/cwd");
+    const children = (next as Extract<PaneNode, { kind: "split" }>).children;
+    expect(children[1]).toEqual({ kind: "leaf", id: 2, cwd: "/cwd" });
+  });
+});
+
+describe("setLeafSshSession", () => {
+  it("binds, forces local and restores inheritance on a nested leaf", () => {
+    const tree: PaneNode = {
+      kind: "split",
+      id: 10,
+      dir: "row",
+      children: [
+        { kind: "leaf", id: 1 },
+        { kind: "leaf", id: 2 },
+      ],
+    };
+    const bound = setLeafSshSession(tree, 2, "sess-2");
+    expect((bound as Extract<PaneNode, { kind: "split" }>).children[1]).toEqual(
+      { kind: "leaf", id: 2, sshSessionId: "sess-2" },
+    );
+    const forced = setLeafSshSession(bound, 2, null);
+    expect(
+      (forced as Extract<PaneNode, { kind: "split" }>).children[1],
+    ).toEqual({ kind: "leaf", id: 2, sshSessionId: null });
+  });
+
+  it("returns the same reference when the leaf does not exist", () => {
+    const tree: PaneNode = { kind: "leaf", id: 1 };
+    expect(setLeafSshSession(tree, 999, "sess")).toBe(tree);
+  });
+});
+
+describe("effectiveLeafSsh", () => {
+  const ssh = "sess-ssh";
+  const leaf1 = (): PaneNode => ({ kind: "leaf", id: 1 });
+
+  it("inherits the tab binding when the leaf has no explicit binding", () => {
+    expect(effectiveLeafSsh(leaf1(), 1, ssh)).toBe(ssh);
+    expect(effectiveLeafSsh(leaf1(), 1, undefined)).toBeNull();
+  });
+
+  it("prefers the explicit leaf binding over the tab binding", () => {
+    const tree: PaneNode = { kind: "leaf", id: 1, sshSessionId: "leaf-only" };
+    expect(effectiveLeafSsh(tree, 1, ssh)).toBe("leaf-only");
+  });
+
+  it("explicit null forces a local shell even inside an SSH tab", () => {
+    const tree: PaneNode = { kind: "leaf", id: 1, sshSessionId: null };
+    expect(effectiveLeafSsh(tree, 1, ssh)).toBeNull();
+  });
+
+  it("resolves each leaf independently inside a split", () => {
+    const tree: PaneNode = {
+      kind: "split",
+      id: 10,
+      dir: "row",
+      children: [
+        { kind: "leaf", id: 1, sshSessionId: "sess-1" },
+        { kind: "leaf", id: 2, sshSessionId: null },
+        { kind: "leaf", id: 3 },
+      ],
+    };
+    expect(effectiveLeafSsh(tree, 1, ssh)).toBe("sess-1");
+    expect(effectiveLeafSsh(tree, 2, ssh)).toBeNull();
+    expect(effectiveLeafSsh(tree, 3, ssh)).toBe(ssh);
+  });
+
+  it("returns null for a leaf id outside the tree", () => {
+    expect(effectiveLeafSsh(leaf1(), 999, ssh)).toBeNull();
   });
 });

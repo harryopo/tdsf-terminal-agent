@@ -11,7 +11,19 @@ export type PaneBounds = {
 };
 
 export type PaneNode =
-  | { kind: "leaf"; id: PaneId; slotId?: PaneId; cwd?: string }
+  | {
+      kind: "leaf";
+      id: PaneId;
+      slotId?: PaneId;
+      cwd?: string;
+      /**
+       * TDSF 魔改 (2026-08-11): SSH 会话绑定（本地/SSH 混合分屏）。
+       * - undefined: 继承所在 tab 的 sshSessionId（向后兼容旧行为）
+       * - null: 强制本地 shell（即使在 SSH Space 里也显示本地终端）
+       * - string: 渲染该 SSH 会话的远端 shell
+       */
+      sshSessionId?: string | null;
+    }
   | {
       kind: "split";
       id: PaneId;
@@ -70,13 +82,21 @@ export function splitLeaf(
   newLeafId: PaneId,
   dir: SplitDir,
   newCwd?: string,
+  // TDSF 魔改 (2026-08-11): 新叶子的 SSH 会话绑定。
+  // undefined=继承 tab（不写字段）、null=强制本地、string=SSH 会话。
+  newSshSessionId?: string | null,
 ): PaneNode {
+  const newLeaf: PaneNode = {
+    kind: "leaf",
+    id: newLeafId,
+    cwd: newCwd,
+    ...(newSshSessionId !== undefined && { sshSessionId: newSshSessionId }),
+  };
   if (tree.kind === "split" && tree.dir === dir) {
     const idx = tree.children.findIndex(
       (c) => c.kind === "leaf" && c.id === targetId,
     );
     if (idx >= 0) {
-      const newLeaf: PaneNode = { kind: "leaf", id: newLeafId, cwd: newCwd };
       return {
         ...tree,
         children: [
@@ -89,7 +109,6 @@ export function splitLeaf(
   }
   if (isLeaf(tree)) {
     if (tree.id !== targetId) return tree;
-    const newLeaf: PaneNode = { kind: "leaf", id: newLeafId, cwd: newCwd };
     return {
       kind: "split",
       id: newSplitId,
@@ -100,9 +119,59 @@ export function splitLeaf(
   return {
     ...tree,
     children: tree.children.map((c) =>
-      splitLeaf(c, targetId, newSplitId, newLeafId, dir, newCwd),
+      splitLeaf(c, targetId, newSplitId, newLeafId, dir, newCwd, newSshSessionId),
     ),
   };
+}
+
+/**
+ * TDSF 魔改 (2026-08-11): 设置/清除树中某个叶子节点的 SSH 会话绑定。
+ * `sshSessionId === null` 表示强制本地；`undefined` 恢复继承（不写字段）。
+ * 叶子不存在时原样返回（避免无谓的引用变化）。
+ */
+export function setLeafSshSession(
+  tree: PaneNode,
+  targetId: PaneId,
+  sshSessionId: string | null,
+): PaneNode {
+  if (isLeaf(tree)) {
+    if (tree.id !== targetId) return tree;
+    const next: PaneNode = { ...tree, sshSessionId };
+    return next;
+  }
+  let changed = false;
+  const next = tree.children.map((c) => {
+    const u = setLeafSshSession(c, targetId, sshSessionId);
+    if (u !== c) changed = true;
+    return u;
+  });
+  return changed ? { ...tree, children: next } : tree;
+}
+
+/**
+ * TDSF 魔改 (2026-08-11): 计算叶子节点的「有效 SSH 会话」——
+ * 叶子显式绑定优先（string=SSH / null=强制本地），否则继承所在 tab 的绑定。
+ * 返回 falsy 表示该叶子渲染本地 shell。
+ *
+ * 注意：`null`（强制本地）是显式绑定，优先级高于 tab 继承，
+ * 不能把 `tree.sshSessionId ?? tabSshSessionId` 写成 `??`（会把 null 当 undefined）。
+ * 必须先判 `!== undefined` 再继承 tab。
+ */
+export function effectiveLeafSsh(
+  tree: PaneNode,
+  leafId: PaneId,
+  tabSshSessionId: string | null | undefined,
+): string | null {
+  if (isLeaf(tree)) {
+    if (tree.id !== leafId) return null;
+    // 显式绑定：undefined=继承 tab / null=强制本地 / string=指定 SSH 会话
+    if (tree.sshSessionId !== undefined) return tree.sshSessionId;
+    return tabSshSessionId ?? null;
+  }
+  for (const c of tree.children) {
+    if (hasLeaf(c, leafId)) return effectiveLeafSsh(c, leafId, tabSshSessionId);
+  }
+  return null;
 }
 
 /**
