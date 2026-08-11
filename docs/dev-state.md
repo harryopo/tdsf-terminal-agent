@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · Agent 深度进化调研 + 6 commit 修复（并发/max_tokens/教学改进/终端执行/SSH cwd/session_id）（§37.42）。接手请直接看 **§37.42**（最新）+ **§37.41**（终端上下文注入）+ **§37.40**（SSH 连接进度）+ **§37.39**（终端异常取证）+ **§37.38**（终端字体/主题）+ **§37.36**（SSH 方案 A）。
+> **最后更新**：2026-08-09 · iShell Pro 竞品调研 + 方案书 §4.9 新增（§37.47）。接手请直接看 **§37.47**（最新）+ **§37.46**（SSH 命令补全）+ **§37.45**（方案书 #10 完成）
 
 ---
 
@@ -3690,3 +3690,30 @@ CDP 全新状态实测通过。commit 见上。
 - 新增 `SshCompletionPopup.tsx`：补全弹窗 UI（Frecency 排序 + 键盘导航）
 - Tab 键拦截逻辑：有匹配弹窗 / 唯一匹配直接补全 / 无匹配回退到远端 Tab 透传
 - **待接线**：SshTerminalHost 尚未 import useSshCompletion（需用户确认是否替换默认 Tab 透传行为）
+
+---
+
+### 37.47 iShell Pro 竞品调研 + 方案书更新（2026-08-09 ✅ 完成）
+
+**背景**：用户提出 iShell Pro 的服务器实时监控仪表盘和分屏功能值得借鉴，需调研并更新方案书。
+
+**调研结论**：
+1. **iShell Pro 是闭源商业产品**（无公开源码），通过官网 + CSDN 深度分析文 + 更新日志获取信息
+2. 核心亮点：**免 Agent 服务器实时监控**（通过 SSH 通道执行 `cat /proc/stat`/`free`/`df`/`cat /proc/net/dev`，3s 轮询，无远程安装）
+3. 技术栈：原生编译（非 Electron），<30MB 安装包，AES-256 加密，六大协议（SSH/SFTP/RDP/VNC/Telnet/Serial）
+4. 架构参考：Tauri 2 + sysinfo 体系（参考开源项目 [sysmonitor](https://github.com/saqibzahoor-dev/sysmonitor)、[Simple_Monitor](https://github.com/CheRongtian/Simple_Monitor)）
+
+**交付物**：
+1. `docs/iShell-Pro-竞品调研.md`：完整调研报告（功能对比 + 技术路径 + 参考项目）
+2. `docs/方案书-v1.0.md` §4.9：新增「服务器实时监控仪表盘」章节（5 模块：CPU/内存/磁盘/网络/进程 + 验收标准 + 技术路径）
+3. `docs/ROADMAP.md`：新增任务 #20（服务器实时监控仪表盘，📋 待启动，预计 2 天）+ #21（本地+SSH 分屏联动，📋 待启动，预计 1 天）
+
+**P2 新增任务（待用户决策是否启动）**：
+- #20 服务器实时监控仪表盘：Rust `server_monitor.rs` + 前端 `server-monitor/` 模块，通过 SSH 通道免 Agent 采集，3s 轮询
+- #21 本地+SSH 分屏联动：WorkspaceSurface 统一本地/SSH 终端面板树
+
+**待用户决策**：
+- [ ] 是否立即启动 P2「服务器实时监控仪表盘」？（预计 2 天）
+- [ ] SSH 隧道管理是否纳入 P3？
+- [ ] 代码片段功能是否纳入 P3？
+- [ ] 分屏联动是否纳入 P2？

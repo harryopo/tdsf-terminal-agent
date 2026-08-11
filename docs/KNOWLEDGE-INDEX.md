@@ -2,7 +2,7 @@
 
 > **位置**：`docs/KNOWLEDGE-INDEX.md`
 > **作用**：本项目所有文档的统一导航入口。任何 AI 或人接手项目，先读本文件了解文档全貌，再按需深入。
-> **版本**：v1.3（2026-08-04 · 同步 §37.24 交接基线：P0-P4 全量工程完成 + sidecar 打包发布闭环）
+> **版本**：v1.4（2026-08-10 · 新增架构审计报告 + iShell 竞品调研 + 方案书 v1.1 草案 + P0-P3 修复路线图）
 > **维护规则**：新增文档必须在此登记；文档废弃移入 `docs/reports/legacy/` 并在此标注
 > **上游参考**：https://github.com/crynta/terax-ai
 
@@ -58,6 +58,8 @@
 |------|------|------|
 | **Agent 架构说明书** | `docs/Agent架构说明书.md` | ⭐**当前 Agent 架构权威**（P0-6 后）：main 统一入口 + 自主委派 + 工具卡片可视化 + 事件协议 + 安全体系 + 流程图 |
 | 产品与技术方案书 | `docs/方案书-v1.0.md` | 项目"做大做强"总纲（定位/选型/路线图/风险），Agent 架构 B 方案拍板 |
+| 方案书 v1.1 更新草案 | `docs/方案书-v1.1-更新草案.md` | 新功能方向（服务器监控/分屏/隧道/片段/录制），技术选型有实测数据支撑 |
+| iShell Pro 竞品调研 | `docs/iShell-Pro-竞品调研.md` | 闭源商业终端对标（监控/分屏/隧道/片段），技术路径建议 |
 | AI 子系统 | `docs/architecture/ai-subsystem.md` | 9 Agent + PAOR 监督循环 + MCP 工具 + 知识库架构（**历史，与当前 Strands 主路径不同，对照阅读**） |
 | 终端渲染池 | `docs/architecture/terminal-renderer-pool.md` | xterm.js 5 槽位 + DR 复用 + 主题/字体管理 |
 | PTY Shell 集成 | `docs/architecture/pty-shell-integration.md` | portable-pty + spawn pwsh/bash + 数据流 |
@@ -84,6 +86,7 @@
 | 可用性审计 | `docs/reports/modded-agent-usability-audit-2026-07-30.md` | 魔改 agent 可用性 9.5/10 | ✅ |
 | P0-D 验证 | `docs/reports/modded-agent-p0d-verification-2026-07-30.md` | Rust ssh_command 实现验证 | ✅ |
 | 深度审计 | `docs/reports/modded-agent-deep-audit.md` | 魔改模块深度审计 | 参考 |
+| **⭐ 全系统架构审计** | `docs/ARCHITECTURE-AUDIT-2026-08-10.md` | 13 子系统 70+ 文件深度审计（落地 vs 应付判定 + P0-P3 路线图） | **必读** |
 | 字体+MockLLM 审计 | `docs/reports/modded-agent-font-mockllm-audit.md` | 字体加载 + MockLLM 路径审计 | 参考 |
 | 多 agent 规范审查 | `docs/reports/multi-agent-workflow-review-2026-07-30.md` | 协作规范合规度审查 | 参考 |
 | Strands 后端审计 | `docs/reports/strands_backend-audit-2026-07-30.md` | Strands 适配层审计 | 参考 |

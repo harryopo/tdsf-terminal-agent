@@ -30,7 +30,7 @@
 | UI 库 | Radix UI（`radix-ui` 包）+ 自绘窗控 |
 | 状态 | zustand v5 |
 | 终端 | xterm.js 6 + FitAddon/WebGL/Unicode11 |
-| 编辑器 | Monaco（本地加载，不走 CDN） |
+| 编辑器 | CodeMirror 6（`@uiw/react-codemirror`，上游已从 Monaco 迁移） |
 | AI SDK | Vercel `ai` v7 + `@ai-sdk/*` |
 | SSH | Rust `russh` 0.61 + `russh-sftp` 2.1 |
 | PTY | Rust `portable-pty` 0.9 |
@@ -52,9 +52,9 @@ src/main.tsx  ← 入口。按上游 terax 重写：
    ├─ invoke("pty_close_all")       ← 清理孤儿 PTY
    ├─ initLaunchDir()
    ├─ ReactDOM.createRoot(...).render(<App/>)
-   └─ setTimeout(getCurrentWindow().show, 50/500)  ← 窗口 visible:false 创建, 首帧后由前端 show()
+   └─ getCurrentWindow().setFocus()  ← 窗口 visible:true 启动即可见，前端只负责 setFocus
 ```
-- 窗口配置：`src-tauri/tauri.conf.json`（`visible:false`）+ `src-tauri/tauri.windows.conf.json`（`decorations:false` `transparent:true` `shadow:false` 无边框透明）。
+- 窗口配置：`src-tauri/tauri.conf.json`（`visible:true` + `backgroundColor:#1a1a1a`）。无边框透明方案已简化——窗口有原生装饰 + CSS `data-chrome="borderless"` 在 `#root` 加圆角边框。
 - 权限：`src-tauri/capabilities/default.json` **必须**含 `core:window:allow-show`/`allow-set-focus`/`allow-center` 等，否则 `show()` 被 Tauri 权限系统拦截、窗口永不可见。
 
 ### 前端（`src/`）
@@ -65,8 +65,8 @@ src/main.tsx  ← 入口。按上游 terax 重写：
 | `src/modules/terminal/` | 本地终端。`lib/rendererPool.ts` = xterm 实例复用池（含 ResizeObserver 防抖 fit） |
 | `src/modules/ssh-explorer/` | SSH 连接管理 + 远程文件树。`sshStore.ts`（zustand + 终端数据 fan-out）、`SshTerminalPane.tsx`（SSH 终端 xterm）、`SshExplorer.tsx`、`SshConnectDialog.tsx` |
 | `src/modules/explorer/` | 本地/远程文件资源管理器（`FileExplorer.tsx` + `lib/useFileTree.ts`/`useRemoteFileTree.ts`） |
-| `src/modules/editor/` | Monaco 代码编辑器 |
-| `src/modules/theme/` | 主题系统。`ThemeProvider.tsx`（顶层 context + customThemes）、`themes/index.ts`（16 内置主题注册）、`useThemeFileEditing.ts`（背景图，**曾是卡死根因**）、`types.ts` |
+| `src/modules/editor/` | CodeMirror 6 代码编辑器（`@uiw/react-codemirror`） |
+| `src/modules/theme/` | 主题系统。`ThemeProvider.tsx`（顶层 context + customThemes）、`themes/index.ts`（15 内置主题注册）、`useThemeFileEditing.ts`（背景图，**曾是卡死根因**）、`types.ts` |
 | `src/modules/translate/` | 离线选词翻译。`linuxDictionary.ts`+`programmingDictionary.ts`（词典数据）、`translateApi.ts`、`translateStore.ts`、`TranslateTooltip.tsx` |
 | `src/modules/shortcuts/` | 快捷键。`shortcuts.ts`（从上游恢复的单一真源 SHORTCUTS） |
 | `src/modules/ai/` | AI 面板/工具/agent。`components/TdsfAgentPanel.tsx`、`tools/`、`agents/registry.ts`、`lib/composer.tsx`（AiComposerProvider 最外层） |

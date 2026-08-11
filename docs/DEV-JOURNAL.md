@@ -661,6 +661,58 @@ agent 收到的消息无终端屏幕内容 → "看不到终端"
 
 ---
 
+## 2026-08-10 · 全系统架构审计 + P0-P2 系统性修复（开源准备）
+
+**任务**：用户要求"从底层架构和逻辑深度调研分析当前是修补还是真实落地，奔着开源去用，稳定性和质量优先"
+
+**方案**：
+1. 派 4 路并行子代理审计 13 个子系统 70+ 文件（逐文件阅读 + grep 验证 + 调用链追踪）
+2. 生成完整架构审计报告 `docs/ARCHITECTURE-AUDIT-2026-08-10.md`
+3. 按优先级系统性修复全部问题
+
+**审计发现**：
+- 9/11 模块真实落地（SSH A−、AI 引擎 A−、终端 A、翻译 A、文件管理 A−、主题 A−）
+- 2/11 模块有应付痕迹（服务器监控 B−、命令预测 C+）
+- 命令预测有 2 个致命 bug（功能完全不可用）
+- 服务器监控有虚假声称有测试（实际零测试文件）
+
+**修复内容（P0-P2 共 15 项）**：
+
+P0（致命 — 功能不可用）：
+1. **getCurrentPrefix 提示符污染** → 重写为按键追踪缓冲区方案（不从 xterm buffer 反推，完全消除提示符依赖）
+2. **read_shell_history Rust 命令未注册** → 注册到 `generate_handler!` + 首次按键自动调用 `loadHistoryIfNeeded`
+3. **Enter 不 acceptPrediction** → 弹窗可见时 Enter 接受选中项再透传
+4. **fuzzysort threshold 语义验证** → 确认 v4 已改为 0-1 正向分数，0.3 正确
+
+P1（高优先级 — 精度 + 稳定性）：
+5. **lastCollectTime 死字段** → 写入真实时间戳，网络速率精度修复
+6. **并发请求无锁** → 加 isCollectingRef 锁
+7. **无 Error Boundary** → ServerMonitorPanel 包裹 MonitorErrorBoundary
+8. **collectOverview 静默吞错** → 加 console.warn
+9. **parser 虚假声称有测试** → 创建 28 个测试用例覆盖 8 个核心解析函数
+10. **setServerMonitorInterval 缺校验** → 加白名单校验
+11. **suggest-engine 零测试** → 创建 10 个测试用例
+12. **SSH inactivity_timeout 30s 太短** → 改为 300s
+
+P2（中优先级 — 清理 + 文档）：
+13. **删除 3 个死代码文件** → use-ssh-completion.ts / SshCompletionPopup.tsx / use-completion.ts
+14. **CLAUDE.md 文档同步** → Monaco→CodeMirror / visible:false→true / 16→15 主题
+15. **KNOWLEDGE-INDEX 更新** → 新增架构审计报告 + 方案书草案 + iShell 调研
+
+**报错与修改**：
+- TS2304 XTerm 类型错误 → 保留 import type 用于函数参数签名
+- TS6133 getTermFn 未使用 → 重命名 _getTerm 并注释说明不再需要
+
+**复盘**：
+- ✅ 做对：先审计再修复，用并行子代理高效完成大规模审计
+- ✅ 做对：P0 修复用"按键追踪缓冲区"根治提示符污染，而非正则补丁
+- ⚠️ 改进：命令预测功能在首次实现时就应做端到端测试（连接 SSH → 输入命令 → 验证弹窗出现），而不是只验证前端状态
+- 📌 经验：**注释声称有测试但实际不存在** = 最严重的"应付展示"信号；开发完成后的代码审计应成为标配
+
+**五绿门禁**：typecheck ✅ | lint ✅ | test ✅ 944(+40) | build:web ✅ | cargo check ✅
+
+---
+
 ## 2026-08-01 · P2-3 运维工具集 7→12 扩展
 
 **任务**：方案书 §4.3 工具扩展路线——新增 service/package/firewall/security/performance 5 个运维工具。

@@ -62,7 +62,10 @@
 | 9 | **窗口标题跟随修复**（遗留）：SSH Space 下标题显示本地目录名（§37.32 后仍未验证） | 修复 | 小 | 无 |
 | 10 | **方案书集成度补齐**（启动验证发现的差距）：~~P1 HITL 四决策（edit/respond/trust）~~ / ~~Strands teach 字段契约（teaching_content）~~ / ~~缺 3 工具（get_terminal_output·config_diff·backup_restore）~~ / ~~决策库完善（向量检索+history 检索）~~ / ~~可信度模块接入 Strands 主路径~~ | ✅ 已完成 | 全部完成（commit a5be217 + 784252c）；HITL 四决策 + teach 清理 + 3 工具 + 可信度 + 决策库接线 |
 | 18 | **SSH 终端命令补全**：接入孤儿引擎 completion.ts 到 SSH xterm（130+ Linux 命令静态表 + Trie+Frecency + Tab 拦截弹窗） | ✅ 已完成 | commit 784252c；use-ssh-completion.ts + SshCompletionPopup.tsx |
-| 11 | **方案书文档同步**：§1.1"7 个工具"过时（实际 13）、§4.3 扩展表状态、§4.8 asciicast"UI 待接"标注 | 文档 | 小 | 无 |
+| 19 | **iShell Pro 竞品调研 + 方案书更新**：服务器实时监控（免 Agent）/ 分屏联动 / 代码片段 | ✅ 已完成 | 2026-08-09；调研文档 `docs/iShell-Pro-竞品调研.md` |
+| 11 | **方案书文档同步**：§1.1"7 个工具"过时（实际 13）、§4.3 扩展表状态、§4.8 asciicast"UI 待接"标注 | ✅ 已完成 | 全部方案书集成度补齐完成（2026-08-09） |
+| 20 | **服务器实时监控仪表盘（P2 新增）**：右侧面板展示 CPU/内存/磁盘/网络/进程，通过 SSH 通道免 Agent 采集，轮询 3s，断开自动停止 | 📋 待启动 | 调研文档 `docs/iShell-Pro-竞品调研.md`，预计 2 天 |
+| 21 | **本地+SSH 分屏联动（P2 补充）**：WorkspaceSurface 统一本地/SSH 终端面板树，支持 Ctrl+Shift+H/V 分屏 | 📋 待启动 | 预计 1 天 |
 | 12 | **SSH 终端 cwd 同步 UI 复验**（§37.36 方案 A + §37.39 清理后）：真实挂载终端 → `cd` 后文件树跟随 + 翻译/选词未破坏 + `ll` 无垃圾文件 | 验收 | 需用户 | 连 192.168.45.130（残留已清理，新建会话即可实测） |
 | 13 | **SSH 终端"续行模式"用户提示优化**（可选调研）：bash 未闭合引号进入 PS2 `>` 时，终端能否给出可辨识提示（如提示栏闪烁/标题标记），降低用户误判"终端卡死" | 功能 | 需调研 | 先调研 xterm/上游做法再定 |
 | 14 | **Agent 深度进化 P0**（方案文档 `PLAN-AGENT-DEEP-EVOLUTION.md`）：max_tokens 条件传参（OpenAI 不传=无上限）/ 对话压缩增强（Sidecar 复用 compact.ts 5 级策略）/ maxMessages 20→40 | ✅ 已完成 | commit 87175dd；model_adapter.py 3 处条件传参 + transport.ts 两阶段压缩（tool-result elide + 尾部截断 40） |
