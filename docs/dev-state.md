@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-11 · 本地+SSH 分屏联动完成（§37.48，ROADMAP #21）。接手请直接看 **§37.48**（最新）+ **§37.47**（iShell 调研）+ **§37.46**（SSH 命令补全）
+> **最后更新**：2026-08-11 · P2 代码片段管理完成（§37.49，方案书 v1.1 §5）。接手请直接看 **§37.49**（最新）+ **§37.48**（分屏联动）+ **§37.47**（iShell 调研）
 
 ---
 
@@ -3743,3 +3743,31 @@ CDP 全新状态实测通过。commit 见上。
 - 桌面端实测分屏链路（连 SSH → Ctrl+Shift+H 分屏 → 本地/SSH 混合 → 翻译/选词/文件树联动）
 - #20 服务器实时监控仪表盘（📋 待启动，预计 2 天）
 - #12 SSH 终端 cwd 同步 UI 复验（连 192.168.45.130 实测）
+
+### 37.49 P2 代码片段管理（Snippets）完成（2026-08-11 ✅ 完成，方案书 v1.1 §5）
+
+**背景**：方案书 v1.1 §5「代码片段管理」——常用 Linux 命令收藏，一键插入终端，支持标签分组 + 变量插值（`{{name}}`）+ Frecency 排序。
+
+**核心设计**：
+1. **数据模型**：`Snippet{id/name/command/description/tags/variables/createdAt/updatedAt/usageCount/lastUsedAt}`，`SnippetVar{name/defaultValue}`；内置变量 `cwd`（自动解析当前终端目录）
+2. **存储**：复用 `@tauri-apps/plugin-store`（`tdsf-snippets.json`，与 settings 同模式）→ 零后端改动；dev 模式（无 Tauri 运行时）降级 localStorage（`tdsf.snippets.cache`）。相比方案书 SQLite 方案更快落地
+3. **纯函数 + store 分离**（react-refresh 规范）：`collectPlaceholders`（占位符提取，去重保序）/ `interpolate`（缺失/空值保留占位符）/ `sortSnippets`（Frecency：usageCount → lastUsedAt → createdAt，不突变输入）
+4. **variables 派生**：保存时从 command 自动提取占位符，保留已存在变量 defaultValue——用户无需手动维护变量表
+5. **UI**：`SnippetsPanel`（工具栏 + 搜索 + 动态标签 tabs + Frecency 列表 + 空状态引导）/ `SnippetEditorDialog`（新建/编辑，实时显示检测变量）/ `SnippetRunDialog`（插入确认：内置 cwd 自动填充 + 自定义变量输入 + 最终命令实时预览）/ 删除确认 Dialog；Dialog 全部懒加载（eager-budget 约束）
+6. **插入终端**：App.tsx `handleInsertSnippetCommand`（复用 insertHistoryCommand 语义：写入 activeLeafId + focus，无活动终端返回 false → toast 提示）；插入成功 `recordUsage` 更新 Frecency
+7. **侧边栏集成**：`SidebarViewId` 新增 "snippets"，SidebarRail 新增「片段」入口（CodeIcon），App.tsx 新增渲染分支
+
+**改动文件**（本里程碑）：
+- 新增 `src/modules/snippets/`：`types.ts` / `lib/snippetStore.ts`（store + 持久化 + 3 纯函数）/ `lib/snippetStore.test.ts`（11 测试）/ `SnippetsPanel.tsx` / `SnippetEditorDialog.tsx` / `SnippetRunDialog.tsx` / `SnippetsPanel.test.tsx`（6 测试）/ `index.ts`
+- 修改 `src/modules/sidebar/types.ts`（SidebarViewId + "snippets"）、`SidebarRail.tsx`（新增入口）、`src/app/App.tsx`（import + handleInsertSnippetCommand + 渲染分支）、`src/modules/theme/ThemeProvider.tsx`（P2 #18 文档声明修正：编辑器主题跟随 CodeMirror 6）
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test **953 全过**（新增 17：store 11 + 组件 6）/ build:web ✅ / cargo check ✅（0 错误）
+
+**报错与修复**：
+- `@hugeicons/core-free-icons` 无 `InfoCircleIcon`/`TerminalSquareIcon` 导出（TS2724）→ 换 `InformationCircleIcon`/`TerminalIcon`（全项目已用图标）
+- EditorDialog 中 `buildVariables`/`useEffect` 未使用（TS6133）→ variables 派生逻辑上移到 SnippetsPanel.handleEditorSave（职责更内聚）
+
+**接手下一步**：
+- 桌面端实测：侧栏「片段」→ 新建（带 `{{var}}`）→ 插入 SSH/本地终端 → 变量弹窗 → 文件树联动
+- P2 SSH 隧道与端口转发（方案书 v1.1 §4，russh direct-tcpip，📋 待启动）
+- #20 服务器实时监控仪表盘（📋 待启动）

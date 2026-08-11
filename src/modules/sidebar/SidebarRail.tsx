@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import {
   BookOpen01Icon,
+  CodeIcon,
   FolderGitTwoIcon,
   FolderTreeIcon,
   SparklesIcon,
@@ -37,6 +38,8 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
 
     { id: "skills", label: "Skills", icon: SparklesIcon },
     { id: "knowledge", label: "知识库", icon: BookOpen01Icon },
+    // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段视图入口
+    { id: "snippets", label: "片段", icon: CodeIcon },
   ];
 
   return (
