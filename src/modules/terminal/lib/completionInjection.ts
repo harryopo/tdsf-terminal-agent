@@ -9,6 +9,11 @@
  *   2. loadHistoryIfNeeded 从未调用 → 首次按键时自动调用
  *   3. Enter 不 acceptPrediction → 弹窗可见时 Enter 接受选中项
  *   4. fuzzysort threshold 验证 → 改为保守值
+ *
+ * P2 #13 修复（2026-08-11 架构审计收尾）：
+ *   5. 弹窗跟随终端光标定位 → 通过 xterm buffer.cursorX/Y + .xterm-screen
+ *      DOM 尺寸换算像素坐标（measureCursorPx），弹窗出现在光标附近
+ *      （computePopupPosition 处理视口边界/上下翻转），取代固定的面板底部居中
  * -----------------------------------------------------------------------------
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
@@ -18,12 +23,20 @@ import { getSuggestEngine, type SuggestionResult } from '@/lib/suggest-engine';
 // 类型
 // ============================================================================
 
+export interface CursorPx {
+  /** 光标像素坐标（相对视口） */
+  left: number;
+  top: number;
+}
+
 export interface CompletionState {
   visible: boolean;
   items: SuggestionResult[];
   selectedIndex: number;
   prefix: string;
   leafId: number | null;
+  /** 光标像素坐标（P2 #13，弹窗据此定位）；null = 无 xterm 实例可用 */
+  cursor: CursorPx | null;
 }
 
 // ============================================================================
@@ -36,11 +49,15 @@ let activeState: CompletionState = {
   selectedIndex: 0,
   prefix: '',
   leafId: null,
+  cursor: null,
 };
 
 const subscribers = new Set<(state: CompletionState) => void>();
 
 let writeFn: ((leafId: number, data: string) => void) | null = null;
+
+/** P2 #13: 按 leafId 取 xterm 实例（rendererPool 注入），用于光标像素定位 */
+let getTermFn: ((leafId: number) => XTerm | null) | null = null;
 
 // ============================================================================
 // 输入缓冲区（按键追踪，不从 buffer 反推 → 无提示符污染）
@@ -66,11 +83,70 @@ function clearInputBuffer(leafId: number): void {
 // ============================================================================
 
 export function initCompletionInjection(
-  _getTerm: (leafId: number) => XTerm | null,
+  getTerm: (leafId: number) => XTerm | null,
   write: (leafId: number, data: string) => void,
 ): void {
-  // getTerm 在按键追踪方案中不再需要（输入缓冲区不从 xterm buffer 反推）
+  // P2 #13: 保存 getTerm 供光标像素定位（按键追踪本身不从 xterm buffer 反推）
+  getTermFn = getTerm;
   writeFn = write;
+}
+
+// ============================================================================
+// 光标像素定位（P2 #13：弹窗跟随终端光标）
+// ============================================================================
+
+/**
+ * 计算 xterm 光标当前的像素坐标（相对视口）。
+ *
+ * 原理：xterm 的字符网格尺寸 = .xterm-screen（或 .xterm-rows）DOM 尺寸 ÷ cols/rows；
+ * 光标位置 = 网格左上角 + cursorX/cursorY × 单格尺寸。
+ * 不依赖 xterm 私有 API（_core），仅用公开的 buffer + DOM 结构。
+ */
+export function measureCursorPx(
+  getTerm: ((leafId: number) => XTerm | null) | null,
+  leafId: number,
+): CursorPx | null {
+  if (!getTerm) return null;
+  const term = getTerm(leafId);
+  if (!term || !term.element) return null;
+  const buf = term.buffer.active;
+  const screenEl = term.element.querySelector<HTMLElement>('.xterm-screen');
+  const rowsEl = term.element.querySelector<HTMLElement>('.xterm-rows');
+  const el = screenEl ?? rowsEl;
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  const cols = Math.max(term.cols, 1);
+  const rows = Math.max(term.rows, 1);
+  return {
+    left: rect.left + buf.cursorX * (rect.width / cols),
+    top: rect.top + buf.cursorY * (rect.height / rows),
+  };
+}
+
+/** 预测弹窗固定宽度（与 TerminalCompletionPopup 的 w-96 一致） */
+export const POPUP_WIDTH = 384;
+
+/**
+ * 计算弹窗定位：优先贴在光标下方，视口右/下溢出时收拢，
+ * 下方放不下时翻转到光标上方。返回弹窗左上角坐标。
+ */
+export function computePopupPosition(
+  cursor: CursorPx,
+  viewport: { width: number; height: number },
+  itemsCount: number,
+): { left: number; top: number } {
+  // 估算弹窗高度：顶部提示栏 ~24px + 每行 ~30px + padding ~8px
+  const estHeight = 24 + itemsCount * 30 + 8;
+  const left = Math.min(
+    Math.max(cursor.left, 8),
+    Math.max(8, viewport.width - POPUP_WIDTH - 8),
+  );
+  const offsetBelow = 12;
+  let top = cursor.top + offsetBelow;
+  if (top + estHeight > viewport.height) {
+    top = Math.max(8, cursor.top - estHeight - offsetBelow);
+  }
+  return { left, top };
 }
 
 // ============================================================================
@@ -119,6 +195,8 @@ function updatePredictions(leafId: number): void {
       selectedIndex: 0,
       prefix,
       leafId,
+      // P2 #13: 记录光标像素坐标（按键后 xterm 已刷新光标位置）
+      cursor: measureCursorPx(getTermFn, leafId),
     });
   }
 }
