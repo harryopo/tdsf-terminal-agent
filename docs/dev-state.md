@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-09 · iShell Pro 竞品调研 + 方案书 §4.9 新增（§37.47）。接手请直接看 **§37.47**（最新）+ **§37.46**（SSH 命令补全）+ **§37.45**（方案书 #10 完成）
+> **最后更新**：2026-08-11 · 本地+SSH 分屏联动完成（§37.48，ROADMAP #21）。接手请直接看 **§37.48**（最新）+ **§37.47**（iShell 调研）+ **§37.46**（SSH 命令补全）
 
 ---
 
@@ -3717,3 +3717,29 @@ CDP 全新状态实测通过。commit 见上。
 - [ ] SSH 隧道管理是否纳入 P3？
 - [ ] 代码片段功能是否纳入 P3？
 - [ ] 分屏联动是否纳入 P2？
+
+### 37.48 本地+SSH 分屏联动（2026-08-11 ✅ 完成，ROADMAP #21）
+
+**背景**：SSH 终端此前在 workspace 级独立渲染（SshTerminalHost），无法参与 PaneTree 分屏。借鉴 iShell Pro 的分屏组合，实现「本地 + SSH 混合分屏」。
+
+**核心设计**：
+1. **per-leaf SSH 绑定**：`PaneNode.sshSessionId` 三态——`undefined`=继承 tab 绑定 / `null`=强制本地 / `string`=指定 SSH 会话；`effectiveLeafSsh(tree, leafId, tabSshSessionId)` 纯函数解析有效会话（修正语义：显式 `null` 不被 tab 绑定覆盖）
+2. **SSH 叶子渲染**：`PaneTreeView` 新增 `SshLeafPane`（复用 `useSshLeafTransport` 注入 transport + `handleCwd` 同步远端 cwd 到 sshStore），`TerminalPaneContent` 条件渲染本地/SSH leaf
+3. **分屏继承**：`splitActivePane` 让新 leaf 继承 active leaf 的有效 SSH 会话；快捷键 Ctrl/Cmd+Shift+H/V 水平/垂直分屏（SSH 场景）
+4. **workspace 级覆盖移除**：App.tsx 删除 SshTerminalHost 覆盖路径 + `workspaceSshSessionId` 派生；`sshActiveLeafIdRef` 改为从 active tab + active leaf 派生（会话 connected 才有效）；WorkspaceSurface 仅保留 SSH connecting overlay
+
+**改动文件**（commit 84f2941）：
+- `src/modules/terminal/lib/panes.ts`（effectiveLeafSsh 修正 + splitLeaf/setLeafSshSession 支持 sshSessionId）
+- `src/modules/terminal/PaneTreeView.tsx`（SshLeafPane + TerminalPaneContent 拆分）
+- `src/modules/terminal/lib/useSshLeafTransport.ts`（新增，OSC7 诊断日志）
+- `src/modules/tabs/lib/useTabs.ts`（splitActivePane 继承 SSH）
+- `src/modules/shortcuts/shortcuts.ts`（pane.splitSshRight/Down）
+- `src/app/App.tsx`、`src/app/components/WorkspaceSurface.tsx`、`src/modules/ai/lib/useAiLiveBridge.ts`（覆盖路径移除/注释同步）
+- `src/modules/terminal/lib/panes.test.ts`（SSH binding 三组测试）
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test 936 全过（新增 10 个）/ build:web ✅ / cargo check ✅（0 错误）
+
+**接手下一步**：
+- 桌面端实测分屏链路（连 SSH → Ctrl+Shift+H 分屏 → 本地/SSH 混合 → 翻译/选词/文件树联动）
+- #20 服务器实时监控仪表盘（📋 待启动，预计 2 天）
+- #12 SSH 终端 cwd 同步 UI 复验（连 192.168.45.130 实测）
