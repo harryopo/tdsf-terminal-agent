@@ -121,7 +121,7 @@ src/main.tsx  ← 入口。按上游 terax 重写：
 ```bash
 pnpm typecheck        # tsc -p tsconfig.app.json && tsc -p tsconfig.node.json，0 错误
 pnpm lint             # eslint . --max-warnings 0，0 错误 0 警告
-pnpm test             # vitest run，当前 832 全过
+pnpm test             # vitest run，当前 982 全过
 pnpm build:web        # tsc -p app + vite build，成功出 dist
 pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功能真的工作
 ```

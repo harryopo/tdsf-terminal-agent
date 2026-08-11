@@ -10,11 +10,18 @@
 
 | 门禁 | 状态 |
 |------|------|
-| typecheck / lint / test(832) / build:web | ✅ 全绿 |
+| typecheck / lint / test(982) / build:web | ✅ 全绿（2026-08-11 复核） |
+| cargo check / cargo test(315 单元 + 25/27 集成 + doc) | ✅ 全绿（2026-08-11 复核，含 ssh_integration mock server） |
 | tauri:dev 桌面端 | ✅ 窗口可见、可点击、本地终端(PTY pwsh)、SSH 可连、远程文件树可展开 |
-| CDP P1 实测 | ✅ event.history/event.stats/agent_switch listen 全通，4 条历史 agent_switch 事件 payload 含 env 块（终端上下文感知 P0-e 也生效） |
 
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
+
+**最新里程碑（2026-08-11）**：
+- §37.48 本地+SSH 混合分屏（ROADMAP #21，commit 84f2941）
+- §37.49 P2 代码片段管理 Snippets（方案书 v1.1 §5，commit 9463f9e）
+- §37.50 P2 SSH 隧道本地转发 direct-tcpip（方案书 v1.1 §4，commit aa29dd7）
+- §37.51 架构审计 P0-P3 全部收尾（ARCHITECTURE-AUDIT-2026-08-10 23 项 + P2 #13 弹窗跟随光标，commit a41d33e）
+- §37.52 服务器监控 #20 确认完成 + 文档滞后修正（commit dd94aed）
 
 ---
 
