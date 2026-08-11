@@ -928,6 +928,49 @@ impl<R: tauri::Runtime> SshSession<R> {
         Ok(channel.into_stream())
     }
 
+    /// 打开 direct-tcpip 转发 channel (P2 #23 SSH 隧道)
+    ///
+    /// 复用现有 SSH Handle 开一个直连 channel (RFC 4254 7.1),
+    /// 请求远程 SSH 服务器代连 `host_to_connect:port_to_connect`,
+    /// 返回的 Channel 与本地的 TcpStream 双向桥接即构成一条隧道。
+    ///
+    /// 与 `open_sftp_channel` / `exec_command` 同一模式:
+    /// 锁只覆盖开 channel 一个 RTT, 立即释放, 不阻塞同会话其他操作。
+    ///
+    /// # 参数
+    /// - `host_to_connect` / `port_to_connect`: 远程目标 (相对 SSH 服务器可达)
+    /// - `originator_address` / `originator_port`: 发起方 (本地地址端口, 仅用于日志)
+    ///
+    /// # 返回
+    /// `Channel<Msg>` — 与本地 TCP 连接桥接用
+    pub async fn open_tcpip_channel(
+        &self,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        originator_address: &str,
+        originator_port: u32,
+    ) -> Result<russh::Channel<russh::client::Msg>, SshSessionError> {
+        // 与 open_sftp_channel 一致: 只在连接已断时拒绝
+        if self.connection_closed.load(Ordering::Acquire) {
+            return Err(SshSessionError::Closed);
+        }
+
+        // 借用 handle 开 channel (不 take, 保持 SSH 连接; 锁只覆盖开 channel 一个 RTT)
+        let handle_guard = self.handle.lock().await;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let channel = handle
+            .channel_open_direct_tcpip(
+                host_to_connect,
+                port_to_connect,
+                originator_address,
+                originator_port,
+            )
+            .await?;
+        drop(handle_guard);
+
+        Ok(channel)
+    }
+
     /// 执行单条 SSH 命令并返回结构化结果（exec 模式，非 PTY）
     ///
     /// TDSF 魔改 P0-D（2026-07-30）：为运维 Agent 提供"执行命令并拿回输出"能力，
@@ -1353,7 +1396,8 @@ impl<R: tauri::Runtime> Drop for SshSession<R> {
 }
 
 #[cfg(test)]
-mod tests {
+// make_test_session 为 pub(crate), 供 tunnel.rs / mod.rs 测试复用
+pub(crate) mod tests {
     use super::*;
     use crate::modules::ssh::client::SshAuthMethod;
 
@@ -1421,7 +1465,9 @@ mod tests {
     /// `connection_closed=true` 让 exec_command 在第 1 步就提前返回 Closed,
     /// 不会触达 handle 借用;`connection_closed=false` 时让 handle 借用
     /// 走 `as_ref() → None` 路径,同样返回 Closed (防御性分支覆盖)。
-    fn make_test_session<R: tauri::Runtime>(
+    ///
+    /// pub(crate): 供 tunnel.rs / mod.rs 的隧道 registry 测试构造假会话。
+    pub(crate) fn make_test_session<R: tauri::Runtime>(
         connection_closed: bool,
         exited: bool,
     ) -> SshSession<R> {
