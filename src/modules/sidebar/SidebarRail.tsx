@@ -4,6 +4,7 @@ import {
   CodeIcon,
   FolderGitTwoIcon,
   FolderTreeIcon,
+  Router01Icon,
   SparklesIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -40,6 +41,8 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
     { id: "knowledge", label: "知识库", icon: BookOpen01Icon },
     // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段视图入口
     { id: "snippets", label: "片段", icon: CodeIcon },
+    // TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道视图入口
+    { id: "tunnels", label: "隧道", icon: Router01Icon },
   ];
 
   return (

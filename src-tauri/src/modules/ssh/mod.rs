@@ -34,12 +34,14 @@ pub mod handler;
 pub mod known_hosts;
 pub mod session;
 pub mod sftp;
+pub mod tunnel;
 
 // 重导出核心类型,供 lib.rs 注册 Tauri 命令使用
 pub use client::{SshAuthMethod, SshClient, SshConnectParams};
 pub use known_hosts::KnownHostsManager;
 pub use session::{SshCommandOutput, SshReconnectConfig, SshSession, SshSessionState, SshStatusEvent};
 pub use sftp::{SftpAttrs, SftpEntry, SftpSession};
+pub use tunnel::{SshTunnel, TunnelInfo, TunnelSpec, TunnelState};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -61,7 +63,12 @@ pub struct SshState {
     /// SFTP 会话缓存 (T-P2-05)
     /// 与 sessions 共享 session_id,首次 SFTP 操作时通过 SshSession::open_sftp_channel 创建。
     sftp_sessions: RwLock<HashMap<u32, Arc<SftpSession>>>,
+    /// SSH 隧道注册表 (P2 #23)
+    /// 独立 id 空间 (从 1 开始),与 session_id 无关。
+    tunnels: RwLock<HashMap<u32, Arc<SshTunnel>>>,
     next_id: AtomicU32,
+    /// 隧道 id 分配器 (独立于 session_id)
+    next_tunnel_id: AtomicU32,
 }
 
 impl Default for SshState {
@@ -69,8 +76,10 @@ impl Default for SshState {
         Self {
             sessions: RwLock::new(HashMap::new()),
             sftp_sessions: RwLock::new(HashMap::new()),
+            tunnels: RwLock::new(HashMap::new()),
             // 从 1 开始,避免前端把 0 误判为 "未设置"
             next_id: AtomicU32::new(1),
+            next_tunnel_id: AtomicU32::new(1),
         }
     }
 }
@@ -163,6 +172,75 @@ impl SshState {
     #[allow(dead_code)]
     pub async fn remove_sftp(&self, session_id: u32) -> Option<Arc<SftpSession>> {
         self.sftp_sessions.write().await.remove(&session_id)
+    }
+
+    // === SSH 隧道注册表管理 (P2 #23 新增) ===
+
+    /// 分配新隧道 id (独立于 session_id 空间)
+    pub fn allocate_tunnel_id(&self) -> u32 {
+        self.next_tunnel_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// 插入新隧道
+    pub async fn insert_tunnel(&self, id: u32, tunnel: Arc<SshTunnel>) {
+        self.tunnels.write().await.insert(id, tunnel);
+    }
+
+    /// 取出隧道 (移除)
+    pub async fn take_tunnel(&self, id: u32) -> Option<Arc<SshTunnel>> {
+        self.tunnels.write().await.remove(&id)
+    }
+
+    /// 获取隧道引用 (不移除)
+    pub async fn get_tunnel(&self, id: u32) -> Option<Arc<SshTunnel>> {
+        self.tunnels.read().await.get(&id).cloned()
+    }
+
+    /// 列出所有隧道信息 (用于 tunnel_list 命令)
+    pub async fn list_tunnels(&self) -> Vec<TunnelInfo> {
+        let tunnels = self.tunnels.read().await;
+        let mut result: Vec<TunnelInfo> = tunnels
+            .iter()
+            .map(|(_, t)| t.info())
+            .collect();
+        result.sort_by_key(|t| t.id);
+        result
+    }
+
+    /// 检测本地端口是否已被本项目隧道占用
+    ///
+    /// 只检查 Running 状态的隧道 (Stopping/Stopped 的端口已释放)。
+    /// 其他进程占用的端口由 TcpListener::bind 兜底报错。
+    pub async fn port_in_use(&self, local_port: u16) -> bool {
+        let tunnels = self.tunnels.read().await;
+        tunnels.values().any(|t| {
+            t.spec.local_port == local_port && t.is_running()
+        })
+    }
+
+    /// 停止并移除指定 SSH 会话下的所有隧道 (ssh_disconnect 时调用)
+    ///
+    /// 会话断开后其隧道失去转发通道, 必须全部停止并释放本地端口。
+    pub async fn stop_tunnels_for_session(&self, session_id: u32) {
+        // 先收集匹配的隧道 id (避免在迭代时修改 HashMap)
+        let ids: Vec<u32> = {
+            let tunnels = self.tunnels.read().await;
+            tunnels
+                .iter()
+                .filter(|(_, t)| t.spec.session_id == session_id)
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        for id in ids {
+            if let Some(tunnel) = self.take_tunnel(id).await {
+                log::info!(
+                    "[ssh] stopping tunnel id={} (session {} disconnected)",
+                    id,
+                    session_id
+                );
+                tunnel.stop().await;
+            }
+        }
     }
 }
 
@@ -354,6 +432,7 @@ pub async fn ssh_resize(
 /// ssh_disconnect 命令: 主动断开 SSH 连接
 ///
 /// 关闭 channel + disconnect,会话从 state 移除。
+/// P2 #23: 断开前先停止该会话下的所有 SSH 隧道 (释放本地端口)。
 #[tauri::command]
 pub async fn ssh_disconnect(
     state: tauri::State<'_, SshState>,
@@ -365,6 +444,9 @@ pub async fn ssh_disconnect(
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
     log::info!("[ssh] disconnect: id={}", session_id);
+    // P2 #23: 会话断开 → 其隧道失去转发通道, 全部停止并释放端口
+    state.stop_tunnels_for_session(session_id).await;
+
     session.close().await.map_err(|e| {
         log::error!("[ssh] disconnect failed: id={} err={}", session_id, e);
         e.to_string()
@@ -762,6 +844,107 @@ pub async fn ssh_command(
 }
 
 // ============================================================================
+// SSH 隧道与端口转发 Tauri 命令 (P2 #23, 2026-08-11)
+// ============================================================================
+// 本地端口转发: 前端在隧道面板创建/停止/列出隧道。
+// 复用已连接的 SSH 会话 (SshState.sessions), 开 direct-tcpip channel 转发。
+//
+// 前端调用示例:
+// ```ts
+// const tunnelId = await invoke('tunnel_start', {
+//   spec: { name, sessionId, localHost, localPort, remoteHost, remotePort },
+// });
+// await invoke('tunnel_list');   // → TunnelInfo[]
+// await invoke('tunnel_stop', { tunnelId });
+// ```
+
+/// tunnel_start 命令: 创建并启动本地端口转发隧道
+///
+/// 流程:
+/// 1. 校验 SSH 会话存在且连接未断
+/// 2. 校验本地端口未被本项目其他隧道占用
+/// 3. 分配隧道 id + 绑定本地端口 + 启动 accept loop
+/// 4. 注册到 SshState (绑定失败则不注册, 直接返回错误)
+///
+/// # 返回
+/// 隧道 id (u32), 前端用于 tunnel_stop / tunnel_list 关联
+#[tauri::command]
+pub async fn tunnel_start(
+    state: tauri::State<'_, SshState>,
+    spec: TunnelSpec,
+) -> Result<u32, String> {
+    log::info!(
+        "[tunnel] start: name={} session={} {}:{} → {}:{}",
+        spec.name,
+        spec.session_id,
+        spec.local_host,
+        spec.local_port,
+        spec.remote_host,
+        spec.remote_port
+    );
+
+    // 1. 校验 SSH 会话存在且连接未断
+    let session = state
+        .get(spec.session_id)
+        .await
+        .ok_or_else(|| format!("SSH session not found: id={}", spec.session_id))?;
+    if session.is_connection_closed() {
+        return Err(format!(
+            "SSH session closed: id={}",
+            spec.session_id
+        ));
+    }
+
+    // 2. 端口占用检测 (本项目隧道; 其他进程由 bind 兜底)
+    if state.port_in_use(spec.local_port).await {
+        return Err(format!(
+            "本地端口 {} 已被其他隧道占用",
+            spec.local_port
+        ));
+    }
+
+    // 3. 创建 + 启动 (绑定失败不注册)
+    let tunnel_id = state.allocate_tunnel_id();
+    let tunnel = Arc::new(SshTunnel::new(tunnel_id, spec, session));
+    tunnel.start().await?;
+
+    // 4. 注册到全局 registry
+    state.insert_tunnel(tunnel_id, tunnel).await;
+    log::info!("[tunnel] started: id={}", tunnel_id);
+    Ok(tunnel_id)
+}
+
+/// tunnel_stop 命令: 停止隧道 (幂等)
+///
+/// 释放本地端口, 停止 accept loop; 已建立的桥接连接自然结束。
+/// 停止后从 registry 移除 (第二次调用返回 "tunnel not found" 属于预期)。
+#[tauri::command]
+pub async fn tunnel_stop(
+    state: tauri::State<'_, SshState>,
+    tunnel_id: u32,
+) -> Result<(), String> {
+    let tunnel = state
+        .get_tunnel(tunnel_id)
+        .await
+        .ok_or_else(|| format!("tunnel not found: id={tunnel_id}"))?;
+
+    log::info!("[tunnel] stop requested: id={}", tunnel_id);
+    // 先移除再 stop (stop 期间 list 不再显示; 幂等)
+    state.take_tunnel(tunnel_id).await;
+    tunnel.stop().await;
+    log::info!("[tunnel] stopped: id={}", tunnel_id);
+    Ok(())
+}
+
+/// tunnel_list 命令: 列出所有隧道信息
+#[tauri::command]
+pub async fn tunnel_list(
+    state: tauri::State<'_, SshState>,
+) -> Result<Vec<TunnelInfo>, String> {
+    Ok(state.list_tunnels().await)
+}
+
+// ============================================================================
 // 单元测试 (P0-D 新增, 2026-07-30)
 // ============================================================================
 //
@@ -878,5 +1061,141 @@ mod tests {
         let state = SshState::default();
         let _id = state.allocate_id(); // id=1, 但未 insert
         assert!(state.get(1).await.is_none());
+    }
+
+    // === P2 #23 SSH 隧道 registry 测试 =========================================
+
+    /// 构造测试用 SshTunnel (不 start; 只测 registry 增删查与端口检测)
+    ///
+    /// 用 session.rs 的 make_test_session 构造假会话 (handle=None),
+    /// SshTunnel::new 不访问 session 内部, 因此可离线构造。
+    /// 测试断言依赖 SshTunnel::state() 初始为 Starting (未运行),
+    /// 因此 port_in_use 在未 start 时应返回 false。
+    fn make_test_tunnel(id: u32, local_port: u16) -> SshTunnel<tauri::Wry> {
+        SshTunnel::new(
+            id,
+            TunnelSpec {
+                name: format!("tunnel-{id}"),
+                session_id: 1,
+                local_host: "127.0.0.1".to_string(),
+                local_port,
+                remote_host: "db.internal".to_string(),
+                remote_port: 3306,
+            },
+            Arc::new(super::session::tests::make_test_session::<tauri::Wry>(
+                false,
+                false,
+            )),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_ssh_state_tunnels_empty_by_default() {
+        // 验证 SshState 初始无隧道 (tunnel_list 应返回空数组)
+        let state = SshState::default();
+        assert!(state.list_tunnels().await.is_empty());
+        assert!(state.get_tunnel(1).await.is_none());
+        assert!(state.take_tunnel(1).await.is_none());
+        // 端口检测: 无隧道时任何端口都可用
+        assert!(!state.port_in_use(3306).await);
+    }
+
+    #[test]
+    fn test_ssh_state_allocate_tunnel_id_monotonic() {
+        // 验证隧道 id 从 1 开始单调递增 (独立于 session_id 空间)
+        let state = SshState::default();
+        assert_eq!(state.allocate_tunnel_id(), 1);
+        assert_eq!(state.allocate_tunnel_id(), 2);
+        assert_eq!(state.allocate_tunnel_id(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_ssh_state_tunnel_insert_get_list() {
+        // 验证 insert/get/list 闭环 (tunnel_list 按 id 排序)
+        let state = SshState::default();
+        let t1 = Arc::new(make_test_tunnel(1, 3306));
+        let t2 = Arc::new(make_test_tunnel(2, 5432));
+        state.insert_tunnel(1, t1).await;
+        state.insert_tunnel(2, t2).await;
+
+        // get 返回引用
+        assert!(state.get_tunnel(1).await.is_some());
+        assert!(state.get_tunnel(99).await.is_none());
+
+        // list 返回 2 条, 按 id 升序
+        let list = state.list_tunnels().await;
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, 1);
+        assert_eq!(list[0].local_port, 3306);
+        assert_eq!(list[1].id, 2);
+        // make_test_tunnel 的 remote_port 固定 3306 (见 helper 注释)
+        assert_eq!(list[1].local_port, 5432);
+        assert_eq!(list[1].remote_port, 3306);
+    }
+
+    #[tokio::test]
+    async fn test_ssh_state_tunnel_take_removes() {
+        // 验证 take 移除后 list/get 不再可见
+        let state = SshState::default();
+        state
+            .insert_tunnel(1, Arc::new(make_test_tunnel(1, 3306)))
+            .await;
+        assert!(state.get_tunnel(1).await.is_some());
+
+        let removed = state.take_tunnel(1).await;
+        assert!(removed.is_some());
+        assert!(state.get_tunnel(1).await.is_none());
+        assert!(state.list_tunnels().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ssh_state_port_in_use_ignores_non_running() {
+        // 验证端口占用检测只认 Running 状态的隧道:
+        // 未 start 的隧道状态为 Starting → 不占用端口 (端口可复用)
+        let state = SshState::default();
+        state
+            .insert_tunnel(1, Arc::new(make_test_tunnel(1, 3306)))
+            .await;
+        // Starting 状态不占端口
+        assert!(!state.port_in_use(3306).await);
+        // 其他端口更不占
+        assert!(!state.port_in_use(5432).await);
+    }
+
+    #[tokio::test]
+    async fn test_ssh_state_stop_tunnels_for_session() {
+        // 验证 ssh_disconnect 路径: 会话断开时清理其全部隧道
+        let state = SshState::default();
+        // 两个隧道都属于 session 1
+        state
+            .insert_tunnel(1, Arc::new(make_test_tunnel(1, 3306)))
+            .await;
+        state
+            .insert_tunnel(2, Arc::new(make_test_tunnel(2, 5432)))
+            .await;
+
+        // 先构造一个属于 session 99 的隧道 (不应被清理)
+        let other = SshTunnel::new(
+            3,
+            TunnelSpec {
+                name: "other".to_string(),
+                session_id: 99,
+                local_host: "127.0.0.1".to_string(),
+                local_port: 8080,
+                remote_host: "r".to_string(),
+                remote_port: 80,
+            },
+            Arc::new(super::session::tests::make_test_session::<tauri::Wry>(
+                false,
+                false,
+            )),
+        );
+        state.insert_tunnel(3, Arc::new(other)).await;
+
+        // 清理 session 1 → 隧道 1/2 移除, 隧道 3 保留
+        state.stop_tunnels_for_session(1).await;
+        assert!(state.get_tunnel(1).await.is_none());
+        assert!(state.get_tunnel(2).await.is_none());
+        assert!(state.get_tunnel(3).await.is_some());
     }
 }

@@ -73,7 +73,7 @@
 | 16 | **Agent 深度进化 P2**：TodoStrip 双轨联动（Sidecar 路径驱动前端 TodoStrip UI） | ✅ 已完成 | commit 3e11abc；Python todo_write.py + adapter 挂载 + system_prompt 任务规划指令 + 前端 listen sidecar:update_todos |
 | 17 | **Agent 深度进化 P3**：LLM 自动摘要（long_context.py 重写为真 LLM 摘要替代 hash 模拟） | ✅ 已完成 | commit a5be217；summarize 优先调 LLM（OpenAI 兼容接口），失败回退 hash 截断；输入预处理首尾各 40% |
 | 22 | **P2 代码片段管理（Snippets）**：常用命令收藏一键插入终端，标签分组 + `{{var}}` 插值 + Frecency 排序（方案书 v1.1 §5） | ✅ 已完成 | 2026-08-11；LazyStore 持久化（tdsf-snippets.json）+ dev 降级 localStorage；`src/modules/snippets/`（store 11 + 组件 6 = 17 测试），详见 dev-state §37.49 |
-| 23 | **P2 SSH 隧道与端口转发**：russh direct-tcpip 本地端口转发（方案书 v1.1 §4） | 📋 待启动 | 预计后置（先完成 #20 监控或用户实测反馈） |
+| 23 | **P2 SSH 隧道与端口转发**：russh direct-tcpip 本地端口转发（方案书 v1.1 §4） | ✅ 已完成 | 2026-08-11；后端 `tunnel.rs`（SshTunnel 生命周期 + direct-tcpip 双向桥接 + 隧道 registry）+ 前端 `tunnels/` 模块（TunnelPanel/CreateTunnelDialog + store + 16 测试），详见 dev-state §37.50 |
 
 ### 待用户决策/确认
 
