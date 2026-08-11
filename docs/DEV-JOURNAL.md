@@ -32,6 +32,37 @@
 
 ---
 
+## 2026-08-11 · P2 代码片段管理（Snippets，方案书 v1.1 §5）— 收藏命令一键插入终端
+
+**任务**：方案书 v1.1 §5「代码片段管理」——常用 Linux 命令收藏，一键插入终端；标签分组 + `{{var}}` 变量插值 + Frecency 排序 + 持久化。
+
+**方案**：
+1. 数据模型 `Snippet`（id/name/command/description/tags/variables/usageCount/lastUsedAt）+ 内置变量 `cwd`（自动解析当前终端目录）
+2. 存储复用 `@tauri-apps/plugin-store`（`tdsf-snippets.json`，与 settings 同模式）→ **零后端改动**；dev 模式降级 localStorage（`isTauriRuntime()` 判定）
+3. 纯函数与 store 分离（react-refresh 规范）：`collectPlaceholders` / `interpolate`（缺失/空值保留占位符）/ `sortSnippets`（Frecency，不突变输入）
+4. **variables 派生**：保存时从 command 自动提取占位符并保留已有 defaultValue——用户不手动维护变量表
+5. UI：SnippetsPanel（搜索 + 动态标签 tabs + Frecency 列表）+ SnippetEditorDialog + SnippetRunDialog（cwd 自动填充 + 自定义变量输入 + 最终命令实时预览）+ 删除确认；Dialog 全懒加载（eager-budget 约束）
+6. 插入语义复用 insertHistoryCommand（writeToSession(activeLeafId) + focus），App.tsx 新增 `handleInsertSnippetCommand` 返回 boolean（无活动终端 → toast）
+
+**报错与修改**：
+- `@hugeicons/core-free-icons` 无 `InfoCircleIcon`/`TerminalSquareIcon` 导出（TS2724）→ 换全项目已验证的 `InformationCircleIcon`/`TerminalIcon`
+- EditorDialog 未用 `buildVariables`/`useEffect`（TS6133）→ variables 派生上移到 Panel.handleEditorSave（职责内聚）
+- import 误放文件中部（DeleteConfirmDialog 的 Dialog import）→ 上移顶部
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test **953 全过**（新增 17：store 纯函数 11 + 组件 6）/ build:web ✅ / cargo check ✅。
+
+**复盘**：
+- ✅ LazyStore 复用（settings 同模式）比方案书 SQLite 更快落地、零后端——「本地资源优先」准则的又一次实践
+- ✅ 纯函数单测先行：collectPlaceholders/interpolate/sortSnippets 边界（空白容忍、缺失保留、Frecency 三级排序、不突变）一次写对，UI 开发零返工
+- ✅ variables 作为 command 的派生数据（而非独立维护）杜绝了「改了命令忘了改变量表」的漂移
+- ✅ 组件测试覆盖交互关键路径（直接插入计数 / 有变量弹窗不直插 / 无终端提示不计数），jsdom 下 radix Dialog 可用
+- ⚠️ 图标命名不能靠猜：hugeicons 导出名与直觉差异大（InfoCircleIcon 不存在），先 grep 全项目已用图标最稳
+- 📌 待桌面端实测：侧栏「片段」→ 新建 → 插入 SSH/本地终端 → 变量弹窗 → 文件树联动
+
+---
+
+
+
 ## 2026-08-09 · Agent 深度进化调研（并发修复 + max_tokens + 双模式 SSH + 任务规划 + 压缩）
 
 **任务（用户反馈）**：
