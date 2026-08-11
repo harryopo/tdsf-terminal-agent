@@ -1118,3 +1118,38 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：
 - ✅ CDP 诊断脚本（terminalHasLeaf/terminalRefsSize 只读暴露）是定位利器——三行暴露把"可能原因"收敛为"确定断点"
 - 📌 黑屏 = 多重连接/重挂的边角状态（开发期 HMR 干扰大），发布版无 HMR 但多会话场景仍需关注
+
+---
+
+## 2026-08-11 · SSH 终端切换后显示内容丢失（调研驱动修复，对齐竞品 buffer 常驻范式）
+
+**现象**：用户新建终端/切换到别的终端窗口后，**SSH 服务器终端**显示的内容消失（体验差）。要求先调研竞品做法再修复。
+
+**调研（竞品 buffer 保留范式，WebSearch + iShell-Pro 竞品调研报告）**：
+- **VS Code**（Persistent terminal sessions / `terminal.integrated.persistentSessionReviveProcess`）：每个终端面板独立 xterm + 独立 buffer，**切标签只改可见性，从不销毁**；窗口重启甚至可恢复进程/输出。
+- **iTerm2 / Tabby / Warp**：每个标签页是独立终端对象，buffer（含 scrollback）**常驻内存**，切换零重建、零序列化。
+- **共同范式**：`每个终端 = 独立 buffer，切换只改可见性`。**没有一家**做"slot 池复用 + 序列化快照保底"。
+- 我们（terax 继承）是唯一走"**slot 池复用 + snapshot/ring 三段保活链**"折中方案的项目：POOL_MAX_SIZE=5 共享 xterm 实例，隐藏 300ms 后 release 归还池。
+
+**为什么我们没做好（根因，CDP 实测证据）**：
+1. **根因 A（steal 丢内容）**：`acquireSlot` 池满 steal occupied slot 时，`evictLeaf → releaseSlot → detachSlotFromLeaf(true)` 只设 retainedLeafId，随后 `detachSlotFromLeaf(slot, false)` 直接 `discardRetention`——**期间从未 storeSnapshot**，被驱逐 leaf 的 buffer 永久丢失，只剩 dormantRing 最近 1MB（可能还是错误内容）。
+2. **根因 B（SSH 隐藏即释放，主因）**：SSH leaf 无 `pty_has_foreground_job` 保护（remote 恒 false）+ `leafBusy` 不检测 remote → **命令运行中切走 300ms 也被 release** → 内容进 retained/ring/snapshot 三段保活链，一旦被 steal/reap 即丢。本地 tab 有 foreground job 保护所以问题不明显，SSH 裸奔。
+
+**为什么当初不这样做（架构反思）**：
+- slot 池复用是**上游 terax 继承**的设计，本质是资源折中（WebGL 实例 5 个封顶、省显存）；竞品要么每终端一渲染器（iTerm2 Metal），要么不限制 xterm 实例（VS Code），没有"池"概念。
+- 本地多 tab 场景快照保底"够用"（有 foreground job 保护，release 只在空闲时），**但 SSH 没有等价的空闲探测**——这是移植上游设计时的盲点：只看到"slot 池能用"，没看到"SSH 场景缺少 release 的守卫条件"。
+
+**修复（对齐竞品"常驻"语义，而非继续堆保活链）**：
+1. **修复 1（通用兜底）** `rendererPool.ts acquireSlot`：steal 被驱逐 leaf 前先 `storeSnapshot`，保证池满场景也有快照保底（本地/SSH 通吃）。
+2. **修复 2（SSH 语义对齐）** `useTerminalSession.ts scheduleHiddenRelease/releaseIfIdle`：`if (s.remote) return`——**SSH leaf 隐藏不 release，slot 常驻**，buffer 永不离开 xterm，内容零丢失；池满时由修复 1 的 steal 兜底。
+
+**验证（CDP 实测 + 门禁）**：
+- 6 个本地 tab（超过 POOL_MAX_SIZE=5 触发池满 steal）来回切换，全部注入 marker（STEAL_MARKER_4-9 等）**逐一保留**（修复 1+2 交集验证）。
+- SSH 语义：代码路径确认（`s.remote` 判断就位），待用户连真实 SSH 实测。
+- 五绿门禁：typecheck ✅ / lint ✅ / test 982 全过 / build:web ✅ / tauri:dev 用户桌面实测中。
+
+**复盘**：
+- ✅ **先调研后动手**：竞品范式（buffer 常驻、切换只改可见性）直接决定了修复方向——"对齐语义"而非"继续堆保活链"，避免重复造轮子（快照/ring 三段链本质是池复用的补丁，不是目标）。
+- ✅ CDP 真实鼠标事件（Input.dispatchMouseEvent）才触发 Radix TabsTrigger——`el.click()` 对 Radix press 语义无效，验证脚本必须用真实鼠标。
+- 📌 **架构决策教训**：移植上游时，凡"资源复用"设计都必须逐场景核对守卫条件（SSH 缺 foreground job = release 无守卫）。后续开发修复前先走"调研竞品/上游怎么解决 → 我们的场景缺什么 → 对齐而非补丁"三步。
+- 📌 Terminal 对象不能跨 CDP evaluate 序列化（returnByValue 返回 undefined）——验证脚本必须单次 evaluate 内联检查。
