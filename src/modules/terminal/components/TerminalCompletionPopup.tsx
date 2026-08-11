@@ -4,14 +4,18 @@
  * 订阅 completionInjection 的状态，渲染 fish-shell 风格的命令预测弹窗。
  * 同时适用于本地终端和 SSH 终端（因为拦截器统一注入到 rendererPool）。
  *
- * 定位：跟随当前活跃的终端面板，浮动在光标附近。
+ * 定位（P2 #13，2026-08-11）：优先跟随终端光标（state.cursor 像素坐标），
+ * 弹窗出现在光标附近（computePopupPosition 处理视口边界/上下翻转）；
+ * 无 xterm 实例（cursor 为 null）时回退到跟随活跃终端面板底部居中。
  * -----------------------------------------------------------------------------
  */
+import type { CSSProperties } from 'react';
 import type { SuggestionResult } from '@/lib/suggest-engine';
 import { cn } from '@/lib/utils';
 import { useEffect, useRef, useState } from 'react';
 import {
   closeCompletion,
+  computePopupPosition,
   selectCompletionByIndex,
   subscribeCompletion,
   type CompletionState,
@@ -34,41 +38,58 @@ export function TerminalCompletionPopup() {
     selectedIndex: 0,
     prefix: '',
     leafId: null,
+    cursor: null,
   });
   const listRef = useRef<HTMLDivElement>(null);
-  // 弹窗相对终端面板的定位（null 时回退到屏幕底部居中）
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
+  // 弹窗定位：null = 不渲染定位样式（回退默认）。mode: 'cursor' 用 left/top，
+  // 'panel' 用 left/bottom（跟随面板底部居中）。
+  const [anchor, setAnchor] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+    mode: 'cursor' | 'panel';
+  } | null>(null);
 
   // 订阅补全状态
   useEffect(() => {
     return subscribeCompletion(setState);
   }, []);
 
-  // 跟随终端面板定位：按 leafId 找到对应终端容器（data-pane-leaf），
-  // 弹窗浮动在该容器底部居中。监听 resize 以应对分栏/窗口缩放。
+  // 定位：优先跟随光标（P2 #13），无光标坐标时跟随终端面板底部居中。
+  // 监听 resize 以应对分栏/窗口缩放。
   useEffect(() => {
     if (!state.visible || state.leafId === null) {
-      setPos(null);
+      setAnchor(null);
       return;
     }
     const measure = () => {
+      if (state.cursor) {
+        const pos = computePopupPosition(
+          state.cursor,
+          { width: window.innerWidth, height: window.innerHeight },
+          state.items.length,
+        );
+        setAnchor({ left: pos.left, top: pos.top, mode: 'cursor' });
+        return;
+      }
       const el = document.querySelector<HTMLElement>(
         `[data-pane-leaf="${state.leafId}"]`,
       );
       if (!el) {
-        setPos(null);
+        setAnchor(null);
         return;
       }
       const rect = el.getBoundingClientRect();
-      setPos({
+      setAnchor({
         left: rect.left + rect.width / 2,
         bottom: window.innerHeight - rect.bottom,
+        mode: 'panel',
       });
     };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [state.visible, state.leafId]);
+  }, [state.visible, state.leafId, state.cursor, state.items.length]);
 
   // 选中项滚动到可视区域
   useEffect(() => {
@@ -94,15 +115,25 @@ export function TerminalCompletionPopup() {
 
   if (!state.visible || state.items.length === 0) return null;
 
+  // 定位样式：光标模式用 left/top（已由 computePopupPosition 处理边界），
+  // 面板模式用 left/bottom + 水平居中（translate 抵消）
+  const style: CSSProperties | undefined = anchor
+    ? anchor.mode === 'cursor'
+      ? { left: anchor.left, top: anchor.top }
+      : { left: anchor.left, bottom: anchor.bottom }
+    : undefined;
+
   return (
     <div
       ref={listRef}
       data-no-drag
-      style={pos ?? undefined}
+      style={style}
       className={cn(
-        'fixed bottom-12 left-1/2 z-50 mb-2 max-h-64 w-96 -translate-x-1/2',
-        'overflow-auto rounded-lg border border-border bg-popover/95 shadow-2xl backdrop-blur-md',
+        'fixed z-50 mb-2 max-h-64 w-96 overflow-auto rounded-lg border border-border bg-popover/95 shadow-2xl backdrop-blur-md',
         'animate-in fade-in-0 zoom-in-95 duration-150',
+        // 面板模式水平居中；光标模式完全由 style 控制
+        anchor?.mode === 'panel' && 'bottom-12 left-1/2 -translate-x-1/2',
+        !anchor && 'bottom-12 left-1/2 -translate-x-1/2',
       )}
       onClick={(e) => e.stopPropagation()}
     >
