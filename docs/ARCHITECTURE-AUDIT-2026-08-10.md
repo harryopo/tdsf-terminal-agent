@@ -257,6 +257,31 @@
 
 ---
 
+### 修复进度跟踪（2026-08-11 复核）
+
+| # | 状态 | 证据 |
+|---|------|------|
+| P0 #1-#4 | ✅ 已修复 | `completionInjection.ts` P0 重写（按键追踪缓冲区替代 getCurrentPrefix；Enter 接受选中项；threshold 0.3）+ `shell_history.rs` 注册 `read_shell_history`（lib.rs:397） |
+| P1 #5-#9 | ✅ 已修复 | `useServerMetrics.ts` lastCollectTime 真实值（:225）+ isCollectingRef 锁（:193）+ `MonitorErrorBoundary`；`parser.test.ts`、`suggest-engine.test.ts` 已存在 |
+| P1 #10 | ✅ 已修复 | `client.rs:155` `inactivity_timeout: 300s` |
+| P2 #11 | ✅ 已修复 | use-ssh-completion / SshCompletionPopup / use-completion / 独立 completion.ts 已删除（grep 无引用） |
+| P2 #12 | ✅ 已修复 | 统一走 suggest-engine（completionInjection 单一入口） |
+| P2 #13 | ✅ 已修复 | `measureCursorPx`（.xterm-screen ÷ cols/rows 换算像素，不用私有 API）+ `computePopupPosition`（视口边界/上下翻转），TerminalCompletionPopup 光标模式 + 面板回退；13 个单测 |
+| P2 #14 | ✅ 已修复 | `store.ts` `coerceServerMonitorInterval` 白名单 clamp |
+| P2 #15 | ✅ 已修复 | serverMonitorWidth 已移除（grep 无命中） |
+| P2 #16 | ✅ 已修复 | `parser.ts` idle + iowait 视为非忙碌（对齐 top/htop/node_exporter）+ 单测 |
+| P2 #17 | ✅ 已覆盖 | P0-2 真流式（Strands event_bus 事件流主路径，dev-state §37.17） |
+| P2 #18 | ✅ 已修复 | CLAUDE.md §1 技术栈已改 CodeMirror 6；ThemeProvider 注释已更新 |
+| P3 #19 | ✅ 已修复 | package.json 无 monaco 依赖（仅 @uiw/react-codemirror） |
+| P3 #20 | ✅ 已修复 | `session.rs` SshSessionState::Reconnecting + 单测（:1512） |
+| P3 #21 | ✅ 已修复 | `tests/ssh_integration.rs` mock SSH server 全链路（connect→open_pty→exec→write_data→close + 认证失败） |
+| P3 #22 | ✅ 已修复 | `adapter.py:1496` clear_cache 一并 `_agent_locks.clear()` |
+| P3 #23 | ✅ 已修复 | `useServerMetrics.ts:273` collectOverview catch 加 console.warn |
+
+> **结论**：审计报告 P0-P3 全部 23 项均有处置结论与落地证据，无剩余未修复项。
+
+---
+
 ## 六、开源准备评估
 
 ### 可开源的模块（质量达标）

@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-11 · P2 SSH 隧道（本地转发）完成（§37.50，方案书 v1.1 §4）。接手请直接看 **§37.50**（最新）+ **§37.49**（Snippets）+ **§37.48**（分屏联动）+ **§37.47**（iShell 调研）
+> **最后更新**：2026-08-11 · 架构审计 P0-P3 全部收尾（§37.51）。接手请直接看 **§37.51**（最新）+ **§37.50**（SSH 隧道）+ **§37.49**（Snippets）+ **§37.48**（分屏联动）
 
 ---
 
@@ -3813,4 +3813,25 @@ CDP 全新状态实测通过。commit 见上。
 **接手下一步**：
 - 桌面端实测：连 SSH → 侧栏「隧道」→ 新建本地转发（如 127.0.0.1:3306 → db-host:3306）→ 本地 `mysql -h 127.0.0.1 -P 3306` 验证直连远程 → 停止释放端口
 - P3 远程转发（`tcpip_forward`）+ SOCKS5 动态转发（参考 chisel-rs）
+- #20 服务器实时监控仪表盘（📋 待启动）
+
+### 37.51 架构审计 P0-P3 全部收尾（2026-08-11 ✅ 完成，ARCHITECTURE-AUDIT-2026-08-10）
+
+**背景**：目标链最后一块——审计报告 23 项逐一复核处置结论（只读 grep 证据），仅 **P2 #13 弹窗跟随终端光标** 未达审计描述，本次补实现。
+
+**复核结论（全部有落地证据，详见审计报告"修复进度跟踪"节）**：
+- P0 #1-4：completionInjection P0 重写（按键追踪 / Enter 接受 / threshold 0.3）+ `shell_history.rs` 注册
+- P1 #5-10：lastCollectTime 真实值 / isCollectingRef 锁 / MonitorErrorBoundary / parser.test / suggest-engine.test / inactivity_timeout 300s
+- P2 #11-18：死代码 4 文件已删 / suggest-engine 统一 / **#13 本次补做** / coerceServerMonitorInterval clamp / serverMonitorWidth 移除 / iowait 对齐 / 真流式（P0-2 覆盖）/ CLAUDE.md 文档已同步
+- P3 #19-23：无 monaco 依赖 / Reconnecting 状态+单测 / **tests/ssh_integration.rs mock server 集成测试** / _agent_locks.clear / collectOverview 日志
+
+**P2 #13 实现**：
+1. `completionInjection.ts` 新增 `measureCursorPx`（`.xterm-screen`÷cols/rows×buffer.cursorX/Y，**只用公开 API**）+ `computePopupPosition`（贴光标下方→右缘收拢→下溢翻转→边界 clamp）+ 保存 getTermFn
+2. `TerminalCompletionPopup.tsx`：cursor 模式（left/top）优先，无 xterm 回退面板底部居中
+3. 新增 `completionInjection.test.ts` 13 个测试（measureCursorPx 7 + computePopupPosition 6）
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test **982 全过**（新增 13）/ build:web ✅ / cargo check（后端未动）。
+
+**接手下一步**：
+- 桌面端实测：本地/SSH 终端输入命令 → 弹窗贴在光标处、右缘收拢、底部翻转
 - #20 服务器实时监控仪表盘（📋 待启动）

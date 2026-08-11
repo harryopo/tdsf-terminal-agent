@@ -6,6 +6,35 @@
 
 ---
 
+## 2026-08-11 · 架构审计 P0-P3 全部收尾（ARCHITECTURE-AUDIT-2026-08-10）+ P2 #13 弹窗跟随光标
+
+**任务**：目标链最后一块——审计报告 23 项逐一复核处置结论；其中唯一未达审计描述的 **P2 #13 弹窗跟随终端光标定位** 补实现。
+
+**复核结论（23 项全有落地证据）**：
+- P0 #1-4（命令预测）：completionInjection P0 重写（按键追踪缓冲区 / Enter 接受 / threshold 0.3）+ read_shell_history 注册 ✅
+- P1 #5-10（服务器监控 + SSH）：lastCollectTime / isCollecting / ErrorBoundary / parser.test / suggest-engine.test / inactivity_timeout 300s ✅
+- P2 #11-18：死代码已删 / 引擎统一 / #13 本次补做 / clamp / serverMonitorWidth 已移除 / iowait / 真流式（P0-2 覆盖）/ 文档同步 ✅
+- P3 #19-23：无 monaco / Reconnecting / ssh_integration.rs mock server / _agent_locks.clear / collectOverview 日志 ✅
+
+**方案（P2 #13 弹窗跟随光标）**：
+1. `measureCursorPx`：光标像素 = `.xterm-screen`（回退 `.xterm-rows`）DOM 尺寸 ÷ cols/rows × buffer.cursorX/Y——**只用公开 API + DOM 结构，不用 xterm 私有 `_core`**
+2. `computePopupPosition`：贴光标下方 → 右边界收拢 → 下溢出翻转到上方 → 视口边界 clamp（估算高度 = 24 + items×30 + 8）
+3. completionInjection 保存 getTermFn（恢复原 `_getTerm` 占位）；updatePredictions 时记录 cursor
+4. TerminalCompletionPopup：cursor 模式（left/top）优先，无 xterm 时回退面板底部居中（保留原行为）
+
+**报错与修改**：
+- 测试用例设计错：`{top: 0}` 不满足翻转条件（12+632 < 1080 不翻转）→ 改 `{top: 500}` 触发"翻转后仍 < 8" → clamp 8
+
+**五绿门禁**：typecheck ✅ / lint ✅ / test **982 全过**（新增 13：completionInjection）/ build:web ✅ / cargo check（后端未动）。
+
+**复盘**：
+- ✅ **只读复核先行**：先 grep 全部 23 项的证据（文件/行号），只有 #13 未达审计描述，其余 22 项早已在 P0 修复期 + 8月11日开发中落地——避免"重复造轮子"去重做已完成项
+- ✅ **不用私有 API 做光标定位**：xterm `_core._renderService` 是私有路径，升级易碎；`.xterm-screen` DOM 尺寸 ÷ 网格数是从公开结构推导的稳定做法
+- ⚠️ 测试用例要按函数真实分支推导，别凭直觉造数据（{top:0} 不触发翻转）
+- 📌 待桌面端实测：本地/SSH 终端输入命令 → 弹窗贴在光标处、右缘收拢、底部翻转
+
+---
+
 ## 2026-08-11 · P2 SSH 隧道与端口转发（方案书 v1.1 §4）— 本地转发 direct-tcpip
 
 **任务**：方案书 v1.1 §4「SSH 隧道与端口转发」P2 部分——russh `direct-tcpip` 本地端口转发（DBA 连远程数据库免 VPN），P3 再做远程转发 + SOCKS5。
