@@ -452,6 +452,15 @@ export function acquireSlot(params: AcquireParams): Slot {
 
   const pick = pickSlotFor(params.leafId);
   if (pick.previousLeafId !== null) {
+    // TDSF 修复 2026-08-11 (SSH/本地终端 buffer 保留):
+    // evictLeaf → releaseSlot → detachSlotFromLeaf(true) 会把 currentLeafId
+    // 置空并仅设置 retainedLeafId，随后下方 detachSlotFromLeaf(slot, false)
+    // 会 discardRetention 直接丢弃该 slot。若这里不先序列化快照，被驱逐
+    // leaf 的 buffer 将永久丢失——切回时 s.snapshot 为 null，只剩 dormantRing
+    // 里最近 1MB 数据（可能还是旧 prompt 起的新内容）。竞品 (iTerm2/VS Code/
+    // Tabby) 每个终端 buffer 常驻、切换只改可见性，无此风险；我们因 slot 池
+    // 复用必须用快照保底，所以 steal 前务必先 storeSnapshot。
+    adapter?.storeSnapshot(pick.previousLeafId, serializeSlot(pick.slot));
     adapter?.evictLeaf(pick.previousLeafId);
   }
   if (

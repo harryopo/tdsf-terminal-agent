@@ -438,6 +438,17 @@ const HIDDEN_RELEASE_DELAY_MS = 300;
 // A parked hidden leaf went idle: give the post-command prompt a moment to
 // render into the live buffer, then hand the slot back to the pool.
 function scheduleHiddenRelease(leafId: number, s: Session): void {
+  // TDSF 修复 2026-08-11 (SSH 终端 buffer 保留):
+  // SSH leaf 隐藏不释放 slot —— 保持"buffer 常驻"，与竞品 (iTerm2/VS Code/
+  // Tabby) 的每个终端独立 buffer、切换只改可见性的语义对齐。原因:
+  //   1. SSH 无 pty_has_foreground_job 保护 (leafHasForegroundJob 对 remote
+  //      恒 false)，命令运行中切走也会被 release；
+  //   2. release 后内容进入 retained slot + dormantRing + snapshot 三段保活链，
+  //      一旦 slot 被池满 steal/reap，切回只能靠快照重放（有 5000 行 cap 截断
+  //      风险）。slot 常驻则 buffer 永不离开 xterm，内容零丢失。
+  // 代价: SSH leaf 占用 slot（池上限 5）。池满时由 acquireSlot 的 steal 兜底
+  // (steal 前必 storeSnapshot)。
+  if (s.remote) return;
   if (s.visibleNow || !s.hasSlot) return;
   cancelHiddenRelease(s);
   s.hiddenReleaseTimer = setTimeout(() => {
@@ -456,6 +467,10 @@ function cancelHiddenRelease(s: Session): void {
 }
 
 async function releaseIfIdle(leafId: number, s: Session): Promise<void> {
+  // TDSF 修复 2026-08-11 (SSH 终端 buffer 保留): 与 scheduleHiddenRelease 同因，
+  // SSH leaf 的 slot 保持常驻，不做异步释放（remote 无 foreground job 探测，
+  // 释放后内容进 retained/ring 三段保活链，被 steal/reap 即丢）。
+  if (s.remote) return;
   const busy = await leafHasForegroundJob(leafId);
   if (busy || s.disposed || s.visibleNow || !s.hasSlot) return;
   if (s.blocks || isLeafAltScreen(leafId) || leafBusy(s)) return;

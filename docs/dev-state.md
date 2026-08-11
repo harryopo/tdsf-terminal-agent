@@ -3862,3 +3862,29 @@ CDP 全新状态实测通过。commit 见上。
 - 桌面端实测：连 SSH 后右侧面板实时刷新 CPU/内存/磁盘/网络/进程 → 断开 SSH 自动停止
 - P3 SSH 隧道远程转发 + SOCKS5（📋 待启动）
 - #12 SSH 终端 cwd 同步 UI 复验（连 192.168.45.130 实测）
+
+### 37.53 SSH 终端切换后 buffer 保留（对齐竞品常驻范式，2026-08-11 ✅）
+
+**背景**：用户实测反馈——新建终端/切到别的终端窗口后，**SSH 服务器终端显示的内容消失**。要求先调研竞品做法（"为什么别的能做好、为什么当初不这样做"）再修复。
+
+**调研结论（WebSearch 竞品范式 + iShell-Pro 竞品调研报告）**：
+- VS Code / iTerm2 / Tabby / Warp 共同范式：**每个终端 = 独立 buffer 常驻，切换只改可见性，从不销毁**（VS Code 甚至可持久化会话跨窗口重启）。
+- 本项目（terax 继承）是唯一"**slot 池复用（POOL_MAX_SIZE=5）+ snapshot/ring 三段保活链**"方案：隐藏 300ms 后 release 归还池，内容靠 retained slot + dormantRing + SerializeAddon 快照保底。
+- 竞品无"池"概念：iTerm2 每终端一 Metal 渲染器、VS Code 不限制 xterm 实例，无资源复用压力。
+
+**根因（CDP 实测确认，两处）**：
+1. **根因 A（steal 丢内容）**：`acquireSlot` 池满 steal occupied 时 evict→release→detachSlotFromLeaf(true) 仅设 retainedLeafId，随后的 `detachSlotFromLeaf(slot, false)` 直接 discardRetention，**从未 storeSnapshot** → 被驱逐 leaf buffer 永久丢失。
+2. **根因 B（SSH 主因）**：SSH 无 `pty_has_foreground_job`（remote 恒 false）+ `leafBusy` 不检测 remote → **命令运行中切走 300ms 也被 release** → 内容进三段保活链，被 steal/reap 即丢。本地 tab 有 foreground job 保护，故问题只在 SSH 暴露。
+
+**修复（对齐"常驻"语义，非继续堆保活链）**：
+1. **`rendererPool.ts acquireSlot`**：steal 被驱逐 leaf 前先 `storeSnapshot`（通用兜底，本地/SSH 通吃）。
+2. **`useTerminalSession.ts scheduleHiddenRelease / releaseIfIdle`**：开头 `if (s.remote) return`——**SSH leaf 隐藏不 release、slot 常驻**，buffer 永不离开 xterm、零丢失；池满由修复 1 steal 兜底。
+
+**验证**：
+- CDP 实测 6 本地 tab（超 POOL_MAX_SIZE 触发 steal）来回切换，全部注入 marker 逐一保留（修复 1+2 交集）。
+- SSH 语义代码路径确认，待用户连真实 SSH 复验。
+- 五绿门禁：typecheck ✅ / lint ✅ / test **982 全过** / build:web ✅ / tauri:dev 用户桌面实测中。
+
+**接手下一步**：
+- 用户连真实 SSH 服务器实测：新建终端/切换 tab 后切回，SSH 终端内容（含滚动缓冲）完整保留
+- 架构教训已沉淀 DEV-JOURNAL 2026-08-11 条目：移植上游"资源复用"设计必须逐场景核对守卫条件（SSH 缺 foreground job = release 无守卫）；修复前先走"调研竞品/上游 → 我们的场景缺什么 → 对齐而非补丁"三步
