@@ -84,18 +84,22 @@ pub fn resolve_host_approval(approval_id: &str, approved: bool) -> Result<(), St
 /// - host/port: 用于 known_hosts 检查
 /// - app_handle: 用于推送 Tauri 事件到前端
 /// - known_hosts_manager: 用于 check/learn known_hosts
-pub struct SshClientHandler {
+pub struct SshClientHandler<R: tauri::Runtime = tauri::Wry> {
     /// 远程主机名 (用于 known_hosts 检查)
     pub host: String,
     /// 远程端口 (用于 known_hosts 检查)
     pub port: u16,
     /// Tauri AppHandle (用于 emit 事件到前端)
-    pub app_handle: tauri::AppHandle,
+    ///
+    /// 泛型化 Runtime (默认 Wry): 测试用 tauri::test::mock_app() (MockRuntime)
+    /// 即可构造, 无需构建真实 Wry App (真实 App 在非主线程构建会触发 tao
+    /// EventLoop 限制)。
+    pub app_handle: tauri::AppHandle<R>,
     /// known_hosts 管理器 (TOFU + 持久化)
     pub known_hosts: KnownHostsManager,
 }
 
-impl Handler for SshClientHandler {
+impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
     type Error = russh::Error;
 
     /// check_server_key 回调: TOFU 策略入口
@@ -187,7 +191,7 @@ impl Handler for SshClientHandler {
     }
 }
 
-impl SshClientHandler {
+impl<R: tauri::Runtime> SshClientHandler<R> {
     /// 询问用户是否信任主机
     ///
     /// 通过 Tauri emit 推送事件到前端,前端弹窗询问用户。

@@ -7,10 +7,15 @@
  *   3. invoke("pty_close_all") 清理孤儿 PTY
  *   4. initLaunchDir() 解析启动目录
  *   5. render <App />（terax 壳 = src/app/App.tsx）
- *   6. setTimeout(showWindow, 50/500) — 窗口 visible:false 创建，
- *      首帧后由前端 show()，避免透明窗影闪烁
  *
  * TDSF 魔改：fontsource 字体 + Monaco Editor 本地加载（国内网络不走 CDN）
+ *
+ * TDSF 永久修复 (2026-08-09): 窗口可见性不再由前端 JS 控制。
+ * 上游用 visible:false + setTimeout(show) 来避免 borderless 透明窗口的闪烁，
+ * 但这让 HMR 页面重载后窗口可能永远不可见（show 时机竞态）。
+ * 现在 tauri.conf.json 已改为 visible:true，窗口启动即不可见改为直接可见，
+ * 配合 backgroundColor:"#1a1a1a" 确保 CSS 加载前不闪白屏。
+ * 前端只负责 setFocus（确保窗口在前台），不再负责 show。
  */
 import "@xterm/xterm/css/xterm.css";
 import "./styles/globals.css";
@@ -27,12 +32,6 @@ import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/700.css";
 
-// TDSF 魔改: Monaco Editor 本地加载 (避免 CDN, 国内网络不可靠)
-import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
-
-loader.config({ monaco });
-
 if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
 }
@@ -45,17 +44,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <App />,
 );
 
-// 上游窗口显示逻辑: visible:false 创建 → 首帧后 show()
-// T2 透明窗口修复: 原 setTimeout(50/500ms) 在 React 首帧渲染前 show——
-// App 初始化重（sidecar/workspace boot）时首帧可能 >500ms，窗口显示时
-// WebView 未绘制 → 透明。改为：
-//   1. 双 requestAnimationFrame：首帧真正绘制后再 show（标准做法）
-//   2. 2s 兜底：极端慢机器保证最终显示
-//   3. 窗口级 backgroundColor 已兜底（tauri.conf）——渲染前即不透明
-const showWindow = () => {
-  getCurrentWindow()
-    .show()
-    .catch((e) => console.error("window.show failed:", e));
-};
-requestAnimationFrame(() => requestAnimationFrame(showWindow));
-setTimeout(showWindow, 2000);
+// 窗口已在 tauri.conf.json 中以 visible:true 启动，无需前端 show()。
+// 此处只做 setFocus 确保窗口在前台（不涉及可见性控制）。
+getCurrentWindow()
+  .setFocus()
+  .catch(() => {});

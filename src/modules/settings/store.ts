@@ -183,6 +183,9 @@ export type Preferences = {
   teachAgentEnabled: boolean;
   /** Teach 触发降频阈值：每 N 条命令触发一次（合法值 1/2/3/5，默认 3） */
   teachThreshold: number;
+  // TDSF 魔改 2026-08-09: 服务器实时监控偏好
+  /** 监控采集间隔（毫秒，合法值 2000/3000/5000/10000，默认 3000） */
+  serverMonitorInterval: number;
 };
 
 export type EditorFormatter =
@@ -274,6 +277,8 @@ const KEY_LSP_CUSTOM_SERVERS = "lspCustomServers";
 // TDSF 魔改 (P4-T4.3): Teach Agent 偏好 key
 const KEY_TEACH_AGENT_ENABLED = "teachAgentEnabled";
 const KEY_TEACH_THRESHOLD = "teachThreshold";
+// TDSF 魔改 2026-08-09: 服务器监控 key
+const KEY_SERVER_MONITOR_INTERVAL = "serverMonitorInterval";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = 8;
@@ -363,6 +368,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   // TDSF 魔改 (P4-T4.3): Teach Agent 默认偏好
   teachAgentEnabled: true,
   teachThreshold: TEACH_THRESHOLD_DEFAULT,
+  // TDSF 魔改 2026-08-09: 服务器监控默认偏好
+  serverMonitorInterval: 3000,
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -568,6 +575,11 @@ export async function loadPreferences(): Promise<Preferences> {
       DEFAULT_PREFERENCES.teachAgentEnabled,
     teachThreshold: coerceTeachThreshold(
       get<number>(KEY_TEACH_THRESHOLD) ?? DEFAULT_PREFERENCES.teachThreshold,
+    ),
+    // TDSF 魔改 2026-08-09: 服务器监控偏好读取
+    serverMonitorInterval: coerceServerMonitorInterval(
+      get<number>(KEY_SERVER_MONITOR_INTERVAL) ??
+        DEFAULT_PREFERENCES.serverMonitorInterval,
     ),
   };
 }
@@ -900,6 +912,31 @@ export async function setTeachThreshold(value: number): Promise<void> {
   await writePref(KEY_TEACH_THRESHOLD, coerceTeachThreshold(value));
 }
 
+// TDSF 魔改 2026-08-09: 服务器监控 setter
+export const SERVER_MONITOR_INTERVAL_PRESETS = [2000, 3000, 5000, 10000] as const;
+
+/**
+ * 校验 serverMonitorInterval 值：只接受预设白名单中的值，其他回退到默认。
+ *
+ * 与 coerceTeachThreshold 同模式：loadPreferences + setter 共用，确保
+ * 旧版本 store 中的非法值（如 0、1500、NaN）不会污染运行时。
+ */
+export function coerceServerMonitorInterval(value: number): number {
+  if (
+    !(SERVER_MONITOR_INTERVAL_PRESETS as readonly number[]).includes(value)
+  ) {
+    return DEFAULT_PREFERENCES.serverMonitorInterval;
+  }
+  return value;
+}
+
+export async function setServerMonitorInterval(value: number): Promise<void> {
+  await writePref(
+    KEY_SERVER_MONITOR_INTERVAL,
+    coerceServerMonitorInterval(value),
+  );
+}
+
 export async function setAgentLaunchCommands(
   value: AgentLaunchCommands,
 ): Promise<void> {
@@ -991,6 +1028,8 @@ export async function onPreferencesChange(
     // TDSF 魔改 (P4-T4.3): Teach Agent 偏好映射
     [KEY_TEACH_AGENT_ENABLED]: "teachAgentEnabled",
     [KEY_TEACH_THRESHOLD]: "teachThreshold",
+    // TDSF 魔改 2026-08-09: 服务器监控偏好映射
+    [KEY_SERVER_MONITOR_INTERVAL]: "serverMonitorInterval",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

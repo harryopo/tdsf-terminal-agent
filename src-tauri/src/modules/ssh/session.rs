@@ -29,7 +29,7 @@ use russh::{ChannelMsg, Disconnect};
 use tauri::ipc::Channel;
 use tokio::sync::Mutex;
 
-use crate::modules::ssh::client::SshClient;
+use crate::modules::ssh::client::{SshClient, SshConnectParams};
 use crate::modules::ssh::handler::SshClientHandler;
 
 /// SSH 会话状态 (用于状态栏显示)
@@ -169,6 +169,18 @@ impl SshStatusEvent {
             timestamp: Self::now(),
         }
     }
+
+    /// 重连中状态 (P3 #20: KeepaliveTimeout / 网络抖动 / 服务器重启后自动重连)
+    pub fn reconnecting(host: &str, port: u16, attempt: u32) -> Self {
+        Self {
+            state: SshSessionState::Reconnecting,
+            host: host.to_string(),
+            port,
+            user: None,
+            error: Some(format!("第 {attempt} 次重连")),
+            timestamp: Self::now(),
+        }
+    }
 }
 
 /// SSH 会话错误
@@ -187,15 +199,76 @@ pub enum SshSessionError {
     Other(String),
 }
 
+/// 自动重连配置 (P3 #20)
+///
+/// 由 `ssh_connect` 命令在 `open_pty` 成功后调用 `enable_reconnect` 注入。
+/// 保存重连所需的全部参数: 连接参数 + PTY 尺寸 + 三个前端 channel。
+/// 重连成功后, 新 reader task 推送到**同一批** channel, 前端无需感知。
+///
+/// Clone 为手动实现 (见下方 impl), 避免 derive 给泛型 R 加不必要的 Clone 约束。
+pub struct SshReconnectConfig<R: tauri::Runtime = tauri::Wry> {
+    /// Tauri AppHandle (重连时 SshClient::connect 需要, 用于 TOFU 事件)
+    ///
+    /// 泛型化 Runtime (默认 Wry): 测试用 tauri::test::mock_app() (MockRuntime)
+    /// 即可构造, 无需构建真实 Wry App。
+    pub app_handle: tauri::AppHandle<R>,
+    /// 连接参数 (host/port/user/auth, 含密码/私钥路径)
+    pub params: SshConnectParams,
+    /// PTY 尺寸 (cols/rows) 与终端类型 (重连后重开 PTY 用)
+    pub cols: u16,
+    pub rows: u16,
+    pub term: String,
+    /// 输出推送 channel (与首次 open_pty 传入的同一个)
+    pub on_data: Channel<Vec<u8>>,
+    /// 状态推送 channel (同上)
+    pub on_status: Channel<SshStatusEvent>,
+    /// 退出码推送 channel (同上)
+    pub on_exit: Channel<i32>,
+}
+
+// 手动实现 Clone (不用 derive): derive 会给泛型参数 R 添加 `R: Clone` 约束,
+// 而 tauri::Runtime 不要求 Clone, 导致 `SshReconnectConfig<R>: Clone` 不成立。
+// 各字段本身无条件 Clone (AppHandle<R>/Channel/参数), 手动 impl 可省去该约束。
+impl<R: tauri::Runtime> Clone for SshReconnectConfig<R> {
+    fn clone(&self) -> Self {
+        Self {
+            app_handle: self.app_handle.clone(),
+            params: self.params.clone(),
+            cols: self.cols,
+            rows: self.rows,
+            term: self.term.clone(),
+            on_data: self.on_data.clone(),
+            on_status: self.on_status.clone(),
+            on_exit: self.on_exit.clone(),
+        }
+    }
+}
+
+/// 自动重连常量 (P3 #20)
+const RECONNECT_MAX_ATTEMPTS: u32 = 6;
+const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
+const RECONNECT_BACKOFF_CAP_SECS: u64 = 30;
+
+/// 重连退避延迟计算 (纯函数, 可单测)
+///
+/// 指数退避: 1s → 2s → 4s → 8s → 16s → 30s (封顶 30s)
+fn reconnect_backoff_delay(attempt: u32) -> std::time::Duration {
+    let secs = RECONNECT_BACKOFF_INITIAL_SECS
+        .checked_shl(attempt.saturating_sub(1).min(5))
+        .unwrap_or(RECONNECT_BACKOFF_CAP_SECS)
+        .min(RECONNECT_BACKOFF_CAP_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
 /// SSH PTY 会话
 ///
 /// 持有 russh Channel 的写半部 + 状态信息。
 /// reader task 在后台独立运行,通过 Channel<Vec<u8>> 推送输出到前端。
-pub struct SshSession {
+pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// russh 客户端 Handle (用于 disconnect)
     ///
     /// 用 Mutex 保护,close 时持有锁避免并发冲突。
-    handle: Arc<Mutex<Option<Handle<SshClientHandler>>>>,
+    handle: Arc<Mutex<Option<Handle<SshClientHandler<R>>>>>,
 
     /// russh Channel 写半部
     ///
@@ -229,9 +302,28 @@ pub struct SshSession {
     port: u16,
     #[allow(dead_code)]
     user: String,
+
+    /// PTY 断开通知器 (P3 #20)
+    ///
+    /// reader task 结束时 `notify_waiters`, 自动重连 supervisor 等待唤醒。
+    /// 用 `Mutex<Arc<Notify>>` 以便重连成功后替换为新 reader task 的 notify
+    /// (新 reader 结束时要能再次唤醒 supervisor)。
+    exited_notify: Arc<Mutex<Arc<tokio::sync::Notify>>>,
+
+    /// 自动重连配置 (P3 #20)
+    ///
+    /// `enable_reconnect` 设置; supervisor 任务读取。None = 不自动重连。
+    reconnect: Arc<Mutex<Option<SshReconnectConfig<R>>>>,
+
+    /// 是否收到过 ExitStatus (P3 #20)
+    ///
+    /// reader task 收到 `ChannelMsg::ExitStatus` 时置 true。supervisor 据此
+    /// 区分"shell 正常退出 (exit 命令)" vs "连接异常断开 (Close/None)"。
+    /// 用 `Mutex<Arc<AtomicBool>>` 以便重连成功后替换为新 reader 的标志。
+    received_exit: Arc<Mutex<Arc<AtomicBool>>>,
 }
 
-impl SshSession {
+impl<R: tauri::Runtime> SshSession<R> {
     /// 打开 PTY 会话
     ///
     /// 流程:
@@ -243,7 +335,7 @@ impl SshSession {
     /// 6. 启动 reader task (channel.wait() 循环 → on_data)
     /// 7. 推送 Connected 状态到 on_status
     pub async fn open_pty(
-        client: SshClient,
+        client: SshClient<R>,
         cols: u16,
         rows: u16,
         term: String,
@@ -334,11 +426,26 @@ impl SshSession {
         //    reader task 在后台运行,通过 on_data 推送输出
         let exited = Arc::new(AtomicBool::new(false));
         let exited_clone = exited.clone();
+        // P3 #20: 记录是否收到 ExitStatus (shell 正常退出 vs 连接异常断开)。
+        // supervisor 据此决定是否自动重连: 收到 ExitStatus = 用户 exit / shell
+        // 被杀 → 不重连; 连接断开 (Close/None, 无 ExitStatus) → 自动重连。
+        let received_exit = Arc::new(Mutex::new(Arc::new(AtomicBool::new(false))));
+        let received_exit_clone = received_exit.lock().await.clone();
         let on_data_clone = on_data.clone();
         let on_exit_clone = on_exit.clone();
+        let exited_notify = Arc::new(Mutex::new(Arc::new(tokio::sync::Notify::new())));
+        let notify_for_reader = exited_notify.lock().await.clone();
 
         tokio::spawn(async move {
-            Self::reader_task(channel_read, on_data_clone, on_exit_clone, exited_clone).await;
+            Self::reader_task(
+                channel_read,
+                on_data_clone,
+                on_exit_clone,
+                exited_clone,
+                received_exit_clone,
+                notify_for_reader,
+            )
+            .await;
         });
 
         // 7. 推送 Connected 状态
@@ -361,6 +468,9 @@ impl SshSession {
             host,
             port,
             user,
+            exited_notify,
+            reconnect: Arc::new(Mutex::new(None)),
+            received_exit,
         })
     }
 
@@ -372,6 +482,8 @@ impl SshSession {
         on_data: Channel<Vec<u8>>,
         on_exit: Channel<i32>,
         exited: Arc<AtomicBool>,
+        received_exit: Arc<AtomicBool>,
+        exited_notify: Arc<tokio::sync::Notify>,
     ) {
         log::info!("[ssh] reader task started");
         let mut exit_code: Option<i32> = None;
@@ -404,6 +516,9 @@ impl SshSession {
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     log::info!("[ssh] remote exit status: {}", exit_status);
                     exit_code = Some(exit_status as i32);
+                    // P3 #20: 收到 ExitStatus 说明 shell 进程正常结束 (exit 命令等)。
+                    // supervisor 据此不触发自动重连 (用户主动退出, 会话应保持结束态)。
+                    received_exit.store(true, Ordering::Release);
                     // 不立即 break,继续读取剩余输出直到 EOF/Close
                 }
                 Some(ChannelMsg::Eof) => {
@@ -441,6 +556,11 @@ impl SshSession {
 
         // 标记已退出
         exited.store(true, Ordering::Release);
+        // P3 #20: 唤醒自动重连 supervisor (若有)。
+        // notify_waiters 不存储 permit: 唤醒当前 waiter 后, 新注册的
+        // notified() 需等下一次 notify (重连成功后的新 reader task 结束时会
+        // 再次 notify, 因为 open_pty 内部把同一个 Arc<Notify> 传给了新 reader)。
+        exited_notify.notify_waiters();
         log::info!("[ssh] reader task done, exit_code={}", code);
     }
 
@@ -534,6 +654,215 @@ impl SshSession {
         self.exited.store(true, Ordering::Release);
         self.connection_closed.store(true, Ordering::Release);
         log::info!("[ssh] session closed: host={}", self.host);
+        Ok(())
+    }
+
+    // ========================================================================
+    // P3 #20: 自动重连
+    // ========================================================================
+
+    /// 启用自动重连 (P3 #20)
+    ///
+    /// 由 `ssh_connect` 命令在 `open_pty` 成功后调用。注入重连配置。
+    /// 后台 supervisor 需另调 `reconnect_supervisor(arc_session)` spawn:
+    /// 当 SSH 连接异常断开 (非用户 exit、非主动 close) 时, 按指数退避
+    /// 自动重建连接 + PTY, 新 reader task 继续推送到原有三个 channel
+    /// (on_data/on_status/on_exit), 前端无需感知。
+    ///
+    /// 仅在明确配置时才启用; 不调用本方法 = 保持旧行为 (断开即结束)。
+    pub async fn enable_reconnect(&self, config: SshReconnectConfig<R>) {
+        // 先提取日志字段 (config 随后 move 进 store, 避免 use-after-move)
+        let user = config.params.user.clone();
+        let host = config.params.host.clone();
+        let port = config.params.port;
+        *self.reconnect.lock().await = Some(config);
+        log::info!(
+            "[ssh] auto reconnect enabled: {}@{}:{} (max {} attempts, backoff 1s..30s)",
+            user,
+            host,
+            port,
+            RECONNECT_MAX_ATTEMPTS
+        );
+    }
+
+    /// 获取自动重连配置 (供 Arc 包装的调用方读取)
+    async fn reconnect_config(&self) -> Option<SshReconnectConfig<R>> {
+        self.reconnect.lock().await.clone()
+    }
+
+    /// supervisor 后台循环 (P3 #20)
+    ///
+    /// 由 `ssh_connect` 命令在 `enable_reconnect` 之后 spawn:
+    /// ```text
+    /// let session = Arc::new(session);
+    /// session.enable_reconnect(config).await;
+    /// tokio::spawn(SshSession::reconnect_supervisor(session));
+    /// ```
+    ///
+    /// 流程: 等待 PTY 断开 → 非主动关闭且非正常退出 → 进入重连状态机,
+    /// 指数退避重建连接 + PTY, 直到成功或耗尽尝试次数。
+    pub async fn reconnect_supervisor(session: Arc<Self>) {
+        log::info!("[ssh] reconnect supervisor started");
+        loop {
+            // 1. 等待 PTY 断开 (notify_waiters 不存储 permit, 无忙轮询)
+            let notify = session.exited_notify.lock().await.clone();
+            notify.notified().await;
+
+            // 2. 主动关闭 (close / ssh_disconnect) → 退出 supervisor
+            if session.connection_closed.load(Ordering::Acquire) {
+                log::info!("[ssh] reconnect supervisor: session closed by user, stop");
+                return;
+            }
+
+            // 3. 未配置重连 → 退出 (防御, 正常不会发生)
+            let config = match session.reconnect_config().await {
+                Some(c) => c,
+                None => {
+                    log::debug!("[ssh] reconnect supervisor: no reconnect config, stop");
+                    return;
+                }
+            };
+
+            // 4. shell 正常退出 (收到 ExitStatus = 用户 exit) → 不重连
+            if session.received_exit.lock().await.load(Ordering::Acquire) {
+                log::info!(
+                    "[ssh] pty exited normally (ExitStatus received), skip auto reconnect: {}@{}:{}",
+                    config.params.user,
+                    config.params.host,
+                    config.params.port
+                );
+                return;
+            }
+
+            // 5. 连接异常断开 → 进入重连状态机
+            log::warn!(
+                "[ssh] connection dropped unexpectedly, starting auto reconnect: {}@{}:{}",
+                config.params.user,
+                config.params.host,
+                config.params.port
+            );
+            *session.state.write().unwrap_or_else(|e| e.into_inner()) =
+                SshSessionState::Reconnecting;
+            let _ = config.on_status.send(SshStatusEvent::reconnecting(
+                &config.params.host,
+                config.params.port,
+                1,
+            ));
+
+            // 6. 指数退避重连
+            let mut ok = false;
+            let mut attempt: u32 = 0;
+            while attempt < RECONNECT_MAX_ATTEMPTS {
+                attempt += 1;
+                let delay = reconnect_backoff_delay(attempt);
+                log::info!(
+                    "[ssh] reconnect attempt {}/{} in {}s",
+                    attempt,
+                    RECONNECT_MAX_ATTEMPTS,
+                    delay.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+                // 退避期间用户主动断开 → 取消重连
+                if session.connection_closed.load(Ordering::Acquire) {
+                    log::info!("[ssh] reconnect cancelled (user disconnected during backoff)");
+                    return;
+                }
+                if session.perform_reconnect(&config).await.is_ok() {
+                    ok = true;
+                    break;
+                }
+            }
+
+            // 7. 结果
+            if !ok {
+                log::error!(
+                    "[ssh] auto reconnect failed after {} attempts: {}@{}:{}",
+                    RECONNECT_MAX_ATTEMPTS,
+                    config.params.user,
+                    config.params.host,
+                    config.params.port
+                );
+                let _ = config.on_status.send(SshStatusEvent::failed(
+                    &config.params.host,
+                    config.params.port,
+                    &format!("自动重连失败 (已重试 {} 次)", RECONNECT_MAX_ATTEMPTS),
+                ));
+                *session.state.write().unwrap_or_else(|e| e.into_inner()) =
+                    SshSessionState::Failed;
+                return;
+            }
+            // 成功 → 继续循环, 等待下一次断开
+        }
+    }
+
+    /// 单次重连: 重建 SSH 连接 + PTY, 热替换内部资源
+    ///
+    /// 成功时: 状态 → Connected + 推送状态事件; 失败时返回错误字符串。
+    async fn perform_reconnect(&self, config: &SshReconnectConfig<R>) -> Result<(), String> {
+        // 1. 重新建立 SSH 连接 (含 TOFU + 认证, 凭据来自 config)
+        let client = SshClient::connect(
+            config.app_handle.clone(),
+            config.params.clone(),
+            Some(config.on_status.clone()),
+        )
+        .await
+        .map_err(|e| format!("SSH reconnect connect failed: {e}"))?;
+
+        // 2. 重新开 PTY (含远端 shell 静默注入 + 新 reader task)
+        let new_session = SshSession::open_pty(
+            client,
+            config.cols,
+            config.rows,
+            config.term.clone(),
+            config.on_data.clone(),
+            config.on_status.clone(),
+            config.on_exit.clone(),
+        )
+        .await
+        .map_err(|e| format!("SSH reconnect open_pty failed: {e}"))?;
+
+        // 3. 热替换内部资源
+        // 3.1 关闭旧 channel_write (drop 触发 channel close)
+        {
+            let mut guard = self.channel_write.lock().await;
+            if let Some(old) = guard.take() {
+                drop(old);
+            }
+        }
+        // 3.2 关闭旧 handle (主动断开, 释放连接资源)
+        {
+            let mut guard = self.handle.lock().await;
+            if let Some(old) = guard.take() {
+                let _ = old
+                    .disconnect(Disconnect::ByApplication, "reconnecting", "en")
+                    .await;
+                drop(old);
+            }
+        }
+        // 3.3 替换为新的 (handle / channel_write / notify / received_exit)
+        *self.channel_write.lock().await = new_session.channel_write.lock().await.take();
+        *self.handle.lock().await = new_session.handle.lock().await.take();
+        *self.exited_notify.lock().await = new_session.exited_notify.lock().await.clone();
+        *self.received_exit.lock().await = new_session.received_exit.lock().await.clone();
+
+        // 3.4 重置标志 (新 reader task 已 spawn)
+        self.exited.store(false, Ordering::Release);
+        self.connection_closed.store(false, Ordering::Release);
+
+        // 3.5 状态 → Connected + 推送状态事件 (前端状态栏恢复 "已连接")
+        *self.state.write().unwrap_or_else(|e| e.into_inner()) = SshSessionState::Connected;
+        let _ = config.on_status.send(SshStatusEvent::connected(
+            &config.params.host,
+            config.params.port,
+            &config.params.user,
+        ));
+
+        log::info!(
+            "[ssh] auto reconnect success: {}@{}:{}",
+            config.params.user,
+            config.params.host,
+            config.params.port
+        );
         Ok(())
     }
 
@@ -910,8 +1239,8 @@ end
 "#;
 
 /// 执行一条单次命令并返回 stdout 文本 (探测/写脚本用, 非 PTY, 10s 超时)
-async fn exec_simple(
-    handle: &Handle<SshClientHandler>,
+async fn exec_simple<R: tauri::Runtime>(
+    handle: &Handle<SshClientHandler<R>>,
     cmd: &str,
 ) -> Result<String, SshSessionError> {
     let mut channel = handle.channel_open_session().await?;
@@ -936,8 +1265,8 @@ async fn exec_simple(
 }
 
 /// 探测远端默认登录 shell
-async fn probe_remote_shell(
-    handle: &Handle<SshClientHandler>,
+async fn probe_remote_shell<R: tauri::Runtime>(
+    handle: &Handle<SshClientHandler<R>>,
 ) -> Result<RemoteShellKind, SshSessionError> {
     // exec 模式的命令由用户默认 shell 的 -c 执行。优先 $SHELL 环境变量,
     // 兜底 getent passwd (id -u) 第 7 字段 (getent 缺失时输出为空)。
@@ -949,8 +1278,8 @@ async fn probe_remote_shell(
 }
 
 /// 按 shell 类型写入注入脚本, 返回 PTY 启动命令
-async fn write_shell_integration(
-    handle: &Handle<SshClientHandler>,
+async fn write_shell_integration<R: tauri::Runtime>(
+    handle: &Handle<SshClientHandler<R>>,
     kind: RemoteShellKind,
 ) -> Result<String, SshSessionError> {
     // uuid simple (32 hex 无连字符), 避免并发连接共享同名临时文件
@@ -1010,7 +1339,7 @@ pub struct SshCommandOutput {
     pub exit_code: i32,
 }
 
-impl Drop for SshSession {
+impl<R: tauri::Runtime> Drop for SshSession<R> {
     fn drop(&mut self) {
         // drop 时设置 connection_closed (即使 reader task 还在跑, handle drop
         // 会触发底层 disconnect, 后续 open_sftp_channel 会因 connection_closed
@@ -1026,6 +1355,7 @@ impl Drop for SshSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::ssh::client::SshAuthMethod;
 
     #[test]
     fn test_ssh_session_state_default() {
@@ -1091,8 +1421,11 @@ mod tests {
     /// `connection_closed=true` 让 exec_command 在第 1 步就提前返回 Closed,
     /// 不会触达 handle 借用;`connection_closed=false` 时让 handle 借用
     /// 走 `as_ref() → None` 路径,同样返回 Closed (防御性分支覆盖)。
-    fn make_test_session(connection_closed: bool, exited: bool) -> SshSession {
-        SshSession {
+    fn make_test_session<R: tauri::Runtime>(
+        connection_closed: bool,
+        exited: bool,
+    ) -> SshSession<R> {
+        SshSession::<R> {
             handle: Arc::new(Mutex::new(None)),
             channel_write: Arc::new(Mutex::new(None)),
             state: Arc::new(std::sync::RwLock::new(if connection_closed {
@@ -1105,7 +1438,74 @@ mod tests {
             host: String::new(),
             port: 0,
             user: String::new(),
+            exited_notify: Arc::new(Mutex::new(Arc::new(tokio::sync::Notify::new()))),
+            reconnect: Arc::new(Mutex::new(None)),
+            received_exit: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
         }
+    }
+
+    // === P3 #20 自动重连测试 ====================================================
+
+    #[test]
+    fn test_reconnect_backoff_delay_progression() {
+        // 指数退避: 1s → 2s → 4s → 8s → 16s → 30s (封顶)
+        assert_eq!(reconnect_backoff_delay(1).as_secs(), 1);
+        assert_eq!(reconnect_backoff_delay(2).as_secs(), 2);
+        assert_eq!(reconnect_backoff_delay(3).as_secs(), 4);
+        assert_eq!(reconnect_backoff_delay(4).as_secs(), 8);
+        assert_eq!(reconnect_backoff_delay(5).as_secs(), 16);
+        assert_eq!(reconnect_backoff_delay(6).as_secs(), 30);
+        // 超过上限封顶 30s (防止 attempt 溢出 / 无限增大)
+        assert_eq!(reconnect_backoff_delay(7).as_secs(), 30);
+        assert_eq!(reconnect_backoff_delay(u32::MAX).as_secs(), 30);
+    }
+
+    #[tokio::test]
+    async fn test_reconnecting_status_event() {
+        let event = SshStatusEvent::reconnecting("example.com", 22, 3);
+        assert_eq!(event.state, SshSessionState::Reconnecting);
+        assert_eq!(event.host, "example.com");
+        assert_eq!(event.port, 22);
+        assert_eq!(event.error, Some("第 3 次重连".to_string()));
+        // snake_case 序列化 (前端期望)
+        let json = serde_json::to_string(&event.state).unwrap();
+        assert_eq!(json, "\"reconnecting\"");
+    }
+
+    #[tokio::test]
+    async fn test_enable_reconnect_stores_config() {
+        // MockRuntime: tauri::test::mock_app() 返回 App<MockRuntime>,
+        // 无需构建真实 Wry App (真实 App 在非主线程构建会触发 tao EventLoop 限制)
+        let session = make_test_session::<tauri::test::MockRuntime>(false, false);
+        // reconnect 初始为 None
+        assert!(session.reconnect.lock().await.is_none());
+        // 构造 mock Tauri app 拿 AppHandle
+        let app = tauri::test::mock_app();
+        // 注入配置
+        session.enable_reconnect(SshReconnectConfig {
+            app_handle: app.handle().clone(),
+            params: SshConnectParams {
+                host: "example.com".to_string(),
+                port: 22,
+                user: "root".to_string(),
+                auth: SshAuthMethod::Password {
+                    password: "secret".to_string(),
+                },
+            },
+            cols: 80,
+            rows: 24,
+            term: "xterm-256color".to_string(),
+            on_data: Channel::new(|_| Ok(())),
+            on_status: Channel::new(|_| Ok(())),
+            on_exit: Channel::new(|_| Ok(())),
+        })
+        .await;
+        let stored = session.reconnect.lock().await;
+        assert!(stored.is_some());
+        let cfg = stored.as_ref().unwrap();
+        assert_eq!(cfg.params.host, "example.com");
+        assert_eq!(cfg.cols, 80);
+        assert_eq!(cfg.rows, 24);
     }
 
     #[test]
@@ -1169,7 +1569,7 @@ mod tests {
     async fn test_exec_command_returns_closed_when_connection_closed() {
         // 验证 exec_command 在 connection_closed=true 时立即返回 Err(Closed),
         // 不会触达 handle 借用 / channel_open_session (避免对已断连接的二次操作)
-        let session = make_test_session(
+        let session = make_test_session::<tauri::Wry>(
             /* connection_closed */ true,
             /* exited */ true,
         );
@@ -1189,7 +1589,7 @@ mod tests {
         // 但 handle.as_ref() 返回 None → 返回 Closed。
         // 注意:此场景在生产中不应发生 (close() 同时设 connection_closed=true),
         // 这里覆盖防御性分支 (collect_exec_output 的 handle 借用路径)。
-        let session = make_test_session(
+        let session = make_test_session::<tauri::Wry>(
             /* connection_closed */ false,
             /* exited */ false,
         );
@@ -1206,7 +1606,7 @@ mod tests {
     async fn test_exec_command_returns_closed_with_custom_timeout() {
         // 验证 timeout 参数不影响错误路径的提前返回
         // (timeout 仅在 collect_exec_output 阶段生效,connection_closed 在 1. 步拦截)
-        let session = make_test_session(true, true);
+        let session = make_test_session::<tauri::Wry>(true, true);
 
         let result = session.exec_command("sleep 100", Some(1)).await;
         assert!(matches!(result, Err(SshSessionError::Closed)));
@@ -1215,11 +1615,11 @@ mod tests {
     #[test]
     fn test_is_connection_closed_after_construction() {
         // 验证 make_test_session 的状态标志正确 (测试工具自身的自检)
-        let closed = make_test_session(true, true);
+        let closed = make_test_session::<tauri::Wry>(true, true);
         assert!(closed.is_connection_closed());
         assert!(closed.is_exited()); // exited 也 true (close 同时设两者)
 
-        let open = make_test_session(false, false);
+        let open = make_test_session::<tauri::Wry>(false, false);
         assert!(!open.is_connection_closed());
         assert!(!open.is_exited());
     }

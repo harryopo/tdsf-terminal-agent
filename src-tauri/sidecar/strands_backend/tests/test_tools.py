@@ -1082,6 +1082,32 @@ class TestTdsfStrandsCallbackHandler(unittest.TestCase):
         # 不应抛错
         handler(data="hello", start=True, complete=True)
 
+    def test_multiple_data_deltas_emit_per_token(self):
+        """连续 data 增量应逐条转发（真流式），而非合并为一条
+
+        审计 P2 #17 (2026-08-11) 固化: Sidecar 流式链路是
+        Strands data 增量 → callback handler → event_bus → rust_notifier
+        逐条推送，无缓冲合并。此测试防止回归为"同步返回后整体切片"。
+        """
+        bus = make_mock_event_bus()
+        handler = TdsfStrandsCallbackHandler(bus, agent_name="main", session_id="s1")
+        deltas = ["hel", "lo ", "wor", "ld"]
+        for d in deltas:
+            handler(data=d)
+        self.assertEqual(bus.emit_agent_message.call_count, len(deltas))
+        contents = [
+            call.kwargs["content"]
+            for call in bus.emit_agent_message.call_args_list
+        ]
+        self.assertEqual(contents, deltas)
+
+    def test_empty_data_delta_not_emitted(self):
+        """空字符串 data 增量不应触发推送（防无效事件洪泛）"""
+        bus = make_mock_event_bus()
+        handler = TdsfStrandsCallbackHandler(bus, agent_name="main")
+        handler(data="")
+        bus.emit_agent_message.assert_not_called()
+
 
 # ============================================================================
 # 集成测试：包导入 + 公共 API
