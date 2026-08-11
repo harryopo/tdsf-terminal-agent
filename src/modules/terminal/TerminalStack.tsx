@@ -96,6 +96,9 @@ export function TerminalStack({
               tabVisible={tabVisible}
               activeLeafId={t.activeLeafId}
               blocks={t.blocks ?? false}
+              // TDSF 魔改 (2026-08-11): 透传 tab 级 SSH 绑定，供 leaf 继承
+              // （SSH Space 的 terminal tab 绑定了会话 → 单 leaf 继承即全屏 SSH）
+              tabSshSessionId={t.sshSessionId}
               onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
               getBundle={getBundle}
             />
