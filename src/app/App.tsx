@@ -141,6 +141,10 @@ import { toast } from "sonner";
 // P2 (2026-08-01): 触发方式改为选中浮层点「翻译」按钮（SelectionAskAi），
 // useTranslateSelection 自动翻译逻辑已移除
 import { TranslateTooltip, useTranslateStore } from "@/modules/translate";
+// TDSF 魔改 2026-08-09: 服务器实时监控仪表盘（参考 iShell Pro，右上角浮动面板）
+import { ServerMonitorEntry } from "@/modules/server-monitor";
+// TDSF 魔改 2026-08-09: 终端命令预测弹窗（统一本地+SSH）
+import { TerminalCompletionPopup } from "@/modules/terminal/components/TerminalCompletionPopup";
 import { translateText } from "@/modules/translate/translateApi";
 
 import { CloseDialogs } from "./components/CloseDialogs";
@@ -2412,6 +2416,12 @@ export default function App() {
           {/* TDSF 魔改 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位）
               P2: 卡片带「Ask TDSF」操作，把选中词/代码片段发给 AI 深入解释 */}
           <TranslateTooltip onAsk={onAskWithSelection} />
+
+          {/* TDSF 魔改 2026-08-09: 服务器实时监控仪表盘（右上角浮动面板，不遮挡 AI 对话） */}
+          <ServerMonitorEntry />
+
+          {/* TDSF 魔改 2026-08-09: 终端命令预测弹窗（本地+SSH 统一，通过 rendererPool 注入） */}
+          <TerminalCompletionPopup />
 
           {/* P2-2: asciicast 录制回放面板 */}
           <AsciicastPanel

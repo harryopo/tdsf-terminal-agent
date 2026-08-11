@@ -201,9 +201,13 @@ html[data-chrome="borderless"] .tdsf-bg-surface {
 html[data-chrome="borderless"],
 html[data-chrome="borderless"] body {
   background: transparent !important;
+  /* 确保 html/body 占满整个窗口高度——HMR 重载后 React 内容清空时
+   * #root 仍然有 height:100% 的不透明背景，不会出现透明闪烁 */
+  height: 100%;
 }
 html[data-chrome="borderless"] #root,
 html[data-chrome="borderless"] #settings-root {
+  min-height: 100%;
   height: 100%;
   border-radius: 12px;
   overflow: hidden;

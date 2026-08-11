@@ -25,7 +25,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri 2 核心
-tauri = { version = "2", features = ["protocol-asset"] }
+# "test" feature: 提供 tauri::test::mock_app() 等测试工具 (仅测试构建启用,不影响产物)
+tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
