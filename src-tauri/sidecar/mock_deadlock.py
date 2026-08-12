@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TDSF sidecar 死锁 mock（仅本地验证用，不打进安装包）。
+r"""TDSF sidecar 死锁 mock（仅本地验证用，不打进安装包）。
 
 用途：验证 sidecar「心跳超时 → 强杀 → 指数退避自动重启」链路：
 1. 启动后立即发 ready 通知 → Rust 认为启动成功（status=Running）
@@ -8,7 +8,8 @@
    child.wait() 返回 → 复用既有指数退避重启 → 5 轮（MAX_RETRY）后停止
 
 运行方式（PowerShell，tauri dev 下验证）：
-    $env:TDSF_SIDECAR_SCRIPT = "src-tauri/sidecar/mock_deadlock.py"
+    # 注意: 必须用绝对路径! Rust 进程 cwd 是 src-tauri/, 相对路径解析会失败
+    $env:TDSF_SIDECAR_SCRIPT = "D:\ai\linux教学一体\tdsf-terminal-agent-clone\src-tauri\sidecar\mock_deadlock.py"
     pnpm tauri:dev
     # 验证完恢复：
     Remove-Item Env:TDSF_SIDECAR_SCRIPT

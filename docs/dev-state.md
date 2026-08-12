@@ -3958,4 +3958,13 @@ CDP 全新状态实测通过。commit 见上。
 
 **验证**：`cargo check` 通过；`cargo test --lib sidecar` 10 全过（含 backoff/state 既有测试）。测试期间残留 dev 实例锁定 exe 导致 build 失败（os error 5），停进程后正常。
 
-**后续待办**：真实死锁场景实测（构造 Python 卡死 → 观察 60s 冷却 + 退避重启）；SSH 隧道三模式实测验收
+**✅ 真实死锁实测（2026-08-12 完成，mock 场景）**：
+- 新增 dev 诊断钩子 `TDSF_SIDECAR_SCRIPT`（lib.rs `locate_sidecar_script`，与 `TDSF_SIDECAR_PYTHON` 对称；默认行为不变）+ mock 脚本 `src-tauri/sidecar/mock_deadlock.py`（发 ready 后 sleep 死锁不响应 ping）
+- `$env:TDSF_SIDECAR_SCRIPT=<绝对路径>; pnpm tauri:dev` 实测 5 轮全链路通过：
+  - `[sidecar:health] heartbeat lost (no response in ~30s)` ×5（心跳超时判定）
+  - `[sidecar:health] killed hung pid=xxxx success=true` ×5（强杀全成功——本修复核心）
+  - `[sidecar:restart_loop] backing off 1/2/4/8/16s`（退避序列正确递增）
+  - `[sidecar:watcher] max retry exceeded (5/5), giving up`（达上限停止，不无限重启）
+- ⚠️ 踩坑：`TDSF_SIDECAR_SCRIPT` 必须绝对路径——Rust 进程 cwd 是 `src-tauri/`，相对路径解析失败（WARN fallback to main.py）
+
+**后续待办**：SSH 隧道三模式实测验收；AI 入口 3 优化点（用户暂缓）
