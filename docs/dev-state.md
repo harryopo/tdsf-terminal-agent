@@ -3929,3 +3929,16 @@ CDP 全新状态实测通过。commit 见上。
 - P3 方案文档：`docs/P3-SSH隧道-远程转发与SOCKS5-实施方案.md`
 
 **接手下一步**：用户实测验收三种隧道模式（本地转发回归 + 远程/SOCKS5 新验证）；窗口标题跟随修复、sidecar 崩溃重启退避、AI 入口 3 优化点（用户暂缓）仍在 backlog
+
+### 37.56 窗口标题跟随修复 + sidecar 退避澄清（2026-08-12 ✅，ROADMAP #9）
+
+**窗口标题跟随（已修复）**：
+- **现象**：SSH Space 下窗口标题显示本地目录名，丢失 `user@host`
+- **根因**：`useWindowTitle` 只接收 explorerRoot；App.tsx:905 把 `sshLocationLabel`（`user@host:path`）当 explorerRoot 传入 → `basename()` 只取路径最后段（丢主机）+ label 走 paneTree cwd 混入本地目录名
+- **修复**（本次 commit）：`useWindowTitle(activeTab, explorerRoot, sshLocation)` 加第三参数；SSH Space 激活时标题直接显示完整 `user@host:path`（path 来自会话 OSC 7 同步 `spaceSshCurrentPath`，cd 后自动跟随）；非 SSH 分支保持 `project — tab` 不变
+- 门禁：typecheck/lint/vitest 982/build:web 全过
+
+**sidecar 崩溃重启退避（澄清——已完成 commit 2091e2f）**：MAX_RETRY 5、指数退避 1/2/4/8/16/32/60s、60s 运行冷却重置、cancel_tx 可中断。dev-state 早期章节（:49）「无退避」为过时条目。
+- **新发现缺陷（待用户决策）**：`health_check_task` 心跳丢失（死锁 30s 无响应）只置 Crashed + emit `sidecar:heartbeat_lost`，**不触发重启**（重启信号仅 exit_watcher_task=进程退出发出）→ 死锁进程存活时永不自动恢复
+
+**接手下一步**：用户决策是否修 heartbeat-lost 死锁自动重启；AI 入口 3 优化点（用户暂缓）仍在 backlog；SSH 隧道三模式实测验收
