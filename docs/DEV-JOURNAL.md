@@ -1222,3 +1222,27 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ 做对：读透 useWindowTitle 调用链（App.tsx → tabLabel → paneTree cwd）再动手，修复方向准确
 - ⚠️ 改进：backlog 项应标注「待验证/已完成/待增强」三态，避免用户误以为未做
 - 📌 经验：**「已完成但文档过时」与「未完成」要区分**——dev-state 早期章节的旧结论需对照最新状态核实
+
+---
+
+## 2026-08-12 · sidecar 心跳丢失死锁自动重启修复（承上）
+
+**任务**：修复 sidecar 心跳丢失（Python 死锁 30s 无响应）时不自动重启的缺陷（上一章节发现，用户已授权）。
+
+**根因**：退避链路只覆盖"进程退出"（exit_watcher_task 的 child.wait()），死锁进程存活 → 无退出信号 → 永不重启；health_check_task 只置 Crashed + emit 事件。
+
+**方案**（`src-tauri/src/modules/sidecar.rs`）：
+1. 新增 `kill_process(pid)`：Windows `OpenProcess(PROCESS_TERMINATE) + TerminateProcess`（spawn_blocking 内系统调用）；非 Windows `kill -9`。双平台与 `is_process_alive` 风格一致
+2. health_check_task 心跳超时分支：读 pid → **drop guard** → `kill_process().await` → 重写锁置 Crashed → emit → return。强杀后 child.wait() 返回，**复用既有指数退避重启链路**，零新增重启逻辑
+
+**报错与修改**：
+- `TerminateProcess` 放错模块（`Win32::Foundation`）→ E0432。修正：它在 `Win32::System::Threading`（与 `OpenProcess`/`PROCESS_TERMINATE` 同处，`CloseHandle` 在 Foundation）。首次 E0432 后经 grep windows-sys 文档定位
+- `cargo test` 报 `failed to remove file tdsf-terminal-agent.exe`（os error 5 拒绝访问）→ 残留 dev 实例（PID 34048）锁定 target/debug exe → Stop-Process 后重跑通过
+
+**验证**：cargo check 通过；`cargo test --lib sidecar` 10 全过（backoff/state/ipc 既有测试）。
+
+**复盘**：
+- ✅ 做对：修复复用既有退避链路（kill → wait → 冷却检查 → 指数退避），只补"让进程退出"这一环，未另造重启逻辑
+- ✅ 做对：遵守锁纪律——先读 pid、drop guard 再 await 系统调用，避免跨 await 持锁
+- ⚠️ 改进：Windows API 模块归属凭记忆易错，应直接 grep windows-sys 已用处的 import 风格（本文件 is_process_alive 就是同款模式，可参考其 import 位置）
+- 📌 经验：残留 dev 实例会锁定 target/debug exe 导致 Rust build/test 失败——build/test 前先确认无 tdsf-terminal-agent 进程占用

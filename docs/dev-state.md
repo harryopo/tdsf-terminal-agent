@@ -3939,6 +3939,23 @@ CDP 全新状态实测通过。commit 见上。
 - 门禁：typecheck/lint/vitest 982/build:web 全过
 
 **sidecar 崩溃重启退避（澄清——已完成 commit 2091e2f）**：MAX_RETRY 5、指数退避 1/2/4/8/16/32/60s、60s 运行冷却重置、cancel_tx 可中断。dev-state 早期章节（:49）「无退避」为过时条目。
-- **新发现缺陷（待用户决策）**：`health_check_task` 心跳丢失（死锁 30s 无响应）只置 Crashed + emit `sidecar:heartbeat_lost`，**不触发重启**（重启信号仅 exit_watcher_task=进程退出发出）→ 死锁进程存活时永不自动恢复
+- **新发现缺陷（已修复，见 §37.57）**：`health_check_task` 心跳丢失（死锁 30s 无响应）只置 Crashed + emit `sidecar:heartbeat_lost`，**不触发重启**（重启信号仅 exit_watcher_task=进程退出发出）→ 死锁进程存活时永不自动恢复
 
-**接手下一步**：用户决策是否修 heartbeat-lost 死锁自动重启；AI 入口 3 优化点（用户暂缓）仍在 backlog；SSH 隧道三模式实测验收
+**接手下一步**：~~用户决策是否修 heartbeat-lost 死锁自动重启~~（已修，§37.57）；AI 入口 3 优化点（用户暂缓）仍在 backlog；SSH 隧道三模式实测验收
+
+---
+
+### 37.57 sidecar 心跳丢失死锁自动重启修复（2026-08-12 ✅）
+
+**背景**：sidecar 退避链路（commit 2091e2f）只覆盖"进程退出"场景（exit_watcher_task）。Python 死锁（进程存活、30s 无 ping 响应）时 health_check_task 只置 Crashed + emit `sidecar:heartbeat_lost`，**不触发重启** → AI 功能卡死直到用户手动 restart。
+
+**修复**（`src-tauri/src/modules/sidecar.rs`）：
+- 新增 `kill_process(pid)` 辅助函数：Windows 用 `OpenProcess(PROCESS_TERMINATE) + TerminateProcess`（spawn_blocking 内系统调用），非 Windows 用 `kill -9`（与 `is_process_alive` 双平台风格一致）
+- `health_check_task` 心跳超时分支改为：读 pid → **drop guard** → `kill_process().await`（不跨 await 持锁）→ 重写锁置 Crashed → emit → return
+- **为何不 child.kill()**：exit_watcher_task 已 take 走 Child 句柄（mutex 内为 None），只能按 pid 系统级终止；强杀后 `child.wait()` 返回 → **复用既有指数退避重启链路**自动恢复
+
+**编译坑**：`TerminateProcess` 在 `windows_sys::Win32::System::Threading`（**不在** `Foundation`，首次编译 E0432，已修正 import）。
+
+**验证**：`cargo check` 通过；`cargo test --lib sidecar` 10 全过（含 backoff/state 既有测试）。测试期间残留 dev 实例锁定 exe 导致 build 失败（os error 5），停进程后正常。
+
+**后续待办**：真实死锁场景实测（构造 Python 卡死 → 观察 60s 冷却 + 退避重启）；SSH 隧道三模式实测验收
