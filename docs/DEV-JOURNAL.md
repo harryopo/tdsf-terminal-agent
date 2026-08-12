@@ -1246,3 +1246,31 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ 做对：遵守锁纪律——先读 pid、drop guard 再 await 系统调用，避免跨 await 持锁
 - ⚠️ 改进：Windows API 模块归属凭记忆易错，应直接 grep windows-sys 已用处的 import 风格（本文件 is_process_alive 就是同款模式，可参考其 import 位置）
 - 📌 经验：残留 dev 实例会锁定 target/debug exe 导致 Rust build/test 失败——build/test 前先确认无 tdsf-terminal-agent 进程占用
+
+---
+
+## 2026-08-12 · sidecar 心跳死锁自动重启 mock 实测通过（承上）
+
+**任务**：构造 Python 死锁 mock 场景，本地实测「心跳超时 → 强杀 → 指数退避自动重启」链路。
+
+**方案**：
+1. dev 诊断钩子 `TDSF_SIDECAR_SCRIPT`（lib.rs `locate_sidecar_script`，cfg(dev) 内、环境变量存在且文件存在时覆盖脚本路径；与既有 `TDSF_SIDECAR_PYTHON` 对称，默认行为不变）
+2. mock 脚本 `src-tauri/sidecar/mock_deadlock.py`：发 `ready` 通知 → `time.sleep(3600)` 死锁（进程存活、CPU 0%、不读 stdin 不响应 ping）。bundle.resources 只含 `sidecar/tdsf-sidecar/`，mock 不会进安装包
+
+**实测结果（tauri:dev，5 轮全链路）**：
+```
+[sidecar:health] heartbeat lost (no response in ~30s)      ×5  心跳超时判定
+[sidecar:health] killed hung pid=xxxx success=true          ×5  强杀全成功
+[sidecar:restart_loop] backing off 1/2/4/8/16s                    退避递增
+[sidecar:watcher] max retry exceeded (5/5), giving up             达上限停止
+```
+
+**报错与修改**：
+- `TDSF_SIDECAR_SCRIPT` 用相对路径 `src-tauri/sidecar/mock_deadlock.py` → WARN `not found, fallback to main.py`。**根因**：Rust 进程 cwd 是 `src-tauri/`，相对路径拼接错位。**修改**：改用绝对路径；mock docstring 中已加醒目提示
+- mock docstring 含 Windows 反斜杠路径 → Python `SyntaxWarning: invalid escape sequence '\l'`（Python 3.12+）。**修改**：docstring 改为 raw string `r"""`（或路径用正斜杠/双反斜杠）
+
+**复盘**：
+- ✅ 做对：真实链路验证（tauri:dev 而非单测模拟），覆盖 ready → Running → 心跳超时 → 强杀 → 退避 → max retry 全流程
+- ✅ 做对：mock 用 sleep 而非死循环——进程存活但 CPU 0%，模拟死锁同时不拖垮本机
+- ⚠️ 改进：给用户验证指引时应先确认环境变量解析的 cwd 上下文（Rust cargo run 的 cwd ≠ 项目根目录）
+- 📌 经验：dev 诊断钩子（环境变量覆盖）比临时改产品代码更安全可复用——`TDSF_SIDECAR_SCRIPT` 以后任何 sidecar mock 场景都能用
