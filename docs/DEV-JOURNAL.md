@@ -1201,3 +1201,24 @@ P2（中优先级 — 清理 + 文档）：
 - 📌 经验：**serde 必填字段 vs 多模式可选字段**——模式化结构体建议默认值 + 命令层校验，而非必填字段
 
 **五绿门禁**：typecheck ✅ | lint ✅ | vitest 982 全过 ✅ | build:web ✅ | cargo test 380+ 全过 ✅
+
+---
+
+## 2026-08-12 · 窗口标题跟随修复 + sidecar 退避澄清（ROADMAP #9）
+
+**任务**：修复 SSH Space 下窗口标题显示本地目录名；sidecar 崩溃重启退避。
+
+**窗口标题（已修复）**：
+- **根因**：`useWindowTitle` 只接收 explorerRoot 参数，App.tsx 把 `sshLocationLabel`（`user@host:path`）当 explorerRoot 传入 → `basename()` 取 `user@host:path` 最后段（丢主机信息），且 label 走 paneTree cwd，标题混入本地目录名
+- **修复**：`useWindowTitle(activeTab, explorerRoot, sshLocation)` 加第三参数；SSH Space 激活时标题直接显示完整 `user@host:path`（path 来自会话 OSC 7 同步，cd 后自动跟随）；非 SSH 保持 `project — tab` 逻辑不变
+- 门禁：typecheck/lint/vitest 982/build:web 全过（tabs/app 33 测试全过）
+
+**sidecar 崩溃重启退避（澄清——已完成）**：
+- 调研发现 **commit 2091e2f（2026-07-30）已实现完整退避**：MAX_RETRY 3→5、指数退避 1/2/4/8/16/32/60s（上限 60s）、60s 运行冷却重置、cancel_tx 用户可中断、start() 失败路径补 child.kill+wait。dev-state:49 的「无退避」是旧章节过时条目（dev-state:253 已正确标记完成）
+- **发现新缺陷（待用户决策）**：`health_check_task` 心跳丢失（Python 死锁/无响应 30s）时只置 Crashed + emit `sidecar:heartbeat_lost` 事件，**不触发重启**——重启信号仅由 `exit_watcher_task`（进程退出）发出，死锁进程存活 → 永不重启 → AI 功能卡死到用户手动 restart
+
+**复盘**：
+- ✅ 做对：接任务先查文档确认是否已有实现/历史记录，避免重复造轮子（sidecar 退避已完成是血泪教训的反面教材——差点重写）
+- ✅ 做对：读透 useWindowTitle 调用链（App.tsx → tabLabel → paneTree cwd）再动手，修复方向准确
+- ⚠️ 改进：backlog 项应标注「待验证/已完成/待增强」三态，避免用户误以为未做
+- 📌 经验：**「已完成但文档过时」与「未完成」要区分**——dev-state 早期章节的旧结论需对照最新状态核实

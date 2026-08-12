@@ -59,7 +59,7 @@
 | 7 | **用户实测 WorkspaceFs**：创建 SSH Space → 远程树稳定无闪跳 → 断开降级横幅 | 验收 | 需用户 | 无 |
 | 8 | **命令行自动补全/预测**（用户 2026-08-08 意向）：xterm 输入补全 → 命令建议（历史 + 词典 + AI），先调研 yazi/terax 做法再规划 | 功能 | 中 | WorkspaceFs 实测后 |
 | 8.5 | **SSH 选中翻译链路收尾**（§37.34/37.35）：✅ 已修复并 CDP 全链路实测（根因 = 修剪 effect 误删 SSH leaf handle → live 集合纳入 sshLid + captureActiveSelection 改 rendererPool slot 直读，见 §37.35） | ✅ 完成 | 中 | 2026-08-09 |
-| 9 | **窗口标题跟随修复**（遗留）：SSH Space 下标题显示本地目录名（§37.32 后仍未验证） | 修复 | 小 | 无 |
+| 9 | **窗口标题跟随修复**（遗留）：SSH Space 下标题显示本地目录名（§37.32 后仍未验证） | ✅ 已完成 | 2026-08-12；useWindowTitle 加第三参数 sshLocation，SSH Space 时标题直接显示 user@host:path（随 cd 跟随）；详见 dev-state §37.56 |
 | 10 | **方案书集成度补齐**（启动验证发现的差距）：~~P1 HITL 四决策（edit/respond/trust）~~ / ~~Strands teach 字段契约（teaching_content）~~ / ~~缺 3 工具（get_terminal_output·config_diff·backup_restore）~~ / ~~决策库完善（向量检索+history 检索）~~ / ~~可信度模块接入 Strands 主路径~~ | ✅ 已完成 | 全部完成（commit a5be217 + 784252c）；HITL 四决策 + teach 清理 + 3 工具 + 可信度 + 决策库接线 |
 | 18 | **SSH 终端命令补全**：接入孤儿引擎 completion.ts 到 SSH xterm（130+ Linux 命令静态表 + Trie+Frecency + Tab 拦截弹窗） | ✅ 已完成 | commit 784252c；use-ssh-completion.ts + SshCompletionPopup.tsx |
 | 19 | **iShell Pro 竞品调研 + 方案书更新**：服务器实时监控（免 Agent）/ 分屏联动 / 代码片段 | ✅ 已完成 | 2026-08-09；调研文档 `docs/iShell-Pro-竞品调研.md` |
