@@ -902,7 +902,10 @@ export default function App() {
     isSpaceSshConnected && spaceSshSession && activeSpace?.env.kind === "ssh"
       ? `${spaceSshSession.params.user}@${spaceSshSession.params.host}:${spaceSshCurrentPath ?? "/"}`
       : null;
-  useWindowTitle(activeTab, sshLocationLabel ?? effectiveExplorerRoot);
+  // TDSF 修复 2026-08-12 (ROADMAP #9): SSH 位置作为第三参数传入 useWindowTitle，
+  // SSH Space 时窗口标题显示 user@host:path（此前混入 explorerRoot 计算导致
+  // 标题显示本地目录名、丢主机信息）。
+  useWindowTitle(activeTab, effectiveExplorerRoot, sshLocationLabel);
 
   useEffect(() => {
     setActiveSearchAddon(

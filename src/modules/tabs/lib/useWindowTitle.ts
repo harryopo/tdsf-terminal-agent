@@ -29,18 +29,29 @@ function tabLabel(tab: Tab | undefined): string {
  * Format: `<project> — <tab>` (e.g. `tdsf — src`), collapsing to just the
  * project when the focused terminal sits at the project root. Falls back to the
  * app name when there's nothing to show.
+ *
+ * TDSF 修复 2026-08-12 (ROADMAP #9): SSH Space 时标题直接显示完整远程位置
+ * `user@host:path`（随远端 cd 跟随），此前把 sshLocationLabel 当 explorerRoot
+ * 传入，basename() 只取到路径最后段，丢主机信息且混入 pane cwd，导致标题
+ * 显示本地目录名。
  */
 export function useWindowTitle(
   activeTab: Tab | undefined,
   explorerRoot: string | null,
+  sshLocation: string | null = null,
 ): void {
-  const project = explorerRoot ? basename(explorerRoot) : "";
-  const label = tabLabel(activeTab);
-
   useEffect(() => {
     let title: string;
-    if (project && label && label !== project) title = `${project} — ${label}`;
-    else title = project || label || APP_NAME;
+    if (sshLocation) {
+      // SSH Space：显示 user@host:path（含主机便于区分多服务器），
+      // path 来自会话 OSC 7 同步，cd 后自动跟随。
+      title = sshLocation;
+    } else {
+      const project = explorerRoot ? basename(explorerRoot) : "";
+      const label = tabLabel(activeTab);
+      if (project && label && label !== project) title = `${project} — ${label}`;
+      else title = project || label || APP_NAME;
+    }
 
     document.title = title;
     // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 setTitle 调用
@@ -48,5 +59,5 @@ export function useWindowTitle(
     void getCurrentWindow()
       .setTitle(title)
       .catch(() => {});
-  }, [project, label]);
+  }, [activeTab, explorerRoot, sshLocation]);
 }
