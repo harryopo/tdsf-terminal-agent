@@ -660,6 +660,19 @@ mod launch_target_tests {
 fn locate_sidecar_script(app: &tauri::App) -> PathBuf {
     #[cfg(dev)]
     {
+        // TDSF 2026-08-12 诊断钩子: TDSF_SIDECAR_SCRIPT 环境变量可覆盖 dev 脚本路径,
+        // 用于 mock 验证（如 sidecar/mock_deadlock.py 模拟心跳死锁）。默认走 main.py。
+        if let Ok(override_script) = std::env::var("TDSF_SIDECAR_SCRIPT") {
+            let override_path = PathBuf::from(override_script);
+            if override_path.exists() {
+                log::info!("[setup] dev mode: TDSF_SIDECAR_SCRIPT override {:?}", override_path);
+                return override_path;
+            }
+            log::warn!(
+                "[setup] dev mode: TDSF_SIDECAR_SCRIPT={:?} not found, fallback to main.py",
+                override_path
+            );
+        }
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let dev_script = manifest_dir.join("sidecar").join("main.py");
         log::info!("[setup] dev mode: using python script {:?}", dev_script);
