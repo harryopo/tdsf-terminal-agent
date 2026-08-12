@@ -41,7 +41,7 @@ pub use client::{SshAuthMethod, SshClient, SshConnectParams};
 pub use known_hosts::KnownHostsManager;
 pub use session::{SshCommandOutput, SshReconnectConfig, SshSession, SshSessionState, SshStatusEvent};
 pub use sftp::{SftpAttrs, SftpEntry, SftpSession};
-pub use tunnel::{SshTunnel, TunnelInfo, TunnelSpec, TunnelState};
+pub use tunnel::{SshTunnel, TunnelInfo, TunnelKind, TunnelSpec, TunnelState};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -858,13 +858,14 @@ pub async fn ssh_command(
 // await invoke('tunnel_stop', { tunnelId });
 // ```
 
-/// tunnel_start 命令: 创建并启动本地端口转发隧道
+/// tunnel_start 命令: 创建并启动 SSH 隧道 (按 kind 分支, P2 #23 / P3 #24)
 ///
 /// 流程:
 /// 1. 校验 SSH 会话存在且连接未断
-/// 2. 校验本地端口未被本项目其他隧道占用
-/// 3. 分配隧道 id + 绑定本地端口 + 启动 accept loop
-/// 4. 注册到 SshState (绑定失败则不注册, 直接返回错误)
+/// 2. 按 kind 校验字段 + 本地端口占用 (Local/Socks5; Remote 无本地端口问题)
+/// 3. 分配隧道 id + 启动 (Local/Socks5 绑定本地端口 + accept loop;
+///    Remote 请求服务器 tcpip_forward + 注册本地目标)
+/// 4. 注册到 SshState (启动失败则不注册, 直接返回错误)
 ///
 /// # 返回
 /// 隧道 id (u32), 前端用于 tunnel_stop / tunnel_list 关联
@@ -874,9 +875,10 @@ pub async fn tunnel_start(
     spec: TunnelSpec,
 ) -> Result<u32, String> {
     log::info!(
-        "[tunnel] start: name={} session={} {}:{} → {}:{}",
+        "[tunnel] start: name={} session={} kind={:?} local={}:{} remote={}:{}",
         spec.name,
         spec.session_id,
+        spec.kind,
         spec.local_host,
         spec.local_port,
         spec.remote_host,
@@ -895,15 +897,51 @@ pub async fn tunnel_start(
         ));
     }
 
-    // 2. 端口占用检测 (本项目隧道; 其他进程由 bind 兜底)
-    if state.port_in_use(spec.local_port).await {
-        return Err(format!(
-            "本地端口 {} 已被其他隧道占用",
-            spec.local_port
-        ));
+    // 2. 按 kind 校验
+    match spec.kind {
+        TunnelKind::Local => {
+            if spec.local_port == 0 {
+                return Err("本地端口需为 1-65535".to_string());
+            }
+            if spec.remote_host.trim().is_empty() {
+                return Err("远程目标地址不能为空".to_string());
+            }
+            if spec.remote_port == 0 {
+                return Err("远程端口需为 1-65535".to_string());
+            }
+            // 端口占用检测 (本项目隧道; 其他进程由 bind 兜底)
+            if state.port_in_use(spec.local_port).await {
+                return Err(format!(
+                    "本地端口 {} 已被其他隧道占用",
+                    spec.local_port
+                ));
+            }
+        }
+        TunnelKind::Socks5 => {
+            if spec.local_port == 0 {
+                return Err("本地监听端口需为 1-65535".to_string());
+            }
+            if state.port_in_use(spec.local_port).await {
+                return Err(format!(
+                    "本地端口 {} 已被其他隧道占用",
+                    spec.local_port
+                ));
+            }
+        }
+        TunnelKind::Remote => {
+            // 无本地端口占用问题 (占用的是服务器端口, 由 tcpip_forward 失败兜底)
+            let target_host = spec.local_target_host.as_deref().unwrap_or("").trim();
+            if target_host.is_empty() {
+                return Err("本地目标地址不能为空".to_string());
+            }
+            let target_port = spec.local_target_port.unwrap_or(0);
+            if target_port == 0 {
+                return Err("本地目标端口需为 1-65535".to_string());
+            }
+        }
     }
 
-    // 3. 创建 + 启动 (绑定失败不注册)
+    // 3. 创建 + 启动 (启动失败不注册)
     let tunnel_id = state.allocate_tunnel_id();
     let tunnel = Arc::new(SshTunnel::new(tunnel_id, spec, session));
     tunnel.start().await?;
@@ -1077,10 +1115,15 @@ mod tests {
             TunnelSpec {
                 name: format!("tunnel-{id}"),
                 session_id: 1,
+                kind: TunnelKind::Local,
                 local_host: "127.0.0.1".to_string(),
                 local_port,
                 remote_host: "db.internal".to_string(),
                 remote_port: 3306,
+                bind_address: "127.0.0.1".to_string(),
+                bind_port: None,
+                local_target_host: None,
+                local_target_port: None,
             },
             Arc::new(super::session::tests::make_test_session::<tauri::Wry>(
                 false,
@@ -1180,10 +1223,15 @@ mod tests {
             TunnelSpec {
                 name: "other".to_string(),
                 session_id: 99,
+                kind: TunnelKind::Local,
                 local_host: "127.0.0.1".to_string(),
                 local_port: 8080,
                 remote_host: "r".to_string(),
                 remote_port: 80,
+                bind_address: "127.0.0.1".to_string(),
+                bind_port: None,
+                local_target_host: None,
+                local_target_port: None,
             },
             Arc::new(super::session::tests::make_test_session::<tauri::Wry>(
                 false,

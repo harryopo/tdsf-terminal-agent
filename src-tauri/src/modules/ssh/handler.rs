@@ -13,9 +13,11 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
-use russh::client::Handler;
+use russh::client::{Handler, Msg, Session};
 use russh::keys::PublicKey;
+use russh::Channel;
 use tauri::Emitter;
+use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Notify};
 // P1-NEW-v3-3 修复 (2026-07-30): 引入 timeout + Duration,
 // 给主机审批 rx.await 加 5min 超时, 防止用户关闭弹窗不点按钮时
@@ -57,6 +59,62 @@ static HOST_APPROVAL_REGISTRY: LazyLock<Mutex<HashMap<String, oneshot::Sender<bo
 /// 全局通知器: 当有新 approval 注册时唤醒 (用于前端事件订阅,目前预留)
 #[allow(dead_code)]
 static HOST_APPROVAL_NOTIFY: OnceLock<Notify> = OnceLock::new();
+
+/// 远程端口转发 (P3 #24) 的本地目标
+///
+/// 服务器收到远程转发连接时, Handler 回调按 (address, port) 查到该结构,
+/// 连接其中的本地目标后与 SSH channel 桥接。
+#[derive(Debug, Clone)]
+pub struct RemoteTarget {
+    /// 本地目标地址 (相对客户端可达, 如 "127.0.0.1")
+    pub local_target_host: String,
+    /// 本地目标端口
+    pub local_target_port: u16,
+}
+
+/// 全局远程转发注册表 (P3 #24)
+///
+/// key: (服务器监听地址, 实际端口) —— 与 `server_channel_open_forwarded_tcpip`
+/// 回调的 `connected_address`/`connected_port` 参数一一对应。
+/// value: 该远程隧道要连的本地目标。
+///
+/// 多个远程隧道可共存于同一 SSH 会话 (共享同一个 Handler 实例), 因此必须
+/// 全局查表, 而不能把目标塞进 Handler 字段。生命周期与隧道同步:
+/// - 注册: `tcpip_forward` 成功后 (tunnel.rs 的 SshTunnel::start)
+/// - 移除: `cancel_tcpip_forward` 或 SSH 会话断开时 (tunnel.rs 的 stop /
+///   mod.rs 的 stop_tunnels_for_session)
+static REMOTE_TUNNEL_REGISTRY: LazyLock<Mutex<HashMap<(String, u32), RemoteTarget>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 注册远程转发目标 (P3 #24)
+///
+/// # 参数
+/// - `address` / `port`: 服务器监听地址与**实际**端口 (tcpip_forward 返回值)
+/// - `target`: 本地目标 (回调收到连接时连接它)
+pub fn register_remote_target(address: String, port: u32, target: RemoteTarget) -> Result<(), String> {
+    let mut registry = REMOTE_TUNNEL_REGISTRY.lock().map_err(|e| e.to_string())?;
+    if let Some(existing) = registry.insert((address.clone(), port), target) {
+        log::warn!(
+            "[ssh] remote target overwritten: {}:{} → {:?}",
+            address,
+            port,
+            existing
+        );
+    }
+    Ok(())
+}
+
+/// 移除远程转发目标 (P3 #24)
+pub fn unregister_remote_target(address: &str, port: u32) -> Option<RemoteTarget> {
+    let mut registry = REMOTE_TUNNEL_REGISTRY.lock().ok()?;
+    registry.remove(&(address.to_string(), port))
+}
+
+/// 查询远程转发目标 (P3 #24; Handler 回调用)
+pub fn lookup_remote_target(address: &str, port: u32) -> Option<RemoteTarget> {
+    let registry = REMOTE_TUNNEL_REGISTRY.lock().ok()?;
+    registry.get(&(address.to_string(), port)).cloned()
+}
 
 /// 解析主机审批结果 (供 ssh_approve_host 命令调用)
 ///
@@ -186,6 +244,71 @@ impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
             russh::client::DisconnectReason::Error(e) => {
                 log::warn!("[ssh] disconnected with transport error: {:?}", e);
                 Err(e)
+            }
+        }
+    }
+
+    /// server_channel_open_forwarded_tcpip 回调 (P3 #24 远程转发)
+    ///
+    /// 服务器在远程转发监听端口收到 TCP 连接时, 经 SSH channel 反推给客户端,
+    /// 调用此方法。默认 trait 实现是空操作 (channel 被直接丢弃, 数据流断裂),
+    /// 因此必须覆盖:
+    /// 1. 按 (connected_address, connected_port) 查 REMOTE_TUNNEL_REGISTRY 拿本地目标
+    /// 2. spawn 独立 task: 连接本地目标 → 复用 tunnel.rs 的 bridge_connection 双向桥接
+    /// 3. 回调立即返回 (不阻塞 handler 主循环)
+    ///
+    /// 查不到目标 (隧道已停止 / 从未注册) → 关闭 channel, 不报错 (不杀 SSH 连接)。
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        match lookup_remote_target(connected_address, connected_port) {
+            Some(target) => {
+                log::info!(
+                    "[ssh] remote forward connection: {}:{} → local {}:{} (originator {}:{})",
+                    connected_address,
+                    connected_port,
+                    target.local_target_host,
+                    target.local_target_port,
+                    originator_address,
+                    originator_port
+                );
+                // Channel<Msg> 是 Send + Sync, 可跨 task 传递
+                tokio::spawn(async move {
+                    let addr = (target.local_target_host.as_str(), target.local_target_port);
+                    match TcpStream::connect(addr).await {
+                        Ok(stream) => {
+                            crate::modules::ssh::tunnel::bridge_connection(stream, channel).await
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[ssh] remote forward: connect local target {}:{} failed: {}",
+                                target.local_target_host,
+                                target.local_target_port,
+                                e
+                            );
+                            let _ = channel.close().await;
+                        }
+                    }
+                });
+                Ok(())
+            }
+            None => {
+                // 服务器发了连接但注册表查不到 → 该隧道已被停止/从未注册, 关闭 channel
+                log::warn!(
+                    "[ssh] remote forward: no target registered for {}:{} (originator {}:{}), closing channel",
+                    connected_address,
+                    connected_port,
+                    originator_address,
+                    originator_port
+                );
+                let _ = channel.close().await;
+                Ok(())
             }
         }
     }
@@ -352,5 +475,67 @@ mod tests {
         // 再次解析应失败 (已被消费)
         let result = resolve_host_approval(approval_id, true);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remote_target_register_lookup_unregister() {
+        // P3 #24: 远程转发 registry 全生命周期
+        let addr = "127.0.0.1";
+        let port = 18080u32;
+        let target = RemoteTarget {
+            local_target_host: "127.0.0.1".to_string(),
+            local_target_port: 3000,
+        };
+
+        // 注册成功
+        assert!(register_remote_target(addr.to_string(), port, target.clone()).is_ok());
+
+        // 查表命中, 值与注册一致
+        let found = lookup_remote_target(addr, port).expect("should find target");
+        assert_eq!(found.local_target_host, "127.0.0.1");
+        assert_eq!(found.local_target_port, 3000);
+
+        // 查表未命中 (不同端口 / 不同地址)
+        assert!(lookup_remote_target(addr, 18081).is_none());
+        assert!(lookup_remote_target("0.0.0.0", port).is_none());
+
+        // 移除成功, 再查为空
+        let removed = unregister_remote_target(addr, port);
+        assert!(removed.is_some());
+        assert!(lookup_remote_target(addr, port).is_none());
+    }
+
+    #[test]
+    fn test_remote_target_register_overwrite() {
+        // P3 #24: 同 key 重复注册应覆盖旧值 (视为启动新隧道)
+        let addr = "127.0.0.1".to_string();
+        let port = 19090u32;
+        let _ = register_remote_target(
+            addr.clone(),
+            port,
+            RemoteTarget {
+                local_target_host: "10.0.0.1".to_string(),
+                local_target_port: 1111,
+            },
+        );
+        let _ = register_remote_target(
+            addr.clone(),
+            port,
+            RemoteTarget {
+                local_target_host: "10.0.0.2".to_string(),
+                local_target_port: 2222,
+            },
+        );
+        let found = lookup_remote_target(&addr, port).expect("should find target");
+        assert_eq!(found.local_target_host, "10.0.0.2");
+        assert_eq!(found.local_target_port, 2222);
+        // 清理
+        unregister_remote_target(&addr, port);
+    }
+
+    #[test]
+    fn test_remote_target_unregister_missing() {
+        // P3 #24: 移除不存在的 key 返回 None (幂等)
+        assert!(unregister_remote_target("127.0.0.1", 1).is_none());
     }
 }

@@ -971,6 +971,51 @@ impl<R: tauri::Runtime> SshSession<R> {
         Ok(channel)
     }
 
+    /// 请求服务器开启远程端口转发 (P3 #24, RFC 4254 §7.1 forward-tcpip)
+    ///
+    /// 让 SSH 服务器监听 `address:port`, 收到连接时经 SSH channel 反推给客户端
+    /// (对应 `ssh -R`)。客户端侧在 Handler 的 `server_channel_open_forwarded_tcpip`
+    /// 回调里收到 channel, 连接本地目标后桥接。
+    ///
+    /// # 参数
+    /// - `address`: 服务器监听地址 (受 sshd_config GatewayPorts 约束;
+    ///   no=仅 127.0.0.1, yes=0.0.0.0, clientspecified=请求地址)
+    /// - `port`: 服务器监听端口; **0 = 由服务器自动分配**, 返回值即实际端口
+    ///
+    /// # 返回
+    /// 服务器实际监听端口 (port 非 0 时与入参相同)
+    pub async fn tcpip_forward(&self, address: &str, port: u32) -> Result<u32, SshSessionError> {
+        // 与 open_tcpip_channel 一致: 只在连接已断时拒绝
+        if self.connection_closed.load(Ordering::Acquire) {
+            return Err(SshSessionError::Closed);
+        }
+
+        // 借用 handle 发起全局请求 (锁只覆盖一个 RTT, 不阻塞同会话其他操作)
+        let handle_guard = self.handle.lock().await;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let actual_port = handle.tcpip_forward(address, port).await?;
+        drop(handle_guard);
+
+        Ok(actual_port)
+    }
+
+    /// 取消服务器远程端口转发 (RFC 4254 §7.1)
+    ///
+    /// 与 `tcpip_forward` 对称: 请求服务器停止监听 `address:port`。
+    /// SSH 会话断开后调用会失败 (连接已断), 调用方需容错 (只清理本地注册表)。
+    pub async fn cancel_tcpip_forward(&self, address: &str, port: u32) -> Result<(), SshSessionError> {
+        if self.connection_closed.load(Ordering::Acquire) {
+            return Err(SshSessionError::Closed);
+        }
+
+        let handle_guard = self.handle.lock().await;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        handle.cancel_tcpip_forward(address, port).await?;
+        drop(handle_guard);
+
+        Ok(())
+    }
+
     /// 执行单条 SSH 命令并返回结构化结果（exec 模式，非 PTY）
     ///
     /// TDSF 魔改 P0-D（2026-07-30）：为运维 Agent 提供"执行命令并拿回输出"能力，

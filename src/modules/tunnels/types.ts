@@ -1,16 +1,43 @@
 /**
- * tunnels/types.ts — SSH 隧道数据模型（P2 #23）
+ * tunnels/types.ts — SSH 隧道数据模型（P2 #23 / P3 #24）
  *
- * P2 SSH 隧道（方案书 v1.1 §四）：本地端口转发（direct-tcpip），
- * DBA 通过跳板机连远程数据库 / 访问内网服务，免 VPN。
+ * 三种模式（对应 OpenSSH -L / -R / -D）：
+ *   - local  本地转发（direct-tcpip）：本地监听 → SSH 隧道 → 远程目标
+ *   - remote 远程转发（forward-tcpip）：服务器监听 → SSH channel → 本地目标
+ *   - socks5 动态转发（SOCKS5 协商 + 动态 direct-tcpip）：本地代理按需访问内网
  */
-import type { TunnelInfo, TunnelStateValue } from "@/lib/tunnel-bridge";
+import type { TunnelInfo, TunnelKind, TunnelStateValue } from "@/lib/tunnel-bridge";
 
 /** 隧道状态值（重新导出，供 UI 使用） */
 export type { TunnelStateValue };
 
+/** 隧道类型（重新导出，供 UI 使用） */
+export type { TunnelKind };
+
 /** 隧道（别名 TunnelInfo，语义更通用） */
 export type Tunnel = TunnelInfo;
+
+/** 隧道类型展示元信息（选择器 + badge） */
+export const TUNNEL_TYPE_META: Record<
+  TunnelKind,
+  { label: string; hint: string; badgeClass: string }
+> = {
+  local: {
+    label: "本地转发",
+    hint: "本地端口 → SSH → 远程目标（-L）",
+    badgeClass: "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  },
+  remote: {
+    label: "远程转发",
+    hint: "服务器端口 → SSH → 本地目标（-R）",
+    badgeClass: "border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  },
+  socks5: {
+    label: "SOCKS5",
+    hint: "本地 SOCKS5 代理，按需访问内网（-D）",
+    badgeClass: "border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-400",
+  },
+};
 
 /** 隧道状态展示元信息（badge 文案 + 配色） */
 export const TUNNEL_STATE_META: Record<
@@ -52,14 +79,24 @@ export interface TunnelFormData {
   sessionId: number;
   /** 会话显示标签（host:port，选择器展示用） */
   sessionLabel: string;
-  /** 本地监听地址（默认 "127.0.0.1"） */
+  /** 隧道类型 */
+  kind: TunnelKind;
+  /** 本地监听地址（Local/Socks5 用，默认 "127.0.0.1"） */
   localHost: string;
-  /** 本地监听端口（字符串，提交时校验 1-65535） */
+  /** 本地监听端口（Local/Socks5 用，字符串，提交时校验 1-65535） */
   localPort: string;
-  /** 远程目标地址 */
+  /** 远程目标地址（仅 Local 用） */
   remoteHost: string;
-  /** 远程目标端口（字符串，提交时校验 1-65535） */
+  /** 远程目标端口（仅 Local 用，字符串，提交时校验 1-65535） */
   remotePort: string;
+  /** 服务器监听地址（仅 Remote 用，默认 "127.0.0.1"） */
+  bindAddress: string;
+  /** 服务器监听端口（仅 Remote 用，字符串；留空=服务器自动分配） */
+  bindPort: string;
+  /** 本地目标地址（仅 Remote 用） */
+  localTargetHost: string;
+  /** 本地目标端口（仅 Remote 用，字符串，提交时校验 1-65535） */
+  localTargetPort: string;
 }
 
 /** 空表单初始值 */
@@ -67,10 +104,15 @@ export const EMPTY_TUNNEL_FORM: TunnelFormData = {
   name: "",
   sessionId: 0,
   sessionLabel: "",
+  kind: "local",
   localHost: "127.0.0.1",
   localPort: "",
   remoteHost: "",
   remotePort: "",
+  bindAddress: "127.0.0.1",
+  bindPort: "",
+  localTargetHost: "127.0.0.1",
+  localTargetPort: "",
 };
 
 /** 校验端口字符串是否合法（1-65535） */

@@ -30,14 +30,22 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { CreateTunnelDialog } from "./CreateTunnelDialog";
 import { useTunnelsStore } from "./lib/tunnelStore";
-import { TUNNEL_STATE_META, type Tunnel } from "./types";
+import { TUNNEL_STATE_META, TUNNEL_TYPE_META, type Tunnel } from "./types";
 
 interface Props {
   className?: string;
 }
 
-/** 端点映射展示：localHost:localPort → remoteHost:remotePort */
+/** 端点映射展示（按隧道类型分支，P3 #24） */
 function formatEndpoint(t: Tunnel): string {
+  if (t.kind === "socks5") {
+    return `SOCKS5 ${t.localHost}:${t.localPort}`;
+  }
+  if (t.kind === "remote") {
+    // 服务器监听地址: bindAddress:实际端口（自动分配时用返回的 bindPort）
+    const serverPort = t.bindPort ?? t.localPort;
+    return `${t.bindAddress}:${serverPort} → ${t.localTargetHost ?? "?"}:${t.localTargetPort ?? "?"}`;
+  }
   return `${t.localHost}:${t.localPort} → ${t.remoteHost}:${t.remotePort}`;
 }
 
@@ -158,6 +166,7 @@ function TunnelRow({
   onStop: () => void;
 }) {
   const meta = TUNNEL_STATE_META[tunnel.state];
+  const typeMeta = TUNNEL_TYPE_META[tunnel.kind];
   const stopping = tunnel.state === "stopping" || tunnel.state === "stopped";
 
   return (
@@ -165,10 +174,20 @@ function TunnelRow({
       className="group relative rounded-md border border-border/50 bg-background/60 px-2.5 py-2 transition-colors hover:border-border hover:bg-muted/40"
       data-testid={`tunnel-row-${tunnel.id}`}
     >
-      {/* 第一行: 名称 + 状态 badge */}
-      <div className="flex items-center gap-2">
+      {/* 第一行: 名称 + 类型 badge + 状态 badge */}
+      <div className="flex items-center gap-1.5">
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">
           {tunnel.name}
+        </span>
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center rounded-full border px-1.5 py-px text-[9.5px] font-medium",
+            typeMeta.badgeClass,
+          )}
+          title={typeMeta.hint}
+          data-testid={`tunnel-kind-${tunnel.id}`}
+        >
+          {typeMeta.label}
         </span>
         <span
           className={cn(

@@ -25,10 +25,12 @@ function makeTunnel(over: Partial<TunnelInfo> = {}): TunnelInfo {
     id: 1,
     name: "远程数据库",
     sessionId: 1,
+    kind: "local",
     localHost: "127.0.0.1",
     localPort: 5432,
     remoteHost: "db.internal",
     remotePort: 5432,
+    bindAddress: "127.0.0.1",
     state: "running",
     connections: 2,
     createdAt: 1000,
@@ -91,11 +93,12 @@ describe("tunnelStore — Tauri 模式", () => {
       remotePort: 5432,
     });
     expect(result).toEqual({ ok: true });
-    // tunnel_start 参数 camelCase（localHost 省略时补默认值）
+    // tunnel_start 参数 camelCase（localHost 省略时补默认值；kind 显式 local）
     expect(mockInvoke).toHaveBeenCalledWith("tunnel_start", {
       spec: {
         name: "t1",
         sessionId: 1,
+        kind: "local",
         localHost: "127.0.0.1",
         localPort: 5432,
         remoteHost: "db.internal",
