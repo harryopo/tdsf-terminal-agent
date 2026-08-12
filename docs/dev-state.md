@@ -3888,3 +3888,19 @@ CDP 全新状态实测通过。commit 见上。
 **接手下一步**：
 - 用户连真实 SSH 服务器实测：新建终端/切换 tab 后切回，SSH 终端内容（含滚动缓冲）完整保留
 - 架构教训已沉淀 DEV-JOURNAL 2026-08-11 条目：移植上游"资源复用"设计必须逐场景核对守卫条件（SSH 缺 foreground job = release 无守卫）；修复前先走"调研竞品/上游 → 我们的场景缺什么 → 对齐而非补丁"三步
+
+### 37.54 "打开软件后语音输入自动触发"调查（2026-08-11 ✅ 已闭环，无代码改动）
+
+**现象**：用户反馈打开软件后"开启一个语音输入"。AskUserQuestion 确认实际现象 = 底部 AI 输入条自动弹出 + 自动聚焦 + 出现录音状态（麦克风按钮）。
+
+**结论**：
+- **无自动触发路径**：`openMini/openPanel/focusInput/attachSelection` 全部调用点（40+ 处）均在用户交互处理器内；`voice.start` 唯一调用点 = AiStatusBarControls 麦克风按钮点击。
+- **真录音物理上不可能**：用户环境 `apiKeys=["deepseek"]`（无 openai key）、sttProvider 默认 "openai" → hasKey=false → `useWhisperRecording.start` 首行 `!hasKey` 直接 return。"录音状态"实为底部输入条上 disabled 的麦克风按钮 UI。
+- **触发链路**：Ctrl+I（ai.toggle）→ `toggleMini() + focusInput(null)` → focusInput 隐藏副作用设 `panelOpen:true + focusSignal+1` → 底部输入条 + 自动聚焦 + 状态栏麦克风按钮出现。用户确认"可能按过" → 肌肉记忆假设成立。
+- 用户选择"先只解释不修"。
+
+**3 个已识别待优化点（用户暂缓）**：① 无 key 时麦克风按钮仍显示（disabled）易误导；② Ctrl+I 同时开浮动小窗 + 底部输入条；③ 启动首帧可能聚焦输入框。
+
+**接手下一步**：
+- 若用户后续配置 whispercpp 等免 key STT，麦克风按钮变可用 → 按优化点 ①② 处理（无 key 隐藏、Ctrl+I 行为精简）
+- 插桩（tdsfTrace + voice.start trace）与临时 cdp-*.mjs 脚本已清理，工作区与 HEAD 一致（git diff 空），无需 commit
