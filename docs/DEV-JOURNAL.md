@@ -1153,3 +1153,27 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ CDP 真实鼠标事件（Input.dispatchMouseEvent）才触发 Radix TabsTrigger——`el.click()` 对 Radix press 语义无效，验证脚本必须用真实鼠标。
 - 📌 **架构决策教训**：移植上游时，凡"资源复用"设计都必须逐场景核对守卫条件（SSH 缺 foreground job = release 无守卫）。后续开发修复前先走"调研竞品/上游怎么解决 → 我们的场景缺什么 → 对齐而非补丁"三步。
 - 📌 Terminal 对象不能跨 CDP evaluate 序列化（returnByValue 返回 undefined）——验证脚本必须单次 evaluate 内联检查。
+
+---
+
+## 2026-08-11 · "打开软件后语音输入自动触发"调查（已闭环，无代码改动）
+
+**现象**：用户反馈打开软件后"开启一个语音输入"。AskUserQuestion 确认实际现象 = 底部 AI 输入条自动弹出 + 自动聚焦 + 出现录音状态（麦克风按钮）。
+
+**调查结论（穷尽 grep + CDP 实测 + 插桩取证）**：
+- **无自动触发路径**：`openMini/openPanel/focusInput/attachSelection` 全部调用点（40+ 处）均在用户交互处理器内；`voice.start` 唯一调用点 = AiStatusBarControls 麦克风按钮点击。
+- **真录音物理上不可能**：用户环境 `apiKeys=["deepseek"]`（无 openai key）、sttProvider 默认 "openai" → hasKey=false → `useWhisperRecording.start` 首行 `!hasKey` 直接 return。"录音状态"实为底部输入条上 disabled 的麦克风按钮 UI。
+- **触发链路**：Ctrl+I（ai.toggle）→ `toggleMini() + focusInput(null)` → focusInput 隐藏副作用设 `panelOpen:true + focusSignal+1` → 底部输入条 + 自动聚焦 + 状态栏麦克风按钮出现。用户确认"可能按过" → 肌肉记忆假设成立。
+- 用户选择"先只解释不修"。
+
+**3 个已识别待优化点（用户暂缓，记入 ROADMAP 候选）**：
+1. 无 OpenAI key 时麦克风按钮仍显示（disabled），易误以为语音已开启 → 可隐藏。
+2. Ctrl+I 同时开浮动小窗 + 底部输入条（toggleMini + focusInput 并存）→ 易造成"自动弹出"错觉。
+3. 启动首帧 focusSignal 消费可能聚焦输入框。
+
+**调试环境坑（血泪）**：插桩触发的 HMR 会让页面白屏——`composer.tsx` 的 `useComposer` 导出与 React Fast Refresh 不兼容（vite 报 "Could not Fast Refresh"），HMR 后 Provider 树与消费方模块实例不一致，React 抛 `useComposer must be used inside <AiComposerProvider>` 组件树炸掉。重启即恢复；生产无 HMR 无此问题。
+
+**复盘**：
+- ✅ **插桩取证闭环**：静态 grep 穷尽后仍与用户现象矛盾（"无操作却有现象"）时，注入 trace 到所有候选 action + 读取调用栈，是定位"自动触发"类问题的最快路径；同时用 CDP 读取用户环境真实配置（apiKeys/sttProvider）排除"物理不可能"分支，避免在错误假设上继续查。
+- ✅ **先确认现象再查代码**：第一轮误以为"语音输入"= 麦克风真录音，AskUserQuestion 后才知道是"输入条弹出 + 聚焦 + 麦克风按钮 UI"——现象定义错则方向全错。
+- 📌 快捷键链路（Ctrl+I → toggleMini + focusInput）用合成 KeyboardEvent 模拟不生效（isTrusted=false 未被处理），但直接调 store action 验证了 DOM 链路；模拟事件需用 CDP Input.dispatchKeyEvent 级真实事件。
