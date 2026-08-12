@@ -3904,3 +3904,28 @@ CDP 全新状态实测通过。commit 见上。
 **接手下一步**：
 - 若用户后续配置 whispercpp 等免 key STT，麦克风按钮变可用 → 按优化点 ①② 处理（无 key 隐藏、Ctrl+I 行为精简）
 - 插桩（tdsfTrace + voice.start trace）与临时 cdp-*.mjs 脚本已清理，工作区与 HEAD 一致（git diff 空），无需 commit
+
+### 37.55 SSH 隧道 P3：远程转发（tcpip_forward）+ SOCKS5 动态转发完成（2026-08-12 ✅，方案书 v1.1 §4，ROADMAP #25）
+
+**能力**：隧道三种模式齐备（对应 OpenSSH -L / -R / -D）：
+- **Local 本地转发**（P2 已有，未变）：本地监听 → direct-tcpip → 远程目标
+- **Remote 远程转发**（新增）：服务器监听 `bind_address:bind_port`（tcpip_forward，port=0 自动分配）→ SSH channel 反推客户端 → 客户端连 `local_target_host:local_target_port`。**依赖 handler.rs 的 `server_channel_open_forwarded_tcpip` 回调**（russh Handler trait 默认空实现直接丢 channel，必须显式实现）+ 全局 `REMOTE_TUNNEL_REGISTRY`（key=(地址,实际端口) → 本地目标）
+- **Socks5 动态转发**（新增）：本地 SOCKS5 代理（NO AUTH 协商 + CONNECT 请求，IPv4/域名/IPv6）→ 按目标动态开 direct-tcpip channel
+
+**文件级改动**：
+- `src-tauri/src/modules/ssh/tunnel.rs`：`TunnelKind` 枚举（Local/Remote/Socks5，serde snake_case，Default=Local）；`TunnelSpec`/`TunnelInfo` 扩展（kind/bind_address/bind_port/local_target_*，`local_port/remote_host/remote_port` 改 serde default 兼容多模式）；`SshTunnel` 加 `remote_port` 字段 + start/stop/info 按 kind 分支；`bridge_connection` 改 pub(crate) 供 handler 复用；SOCKS5 实现（`Socks5Reply` + 纯函数 `socks5_parse_request` + `handle_socks5_connection`）
+- `src-tauri/src/modules/ssh/session.rs`：新增 `tcpip_forward`/`cancel_tcpip_forward`（锁只覆盖一个 RTT）
+- `src-tauri/src/modules/ssh/handler.rs`：`RemoteTarget` + `REMOTE_TUNNEL_REGISTRY` + 3 管理函数 + `server_channel_open_forwarded_tcpip` 回调（查表命中 → spawn connect+bridge；未命中 → close channel 防泄漏）
+- `src-tauri/src/modules/ssh/mod.rs`：re-export TunnelKind；`tunnel_start` 按 kind 分支校验必填字段
+- 前端 `src/lib/tunnel-bridge.ts`（TunnelKind + 可选字段 + tunnelStart 按 kind 透传）、`src/modules/tunnels/types.ts`（TunnelFormData 扩展 + TUNNEL_TYPE_META）、`CreateTunnelDialog.tsx`（类型选择 + 三套条件渲染表单 + 分支校验）、`TunnelPanel.tsx`（formatEndpoint 按 kind 分支 + 类型 badge）
+- 测试：后端 +（SOCKS5 解析 4 / remote+socks5 spec 反序列化 / registry 3 / TunnelInfo remote 序列化）；前端 tunnels 16 测试同步更新
+
+**门禁**：cargo test 全过（327+25+27+1+1）| vitest 982 全过 | typecheck/lint/build:web 全绿
+
+**遗留/注意事项**：
+- Remote 转发受服务器 `sshd_config GatewayPorts` 约束（默认 no 只监听 127.0.0.1）
+- `bind_port=0` → 服务器自动分配，实际端口在 `TunnelInfo.bindPort` 返回
+- 真实端到端验证需跳板机/内网环境（`ssh -R`/`-D` 类比），后续用户实测验收
+- P3 方案文档：`docs/P3-SSH隧道-远程转发与SOCKS5-实施方案.md`
+
+**接手下一步**：用户实测验收三种隧道模式（本地转发回归 + 远程/SOCKS5 新验证）；窗口标题跟随修复、sidecar 崩溃重启退避、AI 入口 3 优化点（用户暂缓）仍在 backlog

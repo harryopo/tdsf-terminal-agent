@@ -852,10 +852,6 @@ P2（中优先级 — 清理 + 文档）：
 - ⚠️ 改进：命令预测功能在首次实现时就应做端到端测试（连接 SSH → 输入命令 → 验证弹窗出现），而不是只验证前端状态
 - 📌 经验：**注释声称有测试但实际不存在** = 最严重的"应付展示"信号；开发完成后的代码审计应成为标配
 
-**五绿门禁**：typecheck ✅ | lint ✅ | test ✅ 944(+40) | build:web ✅ | cargo check ✅
-
----
-
 ## 2026-08-01 · P2-3 运维工具集 7→12 扩展
 
 **任务**：方案书 §4.3 工具扩展路线——新增 service/package/firewall/security/performance 5 个运维工具。
@@ -1177,3 +1173,31 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ **插桩取证闭环**：静态 grep 穷尽后仍与用户现象矛盾（"无操作却有现象"）时，注入 trace 到所有候选 action + 读取调用栈，是定位"自动触发"类问题的最快路径；同时用 CDP 读取用户环境真实配置（apiKeys/sttProvider）排除"物理不可能"分支，避免在错误假设上继续查。
 - ✅ **先确认现象再查代码**：第一轮误以为"语音输入"= 麦克风真录音，AskUserQuestion 后才知道是"输入条弹出 + 聚焦 + 麦克风按钮 UI"——现象定义错则方向全错。
 - 📌 快捷键链路（Ctrl+I → toggleMini + focusInput）用合成 KeyboardEvent 模拟不生效（isTrusted=false 未被处理），但直接调 store action 验证了 DOM 链路；模拟事件需用 CDP Input.dispatchKeyEvent 级真实事件。
+
+---
+
+## 2026-08-12 · SSH 隧道 P3：远程转发（tcpip_forward）+ SOCKS5 动态转发（方案书 v1.1 §4，ROADMAP #25）
+
+**任务**：在 P2 本地转发（direct-tcpip）基础上扩展 russh 远程转发（forward-tcpip，-R）+ SOCKS5 动态转发（-D），参考 chisel-rs。方案见 `docs/P3-SSH隧道-远程转发与SOCKS5-实施方案.md`。
+
+**方案**：
+1. **russh API 确认**（源码级）：`handle.tcpip_forward(address, port)`（port=0 服务器自动分配，返回实际端口）、`cancel_tcpip_forward`；**Handler trait 默认 `server_channel_open_forwarded_tcpip` 是空实现直接丢 channel** → 必须显式实现回调
+2. **后端**：`TunnelKind` 三模式枚举（serde snake_case，Default=Local 向后兼容 P2）；`TunnelSpec`/`TunnelInfo` 扩展（kind/bind_address/bind_port/local_target_*）；`SshTunnel.start/stop/accept_loop/info` 按 kind 分支；`session.rs` 封装 `tcpip_forward`/`cancel_tcpip_forward`（锁只覆盖一个 RTT）；`handler.rs` 全局 `REMOTE_TUNNEL_REGISTRY`（key=(地址,端口) → 本地目标）+ `server_channel_open_forwarded_tcpip` 回调（查表 → spawn TcpStream::connect + bridge_connection）；SOCKS5 纯函数 `socks5_parse_request`（IPv4/域名/IPv6）+ 握手/协商/动态 channel
+3. **前端**：`tunnel-bridge.ts`（TunnelKind + 可选字段透传，按 kind 只传所需字段）；`types.ts`（TunnelFormData 扩展 + TUNNEL_TYPE_META）；`CreateTunnelDialog.tsx`（类型选择 + 三套条件渲染表单 + 分支校验）；`TunnelPanel.tsx`（formatEndpoint 按 kind 分支 + 类型 badge）
+4. **测试**：后端新增 SOCKS5 解析 4 测试 + remote/socks5 spec 反序列化 + registry 3 测试 + TunnelInfo remote 序列化；前端 tunnels 模块 16 测试同步更新
+
+**报错与修改**：
+- **cargo check future not Send（tunnel_stop）**：`remote_port.write().take()` 守卫锁跨 `cancel_tcpip_forward(...).await` → 先取值立即释放锁再 await
+- **make_test_tunnel / other 构造缺 TunnelSpec 新字段（E0063）**：3 处构造点逐一补全（grep 全量定位）
+- **remote/socks5 反序列化测试失败**：`local_port/remote_host/remote_port` 原为必填，remote/socks5 JSON 无此字段 → 改 `#[serde(default)]`（u16→0/String→""），与命令层既有校验（==0/is_empty）吻合
+- **TS2345 spec 联合类型不匹配**：`TunnelSpec.localPort` 必填 vs remote 分支无 localPort → localPort 改可选 + tunnelStart 内防御 throw
+- **TunnelInfo 缺 bind_address**：Remote 前端无法显示服务器监听地址 → Rust 补字段 + info() + 2 处测试构造
+
+**复盘**：
+- ✅ 做对：russh 回调默认空实现丢 channel 的坑通过读源码提前发现，Handler 回调立即返回 Ok 不阻塞主循环
+- ✅ 做对：SOCKS5 解析做成纯函数（`socks5_parse_request` 无 IO）→ 可单测，比内联在 task 里强
+- ✅ 做对：TunnelSpec 用 `#[serde(default)]` 保持 P2 前端零破坏向后兼容
+- ⚠️ 改进：编辑时误删 `bind_address` clone 行导致连锁错误 → 大改后先 `git diff` 复查删除行
+- 📌 经验：**serde 必填字段 vs 多模式可选字段**——模式化结构体建议默认值 + 命令层校验，而非必填字段
+
+**五绿门禁**：typecheck ✅ | lint ✅ | vitest 982 全过 ✅ | build:web ✅ | cargo test 380+ 全过 ✅
