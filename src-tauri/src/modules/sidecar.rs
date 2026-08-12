@@ -1088,6 +1088,41 @@ async fn is_process_alive(_pid: u32) -> u32 {
     2
 }
 
+/// 强制终止进程（TDSF 2026-08-12 新增）
+///
+/// 用途: health_check_task 心跳丢失（Python 死锁/无响应）时杀死进程,
+/// 让 exit_watcher_task 的 child.wait() 返回, 从而复用既有"指数退避重启"
+/// 流程自动恢复, 而非让 AI 功能卡死在 Crashed 直到用户手动重启。
+/// 不用 child.kill() 的原因: exit_watcher_task 已 take 走 Child 句柄
+/// (mutex 内为 None), 这里只能按 pid 系统级终止。
+#[cfg(target_os = "windows")]
+async fn kill_process(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    tokio::task::spawn_blocking(move || unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            return false; // 进程已不存在
+        }
+        let ok = TerminateProcess(handle, 1);
+        CloseHandle(handle);
+        ok != 0
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// 非 Windows 平台: SIGKILL（兼容占位, 与 is_process_alive 风格一致）
+#[cfg(not(target_os = "windows"))]
+async fn kill_process(pid: u32) -> bool {
+    tokio::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// TDSF P1（2026-07-30）: 处理 Python→Rust 反向 JSON-RPC 请求
 ///
 /// 把 method 路由到对应 Tauri 命令，执行后返回结果。
@@ -1443,7 +1478,27 @@ async fn health_check_task(
                         "[sidecar:health] heartbeat lost (no response in {:?})",
                         elapsed
                     );
+                    // TDSF 2026-08-12 修复: 死锁(进程存活但无响应)时按 pid 强杀,
+                    // 让 exit_watcher_task 的 child.wait() 返回 → 既有指数退避重启流程
+                    // 自动恢复。此前只置 Crashed, 死锁进程存活 → 永不重启, AI 卡死到手动 restart。
+                    let pid = state_guard.pid;
                     drop(state_guard);
+                    if let Some(pid_num) = pid {
+                        let killed = kill_process(pid_num).await;
+                        log::warn!(
+                            "[sidecar:health] killed hung pid={} success={}",
+                            pid_num,
+                            killed
+                        );
+                        if !killed {
+                            log::error!(
+                                "[sidecar:health] kill pid={} failed (process gone or no permission)",
+                                pid_num
+                            );
+                        }
+                    } else {
+                        log::warn!("[sidecar:health] no pid recorded, cannot kill");
+                    }
                     let mut state_mut = state.write().await;
                     state_mut.status = SidecarStatus::Crashed;
                     // 通知前端
