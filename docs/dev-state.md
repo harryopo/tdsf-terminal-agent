@@ -3968,3 +3968,20 @@ CDP 全新状态实测通过。commit 见上。
 - ⚠️ 踩坑：`TDSF_SIDECAR_SCRIPT` 必须绝对路径——Rust 进程 cwd 是 `src-tauri/`，相对路径解析失败（WARN fallback to main.py）
 
 **后续待办**：SSH 隧道三模式实测验收；AI 入口 3 优化点（用户暂缓）
+
+---
+
+### 37.58 窗口创建失败排障 + 启动指南（2026-08-15 ✅）
+
+**现象**：`pnpm tauri:dev` 后任务管理器有 tdsf-terminal-agent 进程、sidecar 正常（`ready notification received`），但**主窗口不弹出**。
+
+**根因**：从 **AI 工具沙箱终端**（Trae 等）启动 tauri:dev——沙箱环境导致 WebView2 创建失败。错误码 `0x800700AA 资源在使用中` → 删 `%LOCALAPPDATA%\com.tdsf.terminal-agent\EBWebView` 缓存后变为 `0x8000FFFF 灾难性故障`（缓存清理生效、问题更深=沙箱限制）。正常终端启动无此问题。
+
+**关键教训（已入 DEV-JOURNAL）**：
+1. `MainWindowHandle`/`GetWindowRect` 会命中隐藏辅助窗口（`Tao Thread Event Target` 14×14 = WebView2 消息窗口）——判定"窗口真的打开"须用 EnumWindows 找主窗口（类名 `Chrome_WidgetWin_1`/有标题）
+2. 数据目录由 tauri.conf.json `identifier`（`com.tdsf.terminal-agent`）决定；旧 `app.crynta.terax` 目录与本应用无关，排障别被带偏
+3. **AI 沙箱不能代跑桌面应用实测**——桌面实测必须用户在自有终端执行
+
+**交付**：`docs/启动指南.md`（环境检查/依赖/启动/停止/6 类排障/自检清单）。用户在自己终端跑 `pnpm tauri:dev` 即可正常开窗。
+
+**遗留**：用户自有终端首启若仍失败（WebView2 Runtime 异常等），按启动指南排障 1 处理（删 EBWebView 重建）
