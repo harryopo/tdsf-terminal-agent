@@ -6,6 +6,27 @@
 
 ---
 
+## 2026-08-15 · 用户实测三连修：知识库详情概述卡片 / Skill 去手动调用窗口 / 命令预测（emoji·绿箭头·ipp bug）
+
+**任务**：用户实测反馈 3 类问题：① 知识库详情弹窗空内容 + 排版乱；② skill 面板不需要"让 Agent 调用"窗口，agent 允许时自动调用；③ 命令预测弹窗去 emoji、去掉选中绿色箭头、修复"输 ip 接受 pip 打出 ipp"、压缩命令与翻译间距。
+
+**方案**：
+- ① `KnowledgeDetailDialog`（KnowledgeBrowser.tsx）：不再用 MessageResponse 渲染完整 md（内容空 + 排版乱根因），改简单概述卡片——标题 + 来源/标签 Badge + 分隔线 + `toSummary()` 剥离 md 符号取前 3 行正文。
+- ② `SkillCard`/`SkillsPanel`：删 `onInvoke` prop、删"让 Agent 调用"按钮与 SkillInvoker 懒加载弹窗，仅保留"查看"（SkillContentDialog）+ "目录" + "详情"。
+- ③ `TerminalCompletionPopup`：SOURCE_LABELS 去 emoji 图标（只留文字标签）；删选中项绿色 `←`；翻译从 `ml-auto` 推右改为紧跟命令（`flex-1 truncate`），来源标签保持最右。
+- ③ 核心 `acceptPrediction`（completionInjection.ts）：**ipp bug 根因**——旧实现 `remaining = command.slice(prefix.length)` 直接追加，屏幕上已回显 prefix（如 `ip`），再写 remaining（`p`）拼成 `ipp`；且 fuzzy 匹配的命令不以 prefix 开头，slice 剩余本身不可靠。**修复**：先发 `'\b'.repeat(prefix.length)` 退格清掉已回显 prefix（PTY canonical 行编辑），再写完整命令，结果精确等于选中项。
+
+**报错与修改**：
+- lint `no-useless-escape`：`/[#*_`>~|\[\]()]/g` → `[` 在字符类中是字面量，去转义（保留 `\]`）。
+- 回归测试 2 例初跑失败：① 默认选中项是字典第一条 `ip`（非 fuzzy `pip`），需 ArrowDown 切到目标项；② 模块级 `inputBuffers` 跨测试共享（leafId 1 残留），换 leafId 隔离；③ `key()` 假对象缺 `preventDefault` 导致 `event.preventDefault is not a function`。
+
+**复盘**：
+- ✅ **"先退格再写完整命令"比"追加剩余"鲁棒**：不依赖预测命令与输入的前缀关系，fuzzy/dictionary/history 三层通吃。
+- ⚠️ 写测试时先想**模块级状态共享**（inputBuffers Map、engine 单例），别让前一个测试污染后一个。
+- 📌 命令预测任何按键/接受路径改动，都必须实测本地 + SSH 双端（canonical 行编辑退格行为一致，但 SSH 远端 shell 差异需真机确认）。
+
+---
+
 ## 2026-08-11 · 文档滞后修正：ROADMAP #20 服务器监控早已完成（用户指出）
 
 **任务**：用户问"下一步是啥"，我按 ROADMAP 推荐 #20 监控仪表盘为待开发项；用户反问"仪表盘不是做完了吗，你的开发进度更新了吗？"——核实后确认用户完全正确。
