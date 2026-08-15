@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-11 · 服务器监控 #20 确认完成 + 文档滞后修正（§37.52）。接手请直接看 **§37.52**（最新）+ **§37.51**（审计收尾）+ **§37.50**（SSH 隧道）+ **§37.49**（Snippets）
+> **最后更新**：2026-08-15 · 用户实测三连修：知识库详情概述 + Skill 去调用窗口 + 命令预测修复（§37.59）。接手请直接看 **§37.59**（最新）+ **§37.58**（启动/排障）+ **§37.57**（sidecar 死锁自愈）+ **§37.56**（窗口标题）
 
 ---
 
@@ -16,12 +16,9 @@
 
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
-**最新里程碑（2026-08-11）**：
-- §37.48 本地+SSH 混合分屏（ROADMAP #21，commit 84f2941）
-- §37.49 P2 代码片段管理 Snippets（方案书 v1.1 §5，commit 9463f9e）
-- §37.50 P2 SSH 隧道本地转发 direct-tcpip（方案书 v1.1 §4，commit aa29dd7）
-- §37.51 架构审计 P0-P3 全部收尾（ARCHITECTURE-AUDIT-2026-08-10 23 项 + P2 #13 弹窗跟随光标，commit a41d33e）
-- §37.52 服务器监控 #20 确认完成 + 文档滞后修正（commit dd94aed）
+**最新里程碑（2026-08-15）**：
+- §37.58 窗口创建失败排障 + 启动指南（docs/启动指南.md，commit 59e643e + a5a8901）
+- §37.59 用户实测三连修：知识库详情概述卡片 + Skill 去手动调用窗口 + 命令预测三修（commit 9ec99db）
 
 ---
 
@@ -3985,3 +3982,18 @@ CDP 全新状态实测通过。commit 见上。
 **交付**：`docs/启动指南.md`（环境检查/依赖/启动/停止/6 类排障/自检清单）。用户在自己终端跑 `pnpm tauri:dev` 即可正常开窗。
 
 **遗留**：用户自有终端首启若仍失败（WebView2 Runtime 异常等），按启动指南排障 1 处理（删 EBWebView 重建）
+
+### 37.59 用户实测三连修：知识库详情概述 / Skill 去调用窗口 / 命令预测修复（2026-08-15 ✅，commit 9ec99db）
+
+**现象**（用户实测）：① 知识库详情弹窗空内容 + 排版乱；② skill 面板"让 Agent 调用"窗口多余；③ 命令预测弹窗出现 emoji、选中项绿色箭头、`打 ip 出现 pip 但右箭头打出 ipp`、命令与翻译间距太空。
+
+**修复**：
+- ① `KnowledgeDetailDialog` 改为简单概述卡片（标题+来源/标签 Badge+`toSummary()` 前 3 行正文），不再渲染完整 md
+- ② 移除 `SkillInvoker` 手动调用弹窗（SkillCard `onInvoke` prop/按钮、SkillsPanel 懒加载入口全删），agent 允许时自动调用；保留"查看/目录/详情"
+- ③ 预测弹窗：SOURCE_LABELS 去 emoji 图标；删绿色 `←`；翻译紧跟命令（`flex-1 truncate`）压缩间距
+- ③ ipp bug：`acceptPrediction` 改为先发 `'\b'.repeat(prefix.length)` 退格清已回显前缀、再写完整命令（旧逻辑 `slice(prefix.length)` 追加既拼错又对 fuzzy 前缀关系假设错误）
+- 新增 `acceptPrediction` 回归测试 2 例（fuzzy/history 场景），984 tests 全过
+
+**门禁**：typecheck / lint(0 警告) / test(984) / build:web 全绿；`tauri:dev` 桌面实测待用户验证。
+
+**遗留**：① 启动.bat 未跟踪（是否入库待定）；② SSH 端退格接受预测需真机再验（canonical 行编辑理论一致）
