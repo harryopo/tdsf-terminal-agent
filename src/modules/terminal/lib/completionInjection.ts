@@ -18,6 +18,8 @@
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
 import { getSuggestEngine, type SuggestionResult } from '@/lib/suggest-engine';
+import { getCommandSpec } from '@/lib/spec-data/loader';
+import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
 
 // ============================================================================
 // 类型
@@ -176,14 +178,48 @@ export function getCompletionState(): CompletionState {
 // 更新预测
 // ============================================================================
 
-function updatePredictions(leafId: number): void {
+/** 预测请求序号：防止异步参数加载结果覆盖更新的输入 */
+let predictSeq = 0;
+
+async function updatePredictions(leafId: number): Promise<void> {
+  const seq = ++predictSeq;
   const prefix = getInputBuffer(leafId);
-  // 空前缀或含空格 → 不弹预测（已经在输参数了）
-  if (!prefix || prefix.includes(' ')) {
+  if (!prefix || prefix.trim() === '') {
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return;
   }
 
+  if (prefix.includes(' ')) {
+    // ── 参数模式：命令 + 子命令/选项/参数值（Fig spec 开源数据） ──────────
+    const { cmd } = parseCommandLine(prefix);
+    if (!cmd) {
+      setState((s) => (s.visible ? { ...s, visible: false } : s));
+      return;
+    }
+    // 首次触发全量 spec 懒加载（~11MB 独立 chunk，本地读取百毫秒级）
+    const spec = await getCommandSpec(cmd);
+    if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
+    if (!spec) {
+      setState((s) => (s.visible ? { ...s, visible: false } : s));
+      return;
+    }
+    const items = suggestParams(spec, prefix, 8);
+    if (items.length === 0) {
+      setState((s) => (s.visible ? { ...s, visible: false } : s));
+    } else {
+      setState({
+        visible: true,
+        items,
+        selectedIndex: 0,
+        prefix,
+        leafId,
+        cursor: measureCursorPx(getTermFn, leafId),
+      });
+    }
+    return;
+  }
+
+  // ── 命令模式：history → 索引 startsWith → fuzzy（fish 三层） ────────────
   const engine = getSuggestEngine();
   const items = engine.getSuggestions(prefix, 5);
   if (items.length === 0) {
@@ -211,6 +247,36 @@ export function closeCompletion(): void {
 
 function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   if (!writeFn) return;
+
+  // ── 参数模式：替换当前 token（-n/--noheadings/子命令/参数值） ──────────
+  if (entry.kind === 'arg') {
+    const line = getInputBuffer(leafId);
+    if (/\s+$/.test(line)) {
+      // 刚打完空格（如 `lsblk -o ` 选 NAME）：直接追加建议文本 + 空格
+      writeFn(leafId, entry.command + ' ');
+      setInputBuffer(leafId, line + entry.command + ' ');
+    } else {
+      // 光标在行尾 token 中间（如 `lsblk -` 选 --noheadings）：
+      // 先退格删掉已回显的当前 token，再写入建议文本
+      const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
+      const current = tokens[tokens.length - 1] ?? '';
+      if (current) {
+        writeFn(leafId, '\b'.repeat(current.length) + entry.command);
+        // 缓冲区同步替换（保留前面的 "cmd sub " 前缀）
+        setInputBuffer(
+          leafId,
+          line.slice(0, line.length - current.length) + entry.command,
+        );
+      } else {
+        writeFn(leafId, entry.command);
+        setInputBuffer(leafId, line + entry.command);
+      }
+    }
+    setState((s) => ({ ...s, visible: false }));
+    return;
+  }
+
+  // ── 命令模式 ────────────────────────────────────────────────────────────
   const prefix = getInputBuffer(leafId);
   // 修复 ipp bug（2026-08-15）：屏幕上已回显 prefix，若直接追加 remaining
   // 会拼成 prefix+remaining（输入 ip 接受 pip 变 ipp）；且 fuzzy 匹配的

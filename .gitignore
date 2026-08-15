@@ -92,6 +92,7 @@ src-tauri/sidecar/skills/auto-generated/
 # 会话临时产物 (2026-07-29 基线固化时补充)
 lint-*.txt
 .tmp-*
+.tmp/
 .codegraph/
 .tdsf-data/
 .claude/
