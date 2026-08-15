@@ -29,6 +29,7 @@ const SOURCE_LABELS: Record<
   history: { label: '历史', color: 'text-blue-500' },
   dictionary: { label: '', color: 'text-muted-foreground' },
   fuzzy: { label: '模糊', color: 'text-amber-500' },
+  arg: { label: '参数', color: 'text-violet-500' },
 };
 
 export function TerminalCompletionPopup() {
@@ -171,13 +172,13 @@ export function TerminalCompletionPopup() {
             >
               {item.command}
             </span>
-            {/* 中文翻译：紧跟命令，中间可收缩截断，避免右侧来源标签被挤出 */}
-            {item.zh && (
+            {/* 说明文字：中文翻译优先，参数建议回退英文描述（Fig spec） */}
+            {(item.zh || item.description) && (
               <span
                 className="min-w-0 flex-1 truncate text-[10.5px] text-muted-foreground"
-                title={item.zh}
+                title={item.zh ?? item.description}
               >
-                {item.zh}
+                {item.zh ?? item.description}
               </span>
             )}
             {/* 来源标签（固定最右） */}

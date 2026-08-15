@@ -1,0 +1,168 @@
+/**
+ * build-fig-specs.mjs — 从 withfig/autocomplete 编译全量命令 spec（TS → JSON）
+ * -----------------------------------------------------------------------------
+ * 数据源：opensource-reference/fig-autocomplete/src/*.ts（715+ 命令 spec，
+ *         含 options/-n/-y、subcommands、args.suggestions）
+ *
+ * 为什么不用 @fig/* 包：
+ *   - Fig 不发布编译后的 specs 到 npm；源码是 TS，import 了
+ *     @fig/autocomplete-generators / @fig/autocomplete-helpers / @withfig/autocomplete-types
+ *   - 本项目沙箱无法 pnpm add（store index 临时文件被沙箱拦截）
+ *   → 直接复用 vite 内置的 esbuild（require.resolve 从 vite 依赖树找），
+ *     用 onResolve 插件把上述 3 个包指向本地 stub（生成器是运行时函数，
+ *     序列化为 JSON 时会被丢弃，stub 只需导出占位名）。
+ *
+ * 产物：
+ *   src/lib/spec-data/generated/spec-index.ts  命令名索引（主 bundle 静态引入）
+ *   src/lib/spec-data/generated/specs.json     全量干净 spec（懒加载 chunk）
+ *
+ * 用法：node scripts/build-fig-specs.mjs
+ * -----------------------------------------------------------------------------
+ */
+import { createRequire } from "node:module";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const FIG_SRC = join(ROOT, "opensource-reference/fig-autocomplete/src");
+const OUT_DIR = join(ROOT, "src/lib/spec-data/generated");
+const TMP_DIR = join(ROOT, ".tmp-specs");
+
+// 定位 vite 依赖树里的 esbuild（本项目无直接 esbuild 依赖）
+const vitePkgPath = require.resolve("vite/package.json");
+const esbuildMain = require.resolve("esbuild/lib/main.js", {
+  paths: [dirname(vitePkgPath)],
+});
+const esbuild = await import(pathToFileURL(esbuildMain).href);
+
+// ---- stub：spec 依赖的 @fig/* 包（运行时函数序列化时丢弃，无需真实实现） ----
+const STUB = `
+export const filepaths = () => [];
+export const valueList = () => [];
+export const keyValueList = () => [];
+export const keyValue = () => [];
+export const ai = () => [];
+export const createVersionedSpec = (s) => s;
+export const Fig = {};
+`;
+const stubUrl = pathToFileURL(join(TMP_DIR, "_stub.mjs")).href;
+
+const figResolvePlugin = {
+  name: "fig-stubs",
+  setup(build) {
+    build.onResolve({ filter: /^(@fig\/|@withfig\/)/ }, () => ({
+      path: stubUrl,
+      namespace: "stub",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
+      contents: STUB,
+      loader: "js",
+    }));
+  },
+};
+
+/** 深度清理：剥离 icon(emoji)/generators 动态脚本，避免弹窗出现 emoji 且减体积 */
+function cleanSpec(node) {
+  if (Array.isArray(node)) return node.map(cleanSpec).filter((v) => v !== undefined);
+  if (node && typeof node === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "icon" || k === "generators" || k === "isDangerous") continue;
+      if (typeof v === "function") continue;
+      out[k] = cleanSpec(v);
+    }
+    return out;
+  }
+  return node;
+}
+
+rmSync(TMP_DIR, { recursive: true, force: true });
+mkdirSync(TMP_DIR, { recursive: true });
+mkdirSync(OUT_DIR, { recursive: true });
+
+// 顶层命令 spec（排除 scoped 目录 @fig/@usermn 等 + 非 spec 目录）
+const specFiles = readdirSync(FIG_SRC)
+  .filter((f) => f.endsWith(".ts") && !f.startsWith("@"));
+
+const index = [];
+const specs = {};
+let skipped = 0;
+for (const f of specFiles) {
+  const name = f.replace(/\.ts$/, "");
+  const outFile = join(TMP_DIR, `${name}.mjs`);
+  try {
+    await esbuild.build({
+      entryPoints: [join(FIG_SRC, f)],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      target: "node18",
+      outfile: outFile,
+      plugins: [figResolvePlugin],
+      logLevel: "silent",
+    });
+    const mod = await import(pathToFileURL(outFile).href);
+    let spec = mod.default ?? mod.completionSpec;
+    if (typeof spec === "function") spec = spec(); // createVersionedSpec 包装
+    if (!spec || typeof spec !== "object") {
+      skipped++;
+      index.push({ name, hasOptions: false, hasSubcommands: false });
+      continue;
+    }
+    const clean = cleanSpec(spec);
+    // 兜底：名字以 spec.name 为准（个别文件与命令名不同）
+    const cmd = typeof clean.name === "string" ? clean.name : name;
+    specs[cmd] = clean;
+    index.push({
+      name: cmd,
+      description:
+        typeof clean.description === "string" ? clean.description : undefined,
+      hasOptions: Array.isArray(clean.options) && clean.options.length > 0,
+      hasSubcommands:
+        Array.isArray(clean.subcommands) && clean.subcommands.length > 0,
+    });
+  } catch (err) {
+    skipped++;
+    index.push({ name, hasOptions: false, hasSubcommands: false });
+    console.warn(`[skip] ${name}: ${String(err).split("\n")[0]}`);
+  }
+}
+
+// 去重 + 字母序排序（同一命令可能出现多次——如 git/broot/ns；排序保证
+// "git" 先于 "git-cliff"，让 Layer 2 前缀匹配稳定命中精确命令名）
+const seenNames = new Set();
+const uniqueIndex = [];
+for (const e of index) {
+  if (seenNames.has(e.name)) continue;
+  seenNames.add(e.name);
+  uniqueIndex.push(e);
+}
+uniqueIndex.sort((a, b) => a.name.localeCompare(b.name));
+
+// 索引（TS 模块，主 bundle 静态引入）
+const indexTs = `// GENERATED by scripts/build-fig-specs.mjs — DO NOT EDIT
+export interface SpecIndexEntry {
+  name: string;
+  description?: string;
+  hasOptions: boolean;
+  hasSubcommands: boolean;
+}
+export const SPEC_INDEX: SpecIndexEntry[] = ${JSON.stringify(uniqueIndex)};
+`;
+writeFileSync(join(OUT_DIR, "spec-index.ts"), indexTs);
+
+// 全量 spec（懒加载 JSON）
+writeFileSync(
+  join(OUT_DIR, "specs.json"),
+  JSON.stringify(specs),
+  "utf8",
+);
+
+rmSync(TMP_DIR, { recursive: true, force: true });
+
+const size = JSON.stringify(specs).length / 1024 / 1024;
+console.log(
+  `done: ${index.length} commands (skipped ${skipped}), specs.json ${size.toFixed(2)}MB`,
+);

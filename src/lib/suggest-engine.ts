@@ -18,20 +18,25 @@
  */
 import fuzzysort from "fuzzysort";
 import { COMMAND_LIST, type CommandDictEntry } from "./command-dictionary";
+import { SPEC_INDEX } from "./spec-data/generated/spec-index";
 
 // ============================================================================
 // 类型
 // ============================================================================
 
 export interface SuggestionResult {
-  /** 完整的建议命令（含已输入前缀） */
+  /** 完整的建议命令（含已输入前缀）或参数建议文本（-n/--noheadings） */
   command: string;
-  /** 来源：history / dictionary / fuzzy */
-  source: "history" | "dictionary" | "fuzzy";
-  /** 中文翻译（仅 dictionary 来源有） */
+  /** 来源：history / dictionary / fuzzy（命令层）/ arg（参数层） */
+  source: "history" | "dictionary" | "fuzzy" | "arg";
+  /** 中文翻译（仅手编词典覆盖的命令有） */
   zh?: string;
+  /** 英文描述（Fig spec description / 参数说明） */
+  description?: string;
   /** fuzzy 匹配分数（仅 fuzzy 来源有，越低越好） */
   score?: number;
+  /** 建议类别：cmd=命令名预测，arg=参数预测（替换当前 token） */
+  kind?: "cmd" | "arg";
 }
 
 // ============================================================================
@@ -46,15 +51,21 @@ export class SuggestEngine {
   /** 历史最大保留条数 */
   private readonly maxHistory = 500;
 
-  /** 命令名数组（用于 fuzzysort） */
+  /** 命令名数组（用于 fuzzysort；数据源 = Fig spec 索引 715+ 命令） */
   private commandNames: string[];
-  /** 命令名 → CommandDictEntry 的映射 */
+  /** 命令名 → CommandDictEntry 的映射（中文翻译增强，手编词典覆盖子集） */
   private commandMap: Map<string, CommandDictEntry>;
+  /** 命令名 → 英文描述（Fig spec description） */
+  private descMap: Map<string, string | undefined>;
 
   constructor() {
-    // 构建命令名 → entry 映射
+    // 中文翻译映射（手编词典，180+ 常用命令）
     this.commandMap = new Map(COMMAND_LIST.map((e) => [e.command, e]));
-    this.commandNames = COMMAND_LIST.map((e) => e.command);
+    // 命令名数据源：Fig spec 索引（开源全量）
+    this.commandNames = SPEC_INDEX.map((e) => e.name);
+    this.descMap = new Map(
+      SPEC_INDEX.map((e) => [e.name, e.description]),
+    );
   }
 
   // ========================================================================
@@ -94,17 +105,19 @@ export class SuggestEngine {
       results.push({ command: cmd, source: "history" });
     }
 
-    // ── Layer 2: 命令字典精确匹配（startsWith） ─────────────────────────
+    // ── Layer 2: 命令索引精确匹配（startsWith，Fig spec 全量数据源） ─────
     const lower = input.toLowerCase();
-    for (const entry of COMMAND_LIST) {
+    for (const name of this.commandNames) {
       if (results.length >= limit) break;
-      if (seen.has(entry.command)) continue;
-      if (entry.command.toLowerCase().startsWith(lower)) {
-        seen.add(entry.command);
+      if (seen.has(name)) continue;
+      if (name.toLowerCase().startsWith(lower)) {
+        seen.add(name);
+        const entry = this.commandMap.get(name);
         results.push({
-          command: entry.command,
+          command: name,
           source: "dictionary",
-          zh: entry.zh,
+          zh: entry?.zh,
+          description: this.descMap.get(name),
         });
       }
     }
