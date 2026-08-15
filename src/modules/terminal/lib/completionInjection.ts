@@ -212,10 +212,13 @@ export function closeCompletion(): void {
 function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   if (!writeFn) return;
   const prefix = getInputBuffer(leafId);
-  const remaining = entry.command.slice(prefix.length);
-  if (remaining) {
-    writeFn(leafId, remaining);
-  }
+  // 修复 ipp bug（2026-08-15）：屏幕上已回显 prefix，若直接追加 remaining
+  // 会拼成 prefix+remaining（输入 ip 接受 pip 变 ipp）；且 fuzzy 匹配的
+  // 命令不以 prefix 开头，slice(prefix.length) 取剩余部分不可靠。
+  // 方案：先发等量退格清掉屏幕上已回显的 prefix（PTY canonical 行编辑
+  // 删除行尾字符并回显），再写入完整命令，保证结果精确等于选中项。
+  const backspaces = prefix.length > 0 ? '\b'.repeat(prefix.length) : '';
+  writeFn(leafId, backspaces + entry.command);
   // 更新输入缓冲区为完整命令
   setInputBuffer(leafId, entry.command);
   // 添加到历史

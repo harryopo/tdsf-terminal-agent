@@ -9,8 +9,12 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Terminal as XTerm } from "@xterm/xterm";
+import { getSuggestEngine } from "@/lib/suggest-engine";
 import {
+  completionKeyHandler,
   computePopupPosition,
+  getCompletionState,
+  initCompletionInjection,
   measureCursorPx,
   POPUP_WIDTH,
 } from "./completionInjection";
@@ -160,5 +164,86 @@ describe("computePopupPosition", () => {
       5,
     );
     expect(pos.left).toBe(8);
+  });
+});
+
+// === acceptPrediction（2026-08-15 ipp bug 回归） =============================
+// 用户场景：输入 "ip" → fuzzy 预测 "pip"，按右箭头接受。
+// 旧实现：remaining = "pip".slice(2) = "p" 直接追加到已回显的 "ip" → "ipp"。
+// 修复：先发等量退格清掉屏幕上已回显的 prefix，再写入完整命令。
+
+/** 构造最小可测键盘事件（completionKeyHandler 用到的字段） */
+function key(k: string): KeyboardEvent {
+  return {
+    type: "keydown",
+    key: k,
+    keyCode: k.length === 1 ? k.charCodeAt(0) : 0,
+    isComposing: false,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    preventDefault: () => {},
+  } as unknown as KeyboardEvent;
+}
+
+/** 等待 setTimeout(0) 微任务（updatePredictions 在定时器里跑） */
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+describe("acceptPrediction", () => {
+  it("接受 fuzzy 预测时先退格清 prefix 再写完整命令（输 ip 接受 pip）", async () => {
+    // 清空历史，避免 history/dictionary 前缀命中干扰 fuzzy 层
+    getSuggestEngine().clearHistory();
+    const written: string[] = [];
+    initCompletionInjection(
+      () => null,
+      (_leafId, data) => {
+        written.push(data);
+      },
+    );
+
+    // 输入 "ip"
+    expect(completionKeyHandler(1, key("i"))).toBe(true);
+    expect(completionKeyHandler(1, key("p"))).toBe(true);
+    await tick();
+
+    const state = getCompletionState();
+    expect(state.visible).toBe(true);
+    // 复现用户场景：预测列表里存在 fuzzy 来源的 "pip"
+    const pipIndex = state.items.findIndex(
+      (it) => it.command === "pip" && it.source === "fuzzy",
+    );
+    expect(pipIndex).toBeGreaterThanOrEqual(0);
+
+    // 下移选中 fuzzy 的 "pip"，再右箭头接受
+    for (let i = 0; i < pipIndex; i++) {
+      expect(completionKeyHandler(1, key("ArrowDown"))).toBe(false);
+    }
+    expect(completionKeyHandler(1, key("ArrowRight"))).toBe(false);
+    // 写入 = 2 个退格 + 完整命令 "pip"，而非 "p" 追加成 "ipp"
+    expect(written).toEqual(["\b\b" + "pip"]);
+  });
+
+  it("接受 history 预测时同样先退格再写完整命令", async () => {
+    // 用独立 leafId 隔离输入缓冲区（leafId 1 已在上一个测试使用）
+    getSuggestEngine().clearHistory();
+    getSuggestEngine().loadHistory(["ipp"]);
+    const written: string[] = [];
+    initCompletionInjection(
+      () => null,
+      (_leafId, data) => {
+        written.push(data);
+      },
+    );
+
+    expect(completionKeyHandler(2, key("i"))).toBe(true);
+    expect(completionKeyHandler(2, key("p"))).toBe(true);
+    await tick();
+
+    const state = getCompletionState();
+    expect(state.visible).toBe(true);
+    expect(state.items[0]?.command).toBe("ipp");
+
+    expect(completionKeyHandler(2, key("ArrowRight"))).toBe(false);
+    expect(written).toEqual(["\b\b" + "ipp"]);
   });
 });
