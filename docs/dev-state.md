@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-15 · 命令预测升级：开源 Fig specs 集成（715 命令）+ 参数预测（-n/-y）（§37.60）。接手请直接看 **§37.60**（最新）+ **§37.59**（三连修）+ **§37.58**（启动/排障）+ **§37.57**（sidecar 死锁自愈）
+> **最后更新**：2026-08-15 · 知识库详情空内容根治：list/get 数据源割裂修复（§37.61）。接手请直接看 **§37.61**（最新）+ **§37.60**（开源命令预测）+ **§37.59**（三连修）
 
 ---
 
@@ -4019,3 +4019,21 @@ CDP 全新状态实测通过。commit 见上。
 **门禁**：typecheck / lint(0) / test(994，含新增 paramSuggest 10 例) / build:web 全绿；`tauri:dev` 实测待用户验证（打 `lsblk` 看命令、`lsblk -` 看参数、`apt install --` 看长选项）。
 
 **遗留**：① specs.json 11MB 已入库（离线可用）；② 动态 generators（需执行远端 shell 的包名/主机名补全）不在静态预测范围；③ 更新数据源 = 重跑构建脚本（git 拉新 src 后 `node scripts/build-fig-specs.mjs`）
+
+### 37.61 知识库详情弹窗空内容根治：list/get 数据源割裂（2026-08-15 ✅）
+
+**用户反馈**：知识库 UI 未更新、点击条目弹出的详情弹窗不显示内容。
+
+**根因（实测定位，非猜测）**：
+- `knowledge.list`/`knowledge.search`(hybrid) 走 **RagIndex（rag.db）**，`knowledge.get`/`knowledge.count` 却走**旧 FTS5Index（knowledge.db）**——两套独立数据库文件
+- 实测：rag.db **11 条**、knowledge.db **0 条** → 列表正常显示，详情永远 "entry not found" → 弹窗空白
+- 后端字段 id/title/content 全匹配，前端 5 项测试 mock 全过——**只有真数据链路能暴露这个割裂**
+
+**修复**：
+- `rag.py` 新增 `RagIndex.get(entry_id)`（与 list_entries 同构，列表/详情同源）
+- `rpc.py` `knowledge.get`/`knowledge.count` 改走 get_global_rag()（`_add`/`_rebuild` 保留旧实现，前端无调用点）
+- `test_rag.py` 补 2 例回归（get 全字段 + 不存在返回 None）
+
+**门禁**：knowledge/tests 17 全过；sidecar 全量 1428 过（5 失败均为既有失败：long_context 摘要/needs_you 枚举/toolset 数量，与本次改动无交集）。前端样式沿用 §37.59 概述卡片版，**用户需重新 `pnpm tauri:dev` 才能看到新版 UI + 有内容的弹窗**。
+
+**遗留**：sidecar 全量 5 个既有失败待专项排查（test_long_context 3 + test_needs_you 1 + test_e2e_strands 1）；`.tdsf-data/chroma` 测试写盘被 AI 沙箱拦截（用户终端跑无此问题）
