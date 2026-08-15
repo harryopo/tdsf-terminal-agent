@@ -1315,3 +1315,20 @@ P2（中优先级 — 清理 + 文档）：
 - ⚠️ 教训 2：**identifier 决定一切数据目录**（Roaming/LocalAppData/EBWebView/user-data-dir），排障前先读 tauri.conf.json 确认 identifier，别被旧目录带偏
 - ⚠️ 教训 3：**AI 沙箱终端不能跑桌面应用实测**——沙箱会拦截 WebView2 所需资源；"AI 代为启动桌面应用"必须降级为"提供文档让用户在自己终端启动"
 - ✅ 做对：用 EnumWindows + user-data-dir 过滤逐步逼近根因，每步有证据；用 mcp_filesystem 绕过 RunCommand 沙箱限制完成 AppData 操作
+
+## 2026-08-15 · 命令预测升级：开源 Fig specs 集成 + 参数预测（ROADMAP #8）
+
+**任务**：用户反馈命令覆盖太少（lsblk 未收录），反对继续手编词典，要求集成开源方案；并扩展预测到参数（-n/-y/--long/参数值）。
+
+**方案**：选定 withfig/autocomplete（MIT，715+ 命令 spec）→ `scripts/build-fig-specs.mjs` 编译 TS spec → JSON（复用 vite 内置 esbuild + stub 解析 @fig/* 依赖，**零新增依赖**，绕过沙箱 pnpm add 拦截）→ `spec-index.ts`（707 唯一命令）+ `specs.json`（11MB 懒加载）→ 前端 `spec-data/`（types/loader/paramSuggest）+ suggest-engine 命令层切到开源索引 + completionInjection 参数模式。
+
+**报错与修改**（根因 → 解法）：
+1. **suggest-engine 2 测试挂**（git 匹配不到）→ 根因：spec-index 按 glob 文件序 + 重复项（git×2/broot×2/ns×3），"git" 排在 "git-cliff" 后被 limit 截断 → 构建脚本**去重+字母序排序**
+2. **`lsblk -o ` 参数值建议空** → 根因 1：`parseCommandLine` 用 `trim()` 吞尾随空格，current 变 "-o" 而非空串；根因 2：`if (!current) return []` 误伤；根因 3：suggestions 挂在 option.args 而非 node.args → 三处修：保留 trailingSpace 判断、空守卫改 `!cmd`、option 带 args 时只建议其参数值
+3. **acceptPrediction 边界**：刚打完空格（行尾空格）会退格误删前一 token → 行尾空格直接追加+空格，否则退格替换当前 token
+
+**复盘**：
+- ✅ 做对：坚持用户"开源优先"路线，不补手编词典；图 spec 数据天然含 options/subcommands/suggestions，一石三鸟；懒加载 11MB 不影响启动；predictSeq 防 stale 覆盖
+- ⚠️ 教训：**trim() 会吞尾随空格**——凡"光标处 token"解析必须显式保留行尾空格信息（/^\s+$/），否则"刚打完空格"与"正在输入 token"无法区分
+- ⚠️ 教训：**测试是数据源切换的照妖镜**——suggest-engine 旧测试（git 前缀匹配）第一时间暴露了 spec-index 乱序+重复问题；数据源变更必须保留并跑旧回归测试
+- 待办：用户 tauri:dev 实测（lsblk / lsblk - / apt install --）；动态 generators（远端 shell 执行）不在静态预测范围，后续可做"SSH 回显包名补全"

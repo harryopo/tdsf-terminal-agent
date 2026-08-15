@@ -57,7 +57,7 @@
 | 5 | **dev 启动规范**（§37.24 教训）：长期进程禁管道截断；dev 误用打包 exe 时删 target/debug/sidecar | 规范 | 无 | 无 |
 | 6 | ~~**WorkspaceFs 文件系统视图重构**~~ ✅ 完成：FsBackend trait + LocalFs/SftpFs + 单 store（§37.33，双根因修复：双轨竞态 + OSC 7 泄漏，CDP 10/10 稳定） | 架构 | 大 | 无 |
 | 7 | **用户实测 WorkspaceFs**：创建 SSH Space → 远程树稳定无闪跳 → 断开降级横幅 | 验收 | 需用户 | 无 |
-| 8 | **命令行自动补全/预测**（用户 2026-08-08 意向）：xterm 输入补全 → 命令建议（历史 + 词典 + AI），先调研 yazi/terax 做法再规划 | ✅ 已完成 | completionInjection.ts 统一注入 rendererPool（本地+SSH 通吃）：按键追踪缓冲 + 三层引擎（history/dictionary/fuzzy）+ 弹窗跟随光标（P2 #13）；2026-08-15 修复 ipp bug（退格清前缀再写完整命令）+ 去 emoji/绿箭头/压缩间距（commit 9ec99db） |
+| 8 | **命令行自动补全/预测**（用户 2026-08-08 意向）：xterm 输入补全 → 命令建议（历史 + 词典 + AI），先调研 yazi/terax 做法再规划 | ✅ 已完成 | completionInjection.ts 统一注入 rendererPool（本地+SSH 通吃）：按键追踪缓冲 + 三层引擎（history/dictionary/fuzzy）+ 弹窗跟随光标（P2 #13）；2026-08-15 修复 ipp bug + 去 emoji/绿箭头/压缩间距（commit 9ec99db）；2026-08-15 升级：**集成开源 withfig/autocomplete（707 唯一命令）取代手编词典为主数据源 + 参数预测**（options -n/-y/--long、subcommands、参数值）——spec-index 静态索引 + specs.json 11MB 懒加载，构建脚本 scripts/build-fig-specs.mjs |
 | 8.5 | **SSH 选中翻译链路收尾**（§37.34/37.35）：✅ 已修复并 CDP 全链路实测（根因 = 修剪 effect 误删 SSH leaf handle → live 集合纳入 sshLid + captureActiveSelection 改 rendererPool slot 直读，见 §37.35） | ✅ 完成 | 中 | 2026-08-09 |
 | 9 | **窗口标题跟随修复**（遗留）：SSH Space 下标题显示本地目录名（§37.32 后仍未验证） | ✅ 已完成 | 2026-08-12；useWindowTitle 加第三参数 sshLocation，SSH Space 时标题直接显示 user@host:path（随 cd 跟随）；详见 dev-state §37.56 |
 | 10 | **方案书集成度补齐**（启动验证发现的差距）：~~P1 HITL 四决策（edit/respond/trust）~~ / ~~Strands teach 字段契约（teaching_content）~~ / ~~缺 3 工具（get_terminal_output·config_diff·backup_restore）~~ / ~~决策库完善（向量检索+history 检索）~~ / ~~可信度模块接入 Strands 主路径~~ | ✅ 已完成 | 全部完成（commit a5be217 + 784252c）；HITL 四决策 + teach 清理 + 3 工具 + 可信度 + 决策库接线 |

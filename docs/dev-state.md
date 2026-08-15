@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-15 · 用户实测三连修：知识库详情概述 + Skill 去调用窗口 + 命令预测修复（§37.59）。接手请直接看 **§37.59**（最新）+ **§37.58**（启动/排障）+ **§37.57**（sidecar 死锁自愈）+ **§37.56**（窗口标题）
+> **最后更新**：2026-08-15 · 命令预测升级：开源 Fig specs 集成（715 命令）+ 参数预测（-n/-y）（§37.60）。接手请直接看 **§37.60**（最新）+ **§37.59**（三连修）+ **§37.58**（启动/排障）+ **§37.57**（sidecar 死锁自愈）
 
 ---
 
@@ -19,6 +19,7 @@
 **最新里程碑（2026-08-15）**：
 - §37.58 窗口创建失败排障 + 启动指南（docs/启动指南.md，commit 59e643e + a5a8901）
 - §37.59 用户实测三连修：知识库详情概述卡片 + Skill 去手动调用窗口 + 命令预测三修（commit 9ec99db）
+- §37.60 命令预测升级：开源 Fig specs 集成（707 唯一命令）+ 参数预测（-n/-y/--long/参数值）
 
 ---
 
@@ -3997,3 +3998,24 @@ CDP 全新状态实测通过。commit 见上。
 **门禁**：typecheck / lint(0 警告) / test(984) / build:web 全绿；`tauri:dev` 桌面实测待用户验证。
 
 **遗留**：① 启动.bat 未跟踪（是否入库待定）；② SSH 端退格接受预测需真机再验（canonical 行编辑理论一致）
+
+### 37.60 命令预测升级：开源 Fig specs 集成（715 命令）+ 参数预测（-n/-y）（2026-08-15 ✅）
+
+**用户需求**：命令覆盖太少（如 lsblk 未收录）——反对继续手编词典，要求**集成开源方案**；且不只预测命令名，还要**预测参数**（-n/-y/--long 等）。
+
+**方案**（调研选定，见 ROADMAP #8）：
+- 数据源 = **withfig/autocomplete**（MIT，业界最大 CLI 补全 spec 数据集）：715+ 命令，TS 源码 `src/*.ts`，含 `options`（-n/--noheadings）、`subcommands`（apt install）、`args.suggestions`（-o NAME/SIZE）
+- 构建链 = `scripts/build-fig-specs.mjs`：复用 vite 内置 esbuild + onResolve 插件把 `@fig/*` 依赖指向本地 stub（generators 是运行时函数，JSON 序列化时丢弃）→ 715 spec 编译为 JSON。**零新增依赖**（沙箱无法 pnpm add，绕过 = 复用 vite 依赖树里的 esbuild）
+- 产物：`spec-index.ts`（707 唯一命令索引，字母序+去重，主 bundle 静态引入）+ `specs.json`（11.09MB，懒加载独立 chunk）
+- 前端链路：`spec-data/`（types/loader/paramSuggest）+ `suggest-engine.ts` 命令层数据源切到 SPEC_INDEX（中文翻译保留手编词典做增强子集）+ `completionInjection.ts` 参数模式（parseCommandLine → getCommandSpec 懒加载 → suggestParams）
+- 弹窗：参数建议显示英文描述（Fig spec description）+ 紫色"参数"标签
+
+**关键修复**：
+- spec-index 重复命令（git×2/broot/ns×3）+ 乱序 → 构建脚本去重+字母序，保证 "git" 先于 "git-cliff" 被 Layer 2 前缀匹配命中
+- `parseCommandLine` trim() 吞尾随空格 → 保留 trailingSpace 判断（`lsblk -o ` 的 current 应为空串而非 "-o"）
+- `suggestParams` 空串守卫 + option 带 args 时（`lsblk -o `）只建议参数值（NAME/SIZE/TYPE），避免 options 占满 limit
+- `acceptPrediction` 参数模式：行尾空格（刚打完空格）直接追加+空格；否则退格替换当前 token——修复"误删前一 token"边界
+
+**门禁**：typecheck / lint(0) / test(994，含新增 paramSuggest 10 例) / build:web 全绿；`tauri:dev` 实测待用户验证（打 `lsblk` 看命令、`lsblk -` 看参数、`apt install --` 看长选项）。
+
+**遗留**：① specs.json 11MB 已入库（离线可用）；② 动态 generators（需执行远端 shell 的包名/主机名补全）不在静态预测范围；③ 更新数据源 = 重跑构建脚本（git 拉新 src 后 `node scripts/build-fig-specs.mjs`）
