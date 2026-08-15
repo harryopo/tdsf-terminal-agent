@@ -36,13 +36,18 @@ if (USE_CUSTOM_WINDOW_CONTROLS) {
   document.documentElement.dataset.chrome = "borderless";
 }
 
-// 上游启动链: 清理上次会话遗留的孤儿 PTY (非 Tauri 环境静默失败)
-await invoke("pty_close_all").catch(() => {});
-await initLaunchDir();
-
+// 稳定性修复 (2026-08-15): 先渲染 UI，再异步初始化。
+// 之前用顶层 await 串行等待 invoke + initLaunchDir 完成后才 render，
+// 若 IPC 在 WebView2 冷启动时挂起（不 reject 只 hang），render 永远不执行 = 黑屏。
+// 现在 render 立即同步执行，IPC 初始化在后台异步完成，互不阻塞。
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <App />,
 );
+
+// 异步初始化（不阻塞渲染）：清理上次会话遗留的孤儿 PTY + 解析启动目录。
+// 非阻塞设计：即使某项 IPC 挂起，UI 也已渲染，不会黑屏。
+invoke("pty_close_all").catch(() => {});
+initLaunchDir().catch(() => {});
 
 // 窗口已在 tauri.conf.json 中以 visible:true 启动，无需前端 show()。
 // 此处只做 setFocus 确保窗口在前台（不涉及可见性控制）。
