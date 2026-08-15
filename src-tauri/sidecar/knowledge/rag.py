@@ -386,6 +386,30 @@ class RagIndex:
                 for r in rows
             ]
 
+    def get(self, entry_id: str) -> dict[str, Any] | None:
+        """按 ID 取单条（详情弹窗用，与 list_entries 同源——必须与 list/search
+        使用同一个 rag.db，否则列表与详情割裂（旧 FTS5Index 的 knowledge.db
+        与此库不互通，曾导致列表有数据而详情永远为空））"""
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            row = conn.execute(
+                "SELECT * FROM entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "source": row["source"],
+            "title": row["title"],
+            "content": row["content"],
+            "url": row["url"],
+            "tags": _json_loads(row["tags"]),
+            "created_at": row["created_at"],
+            "score": 1.0,
+            "match_type": "list",
+        }
+
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:
