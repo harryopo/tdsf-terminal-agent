@@ -32,7 +32,6 @@ import {
   SparklesIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { MessageResponse } from "@/components/ai-elements/message";
 
 // ============================================================================
 // 类型（与后端 knowledge.* RPC 返回对齐）
@@ -249,7 +248,22 @@ export function KnowledgePanel() {
 }
 
 // ============================================================================
-// KnowledgeDetailDialog — 详情弹窗（md 渲染）
+// 概述工具：剥离 markdown 语法符号，提取前几行非标题内容作为简单概述
+// （详情弹窗只展示概述，不渲染完整 md——用户要求 UI 简单）
+// ============================================================================
+
+function toSummary(content: string, maxLines = 3): string[] {
+  return content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"))
+    .map((l) => l.replace(/[#*_`>~|[]()]/g, "").trim())
+    .filter((l) => l.length > 0)
+    .slice(0, maxLines);
+}
+
+// ============================================================================
+// KnowledgeDetailDialog — 详情弹窗（简单概述卡片，2026-08-15 改版）
 // ============================================================================
 
 export function KnowledgeDetailDialog({
@@ -301,12 +315,18 @@ export function KnowledgeDetailDialog({
               加载中…
             </div>
           )}
+          {!loading && !detail && (
+            <div className="py-8 text-center text-xs text-muted-foreground">
+              未获取到该条目的详情。
+            </div>
+          )}
           {!loading && detail && (
-            <article className="not-prose">
-              <h2 className="mb-1 text-[15px] font-semibold text-foreground">
+            /* 简单概述卡片：标题 + 来源/标签 + 概述（不渲染完整 md） */
+            <div className="space-y-3">
+              <h2 className="text-[15px] font-semibold text-foreground">
                 {detail.title}
               </h2>
-              <div className="mb-3 flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 {detail.source && (
                   <Badge variant="secondary" className="px-1.5 py-px text-[10px]">
                     {detail.source}
@@ -322,16 +342,21 @@ export function KnowledgeDetailDialog({
                   </Badge>
                 ))}
               </div>
-              <Separator className="mb-3" />
+              <Separator className="mb-1" />
               <div className="text-[12.5px] leading-relaxed text-muted-foreground">
-                <MessageResponse>{detail.content}</MessageResponse>
+                {toSummary(detail.content).map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
+                {toSummary(detail.content).length === 0 && (
+                  <p className="italic">（无概述内容）</p>
+                )}
               </div>
               {detail.url && (
-                <div className="mt-3 text-[10.5px] text-muted-foreground/60">
+                <div className="text-[10.5px] text-muted-foreground/60">
                   来源：{detail.url}
                 </div>
               )}
-            </article>
+            </div>
           )}
         </div>
       </DialogContent>

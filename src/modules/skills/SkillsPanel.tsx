@@ -15,11 +15,9 @@
 // 数据流:
 //   - mount 时调用 store.loadAll() 加载 skill 列表
 //   - 用户搜索/切换 tab 时本地筛选（filterSkills 纯函数）
-//   - 点击"让 Agent 调用"按钮弹出 SkillInvoker 真正调用 skill
+//   - Agent 在允许时自动调用 skill，无手动调用窗口
 //   - 点击"查看"按钮弹出 SkillContentDialog 预览 SKILL.md 定义
-//   TDSF 魔改 2026-07-28: P0-2 方案B (用户反馈: 按钮语义要明确)
-//     - 主按钮 "让 Agent 调用" 调 SkillInvoker (args 输入 + 流式输出)
-//     - 次按钮 "查看" 调 SkillContentDialog (SKILL.md 定义)
+//   TDSF 魔改 2026-08-15: 移除 SkillInvoker 手动调用弹窗（用户反馈: 无需调用窗口）
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,11 +46,6 @@ const SkillContentDialog = lazy(() =>
   import("./SkillContentDialog").then((m) => ({
     default: m.SkillContentDialog,
   })),
-);
-// TDSF 魔改 2026-07-28: 恢复 SkillInvoker (P0-2 方案B), 与 SkillContentDialog 各司其职
-// 懒加载: 仅在用户点击"让 Agent 调用"按钮时才挂载
-const SkillInvoker = lazy(() =>
-  import("./SkillInvoker").then((m) => ({ default: m.SkillInvoker })),
 );
 
 import {
@@ -89,9 +82,8 @@ export function SkillsPanel({ className }: Props) {
   const setSearchQuery = useSkillsStore((s) => s.setSearchQuery);
   const toggleEnabled = useSkillsStore((s) => s.toggleEnabled);
 
-  // TDSF 魔改 2026-07-28: P0-2 方案B - viewerSkill / invokerSkill 各管一个 dialog
+  // TDSF 魔改 2026-07-28: viewerSkill 管内容预览 dialog
   const [viewerSkill, setViewerSkill] = useState<SkillMetadata | null>(null);
-  const [invokerSkill, setInvokerSkill] = useState<SkillMetadata | null>(null);
 
   // mount 时加载 skill 列表（仅首次）
   useEffect(() => {
@@ -108,11 +100,6 @@ export function SkillsPanel({ className }: Props) {
   // TDSF 魔改 2026-07-28: 处理"查看"按钮点击, 弹 SkillContentDialog
   const handleViewContent = useCallback((skill: SkillMetadata) => {
     setViewerSkill(skill);
-  }, []);
-
-  // TDSF 魔改 2026-07-28: 处理"让 Agent 调用"按钮点击, 弹 SkillInvoker
-  const handleInvoke = useCallback((skill: SkillMetadata) => {
-    setInvokerSkill(skill);
   }, []);
 
   const handleRetry = useCallback(() => {
@@ -233,7 +220,6 @@ export function SkillsPanel({ className }: Props) {
                 skill={skill}
                 onToggleEnabled={toggleEnabled}
                 onViewContent={handleViewContent}
-                onInvoke={handleInvoke}
               />
             ))}
           </div>
@@ -250,20 +236,6 @@ export function SkillsPanel({ className }: Props) {
             skill={viewerSkill}
             onOpenChange={(v) => {
               if (!v) setViewerSkill(null);
-            }}
-          />
-        </Suspense>
-      )}
-
-      {/* === 调用对话框 === */}
-      {/* TDSF 魔改 2026-07-28: 由 SkillCard 的"让 Agent 调用"按钮触发
-          懒加载: 仅当 invokerSkill 非 null (用户点击"让 Agent 调用"按钮) 时才挂载 */}
-      {invokerSkill && (
-        <Suspense fallback={null}>
-          <SkillInvoker
-            skill={invokerSkill}
-            onOpenChange={(v) => {
-              if (!v) setInvokerSkill(null);
             }}
           />
         </Suspense>

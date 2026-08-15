@@ -370,7 +370,8 @@ function Body({
   //
   // TDSF 魔改 (P4-T4.4): 若输入以 `/skill:<name> <args>` 开头，则走 Skill 调用
   // 路径（useSkillsStore.invoke → executor.invokeSkill → IPC skill.invoke），
-  // 不经过 LLM。成功/失败都用 toast 提示，输出在 SkillInvoker 对话框中展示。
+  // 不经过 LLM。成功/失败都用 toast 提示（2026-08-15: SkillInvoker 手动调用
+  // 弹窗已移除，Agent 在允许时自动调用 skill）。
   const handleSubmit = async () => {
     const text = input.trim();
     if (!text || isSending) return;

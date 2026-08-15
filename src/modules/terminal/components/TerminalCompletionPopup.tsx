@@ -21,14 +21,14 @@ import {
   type CompletionState,
 } from '@/modules/terminal/lib/completionInjection';
 
-/** 来源标签 */
+/** 来源标签（TDSF 2026-08-15: 去除 emoji 图标，仅保留文字标签） */
 const SOURCE_LABELS: Record<
   SuggestionResult['source'],
-  { icon: string; label: string; color: string }
+  { label: string; color: string }
 > = {
-  history: { icon: '⏱', label: '历史', color: 'text-blue-500' },
-  dictionary: { icon: '📖', label: '', color: 'text-muted-foreground' },
-  fuzzy: { icon: '⚡', label: '', color: 'text-amber-500' },
+  history: { label: '历史', color: 'text-blue-500' },
+  dictionary: { label: '', color: 'text-muted-foreground' },
+  fuzzy: { label: '模糊', color: 'text-amber-500' },
 };
 
 export function TerminalCompletionPopup() {
@@ -162,13 +162,6 @@ export function TerminalCompletionPopup() {
                 : 'hover:bg-accent/50',
             )}
           >
-            {/* 来源图标 */}
-            <span
-              className={cn('shrink-0 text-[10px]', src.color)}
-              title={src.label || '模糊匹配'}
-            >
-              {src.icon}
-            </span>
             {/* 命令名 */}
             <span
               className={cn(
@@ -178,25 +171,19 @@ export function TerminalCompletionPopup() {
             >
               {item.command}
             </span>
-            {/* 选中标记 */}
-            {isSelected && (
-              <span className="ml-0.5 shrink-0 text-[9px] text-emerald-500">
-                ←
-              </span>
-            )}
-            {/* 中文翻译 */}
+            {/* 中文翻译：紧跟命令，中间可收缩截断，避免右侧来源标签被挤出 */}
             {item.zh && (
-              <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground">
+              <span
+                className="min-w-0 flex-1 truncate text-[10.5px] text-muted-foreground"
+                title={item.zh}
+              >
                 {item.zh}
               </span>
             )}
-            {/* 来源标签 */}
-            {!item.zh && item.source !== 'dictionary' && (
-              <span className={cn('ml-auto shrink-0 text-[9px]', src.color)}>
-                {src.label ||
-                  (item.score != null ? item.score.toFixed(0) : '')}
-              </span>
-            )}
+            {/* 来源标签（固定最右） */}
+            <span className={cn('ml-auto shrink-0 text-[9px]', src.color)}>
+              {src.label || (item.score != null ? item.score.toFixed(0) : '')}
+            </span>
           </button>
         );
       })}
