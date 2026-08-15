@@ -1332,3 +1332,20 @@ P2（中优先级 — 清理 + 文档）：
 - ⚠️ 教训：**trim() 会吞尾随空格**——凡"光标处 token"解析必须显式保留行尾空格信息（/^\s+$/），否则"刚打完空格"与"正在输入 token"无法区分
 - ⚠️ 教训：**测试是数据源切换的照妖镜**——suggest-engine 旧测试（git 前缀匹配）第一时间暴露了 spec-index 乱序+重复问题；数据源变更必须保留并跑旧回归测试
 - 待办：用户 tauri:dev 实测（lsblk / lsblk - / apt install --）；动态 generators（远端 shell 执行）不在静态预测范围，后续可做"SSH 回显包名补全"
+
+## 2026-08-15 · 知识库详情弹窗空内容：list/get 数据源割裂（§37.61）
+
+**任务**：用户反馈知识库 UI"未更新"、点击条目详情弹窗不显示内容。
+
+**排查**：前端字段/测试全对（5 项 mock 测试过），怀疑真数据链路 → 直接跑 Python 调 sidecar 模块实测：
+- `FTS5Index().count()` = **0**（knowledge.db）
+- `RagIndex().count()` = **11**（rag.db）
+- `knowledge.list`/`search`(hybrid) 走 rag，`knowledge.get`/`count` 走旧 FTS5Index → **两套库割裂**，列表有数据详情必空
+
+**修复**：rag.py 加 `get()`（与 list_entries 同构）→ rpc.py `_get`/`_count` 改走 rag；test_rag.py 补 2 例。
+
+**复盘**：
+- ✅ 做对：不轻信"前端测试全过"，跑真实数据链路一次定位（两库 count 对比秒杀一切猜测）；入库全走 rag（sources.py 证实），所以统一到 rag 是唯一正确方向
+- ⚠️ 教训：**知识库曾有过旧 FTS5Index 与新 RagIndex 两套实现并存**——新功能接入时旧 RPC 函数未同步迁移，形成隐性割裂。加注释警示"必须与 list/search 同源"
+- ⚠️ 教训：sidecar 全量 1428 过/5 失败（long_context/needs_you/toolset）为既有失败，与本次无关，已记遗留待专项排查
+- 待办：用户重新 `pnpm tauri:dev` 验证新版 UI + 弹窗内容；5 个既有失败专项排查

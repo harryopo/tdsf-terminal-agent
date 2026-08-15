@@ -21,7 +21,7 @@
 - [x] asciicast 录制 → 回放面板（AsciicastPanel.tsx + asciicast.ts，CastEvent 解构 bug 已修）
 - [x] 工具集扩展：service_manage / package_manage / firewall_manage / security_audit / performance_analyze（strands_backend/tools/ops_extended.py）+ ssh_command / suggest_command 等共 9+ 工具
 - [x] 决策库：knowledge.add_case 自动沉淀（排障成功自动入库）+ hybrid 检索（knowledge.search）+ 前端浏览（KnowledgeBrowser）
-- [x] 知识库管理 UI（左侧栏浏览/搜索/详情弹窗，knowledge.list/search/get）
+- [x] 知识库管理 UI（左侧栏浏览/搜索/详情弹窗，knowledge.list/search/get；2026-08-15 修复详情空内容：list/get 数据源割裂，统一走 rag.db）
 - [x] 资源管理器性能债：上游 terax 已按目录缓存（expansionCache），无需重做
 
 **P1 剩余核实**：

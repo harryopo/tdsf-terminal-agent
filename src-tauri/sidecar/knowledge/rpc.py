@@ -195,6 +195,10 @@ def register_methods(dispatcher: Any) -> None:
     def _get(id: str) -> dict[str, Any]:
         """按 ID 获取单条知识
 
+        ⚠️ 必须与 list/search 同源（rag.db）。历史实现读旧 FTS5Index 的
+        knowledge.db（knowledge_entries 表），与列表/搜索（rag.db）割裂，
+        导致列表有数据而详情永远为空（2026-08-15 修复）。
+
         Args:
             id: 条目 ID
 
@@ -202,8 +206,8 @@ def register_methods(dispatcher: Any) -> None:
             {ok: bool, entry: dict | null}
         """
         try:
-            fts_index = get_global_index()
-            entry = fts_index.get(id)
+            rag = get_global_rag()
+            entry = rag.get(id)
             if entry is None:
                 return {"ok": False, "error": f"entry not found: {id}"}
             return {"ok": True, "entry": entry}
@@ -212,10 +216,10 @@ def register_methods(dispatcher: Any) -> None:
             return {"ok": False, "error": str(e)}
 
     def _count() -> dict[str, Any]:
-        """返回知识库条目总数（FTS5 索引）"""
+        """返回知识库条目总数（RAG entries 表，与 list/search/get 同源）"""
         try:
-            fts_index = get_global_index()
-            return {"count": fts_index.count()}
+            rag = get_global_rag()
+            return {"count": rag.count()}
         except Exception as e:
             logger.exception(f"knowledge.count failed: {e}")
             return {"count": 0, "error": str(e)}

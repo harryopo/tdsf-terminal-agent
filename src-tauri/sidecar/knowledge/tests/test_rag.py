@@ -43,6 +43,21 @@ class TestRagIndex(unittest.TestCase):
         self.rag.add(self._entry("systemd 服务", "systemctl restart 服务名"))
         self.assertEqual(self.rag.count(), 2)
 
+    def test_get_returns_full_entry(self):
+        """详情弹窗同源：get 按 id 取单条（列表与详情必须同库）"""
+        e = self._entry("systemctl 服务管理", "systemctl 是 systemd 的服务管理命令",
+                        source="builtin-corpus", tags=["命令"])
+        self.rag.add(e)
+        entry = self.rag.get(e.id)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["title"], "systemctl 服务管理")
+        self.assertEqual(entry["source"], "builtin-corpus")
+        self.assertIn("命令", entry["tags"])
+        self.assertEqual(entry["id"], e.id)
+
+    def test_get_missing_returns_none(self):
+        self.assertEqual(self.rag.get("not-exist-id"), None)
+
     def test_keyword_search_hits_fts(self):
         self.rag.add(self._entry("nginx 配置", "server 块监听 80 端口，location 匹配规则"))
         self.rag.add(self._entry("systemd 服务", "systemctl 管理服务生命周期"))
