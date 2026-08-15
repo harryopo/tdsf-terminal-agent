@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
-  AiMagicIcon,
   ChevronDownIcon,
   EyeIcon,
   FolderOpenIcon,
@@ -39,8 +38,6 @@ interface Props {
   onToggleEnabled: (name: string) => void;
   /** 触发查看内容（弹出 SkillContentDialog） */
   onViewContent: (skill: SkillMetadata) => void;
-  /** TDSF 魔改 2026-07-28: 让 Agent 调用此 skill（弹出 SkillInvoker） */
-  onInvoke?: (skill: SkillMetadata) => void;
 }
 
 // TDSF 魔改: 分类 → 图标颜色统一为 text-primary，避免硬编码颜色名
@@ -81,7 +78,6 @@ export function SkillCard({
   skill,
   onToggleEnabled,
   onViewContent,
-  onInvoke,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const categoryColor = CATEGORY_COLOR[skill.category] ?? CATEGORY_COLOR.custom;
@@ -195,35 +191,11 @@ export function SkillCard({
         )}
       </div>
 
-      {/* === 底部: 让 Agent 调用 + 查看内容 + 目录 + 详情 (固定贴底, 永远可见) ===
-          TDSF 魔改 2026-07-28: P0-2 方案B 修复 (用户反馈: 按钮语义要明确)
-          - 主按钮改为"让 Agent 调用" (WandMagicSparkles 图标 + 语义色),
-            表达"触发 Agent 使用此 skill", 弹 SkillInvoker 真正调用
-          - 次按钮"查看" (EyeIcon), 弹 SkillContentDialog 显示 SKILL.md 定义
-          - 移除 mt-auto (在 flex 中已自动贴底),
-            移除 pt-1 减少上下间距, 让按钮更紧凑避免被挤压 */}
+      {/* === 底部: 查看内容 + 目录 + 详情 (固定贴底, 永远可见) ===
+          TDSF 魔改 2026-08-15: 移除"让 Agent 调用"按钮 (SkillInvoker 弹窗),
+          改为 Agent 在允许时自动调用 skill; 保留"查看" (SkillContentDialog) */}
       <div className="flex shrink-0 items-center gap-1 border-t border-border/30 pt-1.5">
-        {/* TDSF 魔改 2026-07-28: 主按钮"让 Agent 调用" - 真正调用 skill (有 args 输入 + 输出流式展示) */}
-        {onInvoke && (
-          <Button
-            type="button"
-            size="sm"
-            variant="default"
-            disabled={!skill.enabled}
-            onClick={() => onInvoke(skill)}
-            className={cn(
-              "h-7 gap-1 rounded-md px-2 text-[10.5px] font-medium",
-              "bg-primary text-primary-foreground hover:bg-primary/90",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-            )}
-            data-testid={`skill-invoke-btn-${skill.name}`}
-            title="让 Agent 用此 skill 处理你的问题"
-          >
-            <HugeiconsIcon icon={AiMagicIcon} size={11} strokeWidth={1.75} />让
-            Agent 调用
-          </Button>
-        )}
-        {/* TDSF 魔改 2026-07-28: 次按钮"查看" - 弹 SkillContentDialog 显示 SKILL.md 定义 */}
+        {/* TDSF 魔改 2026-07-28: "查看" - 弹 SkillContentDialog 显示 SKILL.md 定义 */}
         <Button
           type="button"
           size="sm"
