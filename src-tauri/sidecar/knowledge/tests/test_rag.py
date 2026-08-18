@@ -92,6 +92,26 @@ class TestRagIndex(unittest.TestCase):
         self.assertEqual(self.rag.count(), 0)
         self.assertEqual(self.rag.hybrid_search("临时条目"), [])
 
+    def test_add_then_list_roundtrip(self):
+        """写读同源闭环（P0-1 回归）：add 后 list_entries 必须能列出——
+        历史 _add 写旧库导致 add 后前端不可见（2026-08-18 修复）"""
+        e = self._entry("新增知识", "通过 knowledge.add 写入，列表应立即可见",
+                        source="user-added", tags=["回归"])
+        self.rag.add(e)
+        rows = self.rag.list_entries(limit=10)
+        self.assertTrue(any(r["id"] == e.id for r in rows), "add 后 list 应包含新条目")
+        self.assertEqual(self.rag.get(e.id)["title"], "新增知识")
+
+    def test_rebuild_clears_entries(self):
+        """rebuild 清空三表（P0-1 回归）：rebuild 后 list/count 归零——
+        历史 _rebuild 清旧库对 rag.db 无操作（2026-08-18 修复）"""
+        self.rag.add(self._entry("条目A", "内容A"))
+        self.rag.add(self._entry("条目B", "内容B"))
+        self.assertEqual(self.rag.count(), 2)
+        self.assertEqual(self.rag.rebuild(), 0)
+        self.assertEqual(self.rag.list_entries(limit=10), [])
+        self.assertEqual(self.rag.hybrid_search("条目A"), [])
+
     def test_hash_embedding_shape(self):
         vec = hash_embedding("测试")
         self.assertEqual(len(vec), 512)

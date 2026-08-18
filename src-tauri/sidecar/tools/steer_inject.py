@@ -213,11 +213,15 @@ def _emit_steer_event(
 
 
 def _get_global_event_bus() -> Any:
-    """获取全局 event_bus 实例（从 main 模块）"""
+    """获取全局 event_bus 实例（event_bus 模块单例）
+
+    ⚠️ 历史实现 `getattr(main, "_global_event_bus", None)` 读 main 模块不存在的
+    属性，永远返回 None → steer.inject 事件静默丢弃（2026-08-18 修复）。
+    全库统一入口是 event_bus.get_global_bus()（见 main.py/tdsf_loader.py）。
+    """
     try:
-        # 通过 main.py 模块级变量获取（main.py 启动时设置）
-        import main as _main
-        return getattr(_main, "_global_event_bus", None)
+        from event_bus import get_global_bus
+        return get_global_bus()
     except Exception:
         return None
 

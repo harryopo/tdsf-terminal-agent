@@ -38,7 +38,6 @@ function makeSession(over: Partial<SshSessionInfo> = {}): SshSessionInfo {
       host: "192.168.1.100",
       port: 22,
       user: "root",
-      auth: { type: "password", password: "x" },
     },
     state: "connected",
     connectedAt: Date.now(),

@@ -123,7 +123,14 @@ export function suggestParams(
     // 前一个 token 是带 args 的 option（如 `lsblk -o `）→ 只建议该 option 的
     // 参数值（NAME/SIZE/TYPE...），避免混入无关 options
     const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
-    const prevToken = tokens[tokens.length - 1] ?? "";
+    // P2-11 修复 (2026-08-18): 取"前一个已完成"的 token——末尾有空格时
+    // current 为空, tokens 最后一个就是前一个 token; 正在输入时 current
+    // 就是 tokens 最后一个, 前一个应是倒数第二个 (原实现取最后一个,
+    // `lsblk -o N` 时误把当前输入 N 当成 option, 参数建议全部失效)。
+    const prevToken =
+      current === ""
+        ? tokens[tokens.length - 1] ?? ""
+        : tokens[tokens.length - 2] ?? "";
     for (const opt of options) {
       if (!toNameList(opt.name).includes(prevToken)) continue;
       for (const arg of toArgList(opt.args)) {

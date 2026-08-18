@@ -200,8 +200,8 @@ impl SshState {
     pub async fn list_tunnels(&self) -> Vec<TunnelInfo> {
         let tunnels = self.tunnels.read().await;
         let mut result: Vec<TunnelInfo> = tunnels
-            .iter()
-            .map(|(_, t)| t.info())
+            .values()
+            .map(|t| t.info())
             .collect();
         result.sort_by_key(|t| t.id);
         result
@@ -351,6 +351,10 @@ pub async fn ssh_connect(
         on_data.clone(),
         on_status.clone(),
         on_exit.clone(),
+        // 真实连接参数 (2026-08-18: Connected 事件不再用占位空值)
+        connect_params.host.clone(),
+        connect_params.port,
+        connect_params.user.clone(),
     )
     .await
     .map_err(|e| {

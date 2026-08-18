@@ -33,8 +33,10 @@ use crate::modules::ssh::handler::SshClientHandler;
 use crate::modules::ssh::known_hosts::KnownHostsManager;
 use crate::modules::ssh::session::SshStatusEvent;
 
-/// TCP + SSH 握手超时: 服务器不可达/端口未开放时快速失败
+/// TCP 可达性探测超时: 服务器不可达/端口未开放时快速失败
 /// (Windows TCP connect 默认 ~21s, 无显式超时会卡住用户等待)
+/// ⚠️ 只包 TCP 探测, 不包完整握手——TOFU 审批等待由 handler 内部
+/// HOST_APPROVAL_TIMEOUT (5min) 管理, 见 client.rs connect() 2026-08-18 修复
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// SSH 认证方法
@@ -173,17 +175,26 @@ impl<R: tauri::Runtime> SshClient<R> {
         //    client::connect 内部:
         //    a. TcpStream::connect((host, port))
         //    b. SSH 协议握手 (version exchange + kex)
-        //    c. 调用 handler.check_server_key (TOFU)
-        //    TDSF 2026-08-08: 显式 15s 超时, 服务器不可达/端口关闭时快速失败
-        //    (TCP connect 系统默认 ~21s, 用户等待无反馈, 教学场景应快速提示)
-        let mut handle = tokio::time::timeout(
+        //    c. 调用 handler.check_server_key (TOFU, 内部 5min 审批超时)
+        //    2026-08-18 修复: 15s 超时只包 TCP 可达性探测。历史实现整包
+        //    connect 加 15s 超时, 会把 TOFU 审批等待(最长 5min)一起杀掉——
+        //    用户点"信任"时连接早已断开 (HANDshakeTimeout vs HOST_APPROVAL_TIMEOUT 矛盾)。
+        let tcp_probe = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            client::connect(Arc::new(config), (host.as_str(), port), handler),
+            tokio::net::TcpStream::connect((host.as_str(), port)),
         )
         .await
         .map_err(|_| SshClientError::HandshakeTimeout {
             secs: HANDSHAKE_TIMEOUT.as_secs(),
-        })??;
+        })?
+        .map_err(|e| SshClientError::Other(format!("TCP 连接失败: {e}")))?;
+        drop(tcp_probe); // 探测即弃, russh 会自行建立连接
+
+        // 完整握手不再包网络超时: TCP 已可达, kex 秒级; TOFU 审批等待由
+        // handler.check_server_key 内部 5min 超时管理, 不再被误杀
+        // russh Handle::authenticate_password 需 &mut self, 声明 mut
+        let mut handle = client::connect(Arc::new(config), (host.as_str(), port), handler)
+            .await?;
 
         log::info!("[ssh] TCP+SSH handshake done, starting authentication");
 

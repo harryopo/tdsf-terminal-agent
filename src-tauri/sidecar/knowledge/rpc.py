@@ -145,7 +145,11 @@ def register_methods(dispatcher: Any) -> None:
         }
 
     def _add(entry: dict[str, Any]) -> dict[str, Any]:
-        """增加一条知识到 FTS5 + Vector 索引
+        """增加一条知识到统一 RAG 引擎（rag.db）
+
+        ⚠️ 必须与 list/get/search 同源（rag.db）。历史实现写旧 FTS5Index
+        （knowledge.db）+ ChromaDB，与读路径割裂，导致 add 后前端不可见
+        （2026-08-18 修复）。
 
         Args:
             entry: KnowledgeEntry 字典（id/source/title/content/url/tags）
@@ -155,38 +159,25 @@ def register_methods(dispatcher: Any) -> None:
         """
         try:
             e: KnowledgeEntry = KnowledgeEntry.from_dict(entry)
-            fts_index = get_global_index()
-            entry_id = fts_index.add(e)
-
-            # 同步加入向量索引
-            try:
-                vec_index = get_global_vector()
-                vec_index.add(e)
-            except Exception as ex:
-                logger.warning(f"knowledge.add: 向量索引添加失败（不阻塞）: {ex}")
-
+            rag = get_global_rag()
+            entry_id = rag.add(e)
             return {"ok": True, "id": entry_id}
         except Exception as e:
             logger.exception(f"knowledge.add failed: {e}")
             return {"ok": False, "error": str(e)}
 
     def _rebuild() -> dict[str, Any]:
-        """全量重建索引（清空所有数据）
+        """全量重建索引（清空统一 RAG 引擎三表）
+
+        ⚠️ 与 _add 同源（rag.db）——历史实现清的是旧 FTS5Index + ChromaDB，
+        对 rag.db 无操作，rebuild 后前端列表毫无变化（2026-08-18 修复）。
 
         Returns:
             {ok: bool, count: int}
         """
         try:
-            fts_index = get_global_index()
-            count = fts_index.rebuild()
-
-            # 同步重置向量索引
-            try:
-                vec_index = get_global_vector()
-                vec_index.reset()
-            except Exception as ex:
-                logger.warning(f"knowledge.rebuild: 向量索引重置失败（不阻塞）: {ex}")
-
+            rag = get_global_rag()
+            count = rag.rebuild()
             return {"ok": True, "count": count}
         except Exception as e:
             logger.exception(f"knowledge.rebuild failed: {e}")

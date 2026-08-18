@@ -274,6 +274,10 @@ async fn ssh_roundtrip_against_mock_server() {
         on_data,
         on_status,
         on_exit,
+        // 2026-08-18 (P1-5): open_pty 新增真实连接参数
+        "127.0.0.1".to_string(),
+        port,
+        "root".to_string(),
     )
     .await
     .expect("open_pty should succeed");

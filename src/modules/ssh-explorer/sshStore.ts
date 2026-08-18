@@ -111,8 +111,9 @@ export interface SshSessionInfo {
   id: string;
   /** Rust 端分配的 session_id (ssh_connect 成功后填充) */
   rustSessionId: number | null;
-  /** 连接参数 (host/port/user/auth, 用于重连) */
-  params: SshConnectParams;
+  /** 连接参数 (host/port/user 等展示用字段; 不含 auth——明文凭据不落 store,
+   *  auth 仅在 ssh_connect 调用时使用一次, 见 connect(), 2026-08-18 P1-9) */
+  params: Omit<SshConnectParams, 'auth'>;
   /** 当前状态 (与 Rust SshSessionState 对齐, snake_case) */
   state: SshSessionStateValue;
   /** 错误信息 (Failed 状态时填充) */
@@ -506,10 +507,22 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
 
   connect: async (params) => {
     const sessionId = genId();
+    // TDSF 魔改 2026-08-18 (P1-9): 明文凭据不落 store——auth.password/
+    // passphrase 是明文, 原实现连同完整 params 存入 zustand, 任何订阅者/
+    // DevTools/__TDSF_DBG__ 均可读到密码。会话建立后下游只用 host/user/
+    // port (auth 仅在 sshConnect 调用时使用一次), 此处剥离后再入库。
+    const safeParams: Omit<SshConnectParams, 'auth'> = {
+      host: params.host,
+      port: params.port,
+      user: params.user,
+      cols: params.cols,
+      rows: params.rows,
+      term: params.term,
+    };
     const session: SshSessionInfo = {
       id: sessionId,
       rustSessionId: null,
-      params,
+      params: safeParams,
       // TDSF 魔改: 初始状态改为 connecting, 给 UI 立即 loading 反馈
       // 原为 idle 会让用户以为没点上, 也无法触发 SshExplorer 的 SessionStatusView spinner
       state: 'connecting',
@@ -586,12 +599,17 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
 
   disconnect: async (sessionId) => {
     const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.handle) return;
+    // TDSF 魔改 2026-08-18 (P1-7): 无 handle 的会话（连接失败/未完成）也
+    // 能清理——原实现 `if (!session?.handle) return` 导致 failed 会话永久
+    // 残留 sessions 数组, 用户无法通过断开按钮移除, 只能重启应用。
+    if (!session) return;
     const wasActive = get().activeSessionId === sessionId;
-    try {
-      await session.handle.close();
-    } catch (e) {
-      console.warn('[sshStore] disconnect failed:', e);
+    if (session.handle) {
+      try {
+        await session.handle.close();
+      } catch (e) {
+        console.warn('[sshStore] disconnect failed:', e);
+      }
     }
     // TDSF 魔改: 清理终端数据订阅者, 避免已断开会话的回调泄漏
     clearTerminalSubscribers(sessionId);

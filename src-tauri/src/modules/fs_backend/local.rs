@@ -2,7 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{FsBackend, FsBackendError, FsCapabilities, FsEntry, FsErrorCode, FsKind};
+use super::{FsBackend, FsBackendError, FsCapabilities, FsEntry, FsKind};
+// FsErrorCode 仅测试引用 (tests 里 super::FsErrorCode), lib 目标不使用 →
+// 条件导入消除 unused import 告警 (2026-08-18)
+#[cfg(test)]
+use super::FsErrorCode;
 use crate::modules::workspace::WorkspaceEnv;
 
 /// 本地后端: tokio::fs 异步实现, 路径语义 = Windows 盘符 / UNC

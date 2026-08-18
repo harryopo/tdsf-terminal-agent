@@ -76,6 +76,7 @@
 | 23 | **P2 SSH 隧道与端口转发**：russh direct-tcpip 本地端口转发（方案书 v1.1 §4） | ✅ 已完成 | 2026-08-11；后端 `tunnel.rs`（SshTunnel 生命周期 + direct-tcpip 双向桥接 + 隧道 registry）+ 前端 `tunnels/` 模块（TunnelPanel/CreateTunnelDialog + store + 16 测试），详见 dev-state §37.50 |
 | 24 | **架构审计 P0-P3 全部收尾**（ARCHITECTURE-AUDIT-2026-08-10 23 项复核处置；唯一缺口 P2 #13 弹窗跟随光标补实现） | ✅ 已完成 | 2026-08-11；审计报告新增"修复进度跟踪"节（23 项全有证据）；P2 #13 = measureCursorPx + computePopupPosition（13 测试），详见 dev-state §37.51 |
 | 25 | **SSH 隧道 P3**：远程转发（`tcpip_forward`）+ SOCKS5 动态转发（参考 chisel-rs） | ✅ 已完成 | 2026-08-12；后端 `TunnelKind` 三模式 + handler `server_channel_open_forwarded_tcpip` 回调 + `REMOTE_TUNNEL_REGISTRY` + SOCKS5 纯函数实现；前端创建对话框三套表单 + 类型 badge；方案 `docs/P3-SSH隧道-远程转发与SOCKS5-实施方案.md`，详见 dev-state §37.55 |
+| 26 | **全面代码审查修复**（2026-08-18 审查 §37.62：P0×2/P1×8/P2×6/P3×3）——修复项由用户选择：P0 知识库 _add 写旧库割裂 + steer 总线取错；P1 SSH 超时/占位事件/TOFU 断链/disconnect/fatalError/密码泄漏/预测缓冲；P2 prevToken/JSON-RPC 静默/exec 无上限/密钥锁/CSP | ✅ 已完成 | 2026-08-18；17 项全修 + 全绿门禁（clippy 0 警告 / cargo test / 168 pytest / 994 vitest / tsc / lint / build）；详见 dev-state §37.63；P2-15 CSP 验证为功能必需保持；P3-17 低风险留待专项 |
 
 ### 待用户决策/确认
 

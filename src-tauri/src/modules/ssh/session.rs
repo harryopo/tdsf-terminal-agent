@@ -35,10 +35,11 @@ use crate::modules::ssh::handler::SshClientHandler;
 /// SSH 会话状态 (用于状态栏显示)
 ///
 /// 对应 SSH 连接生命周期各阶段,前端根据状态渲染不同 UI。
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SshSessionState {
     /// 空闲 (尚未连接)
+    #[default]
     Idle,
     /// 正在建立 TCP 连接
     Connecting,
@@ -58,12 +59,6 @@ pub enum SshSessionState {
     Failed,
     /// 已关闭 (主动断开或服务器断开)
     Closed,
-}
-
-impl Default for SshSessionState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// SSH 状态事件 (推送到前端 on_status channel)
@@ -334,6 +329,9 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 5. request_shell 请求 shell
     /// 6. 启动 reader task (channel.wait() 循环 → on_data)
     /// 7. 推送 Connected 状态到 on_status
+    // 2026-08-18: 10 个参数均为真实链路所需 (client + 终端尺寸 + 事件通道 + 主机信息),
+    // 属函数签名固有结构; 引入参数结构体改动面过大, 用 `#[allow]` 并保留签名自文档
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_pty(
         client: SshClient<R>,
         cols: u16,
@@ -342,6 +340,11 @@ impl<R: tauri::Runtime> SshSession<R> {
         on_data: Channel<Vec<u8>>,
         on_status: Channel<SshStatusEvent>,
         on_exit: Channel<i32>,
+        // 2026-08-18: 新增真实连接参数——历史实现 Connected 事件用占位空值
+        // (host="" port=22 user=""), 前端状态栏/多标签显示假主机信息
+        host: String,
+        port: u16,
+        user: String,
     ) -> Result<Self, SshSessionError> {
         // 1. 获取 Handle
         let handle = client.handle();
@@ -448,14 +451,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             .await;
         });
 
-        // 7. 推送 Connected 状态
-        //    (host/port/user 从 handler 字段获取,这里简化为占位)
-        //    实际生产中应从 handle 中提取,但 russh 0.61 API 不直接暴露 handler
-        //    解决方案: SshClient::connect 时记录 host/port/user,通过返回值传递
-        //    此处用空字符串,前端通过 connect 时的参数补全
-        let host = String::new(); // 占位,SshClient 应传递
-        let port: u16 = 22;
-        let user = String::new();
+        // 7. 推送 Connected 状态 (真实连接参数, 2026-08-18 修复前为占位空值)
         let _ = on_status.send(SshStatusEvent::connected(&host, port, &user));
 
         Ok(Self {
@@ -817,6 +813,10 @@ impl<R: tauri::Runtime> SshSession<R> {
             config.on_data.clone(),
             config.on_status.clone(),
             config.on_exit.clone(),
+            // 重连也用真实参数 (2026-08-18 与首次连接一致)
+            config.params.host.clone(),
+            config.params.port,
+            config.params.user.clone(),
         )
         .await
         .map_err(|e| format!("SSH reconnect open_pty failed: {e}"))?;
@@ -1163,20 +1163,20 @@ impl<R: tauri::Runtime> SshSession<R> {
         loop {
             match channel.wait().await {
                 Some(ChannelMsg::Data { data }) => {
-                    stdout.extend_from_slice(&data);
+                    append_exec_output_limited(&mut stdout, &data, MAX_EXEC_OUTPUT_BYTES);
                 }
                 Some(ChannelMsg::ExtendedData { ext, data }) => {
                     // ext=1 是 stderr（RFC 4254 5.2）
                     // ext=2 是 "ExitStatus 之外的扩展数据"（罕见，合并到 stderr）
                     if ext == 1 || ext == 2 {
-                        stderr.extend_from_slice(&data);
+                        append_exec_output_limited(&mut stderr, &data, MAX_EXEC_OUTPUT_BYTES);
                     } else {
                         log::debug!(
                             "[ssh] exec unknown ext={}: {} bytes",
                             ext,
                             data.len()
                         );
-                        stderr.extend_from_slice(&data);
+                        append_exec_output_limited(&mut stderr, &data, MAX_EXEC_OUTPUT_BYTES);
                     }
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
@@ -1326,6 +1326,21 @@ if not set -q __TDSF_OSC7_LOADED
 end
 "#;
 
+/// exec 输出字节上限（单次命令 stdout/stderr 各自上限, 2026-08-18）
+///
+/// 防御 `cat /dev/urandom` 这类无限输出吃满内存。8MiB 对监控采集/探测
+/// 命令绰绰有余; 超限后静默截断 (不中断命令, 只丢尾部数据)。
+const MAX_EXEC_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
+/// 受上限追加：buf 达 cap 后丢弃后续数据（防 exec 输出无界）
+fn append_exec_output_limited(buf: &mut Vec<u8>, data: &[u8], cap: usize) {
+    if buf.len() >= cap {
+        return;
+    }
+    let remaining = cap - buf.len();
+    buf.extend_from_slice(&data[..data.len().min(remaining)]);
+}
+
 /// 执行一条单次命令并返回 stdout 文本 (探测/写脚本用, 非 PTY, 10s 超时)
 async fn exec_simple<R: tauri::Runtime>(
     handle: &Handle<SshClientHandler<R>>,
@@ -1338,7 +1353,10 @@ async fn exec_simple<R: tauri::Runtime>(
     let collect = async {
         loop {
             match channel.wait().await {
-                Some(ChannelMsg::Data { data }) => out.extend_from_slice(&data),
+                Some(ChannelMsg::Data { data }) => {
+                    // 2026-08-18: 上限截断, 防 exec 输出无界 (cat /dev/urandom)
+                    append_exec_output_limited(&mut out, &data, MAX_EXEC_OUTPUT_BYTES)
+                }
                 Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
                 _ => {} // ExitStatus/Success/Failure/ExtendedData 忽略
             }

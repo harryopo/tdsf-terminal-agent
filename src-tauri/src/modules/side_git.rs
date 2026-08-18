@@ -140,7 +140,7 @@ impl SideGitManager {
         // 优先读取 TDSF_HOME 环境变量 (测试覆盖)
         let home = std::env::var_os("TDSF_HOME")
             .map(PathBuf::from)
-            .or_else(|| dirs::home_dir())
+            .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."));
         let hash = Self::project_hash(path);
         home.join(".tdsf").join(SHADOW_ROOT_DIR).join(hash)
