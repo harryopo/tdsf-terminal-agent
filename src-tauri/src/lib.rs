@@ -193,13 +193,14 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     let builder = builder.decorations(false).transparent(true);
 
-    let window = builder.build().map_err(|e| e.to_string())?;
+    // Windows 下 window 后续无使用 (Linux/macOS 分支才用), 前缀 _ 避免 unused 告警
+    let _window = builder.build().map_err(|e| e.to_string())?;
 
     // Some Linux compositors (GNOME/Mutter with CSD-by-default) ignore the
     // builder-time decorations flag — re-assert it after realize.
     #[cfg(target_os = "linux")]
     {
-        let _ = window.set_decorations(false);
+        let _ = _window.set_decorations(false);
     }
 
     #[cfg(target_os = "macos")]
@@ -207,15 +208,15 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         if let (Ok(main_pos), Ok(main_size), Ok(settings_size)) = (
             main.outer_position(),
             main.outer_size(),
-            window.outer_size(),
+            _window.outer_size(),
         ) {
             let x = main_pos.x
                 + ((main_size.width as i32).saturating_sub(settings_size.width as i32)) / 2;
             let y = main_pos.y
                 + ((main_size.height as i32).saturating_sub(settings_size.height as i32)) / 2;
-            let _ = window.set_position(PhysicalPosition::new(x, y));
+            let _ = _window.set_position(PhysicalPosition::new(x, y));
         } else {
-            let _ = window.center();
+            let _ = _window.center();
         }
     }
 
@@ -657,6 +658,9 @@ mod launch_target_tests {
 ///    tauri dev 构建会把 bundle.resources 复制到 target/debug, 若不跳过探测,
 ///    dev 会误用打包 exe: 冷启动慢 + 数据目录变 %APPDATA% 读不到项目根
 ///    .tdsf-data/llm_config.json 等配置）
+// dev 特性下发布模式探测代码不执行 (见下方 #[cfg(dev)] 块提前 return),
+// app 参数与后续 candidates 均不可达——clippy 只在 dev 构建时豁免这两项
+#[cfg_attr(dev, allow(unreachable_code, unused_variables))]
 fn locate_sidecar_script(app: &tauri::App) -> PathBuf {
     #[cfg(dev)]
     {

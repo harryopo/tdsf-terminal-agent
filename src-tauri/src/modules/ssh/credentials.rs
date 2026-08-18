@@ -134,8 +134,8 @@ pub async fn ssh_credentials_list(
     app: AppHandle,
 ) -> Result<Vec<SshCredentialProfile>, String> {
     let mut profiles = read_all_profiles(&app)?;
-    // 按 last_used 倒序
-    profiles.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+    // 按 last_used 倒序 (Reverse)
+    profiles.sort_by_key(|p| std::cmp::Reverse(p.last_used));
     Ok(profiles)
 }
 
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn profile_camel_case_serialization() {
-        let now = 1700000000_000u64;
+        let now = 1_700_000_000_000u64;
         let profile = SshCredentialProfile {
             id: "test-1".to_string(),
             alias: "测试".to_string(),

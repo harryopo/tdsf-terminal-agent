@@ -447,7 +447,8 @@ pub fn decode_command_output(bytes: &[u8]) -> String {
 
 #[cfg(windows)]
 fn looks_utf16le(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
+    // 注意: 不用 `is_multiple_of` (MSRV 1.87 > 项目 1.85), 用取模兼容
+    if bytes.len() < 4 || bytes.len() % 2 != 0 {
         return false;
     }
     let nul_odd = bytes.iter().skip(1).step_by(2).filter(|b| **b == 0).count();

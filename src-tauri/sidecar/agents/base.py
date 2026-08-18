@@ -619,13 +619,21 @@ class BaseAgent:
         start_time = time.time()
         self._stats["tool_calls"] += 1
 
-        # 校验工具是否在可用列表
+        # 校验工具是否在可用列表——未授权一律拦截（permission_check 节点
+        # 历史不存在，这里直接作为权限边界；2026-08-18 修复前只 warn 放行）
         if name not in self.tools:
             logger.warning(
                 f"agent {self.name} calling unauthorized tool: {name} "
                 f"(allowed: {self.tools})"
             )
-            # 仍允许调用，但记录警告（不强制拦截，由 permission_check 节点处理）
+            return {
+                "tool_name": name,
+                "params": params,
+                "result": {"error": f"unauthorized tool: {name}"},
+                "duration": 0.0,
+                "success": False,
+                "error": f"unauthorized tool: {name}",
+            }
 
         try:
             # 延迟导入，避免循环依赖

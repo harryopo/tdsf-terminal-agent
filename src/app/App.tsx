@@ -91,6 +91,14 @@ import {
   selectSessionCurrentPath,
   useSshStore,
 } from "@/modules/ssh-explorer";
+// TDSF 魔改 2026-08-18 (P1-6): 主机审批订阅提升到顶层——
+// SshExplorer 只在 ssh 视图挂载, 其他视图首次连接未知主机时审批事件
+// 无人订阅会永久挂起; 订阅 + HostApprovalDialog 现由 App 顶层常驻。
+import {
+  subscribeHostKeyMismatch,
+  subscribeHostVerify,
+} from "@/lib/ssh-bridge";
+import { HostApprovalDialog } from "@/modules/ssh-explorer/SshExplorer";
 // TDSF 魔改 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
 // TDSF 魔改 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
 // 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
@@ -440,6 +448,10 @@ export default function App() {
   // 保留全局 active SSH session 用于非 Space 场景（自动登录、SshExplorer 视图）
   const activeSshSession = useSshStore(selectActiveSession);
   const activeSshSessionId = activeSshSession?.id ?? null;
+  // TDSF 魔改 2026-08-18 (P1-6): 主机审批状态提升到顶层——
+  // pendingApproval 由下方常驻订阅 effect 填充, 弹窗任何视图可弹
+  const pendingApproval = useSshStore((s) => s.pendingApproval);
+  const resolveApproval = useSshStore((s) => s.resolveApproval);
   // Space 环境决定左侧 Files 面板来源：SSH Space 用远程文件资源管理器，
   // 本地/WSL Space 用本地文件资源管理器。
   const explorerSource: "local" | "ssh" = isSpaceSshConnected ? "ssh" : "local";
@@ -497,7 +509,9 @@ export default function App() {
   // SSH 连接成功后, 会自动把当前 active terminal tab 的 sshSessionId 设为会话 id
   // (见下方 useEffect)。用户也可手动"新建本地 shell tab"获得本地终端。
   // TDSF 调试: 输出关键判定值
-  if (typeof window !== "undefined") {
+  // TDSF 魔改 2026-08-18 (P1-9): 仅开发环境挂载 __TDSF_DBG__——
+  // 生产包挂在 window 上无调试价值, 还扩大内存泄漏面/暴露内部状态。
+  if (typeof window !== "undefined" && import.meta.env.DEV) {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
       // TDSF debug (AI mini window): 暴露 chatStore 供 CDP 诊断 AI 入口问题
       getChatStore: () => useChatStore,
@@ -590,6 +604,22 @@ export default function App() {
   // 但应用启动默认视图是 "explorer", 导致自动登录不执行, 用户反馈"SSH 未自动连接".
   // 修复: 把自动登录提升到 App 顶层, launchCwdResolved 后即触发, 不依赖 SshExplorer 挂载.
   // SshExplorer.tsx 中的重复逻辑已移除, 避免双重登录.
+  // TDSF 魔改 2026-08-18 (P1-6): 主机审批事件常驻订阅。
+  // 原因: SshExplorer 只在 sidebarView === "ssh" 时挂载, 其他视图下首次
+  // 连接未知主机时 ssh:host_verify / ssh:host_key_mismatch 事件无人订阅,
+  // 审批永远无人处理, 连接永久挂起。订阅提升到 App 顶层后任何视图可弹框。
+  useEffect(() => {
+    const off1 = subscribeHostVerify((req) => {
+      useSshStore.setState({ pendingApproval: req });
+    });
+    const off2 = subscribeHostKeyMismatch((req) => {
+      useSshStore.setState({ pendingApproval: req });
+    });
+    return () => {
+      off1();
+      off2();
+    };
+  }, []);
   // TDSF 修复 2026-08-01: 欢迎界面（无任何工作区）下不自动连接——用户尚未选择
   // 工作区，登录统一走"新建工作区"流程（SSH Space 创建时显式连接）。
   useEffect(() => {
@@ -715,6 +745,11 @@ export default function App() {
       for (const session of connectedSessions) {
         if (boundSshSessionsRef.current.has(session.id)) continue;
         boundSshSessionsRef.current.add(session.id);
+        // TDSF 魔改 2026-08-18 (P1-8): 重连成功后清除 fatalError——
+        // 断线时 workspaceFsStore.fatalError 被置为"SSH 连接已断开"且只在
+        // Space 切换/重新 navigate 时清除; 同一 Space 内重连成功时残留,
+        // 资源管理器会一直显示错误而非远程文件。
+        useWorkspaceFsStore.getState().setFatalError(null);
 
         // TDSF 修复 2026-08-01: 目标 Space 按连接来源区分——
         //   - 自动连接（connectWithSaved，state.autoConnectSessionId 标记）：
@@ -842,29 +877,38 @@ export default function App() {
       const disconnectedSessions = state.sessions.filter(
         (s) => s.state === "closed" || s.state === "failed",
       );
-      const disconnectedIds = new Set(disconnectedSessions.map((s) => s.id));
-      for (const sessionId of Array.from(boundSshSessionsRef.current)) {
-        if (!disconnectedIds.has(sessionId)) continue;
-        // 该会话已彻底断开, 解绑所有绑定的 tab
-        boundSshSessionsRef.current.delete(sessionId);
-        const currentTabs = tabsRef.current;
-        for (const tab of currentTabs) {
-          if (tab.kind === "terminal" && tab.sshSessionId === sessionId) {
-            updateTab(tab.id, {
-              sshSessionId: null,
-              customTitle: "",
-            });
+      // TDSF 魔改 2026-08-18 (P1-7): 断开/失败会话立即从 store 移除——
+      // 原实现只遍历 boundSshSessionsRef 解绑 tab, 会话仍残留 sessions 数组
+      // (且未绑定过的 failed 会话完全不被处理), disconnect 对无 handle 会话
+      // 又直接 return, 残留会话只能重启应用清除。disconnect 已支持无 handle
+      // 清理, 这里补上生产调用方。
+      for (const session of disconnectedSessions) {
+        const sessionId = session.id;
+        if (boundSshSessionsRef.current.has(sessionId)) {
+          boundSshSessionsRef.current.delete(sessionId);
+          const currentTabs = tabsRef.current;
+          for (const tab of currentTabs) {
+            if (tab.kind === "terminal" && tab.sshSessionId === sessionId) {
+              updateTab(tab.id, {
+                sshSessionId: null,
+                customTitle: "",
+              });
+            }
+          }
+          // WorkspaceFs P2-4: 当前 Space 的 SSH 会话断开 → 明确降级提示
+          // (资源管理器显示 fatalError, 而非静默回退本地/空白)
+          const spacesState = useSpaces.getState();
+          const cur = spacesState.spaces.find(
+            (s) => s.id === spacesState.activeId,
+          );
+          if (cur?.env.kind === "ssh" && cur.env.sessionId === sessionId) {
+            useWorkspaceFsStore
+              .getState()
+              .setFatalError("SSH 连接已断开，请重新连接");
           }
         }
-        // WorkspaceFs P2-4: 当前 Space 的 SSH 会话断开 → 明确降级提示
-        // (资源管理器显示 fatalError, 而非静默回退本地/空白)
-        const spacesState = useSpaces.getState();
-        const cur = spacesState.spaces.find((s) => s.id === spacesState.activeId);
-        if (cur?.env.kind === "ssh" && cur.env.sessionId === sessionId) {
-          useWorkspaceFsStore
-            .getState()
-            .setFatalError("SSH 连接已断开，请重新连接");
-        }
+        // 从 store 移除会话（closed/failed 均无继续存在的价值）
+        void useSshStore.getState().disconnect(sessionId);
       }
 
       if (!hasConnected) {
@@ -2358,6 +2402,14 @@ export default function App() {
               </ResizablePanel>
             </ResizablePanelGroup>
           </main>
+
+          {/* TDSF 魔改 2026-08-18 (P1-6): 主机审批弹窗常驻顶层——任何视图
+              首次连接未知主机都能弹审批框, 不依赖 SshExplorer 挂载 */}
+          <HostApprovalDialog
+            request={pendingApproval}
+            onApprove={() => resolveApproval(true)}
+            onReject={() => resolveApproval(false)}
+          />
 
           {!zenMode && (
             <StatusBar

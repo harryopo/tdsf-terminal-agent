@@ -43,7 +43,7 @@ const HOST_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// russh 0.61 的 Error 枚举没有 Inner 变体,我们使用 IO 变体包装字符串错误。
 /// (russh::Error::IO(std::io::Error::new(Other, msg)))
 fn rust_error(msg: impl Into<String>) -> russh::Error {
-    russh::Error::IO(std::io::Error::new(std::io::ErrorKind::Other, msg.into()))
+    russh::Error::IO(std::io::Error::other(msg.into()))
 }
 
 /// 全局主机审批注册表

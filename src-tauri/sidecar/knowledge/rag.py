@@ -261,6 +261,23 @@ class RagIndex:
             cur = self._conn.execute("SELECT COUNT(*) FROM entries")
             return int(cur.fetchone()[0])
 
+    def rebuild(self) -> int:
+        """全量清空索引（entries/fts_entries/vec_entries 三表，与 add 同源）
+
+        ⚠️ 必须与 add/list/search/get 使用同一 rag.db——历史实现清的是旧
+        FTS5Index（knowledge.db）+ ChromaDB，与读路径（rag.db）割裂，导致
+        rebuild 后前端列表毫无变化（2026-08-18 修复）。
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            conn.execute("DELETE FROM entries")
+            conn.execute("DELETE FROM fts_entries")
+            if self._vec_available:
+                conn.execute("DELETE FROM vec_entries")
+            conn.commit()
+        return self.count()
+
     # ------------------------------------------------------------------
     # 混合检索
     # ------------------------------------------------------------------

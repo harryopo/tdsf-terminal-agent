@@ -33,11 +33,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import {
-  type HostApprovalRequest,
-  subscribeHostKeyMismatch,
-  subscribeHostVerify,
-} from "@/lib/ssh-bridge";
+// 2026-08-18 (P1-6): 仅保留类型 import——HostApprovalDialog 导出给 App 顶层
+// 使用; 订阅函数 subscribeHostVerify/subscribeHostKeyMismatch 已移至 App.tsx
+import type { HostApprovalRequest } from "@/lib/ssh-bridge";
 import { cn } from "@/lib/utils";
 import {
   Add01Icon,
@@ -49,7 +47,7 @@ import {
   Loading03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { generateRandomArt } from "./randomart";
 import { SshConnectDialog } from "./SshConnectDialog";
@@ -77,22 +75,11 @@ export function SshExplorer({ className }: Props) {
   const closeConnectDialog = useSshStore((s) => s.closeConnectDialog);
   const setActiveSession = useSshStore((s) => s.setActiveSession);
   const disconnect = useSshStore((s) => s.disconnect);
-  const pendingApproval = useSshStore((s) => s.pendingApproval);
-  const resolveApproval = useSshStore((s) => s.resolveApproval);
 
-  // === 主机审批事件订阅 ===
-  useEffect(() => {
-    const off1 = subscribeHostVerify((req) => {
-      useSshStore.setState({ pendingApproval: req });
-    });
-    const off2 = subscribeHostKeyMismatch((req) => {
-      useSshStore.setState({ pendingApproval: req });
-    });
-    return () => {
-      off1();
-      off2();
-    };
-  }, []);
+  // === TDSF 魔改 2026-08-18 (P1-6): 主机审批订阅已提升到 App.tsx 顶层 ===
+  // 原因: 本组件只在 sidebarView === "ssh" 时挂载, 其他视图下首次连接
+  // 未知主机时审批事件无人订阅 → 永久挂起。订阅 + HostApprovalDialog
+  // 现由 App 顶层常驻渲染, 任何视图下都能弹审批框。
 
   // === TDSF 魔改 2026-07-28 (P1-C): 自动登录逻辑已提升到 App.tsx 顶层 ===
   // ---------------------------------------------------------------
@@ -116,15 +103,6 @@ export function SshExplorer({ className }: Props) {
     },
     [disconnect],
   );
-
-  const handleApprove = useCallback(async () => {
-    await resolveApproval(true);
-  }, [resolveApproval]);
-
-  const handleReject = useCallback(async () => {
-    await resolveApproval(false);
-    toast.warning("已拒绝主机, 连接将中止");
-  }, [resolveApproval]);
 
   return (
     <div
@@ -196,13 +174,6 @@ export function SshExplorer({ className }: Props) {
       <SshConnectDialog
         open={connectDialogOpen}
         onOpenChange={(v) => (v ? openConnectDialog() : closeConnectDialog())}
-      />
-
-      {/* === 主机审批对话框 (TOFU) === */}
-      <HostApprovalDialog
-        request={pendingApproval}
-        onApprove={handleApprove}
-        onReject={handleReject}
       />
     </div>
   );
@@ -451,8 +422,11 @@ function SessionStatusView({
 }
 
 // === 子组件: 主机审批对话框 (TOFU) ===========================================
+// 2026-08-18 (P1-6): 从 SshExplorer 内部提升为导出组件, 由 App.tsx 顶层
+// 常驻渲染——SshExplorer 只在 ssh 视图挂载, 其他视图首次连接未知主机
+// 时审批弹窗必须仍可用, 否则连接永久挂起。
 
-function HostApprovalDialog({
+export function HostApprovalDialog({
   request,
   onApprove,
   onReject,

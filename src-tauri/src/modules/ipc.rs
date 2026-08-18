@@ -290,7 +290,7 @@ pub async fn ipc_invoke(
     match timeout_ms {
         // P0-3: 前端显式传 timeoutMs 时覆盖默认（夹取 10s-10min，防误配）
         Some(ms) => {
-            let secs = (ms.max(10_000).min(600_000) as u64) / 1000;
+            let secs = ms.clamp(10_000, 600_000) / 1000;
             client
                 .invoke_with_timeout(&method, params, Duration::from_secs(secs))
                 .await

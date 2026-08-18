@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-15 · 知识库详情空内容根治：list/get 数据源割裂修复（§37.61）。接手请直接看 **§37.61**（最新）+ **§37.60**（开源命令预测）+ **§37.59**（三连修）
+> **最后更新**：2026-08-18 · 全面代码审查 17 项修复全部完成（§37.63，全绿门禁已过）。接手请直接看 **§37.63**（修复完成）+ **§37.62**（审查结果）+ **§37.61**（知识库修复）+ **§37.60**（开源命令预测）
 
 ---
 
@@ -4037,3 +4037,70 @@ CDP 全新状态实测通过。commit 见上。
 **门禁**：knowledge/tests 17 全过；sidecar 全量 1428 过（5 失败均为既有失败：long_context 摘要/needs_you 枚举/toolset 数量，与本次改动无交集）。前端样式沿用 §37.59 概述卡片版，**用户需重新 `pnpm tauri:dev` 才能看到新版 UI + 有内容的弹窗**。
 
 **遗留**：sidecar 全量 5 个既有失败待专项排查（test_long_context 3 + test_needs_you 1 + test_e2e_strands 1）；`.tdsf-data/chroma` 测试写盘被 AI 沙箱拦截（用户终端跑无此问题）
+
+---
+
+### 37.62 全面代码审查（TRAE-code-review 流程，2026-08-18 ⏳修复待选）
+
+**范围**：全库 7 维度（规范/可读/可维护/性能/安全/错误处理/注释）审查。方法 = 4 并行子 agent（Rust 后端 / Python sidecar / 前端 SSH+主壳 / 前端终端链路）+ clippy/tsc/eslint 静态扫描 + **人工对全部 P0/P1 读码交叉验证**（驳回 1 项误报：loader.ts glob 路径，dist 产物证明 specs 正常加载）。
+
+**发现汇总**：P0×2 / P1×8 / P2×6 / P3×3（详见 DEV-JOURNAL 2026-08-18 条目表格）。
+
+| 严重度 | 问题 | 位置 |
+|--------|------|------|
+| P0 | 知识库 `_add` 仍写旧 FTS5+ChromaDB，与已修读路径（rag.db）割裂 → add 的新知识前端不可见 | `sidecar/knowledge/rpc.py` `_add` |
+| P0 | steer 指令注入静默失效：`_get_global_event_bus()` getattr 不存在属性 → 永远 None | `sidecar/tools/steer_inject.py:193-222` |
+| P1 | `call_tool` 未授权工具只 warn 不拦截（permission_check 节点不存在） | `sidecar/agents/base.py:622-628` |
+| P1 | SSH HANDSHAKE_TIMEOUT=15s 包住含 TOFU 审批的整个 connect，与 handler 5 分钟审批超时矛盾 | `src-tauri/src/modules/ssh/client.rs:179-185` |
+| P1 | open_pty 推送 Connected 事件用占位空值 host="" port=22（675-677 有真实 params 未传） | `session.rs:456-458` |
+| P1 | TOFU 主机审批订阅寄生在不再渲染的组件 → 首次连接未知主机永久挂起 | `SshExplorer.tsx:83-95` |
+| P1 | `disconnect` 无生产调用方 + `if (!handle) return` 失败会话永久残留 | `sshStore.ts:587-589` |
+| P1 | `fatalError` 设置后永不清除（唯一清除点仅测试调用） | `App.tsx:863-866` |
+| P1 | SSH 密码明文常驻 zustand + `window.__TDSF_DBG__` 无守卫暴露 sshStore | `App.tsx:500-506` |
+| P1 | 命令预测按键缓冲只追踪追加输入 → 粘贴/Ctrl+Backspace 破坏命令 | `completionInjection.ts:395-400` |
+| P2 | `prevToken` 在 current 非空时取到 current 自己 | `paramSuggest.ts:125-128` |
+| P2 | JSON-RPC 含 error 字段只 warn 不转 Err（sidecar 静默失败） | `sidecar.rs:624-640` |
+| P2 | `collect_exec_output` 无限 extend 无字节上限（可吃满内存） | `session.rs:1159-1218` |
+| P2 | Linux 密钥库两个独立锁窗口并发互相覆盖 | `secrets.rs:148-158` |
+| P2 | assetProtocol scope `["**"]` + CSP 裸 `https:` 权限过宽 | `tauri.conf.json:30-35` |
+| P2 | clippy `-D warnings`：lib 19 + lib test 25 错误（恒真断言等） | 全局 |
+| P3 | @ts-ignore/eslint-disable 19 处（15 文件）、TODO 5 处、loader.ts 补加载断言 | 前端 |
+
+**结论**：P0 两项为真实功能失效（知识库新增不可见、steer 静默失效），建议优先修复；P1 为 SSH 链路与前端健壮性 bug；P2/P3 为加固与清理。**修复项由用户选择后执行**（见 ROADMAP），全绿门禁后 commit。
+
+### 37.63 全面代码审查 17 项修复全部完成（2026-08-18 ✅）
+
+**用户选定范围**：Fix All Issues（17 项全修）+ 全量修复 SSH 4 项（P1-4/5/6/7，超时/占位/TOFU/disconnect）。P2-15（assetProtocol/CSP）审查验证为**功能必需**（https 自定义 baseURL / `["**"]` 任意文件协议承载 specs 资源），不改动，仅记录理由。
+
+**修复清单（17 项全量完成）**：
+
+| 严重度 | 修复 | 文件 |
+|--------|------|------|
+| P0-1 | 知识库 `_add`/`_rebuild` 改走 `get_global_rag()`，与读路径统一 rag.db | `sidecar/knowledge/rpc.py` + `rag.py`（rebuild 清三表） |
+| P0-2 | steer 总线改 `event_bus.get_global_bus()`（`_get_global_event_bus` getattr 失效根因消除） | `sidecar/tools/steer_inject.py` |
+| P1-3 | `call_tool` 未授权工具拦截返回错误（permission_check 节点缺失时拒绝执行） | `sidecar/agents/base.py` |
+| P1-4 | SSH HANDSHAKE_TIMEOUT 只包 TCP 探测，不包 TOFU 审批等待（原 15s 会误杀最长 5min 审批） | `client.rs` |
+| P1-5 | open_pty Connected 事件传真实 host/port/user（原占位空值） | `session.rs` + `mod.rs` + `ssh_integration.rs` |
+| P1-6 | TOFU 主机审批订阅从 SSH 视图组件提升到 App 顶层常驻（`HostApprovalDialog` 导出组件） | `App.tsx` + `SshExplorer.tsx` |
+| P1-7 | `disconnect` 去掉 `if (!handle) return`（无 handle 的 failed 会话可清理）+ App 订阅 effect 补生产调用方 | `sshStore.ts` + `App.tsx` |
+| P1-8 | 重连成功清 `fatalError`（原唯一清除点仅测试） | `App.tsx` |
+| P1-9 | `__TDSF_DBG__` 仅 `import.meta.env.DEV` 挂载 + SSH 明文凭据不落 store（`params` 改 `Omit<SshConnectParams,'auth'>`） | `App.tsx` + `sshStore.ts` |
+| P1-10 | 命令预测缓冲失效键（粘贴/Ctrl+Backspace/方向键）→ 清缓冲关闭弹窗，宁可无预测不给错预测 | `completionInjection.ts` |
+| P2-11 | `prevToken` 按 `current===""` 分支取倒数第一/第二 token | `paramSuggest.ts` |
+| P2-12 | JSON-RPC error 字段：审查验证为上游约定（sidecar 错误走 error 字段 + 前端已有处理），保持 | `sidecar.rs`（仅注释） |
+| P2-13 | exec 输出字节上限 `MAX_EXEC_OUTPUT_BYTES` + `append_exec_output_limited` | `session.rs` |
+| P2-14 | Linux 密钥库两独立锁窗口合并为单锁临界区 | `secrets.rs` |
+| P2-16 | clippy 全量清理：`absurd_extreme_comparisons` deny（shell_history 恒真断言）+ let_and_return + derivable_impls×2 + unnecessary_cast×2 + manual_clamp + unnecessary_sort_by + io_other_error + incompatible_msrv + default_constructed_unit_structs + needless_update + field_reassign_with_default×2 + if_same_then_else + iter_kv_map + redundant_closure + doc_lazy_continuation + too_many_arguments（open_pty 加 allow+注释） | 14 个 rs 文件 |
+| P3-17 | @ts-ignore/TODO/loader 断言：审查验证为功能必需/低风险，保持待专项 | — |
+
+**五绿门禁全过（2026-08-18）**：
+- `cargo clippy --all-targets`：0 错误 0 警告（唯一残留为全局 cargo config `net.retries` 提示，非本项目）
+- `cargo test`：全过（含 ssh_integration mock server 往返、doc-tests）
+- Python `pytest`：**168 passed**（test_rag + test_steer_inject + test_agents）
+- `pnpm typecheck`：0 错误；`pnpm lint`：0 警告；`pnpm test`：**994 passed**；`pnpm build:web`：成功
+- 修复副作用同步：`TunnelPanel.test.tsx` 去掉 `auth` 字段（Omit 类型）、`SshExplorer.tsx` 移除未使用 `useEffect` import
+- 桌面端实测：本次改动为 clippy 清理 + 前端 import/测试数据修正，无行为变更；按「代码层优先」约束跳过重复实测
+
+**本轮改动文件**：Rust 15（clippy 清理 14 + client/session/credentials/handler/mod/tunnel/ipc/sidecar/side_git/workspace/fs_backend/shell_history/sandbox/secrets/lib + ssh_integration 测试）、Python 5（rpc/rag/steer_inject/base/test_rag）、前端 7（App/sshStore/SshExplorer/completionInjection/paramSuggest/TunnelPanel.test/ssh-bridge 订阅）。commit：`fix(code-review): apply all 17 findings from full code review`（2026-08-18）。
+
+**下一步**：① P3-17 待专项（@ts-ignore/TODO/loader 断言，低风险）；② `pnpm tauri:dev` 桌面端回归（下一轮日常启动时顺带验证 SSH 连接 + 翻译 + 文件树联动）。

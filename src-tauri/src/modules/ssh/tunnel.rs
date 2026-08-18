@@ -66,22 +66,17 @@ pub enum TunnelState {
 }
 
 /// 隧道类型 (P3 #24)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TunnelKind {
     /// 本地转发 (direct-tcpip): 本地监听 → 远程目标 (ssh -L)
+    /// 向后兼容: P2 前端不传 kind → 视为本地转发 (Default)
+    #[default]
     Local,
     /// 远程转发 (forward-tcpip): 服务器监听 → 本地目标 (ssh -R)
     Remote,
     /// 动态转发 (SOCKS5): 本地代理 → 按 CONNECT 目标动态直连 (ssh -D)
     Socks5,
-}
-
-impl Default for TunnelKind {
-    fn default() -> Self {
-        // 向后兼容: P2 前端不传 kind → 视为本地转发
-        Self::Local
-    }
 }
 
 /// 隧道定义 (前端 → Rust, tunnel_start 参数)
@@ -492,7 +487,7 @@ impl<R: tauri::Runtime> SshTunnel<R> {
 ///
 /// - 本地客户端 → SSH 服务器: stream.read → channel.data (stream EOF → channel.eof)
 /// - SSH 服务器 → 本地客户端: channel.wait → stream.write_all (channel Eof → 关闭)
-/// 任一端错误即退出, 结束前 shutdown 本地连接。
+///   任一端错误即退出, 结束前 shutdown 本地连接。
 ///
 /// 三种隧道模式 + 远程转发 Handler 回调都复用本函数:
 /// stream = 本地 TCP 连接 (Local/Socks5 为入站, Remote 回调为主动 connect),

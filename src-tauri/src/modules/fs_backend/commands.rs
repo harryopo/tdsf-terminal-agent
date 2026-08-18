@@ -5,8 +5,6 @@
 // 消除 FileExplorer 双轨 (useFileTree/useRemoteFileTree) 的根源——路径
 // 语义由后端实现层保证, 前端不再有 local/ssh 分支。
 
-use std::sync::Arc;
-
 use tauri::State;
 
 use super::{FsBackend, FsBackendError, FsCapabilities, FsEntry, LocalFs, SftpFs};
@@ -26,7 +24,7 @@ async fn resolve_backend(
             let root = root.unwrap_or_else(|| "/".to_string());
             Ok(Box::new(SftpFs::new(sftp, root)))
         }
-        None => Ok(Box::new(LocalFs::default())),
+        None => Ok(Box::new(LocalFs)),
     }
 }
 
