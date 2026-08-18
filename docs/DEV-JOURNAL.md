@@ -1409,3 +1409,20 @@ P2（中优先级 — 清理 + 文档）：
 - ⚠️ 教训：**知识库曾有过旧 FTS5Index 与新 RagIndex 两套实现并存**——新功能接入时旧 RPC 函数未同步迁移，形成隐性割裂。加注释警示"必须与 list/search 同源"
 - ⚠️ 教训：sidecar 全量 1428 过/5 失败（long_context/needs_you/toolset）为既有失败，与本次无关，已记遗留待专项排查
 - 待办：用户重新 `pnpm tauri:dev` 验证新版 UI + 弹窗内容；5 个既有失败专项排查
+
+## 2026-08-18 · 知识库 UI 三修：详情渲染 md / 列表预览去符号 / 视图标签英文化
+
+**任务**：用户反馈知识库 ① 点开详情弹窗不是渲染的 md；② 列表未点进的简要预览很丑（透出 `--`/`` ` ``/`**` 等 markdown 符号）；③ 侧边栏「知识库/片段/隧道」标签改英文，与 Files 一致。
+
+**方案**：
+- 详情弹窗：`KnowledgeDetailDialog` 弃 2026-08-15 的 `toSummary()` 概述卡片，改 `<MessageResponse>{detail.content}</MessageResponse>`（项目标准 Streamdown 渲染器，TeachCard 同款），完整 md 滚动阅读
+- 列表预览：删除 `hit.content` 的 line-clamp 预览块，只留标题 + match_type/source badge（用户明确"简短显示写一句标题即可"）
+- 标签英文化：`SidebarRail` rail 按钮 知识库→Knowledge/片段→Snippets/隧道→Tunnels；`KnowledgePanel` 面板标题→Knowledge（uppercase）；`TunnelPanel` 标题→Tunnels；`SnippetsPanel` 标题→Snippets
+- 清理：删除 `toSummary` 函数 + 不再使用的 Separator import
+
+**验证**：`pnpm vitest run KnowledgeBrowser.test` 6 过（详情渲染断言 `ls 的详细讲解……` 在 MessageResponse 下仍命中）；全量门禁 994 vitest + tsc + lint + build:web 全绿。
+
+**复盘**：
+- ✅ 做对：复用项目标准渲染器 MessageResponse（TeachCard 已验证 jsdom 可渲染），不新造 md 渲染；测试先跑验证再改断言（无需改）
+- ⚠️ 教训：2026-08-15 把详情从完整 md 改成概述卡片是"用户要求 UI 简单"的错误解读——用户要的是渲染正确、预览干净，不是去掉 md。改 UI 前先确认用户吐槽的具体对象（列表 vs 详情）
+- 待办：用户 `pnpm tauri:dev` 实测视觉效果

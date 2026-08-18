@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-18 · 全面代码审查 17 项修复全部完成（§37.63，全绿门禁已过）。接手请直接看 **§37.63**（修复完成）+ **§37.62**（审查结果）+ **§37.61**（知识库修复）+ **§37.60**（开源命令预测）
+> **最后更新**：2026-08-18 · 知识库 UI 三修完成（§37.64，全绿门禁已过）。接手请直接看 **§37.64**（知识库 UI）+ **§37.63**（审查修复）+ **§37.62**（审查结果）+ **§37.61**（知识库数据链路）
 
 ---
 
@@ -4104,3 +4104,19 @@ CDP 全新状态实测通过。commit 见上。
 **本轮改动文件**：Rust 15（clippy 清理 14 + client/session/credentials/handler/mod/tunnel/ipc/sidecar/side_git/workspace/fs_backend/shell_history/sandbox/secrets/lib + ssh_integration 测试）、Python 5（rpc/rag/steer_inject/base/test_rag）、前端 7（App/sshStore/SshExplorer/completionInjection/paramSuggest/TunnelPanel.test/ssh-bridge 订阅）。commit：`fix(code-review): apply all 17 findings from full code review`（2026-08-18）。
 
 **下一步**：① `pnpm tauri:dev` 桌面端回归（日常启动时顺带验证 SSH 连接 + 翻译 + 文件树联动）；② 长短期规划见 ROADMAP 待办。
+
+### 37.64 知识库 UI 三修：详情渲染 md / 列表预览去符号 / 视图标签英文化（2026-08-18 ✅）
+
+**用户反馈**：① 知识库详情弹窗不是渲染的 md（2026-08-15 改版成概述卡片）；② 列表未点进的简要预览很丑，透出 `--`/`` ` ``/`**` 等 markdown 符号；③ 侧边栏「知识库/片段/隧道」标签用英文，与 Files 一致。
+
+**修复**：
+1. **详情弹窗**：`KnowledgeDetailDialog` 弃 `toSummary()` 概述卡片 → `<MessageResponse>{detail.content}</MessageResponse>` 完整 md 渲染（项目标准 Streamdown 渲染器，与 TeachCard 同款；保留标题 + source/tags badge + url 来源行）
+2. **列表预览**：删除 `hit.content` line-clamp 预览块，只留标题 + match_type/source badge
+3. **标签英文化**：`SidebarRail` rail 按钮 知识库→Knowledge/片段→Snippets/隧道→Tunnels；`KnowledgePanel` 面板标题→Knowledge（uppercase tracking）；`TunnelPanel` 标题→Tunnels；`SnippetsPanel` 标题→Snippets
+4. **清理**：删除 `toSummary` 函数 + 不再使用的 Separator import
+
+**门禁**：KnowledgeBrowser.test 6 过（MessageResponse 下详情文本断言仍命中）；全量 `pnpm test` 994 passed + typecheck + lint + build:web 全绿。
+
+**改动文件**：`KnowledgeBrowser.tsx` / `SidebarRail.tsx` / `TunnelPanel.tsx` / `SnippetsPanel.tsx`。commit：`feat(knowledge): render full md in detail dialog and unify sidebar labels to english`。
+
+**下一步**：用户 `pnpm tauri:dev` 实测知识库列表/详情视觉效果；AI 面板 `#知识库` 快捷提示、AI 工具 `knowledge_search` label 保持中文（AI 交互语境，非视图标签）。

@@ -8,7 +8,7 @@
  *   knowledge.search(query, limit) → 结果列表
  *   knowledge.get(id) → 单条详情（content 为 markdown，MessageResponse 渲染）
  *
- * 设计规范：UI 组件套（Input/Button/Badge/Separator/Dialog）+ Hugeicons
+ * 设计规范：UI 组件套（Input/Button/Badge/Dialog）+ Hugeicons
  * 图标，不使用 emoji。
  */
 
@@ -16,7 +16,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft01Icon,
@@ -136,7 +136,10 @@ export function KnowledgePanel() {
       {/* 头部 */}
       <div className="flex items-center gap-1.5 border-b border-border/50 px-3 py-2">
         <HugeiconsIcon icon={BookOpen01Icon} size={13} strokeWidth={1.75} />
-        <span className="text-[11px] font-medium text-foreground">知识库</span>
+        {/* TDSF 魔改 2026-08-18: 视图标签统一英文, 与 Files/Skills 一致 */}
+        <span className="text-[11px] font-medium uppercase tracking-wide text-foreground">
+          Knowledge
+        </span>
         <span className="ml-auto text-[10px] text-muted-foreground/60">
           搜索/浏览教学语料
         </span>
@@ -223,9 +226,6 @@ export function KnowledgePanel() {
                   </Badge>
                 )}
               </div>
-              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground">
-                {hit.content}
-              </div>
               {hit.source && (
                 <div className="mt-1 flex items-center gap-1">
                   <span className="rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/80">
@@ -248,22 +248,7 @@ export function KnowledgePanel() {
 }
 
 // ============================================================================
-// 概述工具：剥离 markdown 语法符号，提取前几行非标题内容作为简单概述
-// （详情弹窗只展示概述，不渲染完整 md——用户要求 UI 简单）
-// ============================================================================
-
-function toSummary(content: string, maxLines = 3): string[] {
-  return content
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith("#"))
-    .map((l) => l.replace(/[#*_`>~|[]()]/g, "").trim())
-    .filter((l) => l.length > 0)
-    .slice(0, maxLines);
-}
-
-// ============================================================================
-// KnowledgeDetailDialog — 详情弹窗（简单概述卡片，2026-08-15 改版）
+// KnowledgeDetailDialog — 详情弹窗（MessageResponse 渲染完整 md）
 // ============================================================================
 
 export function KnowledgeDetailDialog({
@@ -321,7 +306,6 @@ export function KnowledgeDetailDialog({
             </div>
           )}
           {!loading && detail && (
-            /* 简单概述卡片：标题 + 来源/标签 + 概述（不渲染完整 md） */
             <div className="space-y-3">
               <h2 className="text-[15px] font-semibold text-foreground">
                 {detail.title}
@@ -342,15 +326,11 @@ export function KnowledgeDetailDialog({
                   </Badge>
                 ))}
               </div>
-              <Separator className="mb-1" />
-              <div className="text-[12.5px] leading-relaxed text-muted-foreground">
-                {toSummary(detail.content).map((line, i) => (
-                  <p key={i}>{line}</p>
-                ))}
-                {toSummary(detail.content).length === 0 && (
-                  <p className="italic">（无概述内容）</p>
-                )}
-              </div>
+              {/* TDSF 魔改 2026-08-18: 完整 md 渲染（MessageResponse = Streamdown），
+                  像看本地 md 文件一样滚动阅读 */}
+              <MessageResponse className="text-[12.5px] leading-relaxed">
+                {detail.content}
+              </MessageResponse>
               {detail.url && (
                 <div className="text-[10.5px] text-muted-foreground/60">
                   来源：{detail.url}
