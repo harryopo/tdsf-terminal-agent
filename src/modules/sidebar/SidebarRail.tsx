@@ -38,11 +38,12 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
     },
 
     { id: "skills", label: "Skills", icon: SparklesIcon },
-    { id: "knowledge", label: "知识库", icon: BookOpen01Icon },
+    // TDSF 魔改 2026-08-18: 视图标签统一英文, 与 Files/Skills 一致
+    { id: "knowledge", label: "Knowledge", icon: BookOpen01Icon },
     // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段视图入口
-    { id: "snippets", label: "片段", icon: CodeIcon },
+    { id: "snippets", label: "Snippets", icon: CodeIcon },
     // TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道视图入口
-    { id: "tunnels", label: "隧道", icon: Router01Icon },
+    { id: "tunnels", label: "Tunnels", icon: Router01Icon },
   ];
 
   return (
