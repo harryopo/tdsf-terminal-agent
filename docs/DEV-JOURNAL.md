@@ -62,7 +62,7 @@
 - ⚠️ **同文件批量 Edit 是覆盖风险源**：编辑纪律（CLAUDE.md §3.5 红线 7"连续多次 Edit 同区域逐次 Read 确认"）应扩展到"同文件同批多 Edit 串行化"。
 - ⚠️ 类型收窄（Omit auth）让 TS 编译器立刻抓出测试构造的明文密码——**类型即文档**，比运行时守卫更早暴露泄漏面。
 - 📌 P2-15（assetProtocol/CSP）验证为功能必需：`https:` 承载用户自定义 baseURL 的 specs 源、`["**"]` 是 specs 资源的 file 协议范围，收窄会断功能——审查结论不能机械执行，需业务上下文。
-- 📌 下一步 P3-17（@ts-ignore/TODO/loader 断言）低风险，留待专项。
+- 📌 P3-17（2026-08-18 晚补做）：lint 豁免 19 处逐项验证全带理由（no-control-regex 终端 ANSI / exhaustive-deps 上游设计防回归 / no-explicit-any mock / @ts-expect-error 类型缺声明），属 CLAUDE.md §4 允许豁免 → 保持；TODO 注释实测 0 处（审查报告 5 处已被前期修复消化）；**loader.ts 补加载断言**（glob 空 / 结果空双 console.warn，防参数预测静默失效），typecheck/lint/186 相关测试全过，commit 见 §37.63。
 
 ---
 

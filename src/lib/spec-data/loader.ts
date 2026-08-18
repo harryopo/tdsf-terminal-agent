@@ -27,8 +27,23 @@ export function loadSpecs(): Promise<Record<string, FigSpec>> {
   if (!loading) {
     loading = (async () => {
       const keys = Object.keys(specsImporters);
-      const mod = keys.length ? await specsImporters[keys[0]]() : {};
-      cache = mod as Record<string, FigSpec>;
+      // P3-17: 加载断言——glob 未匹配到 specs.json 时显式告警,
+      // 避免参数预测功能在打包配置变化后静默失效
+      if (!keys.length) {
+        console.warn(
+          "[spec-data] specs.json 未被打包 (import.meta.glob 空), 参数预测将不可用",
+        );
+        cache = {};
+        return cache;
+      }
+      const mod = await specsImporters[keys[0]]();
+      cache = (mod ?? {}) as Record<string, FigSpec>;
+      // 加载结果为空同样告警 (如生成脚本失败产出空对象)
+      if (!Object.keys(cache).length) {
+        console.warn(
+          "[spec-data] specs.json 加载结果为空, 请重跑 scripts/build-fig-specs.mjs",
+        );
+      }
       return cache;
     })();
   }
