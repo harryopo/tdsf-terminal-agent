@@ -172,7 +172,7 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
           className="shrink-0 text-primary"
         />
         <span className="flex-1 truncate text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
-          代码片段
+          Snippets
         </span>
         <Button
           type="button"

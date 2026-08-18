@@ -109,7 +109,7 @@ export function TunnelPanel({ className }: Props) {
           className="shrink-0 text-primary"
         />
         <span className="flex-1 truncate text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
-          SSH 隧道
+          Tunnels
         </span>
         <Button
           type="button"
