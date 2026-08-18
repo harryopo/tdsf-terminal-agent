@@ -391,6 +391,39 @@ export function completionKeyHandler(
     return true;
   }
 
+  // === 缓冲失效键（粘贴 / 删词 / 光标移动）===============================
+  // 缓冲只追踪"追加输入", 粘贴 (Ctrl+V)、删词 (Ctrl/Alt+Backspace)、
+  // 光标移动 (←→/Home/End) 会让缓冲区与终端实际行失配, 继续基于旧缓冲
+  // 预测会给出错误补全破坏命令 (P1-10, 2026-08-18)。失配即失效:
+  // 清空缓冲 + 关闭弹窗, 宁可无预测也不给错误预测。
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    (event.key === 'v' || event.key === 'V')
+  ) {
+    clearInputBuffer(leafId);
+    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    return true;
+  }
+  if (
+    (event.ctrlKey || event.altKey || event.metaKey) &&
+    event.key === 'Backspace'
+  ) {
+    clearInputBuffer(leafId);
+    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    return true;
+  }
+  if (
+    event.key === 'ArrowLeft' ||
+    event.key === 'Home' ||
+    event.key === 'End'
+  ) {
+    // 弹窗可见时的 ArrowRight 已在上面"接受预测"分支拦截, 不会落此;
+    // 光标移出行尾后缓冲已失配, 清空 + 关闭弹窗。
+    clearInputBuffer(leafId);
+    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    return true;
+  }
+
   // === 可打印字符 → 追加到缓冲区 + 更新预测 ===
   if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
     const buf = getInputBuffer(leafId);

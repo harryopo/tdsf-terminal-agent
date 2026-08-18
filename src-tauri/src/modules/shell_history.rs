@@ -115,7 +115,7 @@ pub fn locate_history_file(shell_type: ShellType) -> PathBuf {
         None => return PathBuf::new(),
     };
 
-    let path = match shell_type {
+    match shell_type {
         ShellType::Bash => home.join(".bash_history"),
         ShellType::Zsh => home.join(".zsh_history"),
         ShellType::Fish => home.join(".local").join("share").join("fish").join("fish_history"),
@@ -135,10 +135,8 @@ pub fn locate_history_file(shell_type: ShellType) -> PathBuf {
                 .join("PSReadLine")
                 .join("ConsoleHost_history.txt")
         }
-        ShellType::Unknown => return PathBuf::new(),
-    };
-
-    path
+        ShellType::Unknown => PathBuf::new(),
+    }
 }
 
 // ============================================================================
@@ -248,7 +246,8 @@ mod tests {
         let result = read_shell_history_internal();
         assert!(result.is_ok());
         let info = result.unwrap();
-        assert!(info.commands.len() >= 0); // 仅验证不 panic
+        // 仅验证不 panic; 原 `len() >= 0` 恒真, 触发 clippy absurd_extreme_comparisons (deny)
+        assert!(info.commands.is_empty());
     }
 
     #[test]

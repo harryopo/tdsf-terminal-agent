@@ -457,7 +457,7 @@ impl SidecarManager {
                 //    backoff = 2^(retry-1) 秒，上限 60s
                 let retry = manager.retry_count.load(Ordering::SeqCst);
                 // shift 限制在 0-6（retry=1→1s, retry=7→64s 但被 min(60) 截断）
-                let shift = retry.saturating_sub(1).min(6) as u32;
+                let shift = retry.saturating_sub(1).min(6);
                 let backoff_secs = RESTART_BACKOFF_BASE
                     .saturating_mul(1u64 << shift);
                 let backoff = Duration::from_secs(backoff_secs).min(RESTART_BACKOFF_MAX);
@@ -630,6 +630,9 @@ impl SidecarManager {
                         .get("message")
                         .and_then(|m| m.as_str())
                         .unwrap_or("unknown error");
+                    // 2026-08-18 审查确认: 此处仅做日志, 不转 Err——
+                    // 唯一调用方 IPCClient::invoke (ipc.rs) 会检测 error 字段
+                    // 并返回 IPCError::RemoteError (含 code/message/data), 语义已正确
                     log::warn!(
                         "[sidecar] request {} failed: code={}, message={}",
                         method,
@@ -1849,14 +1852,15 @@ mod tests {
 
     #[test]
     fn test_sidecar_state_snapshot() {
-        let mut state = SidecarState::default();
-        state.status = SidecarStatus::Running;
-        state.pid = Some(12345);
-        state.started_at = Some(Instant::now());
-        state.last_heartbeat = Some(Instant::now());
-        state.retry_count = 1;
-        state.methods = vec!["ping".to_string(), "status".to_string()];
-        state.python_version = Some("3.13.7".to_string());
+        let state = SidecarState {
+            status: SidecarStatus::Running,
+            pid: Some(12345),
+            started_at: Some(Instant::now()),
+            last_heartbeat: Some(Instant::now()),
+            retry_count: 1,
+            methods: vec!["ping".to_string(), "status".to_string()],
+            python_version: Some("3.13.7".to_string()),
+        };
 
         let snapshot = state.snapshot();
         assert_eq!(snapshot.status, SidecarStatus::Running);
@@ -1882,7 +1886,7 @@ mod tests {
 
     /// TDSF P0 修复：退避计算辅助函数（与 start_restart_loop 内联公式一致）
     fn compute_backoff(retry: u32) -> Duration {
-        let shift = retry.saturating_sub(1).min(6) as u32;
+        let shift = retry.saturating_sub(1).min(6);
         let secs = RESTART_BACKOFF_BASE.saturating_mul(1u64 << shift);
         Duration::from_secs(secs).min(RESTART_BACKOFF_MAX)
     }

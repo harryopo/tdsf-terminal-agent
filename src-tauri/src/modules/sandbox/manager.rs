@@ -342,7 +342,6 @@ impl SandboxManager {
             tmpfs_options: Some(MountTmpfsOptions {
                 size_bytes: Some(config.tmpfs_size_bytes),
                 mode: None,
-                ..Default::default()
             }),
             ..Default::default()
         };
@@ -522,11 +521,13 @@ mod tests {
     // 测试 13: 自定义配置能正确传递 (如 ubuntu:24.04)
     #[test]
     fn test_custom_config_propagates() {
-        let mut config = SandboxConfig::default();
-        config.image = "ubuntu:24.04".to_string();
-        config.memory_limit_bytes = 1024 * 1024 * 1024; // 1GB
-        config.network_mode = "bridge".to_string();
-        config.user = "sandbox:1000".to_string();
+        let config = SandboxConfig {
+            image: "ubuntu:24.04".to_string(),
+            memory_limit_bytes: 1024 * 1024 * 1024, // 1GB
+            network_mode: "bridge".to_string(),
+            user: "sandbox:1000".to_string(),
+            ..Default::default()
+        };
 
         let body = SandboxManager::build_create_body(&config);
         assert_eq!(body.image, Some("ubuntu:24.04".to_string()));
@@ -542,9 +543,8 @@ mod tests {
         let transport = SandboxManager::detect_transport_name();
         if cfg!(target_os = "windows") {
             assert_eq!(transport, "named_pipe");
-        } else if cfg!(target_os = "linux") {
-            assert_eq!(transport, "unix_socket");
-        } else if cfg!(target_os = "macos") {
+        } else {
+            // Linux/macOS 均为 unix_socket
             assert_eq!(transport, "unix_socket");
         }
     }
