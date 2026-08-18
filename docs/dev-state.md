@@ -4091,7 +4091,7 @@ CDP 全新状态实测通过。commit 见上。
 | P2-13 | exec 输出字节上限 `MAX_EXEC_OUTPUT_BYTES` + `append_exec_output_limited` | `session.rs` |
 | P2-14 | Linux 密钥库两独立锁窗口合并为单锁临界区 | `secrets.rs` |
 | P2-16 | clippy 全量清理：`absurd_extreme_comparisons` deny（shell_history 恒真断言）+ let_and_return + derivable_impls×2 + unnecessary_cast×2 + manual_clamp + unnecessary_sort_by + io_other_error + incompatible_msrv + default_constructed_unit_structs + needless_update + field_reassign_with_default×2 + if_same_then_else + iter_kv_map + redundant_closure + doc_lazy_continuation + too_many_arguments（open_pty 加 allow+注释） | 14 个 rs 文件 |
-| P3-17 | @ts-ignore/TODO/loader 断言：审查验证为功能必需/低风险，保持待专项 | — |
+| P3-17 | lint 豁免 19 处逐项验证：1 @ts-expect-error（HugeiconsIcon 类型缺声明）+ 18 eslint-disable（no-control-regex×4 终端 ANSI / exhaustive-deps×11 上游设计防回归 / no-explicit-any×2 mock）全部带理由注释且属 CLAUDE.md §4 允许豁免，保持；TODO 注释实测 0 处（前期已消除）；**loader.ts 补加载断言**（glob 空 / 结果空双告警，防参数预测静默失效） | `loader.ts` + 豁免验证记录 |
 
 **五绿门禁全过（2026-08-18）**：
 - `cargo clippy --all-targets`：0 错误 0 警告（唯一残留为全局 cargo config `net.retries` 提示，非本项目）
@@ -4103,4 +4103,4 @@ CDP 全新状态实测通过。commit 见上。
 
 **本轮改动文件**：Rust 15（clippy 清理 14 + client/session/credentials/handler/mod/tunnel/ipc/sidecar/side_git/workspace/fs_backend/shell_history/sandbox/secrets/lib + ssh_integration 测试）、Python 5（rpc/rag/steer_inject/base/test_rag）、前端 7（App/sshStore/SshExplorer/completionInjection/paramSuggest/TunnelPanel.test/ssh-bridge 订阅）。commit：`fix(code-review): apply all 17 findings from full code review`（2026-08-18）。
 
-**下一步**：① P3-17 待专项（@ts-ignore/TODO/loader 断言，低风险）；② `pnpm tauri:dev` 桌面端回归（下一轮日常启动时顺带验证 SSH 连接 + 翻译 + 文件树联动）。
+**下一步**：① `pnpm tauri:dev` 桌面端回归（日常启动时顺带验证 SSH 连接 + 翻译 + 文件树联动）；② 长短期规划见 ROADMAP 待办。
