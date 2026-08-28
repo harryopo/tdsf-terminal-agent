@@ -3,7 +3,8 @@
   "app": {
     "windows": [
       {
-        "label": "main"
+        "label": "main",
+        "decorations": false
       }
     ]
   }
