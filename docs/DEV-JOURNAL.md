@@ -1568,3 +1568,19 @@ P2（中优先级 — 清理 + 文档）：
 **测试**：completionInjection.test 重写用户场景断言——输入 `ll`：items[0] = ll（dictionary 来源，含"详细列表（别名）"解释）+ 全列表无 ollama；门禁 tsc/lint/vitest 目标 25 测试全过。
 
 **复盘**：✅ 数据源"翻译用途"与"预测用途"要显式分离检查——词典命令没进预测集是典型的"字段复用掩盖了集合缺口"。fuzzy 参数不实测分数语义就调是瞎调（threshold 注释与实际语义不符，实测才确认 0~1 越高越好）。
+
+## 2026-08-28 · shell 别名数据集深度调研 + 系统性补齐（§37.70）
+
+**任务**：用户要求检查所有缩写命令是否存在同类问题（不在预测集/无解释），并深度调研（调用 deep-research-ultra）。
+
+**调研结论**（deep-research-ultra 代理，来源 URL 全存报告）：
+- **Fig specs 无 alias spec**（官方 #110 确认：alias 由运行时从 shell 读取展开）→ 静态别名表是唯一方案
+- **tldr 不收录 rc 别名**（style guide 只允许命令本身的别名页）
+- 可嵌入数据源：**oh-my-zsh git 插件（MIT）** / **bash-it aliases（MIT）** / 发行版 rc 事实性条目；grml GPL v2 仅提炼事实性映射不拷贝文本
+- MIT 论文佐证：220 万真实用户 alias 高度收敛于 .bashrc 常见集合
+
+**实施**：新建 `src/lib/shell-aliases.ts`（**47 条**，三组：发行版开箱 14 / oh-my-zsh git+社区 27 / 运维教学 6），每条含 alias/expand（展开命令）/zh（弹窗展示"解释（= 展开）"）。suggest-engine 集成：别名独有命令并入 linux 预测集；词典同名别名（ll/la）用别名表精确解释覆盖；**SPEC_INDEX 标准命令（ls/grep/rm）不被别名解释覆盖**（tldr 标准解释更准确）。gs 与 gst 双收录（omz 官方是 gst，gs 是社区流行）。
+
+**验证**：目标测试 26 过（新增 gs 可预测 + zh 含 "git status" 断言）/ tsc / lint 全绿。
+
+**复盘**：✅ 别名覆盖不覆盖标准命令需辨析——`ll`（独有条目）用别名解释，`ls`（标准命令的加参别名）保留 tldr 标准解释，两种情况语义不同。

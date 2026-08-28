@@ -26,6 +26,7 @@
 import fuzzysort from "fuzzysort";
 import { COMMAND_LIST, type CommandDictEntry } from "./command-dictionary";
 import { WINDOWS_COMMAND_LIST } from "./windows-commands";
+import { SHELL_ALIASES } from "./shell-aliases";
 import { SPEC_INDEX } from "./spec-data/generated/spec-index";
 import { TLDR_ZH } from "./spec-data/generated/tldr-zh";
 
@@ -94,14 +95,39 @@ export class SuggestEngine {
         extra.push({ name: e.command, zh: e.zh });
       }
     }
+    // 2026-08-28 深度调研补充：shell 别名数据集（oh-my-zsh git 插件 MIT /
+    // bash-it MIT / 发行版 rc 事实性条目）。Fig specs 官方不收录 alias
+    //（#110：运行时展开），tldr 也不收录 → 静态表。别名解释最精确
+    //（含展开命令），同名时覆盖词典/INDEX 的 zh。
+    const aliasMap = new Map(
+      SHELL_ALIASES.map((a) => [
+        a.alias,
+        { name: a.alias, zh: `${a.zh}（= ${a.expand}）` },
+      ]),
+    );
     this.linuxCommands = [
       ...SPEC_INDEX.map((e) => ({
         name: e.name,
-        // 中文优先级: tldr zh（开源全量）> 手编词典 > 无
+        // 中文优先级: tldr zh（开源全量）> 手编词典 > 无。
+        // 注意: 别名解释不覆盖 SPEC_INDEX 标准命令（ls/grep/rm 的别名
+        // 只是加参数，tldr 的标准解释更准确）。
         zh: TLDR_ZH[e.name] ?? manualMap.get(e.name)?.zh,
         description: e.description,
       })),
-      ...extra,
+      ...extra.map((e) => ({
+        // 词典命令若同时也是别名（ll/la），用别名的精确解释覆盖
+        ...e,
+        zh: aliasMap.get(e.name)?.zh ?? e.zh,
+      })),
+      // 别名独有命令（不在 SPEC_INDEX 也不在词典的，如 gs/gst/gaa）
+      ...SHELL_ALIASES.filter(
+        (a) =>
+          !SPEC_INDEX.some((s) => s.name === a.alias) &&
+          !COMMAND_LIST.some((c) => c.command === a.alias),
+      ).map((a) => ({
+        name: a.alias,
+        zh: `${a.zh}（= ${a.expand}）`,
+      })),
     ];
     this.windowsCommands = WINDOWS_COMMAND_LIST.map((e) => ({
       name: e.command,
