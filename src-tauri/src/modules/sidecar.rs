@@ -702,25 +702,24 @@ impl SidecarManager {
         };
 
         // 3. 判定运行目标: PyInstaller onefile 产物自带入口, 不接受 -u/script 参数
-        //    - TDSF_SIDECAR_PYTHON 指向打包 exe（python 即 exe）
         //    - 发布模式下 script_path 即打包 exe（lib.rs locate_sidecar_script 探测）
-        let python_is_exe = python
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("exe"))
-            .unwrap_or(false);
+        //    2026-08-28 审查修复: 不能用"扩展名是 exe"判定打包产物——venv 的
+        //    解释器本身就叫 python.exe，会被误判 → 不带任何参数运行 python.exe
+        //    → 交互解释器读 pipe stdin 遇 EOF 立即退出 → ready 超时。
+        //    现只看 script 是否 exe：dev 模式 script=main.py 走解释器分支，
+        //    打包模式 script=tdsf-sidecar.exe 走 exe 分支。TDSF_SIDECAR_PYTHON
+        //    无论指向解释器还是什么都不影响该判定。
         let script_is_exe = script
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.eq_ignore_ascii_case("exe"))
             .unwrap_or(false);
 
-        let mut command = if python_is_exe || script_is_exe {
+        let mut command = if script_is_exe {
             // 打包 exe 冷启动慢（744MB 依赖）, ready 等待放宽到 60s
             *self.ready_timeout.lock().await = Duration::from_secs(60);
-            let exe = if python_is_exe { python } else { script.clone() };
-            log::info!("[sidecar] running packaged sidecar exe: {:?}", exe);
-            tokio::process::Command::new(&exe)
+            log::info!("[sidecar] running packaged sidecar exe: {:?}", script);
+            tokio::process::Command::new(&script)
         } else {
             if !script.exists() {
                 return Err(SidecarError::SpawnFailed(format!(

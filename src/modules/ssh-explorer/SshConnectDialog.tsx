@@ -35,6 +35,8 @@ import {
   Delete01Icon,
   Loading03Icon,
   Login03Icon,
+  ViewIcon,
+  ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useState } from "react";
@@ -444,13 +446,11 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
           {authKind === "password" ? (
             <div className="grid gap-1.5">
               <Label htmlFor="ssh-password">密码 (Password)</Label>
-              <Input
+              <PasswordInput
                 id="ssh-password"
-                type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={setPassword}
                 placeholder="••••••••"
-                autoComplete="off"
                 disabled={submitting}
               />
             </div>
@@ -470,13 +470,11 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="ssh-passphrase">口令 (Passphrase, 可选)</Label>
-                <Input
+                <PasswordInput
                   id="ssh-passphrase"
-                  type="password"
                   value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
+                  onChange={setPassphrase}
                   placeholder="若私钥加密则填写"
-                  autoComplete="off"
                   disabled={submitting}
                 />
               </div>
@@ -558,5 +556,50 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** 带显示/隐藏切换的密码输入框（用户 2026-08-28 反馈"没有小眼睛"） */
+function PasswordInput({
+  id,
+  value,
+  onChange,
+  placeholder,
+  disabled,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        type={reveal ? "text" : "password"}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        disabled={disabled}
+        className="pr-9"
+      />
+      <button
+        type="button"
+        onClick={() => setReveal((v) => !v)}
+        tabIndex={-1}
+        className="absolute top-1/2 right-2.5 -translate-y-1/2 text-muted-foreground/60 transition-colors hover:text-foreground"
+        aria-label={reveal ? "隐藏密码" : "显示密码"}
+        title={reveal ? "隐藏密码" : "显示密码"}
+      >
+        <HugeiconsIcon
+          icon={reveal ? ViewOffSlashIcon : ViewIcon}
+          size={14}
+          strokeWidth={1.75}
+        />
+      </button>
+    </div>
   );
 }
