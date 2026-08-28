@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · 换机重装后环境重建 + 全量门禁恢复（§37.65）。接手请直接看 **§37.65**（换机环境重建）+ **§37.64**（知识库 UI）+ **§37.63**（审查修复）
+> **最后更新**：2026-08-28 · 启动.bat 编码修复 + langchain-openai 补装（§37.66）。接手请直接看 **§37.66**（启动修复）+ **§37.65**（换机环境重建）+ **§37.64**（知识库 UI）+ **§37.63**（审查修复）
 
 ---
 
@@ -4152,3 +4152,18 @@ CDP 全新状态实测通过。commit 见上。
 **改动文件**：`启动.bat`（新增）/ `src-tauri/sidecar/requirements.txt` / `src-tauri/sidecar/tests/test_needs_you.py` / `src-tauri/sidecar/tests/test_long_context.py` / `src-tauri/sidecar/strands_backend/tests/test_e2e_strands.py` / `src-tauri/src/modules/workspace.rs` / `docs/DEV-JOURNAL.md` / `docs/ROADMAP.md`。
 
 **下一步**：用户真实终端 `启动.bat` 实测（五绿第 5 项）；后续开发照常。
+
+### 37.66 启动.bat 中文编码错乱修复 + langchain-openai 补装（2026-08-28 ⚠️→✅ 待用户实测）
+
+**背景**：用户 cmd 双击 `启动.bat`，GBK 代码页解析 UTF-8 中文注释/路径 → 乱码命令报错 + `set TDSF_SIDECAR_PYTHON` 被拆碎未生效 → sidecar 回退系统 python（缺 langchain-openai）→ LLM 不可用。交接记录供后续接手（§37.65 遗留的启动修复落地）。
+
+**根因**：cmd 解析 .bat 用当前代码页（GBK 936）≠ 文件 UTF-8；`chcp 65001` 在 `@echo off` 后执行，救不了已发生的解析。sidecar 解释器解析链（`src-tauri/src/modules/sidecar.rs:782-825`）：`TDSF_SIDECAR_PYTHON` > `python` > `python3` > `py -3`。
+
+**修复**（commit `04768bf`）：
+1. `启动.bat` 全 ASCII 重写：`cd /d "%~dp0"` + `set "TDSF_SIDECAR_PYTHON=%~dp0src-tauri\sidecar\.venv\Scripts\python.exe"`（中文路径安全，已临时 verify.bat 实测展开正确）
+2. `.venv` 补装 `langchain-openai`（清华源，langchain_openai 1.6.0，`ChatOpenAI` 导入 OK）
+3. `requirements.txt` 补录 `langchain-openai>=0.3.0`（防重装再踩）
+
+**经验固化**：写 .bat 一律全 ASCII + `%~dp0` 动态路径；依赖补装必须同步 requirements.txt。
+
+**下一步（需用户）**：真实 cmd 重新运行 `启动.bat`，确认 ① 无乱码命令报错 ② 日志 `using python: "...\.venv\Scripts\python.exe"` ③ 无 `langchain-openai 未安装` ④ 窗口出现 → 五绿第 5 项闭环。
