@@ -1677,3 +1677,22 @@ P2（中优先级 — 清理 + 文档）：
 **验证**：tsc/lint 0 + vitest 1088(+7) 全过。
 
 **复盘**：✅ 用户"参数应该在空格后才弹"的直觉是对的——无空格尾部触发是额外增强，增强必须有比基础路径更严的门禁（基础路径有 predictSeq 和远端过滤，尾部触发原本只有数据源判断）；✅ 抽纯函数后门禁逻辑可测可复用；⚠️ 数据源的"有数据"和"环境有命令"是两个正交维度，静态数据源必须动态门禁兜底。
+
+## 2026-08-28 · AI 配置国产化与现代化（§37.75）
+
+**用户诉求**：AI 配置以国产为主、跟上大模型最新进度（2026-08）；默认对话模型不应停留在旧 GPT；搞清"自动补全模型"语义；语音要本地支持；本地部署确保可用。
+
+**现状盘点**（先盘点后写码）：目录里 gpt-5.6 家族与 deepseek-v4-pro/flash 都已存在，但 DEFAULT_MODEL_ID 停在 gpt-5.4-mini；GLM/Qwen/Kimi 无官方 provider（只能绕 OpenRouter）；STT 三选一（openai/groq/whispercpp 本地）但默认 openai；"自动补全模型"= 编辑器内联 AI 补全（Cerebras qwen-3-32b），与终端命令预测（本地词典+carapace，零大模型）无关——用户误解的根源是没说明文案。
+
+**调研**（联网 2026-08-27 快照）：国产第一梯队 DeepSeek V4-Pro（0813，1M 上下文，Agent 能力逼近 Claude Fable 5）/V4-Flash（MIT）；GLM-5.3（743B 开源）/5.3-Flash（8/26 开源，定价 1/10）；Qwen3.8-Flash（开源）；Kimi K3（1T MoE 开源）；MiniMax M3。五家全部 OpenAI 兼容 tool-calling，GLM-5.1/MiniMax M3 得分超 GPT-5.5 基线——Strands OpenAIModel 兼容端点接入成本低。
+
+**实施**（commit 06edce5，+1767 行；spec .trae/specs/add-domestic-first-ai-config/）：
+- 前端：DEFAULT_MODEL_ID → deepseek-v4-flash、DEFAULT_STT_PROVIDER → whispercpp（loopback 红线保留）；provider 扩为 zhipu/qwen(百炼)/moonshot/doubao 四家国产 + 国产优先排序；GLM-5.3(-Flash)/Kimi K3 条目（中文描述/上下文/定价 2026-08 快照）；旧条目 [legacy] 保留（老用户偏好不失效）；zhipu keyPrefix 修为 null（其 key 是 "id.secret" 格式，"sk-" 校验会误拒）；whisper.cpp 本地引导 + 自动补全作用域说明 + Ollama 推荐模型名（qwen3:8b/glm4:9b/deepseek-r1:8b）
+- Python：llm_config.py PROVIDER_DEFAULT_BASE_URLS + _resolve_base_url() 回退（显式 base_url 优先）；model_adapter.py _OPENAI_COMPATIBLE_PROVIDERS 显式集合（新 id 静默命中 OpenAIModel，不再误报 unknown provider）
+- 测试：config.test 52 + preferences.test 5（迁移三路径：无存储→新默认/已存→保留/脏值→回退）+ pytest 55；全量门禁 tsc/lint 0 + vitest 1125 全过
+
+**实施波折（值得记）**：①工作树有先行会话的同主题改动（provider id 用 `qwen` 而非任务书 `dashscope`、doubao 条目、sidecar-config-sync 新链路）——采用"补齐而非推倒"策略，偏差记录在 tasks.md；②三 agent 并行导致的 typecheck 中间态（AiStatusBarControls 图标表缺 4 key）由主线补修；③全量 vitest 首跑 3 失败为并发编辑中间态，稳定重跑 1125 全过——并行 agent 作业时门禁必须等全部合流后再跑。
+
+**复盘**：✅ 先盘点后定方案避免了一次"重复添加 gpt-5.6-sol"的浪费（已存在）；✅ 双侧 baseURL（前端 PROVIDER_BASE_URLS + Python PROVIDER_DEFAULT_BASE_URLS）需同步——单侧改会造成 dev 正常 sidecar 失败的分裂；⚠️ Strands 路径 base_url 为空时不回退官方端点（回退仅在 LangGraph 路径生效）——前端预填 baseURL 的正常流程无影响，环境变量纯 provider 用法受影响，遗留记录。
+
+**待实测**（T6）：设置页默认显示 DeepSeek + whisper.cpp 本地；智谱 key 对话通；Ollama qwen3:8b 对话通。**下一步**：回归 agent 模块规划（B1 安全基座 → 真实 LLM 委派实测 → B2 交互升级）+ 预测第二轮历史 OSC。
