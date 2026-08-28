@@ -222,6 +222,27 @@ describe("acceptPrediction", () => {
     expect(written).toEqual(["\b\b" + "ll"]);
   });
 
+  it("别名独有命令（gs/gaa）可预测且解释含展开命令", async () => {
+    // gs/gaa 只在 shell-aliases 数据集（oh-my-zsh git 插件），
+    // 不在 Fig specs 也不在手编词典。
+    setLeafEnvironment(3, "linux");
+    getSuggestEngine().clearHistory();
+    initCompletionInjection(
+      () => null,
+      () => {},
+    );
+
+    expect(completionKeyHandler(3, key("g"))).toBe(true);
+    expect(completionKeyHandler(3, key("s"))).toBe(true);
+    await tick();
+
+    const state = getCompletionState();
+    expect(state.visible).toBe(true);
+    const gs = state.items.find((it) => it.command === "gs");
+    expect(gs).toBeDefined();
+    expect(gs?.zh).toContain("git status");
+  });
+
   it("接受 history 预测时同样先退格再写完整命令", async () => {
     // 用独立 leafId 隔离输入缓冲区（leafId 1 已在上一个测试使用）。
     // 2026-08-28 环境分流后：未注册环境默认 windows，显式注册为 linux
