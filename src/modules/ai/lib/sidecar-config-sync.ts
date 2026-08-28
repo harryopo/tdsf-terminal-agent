@@ -273,20 +273,23 @@ export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
         ? await getKey(target.provider)
         : null;
 
-    if (!apiKey?.trim()) {
-      // sidecar llm_config.py is_configured 要求非空 api_key——无 key 的本地
-      // 模型（ollama/lmstudio/mlx）与未配 key 的端点无法在 sidecar 生效，
-      // 提前拦截避免一次注定失败的 IPC
+    // 本地 keyless provider（ollama/lmstudio/mlx）→ 占位 key：
+    // 它们的 OpenAI 兼容端点不校验 key，但 sidecar llm_config.py 的
+    // is_configured 要求非空 api_key（用户明确要求本地部署在 Agent 面板可用）
+    const effectiveKey = apiKey?.trim() || (providerNeedsKey(target.provider) ? "" : "tdsf-local");
+
+    if (!effectiveKey) {
+      // 真云端 provider 未配 key → 提前拦截（本地模型已被占位 key 放行）
       return {
         ok: false,
-        detail: `${getProvider(target.provider).label} 未配置 API Key（本地模型不走 sidecar 配置同步）`,
+        detail: `${getProvider(target.provider).label} 未配置 API Key`,
       };
     }
 
     const config = buildSidecarLlmConfig({
       provider: target.provider,
       model: target.model,
-      apiKey,
+      apiKey: effectiveKey,
       baseURL: target.baseURL,
     });
 
