@@ -269,6 +269,32 @@ describe("acceptPrediction", () => {
     expect(completionKeyHandler(2, key("ArrowRight"))).toBe(false);
     expect(written).toEqual(["\b\b" + "ipp"]);
   });
+
+  it("Enter 永远透传：弹窗可见时也不接受预测，仅 → 接受（用户 2026-08-28 钦定）", async () => {
+    // 终端操作终端优先：Enter 只执行用户已敲入的内容，绝不写入预测文本
+    setLeafEnvironment(4, "linux");
+    getSuggestEngine().clearHistory();
+    const written: string[] = [];
+    initCompletionInjection(
+      () => null,
+      (_leafId, data) => {
+        written.push(data);
+      },
+    );
+
+    // 输入 "ll" → 弹窗可见且有候选
+    expect(completionKeyHandler(4, key("l"))).toBe(true);
+    expect(completionKeyHandler(4, key("l"))).toBe(true);
+    await tick();
+
+    const state = getCompletionState();
+    expect(state.visible).toBe(true);
+    expect(state.items.length).toBeGreaterThan(0);
+
+    // Enter → 透传（true），且不向 PTY 写入任何预测文本
+    expect(completionKeyHandler(4, key("Enter"))).toBe(true);
+    expect(written).toEqual([]);
+  });
 });
 
 // === 二轮改进纯函数（2026-08-28：远端过滤 / 尾部触发合并 / 缩写追加）=========

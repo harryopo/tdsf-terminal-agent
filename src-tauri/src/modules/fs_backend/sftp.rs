@@ -47,6 +47,35 @@ fn map_err(path: &str, e: String) -> FsBackendError {
     }
 }
 
+/// 逐级确保父目录存在（mkdir -p 语义，TDSF 魔改 2026-08-28）。
+///
+/// SFTP 协议没有递归建目录，逐段 `stat` 探测 + `create_dir`。用户在远程文件树
+/// 新建多级路径（如 `/root/lab/test/a.txt`）时，中间目录不存在会导致
+/// russh-sftp 报 "no such file"——写文件/建目录前先补齐父目录即可一次成功。
+async fn ensure_parent_dirs(
+    session: &SftpSession,
+    path: &str,
+) -> Result<(), FsBackendError> {
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut cur = String::new();
+    // 除最后一段（文件名/目标目录名本身）外逐级确保存在
+    for part in parts.iter().take(parts.len().saturating_sub(1)) {
+        cur.push('/');
+        cur.push_str(part);
+        // 已存在（文件或目录）→ 跳过该级
+        if session.stat(&cur).await.is_ok() {
+            continue;
+        }
+        if let Err(e) = session.mkdir(&cur).await {
+            // 竞态保护：create_dir 失败后再 stat 一次，仍不存在才报错
+            if session.stat(&cur).await.is_err() {
+                return Err(map_err(&cur, e));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn entry_from_sftp(e: &crate::modules::ssh::sftp::SftpEntry) -> FsEntry {
     FsEntry {
         name: e.name.clone(),
@@ -109,10 +138,13 @@ impl FsBackend for SftpFs {
 
     async fn write(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError> {
         let p = validate_sftp_path(path)?;
+        // TDSF 魔改 2026-08-28: 写文件前自动补齐父目录（mkdir -p 语义）——
+        // 新建多级路径（如 /root/lab/a.txt）不再报 "no such file"。
+        ensure_parent_dirs(&self.session, p).await?;
         self.session
             .write_file(p, data)
             .await
-            .map_err(|e| map_err(path, e))
+            .map_err(|e| map_err(p, e))
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<(), FsBackendError> {
@@ -148,10 +180,13 @@ impl FsBackend for SftpFs {
 
     async fn mkdir(&self, path: &str) -> Result<(), FsBackendError> {
         let p = validate_sftp_path(path)?;
+        // TDSF 魔改 2026-08-28: mkdir 同样走逐级创建（mkdir -p 语义），
+        // 新建多级目录一次成功；目标级本身由调用方语义决定，不在此创建。
+        ensure_parent_dirs(&self.session, p).await?;
         self.session
             .mkdir(p)
             .await
-            .map_err(|e| map_err(path, e))
+            .map_err(|e| map_err(p, e))
     }
 
     async fn stat(&self, path: &str) -> Result<FsEntry, FsBackendError> {

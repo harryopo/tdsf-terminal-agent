@@ -1,6 +1,7 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listenFsChanged, watchAdd, watchRemove } from "./watch";
 
@@ -407,7 +408,16 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         }
         await fetchChildren(pendingCreate.parentPath);
       } catch (e) {
+        // TDSF 魔改 2026-08-28: 新建失败必须有可见反馈（此前静默 console，
+        // 用户点新建后"什么都没发生"误以为功能坏了）。Rust 端 SFTP 已支持
+        // mkdir -p 语义，这里剩下的错误通常是权限/连接断开。
         console.error("create failed:", e);
+        const detail = e instanceof Error ? e.message : String(e);
+        toast.error(
+          pendingCreate.kind === "dir"
+            ? `新建文件夹失败：${detail}`
+            : `新建文件失败：${detail}`,
+        );
       } finally {
         setPendingCreate(null);
       }

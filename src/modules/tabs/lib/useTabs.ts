@@ -48,6 +48,21 @@ function sshSessionIdForSpace(spaceId: string | null): string | undefined {
   return undefined;
 }
 
+/**
+ * 新建终端 tab 的初始标题（用户钦定 2026-08-28）：
+ * SSH Space → "shell"、WSL Space → "shell"、本地 Space → "terminal"。
+ * 注意：tabLabel 显示优先级 customTitle > cwd basename > title，
+ * 本地 tab 被 OSC7 同步 cwd 后仍会显示目录名（既有跟随行为，不受影响）。
+ */
+function terminalTitleForSpace(spaceId: string | null): string {
+  if (!spaceId) return "terminal";
+  const space = useSpaces
+    .getState()
+    .spaces.find((s) => s.id === spaceId);
+  if (space?.env.kind === "ssh" || space?.env.kind === "wsl") return "shell";
+  return "terminal";
+}
+
 type TabBase = {
   spaceId: string;
   /** Restored from disk, not yet activated: rendered as a placeholder, not mounted. */
@@ -472,7 +487,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         kind: "terminal",
         spaceId,
         cold: true,
-        title: cwd ? basename(cwd) : "shell",
+        title: cwd ? basename(cwd) : terminalTitleForSpace(spaceId),
         cwd,
         sshSessionId,
         paneTree: { kind: "leaf", id: leafId, cwd },
@@ -586,7 +601,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         id: tabId,
         kind: "terminal",
         spaceId: activeSpaceIdRef.current,
-        title: "shell",
+        title: terminalTitleForSpace(activeSpaceIdRef.current),
         cwd,
         sshSessionId,
         paneTree: { kind: "leaf", id: leafId, cwd },
