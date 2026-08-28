@@ -191,9 +191,9 @@ function key(k: string): KeyboardEvent {
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe("acceptPrediction", () => {
-  it("接受 fuzzy 预测时先退格清 prefix 再写完整命令（输 ip 接受 pip）", async () => {
-    // 清空历史，避免 history/dictionary 前缀命中干扰 fuzzy 层。
-    // 注册 linux 环境（pip 是 Linux 命令；未注册默认 windows）。
+  it("输入 ll 弹出词典别名 ll 且不弹 ollama（用户 2026-08-28 反馈场景）", async () => {
+    // ll 是 shell 别名，不在 Fig specs——已并入手编词典预测集；
+    // ollama 是首字符不一致的弱子序列，被 fuzzy 首字符约束过滤。
     setLeafEnvironment(1, "linux");
     getSuggestEngine().clearHistory();
     const written: string[] = [];
@@ -204,26 +204,22 @@ describe("acceptPrediction", () => {
       },
     );
 
-    // 输入 "ip"
-    expect(completionKeyHandler(1, key("i"))).toBe(true);
-    expect(completionKeyHandler(1, key("p"))).toBe(true);
+    // 输入 "ll"
+    expect(completionKeyHandler(1, key("l"))).toBe(true);
+    expect(completionKeyHandler(1, key("l"))).toBe(true);
     await tick();
 
     const state = getCompletionState();
     expect(state.visible).toBe(true);
-    // 复现用户场景：预测列表里存在 fuzzy 来源的 "pip"
-    const pipIndex = state.items.findIndex(
-      (it) => it.command === "pip" && it.source === "fuzzy",
-    );
-    expect(pipIndex).toBeGreaterThanOrEqual(0);
+    // 第一条 = ll（dictionary 命中，非 fuzzy）
+    expect(state.items[0]?.command).toBe("ll");
+    expect(state.items[0]?.source).toBe("dictionary");
+    // 全列表无 ollama（首字符不一致的 fuzzy 噪音）
+    expect(state.items.some((it) => it.command === "ollama")).toBe(false);
 
-    // 下移选中 fuzzy 的 "pip"，再右箭头接受
-    for (let i = 0; i < pipIndex; i++) {
-      expect(completionKeyHandler(1, key("ArrowDown"))).toBe(false);
-    }
+    // 右箭头接受 → 先退格清 prefix 再写完整命令
     expect(completionKeyHandler(1, key("ArrowRight"))).toBe(false);
-    // 写入 = 2 个退格 + 完整命令 "pip"，而非 "p" 追加成 "ipp"
-    expect(written).toEqual(["\b\b" + "pip"]);
+    expect(written).toEqual(["\b\b" + "ll"]);
   });
 
   it("接受 history 预测时同样先退格再写完整命令", async () => {
