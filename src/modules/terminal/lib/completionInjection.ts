@@ -17,6 +17,17 @@
  * -----------------------------------------------------------------------------
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
+import { invoke } from '@tauri-apps/api/core';
+import {
+  buildParamRequest,
+  getLeafCwd,
+  getLeafRemoteCwd,
+  getLeafSshSession,
+  mergeCandidates,
+  remoteCarapaceInstalled,
+  remoteParamComplete,
+  type CarapaceCandidate,
+} from '@/lib/param-complete-client';
 import { getSuggestEngine, type SuggestionResult, type TerminalEnv } from '@/lib/suggest-engine';
 import { getCommandSpec } from '@/lib/spec-data/loader';
 import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
@@ -200,6 +211,65 @@ export function getCompletionState(): CompletionState {
 /** 预测请求序号：防止异步参数加载结果覆盖更新的输入 */
 let predictSeq = 0;
 
+/**
+ * 参数模式候选加载（按环境分流，TDSF 2026-08-28）。
+ *
+ * - windows（本地 pwsh）：invoke param_complete（Rust spawn 打包内 carapace.exe，
+ *   命令由 param_complete.rs 提供）。失败（后端旧版本无此命令）→ 静默返回 []。
+ * - linux（SSH）：远端 carapace 优先（远端真实环境的动态值：分支/文件/PID），
+ *   远端未装或失败 → 回退 Fig specs 静态层（行为与历史版本一致）。
+ *
+ * 过期结果由调用方 predictSeq 校验统一丢弃，本函数内部不再重复校验。
+ */
+async function loadParamPredictions(
+  leafId: number,
+  env: TerminalEnv,
+  cmd: string,
+  prefix: string,
+): Promise<SuggestionResult[]> {
+  const { tokens, current } = buildParamRequest(prefix);
+
+  if (env === 'windows') {
+    try {
+      // tokens 约定【含命令名】（param_complete.rs 接口约定，Rust 侧自行消费）
+      // cwd：本地 leaf 的 OSC 7 跟踪目录 —— git 分支等动态 action 按 cwd 取数据，
+      // 不传则 carapace 继承应用进程目录（几乎总是错的仓库）
+      const candidates = await invoke<CarapaceCandidate[]>('param_complete', {
+        cmd,
+        tokens,
+        current,
+        cwd: getLeafCwd(leafId),
+      });
+      return mergeCandidates(candidates ?? [], []);
+    } catch {
+      // 后端旧版本无 param_complete 命令 / 浏览器 dev 模式 → 静默降级为无预测
+      console.warn('[completion] param_complete unavailable, skip');
+      return [];
+    }
+  }
+
+  // ── linux（SSH）：远端 carapace 优先 ─────────────────────────────────────
+  const sessionId = getLeafSshSession(leafId);
+  if (sessionId !== null && (await remoteCarapaceInstalled(sessionId))) {
+    // tokens 去掉命令名（carapace CLI 语义：completer 已单独作第一个位置参数）
+    // remoteCwd：exec 通道默认在远端 home，git 分支会取错仓库 → cd 到 OSC 7 跟踪目录
+    const remote = await remoteParamComplete(
+      sessionId,
+      cmd,
+      tokens.slice(1),
+      current,
+      getLeafRemoteCwd(leafId),
+    );
+    if (remote !== null) return remote;
+  }
+
+  // ── 回退：Fig specs 静态层（行为与历史版本一致）──────────────────────────
+  // 首次触发全量 spec 懒加载（~11MB 独立 chunk，本地读取百毫秒级）
+  const spec = await getCommandSpec(cmd);
+  if (!spec) return [];
+  return suggestParams(spec, prefix, 8);
+}
+
 async function updatePredictions(leafId: number): Promise<void> {
   const seq = ++predictSeq;
   const env = getLeafEnvironment(leafId);
@@ -209,22 +279,18 @@ async function updatePredictions(leafId: number): Promise<void> {
     return;
   }
 
-  if (prefix.includes(' ') && env === 'linux') {
-    // ── 参数模式：命令 + 子命令/选项/参数值（Fig spec 开源数据）──────────
-    // 仅 linux（SSH）环境：Fig specs 是 POSIX CLI 定义，Windows 命令无 spec。
+  if (prefix.includes(' ')) {
+    // ── 参数模式：命令 + 子命令/选项/参数值/动态值（分支/目录/PID）────────
+    // TDSF 2026-08-28：移除 env === 'linux' 硬限制（spec: add-carapace-param-completion），
+    // 按环境分流到本地 carapace（param_complete）/ 远端 carapace（ssh_command），
+    // 失败统一回退 Fig specs 静态层（linux），Windows 无 spec 可回退则静默无预测。
     const { cmd } = parseCommandLine(prefix);
     if (!cmd) {
       setState((s) => (s.visible ? { ...s, visible: false } : s));
       return;
     }
-    // 首次触发全量 spec 懒加载（~11MB 独立 chunk，本地读取百毫秒级）
-    const spec = await getCommandSpec(cmd);
+    const items = await loadParamPredictions(leafId, env, cmd, prefix);
     if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
-    if (!spec) {
-      setState((s) => (s.visible ? { ...s, visible: false } : s));
-      return;
-    }
-    const items = suggestParams(spec, prefix, 8);
     if (items.length === 0) {
       setState((s) => (s.visible ? { ...s, visible: false } : s));
     } else {

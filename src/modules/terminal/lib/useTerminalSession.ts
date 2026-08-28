@@ -33,6 +33,8 @@ import {
 } from "./osc-handlers";
 import { openPty, type TerminalTransport } from "./pty-bridge";
 import { clearLeafEnvironment, setLeafEnvironment } from "./completionInjection";
+// carapace 参数补全的 cwd 注册表（动态候选按当前目录取数据，见 param-complete-client）
+import { setLeafCwd } from "@/lib/param-complete-client";
 import "../block/block.css";
 import { ensureAgentActivityListener, isAgentActivePty } from "./agentActivity";
 import {
@@ -805,6 +807,8 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
             s.lastCwd = next;
+            // carapace 参数补全的 cwd 上下文（动态候选按当前目录取数据）
+            setLeafCwd(leafId, next);
             s.callbacks.onCwd?.(next);
           },
           onMode: (mode) => applyBlockMode(leafId, mode),
@@ -848,6 +852,8 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
             s.lastCwd = next;
+            // carapace 参数补全的 cwd 上下文（动态候选按当前目录取数据）
+            setLeafCwd(leafId, next);
             s.callbacks.onCwd?.(next);
           },
           shellState,
@@ -880,6 +886,8 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
             s.lastCwd = next;
+            // carapace 参数补全的 cwd 上下文（动态候选按当前目录取数据）
+            setLeafCwd(leafId, next);
             s.callbacks.onCwd?.(next);
           },
           undefined,
