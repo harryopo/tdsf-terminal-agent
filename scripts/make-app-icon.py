@@ -22,8 +22,35 @@ SS = 4                             # 超采样倍数（4x = 4096 实际绘制）
 
 # 箭头 ">"：6 点多边形（外缘 3 点 + 平切端 + 内缘，横向厚度 t）
 CHEVRON = dict(x_left=330, y_top=270, y_bot=770, x_tip=650, y_mid=520, t=115)
+CHEVRON_ROUND = 48                 # 箭头圆角半径（v3：0 = 直角，>0 全角圆润）
 # 光标 "_"：圆角方块（v2 加圆角），底边与箭头底对齐
 CURSOR = dict(x=720, y=620, size=150, radius=42)
+
+
+def rounded_polygon_pts(pts, d, seg=10):
+    """把多边形每个直角/尖角替换为二次贝塞尔圆角，返回加密顶点列表。
+
+    原理：每个顶点沿两条邻边各退进距离 d 得 p1/p2，以原顶点为控制点
+    画二次贝塞尔曲线 p1->p2，全部采样后连成一个大 polygon。
+    """
+    out = []
+    n = len(pts)
+    for i in range(n):
+        prev, cur, nxt = pts[i - 1], pts[i], pts[(i + 1) % n]
+        v1 = (prev[0] - cur[0], prev[1] - cur[1])
+        l1 = (v1[0] ** 2 + v1[1] ** 2) ** 0.5
+        v2 = (nxt[0] - cur[0], nxt[1] - cur[1])
+        l2 = (v2[0] ** 2 + v2[1] ** 2) ** 0.5
+        p1 = (cur[0] + v1[0] / l1 * d, cur[1] + v1[1] / l1 * d)
+        p2 = (cur[0] + v2[0] / l2 * d, cur[1] + v2[1] / l2 * d)
+        out.append(p1)
+        for s in range(1, seg):
+            t = s / seg
+            x = (1 - t) ** 2 * p1[0] + 2 * (1 - t) * t * cur[0] + t ** 2 * p2[0]
+            y = (1 - t) ** 2 * p1[1] + 2 * (1 - t) * t * cur[1] + t ** 2 * p2[1]
+            out.append((x, y))
+        out.append(p2)
+    return out
 
 
 def build(size: int) -> Image.Image:
@@ -37,8 +64,9 @@ def build(size: int) -> Image.Image:
     d.rounded_rectangle([0, 0, s - 1, s - 1], radius=round(RADIUS * k), fill=BG_GRAY)
 
     # 2) 箭头 ">"：外缘 (左上 -> 尖端 -> 左下)；内缘 = 外缘整体左移 t（平行线），
-    #    端头水平平切向左延伸，形成厚度均匀的粗箭头
-    c = {key: round(val * k) for key, val in CHEVRON.items()}
+    #    端头水平平切向左延伸，形成厚度均匀的粗箭头；v3 全角贝塞尔圆角
+    #    注意：全程用 1024 逻辑坐标构建，仅在 polygon 填充时统一乘 k 映射像素
+    c = CHEVRON
     chevron_pts = [
         (c["x_left"], c["y_top"]),                # 外缘左上（顶端平切右角）
         (c["x_tip"], c["y_mid"]),                 # 外缘尖端
@@ -47,7 +75,12 @@ def build(size: int) -> Image.Image:
         (c["x_tip"] - c["t"], c["y_mid"]),        # 内缘尖端（平行线交点）
         (c["x_left"] - c["t"], c["y_top"]),       # 顶端平切左角
     ]
-    d.polygon(chevron_pts, fill=GREEN)
+    if CHEVRON_ROUND > 0:
+        # 圆角化：逻辑坐标算贝塞尔采样点，再映射到超采样像素坐标
+        smooth = rounded_polygon_pts(chevron_pts, CHEVRON_ROUND)
+        d.polygon([(round(x * k), round(y * k)) for x, y in smooth], fill=GREEN)
+    else:
+        d.polygon(chevron_pts, fill=GREEN)
 
     # 3) 光标 "_"：加大后的圆角方块，底边与箭头底对齐
     cu = {key: round(val * k) for key, val in CURSOR.items()}
