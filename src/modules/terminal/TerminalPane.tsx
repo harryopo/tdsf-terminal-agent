@@ -23,6 +23,10 @@ import {
   subscribePendingRiskCommand,
   useTerminalSession,
 } from "./lib/useTerminalSession";
+import { TerminalSearchBar } from "./TerminalSearchBar";
+import { useTerminalSearchStore } from "./terminal-search-store";
+import { useErrorExplainStore } from "./block/errorExplainStore";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { TerminalTransport } from "./lib/pty-bridge";
 import type { RiskRpcAssessment } from "@/lib/risk-engine/riskClient";
 
@@ -133,6 +137,9 @@ export const TerminalPane = memo(
 
     const promptReady = session.blockMode === "prompt";
 
+    // TDSF 魔改 2026-08-28 (B1-G3): Teach 开关控制"AI 解释"按钮渲染
+    const teachEnabled = usePreferencesStore((s) => s.teachAgentEnabled);
+
     // TDSF 魔改: RiskGuardDialog（命中 L3+ 命令时弹出，AlertDialog 用 Portal 不影响布局）
     const riskGuardDialog = pending ? (
       <RiskGuardDialog
@@ -146,6 +153,20 @@ export const TerminalPane = memo(
         onCancel={onDialogCancel}
       />
     ) : null;
+
+    // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索浮层（Ctrl/Cmd+Shift+F 触发）
+    const searchOpen = useTerminalSearchStore((s) => s.openLeafId) === leafId;
+    const closeSearch = useCallback(
+      () => useTerminalSearchStore.getState().close(leafId),
+      [leafId],
+    );
+    const searchBar = (
+      <TerminalSearchBar
+        leafId={leafId}
+        open={searchOpen}
+        onClose={closeSearch}
+      />
+    );
 
     if (blocks) {
       return (
@@ -187,7 +208,23 @@ export const TerminalPane = memo(
                 onRestoreFocus={() => {
                   if (session.blockMode === "prompt") focusLeafInput(leafId);
                 }}
+                // TDSF 魔改 2026-08-28 (B1-G3): 失败块"AI 解释"（手动触发，
+                // Teach 开关关闭时不传回调 → 按钮不渲染）
+                onExplainError={
+                  teachEnabled
+                    ? (block) => {
+                        void useErrorExplainStore.getState().request({
+                          blockId: block.id,
+                          command: block.command,
+                          exitCode: block.exitCode,
+                          tail:
+                            session.readBlockId(block.id)?.output ?? "",
+                        });
+                      }
+                    : undefined
+                }
               />
+              {searchBar}
             </div>
           </div>
           {riskGuardDialog}
@@ -197,11 +234,13 @@ export const TerminalPane = memo(
 
     return (
       <>
-        <div
-          ref={containerRef}
-          className="zoom-exempt h-full w-full"
-          style={hideStyle}
-        />
+        <div className="relative h-full w-full" style={hideStyle}>
+          <div
+            ref={containerRef}
+            className="zoom-exempt h-full w-full"
+          />
+          {searchBar}
+        </div>
         {riskGuardDialog}
       </>
     );

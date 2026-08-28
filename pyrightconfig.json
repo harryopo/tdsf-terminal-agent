@@ -1,0 +1,22 @@
+{
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.mypy_cache",
+    "**/.ruff_cache",
+    "**/.venv",
+    "**/dist",
+    "**/target",
+    ".codegraph",
+    ".tdsf-data",
+    "cdp-dir",
+    "output",
+    "website",
+    "opensource-reference"
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Windows"
+}

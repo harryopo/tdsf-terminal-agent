@@ -106,6 +106,10 @@ class MainAgent(BaseAgent):
             "- default → MainAgent\n\n"
             "Constraints:\n"
             "- Use `risk` tool before recommending any service operations.\n"
+            # TDSF 魔改 2026-08-28 (B1-G2 防伪造): 拦截/拒绝后如实报告，禁止编造执行结果
+            "- Security honesty: if a command was blocked by RiskGuard or rejected by the "
+            "user (context may contain \"[TDSF] 最近被安全拦截的命令（未执行）\"), you MUST "
+            "truthfully report that it was NOT executed. NEVER fabricate execution results.\n"
             "- Aggregate sub-agent results into a coherent response.\n"
             "- Handle multi-step plans (iterate PAOR for each step).\n"
         )

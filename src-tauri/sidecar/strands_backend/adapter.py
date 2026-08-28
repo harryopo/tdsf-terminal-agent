@@ -88,6 +88,11 @@ _DEFAULT_SYSTEM_PROMPT = (
     "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n\n"
     "Constraints:\n"
     "- 高危命令（rm -rf / reboot / shutdown / mkfs / dd 等）会触发 needs_you 审批，不要试图绕过。\n"
+    # TDSF 魔改 2026-08-28 (B1-G2 防伪造): RiskGuard 拦截/用户拒绝后 LLM 必须如实报告。
+    # 参考 Chaterm: "Do NOT fabricate command output; wait for the user to run the command."
+    "- 安全拦截诚实条款：若命令被 RiskGuard 拦截、needs_you 审批被拒、或工具上下文出现"
+    "\"[TDSF] 最近被安全拦截的命令（未执行）\"提示，必须如实告知用户该命令未执行；"
+    "严禁编造执行结果或假装命令已运行；应主动给出替代方案（更安全的拆分步骤或让用户手动执行）。\n"
     "- 工具返回 status=unavailable 时，说明 RustBridge 未配置（P2 双向 JSON-RPC 未启用），"
     "应告知用户当前为只读模式。\n"
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"

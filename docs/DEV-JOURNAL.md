@@ -1,4 +1,4 @@
-﻿﻿# TDSF Terminal Agent · 开发日志（经验沉淀）
+﻿# TDSF Terminal Agent · 开发日志（经验沉淀）
 
 > **用途**：每次任务收尾时追加一条记录——任务 / 方案 / 报错与修改 / 复盘（经验教训）。
 > **配套**：`docs/ROADMAP.md`（短/长期规划）、`docs/dev-state.md`（进度状态，§37.x 交接章）、`docs/方案书-v1.0.md`（总纲）。
@@ -1717,3 +1717,23 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ 删功能按调用链正删（类型→默认值→读取→setter→迁移→UI→测试→注释），grep 收口后 typecheck 一次过；⚠️ 老用户本地已存 `autocompleteProvider: cerebras` 的偏好不受默认值影响（预期行为），需在设置页手动切 DeepSeek；⚠️ 遗留文档漂移：dev-state 头部引用的 §37.73-75 交接章正文在 DEV-JOURNAL，dev-state 正文缺同号章节（历史会话只更新了头部）。
 
 **待用户实测**：① 设置页自动补全区显示 DeepSeek + deepseek-v4-flash（若仍显示 Cerebras 属本地旧偏好，手动切换即可）；② 编辑器打字触发内联补全走 DeepSeek（需配 DeepSeek key）；③ AI 面板/状态栏无麦克风按钮、设置页无语音区。
+
+## §37.77 B1 Agent 安全基座（2026-08-28 ✅ 全量门禁绿）
+
+**任务目标**（spec `.trae/specs/add-b1-agent-safety-baseline/spec.md`）：落地 B1 四道防线——① 防伪造提示（AI 不许编造命令执行结果）；② AI 脱敏强化（密钥/私钥/Authorization 头/数据库连接串不进模型）；③ 终端搜索 UI（Ctrl+Shift+F）；④ 失败块"AI 解释"（手动触发轻量错误解释）+ F0 断链修复（`get_terminal_scrollback` Rust↔前端往返通道）。
+
+**方案与实施**：
+- **T1 防伪造**：`main_agent.py`/`strands adapter` 系统提示加 Security honesty 条款（拦截/拒绝后 MUST 如实报告未执行，NEVER fabricate）；`useTerminalSession.ts` 记录 `lastBlockedCommand`（RiskGuard 拦截命令）注入 AI 上下文（`[TDSF] 最近被安全拦截的命令（未执行）`）；测试：4 vitest（blocked-command.test）+ 2 pytest（test_agents）。
+- **T2 脱敏强化**：`redact.ts` 前端 + `_redact.py`（strands_backend/tools）双侧各加 3 组正则——私钥块（`-----BEGIN ... PRIVATE KEY-----`）、Authorization 头、数据库连接串（postgres/mysql/redis/mongodb URL 内密码）；18 vitest（redact.test）+ 10 pytest（test_redact）全过。
+- **T3 终端搜索**：`terminal-search-store.ts`（zustand，per-leaf 搜索状态）+ `TerminalSearchBar.tsx`（SearchAddon 驱动：大小写敏感切换/上下查找/高亮/无结果提示）+ `shortcuts.ts` 新增 `terminal.find`（Ctrl+Shift+F）+ App.tsx 处理函数（激活 tab 为终端时 open active leaf 的搜索浮层）。
+- **T4 报错解释**：`errorExplainStore.ts`（手动触发→调 teach agent→流式渲染，节流 100ms）+ `ErrorExplainCard.tsx`（streaming/done/error 三态卡片，复制/在 AI 面板继续问）+ `BlockOverlay.tsx` 失败块工具条加"AI 解释"按钮；`teach_agent.py` 加 `explain-error` 轻量模式指令（纯文本、禁 6 板块教学格式，防止 teachParser 误渲染）；`teachParser.ts` 放宽无编号标题识别。28 vitest 全过。
+- **T5 F0 断链修复**：Python `get_terminal_output.py` 的 `get_terminal_scrollback` JSON-RPC 原本无 Rust 命令承接（断链）→ `sidecar.rs` 新增 `get_terminal_scrollback` 处理：emit `sidecar:get-terminal-scrollback` 事件给前端 + oneshot 通道等回传；`useAiLiveBridge.ts` 监听该事件取 `live.getTerminalContext()` 经 `sidecar_scrollback_response` 命令回传；`lib.rs` 注册新命令。
+- **T6 门禁修复**：① App.tsx `terminal.find` 用 `tabs` 直引触发 react-hooks/exhaustive-deps 警告 → 改 `tabsRef.current`（文件既有模式）；② pytest `test_long_context` 失败——`summarize` 2026-08-09 重写为真 LLM 摘要后，本机配置了 LLM（is_configured=True）导致测试走 LLM 路径而非 hash 回退 → 测试加 monkeypatch mock `load_config` 未配置（测试环境隔离）。
+
+**报错与修改**：
+- cargo test 直接跑报 os error 5（debug exe 被运行中的 tauri dev 锁定）→ 按既有经验 `CARGO_TARGET_DIR=target-test` 隔离编译跑全量 test，测完删除目录。
+- `test_enabled_summarize_long_text_adds_hash` 断言失败根因是**测试依赖真实环境状态**（读到了本机 LLM 配置），属历史测试缺口，非本次改动回归。
+
+**复盘**：✅ 五绿门禁全绿（typecheck/lint 0 警告/vitest 1136/build:web/pytest 1480/cargo test 含 doc-test）；✅ 双侧脱敏同源正则+双侧测试，防"前端拦了后端漏"或反之；⚠️ `pyrightconfig.json` 与 `启动-日志版.bat` 为本会话遗留的有效开发配置，一并入库；⚠️ 根目录 `terax-icon.png`（743KB，a4e5a7c 初始基线素材）在工作树中被删且未提交——本次提交不包含该删除，待用户确认去留。
+
+**待用户实测**：① `pnpm tauri:dev` 桌面端：终端 Ctrl+Shift+F 弹搜索浮层（大小写切换/上下查找）；② 跑一条危险命令（如 `rm -rf /`）被拦截后问 AI"刚才命令执行了吗"→ AI 应如实回答未执行；③ 失败块（红色 exit≠0）工具条点"AI 解释"→ 卡片流式输出错误解释（需已配 LLM）；④ `startup` 时 sidecar 日志确认无 `get_terminal_scrollback` 报错。

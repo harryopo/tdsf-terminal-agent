@@ -56,4 +56,42 @@ describe("redactSensitive", () => {
     expect(out).not.toContain("AKIA1234567890ABCDEF");
     expect(out).not.toContain(`sk-proj-${"a".repeat(24)}`);
   });
+
+  // ── TDSF 魔改 2026-08-28 (B1-G1): 对齐 nyaterm redaction.rs 的 3 个新模式 ──
+
+  it("redacts a PEM private key block across lines", () => {
+    const key = [
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "MIIEpAIBAAKCAQEA0123456789abcdef",
+      "-----END RSA PRIVATE KEY-----",
+    ].join("\n");
+    const out = redactSensitive(`id_rsa:\n${key}\ndone`);
+    expect(out).not.toContain("MIIEpAIBAAKCAQEA0123456789abcdef");
+    expect(out).toContain("<REDACTED:private-key>");
+    expect(out).toContain("id_rsa:");
+  });
+
+  it("redacts an Authorization header value", () => {
+    const out = redactSensitive(
+      "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwx' http://x",
+    );
+    // 注：bearer 模式先命中长 token，authorization 模式兜底短 token/其他形式——
+    // 断言只验证"值被移除 + 头名保留"，具体 kind 标签不敏感
+    expect(out).not.toContain("abcdefghijklmnopqrstuvwx");
+    expect(out).toContain("Authorization:");
+    expect(out).toContain("<REDACTED");
+  });
+
+  it("redacts credentials embedded in a database URL", () => {
+    const out = redactSensitive(
+      "psql postgres://admin:s3cret@db.example.com:5432/app",
+    );
+    expect(out).not.toContain("admin:s3cret");
+    expect(out).toContain("postgres://<REDACTED:db-url>@db.example.com:5432/app");
+  });
+
+  it("leaves intranet IPv4 addresses untouched (user decision 2026-08-28)", () => {
+    const text = "ssh root@192.168.45.200 failed; try 10.0.0.5";
+    expect(redactSensitive(text)).toBe(text);
+  });
 });

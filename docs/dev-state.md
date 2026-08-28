@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · 语音移除+补全默认 DeepSeek（§37.76）。接手请直接看 **DEV-JOURNAL §37.76**（语音功能整体移除 + 补全默认 deepseek-v4-flash）+ **§37.75**（国产 provider/默认值）+ **§37.74/37.73**（预测模块收口）。**下一步 = agent 模块完善**（B1 安全基座 → 真实 LLM 委派实测 → B2 交互升级）+ 预测第二轮历史 OSC
+> **最后更新**：2026-08-28 · B1 Agent 安全基座（§37.77）。接手请直接看 **DEV-JOURNAL §37.77**（防伪造+脱敏强化+终端搜索+失败块 AI 解释+F0 断链修复）+ **§37.76**（语音移除+补全 DeepSeek）+ **§37.74/37.73**（预测收口）。**下一步 = agent 模块完善**（真实 LLM 委派实测 → B2-B4 分期拍板）+ 预测第二轮历史 OSC
 
 ---
 
@@ -10,13 +10,14 @@
 
 | 门禁 | 状态 |
 |------|------|
-| typecheck / lint / test(982) / build:web | ✅ 全绿（2026-08-11 复核） |
-| cargo check / cargo test(315 单元 + 25/27 集成 + doc) | ✅ 全绿（2026-08-11 复核，含 ssh_integration mock server） |
+| typecheck / lint / test(1136) / build:web | ✅ 全绿（2026-08-28 B1 复核） |
+| cargo check / cargo test(全量含 doc-test) / pytest(1480) | ✅ 全绿（2026-08-28 B1 复核） |
 | tauri:dev 桌面端 | ✅ 窗口可见、可点击、本地终端(PTY pwsh)、SSH 可连、远程文件树可展开 |
 
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
 **最新里程碑（2026-08-28）**：
+- §37.77 **B1 Agent 安全基座**（竞品借鉴分期 B1 全量落地）：①防伪造——Security honesty 系统提示条款 + lastBlockedCommand 注入；②脱敏强化——前端/Python 双侧同源 3 组新正则（私钥块/Authorization 头/DB 连接串）；③终端搜索 Ctrl+Shift+F（SearchAddon 浮层）；④失败块"AI 解释"（teach agent 轻量模式流式）；⑤F0 断链修复——`get_terminal_scrollback` Rust oneshot 往返通道；门禁全绿（vitest 1136 / pytest 1480 / cargo test 隔离跑）；**待实测：Ctrl+Shift+F 搜索 / 拦截后问 AI 如实回答 / 失败块 AI 解释**
 - §37.76 语音输入整体移除（-625 行：钩子/stt.ts/麦克风按钮/语音设置区/STT 偏好三字段/SttProvider 类型，含测试同步删除）+ **自动补全默认 provider 改 deepseek（deepseek-v4-flash）**；调用链 provider.ts→buildLanguageModel→createDeepSeek 实测存在；commit 6205311；门禁 tsc/lint/vitest 1122/build 全绿；**待实测：设置页补全区显示 DeepSeek（老用户若显示 Cerebras 属本地旧偏好需手动切）/ 无麦克风按钮 / 无语音设置区**
 - §37.75 AI 配置国产化：默认 deepseek-v4-flash + provider 扩 zhipu/qwen(百炼)/moonshot/doubao 国产优先；GLM-5.3/Kimi K3 条目；Python 双侧 baseURL 对齐；UI 三处引导文案；commit 06edce5；**待实测：设置页默认显示 / 智谱 key 对话 / Ollama 对话**（原 STT whispercpp 条目已被 §37.76 移除取代）
 - §37.74 预测第一轮补丁：参数层远端存在性门禁（ag -l 不再误弹）+ 尾部触发双门禁（shouldTriggerTailParams）+ **历史止血**（停运行时写入，收敛 windows shell history 文件；第二轮 OSC exit code 上报后恢复）；commits 8d18f33 + 083feba；**用户确认预测模块没有大问题**

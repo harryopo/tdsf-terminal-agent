@@ -156,6 +156,38 @@ const blockViewportListeners = new Map<number, Set<() => void>>();
 // TDSF 魔改: 待风险确认命令的 listeners，UI 层订阅以弹出 RiskGuardDialog
 const pendingRiskListeners = new Map<number, Set<() => void>>();
 
+// TDSF 魔改 2026-08-28 (B1-G2 防伪造): 最近被用户拒绝/取消的高危命令记录。
+// deny/取消时 RiskGuard 静默不执行，sidecar 侧 LLM 无从感知，可能编造"已执行"。
+// 该记录经 useAiLiveBridge.getTerminalContext 注入 AI 上下文（不写终端——红线 9），
+// 10 分钟过期（超过则视为陈旧不再注入）。
+const BLOCKED_COMMAND_TTL_MS = 10 * 60 * 1000;
+let lastBlockedCommand: { text: string; ts: number } | null = null;
+
+/** 记录被拦截/拒绝的命令（cancelPendingRiskCommand 及未来自动 deny 路径共用） */
+export function recordBlockedCommand(text: string): void {
+  lastBlockedCommand = { text, ts: Date.now() };
+}
+
+/** 最近被拦截命令的可注入文本（过期/无记录返回 null）——供 AI 上下文使用 */
+export function getRecentBlockedCommandText(): string | null {
+  if (!lastBlockedCommand) return null;
+  if (Date.now() - lastBlockedCommand.ts > BLOCKED_COMMAND_TTL_MS) {
+    lastBlockedCommand = null;
+    return null;
+  }
+  return lastBlockedCommand.text;
+}
+
+// TDSF 魔改 2026-08-28 (B1-G4): SearchAddon 注册表（lid → addon），
+// TerminalSearchBar 组件按 leafId 直调 findNext/findPrevious；
+// 绑定 slot 时注册（onSearchReady 回调），session 销毁时清理。
+const searchAddons = new Map<number, SearchAddon>();
+
+/** 获取指定 leaf 的 SearchAddon（未绑定/已销毁返回 null） */
+export function getSearchAddon(leafId: number): SearchAddon | null {
+  return searchAddons.get(leafId) ?? null;
+}
+
 function notifyPendingRiskListeners(leafId: number): void {
   const set = pendingRiskListeners.get(leafId);
   if (set) for (const l of set) l();
@@ -299,6 +331,8 @@ export function confirmPendingRiskCommand(leafId: number): void {
 export function cancelPendingRiskCommand(leafId: number): void {
   const s = sessions.get(leafId);
   if (!s) return;
+  // TDSF 魔改 2026-08-28 (B1-G2): 记录被拒绝的命令，供 AI 上下文防伪造注入
+  if (s.pendingRiskCommand) recordBlockedCommand(s.pendingRiskCommand.text);
   s.pendingRiskCommand = null;
   notifyPendingRiskListeners(leafId);
 }
@@ -1060,6 +1094,7 @@ export function disposeSession(leafId: number): void {
   sessions.delete(leafId);
   blockViewportListeners.delete(leafId);
   pendingRiskListeners.delete(leafId);
+  searchAddons.delete(leafId);
   readyLeaves.delete(leafId);
   const waiters = readyWaiters.get(leafId);
   if (waiters) {
