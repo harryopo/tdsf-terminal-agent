@@ -17,6 +17,7 @@ import {
   MLX_DEFAULT_BASE_URL,
   modelKeepsReasoning,
   OLLAMA_DEFAULT_BASE_URL,
+  PROVIDER_BASE_URLS,
   type ProviderId,
   providerNeedsKey,
   resolveModel,
@@ -129,6 +130,26 @@ export async function buildLanguageModel(
       built = createOpenAICompatible({
         name: "deepseek",
         baseURL: "https://api.deepseek.com",
+        apiKey: key,
+      })(resolvedModelId);
+      break;
+    }
+    // TDSF 魔改 2026-08-28: 国产 provider（阿里百炼/智谱/Kimi/火山方舟）——
+    // 全部 OpenAI 兼容，baseURL 取 config.ts 的 PROVIDER_BASE_URLS 单一真源
+    case "qwen":
+    case "zhipu":
+    case "moonshot":
+    case "doubao": {
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
+      const baseURL = PROVIDER_BASE_URLS[provider];
+      if (!baseURL) {
+        throw new Error(`No base URL configured for ${provider}`);
+      }
+      built = createOpenAICompatible({
+        name: provider,
+        baseURL,
         apiKey: key,
       })(resolvedModelId);
       break;

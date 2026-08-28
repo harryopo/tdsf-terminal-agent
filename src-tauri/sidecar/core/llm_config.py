@@ -160,14 +160,54 @@ def save_config(config: LLMConfig) -> None:
 # LLM 调用实现
 # ============================================================================
 
+# Provider → 默认 baseURL 映射（2026-08 国产 provider 官方 OpenAI 兼容端点）
+# ----------------------------------------------------------------------------
+# 为什么需要：base_url 理论上由前端预填写入配置，但环境变量 / 手写
+# llm_config.json 两条路径可能只带 provider 不带 base_url；若不回退，
+# ChatOpenAI 会默认打到 api.openai.com，国产 key 必然 401。
+# 仅收录官方提供 OpenAI 兼容端点的国产三家；deepseek / ollama 等既有
+# provider 由前端预填 base_url，留空时保持既有行为（OpenAI 默认端点），
+# 未知 provider 同样不回退（默认 OpenAI 兼容语义不变）。
+PROVIDER_DEFAULT_BASE_URLS: dict[str, str] = {
+    # 智谱 GLM 开放平台（open.bigmodel.cn 的 OpenAI 兼容端点）
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    # 阿里云百炼 DashScope（compatible-mode 即 OpenAI 兼容模式）
+    "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    # 月之暗面 Kimi（Moonshot 开放平台 OpenAI 兼容端点）
+    "moonshot": "https://api.moonshot.cn/v1",
+}
+
+
+def _resolve_base_url(config: LLMConfig) -> str:
+    """解析最终 base_url：显式配置优先，已知国产 provider 回退官方端点
+
+    Args:
+        config: LLM 配置
+
+    Returns:
+        base_url（可能为空串 = 走 ChatOpenAI 默认 OpenAI 官方端点）
+    """
+    explicit = (config.base_url or "").strip()
+    if explicit:
+        return explicit
+    # provider 归一小写后再查映射（前端 id 均为小写，此处防御大写输入）
+    return PROVIDER_DEFAULT_BASE_URLS.get(config.provider.lower(), "")
+
+
 def _make_openai_call(config: LLMConfig) -> LLMCallFunction:
     """创建 OpenAI 兼容的 LLM 调用函数
 
     使用 langchain-openai 的 ChatOpenAI，通过 base_url 支持任意兼容端点：
     - OpenAI 官方: https://api.openai.com/v1
     - DeepSeek: https://api.deepseek.com/v1
+    - 智谱(zhipu): https://open.bigmodel.cn/api/paas/v4
+    - 阿里百炼(dashscope): https://dashscope.aliyuncs.com/compatible-mode/v1
+    - Kimi(moonshot): https://api.moonshot.cn/v1
     - OneAPI / NewAPI 代理: 用户自定义
     - 本地 Ollama: http://localhost:11434/v1
+
+    base_url 为空时：已知国产 provider（见 PROVIDER_DEFAULT_BASE_URLS）
+    回退到官方 OpenAI 兼容端点；其余 provider 维持 OpenAI 默认端点不变。
     """
     try:
         from langchain_openai import ChatOpenAI
@@ -177,15 +217,16 @@ def _make_openai_call(config: LLMConfig) -> LLMCallFunction:
             f"请运行: pip install langchain-openai"
         ) from e
 
-    # 构造 ChatOpenAI 参数
+    # 构造 ChatOpenAI 参数（base_url 解析含国产 provider 官方端点回退）
     kwargs: dict[str, Any] = {
         "model": config.model,
         "api_key": config.api_key,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
     }
-    if config.base_url:
-        kwargs["base_url"] = config.base_url
+    resolved_base_url = _resolve_base_url(config)
+    if resolved_base_url:
+        kwargs["base_url"] = resolved_base_url
 
     llm = ChatOpenAI(**kwargs)
 
@@ -293,7 +334,8 @@ def make_llm_call(config: LLMConfig | None = None) -> LLMCallFunction | None:
     try:
         if config.provider == "anthropic":
             return _make_anthropic_call(config)
-        # 默认使用 OpenAI 兼容（覆盖 openai / deepseek / ollama / oneapi 等）
+        # 默认使用 OpenAI 兼容（覆盖 openai / zhipu / dashscope / moonshot /
+        # deepseek / ollama / oneapi 等；国产三家 base_url 为空时回退官方端点）
         return _make_openai_call(config)
     except Exception as e:
         logger.error(f"Failed to create LLM call: {e}")

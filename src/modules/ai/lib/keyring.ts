@@ -12,13 +12,18 @@ export type ProviderKeys = Record<ProviderId, string | null>;
 export type CustomEndpointKeys = Record<string, string | null>;
 
 export const EMPTY_PROVIDER_KEYS: ProviderKeys = {
+  // TDSF 魔改 2026-08-28: 国产 provider（顺序与 PROVIDERS 一致，国产优先）
+  deepseek: null,
+  qwen: null,
+  zhipu: null,
+  moonshot: null,
+  doubao: null,
   openai: null,
   anthropic: null,
   google: null,
   xai: null,
   cerebras: null,
   groq: null,
-  deepseek: null,
   mistral: null,
   openrouter: null,
   "openai-compatible": null,

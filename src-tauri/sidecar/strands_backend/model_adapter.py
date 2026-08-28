@@ -102,6 +102,24 @@ except ImportError:
 # 工厂函数
 # ============================================================================
 
+# 已知 OpenAI 兼容 provider id 集合（2026-08 国产 provider 一等公民化）
+# 命中此集合的 provider 直接走 OpenAIModel 分支（而非 unknown 兜底），
+# 避免 "unknown provider" 误报警告。这些 provider 的请求经 base_url
+# 发往各自官方 OpenAI 兼容端点（端点预填/回退逻辑在 core/llm_config.py，
+# adapter 层只透传 config.base_url，保持职责单一）。
+_OPENAI_COMPATIBLE_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "openai",
+        # 智谱 GLM 开放平台
+        "zhipu",
+        # 阿里云百炼 DashScope（compatible-mode）
+        "dashscope",
+        # 月之暗面 Kimi（Moonshot）
+        "moonshot",
+    }
+)
+
+
 def create_strands_model(config: Any | None = None) -> Any:
     """根据 LLMConfig 创建对应的 Strands Model 实例
 
@@ -180,8 +198,10 @@ def create_strands_model(config: Any | None = None) -> Any:
     )
 
     # 4. 按 provider 分发到具体工厂
+    # OpenAI 兼容集合含国产三家（zhipu/dashscope/moonshot），它们与 openai
+    # 同走 OpenAIModel 分支；仅真正未知的 provider 才落 else 兜底并告警
     try:
-        if provider == "openai":
+        if provider in _OPENAI_COMPATIBLE_PROVIDERS:
             return _create_openai_model(config)
         elif provider == "anthropic":
             return _create_anthropic_model(config)
@@ -213,13 +233,16 @@ def _create_openai_model(config: Any) -> Any:
     支持的端点（通过 base_url 配置）：
     - OpenAI 官方：https://api.openai.com/v1（base_url 留空）
     - DeepSeek：https://api.deepseek.com/v1
+    - 智谱(zhipu)：https://open.bigmodel.cn/api/paas/v4
+    - 阿里百炼(dashscope)：https://dashscope.aliyuncs.com/compatible-mode/v1
+    - Kimi(moonshot)：https://api.moonshot.cn/v1
     - SiliconFlow：https://api.siliconflow.cn/v1
     - OneAPI / NewAPI 代理：用户自定义
     - 本地 Ollama（OpenAI 兼容接口）：http://localhost:11434/v1
     - vLLM 自部署：http://localhost:8000/v1
 
     Args:
-        config: LLMConfig 实例（provider="openai"）
+        config: LLMConfig 实例（provider 属于 _OPENAI_COMPATIBLE_PROVIDERS）
 
     Returns:
         OpenAIModel 实例

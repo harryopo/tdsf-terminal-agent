@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   type CustomEndpoint,
   compatModelIdForEndpoint,
+  DEFAULT_MODEL_ID,
+  DEFAULT_STT_PROVIDER,
   endpointIdFromCompatModel,
   getModelContextLimit,
   isCompatModelId,
@@ -10,6 +12,7 @@ import {
   modelKeepsReasoning,
   modelSupportsTemperature,
   modelUsesReasoningTokens,
+  PROVIDERS,
   resolveModel,
 } from "./config";
 
@@ -178,5 +181,67 @@ describe("migrateLegacyCompatEndpoint", () => {
   it("skips migration when base URL or model id is missing", () => {
     expect(migrateLegacyCompatEndpoint("", "m", 1, "x")).toEqual([]);
     expect(migrateLegacyCompatEndpoint("u", "  ", 1, "x")).toEqual([]);
+  });
+});
+
+// ── TDSF 魔改 2026-08-28: AI 配置国产化（spec: add-domestic-first-ai-config） ──
+describe("domestic-first AI config", () => {
+  it("defaults the chat model to DeepSeek V4 Flash", () => {
+    expect(DEFAULT_MODEL_ID).toBe("deepseek-v4-flash");
+  });
+
+  it("defaults STT to the local whisper.cpp server", () => {
+    expect(DEFAULT_STT_PROVIDER).toBe("whispercpp");
+  });
+
+  it("orders providers domestic-first with the domestic set present", () => {
+    const ids = PROVIDERS.map((p) => p.id);
+    expect(ids[0]).toBe("deepseek");
+    // qwen 即"阿里百炼"（dashscope 端点），provider id 用模型家族名
+    for (const domestic of ["zhipu", "qwen", "moonshot"] as const) {
+      expect(ids).toContain(domestic);
+    }
+    // 国产 provider 必须排在 OpenAI 之前（UI 下拉按数组序展示）
+    expect(ids.indexOf("qwen")).toBeLessThan(ids.indexOf("openai"));
+    expect(ids.indexOf("zhipu")).toBeLessThan(ids.indexOf("openai"));
+    expect(ids.indexOf("moonshot")).toBeLessThan(ids.indexOf("openai"));
+  });
+
+  it("keeps legacy models resolvable for stored preferences", () => {
+    // 老用户 localStorage 可能仍存 legacy id——目录必须可解析
+    expect(() => resolveModel("gpt-5.4-mini")).not.toThrow();
+    expect(resolveModel("gpt-5.4-mini").provider).toBe("openai");
+    expect(() => resolveModel("gpt-4.1-mini")).not.toThrow();
+  });
+
+  it.each([
+    ["glm-5.3", "zhipu"],
+    ["glm-5.3-flash", "zhipu"],
+    ["kimi-k3", "moonshot"],
+    ["qwen3.8-flash", "qwen"],
+  ] as const)("resolves domestic model %s through %s", (modelId, provider) => {
+    expect(resolveModel(modelId).provider).toBe(provider);
+  });
+
+  it("prices the domestic default chat model", () => {
+    expect(MODEL_PRICING["deepseek-v4-flash"]).toEqual({
+      input: 0.07,
+      output: 0.27,
+      cacheRead: 0.007,
+    });
+  });
+
+  it("prices the new domestic models (2026-08 snapshot)", () => {
+    expect(MODEL_PRICING["glm-5.3"]).toEqual({ input: 1.2, output: 4.2 });
+    expect(MODEL_PRICING["glm-5.3-flash"]).toEqual({
+      input: 0.12,
+      output: 0.5,
+    });
+    // ¥1/¥3 折算 USD（¥1 ≈ $0.14）
+    expect(MODEL_PRICING["qwen3.8-flash"]).toEqual({
+      input: 0.14,
+      output: 0.42,
+    });
+    expect(MODEL_PRICING["kimi-k3"]).toEqual({ input: 0.6, output: 2.5 });
   });
 });
