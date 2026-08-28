@@ -31,6 +31,7 @@ import { TerminalPane } from "@/modules/terminal/TerminalPane";
 import type { TerminalPaneHandle } from "@/modules/terminal/TerminalPane";
 import type { TerminalTransport } from "@/modules/terminal/lib/pty-bridge";
 import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
+import { setLeafSshSession } from "@/lib/param-complete-client";
 import { useSshStore, getOsc7Log } from "./sshStore";
 
 // OSC7 诊断日志统一从 sshStore 导入（消除两文件重复声明）
@@ -179,6 +180,20 @@ export function SshTerminalHost({
       }
     };
   }, []);
+
+  // TDSF 2026-08-28: leaf ↔ SSH 会话注册——参数补全经注册表取 rustSessionId
+  // 发起远端 carapace 查询（与 PaneTreeView.SshLeafPane 同模式；当前主渲染路径
+  // 是 SshLeafPane，此注册保证 SshTerminalHost 若被启用同样生效）。
+  const rustSessionId = session?.rustSessionId ?? null;
+  useEffect(() => {
+    // 第 3 参：远端 cwd getter（ssh_command exec 默认在远端 home，动态候选需 cd）
+    setLeafSshSession(
+      leafId,
+      rustSessionId,
+      () => (session ? useSshStore.getState().currentPathBySession[session.id] ?? null : null),
+    );
+    return () => setLeafSshSession(leafId, null);
+  }, [leafId, rustSessionId, session]);
 
   // TDSF 魔改 (2026-08-09): SSH 终端命令预测弹窗
   // 注意：命令预测拦截已统一注入到 rendererPool 的 attachCustomKeyEventHandler 链中

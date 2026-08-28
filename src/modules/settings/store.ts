@@ -186,6 +186,9 @@ export type Preferences = {
   // TDSF 魔改 2026-08-09: 服务器实时监控偏好
   /** 监控采集间隔（毫秒，合法值 2000/3000/5000/10000，默认 3000） */
   serverMonitorInterval: number;
+  // TDSF 2026-08-28: SSH 远端动态补全（carapace）偏好
+  /** 是否在 SSH 终端显示"启用远端动态补全"小图标（默认 true；false = 所有会话不再提示/检测） */
+  sshRemoteCarapacePrompt: boolean;
 };
 
 export type EditorFormatter =
@@ -279,6 +282,8 @@ const KEY_TEACH_AGENT_ENABLED = "teachAgentEnabled";
 const KEY_TEACH_THRESHOLD = "teachThreshold";
 // TDSF 魔改 2026-08-09: 服务器监控 key
 const KEY_SERVER_MONITOR_INTERVAL = "serverMonitorInterval";
+// TDSF 2026-08-28: SSH 远端动态补全 key
+const KEY_SSH_REMOTE_CARAPACE_PROMPT = "sshRemoteCarapacePrompt";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = 8;
@@ -370,6 +375,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   teachThreshold: TEACH_THRESHOLD_DEFAULT,
   // TDSF 魔改 2026-08-09: 服务器监控默认偏好
   serverMonitorInterval: 3000,
+  // TDSF 2026-08-28: SSH 远端动态补全默认开启提示（无弹窗设计，仅小图标）
+  sshRemoteCarapacePrompt: true,
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -581,6 +588,10 @@ export async function loadPreferences(): Promise<Preferences> {
       get<number>(KEY_SERVER_MONITOR_INTERVAL) ??
         DEFAULT_PREFERENCES.serverMonitorInterval,
     ),
+    // TDSF 2026-08-28: SSH 远端动态补全偏好读取
+    sshRemoteCarapacePrompt:
+      get<boolean>(KEY_SSH_REMOTE_CARAPACE_PROMPT) ??
+      DEFAULT_PREFERENCES.sshRemoteCarapacePrompt,
   };
 }
 
@@ -937,6 +948,11 @@ export async function setServerMonitorInterval(value: number): Promise<void> {
   );
 }
 
+// TDSF 2026-08-28: SSH 远端动态补全 setter（"不再提示"写入持久化偏好）
+export async function setSshRemoteCarapacePrompt(value: boolean): Promise<void> {
+  await writePref(KEY_SSH_REMOTE_CARAPACE_PROMPT, value);
+}
+
 export async function setAgentLaunchCommands(
   value: AgentLaunchCommands,
 ): Promise<void> {
@@ -1030,6 +1046,8 @@ export async function onPreferencesChange(
     [KEY_TEACH_THRESHOLD]: "teachThreshold",
     // TDSF 魔改 2026-08-09: 服务器监控偏好映射
     [KEY_SERVER_MONITOR_INTERVAL]: "serverMonitorInterval",
+    // TDSF 2026-08-28: SSH 远端动态补全偏好映射
+    [KEY_SSH_REMOTE_CARAPACE_PROMPT]: "sshRemoteCarapacePrompt",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

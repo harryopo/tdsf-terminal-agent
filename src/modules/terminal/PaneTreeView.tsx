@@ -4,7 +4,9 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import type { SearchAddon } from "@xterm/addon-search";
-import { Fragment, useCallback, type Ref } from "react";
+import { Fragment, useCallback, useEffect, type Ref } from "react";
+import { setLeafSshSession } from "@/lib/param-complete-client";
+import { SshCarapaceBadge } from "@/modules/ssh-explorer/SshCarapaceBadge";
 import { useTerminalDropStore } from "./lib/dropStore";
 import {
   effectiveLeafSsh,
@@ -142,9 +144,26 @@ function TerminalPaneContent({
  */
 function SshLeafPane({
   sessionId,
+  leafId,
   ...paneProps
 }: PaneProps & { sessionId: string }) {
   const { openTransport } = useSshLeafTransport(sessionId);
+  // TDSF 2026-08-28: leaf ↔ SSH 会话注册——参数补全（completionInjection）经
+  // 注册表把 rustSessionId 用于远端 carapace 查询（ssh_command exec 通道）。
+  // 连接建立后 rustSessionId 才非空，此处响应式注册/注销。
+  const rustSessionId = useSshStore(
+    (s) => s.sessions.find((it) => it.id === sessionId)?.rustSessionId ?? null,
+  );
+  useEffect(() => {
+    // 第 3 参：远端 cwd getter —— ssh_command exec 默认在远端 home 执行，
+    // carapace 动态候选（git 分支等）需 cd 到 OSC 7 跟踪的当前目录
+    setLeafSshSession(
+      leafId,
+      rustSessionId,
+      () => useSshStore.getState().currentPathBySession[sessionId] ?? null,
+    );
+    return () => setLeafSshSession(leafId, null);
+  }, [leafId, rustSessionId, sessionId]);
   // SSH 终端 OSC 7 解析后同步远程 cwd（与 SshTerminalHost.handleCwd 一致）
   const handleCwd = useCallback(
     (_leafId: number, cwd: string) => {
@@ -154,14 +173,19 @@ function SshLeafPane({
     [sessionId],
   );
   return (
-    <TerminalPane
-      {...paneProps}
-      // 远端 shell 不一定有 OSC 133 shell integration，关闭 block 装饰
-      blocks={false}
-      openTransport={openTransport}
-      remote
-      onCwd={handleCwd}
-    />
+    // 相对定位容器承载远端补全安装提示 badge（无弹窗设计，右下角小图标）
+    <div className="relative h-full w-full">
+      <TerminalPane
+        {...paneProps}
+        leafId={leafId}
+        // 远端 shell 不一定有 OSC 133 shell integration，关闭 block 装饰
+        blocks={false}
+        openTransport={openTransport}
+        remote
+        onCwd={handleCwd}
+      />
+      <SshCarapaceBadge sessionId={sessionId} />
+    </div>
   );
 }
 
