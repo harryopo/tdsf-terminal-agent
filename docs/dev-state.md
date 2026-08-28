@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · carapace 参数预测全链路（§37.72）。接手请直接看 **§37.72**（参数预测 P0+P1+cwd+借鉴）+ **§37.71**（图标）+ **§37.70**（别名数据集）。竞品调研与 B1-B4 借鉴分期见 `docs/开源AI运维终端-竞品对比与借鉴规划.md`
+> **最后更新**：2026-08-28 · 预测模块收口（§37.74 补丁）。接手请直接看 **§37.74**（参数层门禁+历史止血）+ **§37.73**（假预测根治+尾部触发+缩写）+ **§37.72**（carapace 全链路）。**下一步=agent 模块完善**（竞品借鉴 B1-B4 见 `docs/开源AI运维终端-竞品对比与借鉴规划.md`）
 
 ---
 
@@ -17,9 +17,9 @@
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
 **最新里程碑（2026-08-28）**：
-- §37.72 carapace 参数预测全链路：本地（windows）参数阶段动态补全 + SSH 远端（exec 通道跑远端 carapace，弹远端真实分支）+ 一键安装（无弹窗：静默检测+工具栏图标+设置开关）+ tldr-zh 选项级中文 1291 条；commits 0f66a72+7fd79a3+ad2b6f6+bbed100；**carapace 二进制不入 git，新环境先跑 `scripts/fetch-carapace.ps1`**
-- §37.71 应用图标重绘：灰底+箭头缩小+光标加大+超采样锐化，源图脚本化 `scripts/make-app-icon.py`，全套尺寸经 `pnpm tauri icon` 重生成（commit 7ea738b）
-- §37.70 shell 别名数据集（47 条，deep-research 调研）并入预测集（commit a060e9e）
+- §37.74 预测第一轮补丁：参数层远端存在性门禁（ag -l 不再误弹）+ 尾部触发双门禁（shouldTriggerTailParams）+ **历史止血**（停运行时写入，收敛 windows shell history 文件；第二轮 OSC exit code 上报后恢复）；commits 8d18f33 + 083feba；**用户确认预测模块没有大问题**
+- §37.73 预测第一轮：假预测根治（compgen -c 远端命令全集过滤）+ 尾部弹参数 + tldr-params 基础命令参数源 + 24 条缩写表
+- §37.72 carapace 参数预测全链路：本地+SSH 远端动态补全、一键安装（无弹窗）、tldr-zh 选项级中文 1291 条；**carapace 二进制不入 git，新环境先跑 `scripts/fetch-carapace.ps1`**
 
 ---
 

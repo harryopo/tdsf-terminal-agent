@@ -1638,3 +1638,42 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ 协议先实测再写码（sub-agent 拿到的就是验证过的协议，一次做对）；✅ 二进制 155MB 不入 git（repo 才 40MB），fetch-carapace.ps1 一键恢复 + sha256 校验；⚠️ sub-agent 并行时接口约定要写死在任务书（carapace_linux_path/sftp_upload_file 命令名靠约定对齐，主线程补实现时才闭合）；⚠️ PowerShell 传空串给 native exe 的坑值得记住——凡是"实测协议"，最后一步必须用**与生产代码相同的调用方式**验证（PowerShell 实验结论不等于 Rust spawn 行为）。
 
 **待实测**：重启 `启动.bat` 后——本地终端 `git checkout t`（弹分支）/ `git checkout -`（弹选项）；SSH 连 VM 后工具栏图标一键安装远端 carapace → `git checkout ` 弹**远端**分支；远端未装时输 `lsblk -o ` 弹静态中文说明（回退层）。
+
+## 2026-08-28 · 预测第一轮：假预测根治 + 尾部弹参数 + 缩写表（§37.73）
+
+**用户实测反馈**：①SSH 输 ag/adr/adb/ansible-doc 全部 command not found（假预测）；②历史层"又惊喜又鸡肋"（输 lsb 点 Tab 就成历史，要求只记正确运行的完整命令）；③输 IP 没有 ip a、ls 没有 -l、输完 ls 后不再弹参数窗口。
+
+**调研结论**（本地盘点 + 联网双 agent）：
+- **数据源缺口真相**：Fig specs 和 carapace **都不收录** ls/ip/systemctl 等基础命令（前者只收复杂 CLI，后者只有 git/docker 等开发工具）——这是"ls 没有 -l"的根因；假预测根因 = 静态词典零存在性校验（含 macOS 专属命令如 mdfind/sips）
+- **历史污染根因**：Enter 即记（不管成败）+ 接受预测即记；全链路无"真实执行结果"信号（OSC 133 不解析命令文本/退出码；session.rs 方案 A 只发 OSC 7）
+- **历史修复方案**（用户拍板：换集成方式，第二轮做）：扩展 session.rs 静默注入发 OSC 133;D;exit + 命令行（VS Code OSC 633 同构），只记执行成功的命令
+- **尾部触发**：carapace 约定当前词=命令名时传空 token [''] 返回 options+子命令第一层
+- **缩写**：无通用方案，fish ip.fish 手编归一化表是权威样板
+
+**实施**（commit 8d18f33，+761 行）：
+1. **假预测根治**：fetchRemoteCommands——SSH 连接后 exec `compgen -c | sort -u` 拉远端命令全集（会话级缓存），命令名候选过滤（history 豁免、无缓存降级不过滤）
+2. **tldr-params.ts**：TLDR_ZH_OPTIONS 接入参数层（ls -a→「列出包含隐藏文件的所有文件」中文直接当 description）——补上基础命令参数数据源缺口
+3. **尾部触发**：单 token 已知命令（tldr/specs/缩写表命中）无空格也并行走参数层，命令候选先展示、参数候选异步追加（predictSeq 包裹）
+4. **command-abbrevs.ts**：24 条手编缩写（ip a=address、systemctl s=status、nmcli c=connection、dnf in=install）
+5. **顺手修 bug**：acceptPrediction 的 addHistory 泄漏（本地接受预测误写 linux 历史）
+
+**验证**：tsc 0 / lint 0 / vitest 1081（+34 新增）全过。
+
+**复盘**：✅ "全覆盖"表述要实测校验（任务书称 tldr 有 ip，实际没有——ip 在 tldr 是拆分成 ip-address 等独立页的，生成器按顶级命令名收录所以漏了；缩写表兜住了 ip 场景）；✅ 探针脚本定位数据源缺口比读代码快（3 分钟锁定"两边都没有"）；⚠️ 历史第二轮动 session.rs 注入脚本（终端红线），必须单独一轮 + SSH 全链路实测。
+
+## 2026-08-28 · 预测第一轮补丁：参数层远端门禁 + 历史污染止血（§37.74）
+
+**用户实测反馈**：①历史污染还在（lsb 仍弹）；②输无关的 ag 弹出 -l，按 → 直接把命令覆盖成 -l——用户明确"参数应该在空格后才弹"。
+
+**根因**（第一轮的两个缺口）：
+1. **参数层没有存在性门禁**：tldr 有 ag（silver searcher）的参数数据 ≠ 远端装了 ag——tldr 源对远端不存在的命令照样放行；尾部触发同样只查数据源不查远端
+2. **历史污染源未动**：Enter 即记 + 接受即记仍在跑（第二轮 OSC 才改时机），且 filterCommandItems 的 history 豁免放大了污染
+
+**修复**（commit 083feba）：
+1. loadParamPredictions linux 分支：远端命令集就绪时 cmd 不在其中 → tldr/Fig 源全跳过（carapace 源保留——它对无 completer 命令返回空）；未拉到（null）→ 不过滤（避免 ls/git 失效）
+2. 尾部触发门禁抽纯函数 shouldTriggerTailParams：**linux 只看远端**（ip 不在词典但缩写表有，是用户要的场景，不能被词典挡）；**windows 只看词典**（挡 ag 类假参数）——7 个测试用例覆盖 ls/ag/ip/边界
+3. **历史止血**：停掉两处运行时写入（Enter 即记 + 接受即记），历史来源收敛到 windows shell history 文件（PSReadLine 只写真实执行过的）；已污染的内存历史 HMR/重启即清。第二轮 OSC 上线后恢复带 exit code 的记录
+
+**验证**：tsc/lint 0 + vitest 1088(+7) 全过。
+
+**复盘**：✅ 用户"参数应该在空格后才弹"的直觉是对的——无空格尾部触发是额外增强，增强必须有比基础路径更严的门禁（基础路径有 predictSeq 和远端过滤，尾部触发原本只有数据源判断）；✅ 抽纯函数后门禁逻辑可测可复用；⚠️ 数据源的"有数据"和"环境有命令"是两个正交维度，静态数据源必须动态门禁兜底。
