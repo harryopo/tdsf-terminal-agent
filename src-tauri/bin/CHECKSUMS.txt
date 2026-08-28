@@ -1,0 +1,17 @@
+carapace-bin v1.7.3 (MIT License, https://github.com/carapace-sh/carapace-bin)
+下载来源: https://github.com/carapace-sh/carapace-bin/releases/tag/v1.7.3
+用途: 终端命令参数动态补全引擎 (param_complete / SSH 远端补全)
+
+carapace-bin_1.7.3_windows_amd64.zip
+  sha256: c25e6f88bcb13ab44cb977db07f2b878bf140c397a3fd5582ce5bfb4d2143303
+  解压为: carapace.exe
+
+carapace-bin_1.7.3_linux_amd64.tar.gz
+  sha256: 35ab52bfe7bdd8296d90c3687660bde80497599badde840ab615d2f421f5f053
+  解压为: carapace-linux-amd64 (远端安装用)
+
+调用协议 (实测验证):
+  carapace <completer> export <tokens含命令名...> <当前词>
+  输出: {"version","messages","noprefix","nospace","usage","values":[{value,display,description,tag}]}
+  示例: carapace git export git checkout t  →  terax-clone-v0 (local branches)
+  示例: carapace git export git switch -    →  --conflict/--create/... (longhand flags)
