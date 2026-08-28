@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 应用图标生成脚本（Tauri 源图 1024x1024）
 用法：python scripts/make-app-icon.py
@@ -14,8 +14,8 @@
 from PIL import Image, ImageDraw
 
 # ---------- 可调参数（单位：1024 逻辑坐标，实际绘制时乘 S） ----------
-BG_GRAY = (58, 58, 58, 255)        # 背景：深灰 #3A3A3A（v5：#4A4A4A 再深一档）
-GREEN = (52, 211, 153, 255)        # 主题绿 #34D399（与原图标一致）
+BG = (58, 58, 58, 255)             # 背景：深灰 #3A3A3A（v5 定下的灰底保留）
+FG = (245, 241, 230, 255)          # 前景（箭头+光标）：米白 #F5F1E6（v7：取代绿色）
 RADIUS = 280                       # 圆角半径（1024 坐标，v2 调大更圆润：200 -> 280）
 CANVAS = 1024                      # 输出尺寸
 SS = 4                             # 超采样倍数（4x = 4096 实际绘制）
@@ -60,8 +60,8 @@ def build(size: int) -> Image.Image:
     d = ImageDraw.Draw(img)
     k = s / CANVAS  # 逻辑坐标 -> 实际像素缩放系数
 
-    # 1) 灰色圆角方形背景（圆角外透明）
-    d.rounded_rectangle([0, 0, s - 1, s - 1], radius=round(RADIUS * k), fill=BG_GRAY)
+    # 1) 米白圆角方形背景（圆角外透明）
+    d.rounded_rectangle([0, 0, s - 1, s - 1], radius=round(RADIUS * k), fill=BG)
 
     # 2) 箭头 ">"：外缘 (左上 -> 尖端 -> 左下)；内缘 = 外缘整体左移 t（平行线），
     #    端头水平平切向左延伸，形成厚度均匀的粗箭头；v3 全角贝塞尔圆角
@@ -78,16 +78,16 @@ def build(size: int) -> Image.Image:
     if CHEVRON_ROUND > 0:
         # 圆角化：逻辑坐标算贝塞尔采样点，再映射到超采样像素坐标
         smooth = rounded_polygon_pts(chevron_pts, CHEVRON_ROUND)
-        d.polygon([(round(x * k), round(y * k)) for x, y in smooth], fill=GREEN)
+        d.polygon([(round(x * k), round(y * k)) for x, y in smooth], fill=FG)
     else:
-        d.polygon(chevron_pts, fill=GREEN)
+        d.polygon(chevron_pts, fill=FG)
 
     # 3) 光标 "_"：加大后的圆角方块，底边与箭头底对齐
     cu = {key: round(val * k) for key, val in CURSOR.items()}
     d.rounded_rectangle(
         [cu["x"], cu["y"], cu["x"] + cu["size"], cu["y"] + cu["size"]],
         radius=cu["radius"],
-        fill=GREEN,
+        fill=FG,
     )
 
     # 4) 高质量下采样回目标尺寸（超采样抗锯齿的核心步骤）
