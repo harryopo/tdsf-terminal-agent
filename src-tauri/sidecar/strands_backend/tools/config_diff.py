@@ -7,6 +7,7 @@ TDSF 魔改 (2026-08-09): 方案书集成度补齐。
 from __future__ import annotations
 
 import logging
+import shlex
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
@@ -36,8 +37,11 @@ def invoke_config_diff(
         return {"diff": "", "identical": False, "exit_code": 1,
                 "error": "file_a and file_b are required"}
 
-    # 构建 diff 命令（安全：路径用单引号包裹防注入）
-    cmd = f"diff -u '{file_a}' '{file_b}' 2>&1 || true"
+    # 构建 diff 命令（shlex.quote 转义路径, 防止含引号的路径拼接成任意命令）
+    # 注意: 不能加 `|| true` 兜底——那会把 diff 的退出码恒置 0, 导致
+    # identical 判定恒为 True (2026-08-28 审查修复)。diff 退出码
+    # 0=相同 / 1=有差异 / 2=错误 都是合法值, 无需兜底。
+    cmd = f"diff -u {shlex.quote(file_a)} {shlex.quote(file_b)} 2>&1"
 
     # 复用 ssh_command 执行
     from strands_backend.tools.ssh_command import invoke_ssh_command_tool
@@ -54,7 +58,8 @@ def invoke_config_diff(
     output = result.get("output", "")
     exit_code = result.get("exit_code", 1)
     # diff 返回 0=相同，1=有差异，2=错误
-    identical = exit_code == 0
+    # 防御: 若执行层未回传 exit_code (缺失时上面兜底 1), 再用输出空判定
+    identical = (exit_code == 0) if result.get("exit_code") is not None else (output.strip() == "")
 
     return {
         "diff": output,

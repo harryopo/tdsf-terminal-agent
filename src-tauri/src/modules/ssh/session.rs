@@ -289,6 +289,14 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// open_sftp_channel 只检查此标志 (不再检查 `exited`)。
     connection_closed: Arc<AtomicBool>,
 
+    /// 用户主动断开意图 (原子标志,仅 close() 设置,永不重置)
+    ///
+    /// 与 `connection_closed` 分离的原因: `connection_closed` 会在重连成功后
+    /// 被 perform_reconnect 清零 (表示"新连接已建立"),无法表达用户意图。
+    /// 若用户在 perform_reconnect 执行中调用 close(),清零会让无人持有的
+    /// 僵尸会话复活并进入无限重连。此标志只增不减,是重连/复活的最终闸门。
+    user_closed: Arc<AtomicBool>,
+
     /// 主机信息 (用于状态事件 + P2-04 多标签会话标识)
     /// 注: 当前仅在日志/host 字段使用,port/user 预留给 P2-04 SSH 多标签
     #[allow(dead_code)]
@@ -461,6 +469,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             exited,
             // TDSF (#20): 连接刚建立,未关闭
             connection_closed: Arc::new(AtomicBool::new(false)),
+            user_closed: Arc::new(AtomicBool::new(false)),
             host,
             port,
             user,
@@ -649,6 +658,9 @@ impl<R: tauri::Runtime> SshSession<R> {
         // PTY 也跟着死 (write_data/resize 会因 connection_closed 直接返回 Closed)。
         self.exited.store(true, Ordering::Release);
         self.connection_closed.store(true, Ordering::Release);
+        // user_closed 只增不减: 即使与 perform_reconnect 竞态 (重连成功后
+        // 清零 connection_closed),用户意图也不会被覆盖 → 僵尸会话无法复活。
+        self.user_closed.store(true, Ordering::Release);
         log::info!("[ssh] session closed: host={}", self.host);
         Ok(())
     }
@@ -705,7 +717,9 @@ impl<R: tauri::Runtime> SshSession<R> {
             notify.notified().await;
 
             // 2. 主动关闭 (close / ssh_disconnect) → 退出 supervisor
-            if session.connection_closed.load(Ordering::Acquire) {
+            // 检查 user_closed (永不重置) 而非 connection_closed (重连成功后清零),
+            // 避免与 perform_reconnect 竞态时误判为"异常断开"继续重连。
+            if session.user_closed.load(Ordering::Acquire) {
                 log::info!("[ssh] reconnect supervisor: session closed by user, stop");
                 return;
             }
@@ -758,8 +772,8 @@ impl<R: tauri::Runtime> SshSession<R> {
                     delay.as_secs()
                 );
                 tokio::time::sleep(delay).await;
-                // 退避期间用户主动断开 → 取消重连
-                if session.connection_closed.load(Ordering::Acquire) {
+                // 退避期间用户主动断开 → 取消重连 (user_closed 永不重置,无竞态)
+                if session.user_closed.load(Ordering::Acquire) {
                     log::info!("[ssh] reconnect cancelled (user disconnected during backoff)");
                     return;
                 }
@@ -847,7 +861,15 @@ impl<R: tauri::Runtime> SshSession<R> {
 
         // 3.4 重置标志 (新 reader task 已 spawn)
         self.exited.store(false, Ordering::Release);
-        self.connection_closed.store(false, Ordering::Release);
+        // 仅在用户未主动断开时清零 connection_closed: 若 close() 与本函数竞态
+        // (close 在 connect/open_pty 检查点之后执行),此处清零会让已从 SshState
+        // take 走的僵尸会话"复活"并无限重连。user_closed 是最终闸门。
+        if !self.user_closed.load(Ordering::Acquire) {
+            self.connection_closed.store(false, Ordering::Release);
+        } else {
+            log::info!("[ssh] reconnect finished but user closed during reconnect, marking closed");
+            self.connection_closed.store(true, Ordering::Release);
+        }
 
         // 3.5 状态 → Connected + 推送状态事件 (前端状态栏恢复 "已连接")
         *self.state.write().unwrap_or_else(|e| e.into_inner()) = SshSessionState::Connected;
@@ -1544,6 +1566,7 @@ pub(crate) mod tests {
             })),
             exited: Arc::new(AtomicBool::new(exited)),
             connection_closed: Arc::new(AtomicBool::new(connection_closed)),
+            user_closed: Arc::new(AtomicBool::new(connection_closed)),
             host: String::new(),
             port: 0,
             user: String::new(),

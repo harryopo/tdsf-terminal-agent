@@ -1489,3 +1489,37 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ 做对：对照上游逐文件比对，定位到平台配置被黑屏修复误删；保守恢复（只 decorations 不 transparent），不重蹈黑屏覆辙
 - ⚠️ 教训：**黑屏修复删"transparent 平台配置"时误伤 decorations:false**——窗口类改动要区分"透明"（黑屏根因）与"无边框"（观感需求）两个独立维度，删除前确认影响面
 - 待办：用户实测确认 ① 顶部无系统边框 ② 可拖动 ③ 右上角自绘窗控按钮可用（最小化/最大化/关闭）；若想要透明圆角观感（terax 原版），再评估 transparent 方案（需移除 backgroundColor 防冲突）
+
+## 2026-08-28 · 第三轮全面审查 + P0/P1/功能缺陷 14 项修复（§37.68）
+
+**任务**：用户要求启动"代码和功能审查模式"——代码质量/稳定性/速度 + 功能对照方案书 + 小瑕疵。4 个并行审查代理（前端/Rust/Python/功能对照）+ P0 级亲验复核。
+
+**审查产出**：P0×2 / P1×9 / P2×13 / 功能缺陷 3（其中 1 误报）。用户选择修 P0+P1+功能缺陷（14 项）。
+
+**已修复**（commit 见 git log）：
+1. **[P0] tunnel.rs select! 全分支禁用 panic**：`Some(msg) = channel.wait()` 带 pattern 写法在"本地半关闭 + channel 死亡"时全分支禁用 → panic，release `panic="abort"` 整个应用退出。改为无 pattern 绑定 + match（None → break）
+2. **[P0] project_service 部分更新清空 metadata/approved**：`existing.get("metadata_str")` 取不存在的键（`_row_to_dict` 已转 dict）→ 兜底 "{}"，4 处（update_project/session/message/decision）确定性数据丢失。改为取解析后 dict 键再重序列化；补 3 个回归单测
+3. **[P1] SSH 僵尸重连**：perform_reconnect 清零 connection_closed 与用户 close() 竞态 → 无人持有的会话无限重连。新增 `user_closed` 原子标志（只增不减），supervisor 两处检查 + perform_reconnect 尾部清零前检查
+4. **[P1] sidecar restart_loop 一次性**：退避期间收到 cancel 就 break → rx drop → 自动重启永久失效（退避修复引入的回归）。break 改 continue
+5. **[P1] health task 泄漏**：Stopped 状态无退出路径，每次重启泄漏一个永久空转 task。Stopped 时 return（下次 start 会 spawn 新的）
+6. **[P1] ssh_credentials 读改写竞态**：save/delete/touch 无锁并发互相覆盖。加静态 tokio Mutex 串行化（锁内无 await）
+7. **[P1] DefaultRustBridge 缺 send_notification**：todo_write/inject_terminal 两条通知链路（TodoStrip 双轨 + SSH 可见执行）调用 AttributeError 被吞、仅 debug 日志 → **功能整体静默失效但 ROADMAP 标 ✅**。补方法 + main.py 注入回调 + 日志 debug→warning
+8. **[P1] config_diff 恒真**：`|| true` 兜底使 exit_code 恒 0 → identical 恒 True。去掉兜底 + shlex.quote 转义
+9. **[P1] backup_restore 注入+假成功**：单引号拼接可被 LLM 参数注入远端 shell；ok 不校验 exit_code（备份失败报成功）。shlex.quote + `_cp_ok` 双重校验
+10. **[P1] 重 IO 阻塞主循环**：long_context.summarize（30s urlopen）/knowledge.search（首次加载模型）不在 _slow_methods → ping 堆积被健康检查误杀。补入 frozenset
+11. **[P1] AiComposerProvider**：ctx 裸对象 + 8 裸函数回调（CLAUDE.md 红线 5 点名组件）。全部 useCallback + useMemo；useWhisperRecording 返回值也 useMemo
+12. **[功能] server-monitor 失败不停**：达 MAX_FAILURES 只置 error 状态，interval 继续空发命令（与 ROADMAP #20 声称不符）。失败时 clearInterval，重连时 effect 重建恢复
+13. **[功能] Teach 契约脆弱**：parser 要求 `## N. 关键词` 格式但 prompt 未明确要求且禁用 emoji 兜底 → 可能静默降级纯 markdown。prompt 加 Output contract 明确格式模板 + parser 加无编号兜底（100 字下限防误判）
+14. **[卫生] App.tsx:139 双分号**
+
+**误报裁决（审查方法论价值）**：
+- 功能代理报"add_case 自动沉淀无调用方"——实过渡代理 grep 口径太窄（只搜 RPC 入口名），`_auto_sink_case`（adapter.py:839→1424）已完整接线（关键词过滤+工具证据+md5 去重）。**Python 代理与功能代理对 TodoStrip 链路结论直接冲突**（一个说断、一个说通），亲验代码裁决：Python 代理对（bridge 对象确实没有该方法），功能代理只验证了"代码路径存在"未验证"运行时对象具备方法"。
+
+**门禁**：cargo check + test（327+25+27+1）✅ / pytest **1455**（1452+3 新回归）✅ / typecheck + lint（0 警告）+ vitest 994 ✅ / build:web ✅
+
+**复盘**：
+- ✅ 做对：审查代理结论全部要求"文件:行号 + 证据"，P0 级亲自复读代码后才修；冲突结论靠亲验裁决而非 majority vote
+- ⚠️ 教训：**"代码路径存在"≠"功能接线"**——审查接线问题必须验证运行时对象注入（DefaultRustBridge 是包装类，方法在包装层丢失）；grep 验证要用多个口径（入口名/函数名/rag.add 都搜）
+- ⚠️ 教训：修复引入回归（restart_loop break）说明**每个"取消"路径都要问：取消后机制还能自恢复吗**
+- 未修（P2×13 留档）：Local 隧道串行 accept、pty 5 处裸 unwrap、Notify 首次竞态、死会话隧道残留、/tmp 注入脚本泄漏、SOCKS5 无认证、桥接无句柄、ToolCallLimitHook 幽灵代码、needs_you 无回收、tdsf watcher 全量读、sys.path 污染、clear_cache 锁竞态、runtime.tsx ~650 行死代码（删除需用户确认）、keyring 空 catch、sshStore 全量订阅、方案书前端可视化三件套未做
+- 待办：用户实测 SSH 隧道（三模式）+ Teach 卡片渲染 + TodoStrip 联动

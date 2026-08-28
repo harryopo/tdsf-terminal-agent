@@ -243,6 +243,13 @@ export function useServerMetrics(
         if (snapshotsRef.current.failures >= MAX_FAILURES) {
           setStatus('error');
           setError(`采集连续失败 ${MAX_FAILURES} 次：${errMsg}`);
+          // ROADMAP #20 声称"连续失败 3 次自动停止轮询"——此前只置 error
+          // 状态，interval 仍在每轮空发采集命令（2026-08-28 审查修复）。
+          // 停止后由主轮询 effect 在会话重连/参数变化时重建恢复。
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
         } else {
           setError(errMsg);
         }

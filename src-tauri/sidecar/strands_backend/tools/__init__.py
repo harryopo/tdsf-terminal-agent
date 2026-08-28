@@ -103,16 +103,28 @@ class DefaultRustBridge:
     Args:
         send_request: 双向 JSON-RPC 请求回调，签名 (method: str, params: dict) -> Any。
                       None 时所有 ipc_invoke 返回 unavailable 状态（当前架构默认）。
+        send_notification: 单向通知回调，签名 (method: str, params: dict) -> None。
+                      供 todo_write / ssh_command(visible) 等工具向前端推送
+                      sidecar:update_todos / sidecar:inject_terminal 通知。
+                      None 时静默降级（仅 debug 日志）。
 
     用法：
-        # P2 阶段：main.py 注入真实 send_request
-        bridge = DefaultRustBridge(send_request=main.send_request_to_rust)
-        # 当前阶段：未注入，工具返回 unavailable
+        # main.py 注入真实回调
+        bridge = DefaultRustBridge(
+            send_request=main.send_request_to_rust,
+            send_notification=main.send_notification,
+        )
+        # 未注入降级
         bridge = DefaultRustBridge()
     """
 
-    def __init__(self, send_request: Callable[[str, dict[str, Any]], Any] | None = None) -> None:
+    def __init__(
+        self,
+        send_request: Callable[[str, dict[str, Any]], Any] | None = None,
+        send_notification: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         self._send_request = send_request
+        self._send_notification = send_notification
 
     def ipc_invoke(self, method: str, params: dict[str, Any]) -> Any:
         if self._send_request is None:
@@ -139,6 +151,25 @@ class DefaultRustBridge:
                 "method": method,
                 "error": str(e),
             }
+
+    def send_notification(self, method: str, params: dict[str, Any]) -> None:
+        """向前端推送单向通知（JSON-RPC notification，无 id 无响应）
+
+        2026-08-28 审查修复：此前该类只有 ipc_invoke，工具里调用
+        send_notification 会 AttributeError 被 except 吞掉（仅 debug 日志），
+        导致 update_todos（TodoStrip 双轨）与 inject_terminal（SSH 可见执行）
+        两条通知链路静默失效。
+        """
+        if self._send_notification is None:
+            logger.debug(
+                f"rust_bridge send_notification unavailable: method={method} (未配置回调)"
+            )
+            return
+        try:
+            self._send_notification(method, params)
+        except Exception as e:
+            # 通知失败不应中断工具主流程，但必须可见（warning 而非 debug）
+            logger.warning(f"rust_bridge send_notification failed: method={method}, error={e}")
 
 
 # ============================================================================

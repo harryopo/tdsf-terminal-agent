@@ -1,6 +1,14 @@
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useWhisperRecording } from "../hooks/useWhisperRecording";
 import { expandSnippetTokens, type Snippet } from "../lib/snippets";
 import { getChat, useChatStore } from "../store/chatStore";
@@ -180,7 +188,7 @@ export function AiComposerProvider({ children }: ProviderProps) {
     },
   });
 
-  const addFiles = async (list: FileList | null) => {
+  const addFiles = useCallback(async (list: FileList | null) => {
     if (!list) return;
     const next: FileAttachment[] = [];
     for (const f of Array.from(list)) {
@@ -188,26 +196,40 @@ export function AiComposerProvider({ children }: ProviderProps) {
       if (att) next.push(att);
     }
     if (next.length) setFiles((prev) => [...prev, ...next]);
-  };
+  }, []);
 
-  const removeFile = (id: string) =>
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+  const removeFile = useCallback(
+    (id: string) => setFiles((prev) => prev.filter((f) => f.id !== id)),
+    [],
+  );
 
-  const addSnippet = (s: Snippet) =>
-    setPickedSnippets((prev) =>
-      prev.some((p) => p.id === s.id) ? prev : [...prev, s],
-    );
-  const removeSnippet = (id: string) =>
-    setPickedSnippets((prev) => prev.filter((s) => s.id !== id));
+  const addSnippet = useCallback(
+    (s: Snippet) =>
+      setPickedSnippets((prev) =>
+        prev.some((p) => p.id === s.id) ? prev : [...prev, s],
+      ),
+    [],
+  );
+  const removeSnippet = useCallback(
+    (id: string) =>
+      setPickedSnippets((prev) => prev.filter((s) => s.id !== id)),
+    [],
+  );
 
-  const addCommand = (cmd: SlashCommandMeta) =>
-    setPickedCommands((prev) =>
-      prev.some((p) => p.name === cmd.name) ? prev : [...prev, cmd],
-    );
-  const removeCommand = (name: string) =>
-    setPickedCommands((prev) => prev.filter((c) => c.name !== name));
+  const addCommand = useCallback(
+    (cmd: SlashCommandMeta) =>
+      setPickedCommands((prev) =>
+        prev.some((p) => p.name === cmd.name) ? prev : [...prev, cmd],
+      ),
+    [],
+  );
+  const removeCommand = useCallback(
+    (name: string) =>
+      setPickedCommands((prev) => prev.filter((c) => c.name !== name)),
+    [],
+  );
 
-  const submit = () => {
+  const submit = useCallback(() => {
     if (isBusy) return;
     const trimmed = value.trim();
     if (
@@ -315,12 +337,12 @@ export function AiComposerProvider({ children }: ProviderProps) {
     setPickedCommands([]);
     // Re-focus immediately after submit so the user can type a follow-up
     requestAnimationFrame(() => textareaRef.current?.focus());
-  };
+  }, [isBusy, value, files, pickedSnippets, pickedCommands, sessionId]);
 
-  const stop = () => {
+  const stop = useCallback(() => {
     if (!sessionId) return;
     void getChat(sessionId)?.stop();
-  };
+  }, [sessionId]);
 
   const canSend =
     !isBusy &&
@@ -329,26 +351,49 @@ export function AiComposerProvider({ children }: ProviderProps) {
       pickedSnippets.length > 0 ||
       pickedCommands.length > 0);
 
-  const ctx: ComposerCtx = {
-    textareaRef,
-    value,
-    setValue,
-    files,
-    addFiles,
-    attachFileByPath,
-    removeFile,
-    pickedSnippets,
-    addSnippet,
-    removeSnippet,
-    pickedCommands,
-    addCommand,
-    removeCommand,
-    isBusy,
-    submit,
-    stop,
-    voice,
-    canSend,
-  };
+  // Context value 必须 useMemo（CLAUDE.md 红线 5）：本 Provider 是全树最外层，
+  // 裸对象会在每次渲染时都是新引用，强制 3 个消费者全量重渲染。
+  // 依赖只保留真正进入 ctx 的状态；回调已全部 useCallback 稳定化。
+  const ctx = useMemo<ComposerCtx>(
+    () => ({
+      textareaRef,
+      value,
+      setValue,
+      files,
+      addFiles,
+      attachFileByPath,
+      removeFile,
+      pickedSnippets,
+      addSnippet,
+      removeSnippet,
+      pickedCommands,
+      addCommand,
+      removeCommand,
+      isBusy,
+      submit,
+      stop,
+      voice,
+      canSend,
+    }),
+    [
+      value,
+      files,
+      addFiles,
+      attachFileByPath,
+      removeFile,
+      pickedSnippets,
+      addSnippet,
+      removeSnippet,
+      pickedCommands,
+      addCommand,
+      removeCommand,
+      isBusy,
+      submit,
+      stop,
+      voice,
+      canSend,
+    ],
+  );
 
   return <Ctx.Provider value={ctx}>{children}</Ctx.Provider>;
 }

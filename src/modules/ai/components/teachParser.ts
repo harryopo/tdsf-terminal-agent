@@ -51,6 +51,11 @@ export function isTeachMessage(text: string): boolean {
   if (/##\s*\d+\.\s*(概念|原理|路径|哲学|示例|易错|练习)/.test(text)) {
     return true;
   }
+  // 兜底：模型偶发输出无编号纯文字标题（## 概念与原理）——prompt 已要求
+  // `## N.` 格式，此处放宽识别防止 TeachCard 静默降级；内容量下限防误判。
+  if (text.length >= 100 && /##\s*(概念|原理|路径|哲学|示例|易错|练习)/.test(text)) {
+    return true;
+  }
   // 6 大板块 emoji 标记（需有一定内容量，避免误判）
   if (text.length < 20) return false;
   return EMOJI_TYPES.some(([emoji]) => text.includes(emoji));
