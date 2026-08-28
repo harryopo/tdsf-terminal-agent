@@ -43,8 +43,13 @@ use tokio::time::timeout;
 // ============================================================================
 
 /// ready 通知等待超时（python 脚本模式; jieba 词典重建 + 语料索引冷启动
-/// 实测 15-25s, 10s 会误杀; 打包 exe 模式在 new() 中显式 60s）
-const READY_TIMEOUT: Duration = Duration::from_secs(30);
+/// 实测 15-25s, 10s 会误杀; 打包 exe 模式在 new() 中显式 60s。
+/// TDSF 修复 2026-08-28: 30s 在重负载下仍会误杀——实测 cargo 并行编译
+/// 抢满 CPU 时 sidecar 仅注册方法就耗时 12s+，叠加词典/索引冷启动逼近
+/// 30s 上限，触发 "ready timeout" → 启动失败（用户侧表现为窗口空白）。
+/// 与打包模式统一放宽到 60s：sidecar 本就是后台异步启动，放宽不影响
+/// 窗口首屏；AI 后端就绪晚几十秒可接受，启动失败不可接受。）
+const READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 心跳间隔（每 5s 发送 ping）
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
