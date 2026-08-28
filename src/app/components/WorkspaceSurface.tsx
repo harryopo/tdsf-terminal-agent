@@ -1,4 +1,4 @@
-import type { SshSessionStateValue } from "@/store/runtime";
+import type { SshSessionStateValue } from "@/lib/ssh-bridge";
 import { cn } from "@/lib/utils";
 import { AiDiffStack, EditorStack, GitDiffStack } from "@/modules/editor";
 import { GitHistoryStack } from "@/modules/git-history";

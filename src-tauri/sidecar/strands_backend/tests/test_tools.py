@@ -300,6 +300,23 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertIn("超时", result["message"])
         bridge.ipc_invoke.assert_not_called()
 
+    def test_high_risk_command_approval_service_down_fails_closed(self):
+        """T3 fail-closed: 审批服务创建失败（request_approval_and_wait → None）
+        → 必须不执行（fail-closed 门禁：审批通道不可用 = 默认拒绝）"""
+        from unittest.mock import patch
+
+        bus = make_mock_event_bus()
+        bridge = make_mock_rust_bridge()
+        ctx = make_ctx(event_bus=bus, rust_bridge=bridge)
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=None,
+        ):
+            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+        self.assertEqual(result["status"], "needs_approval")
+        self.assertIn("未执行", result["message"])
+        bridge.ipc_invoke.assert_not_called()
+
     def test_no_rust_bridge_unavailable(self):
         """RustBridge=None 时应返回 unavailable"""
         ctx = make_ctx(rust_bridge=None)
@@ -797,17 +814,18 @@ class TestNetworkDiagnosticTool(unittest.TestCase):
 class TestMakeAllOpsTools(unittest.TestCase):
     """make_all_ops_tools 批量构建测试"""
 
-    def test_returns_7_tools(self):
-        """make_all_ops_tools 应返回 7 个工具（2026-08-01: +skill_invoke/suggest_command）"""
+    def test_returns_all_registered_tools(self):
+        """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
+        （T2 后 = 13 运维/知识 + 6 魔改增强 = 19）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 13)
+        self.assertEqual(len(tools), 19)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应包含 7 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 13)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 19 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 19)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -815,6 +833,13 @@ class TestMakeAllOpsTools(unittest.TestCase):
         self.assertIn("network_diagnostic", OPS_TOOL_NAMES)
         self.assertIn("skill_invoke", OPS_TOOL_NAMES)
         self.assertIn("suggest_command", OPS_TOOL_NAMES)
+        # T2 收编的 6 个增强工具
+        self.assertIn("todo_write", OPS_TOOL_NAMES)
+        self.assertIn("get_terminal_output", OPS_TOOL_NAMES)
+        self.assertIn("config_diff", OPS_TOOL_NAMES)
+        self.assertIn("backup_restore", OPS_TOOL_NAMES)
+        self.assertIn("assess_confidence", OPS_TOOL_NAMES)
+        self.assertIn("search_history", OPS_TOOL_NAMES)
 
 
 # ============================================================================
@@ -1345,7 +1370,7 @@ class TestSubAgentToolWhitelist(unittest.TestCase):
             tool_names=_SUB_AGENT_SPECS["main"]["tool_names"],
         )
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 13)
+        self.assertEqual(len(tools), 19)
         self.assertIn("ssh_command", names)
 
     def test_whitelist_composes_with_l1_readonly(self):
@@ -1505,7 +1530,14 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertIn("suggest_command", names)
         # P2-3: 5 基础只读 + 2 扩展只读（security_audit/performance_analyze）
         self.assertIn("security_audit", names)
-        self.assertEqual(len(tools), 7)
+        # T2 收编后：7 原只读 + 5 新只读增强（todo_write/get_terminal_output/
+        # config_diff/assess_confidence/search_history）= 12
+        self.assertIn("todo_write", names)
+        self.assertIn("get_terminal_output", names)
+        self.assertIn("assess_confidence", names)
+        # backup_restore（restore 写操作）L1 下被裁——schema-level safety 补口
+        self.assertNotIn("backup_restore", names)
+        self.assertEqual(len(tools), 12)
 
     def test_l2_keeps_all_tools(self):
         ctx = make_ctx()
@@ -1513,12 +1545,13 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         tools = make_all_ops_tools(ctx)
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
-        self.assertEqual(len(tools), 13)
+        self.assertIn("backup_restore", names)
+        self.assertEqual(len(tools), 19)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 13)
+        self.assertEqual(len(tools), 19)
 
 
 # ============================================================================

@@ -6,7 +6,7 @@ tests/test_skill_registry.py — SkillRegistry 单元测试（T-P3-05 验证）
 1. SkillRegistry 创建
 2. register / get / list / invoke / unregister
 3. 大小写不敏感查询
-4. load_builtin 自动加载 5 内置 Skill
+4. load_builtin 自动加载 7 内置 Skill
 5. load_external_dir 加载用户自定义 Skill
 6. load_mock_external 加载 65 mock Skill
 7. 70+ Skill 注册总数验证
@@ -49,7 +49,7 @@ def empty_registry() -> SkillRegistry:
 
 @pytest.fixture
 def builtin_registry() -> SkillRegistry:
-    """已加载 5 内置 Skill 的 Registry"""
+    """已加载 7 内置 Skill 的 Registry"""
     registry: SkillRegistry = SkillRegistry()
     registry.load_builtin()
     return registry
@@ -57,8 +57,9 @@ def builtin_registry() -> SkillRegistry:
 
 @pytest.fixture
 def full_registry() -> SkillRegistry:
-    """已加载 5 内置 Skill 的 Registry
-    TDSF 魔改 (2026-07-28): 65 mock skill 已禁用, full_registry 仅含 5 builtin
+    """已加载 7 内置 Skill 的 Registry
+    TDSF 魔改 (2026-07-28): 65 mock skill 已禁用, full_registry 仅含 7 builtin
+    T1 (2026-08-28): 新增 systemd-troubleshoot / samba-setup, builtin 数 5 → 7
     """
     registry: SkillRegistry = SkillRegistry()
     registry.load_builtin()
@@ -85,8 +86,8 @@ class TestRegistryCreation:
         r1 = get_global_registry()
         r2 = get_global_registry()
         assert r1 is r2
-        # TDSF 魔改: 只加载 5 个 builtin (mock 已禁用)
-        assert r1.count() == 5
+        # TDSF 魔改: 只加载 7 个 builtin (mock 已禁用)
+        assert r1.count() == 7
         reset_global_registry()
 
 
@@ -235,6 +236,20 @@ class TestInvokeSkill:
         result: dict = builtin_registry.invoke("linux-ops", params)
         assert result["params"] == params
 
+    def test_invoke_knowledge_card_carries_metadata(self, builtin_registry: SkillRegistry):
+        """T1 (2026-08-28): 知识卡模式返回体贯通 tags / triggers / allowed_tools
+
+        注: 需用无 executor 的知识卡 Skill（ssh-troubleshoot）验证；
+        executor 型 Skill（linux-ops 等）走执行分支，返回体不含这些字段。
+        """
+        result: dict = builtin_registry.invoke("ssh-troubleshoot", {})
+        # tags 始终携带
+        assert isinstance(result.get("tags"), list)
+        assert len(result["tags"]) > 0
+        # triggers / allowed_tools 均为 list（SKILL.md 未声明时为空列表）
+        assert isinstance(result.get("triggers"), list)
+        assert isinstance(result.get("allowed_tools"), list)
+
 
 # ============================================================================
 # 4. load_builtin 测试
@@ -242,20 +257,22 @@ class TestInvokeSkill:
 
 
 class TestLoadBuiltin:
-    """load_builtin 加载 5 内置 Skill 测试"""
+    """load_builtin 加载 7 内置 Skill 测试"""
 
     def test_load_builtin_count(self, builtin_registry: SkillRegistry):
-        """load_builtin 加载 5 个内置 Skill"""
-        assert builtin_registry.count() == 5
+        """load_builtin 加载 7 个内置 Skill"""
+        assert builtin_registry.count() == 7
 
     def test_load_builtin_skill_names(self, builtin_registry: SkillRegistry):
-        """5 内置 Skill 名称正确"""
+        """7 内置 Skill 名称正确"""
         names: list[str] = builtin_registry.list_names()
         assert "linux-ops" in names
         assert "ssh-troubleshoot" in names
         assert "docker-management" in names
         assert "selinux-baseline" in names
         assert "python-debug" in names
+        assert "systemd-troubleshoot" in names
+        assert "samba-setup" in names
 
     def test_load_builtin_skill_content(self, builtin_registry: SkillRegistry):
         """内置 Skill 解析内容完整"""
@@ -276,7 +293,7 @@ class TestLoadBuiltin:
         first_count: int = empty_registry.count()
         empty_registry.load_builtin()
         second_count: int = empty_registry.count()
-        assert first_count == second_count == 5
+        assert first_count == second_count == 7
 
     def test_load_builtin_dir_not_exist(self, empty_registry: SkillRegistry):
         """builtin_dir 不存在时返回 0"""
@@ -337,36 +354,40 @@ class Test70PlusSkills:
     """70+ Skill 集成测试"""
 
     def test_total_70_skills(self, full_registry: SkillRegistry):
-        """5 内置 (TDSF 魔改: mock 已禁用, 只剩 5 builtin)"""
+        """7 内置 (TDSF 魔改: mock 已禁用, 只剩 builtin)"""
         # 原行为: 5 内置 + 65 mock = 70 Skill
-        # TDSF 魔改 (2026-07-28): 清理 65 mock skill, 只保留 5 builtin
-        assert full_registry.count() == 5
+        # TDSF 魔改 (2026-07-28): 清理 65 mock skill, 只保留 builtin
+        # T1 (2026-08-28): builtin 5 → 7
+        assert full_registry.count() == 7
 
     def test_total_skills_above_70(self):
-        """全局 registry 加载后总数 ≥ 5 (TDSF 魔改: mock 已禁用)"""
+        """全局 registry 加载后总数 ≥ 7 (TDSF 魔改: mock 已禁用)"""
         reset_global_registry()
         registry: SkillRegistry = get_global_registry()
         # 原行为: >= 70 (含 65 mock)
-        # TDSF 魔改 (2026-07-28): 只剩 5 个 builtin skill
-        assert registry.count() >= 5
+        # TDSF 魔改 (2026-07-28): 只剩 builtin skill; T1 后 7 个
+        # 注: 用户自定义目录 ~/.tdsf/skills 存在时可能更多, 故用 >=
+        assert registry.count() >= 7
         reset_global_registry()
 
     def test_5_builtin_in_full_registry(self, full_registry: SkillRegistry):
-        """full_registry 包含 5 内置 Skill"""
+        """full_registry 包含 7 内置 Skill"""
         for name in [
             "linux-ops",
             "ssh-troubleshoot",
             "docker-management",
             "selinux-baseline",
             "python-debug",
+            "systemd-troubleshoot",
+            "samba-setup",
         ]:
             assert full_registry.exists(name), f"missing builtin: {name}"
 
     def test_65_mock_in_full_registry(self, full_registry: SkillRegistry):
-        """full_registry 含 5 builtin (TDSF 魔改: mock 已禁用)
+        """full_registry 含 7 builtin (TDSF 魔改: mock 已禁用)
 
         原行为: 抽样验证 4 个 mock skill (rust-debug/react-hooks/k8s-deploy/postgres-tuning)
-        TDSF 魔改 (2026-07-28): 65 mock skill 已清理, 改验证 5 个 builtin
+        TDSF 魔改 (2026-07-28): 65 mock skill 已清理, 改验证 builtin
         """
         for name in [
             "docker-management",
@@ -374,14 +395,16 @@ class Test70PlusSkills:
             "python-debug",
             "selinux-baseline",
             "ssh-troubleshoot",
+            "systemd-troubleshoot",
+            "samba-setup",
         ]:
             assert full_registry.exists(name), f"missing builtin: {name}"
 
     def test_to_json(self, full_registry: SkillRegistry):
-        """to_json 返回所有 Skill 的 JSON 兼容列表 (TDSF 魔改: 5 个 builtin)"""
+        """to_json 返回所有 Skill 的 JSON 兼容列表 (TDSF 魔改: 仅 builtin)"""
         data: list[dict] = full_registry.to_json()
-        # TDSF 魔改 (2026-07-28): 65 mock 已禁用, 只剩 5 builtin
-        assert len(data) == 5
+        # TDSF 魔改 (2026-07-28): 65 mock 已禁用, 只剩 builtin; T1 后 7 个
+        assert len(data) == 7
         assert all(isinstance(d, dict) for d in data)
         assert all("name" in d for d in data)
 
@@ -426,6 +449,17 @@ class TestSearch:
         lower: list[Skill] = full_registry.search("docker")
         upper: list[Skill] = full_registry.search("DOCKER")
         assert {r.name for r in lower} == {r.name for r in upper}
+
+    def test_search_by_triggers(self, empty_registry: SkillRegistry):
+        """T1 (2026-08-28): triggers 触发词参与搜索命中"""
+        empty_registry.register(
+            Skill(name="trig-skill", description="触发词技能", triggers=["journalctl", "服务启动失败"])
+        )
+        empty_registry.register(Skill(name="other", description="无关技能"))
+        results: list[Skill] = empty_registry.search("journalctl")
+        names: list[str] = [r.name for r in results]
+        assert "trig-skill" in names
+        assert "other" not in names
 
 
 # ============================================================================
@@ -476,7 +510,7 @@ class TestRegisterMethods:
     """JSON-RPC 方法注册测试（mock dispatcher）"""
 
     def test_register_methods(self):
-        """register_methods 注册 5 个 skill.* 方法"""
+        """register_methods 注册 6 个 skill.* 方法"""
         reset_global_registry()
         registered: dict = {}
 
@@ -492,10 +526,11 @@ class TestRegisterMethods:
         assert "skill.invoke" in registered
         assert "skill.search" in registered
         assert "skill.count" in registered
+        assert "skill.reload" in registered
         reset_global_registry()
 
     def test_skill_list_method(self):
-        """skill.list 返回 5 个 builtin Skill (TDSF 魔改: mock 已禁用)"""
+        """skill.list 返回 builtin Skill (TDSF 魔改: mock 已禁用)"""
         reset_global_registry()
         registered: dict = {}
 
@@ -508,8 +543,8 @@ class TestRegisterMethods:
 
         result: dict = registered["skill.list"]()
         assert "skills" in result
-        # TDSF 魔改 (2026-07-28): 清理 65 mock, 只剩 5 builtin
-        assert result["total"] == 5
+        # TDSF 魔改 (2026-07-28): 清理 65 mock, 只剩 builtin; T1 后 7 个
+        assert result["total"] == 7
         reset_global_registry()
 
     def test_skill_get_method(self):
@@ -559,6 +594,6 @@ class TestRegisterMethods:
         register_methods(MockDispatcher())
 
         result: dict = registered["skill.count"]()
-        # TDSF 魔改 (2026-07-28): 清理 65 mock, 只剩 5 builtin
-        assert result["count"] == 5
+        # TDSF 魔改 (2026-07-28): 清理 65 mock, 只剩 builtin; T1 后 7 个
+        assert result["count"] == 7
         reset_global_registry()
