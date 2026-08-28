@@ -7,12 +7,24 @@ TDSF 魔改 (2026-08-09): 方案书集成度补齐。
 from __future__ import annotations
 
 import logging
+import shlex
 import time
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
 
 logger = logging.getLogger("sidecar.strands_backend.tools.backup_restore")
+
+
+def _cp_ok(result: dict[str, Any]) -> bool:
+    """判定 cp 命令真实成功
+
+    execute_via_ssh 对 exit_code != 0 仍可能返回 status="success"
+    （status 只表示命令通道正常），必须同时校验 exit_code == 0，
+    否则 cp 失败（权限不足/文件不存在）会被误报为成功 → 用户以为
+    有备份就放心改配置，恢复时才发现无备份（2026-08-28 审查修复）。
+    """
+    return result.get("status") == "success" and result.get("exit_code", 1) == 0
 
 
 def invoke_backup_restore(
@@ -50,7 +62,9 @@ def invoke_backup_restore(
         if not backup_path:
             ts = int(time.time())
             backup_path = f"{file_path}.bak.{ts}"
-        cmd = f"cp -p '{file_path}' '{backup_path}' && echo 'backup ok: {backup_path}'"
+        # shlex.quote 转义路径: 单引号包裹不能防注入（路径含 ' 即可闭合
+        # 引号注入任意命令，且 file_path 来自 LLM 参数），必须用 shlex.quote
+        cmd = f"cp -p {shlex.quote(file_path)} {shlex.quote(backup_path)} && echo 'backup ok'"
         result = invoke_ssh_command_tool(
             params={
                 "command": cmd,
@@ -60,7 +74,7 @@ def invoke_backup_restore(
             },
             ctx=ctx,
         )
-        ok = result.get("status") == "success"
+        ok = _cp_ok(result)
         return {
             "ok": ok,
             "action": "backup",
@@ -71,8 +85,9 @@ def invoke_backup_restore(
     else:
         # 恢复: cp backup_path file_path
         if not backup_path:
-            # 找最新的 .bak.N 文件
-            cmd_find = f"ls -t '{file_path}.bak.'* 2>/dev/null | head -1"
+            # 找最新的 .bak.N 文件（glob 由 shell 展开, 引号只包前缀部分;
+            # shlex.quote 防止 file_path 含引号注入）
+            cmd_find = f"ls -t {shlex.quote(file_path)}.bak.* 2>/dev/null | head -1"
             result_find = invoke_ssh_command_tool(
                 params={
                     "command": cmd_find,
@@ -90,7 +105,7 @@ def invoke_backup_restore(
                     "file_path": file_path,
                     "message": "未找到备份文件",
                 }
-        cmd = f"cp -p '{backup_path}' '{file_path}' && echo 'restore ok'"
+        cmd = f"cp -p {shlex.quote(backup_path)} {shlex.quote(file_path)} && echo 'restore ok'"
         result = invoke_ssh_command_tool(
             params={
                 "command": cmd,
@@ -100,7 +115,7 @@ def invoke_backup_restore(
             },
             ctx=ctx,
         )
-        ok = result.get("status") == "success"
+        ok = _cp_ok(result)
         return {
             "ok": ok,
             "action": "restore",

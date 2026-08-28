@@ -188,7 +188,17 @@ START_TIME = time.time()
 # - event_bus / rust_bridge 内部均有锁，线程安全
 # - max_workers=2：允许一个 agent.invoke 在跑时另一个请求（如 ping）也能处理，
 #   同时避免并发过多 LLM 调用导致资源紧张
-_slow_methods: frozenset[str] = frozenset({"agent.invoke"})
+#
+# 2026-08-28 审查补充：long_context.summarize（LLM 摘要 urlopen 最长 30s）
+# 与 knowledge.search/rebuild（首次触发 SentenceTransformer 加载，可能数十秒）
+# 同样是重 IO，必须进线程池，否则主循环被阻塞 → ping 堆积 → Rust 健康检查
+# 30s 窗口误杀 sidecar（与 P1-NEW-1 同类问题）。
+_slow_methods: frozenset[str] = frozenset({
+    "agent.invoke",
+    "long_context.summarize",
+    "knowledge.search",
+    "knowledge.rebuild",
+})
 _main_executor: ThreadPoolExecutor | None = None
 
 
@@ -593,7 +603,11 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 # RustBridge 协议 ipc_invoke(method, params) → send_request(method, params)
                 if _rust_bridge is not None:
                     _rust_bridge_impl = DefaultRustBridge(
-                        send_request=lambda m, p: _rust_bridge.send_request(m, p)
+                        send_request=lambda m, p: _rust_bridge.send_request(m, p),
+                        # 2026-08-28 审查修复: 注入通知回调, 否则工具里的
+                        # send_notification 调用 AttributeError 静默失效
+                        # (update_todos / inject_terminal 两条链路断)
+                        send_notification=lambda m, p: send_notification(m, p),
                     )
                     logger.info(
                         "rust_bridge injected into Strands "

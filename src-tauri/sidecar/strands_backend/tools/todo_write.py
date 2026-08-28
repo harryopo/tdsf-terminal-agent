@@ -80,7 +80,8 @@ def invoke_todo_write_tool(
                 "todos": normalized,
             })
         except Exception as e:
-            logger.debug(f"update_todos notification failed: {e}")
+            # 通知失败 = 前端 TodoStrip 不更新，必须可见（warning 而非 debug）
+            logger.warning(f"update_todos notification failed: {e}")
 
     # 推送 tool_call 事件
     if ctx.event_bus is not None:

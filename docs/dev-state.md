@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · 主窗口系统边框回归修复（§37.67）。接手请直接看 **§37.67**（窗口边框）+ **§37.66**（启动修复）+ **§37.65**（换机环境重建）+ **§37.64**（知识库 UI）
+> **最后更新**：2026-08-28 · 第三轮全面审查 + 14 项修复（§37.68）。接手请直接看 **§37.68**（审查修复，含 P2 未修清单）+ **§37.67**（窗口边框）+ **§37.66**（启动修复）+ **§37.65**（换机环境重建）
 
 ---
 
@@ -4177,3 +4177,20 @@ CDP 全新状态实测通过。commit 见上。
 **修复**（commit `b29ff04`）：两个平台配置恢复 `decorations:false`；**不恢复 transparent**（保留 backgroundColor 不透明，防黑屏回归 §37.23/37.24）。前端配套已就绪：`data-tauri-drag-region`（Header/TabBar）、`WindowControls` 自绘 min/max/close、capabilities 权限齐全。
 
 **下一步（需用户）**：重跑 `启动.bat` 实测 ① 顶部无系统边框 ② 可拖动窗口 ③ 右上角自绘窗控可用。若想要 terax 原版透明圆角观感，再评估 transparent 方案（需移除 backgroundColor 防冲突）。
+
+### 37.68 第三轮全面审查 + P0/P1/功能缺陷 14 项修复（2026-08-28 ✅）
+
+**审查**：4 并行代理（前端/Rust/Python/功能对照）产出 P0×2/P1×9/P2×13/功能缺陷 3（1 误报）。用户选修复 P0+P1+功能缺陷 14 项。完整清单见 DEV-JOURNAL §37.68。
+
+**P0（已修）**：① tunnel.rs select! 全分支禁用 panic（release panic=abort 整应用退出）② project_service 4 处部分更新清空 metadata/approved（确定性数据丢失，补 3 回归单测）
+**P1 Rust（已修）**：SSH 僵尸重连（新增 user_closed 标志）/ sidecar restart_loop break 一次性失效（改 continue）/ health task 无退出（Stopped 时 return）/ credentials 读改写竞态（静态 tokio Mutex）
+**P1 Python（已修）**：**DefaultRustBridge 缺 send_notification → TodoStrip 双轨 + SSH 可见执行两功能静默失效**（补方法+注入）/ config_diff `|| true` 恒真 / backup_restore shell 注入+备份假成功（shlex.quote + exit_code 双校验）/ 重 IO 阻塞主循环（_slow_methods 补 3 方法）
+**P1 前端（已修）**：AiComposerProvider ctx useMemo + 8 回调 useCallback（红线 5 点名组件）
+**功能缺陷（已修）**：server-monitor 失败 3 次不停轮询（clearInterval）/ Teach prompt 与 parser 契约对齐（prompt 加 Output contract + parser 无编号兜底）
+**误报**：add_case 自动沉淀已接线（`_auto_sink_case` adapter.py:839，代理 grep 口径太窄）
+
+**门禁**：cargo check+test 327+25+27+1 ✅ / pytest 1455 ✅ / typecheck+lint+vitest 994 ✅ / build:web ✅
+
+**P2×13 未修留档**（详单见 DEV-JOURNAL §37.68）：Local 隧道串行 accept / pty 5 处裸 unwrap / Notify 首次竞态 / 死会话隧道残留 / /tmp 注入脚本泄漏 / SOCKS5 无认证可绑 0.0.0.0 / 桥接无句柄 / ToolCallLimitHook 幽灵代码 / needs_you 无回收 / tdsf watcher 全量读 / sys.path 污染 / clear_cache 锁竞态 / runtime.tsx ~650 行死代码（删除需用户确认）+ keyring 空 catch + sshStore 全量订阅 + 方案书 §4.5 前端可视化三件套未做（证据链/置信度仪表盘/风险色带）
+
+**下一步（需用户）**：实测 ① SSH 隧道三模式 ② Teach 卡片渲染 ③ TodoStrip 联动（此前因 #7 静默失效，本次修复后应首次真正可用）；决策是否修 P2 清单与删除 runtime.tsx 死代码。
