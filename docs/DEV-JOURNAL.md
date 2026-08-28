@@ -1,4 +1,4 @@
-# TDSF Terminal Agent · 开发日志（经验沉淀）
+﻿﻿# TDSF Terminal Agent · 开发日志（经验沉淀）
 
 > **用途**：每次任务收尾时追加一条记录——任务 / 方案 / 报错与修改 / 复盘（经验教训）。
 > **配套**：`docs/ROADMAP.md`（短/长期规划）、`docs/dev-state.md`（进度状态，§37.x 交接章）、`docs/方案书-v1.0.md`（总纲）。
@@ -1597,3 +1597,38 @@ P2（中优先级 — 清理 + 文档）：
 **报错与修改**：首版箭头画成"蝴蝶结"——内缘多边形顶点向右偏移导致自交；正确做法是内缘 = 外缘**整体左移 t**（平行线），端头平切随之向左延伸。改一行顶点偏移方向即修复。
 
 **复盘**：✅ 图标迭代成本低是关键收益——源图由脚本参数化生成，用户后续想调灰色深浅/比例，改 3 个常量重跑脚本 + `pnpm tauri icon` 即可；⚠️ tauri icon 会顺带产出 ios/android 目录，纯桌面项目生成后要手动清掉。
+
+**v2 追加（同日）**：用户反馈"边角再圆润一点，点也圆润一下"——RADIUS 200→280（≈27%，接近 iOS 圆润度），光标方块改 rounded_rectangle（radius 42 ≈ 28%）。验证参数化迭代的收益：改 2 处常量 + 3 条命令（生成/图标/同步512）约 10 秒完成。
+
+## 2026-08-28 · carapace 参数预测全链路落地（P0 本地 + P1 SSH 远端）（§37.72）
+
+**任务**：spec `.trae/specs/add-carapace-param-completion/`（用户批准）——①Windows 本地参数阶段动态补全（此前 `env === 'linux'` 硬限制导致参数阶段完全无预测）；②SSH 远端动态补全（`git checkout ` 弹**远端仓库真实分支**）；③参数描述中文化。
+
+**方案**：开源 carapace-bin v1.7.3（MIT，Go 单二进制 1511 completer）作动态补全引擎；Fig specs 静态层降级为远端未装时的回退。三并行 sub-agent 实施（Rust 引擎 / 前端分流+SSH / tldr-zh 选项级）+ 主线程集成修复。
+
+**协议实测关键结论**（源码考古+实验矩阵得出，文档未载）：
+- 调用语法 `carapace <completer> export <tokens含命令名...> <当前词>`，输出单行 JSON `{values:[{value,display,description,tag}]}`，已含前缀过滤
+- bash snippet（bash.go:23）用 `compline + ''` 经 xargs 拆参 —— "当前词=最后一个参数"；PowerShell 传空串会被吞导致实验误判（返回顶层子命令），Rust spawn 无此坑
+- 动态分支 action = `ActionExecCommand("git","branch",...)`，**依赖进程 cwd** —— 引出本次最重要的集成修复
+
+**主线程集成修复（sub-agent 遗留）**：
+1. **cwd 缺口**：本地 leaf 的 OSC 7 cwd → `setLeafCwd` 注册表（useTerminalSession 三处赋值点接入）；远端 `ssh_command` exec 默认在 home → `cd '<escaped cwd>' && ...` 前缀（cwd getter 读 `sshStore.currentPathBySession`，getState 模式防 stale closure）。不修则 git 分支永远补错仓库。
+2. **循环依赖规避**：completionInjection ← useTerminalSession 单向，反向取 leafCwd 会成环 → cwd/remoteCwd 全走 param-complete-client 注册表（与 setLeafSshSession 同模式）。
+3. **命令对齐**：补 `carapace_linux_path` + `sftp_upload_file`（Rust 内部读盘+SFTP 写，80MB 不经 IPC 中转）。
+
+**报错与修改**：
+- `git checkout ma` 在 tdsf 仓库返回空 → **不是 bug**：仓库只有 terax-clone-v0 分支，ma 前缀无匹配（一度误判为 action 失败，对照实验矩阵 + `t` 前缀验证澄清）
+- PowerShell `('')` 传参仍被吞（PS 版本行为）→ 测试改用字符串拼接比较
+- cargo test 全量链接失败 os error 5 → tauri dev 的 cargo run（PID 21048）占用 debug exe → `CARGO_TARGET_DIR=target-test` 隔离跑全量（绿），target-test 已 gitignore
+- eslint no-useless-escape（测试描述里的 `\'`）→ 改描述措辞
+
+**开源借鉴（用户点名）——对标 inshellisense/Chaterm 后的结论**：
+- ✅ 已对齐：500ms 超时强杀+kill_on_drop（inshellisense 5s+AbortSignal 模式）、predictSeq 版本号防竞态（inshellisense 同款）、失败静默降级、stdin 关闭防挂起、控制字符防注入
+- ✅ 优于 inshellisense：不执行 Fig generator 任意 JS（carapace 声明式 spec）；无需 git bash 兜底；DOM overlay 而非 ANSI patch 重绘（正确性风险更低）
+- 📌 记录待做（低成本增强）：①carapace `nospace` 字段未消费——nospace=true 场景（`git switch -` 选项）接受候选后不该追加空格，当前多加一个空格（影响小，候选含参值时加空格反而正确，暂不做）；②`tag` 字段已透传可按分类着色弹窗分组（UI 增强，B2 一起）；③Chaterm ghost text AI 兜底（快模型 2s 超时）——B2 阶段功能，carapace 无 completer 的长尾命令由 AI 生成
+
+**验证**：五绿全过 —— typecheck 0 错 / lint 0 / vitest **1046**（+58 新增）/ build:web / cargo test 全量（隔离 target；lib 342 + 集成 25/27/1）。4 commits：0f66a72（Rust）+ 7fd79a3（前端）+ ad2b6f6（tldr-zh 选项级 168 命令/1291 选项）+ bbed100（spec+调研归档）。
+
+**复盘**：✅ 协议先实测再写码（sub-agent 拿到的就是验证过的协议，一次做对）；✅ 二进制 155MB 不入 git（repo 才 40MB），fetch-carapace.ps1 一键恢复 + sha256 校验；⚠️ sub-agent 并行时接口约定要写死在任务书（carapace_linux_path/sftp_upload_file 命令名靠约定对齐，主线程补实现时才闭合）；⚠️ PowerShell 传空串给 native exe 的坑值得记住——凡是"实测协议"，最后一步必须用**与生产代码相同的调用方式**验证（PowerShell 实验结论不等于 Rust spawn 行为）。
+
+**待实测**：重启 `启动.bat` 后——本地终端 `git checkout t`（弹分支）/ `git checkout -`（弹选项）；SSH 连 VM 后工具栏图标一键安装远端 carapace → `git checkout ` 弹**远端**分支；远端未装时输 `lsblk -o ` 弹静态中文说明（回退层）。
