@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · 启动.bat 编码修复 + langchain-openai 补装（§37.66）。接手请直接看 **§37.66**（启动修复）+ **§37.65**（换机环境重建）+ **§37.64**（知识库 UI）+ **§37.63**（审查修复）
+> **最后更新**：2026-08-28 · 主窗口系统边框回归修复（§37.67）。接手请直接看 **§37.67**（窗口边框）+ **§37.66**（启动修复）+ **§37.65**（换机环境重建）+ **§37.64**（知识库 UI）
 
 ---
 
@@ -4167,3 +4167,13 @@ CDP 全新状态实测通过。commit 见上。
 **经验固化**：写 .bat 一律全 ASCII + `%~dp0` 动态路径；依赖补装必须同步 requirements.txt。
 
 **下一步（需用户）**：真实 cmd 重新运行 `启动.bat`，确认 ① 无乱码命令报错 ② 日志 `using python: "...\.venv\Scripts\python.exe"` ③ 无 `langchain-openai 未安装` ④ 窗口出现 → 五绿第 5 项闭环。
+
+### 37.67 主窗口系统标题栏边框回归修复（2026-08-28 ✅ 代码已修，待用户实测）
+
+**背景**：用户实测启动成功，反馈"顶部有软件的边框，之前没有"——Windows 主窗口带系统标题栏，与 terax 无边框沉浸式不符。
+
+**根因**：`7cb230d` 黑屏修复把 `tauri.windows/linux.conf.json` 平台配置里的 `decorations:false + transparent:true` 一并删除（平台配置按 label 合并覆盖主配置）→ 主窗口回退原生边框。tauri.conf.json 的 `titleBarStyle:Overlay + hiddenTitle:true` 仅 macOS 生效，Windows 不隐藏系统标题栏。
+
+**修复**（commit `b29ff04`）：两个平台配置恢复 `decorations:false`；**不恢复 transparent**（保留 backgroundColor 不透明，防黑屏回归 §37.23/37.24）。前端配套已就绪：`data-tauri-drag-region`（Header/TabBar）、`WindowControls` 自绘 min/max/close、capabilities 权限齐全。
+
+**下一步（需用户）**：重跑 `启动.bat` 实测 ① 顶部无系统边框 ② 可拖动窗口 ③ 右上角自绘窗控可用。若想要 terax 原版透明圆角观感，再评估 transparent 方案（需移除 backgroundColor 防冲突）。

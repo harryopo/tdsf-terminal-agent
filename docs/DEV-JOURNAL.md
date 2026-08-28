@@ -1472,3 +1472,20 @@ P2（中优先级 — 清理 + 文档）：
 - ⚠️ 教训：**写 .bat 一律全 ASCII + `%~dp0` 动态路径**，中文注释/中文路径硬编码在 GBK 代码页 cmd 下必炸；`chcp 65001` 无法补救已发生的解析
 - ⚠️ 教训：**依赖补装要同步 requirements.txt**（上次只补了 venv 里的包，漏了文件声明，重装又踩）
 - 待办：用户真实 cmd 重新运行 `启动.bat`，确认 ① 无乱码命令报错 ② 日志 `using python: "...\.venv\Scripts\python.exe"` ③ 无 `langchain-openai 未安装` ④ 窗口出现
+
+## 2026-08-28 · 主窗口系统标题栏边框回归修复（§37.67）
+
+**任务**：用户实测启动成功（窗口出现、LLM 可用），但反馈"顶部有软件的边框，之前没有"——主窗口带系统标题栏，与上游 terax 的无边框沉浸式不符。
+
+**根因**：`7cb230d` 黑屏根因修复时，把 `tauri.windows.conf.json` / `tauri.linux.conf.json` 平台配置里的 `decorations:false + transparent:true` **一并删了**（平台配置按 label 合并覆盖主配置）。副作用 = Windows/Linux 主窗口回退原生边框（tauri.conf.json 只有 `titleBarStyle:Overlay + hiddenTitle:true`，这两字段仅 macOS 生效，Windows 上不隐藏系统标题栏）。上游 terax 两个平台配置：
+- `tauri.windows.conf.json`：`decorations:false + transparent:true + shadow:false`
+- `tauri.linux.conf.json`：`decorations:false + transparent:true`
+
+**解法**（commit `b29ff04`）：恢复 `decorations:false`（两个平台配置），**不恢复 transparent**——保留 backgroundColor #1a1a1a + 不透明，避免透明窗口黑屏回归（§37.23/37.24 血泪）。前端配套已就绪无需改：Header/TabBar 有 `data-tauri-drag-region`（拖拽）、`WindowControls` 自绘 min/max/close、capabilities 已有 start-dragging/close/minimize/maximize/toggle-maximize 权限。
+
+**验证**：JSON 语法解析通过；沙箱内无法跑 tauri:dev（WebView2 被拦），待用户实测无边框 + 拖拽 + 窗控。
+
+**复盘**：
+- ✅ 做对：对照上游逐文件比对，定位到平台配置被黑屏修复误删；保守恢复（只 decorations 不 transparent），不重蹈黑屏覆辙
+- ⚠️ 教训：**黑屏修复删"transparent 平台配置"时误伤 decorations:false**——窗口类改动要区分"透明"（黑屏根因）与"无边框"（观感需求）两个独立维度，删除前确认影响面
+- 待办：用户实测确认 ① 顶部无系统边框 ② 可拖动 ③ 右上角自绘窗控按钮可用（最小化/最大化/关闭）；若想要透明圆角观感（terax 原版），再评估 transparent 方案（需移除 backgroundColor 防冲突）
