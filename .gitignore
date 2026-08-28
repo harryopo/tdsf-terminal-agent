@@ -16,6 +16,12 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/Cargo.lock
 
+# carapace 二进制 (参数补全引擎, ~155MB 不入 git)
+# 恢复方式: scripts/fetch-carapace.ps1 (下载 + sha256 校验, 版本/哈希见 src-tauri/bin/CHECKSUMS.txt)
+src-tauri/bin/carapace.exe
+src-tauri/bin/carapace-linux-amd64
+target-test/
+
 # Logs
 logs/
 *.log

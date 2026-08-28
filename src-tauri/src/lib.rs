@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
+use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, param_complete, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -508,6 +508,10 @@ pub fn run() {
             ssh::credentials::ssh_credentials_list,
             ssh::credentials::ssh_credentials_delete,
             ssh::credentials::ssh_credentials_touch,
+            // TDSF 魔改: carapace 参数补全 (终端参数阶段动态候选, 失败/超时静默降级空候选)
+            param_complete::param_complete,
+            param_complete::carapace_linux_path,
+            param_complete::sftp_upload_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
