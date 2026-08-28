@@ -23,12 +23,22 @@ import {
   getLeafCwd,
   getLeafRemoteCwd,
   getLeafSshSession,
+  getCachedRemoteCommands,
   mergeCandidates,
   remoteCarapaceInstalled,
   remoteParamComplete,
   type CarapaceCandidate,
 } from '@/lib/param-complete-client';
+import {
+  COMMAND_ABBREVS,
+  findAbbrevSuggestions,
+} from '@/lib/command-abbrevs';
 import { getSuggestEngine, type SuggestionResult, type TerminalEnv } from '@/lib/suggest-engine';
+import {
+  isParamCandidateCommand,
+  tldrOptionZh,
+  tldrParamSuggestions,
+} from '@/lib/spec-data/tldr-params';
 import { getCommandSpec } from '@/lib/spec-data/loader';
 import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
 
@@ -212,12 +222,78 @@ export function getCompletionState(): CompletionState {
 let predictSeq = 0;
 
 /**
- * 参数模式候选加载（按环境分流，TDSF 2026-08-28）。
+ * 命令模式候选按远端命令全集过滤（二轮改进：根治假预测）。
+ * cmds 为 null（远端命令全集未拉到）→ 原样降级不过滤（无损）；
+ * history 来源豁免（历史是真实执行过的，远端没有也可能是容器/临时装过）。
+ */
+export function filterCommandItems(
+  items: readonly SuggestionResult[],
+  cmds: Set<string> | null,
+  limit = 5,
+): SuggestionResult[] {
+  if (!cmds) return items.slice(0, limit);
+  return items
+    .filter((it) => it.source === 'history' || cmds.has(it.command))
+    .slice(0, limit);
+}
+
+/**
+ * 命令预测 + 参数候选合并（尾部无空格触发用）：
+ * 命令模式结果优先，参数候选按 command 去重追加，最多再带 paramLimit 条
+ * （总上限 = 命令条数 + paramLimit，调用方命令侧已截 5 → 即"限 5+3"）。
+ */
+export function mergeCommandWithParamItems(
+  cmdItems: readonly SuggestionResult[],
+  paramItems: readonly SuggestionResult[],
+  paramLimit = 3,
+): SuggestionResult[] {
+  const seen = new Set(cmdItems.map((it) => it.command));
+  const out = [...cmdItems];
+  for (const it of paramItems) {
+    if (out.length >= cmdItems.length + paramLimit) break;
+    if (seen.has(it.command)) continue;
+    seen.add(it.command);
+    out.push(it);
+  }
+  return out;
+}
+
+/**
+ * 参数模式候选追加子命令缩写（二轮改进：ip a → address 等教学高频缩写）。
+ * 缩写排在 carapace/tldr/Fig specs 之后（真实数据优先），整体限 8。
+ */
+export function appendAbbrevItems(
+  items: readonly SuggestionResult[],
+  cmd: string,
+  prefix: string,
+): SuggestionResult[] {
+  if (items.length >= 8) return items.slice(0, 8);
+  const { current } = parseCommandLine(prefix);
+  const abbrevs = findAbbrevSuggestions(cmd, current);
+  if (abbrevs.length === 0) return items.slice(0, 8);
+  const seen = new Set(items.map((it) => it.command));
+  const out = [...items.slice(0, 8)];
+  for (const it of abbrevs) {
+    if (out.length >= 8) break;
+    if (seen.has(it.command)) continue;
+    seen.add(it.command);
+    out.push(it);
+  }
+  return out;
+}
+
+/**
+ * 参数模式候选加载（按环境分流 + 三源串联，TDSF 2026-08-28 二轮改进）。
  *
- * - windows（本地 pwsh）：invoke param_complete（Rust spawn 打包内 carapace.exe，
- *   命令由 param_complete.rs 提供）。失败（后端旧版本无此命令）→ 静默返回 []。
- * - linux（SSH）：远端 carapace 优先（远端真实环境的动态值：分支/文件/PID），
- *   远端未装或失败 → 回退 Fig specs 静态层（行为与历史版本一致）。
+ * - windows（本地 pwsh）：invoke param_complete（Rust spawn 打包内 carapace.exe），
+ *   结果与 tldr 参数候选合并（tldr 对 windows 命令查不到返回 []，无害）；
+ *   param_complete 不可用（后端旧版本/浏览器 dev）→ 降级 tldr 单源。
+ * - linux（SSH）：三源按优先级串联去重（限 8）：
+ *     1. 远端 carapace（远端真实环境的动态值：分支/文件/PID），
+ *        描述经 tldr 中文钩子中文化（MergeOptions.zhDescription 预留钩子在此接上）
+ *     2. tldr 选项级中文（ls/systemctl/grep/chmod 等基础命令的主力数据源——
+ *        carapace/Fig specs 都不覆盖这些命令，用户实测确认）
+ *     3. Fig specs 静态层回退（行为与历史版本一致）
  *
  * 过期结果由调用方 predictSeq 校验统一丢弃，本函数内部不再重复校验。
  */
@@ -240,34 +316,51 @@ async function loadParamPredictions(
         current,
         cwd: getLeafCwd(leafId),
       });
-      return mergeCandidates(candidates ?? [], []);
+      // tldr 作为 fallback 合并（按 value 去重，carapace 动态值优先）
+      return mergeCandidates(candidates ?? [], tldrParamSuggestions(cmd, current));
     } catch {
-      // 后端旧版本无 param_complete 命令 / 浏览器 dev 模式 → 静默降级为无预测
-      console.warn('[completion] param_complete unavailable, skip');
-      return [];
+      // 后端旧版本无 param_complete 命令 / 浏览器 dev 模式 → 静默降级，
+      // 仍给 tldr 候选（如 git/curl 等跨平台命令在 Windows 也有中文参数提示）
+      console.warn('[completion] param_complete unavailable, fallback to tldr');
+      return tldrParamSuggestions(cmd, current);
     }
   }
 
-  // ── linux（SSH）：远端 carapace 优先 ─────────────────────────────────────
+  // ── linux（SSH）：三源串联 ─────────────────────────────────────────────
   const sessionId = getLeafSshSession(leafId);
+  const merged: SuggestionResult[] = [];
+  const seen = new Set<string>();
+  const push = (items: readonly SuggestionResult[]) => {
+    for (const it of items) {
+      if (seen.has(it.command) || merged.length >= 8) continue;
+      seen.add(it.command);
+      merged.push(it);
+    }
+  };
+
+  // 源 1：远端 carapace（tokens 去掉命令名——carapace CLI 语义；
+  // remoteCwd：exec 通道默认在远端 home，git 分支会取错仓库 → cd 到跟踪目录）
   if (sessionId !== null && (await remoteCarapaceInstalled(sessionId))) {
-    // tokens 去掉命令名（carapace CLI 语义：completer 已单独作第一个位置参数）
-    // remoteCwd：exec 通道默认在远端 home，git 分支会取错仓库 → cd 到 OSC 7 跟踪目录
     const remote = await remoteParamComplete(
       sessionId,
       cmd,
       tokens.slice(1),
       current,
       getLeafRemoteCwd(leafId),
+      { zhDescription: (v) => tldrOptionZh(cmd, v) },
     );
-    if (remote !== null) return remote;
+    if (remote !== null) push(remote);
   }
 
-  // ── 回退：Fig specs 静态层（行为与历史版本一致）──────────────────────────
-  // 首次触发全量 spec 懒加载（~11MB 独立 chunk，本地读取百毫秒级）
-  const spec = await getCommandSpec(cmd);
-  if (!spec) return [];
-  return suggestParams(spec, prefix, 8);
+  // 源 2：tldr 选项级中文（键序稳定输出，高频示例在前）
+  push(tldrParamSuggestions(cmd, current));
+
+  // 源 3：Fig specs 静态层兜底（首次触发全量 spec 懒加载，~11MB 独立 chunk）
+  if (merged.length < 8) {
+    const spec = await getCommandSpec(cmd);
+    if (spec) push(suggestParams(spec, prefix, 8));
+  }
+  return merged;
 }
 
 async function updatePredictions(leafId: number): Promise<void> {
@@ -284,13 +377,16 @@ async function updatePredictions(leafId: number): Promise<void> {
     // TDSF 2026-08-28：移除 env === 'linux' 硬限制（spec: add-carapace-param-completion），
     // 按环境分流到本地 carapace（param_complete）/ 远端 carapace（ssh_command），
     // 失败统一回退 Fig specs 静态层（linux），Windows 无 spec 可回退则静默无预测。
+    // TDSF 2026-08-28(二)：loadParamPredictions 内部已串联 carapace→tldr→Fig specs
+    // 三源；此处再追加子命令缩写候选（ip a → address 等教学高频缩写）。
     const { cmd } = parseCommandLine(prefix);
     if (!cmd) {
       setState((s) => (s.visible ? { ...s, visible: false } : s));
       return;
     }
-    const items = await loadParamPredictions(leafId, env, cmd, prefix);
+    const loaded = await loadParamPredictions(leafId, env, cmd, prefix);
     if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
+    const items = appendAbbrevItems(loaded, cmd, prefix);
     if (items.length === 0) {
       setState((s) => (s.visible ? { ...s, visible: false } : s));
     } else {
@@ -307,20 +403,60 @@ async function updatePredictions(leafId: number): Promise<void> {
   }
 
   // ── 命令模式：history → 索引 startsWith → fuzzy（fish 三层，按环境分流）──
+  // TDSF 2026-08-28(二)：linux 环境先取 30 条，再按远端命令全集（compgen -c
+  // 预取缓存）过滤假候选后截 5——词典/fuzzy 层会弹远端根本没装的命令。
+  // 缓存未拉到（null）→ 降级不过滤，照旧取 5（无损）。
   const engine = getSuggestEngine();
-  const items = engine.getSuggestions(prefix, 5, env);
-  if (items.length === 0) {
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
-  } else {
+  const isLinux = env === 'linux';
+  let items = engine.getSuggestions(prefix, isLinux ? 30 : 5, env);
+  if (isLinux) {
+    const sessionId = getLeafSshSession(leafId);
+    const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+    items = filterCommandItems(items, cmds);
+  }
+
+  // P2 #13 的弹窗展示统一入口（光标像素坐标在按键后 xterm 已刷新）
+  const show = (list: readonly SuggestionResult[]) => {
     setState({
       visible: true,
-      items,
+      items: [...list],
       selectedIndex: 0,
       prefix,
       leafId,
-      // P2 #13: 记录光标像素坐标（按键后 xterm 已刷新光标位置）
       cursor: measureCursorPx(getTermFn, leafId),
     });
+  };
+
+  const token = prefix.trim();
+  let shown = false;
+  // 有命令候选先立即展示（参数加载是异步远端 exec，不能阻塞命令预测显示）
+  if (items.length > 0) {
+    show(items);
+    shown = true;
+  }
+
+  // 尾部无空格参数触发（用户实测：输完 `ls` 应立刻弹参数窗口，不用先敲空格）：
+  // 数据源判断含缩写表——ip 不在 tldr/Fig specs（实测确认），但缩写表有
+  // a=address 等教学高频子命令，输完 `ip` 同样要能弹出。
+  const hasParamSource =
+    isParamCandidateCommand(token) ||
+    Object.prototype.hasOwnProperty.call(COMMAND_ABBREVS, token);
+  if (hasParamSource) {
+    // 加尾空格使 buildParamRequest 的 current=''（全量参数候选）；
+    // 缩写候选在 appendAbbrevItems 内追加（与参数模式同一套合并逻辑）
+    const paramItems = await loadParamPredictions(leafId, env, token, prefix + ' ');
+    if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
+    const before = items.length;
+    items = mergeCommandWithParamItems(items, appendAbbrevItems(paramItems, token, prefix + ' '));
+    if (items.length > before) {
+      // 参数候选有新增 → 覆盖展示（命令候选在前，参数候选追加在后）
+      show(items);
+      shown = true;
+    }
+  }
+
+  if (!shown) {
+    setState((s) => (s.visible ? { ...s, visible: false } : s));
   }
 }
 
@@ -374,8 +510,9 @@ function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   writeFn(leafId, backspaces + entry.command);
   // 更新输入缓冲区为完整命令
   setInputBuffer(leafId, entry.command);
-  // 添加到历史
-  getSuggestEngine().addHistory(entry.command);
+  // 添加到历史（bug 修复 2026-08-28：原来漏传 env 恒写 linux 历史，
+  // 导致本地终端接受预测的命令混进 SSH 历史环境）
+  getSuggestEngine().addHistory(entry.command, getLeafEnvironment(leafId));
   setState((s) => ({ ...s, visible: false }));
 }
 
