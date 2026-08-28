@@ -4,13 +4,18 @@
 export const KEYRING_SERVICE = "tdsf";
 
 export type ProviderId =
+  // TDSF 魔改 2026-08-28: 国产 provider 提前（UI 下拉按数组序展示，国产优先）
+  | "deepseek"
+  | "qwen"
+  | "zhipu"
+  | "moonshot"
+  | "doubao"
   | "openai"
   | "anthropic"
   | "google"
   | "xai"
   | "cerebras"
   | "groq"
-  | "deepseek"
   | "mistral"
   | "openrouter"
   | "openai-compatible"
@@ -29,6 +34,45 @@ export type ProviderInfo = {
 };
 
 export const PROVIDERS: readonly ProviderInfo[] = [
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    keyringAccount: "deepseek-api-key",
+    keyPrefix: "sk-",
+    consoleUrl: "https://platform.deepseek.com/api_keys",
+  },
+  {
+    id: "qwen",
+    // TDSF 魔改 2026-08-28: 中文名展示（provider id 保留模型家族名 qwen，
+    // 端点即百炼 OpenAI 兼容层，见 PROVIDER_BASE_URLS.qwen）
+    label: "阿里百炼",
+    keyringAccount: "qwen-api-key",
+    keyPrefix: "sk-",
+    consoleUrl: "https://bailian.console.aliyun.com/?apiKey=1",
+  },
+  {
+    id: "zhipu",
+    // TDSF 魔改 2026-08-28: 智谱 key 无固定前缀（官方格式为 "id.secret"），
+    // keyPrefix 必须为 null——否则 ProviderKeyCard 的前缀校验会误拒真实 key
+    label: "智谱 GLM",
+    keyringAccount: "zhipu-api-key",
+    keyPrefix: null,
+    consoleUrl: "https://open.bigmodel.cn/usercenter/apikeys",
+  },
+  {
+    id: "moonshot",
+    label: "月之暗面 Kimi",
+    keyringAccount: "moonshot-api-key",
+    keyPrefix: "sk-",
+    consoleUrl: "https://platform.moonshot.cn/console/api-keys",
+  },
+  {
+    id: "doubao",
+    label: "Doubao (火山方舟)",
+    keyringAccount: "doubao-api-key",
+    keyPrefix: "sk-",
+    consoleUrl: "https://console.volcengine.com/ark/center/api",
+  },
   {
     id: "openai",
     label: "OpenAI",
@@ -70,13 +114,6 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     keyringAccount: "groq-api-key",
     keyPrefix: "gsk_",
     consoleUrl: "https://console.groq.com/keys",
-  },
-  {
-    id: "deepseek",
-    label: "DeepSeek",
-    keyringAccount: "deepseek-api-key",
-    keyPrefix: "sk-",
-    consoleUrl: "https://platform.deepseek.com/api_keys",
   },
   {
     id: "mistral",
@@ -249,7 +286,9 @@ export const MODELS = [
     provider: "openai",
     label: "GPT-5.4 mini",
     hint: "Fast",
-    description: "Snappy default at low cost.",
+    // TDSF 魔改 2026-08-28: 曾是全局默认，现默认已切 deepseek-v4-flash；
+    // 条目保留以兼容老用户已存偏好（loadPreferences 的 isKnownModelId 白名单）
+    description: "[legacy] Snappy default at low cost. Kept for backward compatibility with existing preferences.",
     capabilities: { intelligence: 4, speed: 4, cost: 4 },
     tags: ["vision", "tools"],
     supportsTemperature: false,
@@ -259,7 +298,8 @@ export const MODELS = [
     provider: "openai",
     label: "GPT-5.4 nano",
     hint: "Fastest",
-    description: "Tiny and instant — great for autocomplete.",
+    description:
+      "[legacy] Tiny and instant — great for autocomplete. Kept for backward compatibility with existing preferences.",
     capabilities: { intelligence: 3, speed: 5, cost: 5 },
     tags: ["tools"],
     supportsTemperature: false,
@@ -279,7 +319,8 @@ export const MODELS = [
     provider: "openai",
     label: "GPT-4.1 mini",
     hint: "Cheap",
-    description: "Ultra-cheap workhorse for bulk tasks.",
+    description:
+      "[legacy] Ultra-cheap workhorse for bulk tasks. Kept for backward compatibility with existing preferences.",
     capabilities: { intelligence: 3, speed: 4, cost: 5 },
     tags: ["vision", "tools"],
   },
@@ -397,7 +438,8 @@ export const MODELS = [
     provider: "google",
     label: "Gemini 2.5 Pro",
     hint: "Stable",
-    description: "Production-stable Gemini.",
+    description:
+      "[legacy] Production-stable Gemini. Kept for backward compatibility with existing preferences.",
     capabilities: { intelligence: 4, speed: 3, cost: 3 },
     tags: ["vision", "tools", "coding"],
   },
@@ -406,7 +448,8 @@ export const MODELS = [
     provider: "google",
     label: "Gemini 2.5 Flash",
     hint: "Cheap",
-    description: "Bulk throughput at low cost.",
+    description:
+      "[legacy] Bulk throughput at low cost. Kept for backward compatibility with existing preferences.",
     capabilities: { intelligence: 3, speed: 5, cost: 5 },
     tags: ["vision", "tools"],
   },
@@ -496,6 +539,115 @@ export const MODELS = [
     description: "Chain-of-thought at open-weight prices.",
     capabilities: { intelligence: 5, speed: 2, cost: 4 },
     tags: ["reasoning", "coding"],
+  },
+
+  // ── Qwen（阿里百炼，OpenAI 兼容端点） ─────────────────────────────────────
+  {
+    id: "qwen3.8-max",
+    provider: "qwen",
+    label: "Qwen 3.8 Max",
+    hint: "Flagship",
+    description: "Alibaba's flagship reasoning and agentic model.",
+    capabilities: { intelligence: 5, speed: 3, cost: 3 },
+    tags: ["reasoning", "tools", "coding"],
+  },
+  {
+    id: "qwen3.8-flash",
+    provider: "qwen",
+    label: "Qwen 3.8 Flash",
+    hint: "Fast",
+    description: "Fast, cheap everyday tier on Bailian.",
+    capabilities: { intelligence: 4, speed: 5, cost: 5 },
+    tags: ["reasoning", "tools"],
+  },
+  {
+    id: "qwen3.6-plus",
+    provider: "qwen",
+    label: "Qwen 3.6 Plus",
+    hint: "1M ctx",
+    description: "Balanced model with 1M-token context window.",
+    capabilities: { intelligence: 4, speed: 4, cost: 4 },
+    tags: ["reasoning", "tools", "coding"],
+  },
+
+  // ── Zhipu（智谱 GLM，OpenAI 兼容端点） ────────────────────────────────────
+  // TDSF 魔改 2026-08-28: 新增 GLM-5.3 家族（2026-08 快照，规格/定价以官网为准）
+  {
+    id: "glm-5.3",
+    provider: "zhipu",
+    label: "GLM-5.3",
+    hint: "Flagship",
+    description: "智谱 743B 开源旗舰，200K 上下文，推理与代码能力强。",
+    capabilities: { intelligence: 5, speed: 3, cost: 4 },
+    tags: ["reasoning", "tools", "coding"],
+  },
+  {
+    id: "glm-5.3-flash",
+    provider: "zhipu",
+    label: "GLM-5.3 Flash",
+    hint: "Fast",
+    description: "快速开源档，定价约为 GLM-5.3 的 1/10，适合高频日常对话。",
+    capabilities: { intelligence: 4, speed: 5, cost: 5 },
+    tags: ["reasoning", "tools"],
+  },
+  {
+    id: "glm-5.1",
+    provider: "zhipu",
+    label: "GLM-5.1",
+    hint: "Flagship",
+    description: "Zhipu's flagship GLM with strong coding ability.",
+    capabilities: { intelligence: 5, speed: 3, cost: 4 },
+    tags: ["reasoning", "tools", "coding"],
+  },
+  {
+    id: "glm-5.2",
+    provider: "zhipu",
+    label: "GLM-5.2",
+    hint: "New",
+    description: "Newer GLM generation, balanced speed and intelligence.",
+    capabilities: { intelligence: 5, speed: 4, cost: 4 },
+    tags: ["reasoning", "tools", "coding"],
+  },
+
+  // ── Moonshot（Kimi，OpenAI 兼容端点） ─────────────────────────────────────
+  // TDSF 魔改 2026-08-28: 新增 Kimi K3（2026-08 快照，规格/定价以官网为准）
+  {
+    id: "kimi-k3",
+    provider: "moonshot",
+    label: "Kimi K3",
+    hint: "Flagship",
+    description: "月之暗面 1T MoE（32B 激活）开源旗舰，长文本与 Agent 能力强。",
+    capabilities: { intelligence: 5, speed: 3, cost: 4 },
+    tags: ["reasoning", "tools", "coding"],
+  },
+  {
+    id: "kimi-k2.6",
+    provider: "moonshot",
+    label: "Kimi K2.6",
+    hint: "Best",
+    description: "Moonshot's open-weight agentic model.",
+    capabilities: { intelligence: 5, speed: 3, cost: 4 },
+    tags: ["tools", "coding"],
+  },
+  {
+    id: "kimi-k2.7-code",
+    provider: "moonshot",
+    label: "Kimi K2.7 Code",
+    hint: "Coding",
+    description: "Coding-specialized Kimi for developer workflows.",
+    capabilities: { intelligence: 4, speed: 4, cost: 4 },
+    tags: ["tools", "coding"],
+  },
+
+  // ── Doubao（火山方舟，OpenAI 兼容端点） ───────────────────────────────────
+  {
+    id: "doubao-seed-2-1-pro-260628",
+    provider: "doubao",
+    label: "Doubao Seed 2.1 Pro",
+    hint: "Pro",
+    description: "ByteDance Seed flagship on Volcengine Ark.",
+    capabilities: { intelligence: 5, speed: 4, cost: 3 },
+    tags: ["tools", "coding"],
   },
 
   // ── Mistral ────────────────────────────────────────────────────────────────
@@ -717,7 +869,40 @@ export function modelUsesReasoningTokens(
   );
 }
 
-export const DEFAULT_MODEL_ID: ModelId = "gpt-5.4-mini";
+// TDSF 魔改 2026-08-28: 默认对话模型国产化（DeepSeek V4 Flash——用户已配 key，
+// 性价比主力；便宜快速，覆盖日常对话/教学场景）
+export const DEFAULT_MODEL_ID: ModelId = "deepseek-v4-flash";
+
+/**
+ * 云端 provider 的固定 OpenAI 兼容端点（单一真源）。
+ *
+ * 用途：
+ *   1. sidecar-config-sync.ts 把前端模型配置映射为 sidecar LLM 配置时取 base_url
+ *   2. agent.ts 的 buildLanguageModel 为新增国产 provider 构造 @ai-sdk/openai-compatible
+ *
+ * 注意：
+ *   - deepseek 与 agent.ts 既有实现一致，不带 /v1（DeepSeek 服务端同时支持）
+ *   - google 是 Gemini 官方 OpenAI 兼容层（/v1beta/openai/），供 sidecar
+ *     （LangChain ChatOpenAI）以 OpenAI 协议调用 Gemini；前端 AI SDK 路径
+ *     仍走 @ai-sdk/google 专属实现，不受此表影响
+ *   - anthropic 走 sidecar 原生分支，无需 base_url，故不出现在此表
+ *   - 本地 provider（lmstudio/mlx/ollama）端点用户可改，见 *_DEFAULT_BASE_URL
+ */
+export const PROVIDER_BASE_URLS: Partial<Record<ProviderId, string>> = {
+  openai: "https://api.openai.com/v1",
+  google: "https://generativelanguage.googleapis.com/v1beta/openai/",
+  xai: "https://api.x.ai/v1",
+  cerebras: "https://api.cerebras.ai/v1",
+  groq: "https://api.groq.com/openai/v1",
+  deepseek: "https://api.deepseek.com",
+  mistral: "https://api.mistral.ai/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  // TDSF 魔改 2026-08-28: 国产 provider（阿里百炼/智谱/Kimi/火山方舟）
+  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  zhipu: "https://open.bigmodel.cn/api/paas/v4",
+  moonshot: "https://api.moonshot.cn/v1",
+  doubao: "https://ark.cn-beijing.volces.com/api/v3",
+};
 
 /** Approximate context window (in tokens) per model. Used for the
  *  context-usage indicator in the AI mini-window header. Conservative
@@ -754,6 +939,20 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "deepseek-v4-pro": 1_000_000,
   "deepseek-v4-flash": 1_000_000,
   "deepseek-reasoner": 128_000,
+  // TDSF 魔改 2026-08-28: 国产 provider 上下文窗口（2026-08 官方公开值；
+  // 官网未逐一复核的条目给保守值，以官网为准）
+  "qwen3.8-max": 262_144,
+  "qwen3.8-flash": 262_144,
+  "qwen3.6-plus": 1_000_000,
+  "glm-5.3": 200_000,
+  "glm-5.3-flash": 200_000,
+  "glm-5.1": 200_000,
+  "glm-5.2": 200_000,
+  // Kimi K3 官网未确认精确窗口，取保守值（以官网为准）
+  "kimi-k3": 256_000,
+  "kimi-k2.6": 262_144,
+  "kimi-k2.7-code": 262_144,
+  "doubao-seed-2-1-pro-260628": 256_000,
   "gpt-oss-120b": 128_000,
   "llama3.3-70b": 128_000,
   "qwen-3-32b": 32_000,
@@ -819,6 +1018,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "deepseek-v4-pro": { input: 0.28, output: 1.1, cacheRead: 0.028 },
   "deepseek-v4-flash": { input: 0.07, output: 0.27, cacheRead: 0.007 },
   "deepseek-reasoner": { input: 0.55, output: 2.19, cacheRead: 0.14 },
+  // TDSF 魔改 2026-08-28: 国产模型定价（USD / 百万 tokens，
+  // 2026-08 快照——qwen3.8-flash 按 ¥1/¥3 折算，以官网为准）
+  "glm-5.3": { input: 1.2, output: 4.2 },
+  "glm-5.3-flash": { input: 0.12, output: 0.5 },
+  "qwen3.8-flash": { input: 0.14, output: 0.42 },
+  "kimi-k3": { input: 0.6, output: 2.5 },
 };
 
 export function estimateCost(
@@ -866,18 +1071,32 @@ export function providerSupportsKey(id: ProviderId): boolean {
  *  user's choice. The picker filters down to fast tiers in the UI. */
 export type AutocompleteProviderId = ProviderId;
 
-/** Sensible default model id per provider for inline autocomplete. */
+/** Sensible default model id per provider for inline autocomplete.
+ *
+ * TDSF 魔改 2026-08-28: 补充国产 provider 的 per-provider 默认（补全对延迟
+ * 极敏感，优先选各家快档/代码档）；openai 从 legacy nano 升为 GPT-5.6 Luna。
+ * 全局默认补全 provider 仍是 cerebras/gpt-oss-120b
+ * （DEFAULT_PREFERENCES.autocompleteProvider），保持不动。 */
 export const DEFAULT_AUTOCOMPLETE_MODEL: Partial<Record<ProviderId, string>> = {
   cerebras: "gpt-oss-120b",
   groq: "openai/gpt-oss-20b",
   lmstudio: "qwen2.5-coder-7b-instruct",
-  openai: "gpt-5.4-nano",
+  // TDSF 魔改 2026-08-28: openai 默认从 legacy gpt-5.4-nano 升为 GPT-5.6 Luna
+  // （快档，speed 5）；nano 条目仍保留可选
+  openai: "gpt-5.6-luna",
   anthropic: "claude-haiku-4-5",
   google: "gemini-2.5-flash",
   xai: "grok-4.3",
   deepseek: "deepseek-v4-flash",
   openrouter: "openai/gpt-5.4-mini",
   "openai-compatible": "",
+  // TDSF 魔改 2026-08-28: 国产 provider 快档（对齐 2026-08 目录新条目）
+  qwen: "qwen3.8-flash",
+  zhipu: "glm-5.3-flash",
+  moonshot: "kimi-k3",
+  doubao: "doubao-seed-2-1-pro-260628",
+  // Ollama 本地补全默认 qwen3:8b（模型 id 运行时自填，此处仅是预填建议）
+  ollama: "qwen3:8b",
 };
 
 /** Curated list of fast models suitable for inline completion (speed ≥ 4). */
@@ -895,7 +1114,10 @@ export const STT_PROVIDER_LABELS: Record<SttProvider, string> = {
   whispercpp: "Whisper.cpp (local)",
 };
 
-export const DEFAULT_STT_PROVIDER: SttProvider = "openai";
+// TDSF 魔改 2026-08-28: 语音输入本地优先——默认走本机 whisper.cpp（离线教学
+// 场景可用、音频不出本机）；whispercpp URL 仍强制 loopback，隐私红线保留。
+// 老用户已存的 sttProvider 偏好不受影响（?? 读取路径）。
+export const DEFAULT_STT_PROVIDER: SttProvider = "whispercpp";
 export const WHISPERCPP_DEFAULT_BASE_URL = "http://127.0.0.1:8080";
 export const LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1";
 export const MLX_DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1";
@@ -980,6 +1202,8 @@ const LITE_SYSTEM_PROMPT_MODEL_IDS = new Set<string>([
   "gemini-2.5-flash",
   "gemini-3-flash-preview",
   "deepseek-v4-flash",
+  // TDSF 魔改 2026-08-28: 国产快档模型也走 lite prompt（省 token、降延迟）
+  "qwen3.8-flash",
   "gpt-oss-120b",
   "openai/gpt-oss-20b",
   "llama3.3-70b",

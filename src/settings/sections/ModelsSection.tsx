@@ -45,6 +45,8 @@ import {
   setCustomEndpointKey,
   setKey,
 } from "@/modules/ai/lib/keyring";
+// TDSF 魔改 2026-08-28: 配置变更后同步 sidecar LLM 配置（agent.configure）
+import { scheduleSidecarConfigSync } from "@/modules/ai/lib/sidecar-config-sync";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
@@ -123,7 +125,9 @@ const LOCAL_META: Partial<Record<ProviderId, LocalMeta>> = {
   ollama: {
     urlPlaceholder: "http://localhost:11434/v1",
     modelPlaceholder: "qwen2.5-coder:7b",
-    description: "通过 Ollama 内置的 OpenAI 兼容 API 运行本地模型。",
+    // TDSF 魔改 2026-08-28: 补充国产化推荐模型与拉取命令（教学一体机内存 8GB 可跑）
+    description:
+      "通过 Ollama 内置的 OpenAI 兼容 API 运行本地模型。推荐模型 qwen3:8b（8GB 内存可跑）/ deepseek-r1:8b — 装好 Ollama 后在终端执行 ollama pull qwen3:8b 即可下载。",
     modelHint: <>`ollama list` / `ollama pull` 中显示的模型名称。</>,
   },
   "openai-compatible": {
@@ -177,24 +181,29 @@ export function ModelsSection() {
     await setKey(provider, value);
     setKeys((prev) => (prev ? { ...prev, [provider]: value } : prev));
     await emitKeysChanged();
+    // TDSF 魔改 2026-08-28: key 变更直接影响 sidecar 可用性，防连击同步
+    scheduleSidecarConfigSync();
   };
 
   const onClearKey = async (provider: ProviderId) => {
     await clearKey(provider);
     setKeys((prev) => (prev ? { ...prev, [provider]: null } : prev));
     await emitKeysChanged();
+    scheduleSidecarConfigSync();
   };
 
   const onSaveEndpointKey = async (endpointId: string, value: string) => {
     await setCustomEndpointKey(endpointId, value);
     setEpKeys((prev) => ({ ...prev, [endpointId]: value }));
     await emitKeysChanged();
+    scheduleSidecarConfigSync();
   };
 
   const onClearEndpointKey = async (endpointId: string) => {
     await clearCustomEndpointKey(endpointId);
     setEpKeys((prev) => ({ ...prev, [endpointId]: null }));
     await emitKeysChanged();
+    scheduleSidecarConfigSync();
   };
 
   const addCustomEndpoint = async () => {
@@ -215,6 +224,9 @@ export function ModelsSection() {
     await setCustomEndpoints(
       customEndpoints.map((e) => (e.id === id ? { ...e, ...patch } : e)),
     );
+    // TDSF 魔改 2026-08-28: endpoint 字段（baseURL/modelId）可能被当前选中
+    // 的 compat 模型引用，变更后防连击同步
+    scheduleSidecarConfigSync();
   };
 
   const removeCustomEndpoint = async (id: string) => {
@@ -252,6 +264,8 @@ export function ModelsSection() {
     }
 
     await setCustomEndpoints(remaining);
+    // TDSF 魔改 2026-08-28: 删除 endpoint 可能触发选中模型回退，同步 sidecar
+    scheduleSidecarConfigSync();
   };
 
   const localConfig = (id: ProviderId): LocalConfig | null => {
@@ -609,7 +623,11 @@ function DefaultModelPicker({
                 {models.map((mod) => (
                   <DropdownMenuItem
                     key={mod.id}
-                    onSelect={() => void setDefaultModel(mod.id as ModelId)}
+                    onSelect={() => {
+                      void setDefaultModel(mod.id as ModelId);
+                      // TDSF 魔改 2026-08-28: 对话模型切换后同步 sidecar LLM 配置
+                      scheduleSidecarConfigSync();
+                    }}
                     className={cn(
                       "flex items-start gap-2 text-[12px]",
                       mod.id === defaultModel && "bg-accent/50",
@@ -789,6 +807,10 @@ function AutocompleteRow({
           </DropdownMenu>
         </div>
       </FieldRow>
+      {/* TDSF 魔改 2026-08-28: 说明补全模型用途，避免与终端命令预测混淆 */}
+      <p className="pl-19 text-[10.5px] leading-relaxed text-muted-foreground">
+        用于编辑器行内代码补全的快速模型（与终端命令预测无关）。
+      </p>
       {enabled ? (
         <FieldRow label="触发方式">
           <Select
@@ -1321,12 +1343,24 @@ function VoiceBlock() {
   useEffect(() => setUrlDraft(whispercppBaseURL), [whispercppBaseURL]);
   useEffect(() => setGroqModelDraft(groqSttModel), [groqSttModel]);
 
+  // TDSF 魔改 2026-08-28: 选项文案区分本地/云端（标签真源仍在 config.ts，
+  // 此处按部署形态拼接后缀）
+  const sttLabel = (p: SttProvider) =>
+    p === "whispercpp"
+      ? `${STT_PROVIDER_LABELS[p]}（本地离线，推荐）`
+      : `${STT_PROVIDER_LABELS[p]}（云端）`;
+
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card/60 px-3 py-2.5">
       <div className="flex items-center gap-2">
         <HugeiconsIcon icon={Mic01Icon} size={15} strokeWidth={1.5} />
         <span className="text-[12.5px] font-medium">语音输入</span>
       </div>
+
+      {/* TDSF 魔改 2026-08-28: 顶部说明——本地 whisper.cpp 免 Key 可离线 */}
+      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+        本地 whisper.cpp 无需 API Key，配置 server 后即可离线转写。
+      </p>
 
       <FieldRow label="提供商">
         <DropdownMenu>
@@ -1335,7 +1369,7 @@ function VoiceBlock() {
               variant="outline"
               className="h-8 flex-1 justify-between gap-2 px-2.5 text-[11.5px]"
             >
-              <span>{STT_PROVIDER_LABELS[sttProvider]}</span>
+              <span>{sttLabel(sttProvider)}</span>
               <HugeiconsIcon
                 icon={ArrowDown01Icon}
                 size={11}
@@ -1354,7 +1388,7 @@ function VoiceBlock() {
                   p === sttProvider && "bg-accent/50",
                 )}
               >
-                <span>{STT_PROVIDER_LABELS[p]}</span>
+                <span>{sttLabel(p)}</span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -1390,6 +1424,16 @@ function VoiceBlock() {
 
       {sttProvider === "whispercpp" && (
         <div className="flex flex-col gap-2.5">
+          <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+            whisper.cpp 完全本地运行：录音不会离开你的电脑。启动方式：编译产物{" "}
+            <span className="font-mono">whisper-server</span>
+            （Windows 为 <span className="font-mono">server.exe</span>）加载 ggml
+            模型，例如：
+            <span className="mt-1 block rounded bg-muted/40 px-2 py-1 font-mono text-[10.5px]">
+              whisper-server -m ggml-large-v3-turbo-q5_0.bin --port 8080
+            </span>
+            模型文件从 whisper.cpp GitHub releases 下载。服务未启动时语音按钮会提示失败，属预期。
+          </p>
           <FieldRow label="基础 URL">
             <Input
               value={urlDraft}
