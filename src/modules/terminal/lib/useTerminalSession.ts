@@ -32,6 +32,7 @@ import {
   registerPromptTracker,
 } from "./osc-handlers";
 import { openPty, type TerminalTransport } from "./pty-bridge";
+import { clearLeafEnvironment, setLeafEnvironment } from "./completionInjection";
 import "../block/block.css";
 import { ensureAgentActivityListener, isAgentActivePty } from "./agentActivity";
 import {
@@ -1117,6 +1118,9 @@ export function useTerminalSession({
     // 不放进 deps，防止每次 render 重订阅 effect。
     s.openTransport = openTransportRef.current;
     s.remote = remoteRef.current;
+    // TDSF 2026-08-28: 命令预测按环境分流——本地终端预测 Windows 命令，
+    // SSH 终端预测 Linux 命令（远程 remote=true → linux 命令集）。
+    setLeafEnvironment(leafId, s.remote ? "linux" : "windows");
     s.ready.then(() => {
       if (cancelled || s.disposed) return;
       const node = container.current;
@@ -1130,6 +1134,7 @@ export function useTerminalSession({
     });
     return () => {
       cancelled = true;
+      clearLeafEnvironment(leafId);
       detachSession(leafId);
     };
   }, [leafId, container, blocks]);
