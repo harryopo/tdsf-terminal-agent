@@ -129,17 +129,19 @@ class TestNeedsYouType:
 class TestNeedsYouStatus:
     """NeedsYouStatus 枚举测试"""
 
-    def test_six_statuses_defined(self):
-        """6 个状态：pending / approved / rejected / resolved / timeout / cancelled"""
+    def test_eight_statuses_defined(self):
+        """8 个状态：pending / approved / rejected / resolved / timeout / edited / responded / cancelled"""
         assert NeedsYouStatus.PENDING.value == "pending"
         assert NeedsYouStatus.APPROVED.value == "approved"
         assert NeedsYouStatus.REJECTED.value == "rejected"
         assert NeedsYouStatus.RESOLVED.value == "resolved"
         assert NeedsYouStatus.TIMEOUT.value == "timeout"
+        assert NeedsYouStatus.EDITED.value == "edited"
+        assert NeedsYouStatus.RESPONDED.value == "responded"
         assert NeedsYouStatus.CANCELLED.value == "cancelled"
 
     def test_total_count(self):
-        assert len(list(NeedsYouStatus)) == 6
+        assert len(list(NeedsYouStatus)) == 8
 
 
 class TestNeedsYouPriority:
