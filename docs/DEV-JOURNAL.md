@@ -1696,3 +1696,20 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ 先盘点后定方案避免了一次"重复添加 gpt-5.6-sol"的浪费（已存在）；✅ 双侧 baseURL（前端 PROVIDER_BASE_URLS + Python PROVIDER_DEFAULT_BASE_URLS）需同步——单侧改会造成 dev 正常 sidecar 失败的分裂；⚠️ Strands 路径 base_url 为空时不回退官方端点（回退仅在 LangGraph 路径生效）——前端预填 baseURL 的正常流程无影响，环境变量纯 provider 用法受影响，遗留记录。
 
 **待实测**（T6）：设置页默认显示 DeepSeek + whisper.cpp 本地；智谱 key 对话通；Ollama qwen3:8b 对话通。**下一步**：回归 agent 模块规划（B1 安全基座 → 真实 LLM 委派实测 → B2 交互升级）+ 预测第二轮历史 OSC。
+
+## §37.76 语音输入整体移除 + 自动补全默认改 DeepSeek（2026-08-28 ✅ commit 6205311）
+
+**任务目标**（用户三连问）：① 自动补全模型用 DeepSeek 行不行（且明确其作用域=仅编辑器内联代码补全）；② 添加供应商时 DeepSeek 选项"消失"；③ 砍掉语音输入相关功能设置；④ 核查两个并行会话做 AI 配置是否有冲突。
+
+**方案与实施**：
+- **语音移除**（-625 行）：删 `useWhisperRecording.ts` + `stt.ts` 两个文件；`composer.tsx` 去 voice hook、`AiStatusBarControls.tsx` 去麦克风按钮、`AiComposerInput.tsx` 去转录状态行、`ModelsSection.tsx` 去 VoiceBlock 整块；`store.ts` Preferences 去 `sttProvider/groqSttModel/whispercppBaseURL` 三字段（类型+默认值+loadPreferences 读取+3 个 setter+迁移映射）；`config.ts` 去 `SttProvider` 类型 + `STT_PROVIDER_LABELS` + `DEFAULT_STT_PROVIDER` + `WHISPERCPP_DEFAULT_BASE_URL`；同步删两处 STT 测试（preferences.test sttProvider 迁移块 / config.test STT 默认值）。
+- **补全默认改 DeepSeek**：`store.ts` `autocompleteProvider: "cerebras" → "deepseek"`，`autocompleteModelId` 同步取 `DEFAULT_AUTOCOMPLETE_MODEL.deepseek`（=deepseek-v4-flash）；`config.ts` 注释更新说明。调用链验证：`editor/lib/autocomplete/provider.ts → buildLanguageModel → agent.ts case "deepseek"` 实测存在，无需新代码。
+- **DeepSeek"消失"解释**：已配置过 key 的 provider 不再出现在"添加供应商"菜单，改在已配置区展示——非 bug。
+
+**报错与修改**：无。全量门禁一次过（vitest 1122 全过；SnippetsPanel 弹窗测试全量跑偶发超时，单跑 6/6 过 = 既有 flaky，与本次改动无关）。
+
+**冲突核查结论**：两个会话（国产化 spec + 本次）无冲突——本次是其收尾延续：语音从"默认 whispercpp 本地"升级为"整体移除"，补全从"说明文案澄清作用域"升级为"默认 provider 改 DeepSeek"。spec checklist 的 STT 条目语义已被本次取代。
+
+**复盘**：✅ 删功能按调用链正删（类型→默认值→读取→setter→迁移→UI→测试→注释），grep 收口后 typecheck 一次过；⚠️ 老用户本地已存 `autocompleteProvider: cerebras` 的偏好不受默认值影响（预期行为），需在设置页手动切 DeepSeek；⚠️ 遗留文档漂移：dev-state 头部引用的 §37.73-75 交接章正文在 DEV-JOURNAL，dev-state 正文缺同号章节（历史会话只更新了头部）。
+
+**待用户实测**：① 设置页自动补全区显示 DeepSeek + deepseek-v4-flash（若仍显示 Cerebras 属本地旧偏好，手动切换即可）；② 编辑器打字触发内联补全走 DeepSeek（需配 DeepSeek key）；③ AI 面板/状态栏无麦克风按钮、设置页无语音区。
