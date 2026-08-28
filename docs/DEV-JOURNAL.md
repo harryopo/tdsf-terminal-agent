@@ -1551,3 +1551,20 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ 做对：先自检读全链路（completionInjection → suggest-engine → spec-index → rendererPool → useTerminalSession）定位四个根因，再调研数据源（tldr zh 实测可达才写生成器），不盲目手编 700 命令
 - ⚠️ 教训：**"终端无关"的预测引擎在多环境终端产品里是设计缺陷**——数据源、历史、参数模式三个维度都要随环境走
 - 待办：用户实测本地终端输 `get-c`（应弹 Get-ChildItem 等）与 SSH 输 `lsb`（应弹 lsblk 中文描述）；tldr zh 数据可定期重跑生成器更新
+
+## 2026-08-28 · 别名命令预测 + fuzzy 首字符约束（§37.69 续）
+
+**任务**：用户实测再反馈：输入 `ll` 预测第一条是 `ollama`（Linux 服务器没有），且 `ll`/`la` 这类缩写别名命令不显示、无解释。
+
+**根因**：
+1. `ll`/`la` 是 shell 别名，**不在 Fig specs 数据源** → 精确匹配层空 → fuzzy 兜底弹出弱子序列 `ollama`（l-l 巧合命中）
+2. 手编词典里的 ll/la **只被当翻译映射用**，从未并入预测命令集（构造器只 map SPEC_INDEX）
+3. fuzzysort 允许首字符不一致的纯子序列命中（ollama[0]='o' ≠ 'l'）→ 噪音
+
+**修复**（suggest-engine.ts）：
+1. 手编词典命令**并入 linux 预测集**（SPEC_INDEX 之外的追加，如 ll/la/l/便于教学的别名），zh 随词典
+2. fuzzy 加**首字符一致约束**（实测 fuzzysort score 语义 0~1 越高越好；ollama@ll=0.703 过阈值 0.6 但被首字符过滤挡住）；threshold 定 0.6（实测 0.4 无增益：gap 过大的弱子序列如 pp→pip 分数 <0.4 本就该拒）
+
+**测试**：completionInjection.test 重写用户场景断言——输入 `ll`：items[0] = ll（dictionary 来源，含"详细列表（别名）"解释）+ 全列表无 ollama；门禁 tsc/lint/vitest 目标 25 测试全过。
+
+**复盘**：✅ 数据源"翻译用途"与"预测用途"要显式分离检查——词典命令没进预测集是典型的"字段复用掩盖了集合缺口"。fuzzy 参数不实测分数语义就调是瞎调（threshold 注释与实际语义不符，实测才确认 0~1 越高越好）。
