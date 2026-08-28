@@ -90,11 +90,19 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         registry = get_global_registry()
         result = registry.invoke(skill_name, invoke_params)
     except KeyError as e:
-        # skill 不存在
+        # skill 不存在 → 附带当前可用技能名列表，方便 LLM 自纠正重试
+        try:
+            from skills.registry import get_global_registry as _ggr
+            available: list[str] = [s.name for s in _ggr().list()]
+        except Exception as e_list:
+            # 降级显式注释（AI 代码质量红线 4）：目录不可用时不阻塞 not_found 返回
+            logger.debug(f"list available skills failed: {e_list}")
+            available = []
         result = {
             "status": "not_found",
             "skill_name": skill_name,
             "message": f"skill not found: {skill_name}",
+            "available_skills": available,
             "error": str(e),
         }
         logger.warning(f"skill_invoke not found: name={skill_name}")
@@ -172,7 +180,11 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             "steps": result.get("steps", []),
             "examples": result.get("examples", []),
             "params_schema": result.get("params", {}),
+            # TDSF 魔改 (T1 2026-08-28): 贯通 tags / triggers / allowed-tools
+            # allowed_tools 语义：该技能建议配合使用的工具白名单（空 = 不限制）
             "tags": result.get("tags", []),
+            "triggers": result.get("triggers", []),
+            "allowed_tools": result.get("allowed_tools", []),
         }
 
     # 推送 tool_call 完成事件
@@ -196,6 +208,30 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 # Strands @tool 工厂（带 ctx 闭包）
 # ============================================================================
 
+def _build_skill_catalog() -> str:
+    """运行时生成技能目录文本（T1 2026-08-28）
+
+    从 SkillRegistry 动态拉取全部已注册 Skill 的 name + description，
+    替代此前硬编码的 5 个技能名——用户新增技能包（builtin 或
+    ~/.tdsf/skills/）后 LLM 无需改代码即可感知。
+
+    Returns:
+        多行文本，每行 `- <name>: <description>`；异常时降级为提示文本
+    """
+    try:
+        from skills.registry import get_global_registry
+        registry = get_global_registry()
+        lines: list[str] = []
+        for s in registry.list():
+            desc = (s.description or "").strip()
+            lines.append(f"- {s.name}: {desc}" if desc else f"- {s.name}")
+        return "\n".join(lines) if lines else "- (no skills registered)"
+    except Exception as e:
+        # 降级显式注释（AI 代码质量红线 4）：目录不可用时工具仍可调用
+        logger.warning(f"build skill catalog failed, fallback: {e}")
+        return "- (skill catalog unavailable, call by exact name)"
+
+
 def make_skill_invoke_tool(ctx: ToolContext):
     """构建 Skill 调用工具（带 ctx 闭包）
 
@@ -205,19 +241,13 @@ def make_skill_invoke_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数（Strands 不可用时为 passthrough 装饰）
     """
-    @tool
-    def skill_invoke(
-        skill_name: str,
-        input: str = "",
-    ) -> dict:
-        """调用已注册的 Skill，获取领域知识或执行特定任务。
+    # T1 2026-08-28: Strands 在 @tool 装饰时读取 __doc__ 生成工具 schema，
+    # 因此必须先构造动态 docstring 再装饰（保证新增技能对 LLM 可见）
+    catalog = _build_skill_catalog()
+    dynamic_doc = f"""调用已注册的 Skill，获取领域知识或执行特定任务。
 
         可用 Skill 包括：
-        - linux-ops: Linux 运维基础知识（文件权限/进程管理/服务管理等）
-        - docker-management: Docker 容器管理（镜像/容器/网络/数据卷）
-        - selinux-baseline: SELinux 安全基线配置
-        - ssh-troubleshoot: SSH 排障指南（连接失败/认证问题/配置错误）
-        - python-debug: Python 调试技巧（pdb/logging/异常处理）
+        {catalog}
 
         Skill 行为：
         - 知识卡模式：返回 SKILL.md 内容作为参考（content/steps/examples）
@@ -230,14 +260,19 @@ def make_skill_invoke_tool(ctx: ToolContext):
 
         Args:
             skill_name (str): Skill 名称（大小写不敏感，如 "linux-ops" / "docker-management"）。
-            input (str): 调用参数，透传给 skill executor（部分 type 支持 ${input} 替换，可选）。
+            input (str): 调用参数，透传给 skill executor（部分 type 支持 ${{input}} 替换，可选）。
 
         Returns:
             dict: 结构化结果，含 status / skill_name / skill_source / content 等字段。
                 status 取值: success | not_found | error
-                知识卡模式额外字段: content / when_to_use / steps / examples
+                知识卡模式额外字段: content / when_to_use / steps / examples / tags / triggers / allowed_tools
                 executor 模式额外字段: stdout / stderr / exit_code / success
         """
+
+    def skill_invoke(
+        skill_name: str,
+        input: str = "",
+    ) -> dict:
         return invoke_skill_tool(
             params={
                 "skill_name": skill_name,
@@ -246,9 +281,10 @@ def make_skill_invoke_tool(ctx: ToolContext):
             ctx=ctx,
         )
 
-    # Strands 从 __name__ 提取工具名，保持原名
+    # Strands 从 __name__ 提取工具名、从 __doc__ 提取描述与参数说明
     skill_invoke.__name__ = "skill_invoke"
-    return skill_invoke
+    skill_invoke.__doc__ = dynamic_doc
+    return tool(skill_invoke)
 
 
 __all__ = [

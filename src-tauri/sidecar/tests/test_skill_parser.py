@@ -434,6 +434,112 @@ author: '单引号作者'
         assert "带引号的描述" in skill.description
         assert "单引号作者" in skill.author
 
+    def test_parse_skill_triggers_inline(self):
+        """T1 (2026-08-28): triggers 内联数组解析"""
+        content: str = """---
+name: trigger-test
+description: 触发词测试
+triggers: [systemd, 服务启动失败, journalctl]
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.triggers == ["systemd", "服务启动失败", "journalctl"]
+
+    def test_parse_skill_triggers_multiline(self):
+        """T1: triggers 多行数组解析"""
+        content: str = """---
+name: trigger-multiline
+description: 触发词多行测试
+triggers:
+  - samba
+  - smb.conf
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.triggers == ["samba", "smb.conf"]
+
+    def test_parse_skill_triggers_missing(self):
+        """T1: 无 triggers 字段时为空列表（不参与触发匹配）"""
+        content: str = """---
+name: no-triggers
+description: 无触发词
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.triggers == []
+
+    def test_parse_skill_allowed_tools_inline(self):
+        """T1: allowed-tools 内联数组解析（横线连字符 frontmatter 键）"""
+        content: str = """---
+name: tools-test
+description: 工具白名单测试
+allowed-tools: [ssh_command, read_remote_file]
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.allowed_tools == ["ssh_command", "read_remote_file"]
+
+    def test_parse_skill_allowed_tools_comma_string(self):
+        """T1: allowed-tools 逗号分隔字符串解析"""
+        content: str = """---
+name: tools-csv
+description: 工具白名单字符串测试
+allowed-tools: ssh_command, network_diagnostic
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.allowed_tools == ["ssh_command", "network_diagnostic"]
+
+    def test_parse_skill_allowed_tools_underline_key(self):
+        """T1: allowed_tools 下划线键兼容"""
+        content: str = """---
+name: tools-underline
+description: 下划线键测试
+allowed_tools: [read_remote_file]
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.allowed_tools == ["read_remote_file"]
+
+    def test_parse_skill_allowed_tools_missing(self):
+        """T1: 无 allowed-tools 字段时为空列表（空 = 不限制）"""
+        content: str = """---
+name: no-tools
+description: 无工具白名单
+---
+
+# Test
+"""
+        skill: Skill = parse_skill_content(content)
+        assert skill.allowed_tools == []
+
+    def test_skill_triggers_allowed_tools_roundtrip(self):
+        """T1: to_dict / from_dict 往返保留 triggers 与 allowed_tools"""
+        original: Skill = Skill(
+            name="roundtrip",
+            description="往返测试",
+            triggers=["a", "b"],
+            allowed_tools=["t1", "t2"],
+        )
+        data: dict = original.to_dict()
+        assert data["triggers"] == ["a", "b"]
+        assert data["allowed_tools"] == ["t1", "t2"]
+        restored: Skill = Skill.from_dict(data)
+        assert restored.triggers == ["a", "b"]
+        assert restored.allowed_tools == ["t1", "t2"]
+
 
 # ============================================================================
 # 4. 5 内置 Skill 全量解析回归测试
@@ -441,29 +547,33 @@ author: '单引号作者'
 
 
 class TestBuiltinSkillsAllParsed:
-    """5 内置 SKILL.md 全部解析通过"""
+    """7 内置 SKILL.md 全部解析通过（T1 2026-08-28: 5 → 7）"""
 
     def test_all_5_builtin_skills_exist(self):
-        """5 个内置 Skill 文件均存在"""
+        """7 个内置 Skill 文件均存在"""
         expected: list[str] = [
             "linux-ops",
             "ssh-troubleshoot",
             "docker-management",
             "selinux-baseline",
             "python-debug",
+            "systemd-troubleshoot",
+            "samba-setup",
         ]
         for name in expected:
             skill_path: Path = BUILTIN_DIR / name / "SKILL.md"
             assert skill_path.exists(), f"missing builtin SKILL.md: {name}"
 
     def test_all_5_builtin_skills_parse(self):
-        """5 个内置 Skill 都能正确解析"""
+        """7 个内置 Skill 都能正确解析"""
         skill_names: list[str] = [
             "linux-ops",
             "ssh-troubleshoot",
             "docker-management",
             "selinux-baseline",
             "python-debug",
+            "systemd-troubleshoot",
+            "samba-setup",
         ]
         for name in skill_names:
             skill_path: Path = BUILTIN_DIR / name / "SKILL.md"
