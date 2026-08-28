@@ -81,16 +81,28 @@ export class SuggestEngine {
   private windowsCommands: EnvCommand[];
 
   constructor() {
-    // 手编词典（180+ 常用 Linux 命令）
+    // 手编词典（180+ 常用 Linux 命令，含 ll/la 等 shell 别名）
     const manualMap = new Map<string, CommandDictEntry>(
       COMMAND_LIST.map((e) => [e.command, e]),
     );
-    this.linuxCommands = SPEC_INDEX.map((e) => ({
-      name: e.name,
-      // 中文优先级: tldr zh（开源全量）> 手编词典 > 无
-      zh: TLDR_ZH[e.name] ?? manualMap.get(e.name)?.zh,
-      description: e.description,
-    }));
+    // 2026-08-28: 手编词典中的命令**并入预测集**（此前只当翻译映射用）。
+    // ll/la 等别名不在 Fig specs 里，导致输入 ll 时精确匹配层为空，
+    // fuzzy 兜底弹出 ollama 这类弱子序列命令（用户反馈）。
+    const extra: EnvCommand[] = [];
+    for (const e of COMMAND_LIST) {
+      if (!SPEC_INDEX.some((s) => s.name === e.command)) {
+        extra.push({ name: e.command, zh: e.zh });
+      }
+    }
+    this.linuxCommands = [
+      ...SPEC_INDEX.map((e) => ({
+        name: e.name,
+        // 中文优先级: tldr zh（开源全量）> 手编词典 > 无
+        zh: TLDR_ZH[e.name] ?? manualMap.get(e.name)?.zh,
+        description: e.description,
+      })),
+      ...extra,
+    ];
     this.windowsCommands = WINDOWS_COMMAND_LIST.map((e) => ({
       name: e.command,
       zh: e.zh,
@@ -163,18 +175,22 @@ export class SuggestEngine {
       }
     }
 
-    // ── Layer 3: fuzzysort 模糊匹配（严格阈值，仅兜底）──────────────────
+    // ── Layer 3: fuzzysort 模糊匹配（严格阈值 + 首字符约束，仅兜底）──────
     // 2026-08-28: threshold 0.3 → 0.6，弱子序列匹配（如输入 ge 弹出 gh）
     // 正是"模糊预测排在前面/很多无效"的体感来源；模糊只做最后的兜底。
+    // 另加首字符一致约束：输入 ll 不应弹出 ollama（首字符都不一样，
+    // 纯子序列巧合命中，对用户是噪音）。
     if (results.length < limit) {
       const names = commands.map((c) => c.name);
+      const first = input[0].toLowerCase();
       const fuzzyResults = fuzzysort.go(input, names, {
-        limit: limit - results.length,
+        limit: limit * 3, // 多取一些，过滤首字符不一致后再截断
         threshold: 0.6, // v4: 0=任意匹配, 0.5=良好, 1=精确
       });
 
       for (const fr of fuzzyResults) {
         if (results.length >= limit) break;
+        if (fr.target[0].toLowerCase() !== first) continue; // 首字符必须一致
         if (seen.has(fr.target)) continue;
         seen.add(fr.target);
         const c = commands.find((x) => x.name === fr.target);
