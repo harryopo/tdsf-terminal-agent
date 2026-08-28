@@ -278,6 +278,7 @@ import {
   appendAbbrevItems,
   filterCommandItems,
   mergeCommandWithParamItems,
+  shouldTriggerTailParams,
 } from "./completionInjection";
 
 /** 构造命令模式候选 */
@@ -323,6 +324,39 @@ describe("filterCommandItems（远端命令全集过滤）", () => {
     const items = Array.from({ length: 10 }, (_, i) => cmdItem(`c${i}`, "fuzzy"));
     const cmds = new Set(items.map((it) => it.command));
     expect(filterCommandItems(items, cmds)).toHaveLength(5);
+  });
+});
+
+describe("shouldTriggerTailParams（尾部触发的存在性门禁）", () => {
+  const remoteCmds = new Set(["ls", "ip", "git"]);
+
+  it("linux + 远端有该命令 + 有数据源 → 触发（ls 场景）", () => {
+    expect(shouldTriggerTailParams("linux", "ls", true, remoteCmds, true)).toBe(true);
+  });
+
+  it("linux + 远端没有该命令 → 不触发（ag 场景：tldr 有参数数据但远端没装）", () => {
+    expect(shouldTriggerTailParams("linux", "ag", true, remoteCmds, true)).toBe(false);
+  });
+
+  it("linux + 远端命令集未拉到（null）→ 不触发（保守，宁可少弹不误弹）", () => {
+    expect(shouldTriggerTailParams("linux", "ls", true, null, true)).toBe(false);
+  });
+
+  it("linux + ip 不在词典但缩写表有 → 只看远端，触发（用户要的场景）", () => {
+    expect(shouldTriggerTailParams("linux", "ip", true, remoteCmds, false)).toBe(true);
+  });
+
+  it("windows + 词典命中 → 触发", () => {
+    expect(shouldTriggerTailParams("windows", "git", true, null, true)).toBe(true);
+  });
+
+  it("windows + 词典未命中 → 不触发（挡住词典外命令的假参数）", () => {
+    expect(shouldTriggerTailParams("windows", "ag", true, null, false)).toBe(false);
+  });
+
+  it("无数据源（tldr/缩写表都没有）→ 一律不触发", () => {
+    expect(shouldTriggerTailParams("linux", "ls", false, remoteCmds, true)).toBe(false);
+    expect(shouldTriggerTailParams("windows", "git", false, null, true)).toBe(false);
   });
 });
 
