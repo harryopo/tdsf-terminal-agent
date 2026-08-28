@@ -238,6 +238,26 @@ export function filterCommandItems(
 }
 
 /**
+ * 尾部无空格参数触发的存在性门禁（纯函数，可测）。
+ *
+ * - linux：token 必须在远端命令全集——tldr 有参数数据 ≠ 远端装了命令
+ *   （用户实测：输 ag 弹 -l 且按 → 覆盖命令）；命令集未拉到 → 不触发（保守）
+ * - windows：引擎词典必须命中——词典外命令的参数只会是假数据
+ * - hasDataSrc：isParamCandidateCommand(token) || COMMAND_ABBREVS 有
+ */
+export function shouldTriggerTailParams(
+  env: TerminalEnv,
+  token: string,
+  hasDataSrc: boolean,
+  remoteCmds: Set<string> | null,
+  engineHit: boolean,
+): boolean {
+  if (!hasDataSrc) return false;
+  if (env === 'linux') return remoteCmds !== null && remoteCmds.has(token);
+  return engineHit;
+}
+
+/**
  * 命令预测 + 参数候选合并（尾部无空格触发用）：
  * 命令模式结果优先，参数候选按 command 去重追加，最多再带 paramLimit 条
  * （总上限 = 命令条数 + paramLimit，调用方命令侧已截 5 → 即"限 5+3"）。
@@ -328,6 +348,13 @@ async function loadParamPredictions(
 
   // ── linux（SSH）：三源串联 ─────────────────────────────────────────────
   const sessionId = getLeafSshSession(leafId);
+  // 远端存在性门禁（用户实测反馈：输 ag 弹出 -l，远端根本没装 ag）：
+  // tldr/Fig specs 是静态数据——有这个命令的参数 ≠ 远端装了这个命令。
+  // 远端命令集就绪时：cmd 不在其中 → 只保留 carapace 源（它对无 completer
+  // 的命令返回空），tldr/Fig 全跳过 → 不弹假参数。
+  // 命令集未拉到（null，连接初期/失败）→ 不过滤，避免 ls/git 等正常场景失效。
+  const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+  const remoteGate = cmds === null || cmds.has(cmd);
   const merged: SuggestionResult[] = [];
   const seen = new Set<string>();
   const push = (items: readonly SuggestionResult[]) => {
@@ -352,11 +379,12 @@ async function loadParamPredictions(
     if (remote !== null) push(remote);
   }
 
-  // 源 2：tldr 选项级中文（键序稳定输出，高频示例在前）
-  push(tldrParamSuggestions(cmd, current));
+  // 源 2：tldr 选项级中文（键序稳定输出，高频示例在前）——受远端门禁约束
+  if (remoteGate) push(tldrParamSuggestions(cmd, current));
 
   // 源 3：Fig specs 静态层兜底（首次触发全量 spec 懒加载，~11MB 独立 chunk）
-  if (merged.length < 8) {
+  // —— 同受远端门禁约束（specs 里的 ag/adb 等远端没装就不弹参数）
+  if (remoteGate && merged.length < 8) {
     const spec = await getCommandSpec(cmd);
     if (spec) push(suggestParams(spec, prefix, 8));
   }
@@ -438,9 +466,25 @@ async function updatePredictions(leafId: number): Promise<void> {
   // 尾部无空格参数触发（用户实测：输完 `ls` 应立刻弹参数窗口，不用先敲空格）：
   // 数据源判断含缩写表——ip 不在 tldr/Fig specs（实测确认），但缩写表有
   // a=address 等教学高频子命令，输完 `ip` 同样要能弹出。
-  const hasParamSource =
+  //
+  // 存在性门禁（用户实测反馈：输无关的 ag 弹出 -l，按 → 还把命令覆盖成 -l）：
+  // linux 以远端命令全集为准（不看词典——ip 不在词典但缩写表有，是用户要的
+  // 场景）；windows 以引擎词典为准。详见 shouldTriggerTailParams。
+  const engineHit =
+    items.length > 0 || engine.getSuggestions(token, 1, env).length > 0;
+  const sessionId = getLeafSshSession(leafId);
+  const remoteCmds =
+    env === 'linux' && sessionId !== null
+      ? getCachedRemoteCommands(sessionId)
+      : null;
+  const hasParamSource = shouldTriggerTailParams(
+    env,
+    token,
     isParamCandidateCommand(token) ||
-    Object.prototype.hasOwnProperty.call(COMMAND_ABBREVS, token);
+      Object.prototype.hasOwnProperty.call(COMMAND_ABBREVS, token),
+    remoteCmds,
+    engineHit,
+  );
   if (hasParamSource) {
     // 加尾空格使 buildParamRequest 的 current=''（全量参数候选）；
     // 缩写候选在 appendAbbrevItems 内追加（与参数模式同一套合并逻辑）
@@ -510,9 +554,11 @@ function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   writeFn(leafId, backspaces + entry.command);
   // 更新输入缓冲区为完整命令
   setInputBuffer(leafId, entry.command);
-  // 添加到历史（bug 修复 2026-08-28：原来漏传 env 恒写 linux 历史，
-  // 导致本地终端接受预测的命令混进 SSH 历史环境）
-  getSuggestEngine().addHistory(entry.command, getLeafEnvironment(leafId));
+  // 历史污染止血（2026-08-28，用户实测反馈）：原来"接受预测即记历史"——
+  // 输入 ag 点 → 就算执行过，ag: command not found 也进历史。第二轮 OSC
+  // 真实执行记录（exit code + 完整命令行）上线前，停止一切运行时历史写入；
+  // windows 环境保留启动时 shell history 文件注入（PSReadLine 只写执行过的）。
+  // getSuggestEngine().addHistory(entry.command, getLeafEnvironment(leafId));
   setState((s) => ({ ...s, visible: false }));
 }
 
@@ -593,14 +639,14 @@ export function completionKeyHandler(
       acceptPrediction(leafId, current.items[current.selectedIndex]);
       // 接受后缓冲区已是完整命令，Enter 透传执行
     } else {
-      // 没用预测 → 记录实际输入到历史（按环境隔离）
-      const prefix = getInputBuffer(leafId);
-      if (prefix.trim()) {
-        getSuggestEngine().addHistory(
-          prefix.trim(),
-          getLeafEnvironment(leafId),
-        );
-      }
+      // 历史污染止血（2026-08-28，用户实测反馈）：原来"Enter 即记"——没执行/
+      // 执行失败的输入（lsb、拼错的词）都进历史，用户反馈"又惊喜又鸡肋"。
+      // 停止运行时写入，历史来源收敛到 windows shell history 文件（真实执行）
+      // 与第二轮 OSC 真实执行记录（exit code 过滤，待上线）。
+      // const prefix = getInputBuffer(leafId);
+      // if (prefix.trim()) {
+      //   getSuggestEngine().addHistory(prefix.trim(), getLeafEnvironment(leafId));
+      // }
     }
     // Enter → 清空缓冲区（新的一行）
     clearInputBuffer(leafId);
