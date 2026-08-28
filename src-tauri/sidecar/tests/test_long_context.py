@@ -107,9 +107,9 @@ class TestFeatureFlagSwitch:
         assert "[summary]" not in summary
         assert "[hash=" not in summary
 
-    def test_enabled_summarize_adds_hash(self, enabled_mgr: LongContextManager):
-        """启用时 summarize 加 hash 标注"""
-        text = "hello world"
+    def test_enabled_summarize_long_text_adds_hash(self, enabled_mgr: LongContextManager):
+        """启用时超长文本 → hash 回退标注"""
+        text = "hello world " * 100  # 超长（> max_chars）触发摘要路径
         summary = enabled_mgr.summarize(text, max_tokens=100)
         assert "[summary]" in summary
         assert "[hash=" in summary
@@ -195,13 +195,12 @@ class TestSummarize:
         """空文本 → 空字符串"""
         assert enabled_mgr.summarize("") == ""
 
-    def test_short_text_returns_with_hash(self, enabled_mgr: LongContextManager):
-        """短文本 → 加 hash 标注"""
+    def test_short_text_returns_original(self, enabled_mgr: LongContextManager):
+        """短文本 → 直接返回原文（不摘要不加标注）"""
         text = "hello"
         summary = enabled_mgr.summarize(text, max_tokens=100)
-        assert "[summary]" in summary
-        assert "hello" in summary
-        assert "[hash=" in summary
+        assert summary == text
+        assert "[summary]" not in summary
 
     def test_long_text_truncated(self, enabled_mgr: LongContextManager):
         """长文本 → 截断 + 省略号 + hash"""
@@ -214,10 +213,10 @@ class TestSummarize:
         assert len(summary) < 100
 
     def test_hash_consistency(self, enabled_mgr: LongContextManager):
-        """相同文本 → 相同 hash"""
-        text = "consistent hash test"
-        s1 = enabled_mgr.summarize(text, max_tokens=1000)
-        s2 = enabled_mgr.summarize(text, max_tokens=1000)
+        """相同超长文本 → 相同 hash"""
+        text = "consistent hash test " * 50  # 超长触发 hash 回退
+        s1 = enabled_mgr.summarize(text, max_tokens=50)
+        s2 = enabled_mgr.summarize(text, max_tokens=50)
         # 提取 hash 部分
         import re
         h1 = re.search(r"\[hash=([a-f0-9]+)\]", s1)
@@ -285,3 +284,4 @@ class TestStatus:
         assert status["enabled"] is True
         assert status["max_tokens_per_chunk"] == 100
         assert status["summary_max_tokens"] == 50
+

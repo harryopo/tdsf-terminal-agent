@@ -192,7 +192,9 @@ class TestStrandsRealE2E(unittest.TestCase):
         self.assertIsNot(agent, main_agent)
 
     def test_main_agent_has_full_toolset(self):
-        """main：真实 Strands Agent 全量 7 运维工具 + 4 子 agent 工具（P0-6）"""
+        """main：真实 Strands Agent 全量 7 运维工具 + 4 子 agent 工具（P0-6）
+        + 5 扩展运维 + 6 个 2026-08-09 方案书工具（todo/terminal/config_diff/
+        backup_restore/confidence/history）+ knowledge_search，合计 23。"""
         model = FakeStrandsModel(file_content=b"", final_text="ok")
         adapter, _ = self._make_adapter(model)
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
@@ -201,8 +203,8 @@ class TestStrandsRealE2E(unittest.TestCase):
         # 7 运维工具
         self.assertIn("ssh_command", tool_names)
         self.assertIn("skill_invoke", tool_names)
-        # P0-6: main 额外挂载 4 个子 agent 工具
-        self.assertEqual(len(tool_names), 17)
+        # P0-6: main 额外挂载 4 个子 agent 工具 + 扩展运维 + 方案书工具
+        self.assertEqual(len(tool_names), 23)
         for sub in (
             "teach", "coding", "explore", "history", "knowledge_search",
             "service_manage", "package_manage", "firewall_manage",

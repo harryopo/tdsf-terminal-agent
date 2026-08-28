@@ -78,6 +78,7 @@
 | 25 | **SSH 隧道 P3**：远程转发（`tcpip_forward`）+ SOCKS5 动态转发（参考 chisel-rs） | ✅ 已完成 | 2026-08-12；后端 `TunnelKind` 三模式 + handler `server_channel_open_forwarded_tcpip` 回调 + `REMOTE_TUNNEL_REGISTRY` + SOCKS5 纯函数实现；前端创建对话框三套表单 + 类型 badge；方案 `docs/P3-SSH隧道-远程转发与SOCKS5-实施方案.md`，详见 dev-state §37.55 |
 | 26 | **全面代码审查修复**（2026-08-18 审查 §37.62：P0×2/P1×8/P2×6/P3×3）——修复项由用户选择：P0 知识库 _add 写旧库割裂 + steer 总线取错；P1 SSH 超时/占位事件/TOFU 断链/disconnect/fatalError/密码泄漏/预测缓冲；P2 prevToken/JSON-RPC 静默/exec 无上限/密钥锁/CSP | ✅ 已完成 | 2026-08-18；17 项全修 + 全绿门禁（clippy 0 警告 / cargo test / 168 pytest / 994 vitest / tsc / lint / build）；详见 dev-state §37.63；P2-15 CSP 验证为功能必需保持；P3-17 lint 豁免 19 处验证为合理保持 + TODO 已清零 + loader.ts 补加载断言 |
 | 27 | **知识库 UI 三修**（2026-08-18 用户反馈）：① 详情弹窗完整 md 渲染（MessageResponse）；② 列表预览去 markdown 符号只显标题；③ 侧边栏视图标签英文化（知识库→Knowledge/片段→Snippets/隧道→Tunnels，与 Files 一致） | ✅ 已完成 | 2026-08-18；`KnowledgeBrowser.tsx`/`SidebarRail.tsx`/`TunnelPanel.tsx`/`SnippetsPanel.tsx`；全绿门禁（994 vitest + tsc + lint + build）；详见 dev-state §37.64 |
+| 28 | **换机重装环境重建 + 全量门禁恢复**（新机器 d:\ai\linux教学一体\）：Rust 1.98 工具链 + sidecar 依赖补齐（langgraph/bs4）+ `启动.bat`（TDSF_SIDECAR_PYTHON 指向 .venv）+ pytest 环境变量三件套（TDSF_DATA_DIR=Temp 绕沙箱 chroma 拦截/CUDA_VISIBLE_DEVICES=-1/PYTHONPYCACHEPREFIX） | ✅ 已完成 | 2026-08-28；全量门禁：typecheck/lint/build/vitest 993 ✓ + cargo test 327 全绿 ✓ + **pytest 1433 passed in 60s** ✓；修复既有 5 失败（needs_you 6→8 / long_context 3 处语义 / toolset 17→23）；symlink 测试改运行时跳过（沙箱 hook CreateSymbolicLink）；tauri:dev 沙箱无法启动 GUI，须用户真实终端 `启动.bat`；详见 dev-state §37.65 |
 
 ### 待用户决策/确认
 
