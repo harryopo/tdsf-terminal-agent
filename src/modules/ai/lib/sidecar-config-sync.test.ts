@@ -274,14 +274,25 @@ describe("syncSidecarLlmConfig", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it("ollama-local（keyless）→ ok:false，不触发 invoke", async () => {
+  it("ollama-local（keyless）→ 占位 key 同步成功（本地部署在 Agent 面板可用）", async () => {
     currentModelId.value = "ollama-local";
+    invokeMock.mockResolvedValue({ ok: true });
 
     const r = await syncSidecarLlmConfig();
 
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
     expect(getKeyMock).not.toHaveBeenCalled();
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("ipc_invoke", {
+      method: "agent.configure",
+      // 占位 key：Ollama 兼容端点不校验，但 sidecar is_configured 要求非空
+      params: {
+        config: expect.objectContaining({
+          provider: "ollama",
+          api_key: "tdsf-local",
+          model: expect.any(String),
+        }),
+      },
+    });
   });
 
   it("compat 模型：key 取 endpoint 专属账户", async () => {
