@@ -22,6 +22,10 @@ langgraph>=1.0
 beautifulsoup4>=4.12
 
 # LLM 客户端（按需选择，P1-B 默认使用 OpenAI 兼容接口）
+#   - langchain-openai: core/llm_config.py 的 _make_openai_call() 依赖
+#     `from langchain_openai import ChatOpenAI`；缺失会导致 LLM 不可用
+#     （启动日志报 "langchain-openai 未安装"），2026-08-28 换机环境踩坑补录
+langchain-openai>=0.3.0
 
 # ----------------------------------------------------------------------------
 # 数据验证（Pydantic v2）
