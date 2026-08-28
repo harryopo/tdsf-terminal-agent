@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · 应用图标重绘（§37.71）。接手请直接看 **§37.71**（图标）+ **§37.70**（别名数据集）+ **§37.69**（环境分流/中文描述/排序/fuzzy 约束）
+> **最后更新**：2026-08-28 · carapace 参数预测全链路（§37.72）。接手请直接看 **§37.72**（参数预测 P0+P1+cwd+借鉴）+ **§37.71**（图标）+ **§37.70**（别名数据集）。竞品调研与 B1-B4 借鉴分期见 `docs/开源AI运维终端-竞品对比与借鉴规划.md`
 
 ---
 
@@ -17,10 +17,9 @@
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
 **最新里程碑（2026-08-28）**：
+- §37.72 carapace 参数预测全链路：本地（windows）参数阶段动态补全 + SSH 远端（exec 通道跑远端 carapace，弹远端真实分支）+ 一键安装（无弹窗：静默检测+工具栏图标+设置开关）+ tldr-zh 选项级中文 1291 条；commits 0f66a72+7fd79a3+ad2b6f6+bbed100；**carapace 二进制不入 git，新环境先跑 `scripts/fetch-carapace.ps1`**
 - §37.71 应用图标重绘：灰底+箭头缩小+光标加大+超采样锐化，源图脚本化 `scripts/make-app-icon.py`，全套尺寸经 `pnpm tauri icon` 重生成（commit 7ea738b）
 - §37.70 shell 别名数据集（47 条，deep-research 调研）并入预测集（commit a060e9e）
-- §37.69 命令预测四修：windows/linux 环境分流 + tldr 中文描述 + 精确匹配排序修 + fuzzy 首字符约束（commit 32a6f79 + be6d54c）
-- §37.68 第三轮全面审查 14 项修复（P0×2 + P1×9 + 功能×2，含 DefaultRustBridge 缺 send_notification）
 
 ---
 
