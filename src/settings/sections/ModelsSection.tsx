@@ -32,9 +32,6 @@ import {
   type ProviderId,
   type ProviderInfo,
   providerNeedsKey,
-  STT_PROVIDER_LABELS,
-  type SttProvider,
-  WHISPERCPP_DEFAULT_BASE_URL,
 } from "@/modules/ai/config";
 import {
   type CustomEndpointKeys,
@@ -59,7 +56,6 @@ import {
   setCustomEndpoints,
   setDefaultModel,
   setFavoriteModelIds,
-  setGroqSttModel,
   setLmstudioBaseURL,
   setLmstudioModelId,
   setMlxBaseURL,
@@ -71,8 +67,6 @@ import {
   setOpenaiCompatibleModelId,
   setOpenrouterModelId,
   setRecentModelIds,
-  setSttProvider,
-  setWhispercppBaseURL,
 } from "@/modules/settings/store";
 import { getBindingTokens, SHORTCUTS } from "@/modules/shortcuts/shortcuts";
 import {
@@ -82,7 +76,6 @@ import {
   Cancel01Icon,
   CheckmarkCircle02Icon,
   ChevronDown,
-  Mic01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { invoke } from "@tauri-apps/api/core";
@@ -377,8 +370,6 @@ export function ModelsSection() {
         keys={keys}
         customEndpoints={customEndpoints}
       />
-
-      <VoiceBlock />
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
@@ -1330,126 +1321,6 @@ function StatusLine({
     <span className="text-[10.5px] text-destructive/80">
       无法连接到服务器。
     </span>
-  );
-}
-
-function VoiceBlock() {
-  const sttProvider = usePreferencesStore((s) => s.sttProvider);
-  const groqSttModel = usePreferencesStore((s) => s.groqSttModel);
-  const whispercppBaseURL = usePreferencesStore((s) => s.whispercppBaseURL);
-  const [urlDraft, setUrlDraft] = useState(whispercppBaseURL);
-  const [groqModelDraft, setGroqModelDraft] = useState(groqSttModel);
-
-  useEffect(() => setUrlDraft(whispercppBaseURL), [whispercppBaseURL]);
-  useEffect(() => setGroqModelDraft(groqSttModel), [groqSttModel]);
-
-  // TDSF 魔改 2026-08-28: 选项文案区分本地/云端（标签真源仍在 config.ts，
-  // 此处按部署形态拼接后缀）
-  const sttLabel = (p: SttProvider) =>
-    p === "whispercpp"
-      ? `${STT_PROVIDER_LABELS[p]}（本地离线，推荐）`
-      : `${STT_PROVIDER_LABELS[p]}（云端）`;
-
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card/60 px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <HugeiconsIcon icon={Mic01Icon} size={15} strokeWidth={1.5} />
-        <span className="text-[12.5px] font-medium">语音输入</span>
-      </div>
-
-      {/* TDSF 魔改 2026-08-28: 顶部说明——本地 whisper.cpp 免 Key 可离线 */}
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-        本地 whisper.cpp 无需 API Key，配置 server 后即可离线转写。
-      </p>
-
-      <FieldRow label="提供商">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              className="h-8 flex-1 justify-between gap-2 px-2.5 text-[11.5px]"
-            >
-              <span>{sttLabel(sttProvider)}</span>
-              <HugeiconsIcon
-                icon={ArrowDown01Icon}
-                size={11}
-                strokeWidth={2}
-                className="opacity-70"
-              />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-44 p-1">
-            {(Object.keys(STT_PROVIDER_LABELS) as SttProvider[]).map((p) => (
-              <DropdownMenuItem
-                key={p}
-                onSelect={() => void setSttProvider(p)}
-                className={cn(
-                  "flex items-center gap-2 text-[12px]",
-                  p === sttProvider && "bg-accent/50",
-                )}
-              >
-                <span>{sttLabel(p)}</span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </FieldRow>
-
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-        {sttProvider === "openai" &&
-          "使用官方 OpenAI API Key 和 Whisper 模型进行转录。"}
-        {sttProvider === "groq" &&
-          "使用官方 Groq API Key 和 Groq 的 Whisper 端点进行转录。"}
-        {sttProvider === "whispercpp" &&
-          "连接到本地 Whisper.cpp 服务器,完全离线转录。"}
-      </p>
-
-      {sttProvider === "groq" && (
-        <div className="flex flex-col gap-2.5">
-          <FieldRow label="模型">
-            <Input
-              value={groqModelDraft}
-              onChange={(e) => setGroqModelDraft(e.target.value)}
-              onBlur={() => {
-                const v = groqModelDraft.trim();
-                if (v !== groqSttModel) void setGroqSttModel(v);
-              }}
-              placeholder="whisper-large-v3-turbo"
-              spellCheck={false}
-              className="h-8 font-mono text-[11.5px]"
-            />
-          </FieldRow>
-        </div>
-      )}
-
-      {sttProvider === "whispercpp" && (
-        <div className="flex flex-col gap-2.5">
-          <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-            whisper.cpp 完全本地运行：录音不会离开你的电脑。启动方式：编译产物{" "}
-            <span className="font-mono">whisper-server</span>
-            （Windows 为 <span className="font-mono">server.exe</span>）加载 ggml
-            模型，例如：
-            <span className="mt-1 block rounded bg-muted/40 px-2 py-1 font-mono text-[10.5px]">
-              whisper-server -m ggml-large-v3-turbo-q5_0.bin --port 8080
-            </span>
-            模型文件从 whisper.cpp GitHub releases 下载。服务未启动时语音按钮会提示失败，属预期。
-          </p>
-          <FieldRow label="基础 URL">
-            <Input
-              value={urlDraft}
-              onChange={(e) => setUrlDraft(e.target.value)}
-              onBlur={() => {
-                const v = urlDraft.trim();
-                if (v !== whispercppBaseURL) void setWhispercppBaseURL(v);
-              }}
-              placeholder={WHISPERCPP_DEFAULT_BASE_URL}
-              spellCheck={false}
-              className="h-8 font-mono text-[11.5px]"
-            />
-          </FieldRow>
-        </div>
-      )}
-    </div>
   );
 }
 

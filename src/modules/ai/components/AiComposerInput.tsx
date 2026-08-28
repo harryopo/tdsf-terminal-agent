@@ -1,8 +1,6 @@
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
-import { Spinner } from "@/components/ui/spinner";
-import { usePresence } from "@/lib/usePresence";
 import { cn } from "@/lib/utils";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useWorkspaceFiles } from "../hooks/useWorkspaceFiles";
 import { useComposer } from "../lib/composer";
 import { SLASH_COMMANDS } from "../lib/slashCommands";
@@ -198,15 +196,6 @@ export function AiComposerInput() {
     if (it) onPickItem(it);
   };
 
-  const voiceLabel = c.voice.recording
-    ? "Listening…"
-    : c.voice.transcribing
-      ? "Transcribing…"
-      : null;
-  const voiceRow = usePresence(Boolean(voiceLabel), 180);
-  const lastVoiceLabel = useRef("");
-  if (voiceLabel) lastVoiceLabel.current = voiceLabel;
-
   return (
     <>
       <Popover open={pickerOpen}>
@@ -288,21 +277,6 @@ export function AiComposerInput() {
           />
         )}
       </Popover>
-
-      {voiceRow.mounted && (
-        <div data-state={voiceRow.state} className="tdsf-reveal">
-          <div className="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
-            {c.voice.recording ? (
-              <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
-            ) : (
-              <Spinner className="size-3" />
-            )}
-            <span className="truncate">
-              {voiceLabel || lastVoiceLabel.current}
-            </span>
-          </div>
-        </div>
-      )}
     </>
   );
 }
