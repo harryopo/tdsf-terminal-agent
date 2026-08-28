@@ -270,3 +270,123 @@ describe("acceptPrediction", () => {
     expect(written).toEqual(["\b\b" + "ipp"]);
   });
 });
+
+// === 二轮改进纯函数（2026-08-28：远端过滤 / 尾部触发合并 / 缩写追加）=========
+
+import type { SuggestionResult } from "@/lib/suggest-engine";
+import {
+  appendAbbrevItems,
+  filterCommandItems,
+  mergeCommandWithParamItems,
+} from "./completionInjection";
+
+/** 构造命令模式候选 */
+function cmdItem(command: string, source: SuggestionResult["source"]): SuggestionResult {
+  return { command, source, kind: "cmd" };
+}
+
+/** 构造参数模式候选 */
+function argItem(command: string, description?: string): SuggestionResult {
+  return { command, source: "arg", kind: "arg", description };
+}
+
+describe("filterCommandItems（远端命令全集过滤）", () => {
+  it("cmds 有值 → 只保留远端存在的命令，截 5", () => {
+    const items = [
+      cmdItem("ls", "dictionary"),
+      cmdItem("git", "fuzzy"),
+      cmdItem("nope", "dictionary"), // 远端没有
+      cmdItem("ipt", "fuzzy"), // 远端没有
+    ];
+    const cmds = new Set(["ls", "git"]);
+    const out = filterCommandItems(items, cmds);
+    expect(out.map((it) => it.command)).toEqual(["ls", "git"]);
+  });
+
+  it("history 来源豁免过滤（历史是真实执行过的）", () => {
+    const items = [
+      cmdItem("my-custom-tool", "history"), // 远端命令全集里没有
+      cmdItem("nope", "dictionary"),
+    ];
+    const out = filterCommandItems(items, new Set(["ls"]));
+    expect(out.map((it) => it.command)).toEqual(["my-custom-tool"]);
+  });
+
+  it("cmds 为 null（未拉到远端全集）→ 降级不过滤，仅截 5（无损）", () => {
+    const items = Array.from({ length: 8 }, (_, i) => cmdItem(`c${i}`, "fuzzy"));
+    const out = filterCommandItems(items, null);
+    expect(out).toHaveLength(5);
+    expect(out.map((it) => it.command)).toEqual(["c0", "c1", "c2", "c3", "c4"]);
+  });
+
+  it("过滤后超过 5 → 截 5", () => {
+    const items = Array.from({ length: 10 }, (_, i) => cmdItem(`c${i}`, "fuzzy"));
+    const cmds = new Set(items.map((it) => it.command));
+    expect(filterCommandItems(items, cmds)).toHaveLength(5);
+  });
+});
+
+describe("mergeCommandWithParamItems（尾部触发合并）", () => {
+  it("命令候选在前，参数候选去重追加", () => {
+    const cmdItems = [cmdItem("lsblk", "fuzzy"), cmdItem("ls", "dictionary")];
+    const paramItems = [
+      argItem("-l", "列出文件信息"),
+      argItem("-a", "列出隐藏文件"),
+      argItem("ls", "重复的命令名"), // 与命令候选重名 → 去重
+    ];
+    const out = mergeCommandWithParamItems(cmdItems, paramItems);
+    expect(out.map((it) => it.command)).toEqual(["lsblk", "ls", "-l", "-a"]);
+    expect(out[2]?.kind).toBe("arg");
+  });
+
+  it("参数候选最多追加 3 条（限 5+3）", () => {
+    const cmdItems = [cmdItem("ls", "dictionary")];
+    const paramItems = ["-1", "-a", "-F", "-la", "-l"].map((c) => argItem(c));
+    const out = mergeCommandWithParamItems(cmdItems, paramItems);
+    expect(out).toHaveLength(4); // 1 命令 + 3 参数
+  });
+});
+
+describe("appendAbbrevItems（参数模式追加子命令缩写）", () => {
+  it("ip + prefix 'ip a'（远端/tldr/specs 全无数据）→ 缩写补上 address", () => {
+    // 用户实测痛点：carapace 无 ip completer、Fig specs/tldr 无 ip → 三源空。
+    // current='a' → 只命中 a/addr 同指的 address（去重为一条）；
+    // link/route 等是 `ip l`/`ip r` 的候选，不应混入。
+    const out = appendAbbrevItems([], "ip", "ip a");
+    expect(out).toHaveLength(1);
+    expect(out[0]?.command).toBe("address");
+    // 缩写候选是参数类（acceptPrediction 替换当前 token 'a' → 'address'）
+    expect(out[0]?.kind).toBe("arg");
+    expect(out[0]?.description).toContain("（= a 缩写）");
+  });
+
+  it("ip + prefix 'ip'（尾部触发，current 空）→ 全量缩写候选", () => {
+    const out = appendAbbrevItems([], "ip", "ip ");
+    const commands = out.map((it) => it.command);
+    expect(commands).toEqual(["address", "link", "route", "neighbour", "stats"]);
+  });
+
+  it("systemctl + prefix 'systemctl s' → tldr 选项在前，缩写 status/start/stop 追加", () => {
+    // tldr systemctl 先占 4 条（--failed/-t/--type/--state），缩写补足剩余空位
+    const tldrItems = [
+      argItem("--failed"),
+      argItem("-t"),
+      argItem("--type"),
+      argItem("--state"),
+    ];
+    const out = appendAbbrevItems(tldrItems, "systemctl", "systemctl s");
+    expect(out).toHaveLength(7); // 4 tldr + 3 缩写（s→status/start/stop）
+    const commands = out.map((it) => it.command);
+    expect(commands.slice(0, 4)).toEqual(["--failed", "-t", "--type", "--state"]);
+    expect(commands.slice(4)).toEqual(["status", "start", "stop"]);
+    // 缩写条目（'s' 缩写的 status）描述带"= 缩写"教学后缀
+    const status = out.find((it) => it.command === "status");
+    expect(status?.description).toContain("（= s 缩写）");
+  });
+
+  it("已有 8 条满 → 原样截 8 不追加", () => {
+    const full = Array.from({ length: 8 }, (_, i) => argItem(`-opt${i}`));
+    expect(appendAbbrevItems(full, "ip", "ip a")).toHaveLength(8);
+    expect(appendAbbrevItems(full, "ip", "ip a")[0]?.command).toBe("-opt0");
+  });
+});

@@ -26,13 +26,17 @@ import {
   CARAPACE_CHECK_CMD,
   CARAPACE_YES_MARK,
   escapeShSingleQuote,
+  fetchRemoteCommands,
+  getCachedRemoteCommands,
   getLeafCwd,
   getLeafRemoteCwd,
   getLeafSshSession,
   installRemoteCarapace,
   invalidateRemoteCarapaceCache,
+  invalidateRemoteCommands,
   mergeCandidates,
   parseCarapaceJson,
+  REMOTE_COMMANDS_CMD,
   remoteCarapaceInstalled,
   remoteParamComplete,
   setLeafCwd,
@@ -328,6 +332,60 @@ describe('remoteCarapaceInstalled', () => {
   it('invoke 抛错 → false（静默，不抛给调用方）', async () => {
     mockInvoke.mockRejectedValueOnce(new Error('session gone'));
     await expect(remoteCarapaceInstalled(42)).resolves.toBe(false);
+  });
+});
+
+// === fetchRemoteCommands（二轮改进：远端命令全集，供命令模式过滤假候选）====
+
+describe('fetchRemoteCommands', () => {
+  beforeEach(() => {
+    invalidateRemoteCommands(42);
+  });
+
+  it('成功拉取 → 按行 split 成 Set 并缓存', async () => {
+    mockInvoke.mockResolvedValueOnce(
+      sshResult('ls\ngit\nsystemctl\nip\ngit\n'),
+    );
+    const cmds = await fetchRemoteCommands(42);
+    expect(cmds).not.toBeNull();
+    expect(cmds!.has('ls')).toBe(true);
+    expect(cmds!.has('systemctl')).toBe(true);
+    expect(cmds!.size).toBe(4); // git 重复行去重
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'ssh_command',
+      expect.objectContaining({ sessionId: 42, command: REMOTE_COMMANDS_CMD }),
+    );
+    // 缓存命中：第二次不再 invoke
+    await fetchRemoteCommands(42);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('非零退出 → null 且不缓存（下次重试）', async () => {
+    mockInvoke.mockResolvedValue(sshResult('', 1));
+    await expect(fetchRemoteCommands(42)).resolves.toBeNull();
+    expect(getCachedRemoteCommands(42)).toBeNull();
+    await fetchRemoteCommands(42);
+    expect(mockInvoke).toHaveBeenCalledTimes(2); // 未缓存 → 重试
+  });
+
+  it('输出为空（compgen 不存在的 sh 环境）→ null 且不缓存', async () => {
+    mockInvoke.mockResolvedValue(sshResult(''));
+    await expect(fetchRemoteCommands(42)).resolves.toBeNull();
+    expect(getCachedRemoteCommands(42)).toBeNull();
+  });
+
+  it('invoke 抛错 → null（静默，不抛给调用方）', async () => {
+    mockInvoke.mockRejectedValueOnce(new Error('session gone'));
+    await expect(fetchRemoteCommands(42)).resolves.toBeNull();
+    expect(getCachedRemoteCommands(42)).toBeNull();
+  });
+
+  it('invalidateRemoteCommands 后重新拉取', async () => {
+    mockInvoke.mockResolvedValue(sshResult('ls\n'));
+    await fetchRemoteCommands(42);
+    invalidateRemoteCommands(42);
+    await fetchRemoteCommands(42);
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
   });
 });
 
