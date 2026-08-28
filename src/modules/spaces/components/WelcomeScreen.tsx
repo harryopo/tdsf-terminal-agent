@@ -6,6 +6,7 @@
 import { Button } from "@/components/ui/button";
 import {
   CloudServerIcon,
+  CubeIcon,
   Square01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -13,9 +14,15 @@ import { HugeiconsIcon } from "@hugeicons/react";
 type Props = {
   onCreateLocal: () => void;
   onCreateSsh: () => void;
+  /** TDSF 魔改 2026-08-28（用户反馈）: WSL 加入工作区创建入口 */
+  onCreateWsl: () => void;
 };
 
-export function WelcomeScreen({ onCreateLocal, onCreateSsh }: Props) {
+export function WelcomeScreen({
+  onCreateLocal,
+  onCreateSsh,
+  onCreateWsl,
+}: Props) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-8 bg-background">
       <div className="flex flex-col items-center gap-3">
@@ -27,7 +34,7 @@ export function WelcomeScreen({ onCreateLocal, onCreateSsh }: Props) {
         </h1>
         <p className="max-w-sm text-center text-[13px] text-muted-foreground">
           终端优先的 Linux 运维工作台。创建一个工作区开始使用——
-          本地终端或连接 SSH 服务器。
+          本地终端、WSL 或连接 SSH 服务器。
         </p>
       </div>
 
@@ -40,6 +47,16 @@ export function WelcomeScreen({ onCreateLocal, onCreateSsh }: Props) {
         >
           <HugeiconsIcon icon={Square01Icon} size={16} strokeWidth={1.75} />
           新建本地工作区
+        </Button>
+        <Button
+          size="lg"
+          variant="outline"
+          className="w-64 gap-2"
+          onClick={onCreateWsl}
+          data-testid="welcome-wsl"
+        >
+          <HugeiconsIcon icon={CubeIcon} size={16} strokeWidth={1.75} />
+          新建 WSL 工作区
         </Button>
         <Button
           size="lg"

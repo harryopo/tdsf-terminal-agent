@@ -8,6 +8,8 @@
  *   1. getCurrentPrefix 提示符污染 → 改为按键追踪缓冲区
  *   2. loadHistoryIfNeeded 从未调用 → 首次按键时自动调用
  *   3. Enter 不 acceptPrediction → 弹窗可见时 Enter 接受选中项
+ *      （2026-08-28 用户钦定推翻：Enter 永远原样透传执行已敲入内容，
+ *       接受预测仅限 → 右箭头/鼠标点击，终端操作终端优先）
  *   4. fuzzysort threshold 验证 → 改为保守值
  *
  * P2 #13 修复（2026-08-11 架构审计收尾）：
@@ -632,22 +634,19 @@ export function completionKeyHandler(
     return true;
   }
 
-  // === Enter = 接受选中预测（如果可见）或记录历史 + 清空缓冲区 ===
+  // === Enter = 永远原样透传（终端操作终端优先，用户钦定 2026-08-28）===
+  // 弹窗可见时 Enter 也只执行"用户已敲入的内容"，绝不接受预测——
+  // 接受预测仅限 → 右箭头（597-601 行）与鼠标点击候选项。历史运行时写入已停
+  // （历史污染止血，见下方注释块），来源收敛到 shell history 文件注入。
   if (event.key === 'Enter') {
-    if (isVisible && current.items.length > 0) {
-      // P0-3 修复：弹窗可见时 Enter 接受选中项（不拦截 Enter，先接受再透传）
-      acceptPrediction(leafId, current.items[current.selectedIndex]);
-      // 接受后缓冲区已是完整命令，Enter 透传执行
-    } else {
-      // 历史污染止血（2026-08-28，用户实测反馈）：原来"Enter 即记"——没执行/
-      // 执行失败的输入（lsb、拼错的词）都进历史，用户反馈"又惊喜又鸡肋"。
-      // 停止运行时写入，历史来源收敛到 windows shell history 文件（真实执行）
-      // 与第二轮 OSC 真实执行记录（exit code 过滤，待上线）。
-      // const prefix = getInputBuffer(leafId);
-      // if (prefix.trim()) {
-      //   getSuggestEngine().addHistory(prefix.trim(), getLeafEnvironment(leafId));
-      // }
-    }
+    // 历史污染止血（2026-08-28，用户实测反馈）：原来"Enter 即记"——没执行/
+    // 执行失败的输入（lsb、拼错的词）都进历史，用户反馈"又惊喜又鸡肋"。
+    // 停止运行时写入，历史来源收敛到 windows shell history 文件（真实执行）
+    // 与第二轮 OSC 真实执行记录（exit code 过滤，待上线）。
+    // const prefix = getInputBuffer(leafId);
+    // if (prefix.trim()) {
+    //   getSuggestEngine().addHistory(prefix.trim(), getLeafEnvironment(leafId));
+    // }
     // Enter → 清空缓冲区（新的一行）
     clearInputBuffer(leafId);
     setState((s) => (s.visible ? { ...s, visible: false } : s));

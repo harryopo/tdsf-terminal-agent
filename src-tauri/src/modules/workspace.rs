@@ -583,19 +583,42 @@ pub fn wsl_home(distro: String) -> Result<String, String> {
     }
     #[cfg(windows)]
     {
-        let out = run_wsl_sh(&distro, "printf %s \"$HOME\"")?;
-        let home = normalize_wsl_value(out, "");
-        if home.is_empty() {
-            Err(format!("could not resolve WSL home for {distro}"))
-        } else {
-            Ok(home)
-        }
+        cached_wsl_probe(&distro).map(|e| e.home)
     }
 }
 
+/// TDSF 魔改 2026-08-28（用户反馈：WSL 切换卡一下）：WSL 探测结果进程内缓存。
+///
+/// login shell / home 在发行版生命周期内基本不变，而每次 `build_wsl` 都要
+/// 串行跑多次 `wsl.exe`（VM 未运行时冷启动可达数秒）——这是"选择 WSL 后
+/// 卡一下"的主因。改为：① 两次探测（home + login shell）合并为一次
+/// `wsl.exe` 往返；② 结果按发行版进程内缓存，后续切换/新建终端直接命中。
 #[cfg(windows)]
-pub fn wsl_login_shell(distro: String) -> Result<String, String> {
-    const SCRIPT: &str = r#"uid="$(id -u 2>/dev/null || printf '')"
+#[derive(Clone)]
+pub(crate) struct WslProbeCacheEntry {
+    pub home: String,
+    pub login_shell: String,
+}
+
+#[cfg(windows)]
+static WSL_PROBE_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, WslProbeCacheEntry>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+#[cfg(windows)]
+fn cached_wsl_probe(distro: &str) -> Result<WslProbeCacheEntry, String> {
+    // 命中缓存直接返回（短临界区、无 await，std Mutex 安全）
+    if let Ok(cache) = WSL_PROBE_CACHE.lock() {
+        if let Some(entry) = cache.get(distro) {
+            return Ok(entry.clone());
+        }
+    }
+
+    // miss：一个 sh 脚本同时输出 home（第 1 行）与 login shell（第 2 行），
+    // 省一次 wsl.exe 冷启动往返。探测脚本避免 login shell 启动文件污染 stdout
+    // （与原 run_wsl_sh 注释同因）。
+    const PROBE_SCRIPT: &str = r#"printf '%s\n' "$HOME"
+uid="$(id -u 2>/dev/null || printf '')"
 entry=''
 if [ -n "$uid" ] && command -v getent >/dev/null 2>&1; then
   entry="$(getent passwd "$uid" 2>/dev/null || true)"
@@ -615,8 +638,34 @@ if [ -z "$shell" ]; then
 fi
 printf %s "$shell""#;
 
-    let out = run_wsl_sh(&distro, SCRIPT)?;
-    Ok(normalize_wsl_value(out, "/bin/sh"))
+    let out = run_wsl_sh(distro, PROBE_SCRIPT)?;
+    let mut lines = out.lines().map(str::trim).filter(|l| !l.is_empty());
+    let home = lines.next().unwrap_or("").to_string();
+    let login_shell = lines.next().unwrap_or("").to_string();
+    if home.is_empty() {
+        return Err(format!("could not resolve WSL home for {distro}"));
+    }
+    let login_shell = if login_shell.is_empty() {
+        "/bin/sh".to_string()
+    } else {
+        login_shell
+    };
+
+    let entry = WslProbeCacheEntry {
+        home,
+        login_shell,
+    };
+    if let Ok(mut cache) = WSL_PROBE_CACHE.lock() {
+        cache.insert(distro.to_string(), entry.clone());
+    }
+    Ok(entry)
+}
+
+#[cfg(windows)]
+pub fn wsl_login_shell(distro: String) -> Result<String, String> {
+    // TDSF 魔改 2026-08-28: 原实现每次独立跑一次 wsl.exe 探测脚本；
+    // 现改为走 cached_wsl_probe（合并探测 + 进程内缓存）。
+    cached_wsl_probe(&distro).map(|e| e.login_shell)
 }
 
 #[cfg(all(test, windows))]

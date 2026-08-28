@@ -65,6 +65,8 @@ type Props = {
   onNewPreview: () => void;
   /** TDSF 修复 2026-08-01: SSH 空间隐藏本地预览菜单项 */
   showPreview?: boolean;
+  /** TDSF 魔改 2026-08-28: SSH 空间隐藏本地专属菜单项（Blocks/Privacy/Editor/GitGraph） */
+  showLocalExtras?: boolean;
   onNewEditor: () => void;
   onNewGitGraph: () => void;
   onLaunchAgents: (request: AgentLaunchRequest) => void;
@@ -102,6 +104,7 @@ export function Header({
   onNewPrivate,
   onNewPreview,
   showPreview = true,
+  showLocalExtras = true,
   onNewEditor,
   onNewGitGraph,
   onLaunchAgents,
@@ -257,6 +260,7 @@ export function Header({
           onNewPrivate={onNewPrivate}
           onNewPreview={onNewPreview}
           showPreview={showPreview}
+          showLocalExtras={showLocalExtras}
           onNewEditor={onNewEditor}
           onNewGitGraph={onNewGitGraph}
           onLaunchAgents={onLaunchAgents}

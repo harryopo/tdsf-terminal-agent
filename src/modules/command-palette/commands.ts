@@ -163,6 +163,8 @@ export function createCommandItems(
       group: "标签页",
       keywords: ["blocks", "warp", "command blocks", "terminal", "new block terminal"],
       icon: DashboardSquare01Icon,
+      // TDSF 魔改 2026-08-28: SSH 空间隐藏本地专属入口（块状终端基于本地 PTY）
+      hidden: ctx.isSshSpace === true,
       run: ctx.openNewBlock,
     },
     {
@@ -172,6 +174,8 @@ export function createCommandItems(
       keywords: ["privacy", "private", "incognito", "hidden from ai", "new private terminal"],
       icon: IncognitoIcon,
       shortcutId: "tab.newPrivate",
+      // TDSF 魔改 2026-08-28: SSH 空间隐藏（用户钦定，隐私终端属本地工作区功能）
+      hidden: ctx.isSshSpace === true,
       run: ctx.openNewPrivate,
     },
     {
@@ -182,6 +186,8 @@ export function createCommandItems(
       icon: FileEditIcon,
       shortcutId: "tab.newEditor",
       disabledReason: noWorkspaceRoot ? "无工作区根目录" : undefined,
+      // TDSF 魔改 2026-08-28: SSH 空间隐藏（新建文件走远程文件树，非本地编辑器）
+      hidden: ctx.isSshSpace === true,
       run: ctx.openNewEditor,
     },
     {
@@ -232,6 +238,8 @@ export function createCommandItems(
       group: "Git",
       keywords: ["git", "graph", "history", "log", "commits", "open git graph"],
       icon: SourceCodeIcon,
+      // TDSF 魔改 2026-08-28: SSH 空间隐藏（Git 图扫的是本地仓库，远程无意义）
+      hidden: ctx.isSshSpace === true,
       run: ctx.openGitGraph,
     },
     {
@@ -241,6 +249,8 @@ export function createCommandItems(
       keywords: ["git", "source control", "changes", "staging", "diff"],
       icon: SourceCodeIcon,
       shortcutId: "pane.source",
+      // TDSF 魔改 2026-08-28: SSH 空间隐藏（源代码管理基于本地 git 仓库）
+      hidden: ctx.isSshSpace === true,
       run: ctx.toggleSourceControl,
     },
     {

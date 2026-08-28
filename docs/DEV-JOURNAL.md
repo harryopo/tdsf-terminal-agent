@@ -1737,3 +1737,20 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ 五绿门禁全绿（typecheck/lint 0 警告/vitest 1136/build:web/pytest 1480/cargo test 含 doc-test）；✅ 双侧脱敏同源正则+双侧测试，防"前端拦了后端漏"或反之；⚠️ `pyrightconfig.json` 与 `启动-日志版.bat` 为本会话遗留的有效开发配置，一并入库；⚠️ 根目录 `terax-icon.png`（743KB，a4e5a7c 初始基线素材）在工作树中被删且未提交——本次提交不包含该删除，待用户确认去留。
 
 **待用户实测**：① `pnpm tauri:dev` 桌面端：终端 Ctrl+Shift+F 弹搜索浮层（大小写切换/上下查找）；② 跑一条危险命令（如 `rm -rf /`）被拦截后问 AI"刚才命令执行了吗"→ AI 应如实回答未执行；③ 失败块（红色 exit≠0）工具条点"AI 解释"→ 卡片流式输出错误解释（需已配 LLM）；④ `startup` 时 sidecar 日志确认无 `get_terminal_scrollback` 报错。
+
+## §37.78 用户实测四修：预测回车透传 + tab 命名 + SSH 入口收敛 + WSL 工作区（2026-08-28 ✅ 全量门禁绿）
+
+**任务目标**（用户实测反馈）：① 命令预测弹窗按回车把预测命令敲进终端——违反"终端操作终端优先"，要求 Enter 永远原样执行已敲入内容，仅 → 接受预测；② 本地新建 tab 应叫 terminal、SSH 新建叫 shell、WSL 也叫 shell；③ SSH 工作区下浏览器/隐私/Blocks 等本地专属入口先删去，新建文件指定路径即可创建（当前报错）；④ 左下角 WSL 选择后卡一下不丝滑，下拉应加 SSH 选项，WSL 应进欢迎页与新建工作区对话框。附带：根目录 terax-icon.png 旧素材确认删除（commit 103d77d）。
+
+**方案与实施**（三路并行调研后定位根因）：
+- **P1 预测回车透传**：`completionInjection.ts` Enter 分支原是"P0-3 弹窗可见时先 acceptPrediction 再透传"（写入 PTY 预测完整命令）→ 删除接受逻辑，Enter 无条件透传+清缓冲；接受预测仅存 → 右箭头（597-601）与鼠标点击（selectCompletionByIndex）。本地/SSH 共用 rendererPool 注入链，一处修改双端生效。补 Enter 透传测试（弹窗可见时 written=[]）。
+- **P2 tab 命名**：`useTabs.ts` 新增 `terminalTitleForSpace()`（SSH/WSL Space→"shell"，local→"terminal"），`newTab`/`newTabInSpace` 接入；`App.tsx` `bindTabToSshSpace` 与 `handleSpaceCreated` 的 customTitle 从 `user@host` 改为固定 `"shell"`（customTitle 必须设，否则 tabLabel 里 cwd basename 优先级会让远端 cd 后标题漂移）。
+- **P3 SSH 入口收敛**：`NewTabMenu.tsx` 新增 `showLocalExtras` prop（Blocks/Privacy/Editor/GitGraph 四项条件渲染），Header/TabBar 透传，App 层按 `activeSpace?.env.kind !== "ssh"` 传入（Preview 已有 showPreview 先例）；命令面板 `commands.ts` 的 tab.newBlock/tab.newPrivate/tab.newEditor/git.graph/git.source 补 `hidden: ctx.isSshSpace`。
+- **P4 远程新建文件**：根因三层——① Rust `SftpFs.write/mkdir` 无递归建父目录，多级路径报 "no such file"；② 错误被 catch 静默 console（无 toast）；③ App 层 SSH 判定两处不同源（断开瞬间 local-root×sftp-source 抖动报 invalid_path）。修复：`fs_backend/sftp.rs` 新增 `ensure_parent_dirs`（逐级 stat+mkdir，竞态保护）接入 write/mkdir（mkdir -p 语义）；`useFileTree.ts` commitCreate 失败补 `toast.error`；`App.tsx` fsSource 判定加 `env.kind === "ssh"` 与 effectiveExplorerRoot 同源。
+- **P5 WSL 工作区 + 流畅化**：① `WorkspaceEnvSelector.tsx` 加 `SSH Server...` 菜单项（onSelectSsh → 打开新建工作区对话框 SSH 模式，与欢迎页同源）+ `switching` pending 态（按钮 "Switching..." + pulse + disabled）；② `WelcomeScreen.tsx` 加"新建 WSL 工作区"按钮（CubeIcon）；③ `SpaceCreateDialog.tsx` Mode 扩为 local/wsl/ssh，三栏模式切换 + WSL 发行版下拉（复用 refreshDistros，仅列表为空时才拉取防 wsl.exe 冷启拖慢弹窗）+ `handleCreateWsl`（root 置 null → 首终端 `--cd ~` 落 WSL home）+ 提交按钮 disabled 逻辑；④ `useTerminalSession.ts` setLeafEnvironment 加 WSL 判定（active Space env.kind==="wsl" → linux 命令集）；⑤ Rust `workspace.rs` 新增 `cached_wsl_probe`：home+login shell 两次探测合并为一次 wsl.exe 往返 + per-distro 进程内缓存（LazyLock<Mutex<HashMap>>，短临界区无 await），`wsl_home`/`wsl_login_shell` 接入——后续切换/新建终端直接命中缓存；⑥ `handleSpaceCreated` 加 wsl 分支（newTab 不带 cwd）；⑦ `handleWorkspaceChange` 加 pending 反馈。
+
+**报错与修改**：typecheck 一次报 3 错——SpaceCreateDialog 改 import 时误删 WorkspaceEnv、误加未用的 WslDistro → 修正 import 后过；cargo check 一次过（LazyLock/Mutex 常量引用写法正确）。
+
+**复盘**：✅ P1 是用户钦定的交互原则修正（P0-3 的"聪明"行为被推翻——预测工具不该抢终端的回车），教训与 CLAUDE.md §3 红线 9 同源：终端输入链路禁止前端"聪明"改写；✅ WSL 探测缓存是纯增量优化（首启仍受 VM 冷启限制，二次切换零 wsl.exe 探测开销）；⚠️ 遗留：① `launchAgentGroup` 在 SSH Space 下把远程路径当本地 cwd 传 agent（调研发现的既有隐患，用户未提，暂留档）；② zsh 分支的 `probe_wsl_zdotdir` 仍是一次独立 wsl.exe（低频路径未缓存）；③ WSL Space 的左下角地址标签/标题栏显示未专门适配（follow-up）。
+
+**待用户实测**：① 预测弹窗可见时按 Enter → 执行已敲入内容（不被预测覆盖）；按 → 才接受预测；② 本地新建 tab 标题 terminal，SSH 新建/已有 tab 标题 shell，cd 后不漂移；③ SSH 工作区左下 + 标签栏 "+" 菜单只剩 Terminal/Agents；④ SSH 文件树新建多级路径文件/文件夹（如 lab/test/a.txt）一次成功，失败有红色 toast；⑤ 左下角下拉出现 SSH Server...（点击弹新建工作区对话框）；⑥ 欢迎页/新建工作区出现 WSL 选项，选发行版创建 → 首终端落 WSL home，第二次切换明显变快；⑦ WSL 终端输 `ls` 应弹 Linux 命令集预测。

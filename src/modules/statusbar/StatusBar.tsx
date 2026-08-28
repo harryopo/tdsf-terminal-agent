@@ -22,6 +22,10 @@ type Props = {
   home: string | null;
   onCd: (path: string) => void;
   onWorkspaceChange: (env: WorkspaceEnv) => void;
+  /** TDSF 魔改 2026-08-28: 环境选择器 SSH 选项 → 打开新建 SSH 工作区对话框 */
+  onWorkspaceSshClick?: () => void;
+  /** TDSF 魔改 2026-08-28: 环境切换进行中（pending 态） */
+  workspaceSwitching?: boolean;
   onOpenMini: () => void;
   /** Only rendered when the AI panel is open and a key is loaded. */
   hasComposer: boolean;
@@ -34,6 +38,8 @@ export function StatusBar({
   home,
   onCd,
   onWorkspaceChange,
+  onWorkspaceSshClick,
+  workspaceSwitching,
   onOpenMini,
   hasComposer,
   privateActive,
@@ -46,7 +52,11 @@ export function StatusBar({
       className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-border/60 bg-card/60 pl-3 pr-4 text-[11px]"
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <WorkspaceEnvSelector onSelect={onWorkspaceChange} />
+        <WorkspaceEnvSelector
+          onSelect={onWorkspaceChange}
+          onSelectSsh={onWorkspaceSshClick}
+          switching={workspaceSwitching}
+        />
         <CwdBreadcrumb cwd={cwd} filePath={filePath} home={home} onCd={onCd} />
         <LspStatusPill filePath={filePath ?? null} />
         <DiagnosticsBadge filePath={filePath ?? null} />
