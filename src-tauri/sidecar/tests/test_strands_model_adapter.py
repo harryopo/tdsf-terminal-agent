@@ -410,6 +410,86 @@ class TestCreateStrandsModelUnknownProvider:
 
 
 # ============================================================================
+# 5.5 国产 OpenAI 兼容 provider 测试（zhipu/dashscope/moonshot，2026-08）
+# ============================================================================
+
+class TestDomesticOpenAICompatibleProviders:
+    """国产三家 provider（zhipu/dashscope/moonshot）直通 OpenAIModel 分支测试
+
+    三家均走官方 OpenAI 兼容端点（spec: add-domestic-first-ai-config），
+    应命中 _OPENAI_COMPATIBLE_PROVIDERS 集合直接进 OpenAIModel 分支，
+    而非 unknown 兜底（不产生 "unknown provider" warning）。
+    """
+
+    @pytest.mark.parametrize(
+        ("provider", "base_url"),
+        [
+            ("zhipu", "https://open.bigmodel.cn/api/paas/v4"),
+            ("dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            ("moonshot", "https://api.moonshot.cn/v1"),
+        ],
+    )
+    def test_domestic_provider_returns_openai_model(
+        self, injected_model_adapter, provider: str, base_url: str
+    ):
+        """国产 provider + 官方端点 → 返回 OpenAIModel 实例 + 参数透传"""
+        config = LLMConfig(
+            provider=provider,
+            api_key="sk-domestic-test",
+            base_url=base_url,
+            model="test-model",
+            temperature=0.5,
+            max_tokens=1024,
+        )
+        result = injected_model_adapter.create_strands_model(config)
+
+        assert result is not None
+        assert isinstance(result, _MockOpenAIModel)
+        assert result.model_id == "test-model"
+        assert result.client_args["api_key"] == "sk-domestic-test"
+        assert result.client_args["base_url"] == base_url
+        assert result.params["temperature"] == 0.5
+        assert result.params["max_tokens"] == 1024
+
+    @pytest.mark.parametrize("provider", ["zhipu", "dashscope", "moonshot"])
+    def test_domestic_provider_no_unknown_warning(
+        self, injected_model_adapter, caplog, provider: str
+    ):
+        """国产 provider 命中显式集合（非 unknown 兜底），不产生 unknown 告警"""
+        import logging
+
+        config = LLMConfig(
+            provider=provider,
+            api_key="sk-domestic-test",
+            base_url="https://example.com/v1",
+            model="test-model",
+        )
+        with caplog.at_level(
+            logging.WARNING, logger="sidecar.strands_backend.model_adapter"
+        ):
+            result = injected_model_adapter.create_strands_model(config)
+
+        assert isinstance(result, _MockOpenAIModel)
+        assert "unknown provider" not in caplog.text
+
+    @pytest.mark.parametrize("provider", ["zhipu", "dashscope", "moonshot"])
+    def test_domestic_provider_without_base_url(
+        self, injected_model_adapter, provider: str
+    ):
+        """国产 provider + base_url 留空 → OpenAIModel 创建成功、不传 base_url
+
+        端点预填/回退在 core/llm_config.py 层完成，adapter 层只透传 config。
+        """
+        config = LLMConfig(
+            provider=provider, api_key="sk-domestic-test", model="test-model"
+        )
+        result = injected_model_adapter.create_strands_model(config)
+
+        assert isinstance(result, _MockOpenAIModel)
+        assert "base_url" not in result.client_args
+
+
+# ============================================================================
 # 6. 可用性查询测试
 # ============================================================================
 

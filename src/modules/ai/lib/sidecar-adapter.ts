@@ -31,6 +31,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { UIMessageChunk } from "ai";
 import { TDSF_AGENTS, type TdsfAgentId } from "../agents/registry";
+// TDSF 魔改 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
+import {
+  isSidecarConfigSynced,
+  markSidecarConfigSynced,
+  syncSidecarLlmConfig,
+} from "./sidecar-config-sync";
 
 // === 常量 ====================================================================
 
@@ -666,6 +672,22 @@ export async function* runSidecarStream(
   opts: SidecarStreamOptions,
 ): AsyncIterable<SidecarStreamPart> {
   const { agentId, messages, input, live, abortSignal, onMood, onStep, onUsage } = opts;
+
+  // TDSF 魔改 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
+  // （agent.configure 一次 configure 永久生效）。失败不阻塞对话——sidecar
+  // 沿用上次落盘配置；置位标志防止每条消息重复打 IPC，配置变更时由
+  // ModelsSection 重置标志（scheduleSidecarConfigSync）。
+  if (!isSidecarConfigSynced()) {
+    markSidecarConfigSynced();
+    const sync = await syncSidecarLlmConfig();
+    if (!sync.ok) {
+      console.warn(
+        "[sidecar-adapter] sidecar LLM 配置未同步（不影响本次对话）:",
+        sync.detail,
+      );
+    }
+  }
+
   const pythonName = mapToPythonName(agentId);
   const streamId = `tdsf-${agentId}-${Date.now()}`;
   const thinkingId = `${streamId}-thinking`;

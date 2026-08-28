@@ -14,6 +14,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   Add01Icon,
   AiBookIcon,
+  AiCloud01Icon,
   AppleIcon,
   ArrowDown01Icon,
   ArrowUpIcon,
@@ -26,6 +27,7 @@ import {
   CpuIcon,
   DeepseekIcon,
   FavouriteIcon,
+  FireIcon,
   FlashIcon,
   GlobeIcon,
   GoogleGeminiIcon,
@@ -33,10 +35,12 @@ import {
   Message01Icon,
   Mic01Icon,
   MistralIcon,
+  Moon02Icon,
   PlugIcon,
   Search01Icon,
   ServerStack01Icon,
   Settings01Icon,
+  SparklesIcon,
   StarIcon,
   StopCircleIcon,
   Tick01Icon,
@@ -62,13 +66,18 @@ import { toggleFavoriteModel } from "../lib/modelPrefs";
 import { useChatStore } from "../store/chatStore";
 
 const PROVIDER_ICON = {
+  // TDSF 魔改 2026-08-28: 国产 provider 图标（与 settings/ProviderIcon 保持一致）
+  deepseek: DeepseekIcon,
+  qwen: AiCloud01Icon,
+  zhipu: SparklesIcon,
+  moonshot: Moon02Icon,
+  doubao: FireIcon,
   openai: ChatGptIcon,
   anthropic: ClaudeIcon,
   google: GoogleGeminiIcon,
   xai: Grok02Icon,
   cerebras: CpuIcon,
   groq: FlashIcon,
-  deepseek: DeepseekIcon,
   mistral: MistralIcon,
   openrouter: GlobeIcon,
   "openai-compatible": PlugIcon,
