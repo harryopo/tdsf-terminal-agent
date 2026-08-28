@@ -23,6 +23,8 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { homeDir } from "@tauri-apps/api/path";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ErrorExplainCard } from "./ErrorExplainCard";
+import { useErrorExplainStore } from "./errorExplainStore";
 import type {
   BlockMatch,
   PositionedBlock,
@@ -47,6 +49,9 @@ type Props = {
   promptReady: boolean;
   onRunAgain: (command: string) => void;
   onRestoreFocus: () => void;
+  // TDSF 魔改 2026-08-28 (B1-G3): 失败块"AI 解释"（手动触发）。
+  // teachAgentEnabled=false 时调用方传 undefined → 按钮不渲染。
+  onExplainError?: (block: PositionedBlock) => void;
 };
 
 const EMPTY: VisibleBlocks = { blocks: [], sticky: null };
@@ -99,6 +104,8 @@ export function BlockOverlay(props: Props) {
   const [vis, setVis] = useState<VisibleBlocks>(EMPTY);
   const [searchId, setSearchId] = useState<string | null>(null);
   const lastSig = useRef("");
+  // B1-G3: 当前展示解释的块 id（null=无）
+  const explainBlockId = useErrorExplainStore((s) => s.blockId);
 
   useEffect(() => {
     const update = () => {
@@ -131,6 +138,17 @@ export function BlockOverlay(props: Props) {
           searchBlock={props.searchBlock}
           revealMatch={props.revealMatch}
           onClose={closeSearch}
+        />
+      )}
+      {/* B1-G3: 错误解释卡片（锚在对应块分隔线下方） */}
+      {explainBlockId && (
+        <ErrorExplainCard
+          active={true}
+          top={
+            vis.blocks.find((b) => b.id === explainBlockId)?.bottom ??
+            vis.sticky?.bottom ??
+            0
+          }
         />
       )}
     </div>
@@ -193,6 +211,9 @@ function Toolbar({ block, all, onSearch }: ChromeProps) {
     ? null
     : fmtDuration(block.finishedAt - block.startedAt);
   const failed = !block.running && !block.ok && block.exitCode !== null;
+  // B1-G3: explain streaming 期间全局禁用（单飞行节流）
+  const explainStreaming =
+    useErrorExplainStore((s) => s.status) === "streaming";
   return (
     <div className="bt-tools">
       {failed && <span className="bt-exit">exit {block.exitCode}</span>}
@@ -206,6 +227,17 @@ function Toolbar({ block, all, onSearch }: ChromeProps) {
           onClick={() => all.onRunAgain(block.command)}
         >
           <HugeiconsIcon icon={Refresh01Icon} size={12.5} strokeWidth={1.75} />
+        </button>
+      )}
+      {failed && all.onExplainError && (
+        <button
+          type="button"
+          title="AI 解释此错误"
+          className="bt-btn"
+          disabled={explainStreaming}
+          onClick={() => all.onExplainError?.(block)}
+        >
+          <HugeiconsIcon icon={SparklesIcon} size={12.5} strokeWidth={1.75} />
         </button>
       )}
       <BlockMenu block={block} all={all} onSearch={onSearch} />

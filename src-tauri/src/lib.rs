@@ -478,6 +478,8 @@ pub fn run() {
             sidecar::sidecar_logs_clear,
             ipc::ipc_invoke,
             ipc::ipc_notify,
+            // TDSF 魔改 2026-08-28 (B1-F0): 前端回传终端 scrollback（sidecar 反向 RPC 响应通道）
+            sidecar::sidecar_scrollback_response,
             // TDSF 魔改 (P4-T4.1): SSH 远程资源管理器 (russh 0.61 + SFTP)
             // ssh_*: SSH 连接/PTY 读写/窗口调整/断开/状态查询/TOFU 主机审批
             // sftp_*: 远程文件 list/stat/read/write/mkdir/remove/rename

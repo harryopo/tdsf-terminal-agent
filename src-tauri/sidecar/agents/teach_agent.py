@@ -93,7 +93,16 @@ class TeachAgent(BaseAgent):
             "- Mark CET-4 vocabulary with English translation in parentheses.\n"
             "- Provide English term translation module for technical terms.\n"
             "- Include practical examples for each concept.\n"
-            "- Highlight common pitfalls and exam points (考点).\n"
+            "- Highlight common pitfalls and exam points (考点).\n\n"
+            # TDSF 魔改 2026-08-28 (B1-G3): 失败块"AI 解释"轻量模式——
+            # 前端 ErrorExplainCard 渲染纯文本，禁用 6 板块格式（否则 teachParser
+            # 会把短解释误渲染成 TeachCard）。
+            "Lightweight error-explain mode:\n"
+            "- When the user input starts with 'explain-error:', output a SHORT\n"
+            "  Chinese explanation (<=150 chars) of why the command failed, followed\n"
+            "  by 1-3 concrete fix suggestions (numbered list).\n"
+            "- Do NOT use the 6-section tutorial format (## 教程/知识卡/学习路径).\n"
+            "- Plain text only, no markdown headings.\n"
         )
 
     def plan_task(self, user_input: str, state: dict[str, Any]) -> list[str]:

@@ -13,6 +13,8 @@ import logging
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
+# TDSF 魔改 2026-08-28 (B1-G1): 终端文本进 LLM 前必须脱敏（对齐前端 redact.ts）
+from strands_backend.tools._redact import redact_sensitive_text
 
 logger = logging.getLogger("sidecar.strands_backend.tools.get_terminal_output")
 
@@ -48,6 +50,9 @@ def invoke_get_terminal_output(
         max_chars = 24000
         if len(output) > max_chars:
             output = output[-max_chars:]
+        # TDSF 魔改 2026-08-28 (B1-G1): 送 LLM 前脱敏（前端路径 3 处已覆盖，
+        # 本工具是 Sidecar 独立路径，此前裸奔）
+        output = redact_sensitive_text(output)
         return {
             "output": output,
             "lines_returned": output.count("\n") + 1 if output else 0,

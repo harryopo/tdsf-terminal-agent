@@ -12,6 +12,8 @@ import { type RefObject, useEffect, useRef } from "react";
 import type { Live } from "../store/chatStore";
 import { useChatStore } from "../store/chatStore";
 import { redactSensitive } from "./redact";
+// TDSF 魔改 2026-08-28 (B1-G2 防伪造): 拦截命令注入 AI 上下文
+import { getRecentBlockedCommandText } from "@/modules/terminal/lib/useTerminalSession";
 
 type TuiWaitResult = "ready" | "gone" | "timeout";
 
@@ -114,12 +116,24 @@ export function useAiLiveBridge(params: Params) {
         // 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，active tab 的 activeLeafId
         // 就是当前 pane；getSshLeafId 返回其 leafId（会话 connected 时）。
         // 优先读 SSH 终端的 scrollback，无内容时回退本地终端。
+        // TDSF 魔改 2026-08-28 (B1-G2 防伪造): 尾部追加"最近被拦截命令"提示，
+        // 让 LLM 知道该命令未执行，防止编造执行结果（见 useTerminalSession）。
+        const appendBlockedHint = (ctx: string): string => {
+          const blocked = getRecentBlockedCommandText();
+          return blocked
+            ? `${ctx}\n[TDSF] 最近被安全拦截的命令（未执行）: ${blocked}`
+            : ctx;
+        };
         const sshLeafId = ref.current.getSshLeafId?.();
         if (sshLeafId !== null && sshLeafId !== undefined) {
           const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(300);
-          if (buf) return redactSensitive(buf);
-          // SSH leaf 存在但 buffer 还没准备好（刚连接），不回退本地
-          return null;
+          if (buf) return appendBlockedHint(redactSensitive(buf));
+          // SSH leaf 存在但 buffer 还没准备好（刚连接），不回退本地；
+          // 仍注入拦截提示（若存在）——命令被拦截时终端无新输出，AI 也能感知
+          const blockedOnly = getRecentBlockedCommandText();
+          return blockedOnly
+            ? `[TDSF] 最近被安全拦截的命令（未执行）: ${blockedOnly}`
+            : null;
         }
         // 本地终端（无 SSH 会话活跃时）
         const { activeId, tabs } = ref.current;
@@ -127,7 +141,7 @@ export function useAiLiveBridge(params: Params) {
         if (t?.kind === "terminal") {
           if (t.private) return null;
           const buf = terminalRefs.current.get(t.activeLeafId)?.getBuffer(300);
-          return buf ? redactSensitive(buf) : null;
+          return buf ? appendBlockedHint(redactSensitive(buf)) : null;
         }
         return null;
       },
@@ -279,9 +293,37 @@ export function useAiLiveBridge(params: Params) {
       console.warn("[tdsf] update_todos listen failed:", e);
     });
 
+    // TDSF 魔改 2026-08-28 (B1-F0): 响应 sidecar 的终端 scrollback 请求
+    // Python get_terminal_output 工具 → rust_bridge.ipc_invoke("get_terminal_scrollback")
+    // → Rust emit 本事件 → 这里读 getTerminalContext()（redact+SSH 优先+private 检查）
+    // → invoke("sidecar_scrollback_response") 回传 → Rust oneshot resolve → Python。
+    // 复用上方闭包的 getTerminalContext：从 live 对象取（setLive 已注册）。
+    let unlistenScrollback: (() => void) | null = null;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenScrollback = await listen<{
+        requestId: string;
+        lines: number;
+      }>("sidecar:get-terminal-scrollback", (event) => {
+        const { requestId } = event.payload;
+        if (!requestId) return;
+        const live = useChatStore.getState().live;
+        const output = live?.getTerminalContext?.() ?? "";
+        void invoke("sidecar_scrollback_response", {
+          requestId,
+          output: output ?? "",
+        }).catch((e) => {
+          console.warn("[tdsf] scrollback response failed:", e);
+        });
+      });
+    })().catch((e) => {
+      console.warn("[tdsf] scrollback listen failed:", e);
+    });
+
     return () => {
       if (unlistenInject) unlistenInject();
       if (unlistenTodos) unlistenTodos();
+      if (unlistenScrollback) unlistenScrollback();
     };
   }, [setLive, terminalRefs]);
 }
