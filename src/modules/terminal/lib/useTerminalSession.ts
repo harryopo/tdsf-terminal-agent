@@ -7,6 +7,7 @@ import { ensureMonoFontsLoaded } from "@/lib/fonts";
 import type { RiskRpcAssessment } from "@/lib/risk-engine/riskClient";
 import { evaluateRisk, evaluateRiskSync } from "@/lib/risk-engine/riskClient";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { useSpaces } from "@/modules/spaces";
 import { invoke } from "@tauri-apps/api/core";
 import type { SearchAddon } from "@xterm/addon-search";
 import {
@@ -1163,7 +1164,16 @@ export function useTerminalSession({
     s.remote = remoteRef.current;
     // TDSF 2026-08-28: 命令预测按环境分流——本地终端预测 Windows 命令，
     // SSH 终端预测 Linux 命令（远程 remote=true → linux 命令集）。
-    setLeafEnvironment(leafId, s.remote ? "linux" : "windows");
+    // TDSF 魔改 2026-08-28（用户反馈）: WSL Space 的本地 PTY 实际运行 Linux，
+    // 命令预测同样按 linux 命令集分流。WorkspaceSurface 只渲染当前 Space 的
+    // tabs，session 创建时 active Space 即 leaf 所属 Space。
+    const spaceEnvKind = useSpaces
+      .getState()
+      .spaces.find((x) => x.id === useSpaces.getState().activeId)?.env.kind;
+    setLeafEnvironment(
+      leafId,
+      s.remote || spaceEnvKind === "wsl" ? "linux" : "windows",
+    );
     s.ready.then(() => {
       if (cancelled || s.disposed) return;
       const node = container.current;

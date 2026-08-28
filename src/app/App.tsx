@@ -287,15 +287,31 @@ export default function App() {
   // TDSF 修复 2026-08-01: 工作区数量（0 = 欢迎界面）
   const spaceCount = useSpaces((s) => s.spaces.length);
 
+  // TDSF 魔改 2026-08-28（用户反馈）: 环境切换 pending 态——WSL 首次冷启动
+  // 要串行探测 home/login shell/zdotdir（多次 wsl.exe），期间无反馈会显得"卡死"。
+  const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const handleWorkspaceChange = useCallback(
     async (env: WorkspaceEnv) => {
-      const switched = await switchWorkspace(env);
-      if (switched && activeSpaceId) {
-        useSpaces.getState().setEnv(activeSpaceId, env);
+      setWorkspaceSwitching(true);
+      try {
+        const switched = await switchWorkspace(env);
+        if (switched && activeSpaceId) {
+          useSpaces.getState().setEnv(activeSpaceId, env);
+        }
+      } finally {
+        setWorkspaceSwitching(false);
       }
     },
     [switchWorkspace, activeSpaceId],
   );
+
+  // TDSF 魔改 2026-08-28（用户反馈）: 左下角环境选择器的 SSH 选项——
+  // 与欢迎页同源，打开"新建工作区"对话框的 SSH 模式（SSH 需要主机/凭据，
+  // 无法像 WSL 一样一步切换）。
+  const handleWorkspaceSshClick = useCallback(() => {
+    setSpaceCreateMode("ssh");
+    setSpaceCreateOpen(true);
+  }, []);
 
   useSpacesBoot({
     ready: launchCwdResolved,
@@ -353,8 +369,10 @@ export default function App() {
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [spaceCreateOpen, setSpaceCreateOpen] = useState(false);
-  // TDSF 修复 2026-08-01: 创建对话框初始模式（欢迎界面预设 local/ssh）
-  const [spaceCreateMode, setSpaceCreateMode] = useState<"local" | "ssh">("local");
+  // TDSF 修复 2026-08-01: 创建对话框初始模式（欢迎界面预设 local/wsl/ssh）
+  const [spaceCreateMode, setSpaceCreateMode] = useState<
+    "local" | "wsl" | "ssh"
+  >("local");
 
   const spaceTabs = useMemo(
     () => tabs.filter((t) => t.spaceId === (activeSpaceId ?? DEFAULT_SPACE_ID)),
@@ -1243,7 +1261,10 @@ export default function App() {
       if (space?.env.kind === "ssh" && space.env.sessionId) {
         updateTab(tabId, {
           sshSessionId: space.env.sessionId,
-          customTitle: `${space.env.user}@${space.env.host}`,
+          // 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（原显示 user@host）。
+          // customTitle 必须设——tabLabel 里 cwd basename 优先级高于 title，
+          // 不设的话远端 cd 后标题会漂移成目录名。
+          customTitle: "shell",
         });
       }
     },
@@ -1893,8 +1914,14 @@ export default function App() {
         const tabId = newTabInSpace(space.id, space.root ?? undefined);
         updateTab(tabId, {
           sshSessionId,
-          customTitle: `${space.env.user}@${space.env.host}`,
+          // 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（与 bindTabToSshSpace 一致）
+          customTitle: "shell",
         });
+        setActiveId(tabId);
+      } else if (space.env.kind === "wsl") {
+        // TDSF 魔改 2026-08-28: WSL Space 首终端不带 cwd（cwd=null 时 Rust 端
+        // build_wsl 用 `--cd ~` 落在 WSL home；传 activeCwd 本地路径反而错误）
+        const tabId = newTab(undefined);
         setActiveId(tabId);
       } else {
         const tabId = newTab(activeCwd ?? space.root ?? undefined);
@@ -2174,6 +2201,7 @@ export default function App() {
               onNewPrivate={openNewPrivateTab}
               onNewPreview={() => openPreviewTab("")}
               showPreview={activeSpace?.env.kind !== "ssh"}
+              showLocalExtras={activeSpace?.env.kind !== "ssh"}
               onNewEditor={() => setNewEditorOpen(true)}
               onNewGitGraph={openGitGraphFromContext}
               onLaunchAgents={launchAgentGroup}
@@ -2254,7 +2282,12 @@ export default function App() {
                             ref={explorerRef}
                             rootPath={effectiveExplorerRoot}
                             fsSource={
+                              // TDSF 魔改 2026-08-28: SSH 判定与 effectiveExplorerRoot 同源
+                              // （都要求 env.kind === "ssh"），消除断开瞬间
+                              // "rootPath 已回退本地 Windows 路径 × fsSource 仍是 sftp"
+                              // 的抖动窗口（validate_sftp_path 报 invalid_path）。
                               explorerSource === "ssh" &&
+                              activeSpace?.env.kind === "ssh" &&
                               spaceSshSession?.rustSessionId != null
                                 ? {
                                     kind: "sftp",
@@ -2355,6 +2388,11 @@ export default function App() {
                           setSpaceCreateMode("local");
                           setSpaceCreateOpen(true);
                         }}
+                        onCreateWsl={() => {
+                          // TDSF 魔改 2026-08-28（用户反馈）: WSL 加入欢迎页
+                          setSpaceCreateMode("wsl");
+                          setSpaceCreateOpen(true);
+                        }}
                         onCreateSsh={() => {
                           setSpaceCreateMode("ssh");
                           setSpaceCreateOpen(true);
@@ -2429,6 +2467,8 @@ export default function App() {
               home={home}
               onCd={sendCd}
               onWorkspaceChange={handleWorkspaceChange}
+              onWorkspaceSshClick={handleWorkspaceSshClick}
+              workspaceSwitching={workspaceSwitching}
               onOpenMini={openMini}
               hasComposer={hasComposer}
               privateActive={

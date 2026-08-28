@@ -2,11 +2,13 @@
 // -----------------------------------------------------------------------------
 // 用户在创建新工作区时可选择:
 //   - 本地工作区 (Local Workspace): 使用当前 workspaceEnv 启动本地 PTY
+//   - WSL 工作区 (2026-08-28 用户反馈新增): 选择 WSL 发行版, 首终端落在 WSL home
 //   - SSH 服务器 (SSH Server): 填写 SSH 连接信息, 连接成功后创建 SSH Space
 //
 // 设计要点:
-//   - 本地模式与 SSH 模式通过顶部选项卡切换
+//   - 本地/WSL/SSH 模式通过顶部选项卡切换
 //   - SSH 模式复用 sshStore.connect 建立会话, 成功后把 sessionId 写入 Space.env
+//   - WSL 模式复用 useWorkspaceEnvStore.refreshDistros 拉发行版列表
 //   - 新建 Space 后自动在该 Space 下创建一个 Terminal Tab
 //   - 对话框关闭或成功时重置表单, 避免下次打开残留
 
@@ -31,6 +33,7 @@ import { cn } from "@/lib/utils";
 import {
   Cancel01Icon,
   CloudServerIcon,
+  CubeIcon,
   Loading03Icon,
   Square01Icon,
 } from "@hugeicons/core-free-icons";
@@ -39,12 +42,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSshStore } from "../../ssh-explorer/sshStore";
 import type { SpaceMeta } from "../lib/store";
 import { useSpaces } from "../lib/useSpaces";
-import type { WorkspaceEnv } from "@/modules/workspace";
+import {
+  useWorkspaceEnvStore,
+  type WorkspaceEnv,
+} from "@/modules/workspace";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** TDSF 2026-08-01: 初始模式（欢迎界面可预设 local/ssh） */
+  /** TDSF 2026-08-01: 初始模式（欢迎界面可预设 local/wsl/ssh） */
   initialMode?: Mode;
   /** 本地 Space 默认使用的环境 (local 或当前 WSL) */
   defaultEnv: WorkspaceEnv;
@@ -54,7 +60,7 @@ type Props = {
   onCreated: (space: SpaceMeta, sshSessionId?: string) => void;
 };
 
-type Mode = "local" | "ssh";
+type Mode = "local" | "wsl" | "ssh";
 
 type AuthKind = "password" | "publickey";
 
@@ -84,6 +90,13 @@ export function SpaceCreateDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // === WSL 表单状态（2026-08-28 用户反馈新增） ===
+  const wslDistros = useWorkspaceEnvStore((s) => s.distros);
+  const wslLoading = useWorkspaceEnvStore((s) => s.loading);
+  const wslError = useWorkspaceEnvStore((s) => s.error);
+  const refreshDistros = useWorkspaceEnvStore((s) => s.refreshDistros);
+  const [wslDistro, setWslDistro] = useState("");
+
   // === SSH 表单状态 ===
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -101,8 +114,9 @@ export function SpaceCreateDialog({
 
   const defaultName = useMemo(() => {
     if (mode === "ssh") return host.trim() ? `${user.trim()}@${host.trim()}` : "";
+    if (mode === "wsl") return wslDistro ? `WSL ${wslDistro}` : "";
     return `Space ${spaces.length + 1}`;
-  }, [mode, host, user, spaces.length]);
+  }, [mode, host, user, wslDistro, spaces.length]);
 
   // 打开时重置表单; 打开瞬间应用初始模式 + 加载已保存连接。
   // TDSF 修复 2026-08-07: 原 effect 在 open 期间因依赖变化（defaultName /
@@ -116,6 +130,7 @@ export function SpaceCreateDialog({
       setName("");
       setSubmitting(false);
       setError(null);
+      setWslDistro("");
       setHost("");
       setPort("22");
       setUser("");
@@ -131,12 +146,17 @@ export function SpaceCreateDialog({
     }
     if (!initializedRef.current) {
       initializedRef.current = true;
-      // TDSF 2026-08-01: 打开时应用初始模式（欢迎界面预设 local/ssh）
+      // TDSF 2026-08-01: 打开时应用初始模式（欢迎界面预设 local/wsl/ssh）
       setMode(initialMode);
       setName(defaultName);
       void loadSavedConnections();
+      // WSL 发行版列表预取——仅在从未加载过时调用（wsl.exe -l 有冷启动开销，
+      // 每次打开对话框都拉会拖慢弹窗；与 WorkspaceEnvSelector 的惰性策略一致）
+      if (useWorkspaceEnvStore.getState().distros.length === 0) {
+        void refreshDistros();
+      }
     }
-  }, [open, defaultName, loadSavedConnections, initialMode]);
+  }, [open, defaultName, loadSavedConnections, initialMode, refreshDistros]);
 
   useEffect(() => {
     setName(defaultName);
@@ -275,6 +295,21 @@ export function SpaceCreateDialog({
     onOpenChange(false);
   };
 
+  // TDSF 魔改 2026-08-28（用户反馈）: WSL 工作区创建。
+  // root 置 null —— activeSpace.freshTabCwd 对 WSL Space 返回 null，
+  // 首终端不带 cwd 启动，Rust 端 build_wsl 用 `--cd ~` 落在 WSL home。
+  const handleCreateWsl = () => {
+    if (!wslDistro) return;
+    const spaceName = name.trim() || defaultName || `WSL ${wslDistro}`;
+    const meta = createSpace({
+      name: spaceName,
+      root: null,
+      env: { kind: "wsl", distro: wslDistro },
+    });
+    onCreated(meta);
+    onOpenChange(false);
+  };
+
   const handleCreateSsh = async () => {
     const params = validateSsh();
     if (!params) return;
@@ -352,6 +387,8 @@ export function SpaceCreateDialog({
     e.preventDefault();
     if (mode === "local") {
       handleCreateLocal();
+    } else if (mode === "wsl") {
+      handleCreateWsl();
     } else {
       void handleCreateSsh();
     }
@@ -363,12 +400,13 @@ export function SpaceCreateDialog({
         <DialogHeader>
           <DialogTitle>新建工作区 (New Space)</DialogTitle>
           <DialogDescription>
-            选择本地工作区或连接 SSH 服务器, 每个 Space 可包含多个 Terminal Tab。
+            选择本地、WSL 或 SSH 服务器工作区, 每个 Space 可包含多个
+            Terminal Tab。
           </DialogDescription>
         </DialogHeader>
 
         {/* 模式选择 */}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => setMode("local")}
@@ -381,6 +419,19 @@ export function SpaceCreateDialog({
           >
             <HugeiconsIcon icon={Square01Icon} size={14} strokeWidth={1.75} />
             本地工作区
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("wsl")}
+            className={cn(
+              "flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+              mode === "wsl"
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:bg-muted",
+            )}
+          >
+            <HugeiconsIcon icon={CubeIcon} size={14} strokeWidth={1.75} />
+            WSL
           </button>
           <button
             type="button"
@@ -413,6 +464,55 @@ export function SpaceCreateDialog({
               disabled={submitting}
             />
           </div>
+
+          {mode === "wsl" && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="wsl-distro">WSL 发行版 (Distro)</Label>
+              {wslDistros.length > 0 ? (
+                <select
+                  id="wsl-distro"
+                  value={wslDistro}
+                  onChange={(e) => setWslDistro(e.target.value)}
+                  disabled={submitting}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20"
+                >
+                  <option value="" disabled>
+                    选择发行版…
+                  </option>
+                  {wslDistros.map((d) => (
+                    <option key={d.name} value={d.name}>
+                      {d.name}
+                      {d.default ? "（默认）" : ""}
+                      {d.running ? " · running" : ""}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-3 py-2 text-[12px] text-muted-foreground">
+                  <span>
+                    {wslLoading
+                      ? "正在探测 WSL 发行版…"
+                      : wslError
+                        ? `WSL 不可用：${wslError}`
+                        : "未找到 WSL 发行版"}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void refreshDistros()}
+                    disabled={wslLoading}
+                  >
+                    重新探测
+                  </Button>
+                </div>
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                首个终端将启动在所选发行版的 home 目录，命令预测按 Linux
+                环境处理。
+              </p>
+            </div>
+          )}
 
           {mode === "ssh" && (
             <>
@@ -630,9 +730,11 @@ export function SpaceCreateDialog({
               type="submit"
               disabled={
                 submitting ||
-                (mode === "local"
-                  ? false
-                  : !host.trim() || !user.trim())
+                (mode === "wsl"
+                  ? !wslDistro
+                  : mode === "ssh"
+                    ? !host.trim() || !user.trim()
+                    : false)
               }
             >
               {submitting && (
@@ -643,7 +745,7 @@ export function SpaceCreateDialog({
                   className="animate-spin"
                 />
               )}
-              {mode === "local" ? "创建" : "连接并创建"}
+              {mode === "ssh" ? "连接并创建" : "创建"}
             </Button>
           </DialogFooter>
         </form>

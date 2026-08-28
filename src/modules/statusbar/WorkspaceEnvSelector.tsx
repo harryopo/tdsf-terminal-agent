@@ -11,14 +11,30 @@ import {
   useWorkspaceEnvStore,
   type WorkspaceEnv,
 } from "@/modules/workspace";
-import { Refresh01Icon, ServerStack03Icon } from "@hugeicons/core-free-icons";
+import {
+  Refresh01Icon,
+  ServerStack03Icon,
+  Settings01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
 type Props = {
   onSelect: (env: WorkspaceEnv) => void;
+  /**
+   * TDSF 魔改 2026-08-28（用户反馈）: SSH 选项——SSH 无法像 WSL 一样
+   * 一步切换（需要主机/凭据），点击后打开"新建 SSH 工作区"对话框，
+   * 与欢迎页/新建工作区的 SSH 链路保持同源。
+   */
+  onSelectSsh?: () => void;
+  /** 环境切换进行中（按钮 pending 态，防止"卡一下"的错觉） */
+  switching?: boolean;
 };
 
-export function WorkspaceEnvSelector({ onSelect }: Props) {
+export function WorkspaceEnvSelector({
+  onSelect,
+  onSelectSsh,
+  switching = false,
+}: Props) {
   const env = useWorkspaceEnvStore((s) => s.env);
   const distros = useWorkspaceEnvStore((s) => s.distros);
   const loading = useWorkspaceEnvStore((s) => s.loading);
@@ -40,20 +56,30 @@ export function WorkspaceEnvSelector({ onSelect }: Props) {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex h-6 shrink-0 items-center gap-1 rounded-sm px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent data-[state=open]:text-foreground"
-          title="Workspace environment"
+          disabled={switching}
+          className="flex h-6 shrink-0 items-center gap-1 rounded-sm px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent data-[state=open]:text-foreground disabled:opacity-60"
+          title={
+            switching ? "Switching environment..." : "Workspace environment"
+          }
         >
           <HugeiconsIcon
             icon={ServerStack03Icon}
             size={13}
             strokeWidth={1.75}
+            className={switching ? "animate-pulse" : undefined}
           />
-          <span className="max-w-28 truncate">{label}</span>
+          <span className="max-w-28 truncate">
+            {switching ? "Switching..." : label}
+          </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-48">
         <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
           Windows Local
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onSelectSsh}>
+          <HugeiconsIcon icon={Settings01Icon} size={13} strokeWidth={1.75} />
+          SSH Server...
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {distros.length === 0 ? (
