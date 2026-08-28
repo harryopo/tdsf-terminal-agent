@@ -1754,3 +1754,19 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ P1 是用户钦定的交互原则修正（P0-3 的"聪明"行为被推翻——预测工具不该抢终端的回车），教训与 CLAUDE.md §3 红线 9 同源：终端输入链路禁止前端"聪明"改写；✅ WSL 探测缓存是纯增量优化（首启仍受 VM 冷启限制，二次切换零 wsl.exe 探测开销）；⚠️ 遗留：① `launchAgentGroup` 在 SSH Space 下把远程路径当本地 cwd 传 agent（调研发现的既有隐患，用户未提，暂留档）；② zsh 分支的 `probe_wsl_zdotdir` 仍是一次独立 wsl.exe（低频路径未缓存）；③ WSL Space 的左下角地址标签/标题栏显示未专门适配（follow-up）。
 
 **待用户实测**：① 预测弹窗可见时按 Enter → 执行已敲入内容（不被预测覆盖）；按 → 才接受预测；② 本地新建 tab 标题 terminal，SSH 新建/已有 tab 标题 shell，cd 后不漂移；③ SSH 工作区左下 + 标签栏 "+" 菜单只剩 Terminal/Agents；④ SSH 文件树新建多级路径文件/文件夹（如 lab/test/a.txt）一次成功，失败有红色 toast；⑤ 左下角下拉出现 SSH Server...（点击弹新建工作区对话框）；⑥ 欢迎页/新建工作区出现 WSL 选项，选发行版创建 → 首终端落 WSL home，第二次切换明显变快；⑦ WSL 终端输 `ls` 应弹 Linux 命令集预测。
+
+## §37.79 Agent 能力升级方案书 v3.0 + agent 资料归档中心建立（2026-08-28 ✅ 纯文档任务）
+
+**任务目标**（用户指令四合一）：① 讲清当前 agent 模块设计；② 自检问题与优化建议；③ 联网深度调研最新 agent 架构 + DeepSeek Harness 开源项目借鉴可行性；④ 整理上级目录散落的 agent 源码/调研/方案书文档到当前目录，建 agent 开发文档文件夹，产出下一步方案书。
+
+**方案与实施**（纯文档 + 资料整理，无代码改动）：
+- **架构梳理**：通读 `docs/Agent架构说明书.md`（v1.1）+ `strands_backend/` 全目录 + ROADMAP/dev-state 近期章节，确认现状 = Strands 单框架 / main(23 工具)+4 子 agent / 四层安全 / RAG 知识库（FTS5+sqlite-vec+RRF）/ 双路径（Vercel SDK + Sidecar）；深度进化 P0-P3 与 B1 安全基座已全部落地
+- **网络调研**（general_purpose_task 子代理）：确认 DeepSeek Harness 真实存在（`deepseek-ai/deepseek-harness`，2026-08-13 preview，MIT，Agent Runtime Framework 微内核插件架构）；产出 2026 agent 能力全景报告 → `docs/agent/调研报告-2026-Agent架构能力全景与DeepSeekHarness.md`
+- **资料归档**：新建 `docs/agent/`——复制上级目录外部方案书 11 份（外部资料/）+ idea-to-dev 全量 46 份（idea-to-dev/，含方案书迭代链 v0.9→v9.0、Claude Code/Cline/KiloCode/Aider/ContinueDev/Mastra/OpenHands 等源码分析、可信度专题）；写 `docs/agent/INDEX.md` 总索引（含上级 opensource-reference/ 源码地图与借鉴点映射、projects/ LangGraph 遗产项目说明）
+- **自检结论**（方案书 §2）：8 项功能缺口（G1 无 SKILL.md 技能包体系 / G2 无 MCP 客户端 / G3 无事件源会话日志 / G4 无跨会话记忆 / G5 无 token 计量 / G6 subagent 仅静态 / G7 SSH 交互式命令缺位 / G8 可视化三件套未做）+ 技术债（D1 ToolCallLimitHook 疑似幽灵代码 / D3 sidecar/ 旧 LangGraph 遗产目录并存 / D4 runtime.tsx 650 行死代码 / D5 needs_you 无回收 / D6 双路径工具重复定义等）
+- **借鉴决策**：SKILL.md 技能包/三角色解耦（Provider-Policy-Interface）/fail-closed 审批/事件源会话日志/token 计量/轻量 subagent → 分期借鉴；DSH Runtime 全插件化/LangGraph 编排/MCP Server 暴露/向量化记忆 → 明确不做（防过度设计）
+- **产出方案书**：`docs/agent/方案书-v3.0-Agent能力升级.md`——P0（技能包+工具解耦+fail-closed+债务清理）→ P1（事件源会话日志+回放+token 计量）→ P2（task 动态 subagent+SSH pty_session+可视化三件套+双路径收敛）→ P3（MCP 客户端+会话记忆沉淀）；与 B2-B4 借鉴分期/方案书 v2.0 总纲/预测第二轮的衔接关系已注明
+
+**报错与修改**：无（文档任务，未跑门禁——无代码改动；git diff 仅 docs/ 下新增/移动）
+
+**复盘**：✅ 上级目录资料全部入档且引用链未破坏（项目内 docs/ 文档只索引不移动）；✅ DSH 价值判断准确——借思想（四条设计）不借代码（Node/Cordos 生态不匹配 Python Sidecar）；⚠️ 遗留待用户拍板：① 分期顺序 ② D3/D4 删除确认 ③ P0 前真实 LLM 委派实测 ④ P3 是否纳入；⚠️ MCP 客户端（G2）是业界标配但排 P3，理由 = P0-P2 自有能力补齐优先，若用户在意可提级。

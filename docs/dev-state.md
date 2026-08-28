@@ -4197,3 +4197,16 @@ CDP 全新状态实测通过。commit 见上。
 **P2×13 未修留档**（详单见 DEV-JOURNAL §37.68）：Local 隧道串行 accept / pty 5 处裸 unwrap / Notify 首次竞态 / 死会话隧道残留 / /tmp 注入脚本泄漏 / SOCKS5 无认证可绑 0.0.0.0 / 桥接无句柄 / ToolCallLimitHook 幽灵代码 / needs_you 无回收 / tdsf watcher 全量读 / sys.path 污染 / clear_cache 锁竞态 / runtime.tsx ~650 行死代码（删除需用户确认）+ keyring 空 catch + sshStore 全量订阅 + 方案书 §4.5 前端可视化三件套未做（证据链/置信度仪表盘/风险色带）
 
 **下一步（需用户）**：实测 ① SSH 隧道三模式 ② Teach 卡片渲染 ③ TodoStrip 联动（此前因 #7 静默失效，本次修复后应首次真正可用）；决策是否修 P2 清单与删除 runtime.tsx 死代码。
+
+### 37.69 Agent 能力升级方案书 v3.0 + agent 资料归档中心（2026-08-28 ✅ 纯文档任务）
+
+**背景**：用户四合一指令——讲清 agent 模块设计 / 自检问题 / 调研最新 agent 架构与 DeepSeek Harness / 整理上级目录 agent 资料并产出下一步方案书。
+
+**产出**：
+1. **`docs/agent/` 资料归档中心**（新）：`INDEX.md` 总索引 + `调研报告-2026-Agent架构能力全景与DeepSeekHarness.md`（联网调研，DSH=`deepseek-ai/deepseek-harness` 2026-08-13 preview，Agent Runtime Framework 微内核，四条设计思想）+ `外部资料/`（上级目录 11 份方案书）+ `idea-to-dev/`（46 份：方案书迭代链 + Claude Code/Cline/KiloCode/Aider/ContinueDev/Mastra/OpenHands 等源码分析 + 可信度专题）
+2. **`docs/agent/方案书-v3.0-Agent能力升级.md`**：下一步 agent 开发方案——P0 技能包体系（SKILL.md 标准化）+ 工具三角色解耦 + fail-closed 审批 → P1 事件源会话日志 + 回放 + token 计量 → P2 task 动态 subagent + SSH pty_session + 可视化三件套 + 双路径收敛 → P3 MCP 客户端 + 会话记忆沉淀
+3. **自检结论**：8 功能缺口（G1-G8：无技能包体系/无 MCP/无事件源日志/无跨会话记忆/无 token 计量/subagent 静态/SSH 交互式缺位/可视化三件套未做）+ 技术债（ToolCallLimitHook 幽灵代码/sidecar 旧 LangGraph 遗产目录/runtime.tsx 死代码/needs_you 无回收/双路径工具重复）
+
+**当前 agent 架构一句话**（用户问"目前怎么设计的"）：Python Sidecar 内 Strands Agents 单框架——main 统一入口（23 工具）+ 4 个真实子 agent（teach/coding/explore/history，agent-as-tool 委派，schema 级工具白名单），四层安全（schema 白名单→RiskChecker 4 级权限+HITL→ToolCallLimitHook→redact 脱敏）+ audit_chain/evidence，RAG 知识库（FTS5+sqlite-vec+RRF），前端 registry/sidecar-adapter 事件流可视化。事实源 = `docs/Agent架构说明书.md`。
+
+**下一步（需用户拍板）**：① 方案书 v3.0 分期顺序（建议 P0 起步，T1 技能包先行——独立可验收、不碰终端链路）② D3（sidecar/ 旧遗产目录）与 D4（runtime.tsx）删除确认 ③ P0 前真实 LLM 委派实测 ④ P3（MCP/长期记忆）是否纳入。
