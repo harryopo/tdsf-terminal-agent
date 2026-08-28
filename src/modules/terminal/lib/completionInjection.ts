@@ -17,7 +17,7 @@
  * -----------------------------------------------------------------------------
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
-import { getSuggestEngine, type SuggestionResult } from '@/lib/suggest-engine';
+import { getSuggestEngine, type SuggestionResult, type TerminalEnv } from '@/lib/suggest-engine';
 import { getCommandSpec } from '@/lib/spec-data/loader';
 import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
 
@@ -67,6 +67,25 @@ let getTermFn: ((leafId: number) => XTerm | null) | null = null;
 
 /** 每个终端的输入缓冲区 */
 const inputBuffers = new Map<number, string>();
+
+/** 每个终端的环境（windows=本地 pwsh/cmd，linux=SSH 远程）。
+ * TDSF 2026-08-28：命令预测必须区分环境——本地终端预测 Windows 命令，
+ * SSH 终端预测 Linux 命令，否则本地弹出的 Linux 命令输入了无效。
+ * 由 useTerminalSession 在会话创建时按 s.remote 注册。 */
+const leafEnvironments = new Map<number, TerminalEnv>();
+
+export function setLeafEnvironment(leafId: number, env: TerminalEnv): void {
+  leafEnvironments.set(leafId, env);
+}
+
+export function clearLeafEnvironment(leafId: number): void {
+  leafEnvironments.delete(leafId);
+}
+
+function getLeafEnvironment(leafId: number): TerminalEnv {
+  // 未注册的 leaf 按本地环境处理（保守：本地终端占比高，且 Linux 命令集更大）
+  return leafEnvironments.get(leafId) ?? 'windows';
+}
 
 function getInputBuffer(leafId: number): string {
   return inputBuffers.get(leafId) ?? '';
@@ -183,14 +202,16 @@ let predictSeq = 0;
 
 async function updatePredictions(leafId: number): Promise<void> {
   const seq = ++predictSeq;
+  const env = getLeafEnvironment(leafId);
   const prefix = getInputBuffer(leafId);
   if (!prefix || prefix.trim() === '') {
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return;
   }
 
-  if (prefix.includes(' ')) {
-    // ── 参数模式：命令 + 子命令/选项/参数值（Fig spec 开源数据） ──────────
+  if (prefix.includes(' ') && env === 'linux') {
+    // ── 参数模式：命令 + 子命令/选项/参数值（Fig spec 开源数据）──────────
+    // 仅 linux（SSH）环境：Fig specs 是 POSIX CLI 定义，Windows 命令无 spec。
     const { cmd } = parseCommandLine(prefix);
     if (!cmd) {
       setState((s) => (s.visible ? { ...s, visible: false } : s));
@@ -219,9 +240,9 @@ async function updatePredictions(leafId: number): Promise<void> {
     return;
   }
 
-  // ── 命令模式：history → 索引 startsWith → fuzzy（fish 三层） ────────────
+  // ── 命令模式：history → 索引 startsWith → fuzzy（fish 三层，按环境分流）──
   const engine = getSuggestEngine();
-  const items = engine.getSuggestions(prefix, 5);
+  const items = engine.getSuggestions(prefix, 5, env);
   if (items.length === 0) {
     setState((s) => (s.visible ? { ...s, visible: false } : s));
   } else {
@@ -369,10 +390,13 @@ export function completionKeyHandler(
       acceptPrediction(leafId, current.items[current.selectedIndex]);
       // 接受后缓冲区已是完整命令，Enter 透传执行
     } else {
-      // 没用预测 → 记录实际输入到历史
+      // 没用预测 → 记录实际输入到历史（按环境隔离）
       const prefix = getInputBuffer(leafId);
       if (prefix.trim()) {
-        getSuggestEngine().addHistory(prefix.trim());
+        getSuggestEngine().addHistory(
+          prefix.trim(),
+          getLeafEnvironment(leafId),
+        );
       }
     }
     // Enter → 清空缓冲区（新的一行）
@@ -452,7 +476,9 @@ export async function loadHistoryIfNeeded(): Promise<void> {
       const commandNames = parsed
         .map((cmd) => cmd.trim().split(/\s+/)[0] ?? '')
         .filter((cmd) => cmd.length > 0);
-      getSuggestEngine().loadHistory(commandNames);
+      // 本地 shell（pwsh/powershell/cmd）历史 → windows 环境
+      // （SSH 会话的历史由远端 shell 自身管理，不在此加载）
+      getSuggestEngine().loadHistory(commandNames, 'windows');
     }
   } catch (e) {
     // 非致命——浏览器预览模式或 Rust 命令未注册时降级

@@ -1523,3 +1523,31 @@ P2（中优先级 — 清理 + 文档）：
 - ⚠️ 教训：修复引入回归（restart_loop break）说明**每个"取消"路径都要问：取消后机制还能自恢复吗**
 - 未修（P2×13 留档）：Local 隧道串行 accept、pty 5 处裸 unwrap、Notify 首次竞态、死会话隧道残留、/tmp 注入脚本泄漏、SOCKS5 无认证、桥接无句柄、ToolCallLimitHook 幽灵代码、needs_you 无回收、tdsf watcher 全量读、sys.path 污染、clear_cache 锁竞态、runtime.tsx ~650 行死代码（删除需用户确认）、keyring 空 catch、sshStore 全量订阅、方案书前端可视化三件套未做
 - 待办：用户实测 SSH 隧道（三模式）+ Teach 卡片渲染 + TodoStrip 联动
+
+## 2026-08-28 · 命令预测四问题修复（环境分流 + tldr 中文 + 排序）（§37.69）
+
+**任务**：用户实测反馈命令预测四问题：① 预测描述是英文不是中文；② 模糊预测不应排最前；③ 很多预测命令无效（输入了没用）；④ 本地终端（Windows）与 SSH（Linux）不区分命令集。要求先自检逻辑、调研开源方案避免重复造轮子。
+
+**自检根因**：
+1. 描述英文：Fig specs 的 description 全英文，手编中文词典只覆盖 180 命令
+2. 排序：Layer 2 精确前缀匹配按**字母序边遍历边截断**，贴近输入的匹配进不来 + fuzzy threshold 0.3 过松（弱子序列也弹）
+3/4. 无效命令：completionInjection **无会话类型概念**，本地（pwsh）与 SSH 共用 Fig specs（707 个 POSIX/Linux 命令）→ 本地弹 lsblk/systemctl 输入无效
+
+**开源调研与数据源**：
+- 上级目录 `docs/technical/开源项目复用清单.md` 复核：无现成命令补全数据源方案
+- **tldr-pages（CC BY 4.0）**：`pages.zh/` 中文命令描述实测可达（raw.githubusercontent 200）→ 新增 `scripts/build-tldr-zh.mjs` 并发生成器，对 SPEC_INDEX 707 命令拉 zh 页提取 `> ` 描述 → `src/lib/spec-data/generated/tldr-zh.ts`（**207/707 覆盖**，其余为 npm CLI 类 tldr zh 无页）
+- 注：jsdelivr 对 tldr 大仓库 404（文件数超限），raw.githubusercontent 直连可用
+- Windows 命令集无现成开源中文数据源（PSReadLine 是 shell 内部预测 xterm 层拿不到；Get-Command 动态导出描述为英文）→ 手编 `windows-commands.ts`（130+ PowerShell cmdlet/cmd 工具/跨平台开发工具，教学场景中文描述）
+
+**修复**：
+1. `suggest-engine.ts` 环境化：`getSuggestions(input, limit, env)`——windows 用 WINDOWS_COMMAND_LIST，linux 用 SPEC_INDEX；**历史按环境隔离**（本地 Windows 命令不混进 SSH 预测）；Layer 2 改为**收集全部命中后按长度差升序排序再截断**；fuzzy threshold 0.3→0.6 仅兜底；中文优先级 tldr zh > 手编词典 > 英文 description
+2. `completionInjection.ts`：`setLeafEnvironment/clearLeafEnvironment` 注册表；参数模式（Fig specs）仅 linux 环境；addHistory 按 leaf 环境记录；本地 shell 历史加载进 windows 桶
+3. `useTerminalSession.ts`：session 绑定 effect 按 `s.remote` 注册环境（remote=true → linux），cleanup 清理
+4. 应用重启后 HMR 自动生效
+
+**验证**：tsc 0 ✓ / eslint 0 警告 ✓ / vitest 994 全过 ✓（2 个测试适配环境注册：leaf 1/2 显式 setLeafEnvironment(…, 'linux')）
+
+**复盘**：
+- ✅ 做对：先自检读全链路（completionInjection → suggest-engine → spec-index → rendererPool → useTerminalSession）定位四个根因，再调研数据源（tldr zh 实测可达才写生成器），不盲目手编 700 命令
+- ⚠️ 教训：**"终端无关"的预测引擎在多环境终端产品里是设计缺陷**——数据源、历史、参数模式三个维度都要随环境走
+- 待办：用户实测本地终端输 `get-c`（应弹 Get-ChildItem 等）与 SSH 输 `lsb`（应弹 lsblk 中文描述）；tldr zh 数据可定期重跑生成器更新

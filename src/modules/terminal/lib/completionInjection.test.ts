@@ -17,6 +17,7 @@ import {
   initCompletionInjection,
   measureCursorPx,
   POPUP_WIDTH,
+  setLeafEnvironment,
 } from "./completionInjection";
 
 // === measureCursorPx =========================================================
@@ -191,7 +192,9 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe("acceptPrediction", () => {
   it("接受 fuzzy 预测时先退格清 prefix 再写完整命令（输 ip 接受 pip）", async () => {
-    // 清空历史，避免 history/dictionary 前缀命中干扰 fuzzy 层
+    // 清空历史，避免 history/dictionary 前缀命中干扰 fuzzy 层。
+    // 注册 linux 环境（pip 是 Linux 命令；未注册默认 windows）。
+    setLeafEnvironment(1, "linux");
     getSuggestEngine().clearHistory();
     const written: string[] = [];
     initCompletionInjection(
@@ -224,9 +227,12 @@ describe("acceptPrediction", () => {
   });
 
   it("接受 history 预测时同样先退格再写完整命令", async () => {
-    // 用独立 leafId 隔离输入缓冲区（leafId 1 已在上一个测试使用）
+    // 用独立 leafId 隔离输入缓冲区（leafId 1 已在上一个测试使用）。
+    // 2026-08-28 环境分流后：未注册环境默认 windows，显式注册为 linux
+    // 以匹配 ipp（Linux 命令）的历史。
+    setLeafEnvironment(2, "linux");
     getSuggestEngine().clearHistory();
-    getSuggestEngine().loadHistory(["ipp"]);
+    getSuggestEngine().loadHistory(["ipp"], "linux");
     const written: string[] = [];
     initCompletionInjection(
       () => null,
