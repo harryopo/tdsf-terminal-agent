@@ -86,3 +86,13 @@ pub mod sandbox;
 // 自动检测 shell 类型 (bash/zsh/fish/powershell) + 读取 history 文件
 // 返回 ShellHistoryInfo (shellType + historyPath + commands) 供前端 CompletionEngine 加载
 pub mod shell_history;
+
+// ============================================================================
+// TDSF 自有模块（P0 终端参数补全）
+// ============================================================================
+
+// carapace 参数补全 (spec: add-carapace-param-completion T2)
+// spawn 本地 carapace <cmd> export <tokens...> <current> 取动态参数候选
+// (git checkout 弹真实分支 / docker 弹容器等)。500ms 超时强杀 + 任何失败
+// 静默降级空候选 —— 前端零成本回退 Fig specs 静态参数层, 补全只增强不阻断
+pub mod param_complete;
