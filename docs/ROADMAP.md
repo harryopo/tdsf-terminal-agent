@@ -45,6 +45,7 @@
 | 8 | **SSH 连接进度界面**（握手期间显示美观 5 步进度） | ✅ 已完成 | 调研真相：文件树不阻塞终端（兄弟节点并行），延迟源 = SSH connecting 数秒 + cold tab；新增 SshConnectingOverlay（TCP→握手→主机→认证→终端 5 步 amber 动画），commit ee43dde |
 | 9 | **Agent 终端上下文自动注入**（每轮对话自动携带 scrollback 尾部） | ✅ 已完成 | 调研：Python Sidecar 路径 <env> 块缺终端输出 + SSH 终端不在 tabs 里→getTerminalContext 返回 null；新增 formatTerminalContextBlock(截尾部30行注入 <terminal-context>)+SSH 回退+system prompt 更新，commit 24fb81c |
 | 10 | **Agent 深度进化（并发修复 + 教学 5 改进 + max_tokens + 终端执行模式 + session_id 隐藏）** | ✅ 已完成 | 并发 RLock（e1b64c2）/ 教学 UI 基于 agent id（3f562b3）/ max_tokens 2048→8192（d535e8f）/ 终端执行开关（cbc6c22）/ SSH cwd 优先（35c7377）/ session_id 移除（7816f3f）；方案文档 PLAN-AGENT-DEEP-EVOLUTION.md |
+| 11 | **应用图标重绘**（用户拍板魔改 terax 图标：灰底 + 箭头缩小 + 光标加大 + 清晰度锐化） | ✅ 已完成 | §37.71，commit 7ea738b；源图脚本化 `scripts/make-app-icon.py`（4x 超采样），`pnpm tauri icon` 重生成全套，删除未用 ios/android 产物 |
 
 ### 下一步（按优先级）
 
@@ -81,9 +82,12 @@
 | 28 | **换机重装环境重建 + 全量门禁恢复**（新机器 d:\ai\linux教学一体\）：Rust 1.98 工具链 + sidecar 依赖补齐（langgraph/bs4）+ `启动.bat`（TDSF_SIDECAR_PYTHON 指向 .venv）+ pytest 环境变量三件套（TDSF_DATA_DIR=Temp 绕沙箱 chroma 拦截/CUDA_VISIBLE_DEVICES=-1/PYTHONPYCACHEPREFIX） | ✅ 已完成 | 2026-08-28；全量门禁：typecheck/lint/build/vitest 993 ✓ + cargo test 327 全绿 ✓ + **pytest 1433 passed in 60s** ✓；修复既有 5 失败（needs_you 6→8 / long_context 3 处语义 / toolset 17→23）；symlink 测试改运行时跳过（沙箱 hook CreateSymbolicLink）；tauri:dev 沙箱无法启动 GUI，须用户真实终端 `启动.bat`；详见 dev-state §37.65 |
 | 29 | **第三轮全面审查 + P0/P1/功能缺陷 14 项修复**（4 并行代理审查：前端/Rust/Python/功能对照）：P0 tunnel select! panic + project_service 部分更新清空 metadata；P1 僵尸重连/restart_loop 一次性/health task 泄漏/凭据竞态/**DefaultRustBridge 缺 send_notification（TodoStrip+终端注入静默失效）**/config_diff 恒真/backup_restore 注入+假成功/重 IO 阻塞主循环/AiComposerProvider 重渲染；功能 server-monitor 失败不停 + Teach 契约对齐；P2×13 未修留档 | ✅ 已完成 | 2026-08-28；门禁：cargo test 327+25+27+1 ✓ / pytest 1455 ✓ / vitest 994 + tsc + lint + build ✓；误报澄清：add_case 自动沉淀已接线（_auto_sink_case）；详见 dev-state §37.68 |
 | 30 | **命令预测四修 + shell 别名数据集**（2026-08-28 用户实测反馈：英文描述/模糊排最前/无效命令/不分 Win-Linux + `ll` 预测成 ollama）：① windows/linux 环境分流（setLeafEnvironment 按 s.remote 注册，命令集+历史双隔离）；② tldr-pages 中文数据集成（tldr-zh.ts 生成器）；③ 精确匹配收集全命中按长度差升序（取代 startsWith 短路）；④ fuzzy 阈值 0.6 + 首字符一致约束；⑤ 新建 shell-aliases.ts 47 条别名（ll/gs/gst 等，中文解释含展开命令）并入预测集 | ✅ 已完成 | 2026-08-28；commits 32a6f79 + be6d54c + a060e9e；详见 DEV-JOURNAL §37.69/§37.70；**待用户实测**：本地终端输 `get-c`（应弹 Get-ChildItem）+ SSH 输 `lsb`（应弹 lsblk 中文）+ `ll`（应弹别名） |
+| 31 | **竞品源码分析 + 开源生态全景调研**（用户指定 Chaterm/nyaterm/Netcatty 三项目 clone 全量分析 + 30+ 项目联网调研）：Chaterm=GPL-3.0 AI 内核改编 Cline（ghost text/CMD 卡片/交互检测器/防伪造提示）；nyaterm=MIT **同栈 Tauri2+React19+Rust**（AI 脱敏/三壳命令捕获/搜索/高亮）；Netcatty=GPL-3.0 工程化最强（AgentRuntime token 治理/known-hosts 转正/ssh_config 导入）；全景 30+（sshx 教学广播/Girus 实训校验/shell_gpt 三选一范式等） | ✅ 已完成 | 2026-08-28；源码+分析报告在 opensource-reference/（ANALYSIS-Chaterm.md、ANALYSIS-nyaterm-Netcatty.md）；综合对比+借鉴规划+分期提议见 `docs/开源AI运维终端-竞品对比与借鉴规划.md`；方案书新增 §8；**功能差距 20 项按 B1-B4 分期待拍板** |
 
 ### 待用户决策/确认
 
+- [ ] **竞品借鉴 B1-B4 分期拍板**（见 `docs/开源AI运维终端-竞品对比与借鉴规划.md` §5）：B1=AI 脱敏+防伪造提示+报错解释+终端搜索（建议 carapace 之后立刻）；B2=ghost text 补全+CMD 命令卡片+交互检测器；B3=known-hosts 转正+ssh_config 导入+/summary-to-skill；B4=教学围观广播+关键词高亮+透明执行强化；顺序与取舍由用户定
+- [ ] **carapace 参数预测 spec 批准**（`.trae/specs/add-carapace-param-completion/`）：P0 Windows 本地 + P1 SSH 远端动态补全，打包 vs 下载、安装提示形态已按"无弹窗"调整，待批准开工
 - [ ] Headroom MCP 是否引入（外部依赖，P3）
 - [ ] 实训沙箱（Docker 故障环境）是否纳入（P3）
 - [ ] 真实 LLM 委派效果实测反馈（决定 _MAIN_SUB_AGENT_PROMPT 是否需要调优）
