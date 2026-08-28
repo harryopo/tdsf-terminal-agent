@@ -36,6 +36,9 @@ export type ShortcutId =
   | "terminal.clear"
   | "terminal.toggleInput"
   | "terminal.translate"
+  // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索（xterm SearchAddon UI）。
+  // Ctrl+Shift/F 避开 search.focus 的 Ctrl+F（文件/tab 搜索）；Windows Terminal 同惯例。
+  | "terminal.find"
   | "blocks.prev"
   | "blocks.next"
   | "search.focus"
@@ -230,6 +233,13 @@ export const SHORTCUTS: Shortcut[] = [
     label: "开关终端翻译",
     group: "Terminal",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "t" }],
+  },
+  {
+    // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索（Ctrl/Cmd+Shift+F）
+    id: "terminal.find",
+    label: "Find in terminal",
+    group: "Terminal",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "f" }],
   },
   {
     id: "blocks.prev",

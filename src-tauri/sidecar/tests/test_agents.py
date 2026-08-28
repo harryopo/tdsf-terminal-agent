@@ -336,6 +336,26 @@ class TestBaseAgentSystemPrompt:
         assert "Custom system prompt" in prompt
 
 
+class TestMainAgentSecurityHonesty:
+    """B1-G2 防伪造：主 agent system prompt 必须包含安全拦截诚实条款（2026-08-28）"""
+
+    def test_main_agent_prompt_has_honesty_clause(self, mock_event_bus):
+        from agents.main_agent import MainAgent
+        agent = MainAgent(event_bus=mock_event_bus)
+        prompt = agent.build_system_prompt()
+        # 条款关键词（修改 prompt 须同步本断言与前端 blocked-command.test.ts 格式约定）
+        assert "RiskGuard" in prompt
+        assert "NOT executed" in prompt or "未执行" in prompt
+        assert "fabricate" in prompt.lower()
+
+    def test_default_strands_prompt_has_honesty_clause(self):
+        from strands_backend.adapter import _DEFAULT_SYSTEM_PROMPT
+        # 前端主链路（Strands）的默认 system prompt 同样必须带条款
+        assert "安全拦截诚实条款" in _DEFAULT_SYSTEM_PROMPT
+        assert "编造执行结果" in _DEFAULT_SYSTEM_PROMPT
+        assert "[TDSF] 最近被安全拦截的命令" in _DEFAULT_SYSTEM_PROMPT
+
+
 # ============================================================================
 # 2. MainAgent 测试
 # ============================================================================

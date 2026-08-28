@@ -1341,11 +1341,78 @@ async fn handle_reverse_request(
             Ok(Value::Null)
         }
 
+        // === 终端 scrollback（B1-F0 修复 2026-08-28）===
+        // xterm buffer 在前端 renderer，Rust 无缓存 → 经 Tauri event 转发前端读取。
+        // 前端监听 "sidecar:get-terminal-scrollback"（useAiLiveBridge），
+        // 用 getTerminalContext()（含 redact/SSH 优先/private 检查）读 buffer，
+        // 再 invoke("sidecar_scrollback_response") 回传，oneshot 关联 request_id。
+        // 前端无响应（未挂载/JS 阻塞）时 2s 超时 → 返回 unavailable（fail-closed，
+        // 与修复前行为一致，无回归风险）。
+        "get_terminal_scrollback" => {
+            let lines = params.get("lines").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
+
+            let request_id = {
+                let mut counter = SCROLLBACK_REQ_COUNTER.lock().await;
+                *counter += 1;
+                format!("sb-{}", *counter)
+            };
+            let (tx, rx) = oneshot::channel::<String>();
+            SCROLLBACK_PENDING.lock().await.insert(request_id.clone(), tx);
+
+            // 请求前端（emit 不等待；超时由下方 timeout 控制）
+            {
+                let guard = app_handle.lock().await;
+                if let Some(handle) = guard.as_ref() {
+                    if let Err(e) = handle.emit(
+                        "sidecar:get-terminal-scrollback",
+                        json!({ "requestId": request_id, "lines": lines }),
+                    ) {
+                        log::warn!("[sidecar] get_terminal_scrollback emit failed: {}", e);
+                    }
+                }
+            }
+
+            // 等待前端回传（2s 超时 fail-closed）
+            match timeout(Duration::from_secs(2), rx).await {
+                Ok(Ok(output)) => Ok(json!({ "output": output, "available": !output.is_empty() })),
+                Ok(Err(_)) | Err(_) => {
+                    // 清理残留 entry（响应迟到时防泄漏）
+                    SCROLLBACK_PENDING.lock().await.remove(&request_id);
+                    Ok(json!({ "output": "", "available": false }))
+                }
+            }
+        }
+
         _ => Err(format!(
-            "reverse route not found: {} (supported: ssh_command, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename)",
+            "reverse route not found: {} (supported: ssh_command, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename, get_terminal_scrollback)",
             method
         )),
     }
+}
+
+// ── B1-F0 (2026-08-28): 前端 scrollback 回传通道 ────────────────────────────
+// pending 表：request_id → oneshot sender（handle_reverse_request 发起，命令 resolve）
+// 用 std LazyLock（Rust 1.70+）包 tokio Mutex——HashMap::new 非 const fn
+static SCROLLBACK_PENDING: std::sync::LazyLock<
+    tokio::sync::Mutex<HashMap<String, oneshot::Sender<String>>>,
+> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+static SCROLLBACK_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(0));
+
+/// 前端回传终端 scrollback（配合 get_terminal_scrollback 反向 RPC）
+///
+/// 调用链：Python ipc_invoke("get_terminal_scrollback") → Rust emit 事件到前端
+/// → 前端读 xterm buffer（redact 后）→ invoke 本命令 → oneshot resolve → Python。
+/// 迟到响应（原请求已超时）静默丢弃（remove 返回 None）。
+#[tauri::command]
+pub async fn sidecar_scrollback_response(
+    request_id: String,
+    output: String,
+) -> Result<(), String> {
+    if let Some(tx) = SCROLLBACK_PENDING.lock().await.remove(&request_id) {
+        let _ = tx.send(output);
+    }
+    Ok(())
 }
 
 /// 校验反向 RPC 的远程路径（TDSF 2026-08-04, Rust-M2）

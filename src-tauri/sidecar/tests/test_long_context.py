@@ -107,8 +107,17 @@ class TestFeatureFlagSwitch:
         assert "[summary]" not in summary
         assert "[hash=" not in summary
 
-    def test_enabled_summarize_long_text_adds_hash(self, enabled_mgr: LongContextManager):
+    def test_enabled_summarize_long_text_adds_hash(self, enabled_mgr: LongContextManager, monkeypatch):
         """启用时超长文本 → hash 回退标注"""
+        # TDSF 修复 2026-08-28: summarize 已重写为真 LLM 摘要 + hash 回退；
+        # 本测试验证 hash 回退路径，必须 mock load_config 为未配置，
+        # 防止本机真实 LLM 配置（is_configured=True）导致测试走 LLM 路径。
+        from core import llm_config
+
+        class _Unconfigured:
+            is_configured = False
+
+        monkeypatch.setattr(llm_config, "load_config", lambda: _Unconfigured())
         text = "hello world " * 100  # 超长（> max_chars）触发摘要路径
         summary = enabled_mgr.summarize(text, max_tokens=100)
         assert "[summary]" in summary
