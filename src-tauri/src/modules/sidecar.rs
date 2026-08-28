@@ -787,9 +787,16 @@ impl SidecarManager {
     }
 
     /// 解析 Python 解释器路径
-    /// 优先级: TDSF_SIDECAR_PYTHON 环境变量 > python > python3 > py -3
+    /// 优先级: TDSF_SIDECAR_PYTHON 环境变量 > 项目 venv > python > python3 > py
+    ///
+    /// TDSF 修复 2026-08-28（黑屏/崩溃根因治理）：新增"项目 venv 自动探测"层。
+    /// 此前 dev 启动若未设 TDSF_SIDECAR_PYTHON（用户直接跑 `pnpm tauri:dev` 而非
+    /// 启动脚本），会 fallback 到系统 python——缺 pydantic/yaml/jieba 等依赖，
+    /// sidecar 注册方法失败、ready 延迟甚至超时，表现为窗口空白/启动异常。
+    /// 项目 venv 固定在 `src-tauri/sidecar/.venv`（与 main.py 同级 .venv），
+    /// 这里按 Cargo manifest 目录拼路径探测，命中则优先使用，彻底消除环境错配。
     async fn resolve_python(&self) -> SidecarResult<PathBuf> {
-        // 1. 环境变量
+        // 1. 环境变量（显式指定优先，如打包/CI 场景）
         if let Ok(python_path) = std::env::var(ENV_PYTHON) {
             let path = PathBuf::from(python_path);
             if path.exists() {
@@ -802,7 +809,28 @@ impl SidecarManager {
             );
         }
 
-        // 2. 尝试 python / python3 / py
+        // 2. 项目 venv（dev 模式默认正确环境；打包模式不存在此路径，自然跳过）
+        let venv_python = {
+            #[cfg(target_os = "windows")]
+            let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("sidecar")
+                .join(".venv")
+                .join("Scripts")
+                .join("python.exe");
+            #[cfg(not(target_os = "windows"))]
+            let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("sidecar")
+                .join(".venv")
+                .join("bin")
+                .join("python");
+            p
+        };
+        if venv_python.exists() {
+            log::info!("[sidecar] using project venv python: {:?}", venv_python);
+            return Ok(venv_python);
+        }
+
+        // 3. 尝试 python / python3 / py
         let candidates = ["python", "python3", "py"];
         for cmd in &candidates {
             let mut command = tokio::process::Command::new(cmd);

@@ -6,6 +6,31 @@
 
 ---
 
+## 2026-08-28 · Agent 能力升级 P0 全四项收尾（T1 技能包 / T2 工具三角色解耦 / T3 fail-closed 门禁 / T4 债务清理）+ P3 拍板落档
+
+**任务**：用户拍板方案书 v3.0——P0 起步、T1 技能包先行、删除 sidecar 旧遗产与 runtime.tsx 死代码、P3（MCP/长期记忆）纳入近期。执行 P0 全部四项并收尾。
+
+**方案**：
+- **T1 技能包**：SKILL.md frontmatter 新增 `triggers`/`allowed-tools` 解析（parser.py），registry.search 按 triggers 命中，skill_invoke 返回体携带元数据 + not_found 时附可用技能列表（LLM 自纠正）；新增 systemd-troubleshoot / samba-setup 两个教学技能包（共 7 内置）。
+- **T2 三角色解耦**：新建 `strands_backend/tools/registry.py`（ToolPolicy/ToolSpec dataclass + TOOL_REGISTRY 19 工具单一真源 + resolve_factory 延迟解析 + READONLY/APPROVAL 派生集合 + tool_catalog_text）；`make_all_ops_tools` 改注册表驱动（删 `_L1_READONLY_TOOL_NAMES` 硬编码）；2026-08-09 的 6 个魔改增强工具（todo_write/get_terminal_output/config_diff/backup_restore/assess_confidence/search_history）从 adapter 逐挂 try 块收编入注册表；adapter 删 6 个直挂块。
+- **T3 fail-closed 核实**：审批链路已是 fail-closed——request_approval_and_wait 创建失败→None→不执行；REJECTED/TIMEOUT/CANCELLED→不执行；needs_you 后台 1s 扫描 + 30s 超时自动拒绝 + wake 唤醒。补 `test_high_risk_command_approval_service_down_fails_closed` 回归测试固化。
+- **T4 债务清理**：删 byoa/（8 文件）+ e2e_inproc/e2e_smoke/tauri_simulation 3 调试脚本 + test_byoa.py + runtime.tsx 死代码；**agents/ tools/ core/ 经核实为生产 fallback 依赖，保留**（最初误判死代码，grep 调用链后纠正）。
+- **P3 落档**：方案书 §5 P3 细化（T13 MCP 客户端：MCP 工具=外部 Provider 动态 ToolSpec、默认 needs_approval fail-closed；T14 会话记忆沉淀先行，/summary-to-skill 并入）；§8 四项决策全部落档。
+
+**报错与修改（根因+解法）**：
+1. pytest 7 failed：test_skill_registry.py 硬编码技能数 5，新增 2 技能后断言失败 → 改为 7 并补新字段测试。
+2. 误删 mock_deadlock.py：TDSF_SIDECAR_SCRIPT 诊断钩子配套素材，按原描述重建。
+3. sidecar 死代码误判：agents/、tools/、core/ 看似 LangGraph 遗产，实为 Strands 未安装时的生产 fallback 与 tools/__init__ 依赖 → 教训：**删除前必须 grep 全部调用点（含 import/字符串引用）**，"看起来像遗产"≠"是遗产"。
+4. needs_you 审批误判缺失：初判无超时回收，细读发现已有完整机制 → 教训：**结论必须实测/细读，不轻信印象**。
+5. test_invoke_knowledge_card_carries_metadata 用 executor 型技能断言知识卡字段失败 → 改用纯知识卡技能 ssh-troubleshoot。
+
+**复盘**：
+- 做对：T2 收编 6 个游离工具后，L1 免确认模式下 backup_restore（restore 写操作）被 schema-level safety 正确裁剪——原直挂是安全缺口，本次顺带补口；新增 test_registry.py 19 项（含"__name__ 与注册名一致"关键不变量——白名单/L1 过滤都按 __name__ 匹配，错位即静默失效）。
+- 做对：P3 拍板直接落档方案书 §8（用户决策不过夜），T13/T14 写明启动时机与验收标准。
+- 注意：本批改动全在 sidecar Python 层，五绿已过（pytest 1482 / vitest 1137 / tsc / lint / build:web）；tauri:dev 桌面实测待用户下次启动时验证 agent 工具调用与审批卡片。
+
+---
+
 ## 2026-08-18 · 全面代码审查（TRAE-code-review 流程）：7 维度 × 4 模块并行，P0×2/P1×8/P2×6
 
 **任务**：用户要求对系统做全面代码质量排查，执行专业 code review（规范/可读/可维护/性能/安全/错误处理/注释 7 维度），输出审查标准 + 检查清单 + 问题记录 + 改进建议。

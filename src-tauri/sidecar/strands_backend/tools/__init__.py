@@ -836,60 +836,43 @@ def _import_tool_functions() -> None:
     )
 
 
-# 工具名注册表（供适配层枚举注册）
-# TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具
-# TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具
-OPS_TOOL_NAMES: list[str] = [
-    "ssh_command",
-    "remote_file",
-    "log_analyzer",
-    "process_inspector",
-    "network_diagnostic",
-    "skill_invoke",
-    "suggest_command",
-    "knowledge_search",
-    "service_manage",
-    "package_manage",
-    "firewall_manage",
-    "security_audit",
-    "performance_analyze",
-]
+# 工具名注册表（供适配层枚举注册；显示名，与 @tool 函数名可能不同）
+# T2 (2026-08-28): 改由 TOOL_REGISTRY 单一真源派生——新增工具只改 registry.py，
+# 这里自动跟随。显示名映射见 registry.OPS_TOOL_ALIASES。
+from strands_backend.tools.registry import (  # noqa: F401
+    APPROVAL_TOOL_NAMES,
+    OPS_TOOL_ALIASES,
+    READONLY_TOOL_NAMES,
+    TOOL_REGISTRY,
+    get_tool_policy,
+    tool_catalog_text,
+)
 
-# P1-v5-2 schema-level safety: L1（免确认）只保留只读工具
-# （@tool 装饰后的实际函数名，与 OPS_TOOL_NAMES 的注册名不同）
-_L1_READONLY_TOOL_NAMES = {
-    "read_remote_file",
-    "analyze_logs",
-    "inspect_processes",
-    "network_diagnose",
-    "suggest_command",
-    # P2-3: 只读扩展工具（L1 免确认下保留）
-    "security_audit",
-    "performance_analyze",
-}
+OPS_TOOL_NAMES: list[str] = [
+    OPS_TOOL_ALIASES.get(spec.name, spec.name) for spec in TOOL_REGISTRY.values()
+]
 
 
 def make_all_ops_tools(
     ctx: ToolContext,
     tool_names: set[str] | list[str] | None = None,
 ) -> list:
-    """构建全部 7 个工具（5 个运维 + Skill 调用 + 命令建议，带 ctx 闭包）
+    """构建全部已注册工具（TOOL_REGISTRY 单一真源，带 ctx 闭包）
 
-    TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具，让 Strands Agent
-    能在 agentic loop 中主动调用已注册的 Skill（linux-ops / docker-management /
-    selinux-baseline / ssh-troubleshoot / python-debug），增强领域知识。
+    T2 (2026-08-28, 方案书 v3.0 工具三角色解耦): 不再硬编码工厂列表，
+    改为遍历 TOOL_REGISTRY 按点路径延迟解析工厂——实现/Policy/Schema
+    三角色统一在 registry.py 维护，新增工具零改动本函数。
 
-    TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具，让 Strands Agent
-    能根据用户意图生成可执行的 Linux 命令，并通过前端工具卡片展示 Insert 按钮。
-
-    TDSF 修复 2026-08-01 (P1-v5-2, OPENDEV schema-level safety):
-    L1（免确认）权限下，执行/写类工具（ssh_command / skill_invoke）直接从
-    registry 移除——LLM 无法调用不存在于 schema 的工具（remove 优于
-    instruct+intercept），从根源杜绝免确认模式下执行任意命令。
-
-    TDSF 修复 2026-08-01 (P0-1 多 agent): 新增 tool_names 白名单参数，
-    供子 Agent（explore/teach/coding/history）按角色裁剪工具集——
-    schema-level safety 在 agent 维度生效（如 explore 无 ssh_command）。
+    历史行为保持：
+    - P1-v5-2 schema-level safety: L1（免确认）权限下仅保留 readonly=True
+      的工具（READONLY_TOOL_NAMES，registry 派生；原 _L1_READONLY_TOOL_NAMES
+      硬编码已删除）。执行/写类工具从 schema 移除——LLM 无法调用不存在于
+      schema 的工具（remove 优于 instruct+intercept）。
+      注意：2026-08-09 的 6 个增强工具原在 adapter 绕过此过滤直挂，T2
+      收编后统一受管辖（backup_restore 在 L1 下被裁——fail-closed 收紧）。
+    - P0-1 多 agent: tool_names 白名单参数，供子 Agent 按角色裁剪工具集。
+    - 容错：单个工具工厂解析/构建失败仅 warning 跳过，不拖垮整体
+      （对齐原 adapter 逐个 try 挂载的容错语义）。
 
     Args:
         ctx: ToolContext 运行时上下文
@@ -898,36 +881,20 @@ def make_all_ops_tools(
     Returns:
         Strands @tool 装饰后的工具函数列表（Strands 不可用时为 passthrough 装饰）
     """
-    from strands_backend.tools.ssh_command import make_ssh_command_tool
-    from strands_backend.tools.remote_file import make_remote_file_tool
-    from strands_backend.tools.log_analyzer import make_log_analyzer_tool
-    from strands_backend.tools.process_inspector import make_process_inspector_tool
-    from strands_backend.tools.network_diagnostic import make_network_diagnostic_tool
-    from strands_backend.tools.skill_invoke import make_skill_invoke_tool
-    from strands_backend.tools.suggest_command import make_suggest_command_tool
-    from strands_backend.tools.knowledge_search import make_knowledge_search_tool
-    from strands_backend.tools.ops_extended import EXTENDED_TOOL_FACTORIES
+    from strands_backend.tools.registry import resolve_factory
 
-    tools = [
-        make_ssh_command_tool(ctx),
-        make_remote_file_tool(ctx),
-        make_log_analyzer_tool(ctx),
-        make_process_inspector_tool(ctx),
-        make_network_diagnostic_tool(ctx),
-        make_skill_invoke_tool(ctx),
-        make_suggest_command_tool(ctx),
-        make_knowledge_search_tool(ctx),
-    ]
-    # P2-3: 扩展运维工具（按 tool_names 白名单过滤——L1 只读下写工具被裁掉）
-    for _name, _factory in EXTENDED_TOOL_FACTORIES.items():
-        if tool_names is not None and _name not in tool_names:
-            continue
-        tools.append(_factory(ctx))
+    tools: list = []
+    for spec in TOOL_REGISTRY.values():
+        try:
+            factory = resolve_factory(spec)
+            tools.append(factory(ctx))
+        except Exception as e:  # noqa: BLE001 — 单工具失败不阻断其余工具构建
+            logger.warning(f"tool '{spec.name}' build failed, skipped: {e}")
 
     if getattr(ctx, "permission_level", 2) <= 1:
         tools = [
             t for t in tools
-            if getattr(t, "__name__", "") in _L1_READONLY_TOOL_NAMES
+            if getattr(t, "__name__", "") in READONLY_TOOL_NAMES
         ]
     if tool_names is not None:
         allowed = set(tool_names)
@@ -950,7 +917,12 @@ __all__ = [
     "RiskChecker",
     # 辅助函数
     "execute_via_ssh",
-    # 工具注册
+    # 工具注册（T2: TOOL_REGISTRY 单一真源 + 派生集合）
     "OPS_TOOL_NAMES",
+    "TOOL_REGISTRY",
+    "READONLY_TOOL_NAMES",
+    "APPROVAL_TOOL_NAMES",
+    "get_tool_policy",
+    "tool_catalog_text",
     "make_all_ops_tools",
 ]

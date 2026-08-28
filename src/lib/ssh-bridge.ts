@@ -26,10 +26,27 @@
  */
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { SshSessionStateValue } from '../store/runtime';
 
-// 供 ssh-explorer 模块统一从 ssh-bridge 引入会话状态枚举
-export type { SshSessionStateValue };
+/**
+ * SSH 会话状态枚举（与 Rust session.rs SshSessionState 对齐，9 态有限状态机）
+ *
+ * 状态转换图：
+ *   Idle → Connecting → Handshaking → HostVerifying → Authenticating → Authenticated → Connected
+ *   任意状态 → Failed（错误）
+ *   任意状态 → Closed（主动断开或服务器断开）
+ *   Connected → Reconnecting（KeepaliveTimeout，P3 实现）
+ */
+export type SshSessionStateValue =
+  | 'idle'
+  | 'connecting'
+  | 'handshaking'
+  | 'host_verifying'
+  | 'authenticating'
+  | 'authenticated'
+  | 'connected'
+  | 'reconnecting'
+  | 'failed'
+  | 'closed';
 
 const textEncoder = new TextEncoder();
 

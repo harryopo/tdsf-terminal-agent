@@ -8,7 +8,7 @@
 // 当前步骤 amber 脉冲动画，已完成步骤 primary 色 + checkmark。
 // 不使用 AI 味渐变，遵循项目设计语言 (CSS 变量 + shadcn token)。
 
-import type { SshSessionStateValue } from "@/store/runtime";
+import type { SshSessionStateValue } from "@/lib/ssh-bridge";
 import { stateLabel } from "./SshStatusDot";
 import { CloudServerIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";

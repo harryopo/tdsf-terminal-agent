@@ -47,6 +47,11 @@ logger = logging.getLogger("sidecar.skills.registry")
 # 内置 Skill 根目录（python-sidecar/skills/builtin/）
 _BUILTIN_DIR: Path = Path(__file__).parent / "builtin"
 
+# TDSF 魔改 (T1 2026-08-28): 用户自定义 Skill 目录（~/.tdsf/skills/）
+# 启动时若存在则自动加载（<dir>/<skill_name>/SKILL.md 或 <dir>/*.md），
+# 与 tdsf_loader 的 ~/TDSF.md 惯例对齐——用户无需改代码即可沉淀自己的技能包
+_USER_SKILLS_DIR: Path = Path.home() / ".tdsf" / "skills"
+
 # 65 mock 外部 Skill 名称（模拟 claude-skills 库的常见 Skill）
 _MOCK_SKILL_NAMES: list[str] = [
     # === 编程语言类（10）===
@@ -241,7 +246,7 @@ class SkillRegistry:
         return name.lower() in self._skills
 
     def search(self, query: str) -> list[Skill]:
-        """按 name / description / tags 搜索 Skill
+        """按 name / description / tags / triggers 搜索 Skill
 
         Args:
             query: 搜索关键词（大小写不敏感）
@@ -262,6 +267,10 @@ class SkillRegistry:
                     results.append(skill)
                     continue
                 if any(q in tag.lower() for tag in skill.tags):
+                    results.append(skill)
+                    continue
+                # TDSF 魔改 (T1 2026-08-28): triggers 触发词参与命中
+                if any(q in trig.lower() for trig in skill.triggers):
                     results.append(skill)
                     continue
         results.sort(key=lambda s: s.name)
@@ -335,10 +344,16 @@ class SkillRegistry:
         if skill.file_path:
             return {
                 "name": skill.name,
+                "description": skill.description,
                 "content": skill.body,
                 "when_to_use": skill.when_to_use,
                 "steps": skill.steps,
                 "examples": skill.examples,
+                # TDSF 魔改 (T1 2026-08-28): 贯通 tags / triggers / allowed-tools，
+                # 让 Agent 知道该技能的触发词与建议使用的工具白名单
+                "tags": skill.tags,
+                "triggers": skill.triggers,
+                "allowed_tools": skill.allowed_tools,
                 "params": params,
                 "source": "builtin",
             }
@@ -770,12 +785,13 @@ _global_registry_lock: threading.Lock = threading.Lock()
 def get_global_registry() -> SkillRegistry:
     """获取全局 SkillRegistry 单例
 
-    首次调用时自动加载 5 个内置 Skill（linux-ops / docker-management /
-    selinux-baseline / ssh-troubleshoot / python-debug），均为 TDSF
-    实际可调用的运维技能。
+    首次调用时自动加载：
+    - 5+ 内置 Skill（linux-ops / docker-management / selinux-baseline /
+      ssh-troubleshoot / python-debug / systemd-troubleshoot / samba-setup）
+    - 用户自定义 Skill（~/.tdsf/skills/，存在则加载；T1 2026-08-28）
 
     Returns:
-        SkillRegistry 实例（已加载 5 个 Skill）
+        SkillRegistry 实例（已加载内置 + 用户 Skill）
     """
     global _global_registry
     if _global_registry is not None:
@@ -785,6 +801,9 @@ def get_global_registry() -> SkillRegistry:
             return _global_registry
         registry: SkillRegistry = SkillRegistry()
         registry.load_builtin()
+        # TDSF 魔改 (T1 2026-08-28): 加载用户自定义 Skill 目录
+        # ~/.tdsf/skills/ 不存在时静默跳过（load_external_dir 内部处理）
+        user_loaded: int = registry.load_external_dir(_USER_SKILLS_DIR)
         # TDSF 魔改：不再自动加载 65 个 mock 外部 skill
         # 原逻辑会注册 "argocd-gitops" / "rust-debug" 等用户不需要的占位 skill,
         # 前端打开后内容是 "mock skill body", 没有实际价值, 干扰用户判断.
@@ -793,7 +812,32 @@ def get_global_registry() -> SkillRegistry:
         _global_registry = registry
         logger.info(
             f"global SkillRegistry initialized: "
-            f"{registry.count()} skills loaded (5 builtin only, mock disabled)"
+            f"{registry.count()} skills loaded "
+            f"(builtin + user={user_loaded}, mock disabled)"
+        )
+    return _global_registry
+
+
+def reload_global_registry() -> SkillRegistry:
+    """热重载全局 SkillRegistry（T1 2026-08-28 新增）
+
+    清空现有注册表并重新加载内置 + 用户目录 Skill。
+    用途：skill.reload JSON-RPC 方法——用户新增/修改 SKILL.md 后
+    无需重启 sidecar 即可生效。
+
+    Returns:
+        重建后的 SkillRegistry 实例
+    """
+    global _global_registry
+    with _global_registry_lock:
+        registry: SkillRegistry = SkillRegistry()
+        registry.load_builtin()
+        user_loaded: int = registry.load_external_dir(_USER_SKILLS_DIR)
+        _global_registry = registry
+        logger.info(
+            f"global SkillRegistry reloaded: "
+            f"{registry.count()} skills loaded "
+            f"(builtin + user={user_loaded}, mock disabled)"
         )
     return _global_registry
 
@@ -878,9 +922,27 @@ def register_methods(dispatcher: Any) -> None:
         """返回已注册 Skill 总数"""
         return {"count": registry.count()}
 
+    def _skill_reload() -> dict[str, Any]:
+        """热重载 Skill 注册表（T1 2026-08-28 新增）
+
+        重新加载内置 + 用户目录（~/.tdsf/skills/）的 SKILL.md，
+        新增/修改技能包后无需重启 sidecar。
+        """
+        try:
+            new_registry: SkillRegistry = reload_global_registry()
+            return {
+                "ok": True,
+                "count": new_registry.count(),
+                "names": new_registry.list_names(),
+            }
+        except Exception as e:
+            logger.exception(f"skill.reload failed: {e}")
+            return {"ok": False, "error": f"skill reload failed: {e}"}
+
     dispatcher.register("skill.list", _skill_list)
     dispatcher.register("skill.get", _skill_get)
     dispatcher.register("skill.invoke", _skill_invoke)
     dispatcher.register("skill.search", _skill_search)
     dispatcher.register("skill.count", _skill_count)
-    logger.info("skill.* methods registered (5 methods)")
+    dispatcher.register("skill.reload", _skill_reload)
+    logger.info("skill.* methods registered (6 methods)")

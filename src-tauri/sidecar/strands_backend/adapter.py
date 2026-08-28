@@ -519,8 +519,9 @@ class TdsfStrandsCallbackHandler:
 # Strands Agent 实例：独立 system prompt + 按角色裁剪的工具集
 # （schema-level safety：explore/teach 无 ssh_command，LLM 无法调用
 # 不存在于其 schema 的执行工具）。
-# 注意：工具白名单用 @tool 装饰后的函数名（见 tools/__init__.py
-# _L1_READONLY_TOOL_NAMES 的说明），与 OPS_TOOL_NAMES 注册名不同。
+# 注意：工具白名单用 @tool 装饰后的函数名，与 OPS_TOOL_NAMES 注册名不同
+# （兼容映射见 tools/registry.py OPS_TOOL_ALIASES；L1 只读过滤见
+# tools/registry.py READONLY_TOOL_NAMES——T2 后均由注册表单一真源派生）。
 _SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
     "main": {
         "tool_names": None,  # 全量 7 工具
@@ -1020,44 +1021,10 @@ class StrandsAgentAdapter:
         ops_tools = make_all_ops_tools(ctx, tool_names=tool_names)
         all_tools = ops_tools + self.extra_tools
 
-        # TDSF 魔改 (2026-08-09): 所有 agent 都挂载 todo_write 工具（任务规划 UI 联动）
-        try:
-            from strands_backend.tools.todo_write import make_todo_write_tool
-            all_tools.append(make_todo_write_tool(ctx))
-        except Exception as e:
-            logger.warning(f"todo_write tool attach failed: {e}")
-
-        # TDSF 魔改 (2026-08-09): 方案书集成度补齐 — 4 个新工具
-        try:
-            from strands_backend.tools.get_terminal_output import make_get_terminal_output_tool
-            all_tools.append(make_get_terminal_output_tool(ctx))
-        except Exception as e:
-            logger.warning(f"get_terminal_output tool attach failed: {e}")
-
-        try:
-            from strands_backend.tools.config_diff import make_config_diff_tool
-            all_tools.append(make_config_diff_tool(ctx))
-        except Exception as e:
-            logger.warning(f"config_diff tool attach failed: {e}")
-
-        try:
-            from strands_backend.tools.backup_restore import make_backup_restore_tool
-            all_tools.append(make_backup_restore_tool(ctx))
-        except Exception as e:
-            logger.warning(f"backup_restore tool attach failed: {e}")
-
-        try:
-            from strands_backend.tools.confidence_tool import make_confidence_tool
-            all_tools.append(make_confidence_tool(ctx))
-        except Exception as e:
-            logger.warning(f"confidence tool attach failed: {e}")
-
-        # TDSF 魔改 (2026-08-09): 方案书 #10 决策库完善 — 历史案例检索工具
-        try:
-            from strands_backend.tools.decision_history import make_decision_history_tool
-            all_tools.append(make_decision_history_tool(ctx))
-        except Exception as e:
-            logger.warning(f"decision_history tool attach failed: {e}")
+        # T2 (2026-08-28): todo_write / get_terminal_output / config_diff /
+        # backup_restore / assess_confidence / search_history 已收编入
+        # TOOL_REGISTRY（tools/registry.py），由 make_all_ops_tools 统一构建，
+        # 不再在此逐个 try 挂载（原 2026-08-09 集成度补齐的 6 个直挂块删除）。
 
         # P0-6: main agent 挂载子 agent 工具（agent-as-tool 委派）
         sub_agent_names = set()

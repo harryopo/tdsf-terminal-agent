@@ -7,13 +7,15 @@ skills/parser.py — SKILL.md 解析器（T-P3-06）
 - 返回 Skill dataclass（name/description/version/author/tags + body sections）
 - 兼容 PyYAML 不可用时退化为简单 key:value 解析
 
-SKILL.md 格式（DEC-V321-13 标准）：
+SKILL.md 格式（DEC-V321-13 标准 + T1 2026-08-28 扩展）：
     ---
     name: <skill-name>
     description: <一句话描述>
     version: 1.0.0
     author: TDSF
     tags: [linux, ops]
+    triggers: [systemd, 服务启动失败]   # T1: 触发词（可选，search 命中用）
+    allowed-tools: [ssh_command, read_remote_file]  # T1: 工具白名单（可选）
     ---
 
     # <Skill Name>
@@ -33,6 +35,7 @@ Skill dataclass 字段：
 - version:     版本号（默认 "0.0.0"）
 - author:      作者
 - tags:        标签列表
+- triggers:    触发词列表（T1 2026-08-28，search 命中扩展；空 = 不参与触发匹配）
 - when_to_use: "When to use" 章节内容
 - steps:       "Steps" 章节内容
 - examples:    "Examples" 章节内容
@@ -88,6 +91,7 @@ class Skill:
         version:     版本号（默认 "0.0.0"）
         author:      作者
         tags:        标签列表
+        triggers:    触发词列表（T1 2026-08-28，search 命中扩展）
         when_to_use: "When to use" 章节内容
         steps:       "Steps" 章节内容
         examples:    "Examples" 章节内容
@@ -100,6 +104,7 @@ class Skill:
     version: str = "0.0.0"
     author: str = ""
     tags: list[str] = field(default_factory=list)
+    triggers: list[str] = field(default_factory=list)
     when_to_use: str = ""
     steps: str = ""
     examples: str = ""
@@ -111,6 +116,11 @@ class Skill:
     # - python: {type: python, script: "import os; print(os.uname())"}
     # - http:   {type: http,   method: GET, url: "...", headers: {}}
     executor: dict[str, Any] | None = None
+    # TDSF 魔改 (T1 2026-08-28): 工具白名单（可选）
+    # 来自 SKILL.md frontmatter 的 allowed-tools 字段（list[str] 或逗号分隔 str）
+    # 语义：该技能执行/推荐时允许使用的 Strands 工具名列表（对齐 Claude Code
+    # Agent Skills 的 allowed-tools 前置声明）；空列表 = 不限制
+    allowed_tools: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为 JSON 兼容字典"""
@@ -120,6 +130,8 @@ class Skill:
             "version": self.version,
             "author": self.author,
             "tags": list(self.tags),
+            # TDSF 魔改 (T1 2026-08-28): 序列化 triggers
+            "triggers": list(self.triggers),
             "when_to_use": self.when_to_use,
             "steps": self.steps,
             "examples": self.examples,
@@ -127,6 +139,8 @@ class Skill:
             "file_path": self.file_path,
             # TDSF 魔改 (P0-2 修复 2026-07-28): 序列化 executor
             "executor": dict(self.executor) if self.executor else None,
+            # TDSF 魔改 (T1 2026-08-28): 序列化 allowed-tools
+            "allowed_tools": list(self.allowed_tools),
         }
 
     @classmethod
@@ -138,6 +152,8 @@ class Skill:
             version=data.get("version", "0.0.0"),
             author=data.get("author", ""),
             tags=list(data.get("tags", [])),
+            # TDSF 魔改 (T1 2026-08-28): 反序列化 triggers
+            triggers=list(data.get("triggers") or []),
             when_to_use=data.get("when_to_use", ""),
             steps=data.get("steps", ""),
             examples=data.get("examples", ""),
@@ -145,6 +161,8 @@ class Skill:
             file_path=data.get("file_path"),
             # TDSF 魔改 (P0-2 修复 2026-07-28): 反序列化 executor
             executor=data.get("executor"),
+            # TDSF 魔改 (T1 2026-08-28): 反序列化 allowed-tools
+            allowed_tools=list(data.get("allowed_tools") or []),
         )
 
 
@@ -217,6 +235,8 @@ def parse_skill_content(content: str) -> Skill:
         version=str(meta.get("version", "0.0.0")),
         author=str(meta.get("author", "")),
         tags=_normalize_tags(meta.get("tags")),
+        # TDSF 魔改 (T1 2026-08-28): 解析 triggers 触发词
+        triggers=_normalize_tags(meta.get("triggers")),
         when_to_use=sections.get("when to use", ""),
         steps=sections.get("steps", ""),
         examples=sections.get("examples", ""),
@@ -224,6 +244,9 @@ def parse_skill_content(content: str) -> Skill:
         # TDSF 魔改 (P0-2 修复 2026-07-28): 解析 SKILL.md 中的 executor 元数据
         # 支持让 Skill 真正执行 shell 命令, 而不是只回显 SKILL.md 文本
         executor=_parse_executor(meta.get("executor")),
+        # TDSF 魔改 (T1 2026-08-28): 解析 allowed-tools 工具白名单
+        allowed_tools=_normalize_tags(meta.get("allowed-tools")
+                                      or meta.get("allowed_tools")),
     )
 
 
