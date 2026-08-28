@@ -1451,4 +1451,24 @@ P2（中优先级 — 清理 + 文档）：
 - ✅ 做对：环境问题逐层隔离验证（先单测定位再全量），不为环境差异改业务代码（symlink 测试用运行时跳过而非删测试，保住真实环境的断言价值）；TDSF_DATA_DIR 环境变量是 chroma 路径真相（`tools/ground.py:98` 支持覆盖），一设全解
 - ⚠️ 教训：**TRAE 沙箱三拦**（CreateSymbolicLink 系统调用 / WebView2 窗口 / 特定路径写入），任何"沙箱内跑不过"先查这三类；桌面实测必须降级为交付启动指南让用户自己跑
 - ⚠️ 教训：**pytest 全量慢 ≈ chroma 沙箱拦截重试**，不是真实 LLM 调用（llm_config.json 有真实 key 是误导项）；faulthandler 只证明了非死锁，真凶是 IO 重试
-- 待办：用户真实终端 `启动.bat` 实测（五绿第 5 项）；Windows 有管理员权限的机器可验证 symlink 测试真实断言路径
+- 待办：用户真实终端 `启动.bat` 实测（五绿第 5 项）；Windows 有管理员权限的机器 可验证 symlink 测试真实断言路径
+
+## 2026-08-28 · 启动.bat 中文编码错乱修复 + langchain-openai 补装（§37.66）
+
+**任务**：用户在自己 cmd 双击运行 `启动.bat`，输出一堆乱码错误（`'ent' 不是内部或外部命令`、`'l-agent-clone"' 不是内部或外部命令`、`'婂櫒锛堜紭鍏堜娇鐢ㄩ」鐩唴' ...`），sidecar 日志显示回退 `using python: "python"`（Python 3.13.5 系统版）→ `langchain-openai 未安装` ERROR → LLM 不可用。
+
+**根因**：
+1. cmd 解析 .bat 用**系统当前代码页（GBK 936）**，与文件实际 UTF-8 编码不一致 → 中文注释/中文 echo 在解析阶段就被拆碎成乱码 token 当命令执行；`chcp 65001` 在 `@echo off` 之后才切换代码页，**救不了已经发生的解析**（§37.65 里写的"启动.bat 已 set venv"实际被拆碎，`set TDSF_SIDECAR_PYTHON` 行没生效）
+2. sidecar 解释器解析链（`src-tauri/src/modules/sidecar.rs:782-825`）：`TDSF_SIDECAR_PYTHON` 环境变量 > `python` > `python3` > `py -3` —— 环境变量没设上 → 回退系统 `python`（未装 langchain-openai）→ LLM 不可用
+
+**解法**：
+1. `启动.bat` **全 ASCII 重写**：删 `chcp 65001`/`title`/中文注释/中文 echo；`cd /d "%~dp0"` + `set "TDSF_SIDECAR_PYTHON=%~dp0src-tauri\sidecar\.venv\Scripts\python.exe"` 动态展开（中文路径安全，已在项目根放临时 verify.bat 实测 `PYTHON_EXISTS=YES`）
+2. `.venv` 补装 `langchain-openai`（清华源）→ `ChatOpenAI` 导入 OK（langchain_openai 1.6.0）
+3. `requirements.txt` 补录 `langchain-openai>=0.3.0`（此前漏了——只补了 langgraph/bs4），防未来重装再踩
+4. git commit `04768bf`
+
+**复盘**：
+- ✅ 做对：验证脚本放对位置（放 Temp 时 `%~dp0` 解析成 Temp 目录，是假阴性；放项目根才能测中文路径）；根因直击"cmd 解析代码页 ≠ 文件编码"，不用 chcp 这种治标方案
+- ⚠️ 教训：**写 .bat 一律全 ASCII + `%~dp0` 动态路径**，中文注释/中文路径硬编码在 GBK 代码页 cmd 下必炸；`chcp 65001` 无法补救已发生的解析
+- ⚠️ 教训：**依赖补装要同步 requirements.txt**（上次只补了 venv 里的包，漏了文件声明，重装又踩）
+- 待办：用户真实 cmd 重新运行 `启动.bat`，确认 ① 无乱码命令报错 ② 日志 `using python: "...\.venv\Scripts\python.exe"` ③ 无 `langchain-openai 未安装` ④ 窗口出现
