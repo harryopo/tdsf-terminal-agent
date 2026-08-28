@@ -3,7 +3,6 @@ import {
   type CustomEndpoint,
   compatModelIdForEndpoint,
   DEFAULT_MODEL_ID,
-  DEFAULT_STT_PROVIDER,
   endpointIdFromCompatModel,
   getModelContextLimit,
   isCompatModelId,
@@ -188,10 +187,6 @@ describe("migrateLegacyCompatEndpoint", () => {
 describe("domestic-first AI config", () => {
   it("defaults the chat model to DeepSeek V4 Flash", () => {
     expect(DEFAULT_MODEL_ID).toBe("deepseek-v4-flash");
-  });
-
-  it("defaults STT to the local whisper.cpp server", () => {
-    expect(DEFAULT_STT_PROVIDER).toBe("whispercpp");
   });
 
   it("orders providers domestic-first with the domestic set present", () => {

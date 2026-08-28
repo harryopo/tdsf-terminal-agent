@@ -1075,8 +1075,8 @@ export type AutocompleteProviderId = ProviderId;
  *
  * TDSF 魔改 2026-08-28: 补充国产 provider 的 per-provider 默认（补全对延迟
  * 极敏感，优先选各家快档/代码档）；openai 从 legacy nano 升为 GPT-5.6 Luna。
- * 全局默认补全 provider 仍是 cerebras/gpt-oss-120b
- * （DEFAULT_PREFERENCES.autocompleteProvider），保持不动。 */
+ * 全局默认补全 provider 改为 deepseek/deepseek-v4-flash（用户钦定：默认补全
+ * 走 DeepSeek 快档；仅作用于编辑器内联代码补全，与终端命令预测无关）。 */
 export const DEFAULT_AUTOCOMPLETE_MODEL: Partial<Record<ProviderId, string>> = {
   cerebras: "gpt-oss-120b",
   groq: "openai/gpt-oss-20b",
@@ -1106,19 +1106,8 @@ export function getAutocompleteEligibleModels(): readonly ModelInfo[] {
   );
 }
 
-export type SttProvider = "openai" | "groq" | "whispercpp";
-
-export const STT_PROVIDER_LABELS: Record<SttProvider, string> = {
-  openai: "OpenAI Whisper",
-  groq: "Groq Whisper",
-  whispercpp: "Whisper.cpp (local)",
-};
-
-// TDSF 魔改 2026-08-28: 语音输入本地优先——默认走本机 whisper.cpp（离线教学
-// 场景可用、音频不出本机）；whispercpp URL 仍强制 loopback，隐私红线保留。
-// 老用户已存的 sttProvider 偏好不受影响（?? 读取路径）。
-export const DEFAULT_STT_PROVIDER: SttProvider = "whispercpp";
-export const WHISPERCPP_DEFAULT_BASE_URL = "http://127.0.0.1:8080";
+// TDSF 魔改 2026-08-28: 语音输入（STT/Whisper）功能整体移除——设置页 UI、
+// composer 语音按钮、useWhisperRecording 钩子、stt.ts 均已删除。
 export const LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1";
 export const MLX_DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1";
 export const OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1";
