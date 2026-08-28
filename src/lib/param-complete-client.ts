@@ -310,6 +310,8 @@ export async function remoteCarapaceInstalled(sessionId: number): Promise<boolea
  * 由调用方回退 Fig specs 静态层。
  *
  * cwd：远端 shell 当前目录（leaf 注册的 remoteCwd getter 取值，null 时不加 cd 前缀）。
+ * options：透传 mergeCandidates（completionInjection 传 tldr 中文钩子，把 carapace
+ * 英文描述换成 tldr 选项级中文说明——P2 预留的 zhDescription 钩子在此接上）。
  */
 export async function remoteParamComplete(
   sessionId: number,
@@ -317,6 +319,7 @@ export async function remoteParamComplete(
   tokens: string[],
   current: string,
   cwd?: string | null,
+  options?: MergeOptions,
 ): Promise<SuggestionResult[] | null> {
   try {
     const r = await sshCommand(
@@ -327,9 +330,61 @@ export async function remoteParamComplete(
     if (!r.ok || r.exitCode !== 0 || !r.output.trim()) return null;
     const candidates = parseCarapaceJson(r.output);
     if (candidates.length === 0) return null;
-    return mergeCandidates(candidates, []);
+    return mergeCandidates(candidates, [], options);
   } catch (e) {
     console.warn('[param-complete] remoteParamComplete failed:', e);
+    return null;
+  }
+}
+
+// ============================================================================
+// SSH 远端：命令全集（compgen -c，供命令模式预测过滤假候选）
+// ============================================================================
+//
+// 用户实测反馈：SSH 终端命令模式会弹出远端根本不存在的命令（词典/fuzzy 层
+// 的候选是"应该存在"的，不代表这台机器装了）。根治方案：连接成功后拉一次
+// 远端 `compgen -c | sort -u` 命令全集，预测候选按它过滤（历史候选豁免——
+// 历史是真实执行过的）。拉取失败/为空不缓存 → 每次返回 null，调用方照旧
+// 不过滤（降级无损：宁可假预测也不丢真预测）。
+
+/** 远端命令全集拉取命令（compgen 是 bash 内建；stderr 丢弃防污染 stdout） */
+export const REMOTE_COMMANDS_CMD = 'compgen -c 2>/dev/null | sort -u';
+
+/** 会话级缓存：rustSessionId → 远端命令全集（连接成功后预取一次） */
+const remoteCommandsCache = new Map<number, Set<string>>();
+
+/** 读取缓存的远端命令全集（未拉到 → null，调用方降级为不过滤） */
+export function getCachedRemoteCommands(sessionId: number): Set<string> | null {
+  return remoteCommandsCache.get(sessionId) ?? null;
+}
+
+/** 使缓存失效（调试/重连时调用，下次 fetchRemoteCommands 重新 exec） */
+export function invalidateRemoteCommands(sessionId: number): void {
+  remoteCommandsCache.delete(sessionId);
+}
+
+/**
+ * 拉取远端命令全集（exec 通道，15s 超时）。结果缓存到会话级 Map；
+ * 失败或输出为空 → 返回 null 且不缓存（下次重试）。
+ * 本函数自身不抛错（内部全部捕获），调用方可放心 fire-and-forget。
+ */
+export async function fetchRemoteCommands(sessionId: number): Promise<Set<string> | null> {
+  const cached = remoteCommandsCache.get(sessionId);
+  if (cached) return cached;
+  try {
+    const r = await sshCommand(sessionId, REMOTE_COMMANDS_CMD, 15);
+    // compgen 不存在（dash/sh）时 sort 仍成功退出但输出为空 → 走空判定不缓存
+    if (!r.ok || r.exitCode !== 0) return null;
+    const out = r.output.trim();
+    if (!out) return null;
+    const cmds = new Set(
+      out.split('\n').map((line) => line.trim()).filter(Boolean),
+    );
+    if (cmds.size === 0) return null;
+    remoteCommandsCache.set(sessionId, cmds);
+    return cmds;
+  } catch (e) {
+    console.warn('[param-complete] fetchRemoteCommands failed:', e);
     return null;
   }
 }

@@ -36,7 +36,7 @@ import {
   type SftpEntry,
   joinRemotePath,
 } from '@/lib/sftp-bridge';
-import { remoteCarapaceInstalled } from '@/lib/param-complete-client';
+import { fetchRemoteCommands, remoteCarapaceInstalled } from '@/lib/param-complete-client';
 
 // TDSF 2026-08-28: SSH 会话的远端 carapace 检测状态（无弹窗设计，仅驱动小图标显隐）
 /** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装（键不存在 = 未检测） */
@@ -602,6 +602,15 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       // 不阻塞连接流程、不弹 Toast，结果仅写入 remoteCarapaceBySession
       // 驱动 SSH 终端角落小图标的显隐；preferences 关闭时跳过检测）
       void get().detectRemoteCarapace(sessionId);
+
+      // TDSF 2026-08-28(二): 连接成功后静默预取远端命令全集（compgen -c），
+      // 供命令模式预测过滤假候选（用户实测：词典/fuzzy 弹出远端没装的命令）。
+      // 同样不阻塞、失败静默（fetchRemoteCommands 内部全捕获，不缓存失败结果）。
+      // 注意不放在 detectRemoteCarapace 里——那个受 preferences 开关控制，
+      // 而命令全集过滤是预测核心功能，与 badge 提示开关无关。
+      const rustSessionId = get().sessions.find((s) => s.id === sessionId)
+        ?.rustSessionId;
+      if (rustSessionId) void fetchRemoteCommands(rustSessionId);
 
       return sessionId;
     } catch (e) {
