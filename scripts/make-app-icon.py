@@ -16,14 +16,14 @@ from PIL import Image, ImageDraw
 # ---------- 可调参数（单位：1024 逻辑坐标，实际绘制时乘 S） ----------
 BG_GRAY = (74, 74, 74, 255)        # 背景：中灰 #4A4A4A
 GREEN = (52, 211, 153, 255)        # 主题绿 #34D399（与原图标一致）
-RADIUS = 200                       # 圆角半径（1024 坐标）
+RADIUS = 280                       # 圆角半径（1024 坐标，v2 调大更圆润：200 -> 280）
 CANVAS = 1024                      # 输出尺寸
 SS = 4                             # 超采样倍数（4x = 4096 实际绘制）
 
 # 箭头 ">"：6 点多边形（外缘 3 点 + 平切端 + 内缘，横向厚度 t）
 CHEVRON = dict(x_left=330, y_top=270, y_bot=770, x_tip=650, y_mid=520, t=115)
-# 光标 "_"：方块，底边与箭头底对齐
-CURSOR = dict(x=720, y=620, size=150)
+# 光标 "_"：圆角方块（v2 加圆角），底边与箭头底对齐
+CURSOR = dict(x=720, y=620, size=150, radius=42)
 
 
 def build(size: int) -> Image.Image:
@@ -49,10 +49,11 @@ def build(size: int) -> Image.Image:
     ]
     d.polygon(chevron_pts, fill=GREEN)
 
-    # 3) 光标 "_"：加大后的方块，底边与箭头底对齐
+    # 3) 光标 "_"：加大后的圆角方块，底边与箭头底对齐
     cu = {key: round(val * k) for key, val in CURSOR.items()}
-    d.rectangle(
+    d.rounded_rectangle(
         [cu["x"], cu["y"], cu["x"] + cu["size"], cu["y"] + cu["size"]],
+        radius=cu["radius"],
         fill=GREEN,
     )
 
