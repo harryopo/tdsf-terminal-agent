@@ -100,6 +100,13 @@ fn write_all_profiles(
 // Tauri 命令
 // ============================================================================
 
+/// 串行化"读-改-写"临界区的全局锁
+///
+/// save/delete/touch 都是"读全量 → 改内存 → 全量覆盖写"，无锁时并发调用
+/// （如连接成功自动 touch 与用户 save 同时到达）会互相覆盖丢更新。
+/// 与 secrets.rs 同类问题的修复模式（2026-08-18 教训）。锁内无 await。
+static CREDENTIALS_RW_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// 保存 (或更新) 一条 SSH 连接配置
 ///
 /// 敏感字段 (password 或 passphrase) 通过 `secrets_set` 单独写入 keyring,
@@ -118,6 +125,7 @@ pub async fn ssh_credentials_save(
         profile.user
     );
 
+    let _guard = CREDENTIALS_RW_LOCK.lock().await;
     let mut profiles = read_all_profiles(&app)?;
     // upsert: 同 id 覆盖
     if let Some(idx) = profiles.iter().position(|p| p.id == profile.id) {
@@ -147,6 +155,7 @@ pub async fn ssh_credentials_list(
 pub async fn ssh_credentials_delete(app: AppHandle, id: String) -> Result<(), String> {
     log::info!("[ssh-credentials] delete: id={}", id);
 
+    let _guard = CREDENTIALS_RW_LOCK.lock().await;
     let mut profiles = read_all_profiles(&app)?;
     let before = profiles.len();
     profiles.retain(|p| p.id != id);
@@ -173,6 +182,7 @@ pub async fn ssh_credentials_delete(app: AppHandle, id: String) -> Result<(), St
 /// 更新 lastUsed 时间戳 (用于"最近使用"排序)
 #[tauri::command]
 pub async fn ssh_credentials_touch(app: AppHandle, id: String) -> Result<(), String> {
+    let _guard = CREDENTIALS_RW_LOCK.lock().await;
     let mut profiles = read_all_profiles(&app)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

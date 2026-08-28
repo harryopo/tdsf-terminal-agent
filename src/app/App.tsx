@@ -136,7 +136,7 @@ import {
 import { AsciicastRecorder,
   castFileName,
 } from "@/modules/recorder/asciicast"
-import { AsciicastPanel } from "@/modules/recorder/AsciicastPanel";;
+import { AsciicastPanel } from "@/modules/recorder/AsciicastPanel";
 // TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步

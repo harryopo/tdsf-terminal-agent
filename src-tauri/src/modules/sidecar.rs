@@ -470,8 +470,12 @@ impl SidecarManager {
                 tokio::select! {
                     _ = tokio::time::sleep(backoff) => {}
                     _ = cancel_rx.recv() => {
-                        log::info!("[sidecar:restart_loop] cancelled during backoff, exiting loop");
-                        break;
+                        // 注意：不能 break 退出循环——rx 一旦 drop，此后 exit_watcher
+                        // 的重启信号 tx.send 将失败，自动重启机制永久失效
+                        //（手动 stop/restart 一次即触发）。continue 跳过本次重启，
+                        // 循环继续等待下一个信号；用户 stop 语义由下方状态检查兜住。
+                        log::info!("[sidecar:restart_loop] cancelled during backoff, skip this restart");
+                        continue;
                     }
                 }
 
@@ -1465,6 +1469,13 @@ async fn health_check_task(
         // 检查状态
         {
             let state_guard = state.read().await;
+            if state_guard.status == SidecarStatus::Stopped {
+                // Stopped = 进程已被用户 stop 且未重启。本 task 无存在意义，
+                // 退出释放资源（下次 start() 会 spawn 新的 health task）。
+                // 否则每次重启都泄漏一个永久空转 task（每 5s 醒来空转一次）。
+                log::debug!("[sidecar:health] sidecar stopped, health task exiting");
+                return;
+            }
             if state_guard.status != SidecarStatus::Running {
                 log::debug!(
                     "[sidecar:health] skipping ping (status={:?})",

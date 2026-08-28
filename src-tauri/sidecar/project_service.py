@@ -437,10 +437,13 @@ class ProjectService:
         now = self._now_iso()
         new_name = name if name is not None else existing["name"]
         new_path = path if path is not None else existing.get("path")
+        # 注意: _row_to_dict 已把 metadata 解析为 dict (键是 "metadata" 而非
+        # "metadata_str"),此处须取 dict 再重新序列化;取 "metadata_str" 永远
+        # 得到 "{}" → 不传 metadata 的部分更新会静默清空原值 (2026-08-28 审查修复)。
         new_metadata = (
             json.dumps(metadata, ensure_ascii=False)
             if metadata is not None
-            else existing.get("metadata_str", "{}")
+            else json.dumps(existing.get("metadata"), ensure_ascii=False)
         )
 
         with self._write_lease:
@@ -533,10 +536,11 @@ class ProjectService:
         now = self._now_iso()
         new_title = title if title is not None else existing.get("title")
         new_mode = mode if mode is not None else existing.get("mode", "agent")
+        # 同 update_project: 取解析后的 dict 键 "metadata",勿取不存在的 "metadata_str"
         new_metadata = (
             json.dumps(metadata, ensure_ascii=False)
             if metadata is not None
-            else existing.get("metadata_str", "{}")
+            else json.dumps(existing.get("metadata"), ensure_ascii=False)
         )
 
         with self._write_lease:
@@ -624,10 +628,11 @@ class ProjectService:
         """更新消息内容"""
         existing = self.get_message(message_id)
         new_content = content if content is not None else existing["content"]
+        # 同 update_project: 取解析后的 dict 键 "metadata",勿取不存在的 "metadata_str"
         new_metadata = (
             json.dumps(metadata, ensure_ascii=False)
             if metadata is not None
-            else existing.get("metadata_str", "{}")
+            else json.dumps(existing.get("metadata"), ensure_ascii=False)
         )
 
         with self._write_lease:
@@ -782,8 +787,14 @@ class ProjectService:
     ) -> dict:
         """更新决策记录（如用户批准/拒绝审批）"""
         existing = self.get_decision(decision_id)
+        # 注意: _row_to_dict 已把 approved (int) 转为 bool,键是 "approved" 而非
+        # "approved_int";取错键会得到 None → 只改 risk_level 的更新会把 approved
+        # 重置为 NULL (2026-08-28 审查修复)。
+        existing_approved = existing.get("approved")
         new_approved = (
-            int(approved) if approved is not None else existing.get("approved_int")
+            int(approved)
+            if approved is not None
+            else (int(existing_approved) if existing_approved is not None else None)
         )
         new_risk = (
             risk_level if risk_level is not None else existing.get("risk_level")

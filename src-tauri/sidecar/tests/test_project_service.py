@@ -136,6 +136,27 @@ class TestProjectsCRUD:
         assert updated["path"] == "/new/path"
         assert updated["id"] == p["id"]
 
+    def test_partial_update_project_preserves_metadata(self, service: ProjectService) -> None:
+        """部分更新（不传 metadata）不得清空已有 metadata（2026-08-28 审查修复）
+
+        回归背景: update_* 曾取不存在的键 "metadata_str" → 兜底 "{}"，
+        任何只改 name/title 的部分更新都会静默清空原 metadata。
+        """
+        p = service.create_project(
+            name="test", metadata={"env": "prod", "tags": ["a"]}
+        )
+        # 只改 name, 不传 metadata
+        updated = service.update_project(p["id"], name="renamed")
+        assert updated["metadata"] == {"env": "prod", "tags": ["a"]}
+
+    def test_partial_update_session_preserves_metadata(self, service: ProjectService) -> None:
+        p = service.create_project(name="test")
+        s = service.create_session(
+            project_id=p["id"], title="t1", metadata={"k": "v"}
+        )
+        updated = service.update_session(s["id"], title="t2")
+        assert updated["metadata"] == {"k": "v"}
+
     def test_delete_project(self, service: ProjectService) -> None:
         p = service.create_project(name="to-delete")
         assert service.delete_project(p["id"]) is True
@@ -295,6 +316,20 @@ class TestDecisionsCRUD:
         )
         updated = service.update_decision(d["id"], approved=True)
         assert updated["approved"] is True
+
+    def test_update_decision_risk_only_preserves_approved(self, service: ProjectService) -> None:
+        """只改 risk_level 的部分更新不得把 approved 重置为 NULL（2026-08-28 审查修复）"""
+        p = service.create_project(name="test")
+        s = service.create_session(project_id=p["id"])
+        d = service.add_decision(
+            session_id=s["id"],
+            decision_type="command_exec",
+            content="sudo ...",
+            approved=True,
+        )
+        updated = service.update_decision(d["id"], risk_level="L4")
+        assert updated["approved"] is True
+        assert updated["risk_level"] == "L4"
 
     def test_list_decisions(self, service: ProjectService) -> None:
         p = service.create_project(name="test")

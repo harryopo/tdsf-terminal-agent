@@ -142,14 +142,19 @@ export function useWhisperRecording({
     };
   }, [teardownStream]);
 
-  return {
-    state,
-    recording: state === "recording",
-    transcribing: state === "transcribing",
-    start,
-    stop,
-    supported,
-    hasKey,
-    sttProvider,
-  };
+  // useMemo 稳定返回值：调用方（AiComposerProvider）把它放进 Context value，
+  // 每次渲染新建字面量会连带 Context 消费者全量重渲染（2026-08-28 审查修复）
+  return useMemo(
+    () => ({
+      state,
+      recording: state === "recording",
+      transcribing: state === "transcribing",
+      start,
+      stop,
+      supported,
+      hasKey,
+      sttProvider,
+    }),
+    [state, start, stop, supported, hasKey, sttProvider],
+  );
 }

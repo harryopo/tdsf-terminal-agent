@@ -530,7 +530,16 @@ pub(crate) async fn bridge_connection(
                 }
             }
             // SSH 服务器 → 本地客户端
-            Some(msg) = channel.wait() => {
+            // 注意：不能用 `Some(msg) = channel.wait()` 带 pattern 的写法——
+            // 本地半关闭 (stream_closed=true) 时 read 分支被 predicate 禁用，
+            // 若此时 channel 死亡 (wait 返回 None) pattern 不匹配也会移除该分支，
+            // select! 全分支禁用且无 else → panic；release panic="abort" 下整个应用退出。
+            msg = channel.wait() => {
+                let msg = match msg {
+                    // channel 已死（连接断开），正常收尾退出循环
+                    None => break,
+                    Some(m) => m,
+                };
                 match msg {
                     ChannelMsg::Data { ref data } => {
                         if let Err(e) = stream.write_all(data).await {

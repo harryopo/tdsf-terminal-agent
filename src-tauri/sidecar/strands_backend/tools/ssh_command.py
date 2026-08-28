@@ -160,7 +160,8 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 "sessionId": ssh_session_id or ctx.ssh_session_id or "",
             })
         except Exception as e:
-            logger.debug(f"inject_terminal notification failed: {e}")
+            # visible 模式下通知失败 = 用户看不到命令注入，必须可见（warning）
+            logger.warning(f"inject_terminal notification failed: {e}")
 
     # 执行（内部已含 RiskChecker + RustBridge 调用）
     result = execute_via_ssh(
