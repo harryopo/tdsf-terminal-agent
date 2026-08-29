@@ -1839,3 +1839,12 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ spec 驱动 + 子代理分波执行（Task 1 → 2∥3+4 → 5∥6 → 7∥6.5 → 收尾）全程未降级；✅ 双轨反馈/硬底线/评估顺序三处硬条款均有单测锁定（deny 压倒白名单、L4 永远确认、dangerous_construct 永不放行）；✅ 借鉴落地：审批卡四层=Warp/OpenAI 官方、三按钮=Chaterm、免确认记忆=opencode/Claude Code、block 流水账=atuin、打字机=expect send_human、上下文分区=open-code-review；⚠️ 遗留：①审批 host 校验为唯一 fail-open 点（Rust 反向通道无 ssh_status，已注释）；②老 fish(<4.0)/csh 远端仅 OSC 7（降级不报错）；③AgentCapabilityMatrix 孤儿组件与 sidecar-bridge onAgentSwitch 死导出待清理；④permission_level 仅保留 schema 过滤与缓存 key 职责（三模式接管审批决策）。
 
 **待用户实测**（方案书 §7 验收 1-8，需 LLM key + SSH 目标机，dev 实例已启动）：①观察模式拒绝写操作且如实报告 ②Teach 皮肤 TeachCard 输出 ③确认模式 `systemctl restart` 四层审批卡 + 拒绝附言换方案 ④⚡免审/白名单放行/deny 不可绕 ⑤自动模式 L3 升级 L4 永远确认 ⑥T14 记忆注入 ⑦终端感知"刚才哪步失败了"+ yum 因地制宜 ⑧打字机逐字演示 + 任意键打断；红线 9 回归：SSH 终端 + 翻译选词 + 文件树联动。
+
+### §37.81 补记：用户首轮实测四修（2026-08-29，commit 96074e4）
+
+用户实测反馈四点，全部修复：
+1. **模式四档化**（推翻 D1"教学为叠加开关"）：AgentMode 扩第四档 `teach`（= observe + 教学 prompt 预置组合，`toSidecarMode()` 展开为三模式 + teach 布尔下发，sidecar 零改动）；切换器下方新增当前档位区别说明行（用户要求"教学模式与其它三个的区别要写出来"）；AgentStatusPill 四态（教学 · 讲解 violet）
+2. **逐字开关移出 composer**：AgentModeSwitcher 移除逐字/教学独立开关，逐字统一走 设置 → 智能体 → 可视执行演示（AgentTypingCard）
+3. **TDSF 图标全套**：exe/任务栏图标此前仍是 terax `>_` 风格（source-icon.png）→ `pnpm tauri icon public/logo.svg` 从 TDSF 灰色 logo 生成全套（ico/icns/各尺寸 png/Square*/Android/iOS）
+4. **快捷键中文化**：shortcuts.ts 45 条 label 全面中文化（快捷键设置页 + 命令面板消费；id 保持英文稳定标识）
+老会话迁移：SessionMeta 里 observe+teach=true 自动恢复为 teach 档（restoreModeFromMeta）。门禁：vitest 1192 / tsc / lint 全绿。
