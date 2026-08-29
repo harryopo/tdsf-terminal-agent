@@ -7,7 +7,6 @@ export type SettingsTab =
   | "shortcuts"
   | "models"
   | "agents"
-  | "logs" // TDSF 魔改 (2026-07-28): 后端日志独立通路 - 子审查 agent 专用
   | "about";
 
 export async function openSettingsWindow(tab?: SettingsTab): Promise<void> {

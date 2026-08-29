@@ -94,9 +94,10 @@
 ### 待用户决策/确认
 
 - [x] ~~**黑屏修复 + 发行版感知预测方案书拍板**~~ ✅ 已拍板（2026-08-28）：收敛为 **`docs/方案书-v2.0.md` 最终版**（唯一开发方向准绳，M0-M4 里程碑）——P0 dev 启动预检做 / P1→P3 按序 / rhel+debian 先行 / 状态栏跟随左下角；K2 sidecar ready 超时已修（30s→60s）
-- [x] ~~**Agent 能力升级方案书 v3.0 拍板**~~ ✅ 已拍板（2026-08-28，#38）：① P0 起步、T1 技能包先行 ✅（P0 全四项已完成）② D3 部分执行（byoa/+3 脚本已删；agents/tools/core 为生产 fallback 保留）③ D4 runtime.tsx 已删 ✅ ④ P3（MCP/长期记忆）**纳入近期** ✅（T14 先行，T13 需 MCPClient 调研，细化见方案书 §5 P3）；仍待：P0 前真实 LLM 委派实测
+- [x] ~~**Agent 能力升级方案书 v3.0 拍板**~~ ✅ 已拍板（2026-08-28，#38）：① P0 起步、T1 技能包先行 ✅（P0 全四项已完成）② D3 部分执行（byoa/+3 脚本已删；agents/tools/core 为生产 fallback 保留）③ D4 runtime.tsx 已删 ✅ ④ P3（MCP/长期记忆）**纳入近期** ✅（T14 先行 ✅ 已完成，T13 需 MCPClient 调研）
+- [x] ~~**方案书 v3.1 三模式信任体系开工确认**~~ ✅ 已完成（2026-08-29，spec `add-agent-trust-modes`，见 DEV-JOURNAL §37.81；后续用户实测把"教学"从叠加开关改为**第四档**——AgentMode = observe/confirm/auto/teach，教学档 = 只读+教学 prompt 预置组合，`toSidecarMode()` 展开下发 sidecar 零改动）
+- [x] ~~**UI 精简五删**~~ ✅ 已拍板并执行（2026-08-29 用户钦定，产品形态收敛）：①智能体启动命令设置区 + 「启动智能体」卡片（外部 CLI 启动器与 TDSF agent 无关，AgentLauncherPanel 删除，NewTabMenu 菜单收敛）；②后端日志设置 tab（正常用户看不懂，开发时看 sidecar stdout 即可，LogsSection/SidecarLogPanel 删除）；③录制终端会话（asciicast 录制/回放，无必要，recorder/ 模块整删）；④设置页长段技术注释移除（打字机原理/白名单语义——**改放官方文档 `docs/guide/`**：三模式/可视执行演示/审批白名单三份，后续使用教程/注意事项/详细注释统一入该文件夹）；⑤桌面交互精简方向延续（界面只留一句话提示，详细文档进 docs/guide/）
 - [ ] **竞品借鉴 B2-B4 分期拍板**（见 `docs/开源AI运维终端-竞品对比与借鉴规划.md` §5；**B1 已落地**=AI 脱敏+防伪造提示+报错解释+终端搜索，见 #36/§37.77）：B2=ghost text 补全+CMD 命令卡片+交互检测器；B3=known-hosts 转正+ssh_config 导入+/summary-to-skill（✅ 已随 T14 落地）；B4=教学围观广播+关键词高亮+透明执行强化（⚠️ 与方案书 v3.0 T5 会话日志共用事件源）；顺序与取舍由用户定
-- [ ] **方案书 v3.1 三模式信任体系开工确认**（2026-08-29 用户提案 + 四项决策已拍板：教学皮肤/分级直映射/L3 确认/子 agent 一次到位）：观察（只读）/确认（审批+可信度卡）/自动（L0-L2 放行、L3 升级确认、L4 永远确认）三模式 + Teach 叠加开关；删 4 子 agent 委派机制（coding/explore/history 归 main，teach 契约迁教学皮肤）；吸收 v3.0 T11 可视化三件套进审批卡。方案：`docs/agent/方案书-v3.1-三模式信任体系与Agent收敛.md`，按 A1 后端→A2 前端→A3 审批卡顺序动工
 - [ ] **carapace 参数预测实测反馈**（#32 已完成，待用户 `启动.bat` 实测）：本地 `git checkout t` 弹分支 / `git checkout -` 弹选项；SSH 工具栏图标一键装远端 → `git checkout ` 弹**远端**分支；未装回退静态层中文。若 B2 ghost text AI 兜底被选入借鉴分期，此项合并评估
 - [ ] Headroom MCP 是否引入（外部依赖，P3）
 - [ ] 实训沙箱（Docker 故障环境）是否纳入（P3）

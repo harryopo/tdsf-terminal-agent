@@ -99,13 +99,6 @@ export function ApprovalWhitelistCard() {
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-[11px] text-muted-foreground">
-        匹配命令的规则支持通配符（例如 <code>systemctl status *</code>）。命中
-        「放行」的命令在确认/自动模式下不再弹卡；「每次询问」强制逐条确认；
-        「拒绝」直接拦截。内置安全黑名单（如 rm -rf /）优先于一切规则，且最高
-        危险级命令与含危险构造的命令不会被自动放行。
-      </p>
-
       {/* 添加行 */}
       <div className="flex items-center gap-1.5">
         <Input

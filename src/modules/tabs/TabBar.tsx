@@ -15,7 +15,6 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { AgentIcon } from "@/modules/agents/lib/agentIcon";
-import type { AgentLaunchRequest } from "@/modules/agents/lib/launcher";
 import {
   ALL_LANGUAGES,
   EXPOSED_LANGUAGES,
@@ -67,7 +66,6 @@ type Props = {
   showLocalExtras?: boolean;
   onNewEditor: () => void;
   onNewGitGraph: () => void;
-  onLaunchAgents: (request: AgentLaunchRequest) => void;
   onClose: (id: number) => void;
   /** Pin (promote) a preview tab to persistent on double-click. */
   onPin: (id: number) => void;
@@ -91,7 +89,6 @@ export function TabBar({
   showLocalExtras = true,
   onNewEditor,
   onNewGitGraph,
-  onLaunchAgents,
   onClose,
   onPin,
   onRename,
@@ -560,7 +557,6 @@ export function TabBar({
           onNewPreview={onNewPreview}
           onNewEditor={onNewEditor}
           onNewGitGraph={onNewGitGraph}
-          onLaunchAgents={onLaunchAgents}
         />
       </div>
     </div>

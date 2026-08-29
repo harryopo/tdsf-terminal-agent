@@ -1,12 +1,10 @@
-// TDSF 魔改 (P4-T4.1): 智能体设置 (启动命令/凭据/通知) — 全量中文化
+// TDSF 魔改 (P4-T4.1): 智能体设置 (凭据/通知) — 全量中文化
 // -----------------------------------------------------------------------------
 // 涵盖:
 //   - 默认 AI 智能体 (终端里默认唤起的 agent 名称)
-//   - 启动命令 (各 agent 自定义启动参数)
 //   - 通知策略
 //   - 上下文压缩
 
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -15,14 +13,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  AGENT_LAUNCHERS,
-  type AgentLaunchCommands,
-  type AgentLauncherId,
-} from "@/modules/agents/lib/launcher";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
-  setAgentLaunchCommands,
   setAgentNotifications,
   setDefaultWorkspaceEnv,
 } from "@/modules/settings/store";
@@ -38,7 +30,6 @@ const WORKSPACE_ENV_OPTIONS = [
 ];
 
 export function AgentsSection() {
-  const agentLaunchCommands = usePreferencesStore((s) => s.agentLaunchCommands);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
   const defaultWorkspaceEnv = usePreferencesStore((s) => s.defaultWorkspaceEnv);
 
@@ -90,35 +81,6 @@ export function AgentsSection() {
         <ApprovalWhitelistCard />
       </div>
 
-      <div className="flex flex-col gap-2">
-        <Label>智能体启动命令</Label>
-        <p className="text-[11px] text-muted-foreground">
-          每个智能体可独立配置启动命令 (例如 claude / codex / gemini / pi 等
-          CLI)。 留空使用内置默认。
-        </p>
-        <div className="flex flex-col gap-1.5">
-          {AGENT_LAUNCHERS.map((agent) => (
-            <SettingRow
-              key={agent.id}
-              title={agent.label}
-              description={`${agent.label} (${agent.id}) 的启动命令,默认: ${agent.defaultCommand}`}
-            >
-              <Input
-                value={agentLaunchCommands?.[agent.id as AgentLauncherId] ?? ""}
-                onChange={(e) => {
-                  const next: Partial<AgentLaunchCommands> = {
-                    ...(agentLaunchCommands ?? {}),
-                    [agent.id]: e.target.value,
-                  };
-                  void setAgentLaunchCommands(next as AgentLaunchCommands);
-                }}
-                placeholder={`默认: ${agent.defaultCommand}`}
-                className="h-7 w-72 font-mono text-[11.5px]"
-              />
-            </SettingRow>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

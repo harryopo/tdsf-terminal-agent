@@ -12,7 +12,6 @@ import { WindowControls } from "@/components/WindowControls";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { NotificationBell } from "@/modules/agents";
-import type { AgentLaunchRequest } from "@/modules/agents/lib/launcher";
 import { useTheme } from "@/modules/theme";
 import { useTranslateStore } from "@/modules/translate";
 import type { Tab } from "@/modules/tabs";
@@ -69,7 +68,6 @@ type Props = {
   showLocalExtras?: boolean;
   onNewEditor: () => void;
   onNewGitGraph: () => void;
-  onLaunchAgents: (request: AgentLaunchRequest) => void;
   onClose: (id: number) => void;
   /** Promote a preview (transient) tab to persistent. */
   onPin: (id: number) => void;
@@ -103,7 +101,6 @@ export function Header({
   showLocalExtras = true,
   onNewEditor,
   onNewGitGraph,
-  onLaunchAgents,
   onClose,
   onPin,
   onRename,
@@ -249,7 +246,6 @@ export function Header({
           showLocalExtras={showLocalExtras}
           onNewEditor={onNewEditor}
           onNewGitGraph={onNewGitGraph}
-          onLaunchAgents={onLaunchAgents}
           onClose={onClose}
           onPin={onPin}
           onRename={onRename}
