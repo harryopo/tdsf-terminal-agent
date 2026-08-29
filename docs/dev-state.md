@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-28 · Agent 能力升级 P0 全四项完成（§37.79：T1 SKILL.md 技能包体系 + T2 工具三角色解耦 + T3 fail-closed 门禁 + T4 债务清理；P3 MCP/长期记忆已拍板纳入近期）。接手请直接看 **DEV-JOURNAL 2026-08-28 P0 收尾条** + `docs/agent/方案书-v3.0-Agent能力升级.md`。**下一步 = P3 T14（会话记忆沉淀）→ T13（MCP 客户端）** + 真实 LLM 委派实测 + B2-B4 分期拍板
+> **最后更新**：2026-08-29 · **P3-T14 会话记忆沉淀完成**（§37.80：LLM 摘要幂等写 RAG + save_skill 技能包沉淀热重载 + 新会话首轮 `<session-memory>` 记忆注入）。接手请直接看 **DEV-JOURNAL §37.80** + `docs/agent/方案书-v3.0-Agent能力升级.md`。**下一步 = T13（MCP 客户端，需先调研 strands MCPClient）** + T14 真实 LLM 实测 + P1/P2 排期 + B2-B4 分期拍板
 
 ---
 
@@ -10,13 +10,14 @@
 
 | 门禁 | 状态 |
 |------|------|
-| typecheck / lint / test(1137) / build:web | ✅ 全绿（2026-08-28 §37.79 复核） |
-| cargo check / cargo test(全量含 doc-test) / pytest(1482) | ✅ 全绿（2026-08-28 §37.79 复核） |
+| typecheck / lint / test(1137) / build:web | ✅ 全绿（2026-08-29 §37.80 复核） |
+| cargo check / cargo test(全量含 doc-test) / pytest(1493) | ✅ 全绿（2026-08-29 §37.80 复核） |
 | tauri:dev 桌面端 | ✅ 窗口可见、可点击、本地终端(PTY pwsh)、SSH 可连、远程文件树可展开 |
 
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
-**最新里程碑（2026-08-28）**：
+**最新里程碑（2026-08-29）**：
+- §37.80 **P3-T14 会话记忆沉淀完成**（方案书 v3.0，与 B3 /summary-to-skill 合并设计）：①**sidecar `session_memory.py`**——summarize_session（LLM 生成"现象→根因→解法→教学要点"摘要，幂等 ID `session-memory-<session_id>` 写统一 RAG，source=session-memory，重复沉淀自动覆盖）+ save_session_skill（写用户目录 SKILL.md + skills.registry 热重载立即生效）+ memory.summarize_session / memory.save_skill 双 RPC 注册；②**agent 工具 save_skill** 入 TOOL_REGISTRY（19→20，registry 驱动 fail-closed 门禁继承）；③**前端 chatStore 收尾钩子**——newSession/deleteSession 切走时 maybeSummarizeSession 自动摘要（≥3 条消息才触发，会话级去重）；④**transport.ts 首轮记忆注入**——新会话首条用户消息检索 knowledge.search（source 过滤 session-memory/session-case，top3）生成 `<session-memory>` 块注入，Promise.race 3s 超时静默跳过不阻塞首响；门禁：pytest **1493**(+10) / vitest 1137(+13 transport) / tsc / lint / build:web / cargo check 全绿；tauri:dev 实测 sidecar ready 9s、memory.* 110 方法注册无错误；**待实测：真实 LLM 多轮对话 → 切换会话触发摘要 → 新会话首条消息看记忆注入 → agent 调 save_skill 沉淀**
 - §37.79 **Agent 能力升级 P0 全四项完成**（方案书 v3.0，`docs/agent/方案书-v3.0-Agent能力升级.md`）：①**T1 SKILL.md 技能包体系**——frontmatter 新增 triggers/allowed-tools 解析（skills/parser.py）+ registry 命中与知识卡贯通 + skill_invoke 返回新字段 + 7 内置技能（新增 systemd-troubleshoot/samba-setup 教学技能包）+ 用户自定义目录热重载；②**T2 工具三角色解耦**——新建 `strands_backend/tools/registry.py`（19 工具单一真源：实现 factory / 审批策略 ToolPolicy / 模型 schema），`make_all_ops_tools` 注册表驱动，adapter 6 个直挂 try-block 收编删除，新增 test_registry.py 19 项不变量测试；③**T3 fail-closed 审批门禁核实**——审批链路已 fail-closed（审批服务创建失败→None→不执行），补服务宕机回归测试；④**T4 债务清理**——删 byoa/（8 文件）+ e2e_inproc/e2e_smoke/tauri_simulation 3 调试脚本 + test_byoa.py + runtime.tsx 死代码（SSH 类型迁 ssh-bridge）；**P3 拍板纳入近期**（先 T14 会话记忆沉淀，后 T13 MCP 客户端需先调研 strands MCPClient）；pytest 1482 绿 + 前端四绿；**待实测：真实 LLM 委派 + skill_invoke 技能调用**
 - §37.78 **用户实测四修**：①预测回车透传（Enter 永远执行已敲入内容，仅 → 接受预测——终端操作终端优先）；②tab 命名（本地=terminal / SSH=shell / WSL=shell，customTitle 固定防 cd 漂移）；③SSH Space 隐藏 Blocks/Privacy/Editor/GitGraph（NewTabMenu showLocalExtras + 命令面板 5 条 hidden）；④远程新建文件 mkdir -p 语义 + 失败 toast；⑤WSL 工作区（左下角加 SSH Server... + pending 态、欢迎页/新建对话框加 WSL、WSL leaf 预测按 linux、Rust cached_wsl_probe 合并探测+缓存流畅化）；门禁全绿（vitest 1137 / cargo test）；**待实测：Enter 透传 / tab 命名 / SSH 菜单收敛 / WSL 二次切换变快**
 - §37.77 **B1 Agent 安全基座**（竞品借鉴分期 B1 全量落地）：①防伪造——Security honesty 系统提示条款 + lastBlockedCommand 注入；②脱敏强化——前端/Python 双侧同源 3 组新正则（私钥块/Authorization 头/DB 连接串）；③终端搜索 Ctrl+Shift+F（SearchAddon 浮层）；④失败块"AI 解释"（teach agent 轻量模式流式）；⑤F0 断链修复——`get_terminal_scrollback` Rust oneshot 往返通道；门禁全绿（vitest 1136 / pytest 1480 / cargo test 隔离跑）；**待实测：Ctrl+Shift+F 搜索 / 拦截后问 AI 如实回答 / 失败块 AI 解释**
