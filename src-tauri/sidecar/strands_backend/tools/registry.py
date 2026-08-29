@@ -229,6 +229,14 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         description="检索历史排障案例库，参考类似问题的历史解决方案（只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
+    # T14 (2026-08-28): 会话记忆沉淀 — 经验一键沉淀为 SKILL.md 技能包 + 热重载
+    "save_skill": ToolSpec(
+        name="save_skill",
+        factory="strands_backend.tools.session_memory_tool:make_save_skill_tool",
+        description="把本次会话沉淀的经验/排障过程保存为可复用技能包（写用户技能目录并立即生效）",
+        # 只写 ~/.tdsf/skills/<name>/SKILL.md（name 有 slug 校验，非系统命令）→ 免审批
+        policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False),
+    ),
 }
 
 # 派生只读集合（替代原 _L1_READONLY_TOOL_NAMES 硬编码）
