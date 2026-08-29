@@ -29,21 +29,21 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
   // TDSF 魔改 (P4-T4.1): 新增 SSH 远程视图入口 (cloud-server 图标)
   // TDSF 魔改 (P4-T4.4): 新增 Skills 管理视图入口 (sparkles 图标)
   const items: RailItem[] = [
-    { id: "explorer", label: "Files", icon: FolderTreeIcon },
+    // TDSF 魔改 2026-08-29: rail 标签中文化（用户钦定，推翻 2026-08-18 统一英文决策）
+    { id: "explorer", label: "文件", icon: FolderTreeIcon },
     {
       id: "source-control",
-      label: "Source Control",
+      label: "源代码管理",
       icon: FolderGitTwoIcon,
       badge: changedCount,
     },
 
-    { id: "skills", label: "Skills", icon: SparklesIcon },
-    // TDSF 魔改 2026-08-18: 视图标签统一英文, 与 Files/Skills 一致
-    { id: "knowledge", label: "Knowledge", icon: BookOpen01Icon },
+    { id: "skills", label: "技能", icon: SparklesIcon },
+    { id: "knowledge", label: "知识库", icon: BookOpen01Icon },
     // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段视图入口
-    { id: "snippets", label: "Snippets", icon: CodeIcon },
+    { id: "snippets", label: "片段", icon: CodeIcon },
     // TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道视图入口
-    { id: "tunnels", label: "Tunnels", icon: Router01Icon },
+    { id: "tunnels", label: "隧道", icon: Router01Icon },
   ];
 
   return (
@@ -63,7 +63,7 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
             aria-pressed={isActive}
             onClick={() => onSelectView(item.id)}
             className={cn(
-              "group relative flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md text-[11px] font-medium outline-none transition-colors duration-[var(--dur-base)]",
+              "group relative flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md text-[11px] font-medium outline-none transition-colors duration-[var(--dur-base)]",
               "focus-visible:ring-2 focus-visible:ring-primary/40",
               isActive
                 ? "bg-foreground/[0.07] text-foreground dark:bg-foreground/[0.09]"
@@ -76,7 +76,8 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
               strokeWidth={isActive ? 2 : 1.75}
               className="shrink-0 transition-[stroke-width] duration-[var(--dur-base)]"
             />
-            <span>{item.label}</span>
+            {/* TDSF 魔改 2026-08-29: 中文化后「源代码管理」较长，truncate 防拥挤溢出 */}
+            <span className="truncate whitespace-nowrap">{item.label}</span>
             {showBadge && badge ? (
               <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-border/60 bg-card px-1 text-[9px] font-semibold leading-none tabular-nums text-muted-foreground/95">
                 {badge > 99 ? "99+" : badge}
