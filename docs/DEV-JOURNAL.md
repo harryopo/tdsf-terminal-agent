@@ -1861,3 +1861,18 @@ P2（中优先级 — 清理 + 文档）：
 7. **官方文档文件夹建立**：`docs/guide/`（README + 三模式信任体系/可视执行演示/审批白名单三份）——设置页只留一句话提示，详细注释/教程/注意事项统一入此文件夹（后续约定：新功能的详细说明优先写 guide）
 
 **记忆沉淀（产品形态收敛方向，用户钦定）**：界面只留必要控件与一句话提示；外部 CLI 生态（启动器/录制）不属于产品范围；面向用户的功能详细说明一律进 docs/guide/ 官方文档而非 UI 长文本。ROADMAP「待用户决策」区已落档（UI 精简五删条目）。门禁：vitest 1181 / tsc / lint / build:web 全绿（删除测试文件后 vitest 总数 1192→1181 属预期）。
+
+### §37.81 补记 3：用户实测六修（2026-08-29，commit 22fed90，10 文件 +503/-146）
+
+用户第三轮实测反馈六点：
+1. **LSP 教程**：`docs/guide/editor-语言服务器LSP.md` 新建——LSP 是什么（Language Server Protocol）/ 有什么用（悬停文档/跳转定义/实时诊断/符号补全）/ 7 个语言服务器安装命令 / 4 条注意事项（按需开启、依赖工作区、自定义服务器、SSH 不受影响）
+2. **侧边栏 rail 中文化 + 拥挤修复**：六项 label 中文（文件/源代码管理/技能/知识库/片段/隧道，推翻 2026-08-18 统一英文决策）+ min-w-0/truncate whitespace-nowrap 修"Source Control"换行拥挤
+3. **SourceControl 面板 90 处中文化**：SourceControlPanel ~55 + useSourceControlPanel ~22 + useSourceControl 6（无上游分支/提交/推送/暂存/丢弃更改确认等全部用户可见文案；LLM 生成 Conventional Commit 的 prompt 英文有意保留）
+4. **知识库详情排版修复**：根因不是没走 markdown（已用 MessageResponse/Streamdown），而是 streamdown 内置 heading 固定大字号（h1 text-3xl）——用 Tailwind 任意值子选择器覆盖（h1→text-base 等）+ 弹窗加宽 sm:max-w-3xl
+5. **知识库按来源分组浏览**：listKnowledge 结果按 source 分组（内置教学文档/内置命令卡片/导入文档/会话沉淀），builtin-docs 组按 url 文件名二级分组，可折叠——解决"看不见知识库有哪些文件"
+6. **空工作区 agent 误说"本地终端模式"修复**：adapter.py `_build_prompt` 原 else 分支涵盖"本地/WSL/啥都没开"三态——拆三段：无 workspaceRoot/cwd/activeFile 且无 ssh → 改说"未打开任何工作区——请先新建本地、WSL 或 SSH 工作区"；Constraints 加防幻觉条款（不要声称本地诊断工具可用）
+7. **skill 清单漂移修复**：system prompt 原硬编码 5 个 skill 但实际 7 个 → 改 `_skill_names_line()` 动态读 skills registry（list_names），异常降级静态清单（新增技能包/用户自定义自动同步）
+
+**内容质量审查结论（用户问"Skill 不是官方文档/知识库不是官方源爬取"——如实报告）**：①内置 7 个 SKILL.md 全部为自编教学卡（author: TDSF，五步排障模板级，无官方原文摘录）；②知识库 builtin-docs 是仓库内 13 个自编教学 md（如"三级Linux_复习资料"是自编备考资料）、builtin-corpus 是自编命令卡片；③knowledge.crawl 爬虫框架配置了 14 个官方源（nginx/apache/mysql/redis/docker/k8s/systemd/selinux/ssh/bash 等）**但从未实际执行入库**（需显式调 RPC）。**待用户拍板**：a) 保持自编语料为教学主语料（现状）；b) 执行 knowledge.crawl 爬官方文档扩充（GenericCrawler 单页浅抓，量有限，建议后续做深抓）；c) 重写 SKILL.md 对齐官方文档（工作量大）。本轮先完成：排版修复让内容可读 + 来源分组让来源透明（builtin-docs 标签可见）+ skill 清单同步。
+
+**门禁**：vitest 1184 / pytest 1657 / tsc / lint 全绿。
