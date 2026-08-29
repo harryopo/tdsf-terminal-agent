@@ -1,9 +1,12 @@
 """
-knowledge/crawlers/nginx.py — nginx 文档爬虫（T-P3-03）
-=========================================================
+knowledge/crawlers/nginx.py — nginx 文档爬虫（T-P3-03，深度抓取增强）
+=========================================================================
 
 抓取 nginx 官方文档：https://nginx.org/docs/
-解析 beginners_guide / config / modules 等章节
+解析 beginners_guide / config / modules 等章节。
+
+受控多页抓取：与 GenericCrawler 对齐 BFS 参数（max_pages/max_depth/delay），
+通过 generic.crawl_site 共享同一 BFS 实现；parse() 保留单页章节拆分。
 """
 
 from __future__ import annotations
@@ -12,18 +15,39 @@ from typing import Any
 
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
-from knowledge.crawlers.base import BaseCrawler
+from knowledge.crawlers.base import BaseCrawler, CrawlerResult
+from knowledge.crawlers.generic import crawl_site
 from knowledge.fts5 import KnowledgeEntry
 
 
 class NginxCrawler(BaseCrawler):
-    """nginx 文档爬虫"""
+    """nginx 文档爬虫（受控多页 BFS，参数与 GenericCrawler 对齐）"""
 
-    def __init__(self, cache_root=None) -> None:
+    def __init__(
+        self,
+        cache_root=None,
+        max_pages: int = 30,
+        max_depth: int = 2,
+        delay: float = 1.0,
+    ) -> None:
         super().__init__(
             source="nginx-docs",
             base_url="https://nginx.org/docs/",
             cache_root=cache_root,
+        )
+        self.max_pages = max(1, int(max_pages))
+        self.max_depth = max(0, int(max_depth))
+        self.delay = max(0.0, float(delay))
+
+    def fetch(self, offline: bool = False) -> CrawlerResult:
+        """受控多页抓取：BFS 同域爬站（复用通用 crawl_site，每页 1 条 entry）"""
+        return crawl_site(
+            self,
+            max_pages=self.max_pages,
+            max_depth=self.max_depth,
+            delay=self.delay,
+            offline=offline,
+            default_tags=["nginx", "docs"],
         )
 
     def parse(self, html: str) -> list[dict[str, Any]]:

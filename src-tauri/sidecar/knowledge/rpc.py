@@ -13,6 +13,15 @@ knowledge/rpc.py — 知识库 JSON-RPC 方法注册（T-P3-08）
 - knowledge.rebuild:   {} → {ok, count}
 - knowledge.get:       {id} → {entry | null}
 - knowledge.count:     {} → {count}
+- knowledge.list:      {limit?, offset?} → {results, total, ...}
+- knowledge.import_docs: {directory, source?} → {imported, skipped, errors}
+- knowledge.add_case:    {title, content, tags?} → {ok, id}
+- knowledge.crawl:       {source, url?} → {added, entries, error?}
+- knowledge.stats:       {} → {total_entries, embed_model_loaded}
+- knowledge.list_files:  {source?} → {files: [{url, filename, title0,
+                         chunks, total_chars, source}], total}
+- knowledge.get_doc:     {url} → {ok, url, filename, source, title,
+                         content, chunks, total_chars}
 
 method 参数支持：
 - "fts5":    仅 FTS5 检索
@@ -260,8 +269,44 @@ def register_methods(dispatcher: Any) -> None:
 
         return knowledge_stats()
 
+    # 文件级聚合视图（同文件分片段落聚合浏览，配合标题边界分块）
+    def _list_files(source: str | None = None) -> dict[str, Any]:
+        """按 url 聚合列出文档文件
+
+        同一文件（同 url）的全部分块聚合为一条；url 为空的条目
+        （corpus 卡片/会话沉淀）跳过。
+
+        Args:
+            source: 可选，按来源过滤（如 "builtin-docs"）；None/空 = 全部
+
+        Returns:
+            {files: [{url, filename, title0, chunks, total_chars, source}], total}
+        """
+        rag = get_global_rag()
+        files = rag.list_files(source=(source or None))
+        return {"files": files, "total": len(files)}
+
+    def _get_doc(url: str) -> dict[str, Any]:
+        """按 url 取完整文档（全部块按序号排序，content 以空行拼接）
+
+        Args:
+            url: 文档 url（必填，fail-closed）
+
+        Returns:
+            {ok: True, url, filename, source, title, content, chunks, total_chars}
+            或 {ok: False, error}
+        """
+        if not url or not str(url).strip():
+            return {"ok": False, "error": "url is required"}
+        doc = get_global_rag().get_doc(str(url).strip())
+        if doc is None:
+            return {"ok": False, "error": f"document not found: {url}"}
+        return {"ok": True, **doc}
+
     dispatcher.register("knowledge.import_docs", _import_docs)
     dispatcher.register("knowledge.add_case", _add_case)
     dispatcher.register("knowledge.crawl", _crawl)
     dispatcher.register("knowledge.stats", _stats)
-    logger.info("knowledge.* methods registered (9 methods, RAG hybrid)")
+    dispatcher.register("knowledge.list_files", _list_files)
+    dispatcher.register("knowledge.get_doc", _get_doc)
+    logger.info("knowledge.* methods registered (12 methods, RAG hybrid)")
