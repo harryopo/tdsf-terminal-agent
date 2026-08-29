@@ -29,16 +29,17 @@ export type TdsfAgentId = "main";
  * agent.invoke 的 state.live.agentMode 下发 sidecar；缺省缺字段时
  * sidecar 按 confirm 执行（spec: 老会话兼容）。
  */
-export type AgentMode = "observe" | "confirm" | "auto";
+export type AgentMode = "observe" | "confirm" | "auto" | "teach";
 
 /** 默认模式：confirm（中间态最安全，对齐 spec"缺省缺字段时默认 confirm"） */
 export const DEFAULT_AGENT_MODE: AgentMode = "confirm";
 
-/** 三档模式常量列表（AgentModeSwitcher 渲染顺序） */
+/** 四档模式常量列表（AgentModeSwitcher 渲染顺序；teach 为第四档，用户钦定 2026-08-29） */
 export const AGENT_MODES: readonly AgentMode[] = [
   "observe",
   "confirm",
   "auto",
+  "teach",
 ];
 
 /** 模式元数据（切换器 + AgentStatusPill + TdsfAgentPanel 显示用） */
@@ -61,11 +62,31 @@ export const AGENT_MODE_META: Record<
     badge: "自动 · 执行",
     desc: "低危自动放行，高危仍需确认",
   },
+  teach: {
+    label: "教学",
+    badge: "教学 · 讲解",
+    desc: "只读 + 结构化教学输出（概念/示例/易错点/练习），适合跟学，不改系统",
+  },
 };
 
 /** 类型守卫：字符串是否为合法 AgentMode（会话元数据反序列化用） */
 export function isAgentMode(v: string): v is AgentMode {
-  return v === "observe" || v === "confirm" || v === "auto";
+  return v === "observe" || v === "confirm" || v === "auto" || v === "teach";
+}
+
+/**
+ * 四档模式 → sidecar 传参映射。
+ *
+ * sidecar 的权限矩阵只认三模式（observe/confirm/auto）+ teach 布尔
+ * （adapter.py 读 state.live.agentMode / state.live.teach）；前端第四档
+ * "教学" = 只读 + 教学 prompt 的预置组合，下发时展开为 observe + teach=true。
+ */
+export function toSidecarMode(mode: AgentMode): {
+  agentMode: "observe" | "confirm" | "auto";
+  teach: boolean;
+} {
+  if (mode === "teach") return { agentMode: "observe", teach: true };
+  return { agentMode: mode, teach: false };
 }
 
 /** TDSF Agent 定义（前端展示 + Python RPC 调用所需元数据；v3.1 后仅 main） */

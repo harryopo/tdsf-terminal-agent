@@ -31,11 +31,12 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { AGENT_MODE_META, type AgentMode } from "../agents/registry";
 import { useChatStore } from "../store/chatStore";
 
-/** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电，与切换器一致） */
+/** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电 / 教学=书，与切换器一致） */
 const MODE_ICON: Record<AgentMode, typeof EyeIcon> = {
   observe: EyeIcon,
   confirm: ShieldUserIcon,
   auto: FlashIcon,
+  teach: BookOpen01Icon,
 };
 
 /**
@@ -100,7 +101,7 @@ export function AgentStatusPill({
       <span className="max-w-[8rem] truncate text-muted-foreground">
         {meta.badge}
       </span>
-      {teach && (
+      {teach && agentMode !== "teach" && (
         <span className="flex items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-violet-600 dark:text-violet-400">
           <HugeiconsIcon icon={BookOpen01Icon} size={9} strokeWidth={1.75} />
           <span>教学</span>

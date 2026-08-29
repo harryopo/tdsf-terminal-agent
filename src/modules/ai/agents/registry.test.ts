@@ -76,9 +76,9 @@ describe("isTdsfAgent — 类型守卫", () => {
   });
 });
 
-describe("AgentMode — 三模式信任体系（v3.1）", () => {
-  it("三档常量列表顺序与档位正确", () => {
-    expect(AGENT_MODES).toEqual(["observe", "confirm", "auto"]);
+describe("AgentMode — 四档信任体系（v3.1.3）", () => {
+  it("四档常量列表顺序与档位正确", () => {
+    expect(AGENT_MODES).toEqual(["observe", "confirm", "auto", "teach"]);
   });
 
   it("DEFAULT_AGENT_MODE 是 confirm（缺省缺字段最安全中间态）", () => {
@@ -94,7 +94,7 @@ describe("AgentMode — 三模式信任体系（v3.1）", () => {
     expect(isAgentMode("OBSERVE")).toBe(false);
   });
 
-  it("AGENT_MODE_META 与三档一一对应（label/badge/desc 非空）", () => {
+  it("AGENT_MODE_META 与四档一一对应（label/badge/desc 非空）", () => {
     for (const mode of AGENT_MODES as readonly AgentMode[]) {
       const meta = AGENT_MODE_META[mode];
       expect(meta.label.length).toBeGreaterThan(0);
@@ -102,7 +102,7 @@ describe("AgentMode — 三模式信任体系（v3.1）", () => {
       expect(meta.desc.length).toBeGreaterThan(0);
     }
     expect(Object.keys(AGENT_MODE_META).sort()).toEqual(
-      ["auto", "confirm", "observe"].sort(),
+      ["auto", "confirm", "observe", "teach"].sort(),
     );
   });
 });
