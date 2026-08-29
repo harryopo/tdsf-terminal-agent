@@ -1,4 +1,5 @@
 import type { UIMessage } from "@ai-sdk/react";
+import { invoke } from "@tauri-apps/api/core";
 import type { TdsfAgentId } from "../agents/registry";
 import type { CustomEndpoint } from "../config";
 import type { ToolContext } from "../tools/tools";
@@ -142,7 +143,14 @@ export function createContextAwareTransport(deps: Deps) {
     // 双轨受益：Python Sidecar（<env>+<terminal-context> 注入 input）+
     // Vercel SDK（注入 messagesForRun 最后一条 user message）。
     const terminalBlock = formatTerminalContextBlock(live);
-    const contextBlock = [envBlock, terminalBlock]
+    // T14 (2026-08-28): 新会话首轮 → 检索决策库历史会话记忆注入开场
+    // （只在首条 user 消息时检索一次，后续轮次不重复注入，控制 token 开销）
+    const isFirstTurn =
+      options.messages.filter((m) => m.role === "user").length === 1;
+    const memoryBlock = isFirstTurn
+      ? await fetchMemoryHints(extractLastUserText(options.messages))
+      : null;
+    const contextBlock = [envBlock, terminalBlock, memoryBlock]
       .filter(Boolean)
       .join("\n\n");
     const messagesForRun = contextBlock
@@ -261,6 +269,73 @@ function extractLastUserText(messages: UIMessage[]): string {
     }
   }
   return "";
+}
+
+// ============================================================================
+// T14 (2026-08-28): 新会话开场检索注入相关历史（会话记忆）
+// ============================================================================
+
+/** 开场记忆检索超时（ms）——超时静默跳过，绝不阻塞首响 */
+const MEMORY_HINTS_TIMEOUT_MS = 3000;
+/** 最多注入条数与单条截断长度（控制首轮 token 开销） */
+const MEMORY_HINTS_TOP_K = 3;
+const MEMORY_HINTS_SNIPPET_CHARS = 220;
+
+type KnowledgeSearchResult = {
+  id: string;
+  source: string;
+  title: string;
+  content: string;
+};
+
+/**
+ * 新会话首轮：用用户首条消息检索决策库中的历史会话记忆
+ * （source = session-memory / session-case 的会话沉淀条目），
+ * 拼为 <session-memory> 块注入 contextBlock。
+ *
+ * 失败/超时/无命中 → null（静默，不阻塞对话）。
+ */
+async function fetchMemoryHints(firstUserText: string): Promise<string | null> {
+  const query = firstUserText.trim().slice(0, 200);
+  if (!query) return null;
+  try {
+    const r = await Promise.race([
+      invoke<{ results: KnowledgeSearchResult[] }>("ipc_invoke", {
+        method: "knowledge.search",
+        params: { query, limit: MEMORY_HINTS_TOP_K * 2 },
+      }),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), MEMORY_HINTS_TIMEOUT_MS),
+      ),
+    ]);
+    if (!r?.results?.length) return null;
+
+    // 只注入会话沉淀类条目（session-memory = T14 摘要；session-case = 排障案例），
+    // 避免把整篇教学语料灌进首轮上下文
+    const hints = r.results
+      .filter(
+        (e) =>
+          e.source === "session-memory" || e.source === "session-case",
+      )
+      .slice(0, MEMORY_HINTS_TOP_K);
+    if (!hints.length) return null;
+
+    const lines = hints.map(
+      (e, i) =>
+        `${i + 1}. 《${e.title}》${e.content.slice(0, MEMORY_HINTS_SNIPPET_CHARS)}${
+          e.content.length > MEMORY_HINTS_SNIPPET_CHARS ? "…" : ""
+        }`,
+    );
+    return [
+      "<session-memory>",
+      "以下是过往会话沉淀的相关记忆，供参考（与当前问题无关请忽略）：",
+      ...lines,
+      "</session-memory>",
+    ].join("\n");
+  } catch {
+    // 静默：sidecar 未就绪 / 检索失败都不应影响首响
+    return null;
+  }
 }
 
 /**
