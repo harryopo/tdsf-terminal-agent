@@ -1891,3 +1891,25 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ abc 三线全落地且互相咬合（分块聚合后端 + 两级浏览前端 + 官方语料入库）；✅ 内容质量从"自编简版"升级为"自编详实教学语料 + 26.5 万字符官方文档"；⚠️ 遗留：①4 个国外源（gnu.org 等）超时待网络好时重跑 `--crawl systemd-docs/selinux-docs/ssh-docs/bash-docs`；②爬取页是单页粒度（title=页面标题），后续可按页面内标题二次分块提升检索精度；③导入新文档后前端浏览缓存需重开面板刷新。
 
 **待用户实测**：知识库面板——展开"内置教学文档"看文件列表（filename/N 块/X 字）→ 点文件看完整文档排版；搜索命中显示文件名+第 N 块；展开"爬取文档"分组看 10 个官方源的页面；Skill 面板看重写后的 7 个技能包详实内容。
+
+### §37.81 补记 5：RAG 检索增强——真向量语义检索启用 + rerank + 嵌入缓存（2026-08-29，commit 86483eb）
+
+用户问"RAG 检索怎么实现的、有没有用开源方案"后拍板"按增强建议增强，文章字符多了要快速索引，或筛去不必要的知识"。
+
+**重大发现（根因）**：venv 里**根本没有 fastembed/sentence-transformers**——rag.py 的嵌入降级链（fastembed→sentence-transformers→hash）一直走的是 **hash 伪向量兜底**，语义检索从未真正工作过！同时 sqlite-vec 也未安装（vec_entries 表都不存在）。"双路混合检索"实际一直是 FTS5 单路。
+
+**增强实施**：
+1. **真向量启用**：`pip install sqlite-vec`(0.1.9) + `fastembed`(0.8.0，Qdrant ONNX 推理) + BGE-small-zh-v1.5 模型下载（HF_ENDPOINT=hf-mirror.com 镜像，缓存至 sidecar/data/models/）；重建实测 **391 块全量真嵌入仅 11.7s**（ONNX 批量推理）
+2. **rerank 精排**：RRF top-k 后批量计算 query-doc 余弦相似度重排（bi-encoder 精排，毫秒级；结果带 similarity/reranked 字段）。fastembed 0.8 无 TextCrossEncoder（rerank 在不存在的 fastembed-rerank 包里）→ 务实用 embedding 相似度精排，真 cross-encoder（bge-reranker，需 transformers）列为后续可选
+3. **嵌入缓存**：rag.db 加 `embed_cache(content_hash, embedding)` 表——启动幂等重建（先删后加）时同内容直接命中缓存零推理；重复 rebuild 实测命中
+4. **内容治理**：add 签名扩 `dedupe`（同 content 去重，排除自身——同 id 幂等覆盖合法）+ `min_chars`（超短块阈值，**默认 0 仅批量爬取/导入显式传 30**）——首轮治理误伤 13 个测试（短样例被拦 + dedupe 拦幂等覆盖），修正为"排除自身 + 阈值默认关"
+5. **vec_entries 覆盖 bug**：同 rowid 二次 add 报 UNIQUE constraint——vec0 虚拟表不支持 INSERT OR REPLACE，改 DELETE+INSERT（此前向量路从未启用所以从未暴露）
+6. **SKILL 语料入库**：7 个 SKILL.md 索引为 `builtin-skills` 来源（118 块）——skill_invoke 是主动调用、RAG 是被动检索，双通道互补；`_SKILLS_DIR` 提为模块常量可 monkeypatch
+7. **requirements.txt** 补 fastembed 声明（含镜像下载说明）；`scripts/smoke_search.py` 检索冒烟脚本
+
+**检索质量实测**（rerank 相似度）：
+- "服务启动失败怎么办" → systemd-troubleshoot **0.669**（SKILL 语料入库前最高仅泛命中 0.59）
+- "怎么排查 nginx 502" → 精确命中"排障：nginx 502 Bad Gateway" **0.7345**
+- "samba 共享目录 Windows 访问不了" → selinux-baseline samba 示例 **0.6943** + samba-setup **0.673**（入库前知识库无任何 samba 内容）
+
+**门禁**：pytest 1691 / vitest 1190 / tsc / lint 全绿。**遗留**：①4 个国外官方源（systemd/selinux/ssh/bash，gnu.org 等）网络超时未入库，网络好时 `rebuild_knowledge.py --no-clear --crawl <name>` 补抓；②真 cross-encoder rerank（bge-reranker-base）为可选后续（需 transformers 依赖，收益需评估）；③模型缓存目录换机需重下（data/models 不入 git，文档已写镜像命令）。
