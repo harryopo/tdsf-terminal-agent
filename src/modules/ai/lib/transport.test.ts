@@ -12,7 +12,13 @@ import {
   formatEnvBlock,
   formatTerminalContextBlock,
   stripContextBlock,
+  // TDSF B1 (2026-08-29): <environment> / <terminal-history> 分区
+  formatEnvironmentBlock,
+  formatTerminalHistoryBlock,
+  TERMINAL_HISTORY_MAX_BLOCKS,
 } from "./transport";
+import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
+import type { EnvironmentProbe } from "../store/chatStore";
 
 type LiveSnapshot = {
   cwd: string | null;
@@ -131,5 +137,135 @@ describe("CONTEXT_BLOCK_RE — 正则匹配", () => {
 
   it("不匹配普通文本", () => {
     expect(CONTEXT_BLOCK_RE.test("plain text")).toBe(false);
+  });
+});
+
+// ============================================================================
+// TDSF B1 (2026-08-29): <environment> / <terminal-history> 分区
+// ============================================================================
+
+const makeProbe = (over: Partial<EnvironmentProbe> = {}): EnvironmentProbe => ({
+  ok: true,
+  os_pretty_name: "CentOS Linux 7 (Core)",
+  kernel: "3.10.0-1160.el7.x86_64",
+  shell: "/bin/bash",
+  source: "ssh",
+  ...over,
+});
+
+const makeBlock = (over: Partial<TerminalBlock> = {}): TerminalBlock => ({
+  id: "tb-1-1",
+  sessionId: 1,
+  command: "systemctl status nginx",
+  cwd: "/etc/nginx",
+  exitCode: 3,
+  durationMs: 12000,
+  author: "user",
+  outputTail: "Active: failed (Result: exit-code)",
+  startedAt: 1000,
+  ...over,
+});
+
+describe("formatEnvironmentBlock — <environment> 分区", () => {
+  it("输出发行版/内核/cwd/shell", () => {
+    const block = formatEnvironmentBlock(makeProbe(), makeLive({ cwd: "/etc/nginx" }));
+    expect(block).toContain("<environment>");
+    expect(block).toContain("os_pretty_name: CentOS Linux 7 (Core)");
+    expect(block).toContain("kernel: 3.10.0-1160.el7.x86_64");
+    expect(block).toContain("cwd: /etc/nginx");
+    expect(block).toContain("shell: /bin/bash");
+    expect(block).toContain("</environment>");
+  });
+
+  it("probe=null（探测失败降级）返回 null", () => {
+    expect(formatEnvironmentBlock(null, makeLive())).toBeNull();
+  });
+
+  it("probe.ok=false 返回 null", () => {
+    expect(
+      formatEnvironmentBlock(makeProbe({ ok: false }), makeLive()),
+    ).toBeNull();
+  });
+
+  it("字段全空的 probe 返回 null（不输出空标签）", () => {
+    expect(
+      formatEnvironmentBlock(
+        makeProbe({ os_pretty_name: "", kernel: "", shell: "" }),
+        makeLive(),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("formatTerminalHistoryBlock — <terminal-history> 分区", () => {
+  it("空 block 列表返回 null", () => {
+    expect(formatTerminalHistoryBlock([])).toBeNull();
+  });
+
+  it("格式化 user/agent 标记 + exit/duration/cwd + 输出尾部", () => {
+    const block = formatTerminalHistoryBlock([
+      makeBlock(),
+      makeBlock({
+        id: "tb-1-2",
+        command: "yum install httpd -y",
+        author: "agent",
+        exitCode: 0,
+        durationMs: 45000,
+        cwd: "/root",
+        outputTail: "Complete!\nInstalled:\n  httpd",
+      }),
+    ]);
+    expect(block).toContain("<terminal-history>");
+    expect(block).toContain(
+      "- [user] $ systemctl status nginx (exit 3, 12s, cwd=/etc/nginx)",
+    );
+    expect(block).toContain(
+      "- [agent] $ yum install httpd -y (exit 0, 45s, cwd=/root)",
+    );
+    // 输出尾部只取最后 2 行
+    expect(block).toContain("Installed: / httpd");
+    expect(block).not.toContain("Complete!");
+    expect(block).toContain("</terminal-history>");
+  });
+
+  it("exitCode=null 显示 exit ?", () => {
+    const block = formatTerminalHistoryBlock([makeBlock({ exitCode: null })]);
+    expect(block).toContain("(exit ?,");
+  });
+
+  it("超过 10 条只注入最近 10 条", () => {
+    const blocks = Array.from({ length: 15 }, (_, i) =>
+      makeBlock({ id: `tb-1-${i}`, command: `cmd${i}` }),
+    );
+    const block = formatTerminalHistoryBlock(blocks);
+    expect(block).toContain("cmd14");
+    expect(block).toContain("cmd5");
+    expect(block).not.toContain("cmd4\n");
+    expect(block).not.toContain("$ cmd4 ");
+    expect(block).not.toContain("cmd0");
+    expect(TERMINAL_HISTORY_MAX_BLOCKS).toBe(10);
+  });
+
+  it("超 token 预算从最旧开始丢（保留最近）", () => {
+    const blocks = Array.from({ length: 12 }, (_, i) =>
+      makeBlock({
+        id: `tb-1-${i}`,
+        command: `run-${i}-${"x".repeat(600)}`,
+        outputTail: "",
+      }),
+    );
+    const block = formatTerminalHistoryBlock(blocks)!;
+    const body = block.slice("<terminal-history>\n".length, -"\n</terminal-history>".length);
+    expect(body.length).toBeLessThanOrEqual(6000);
+    expect(block).toContain("run-11-");
+    // 最旧的被丢掉
+    expect(block).not.toContain("run-0-");
+  });
+
+  it("单行超长输出截断到 160 字符", () => {
+    const longTail = "y".repeat(400);
+    const block = formatTerminalHistoryBlock([makeBlock({ outputTail: longTail })]);
+    expect(block).toContain(`${"y".repeat(160)}…`);
+    expect(block).not.toContain("y".repeat(200));
   });
 });

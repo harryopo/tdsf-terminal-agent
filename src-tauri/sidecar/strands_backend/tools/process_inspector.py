@@ -207,13 +207,16 @@ def invoke_process_inspector_tool(params: dict[str, Any], ctx: ToolContext) -> d
         except Exception as e:
             logger.debug(f"emit_tool_call started failed: {e}")
 
-    # 通过 execute_via_ssh 执行
+    # 通过 execute_via_ssh 执行。
+    # readonly=True：inspect_processes 是 registry 只读工具——observe 模式下
+    # L0-L1 命令（ps/top）短路放行（方案书 §3.2 只读短路）
     exec_result = execute_via_ssh(
         ctx=ctx,
         command=command,
         ssh_session_id=ssh_session_id,
         timeout=15,
         tool_name="inspect_processes",
+        readonly=True,
     )
 
     if exec_result.get("status") != "success":

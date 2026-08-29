@@ -50,6 +50,9 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tokio::sync::RwLock;
 
+// TDSF B2 (2026-08-29): 可视教学打字机（human_type pump 编排）
+use crate::modules::human_type::{write_human_common, HumanTypeReport};
+
 /// SSH 会话注册表 (全局,通过 Tauri State 注入)
 ///
 /// 每个 SSH 连接对应一个 session_id,前端通过 session_id 操作会话。
@@ -408,10 +411,54 @@ pub async fn ssh_write(
         .await
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
+    // TDSF B2 (2026-08-29): 用户键盘写入计数 —— human_type pump 的 stop 信号
+    // （8 项之 5：用户任意按键 → 停止演示、交还控制权）。ssh_write 是
+    // SSH 会话唯一的用户键盘入口（write_data 当前仅被本命令调用）。
+    session.user_input_seq.fetch_add(1, Ordering::Release);
+
     session.write_data(&data).await.map_err(|e| {
         log::error!("[ssh] write failed: id={} err={}", session_id, e);
         e.to_string()
     })
+}
+
+/// TDSF B2 (2026-08-29): 可视教学打字机 —— 逐字符按人味节奏写入 SSH PTY channel。
+///
+/// 数据流：Python sidecar inject_terminal → 前端 useAiLiveBridge（按设置分流）
+/// → 本命令 → 后台 pump 逐字调 write_data（russh data_bytes，SSH 流控窗口
+/// 自带背压，逐字低速天然无压力）。立即返回，结束/打断走
+/// `terminal:human_typing` end 事件。
+///
+/// sudo 密码场景降级 / `!` 告警 / 重入闸门 / 清行等 prompt —— 与本地 PTY
+/// 共用 human_type::write_human_common 编排（8 项注意事项见该模块注释）。
+#[tauri::command]
+pub async fn ssh_write_human(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SshState>,
+    session_id: u32,
+    text: String,
+    speed: f64,
+) -> Result<HumanTypeReport, String> {
+    let session = state
+        .get(session_id)
+        .await
+        .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
+
+    // 打字机自身写路径（russh channel data_bytes；不走 ssh_write，不 bump
+    // user_input_seq —— 那是用户键盘专属 stop 信号）
+    let write_session = session.clone();
+    let write = move |bytes: Vec<u8>| {
+        let s = write_session.clone();
+        async move {
+            s.write_data(&bytes).await.map_err(|e| {
+                log::debug!("[ssh] human write failed: id={} err={}", session_id, e);
+                e.to_string()
+            })
+        }
+    };
+
+    write_human_common(&app, "ssh", session_id, session.human_typing_guard(), write, text, speed)
+        .await
 }
 
 /// ssh_resize 命令: 调整 SSH PTY 窗口大小

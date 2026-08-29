@@ -324,6 +324,15 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// 区分"shell 正常退出 (exit 命令)" vs "连接异常断开 (Close/None)"。
     /// 用 `Mutex<Arc<AtomicBool>>` 以便重连成功后替换为新 reader 的标志。
     received_exit: Arc<Mutex<Arc<AtomicBool>>>,
+
+    // TDSF B2 (2026-08-29): 用户键盘写入计数器 —— ssh_write（前端按键）每次
+    // 调用 +1。human_type pump 以此检测"用户中途敲键 → 停止演示、交还控制权"
+    // （8 项注意事项之 5）。Arc 包装供 HumanTypingGuard 持有。
+    pub user_input_seq: Arc<std::sync::atomic::AtomicU64>,
+
+    // TDSF B2: 打字机重入闸门 —— 同一会话同时只允许一个 pump，
+    // 并发的第二个请求自动降级整段注入。
+    pub typing_active: Arc<AtomicBool>,
 }
 
 impl<R: tauri::Runtime> SshSession<R> {
@@ -476,6 +485,9 @@ impl<R: tauri::Runtime> SshSession<R> {
             exited_notify,
             reconnect: Arc::new(Mutex::new(None)),
             received_exit,
+            // TDSF B2 (2026-08-29): human_type pump 信号字段
+            user_input_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            typing_active: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -567,6 +579,16 @@ impl<R: tauri::Runtime> SshSession<R> {
         // 再次 notify, 因为 open_pty 内部把同一个 Arc<Notify> 传给了新 reader)。
         exited_notify.notify_waiters();
         log::info!("[ssh] reader task done, exit_code={}", code);
+    }
+
+    /// TDSF B2 (2026-08-29): human_type pump 的 stop 信号句柄
+    /// （exited / user_input_seq / typing_active；供 ssh_write_human 编排）。
+    pub fn human_typing_guard(&self) -> crate::modules::human_type::HumanTypingGuard {
+        crate::modules::human_type::HumanTypingGuard {
+            exited: self.exited.clone(),
+            user_seq: self.user_input_seq.clone(),
+            typing_active: self.typing_active.clone(),
+        }
     }
 
     /// 写入数据 (前端按键)
@@ -1251,16 +1273,32 @@ impl<R: tauri::Runtime> SshSession<R> {
     }
 }
 
-// ==== 远端 shell 注入 (方案 A, 2026-08-09) ======================================
-// 在 open_pty 里探测远端默认登录 shell, 写入最小 OSC 7 注入脚本, 再用
-// PTY exec 启动注入 shell, 让远端 shell 在命令间隙自动上报 cwd。
+// ==== 远端 shell 注入 (方案 A, 2026-08-09; B1 扩展 2026-08-29) ==================
+// 在 open_pty 里探测远端默认登录 shell, 写入终端集成注入脚本, 再用
+// PTY exec 启动注入 shell, 让远端 shell 自动上报命令生命周期语义标记。
+//
+// B1 (2026-08-29, 方案书 v3.1 §4.7): 从"仅 OSC 7"升级为 OSC 133 全套
+// (A/B/C/D) + OSC 633;E(命令行原文)/633;P(Cwd), 与本地终端共用同一语义
+// 通道; 前端 xterm registerOscHandler(133/633) 直接消费 (SSH 输出与本地
+// 一样写入 xterm, 单一解析代码路径, 无需 Rust 侧解析转发)。
 //
 // 设计约束 (综合优化, 不破坏既有功能):
-//   - 只发 OSC 7 (cwd), 不发 OSC 133 / 不碰 PS1: SSH 终端 blocks=false,
-//     前端无 OSC 133 消费方, 且不触碰用户 prompt 样式
+//   - 只发不可见 OSC 序列, **不碰 PS1 样式** (OSC 对终端渲染零影响,
+//     用户 prompt 视觉无任何变化——红线 9: 不改写用户可见内容)
 //   - 注入脚本先 source 用户原 rc (bashrc/zshrc/zshenv), 保留用户配置
+//   - 健壮性清单逐条落 (iTerm2/VS Code/kitty 验证过的写法):
+//       ① 幂等 guard 变量 (__TDSF_OSC133_GUARD 已设置则整块跳过)
+//       ② 交互式检查 (bash `case $- in *i*`; zshrc 本身仅交互 shell 加载)
+//       ③ TERM=dumb 排除 (编辑器内嵌终端/CI 场景不注入)
+//       ④ PROMPT_COMMAND 保序 (bash: 包装为 _tdsf_precmd + eval 用户原值;
+//          zsh: precmd_functions 头插, 保证 $? 在用户钩子改写前捕获)
+//       ⑤ bash DEBUG trap 去重 (trap 首行重装 = bash-preexec 防复合命令
+//          重复上报; 用户 PROMPT_COMMAND 执行期间关 trap 防误报)
+//       ⑥ 孤儿 D 状态机 (precmd 无条件发 133;D —— 上一命令未发 C 时,
+//          前端状态机按"多余 D"忽略; 上一命令 C 未闭时由 D 正常闭合)
+//       ⑦ 脚本放 rc 末尾 (在 source 用户 rc 之后注册钩子, 防被覆盖)
 //   - 脚本写入用带引号 heredoc (`<<'TDSF_OSC7'`), 内容原样落盘, 无转义风险
-//   - 任何失败显式 log 并降级 request_shell (仅失去 cwd 同步, 绝不篡改输入)
+//   - 任何失败显式 log 并降级 request_shell (仅失去语义标记, 绝不篡改输入)
 
 /// 远端 shell 类型 (探测结果)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1282,18 +1320,58 @@ impl RemoteShellKind {
     }
 }
 
-/// 远端 bash 注入脚本: 恢复用户 .bashrc + PROMPT_COMMAND 钩子 (仅 OSC 7)
-const BASH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH cwd integration (bash)
-if [ -z "${__TDSF_OSC7_LOADED:-}" ]; then
-  __TDSF_OSC7_LOADED=1
+/// 远端 bash 注入脚本: 恢复用户 .bashrc + OSC 7/133/633 钩子
+///
+/// 时序 (每个命令周期): `... 133;D;<exit> → OSC7 → 633;P;Cwd → 133;A → 133;B`
+/// → (用户敲命令) `633;E;<cmd>;<nonce> → 133;C` → (输出) → 下一个 precmd。
+/// precmd 无条件发 D 即"孤儿 D 状态机"注入端实现: 未发过 C 的周期发的 D
+/// 会被前端状态机忽略, 已发 C 未闭合的周期由 D 正常闭合。
+const BASH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH terminal integration (bash) — OSC 7 + 133 A/B/C/D + 633;E/P
+if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
+  __TDSF_OSC133_GUARD=1
   [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-  _tdsf_osc7_precmd() {
-    printf '\033]7;file://localhost%s\007' "$(pwd -P)"
-  }
-  case ":${PROMPT_COMMAND:-}:" in
-    *":_tdsf_osc7_precmd:"*) ;;
-    *) PROMPT_COMMAND="_tdsf_osc7_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+  # 健壮性②: 仅交互 shell 注入 (iTerm2/VS Code 同款检查)
+  case $- in
+    *i*) ;;
+    *) return 0 2>/dev/null || exit 0 ;;
   esac
+  # 健壮性③: dumb 终端 (编辑器内嵌/CI) 不注入
+  if [ "${TERM:-}" = "dumb" ]; then return 0 2>/dev/null || exit 0; fi
+  # bash-preexec 同款: extdebug 开启时 DEBUG trap 被占用, 拒装 (仅失去 633;E)
+  __TDSF_NO_TRAP=0
+  shopt -q extdebug 2>/dev/null && __TDSF_NO_TRAP=1
+  # preexec: DEBUG trap (bash-preexec 思路) — 捕获命令行原文 → 633;E + 133;C
+  _tdsf_preexec() {
+    trap '_tdsf_preexec' DEBUG
+    local c="$BASH_COMMAND"
+    case "$c" in _tdsf_*|__TDSF_*) return ;; esac
+    [ "${__TDSF_CMD_REPORTED:-}" = "1" ] && return
+    __TDSF_CMD_REPORTED=1
+    c="${c//$'\a'/}"; c="${c//$'\e'/}"; c="${c//$'\r'/ }"; c="${c//$'\n'/ }"
+    printf '\033]633;E;%s;%s\007' "$c" "$RANDOM"
+    printf '\033]133;C\007'
+  }
+  # precmd: 发 133;D;<exit>(孤儿 D 自愈) + OSC7 + 633;P;Cwd + 133;A/B,
+  # 再保序执行用户原 PROMPT_COMMAND (健壮性④: 包装式 prepend, 用户钩子不丢)
+  _tdsf_precmd() {
+    local ec=$?
+    printf '\033]133;D;%s\007' "$ec"
+    printf '\033]7;file://localhost%s\007' "$(pwd -P)"
+    printf '\033]633;P;Cwd=%s\007' "$(pwd -P)"
+    printf '\033]133;A\007'
+    printf '\033]133;B\007'
+    __TDSF_CMD_REPORTED=0
+    trap - DEBUG
+    if [ -n "${__TDSF_ORIG_PC:-}" ]; then eval "$__TDSF_ORIG_PC"; fi
+    trap '_tdsf_preexec' DEBUG
+  }
+  if [ "$(declare -p PROMPT_COMMAND 2>/dev/null | head -c 11)" = "declare -a" ]; then
+    PROMPT_COMMAND=("_tdsf_precmd" "${PROMPT_COMMAND[@]}")
+  else
+    __TDSF_ORIG_PC="${PROMPT_COMMAND:-}"
+    PROMPT_COMMAND="_tdsf_precmd"
+  fi
+  if [ "$__TDSF_NO_TRAP" = "0" ]; then trap '_tdsf_preexec' DEBUG; fi
 fi
 "#;
 
@@ -1302,20 +1380,43 @@ const ZSH_ZSENV_SCRIPT: &str = r#"# TDSF SSH cwd integration (zsh) - zshenv
 [[ -f "$HOME/.zshenv" ]] && source "$HOME/.zshenv"
 "#;
 
-/// 远端 zsh 注入脚本 (.zshrc): 恢复用户 .zshrc + precmd 钩子 (仅 OSC 7)
-const ZSH_ZSHRC_SCRIPT: &str = r#"# TDSF SSH cwd integration (zsh) - zshrc
-if [[ -z "${__TDSF_OSC7_LOADED:-}" ]]; then
-  __TDSF_OSC7_LOADED=1
+/// 远端 zsh 注入脚本 (.zshrc): 恢复用户 .zshrc + precmd/preexec 钩子
+/// (OSC 7 + 133 全套 + 633;E/P)。zsh 有原生 preexec 钩子 ($1=命令行原文),
+/// 无需 DEBUG trap; precmd/preexec 均**头插**到钩子数组——保证 $? 在用户
+/// 钩子改写之前捕获 (add-zsh-hook 是尾插, 会丢失退出码时序, 故不用)。
+const ZSH_ZSHRC_SCRIPT: &str = r#"# TDSF SSH terminal integration (zsh) - zshrc
+if [[ -z "${__TDSF_OSC133_GUARD:-}" ]]; then
+  __TDSF_OSC133_GUARD=1
   [[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
-  _tdsf_osc7_precmd() {
+  # 健壮性③: dumb 终端不注入 (zshrc 仅交互 shell 加载, 无需 $- 检查)
+  if [[ "${TERM:-}" = "dumb" ]]; then return 0; fi
+  # precmd: 133;D;<exit> (孤儿 D 自愈) + OSC7 + 633;P;Cwd + 133;A/B
+  _tdsf_precmd() {
+    local ec=$?
+    printf '\033]133;D;%s\007' "$ec"
     printf '\033]7;file://localhost%s\007' "$(pwd -P)"
+    printf '\033]633;P;Cwd=%s\007' "$PWD"
+    printf '\033]133;A\007'
+    printf '\033]133;B\007'
   }
-  autoload -Uz add-zsh-hook 2>/dev/null
-  (( $+functions[add-zsh-hook] )) && add-zsh-hook precmd _tdsf_osc7_precmd
+  # preexec: zsh 原生 $1 = 命令行原文 → 633;E;<cmd>;<nonce> + 133;C
+  _tdsf_preexec() {
+    local c="$1"
+    [[ "$c" == _tdsf_* || "$c" == __TDSF_* ]] && return
+    c="${c//$'\a'/}"; c="${c//$'\e'/}"; c="${c//$'\r'/ }"; c="${c//$'\n'/ }"
+    printf '\033]633;E;%s;%s\007' "$c" "$RANDOM"
+    printf '\033]133;C\007'
+  }
+  precmd_functions=(_tdsf_precmd ${precmd_functions[@]})
+  preexec_functions=(_tdsf_preexec ${preexec_functions[@]})
 fi
 "#;
 
 /// 远端 fish 注入脚本: 包装 fish_prompt 发 OSC 7 (fish 自动读 config.fish, -C 最后执行)
+///
+/// B1 (2026-08-29): 不主动发 133/633 —— fish 4.0+ 原生发 OSC 133 标记
+/// (调研 §1.1.5), 会被前端 xterm 133 handler 直接消费; 老版本 fish 降级为
+/// 仅 OSC 7 (cwd 同步), 与既有行为一致。pwsh 场景只在本地 (profile.ps1)。
 const FISH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH cwd integration (fish)
 if not set -q __TDSF_OSC7_LOADED
   set -g __TDSF_OSC7_LOADED 1
@@ -1573,6 +1674,8 @@ pub(crate) mod tests {
             exited_notify: Arc::new(Mutex::new(Arc::new(tokio::sync::Notify::new()))),
             reconnect: Arc::new(Mutex::new(None)),
             received_exit: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
+            user_input_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            typing_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1754,5 +1857,93 @@ pub(crate) mod tests {
         let open = make_test_session::<tauri::Wry>(false, false);
         assert!(!open.is_connection_closed());
         assert!(!open.is_exited());
+    }
+
+    // === B1 终端感知 (2026-08-29, 方案书 v3.1 §4.7) 注入脚本断言 ================
+    //
+    // 注入脚本是 shell 源码字符串, 无法离线执行远端 shell; 这里对脚本内容做
+    // 静态断言, 防健壮性清单要点被后续改动悄悄删掉。真实链路验证靠
+    // pnpm tauri:dev 实测 SSH 终端 (红线 9: 翻译选词/文件树联动不回归)。
+
+    #[test]
+    fn test_bash_integration_script_robustness_checklist() {
+        let s = BASH_INTEGRATION_SCRIPT;
+        // ① 幂等 guard (任务指定变量名)
+        assert!(s.contains("__TDSF_OSC133_GUARD"), "bash 幂等 guard 缺失");
+        // ② 交互式检查 + ③ TERM 排除
+        assert!(s.contains("case $- in"), "bash 交互检查缺失");
+        assert!(s.contains("\"dumb\""), "bash TERM=dumb 排除缺失");
+        // OSC 133 全套 (A/B/C/D) + OSC 7
+        for marker in ["133;A", "133;B", "133;C", "133;D", "]7;file://"] {
+            assert!(s.contains(marker), "bash 脚本缺 OSC 序列: {marker}");
+        }
+        // 633;E (命令行原文, 带 nonce) + 633;P;Cwd
+        assert!(s.contains("633;E;%s;%s"), "bash 633;E 缺失");
+        assert!(s.contains("633;P;Cwd="), "bash 633;P 缺失");
+        // ④ PROMPT_COMMAND 保序: 包装用户原值 (eval), 不丢弃
+        assert!(
+            s.contains("__TDSF_ORIG_PC") && s.contains("eval \"$__TDSF_ORIG_PC\""),
+            "bash 用户 PROMPT_COMMAND 保序缺失"
+        );
+        // ⑤ DEBUG trap 去重 (trap 首行重装) + 用户 PC 期间关 trap
+        assert!(s.contains("trap '_tdsf_preexec' DEBUG"), "bash DEBUG trap 缺失");
+        assert!(s.contains("trap - DEBUG"), "bash 用户 PC 期间关 trap 缺失");
+        // extdebug 拒装 (bash-preexec 同款)
+        assert!(s.contains("extdebug"), "bash extdebug 检查缺失");
+        // ⑦ 脚本先 source 用户 rc (放 rc 末尾语义)
+        assert!(s.contains("source \"$HOME/.bashrc\""), "bash 未恢复用户 rc");
+        // 633;E 发送前清洗控制字符 (BEL/ESC 会截断 OSC 序列)
+        assert!(s.contains("${c//$'\\a'/}"), "bash 633;E 控制字符清洗缺失");
+    }
+
+    #[test]
+    fn test_zsh_integration_script_robustness_checklist() {
+        let s = ZSH_ZSHRC_SCRIPT;
+        // ① 幂等 guard
+        assert!(s.contains("__TDSF_OSC133_GUARD"), "zsh 幂等 guard 缺失");
+        // ③ TERM 排除 (zshrc 仅交互 shell 加载, 无需 $- 检查)
+        assert!(s.contains("\"dumb\""), "zsh TERM=dumb 排除缺失");
+        // OSC 133 全套 + OSC 7 + 633;E/P
+        for marker in ["133;A", "133;B", "133;C", "133;D", "]7;file://", "633;E;%s;%s", "633;P;Cwd="] {
+            assert!(s.contains(marker), "zsh 脚本缺 OSC 序列: {marker}");
+        }
+        // 钩子头插 (保证 $? 新鲜; add-zsh-hook 尾插会丢退出码时序)
+        assert!(
+            s.contains("precmd_functions=(_tdsf_precmd ${precmd_functions[@]})"),
+            "zsh precmd 头插缺失"
+        );
+        assert!(
+            s.contains("preexec_functions=(_tdsf_preexec ${preexec_functions[@]})"),
+            "zsh preexec 头插缺失"
+        );
+        // ⑦ 先 source 用户 zshrc
+        assert!(s.contains("source \"$HOME/.zshrc\""), "zsh 未恢复用户 rc");
+        // 不碰 PS1 (红线 9: OSC 序列对终端不可见, 不改写 prompt 样式)
+        assert!(!s.contains("PS1"), "zsh 脚本不得改写 PS1");
+    }
+
+    #[test]
+    fn test_bash_script_no_raw_bel_or_esc_bytes() {
+        // heredoc 原样落盘: 脚本里不得出现裸 \x07/\x1b 字节 (会截断注入命令
+        // 或破坏 heredoc)。OSC 序列全部经 printf 的 \033/\007 字面转义生成。
+        for (name, s) in [("bash", BASH_INTEGRATION_SCRIPT), ("zsh", ZSH_ZSHRC_SCRIPT)] {
+            assert!(!s.contains('\x07'), "{name} 脚本含裸 BEL 字节");
+            assert!(!s.contains('\x1b'), "{name} 脚本含裸 ESC 字节");
+        }
+    }
+
+    #[test]
+    fn test_zshenv_script_unchanged_contract() {
+        // .zshenv 只负责恢复用户原 zshenv (ZDOTDIR 方案的一部分), 不做注入
+        assert!(ZSH_ZSENV_SCRIPT.contains("source \"$HOME/.zshenv\""));
+        assert!(!ZSH_ZSENV_SCRIPT.contains("printf"));
+    }
+
+    #[test]
+    fn test_fish_script_keeps_osc7_only() {
+        // fish 4.0+ 原生发 OSC 133 (调研 §1.1.5), 注入脚本保持仅 OSC 7
+        assert!(FISH_INTEGRATION_SCRIPT.contains("]7;file://"));
+        assert!(!FISH_INTEGRATION_SCRIPT.contains("133;"), "fish 脚本不应发 133");
+        assert!(FISH_INTEGRATION_SCRIPT.contains("__TDSF_OSC7_LOADED"), "fish 幂等 guard 缺失");
     }
 }

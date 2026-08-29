@@ -31,8 +31,15 @@ TDSF 魔改 2026-07-30 P0-C4:
 返回结构：
     success:
         {status:"success", command, ssh_session_id, output, exit_code, duration}
+    command_blocked:
+        {status:"command_blocked", command, ssh_session_id, risk, impact, message}
+        （denylist 硬底线 / observe 模式 / host 校验失败——拦截类反馈禁替代方案）
+    rejected:
+        {status:"rejected", command, ssh_session_id, risk, impact, message}
+        （用户拒绝——message 含用户附言，agent 可据此给替代方案）
     needs_approval:
-        {status:"needs_approval", command, ssh_session_id, risk, message}
+        {status:"needs_approval", command, ssh_session_id, risk, impact, message}
+        （审批超时 / 请求创建失败——fail-closed 未执行）
     unavailable:
         {status:"unavailable", command, ssh_session_id, reason, message}
     error:
@@ -44,10 +51,10 @@ import logging
 from typing import Any
 
 from strands_backend.tools import (
-    RiskChecker,
     ToolContext,
+    assess_command,
     execute_via_ssh,
-    permission_needs_approval,
+    request_approval_and_wait,
     tool,
 )
 
@@ -88,54 +95,85 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     if ctx.auto_execute_in_terminal:
         visible = True
 
-    # 多行命令拆分检测（每行都过 RiskChecker）
-    # P1-v5-4: 按 4 级权限决策（L3 起写操作行也需审批）
-    # P1-1 (2026-08-01): 命中审批 → 真实等待用户响应，批准后整条执行
+    # 多行命令拆分检测（Task 3 / Task 4 接入：每行走 assess_command 综合决策）
+    # P1-1 (2026-08-01): 命中确认 → 真实等待用户响应，批准后整条执行
+    # （execute_via_ssh 传 skip_approval=True 防止二次审批卡）
+    multiline_approved = False
     if "\n" in command.strip():
-        risk_lines: list[tuple[str, dict[str, Any]]] = []
+        confirm_lines: list[tuple[str, dict[str, Any]]] = []
+        blocked: dict[str, Any] | None = None
         for line in command.strip().splitlines():
             line_stripped = line.strip()
             if not line_stripped or line_stripped.startswith("#"):
                 continue
-            risk = RiskChecker.check(line_stripped)
-            if permission_needs_approval(risk, ctx.permission_level):
-                risk_lines.append((line_stripped, risk))
-        if risk_lines:
+            assessment = assess_command(ctx, line_stripped)
+            if assessment["decision"] in ("blocked", "deny"):
+                # denylist 硬底线 / observe deny → 直接拦截（不审批）；
+                # 拦截类反馈禁替代方案（Task 3.2）
+                blocked = {
+                    "status": "command_blocked",
+                    "command": command,
+                    "ssh_session_id": ssh_session_id or ctx.ssh_session_id,
+                    "risk": assessment["risk"],
+                    "impact": assessment["impact"],
+                    "explanation": explanation,
+                    "message": (
+                        f"command_blocked! 只读模式或安全规则禁止执行："
+                        f"多行命令中 '{line_stripped[:60]}' "
+                        f"{assessment.get('reason') or '命中硬底线黑名单'}。"
+                        f"该命令未执行"
+                        + ("，也不提供替代方案。" if assessment["decision"] == "blocked" else "。")
+                    ),
+                }
+                break
+            if assessment["decision"] == "confirm":
+                confirm_lines.append((line_stripped, assessment))
+        if blocked is not None:
+            return blocked
+        if confirm_lines:
             from strands_backend.tools import (
                 NeedsYouStatus,
                 request_approval_and_wait,
             )
 
-            first_line, first_risk = risk_lines[0]
+            first_line, first_assessment = confirm_lines[0]
             req = request_approval_and_wait(
                 ctx,
                 command,
-                first_risk,
+                first_assessment["risk"],
                 tool_name="ssh_command",
+                explanation=explanation,
+                impact=first_assessment["impact"],
+                risk_l=first_assessment["risk_l"],
             )
             if req is None or req.status != NeedsYouStatus.APPROVED:
+                reason = ""
+                if req is not None and isinstance(req.response, dict):
+                    reason = str(req.response.get("reason", "") or "")
+                # Task 3.2 双轨反馈：拒绝轨附用户附言（可给替代方案）；
+                # 超时轨 fail-closed 按拒绝处理（5 分钟无响应）
                 message = (
-                    f"多行命令中第 '{first_line[:60]}' 触发"
-                    f"{'高危' if first_risk['high_risk'] else '写操作'}规则 "
-                    f"{first_risk['matched_rules']}，已发起审批"
+                    f"多行命令中第 '{first_line[:60]}' 需要用户审批，已发起审批"
                     + (
-                        "，用户已拒绝，未执行"
+                        "，用户已拒绝，未执行" + (f"（用户附言：{reason}）" if reason else "")
                         if req is not None and req.status == NeedsYouStatus.REJECTED
-                        else "，超时未响应，未执行"
+                        else "，审批超时（5 分钟无响应），按拒绝处理，未执行"
                     )
                 )
                 return {
                     "status": "rejected" if req is not None and req.status == NeedsYouStatus.REJECTED else "needs_approval",
                     "command": command,
                     "ssh_session_id": ssh_session_id or ctx.ssh_session_id,
-                    "risk": first_risk,
+                    "risk": first_assessment["risk"],
+                    "impact": first_assessment["impact"],
                     "explanation": explanation,
                     "message": message,
                 }
             logger.info(
-                f"multiline command approved by user: {len(risk_lines)} risk lines, "
+                f"multiline command approved by user: {len(confirm_lines)} confirm lines, "
                 f"command={command[:80]}"
             )
+            multiline_approved = True
 
     # 推送 tool_call 事件（前端 AgentStatusPill + 工具调用面板展示）
     if ctx.event_bus is not None:
@@ -163,13 +201,16 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             # visible 模式下通知失败 = 用户看不到命令注入，必须可见（warning）
             logger.warning(f"inject_terminal notification failed: {e}")
 
-    # 执行（内部已含 RiskChecker + RustBridge 调用）
+    # 执行（Task 3/4 接入后内部含影响预测 + 三模式决策 + denylist 拦截 +
+    # host 校验 + 审批链；多行命令已在上方整条审批通过时传 skip_approval）
     result = execute_via_ssh(
         ctx=ctx,
         command=command,
         ssh_session_id=ssh_session_id,
         timeout=timeout,
         tool_name="ssh_command",
+        explanation=explanation,
+        skip_approval=bool(multiline_approved),
     )
 
     # 补充 explanation 字段
@@ -215,20 +256,22 @@ def make_ssh_command_tool(ctx: ToolContext):
     ) -> dict:
         """在 SSH 会话上执行 shell 命令。
 
-        高危命令（rm -rf / reboot / shutdown / mkfs / dd / fork bomb 等）会触发
-        needs_you 审批事件，不直接执行；低危命令通过 RustBridge 调 Rust 后端
-        ssh_command 执行。
+        影响预测：命令按风险分级（只读/装包/改配置/操作服务/删除等），
+        高危命令与写操作会弹出审批卡等待用户确认；denylist 硬底线
+        （rm -rf / 等）直接拦截不提供审批。目标会话必须与当前激活终端一致。
 
         Args:
             command (str): 待执行的 shell 命令，单行，无尾随换行。
             ssh_session_id (str): SSH 会话 ID，空则用上下文默认会话。
-            explanation (str): 命令解释，前端展示用（可选）。
+            explanation (str): 命令解释，前端审批卡第 3 层展示用（可选）。
             timeout (int): 超时秒数，默认 30。
             visible (bool): 为 True 时同时把命令注入前端终端（用户可见执行）。默认 False。
 
         Returns:
-            dict: 结构化结果，含 status / command / output / exit_code / risk 等字段。
-                status 取值: success | needs_approval | unavailable | error
+            dict: 结构化结果，含 status / command / output / exit_code / risk /
+                impact 等字段。
+                status 取值: success | command_blocked | rejected |
+                needs_approval | unavailable | error
         """
         return invoke_ssh_command_tool(
             params={

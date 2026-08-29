@@ -78,8 +78,10 @@ export const useErrorExplainStore = create<ExplainState>((set, get) => ({
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 30_000);
       try {
+        // v3.1 收敛: teach 子 agent 已删除（方案书 §4.1），唯一入口 main；
+        // live 不带 agentMode → sidecar 缺省 confirm，错误解释为纯只读输出。
         for await (const part of runSidecarStream({
-          agentId: "teach",
+          agentId: "main",
           input,
           messages: [],
           // 与 teach-trigger 相同的最小 live（错误解释无需终端上下文，

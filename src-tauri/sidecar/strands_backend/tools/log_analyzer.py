@@ -167,13 +167,16 @@ def invoke_log_analyzer_tool(params: dict[str, Any], ctx: ToolContext) -> dict[s
         except Exception as e:
             logger.debug(f"emit_tool_call started failed: {e}")
 
-    # 通过 execute_via_ssh 执行（内部含 RiskChecker + RustBridge）
+    # 通过 execute_via_ssh 执行（内部含影响预测 + 三模式决策 + RustBridge）。
+    # readonly=True：analyze_logs 是 registry 只读工具——observe 模式下
+    # L0-L1 命令（tail/grep）短路放行（方案书 §3.2 只读短路）
     exec_result = execute_via_ssh(
         ctx=ctx,
         command=command,
         ssh_session_id=ssh_session_id,
         timeout=30,
         tool_name="analyze_logs",
+        readonly=True,
     )
 
     # 失败 / 不可用 / 待审批 → 直接返回，附加元数据

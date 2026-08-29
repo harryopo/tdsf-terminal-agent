@@ -5,16 +5,19 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   ArrowRight01Icon,
   BookOpen01Icon,
+  Cancel01Icon,
   CheckListIcon,
   Edit02Icon,
   EyeIcon,
   File01Icon,
   FileEditIcon,
   FilePlusIcon,
+  FlashIcon,
   Folder01Icon,
   FolderAddIcon,
   FolderOpenIcon,
@@ -23,6 +26,7 @@ import {
   ShieldUserIcon,
   SparklesIcon,
   TerminalIcon,
+  Tick02Icon,
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
 import { useChatStore } from "@/modules/ai/store/chatStore";
@@ -33,6 +37,293 @@ import { isValidElement, memo, useEffect, useState } from "react";
 
 
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
+
+// ============================================================================
+// 审批卡（Task 3.1，方案书 v3.1 §4.4 四层卡面 + 三按钮）
+// ============================================================================
+
+/** 影响预测（第 4 层数据，来自 Python command_impact.analyze） */
+export type ToolImpact = {
+  /** 影响摘要（人话，如「删除文件：/tmp/a」） */
+  summary?: string;
+  max_risk_l?: number;
+  /** denylist 硬底线命中（永不放行） */
+  denied?: boolean;
+  /** 含危险构造 $() / eval / 管道到 shell 等（永不自动放行） */
+  dangerous_construct?: boolean;
+  segments?: Array<{
+    command?: string;
+    category?: string;
+    category_label?: string;
+    objects?: string[];
+    risk_l?: number;
+    denied?: boolean;
+    dangerous_construct?: boolean;
+    deny_reason?: string;
+  }>;
+};
+
+/** 审批响应：approved + 可选拒绝附言 + 可选会话级只读免审（Task 5 白名单接口） */
+export type ToolApprovalRespond = (response: {
+  approved: boolean;
+  /** 用户附言（拒绝时 agent 收到「用户附言：…」用于给替代方案） */
+  note?: string;
+  /** ⚡批准且本会话只读免审（仅 L0-L1 显示；由会话层记录免审记忆） */
+  sessionTrust?: boolean;
+}) => void;
+
+/** L 级色带（跟随现有 badge 色板：L0-L1 绿 / L2 黄 / L3 橙 / L4 红） */
+const RISK_BADGE: Record<number, string> = {
+  0: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  1: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  2: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  3: "bg-orange-500/15 text-orange-700 dark:text-orange-400",
+  4: "bg-destructive/15 text-destructive",
+};
+
+const RISK_LABEL: Record<number, string> = {
+  0: "L0 无风险",
+  1: "L1 低风险",
+  2: "L2 中风险",
+  3: "L3 高风险",
+  4: "L4 危险",
+};
+
+type ToolApprovalCardProps = {
+  toolName: string;
+  /** 工具调用 input（四层字段：semantic / command / explanation / impact / risk_l） */
+  input?: unknown;
+  onRespond: ToolApprovalRespond;
+  className?: string;
+};
+
+/**
+ * 四层审批卡（自上而下）：
+ * ① 语义描述（semantic，如「想重启服务：nginx」）
+ * ② 命令原文（代码块，永不改写）
+ * ③ 解释（LLM 用途解释，缺失显示「（无解释）」）
+ * ④ 影响预测（类别标签 + 对象列表 + L0-L4 风险色带）
+ *
+ * 三按钮：【拒绝】（可展开附言）【⚡批准且本会话只读免审】（仅 L0-L1）【▶执行】
+ * L3/L4 无「本会话/永久」类选项（⚡按钮仅 risk_l ≤ 1 渲染）。
+ */
+export function ToolApprovalCard({
+  toolName,
+  input,
+  onRespond,
+  className,
+}: ToolApprovalCardProps) {
+  const [showNote, setShowNote] = useState(false);
+  const [note, setNote] = useState("");
+  const i = (input ?? {}) as Record<string, unknown>;
+  const semantic = typeof i.semantic === "string" ? i.semantic : "";
+  const command = typeof i.command === "string" ? i.command : "";
+  const explanation = typeof i.explanation === "string" ? i.explanation : "";
+  const impact: ToolImpact | null =
+    i.impact && typeof i.impact === "object"
+      ? (i.impact as ToolImpact)
+      : null;
+  const riskL =
+    typeof i.risk_l === "number"
+      ? i.risk_l
+      : typeof impact?.max_risk_l === "number"
+        ? impact.max_risk_l
+        : null;
+  const denied = impact?.denied === true;
+  const dangerous = impact?.dangerous_construct === true;
+  // ⚡会话免审仅低风险且无黑名单/危险构造时提供（L3/L4 永远逐条确认）
+  const canSessionTrust =
+    riskL != null && riskL <= 1 && !denied && !dangerous;
+
+  const rejectWithNote = () => {
+    onRespond({ approved: false, note: note.trim() || undefined });
+  };
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg border border-amber-500/40 bg-card shadow-sm",
+        className,
+      )}
+      data-approval-card={toolName}
+    >
+      {/* 卡头 */}
+      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" />
+        <HugeiconsIcon
+          icon={ShieldUserIcon}
+          size={13}
+          strokeWidth={1.75}
+          className="shrink-0 text-muted-foreground"
+        />
+        <span className="text-[12px] font-medium text-foreground">
+          需要你的确认
+        </span>
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          needs approval
+        </span>
+      </div>
+
+      <div className="space-y-2.5 px-3 py-2.5">
+        {/* ① 语义描述 */}
+        <div className="text-[12px] text-foreground">
+          {semantic || "Agent 请求执行操作"}
+        </div>
+
+        {/* ② 命令原文（永不改写） */}
+        {command ? (
+          <pre className="max-h-40 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] leading-relaxed text-foreground">
+            {command}
+          </pre>
+        ) : null}
+
+        {/* ③ 解释 */}
+        {explanation ? (
+          <div className="text-[11px] text-muted-foreground">{explanation}</div>
+        ) : (
+          <div className="text-[11px] italic text-muted-foreground/60">
+            （无解释）
+          </div>
+        )}
+
+        {/* ④ 影响预测 */}
+        <div className="space-y-1.5 rounded border border-border/50 bg-muted/20 p-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-medium text-muted-foreground">
+              影响预测
+            </span>
+            {riskL != null && (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 font-mono text-[10px] font-medium",
+                  RISK_BADGE[riskL] ?? RISK_BADGE[3],
+                )}
+              >
+                {RISK_LABEL[riskL] ?? `L${riskL}`}
+              </span>
+            )}
+            {denied && (
+              <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                命中硬底线黑名单
+              </span>
+            )}
+            {dangerous && (
+              <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                含危险构造
+              </span>
+            )}
+          </div>
+          {impact?.summary ? (
+            <div className="text-[11px] text-foreground">{impact.summary}</div>
+          ) : null}
+          {impact?.segments?.length ? (
+            <div className="space-y-0.5">
+              {impact.segments.slice(0, 6).map((seg, idx) => (
+                <div
+                  key={idx}
+                  className="flex flex-wrap items-center gap-1.5 text-[10.5px]"
+                >
+                  {seg.category_label && (
+                    <span className="rounded bg-foreground/8 px-1 py-0.5 text-muted-foreground">
+                      {seg.category_label}
+                    </span>
+                  )}
+                  {seg.objects?.length ? (
+                    <span className="min-w-0 truncate font-mono text-muted-foreground">
+                      {seg.objects.join("、")}
+                    </span>
+                  ) : null}
+                  {seg.denied && seg.deny_reason && (
+                    <span className="text-destructive">{seg.deny_reason}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {!impact?.summary && !impact?.segments?.length && (
+            <div className="text-[11px] text-orange-700 dark:text-orange-400">
+              影响未知——请人工审查
+            </div>
+          )}
+        </div>
+
+        {/* 拒绝附言（展开式） */}
+        {showNote && (
+          <div className="space-y-1.5">
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="附言（可选）：告诉 Agent 为什么拒绝 / 期望的替代方案"
+              rows={2}
+              className="w-full resize-none rounded border border-border bg-background px-2 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* 三按钮 */}
+      <div className="flex items-center justify-end gap-1.5 border-t border-border/60 px-3 py-2">
+        {showNote ? (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowNote(false)}
+              className="h-7 text-[11px]"
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={rejectWithNote}
+              className="h-7 gap-1.5 text-[11px]"
+            >
+              <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
+              确认拒绝
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowNote(true)}
+            className="h-7 gap-1.5 text-[11px] text-destructive hover:text-destructive"
+          >
+            <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
+            拒绝
+          </Button>
+        )}
+        {canSessionTrust && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              // Task 5: ⚡点击 → 前端会话级免审标志置位（内存不落盘，切会话
+              // 重置）；Python 侧经 needs_you.respond 的 trust 响应同步记录
+              useChatStore.getState().setSessionReadOnlyTrust(true);
+              onRespond({ approved: true, sessionTrust: true });
+            }}
+            className="h-7 gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400"
+            title="批准本次操作，且本会话内同类只读操作不再询问"
+          >
+            <HugeiconsIcon icon={FlashIcon} size={12} strokeWidth={2} />
+            批准且本会话只读免审
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="default"
+          onClick={() => onRespond({ approved: true })}
+          className="h-7 gap-1.5 text-[11px]"
+        >
+          <HugeiconsIcon icon={Tick02Icon} size={12} strokeWidth={2} />
+          执行
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const TOOL_META: Record<string, { label: string; icon: typeof File01Icon }> = {
   read_file: { label: "Read", icon: File01Icon },
@@ -124,6 +415,7 @@ function deriveSummary(toolName: string, input: unknown): string | null {
       return str("path");
     case "bash_run":
     case "bash_background":
+    case "ssh_command":
       return str("command");
     case "bash_logs":
     case "bash_kill":
@@ -157,6 +449,8 @@ export type ToolProps = ComponentProps<typeof Collapsible> & {
   input?: unknown;
   output?: unknown;
   errorText?: string;
+  /** Task 3.1: approval-requested 状态下的审批响应回调——提供时渲染四层审批卡 */
+  onApprovalRespond?: ToolApprovalRespond;
 };
 
 // Tools whose `input` carries large/streaming content (file bodies, sub-
@@ -179,9 +473,23 @@ const ToolImpl = ({
   input,
   output,
   errorText,
+  onApprovalRespond,
   defaultOpen,
   ...props
 }: ToolProps) => {
+  // Task 3.1: 审批等待态 + 提供了响应回调 → 渲染四层审批卡（三按钮）。
+  // 未提供回调时保持通用折叠卡渲染（向后兼容，approval 交互由上层处理）。
+  if (state === "approval-requested" && onApprovalRespond) {
+    return (
+      <ToolApprovalCard
+        toolName={toolName}
+        input={input}
+        onRespond={onApprovalRespond}
+        className={className}
+      />
+    );
+  }
+
   const meta = getToolMeta(toolName);
   const Icon = meta.icon;
   const label = meta.label;
@@ -266,6 +574,7 @@ export const Tool = memo(ToolImpl, (a, b) => {
   if (a.errorText !== b.errorText) return false;
   if (a.output !== b.output) return false;
   if (a.className !== b.className) return false;
+  if (a.onApprovalRespond !== b.onApprovalRespond) return false;
   if (HEAVY_CONTENT_TOOLS.has(a.toolName)) {
     return deriveSummary(a.toolName, a.input) ===
       deriveSummary(b.toolName, b.input);

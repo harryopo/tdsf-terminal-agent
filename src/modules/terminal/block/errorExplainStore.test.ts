@@ -45,7 +45,7 @@ describe("errorExplainStore (B1-G3)", () => {
     calls.length = 0;
   });
 
-  it("正常请求：teach agent + explain-error 输入 + 完成态", async () => {
+  it("正常请求：main agent（v3.1 收敛）+ explain-error 输入 + 完成态", async () => {
     await S().request({
       blockId: "b1",
       command: "systemctl status nginx",
@@ -53,7 +53,8 @@ describe("errorExplainStore (B1-G3)", () => {
       tail: "Unit nginx.service could not be found.",
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0].agentId).toBe("teach");
+    // v3.1: teach 子 agent 已删除，唯一入口 main
+    expect(calls[0].agentId).toBe("main");
     expect(calls[0].input).toContain("explain-error:");
     expect(calls[0].input).toContain("systemctl status nginx");
     expect(calls[0].input).toContain("退出码: 3");

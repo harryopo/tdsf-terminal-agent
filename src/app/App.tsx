@@ -159,6 +159,8 @@ import { TranslateTooltip, useTranslateStore } from "@/modules/translate";
 import { useTerminalSearchStore } from "@/modules/terminal/terminal-search-store";
 // TDSF 魔改 2026-08-09: 服务器实时监控仪表盘（参考 iShell Pro，右上角浮动面板）
 import { ServerMonitorEntry } from "@/modules/server-monitor";
+// TDSF B2 (2026-08-29): 可视教学打字机"演示中"状态条
+import { AgentTypingIndicator } from "@/modules/ai/components/AgentTypingIndicator";
 // TDSF 魔改 2026-08-09: 终端命令预测弹窗（统一本地+SSH）
 import { TerminalCompletionPopup } from "@/modules/terminal/components/TerminalCompletionPopup";
 import { translateText } from "@/modules/translate/translateApi";
@@ -1051,39 +1053,12 @@ export default function App() {
     mruRef.current = mruRef.current.filter((id) => live.has(id));
   }, [tabs]);
 
-  // TDSF 魔改 2026-07-30 P1-a: 永久订阅 sidecar:agent_switch 事件
+  // TDSF 魔改 2026-07-30 P1-a → v3.1 移除: sidecar:agent_switch 永久订阅已删除
   // -------------------------------------------------------------------
-  // 之前 sidecar-adapter.ts:251-265 已在 runSidecarStream 内订阅，但监听器在
-  // finally unlisten()，仅覆盖一次 agent.invoke 调用周期，启动期 / 调用间隙
-  // 的 agent_switch 事件会丢失。
-  //
-  // 这里注册永久监听器（应用生命周期内常驻），作为双保险：
-  //   - 启动期 main_agent 推送的 "main" agent_switch 也能被收到
-  //   - 多次 agent.invoke 调用间隙不丢失事件
-  //   - 与 sidecar-adapter.ts 内的临时监听器叠加，二者都调 setCurrentSubAgent，
-  //     幂等无副作用（重复 set 同值 zustand 不触发重渲染）
-  // 监听失败不致命（非 Tauri 环境如 vitest 跑测试时 listen 会 reject）。
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<{ agent?: string; task?: string }>(
-      "sidecar:agent_switch",
-      (e) => {
-        const agent = e.payload?.agent;
-        if (agent) {
-          useChatStore.getState().setCurrentSubAgent(agent);
-        }
-      },
-    )
-      .then((un) => {
-        unlisten = un;
-      })
-      .catch(() => {
-        // 非 Tauri 环境（vitest）或 sidecar 未就绪，静默跳过
-      });
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, []);
+  // 原用途：main_agent 路由子 Agent 时推送 agent_switch 事件，前端更新
+  // currentSubAgent 驱动 AgentStatusPill。v3.1（方案书 §4.1）4 子 agent
+  // 委派机制整体下线，该事件不再产生；AgentStatusPill 改为模式指示器
+  // （订阅本地状态 agentMode/teach，无 agent 切换动画）。
 
   const getSwitcherOrder = useCallback(() => {
     const space = activeSpaceId ?? DEFAULT_SPACE_ID;
@@ -2550,6 +2525,9 @@ export default function App() {
 
           {/* TDSF 魔改 2026-08-09: 服务器实时监控仪表盘（右上角浮动面板，不遮挡 AI 对话） */}
           <ServerMonitorEntry />
+
+          {/* TDSF B2 (2026-08-29): 可视教学打字机"演示中"状态条（顶部居中，事件驱动） */}
+          <AgentTypingIndicator />
 
           {/* TDSF 魔改 2026-08-09: 终端命令预测弹窗（本地+SSH 统一，通过 rendererPool 注入） */}
           <TerminalCompletionPopup />

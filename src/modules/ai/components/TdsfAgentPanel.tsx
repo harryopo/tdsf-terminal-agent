@@ -34,9 +34,11 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import type { PresenceState } from "@/lib/usePresence";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AGENT_MODE_META } from "../agents/registry";
 import { getOrCreateChat, sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
 import { AiChatView } from "./AiChat";
+import { AgentModeSwitcher } from "./AgentModeSwitcher";
 // TDSF 魔改 (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
   parseSkillCommand,
@@ -100,23 +102,10 @@ const MOOD_COLOR: Record<string, string> = {
   error: "var(--color-error, #ef4444)",
 };
 
-// === TDSF Agent 列表（v2026-07-29 改造：统一主 Agent 入口） ===============
-// 旧版：让用户手动切换 4 Agent Tab
-// 新版：所有消息统一走 'main' 入口，main_agent 自动路由到 8 个子 Agent
-// 面板顶部只读显示当前路由到的子 Agent 名
-
-/** 后端 agent name → 显示元数据（agent_switch 事件用） */
-const SUB_AGENT_META: Record<string, { label: string; color: string; desc: string }> = {
-  main: { label: "Main", color: "var(--color-foreground)", desc: "统一主 Agent（PAOR 监督 + 智能路由）" },
-  coding: { label: "Coding", color: "var(--color-emerald-500, #10b981)", desc: "代码生成与重构" },
-  explore: { label: "Explore", color: "var(--color-sky-500, #0ea5e9)", desc: "代码库扫描与索引" },
-  history: { label: "History", color: "var(--color-amber-500, #f59e0b)", desc: "命令历史与回放" },
-  teach: { label: "Teach", color: "var(--color-violet-500, #8b5cf6)", desc: "Linux 运维教学" },
-  debug: { label: "Debug", color: "var(--color-rose-500, #f43f5e)", desc: "根因排查" },
-  refactor: { label: "Refactor", color: "var(--color-cyan-500, #06b6d4)", desc: "代码重构" },
-  test: { label: "Test", color: "var(--color-lime-500, #84cc16)", desc: "测试生成与运行" },
-  deploy: { label: "Deploy", color: "var(--color-orange-500, #f97316)", desc: "部署编排" },
-};
+// === 模式指示（v3.1 改造：三模式信任体系） =================================
+// 旧版：面板顶部只读显示 main_agent 路由到的子 Agent（SUB_AGENT_META）
+// v3.1：子 agent 委派机制已删除（方案书 §4.1），顶部改为显示当前信任模式
+// （观察/确认/自动）+ 教学皮肤标记；输入框上方工具行挂 AgentModeSwitcher。
 
 interface TdsfAgentPanelProps {
   state: PresenceState;
@@ -326,14 +315,13 @@ function Body({
 }) {
   const focusInput = useChatStore((s) => s.focusInput);
   const agentMeta = useChatStore((s) => s.agentMeta);
-  // v2026-07-29: tdsfAgentId 现在固定为 'main'，由 main_agent 自动路由到子 Agent
-  // 当前路由到的子 Agent 通过 currentSubAgent 字段读取（由后端 agent_switch 事件推送）
-  const currentSubAgent = useChatStore((s) => s.currentSubAgent);
+  // v3.1: 三模式信任体系——顶部指示当前信任模式 + 教学皮肤标记
+  // （旧 currentSubAgent 路由状态随子 agent 委派机制删除）
+  const agentMode = useChatStore((s) => s.agentMode);
+  const teach = useChatStore((s) => s.teach);
   const agentMetaStatus = useChatStore((s) => s.agentMeta.status);
   const isAgentBusy = agentMetaStatus === "thinking" || agentMetaStatus === "streaming";
-  const routedSubAgent = currentSubAgent
-    ? SUB_AGENT_META[currentSubAgent] ?? SUB_AGENT_META.main
-    : SUB_AGENT_META.main;
+  const modeMeta = AGENT_MODE_META[agentMode];
   // TDSF 魔改 (P4-T4.4): Skill 调用入口 — /skill:<name> <args>
   const invokeSkill = useSkillsStore((s) => s.invoke);
   const [input, setInput] = useState("");
@@ -445,7 +433,7 @@ function Body({
           className="font-semibold tracking-wide text-foreground"
           style={{ fontSize: "12px" }}
         >
-          {routedSubAgent.label}
+          Main
         </span>
         <span
           className="rounded px-1.5 py-0.5 font-mono font-medium"
@@ -455,8 +443,10 @@ function Body({
             color: "var(--color-primary, #10b981)",
             fontSize: "10px",
           }}
+          data-testid="tdsf-agent-mode-badge"
         >
-          {(currentSubAgent ?? "main").toUpperCase()}
+          {agentMode.toUpperCase()}
+          {teach ? " · TEACH" : ""}
         </span>
         {/* tokens */}
         <span
@@ -484,11 +474,11 @@ function Body({
         </Button>
       </div>
 
-      {/* ===== Agent 状态指示器 (v2026-07-29 改造：只读显示)
-          - 旧版是 4 Agent Tab 切换按钮
-          - 新版是只读 pill：显示 main_agent 当前路由到的子 Agent
-          - 右侧简短 desc 提示当前 Agent 的职责
-          - 不再有 onClick，用户无需手动选择 === */}
+      {/* ===== 信任模式指示 + 切换器（v3.1 改造）
+          - 旧版是只读 pill：显示 main_agent 当前路由到的子 Agent
+          - v3.1：显示当前信任模式（观察/确认/自动）+ 教学皮肤标记，
+            右侧挂 AgentModeSwitcher（三档 segmented control + Teach 开关），
+            切换 per-session 持久化并随下一条消息即时生效 === */}
       <div
         className="flex shrink-0 items-center gap-1.5 border-b border-border/60 bg-muted/30 px-2 py-1"
         data-tdsf-agent-tabs
@@ -496,31 +486,28 @@ function Body({
         <span
           className="inline-block size-1.5 rounded-full"
           style={{
-            background: routedSubAgent.color,
+            background: isAgentBusy
+              ? "var(--color-primary, #10b981)"
+              : "var(--color-muted-foreground, #6b7280)",
             animation: isAgentBusy ? "pulse 1.4s ease-in-out infinite" : "none",
           }}
         />
         <span
-          className="font-mono"
-          style={{ fontSize: "10.5px", fontWeight: 600, color: routedSubAgent.color }}
+          className="font-mono text-[10.5px] font-semibold text-foreground"
           data-testid="tdsf-agent-current"
-          title="主 Agent 当前路由到的子 Agent（不可手动切换）"
+          title={modeMeta.desc}
         >
-          {routedSubAgent.label}
+          Main
         </span>
         <span
-          className="font-mono text-[10px] text-muted-foreground/70"
-          title={routedSubAgent.desc}
+          className="truncate font-mono text-[10px] text-muted-foreground/70"
+          title={teach ? `${modeMeta.desc}（教学皮肤：输出概念/示例/易错点/练习）` : modeMeta.desc}
         >
-          · {routedSubAgent.desc}
+          · {modeMeta.badge}
+          {teach ? " + 教学" : ""}
         </span>
         <div className="flex-1" />
-        <span
-          className="font-mono text-[10px] text-muted-foreground"
-          title="点击展开 / 折叠调试信息"
-        >
-          统一主 Agent
-        </span>
+        <AgentModeSwitcher />
       </div>
 
       {/* ===== ② Messages ====================================================== */}
@@ -529,7 +516,7 @@ function Body({
         data-tdsf-agent-messages
       >
         {helpers.messages.length === 0 ? (
-          <EmptyState agentLabel={routedSubAgent.label} />
+          <EmptyState agentLabel="Main" />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col [&_.text-sm]:text-[12px] [&_p]:leading-relaxed">
             <AiChatView
@@ -568,7 +555,7 @@ function Body({
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                isSending ? `${routedSubAgent.label} 执行中...` : "输入命令或问题..."
+                isSending ? "Main 执行中..." : "输入命令或问题..."
               }
               disabled={isSending}
               maxLength={2000}

@@ -11,7 +11,9 @@ spec 要求（DEC-V321-07 needs-you 协调服务）：
 
 2. **聚合**：所有 Agent 的 needs-you 请求聚合到统一收件箱
 3. **优先级**：error > approval > question > handoff
-4. **超时**：approval 30s 无响应自动拒绝（可配置）
+4. **超时**：approval 5 分钟无响应自动拒绝（fail-closed，可配置；
+   方案书 v3.1 Task 3.3 从 30s 扩展为 300s——审批卡含影响预测，给用户
+   足够阅读时间；超时 agent 收到「审批超时，按拒绝处理」）
    - 其他类型不自动超时（保留 pending 等待用户处理）
 
 设计要点：
@@ -231,14 +233,15 @@ class NeedsYouService:
 
     def __init__(
         self,
-        approval_timeout: float = 30.0,
+        approval_timeout: float = 300.0,
         timeout_check_interval: float = 1.0,
         event_bus: Any | None = None,
     ):
         """初始化 needs-you 服务
 
         Args:
-            approval_timeout:        approval 类型超时秒数（默认 30s，spec 要求）
+            approval_timeout:        approval 类型超时秒数（默认 300s = 5 分钟，
+                                     方案书 v3.1 Task 3.3；超时 fail-closed 按拒绝处理）
             timeout_check_interval:  超时扫描间隔（默认 1s）
             event_bus:               EventBus 实例（None 时使用全局 bus）
         """
@@ -318,15 +321,22 @@ class NeedsYouService:
         timeout: float | None = None,
         **extra: Any,
     ) -> NeedsYouRequest:
-        """发起 approval 请求（30s 超时自动拒绝）
+        """发起 approval 请求（默认 5 分钟超时自动拒绝，fail-closed）
 
         Args:
             title:       卡片标题
             description: 详细描述
             session_id:  会话 ID
             source:      请求来源
-            timeout:     自定义超时（None 用默认 30s）
-            **extra:     附加数据（command / risk_level / mode 等）
+            timeout:     自定义超时（None 用默认 300s）
+            **extra:     附加数据（经 request.to_dict()["extra"] 透传前端）。
+                         Task 3.1 审批卡四层卡面约定字段：
+                         - command:      命令原文（第 2 层，前端代码块渲染，永不改写）
+                         - semantic:     动作语义描述（第 1 层，如「想重启服务：nginx」）
+                         - explanation:  LLM 用途解释（第 3 层，可缺失）
+                         - impact:       影响预测（第 4 层，command_impact.analyze 产出
+                           {segments, max_risk_l, summary, denied, dangerous_construct} 或 None）
+                         - risk_l:       0-4 整数（风险色带 + 会话免审按钮显隐）
         """
         return self._create_request(
             needs_type=NeedsYouType.APPROVAL,
@@ -850,7 +860,11 @@ class NeedsYouService:
                 req.status = NeedsYouStatus.TIMEOUT
                 req.responded_at = now
                 req.responded_by = "system_timeout"
-                req.response = {"timeout": True, "reason": "approval 30s 无响应自动拒绝"}
+                # Task 3.3: 超时文案对齐「审批超时，按拒绝处理」（fail-closed）
+                req.response = {
+                    "timeout": True,
+                    "reason": f"审批超时（{int(self._approval_timeout)}s 无响应），按拒绝处理",
+                }
                 self._stats["total_timeout"] += 1
                 self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
                 self._stats["by_status"][NeedsYouStatus.TIMEOUT.value] += 1
@@ -1066,6 +1080,31 @@ def register_methods(dispatcher: Any) -> None:
     )
 
     # === 响应 API ===
+    def _record_trust_maybe(req: "NeedsYouRequest", response: Any) -> None:
+        """Task 5（方案书 v3.1 §4.5）：审批响应带 trust 意图时记会话级免审
+
+        触发条件（任一）：response.decision == "trust" / response.sessionTrust
+        为真。动作：⚡批准 → 会话只读免审（risk_l<=1）+ 命令首 token 加入
+        会话免批前缀集（trust_store.record_session_trust 统一处理）。
+        trust_store 归 strands_backend 层——延迟导入防模块环 + 容错不阻断响应。
+        """
+        try:
+            if not isinstance(response, dict):
+                return
+            decision = str(response.get("decision", "")).lower()
+            if decision != "trust" and not response.get("sessionTrust"):
+                return
+            from strands_backend.trust_store import record_session_trust
+
+            extra = req.extra if isinstance(req.extra, dict) else {}
+            record_session_trust(
+                session_id=str(req.session_id or ""),
+                command=str(extra.get("command", "") or ""),
+                risk_l=extra.get("risk_l"),
+            )
+        except Exception as e:  # noqa: BLE001 — trust 记录失败不影响审批响应
+            logger.warning(f"record_session_trust failed (non-fatal): {e}")
+
     def _respond(req_id: str, response: Any = None, responded_by: str = "user") -> dict[str, Any] | None:
         """用户响应请求
 
@@ -1075,6 +1114,8 @@ def register_methods(dispatcher: Any) -> None:
             responded_by: 响应者标识
         """
         req = service.respond(req_id=req_id, response=response, responded_by=responded_by)
+        if req is not None:
+            _record_trust_maybe(req, response)
         return req.to_dict() if req else None
 
     def _approve(req_id: str, comment: str = "", responded_by: str = "user") -> dict[str, Any] | None:

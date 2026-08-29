@@ -1,104 +1,107 @@
 // ============================================================================
-// TDSF Agent 注册表（前端 5 个用户可切换的 Agent）
+// TDSF Agent 注册表（v3.1 收敛：main 唯一入口 + 三模式信任体系）
 // ============================================================================
 //
-// P0-1 (2026-08-01, 方案书 B 方案): 前后端对齐 — 每个前端入口对应一个
-// **真实** Strands Agent 实例（strands_backend/adapter.py _SUB_AGENT_SPECS）：
-//   前端 id   ↔ 后端 agent key（pythonName）↔ Strands Agent 实例
-//   main    ↔ main     （全量 7 工具，通用入口）
-//   coder   ↔ coding   （ssh_command + read_remote_file + suggest_command）
-//   explore ↔ explore  （只读 5 工具，无 ssh_command）
-//   history ↔ history  （suggest_command + skill_invoke）
-//   teach   ↔ teach    （只读 + skill_invoke，结构化教学输出）
-// 旧版"main 在 Python 端按关键词路由到 8 个子 Agent"的模拟已移除：
-// 用户选哪个 Tab，后端就跑哪个真实 Agent；AgentStatusPill 显示与之一致。
+// 方案书 v3.1（docs/agent/方案书-v3.1-三模式信任体系与Agent收敛.md §4.1）：
+// 原 main + 4 静态子 agent（coder/explore/history/teach）委派机制已整体删除——
+// 意图路由靠 LLM 猜不可控、三个子 agent 工具集是 main 的真子集（委派纯开销）。
+// 现在前端只有 main 一个入口，"能力差异"改由 AgentMode 三模式信任体系 +
+// Teach 教学皮肤表达（随 agent.invoke 的 state.live.agentMode / state.live.teach
+// 下发 sidecar，缺省时 sidecar 按 confirm 执行）。
 //
-// 设计原则:
-//   - 前端 id 用业务语义命名（coder），与 Python key（coding 动词形式）解耦
-//   - pythonName 字段作为 RPC 调用时传入的 agent name（agent.invoke 的 params.name）
-//   - 简短 systemPrompt 仅用于前端 Tab tooltip 展示，实际 prompt 由 Python 端构建
-//
-// 与现有 SUBAGENTS 的区别:
-//   - SUBAGENTS 是 Vercel AI SDK 内部 subagent（run_subagent 工具的白名单），仅 fallback 路径用
+// 与 SUBAGENTS 的区别（保留不变）:
+//   - SUBAGENTS 是 Vercel AI SDK 内部 subagent（run_subagent 工具的白名单），
+//     仅 fallback 路径用
 //   - TDSF_AGENTS 是顶层 Agent 集合，走 Python Sidecar（Strands）路径
 //   - 两者互不冲突，可并存
 
-/** TDSF 顶层 Agent 的 id（前端 5 个可切换入口，每个对应后端一个真实 Strands Agent） */
-export type TdsfAgentId = "main" | "coder" | "explore" | "history" | "teach";
+/** TDSF 顶层 Agent id（v3.1 收敛后仅 main 一个入口） */
+export type TdsfAgentId = "main";
 
-/** TDSF Agent 定义（前端 Tab + Python RPC 调用所需元数据） */
+/**
+ * Agent 三模式信任档位（方案书 v3.1 §3.2 模式 × 权限映射矩阵）
+ *
+ * - observe：观察——只读分析，任何写/执行类操作 fail-closed 拒绝并如实报告
+ * - confirm：确认——只读/L0-L1 放行，L2-L4 逐条审批卡（最安全中间态）
+ * - auto：自动——L0-L2 自动放行，L3/L4 仍升级确认（L4 任何模式/白名单不可绕）
+ *
+ * 模式为会话级状态（chatStore.agentMode，per-session 持久化），随
+ * agent.invoke 的 state.live.agentMode 下发 sidecar；缺省缺字段时
+ * sidecar 按 confirm 执行（spec: 老会话兼容）。
+ */
+export type AgentMode = "observe" | "confirm" | "auto";
+
+/** 默认模式：confirm（中间态最安全，对齐 spec"缺省缺字段时默认 confirm"） */
+export const DEFAULT_AGENT_MODE: AgentMode = "confirm";
+
+/** 三档模式常量列表（AgentModeSwitcher 渲染顺序） */
+export const AGENT_MODES: readonly AgentMode[] = [
+  "observe",
+  "confirm",
+  "auto",
+];
+
+/** 模式元数据（切换器 + AgentStatusPill + TdsfAgentPanel 显示用） */
+export const AGENT_MODE_META: Record<
+  AgentMode,
+  { label: string; badge: string; desc: string }
+> = {
+  observe: {
+    label: "观察",
+    badge: "观察 · 只读",
+    desc: "只读分析，不执行任何写操作",
+  },
+  confirm: {
+    label: "确认",
+    badge: "确认 · 审批",
+    desc: "写操作逐条审批后执行",
+  },
+  auto: {
+    label: "自动",
+    badge: "自动 · 执行",
+    desc: "低危自动放行，高危仍需确认",
+  },
+};
+
+/** 类型守卫：字符串是否为合法 AgentMode（会话元数据反序列化用） */
+export function isAgentMode(v: string): v is AgentMode {
+  return v === "observe" || v === "confirm" || v === "auto";
+}
+
+/** TDSF Agent 定义（前端展示 + Python RPC 调用所需元数据；v3.1 后仅 main） */
 export type TdsfAgentDef = {
-  /** 前端 id（业务语义命名） */
+  /** 前端 id */
   id: TdsfAgentId;
-  /** Tab 显示名 */
+  /** 显示名 */
   label: string;
-  /** 短模式标签（Header 徽章用，≤6 字符） */
+  /** 短模式标签（Header 徽章用） */
   mode: string;
-  /** 一句话描述（Tab tooltip + 空状态展示用） */
+  /** 一句话描述（空状态展示用） */
   desc: string;
   /** 对应 Python AGENT_REGISTRY 的 key（agent.invoke 的 params.name） */
-  pythonName: "main" | "coding" | "explore" | "history" | "teach";
-  /** 简短 system prompt（仅前端展示用，实际 prompt 由 Python 端构建） */
+  pythonName: "main";
+  /** 简短 system prompt（仅前端展示用，实际 prompt 由 Python 端按模式构建） */
   systemPrompt: string;
 };
 
 /**
- * TDSF 顶层 Agent 注册表
+ * TDSF 顶层 Agent 注册表（v3.1 收敛后仅 main）
  *
- * 用 Record<TdsfAgentId, TdsfAgentDef> 保证 id 字段与 key 严格一一对应，
- * TypeScript 编译期就能发现遗漏或拼写错误。
- *
- * P0-1：每个入口对应后端一个真实 Strands Agent（见 adapter.py _SUB_AGENT_SPECS）。
+ * 用 Record<TdsfAgentId, TdsfAgentDef> 保证 id 字段与 key 严格一一对应。
  */
 export const TDSF_AGENTS: Record<TdsfAgentId, TdsfAgentDef> = {
   main: {
     id: "main",
     label: "Main",
     mode: "MAIN",
-    desc: "通用主 Agent（全量 7 工具：SSH 执行/文件/日志/进程/网络/技能/命令建议）",
+    desc: "通用主 Agent（全量工具 × 模式过滤，模式感知 prompt + 可选教学皮肤）",
     pythonName: "main",
     systemPrompt:
       "Main Agent：通用 Linux 运维助手，可执行 SSH 命令、读写文件、分析日志、诊断网络。",
   },
-  coder: {
-    id: "coder",
-    label: "Coder",
-    mode: "CODE",
-    desc: "代码与配置修改（SSH 执行 + 读文件 + 命令建议）",
-    pythonName: "coding",
-    systemPrompt:
-      "Coding Agent：定位并修复远程主机上的代码/配置问题，高危命令触发审批。",
-  },
-  explore: {
-    id: "explore",
-    label: "Explore",
-    mode: "SCAN",
-    desc: "只读探索（文件/日志/进程/网络，不执行命令）",
-    pythonName: "explore",
-    systemPrompt:
-      "Explore Agent：只读分析远程主机（读文件/日志/进程/网络诊断），不执行命令。",
-  },
-  history: {
-    id: "history",
-    label: "History",
-    mode: "HIST",
-    desc: "历史与知识（基于会话上下文复盘 + 领域知识卡）",
-    pythonName: "history",
-    systemPrompt:
-      "History Agent：基于会话上下文回答历史操作/命令/排障模式，可查阅领域知识卡。",
-  },
-  teach: {
-    id: "teach",
-    label: "Teach",
-    mode: "TEACH",
-    desc: "Linux 运维教学（概念+示例+易错点+练习，不执行命令）",
-    pythonName: "teach",
-    systemPrompt:
-      "Teach Agent：结构化教学（概念原理/操作示例/易错点/练习），只读 + 知识卡，不执行命令。",
-  },
 };
 
-/** 默认激活的 TDSF agent id — v2026-07-29 改为 'main'，统一入口 */
+/** 默认激活的 TDSF agent id — v3.1 收敛后恒为 'main'（唯一入口） */
 export const DEFAULT_TDSF_AGENT: TdsfAgentId = "main";
 
 /**
@@ -106,19 +109,12 @@ export const DEFAULT_TDSF_AGENT: TdsfAgentId = "main";
  *
  * 使用场景:
  *   - transport.ts 路由分支前收窄 getTdsfAgentId() 返回值类型
- *   - TdsfAgentPanel Tab 切换时校验传入的 id
  *
  * @param id 待校验的字符串
  * @returns 是 TdsfAgentId 则 true，否则 false
  */
 export function isTdsfAgent(id: string): id is TdsfAgentId {
-  return (
-    id === "main" ||
-    id === "coder" ||
-    id === "explore" ||
-    id === "history" ||
-    id === "teach"
-  );
+  return id === "main";
 }
 
 // ============================================================================

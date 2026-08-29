@@ -6,6 +6,7 @@ import { useComposer } from "../lib/composer";
 import { SLASH_COMMANDS } from "../lib/slashCommands";
 import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
+import { AgentModeSwitcher } from "./AgentModeSwitcher";
 import { AgentStatusPill } from "./AgentStatusPill";
 import { FilePickerContent } from "./FilePicker";
 import { type PickerItem, SnippetPickerContent } from "./SnippetPicker";
@@ -251,10 +252,13 @@ export function AiComposerInput() {
               placeholder="Ask TDSF anything   -   # for snippets and commands, @ for files"
               rows={1}
               className={cn(
-                "max-h-40 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none",
+                "max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none",
                 "placeholder:text-muted-foreground/60",
               )}
             />
+            {/* v3.1 三模式信任体系：输入区工具行——模式切换器（观察/确认/自动 + 教学）
+                + 模式指示 pill。状态存 chatStore（per-session 持久化），切换即时生效。 */}
+            <AgentModeSwitcher />
             <AgentStatusPill />
           </div>
         </PopoverAnchor>

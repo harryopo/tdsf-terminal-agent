@@ -54,7 +54,12 @@ from strands_backend.tools.network_diagnostic import (
     invoke_network_diagnostic_tool,
     make_network_diagnostic_tool,
 )
+from strands_backend.modes import AgentMode
 from strands_backend.adapter import StrandsAgentAdapter, TdsfStrandsCallbackHandler
+
+# P0-A1: adapter 缓存 key = (agent_id, session_id, perm, mode, teach)；
+# mock 塞缓存统一用缺省模式/无教学皮肤（invoke 未传 mode 时 parse 到 CONFIRM）
+_CACHE_DEFAULTS = (AgentMode.CONFIRM, False)
 
 
 # ============================================================================
@@ -248,7 +253,11 @@ class TestSshCommandTool(unittest.TestCase):
         )
 
     def test_high_risk_command_approved_executes(self):
-        """P1-1: 高危命令用户批准 → 真实执行"""
+        """P1-1: 高危命令用户批准 → 真实执行
+
+        Task 3/4 注：审批场景用非 denylist 的高危命令（rm -rf /tmp/...）——
+        rm -rf / 命中硬底线黑名单，现在直接 command_blocked 不再走审批。
+        """
         from needs_you import NeedsYouStatus
         from unittest.mock import patch
 
@@ -258,14 +267,20 @@ class TestSshCommandTool(unittest.TestCase):
         with patch(
             "strands_backend.tools.request_approval_and_wait",
             return_value=MagicMock(status=NeedsYouStatus.APPROVED),
-        ):
-            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+        ) as mock_wait:
+            result = invoke_ssh_command_tool({"command": "rm -rf /tmp/old-build"}, ctx)
         self.assertEqual(result["status"], "success")
         # 批准后命令真正执行（RustBridge 被调用）
         bridge.ipc_invoke.assert_called_once()
+        # Task 3.1: 审批载荷带四层卡面字段（semantic/explanation/impact/risk_l）
+        kwargs = mock_wait.call_args.kwargs
+        self.assertIn("impact", kwargs)
+        self.assertIn("explanation", kwargs)
+        self.assertIn("risk_l", kwargs)
+        self.assertEqual(kwargs["risk_l"], 4)
 
     def test_high_risk_command_rejected(self):
-        """P1-1: 高危命令用户拒绝 → 返回 rejected，不执行"""
+        """P1-1: 高危命令用户拒绝 → 返回 rejected，不执行；message 带用户附言"""
         from needs_you import NeedsYouStatus
         from unittest.mock import patch
 
@@ -278,13 +293,14 @@ class TestSshCommandTool(unittest.TestCase):
                 status=NeedsYouStatus.REJECTED, response={"reason": "测试拒绝"}
             ),
         ):
-            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+            result = invoke_ssh_command_tool({"command": "rm -rf /tmp/old-build"}, ctx)
         self.assertEqual(result["status"], "rejected")
-        self.assertIn("拒绝", result["message"])
+        self.assertIn("用户拒绝了此操作", result["message"])
+        self.assertIn("测试拒绝", result["message"])
         bridge.ipc_invoke.assert_not_called()
 
     def test_high_risk_command_timeout_keeps_needs_approval(self):
-        """P1-1: 审批超时 → 保持 needs_approval（旧行为兜底）"""
+        """P1-1: 审批超时 → fail-closed 按拒绝处理（5 分钟无响应）"""
         from needs_you import NeedsYouStatus
         from unittest.mock import patch
 
@@ -295,9 +311,10 @@ class TestSshCommandTool(unittest.TestCase):
             "strands_backend.tools.request_approval_and_wait",
             return_value=MagicMock(status=NeedsYouStatus.TIMEOUT),
         ):
-            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+            result = invoke_ssh_command_tool({"command": "rm -rf /tmp/old-build"}, ctx)
         self.assertEqual(result["status"], "needs_approval")
         self.assertIn("超时", result["message"])
+        self.assertIn("按拒绝处理", result["message"])
         bridge.ipc_invoke.assert_not_called()
 
     def test_high_risk_command_approval_service_down_fails_closed(self):
@@ -312,9 +329,21 @@ class TestSshCommandTool(unittest.TestCase):
             "strands_backend.tools.request_approval_and_wait",
             return_value=None,
         ):
-            result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+            result = invoke_ssh_command_tool({"command": "rm -rf /tmp/old-build"}, ctx)
         self.assertEqual(result["status"], "needs_approval")
         self.assertIn("未执行", result["message"])
+        bridge.ipc_invoke.assert_not_called()
+
+    def test_denylist_hard_block_no_approval(self):
+        """Task 3.2/4: denylist 硬底线（rm -rf /）→ command_blocked 直接拦截，
+        不走审批、无替代方案"""
+        bus = make_mock_event_bus()
+        bridge = make_mock_rust_bridge()
+        ctx = make_ctx(event_bus=bus, rust_bridge=bridge)
+        result = invoke_ssh_command_tool({"command": "rm -rf /"}, ctx)
+        self.assertEqual(result["status"], "command_blocked")
+        self.assertIn("command_blocked!", result["message"])
+        self.assertIn("不提供替代方案", result["message"])
         bridge.ipc_invoke.assert_not_called()
 
     def test_no_rust_bridge_unavailable(self):
@@ -331,7 +360,7 @@ class TestSshCommandTool(unittest.TestCase):
             invoke_ssh_command_tool({}, ctx)
 
     def test_multiline_with_high_risk_blocked(self):
-        """多行命令包含高危行 → 发起审批；超时未响应保持 needs_approval"""
+        """多行命令包含高危行 → 发起审批；超时未响应 fail-closed"""
         from needs_you import NeedsYouStatus
         from unittest.mock import patch
 
@@ -342,9 +371,19 @@ class TestSshCommandTool(unittest.TestCase):
             return_value=MagicMock(status=NeedsYouStatus.TIMEOUT),
         ):
             result = invoke_ssh_command_tool(
-                {"command": "ls\nrm -rf /\nuname -a"}, ctx
+                {"command": "ls\nrm -rf /tmp/old-build\nuname -a"}, ctx
             )
         self.assertEqual(result["status"], "needs_approval")
+
+    def test_multiline_with_denylist_hard_blocked(self):
+        """Task 3.2/4: 多行命令含硬底线行（rm -rf /）→ command_blocked 直接拦截"""
+        bus = make_mock_event_bus()
+        ctx = make_ctx(event_bus=bus)
+        result = invoke_ssh_command_tool(
+            {"command": "ls\nrm -rf /\nuname -a"}, ctx
+        )
+        self.assertEqual(result["status"], "command_blocked")
+        self.assertIn("rm -rf /", result["message"])
 
     def test_multiline_approved_executes_whole(self):
         """P1-1: 多行命令批准后整条执行"""
@@ -377,6 +416,8 @@ class TestSshCommandTool(unittest.TestCase):
         不 mock 审批等待——真实 request_approval_and_wait 阻塞，
         线程模拟用户在 0.3s 后点「批准」（needs_you.approve），
         工具被唤醒并执行命令。
+        Task 3/4 注：rm -rf / 现被 denylist 硬底线拦截，审批场景改用
+        非 denylist 的高危命令。
         """
         import threading
         import time
@@ -402,7 +443,7 @@ class TestSshCommandTool(unittest.TestCase):
 
             t = threading.Thread(target=approve_later, daemon=True)
             t.start()
-            result = execute_via_ssh(ctx, "rm -rf /")
+            result = execute_via_ssh(ctx, "rm -rf /tmp/old-build")
             t.join(timeout=5.0)
 
             self.assertEqual(result["status"], "success")
@@ -411,7 +452,7 @@ class TestSshCommandTool(unittest.TestCase):
             stop_global_service()
 
     def test_real_approval_flow_reject_blocks(self):
-        """P1-1 全链路：真实服务，用户拒绝 → 命令不执行"""
+        """P1-1 全链路：真实服务，用户拒绝 → 命令不执行，message 带附言"""
         import threading
         import time
 
@@ -436,11 +477,12 @@ class TestSshCommandTool(unittest.TestCase):
 
             t = threading.Thread(target=reject_later, daemon=True)
             t.start()
-            result = execute_via_ssh(ctx, "rm -rf /")
+            result = execute_via_ssh(ctx, "rm -rf /tmp/old-build")
             t.join(timeout=5.0)
 
             self.assertEqual(result["status"], "rejected")
-            self.assertIn("拒绝", result["message"])
+            self.assertIn("用户拒绝了此操作", result["message"])
+            self.assertIn("测试拒绝", result["message"])
             bridge.ipc_invoke.assert_not_called()
         finally:
             stop_global_service()
@@ -948,7 +990,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response.metrics = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2)] = mock_agent  # cache 键为 (agent_id, session_id) 元组
+        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent  # cache 键为 (agent_id, session_id, perm, mode, teach)
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -968,7 +1010,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="ok")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -991,7 +1033,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         adapter = StrandsAgentAdapter(event_bus=bus, backend_enabled=True)
 
         mock_agent = MagicMock(side_effect=RuntimeError("strands internal error"))
-        adapter._agent_cache[("main", "s1", 2)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1011,7 +1053,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="done")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1273,7 +1315,7 @@ class TestAgentSwitchEmission(unittest.TestCase):
         mock_response.__str__ = MagicMock(return_value="回答内容")
         mock_response.metrics = {}
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[(agent_id, "s1", 2)] = mock_agent
+        adapter._agent_cache[(agent_id, "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
         return adapter, bus, mock_agent
@@ -1307,11 +1349,12 @@ class TestAgentSwitchEmission(unittest.TestCase):
         self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "not_exist")
 
 
-class TestSubAgentToolWhitelist(unittest.TestCase):
-    """P0-1: 子 agent 工具白名单（schema-level safety，OPENDEV 范式）
+class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
+    """P0-A1: 工具集过滤（原 TestSubAgentToolWhitelist 改写）
 
-    explore/teach 无 ssh_command（LLM 无法调用不存在于 schema 的执行
-    工具）；coding 有 ssh_command；main 全量 7 工具。
+    委派机制删除后 explore/teach/coding 角色白名单不复存在；main 工具集
+    = TOOL_REGISTRY 全量，观察模式/L1 权限按 READONLY_TOOL_NAMES 只读过滤
+    （filter_tools_readonly 单一真源）。
     """
 
     def _ctx(self, level: int = 2):
@@ -1326,64 +1369,38 @@ class TestSubAgentToolWhitelist(unittest.TestCase):
     def _tool_names(self, tools) -> set[str]:
         return {getattr(t, "__name__", str(t)) for t in tools}
 
-    def test_explore_is_readonly_no_ssh_command(self):
-        from strands_backend.adapter import _SUB_AGENT_SPECS
+    def test_main_gets_all_tools(self):
+        """main（唯一 agent）：TOOL_REGISTRY 全量 20 工具"""
+        tools = make_all_ops_tools(self._ctx())
+        names = self._tool_names(tools)
+        self.assertEqual(len(tools), 20)
+        self.assertIn("ssh_command", names)
+        self.assertIn("knowledge_search", names)
 
-        tools = make_all_ops_tools(
-            self._ctx(),
-            tool_names=_SUB_AGENT_SPECS["explore"]["tool_names"],
-        )
+    def test_l1_readonly_filter(self):
+        """L1（免确认）权限：仅保留 readonly=True 工具（schema-level safety）"""
+        tools = make_all_ops_tools(self._ctx(level=1))
         names = self._tool_names(tools)
         self.assertNotIn("ssh_command", names)
         self.assertNotIn("skill_invoke", names)
         self.assertIn("read_remote_file", names)
         self.assertIn("suggest_command", names)
+        self.assertLessEqual(len(tools), 20)
 
-    def test_teach_no_ssh_command_has_skill_invoke(self):
-        from strands_backend.adapter import _SUB_AGENT_SPECS
+    def test_filter_tools_readonly_helper(self):
+        """P0-A1: filter_tools_readonly 帮助函数（观察模式/L1 共用单一真源）"""
+        from strands_backend.tools import filter_tools_readonly
+        from strands_backend.tools.registry import READONLY_TOOL_NAMES
 
-        tools = make_all_ops_tools(
-            self._ctx(),
-            tool_names=_SUB_AGENT_SPECS["teach"]["tool_names"],
-        )
-        names = self._tool_names(tools)
-        self.assertNotIn("ssh_command", names)
-        self.assertIn("skill_invoke", names)
-        self.assertIn("analyze_logs", names)
+        full = make_all_ops_tools(self._ctx())
+        filtered = filter_tools_readonly(full)
+        self.assertEqual(self._tool_names(filtered), set(READONLY_TOOL_NAMES))
+        # 非注册工具（未在白名单）被裁掉（fail-closed）
+        def mystery_extra_tool():
+            pass
 
-    def test_coding_has_ssh_command(self):
-        from strands_backend.adapter import _SUB_AGENT_SPECS
-
-        tools = make_all_ops_tools(
-            self._ctx(),
-            tool_names=_SUB_AGENT_SPECS["coding"]["tool_names"],
-        )
-        names = self._tool_names(tools)
-        self.assertIn("ssh_command", names)
-        self.assertIn("read_remote_file", names)
-
-    def test_main_gets_all_tools(self):
-        from strands_backend.adapter import _SUB_AGENT_SPECS
-
-        tools = make_all_ops_tools(
-            self._ctx(),
-            tool_names=_SUB_AGENT_SPECS["main"]["tool_names"],
-        )
-        names = self._tool_names(tools)
-        self.assertEqual(len(tools), 20)
-        self.assertIn("ssh_command", names)
-
-    def test_whitelist_composes_with_l1_readonly(self):
-        # L1（免确认）+ explore 白名单：ssh_command 仍未出现，且总数 ≤ 只读 5
-        from strands_backend.adapter import _SUB_AGENT_SPECS
-
-        tools = make_all_ops_tools(
-            self._ctx(level=1),
-            tool_names=_SUB_AGENT_SPECS["explore"]["tool_names"],
-        )
-        names = self._tool_names(tools)
-        self.assertNotIn("ssh_command", names)
-        self.assertLessEqual(len(tools), 7)
+        mystery_extra_tool.__name__ = "mystery_extra_tool"
+        self.assertEqual(filter_tools_readonly([mystery_extra_tool]), [])
 
 
 # ============================================================================
@@ -1449,13 +1466,19 @@ class TestRedactSensitive(unittest.TestCase):
 
 
 # ============================================================================
-# 4 级权限测试（P1-v5-4）
+# 三模式决策测试（Task 3，方案书 v3.1 §3.2——取代 P1-v5-4 4 级权限执行链决策）
 # ============================================================================
 
-class TestFourLevelPermission(unittest.TestCase):
-    """execute_via_ssh 按 permission_level 决策审批"""
+class TestModeDecision(unittest.TestCase):
+    """execute_via_ssh 按 ctx.mode 三模式决策（decide(risk_l, mode)）
 
-    def _run(self, command, level, output="ok"):
+    矩阵（core/decision_engine.py）：
+    - observe: L0-L4 全 deny（只读工具 readonly=True 短路放行 L0-L1）
+    - confirm: L0-L1 allow；L2-L4 confirm（缺省模式）
+    - auto:    L0-L2 allow；L3-L4 confirm（永远确认）
+    """
+
+    def _run(self, command, mode, readonly=False, output="ok"):
         from unittest.mock import patch
 
         from needs_you import NeedsYouStatus
@@ -1466,50 +1489,142 @@ class TestFourLevelPermission(unittest.TestCase):
             "ok": True, "output": output, "exit_code": 0, "duration": 0.1,
         }
         ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
-        ctx.permission_level = level
+        ctx.mode = mode
         # P1-1: 审批等待 mock 为 TIMEOUT（语义 = 需审批但未响应 → needs_approval）
         with patch(
             "strands_backend.tools.request_approval_and_wait",
             return_value=MagicMock(status=NeedsYouStatus.TIMEOUT),
         ):
-            return execute_via_ssh(ctx=ctx, command=command, ssh_session_id="1", timeout=10, tool_name="ssh_command")
+            return execute_via_ssh(
+                ctx=ctx, command=command, ssh_session_id="1",
+                timeout=10, tool_name="ssh_command", readonly=readonly,
+            )
 
-    def test_l1_read_auto(self):
-        r = self._run("uptime", 1)
+    # --- observe：只读观察，一切命令 fail-closed 拒绝 ---
+
+    def test_observe_readonly_command_blocked(self):
+        r = self._run("uptime", AgentMode.OBSERVE)
+        self.assertEqual(r["status"], "command_blocked")
+        self.assertIn("command_blocked!", r["message"])
+
+    def test_observe_write_command_blocked(self):
+        r = self._run("mv /a /b", AgentMode.OBSERVE)
+        self.assertEqual(r["status"], "command_blocked")
+
+    def test_observe_readonly_tool_short_circuit(self):
+        """observe 下只读工具（readonly=True）L0-L1 命令短路放行"""
+        r = self._run("uptime", AgentMode.OBSERVE, readonly=True)
         self.assertEqual(r["status"], "success")
 
-    def test_l1_write_auto(self):
-        # L1 免确认：写操作也直接执行
-        r = self._run("mv /a /b", 1)
+    def test_observe_readonly_tool_higher_risk_still_blocked(self):
+        """observe 下只读工具执行 L2+ 命令仍拦（短路仅放行 L0-L1）"""
+        r = self._run("mv /a /b", AgentMode.OBSERVE, readonly=True)
+        self.assertEqual(r["status"], "command_blocked")
+
+    # --- confirm：L0-L1 放行，L2-L4 审批（缺省模式）---
+
+    def test_confirm_readonly_allows(self):
+        r = self._run("uptime", AgentMode.CONFIRM)
         self.assertEqual(r["status"], "success")
 
-    def test_l2_high_risk_approval_default(self):
-        r = self._run("rm -rf /tmp/x", 2)
+    def test_confirm_write_requires_approval(self):
+        r = self._run("mv /a /b", AgentMode.CONFIRM)
         self.assertEqual(r["status"], "needs_approval")
 
-    def test_l2_write_auto(self):
-        # L2 仅高危：写操作（非高危）自动执行（原行为）
-        r = self._run("mv /a /b", 2)
+    def test_confirm_high_risk_requires_approval(self):
+        r = self._run("rm -rf /tmp/x", AgentMode.CONFIRM)
+        self.assertEqual(r["status"], "needs_approval")
+
+    # --- auto：L0-L2 放行，L3-L4 永远确认 ---
+
+    def test_auto_readonly_allows(self):
+        r = self._run("uptime", AgentMode.AUTO)
         self.assertEqual(r["status"], "success")
 
-    def test_l3_write_requires_approval(self):
-        r = self._run("mv /a /b", 3)
+    def test_auto_write_allows(self):
+        """auto 模式 L2 写操作直接执行"""
+        r = self._run("mv /a /b", AgentMode.AUTO)
+        self.assertEqual(r["status"], "success")
+
+    def test_auto_high_risk_requires_approval(self):
+        """auto 模式 L4 仍审批（永远确认，不可绕过）"""
+        r = self._run("rm -rf /tmp/x", AgentMode.AUTO)
         self.assertEqual(r["status"], "needs_approval")
 
-    def test_l4_all_requires_approval(self):
-        r = self._run("uptime", 4)
+    def test_auto_service_restart_requires_approval(self):
+        """auto 模式 L3（服务重启）升级确认"""
+        r = self._run("systemctl restart nginx", AgentMode.AUTO)
         self.assertEqual(r["status"], "needs_approval")
 
-    def test_context_reads_permission_level_from_live(self):
+    def test_default_mode_is_confirm(self):
+        """ctx 未设 mode 时缺省 confirm（中间态最安全）"""
+        r = self._run("mv /a /b", AgentMode.CONFIRM)
+        self.assertEqual(r["status"], "needs_approval")
+
+    def test_host_mismatch_blocked(self):
+        """Task 3.3: 目标会话 != 激活终端会话 → command_blocked"""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.return_value = {
+            "ok": True, "output": "ok", "exit_code": 0, "duration": 0.1,
+        }
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        ctx.mode = AgentMode.CONFIRM
+        ctx.ssh_host = "192.168.45.130"
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="2",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "command_blocked")
+        self.assertIn("192.168.45.130", result["message"])
+        self.assertIn("终端窗口", result["message"])
+        bridge.ipc_invoke.assert_not_called()
+
+    def test_host_check_skipped_when_host_unknown(self):
+        """Task 3.3: 激活终端 host 不可得（ssh_host 空）→ 跳过校验"""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.return_value = {
+            "ok": True, "output": "ok", "exit_code": 0, "duration": 0.1,
+        }
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        ctx.mode = AgentMode.CONFIRM
+        ctx.ssh_host = ""
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="2",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "success")
+
+    def test_context_reads_permission_level_and_mode_from_live(self):
+        """_build_tool_context 注入 permission_level + mode + ssh_host"""
         from strands_backend.adapter import StrandsAgentAdapter
 
         adapter = StrandsAgentAdapter(event_bus=None, backend_enabled=False)
         ctx = adapter._build_tool_context("main", "s1", {"live": {"permissionLevel": "3"}})
         self.assertEqual(ctx.permission_level, 3)
+        self.assertEqual(ctx.mode, AgentMode.CONFIRM)  # 缺省 confirm
         ctx2 = adapter._build_tool_context("main", "s1", {"live": {}})
         self.assertEqual(ctx2.permission_level, 2)
         ctx3 = adapter._build_tool_context("main", "s1", {"live": {"permissionLevel": "99"}})
         self.assertEqual(ctx3.permission_level, 4)
+        # Task 3: live.agentMode 下发 → ctx.mode
+        ctx4 = adapter._build_tool_context(
+            "main", "s1", {"live": {"agentMode": "auto", "permissionLevel": 2}}
+        )
+        self.assertEqual(ctx4.mode, AgentMode.AUTO)
+        # Task 3.3: live.sshConnection "user@host" → ctx.ssh_host
+        ctx5 = adapter._build_tool_context(
+            "main", "s1",
+            {"live": {"agentMode": "observe", "sshConnection": "root@192.168.45.130"}},
+        )
+        self.assertEqual(ctx5.mode, AgentMode.OBSERVE)
+        self.assertEqual(ctx5.ssh_host, "192.168.45.130")
+        # host 不可得 → 空（执行链跳过校验）
+        ctx6 = adapter._build_tool_context("main", "s1", {"live": {}})
+        self.assertEqual(ctx6.ssh_host, "")
 
 
 # ============================================================================
@@ -1642,10 +1757,18 @@ class TestExtendedOpsTools(unittest.TestCase):
         self.assertEqual(r["status"], "error")
 
     def test_package_manage_install(self):
+        """装包 L2：confirm 模式需审批——mock 审批 APPROVED 后执行"""
+        from unittest.mock import patch
+
+        from needs_you import NeedsYouStatus
         from strands_backend.tools.ops_extended import invoke_package_manage_tool
 
         ctx, bridge = self._ctx()
-        r = invoke_package_manage_tool({"action": "install", "package": "nginx"}, ctx)
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+        ):
+            r = invoke_package_manage_tool({"action": "install", "package": "nginx"}, ctx)
         self.assertEqual(r["status"], "success")
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
@@ -1653,12 +1776,20 @@ class TestExtendedOpsTools(unittest.TestCase):
         )
 
     def test_package_manage_apt(self):
+        """apt 装包 L2：confirm 模式需审批——mock 审批 APPROVED 后执行"""
+        from unittest.mock import patch
+
+        from needs_you import NeedsYouStatus
         from strands_backend.tools.ops_extended import invoke_package_manage_tool
 
         ctx, bridge = self._ctx()
-        r = invoke_package_manage_tool(
-            {"action": "install", "package": "nginx", "package_manager": "apt"}, ctx
-        )
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+        ):
+            r = invoke_package_manage_tool(
+                {"action": "install", "package": "nginx", "package_manager": "apt"}, ctx
+            )
         self.assertEqual(r["status"], "success")
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
@@ -1666,10 +1797,18 @@ class TestExtendedOpsTools(unittest.TestCase):
         )
 
     def test_firewall_manage_add_port(self):
+        """防火墙写操作：confirm 模式需审批——mock 审批 APPROVED 后执行"""
+        from unittest.mock import patch
+
+        from needs_you import NeedsYouStatus
         from strands_backend.tools.ops_extended import invoke_firewall_manage_tool
 
         ctx, bridge = self._ctx()
-        r = invoke_firewall_manage_tool({"action": "add_port", "port": "8080"}, ctx)
+        with patch(
+            "strands_backend.tools.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+        ):
+            r = invoke_firewall_manage_tool({"action": "add_port", "port": "8080"}, ctx)
         self.assertEqual(r["status"], "success")
         cmd = bridge.ipc_invoke.call_args.args[1]["command"]
         self.assertIn("firewall-cmd --permanent --add-port=8080/tcp", cmd)
