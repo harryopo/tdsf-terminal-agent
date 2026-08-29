@@ -10,7 +10,7 @@
 
 | 门禁 | 状态 |
 |------|------|
-| typecheck / lint / test(1192) / build:web | ✅ 全绿（2026-08-29 §37.81+补记 复核） |
+| typecheck / lint / test(1181) / build:web | ✅ 全绿（2026-08-29 §37.81+补记 2 复核） |
 | cargo check / cargo test(全量含 doc-test 407) / pytest(1651) | ✅ 全绿（2026-08-29 §37.81 复核） |
 | tauri:dev 桌面端 | ✅ 窗口可见、可点击、本地终端(PTY pwsh)、SSH 可连、远程文件树可展开 |
 

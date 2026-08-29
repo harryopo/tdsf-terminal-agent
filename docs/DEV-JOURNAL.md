@@ -1848,3 +1848,16 @@ P2（中优先级 — 清理 + 文档）：
 3. **TDSF 图标全套**：exe/任务栏图标此前仍是 terax `>_` 风格（source-icon.png）→ `pnpm tauri icon public/logo.svg` 从 TDSF 灰色 logo 生成全套（ico/icns/各尺寸 png/Square*/Android/iOS）
 4. **快捷键中文化**：shortcuts.ts 45 条 label 全面中文化（快捷键设置页 + 命令面板消费；id 保持英文稳定标识）
 老会话迁移：SessionMeta 里 observe+teach=true 自动恢复为 teach 档（restoreModeFromMeta）。门禁：vitest 1192 / tsc / lint 全绿。
+
+### §37.81 补记 2：用户实测七修（2026-08-29，commit bc33587，26 文件 +313/-1447）
+
+用户第二轮实测反馈七点：
+1. **主题色卡修复**：根因 = 色卡依赖的 `--tdsf-theme-preview-from/to` CSS 变量**全项目无注入点**（永远回退深蓝灰渐变）→ 改为上游模式：`variants[resolvedMode].colors` 内联取色（底色 + primary/foreground/muted 三根色条迷你窗口预览），缺 variants 的自定义主题回退深灰
+2. **删智能体启动命令**：外部 CLI 启动器（claude/codex/gemini 等）与 TDSF agent 无关——删 AgentsSection 启动命令区 + AgentLauncherPanel + NewTabMenu「Agents」菜单 + onLaunchAgents 透传链 + store agentLaunchCommands 全链；launchAgentGroup 死代码一并删（唯一调用点即被删的传参），launcher.ts/createAgentPanePlan 核心保留
+3. **删后端日志 tab**：正常用户看不懂——LogsSection/SidecarLogPanel 删除（grep 确认前端无 openSettingsWindow("logs") 调用方、src-tauri 无触发 emit），开发时看 sidecar stdout 即可
+4. **删录制终端会话**：asciicast 录制/回放无必要——recorder/ 整目录 + 命令面板三条 + App 8 处删除
+5. **监控入口漏判修复**：ServerMonitorEntry 原来只判「sshStore 有连接会话」，切到本地/欢迎页仍残留 → 补 `activeSpace?.env.kind === "ssh"` 条件（对齐 commands.ts 的 isSshSpace 惯例），只在 SSH Space + 已连接时显示
+6. **闹铃弹窗中文化**：NotificationBell 13 处（相对时间/状态/标签/空态/折叠区）
+7. **官方文档文件夹建立**：`docs/guide/`（README + 三模式信任体系/可视执行演示/审批白名单三份）——设置页只留一句话提示，详细注释/教程/注意事项统一入此文件夹（后续约定：新功能的详细说明优先写 guide）
+
+**记忆沉淀（产品形态收敛方向，用户钦定）**：界面只留必要控件与一句话提示；外部 CLI 生态（启动器/录制）不属于产品范围；面向用户的功能详细说明一律进 docs/guide/ 官方文档而非 UI 长文本。ROADMAP「待用户决策」区已落档（UI 精简五删条目）。门禁：vitest 1181 / tsc / lint / build:web 全绿（删除测试文件后 vitest 总数 1192→1181 属预期）。
