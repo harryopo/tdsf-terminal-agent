@@ -8,6 +8,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useSpaces } from '@/modules/spaces';
 import { selectActiveSession, useSshStore, isSessionConnected } from '@/modules/ssh-explorer/sshStore';
 
 import { ServerMonitorPanel } from './ServerMonitorPanel';
@@ -16,11 +17,17 @@ import { ServerMonitorPanel } from './ServerMonitorPanel';
 export function ServerMonitorEntry() {
   const [open, setOpen] = useState(false);
 
-  // 只在有 SSH 会话时显示按钮
+  // 只在当前活跃 Space 为 SSH 且该 Space 已有连接会话时显示按钮
+  // (selector 返回 spaces 数组中已有对象引用, 遵循项目 zustand 惯例)
+  const activeSpace = useSpaces((s) =>
+    s.spaces.find((sp) => sp.id === s.activeId),
+  );
+  const isSshSpace = activeSpace?.env.kind === 'ssh';
+
   const activeSession = useSshStore(selectActiveSession);
   const hasConnectedSession = activeSession ? isSessionConnected(activeSession) : false;
 
-  if (!hasConnectedSession) return null;
+  if (!isSshSpace || !hasConnectedSession) return null;
 
   return (
     <>

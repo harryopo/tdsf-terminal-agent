@@ -29,7 +29,6 @@ export const COMMAND_GROUPS = [
   "Git",
   "搜索",
   "视图",
-  "录制",
   "AI",
 ] as const;
 
@@ -63,10 +62,6 @@ export type CommandPaletteActionContext = {
   switchSpace: (id: string) => void;
   /** TDSF 修复 2026-08-01: 当前 Space 是 SSH 时隐藏本地专属命令（网页预览等） */
   isSshSpace?: boolean;
-  /** P1-v5-6 / P2-2: asciicast 会话录制（开始/停止/回放面板） */
-  recordStart: () => void;
-  recordStop: () => void;
-  recordPlay?: () => void;
 };
 
 const noop = () => {};
@@ -299,30 +294,6 @@ export function createCommandItems(
       icon: SidebarLeftIcon,
       shortcutId: "sidebar.toggle",
       run: ctx.toggleSidebar,
-    },
-    {
-      id: "record.start",
-      title: "开始录制终端会话",
-      group: "录制",
-      keywords: ["record", "asciicast", "cast", "capture", "session", "luzhi"],
-      icon: SidebarLeftIcon,
-      run: ctx.recordStart,
-    },
-    {
-      id: "record.stop",
-      title: "停止录制并保存回放 (asciicast v2)",
-      group: "录制",
-      keywords: ["record", "stop", "export", "cast", "asciicast", "daochu"],
-      icon: SidebarLeftIcon,
-      run: ctx.recordStop,
-    },
-    {
-      id: "record.play",
-      title: "打开录制回放 (asciicast)",
-      group: "录制",
-      keywords: ["record", "play", "replay", "cast", "asciicast", "huifang"],
-      icon: SidebarLeftIcon,
-      run: ctx.recordPlay ?? noop,
     },
     {
       id: "ai.toggle",

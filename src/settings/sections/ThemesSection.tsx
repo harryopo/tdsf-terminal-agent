@@ -92,35 +92,86 @@ export function ThemesSection() {
       <div className="flex flex-col gap-2">
         <Label>应用主题</Label>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-          {THEMES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => void setThemeId(t.id)}
-              className={
-                "flex h-16 items-center gap-2 rounded-lg border bg-card px-3 text-left transition-all " +
-                (themeId === t.id
-                  ? "border-foreground/60 ring-1 ring-foreground/20"
-                  : "border-border/60 hover:border-border")
-              }
-            >
-              <div
-                aria-hidden
-                className="h-10 w-10 shrink-0 rounded-md border border-border/40"
-                style={{
-                  background: `linear-gradient(135deg, var(--tdsf-theme-preview-from, #1f2937) 0%, var(--tdsf-theme-preview-to, #0f172a) 100%)`,
-                }}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[12px] font-medium">
-                  {t.name}
+          {THEMES.map((t) => {
+            // 色卡取当前显示模式对应 variant 的真实颜色; 无 variants 的自定义主题回退深灰渐变
+            const c = (
+              t.variants[resolvedMode] ??
+              t.variants.dark ??
+              t.variants.light
+            )?.colors;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => void setThemeId(t.id)}
+                className={
+                  "flex h-16 items-center gap-2 rounded-lg border bg-card px-3 text-left transition-all " +
+                  (themeId === t.id
+                    ? "border-foreground/60 ring-1 ring-foreground/20"
+                    : "border-border/60 hover:border-border")
+                }
+              >
+                <div
+                  aria-hidden
+                  className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md border border-border/40"
+                  style={
+                    c
+                      ? { background: c.background }
+                      : {
+                          background: `linear-gradient(135deg, var(--tdsf-theme-preview-from, #1f2937) 0%, var(--tdsf-theme-preview-to, #0f172a) 100%)`,
+                        }
+                  }
+                >
+                  {c ? (
+                    <>
+                      {/* 迷你窗口预览: 主色标题条 + 前景/弱色内容条 */}
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 4,
+                          left: 4,
+                          right: 4,
+                          height: 3,
+                          borderRadius: 2,
+                          background: c.primary ?? c.accent,
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 11,
+                          left: 4,
+                          right: 10,
+                          height: 3,
+                          borderRadius: 2,
+                          background: c.foreground,
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 18,
+                          left: 4,
+                          right: 16,
+                          height: 3,
+                          borderRadius: 2,
+                          background: c.muted,
+                        }}
+                      />
+                    </>
+                  ) : null}
                 </div>
-                <div className="truncate font-mono text-[10px] text-muted-foreground">
-                  {t.id}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12px] font-medium">
+                    {t.name}
+                  </div>
+                  <div className="truncate font-mono text-[10px] text-muted-foreground">
+                    {t.id}
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       </div>
 
