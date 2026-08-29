@@ -15,29 +15,23 @@ strands_backend/adapter.py — Strands Agent 适配层
 - 优雅降级：Strands 未安装 / model 未注入 / feature flag 关闭时，
   返回 degraded 状态的结构化结果（与 BaseAgent mock LLM 降级模式一致）。
 
+P0-A1 (2026-08-29, 方案书 v3.1 三模式信任体系)：
+- **main 是唯一 agent 实例**：4 子 agent 委派机制（_SUB_AGENT_SPECS /
+  Agent.as_tool / 子 agent 双缓存 / 委派 prompt）已整体删除——意图路由靠
+  LLM 猜测不可控，coding/explore/history 工具集是 main 真子集，委派纯开销。
+- **三模式信任**：AgentMode（observe/confirm/auto）随 invoke 传参下发
+  （state.live.agentMode 或 state.mode），缺省 confirm（中间态最安全）。
+  工具集 = TOOL_REGISTRY 全量 × 模式过滤（observe → 只读白名单）；
+  模式 × 风险映射矩阵见 core/decision_engine.py:decide。
+- **教学皮肤**：原 teach agent 的结构化教学契约迁为 _TEACH_SKIN_PROMPT，
+  invoke 传参 teach=True 时拼入 main system prompt（不改变权限矩阵）。
+- agent_switch 事件保留 emit（agent_id 透传），委派路径删除后不再产生
+  agent:<子 agent> 前缀事件；前端 "agent:" 卡片逻辑由 Task 2 处理。
+
 设计原则：
 1. Strands 是条件依赖（运行时缺失时优雅降级，不影响 sidecar 启动）。
-2. 不修改现有 ``agents/base.py`` / ``event_bus.py`` / ``main.py`` 等文件，
-   通过 feature flag 在 ``main.py`` 注册段注入。
-3. 工具通过 ``make_all_ops_tools(ctx)`` 构造，自动绑定 ``ToolContext``。
-4. callback_handler 内联实现，把 Strands 事件 → event_bus 便捷方法。
-
-集成点（main.py:332-358，本适配层不修改该文件，仅给出推荐用法）：
-
-    backend = os.environ.get("TDSF_AGENT_BACKEND", "langgraph").lower()
-    if backend == "strands":
-        try:
-            from strands_backend import StrandsAgentAdapter
-            from strands_backend.tools import DefaultRustBridge
-            adapter = StrandsAgentAdapter(
-                event_bus=event_bus.get_global_bus(),
-                rust_bridge=DefaultRustBridge(),  # P2 阶段注入 send_request
-                backend_enabled=True,
-            )
-            agents.set_backend(lambda agent_id, input, state: adapter.invoke(agent_id, input, state))
-        except Exception as se:
-            logger.exception(f"failed to activate Strands backend, fallback: {se}")
-            agents.configure_agents(event_bus=event_bus.get_global_bus(), llm_call=llm_call)
+2. 工具通过 ``make_all_ops_tools(ctx)`` 构造，自动绑定 ``ToolContext``。
+3. callback_handler 内联实现，把 Strands 事件 → event_bus 便捷方法。
 """
 from __future__ import annotations
 
@@ -46,11 +40,13 @@ import threading
 import time
 from typing import Any, Callable
 
+from strands_backend.modes import AgentMode, parse_mode
 from strands_backend.tools import (
     DefaultRustBridge,
     RustBridge,
     ToolContext,
     TOOL_DECORATOR_AVAILABLE,
+    filter_tools_readonly,
     make_all_ops_tools,
 )
 
@@ -233,23 +229,17 @@ class TdsfStrandsCallbackHandler:
     - init_event_loop / start_event_loop / start / message / complete / force_stop
     - current_tool_use（含 name + input）
     - data（文本增量）
-    - tool_stream（agent-as-tool 子 agent 工具流事件，P0-6 新增）
-    - message 含 toolResult（子 agent 完成回填，P0-6 新增）
 
-    转发策略：
+    转发策略（main 事件流，P0-A1 委派删除后仅剩唯一 agent）：
     - data（文本增量）→ event_bus.emit_agent_message（流式推送）
-    - current_tool_use → event_bus.emit_tool_call（工具调用开始）
     - start → event_bus.emit_mood_change("thinking")
     - complete → event_bus.emit_mood_change("working")
     - force_stop → event_bus.emit_mood_change("error")
-    - tool_stream（子 agent）→ emit_tool_call("agent:<name>", started)
-    - 子 agent data → emit_agent_message(msg_type="agent_call") + agent_switch
-    - message.toolResult（子 agent 完成）→ emit_tool_call("agent:<name>", completed)
+    - reasoningText（深度思考增量）→ agent_message(msg_type="thinking")
 
-    P0-6 (2026-08-01): main agent 委派子 agent（agent-as-tool）可视化。
-    子 agent 的中间事件以 tool_stream / data+agent 形式到达**main**的 handler
-    （子 agent 自身用静默 handler 防文本污染），此处统一转发为前端可渲染的
-    agent 调用工具行事件。
+    注意（2026-07-31 修复）：不在此处转发 current_tool_use 事件——
+    Strands 的 current_tool_use 是**流式中途态**，直接 emit 会产生
+    input={} 的空参数工具行。工具实现内部自行 emit started/completed。
 
     用法：
         handler = TdsfStrandsCallbackHandler(event_bus, agent_name="main", session_id="...")
@@ -261,23 +251,16 @@ class TdsfStrandsCallbackHandler:
         event_bus: Any,
         agent_name: str = "main",
         session_id: str = "",
-        sub_agent_names: set[str] | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.agent_name = agent_name
         self.session_id = session_id
-        # P0-6: 子 agent 名集合（识别 agent-as-tool 中间事件）
-        self.sub_agent_names = set(sub_agent_names or [])
-        # 已发起 agent 调用事件（tool_use_id → agent 名），避免重复 emit
-        self._agent_call_started: dict[str, str] = {}
-        self._agent_switch_emitted: set[str] = set()
         # 统计（调试用）
         self._stats = {
             "events_received": 0,
             "messages_emitted": 0,
             "tool_calls_emitted": 0,
             "mood_changes_emitted": 0,
-            "agent_calls_emitted": 0,
         }
 
     def __call__(self, **kwargs: Any) -> None:
@@ -289,24 +272,7 @@ class TdsfStrandsCallbackHandler:
             logger.exception(f"callback handler error: {e}")
 
     def _handle_event(self, event: dict) -> None:
-        """处理单个 Strands 事件
-
-        注意（2026-07-31 修复）：不在此处转发 current_tool_use 事件——
-        Strands 的 current_tool_use 是**流式中途态**（streaming.py 里 input
-        是逐 delta 拼接的残缺 JSON 字符串，block 结束才 json.loads），
-        直接 emit 会产生 input={} 的空参数工具行（前端显示 "Input {}"）。
-        工具实现内部（strands_backend/tools/*.py）会在拿到完整参数后
-        自行 emit started/completed，此处转发是冗余且错误的。
-
-        P0-6 (2026-08-01)：新增 agent-as-tool 子 agent 事件转发
-        （tool_stream / data+agent / message.toolResult），不涉及
-        current_tool_use 的缺陷。
-        """
-        # --- P0-6: agent-as-tool 子 agent 事件（优先处理，避免被 data 分支吞掉）---
-        if self.sub_agent_names:
-            if self._handle_sub_agent_events(event):
-                return
-
+        """处理单个 Strands 事件（main 事件流）"""
         # 深度思考流（模型 reasoningContent 增量）→ thinking 消息
         reasoning_text = event.get("reasoningText")
         if reasoning_text and isinstance(reasoning_text, str):
@@ -332,154 +298,6 @@ class TdsfStrandsCallbackHandler:
                 f"strands force_stop: agent={self.agent_name}, "
                 f"reason={event.get('force_stop_reason', 'unknown')}"
             )
-
-    # ========================================================================
-    # P0-6: agent-as-tool 子 agent 事件处理
-    # ========================================================================
-
-    def _handle_sub_agent_events(self, event: dict) -> bool:
-        """处理子 agent 相关事件（tool_stream / data+agent / toolResult）
-
-        Returns:
-            True = 事件已被消费（无需继续处理）；False = 非子 agent 事件
-        """
-        # 1. tool_stream 事件：子 agent 工具流（tool_use 含 name/input，
-        #    data 内嵌子 agent 的 data 增量——子 agent 用静默 handler，
-        #    其文本增量只经此包装到达 main）
-        if event.get("type") == "tool_stream":
-            tse = event.get("tool_stream_event") or {}
-            tool_use = tse.get("tool_use") or {}
-            name = tool_use.get("name", "")
-            if name in self.sub_agent_names:
-                self._emit_agent_call_started(name, tool_use)
-                data = tse.get("data") or {}
-                if isinstance(data, dict):
-                    inner = data.get("data")
-                    if isinstance(inner, str) and inner:
-                        self._emit_agent_call_delta(name, inner)
-                return True
-
-        # 2. data + agent 对象：子 agent 文本增量（agent 是子 agent 实例）
-        data = event.get("data")
-        if data and isinstance(data, str):
-            agent_obj = event.get("agent")
-            sub_name = getattr(agent_obj, "name", "") if agent_obj else ""
-            if sub_name in self.sub_agent_names:
-                self._emit_agent_call_delta(sub_name, data)
-                return True
-
-        # 3. message 含 toolResult：子 agent 完成（toolUseId 回填给 main）
-        msg = event.get("message")
-        if isinstance(msg, dict):
-            content = msg.get("content")
-            if isinstance(content, list):
-                for block in content:
-                    tr = block.get("toolResult") if isinstance(block, dict) else None
-                    if not tr:
-                        continue
-                    tool_use_id = tr.get("toolUseId", "")
-                    name = self._agent_call_started.get(tool_use_id)
-                    if name in self.sub_agent_names:
-                        self._emit_agent_call_completed(name, tool_use_id, tr)
-                        return True
-
-        return False
-
-    def _emit_agent_call_started(self, name: str, tool_use: dict) -> None:
-        """子 agent 调用开始 → agent 工具行 started（按 tool_use_id 去重）"""
-        tool_use_id = tool_use.get("toolUseId", "") or f"agent-{name}-{len(self._agent_call_started)}"
-        if tool_use_id in self._agent_call_started:
-            return
-        self._agent_call_started[tool_use_id] = name
-        self._emit_agent_switch(name)
-        if self.event_bus is None:
-            return
-        try:
-            self.event_bus.emit_tool_call(
-                tool_name=f"agent:{name}",
-                params=tool_use.get("input") or {"input": ""},
-                status="started",
-                session_id=self.session_id or None,
-                source=f"{self.agent_name}_agent.strands.agent_as_tool",
-            )
-            self._stats["agent_calls_emitted"] += 1
-        except Exception as e:
-            logger.debug(f"emit agent call started failed: {e}")
-
-    def _emit_agent_call_delta(self, name: str, data: str) -> None:
-        """子 agent 文本增量 → agent_message(msg_type=agent_call)
-
-        前端不把 agent_call 渲染进主输出流（子 agent 全文在 completed 的
-        tool output 中展示），此事件主要供调试/日志与未来流式增强。
-        """
-        if not self._agent_switch_emitted:
-            self._emit_agent_switch(name)
-        if self.event_bus is None or not data:
-            return
-        try:
-            self.event_bus.emit_agent_message(
-                content=data,
-                message_type="agent_call",
-                session_id=self.session_id or None,
-                source=f"{self.agent_name}_agent.strands.agent_as_tool",
-            )
-        except Exception as e:
-            logger.debug(f"emit agent call delta failed: {e}")
-
-    def _emit_agent_call_completed(self, name: str, tool_use_id: str, tool_result: dict) -> None:
-        """子 agent 完成 → agent 工具行 completed（结果 = 子 agent 最终文本）"""
-        if self.event_bus is None:
-            return
-        # 提取子 agent 最终文本（content[0].text）
-        result_text = ""
-        content = tool_result.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("text"):
-                    result_text += str(block["text"])
-        status = tool_result.get("status", "success")
-        try:
-            self.event_bus.emit_tool_call(
-                tool_name=f"agent:{name}",
-                params={},
-                status="completed" if status == "success" else "error",
-                result=result_text or tool_result,
-                session_id=self.session_id or None,
-                source=f"{self.agent_name}_agent.strands.agent_as_tool",
-            )
-            self._stats["agent_calls_emitted"] += 1
-        except Exception as e:
-            logger.debug(f"emit agent call completed failed: {e}")
-        # P1-2: 子 agent 委派也记录为会话证据（AI 依据了专家子 agent 的输出）
-        try:
-            from strands_backend.evidence import get_global_tracker
-
-            get_global_tracker().record(
-                session_id=self.session_id or "",
-                tool_name=f"agent:{name}",
-                status="completed" if status == "success" else "error",
-                detail=f"委派 {name} Agent",
-                result=result_text or str(tool_result)[:200],
-                agent=self.agent_name,
-                source="agent_as_tool",
-            )
-        except Exception as e:
-            logger.debug(f"evidence record failed: {e}")
-
-    def _emit_agent_switch(self, agent: str) -> None:
-        if self.event_bus is None:
-            return
-        if agent in self._agent_switch_emitted:
-            return
-        self._agent_switch_emitted.add(agent)
-        try:
-            self.event_bus.emit_agent_switch(
-                agent=agent,
-                session_id=self.session_id or None,
-                source=f"{self.agent_name}_agent.strands.agent_as_tool",
-            )
-        except Exception as e:
-            logger.debug(f"emit_agent_switch failed: {e}")
 
     def _emit_mood(self, mood: str) -> None:
         if self.event_bus is None:
@@ -513,164 +331,86 @@ class TdsfStrandsCallbackHandler:
 # StrandsAgentAdapter — 适配层核心
 # ============================================================================
 
-# P0-1 (2026-08-01, 方案书 B 方案): 多 Agent 注册表。
-# 前端显式选择 agent（main/coder/explore/history/teach，见前端
-# src/modules/ai/agents/registry.ts），后端为每个 agent 创建**真实**的
-# Strands Agent 实例：独立 system prompt + 按角色裁剪的工具集
-# （schema-level safety：explore/teach 无 ssh_command，LLM 无法调用
-# 不存在于其 schema 的执行工具）。
-# 注意：工具白名单用 @tool 装饰后的函数名，与 OPS_TOOL_NAMES 注册名不同
-# （兼容映射见 tools/registry.py OPS_TOOL_ALIASES；L1 只读过滤见
-# tools/registry.py READONLY_TOOL_NAMES——T2 后均由注册表单一真源派生）。
-_SUB_AGENT_SPECS: dict[str, dict[str, Any]] = {
-    "main": {
-        "tool_names": None,  # 全量 7 工具
-        "system_prompt": None,  # 用构造时默认 prompt
-    },
-    "explore": {
-        "tool_names": {
-            "read_remote_file",
-            "analyze_logs",
-            "inspect_processes",
-            "network_diagnose",
-            "suggest_command",
-            "knowledge_search",
-            "security_audit",
-            "performance_analyze",
-        },
-        "system_prompt": (
-            "You are the Explore Agent of TDSF Terminal Agent, a read-only "
-            "Linux system explorer.\n"
-            "You locate information: read files, analyze logs, inspect "
-            "processes, diagnose network, and suggest commands.\n\n"
-            "Constraints:\n"
-            "- 你是只读 Agent，没有执行命令的工具；需要用户执行时用 "
-            "suggest_command 生成命令并说明作用，等待用户确认。\n"
-            "- 回答用中文，先给结论，再给依据（文件路径/日志行/命令输出）。"
-        ),
-    },
-    "teach": {
-        "tool_names": {
-            "read_remote_file",
-            "analyze_logs",
-            "skill_invoke",
-            "suggest_command",
-            "knowledge_search",
-        },
-        "system_prompt": (
-            "You are the Teach Agent of TDSF Terminal Agent, a Linux "
-            "operations instructor for beginners.\n"
-            "You explain concepts, commands and troubleshooting steps in a "
-            "structured teaching style.\n\n"
-            "Teaching format (6 大板块，按适用度选用，使用纯文字标题，不用 emoji):\n"
-            "1. 概念与原理：用生活化比喻讲清是什么、为什么（底层原理优先）。\n"
-            "2. 路径拆解：涉及文件路径时逐段解剖每层目录的含义（FHS 标准）。\n"
-            "3. Linux 设计哲学：讲命令/机制时点明背后的设计哲学"
-            "（一切皆文件 / 组合小工具 / 权限最小化 / 机制策略分离 / KISS 等），"
-            "配实例说明哲学如何体现在操作上。\n"
-            "4. 操作示例：给出可执行的 Linux 命令/配置，逐条解释参数含义。\n"
-            "5. 易错点与考点：列出初学者常犯错误。\n"
-            "6. 练习：留 1 个练习或思考题（先想再敲：提示学生先思考再执行）。\n\n"
-            "Output contract: 每个板块标题必须用 `## 数字. 标题` 格式，"
-            "且标题含板块关键词，例如 `## 1. 概念与原理`、`## 4. 操作示例`、"
-            "`## 5. 易错点与考点`——前端按此格式渲染教学卡片，缺编号或缺关键词"
-            "会退化为普通 markdown。\n\n"
-            "Constraints:\n"
-            "- 你是教学 Agent，不执行命令；需要演示时用 suggest_command "
-            "生成命令并提示用户可点击 Insert 插入终端。\n"
-            "- 讲解命令/概念前，先调 knowledge_search 检索知识库"
-            "（命令词源/设计哲学/FHS/90 命令档案），基于权威内容讲解，"
-            "不要凭空发挥。\n"
-            "- 可用 skill_invoke 查阅领域知识（linux-ops / ssh-troubleshoot 等）。\n"
-            "- 回答用中文，内容分节清晰（Markdown 标题 + 列表），不使用 emoji。"
-        ),
-    },
-    "coding": {
-        "tool_names": {
-            "ssh_command",
-            "read_remote_file",
-            "suggest_command",
-            "service_manage",
-            "package_manage",
-            "firewall_manage",
-            "security_audit",
-            "performance_analyze",
-        },
-        "system_prompt": (
-            "You are the Coding Agent of TDSF Terminal Agent, focused on "
-            "locating, explaining and fixing code/config issues on the "
-            "connected Linux host.\n\n"
-            "Working style:\n"
-            "- 先复现/定位问题（read_remote_file 读配置、ssh_command 跑只读命令），"
-            "再给出修改方案。\n"
-            "- 每个改动点说明原因；高危命令会触发审批，不要试图绕过。\n"
-            "- 回答用中文，给出可执行建议。"
-        ),
-    },
-    "history": {
-        "tool_names": {
-            "suggest_command",
-            "skill_invoke",
-            "knowledge_search",
-        },
-        "system_prompt": (
-            "You are the History Agent of TDSF Terminal Agent. "
-            "You answer questions about past operations, commands, and "
-            "troubleshooting patterns based on the conversation context.\n\n"
-            "Constraints:\n"
-            "- 无历史检索工具时，基于当前会话上下文回答，并诚实说明。\n"
-            "- 可用 skill_invoke 查阅领域知识卡。\n"
-            "- 回答用中文。"
-        ),
-    },
-}
+# ============================================================================
+# 模式感知 prompt 资源（P0-A1, 方案书 v3.1 §4.2）
+# ============================================================================
+# main 是唯一 agent（P0-A1 BREAKING：原 _SUB_AGENT_SPECS 5 入口注册表、
+# _SUB_AGENT_TOOL_DESCRIPTIONS、_MAIN_SUB_AGENT_PROMPT 委派段已删除）。
+# main 的 system prompt = 构造注入的基础段（默认 _DEFAULT_SYSTEM_PROMPT）
+# + 按模式拼接的模式指令 (+ Teach 开关 ON 时的教学皮肤)。
 
-# P0-6 (2026-08-01, main 统一入口 + 自主委派): 子 agent 工具描述
-# （main agent 的 as_tool 描述，让 LLM 理解何时委派哪个专家）
-_SUB_AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {
-    "teach": (
-        "教学讲解 Agent：用户请求讲解概念/命令/排障原理时委派。"
-        "输入教学主题，返回结构化教学文本（概念/示例/易错点/练习）。"
-        "只读，不执行命令。"
+# 三段模式指令（方案书 §4.2：观察=只读讲解型 / 确认=先说明再动手 / 自动=高效执行）
+_MODE_PROMPTS: dict[AgentMode, str] = {
+    AgentMode.OBSERVE: (
+        "\n\nCurrent mode: OBSERVE (read-only).\n"
+        "- 你处于只读观察模式，一切写操作与命令执行被禁止"
+        "（工具集已裁剪为只读白名单，LLM 无法调用不存在的执行工具）。\n"
+        "- 专注解释与教学：读文件/分析日志/检查进程/诊断网络，"
+        "需要执行时用 suggest_command 生成命令并说明作用，等待用户自己执行。\n"
+        "- 不要尝试绕过只读限制；若工具返回 status=command_blocked，"
+        "必须如实报告未执行，严禁编造结果。"
     ),
-    "coding": (
-        "代码/配置修改 Agent：用户请求定位或修复代码/配置文件时委派。"
-        "输入问题描述，返回修改方案与原因。"
+    AgentMode.CONFIRM: (
+        "\n\nCurrent mode: CONFIRM.\n"
+        "- 先说明再动手：每个写操作/命令执行会请求用户批准（审批卡），"
+        "调用前用一两句解释你要做什么、为什么。\n"
+        "- 审批被拒时如实报告（不得编造执行结果），并按用户附言给出替代方案。"
     ),
-    "explore": (
-        "只读探索 Agent：需要查找文件/分析日志/检查进程/诊断网络时委派。"
-        "输入探索目标，返回发现与依据。"
-    ),
-    "history": (
-        "历史/知识 Agent：用户询问过往操作或需要领域知识卡时委派。"
-        "输入问题，返回基于上下文的回答。"
+    AgentMode.AUTO: (
+        "\n\nCurrent mode: AUTO.\n"
+        "- 高效执行：低风险操作（L0-L2）直接执行，无需逐步请示。\n"
+        "- 高危操作（L3/L4）仍会弹出审批卡等待确认，不要试图绕过。\n"
+        "- 事后简要报告做了什么、结果如何。"
     ),
 }
 
-# main agent 委派说明（追加到 main 的 system_prompt，让 LLM 知道可委派）
-_MAIN_SUB_AGENT_PROMPT = (
-    "\n\nSub-agents (委派专家):\n"
-    "- teach(input): 用户请求教学讲解时调用（概念/示例/易错点/练习）\n"
-    "- coding(input): 用户请求定位/修复代码或配置时调用\n"
-    "- explore(input): 需要只读探索（文件/日志/进程/网络）时调用\n"
-    "- history(input): 用户询问过往操作/领域知识时调用\n"
-    "委派原则：识别用户意图后调用最合适的子 agent，把子 agent 的返回"
-    "整合进你的最终回答。普通运维操作（执行命令/读文件）直接自己用工具，"
-    "不需要委派。"
+# 教学皮肤（P0-A1：原 teach agent 的结构化教学契约迁入。Teach 开关 ON 时
+# 拼接，叠加在任意模式上且不改变权限矩阵；main 是唯一 agent，禁委派话术）
+_TEACH_SKIN_PROMPT = (
+    "\n\nTeaching skin (TEACH ON):\n"
+    "以 Linux 运维教学者身份输出结构化教学内容。\n\n"
+    "Teaching format (6 大板块，按适用度选用，使用纯文字标题，不用 emoji):\n"
+    "1. 概念与原理：用生活化比喻讲清是什么、为什么（底层原理优先）。\n"
+    "2. 路径拆解：涉及文件路径时逐段解剖每层目录的含义（FHS 标准）。\n"
+    "3. Linux 设计哲学：讲命令/机制时点明背后的设计哲学"
+    "（一切皆文件 / 组合小工具 / 权限最小化 / 机制策略分离 / KISS 等），"
+    "配实例说明哲学如何体现在操作上。\n"
+    "4. 操作示例：给出可执行的 Linux 命令/配置，逐条解释参数含义。\n"
+    "5. 易错点与考点：列出初学者常犯错误。\n"
+    "6. 练习：留 1 个练习或思考题（先想再敲：提示学生先思考再执行）。\n\n"
+    "Output contract: 每个板块标题必须用 `## 数字. 标题` 格式，"
+    "且标题含板块关键词，例如 `## 1. 概念与原理`、`## 4. 操作示例`、"
+    "`## 5. 易错点与考点`——前端按此格式渲染教学卡片，缺编号或缺关键词"
+    "会退化为普通 markdown。\n\n"
+    "Constraints:\n"
+    "- 讲解命令/概念前，先调 knowledge_search 检索知识库"
+    "（命令词源/设计哲学/FHS/90 命令档案），基于权威内容讲解，"
+    "不要凭空发挥。\n"
+    "- 可用 skill_invoke 查阅领域知识（linux-ops / ssh-troubleshoot 等）。\n"
+    "- 需要演示命令时用 suggest_command 生成并提示用户可点击 Insert "
+    "插入终端；观察模式下等待用户执行，确认/自动模式按当前模式规则执行。\n"
+    "- 你是唯一 agent，直接讲解；不得声称把任务委派给其他 agent。"
 )
 
 
-class _SilentCallbackHandler:
-    """静默 callback_handler：子 agent 用，防止其文本污染 main 输出流
+def _compose_system_prompt(mode: AgentMode, teach: bool, base: str | None = None) -> str:
+    """拼接模式感知 main system prompt
 
-    子 agent 的中间事件会以 tool_stream / data+agent 形式经 AgentAsToolStreamEvent
-    到达 **main** 的 handler（TdsfStrandsCallbackHandler 统一转发），
-    因此子 agent 自身的 handler 必须静默，避免同一文本被 emit 两次。
-    子 agent 内部工具调用的 emit_tool_call 由工具代码直接发（不受此影响）。
+    组合：基础段（默认 _DEFAULT_SYSTEM_PROMPT）+ 模式指令
+    (+ 教学皮肤)。供 _get_or_create_agent 与单测复用。
+
+    Args:
+        mode: Agent 信任模式（决定拼入哪段模式指令）
+        teach: Teach 教学开关（True 时拼入教学皮肤）
+        base: 基础段（None 时用 _DEFAULT_SYSTEM_PROMPT）
+
+    Returns:
+        拼接后的完整 system prompt
     """
-
-    def __call__(self, **kwargs: Any) -> None:
-        pass
+    prompt = (base if base is not None else _DEFAULT_SYSTEM_PROMPT) + _MODE_PROMPTS[mode]
+    if teach:
+        prompt += _TEACH_SKIN_PROMPT
+    return prompt
 
 
 class StrandsAgentAdapter:
@@ -679,15 +419,21 @@ class StrandsAgentAdapter:
     封装 Strands Agent 的创建、工具注册、invoke 调用，与现有 needs_you
     BaseAgent PAOR 架构协作。
 
+    P0-A1: main 是唯一 agent 实例（4 子 agent 委派已删除）。每次 invoke
+    携带模式（observe/confirm/auto，缺省 confirm）与教学开关（teach bool），
+    Agent 实例按 (agent_id, session, 权限级, mode, teach) 缓存——模式/开关
+    变化即重建（prompt 与工具集都随模式变化）。
+
     Args:
         event_bus: EventBus 实例（用于推送 mood_change / agent_message / tool_call / needs_you）
         rust_bridge: RustBridge 实例（工具调 Rust 后端的抽象层），None 时用 DefaultRustBridge()
         backend_enabled: 后端是否启用（feature flag），False 时直接降级
-        system_prompt: 系统提示词（None 时用默认 _DEFAULT_SYSTEM_PROMPT）
+        system_prompt: 系统提示词基础段（None 时用默认 _DEFAULT_SYSTEM_PROMPT；
+                       模式指令与教学皮肤在其后按 invoke 传参拼接）
         strands_model: Strands Model 对象（OpenAIModel / AnthropicModel / OllamaModel / LiteLLMModel），
                        None 时降级（不调真实 LLM）
         max_iterations: Strands Agent 最大迭代次数（防死循环），默认 10
-        extra_tools: 额外工具列表（除 5 个运维工具外），默认空
+        extra_tools: 额外工具列表（除 TOOL_REGISTRY 全量外），默认空
 
     用法：
         adapter = StrandsAgentAdapter(
@@ -725,15 +471,14 @@ class StrandsAgentAdapter:
         # P1-NEW-v2-2 修复 (2026-07-30): 缓存 key 从 agent_id 改为 (agent_id, session_id)，
         # 避免 multi-session 并发时 callback_handler 和工具闭包绑定的首次 session_id
         # 导致事件路由到错误会话（needs_you 审批卡片错会话）。
-        self._agent_cache: dict[tuple[str, str], Any] = {}
-
-        # P0-6: 子 agent 工具缓存（agent-as-tool，按 (agent_id, session_id, perm)）
-        self._sub_agent_cache: dict[tuple[str, str, int], Any] = {}
+        # P0-A1 (2026-08-29): key 扩展为 (agent_id, session_id, permission_level,
+        # mode, teach)——模式/教学开关变化即重建 agent（prompt + 工具集都随模式变化）。
+        self._agent_cache: dict[tuple[str, str, int, AgentMode, bool], Any] = {}
 
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
         # 用户停止+立即重发会导致前后请求竞态崩溃。锁确保排队等待。
-        self._agent_locks: dict[tuple[str, str, int], threading.RLock] = {}
+        self._agent_locks: dict[tuple[str, str, int, AgentMode, bool], threading.RLock] = {}
 
         logger.info(
             f"StrandsAgentAdapter initialized: "
@@ -776,9 +521,13 @@ class StrandsAgentAdapter:
         - (可选) degraded_reason: str, 降级原因
 
         Args:
-            agent_id: Agent 标识（如 "main" / "debug"），用于事件 source + 缓存键
+            agent_id: Agent 标识（如 "main"），用于事件 source + 缓存键。
+                P0-A1 后 main 是唯一 agent；未知 agent_id 使用同一套
+                main 工具集与 prompt（回退语义，兼容旧调用方）。
             input: 用户输入文本（Agent 主提示词）
-            state: Agent 状态 dict（含 session_id / live / messages 等，可选）
+            state: Agent 状态 dict（含 session_id / live / messages 等，可选）。
+                P0-A1 传参：live.agentMode 或 mode（observe/confirm/auto，
+                缺省 confirm）、live.teach 或 teach（教学皮肤开关）。
 
         Returns:
             结构化结果 dict（与 BaseAgent.invoke 返回值对齐）
@@ -787,9 +536,18 @@ class StrandsAgentAdapter:
         session_id = state.get("session_id", "") or ""
         start_time = time.time()
 
+        # P0-A1: 三模式信任体系传参——live.agentMode（前端模式切换器下发，
+        # 与 permissionLevel 同级）或顶层 mode；缺省/非法 → confirm（中间态
+        # 最安全，parse_mode 对同一原始值仅记一次降级日志）。teach 教学皮肤
+        # 开关（live.teach 或顶层 teach）叠加在任意模式上，不改变权限矩阵。
+        live_state = state.get("live") or {}
+        mode = parse_mode(live_state.get("agentMode") or state.get("mode"))
+        teach = bool(live_state.get("teach") or state.get("teach"))
+
         logger.info(
             f"StrandsAgentAdapter.invoke: agent_id={agent_id}, "
-            f"session={session_id}, input_len={len(input)}"
+            f"session={session_id}, mode={mode.value}, teach={teach}, "
+            f"input_len={len(input)}"
         )
 
         # 1. 检查降级条件
@@ -807,23 +565,24 @@ class StrandsAgentAdapter:
         self._emit_mood("thinking", agent_id, session_id)
 
         try:
-            # 3. 构建工具上下文
-            ctx = self._build_tool_context(agent_id, session_id, state)
+            # 3. 构建工具上下文（Task 3: 传入 invoke 已解析的三模式，
+            #    供执行链 decide(risk_l, mode) 消费）
+            ctx = self._build_tool_context(agent_id, session_id, state, mode=mode)
 
             # 4. 获取或创建 Strands Agent + per-agent 锁
-            strands_agent = self._get_or_create_agent(agent_id, ctx)
+            strands_agent = self._get_or_create_agent(agent_id, ctx, mode=mode, teach=teach)
             # TDSF 修复 2026-08-09: 防并发崩溃——Strands Agent 有内部状态，
             # 同一实例被并发调用会抛 "already processing a request"。
-            # 用 per-(agent, session, perm) RLock 确保排队等待。
-            lock_key = (agent_id, ctx.session_id, ctx.permission_level)
+            # 用 per-(agent, session, perm, mode, teach) RLock 确保排队等待。
+            lock_key = (agent_id, ctx.session_id, ctx.permission_level, mode, teach)
             agent_lock = self._agent_locks.setdefault(lock_key, threading.RLock())
 
             # 5. 构建 prompt（注入 live 上下文）
             prompt = self._build_prompt(input, state)
 
-            # P0-1 (2026-08-01, 方案书 B 方案): 前端显式选择 agent → 真实
-            # Strands Agent。不再做关键词路由模拟——Pill 显示的就是正在
-            # 运行的 agent（emit agent_switch 让前端 AgentStatusPill 同步）。
+            # P0-A1 (2026-08-29): agent_switch 事件保留 emit（agent_id 透传，
+            # Pill 同步）。委派删除后仅 main 常驻；"agent:" 前缀子 agent 事件
+            # 不再产生，前端兼容逻辑由 Task 2 处理。
             self._emit_agent_switch(agent_id, session_id)
 
             # 6. 推送 mood=working
@@ -849,7 +608,8 @@ class StrandsAgentAdapter:
             self._auto_sink_case(agent_id, input, observation, session_id)
 
             self._emit_mood("done", agent_id, session_id)
-            # P0-6: main 委派结束后 Pill 归位到主 agent（委派期间显示子 agent）
+            # P0-A1: main invoke 结束后 Pill 归位（P0-6 委派期间显示子 agent
+            # 的语义随委派删除而消失，保留归位 emit 保持事件序列兼容）
             if agent_id == "main":
                 self._emit_agent_switch("main", session_id)
             duration = time.time() - start_time
@@ -987,87 +747,61 @@ class StrandsAgentAdapter:
     # Strands Agent 创建与缓存
     # ========================================================================
 
-    def _get_or_create_agent(self, agent_id: str, ctx: ToolContext) -> Any:
-        """获取或创建 Strands Agent 实例（按 agent_id 缓存）
+    def _get_or_create_agent(
+        self,
+        agent_id: str,
+        ctx: ToolContext,
+        mode: AgentMode = AgentMode.CONFIRM,
+        teach: bool = False,
+    ) -> Any:
+        """获取或创建 Strands Agent 实例（按 agent_id + 模式缓存）
 
-        P0-1 (2026-08-01, 方案书 B 方案): 按 _SUB_AGENT_SPECS 为每个
-        agent_id 创建**真实** Strands Agent——独立 system prompt +
-        按角色裁剪的工具集（schema-level safety）。main 用默认 prompt
-        + 全量工具，其余 agent 用角色 prompt + 工具白名单。
-
-        P0-6 (2026-08-01, main 统一入口): main 的工具集额外挂载 4 个
-        子 agent 工具（Agent.as_tool）——main 识别用户意图后自主委派。
-        子 agent 内部用静默 handler（防文本污染），其中间事件经
-        tool_stream / data+agent 到达 main 的 handler 统一转发。
+        P0-A1 (2026-08-29, 方案书 v3.1 三模式): main 是唯一 agent——
+        原 _SUB_AGENT_SPECS 角色裁剪与 agent-as-tool 委派挂载已删除。
+        工具集 = TOOL_REGISTRY 全量 × 模式过滤（observe → 只读白名单
+        filter_tools_readonly；confirm/auto → 全量）。system prompt =
+        基础段 + 模式指令 (+ teach 教学皮肤)。
 
         Args:
-            agent_id: Agent 标识
+            agent_id: Agent 标识（缓存键 + 事件 source；未知 agent_id
+                使用与 main 相同的工具集/prompt，回退语义兼容旧调用方）
             ctx: ToolContext（用于构建工具）
+            mode: 信任模式（observe 裁剪只读白名单；prompt 按模式拼接）
+            teach: Teach 教学皮肤开关（True 时拼入教学契约）
 
         Returns:
             Strands Agent 实例
         """
-        # P1-v5-2: 缓存 key 含 permission_level——工具集按级别过滤（L1 只读），
-        # 级别变化后必须重建 agent（否则旧工具集残留）
-        cache_key = (agent_id, ctx.session_id, ctx.permission_level)
+        # 缓存 key 含 permission_level（P1-v5-2：L1 只读过滤）+ mode/teach
+        # （P0-A1：prompt 与工具集都随模式/开关变化，必须重建）
+        cache_key = (agent_id, ctx.session_id, ctx.permission_level, mode, teach)
         if cache_key in self._agent_cache:
             return self._agent_cache[cache_key]
 
-        spec = _SUB_AGENT_SPECS.get(agent_id) or _SUB_AGENT_SPECS["main"]
-        tool_names = spec.get("tool_names")
-        system_prompt = spec.get("system_prompt") or self.system_prompt
+        # 构建运维工具（TOOL_REGISTRY 全量，带 ctx 闭包；L1 权限由
+        # make_all_ops_tools 内部按 READONLY_TOOL_NAMES 过滤）
+        all_tools = make_all_ops_tools(ctx) + self.extra_tools
 
-        # 构建运维工具（带 ctx 闭包 + 角色白名单过滤）
-        ops_tools = make_all_ops_tools(ctx, tool_names=tool_names)
-        all_tools = ops_tools + self.extra_tools
+        # P0-A1 观察模式 schema 级隔离：裁剪为只读白名单——LLM 无法调用
+        # 不存在于 schema 的执行/写类工具（remove 优于 instruct+intercept）。
+        # extra_tools 未注册项同样被裁（fail-closed）。
+        if mode == AgentMode.OBSERVE:
+            all_tools = filter_tools_readonly(all_tools)
 
-        # T2 (2026-08-28): todo_write / get_terminal_output / config_diff /
-        # backup_restore / assess_confidence / search_history 已收编入
-        # TOOL_REGISTRY（tools/registry.py），由 make_all_ops_tools 统一构建，
-        # 不再在此逐个 try 挂载（原 2026-08-09 集成度补齐的 6 个直挂块删除）。
+        # 模式感知 prompt：基础段 + 模式指令 (+ 教学皮肤)
+        system_prompt = _compose_system_prompt(mode, teach, base=self.system_prompt)
 
-        # P0-6: main agent 挂载子 agent 工具（agent-as-tool 委派）
-        sub_agent_names = set()
-        if agent_id == "main" or agent_id not in _SUB_AGENT_SPECS:
-            for sub_name in _SUB_AGENT_TOOL_DESCRIPTIONS:
-                try:
-                    all_tools.append(
-                        self._create_sub_agent_tool(sub_name, ctx)
-                    )
-                    sub_agent_names.add(sub_name)
-                except Exception as e:
-                    logger.warning(
-                        f"failed to create sub agent tool '{sub_name}': {e}"
-                    )
-            system_prompt = system_prompt + _MAIN_SUB_AGENT_PROMPT
+        # T2 (2026-08-28): 全部 20 工具已收编入 TOOL_REGISTRY（tools/registry.py），
+        # 由 make_all_ops_tools 统一构建（含 service/package/firewall 等 5 个
+        # 扩展运维工具）；原 P2-3 AGENT_EXTENDED_TOOLS 重复挂载块随委派机制
+        # 一并删除（T2 后为冗余路径）。
 
-        # P2-3: 扩展运维工具（service/package/firewall/security/performance）
-        try:
-            from strands_backend.tools.ops_extended import (
-                AGENT_EXTENDED_TOOLS,
-                EXTENDED_TOOL_FACTORIES,
-            )
-
-            for ext_name in AGENT_EXTENDED_TOOLS.get(agent_id, set()):
-                if tool_names is not None and ext_name not in tool_names:
-                    continue
-                factory = EXTENDED_TOOL_FACTORIES.get(ext_name)
-                if factory:
-                    all_tools.append(factory(ctx))
-                    sub_agent_names.discard(ext_name)
-        except Exception as e:
-            logger.warning(f"extended tools attach failed for {agent_id}: {e}")
-
-        # 构建 callback_handler（main 转发子 agent 事件；子 agent 用静默）
-        handler = (
-            TdsfStrandsCallbackHandler(
-                event_bus=self.event_bus,
-                agent_name=agent_id,
-                session_id=ctx.session_id,
-                sub_agent_names=sub_agent_names,
-            )
-            if agent_id == "main" or agent_id not in _SUB_AGENT_SPECS
-            else _SilentCallbackHandler()
+        # 构建 callback_handler（main 事件流转发；P0-A1 委派删除后
+        # 无静默 handler 需求）
+        handler = TdsfStrandsCallbackHandler(
+            event_bus=self.event_bus,
+            agent_name=agent_id,
+            session_id=ctx.session_id,
         )
 
         # 创建 Strands Agent
@@ -1076,9 +810,7 @@ class StrandsAgentAdapter:
         # TDSF 魔改 2026-07-30 P0-E: Strands 1.50.2 API 变更
         #   Agent.__init__() 移除了 max_iterations 参数（实测装 1.50.2 后
         #   报 "Agent.__init__() got an unexpected keyword argument 'max_iterations'"）。
-        #   控制迭代次数的新方式是 hooks=[LimitToolCounts(max_tool_counts={...})]
-        #   或自定义 HookProvider（见 Strands 官方文档 hooks.mdx）。
-        #   当前先移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
+        #   当前移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
         #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
         # TDSF 修复 2026-08-09: 移除工具调用上限（用户要求）。
         #   原 ToolCallLimitHook(max_tool_calls=12) 会强制终止超过 12 次工具调用的
@@ -1097,52 +829,10 @@ class StrandsAgentAdapter:
         self._agent_cache[cache_key] = agent
         logger.info(
             f"Strands Agent created: agent_id={agent_id}, session_id={ctx.session_id}, "
+            f"mode={mode.value}, teach={teach}, "
             f"tools={[t.__name__ if hasattr(t, '__name__') else str(t) for t in all_tools]}"
         )
         return agent
-
-    def _create_sub_agent_tool(self, sub_agent_id: str, ctx: ToolContext) -> Any:
-        """创建子 agent 并包装为 Agent 工具（agent-as-tool，P0-6）
-
-        子 agent 按 _SUB_AGENT_SPECS 构造（独立 prompt + 工具白名单），
-        缓存于 _sub_agent_cache，避免每次 main 重建时重复构造。
-
-        Args:
-            sub_agent_id: 子 agent 名（teach/coding/explore/history）
-            ctx: 与 main 相同的 ToolContext（共享 session/权限/桥）
-
-        Returns:
-            Strands Agent.as_tool() 包装的工具对象
-        """
-        cache_key = (sub_agent_id, ctx.session_id, ctx.permission_level)
-        cached = self._sub_agent_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        spec = _SUB_AGENT_SPECS.get(sub_agent_id) or _SUB_AGENT_SPECS["main"]
-        tools = make_all_ops_tools(ctx, tool_names=spec.get("tool_names"))
-        system_prompt = spec.get("system_prompt") or self.system_prompt
-
-        sub_agent = _StrandsAgent(  # type: ignore[misc]
-            model=self.strands_model,
-            tools=tools,
-            system_prompt=system_prompt,
-            callback_handler=_SilentCallbackHandler(),
-            hooks=[],
-            name=sub_agent_id,
-        )
-        tool = sub_agent.as_tool(
-            name=sub_agent_id,
-            description=_SUB_AGENT_TOOL_DESCRIPTIONS.get(
-                sub_agent_id, f"委派给 {sub_agent_id} Agent"
-            ),
-        )
-        self._sub_agent_cache[cache_key] = tool
-        logger.info(
-            f"Sub-agent tool created: {sub_agent_id}, "
-            f"tools={[getattr(t, '__name__', str(t)) for t in tools]}"
-        )
-        return tool
 
     # ========================================================================
     # 工具上下文构建
@@ -1153,21 +843,43 @@ class StrandsAgentAdapter:
         agent_id: str,
         session_id: str,
         state: dict[str, Any],
+        mode: AgentMode | None = None,
     ) -> ToolContext:
         """构建工具运行时上下文
 
         从 state 中提取 live 上下文（cwd / activeFile / sshSessionId 等），
         与适配层方案 §6.2 终端上下文感知方案 A 对齐。
+
+        Task 3 (2026-08-29): 注入三模式（mode，供执行链 decide 消费）与
+        激活终端主机名（ssh_host，供 host 校验；从 live.sshConnection
+        "user@host" 提取 @ 后部分，不可得时为空 → 执行链跳过校验）。
+
+        Args:
+            agent_id: Agent 标识
+            session_id: 会话 ID
+            state: Agent 状态 dict（live 上下文）
+            mode: 三模式（None 时从 state.live.agentMode / state.mode 解析，
+                缺省 confirm——与 invoke() 的解析逻辑一致）
         """
         live = state.get("live") or {}
 
         # P1-v5-4: 4 级权限（1=免确认 2=仅高危 3=高危+写操作 4=全部确认）。
         # 前端 live.permissionLevel 注入（默认 2，保持原行为）；非法值夹取到 1-4。
+        # Task 3: 仅保留 schema 级过滤职责（L1 只读裁剪），执行链决策走 mode。
         try:
             permission_level = int(live.get("permissionLevel", 2))
         except (TypeError, ValueError):
             permission_level = 2
         permission_level = max(1, min(4, permission_level))
+
+        # Task 3: 三模式——调用方（invoke）已解析时直接用，否则兜底解析
+        if mode is None:
+            mode = parse_mode(live.get("agentMode") or state.get("mode"))
+
+        # Task 3.3 host 校验数据源：live.sshConnection = "user@host" 友好格式。
+        # 取 @ 后的主机部分；无 @ 时整个串视为主机；空 = 不可得（跳过校验）。
+        ssh_conn = str(live.get("sshConnection", "") or "")
+        ssh_host = ssh_conn.split("@", 1)[1] if "@" in ssh_conn else ssh_conn
 
         return ToolContext(
             event_bus=self.event_bus,
@@ -1175,8 +887,10 @@ class StrandsAgentAdapter:
             agent_name=agent_id,
             session_id=session_id,
             user_id=state.get("user_id", "") or "",
-            ssh_session_id=live.get("sshSessionId", "") or "",
+            ssh_session_id=str(live.get("sshSessionId", "") or ""),
             permission_level=permission_level,
+            mode=mode,
+            ssh_host=ssh_host,
             # TDSF 魔改 (2026-08-09): 终端执行模式开关
             auto_execute_in_terminal=bool(live.get("autoExecuteInTerminal", False)),
         )
@@ -1470,13 +1184,8 @@ class StrandsAgentAdapter:
         self._agent_cache.clear()
         # TDSF 修复 2026-08-09: 一并清空锁字典
         self._agent_locks.clear()
-        # P0-6: 子 agent 工具也绑定 model，需一并清理
-        sub_count = len(self._sub_agent_cache)
-        self._sub_agent_cache.clear()
-        logger.info(
-            f"Strands Agent cache cleared: {count} entries, "
-            f"{sub_count} sub-agent tools"
-        )
+        # P0-A1: 子 agent 工具缓存已随委派机制删除（原 _sub_agent_cache）
+        logger.info(f"Strands Agent cache cleared: {count} entries")
 
     def update_model(self, new_model: Any) -> None:
         """更新 LLM 模型并清空 Agent 缓存（agent.configure 调用时同步更新）
@@ -1512,7 +1221,9 @@ class StrandsAgentAdapter:
             "model_available": self._model_available,
             "rust_bridge_type": type(self.rust_bridge).__name__,
             "cached_agents": [
-                f"{a}:{s}" for (a, s) in self._agent_cache.keys()
+                f"{agent_id}:{session_id}:{mode.value}"
+                f"{'+' if teach else ''}"
+                for (agent_id, session_id, _perm, mode, teach) in self._agent_cache.keys()
             ],
             "max_iterations": self.max_iterations,
             "extra_tools_count": len(self.extra_tools),

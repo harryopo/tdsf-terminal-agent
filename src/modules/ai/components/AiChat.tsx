@@ -50,7 +50,8 @@ import {
   fetchEvidence,
   type EvidenceItem,
 } from "../lib/evidence";
-import { AiToolApproval } from "./AiToolApproval";
+// Task 6.5: sidecar needs_you 审批闭环（approval 类请求渲染四层审批卡）
+import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
 import { isTeachMessage } from "./teachParser";
 import { TeachCard } from "./TeachCard";
@@ -212,8 +213,10 @@ export function AiChatView({
     !isBusy && hitStepCap && lastMessage?.role === "assistant";
 
   const onApproval = useCallback(
-    (id: string, approved: boolean) =>
-      addToolApprovalResponse({ id, approved }),
+    (id: string, approved: boolean, reason?: string) =>
+      // Task 6.5: reason 透传拒绝/附言（AI SDK addToolApprovalResponse 原生字段，
+      // 随审批响应发给模型）；为空时省略，保持与旧调用形态一致
+      addToolApprovalResponse({ id, approved, ...(reason ? { reason } : {}) }),
     [addToolApprovalResponse],
   );
 
@@ -241,6 +244,10 @@ export function AiChatView({
             streaming={m.id === streamingMessageId}
           />
         ))}
+        {/* Task 6.5: sidecar needs_you 审批闭环——approval 类 HITL 请求渲染
+            四层审批卡（semantic/command/explanation/impact），三按钮经
+            needs_you.respond RPC 回传 Python 唤醒阻塞的工具线程 */}
+        <NeedsYouApprovalCards />
         {compactionNotice && (
           <CompactionNotice
             droppedCount={compactionNotice.droppedCount}
@@ -495,7 +502,7 @@ const RenderedMessage = memo(function RenderedMessage({
   streaming,
 }: {
   message: UIMessage;
-  onApproval: (id: string, approved: boolean) => void;
+  onApproval: (id: string, approved: boolean, reason?: string) => void;
   streaming: boolean;
 }) {
   // Index of the trailing text part — only that one is "live" mid-stream.
@@ -766,7 +773,7 @@ const RenderedPart = memo(function RenderedPart({
   streaming,
 }: {
   part: AnyPart;
-  onApproval: (id: string, approved: boolean) => void;
+  onApproval: (id: string, approved: boolean, reason?: string) => void;
   streaming: boolean;
 }) {
   if (part.type === "text") {
@@ -776,8 +783,10 @@ const RenderedPart = memo(function RenderedPart({
     //   流完后才整体替换为 TeachCard——用户反馈"输出内容后才开始排版"。
     //   现改为：当前活跃 agent 是 teach 时，流式过程中就用 TeachCard 渲染
     //   （parseTeachSections 支持不完整 markdown，sections 会随流式增长）。
-    const agentId = useChatStore.getState().tdsfAgentId;
-    if (agentId === "teach" && isTeachMessage(text)) {
+    // v3.1 收敛 (2026-08-29): teach 子 agent 已删除，改为教学皮肤开关
+    //   （chatStore.teach）驱动——开关 ON 时按 TeachCard 契约渲染教学输出。
+    const teach = useChatStore.getState().teach;
+    if (teach && isTeachMessage(text)) {
       return <TeachCard content={text} />;
     }
     return (
@@ -816,19 +825,39 @@ const RenderedTool = memo(function RenderedTool({
   onApproval,
 }: {
   part: AnyToolPart;
-  onApproval: (id: string, approved: boolean) => void;
+  onApproval: (id: string, approved: boolean, reason?: string) => void;
 }) {
   const toolName =
     part.type === "dynamic-tool"
       ? part.toolName
       : part.type.replace(/^tool-/, "");
 
-  if (part.state === "approval-requested") {
+  // Task 6.5: approval-requested → 四层审批卡（ToolApprovalCard：语义/命令原文/
+  // 解释/影响预测 + 拒绝附言/⚡会话免审/执行 三按钮）。回调双写：
+  //   ① AI SDK 审批状态机（part → approval-responded，AgentRunBridge 的
+  //      approvalsPending/awaiting-approval 状态随之推进——旧状态机不破坏），
+  //      note 作为 reason 原生透传模型；
+  //   ② ⚡会话免审标志兜底置位（幂等，⚡按钮本身已置位）。
+  const approvalId =
+    part.state === "approval-requested" ? part.approval.id : null;
+  const handleApprovalRespond = useCallback(
+    (resp: { approved: boolean; note?: string; sessionTrust?: boolean }) => {
+      if (!approvalId) return;
+      if (resp.sessionTrust) {
+        useChatStore.getState().setSessionReadOnlyTrust(true);
+      }
+      onApproval(approvalId, resp.approved, resp.note);
+    },
+    [approvalId, onApproval],
+  );
+
+  if (part.state === "approval-requested" && approvalId) {
     return (
-      <AiToolApproval
-        part={part as Extract<ToolUIPart, { state: "approval-requested" }>}
+      <Tool
         toolName={toolName}
-        onRespond={(approved) => onApproval(part.approval.id, approved)}
+        state={part.state}
+        input={part.input}
+        onApprovalRespond={handleApprovalRespond}
       />
     );
   }

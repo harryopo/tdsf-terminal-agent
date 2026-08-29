@@ -218,13 +218,15 @@ export async function notifyCommandExecuted(
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), TEACH_SIDECAR_TIMEOUT_MS);
 
+    // v3.1 收敛: teach 子 agent 已删除（方案书 §4.1），唯一入口 main；
+    // live 不带 agentMode → sidecar 缺省 confirm，讲解为纯只读输出。
     for await (const part of runSidecarStream({
-      agentId: "teach",
+      agentId: "main",
       input: `explain: ${cmd}`,
       messages: [],
       // TDSF 魔改 2026-07-30 (Bug 5): SidecarStreamOptions.live 必填，
       // teach-trigger 触发时无终端上下文（仅 command + cwd），传最小空 live。
-      // Python teach agent 会收到 sshSessionId=null，不会调运维工具。
+      // main agent 会收到 sshSessionId=null，不会调运维工具。
       live: {
         cwd: cwd,
         terminalPrivate: false,

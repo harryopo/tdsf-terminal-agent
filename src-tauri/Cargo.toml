@@ -48,6 +48,9 @@ serde_json = "1"
 # tokio features 扩展：rt + process（子进程）+ io-util（stdin/stdout pipe）
 # + sync（Mutex/oneshot）+ time（timeout/interval）+ macros（spawn/await）
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "process", "io-util", "sync", "time", "macros", "fs"] }
+# TDSF B2 (2026-08-29): human_type 打字机 Weibull 随机采样
+# （0.10 与 russh 0.61 依赖的 rand_core 0.10 共享，原在 dev-dependencies）
+rand = "0.10"
 log = "0.4"
 env_logger = "0.11"
 
@@ -143,7 +146,6 @@ tauri-plugin-window-state = "2"
 [dev-dependencies]
 # SSH 测试用随机数 (russh 0.61 / ssh-key 0.7 依赖 rand_core 0.10)
 # rand 0.10 才兼容 rand_core 0.10
-rand = "0.10"
 
 [profile.release]
 panic = "abort"

@@ -514,6 +514,27 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register session_memory: {e}")
 
+    # Task 5 (2026-08-29): 免确认记忆三级——项目白名单 RPC
+    # 方案书 v3.1 §4.6：memory.whitelist.list / .add / .remove（设置 UI 消费）
+    try:
+        from strands_backend.trust_store import register_methods as register_trust
+
+        register_trust(dispatcher)
+        logger.info("trust_store methods registered (memory.whitelist.list/add/remove)")
+    except Exception as e:
+        logger.exception(f"failed to register trust_store: {e}")
+
+    # Task 6 / B1 (2026-08-29): 终端感知——系统环境探测（方案书 v3.1 §4.7）
+    # system.probe_env：os-release/内核/shell 一次性探测 + 会话级缓存，
+    # 供前端 <environment> 上下文分区（agent 执行命令因地制宜 apt/yum）
+    try:
+        import env_probe
+
+        env_probe.register_methods(dispatcher)
+        logger.info("env_probe methods registered (system.probe_env)")
+    except Exception as e:
+        logger.exception(f"failed to register env_probe: {e}")
+
     # T-P1-09: TDSF.md 指令文件加载（启动加载 + watcher + system prompt 注入）
     try:
         import tdsf_loader

@@ -1,14 +1,16 @@
 """
-strands_backend/tests/test_e2e_strands.py — Strands 真实端到端测试（P0-5）
+strands_backend/tests/test_e2e_strands.py — Strands 真实端到端测试（P0-A1）
 ==========================================================================
 
-用**真实 Strands Agent**（非 MagicMock）验证 P0-1 多 agent 集成：
+用**真实 Strands Agent**（非 MagicMock）验证三模式信任体系（方案书 v3.1）：
 
-1. teach agent：真实创建 → FakeModel 第一轮调 read_remote_file →
-   工具经 mock RustBridge 执行 → 第二轮输出教学文本 → observation 正确
-2. explore agent：真实创建 → 验证工具集只有只读工具（schema-level safety
-   在真实 agent 上生效）
-3. 事件流：invoke 过程 emit agent_switch / agent_message / mood_change
+1. main（唯一 agent）+ Teach 教学皮肤：真实创建 → FakeModel 第一轮调
+   read_remote_file → 工具经 mock RustBridge 执行 → 第二轮输出教学文本
+2. observe 模式：真实 Strands Agent 工具集无任何 readonly=False 工具
+   （schema-level safety 在模式过滤下生效）
+3. confirm/auto 模式：全量 20 工具（TOOL_REGISTRY 全量，委派 4 子 agent
+   工具已删除）
+4. 模式缓存隔离：同 session 切换模式 → 重建 agent
 
 策略：
 - 需要真实 strands 包（skipif 未安装）
@@ -26,6 +28,8 @@ from unittest.mock import MagicMock
 _SIDECAR_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _SIDECAR_DIR not in sys.path:
     sys.path.insert(0, _SIDECAR_DIR)
+
+from strands_backend.modes import AgentMode  # noqa: E402 — sys.path 先行注入
 
 try:
     from strands.models.model import Model  # type: ignore[import]
@@ -97,7 +101,7 @@ class FakeStrandsModel(Model):
 
 @unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
 class TestStrandsRealE2E(unittest.TestCase):
-    """真实 Strands Agent + 多 agent 集成端到端"""
+    """真实 Strands Agent + 三模式信任体系端到端"""
 
     @classmethod
     def setUpClass(cls):
@@ -107,7 +111,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         cls.adapter_cls = StrandsAgentAdapter
         cls.bridge_cls = DefaultRustBridge
 
-    def _make_adapter(self, model: Model) -> tuple[StrandsAgentAdapter, MagicMock]:
+    def _make_adapter(self, model: Model) -> tuple[Any, MagicMock]:
         bus = MagicMock()
         bus.emit_agent_message = MagicMock(return_value=1)
         bus.emit_mood_change = MagicMock(return_value=1)
@@ -126,8 +130,11 @@ class TestStrandsRealE2E(unittest.TestCase):
         adapter._model_available = True
         return adapter, bus
 
-    def test_teach_agent_real_invoke_with_tool_call(self):
-        """teach：真实 Strands Agent 创建 + read_remote_file 经 bridge 执行"""
+    def test_main_teach_skin_invoke_with_tool_call(self):
+        """main + Teach 皮肤：真实 invoke + read_remote_file 经 bridge 执行
+
+        P0-A1: 原 teach 子 agent 入口收敛为 main + teach=True 传参。
+        """
         model = FakeStrandsModel(
             file_content=b"server { listen 80; }\n",
             final_text="## 1. Concept\nnginx.conf is the main Nginx config.\n\n## 2. Exercise\nCheck the server block.",
@@ -135,9 +142,9 @@ class TestStrandsRealE2E(unittest.TestCase):
         adapter, bus = self._make_adapter(model)
 
         result = adapter.invoke(
-            "teach",
+            "main",
             "讲解 nginx.conf 结构",
-            {"session_id": "e2e-s1", "live": {"sshSessionId": 1}},
+            {"session_id": "e2e-s1", "live": {"sshSessionId": 1, "teach": True}},
         )
 
         # 1. 成功完成，输出为教学文本（第二轮）
@@ -161,217 +168,87 @@ class TestStrandsRealE2E(unittest.TestCase):
         self.assertTrue(tool_events, "expected at least one emit_tool_call")
         self.assertEqual(tool_events[0], "read_remote_file")
 
-        # 3. 事件：agent_switch(teach) + mood 序列 + 文本流
-        bus.emit_agent_switch.assert_called_once()
-        self.assertEqual(bus.emit_agent_switch.call_args.kwargs["agent"], "teach")
+        # 3. 事件：agent_switch 全部是 main（委派删除后无子 agent 切换）
+        switches = [
+            c.kwargs.get("agent") for c in bus.emit_agent_switch.call_args_list
+        ]
+        self.assertTrue(switches)
+        self.assertEqual(set(switches), {"main"})
         self.assertGreaterEqual(bus.emit_agent_message.call_count, 1)
 
         # 4. 模型确实走了两轮（工具调用 → 文本）
         self.assertEqual(model.round, 2)
 
-    def test_explore_agent_toolset_readonly_on_real_agent(self):
-        """explore：真实 Strands Agent 的工具集无 ssh_command（schema-level）"""
-        model = FakeStrandsModel(
-            file_content=b"x",
-            final_text="explore 结果",
-        )
-        adapter, bus = self._make_adapter(model)
+    def test_observe_mode_toolset_readonly_on_real_agent(self):
+        """observe 模式：真实 Strands Agent 工具集无 readonly=False 工具
 
-        # 直接走 _get_or_create_agent 拿到真实 Strands Agent
-        ctx = adapter._build_tool_context("explore", "e2e-s2", {})
-        agent = adapter._get_or_create_agent("explore", ctx)
-        tool_names = set(agent.tool_names)
+        spec 验收「观察模式 schema 级隔离」：LLM 无法调用不存在于 schema
+        的执行/写类工具（原 explore agent 只读语义由模式过滤承接）。
+        """
+        from strands_backend.tools.registry import (
+            READONLY_TOOL_NAMES,
+            get_tool_policy,
+        )
+
+        model = FakeStrandsModel(file_content=b"x", final_text="observe 结果")
+        adapter, _ = self._make_adapter(model)
+
+        ctx = adapter._build_tool_context("main", "e2e-s2", {})
+        observe_agent = adapter._get_or_create_agent(
+            "main", ctx, mode=AgentMode.OBSERVE, teach=False
+        )
+        tool_names = set(observe_agent.tool_names)
+        # 无任何 readonly=False 工具（schema 级隔离）
+        for name in tool_names:
+            policy = get_tool_policy(name)
+            self.assertIsNotNone(policy, f"{name} 未注册（白名单外泄）")
+            self.assertTrue(policy.readonly, f"observe schema 出现 readonly=False 工具: {name}")
+        self.assertEqual(tool_names, set(READONLY_TOOL_NAMES))
         self.assertNotIn("ssh_command", tool_names)
         self.assertIn("read_remote_file", tool_names)
         self.assertIn("suggest_command", tool_names)
 
-        # main 与 explore 是不同实例（独立缓存条目）
-        main_agent = adapter._get_or_create_agent("main", ctx)
-        main_names = set(main_agent.tool_names)
-        self.assertIn("ssh_command", main_names)
-        self.assertIsNot(agent, main_agent)
+        # observe 与 confirm 是不同实例（模式缓存隔离）
+        confirm_agent = adapter._get_or_create_agent(
+            "main", ctx, mode=AgentMode.CONFIRM, teach=False
+        )
+        self.assertIsNot(observe_agent, confirm_agent)
+        self.assertIn("ssh_command", set(confirm_agent.tool_names))
 
     def test_main_agent_has_full_toolset(self):
-        """main：真实 Strands Agent 全量 7 运维工具 + 4 子 agent 工具（P0-6）
-        + 5 扩展运维 + 6 个 2026-08-09 方案书工具（todo/terminal/config_diff/
-        backup_restore/confidence/history）+ knowledge_search + T14 save_skill，
-        合计 24。"""
+        """main（唯一 agent）：TOOL_REGISTRY 全量 20 工具
+
+        P0-A1 BREAKING：原 24 = 20 registry + 4 子 agent（agent-as-tool）
+        ——委派删除后收敛为 20。
+        """
         model = FakeStrandsModel(file_content=b"", final_text="ok")
         adapter, _ = self._make_adapter(model)
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
-        agent = adapter._get_or_create_agent("main", ctx)
+        agent = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM)
         tool_names = set(agent.tool_names)
-        # 7 运维工具
-        self.assertIn("ssh_command", tool_names)
-        self.assertIn("skill_invoke", tool_names)
-        # P0-6: main 额外挂载 4 个子 agent 工具 + 扩展运维 + 方案书工具 + T14 save_skill
-        self.assertEqual(len(tool_names), 24)
-        for sub in (
-            "teach", "coding", "explore", "history", "knowledge_search",
+        self.assertEqual(len(tool_names), 20)
+        # 核心工具齐全
+        for name in (
+            "ssh_command", "skill_invoke", "knowledge_search",
             "service_manage", "package_manage", "firewall_manage",
-            "security_audit", "performance_analyze",
+            "security_audit", "performance_analyze", "save_skill",
         ):
-            self.assertIn(sub, tool_names)
+            self.assertIn(name, tool_names)
+        # 子 agent 委派工具不复存在
+        for sub in ("teach", "coding", "explore", "history"):
+            self.assertNotIn(sub, tool_names)
 
-    def test_invoke_unknown_agent_falls_back_main_toolset(self):
-        """未知 agent_id：工具集回退 main 全量（兼容旧调用方）"""
+    def test_unknown_agent_uses_main_toolset(self):
+        """未知 agent_id：使用同一套 main 全量工具集（兼容旧调用方）"""
         model = FakeStrandsModel(file_content=b"", final_text="ok")
         adapter, _ = self._make_adapter(model)
         ctx = adapter._build_tool_context("not_exist", "e2e-s4", {})
-        agent = adapter._get_or_create_agent("not_exist", ctx)
+        agent = adapter._get_or_create_agent(
+            "not_exist", ctx, mode=AgentMode.CONFIRM, teach=False
+        )
         tool_names = set(agent.tool_names)
         self.assertIn("ssh_command", tool_names)
-
-
-@unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
-class TestAgentAsToolDelegation(unittest.TestCase):
-    """P0-6: main 统一入口 + 自主委派子 agent（agent-as-tool）全链路
-
-    真实 Strands：main agent 工具集含 4 个子 agent 工具，模型（FakeModel
-    脚本）第一轮委派 teach，teach 输出教学文本，main 第三轮收尾。
-    验证事件可视化链路：
-    - agent:teach started 恰好 1 次（去重）
-    - agent:teach completed 1 次，result = 子 agent 全文
-    - agent_switch: main → teach（Pill 联动）
-    - agent_call 增量转发（msg_type=agent_call）
-    """
-
-    def _make_adapter(self):
-        from strands_backend.adapter import StrandsAgentAdapter
-
-        bus = MagicMock()
-        bus.emit_agent_message = MagicMock(return_value=1)
-        bus.emit_mood_change = MagicMock(return_value=1)
-        bus.emit_tool_call = MagicMock(return_value=1)
-        bus.emit_needs_you = MagicMock(return_value=1)
-        bus.emit_agent_switch = MagicMock(return_value=1)
-        bridge = MagicMock()
-        bridge.ipc_invoke = MagicMock(return_value={"ok": True})
-        adapter = StrandsAgentAdapter(
-            event_bus=bus,
-            rust_bridge=bridge,
-            backend_enabled=True,
-            strands_model=DelegationModel(),
-        )
-        adapter._strands_available = True
-        adapter._model_available = True
-        return adapter, bus
-
-    def test_main_delegates_to_teach_agent(self):
-        adapter, bus = self._make_adapter()
-
-        result = adapter.invoke(
-            "main",
-            "帮我讲一下 nginx",
-            {"session_id": "e2e-del-1", "live": {"sshSessionId": "1"}},
-        )
-
-        # 1. main 最终回答成功
-        self.assertEqual(result["next_step"], "done")
-        self.assertIn("main 最终回答", result["observation"])
-
-        # 2. agent:teach 工具事件：started 1 次 + completed 1 次
-        agent_events = [
-            c.kwargs
-            for c in bus.emit_tool_call.call_args_list
-            if str(c.kwargs.get("tool_name", "")).startswith("agent:")
-        ]
-        started = [e for e in agent_events if e.get("status") == "started"]
-        completed = [e for e in agent_events if e.get("status") == "completed"]
-        self.assertEqual(len(started), 1, f"expected 1 started, got {len(started)}")
-        self.assertEqual(len(completed), 1)
-        # started 的 params 含委派输入
-        self.assertIn("讲 nginx", str(started[0].get("params")))
-        # completed 的 result 是子 agent 全文（教学文本）
-        self.assertIn("nginx 是反向代理服务器", str(completed[0].get("result")))
-
-        # 3. agent_switch: main → teach（Pill 联动）
-        switches = [
-            c.kwargs.get("agent") for c in bus.emit_agent_switch.call_args_list
-        ]
-        self.assertIn("teach", switches)
-
-        # 4. agent_call 增量转发（子 agent 文本增量经 main handler）
-        agent_call_deltas = [
-            c.kwargs.get("content")
-            for c in bus.emit_agent_message.call_args_list
-            if c.kwargs.get("message_type") == "agent_call"
-        ]
-        self.assertTrue(agent_call_deltas, "expected agent_call deltas")
-        self.assertTrue(
-            any("nginx" in (d or "") for d in agent_call_deltas),
-            "agent_call delta should carry sub-agent text",
-        )
-
-    def test_sub_agent_not_recursively_exposed(self):
-        """子 agent 工具集不嵌套 agent 工具（防无限递归委派）"""
-        adapter, _ = self._make_adapter()
-        ctx = adapter._build_tool_context("main", "e2e-del-2", {})
-        sub_tool = adapter._create_sub_agent_tool("teach", ctx)
-        # as_tool 包装暴露 agent 实例
-        from strands.types.tools import AgentTool
-
-        self.assertIsInstance(sub_tool, AgentTool)
-        self.assertEqual(sub_tool.tool_name, "teach")
-        self.assertEqual(sub_tool.tool_type, "agent")
-
-
-class DelegationModel(Model):
-    """共享 FakeModel：round1=main 委派 teach / round2=teach 输出 / round3=main 收尾"""
-
-    stateful = False
-
-    def __init__(self) -> None:
-        self.round = 0
-
-    def supports_tool_calls(self) -> bool:
-        return True
-
-    def get_config(self) -> dict:
-        return {"model": "fake"}
-
-    def update_config(self, **model_config) -> None:
-        pass
-
-    async def structured_output(self, output_model, prompt, system_prompt=None, **kwargs):
-        yield None
-
-    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs):
-        self.round += 1
-        if self.round == 1:
-            yield {"messageStart": {"role": "assistant"}}
-            yield {
-                "contentBlockStart": {
-                    "start": {"toolUse": {"name": "teach", "toolUseId": "tu-1"}}
-                }
-            }
-            yield {
-                "contentBlockDelta": {
-                    "delta": {
-                        "toolUse": {"input": json.dumps({"input": "讲 nginx"})}
-                    }
-                }
-            }
-            yield {"contentBlockStop": {}}
-            yield {"messageStop": {"stopReason": "tool_use"}}
-        elif self.round == 2:
-            yield {"messageStart": {"role": "assistant"}}
-            yield {"contentBlockStart": {"start": {}}}
-            yield {
-                "contentBlockDelta": {
-                    "delta": {"text": "## 1. 概念\nnginx 是反向代理服务器\n## 2. 练习"}
-                }
-            }
-            yield {"contentBlockStop": {}}
-            yield {"messageStop": {"stopReason": "end_turn"}}
-        else:
-            yield {"messageStart": {"role": "assistant"}}
-            yield {"contentBlockStart": {"start": {}}}
-            yield {
-                "contentBlockDelta": {"delta": {"text": "main 最终回答（整合教学）"}}
-            }
-            yield {"contentBlockStop": {}}
-            yield {"messageStop": {"stopReason": "end_turn"}}
+        self.assertEqual(len(tool_names), 20)
 
 
 if __name__ == "__main__":

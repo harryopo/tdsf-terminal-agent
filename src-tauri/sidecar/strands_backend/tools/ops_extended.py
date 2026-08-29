@@ -250,6 +250,8 @@ def invoke_security_audit_tool(params: dict[str, Any], ctx: ToolContext) -> dict
         ssh_session_id=params.get("ssh_session_id", "") or "",
         timeout=int(params.get("timeout", 30)),
         tool_name="security_audit",
+        # readonly=True：registry 只读工具——observe 模式 L0-L1 短路放行
+        readonly=True,
     )
 
 def make_security_audit_tool(ctx: ToolContext):
@@ -302,6 +304,8 @@ def invoke_performance_analyze_tool(params: dict[str, Any], ctx: ToolContext) ->
         ssh_session_id=params.get("ssh_session_id", "") or "",
         timeout=int(params.get("timeout", 30)),
         tool_name="performance_analyze",
+        # readonly=True：registry 只读工具——observe 模式 L0-L1 短路放行
+        readonly=True,
     )
 
 def make_performance_analyze_tool(ctx: ToolContext):
@@ -329,34 +333,16 @@ def make_performance_analyze_tool(ctx: ToolContext):
 
 
 # ============================================================================
-# 注册表
+# 注册表说明（P0-A1 清理）
 # ============================================================================
-
-EXTENDED_TOOL_FACTORIES: dict[str, Any] = {
-    "service_manage": make_service_manage_tool,
-    "package_manage": make_package_manage_tool,
-    "firewall_manage": make_firewall_manage_tool,
-    "security_audit": make_security_audit_tool,
-    "performance_analyze": make_performance_analyze_tool,
-}
-
-# 只读工具（schema-level safety 白名单用）
-EXTENDED_READONLY_TOOLS = {"security_audit", "performance_analyze"}
-
-# 各 agent 可用工具集（扩展部分）：
-#   main: 全部 5 个；coding: service/package/firewall（写操作需审批）+ 只读；
-#   explore: 只读 2 个；teach/history: 不引入（保持轻量）
-AGENT_EXTENDED_TOOLS: dict[str, set[str]] = {
-    "main": set(EXTENDED_TOOL_FACTORIES.keys()),
-    "coding": {"service_manage", "package_manage", "firewall_manage", "security_audit", "performance_analyze"},
-    "explore": EXTENDED_READONLY_TOOLS,
-}
+# 原 EXTENDED_TOOL_FACTORIES / EXTENDED_READONLY_TOOLS / AGENT_EXTENDED_TOOLS
+# 三个注册表已删除：T2 后 5 个扩展工具统一在 tools/registry.py TOOL_REGISTRY
+# 注册（factory 点路径直指本模块的 make_* 工厂），adapter 的按角色重复挂载
+# 块随 P0-A1 委派机制删除——本模块只保留工具实现（make_* 函数），注册单一
+# 真源是 TOOL_REGISTRY。
 
 
 __all__ = [
-    "EXTENDED_TOOL_FACTORIES",
-    "EXTENDED_READONLY_TOOLS",
-    "AGENT_EXTENDED_TOOLS",
     "make_service_manage_tool",
     "make_package_manage_tool",
     "make_firewall_manage_tool",

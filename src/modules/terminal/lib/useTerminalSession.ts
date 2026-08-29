@@ -25,6 +25,16 @@ import {
 } from "../block/lib/blockDecorations";
 import type { BlockMode } from "../block/lib/modeMachine";
 import { DormantRing } from "./dormantRing";
+// TDSF B1 (2026-08-29, 方案书 §4.7): 终端 block 流水账——OSC 133/633 状态机
+import {
+  TerminalBlockCollector,
+  captureBlockOutput,
+  registerBlockOscHandlers,
+} from "./terminalBlocks";
+import { useTerminalBlocksStore } from "./terminalBlocksStore";
+import type { IMarker } from "@xterm/xterm";
+// outputTail 复用 AI 模块的脱敏函数（redact.ts 零依赖，无循环导入）
+import { redactSensitive } from "@/modules/ai/lib/redact";
 import {
   createShellIntegrationState,
   registerCwdHandler,
@@ -835,10 +845,38 @@ function bindLeafToSlot(leafId: number, s: Session): void {
     cols: s.cols,
     rows: s.rows,
     registerOsc: (term) => {
+      // TDSF B1 (2026-08-29): block 流水账 collector——本地/SSH 分支共用。
+      // 必须先于 BlockDecorations 注册（其 133 handler 返回 true 会终止
+      // xterm OSC handler 链；先注册者先调用，本 handler 返回 false 放行）。
+      let execStartMarker: IMarker | null = null;
+      const collector = new TerminalBlockCollector({
+        sessionId: leafId,
+        resolveAuthor: (command) =>
+          useTerminalBlocksStore.getState().resolveAuthor(leafId, command),
+        onExecStart: () => {
+          execStartMarker = term.registerMarker(0);
+        },
+        onOutputCapture: () => {
+          const endMarker = term.registerMarker(0);
+          try {
+            return redactSensitive(
+              captureBlockOutput(term, execStartMarker, endMarker),
+            );
+          } finally {
+            execStartMarker = null;
+            endMarker?.dispose();
+          }
+        },
+        onBlock: (block) => {
+          useTerminalBlocksStore.getState().pushBlock(block);
+        },
+      });
+      const disposeBlockHandlers = registerBlockOscHandlers(term, collector);
       if (s.blocks) {
         const osc52 = registerOsc52ClipboardHandler(term);
         const deco = new BlockDecorations(term, {
           onCwd: (next) => {
+            collector.setCwd(next);
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
             s.lastCwd = next;
@@ -862,6 +900,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             s.blockDecorations = null;
             osc52();
             deco.dispose();
+            disposeBlockHandlers();
             term.textarea?.removeEventListener("focus", onGridFocus);
           },
         ];
@@ -871,7 +910,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
       // sequence right after `cd` commands from the transport seam. Use the
       // cwd handler without the in-command guard so our injected OSC 7 is
       // honored, and skip the local teach trigger for remote shells.
-      const disposers: (() => void)[] = [];
+      const disposers: (() => void)[] = [disposeBlockHandlers];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
         // flips it on OSC 133 B/C/D/A; the cwd handler reads it to ignore OSC
@@ -884,6 +923,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         const cwd = registerCwdHandler(
           term,
           (next) => {
+            collector.setCwd(next);
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
             s.lastCwd = next;
@@ -918,6 +958,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
               leafId,
               remote: s.remote,
             });
+            collector.setCwd(next);
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
             s.lastCwd = next;
@@ -1096,6 +1137,8 @@ export function disposeSession(leafId: number): void {
   blockViewportListeners.delete(leafId);
   pendingRiskListeners.delete(leafId);
   searchAddons.delete(leafId);
+  // TDSF B1 (2026-08-29): 同步清理 block 流水账 store（防泄漏）
+  useTerminalBlocksStore.getState().clearLeaf(leafId);
   readyLeaves.delete(leafId);
   const waiters = readyWaiters.get(leafId);
   if (waiters) {

@@ -59,7 +59,7 @@ spec 要求（用户决策④：DecisionEngine 用 LangGraph 重写，不复用�
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -72,6 +72,12 @@ from core.schemas import (
 )
 
 logger = logging.getLogger("sidecar.core.decision_engine")
+
+# P0-A1 (2026-08-29, 方案书 v3.1 三模式): AgentMode 仅作类型标注引用。
+# core 不反向 import strands_backend（model_adapter 已依赖 core，运行时导入
+# 会成环）——decide() 运行时按鸭子类型读取 mode.value / 字符串。
+if TYPE_CHECKING:  # pragma: no cover
+    from strands_backend.modes import AgentMode
 
 
 # ============================================================================
@@ -845,3 +851,101 @@ def create_decision_engine(
         confidence_calculator=confidence_calculator,
         history_callback=history_callback,
     )
+
+
+# ============================================================================
+# 模式 × 风险映射矩阵（P0-A1，方案书 v3.1 §3.2 核心不变量）
+# ============================================================================
+
+# 矩阵：mode → {"allow": {...L 级}, "confirm": {...}, "deny": {...}}
+# - observe: 只读类由调用方按 ToolPolicy.readonly 先行短路放行，decide 只管
+#   风险级——L0-L4 全部 deny（fail-closed，agent 收到 command_blocked 后
+#   必须如实报告未执行，对齐 B1 防伪造条款）
+# - confirm: L0-L1 allow；L2-L4 confirm（逐条审批卡）
+# - auto:    L0-L2 allow；L3 confirm（升级确认）；L4 confirm（永远确认，
+#   任何模式/白名单不可绕）
+_MODE_RISK_MATRIX: dict[str, dict[str, frozenset[str]]] = {
+    "observe": {
+        "allow": frozenset(),
+        "confirm": frozenset(),
+        "deny": frozenset({"L0", "L1", "L2", "L3", "L4"}),
+    },
+    "confirm": {
+        "allow": frozenset({"L0", "L1"}),
+        "confirm": frozenset({"L2", "L3", "L4"}),
+        "deny": frozenset(),
+    },
+    "auto": {
+        "allow": frozenset({"L0", "L1", "L2"}),
+        "confirm": frozenset({"L3", "L4"}),
+        "deny": frozenset(),
+    },
+}
+
+_L_TOKENS: frozenset[str] = frozenset({"L0", "L1", "L2", "L3", "L4"})
+
+
+def _normalize_risk_token(risk_l: int | str | RiskLevel) -> str:
+    """归一化风险输入到 "L0"-"L4" 令牌（非法输入抛 ValueError）
+
+    兼容三种输入（与 decision_engine 现有 RiskLevel 风格一致）：
+    - RiskLevel 枚举（LOW/MEDIUM/HIGH/DENY → risk_level_to_l0_l4 映射）
+    - int 0-4（直接映射 L0-L4）
+    - str："L0"-"L4"（大小写不敏感）或 RiskLevel 字符串值（"low" 等）
+    """
+    if isinstance(risk_l, RiskLevel):
+        return risk_level_to_l0_l4(risk_l)
+    if isinstance(risk_l, bool):  # bool 是 int 子类，显式排除
+        raise ValueError(f"invalid risk level: {risk_l!r}")
+    if isinstance(risk_l, int):
+        if 0 <= risk_l <= 4:
+            return f"L{risk_l}"
+        raise ValueError(f"invalid risk level: {risk_l!r}")
+    if isinstance(risk_l, str):
+        token = risk_l.strip().upper()
+        if token in _L_TOKENS:
+            return token
+        try:
+            return risk_level_to_l0_l4(RiskLevel(risk_l.strip().lower()))
+        except ValueError:
+            raise ValueError(f"invalid risk level: {risk_l!r}") from None
+    raise ValueError(f"invalid risk level: {risk_l!r}")
+
+
+def decide(risk_l: int | str | RiskLevel, mode: "AgentMode | str") -> str:
+    """模式 × 风险映射（纯函数）→ "allow" | "confirm" | "deny"
+
+    方案书 v3.1 §3.2 核心不变量（与 ``_MODE_RISK_MATRIX`` 一致）：
+    - observe：L0-L4 全部 deny（只读类由调用方按 ToolPolicy.readonly 先行短路）
+    - confirm：L0-L1 allow；L2-L4 confirm
+    - auto：L0-L2 allow；L3 confirm；L4 confirm（永远确认）
+
+    注意：本函数与 ``DecisionEngine.decide``（LangGraph 实例方法）同名不同
+    语义——实例方法产出完整决策卡，本函数是执行链的模式映射纯函数（Task 3
+    执行链消费）。
+
+    Args:
+        risk_l: 风险等级（RiskLevel 枚举 / int 0-4 / "L0"-"L4" / RiskLevel 字符串值）
+        mode: AgentMode 实例或其字符串值（"observe"/"confirm"/"auto"）
+
+    Returns:
+        "allow" | "confirm" | "deny"
+
+    Raises:
+        ValueError: 风险等级或模式非法——调用方应 fail-closed（按 deny 处理）
+    """
+    token = _normalize_risk_token(risk_l)
+
+    mode_value = getattr(mode, "value", mode)
+    if not isinstance(mode_value, str):
+        raise ValueError(f"invalid agent mode: {mode!r}")
+    mode_key = mode_value.strip().lower()
+    matrix = _MODE_RISK_MATRIX.get(mode_key)
+    if matrix is None:
+        raise ValueError(f"invalid agent mode: {mode!r}")
+
+    if token in matrix["deny"]:
+        return "deny"
+    if token in matrix["confirm"]:
+        return "confirm"
+    return "allow"

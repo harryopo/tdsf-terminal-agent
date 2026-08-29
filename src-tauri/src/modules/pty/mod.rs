@@ -12,6 +12,7 @@ use std::thread;
 use portable_pty::PtySize;
 use tauri::ipc::{Channel, Response};
 
+use crate::modules::human_type::{write_human_common, HumanTypeReport, HumanTypingGuard};
 use crate::modules::workspace::{user_spawn_cwd_or_home, WorkspaceEnv, WorkspaceRegistry};
 use session::Session;
 
@@ -120,6 +121,9 @@ pub fn pty_write(
             log::warn!("pty_write: unknown id={id}");
             "no session".to_string()
         })?;
+    // TDSF B2 (2026-08-29): 用户键盘写入计数 —— human_type pump 的 stop 信号
+    // （8 项之 5：用户任意按键 → 停止演示、交还控制权）。
+    session.user_input_seq.fetch_add(1, Ordering::Release);
     // Bind to a local so the MutexGuard temporary drops before `session` —
     // see rustc note on tail-expression temporary drop order.
     let result = session
@@ -133,6 +137,56 @@ pub fn pty_write(
             e.to_string()
         });
     result
+}
+
+/// TDSF B2 (2026-08-29): 可视教学打字机 —— 逐字符按人味节奏写入本地 PTY。
+///
+/// 数据流：Python sidecar inject_terminal → 前端 useAiLiveBridge（按设置分流）
+/// → 本命令 → 后台 pump 逐字写 session.writer。立即返回 HumanTypeReport，
+/// 打字结束/打断通过 `terminal:human_typing` end 事件通知前端。
+///
+/// 8 项注意事项落地（详见 human_type.rs 模块注释）：
+/// - 之 1：pump 前写 `\x03` 清行 + PROMPT_SETTLE_DELAY 等待新 prompt
+/// - 之 4：`sudo`（非 `-n`）→ 整段注入降级 + 警告（密码场景 echo 关闭，视觉无效）
+/// - 之 5：pty_write 每次用户键盘写入 bump user_input_seq，pump 轮询即停
+/// - 之 6：多次注入由调用方串行保证（Agent 审批逐条天然串行）
+#[tauri::command]
+pub async fn pty_write_human(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PtyState>,
+    id: u32,
+    text: String,
+    speed: f64,
+) -> Result<HumanTypeReport, String> {
+    let session = state
+        .sessions
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("pty_write_human: unknown id={id}"))?;
+    let writer = session.writer.clone();
+
+    // 打字机自身写路径（不走 pty_write，不 bump user_input_seq）
+    let write = move |bytes: Vec<u8>| {
+        let w = writer.clone();
+        async move {
+            // 短临界区：std Mutex lock 不跨 await，write_all 同步完成
+            let mut g = w.lock().map_err(|e| e.to_string())?;
+            g.write_all(&bytes).map_err(|e| {
+                log::debug!("pty_write_human id={id} write failed: {e}");
+                e.to_string()
+            })
+        }
+    };
+
+    let guard = HumanTypingGuard {
+        exited: session.exited.clone(),
+        user_seq: session.user_input_seq.clone(),
+        typing_active: session.typing_active.clone(),
+    };
+
+    write_human_common(&app, "pty", id, guard, write, text, speed).await
 }
 
 #[tauri::command]

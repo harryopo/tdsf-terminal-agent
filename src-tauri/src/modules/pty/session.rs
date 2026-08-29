@@ -49,6 +49,14 @@ pub struct Session {
     pub killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub master: Mutex<Box<dyn MasterPty + Send>>,
+    // TDSF B2 (2026-08-29): 用户键盘写入计数器 —— pty_write 每次调用 +1。
+    // human_type pump 以此检测"用户中途敲键 → 停止演示、交还控制权"
+    // （8 项注意事项之 5；打字机自身写入不走 pty_write，不 bump）。
+    // Arc 包装供 HumanTypingGuard 持有。
+    pub user_input_seq: Arc<std::sync::atomic::AtomicU64>,
+    // TDSF B2: 打字机重入闸门 —— 同一会话同时只允许一个 pump，
+    // 并发的第二个请求自动降级整段注入。
+    pub typing_active: Arc<AtomicBool>,
     // Set by the waiter once the child exits, so pty_open can reap a shell
     // that died before it was registered.
     pub(super) exited: Arc<AtomicBool>,
@@ -160,6 +168,8 @@ pub fn spawn(
         killer: Mutex::new(killer),
         writer: writer.clone(),
         master: Mutex::new(pair.master),
+        user_input_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        typing_active: Arc::new(AtomicBool::new(false)),
         exited: exited.clone(),
     });
 
@@ -345,6 +355,8 @@ mod tests {
             killer: Mutex::new(killer),
             writer,
             master: Mutex::new(pair.master),
+            user_input_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            typing_active: Arc::new(AtomicBool::new(false)),
             exited: Arc::new(AtomicBool::new(false)),
         });
 
@@ -394,6 +406,8 @@ mod tests {
             killer: Mutex::new(killer),
             writer,
             master: Mutex::new(pair.master),
+            user_input_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            typing_active: Arc::new(AtomicBool::new(false)),
             exited: Arc::new(AtomicBool::new(false)),
         });
 

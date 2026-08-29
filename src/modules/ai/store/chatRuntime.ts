@@ -122,6 +122,11 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         terminalOutput: live.getTerminalContext(),
         // TDSF 魔改 (2026-08-09): 终端执行模式开关传给 Python sidecar
         autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
+        // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
+        // sidecar（adapter.py 读 state.live.agentMode / state.live.teach，
+        // 缺省 confirm）。模式即时生效：切换后下一条消息即用新模式。
+        agentMode: useChatStore.getState().agentMode,
+        teach: useChatStore.getState().teach,
       };
     },
     getPlanMode: () => usePlanStore.getState().active,

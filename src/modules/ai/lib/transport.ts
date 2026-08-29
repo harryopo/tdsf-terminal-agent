@@ -1,7 +1,9 @@
 import type { UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
-import type { TdsfAgentId } from "../agents/registry";
+import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
+import type { AgentMode, TdsfAgentId } from "../agents/registry";
 import type { CustomEndpoint } from "../config";
+import type { EnvironmentProbe } from "../store/chatStore";
 import type { ToolContext } from "../tools/tools";
 import { type AgentUsageDelta, runAgentStream } from "./agent";
 import { formatAiError } from "./errors";
@@ -83,6 +85,33 @@ type LiveSnapshot = {
    * null = 无活跃终端 / 隐私模式。
    */
   terminalOutput: string | null;
+  /**
+   * TDSF B1 (2026-08-29, 方案书 §4.7): 环境探测（os-release/内核/shell，
+   * sidecar system.probe_env 会话级缓存；useAiLiveBridge 注册实现）。
+   * 失败返回 null（<environment> 分区静默省略）。旧调用方未注册时
+   * 可选调用返回 null（与 getTerminalHistory 同为可选渐进增强）。
+   */
+  getEnvironmentProbe?: () => Promise<EnvironmentProbe | null>;
+  /**
+   * TDSF B1: 活跃终端最近 block 流水账（<terminal-history> 数据源，
+   * useAiLiveBridge 注册实现）；未注册/无活跃终端返回 []。
+   */
+  getTerminalHistory?: () => TerminalBlock[];
+  /**
+   * Agent 信任模式（v3.1 三模式信任体系，方案书 §3.2）。
+   *
+   * 会话级状态（chatStore.agentMode，per-session 持久化），由 chatRuntime
+   * getLive() 注入；经 runSidecarStream 原样透传到 Python agent.invoke 的
+   * state.live.agentMode，sidecar 的 decision_engine.decide(risk, mode)
+   * 据此控制放行/审批/拒绝。缺省 undefined 时 sidecar 按 confirm 执行
+   * （spec: 老会话兼容 / 缺省缺字段默认 confirm）。
+   */
+  agentMode?: AgentMode;
+  /**
+   * 教学皮肤开关（叠加在任意模式上，不改变权限矩阵）。
+   * 随 state.live.teach 下发；sidecar 据此给 main 拼 TeachCard 输出契约 prompt。
+   */
+  teach?: boolean;
 };
 
 type Deps = {
@@ -143,6 +172,24 @@ export function createContextAwareTransport(deps: Deps) {
     // 双轨受益：Python Sidecar（<env>+<terminal-context> 注入 input）+
     // Vercel SDK（注入 messagesForRun 最后一条 user message）。
     const terminalBlock = formatTerminalContextBlock(live);
+    // TDSF B1 (2026-08-29): 上下文注入升级——<environment>（环境探测缓存）
+    // + <terminal-history>（block 流水账）。probe/历史获取失败静默降级 null
+    // （分区省略），绝不阻塞对话首响。
+    let environmentBlock: string | null = null;
+    try {
+      const probe = (await live.getEnvironmentProbe?.()) ?? null;
+      environmentBlock = formatEnvironmentBlock(probe, live);
+    } catch (e) {
+      console.warn("[tdsf] environment probe degraded:", e);
+    }
+    let historyBlock: string | null = null;
+    try {
+      historyBlock = formatTerminalHistoryBlock(
+        live.getTerminalHistory?.() ?? [],
+      );
+    } catch (e) {
+      console.warn("[tdsf] terminal history degraded:", e);
+    }
     // T14 (2026-08-28): 新会话首轮 → 检索决策库历史会话记忆注入开场
     // （只在首条 user 消息时检索一次，后续轮次不重复注入，控制 token 开销）
     const isFirstTurn =
@@ -150,7 +197,13 @@ export function createContextAwareTransport(deps: Deps) {
     const memoryBlock = isFirstTurn
       ? await fetchMemoryHints(extractLastUserText(options.messages))
       : null;
-    const contextBlock = [envBlock, terminalBlock, memoryBlock]
+    const contextBlock = [
+      envBlock,
+      environmentBlock,
+      terminalBlock,
+      historyBlock,
+      memoryBlock,
+    ]
       .filter(Boolean)
       .join("\n\n");
     const messagesForRun = contextBlock
@@ -490,4 +543,88 @@ export const CONTEXT_BLOCK_RE =
 
 export function stripContextBlock(text: string): string {
   return text.replace(CONTEXT_BLOCK_RE, "");
+}
+
+// ============================================================================
+// TDSF B1 (2026-08-29, 方案书 v3.1 §4.7): 上下文注入升级——XML 分区模板
+// ============================================================================
+// <terminal-context>（尾部 30 行原文）保留不变（Vercel SDK 路径兜底），
+// 新增两条结构化分区（open-code-review 7 槽位工程移植，prompt 组装代码化）：
+//   <environment>       发行版/内核/shell/cwd —— agent 因地制宜 (apt vs yum)
+//   <terminal-history>  最近 N 条 block 流水账 —— agent 引用"刚才跑了什么"
+// 都在 transport 组装好随 input 进 sidecar（sidecar prompt 组装零改动）。
+
+/** <terminal-history> 注入的最大 block 数（方案书：最近 N 个 block） */
+export const TERMINAL_HISTORY_MAX_BLOCKS = 10;
+/** token 预算显式上限（约 1500 token ≈ 6000 字符），超限从最旧开始丢 */
+export const TERMINAL_HISTORY_MAX_CHARS = 6000;
+/** 每个 block 的输出尾部行数/单行字符上限（控 token） */
+const HISTORY_OUTPUT_TAIL_LINES = 2;
+const HISTORY_OUTPUT_TAIL_LINE_CHARS = 160;
+
+/**
+ * <environment> 分区：发行版/内核/cwd/shell。
+ * probe=null（探测失败/超时）时返回 null——分区整体省略，不输出空标签。
+ */
+export function formatEnvironmentBlock(
+  probe: EnvironmentProbe | null,
+  live: LiveSnapshot,
+): string | null {
+  if (!probe || !probe.ok) return null;
+  const lines: string[] = [];
+  if (probe.os_pretty_name) lines.push(`os_pretty_name: ${probe.os_pretty_name}`);
+  if (probe.kernel) lines.push(`kernel: ${probe.kernel}`);
+  if (live.cwd) lines.push(`cwd: ${live.cwd}`);
+  if (probe.shell) lines.push(`shell: ${probe.shell}`);
+  if (lines.length === 0) return null;
+  return `<environment>\n${lines.join("\n")}\n</environment>`;
+}
+
+/** 提取 block 输出尾部的最后 N 行（每行 trim+截断），空输出返回空串 */
+function historyOutputTail(outputTail: string): string {
+  if (!outputTail) return "";
+  const lines = outputTail
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .slice(-HISTORY_OUTPUT_TAIL_LINES)
+    .map(
+      (l) =>
+        l.length > HISTORY_OUTPUT_TAIL_LINE_CHARS
+          ? `${l.slice(0, HISTORY_OUTPUT_TAIL_LINE_CHARS)}…`
+          : l,
+    );
+  return lines.join(" / ");
+}
+
+/**
+ * <terminal-history> 分区：最近 N 条 block 格式化为流水账。
+ * 格式：`- [user] $ systemctl status nginx (exit 3, 12s, cwd=/etc/nginx) 输出尾部: ...`
+ * 预算超限从最旧开始丢（保留最近）；block 全空返回 null。
+ */
+export function formatTerminalHistoryBlock(
+  blocks: TerminalBlock[],
+): string | null {
+  if (!blocks.length) return null;
+  const items: string[] = [];
+  let total = 0;
+  // 从最新往回收集，超预算即停（等价于"超限从最旧开始丢"）
+  for (let i = blocks.length - 1; i >= 0 && items.length < TERMINAL_HISTORY_MAX_BLOCKS; i--) {
+    const b = blocks[i];
+    const exit = b.exitCode === null ? "exit ?" : `exit ${b.exitCode}`;
+    const secs =
+      b.durationMs >= 1000
+        ? `${Math.round(b.durationMs / 1000)}s`
+        : `${b.durationMs}ms`;
+    const head = `- [${b.author}] $ ${b.command || "(空命令)"} (${exit}, ${secs}, cwd=${b.cwd || "?"})`;
+    const tail = historyOutputTail(b.outputTail);
+    const line = tail ? `${head}\n  输出尾部: ${tail}` : head;
+    if (total + line.length > TERMINAL_HISTORY_MAX_CHARS && items.length > 0) {
+      break;
+    }
+    items.unshift(line);
+    total += line.length;
+  }
+  if (items.length === 0) return null;
+  return `<terminal-history>\n${items.join("\n")}\n</terminal-history>`;
 }

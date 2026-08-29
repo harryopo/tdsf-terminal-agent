@@ -42,9 +42,9 @@ import {
 // 与右下角状态栏风格统一, 去除独立彩色标签, 节省水平空间。
 import { AgentStatusPill } from "@/modules/ai/components/AgentStatusPill";
 
-// 新版：所有消息统一走 'main' 入口，main_agent 自动路由到 8 个子 Agent。
-// 顶部只读显示当前路由到的子 Agent 名（通过 AgentStatusPill）。
-type TdsfAgentId = "main" | "coder" | "explore" | "history" | "teach";
+// v3.1 收敛（方案书 §4.1）: 旧版 "4 Agent Segmented Control" 已删除，
+// 顶栏只读显示模式指示（AgentStatusPill 内部订阅 agentMode/teach）。
+// 原 agentId/onAgentChange props（无调用方）一并移除。
 
 // === mood 表情映射（与原 TdsfTitlebar 一致） ===============================
 const MOOD_FACE: Record<string, string> = {
@@ -86,10 +86,6 @@ type Props = {
   spaceSwitcher: ReactNode;
   searchTarget: SearchTarget;
   searchRef: RefObject<SearchInlineHandle | null>;
-  /** 当前 TDSF Agent（不传则从 chatStore 读取） */
-  agentId?: TdsfAgentId;
-  /** 切换 TDSF Agent（不传则用 chatStore 的 setter） */
-  onAgentChange?: (id: TdsfAgentId) => void;
 };
 
 const COMPACT_WIDTH = 720;
@@ -121,8 +117,6 @@ export function Header({
   spaceSwitcher,
   searchTarget,
   searchRef,
-  agentId: agentIdProp,
-  onAgentChange: onAgentChangeProp,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
@@ -130,14 +124,6 @@ export function Header({
 
   // TDSF 魔改: 从 chatStore 读取 agent 状态（mood）
   const agentMeta = useChatStore((s) => s.agentMeta);
-  const storeAgentId = useChatStore((s) => s.tdsfAgentId);
-  const storeSetAgent = useChatStore((s) => s.setTdsfAgent);
-  // v2026-07-29: 统一主 Agent 入口后，agentId/onAgentChange 仅作为 prop 兼容入口保留。
-  // 子 Agent 路由状态由 AgentStatusPill 内部读取，Header 不再直接订阅 currentSubAgent。
-  const agentId = agentIdProp ?? storeAgentId;
-  const onAgentChange = onAgentChangeProp ?? storeSetAgent;
-  void agentId;
-  void onAgentChange;
 
   // TDSF 魔改: 主题切换（通过 ThemeProvider，持久化 + 响应 system 偏好）
   const { resolvedMode, setMode } = useTheme();

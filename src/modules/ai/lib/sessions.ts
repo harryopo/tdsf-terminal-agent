@@ -1,11 +1,19 @@
 import type { UIMessage } from "@ai-sdk/react";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import type { AgentMode } from "../agents/registry";
 
 export type SessionMeta = {
   id: string;
   title: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Agent 信任模式（方案书 v3.1 三模式，per-session 持久化）。
+   * 可选：老会话元数据无此字段，读取时回退 DEFAULT_AGENT_MODE。
+   */
+  agentMode?: AgentMode;
+  /** 教学皮肤开关（叠加在任意模式上，不改变权限矩阵）。可选，缺省 false。 */
+  teach?: boolean;
 };
 
 // TDSF 魔改: store path 改为 tdsf-sessions.json(原 "terax-ai-sessions.json" 保留为注释供溯源)

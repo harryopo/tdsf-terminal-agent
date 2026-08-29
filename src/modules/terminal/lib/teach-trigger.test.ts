@@ -136,8 +136,9 @@ describe("teach-trigger 降频逻辑", () => {
 
     await notifyCommandExecuted("whoami", "/home");
     expect(mocks.sidecarCalls).toHaveLength(1);
+    // v3.1: teach 子 agent 已删除（方案书 §4.1），讲解请求走唯一入口 main
     expect(mocks.sidecarCalls[0]).toEqual({
-      agentId: "teach",
+      agentId: "main",
       input: "explain: whoami",
     });
     expect(mocks.toastInfo).toHaveBeenCalledTimes(1);

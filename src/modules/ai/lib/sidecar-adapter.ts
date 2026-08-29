@@ -30,7 +30,7 @@ import type { UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { UIMessageChunk } from "ai";
-import { TDSF_AGENTS, type TdsfAgentId } from "../agents/registry";
+import { TDSF_AGENTS, type AgentMode, type TdsfAgentId } from "../agents/registry";
 // TDSF 魔改 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
 import {
   isSidecarConfigSynced,
@@ -171,7 +171,6 @@ const TOOL_DRAIN_MS = 30;
 /** Tauri event 名（与 src-tauri/src/modules/ipc.rs:329-339 对齐） */
 const EVENT_MOOD_CHANGE = "sidecar:mood_change";
 const EVENT_TOOL_CALL = "sidecar:tool_call";
-const EVENT_AGENT_SWITCH = "sidecar:agent_switch"; // v2026-07-29: 主 Agent 路由子 Agent 事件
 
 // ============================================================================
 // 事件 payload 解包
@@ -187,7 +186,7 @@ const EVENT_AGENT_SWITCH = "sidecar:agent_switch"; // v2026-07-29: 主 Agent 路
  *
  * 本 helper 统一处理两种形态（已包装 / 裸 payload），避免每个 listener 重复解包。
  */
-function unwrapEventPayload<T>(payload: unknown): T | undefined {
+export function unwrapEventPayload<T>(payload: unknown): T | undefined {
   if (payload == null) return undefined;
   if (typeof payload !== "object") return payload as T;
   const obj = payload as Record<string, unknown>;
@@ -232,6 +231,11 @@ export interface SidecarStreamOptions {
    * ssh_command / sftp_* 命令。Python 端 _build_prompt 也从此处读 cwd /
    * activeFile 注入 <live_context> 块给 LLM。
    *
+   * v3.1 三模式信任体系（方案书 §4.3）:
+   *   - agentMode: observe/confirm/auto，sidecar 的 decision_engine.decide(risk, mode)
+   *     据此控制放行/审批/拒绝；缺省 undefined 时 sidecar 按 confirm 执行
+   *   - teach: 教学皮肤开关，true 时 main system prompt 拼入 TeachCard 输出契约
+   *
    * 字段说明:
    *   - cwd:             当前终端工作目录（OSC seq 捕获）
    *   - terminalPrivate: 隐私模式标记（true 时不发送终端上下文给 LLM）
@@ -245,6 +249,8 @@ export interface SidecarStreamOptions {
     workspaceRoot: string | null;
     activeFile: string | null;
     sshSessionId: number | null;
+    agentMode?: AgentMode;
+    teach?: boolean;
   };
   /** 中断信号（与 useChat 的 abortSignal 联动） */
   abortSignal?: AbortSignal;
@@ -523,7 +529,6 @@ async function* streamText(
  *   - sidecar:tool_call:   Agent 调用工具（用于显示 step 进度 + 工具行渲染）
  *   - sidecar:agent_message: Agent 中途推送的消息片段（thinking/output 流式）
  *     TDSF 修复 2026-07-31 (P1): 新增订阅，实现真正流式输出 + 深度思考 UI
- *   - sidecar:agent_switch: 主 Agent 路由子 Agent 事件
  *
  * 监听失败不致命（如非 Tauri 环境运行测试时），主流程继续。
  *
@@ -590,28 +595,10 @@ async function registerSidecarListeners(
     }
   }
 
-  // v2026-07-29: 主 Agent 路由子 Agent 事件
-  // 后端 main_agent.invoke() 在 PAOR 循环中通过 event_bus 推送 agent_switch 事件，
-  // 前端订阅后更新 chatStore.currentSubAgent，让顶部 AgentStatusPill 实时显示
-  // 当前路由到的子 Agent（Teach / Coding / Debug / ...）。
-  try {
-    unlisteners.push(
-      await listen<unknown>(EVENT_AGENT_SWITCH, (e) => {
-        const p = unwrapEventPayload<{ agent?: string; task?: string }>(
-          e.payload,
-        );
-        const agent = p?.agent;
-        if (agent) {
-          // 动态 import 避免循环依赖
-          import("../store/chatStore").then((mod) => {
-            mod.useChatStore.getState().setCurrentSubAgent(agent);
-          });
-        }
-      }),
-    );
-  } catch {
-    // 同上
-  }
+  // v3.1 收敛（方案书 §4.1）: 旧版 sidecar:agent_switch（main 路由子 Agent）
+  // 监听已删除——4 子 agent 委派机制随 Task 1 从 adapter.py 下线，该事件
+  // 不再产生；"当前能力"由三模式信任体系（agentMode）+ 教学皮肤（teach）表达，
+  // 两者是前端本地状态，无需后端事件推送。
 
   return () => {
     for (const un of unlisteners) {

@@ -3,17 +3,31 @@ import { isSessionConnected, selectSessionCurrentPath, useSshStore } from "@/mod
 import type { Tab } from "@/modules/tabs";
 import {
   findLeafCwd,
+  ptyIdForLeaf,
   type TerminalPaneHandle,
   whenSessionReady,
   writeToSession,
 } from "@/modules/terminal";
+import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { type RefObject, useEffect, useRef } from "react";
-import type { Live } from "../store/chatStore";
+import type { Live, EnvironmentProbe } from "../store/chatStore";
 import { useChatStore } from "../store/chatStore";
 import { redactSensitive } from "./redact";
 // TDSF 魔改 2026-08-28 (B1-G2 防伪造): 拦截命令注入 AI 上下文
 import { getRecentBlockedCommandText } from "@/modules/terminal/lib/useTerminalSession";
+
+// TDSF B2 (2026-08-29): Rust human_type 命令返回值（pty_write_human / ssh_write_human）
+type HumanTypeReport = {
+  mode: "human" | "fallback";
+  stopped: boolean;
+  warning?: string;
+};
+
+/** TDSF B2 (2026-08-29): 8 项之 8 —— 超过此长度的命令自动整段注入（前端判断） */
+const HUMAN_TYPING_MAX_LEN = 200;
 
 type TuiWaitResult = "ready" | "gone" | "timeout";
 
@@ -71,6 +85,72 @@ export function useAiLiveBridge(params: Params) {
     // TDSF 魔改 (2026-08-09): 保存 injectIntoActivePty 引用，供 inject_terminal 事件监听器调用
     let injectFn: (text: string) => boolean = () => false;
 
+    // TDSF B1 (2026-08-29): SSH Rust session_id 查询提为局部函数，
+    // 供 getSshRustSessionId（setLive）与 getEnvironmentProbe 共用。
+    // 取值逻辑与原 inline 实现一致（实时查 sshStore，SSH 重连后 rustSessionId 会变）。
+    const sshRustSessionId = (): number | null => {
+      const state = useSshStore.getState();
+      const active = state.sessions.find(
+        (s) => s.id === state.activeSessionId,
+      );
+      if (active && isSessionConnected(active)) return active.rustSessionId;
+      const fallback = state.sessions.find((s) => isSessionConnected(s));
+      return fallback ? fallback.rustSessionId : null;
+    };
+
+    // TDSF B2 (2026-08-29): 可视教学打字机分流 —— 设置为"逐字演示"时，
+    // 命令交由 Rust human_type pump 按人味节奏逐字写入 PTY/SSH channel
+    // （远端 echo 天然形成打字视觉）。失败/不适用时返回 false 回落整段。
+    // 警告（`!` 告警 / sudo 降级提示）统一由 terminal:human_typing end 事件
+    // 的 toast 处理（AgentTypingIndicator），避免与 report 重复弹。
+    const tryHumanTyping = (t: string): boolean => {
+      const prefs = usePreferencesStore.getState();
+      if (prefs.agentTypingMode !== "human") return false;
+      // 8 项之 8：超长命令自动整段 + toast 提示
+      if (t.length > HUMAN_TYPING_MAX_LEN) {
+        toast(`命令过长（${t.length} 字符），已整段注入`, {
+          description: "可在 设置 → 智能体 → 可视执行演示 调整打字模式",
+        });
+        return false;
+      }
+      const speed = prefs.agentTypingSpeed;
+      const sshLeafId = ref.current.getSshLeafId?.();
+      if (sshLeafId !== null && sshLeafId !== undefined) {
+        const sessionId = sshRustSessionId();
+        if (sessionId === null) return false;
+        void invoke<HumanTypeReport>("ssh_write_human", {
+          sessionId,
+          text: t,
+          speed,
+        })
+          .then((r) => {
+            // 逐字 pump 启动 / sudo 降级整段，都标记 author=agent
+            useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
+            if (r?.mode === "fallback" && r.warning) toast.warning(r.warning);
+          })
+          .catch((e) => {
+            console.warn("[tdsf] ssh_write_human failed, fallback:", e);
+            if (!injectFnCore(t)) toast.error("命令注入失败：SSH 终端不可用");
+          });
+        return true;
+      }
+      const { activeId, tabs } = ref.current;
+      const tab = tabs.find((x) => x.id === activeId);
+      if (tab?.kind !== "terminal") return false;
+      const id = ptyIdForLeaf(tab.activeLeafId);
+      if (id === null) return false;
+      void invoke<HumanTypeReport>("pty_write_human", { id, text: t, speed })
+        .then((r) => {
+          useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
+          if (r?.mode === "fallback" && r.warning) toast.warning(r.warning);
+        })
+        .catch((e) => {
+          console.warn("[tdsf] pty_write_human failed, fallback:", e);
+          if (!injectFnCore(t)) toast.error("命令注入失败：终端会话不可用");
+        });
+      return true;
+    };
+
     const findCwd = () => {
       const { activeId, tabs, explorerRoot, launchCwd, home } = ref.current;
       // TDSF 魔改 (2026-08-09): SSH 终端优先——
@@ -107,6 +187,31 @@ export function useAiLiveBridge(params: Params) {
         if (cwd) return cwd;
       }
       return explorerRoot ?? launchCwd ?? home ?? null;
+    };
+
+    // TDSF 魔改 (2026-08-09): 整段注入核心逻辑（inject_terminal 事件与
+    // injectIntoActivePty 共用；B2 起也作为打字机失败时的回落路径）。
+    const injectFnCore = (t: string): boolean => {
+      const sshLeafId = ref.current.getSshLeafId?.();
+      if (sshLeafId !== null && sshLeafId !== undefined) {
+        const term = terminalRefs.current.get(sshLeafId);
+        if (term) {
+          term.write(t); term.focus();
+          // TDSF B1 (2026-08-29): agent 注入的命令 → 下一条 block 标 author=agent
+          useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
+          return true;
+        }
+        return false;
+      }
+      const { activeId, tabs } = ref.current;
+      const tab = tabs.find((x) => x.id === activeId);
+      if (tab?.kind !== "terminal") return false;
+      const term = terminalRefs.current.get(tab.activeLeafId);
+      if (!term) return false;
+      term.write(t); term.focus();
+      // TDSF B1 (2026-08-29): 同上（本地终端注入路径）
+      useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
+      return true;
     };
 
     setLive({
@@ -153,22 +258,10 @@ export function useAiLiveBridge(params: Params) {
       injectIntoActivePty: (text) => {
         // TDSF 魔改 (2026-08-09): 提取核心注入逻辑为共享函数，
         // 同时供 inject_terminal 事件监听器复用。
-        const injectCore = (t: string): boolean => {
-          const sshLeafId = ref.current.getSshLeafId?.();
-          if (sshLeafId !== null && sshLeafId !== undefined) {
-            const term = terminalRefs.current.get(sshLeafId);
-            if (term) { term.write(t); term.focus(); return true; }
-            return false;
-          }
-          const { activeId, tabs } = ref.current;
-          const tab = tabs.find((x) => x.id === activeId);
-          if (tab?.kind !== "terminal") return false;
-          const term = terminalRefs.current.get(tab.activeLeafId);
-          if (!term) return false;
-          term.write(t); term.focus(); return true;
-        };
-        injectFn = injectCore; // 保存引用供 sidecar:inject_terminal 事件复用
-        return injectCore(text);
+        // TDSF B2 (2026-08-29): 逐字模式优先分流（tryHumanTyping），不适用或
+        // 调用失败时回落整段注入（injectFnCore，原路径零改动）。
+        injectFn = (t: string) => (tryHumanTyping(t) ? true : injectFnCore(t));
+        return injectFn(text);
       },
       getWorkspaceRoot: () => {
         const { explorerRoot, launchCwd, home } = ref.current;
@@ -242,14 +335,45 @@ export function useAiLiveBridge(params: Params) {
       // （Space 持久化旧 UUID / 断连后未清理），此时回退到任意 connected
       // 会话，保证 AI 至少拿到一个可用的 ssh_session_id，而不是误判
       // "未连接 SSH" 而拒绝执行远程命令。
-      getSshRustSessionId: () => {
-        const state = useSshStore.getState();
-        const active = state.sessions.find(
-          (s) => s.id === state.activeSessionId,
-        );
-        if (active && isSessionConnected(active)) return active.rustSessionId;
-        const fallback = state.sessions.find((s) => isSessionConnected(s));
-        return fallback ? fallback.rustSessionId : null;
+      getSshRustSessionId: sshRustSessionId,
+      // TDSF B1 (2026-08-29): 环境探测（os-release/内核/shell）。
+      // sidecar system.probe_env 会话级缓存（首探测后毫秒级返回）；
+      // 前端加 5s 超时与异常降级——探测失败绝不阻塞对话，只是少了
+      // <environment> 分区（agent 退化为不知道发行版）。
+      getEnvironmentProbe: async () => {
+        try {
+          const res = await Promise.race([
+            invoke<EnvironmentProbe>("ipc_invoke", {
+              method: "system.probe_env",
+              params: { sessionId: "", sshSessionId: sshRustSessionId() },
+            }),
+            new Promise<null>((resolve) =>
+              setTimeout(() => resolve(null), 5000),
+            ),
+          ]);
+          if (!res || res.ok === false) return null;
+          return res;
+        } catch (e) {
+          // sidecar 未就绪 / 超时：静默降级（不阻塞对话）
+          console.warn("[tdsf] system.probe_env failed (degraded):", e);
+          return null;
+        }
+      },
+      // TDSF B1 (2026-08-29): 活跃终端最近 10 条 block 流水账。
+      // SSH 优先（与 getTerminalContext 的活跃终端判定一致）；
+      // private 终端不注入（隐私模式，与 getTerminalContext 对齐）。
+      getTerminalHistory: () => {
+        const sshLeafId = ref.current.getSshLeafId?.();
+        if (sshLeafId !== null && sshLeafId !== undefined) {
+          return useTerminalBlocksStore.getState().getRecent(sshLeafId, 10);
+        }
+        const { activeId, tabs } = ref.current;
+        const t = tabs.find((x) => x.id === activeId);
+        if (t?.kind === "terminal") {
+          if (t.private) return [];
+          return useTerminalBlocksStore.getState().getRecent(t.activeLeafId, 10);
+        }
+        return [];
       },
     });
 
