@@ -130,7 +130,7 @@ function entryPathLabel(entry: SourceControlFileEntry): string {
 }
 
 function upstreamBadgeLabel(upstream: string | null | undefined): string {
-  if (!upstream) return "No upstream";
+  if (!upstream) return "无上游分支";
   return upstream;
 }
 
@@ -257,7 +257,7 @@ function BranchDropdown({
         {loading ? (
           <div className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground">
             <Spinner className="size-3" />
-            Loading branches…
+            正在加载分支…
           </div>
         ) : error ? (
           <div className="px-3 py-3 text-[11px] leading-snug text-destructive">
@@ -268,7 +268,7 @@ function BranchDropdown({
             {localBranches.length > 0 && (
               <>
                 <DropdownMenuLabel className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/85">
-                  Local Branches
+                  本地分支
                 </DropdownMenuLabel>
                 <DropdownMenuGroup>
                   {localBranches.map((b) => (
@@ -297,7 +297,7 @@ function BranchDropdown({
               <>
                 {localBranches.length > 0 && <DropdownMenuSeparator />}
                 <DropdownMenuLabel className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/85">
-                  Worktrees
+                  工作树
                 </DropdownMenuLabel>
                 <DropdownMenuGroup>
                   {worktrees.map((b) => (
@@ -331,7 +331,7 @@ function BranchDropdown({
             )}
             {branches.length === 0 && (
               <div className="px-3 py-3 text-[11px] text-muted-foreground">
-                No branches found.
+                未找到分支。
               </div>
             )}
           </>
@@ -366,8 +366,8 @@ export const SourceControlPanel = memo(function SourceControlPanel({
 
   const isRefreshing = scm.panelState === "loading";
   const repoLabel = useMemo(() => {
-    if (!scm.status) return "Source Control";
-    return scm.status.isDetached ? "detached" : scm.status.branch;
+    if (!scm.status) return "源代码管理";
+    return scm.status.isDetached ? "分离头指针" : scm.status.branch;
   }, [scm.status]);
 
   const commitShortcut = IS_MAC ? "⌘↩" : "Ctrl+Enter";
@@ -377,18 +377,18 @@ export const SourceControlPanel = memo(function SourceControlPanel({
     scm.commitMessage.trim().length > 0 &&
     !scm.actionBusy;
   const commitDisabledReason = scm.actionBusy
-    ? "Wait for the current Git action to finish."
+    ? "等待当前 Git 操作完成"
     : scm.stagedEntries.length === 0
-      ? "Stage changes to enable commit."
+      ? "暂存更改后才能提交"
       : scm.commitMessage.trim().length === 0
-        ? "Enter a commit message to enable commit."
+        ? "输入提交信息后才能提交"
         : null;
   const commitHint = canCommit
-    ? `Commit with ${commitShortcut}.`
-    : (commitDisabledReason ?? `Commit with ${commitShortcut}.`);
-  const pushHint = scm.pushHint ?? "Push is unavailable right now.";
+    ? `使用 ${commitShortcut} 提交`
+    : (commitDisabledReason ?? `使用 ${commitShortcut} 提交`);
+  const pushHint = scm.pushHint ?? "当前无法推送";
   const pushDisabledReason = scm.actionBusy
-    ? "Wait for the current Git action to finish."
+    ? "等待当前 Git 操作完成"
     : pushHint;
   const stagedCount = scm.stagedEntries.length;
   const changedCount = scm.fileEntries.length;
@@ -652,13 +652,13 @@ export const SourceControlPanel = memo(function SourceControlPanel({
             ) : null}
             {scm.status?.isDetached ? (
               <span className="rounded bg-muted/55 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                detached
+                分离头指针
               </span>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             <IconActionButton
-              label={fetchBusy ? "Fetching…" : "Fetch from remote"}
+              label={fetchBusy ? "拉取中…" : "从远程拉取"}
               disabled={!canFetch}
               onClick={handleFetch}
               side="bottom"
@@ -676,14 +676,14 @@ export const SourceControlPanel = memo(function SourceControlPanel({
             <IconActionButton
               label={
                 pullBusy
-                  ? "Pulling…"
+                  ? "拉取中…"
                   : isDiverged
-                    ? "Branch diverged — resolve in terminal"
+                    ? "分支已分叉——请在终端解决"
                     : !hasUpstream
-                      ? "No upstream configured"
+                      ? "未配置上游"
                       : (scm.status?.behind ?? 0) === 0
-                        ? "Already up to date"
-                        : `Pull ${scm.status?.behind ?? 0} commits (fast-forward)`
+                        ? "已是最新"
+                        : `拉取 ${scm.status?.behind ?? 0} 个提交（快进）`
               }
               disabled={!canPull}
               onClick={handlePull}
@@ -700,7 +700,7 @@ export const SourceControlPanel = memo(function SourceControlPanel({
               )}
             </IconActionButton>
             <IconActionButton
-              label="Refresh source control"
+              label="刷新源代码管理"
               disabled={isRefreshing || !!scm.actionBusy}
               onClick={handleRefresh}
               side="bottom"
@@ -731,7 +731,7 @@ export const SourceControlPanel = memo(function SourceControlPanel({
               strokeWidth={1.85}
               className="shrink-0"
             />
-            <span className="flex-1 text-[12px] font-medium">Commit Graph</span>
+            <span className="flex-1 text-[12px] font-medium">提交图</span>
             <HugeiconsIcon
               icon={ArrowRight01Icon}
               size={12}
@@ -742,23 +742,23 @@ export const SourceControlPanel = memo(function SourceControlPanel({
         ) : null}
 
         {scm.panelState === "loading" ? (
-          <PanelCenter title="Loading repository" />
+          <PanelCenter title="正在加载仓库" />
         ) : null}
 
         {scm.panelState === "no-repo" ? (
           <PanelCenter
-            title="No repository"
-            body="The active workspace is not inside a Git repository."
+            title="非 Git 仓库"
+            body="当前工作区不在 Git 仓库内。"
           />
         ) : null}
 
         {scm.panelState === "error" ? (
           <PanelCenter
-            title="Source control error"
-            body={scm.statusError ?? "Unknown source control error"}
+            title="源代码管理错误"
+            body={scm.statusError ?? "未知源代码管理错误"}
             action={
               <Button size="sm" onClick={() => void scm.refresh()}>
-                Retry
+                重试
               </Button>
             }
           />
@@ -780,7 +780,7 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                   value={scm.commitMessage}
                   onChange={(event) => scm.setCommitMessage(event.target.value)}
                   onKeyDown={handleCommitShortcut}
-                  placeholder="Commit message"
+                  placeholder="提交信息"
                   rows={3}
                   className={cn(
                     "min-h-[72px] border-border resize-none rounded-lg bg-transparent px-3 pb-7 pt-2.5 text-[12.5px] leading-snug shadow-none placeholder:text-muted-foreground/65 focus-visible:ring-0 focus:border-0",
@@ -788,10 +788,10 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                 />
                 <div className="pointer-events-none absolute inset-x-3 bottom-1.5 flex items-center justify-between p-1 gap-2 text-[10px] tabular-nums text-muted-foreground/55">
                   {scm.commitMessage.length > 0 ? (
-                    <span>Ch: {scm.commitMessage.length}</span>
+                    <span>字符: {scm.commitMessage.length}</span>
                   ) : (
                     <span className="flex gap-2 items-center">
-                      {commitShortcut} <p>to commit</p>
+                      {commitShortcut} <p>提交</p>
                     </span>
                   )}
                 </div>
@@ -846,8 +846,8 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                 />
                 <span className="truncate font-medium text-foreground/85">
                   {stagedCount === 0
-                    ? "Nothing staged"
-                    : `${stagedCount} ${stagedCount === 1 ? "file" : "files"} staged`}
+                    ? "没有已暂存的更改"
+                    : `已暂存 ${stagedCount} 个文件`}
                 </span>
                 <span className="ml-auto shrink-0 truncate text-muted-foreground/65">
                   {pushStatusLabel}
@@ -863,7 +863,7 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                       disabled={!canCommit}
                       onClick={() => void scm.commit()}
                     >
-                      {scm.actionBusy === "commit" ? "Committing…" : "Commit"}
+                      {scm.actionBusy === "commit" ? "提交中…" : "提交"}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent
@@ -885,7 +885,7 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                       disabled={!scm.canPush || !!scm.actionBusy}
                       onClick={() => void scm.push()}
                     >
-                      {scm.actionBusy === "push" ? "Pushing…" : "Push"}
+                      {scm.actionBusy === "push" ? "推送中…" : "推送"}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent
@@ -976,21 +976,21 @@ export const SourceControlPanel = memo(function SourceControlPanel({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
+            <AlertDialogTitle>丢弃更改？</AlertDialogTitle>
             <AlertDialogDescription>
               {scm.pendingDiscard?.scope === "all"
-                ? `This will discard ${scm.pendingDiscard.label} and cannot be undone.`
+                ? `将丢弃 ${scm.pendingDiscard.label}，此操作无法撤销。`
                 : scm.pendingDiscard
-                  ? `Discard changes in "${scm.pendingDiscard.label}"? This cannot be undone.`
+                  ? `丢弃「${scm.pendingDiscard.label}」中的更改？此操作无法撤销。`
                   : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => scm.cancelPendingDiscard()}>
-              Cancel
+              取消
             </AlertDialogCancel>
             <AlertDialogAction onClick={() => void scm.confirmPendingDiscard()}>
-              Discard
+              丢弃
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1032,10 +1032,10 @@ function CleanTreeHint({ repoLabel }: { repoLabel: string }) {
         />
       </div>
       <div className="text-[12px] font-medium text-foreground">
-        Working tree clean
+        工作树是干净的
       </div>
       <div className="text-[10.5px] leading-snug text-muted-foreground">
-        on <span className="font-mono text-foreground/80">{repoLabel}</span>
+        位于 <span className="font-mono text-foreground/80">{repoLabel}</span>
       </div>
     </div>
   );
@@ -1078,10 +1078,8 @@ function DivergedBanner() {
         className="shrink-0"
       />
       <span className="min-w-0 flex-1 truncate">
-        <span className="font-medium text-foreground/85">
-          Diverged from upstream
-        </span>
-        <span className="ml-1 opacity-75">— resolve in terminal</span>
+        <span className="font-medium text-foreground/85">已与上游分叉</span>
+        <span className="ml-1 opacity-75">—— 请在终端解决</span>
       </span>
     </div>
   );
@@ -1098,16 +1096,16 @@ function ListHeader({
   return (
     <div className="flex h-7 items-center gap-2 px-3">
       <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/85">
-        Changes
+        更改
       </span>
       <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-border/60 px-1 text-[9.5px] font-semibold tabular-nums text-muted-foreground">
         {row.count}
       </span>
       {/* biome-ignore lint/a11y/noLabelWithoutControl: label wraps the Checkbox control implicitly; explicit htmlFor is not required here. */}
       <label className="ml-auto flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[10.5px] font-medium text-muted-foreground hover:text-foreground">
-        <span>All</span>
+        <span>全部</span>
         <Checkbox
-          aria-label="Stage all changes"
+          aria-label="暂存全部"
           checked={checkboxValue(headerCheckState)}
           disabled={actionBusy !== null}
           onCheckedChange={() => void onToggleAll()}
@@ -1148,7 +1146,7 @@ const EntryRow = memo(function EntryRow({
     ? joinPath(repoRoot.replace(/\\/g, "/"), entry.path.replace(/\\/g, "/"))
     : null;
   const isDeleted = entry.statusCode === "D";
-  const revealLabel = IS_MAC ? "Reveal in Finder" : "Reveal in File Manager";
+  const revealLabel = IS_MAC ? "在 Finder 中显示" : "在文件管理器中显示";
 
   return (
     <ContextMenu>
@@ -1216,7 +1214,7 @@ const EntryRow = memo(function EntryRow({
           {showDiscard ? (
             <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 data-[focused=true]:opacity-100 data-[selected=true]:opacity-100">
               <IconActionButton
-                label={`Discard ${entry.path}`}
+                label={`丢弃 ${entry.path}`}
                 disabled={disabled}
                 side="top"
                 onClick={() => onDiscardFile(entry)}
@@ -1259,14 +1257,14 @@ const EntryRow = memo(function EntryRow({
             void onSelectFile(entry);
           }}
         >
-          Open Diff
+          打开差异
         </ContextMenuItem>
         {!isDeleted && onOpenFile && absolutePath ? (
           <ContextMenuItem
             className={COMPACT_ITEM}
             onSelect={() => onOpenFile(absolutePath)}
           >
-            Open File
+            打开文件
           </ContextMenuItem>
         ) : null}
 
@@ -1278,7 +1276,7 @@ const EntryRow = memo(function EntryRow({
           disabled={disabled}
           onSelect={() => void onToggleStageFile(entry)}
         >
-          {entry.checkState === "checked" ? "Unstage" : "Stage"}
+          {entry.checkState === "checked" ? "取消暂存" : "暂存"}
         </ContextMenuItem>
         {entry.unstaged ? (
           <ContextMenuItem
@@ -1287,7 +1285,7 @@ const EntryRow = memo(function EntryRow({
             disabled={disabled}
             onSelect={() => onDiscardFile(entry)}
           >
-            Discard Changes
+            丢弃更改
           </ContextMenuItem>
         ) : null}
 
@@ -1298,14 +1296,14 @@ const EntryRow = memo(function EntryRow({
           className={COMPACT_ITEM}
           onSelect={() => void copyToClipboard(entry.path.replace(/\\/g, "/"))}
         >
-          Copy Relative Path
+          复制相对路径
         </ContextMenuItem>
         {absolutePath ? (
           <ContextMenuItem
             className={COMPACT_ITEM}
             onSelect={() => void copyToClipboard(absolutePath)}
           >
-            Copy Absolute Path
+            复制绝对路径
           </ContextMenuItem>
         ) : null}
 

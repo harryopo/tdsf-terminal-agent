@@ -63,6 +63,37 @@ except ImportError:
 # 默认 system prompt（构造时未提供则用此）
 # TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具说明，让 LLM 知道可调用 Skill
 # TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具说明，让 LLM 生成可执行命令
+# TDSF 修复 2026-08-29: skill 清单改为从 skills registry 动态生成（防新增技能包后 prompt 漂移）
+
+# registry 不可用时的静态兜底清单（与 skills/builtin/ 的 7 个技能包保持一致）
+_FALLBACK_SKILL_NAMES: tuple[str, ...] = (
+    "linux-ops",
+    "docker-management",
+    "selinux-baseline",
+    "ssh-troubleshoot",
+    "python-debug",
+    "systemd-troubleshoot",
+    "samba-setup",
+)
+
+
+def _skill_names_line() -> str:
+    """生成 system prompt 的"可用 Skill"清单行（动态同步 skills registry）
+
+    主路径：全局 SkillRegistry（懒加载，自动含 builtin + 用户自定义技能），
+    新增技能包无需改本文件。registry 未就绪/异常时降级为静态兜底清单。
+    """
+    try:
+        from skills.registry import get_global_registry
+
+        names = get_global_registry().list_names()
+        if names:
+            return " / ".join(names)
+    except Exception as e:
+        logger.warning(f"skill names dynamic lookup failed, fallback to static list: {e}")
+    return " / ".join(_FALLBACK_SKILL_NAMES)
+
+
 _DEFAULT_SYSTEM_PROMPT = (
     "You are TDSF Terminal Agent (Strands backend), a Linux operations assistant.\n"
     "You help users diagnose and resolve Linux server issues via SSH.\n\n"
@@ -73,8 +104,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- inspect_processes(mode, filter_user, filter_name, pid, top_n, ssh_session_id): 进程检查\n"
     "- network_diagnose(mode, target, count, port, ssh_session_id): 网络诊断\n"
     "- skill_invoke(skill_name, input): 调用已注册的 Skill 获取领域知识或执行特定任务\n"
-    "  可用 Skill: linux-ops / docker-management / selinux-baseline / "
-    "ssh-troubleshoot / python-debug\n"
+    f"  可用 Skill: {_skill_names_line()}\n"
     "  何时使用: 用户询问特定领域知识时（如\"如何排查 nginx 502\"）、"
     "需要查阅权威操作步骤时、需要执行预定义脚本时\n"
     "- suggest_command(intent, target_os): 根据用户意图生成一条可执行的 Linux 命令及解释\n"
@@ -91,6 +121,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     "严禁编造执行结果或假装命令已运行；应主动给出替代方案（更安全的拆分步骤或让用户手动执行）。\n"
     "- 工具返回 status=unavailable 时，说明 RustBridge 未配置（P2 双向 JSON-RPC 未启用），"
     "应告知用户当前为只读模式。\n"
+    "- live_context 显示\"未打开任何工作区\"时，告知用户先创建工作区（本地/WSL/SSH），"
+    "不要声称本地诊断工具可用。\n"
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"
     "- skill_invoke 返回 content 字段时是知识卡模式（参考内容），返回 stdout 字段时是 executor 模式（已执行）。\n"
     "- 使用 suggest_command 后，向用户说明命令作用并提示可点击 Insert 插入终端执行。\n"
@@ -926,8 +958,16 @@ class StrandsAgentAdapter:
             lines.append(
                 f"已连接 SSH 会话: {live['sshSessionId']}（可调用 ssh_command 工具执行远程命令）"
             )
-        else:
+        # TDSF 修复 2026-08-29: 区分"本地终端在跑/WSL"与"欢迎页啥都没开"。
+        # 欢迎页（无任何环境线索）时原 else 分支让 LLM 自称"本地终端模式"并幻觉
+        # 本地诊断工具可直接用，故拆出无环境分支引导用户先建工作区。
+        elif live.get("workspaceRoot") or live.get("cwd") or live.get("activeFile"):
             lines.append("未连接 SSH 会话（本地终端模式，ssh_command 工具将返回 unavailable）")
+        else:
+            lines.append(
+                "当前未打开任何工作区或终端——请先新建本地、WSL 或 SSH 工作区，"
+                "之后才能执行命令或运行诊断工具；当前不要声称任何工具可以直接使用。"
+            )
 
         if not lines:
             return input

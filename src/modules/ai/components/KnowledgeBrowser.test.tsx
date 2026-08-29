@@ -28,6 +28,34 @@ const HIT = {
   match_type: "fts",
 };
 
+// TDSF 魔改 2026-08-29: 分组浏览测试数据
+const DOC_HIT = {
+  id: "doc-1",
+  source: "builtin-docs",
+  title: "文件权限基础",
+  content: "chmod 用于修改文件权限。",
+  url: "docs/linux-basics.md",
+  tags: [],
+};
+
+const CRAWL_HIT = {
+  id: "crawl-1",
+  source: "nginx-docs",
+  title: "nginx 配置入门",
+  content: "nginx 配置说明。",
+  url: "",
+  tags: [],
+};
+
+const CASE_HIT = {
+  id: "case-1",
+  source: "case-20260801-boot-repair",
+  title: "修复启动失败案例",
+  content: "grub 修复步骤。",
+  url: "",
+  tags: [],
+};
+
 beforeEach(() => {
   vi.mocked(invokeRpc).mockReset();
 });
@@ -118,5 +146,45 @@ describe("KnowledgePanel — 知识库浏览器", () => {
     vi.mocked(invokeRpc).mockResolvedValue({ results: [] });
     render(<KnowledgePanel />);
     expect(await screen.findByText(/知识库为空/)).toBeTruthy();
+  });
+
+  // TDSF 魔改 2026-08-29: 按来源分组浏览
+  it("按来源分组渲染中文组头与条数 badge", async () => {
+    vi.mocked(invokeRpc).mockResolvedValue({
+      results: [HIT, DOC_HIT, CRAWL_HIT, CASE_HIT],
+    });
+    render(<KnowledgePanel />);
+
+    // 组头：映射中文名（*-docs → 前缀+文档；case- → 会话沉淀）
+    expect(await screen.findByText("内置命令卡片")).toBeTruthy();
+    expect(screen.getByText("内置教学文档")).toBeTruthy();
+    expect(screen.getByText("nginx文档")).toBeTruthy();
+    expect(screen.getByText("会话沉淀")).toBeTruthy();
+    // 组内条目仍在
+    expect(screen.getByText("nginx 配置入门")).toBeTruthy();
+  });
+
+  it("builtin-docs 组从 url 提取文件名显示为组内小标题", async () => {
+    vi.mocked(invokeRpc).mockResolvedValue({ results: [DOC_HIT] });
+    render(<KnowledgePanel />);
+
+    expect(await screen.findByText("linux-basics.md")).toBeTruthy();
+    expect(screen.getByText("文件权限基础")).toBeTruthy();
+  });
+
+  it("点击组头折叠该组（条目隐藏），再点展开恢复", async () => {
+    vi.mocked(invokeRpc).mockResolvedValue({ results: [HIT, DOC_HIT] });
+    render(<KnowledgePanel />);
+    await screen.findByText("ls — 列出目录内容");
+
+    // 折叠「内置命令卡片」组
+    fireEvent.click(screen.getByText("内置命令卡片"));
+    expect(screen.queryByText("ls — 列出目录内容")).toBeNull();
+    // 另一组不受影响
+    expect(screen.getByText("文件权限基础")).toBeTruthy();
+
+    // 再点展开恢复
+    fireEvent.click(screen.getByText("内置命令卡片"));
+    expect(screen.getByText("ls — 列出目录内容")).toBeTruthy();
   });
 });

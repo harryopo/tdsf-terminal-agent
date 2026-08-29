@@ -55,7 +55,12 @@ from strands_backend.tools.network_diagnostic import (
     make_network_diagnostic_tool,
 )
 from strands_backend.modes import AgentMode
-from strands_backend.adapter import StrandsAgentAdapter, TdsfStrandsCallbackHandler
+from strands_backend.adapter import (
+    StrandsAgentAdapter,
+    TdsfStrandsCallbackHandler,
+    _DEFAULT_SYSTEM_PROMPT,
+    _skill_names_line,
+)
 
 # P0-A1: adapter 缓存 key = (agent_id, session_id, perm, mode, teach)；
 # mock 塞缓存统一用缺省模式/无教学皮肤（invoke 未传 mode 时 parse 到 CONFIRM）
@@ -1061,6 +1066,79 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
 
         # 应至少调用 3 次 mood_change: thinking → working → done
         self.assertGreaterEqual(bus.emit_mood_change.call_count, 3)
+
+
+# ============================================================================
+# _build_prompt 工作区状态分支测试（2026-08-29 修复：欢迎页不再自称"本地终端模式"）
+# ============================================================================
+
+class TestBuildPromptWorkspaceStates(unittest.TestCase):
+    """_build_prompt 三分支：SSH 会话 / 本地环境（终端在跑）/ 欢迎页无环境"""
+
+    def _make_adapter(self) -> StrandsAgentAdapter:
+        return StrandsAgentAdapter(event_bus=make_mock_event_bus(), backend_enabled=False)
+
+    def test_no_workspace_and_no_ssh_says_open_workspace_first(self):
+        """无 workspaceRoot/cwd/activeFile 且无 sshSessionId：提示先建工作区，不再自称本地终端模式"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt("你好", {"session_id": "s1", "live": {}})
+        self.assertIn("未打开任何工作区", prompt)
+        self.assertNotIn("本地终端模式", prompt)
+
+    def test_with_cwd_keeps_local_terminal_mode_line(self):
+        """有 cwd（本地终端在跑）：保持"本地终端模式"文案"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt("ls", {"session_id": "s1", "live": {"cwd": "/var/log"}})
+        self.assertIn("本地终端模式", prompt)
+        self.assertIn("/var/log", prompt)
+
+    def test_with_workspace_root_keeps_local_terminal_mode_line(self):
+        """仅有 workspaceRoot（无 cwd）也属于本地环境分支，文案不变"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt(
+            "hi", {"session_id": "s1", "live": {"workspaceRoot": "/home/u/proj"}}
+        )
+        self.assertIn("本地终端模式", prompt)
+
+    def test_ssh_session_line_unchanged(self):
+        """有 sshSessionId：SSH 分支文案保持不变"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt("hi", {"session_id": "s1", "live": {"sshSessionId": "ssh-1"}})
+        self.assertIn("已连接 SSH 会话", prompt)
+        self.assertNotIn("未打开任何工作区", prompt)
+
+
+# ============================================================================
+# system prompt skill 清单同步测试（2026-08-29 修复：清单动态生成防漂移）
+# ============================================================================
+
+class TestSystemPromptSkillListSync(unittest.TestCase):
+    """system prompt 的 skill 清单应与 skills registry 同步（7 个内置技能全出现）"""
+
+    _ALL_BUILTIN = (
+        "linux-ops",
+        "docker-management",
+        "selinux-baseline",
+        "ssh-troubleshoot",
+        "python-debug",
+        "systemd-troubleshoot",
+        "samba-setup",
+    )
+
+    def test_default_system_prompt_contains_all_builtin_skills(self):
+        """_DEFAULT_SYSTEM_PROMPT 应含全部 7 个内置 skill 名"""
+        for name in self._ALL_BUILTIN:
+            self.assertIn(name, _DEFAULT_SYSTEM_PROMPT)
+
+    def test_skill_names_line_matches_registry(self):
+        """_skill_names_line 应返回 registry 实际注册的技能清单"""
+        from skills.registry import get_global_registry
+
+        registered = get_global_registry().list_names()
+        self.assertTrue(registered, "global registry 应至少加载内置技能")
+        line = _skill_names_line()
+        for name in registered:
+            self.assertIn(name, line)
 
 
 # ============================================================================
