@@ -41,75 +41,118 @@ logger = logging.getLogger("sidecar.knowledge.crawlers.registry")
 def _make_crawlers() -> dict[str, BaseCrawler]:
     """创建 14 个爬虫实例
 
+    受控多页参数（与 GenericCrawler/NginxCrawler 默认一致，显式写出便于
+    按源调整）：max_pages=30（最多抓 30 页）、max_depth=2（BFS 深度）、
+    delay=1.0（页间限速秒数）。
+
     Returns:
         source → crawler 实例的字典
     """
     return {
-        "nginx-docs": NginxCrawler(),
+        "nginx-docs": NginxCrawler(max_pages=30, max_depth=2, delay=1.0),
         "apache-docs": GenericCrawler(
             source="apache-docs",
             base_url="https://httpd.apache.org/docs/",
             tags=["apache", "httpd"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "mysql-docs": GenericCrawler(
             source="mysql-docs",
             base_url="https://dev.mysql.com/doc/",
             tags=["mysql", "database"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "redis-docs": GenericCrawler(
             source="redis-docs",
             base_url="https://redis.io/docs/",
             tags=["redis", "cache"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "docker-docs": GenericCrawler(
             source="docker-docs",
             base_url="https://docs.docker.com/",
             tags=["docker", "container"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "kubernetes-docs": GenericCrawler(
             source="kubernetes-docs",
             base_url="https://kubernetes.io/docs/",
             tags=["kubernetes", "k8s"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "systemd-docs": GenericCrawler(
             source="systemd-docs",
             base_url="https://systemd.io/docs/",
             tags=["systemd", "service"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "selinux-docs": GenericCrawler(
             source="selinux-docs",
             base_url="https://selinuxproject.org/page/Main_Page",
             tags=["selinux", "security"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "iptables-docs": GenericCrawler(
             source="iptables-docs",
             base_url="https://www.netfilter.org/documentation/",
             tags=["iptables", "firewall"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "ssh-docs": GenericCrawler(
             source="ssh-docs",
             base_url="https://www.ssh.com/docs/",
             tags=["ssh", "remote"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "bash-docs": GenericCrawler(
             source="bash-docs",
             base_url="https://www.gnu.org/software/bash/manual/",
             tags=["bash", "shell"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "python-docs": GenericCrawler(
             source="python-docs",
             base_url="https://docs.python.org/3/",
             tags=["python", "language"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "rust-docs": GenericCrawler(
             source="rust-docs",
             base_url="https://doc.rust-lang.org/",
             tags=["rust", "language"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
         "git-docs": GenericCrawler(
             source="git-docs",
             base_url="https://git-scm.com/docs/",
             tags=["git", "vcs"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
         ),
     }
 
