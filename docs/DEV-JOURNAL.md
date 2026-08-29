@@ -1876,3 +1876,18 @@ P2（中优先级 — 清理 + 文档）：
 **内容质量审查结论（用户问"Skill 不是官方文档/知识库不是官方源爬取"——如实报告）**：①内置 7 个 SKILL.md 全部为自编教学卡（author: TDSF，五步排障模板级，无官方原文摘录）；②知识库 builtin-docs 是仓库内 13 个自编教学 md（如"三级Linux_复习资料"是自编备考资料）、builtin-corpus 是自编命令卡片；③knowledge.crawl 爬虫框架配置了 14 个官方源（nginx/apache/mysql/redis/docker/k8s/systemd/selinux/ssh/bash 等）**但从未实际执行入库**（需显式调 RPC）。**待用户拍板**：a) 保持自编语料为教学主语料（现状）；b) 执行 knowledge.crawl 爬官方文档扩充（GenericCrawler 单页浅抓，量有限，建议后续做深抓）；c) 重写 SKILL.md 对齐官方文档（工作量大）。本轮先完成：排版修复让内容可读 + 来源分组让来源透明（builtin-docs 标签可见）+ skill 清单同步。
 
 **门禁**：vitest 1184 / pytest 1657 / tsc / lint 全绿。
+
+### §37.81 补记 4：知识库完整详实改造——abc 全做（2026-08-29，commit 296d8cf，23 文件 +3228/-744）
+
+用户拍板"abc 全做"+知识库分片聚合。四步：
+
+1. **A 后端**：①分块策略重写（sources.py）——固定 400 字→**标题边界优先**（`^#{1,3}` 切章节段，段超 1200 字段落二次切分，代码围栏内 `#` 不误判为标题——修了 linux_directory_logic 因此 32→85 块的真 bug），块 title=`文件名 · 章节标题`，12 文件 504→386 块（-23%）；②新 RPC `knowledge.list_files({source})`（按 url 聚合文件清单）/`knowledge.get_doc({url})`（块按序拼接**完整文档**）；③GenericCrawler 升级 **BFS 同域多页**（max_pages=30/depth=2/限速 1s/链接过滤/失败跳过）；④**修 crawl_and_index 未适配新版 CrawlerResult 接口的 bug**（fetch 已返回 dataclass 但调用方还在迭代 dict 列表，'not iterable' 全源失败——Task A 遗留，本轮实测抓出）；⑤`scripts/rebuild_knowledge.py` 运维脚本（--no-clear/--crawl <name>/--crawl-all/--offline）
+2. **B SKILL 重写**：7 个包全部重写 v2.0.0（157-190 行/包）——核心概念+18-26 条真实参数速查表+2-3 个分步排查场景（带预期输出）+易错点 6-7 条+验证方法+5 条官方参考 URL；保留 parser 的 When to use/Steps/Examples 三个英文锚点（test_skill_parser 断言依赖）；ssh-troubleshoot 保持无 executor（registry 知识卡分支唯一载体）
+3. **C 前端两级视图**：KnowledgeBrowser 浏览模式=来源分组→文件行（filename/N 块/X 字，懒加载 list_files per source 缓存）→get_doc 完整 md 预览（per url 缓存，"共 N 块·约 X 字"）；搜索命中显示所属文件名徽章+"第 N 块"定位；get_doc 失败 fail-closed 错误提示
+4. **D 实际执行**：rebuild 重建 12 文件 386 块；`--crawl-all` 修 bug 后 **10/14 官方源成功**（python/nginx/kubernetes/git/apache/rust/redis/iptables/docker 等 264 页约 26.5 万字符；systemd/selinux/ssh/bash 4 源国外站超时，可重跑补抓）；知识库总量 **276 文件/662 块/86.7 万字符**
+
+**报错与修改**：①crawl 全源 'CrawlerResult object is not iterable'——Task A 增强 generic.py 后未同步 crawl_and_index（接口断层），实测抓出修复+补 BFS 单测；②PowerShell 多 -m 长 message 断裂（含 `→` 等字符时偶发）→ 分段 amend 补齐；③sqlite_vec 警告为已知降级（FTS5-only 可用）。
+
+**复盘**：✅ abc 三线全落地且互相咬合（分块聚合后端 + 两级浏览前端 + 官方语料入库）；✅ 内容质量从"自编简版"升级为"自编详实教学语料 + 26.5 万字符官方文档"；⚠️ 遗留：①4 个国外源（gnu.org 等）超时待网络好时重跑 `--crawl systemd-docs/selinux-docs/ssh-docs/bash-docs`；②爬取页是单页粒度（title=页面标题），后续可按页面内标题二次分块提升检索精度；③导入新文档后前端浏览缓存需重开面板刷新。
+
+**待用户实测**：知识库面板——展开"内置教学文档"看文件列表（filename/N 块/X 字）→ 点文件看完整文档排版；搜索命中显示文件名+第 N 块；展开"爬取文档"分组看 10 个官方源的页面；Skill 面板看重写后的 7 个技能包详实内容。
