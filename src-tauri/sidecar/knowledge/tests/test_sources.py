@@ -69,14 +69,25 @@ class TestSources(unittest.TestCase):
         self.assertIn("哲学", joined)
 
     def test_import_docs_chunks_long_file(self):
-        """长文档分块入库（>400 字 → 多块）"""
-        long_text = "这是测试文档内容。" * 100  # ~900 字
+        """长文档分块入库（新策略：无标题 ~900 字合并为单块少碎片；
+        超 ~1200 字的多段落文档按段落二次切分为多块）"""
+        mid_text = "这是测试文档内容。" * 100  # ~900 字，无标题 → 单块
         doc = Path(self._tmp) / "guide.md"
-        doc.write_text(long_text, encoding="utf-8")
+        doc.write_text(mid_text, encoding="utf-8")
         result = import_docs(str(self._tmp))
         self.assertEqual(result["imported"], 1)
         self.assertEqual(result["errors"], 0)
-        self.assertGreater(self.rag.count(), 1)  # 多块
+        self.assertEqual(self.rag.count(), 1)  # 新策略：合并为单块（旧策略碎成 3 块）
+
+        long_text = "\n\n".join(
+            f"第{i}段运维知识讲解。" + "系统管理实践细节。" * 40 for i in range(12)
+        )  # ~5000 字多段落 → 二次切分多块
+        doc2 = Path(self._tmp) / "long.md"
+        doc2.write_text(long_text, encoding="utf-8")
+        import_docs(str(self._tmp))
+        doc_entry = self.rag.get_doc(str(doc2))
+        self.assertIsNotNone(doc_entry)
+        self.assertGreater(doc_entry["chunks"], 1)  # 多块
 
     def test_import_docs_invalid_dir(self):
         with self.assertRaises(ValueError):

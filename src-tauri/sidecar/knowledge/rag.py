@@ -25,6 +25,7 @@ import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from knowledge.fts5 import KnowledgeEntry, tokenize
 
@@ -256,6 +257,43 @@ class RagIndex:
             conn.commit()
         return True
 
+    def delete_by_url(self, url: str, id_prefix: str | None = None) -> int:
+        """按 url 删除全部条目（可选限定 id 前缀），返回删除条数
+
+        用于文档重新分块入库前的旧块清理：同一 url 的旧分块尾部 id 序号
+        可能超出新分块数（旧 ~400 字策略的残留块），仅 INSERT OR REPLACE
+        覆盖不到，必须先显式删除再入新块。
+
+        Args:
+            url: 条目 url（本地文件路径或网页 URL）
+            id_prefix: 可选，仅删除 id 以该前缀开头的条目（如 "doc-"），
+                       避免误删同 url 下其他来源的条目
+
+        Returns:
+            删除的条目数
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            sql = "SELECT id FROM entries WHERE url = ?"
+            params: list[Any] = [url]
+            if id_prefix:
+                sql += " AND id LIKE ?"
+                params.append(f"{id_prefix}%")
+            ids = [str(r["id"]) for r in conn.execute(sql, params).fetchall()]
+            for eid in ids:
+                rid = _rowid_for(eid)
+                conn.execute("DELETE FROM entries WHERE id = ?", (eid,))
+                conn.execute("DELETE FROM fts_entries WHERE rowid = ?", (rid,))
+                if self._vec_available:
+                    conn.execute(
+                        "DELETE FROM vec_entries WHERE rowid = ?", (rid,)
+                    )
+            conn.commit()
+        if ids:
+            logger.debug(f"delete_by_url: removed {len(ids)} entries for {url[:60]}")
+        return len(ids)
+
     def count(self) -> int:
         with self._lock:
             cur = self._conn.execute("SELECT COUNT(*) FROM entries")
@@ -403,6 +441,114 @@ class RagIndex:
                 for r in rows
             ]
 
+    def list_files(self, source: str | None = None) -> list[dict[str, Any]]:
+        """按 url 聚合列出文档文件（文件级浏览视图）
+
+        同一文件（同 url）的全部分片段落聚合为一条，便于"同文件的分片
+        放一起"浏览；url 为空的条目（corpus 卡片/会话沉淀等）跳过。
+
+        Args:
+            source: 可选，按来源过滤（如 "builtin-docs"）；None = 全部
+
+        Returns:
+            [{url, filename, title0, chunks, total_chars, source}, ...]
+            title0 为该文件第一个块的标题（按块序号排序）
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            sql = (
+                "SELECT id, source, title, content, url, rowid "
+                "FROM entries WHERE url != ''"
+            )
+            params: list[Any] = []
+            if source:
+                sql += " AND source = ?"
+                params.append(source)
+            sql += " ORDER BY url, rowid"
+            rows = conn.execute(sql, params).fetchall()
+
+        grouped: dict[str, list[sqlite3.Row]] = {}
+        for r in rows:
+            grouped.setdefault(str(r["url"]), []).append(r)
+
+        files: list[dict[str, Any]] = []
+        for url, group in grouped.items():
+            ordered = sorted(
+                group, key=lambda r: (_chunk_seq(str(r["id"])), int(r["rowid"]))
+            )
+            first = ordered[0]
+            files.append(
+                {
+                    "url": url,
+                    "filename": _filename_from_url(url),
+                    "title0": str(first["title"]),
+                    "chunks": len(ordered),
+                    "total_chars": sum(len(str(r["content"])) for r in ordered),
+                    "source": str(first["source"]),
+                }
+            )
+        files.sort(key=lambda f: (str(f["source"]), str(f["filename"])))
+        return files
+
+    def get_doc(self, url: str) -> dict[str, Any] | None:
+        """按 url 取完整文档（全部块按序号排序，content 以空行拼接）
+
+        Args:
+            url: 文档 url（与入库时的条目 url 完全一致）
+
+        Returns:
+            {url, filename, source, title, content, chunks, total_chars}；
+            url 不存在返回 None
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            rows = conn.execute(
+                "SELECT id, source, title, content, url, rowid "
+                "FROM entries WHERE url = ?",
+                (url,),
+            ).fetchall()
+        if not rows:
+            return None
+        ordered = sorted(
+            rows, key=lambda r: (_chunk_seq(str(r["id"])), int(r["rowid"]))
+        )
+        first = ordered[0]
+        return {
+            "url": url,
+            "filename": _filename_from_url(url),
+            "source": str(first["source"]),
+            "title": str(first["title"]),
+            "content": "\n\n".join(str(r["content"]) for r in ordered),
+            "chunks": len(ordered),
+            "total_chars": sum(len(str(r["content"])) for r in ordered),
+        }
+
+    def stats_by_source(self) -> list[dict[str, Any]]:
+        """按 source 统计（文件数/块数/总字符数，重建脚本与前端统计用）"""
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            rows = conn.execute(
+                """SELECT source,
+                          COUNT(*) AS chunks,
+                          COUNT(DISTINCT CASE WHEN url != '' THEN url END) AS files,
+                          SUM(LENGTH(content)) AS total_chars
+                   FROM entries
+                   GROUP BY source
+                   ORDER BY source"""
+            ).fetchall()
+        return [
+            {
+                "source": str(r["source"]),
+                "files": int(r["files"]),
+                "chunks": int(r["chunks"]),
+                "total_chars": int(r["total_chars"] or 0),
+            }
+            for r in rows
+        ]
+
     def get(self, entry_id: str) -> dict[str, Any] | None:
         """按 ID 取单条（详情弹窗用，与 list_entries 同源——必须与 list/search
         使用同一个 rag.db，否则列表与详情割裂（旧 FTS5Index 的 knowledge.db
@@ -438,6 +584,27 @@ def _rowid_for(entry_id: str) -> int:
     """entry_id → FTS/vec 行号（确定性映射：md5 前 8 字节）"""
     digest = hashlib.md5(entry_id.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") % (2**62)
+
+
+def _chunk_seq(entry_id: str) -> int:
+    """从条目 id 尾部提取块序号（"doc-<hash>-3" → 3；无尾部数字 → 0）
+
+    分块 id 统一为 <前缀>-<hash>-<序号> 格式；corpus 卡片/案例等无序号
+    条目恒为 0。用于 get_doc/list_files 的块排序（不能直接按 id 字符串排
+    ——字符串序 "10" < "2" 会乱序）。
+    """
+    tail = entry_id.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def _filename_from_url(url: str) -> str:
+    """从 url 提取文件名（本地路径与 http URL 通用）"""
+    if "://" in url:
+        path = urlparse(url).path
+    else:
+        path = url.replace("\\", "/")
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    return name or url
 
 
 def _pack_vec(vec: list[float]) -> bytes:
