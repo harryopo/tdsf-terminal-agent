@@ -816,16 +816,16 @@ class TestMakeAllOpsTools(unittest.TestCase):
 
     def test_returns_all_registered_tools(self):
         """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
-        （T2 后 = 13 运维/知识 + 6 魔改增强 = 19）"""
+        （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill = 20）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 20)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 19 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 19)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 20 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 20)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1370,7 +1370,7 @@ class TestSubAgentToolWhitelist(unittest.TestCase):
             tool_names=_SUB_AGENT_SPECS["main"]["tool_names"],
         )
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 20)
         self.assertIn("ssh_command", names)
 
     def test_whitelist_composes_with_l1_readonly(self):
@@ -1546,12 +1546,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 20)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 20)
 
 
 # ============================================================================

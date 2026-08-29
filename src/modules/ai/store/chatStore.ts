@@ -1,4 +1,5 @@
 import type { Chat, UIMessage } from "@ai-sdk/react";
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import {
   DEFAULT_MODEL_ID,
@@ -265,6 +266,56 @@ export function flushPersist(id?: string): void {
   for (const key of Array.from(pendingPersist.keys())) flushPersistEntry(key);
 }
 
+// ============================================================================
+// T14 (2026-08-28): 会话记忆沉淀 — 会话收尾时 fire-and-forget LLM 摘要写入决策库
+// ============================================================================
+
+/** 至少 2 轮对话（4 条消息）才值得沉淀，避免空转 LLM */
+const MIN_MEMORY_MESSAGES = 4;
+/** 每个应用生命周期内每会话至多沉淀一次（幂等兜底：sidecar 侧同 id 也是覆盖写） */
+const summarizedSessions = new Set<string>();
+
+/** UIMessage → {role, content} 扁平 transcript（只取 text part） */
+function extractTranscript(messages: UIMessage[]): {
+  role: string;
+  content: string;
+}[] {
+  return messages
+    .map((m) => ({
+      role: m.role,
+      content:
+        m.parts
+          ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
+          .map((p) => p.text)
+          .join("\n") ?? "",
+    }))
+    .filter((m) => m.content.trim().length > 0);
+}
+
+/**
+ * 会话收尾（新建/删除会话时对旧会话调用）：消息量达标则异步触发
+ * memory.summarize_session。fire-and-forget——沉淀失败静默，
+ * 不阻塞不提示（记忆是后台增值能力，不应干扰用户操作）。
+ */
+async function maybeSummarizeSession(id: string): Promise<void> {
+  if (!id || summarizedSessions.has(id)) return;
+  try {
+    // 优先内存中的 Chat（LRU 内）；被淘汰的会话回退持久化存储
+    let messages: UIMessage[] | undefined = chats.get(id)?.messages;
+    if (!messages) messages = (await loadMessages(id)) ?? undefined;
+    const transcript = messages ? extractTranscript(messages) : [];
+    if (transcript.length < MIN_MEMORY_MESSAGES) return;
+
+    summarizedSessions.add(id);
+    await invoke("ipc_invoke", {
+      method: "memory.summarize_session",
+      params: { session_id: id, transcript },
+    });
+  } catch {
+    // 静默：会话记忆沉淀失败不影响用户操作
+  }
+}
+
 export const useChatStore = create<StoreState>((set, get) => ({
   live: NOOP_LIVE,
   setLive: (live) => set({ live }),
@@ -386,6 +437,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
   },
 
   newSession: () => {
+    // T14: 对即将被切走的旧会话触发记忆沉淀（fire-and-forget）
+    const oldId = get().activeSessionId;
+    if (oldId) void maybeSummarizeSession(oldId);
+
     const id = newSessionId();
     const meta: SessionMeta = {
       id,
@@ -421,6 +476,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
   },
 
   deleteSession: (id) => {
+    // T14: 删除前对被删会话触发记忆沉淀（在清理 chats 之前取消息）
+    void maybeSummarizeSession(id);
+
     const remaining = get().sessions.filter((s) => s.id !== id);
     chats.get(id)?.stop();
     chats.delete(id);

@@ -505,6 +505,15 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register evidence: {e}")
 
+    # T14 (2026-08-28): 会话记忆沉淀（memory.summarize_session / memory.save_skill）
+    # 方案书 v3.0 §5 T14：会话结束 LLM 摘要写入决策库 + 摘要沉淀为 SKILL.md 热重载
+    try:
+        import session_memory
+        session_memory.register_methods(dispatcher)
+        logger.info("session_memory methods registered (memory.summarize_session / memory.save_skill)")
+    except Exception as e:
+        logger.exception(f"failed to register session_memory: {e}")
+
     # T-P1-09: TDSF.md 指令文件加载（启动加载 + watcher + system prompt 注入）
     try:
         import tdsf_loader
