@@ -387,6 +387,8 @@ pub fn run() {
             fs_backend::commands::fsb_capabilities,
             pty::pty_open,
             pty::pty_write,
+            // TDSF B2 (2026-08-29): 可视教学打字机（human_type pump 双端）
+            pty::pty_write_human,
             pty::pty_resize,
             pty::pty_close,
             pty::pty_close_all,
@@ -485,6 +487,7 @@ pub fn run() {
             // sftp_*: 远程文件 list/stat/read/write/mkdir/remove/rename
             ssh::ssh_connect,
             ssh::ssh_write,
+            ssh::ssh_write_human,
             ssh::ssh_resize,
             ssh::ssh_disconnect,
             ssh::ssh_status,

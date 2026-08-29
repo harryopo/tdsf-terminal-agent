@@ -183,7 +183,15 @@ export type Preferences = {
   // TDSF 2026-08-28: SSH 远端动态补全（carapace）偏好
   /** 是否在 SSH 终端显示"启用远端动态补全"小图标（默认 true；false = 所有会话不再提示/检测） */
   sshRemoteCarapacePrompt: boolean;
+  // TDSF B2 (2026-08-29): 可视教学打字机偏好（spec: add-agent-trust-modes Task 7）
+  /** Agent 命令注入模式："human"=逐字打字机演示 / "instant"=整段立即写入（默认） */
+  agentTypingMode: AgentTypingMode;
+  /** 打字速度倍率 0.2×~5×（expect send_human 参数等比缩放，默认 1.0） */
+  agentTypingSpeed: number;
 };
+
+/** Agent 命令注入节奏模式 */
+export type AgentTypingMode = "human" | "instant";
 
 export type EditorFormatter =
   | "lsp"
@@ -275,6 +283,9 @@ const KEY_TEACH_THRESHOLD = "teachThreshold";
 const KEY_SERVER_MONITOR_INTERVAL = "serverMonitorInterval";
 // TDSF 2026-08-28: SSH 远端动态补全 key
 const KEY_SSH_REMOTE_CARAPACE_PROMPT = "sshRemoteCarapacePrompt";
+// TDSF B2 (2026-08-29): 可视教学打字机 key
+const KEY_AGENT_TYPING_MODE = "agentTypingMode";
+const KEY_AGENT_TYPING_SPEED = "agentTypingSpeed";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = 8;
@@ -365,6 +376,10 @@ export const DEFAULT_PREFERENCES: Preferences = {
   serverMonitorInterval: 3000,
   // TDSF 2026-08-28: SSH 远端动态补全默认开启提示（无弹窗设计，仅小图标）
   sshRemoteCarapacePrompt: true,
+  // TDSF B2 (2026-08-29): 可视教学打字机默认偏好（保守：整段立即写入，
+  // 教学演示逐字模式由用户显式开启）
+  agentTypingMode: "instant",
+  agentTypingSpeed: 1.0,
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -573,6 +588,13 @@ export async function loadPreferences(): Promise<Preferences> {
     sshRemoteCarapacePrompt:
       get<boolean>(KEY_SSH_REMOTE_CARAPACE_PROMPT) ??
       DEFAULT_PREFERENCES.sshRemoteCarapacePrompt,
+    // TDSF B2 (2026-08-29): 可视教学打字机偏好读取
+    agentTypingMode: coerceAgentTypingMode(
+      get<string>(KEY_AGENT_TYPING_MODE) ?? DEFAULT_PREFERENCES.agentTypingMode,
+    ),
+    agentTypingSpeed: coerceAgentTypingSpeed(
+      get<number>(KEY_AGENT_TYPING_SPEED) ?? DEFAULT_PREFERENCES.agentTypingSpeed,
+    ),
   };
 }
 
@@ -922,6 +944,33 @@ export async function setSshRemoteCarapacePrompt(value: boolean): Promise<void> 
   await writePref(KEY_SSH_REMOTE_CARAPACE_PROMPT, value);
 }
 
+// TDSF B2 (2026-08-29): 可视教学打字机 setter + 校验函数
+
+/** 校验 agentTypingMode：只接受 human / instant，其他回退默认 instant。 */
+export function coerceAgentTypingMode(value: string): AgentTypingMode {
+  return value === "human" ? "human" : "instant";
+}
+
+/** 校验 agentTypingSpeed：clamp 到滑杆范围 0.2~5.0（与 Rust SPEED_MIN/MAX 对齐）。 */
+export const AGENT_TYPING_SPEED_MIN = 0.2;
+export const AGENT_TYPING_SPEED_MAX = 5.0;
+
+export function coerceAgentTypingSpeed(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_PREFERENCES.agentTypingSpeed;
+  return Math.min(
+    AGENT_TYPING_SPEED_MAX,
+    Math.max(AGENT_TYPING_SPEED_MIN, Math.round(value * 10) / 10),
+  );
+}
+
+export async function setAgentTypingMode(value: AgentTypingMode): Promise<void> {
+  await writePref(KEY_AGENT_TYPING_MODE, value);
+}
+
+export async function setAgentTypingSpeed(value: number): Promise<void> {
+  await writePref(KEY_AGENT_TYPING_SPEED, coerceAgentTypingSpeed(value));
+}
+
 export async function setAgentLaunchCommands(
   value: AgentLaunchCommands,
 ): Promise<void> {
@@ -1014,6 +1063,9 @@ export async function onPreferencesChange(
     [KEY_SERVER_MONITOR_INTERVAL]: "serverMonitorInterval",
     // TDSF 2026-08-28: SSH 远端动态补全偏好映射
     [KEY_SSH_REMOTE_CARAPACE_PROMPT]: "sshRemoteCarapacePrompt",
+    // TDSF B2 (2026-08-29): 可视教学打字机偏好映射
+    [KEY_AGENT_TYPING_MODE]: "agentTypingMode",
+    [KEY_AGENT_TYPING_SPEED]: "agentTypingSpeed",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

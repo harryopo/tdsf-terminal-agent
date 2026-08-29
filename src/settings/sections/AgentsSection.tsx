@@ -28,6 +28,8 @@ import {
 } from "@/modules/settings/store";
 import { SectionHeader } from "../components/SectionHeader";
 import { SettingRow } from "../components/SettingRow";
+import { AgentTypingCard } from "./AgentTypingCard";
+import { ApprovalWhitelistCard } from "./ApprovalWhitelistCard";
 
 const WORKSPACE_ENV_OPTIONS = [
   { value: "local", label: "本地 (local)" },
@@ -75,6 +77,17 @@ export function AgentsSection() {
             </SelectContent>
           </Select>
         </SettingRow>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>可视执行演示</Label>
+        {/* TDSF B2 (2026-08-29): 可视教学打字机（逐字/整段 + 速度滑杆） */}
+        <AgentTypingCard />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>审批白名单</Label>
+        <ApprovalWhitelistCard />
       </div>
 
       <div className="flex flex-col gap-2">

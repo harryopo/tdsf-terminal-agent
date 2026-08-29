@@ -61,19 +61,24 @@ function makeMessages(text: string): UIMessage[] {
 }
 
 // TDSF 魔改 2026-07-30 (Bug 5): runSidecarStream 新增必填 live 字段
-// 构造默认 live 上下文（无 SSH 会话），各用例按需覆盖 sshSessionId 字段
+// v3.1 (2026-08-29): live 新增可选 agentMode / teach 字段（三模式信任体系传参）
+// 构造默认 live 上下文（无 SSH 会话），各用例按需覆盖字段
 function makeLive(overrides: Partial<{
   cwd: string | null;
   terminalPrivate: boolean;
   workspaceRoot: string | null;
   activeFile: string | null;
   sshSessionId: number | null;
+  agentMode: "observe" | "confirm" | "auto";
+  teach: boolean;
 }> = {}): {
   cwd: string | null;
   terminalPrivate: boolean;
   workspaceRoot: string | null;
   activeFile: string | null;
   sshSessionId: number | null;
+  agentMode?: "observe" | "confirm" | "auto";
+  teach?: boolean;
 } {
   return {
     cwd: null,
@@ -115,7 +120,7 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
 
     const parts = await collect(
       runSidecarStream({
-        agentId: "coder",
+        agentId: "main",
         messages: makeMessages("hello"),
         input: "hello",
         live: makeLive(),
@@ -139,7 +144,7 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
 
     const parts = await collect(
       runSidecarStream({
-        agentId: "coder",
+        agentId: "main",
         messages: makeMessages("hello"),
         input: "hello",
         live: makeLive(),
@@ -155,7 +160,7 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
 });
 
 describe("runSidecarStream — Python agent name 映射", () => {
-  it("coder → 调用 invoke 时 params.name 应为 'coding'", async () => {
+  it("main → 调用 invoke 时 params.name 应为 'main'（v3.1 收敛后唯一入口）", async () => {
     _setDevModeCheck(() => false);
 
     mockInvoke.mockResolvedValue({ output: "done" });
@@ -163,7 +168,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
     const live = makeLive();
     await collect(
       runSidecarStream({
-        agentId: "coder",
+        agentId: "main",
         messages: makeMessages("test"),
         input: "test",
         live,
@@ -172,65 +177,37 @@ describe("runSidecarStream — Python agent name 映射", () => {
 
     // TDSF 魔改 2026-07-30 (Bug 5): state 现在含 live 字段
     // P0-3: invoke 额外携带 timeoutMs（可配置超时，默认 60000）
+    // v3.1 收敛: 旧 coder/explore/history/teach → coding/explore/history/teach
+    // 的映射已随子 agent 委派机制删除，TDSF_AGENTS 仅 main 一项。
     expect(mockInvoke).toHaveBeenCalledWith("ipc_invoke", {
       method: "agent.invoke",
       params: {
-        name: "coding",
+        name: "main",
         state: { input: "test", messages: makeMessages("test"), live },
       },
       timeoutMs: 60000,
     });
   });
 
-  it("explore → params.name='explore'", async () => {
+  it("state.live.agentMode / state.live.teach 原样透传（v3.1 三模式传参）", async () => {
     _setDevModeCheck(() => false);
     mockInvoke.mockResolvedValue({ output: "ok" });
 
+    const live = makeLive({ agentMode: "observe", teach: true });
     await collect(
       runSidecarStream({
-        agentId: "explore",
-        messages: makeMessages("scan"),
-        input: "scan",
-        live: makeLive(),
+        agentId: "main",
+        messages: makeMessages("test"),
+        input: "test",
+        live,
       }),
     );
 
     const call = mockInvoke.mock.calls[0];
-    expect(call[1].params.name).toBe("explore");
-  });
-
-  it("history → params.name='history'", async () => {
-    _setDevModeCheck(() => false);
-    mockInvoke.mockResolvedValue({ output: "ok" });
-
-    await collect(
-      runSidecarStream({
-        agentId: "history",
-        messages: makeMessages("last"),
-        input: "last",
-        live: makeLive(),
-      }),
-    );
-
-    const call = mockInvoke.mock.calls[0];
-    expect(call[1].params.name).toBe("history");
-  });
-
-  it("teach → params.name='teach'", async () => {
-    _setDevModeCheck(() => false);
-    mockInvoke.mockResolvedValue({ output: "ok" });
-
-    await collect(
-      runSidecarStream({
-        agentId: "teach",
-        messages: makeMessages("explain"),
-        input: "explain",
-        live: makeLive(),
-      }),
-    );
-
-    const call = mockInvoke.mock.calls[0];
-    expect(call[1].params.name).toBe("teach");
+    expect(call[1].params.name).toBe("main");
+    // sidecar adapter.py 读 state.live.agentMode（缺省 confirm）+ state.live.teach
+    expect(call[1].params.state.live.agentMode).toBe("observe");
+    expect(call[1].params.state.live.teach).toBe(true);
   });
 });
 
@@ -251,7 +228,7 @@ describe("runSidecarStream — 成功路径", () => {
 
     const parts = await collect(
       runSidecarStream({
-        agentId: "coder",
+        agentId: "main",
         messages: makeMessages("hi"),
         input: "hi",
         live: makeLive(),
@@ -286,7 +263,7 @@ describe("runSidecarStream — 成功路径", () => {
 
     const parts = await collect(
       runSidecarStream({
-        agentId: "teach",
+        agentId: "main",
         messages: makeMessages("q"),
         input: "q",
         live: makeLive(),
@@ -535,7 +512,7 @@ describe("runSidecarStream — thinking 作为 reasoning part", () => {
 
     const parts = await collect(
       runSidecarStream({
-        agentId: "coder",
+        agentId: "main",
         messages: makeMessages("hi"),
         input: "hi",
         live: makeLive(),

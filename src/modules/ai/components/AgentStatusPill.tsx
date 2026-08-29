@@ -1,90 +1,48 @@
 // ============================================================================
-// AgentStatusPill — 统一主 Agent 入口状态指示器（v2026-07-29 改造）
+// AgentStatusPill — 三模式信任体系模式指示器（v3.1 改造，方案书 §3.1/§4.1）
 // ============================================================================
 //
-// 与旧版 AgentSwitcher 的区别：
-//   - 旧版是"让用户手动切换 4 个 Agent Tab"的下拉菜单
-//   - 新版是"只读显示当前由 main_agent 路由到的子 Agent"的 pill
-//   - 用户无需选择，main_agent 在 Python 端根据意图自动路由
-//   - 通过 event_bus 推送的 agent_switch 事件实时更新
+// v3.1 收敛：4 子 agent 委派机制（含 agent_switch 路由事件）已下线，
+// 本组件从"显示当前路由到的子 Agent"改为"指示当前信任模式 + 教学皮肤"：
+//   - 观察 · 只读（observe）：只读分析，不执行任何写操作
+//   - 确认 · 审批（confirm）：写操作逐条审批后执行（默认）
+//   - 自动 · 执行（auto）：低危自动放行，高危仍需确认
+//   - teach 开启时叠加"教学"标记（叠加在任意模式上，不改变权限矩阵）
 //
 // 设计要点：
-//   - 视觉上像 Terax 的 AgentStatusPill：小巧、pulse 动画、清晰标签
-//   - 空闲时显示 "Main"（统一入口标识）
-//   - 工作时显示 "Teach" / "Coding" / "Debug" 等子 Agent 名
-//   - 思考中时 pulse 动画 + 圆点
+//   - 订阅本地 zustand 状态（agentMode/teach），无 agent 切换动画
+//     （子 agent 路由动画随委派机制一并移除）
+//   - busy 时状态圆点 emerald pulse（运行中反馈，与模式无关，保留）
+//   - 统一 muted 灰字风格，teach 标记用 violet（对齐 TeachCard 色系）
 //
-// 状态映射（与 Python AGENT_REGISTRY 对齐）：
-//   - null / "main" → 不显示文字（统一入口已合并到 Ctrl+I，顶部无需占位标签）
-//   - "coding"      → "Coding"
-//   - "explore"     → "Explore"
-//   - "history"     → "History"
-//   - "teach"       → "Teach"
-//   - "debug"       → "Debug"
-//   - "refactor"    → "Refactor"
-//   - "test"        → "Test"
-//   - "deploy"      → "Deploy"
-//
-// 复用：保留原 ICONS 导出（AGENT_ICONS）让 Header 等位置还能用 icon 集合。
+// 消费方：Header（顶栏）、StatusBar（状态栏）、AiComposerInput（输入区）、
+//         AiMiniWindow（浮动小窗 Header）——全部只读显示。
 // ============================================================================
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  AbsoluteIcon,
-  CodeIcon,
-  PaintBrush04Icon,
-  PencilEdit02Icon,
+  BookOpen01Icon,
+  EyeIcon,
+  FlashIcon,
   ShieldUserIcon,
-  SparklesIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { AGENT_MODE_META, type AgentMode } from "../agents/registry";
 import { useChatStore } from "../store/chatStore";
 
-// TDSF 魔改 2026-07-30: 视觉收敛 — 对齐上游 terax 风格
-// 原实现: 8 个子 Agent 各一种彩色 (emerald/sky/amber/violet/rose/cyan/lime/orange)
-//   → 视觉花哨, 与上游 terax 低调灰字风格不符。
-// 新实现: 所有子 Agent 统一用 muted-foreground 灰字, 仅状态点用单一 emerald 色
-//   表示"工作中"。空闲时状态点为 muted 灰。保持标签语义, 去除彩色噪音。
-/** 子 Agent 名称 → 显示标签的映射（统一灰字风格，对齐上游 terax） */
-const SUB_AGENT_LABEL: Record<string, { label: string }> = {
-  main: { label: "Main" },
-  coding: { label: "Coding" },
-  explore: { label: "Explore" },
-  history: { label: "History" },
-  teach: { label: "Teach" },
-  debug: { label: "Debug" },
-  refactor: { label: "Refactor" },
-  test: { label: "Test" },
-  deploy: { label: "Deploy" },
-};
-
-export type AgentIconId =
-  | "coder"
-  | "architect"
-  | "reviewer"
-  | "security"
-  | "designer"
-  | "spark";
-
-/** 向后兼容：保留旧版 ICONS 导出（Header 等位置仍在使用） */
-export const ICONS: Record<AgentIconId, typeof CodeIcon> = {
-  coder: CodeIcon,
-  architect: AbsoluteIcon,
-  reviewer: PencilEdit02Icon,
-  security: ShieldUserIcon,
-  designer: PaintBrush04Icon,
-  spark: SparklesIcon,
+/** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电，与切换器一致） */
+const MODE_ICON: Record<AgentMode, typeof EyeIcon> = {
+  observe: EyeIcon,
+  confirm: ShieldUserIcon,
+  auto: FlashIcon,
 };
 
 /**
- * AgentStatusPill — 只读显示当前由 main_agent 路由到的子 Agent
- *
- * 不再让用户手动切换 4 Agent Tab。统一入口 main_agent 在 Python 端
- * 根据用户意图自动路由到 8 个子 Agent，前端通过订阅 agent_switch
- * 事件实时更新 currentSubAgent。
+ * AgentStatusPill — 只读指示当前信任模式（+ 教学皮肤标记）
  *
  * @param isMiniWindow 是否在小窗口（mini window）模式下显示
+ * @param onClick      可选点击回调（保留给未来"点击打开模式菜单"扩展）
  */
 export function AgentStatusPill({
   isMiniWindow,
@@ -95,18 +53,13 @@ export function AgentStatusPill({
   onClick?: () => void;
   "data-testid"?: string;
 }) {
-  const currentSubAgent = useChatStore((s) => s.currentSubAgent);
+  const agentMode = useChatStore((s) => s.agentMode);
+  const teach = useChatStore((s) => s.teach);
   const status = useChatStore((s) => s.agentMeta.status);
   const isBusy = status === "thinking" || status === "streaming";
 
-  // 路由到的子 Agent 信息；main / null 时不显示占位文字
-  const routed = currentSubAgent
-    ? SUB_AGENT_LABEL[currentSubAgent] ?? null
-    : null;
-  const isRouted = !!routed;
-
-  // 非路由且不可点击时（如 Header 占位），不渲染任何元素
-  if (!isRouted && !onClick) return null;
+  const meta = AGENT_MODE_META[agentMode];
+  const ModeIcon = MODE_ICON[agentMode];
 
   return (
     <Button
@@ -121,11 +74,7 @@ export function AgentStatusPill({
         "border border-border/40 bg-card/40 text-muted-foreground",
         isMiniWindow && "text-xs mr-1",
       )}
-      title={
-        isRouted
-          ? `主 Agent 正在调度 ${routed.label} Agent`
-          : "统一主 Agent入口（Ctrl+I）"
-      }
+      title={`信任模式：${meta.badge} — ${meta.desc}${teach ? "（教学皮肤已开启）" : ""}`}
     >
       {/* 状态圆点：busy 时 emerald pulse, 空闲时 muted 灰 */}
       <span className="relative flex size-1.5 items-center justify-center">
@@ -143,27 +92,20 @@ export function AgentStatusPill({
         />
       </span>
       <HugeiconsIcon
-        icon={SparklesIcon}
+        icon={ModeIcon}
         size={11}
         strokeWidth={1.75}
         className="text-muted-foreground"
       />
-      {routed && (
-        <span className="max-w-[7rem] truncate text-muted-foreground">
-          {routed.label}
+      <span className="max-w-[8rem] truncate text-muted-foreground">
+        {meta.badge}
+      </span>
+      {teach && (
+        <span className="flex items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-violet-600 dark:text-violet-400">
+          <HugeiconsIcon icon={BookOpen01Icon} size={9} strokeWidth={1.75} />
+          <span>教学</span>
         </span>
       )}
     </Button>
   );
 }
-
-// ============================================================================
-// 向后兼容导出：保留 AgentSwitcher 别名指向新组件
-// ============================================================================
-//
-// v2026-07-29：旧版 AgentSwitcher 已废弃，统一为只读 AgentStatusPill。
-// 旧代码（AiComposerInput/AiMiniWindow/Header）的 import 仍然有效，
-// 行为从"切换菜单"变为"状态指示器"。后续清理时统一替换为 AgentStatusPill。
-// ============================================================================
-export { AgentStatusPill as AgentSwitcher };
-export { ICONS as AGENT_ICONS };

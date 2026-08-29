@@ -14,7 +14,10 @@ import { useTodosStore } from "./todoStore";
 import type { AgentUsage } from "../lib/agent";
 import { EMPTY_PROVIDER_KEYS, type ProviderKeys, type CustomEndpointKeys } from "../lib/keyring";
 import {
+  DEFAULT_AGENT_MODE,
   DEFAULT_TDSF_AGENT,
+  isAgentMode,
+  type AgentMode,
   type TdsfAgentId,
 } from "../agents/registry";
 import {
@@ -29,6 +32,8 @@ import {
   type SessionMeta,
 } from "../lib/sessions";
 import { pushRecentModel } from "../lib/modelPrefs";
+// TDSF B1 (2026-08-29): 终端 block 流水账类型（<terminal-history> 数据源）
+import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 
 export type Live = {
   getCwd: () => string | null;
@@ -55,6 +60,29 @@ export type Live = {
    * 返回 null 表示当前无活跃 SSH 会话（本地终端模式）。
    */
   getSshRustSessionId: () => number | null;
+  /**
+   * TDSF B1 (2026-08-29, 方案书 §4.7): 一次性环境探测
+   * {os_pretty_name, kernel, shell}——SSH 会话经 sidecar→RustBridge 在
+   * 目标机执行合并命令，本地会话读本地信息；sidecar 会话级缓存。
+   * 失败返回 null（<environment> 分区静默省略，不阻塞对话）。
+   */
+  getEnvironmentProbe?: () => Promise<EnvironmentProbe | null>;
+  /**
+   * TDSF B1: 活跃终端最近 N 条 block 流水账
+   * （command/cwd/exit/duration/author/outputTail），供
+   * <terminal-history> 注入。无活跃终端返回 []。
+   */
+  getTerminalHistory?: () => TerminalBlock[];
+};
+
+/** 环境探测结果（sidecar system.probe_env 返回，snake_case 对齐协议） */
+export type EnvironmentProbe = {
+  ok: boolean;
+  os_pretty_name: string;
+  kernel: string;
+  shell: string;
+  /** local = 本地探测 / ssh = 远端探测 / cache = 会话级缓存命中 */
+  source: "local" | "ssh" | "cache";
 };
 
 export type AgentRunStatus =
@@ -135,22 +163,47 @@ type StoreState = {
   /**
    * 当前激活的 TDSF Agent id
    *
-   * v2026-07-29 改造：统一主 Agent 入口
-   *   - 默认 'main'：所有消息统一走 Main Agent，由后端 main_agent 智能路由
-   *   - 用户无需手动切换 4 个 Tab，UI 上 AgentStatusPill 只读显示当前路由到的子 Agent
-   *   - 后端 main_agent 通过 agent_switch 事件推送实际激活的子 Agent，
-   *     前端通过 patchAgentMeta({ currentSubAgent }) 实时更新
+   * v3.1 收敛（方案书 §4.1）：子 agent 委派机制已删除，此值恒为 'main'——
+   * 它只剩一个职责：非 null 时 transport.ts 路由到 Sidecar 路径
+   * （null 才走 Vercel AI SDK fallback）。保留字段维持该路由开关语义。
    *
-   * 与 selectedModelId 解耦：
-   *   - selectedModelId 控制 Vercel AI SDK fallback 路径用哪个 LLM
-   *   - tdsfAgentId 控制是否走 Sidecar 路径 + 走哪个 Python agent
-   *
-   * transport.ts 通过 `getTdsfAgentId()` 读取此值：
-   *   - 非 null → 走 runSidecarStream（Python Sidecar）
-   *   - null    → 走 runAgentStream（Vercel AI SDK fallback）
+   * 能力差异改由 agentMode（三模式信任体系）+ teach（教学皮肤）表达，
+   * 两者随 agent.invoke 的 state.live 下发 sidecar。
    */
   tdsfAgentId: TdsfAgentId;
   setTdsfAgent: (id: TdsfAgentId) => void;
+
+  /**
+   * Agent 信任模式（方案书 v3.1 三模式：observe/confirm/auto）
+   *
+   * 会话级状态 + per-session 持久化（SessionMeta.agentMode）：
+   *   - setAgentMode 写回活跃会话元数据（saveSessionsList 落盘）
+   *   - hydrateSessions / switchSession / newSession 时恢复或重置
+   *   - chatRuntime.getLive() 每轮读取，随 state.live.agentMode 下发 sidecar
+   *   - 缺省 confirm（中间态最安全）
+   */
+  agentMode: AgentMode;
+  setAgentMode: (mode: AgentMode) => void;
+
+  /**
+   * 教学皮肤开关（叠加在任意模式上，不改变权限矩阵）
+   *
+   * per-session 持久化（SessionMeta.teach）；chatRuntime.getLive() 每轮读取，
+   * 随 state.live.teach 下发 sidecar；前端 AiChat 按 teach + 输出契约渲染 TeachCard。
+   */
+  teach: boolean;
+  setTeach: (on: boolean) => void;
+
+  /**
+   * 会话级只读免审标志（Task 5，方案书 v3.1 §4.5 免确认记忆三级）
+   *
+   * ⚡「批准且本会话只读免审」按钮点击时置位；纯内存不落盘（spec：
+   * 会话级不落盘），切会话/新建会话时重置为 false。Python 侧经
+   * needs_you.respond 的 trust 响应同步记录（trust_store.SessionTrustStore），
+   * 本字段仅承载前端会话状态（审批卡提示等 UI 消费）。
+   */
+  sessionReadOnlyTrust: boolean;
+  setSessionReadOnlyTrust: (on: boolean) => void;
 
   /**
    * 终端执行模式开关（TDSF 魔改 2026-08-09）
@@ -161,16 +214,6 @@ type StoreState = {
    */
   autoExecuteInTerminal: boolean;
   setAutoExecuteInTerminal: (on: boolean) => void;
-
-  /**
-   * 当前由 main_agent 路由到的子 Agent 名称（只读状态，由后端推送）
-   *
-   * 例如：用户说"如何用 systemctl" → main_agent 路由到 teach → 前端显示 'teach'
-   * 用户说"修复 nginx 配置" → main_agent 路由到 coding → 前端显示 'coding'
-   * 用户说"排查根因" → main_agent 路由到 debug → 前端显示 'debug'
-   */
-  currentSubAgent: string | null;
-  setCurrentSubAgent: (name: string | null) => void;
 
   mini: MiniState;
   openMini: () => void;
@@ -316,6 +359,50 @@ async function maybeSummarizeSession(id: string): Promise<void> {
   }
 }
 
+/**
+ * v3.1 三模式 per-session 持久化辅助
+ * ----------------------------------------------------------------------------
+ * 模式/教学开关是会话级状态：切换会话要恢复该会话上次的模式，重启后也要恢复
+ * （spec: add-agent-trust-modes "模式 per-session 持久化"）。
+ * 存储复用现有会话元数据管道：SessionMeta.agentMode / SessionMeta.teach，
+ * 随 saveSessionsList 落盘（tdsf-sessions.json），不引入新存储。
+ */
+
+/** 把 agentMode/teach 增量写回活跃会话元数据并落盘（setAgentMode/setTeach 用） */
+function persistModeToActiveSession(
+  state: { activeSessionId: string | null; sessions: SessionMeta[] },
+  patch: { agentMode?: AgentMode; teach?: boolean },
+): void {
+  const id = state.activeSessionId;
+  if (!id) return;
+  const meta = state.sessions.find((s) => s.id === id);
+  if (!meta) return;
+  // 同值短路：避免每档点击都重写 sessions 数组（触发订阅者重渲染 + store 写）
+  if (
+    (patch.agentMode === undefined || meta.agentMode === patch.agentMode) &&
+    (patch.teach === undefined || meta.teach === patch.teach)
+  ) {
+    return;
+  }
+  const next = state.sessions.map((s) => (s.id === id ? { ...s, ...patch } : s));
+  useChatStore.setState({ sessions: next });
+  void saveSessionsList(next);
+}
+
+/** 从会话元数据恢复模式/教学开关到 store（缺字段回退默认值，兼容老会话） */
+function restoreModeFromMeta(meta: SessionMeta | undefined): void {
+  const mode =
+    meta?.agentMode && isAgentMode(meta.agentMode)
+      ? meta.agentMode
+      : DEFAULT_AGENT_MODE;
+  useChatStore.setState({
+    agentMode: mode,
+    teach: meta?.teach === true,
+    // Task 5: 会话级只读免审不落盘——切会话一律重置（spec「会话级不落盘」）
+    sessionReadOnlyTrust: false,
+  });
+}
+
 export const useChatStore = create<StoreState>((set, get) => ({
   live: NOOP_LIVE,
   setLive: (live) => set({ live }),
@@ -342,16 +429,30 @@ export const useChatStore = create<StoreState>((set, get) => ({
     void pushRecentModel(id);
   },
 
-  // TDSF Agent: 默认 'main'，统一入口（v2026-07-29 改造）
+  // TDSF Agent: 默认 'main'，唯一入口（v3.1 收敛）
   tdsfAgentId: DEFAULT_TDSF_AGENT,
   setTdsfAgent: (id) => set({ tdsfAgentId: id }),
 
+  // Agent 信任模式（v3.1 三模式）：缺省 confirm + per-session 持久化
+  agentMode: DEFAULT_AGENT_MODE,
+  setAgentMode: (mode) => {
+    set({ agentMode: mode });
+    persistModeToActiveSession(get(), { agentMode: mode });
+  },
+
+  // 教学皮肤开关（叠加在任意模式上）：缺省关 + per-session 持久化
+  teach: false,
+  setTeach: (on) => {
+    set({ teach: on });
+    persistModeToActiveSession(get(), { teach: on });
+  },
+
+  // 会话级只读免审（Task 5 ⚡）：纯内存不落盘，切会话随 restoreModeFromMeta 重置
+  sessionReadOnlyTrust: false,
+  setSessionReadOnlyTrust: (on) => set({ sessionReadOnlyTrust: on }),
+
   autoExecuteInTerminal: false,
   setAutoExecuteInTerminal: (on) => set({ autoExecuteInTerminal: on }),
-
-  // 当前由 main_agent 路由到的子 Agent 名称（由后端 agent_switch 事件推送）
-  currentSubAgent: null,
-  setCurrentSubAgent: (name) => set({ currentSubAgent: name }),
 
   mini: { open: false },
   openMini: () => set({ mini: { open: true } }),
@@ -429,6 +530,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
     }
     void saveActiveId(freshId);
 
+    // v3.1: 恢复激活会话的信任模式/教学开关（重启后恢复上次选择）
+    restoreModeFromMeta(reusable ?? undefined);
+
     set({
       sessions: nextSessions,
       activeSessionId: freshId,
@@ -450,6 +554,8 @@ export const useChatStore = create<StoreState>((set, get) => ({
     };
     const next = [meta, ...get().sessions];
     set({ sessions: next, activeSessionId: id, agentMeta: IDLE_META });
+    // v3.1: 新会话重置为默认模式（确认 + 教学关）
+    restoreModeFromMeta(meta);
     void saveSessionsList(next);
     void saveActiveId(id);
     return id;
@@ -463,6 +569,8 @@ export const useChatStore = create<StoreState>((set, get) => ({
     // this session. Subsequent switches reuse the cached Chat instance.
     const flip = () => {
       set({ activeSessionId: id, agentMeta: IDLE_META });
+      // v3.1: 切会话恢复该会话上次选用的模式/教学开关
+      restoreModeFromMeta(get().sessions.find((s) => s.id === id));
       void saveActiveId(id);
     };
     if (chats.has(id) || seedMessages.has(id)) {
@@ -499,6 +607,8 @@ export const useChatStore = create<StoreState>((set, get) => ({
         updatedAt: Date.now(),
       };
       set({ sessions: [fresh], activeSessionId: fresh.id });
+      // v3.1: 全删后新建的会话重置为默认模式
+      restoreModeFromMeta(fresh);
       void saveSessionsList([fresh]);
       void saveActiveId(fresh.id);
       return;
@@ -508,7 +618,11 @@ export const useChatStore = create<StoreState>((set, get) => ({
     const nextActive = wasActive ? remaining[0].id : get().activeSessionId;
     set({ sessions: remaining, activeSessionId: nextActive });
     void saveSessionsList(remaining);
-    if (wasActive) void saveActiveId(nextActive);
+    if (wasActive) {
+      void saveActiveId(nextActive);
+      // v3.1: 激活会话被删后切到剩余首个，恢复其模式/教学开关
+      restoreModeFromMeta(remaining.find((s) => s.id === nextActive));
+    }
   },
 
   renameSession: (id, title) => {

@@ -123,35 +123,30 @@ class TestEvidenceIntegration(unittest.TestCase):
         self.assertEqual(evs[0]["detail"], "ls -la")
 
     def test_agent_delegation_produces_evidence(self):
-        """子 agent 委派完成 → 证据记录（agent:teach）"""
+        """P0-A1: 委派机制已删除——main handler 不再产生 agent: 前缀证据。
+
+        原"子 agent 完成回填 → agent:teach 证据"用例随 agent-as-tool 委派
+        机制删除；保留用例名验证 handler 构造不再需要 sub_agent_names，
+        且普通 invoke 不产生 agent: 前缀证据（fail-safe 回归）。
+        """
         from unittest.mock import MagicMock
 
         from strands_backend.adapter import TdsfStrandsCallbackHandler
 
         reset_global_tracker()
         bus = MagicMock()
+        # P0-A1: handler 签名已无 sub_agent_names 参数
         handler = TdsfStrandsCallbackHandler(
             event_bus=bus,
             agent_name="main",
             session_id="ev-s2",
-            sub_agent_names={"teach", "coding", "explore", "history"},
         )
-        # 模拟子 agent 完成回填
-        handler._agent_call_started["tu-9"] = "teach"
-        handler._emit_agent_call_completed(
-            "teach",
-            "tu-9",
-            {
-                "toolUseId": "tu-9",
-                "status": "success",
-                "content": [{"text": "## 教学输出"}],
-            },
-        )
+        self.assertFalse(hasattr(handler, "sub_agent_names"))
+        # main 事件流只发 agent_message/mood，无 agent: 前缀 tool_call
+        handler(data="hello", start=True)
+        bus.emit_tool_call.assert_not_called()
         tracker = get_global_tracker()
-        evs = tracker.list("ev-s2")
-        self.assertEqual(len(evs), 1)
-        self.assertEqual(evs[0]["tool_name"], "agent:teach")
-        self.assertIn("教学输出", evs[0]["result"])
+        self.assertEqual(tracker.list("ev-s2"), [])
 
 
 if __name__ == "__main__":

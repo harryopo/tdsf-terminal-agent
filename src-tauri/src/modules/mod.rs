@@ -96,3 +96,12 @@ pub mod shell_history;
 // (git checkout 弹真实分支 / docker 弹容器等)。500ms 超时强杀 + 任何失败
 // 静默降级空候选 —— 前端零成本回退 Fig specs 静态参数层, 补全只增强不阻断
 pub mod param_complete;
+
+// ============================================================================
+// TDSF 自有模块（B2 可视教学打字机）
+// ============================================================================
+
+// human_type pump (spec: add-agent-trust-modes Task 7 / 方案书 v3.1 §4.8)
+// expect send_human Weibull 逆变换采样 + 输入净化 + sudo 降级检测。
+// 逐字符写 PTY / SSH channel，远端 echo 天然形成打字视觉（前端零改动）。
+pub mod human_type;
