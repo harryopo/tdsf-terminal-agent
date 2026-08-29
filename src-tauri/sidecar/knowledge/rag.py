@@ -104,15 +104,35 @@ def _load_embed_model():
 
 def embed_text(text: str) -> list[float] | None:
     """生成文本向量（None = 模型不可用，调用方降级 FTS5-only）"""
+    batch = embed_batch([text])
+    return batch[0] if batch else None
+
+
+def embed_batch(texts: list[str]) -> list[list[float]] | None:
+    """批量生成向量（None = 模型不可用）。单次 ONNX 前向，662 块 <10s"""
     model = _load_embed_model()
     if model is None:
         return None
     try:
-        vec = next(model.embed([text[:500]]))
-        return [float(x) for x in vec]
+        trimmed = [t[:2000] for t in texts]
+        return [[float(x) for x in vec] for vec in model.embed(trimmed)]
     except Exception as e:
-        logger.warning(f"embed failed: {e}")
+        logger.warning(f"embed_batch failed: {e}")
         return None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """余弦相似度（rerank 精排用；零向量返回 0）"""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def hash_embedding(text: str, dim: int = _EMBED_DIM) -> list[float]:
@@ -190,6 +210,14 @@ class RagIndex:
                 tokenize='unicode61'
             )"""
         )
+        # 嵌入缓存（content hash → 向量）：启动幂等索引先删后加时，同内容
+        # 直接命中缓存免重算——662 块全量真嵌入一次仅数秒，重启重建零推理
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS embed_cache (
+                content_hash TEXT PRIMARY KEY,
+                embedding BLOB NOT NULL
+            )"""
+        )
         conn.commit()
         self._conn = conn
 
@@ -197,11 +225,43 @@ class RagIndex:
     # 写入
     # ------------------------------------------------------------------
 
-    def add(self, entry: KnowledgeEntry) -> str:
-        """入库一条知识（向量 + FTS5 + 元数据三写）"""
+    def add(
+        self,
+        entry: KnowledgeEntry,
+        dedupe: bool = True,
+        min_chars: int = 0,
+    ) -> str:
+        """入库一条知识（向量 + FTS5 + 元数据三写）
+
+        Args:
+            entry: 知识条目
+            dedupe: 同 content 去重（排除自身——同 id 幂等覆盖合法）。
+                    跳过时返回 ""（调用方不计数）。爬取/导入批量语料
+                    建议开启；单条 case 沉淀默认开也无害（同 id 覆盖不受影响）。
+            min_chars: 超短块过滤阈值，0 = 不过滤（默认）。批量爬取/导入
+                       建议传 30（过滤解析残渣）；单条 case/测试传 0。
+
+        Returns:
+            入库成功返回 entry.id；被治理规则跳过返回 ""
+        """
         with self._lock:
             conn = self._conn
             assert conn is not None
+            # 内容治理 1：超短块过滤（仅批量语料显式启用，默认关）
+            if min_chars and len(entry.content.strip()) < min_chars:
+                logger.debug(f"add skipped (too short): {entry.title[:40]}")
+                return ""
+            # 内容治理 2：同 content 去重（排除自身——同 id 幂等覆盖合法）
+            if dedupe:
+                dup = conn.execute(
+                    "SELECT id FROM entries WHERE content = ? AND id != ? LIMIT 1",
+                    (entry.content, entry.id),
+                ).fetchone()
+                if dup is not None:
+                    logger.debug(
+                        f"add skipped (duplicate of {dup['id']}): {entry.title[:40]}"
+                    )
+                    return ""
             rowid = _rowid_for(entry.id)
             tags_json = _json_dumps(entry.tags)
             # 三表统一用确定性 rowid（md5(entry_id)），保证 hybrid_search
@@ -233,10 +293,29 @@ class RagIndex:
                 ),
             )
             if self._vec_available:
-                vec = embed_text(f"{entry.title}\n{entry.content}")
-                if vec is None:
-                    vec = hash_embedding(f"{entry.title}\n{entry.content}")
-                vec_bytes = _pack_vec(vec)
+                # 嵌入缓存：同 content hash 直接复用向量（启动幂等重建零推理）
+                chash = _content_hash(f"{entry.title}\n{entry.content}")
+                cached = conn.execute(
+                    "SELECT embedding FROM embed_cache WHERE content_hash = ?",
+                    (chash,),
+                ).fetchone()
+                if cached is not None:
+                    vec_bytes = cached["embedding"]
+                else:
+                    vec = embed_text(f"{entry.title}\n{entry.content}")
+                    if vec is None:
+                        vec = hash_embedding(f"{entry.title}\n{entry.content}")
+                    vec_bytes = _pack_vec(vec)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO embed_cache (content_hash, embedding) "
+                        "VALUES (?, ?)",
+                        (chash, vec_bytes),
+                    )
+                # vec0 虚拟表不支持 INSERT OR REPLACE（无 conflict 语义），
+                # 幂等覆盖须 DELETE + INSERT（同 rowid 双写/重建安全）
+                conn.execute(
+                    "DELETE FROM vec_entries WHERE rowid = ?", (rowid,)
+                )
                 conn.execute(
                     "INSERT INTO vec_entries (rowid, embedding) VALUES (?, ?)",
                     (rowid, vec_bytes),
@@ -351,11 +430,12 @@ class RagIndex:
                 logger.debug(f"fts5 search failed: {e}")
 
             # 2. 向量路（语义）——BGE 查询前缀按中英文自动切换
+            q_vec: list[float] | None = None
             if self._vec_available:
                 prefix = _BGE_QUERY_PREFIX if _contains_chinese(query) else _BGE_QUERY_PREFIX_EN
-                vec = embed_text(prefix + query)
-                if vec is not None:
-                    q_bytes = _pack_vec(vec)
+                q_vec = embed_text(prefix + query)
+                if q_vec is not None:
+                    q_bytes = _pack_vec(q_vec)
                     try:
                         cur = conn.execute(
                             """SELECT rowid, distance
@@ -416,6 +496,23 @@ class RagIndex:
                         "rrf_score": round(m["score"], 4),
                     }
                 )
+
+            # 5. rerank 精排（向量语义可用时）：RRF 是排名融合，不知道候选与
+            #    query 的真实相关度——用 BGE 对 top_k 候选批量算 query-doc 余弦
+            #    相似度重排（bi-encoder 精排，毫秒级；真 cross-encoder 列为后续
+            #    可选）。hash 降级模式下无语义，跳过。
+            if q_vec is not None and results:
+                try:
+                    batch = embed_batch([r["content"] for r in results])
+                    if batch is not None and len(batch) == len(results):
+                        sims = [_cosine(q_vec, dv) for dv in batch]
+                        for r, sim in zip(results, sims):
+                            r["similarity"] = round(sim, 4)
+                        results.sort(key=lambda r: -r["similarity"])
+                        for r in results:
+                            r["reranked"] = True
+                except Exception as e:
+                    logger.debug(f"rerank skipped: {e}")
             return results
 
     def list_entries(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:

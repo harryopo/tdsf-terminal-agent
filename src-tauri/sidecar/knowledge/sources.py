@@ -33,6 +33,7 @@ from knowledge.rag import get_global_rag
 logger = logging.getLogger("sidecar.knowledge.sources")
 
 _CORPUS_DIR = Path(__file__).parent / "corpus"
+_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "builtin"
 _SECTION_MAX_CHARS = 1200  # 章节段二次切分阈值（字符）
 
 # markdown 1-3 级标题行（4 级以下标题不作为段落边界，保持章内聚合）
@@ -105,6 +106,37 @@ def load_builtin_corpus() -> int:
                 logger.info(f"builtin doc indexed: {f.name} ({len(chunks)} chunks)")
             except Exception as e:
                 logger.warning(f"doc load failed {f.name}: {e}")
+
+    # 3. skills/builtin/*/SKILL.md 技能包入库（source=builtin-skills）
+    #    skill_invoke 是主动调用通道，RAG 是被动检索通道——把技能正文也
+    #    索引进知识库，用户问相关问题时能检索到（如 samba/SELinux 排障）
+    skills_dir = _SKILLS_DIR
+    if skills_dir.exists():
+        for f in sorted(skills_dir.glob("*/SKILL.md")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore").strip()
+                if not text:
+                    continue
+                rag.delete_by_url(str(f), id_prefix="skill-doc-")
+                chunks = _chunk_markdown(text)
+                doc_hash = uuid.uuid5(uuid.NAMESPACE_URL, str(f))
+                for i, (heading, chunk) in enumerate(chunks):
+                    title = f"{f.parent.name} · {heading}" if heading else f.parent.name
+                    entry = KnowledgeEntry(
+                        id=f"skill-doc-{doc_hash}-{i}",
+                        source="builtin-skills",
+                        title=title,
+                        content=chunk,
+                        url=str(f),
+                        tags=["技能包", f"file:{f.parent.name}"],
+                    )
+                    rag.add(entry)
+                added += len(chunks)
+                logger.info(
+                    f"builtin skill indexed: {f.parent.name} ({len(chunks)} chunks)"
+                )
+            except Exception as e:
+                logger.warning(f"skill load failed {f.parent.name}: {e}")
 
     return added
 

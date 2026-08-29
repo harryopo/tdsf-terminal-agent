@@ -163,6 +163,8 @@ def test_load_builtin_docs_new_chunking(tmp_path, monkeypatch):
     """docs 按标题边界分块入库：title="文件 · 标题"、tags 含 file:、id 序号连续"""
     corpus = _make_fake_corpus(tmp_path)
     monkeypatch.setattr(sources_mod, "_CORPUS_DIR", corpus)
+    # skills 目录隔离同理（真实 skills 不参与本测试计数）
+    monkeypatch.setattr(sources_mod, "_SKILLS_DIR", tmp_path / "no-skills")
     doc_path = corpus / "docs" / "guide.md"
 
     added = load_builtin_corpus()
@@ -193,6 +195,7 @@ def test_load_builtin_docs_removes_stale_chunks(tmp_path, monkeypatch):
     """旧策略残留块清理：同 url 旧块（序号超出新块数）被删除再入新块"""
     corpus = _make_fake_corpus(tmp_path)
     monkeypatch.setattr(sources_mod, "_CORPUS_DIR", corpus)
+    monkeypatch.setattr(sources_mod, "_SKILLS_DIR", tmp_path / "no-skills")
     doc_path = corpus / "docs" / "guide.md"
     rag = sources_mod.get_global_rag()
     base = f"doc-{uuid.uuid5(uuid.NAMESPACE_URL, str(doc_path))}"
@@ -223,6 +226,7 @@ def test_load_builtin_idempotent(tmp_path, monkeypatch):
     """重复 load 幂等：同 url 删旧块再入新块，总数不变"""
     corpus = _make_fake_corpus(tmp_path)
     monkeypatch.setattr(sources_mod, "_CORPUS_DIR", corpus)
+    monkeypatch.setattr(sources_mod, "_SKILLS_DIR", tmp_path / "no-skills")
     rag = sources_mod.get_global_rag()
 
     load_builtin_corpus()

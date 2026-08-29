@@ -94,6 +94,7 @@ type FilesLoadState =
 function sourceGroupLabel(source: string): string {
   if (source === "builtin-docs") return "内置教学文档";
   if (source === "builtin-corpus") return "内置命令卡片";
+  if (source === "builtin-skills") return "内置技能包";
   if (source === "imported-docs") return "导入文档";
   if (source.startsWith("case-")) return "会话沉淀";
   if (source.endsWith("-docs")) {
