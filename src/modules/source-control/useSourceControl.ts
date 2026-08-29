@@ -71,7 +71,7 @@ function normalizeError(error: unknown): string {
     const message = (error as { message?: unknown }).message;
     if (typeof message === "string") return message;
   }
-  return "Unknown source control error";
+  return "未知源代码管理错误";
 }
 
 function getContextualAction(
@@ -103,8 +103,7 @@ export function getSourceControlRemoteIndicator(
     return {
       visible: true,
       label: `↑${summary.ahead} ↓${summary.behind}`,
-      title:
-        "Branch has diverged from upstream. Use Source Control or the terminal to resolve it.",
+      title: "分支已与上游分叉，请使用源代码管理或终端解决。",
       disabled: true,
       action: null,
     };
@@ -113,9 +112,7 @@ export function getSourceControlRemoteIndicator(
     return {
       visible: true,
       label: `↓${summary.behind}`,
-      title: `Pull ${summary.behind} remote ${
-        summary.behind === 1 ? "commit" : "commits"
-      } with fast-forward only.`,
+      title: `拉取 ${summary.behind} 个远程提交（仅快进）。`,
       disabled: summary.busyAction !== null,
       action: "pull",
     };
@@ -124,17 +121,15 @@ export function getSourceControlRemoteIndicator(
     return {
       visible: true,
       label: `↑${summary.ahead}`,
-      title: `Push ${summary.ahead} local ${
-        summary.ahead === 1 ? "commit" : "commits"
-      }.`,
+      title: `推送 ${summary.ahead} 个本地提交。`,
       disabled: summary.busyAction !== null,
       action: "push",
     };
   }
   return {
     visible: true,
-    label: "Sync",
-    title: "Fetch remote updates.",
+    label: "同步",
+    title: "获取远程更新。",
     disabled: summary.busyAction !== null,
     action: "fetch",
   };
