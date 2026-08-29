@@ -1815,3 +1815,27 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：✅ 幂等设计用固定 ID 覆盖取代追加，决策库不膨胀；✅ 开场注入 3s 超时 + source 白名单过滤，性能与上下文卫生双保证；✅ save_skill 走 TOOL_REGISTRY 注册表驱动，自动继承 fail-closed 审批/脱敏门禁（T2 解耦红利）；⚠️ 摘要质量依赖已配置 LLM，无 key 时回退截断（可用但不智能）；⚠️ 桌面端仅验证 sidecar 注册与启动健康，**记忆链路（对话→切会话→摘要→新会话注入）需真实 LLM 实测**。
 
 **待用户实测**：① 配好 LLM 后多轮对话 → 点"新会话"→ 旧会话被摘要写库（sidecar 日志出现 memory.summarize_session）；② 新会话首条消息提相关问题 → 回答应引用 `<session-memory>` 历史经验；③ 对话中让 agent "把这次排障沉淀成技能" → `~/.tdsf/skills/` 出现 SKILL.md 且立即可被 skill_invoke 调用。
+
+## §37.81 三模式信任体系与教学特色增强（spec add-agent-trust-modes，2026-08-29 ✅ 全量门禁绿）
+
+**任务目标**（用户提案 + 方案书 v3.1.2 七项决策 D1-D7）：①三模式信任体系（观察只读/确认审批/自动放行）取代"LLM 猜意图的 4 子 agent 委派"；②教学皮肤（Teach 开关叠加）；③审批卡四层信息架构（语义/原文/解释/影响预测）+ 三按钮 + 双轨反馈；④免确认记忆三级；⑤终端感知上下文（SSH OSC 133/633 + block 流水账 + `<environment>`/`<terminal-history>`）；⑥可视教学打字机（Weibull 逐字 + 速度调节）。spec 三件套在 `.trae/specs/add-agent-trust-modes/`，commit c671fef（69 文件，+8234/-1500）。
+
+**方案与实施**（spec 驱动，5 波子代理并行/串行执行，spec 模式由 Task 工具分派）：
+- **Task 1 后端模式层**：`modes.py`（AgentMode + parse_mode 缺省 confirm 降级）+ `decision_engine.decide(risk_l, mode)` 纯函数（矩阵全格单测）+ observe 按 `ToolPolicy.readonly` 裁剪 schema（复用 L1 过滤泛化 `filter_tools_readonly`）+ `_compose_system_prompt(mode, teach)`（三段模式指令 + `_TEACH_SKIN_PROMPT` 教学契约迁移）+ **BREAKING 删委派**（`_SUB_AGENT_SPECS`/agent-as-tool/双缓存/`_MAIN_SUB_AGENT_PROMPT` 委派段；工具集 24→20）
+- **Task 2 前端模式 UI**：registry.ts 收敛 main 单入口 + `AgentModeSwitcher`（三档 segmented + Teach 开关）挂 composer + AgentStatusPill 改模式指示 + chatStore `agentMode`/`teach` per-session 持久化 + `chatRuntime.getLive()` 透传（live.agentMode/live.teach 与 sidecar 字段名核对一致）
+- **Task 3+4 审批卡与影响预测**：`command_impact.py`（复合命令字符串状态机拆解/9 类别映射/denylist 9 条硬底线/危险构造检测）+ `assess_command` 决策入口 + needs_you 载荷四层字段（semantic/explanation/impact/risk_l 走 request.extra 双通道）+ 超时 30s→300s + host 校验（live.sshConnection 提取）+ tool.tsx `ToolApprovalCard` + **双轨反馈**（拒绝轨"用户拒绝了此操作"+附言可协商 vs 拦截轨 command_blocked 禁替代方案）
+- **Task 5 免确认记忆**：`trust_store.py`（SessionTrustStore 会话级内存 + WhitelistStore 持久化 `agent_whitelist.json`）+ 评估顺序（denied 硬底线 → 白名单 deny → 白名单 allow[risk_l≤3 且非危险构造] → 会话免审 → decide）+ `memory.whitelist.*` RPC + 设置页 `ApprovalWhitelistCard`；**硬条款锁定**：L4 永远确认（白名单/前缀免审均 risk_l≤3 上限）、observe 跳过放行类记忆
+- **Task 6 终端感知**：session.rs 注入脚本 OSC 7 → 133 全套 + 633;E/P（幂等 guard/`$- == *i*`/PROMPT_COMMAND 包装保序/DEBUG trap 去重/孤儿 D 自愈/不碰 PS1 断言）；前端 `terminalBlocks.ts` Collector（133/633 registerOscHandler + IMarker 区间抓输出）+ terminalBlocksStore（per-leaf 上限 50）；`env_probe.py` `system.probe_env`（os-release/uname 一次往返 + 会话级缓存 5min TTL）；transport.ts `<environment>`/`<terminal-history>` 分区（最近 10 block/6000 字符预算/脱敏）
+- **Task 6.5 审批卡接线**：关键发现——needs_you 事件前端原本**零消费**（旧 AiToolApproval 是本地 AI SDK part 链路）；新建 `NeedsYouApprovalCards`（订阅 sidecar:needs_you → 四层卡 → invokeRpc needs_you.respond）挂 AiChat + 本地 part 分支升级 ToolApprovalCard + ⚡→trust→SessionTrustStore 全链闭环
+- **Task 7 打字机**：`human_type.rs`（weibull_delay 逆变换采样 + sanitize 过滤 + sudo 检测降级 + human_type_write pump + 重入闸门）+ `pty_write_human`/`ssh_write_human` 双命令 + user_input_seq 用户按键打断 + 设置页 `AgentTypingCard`（0.2×~5× 滑杆）+ AgentModeSwitcher 逐字快捷开关 + AgentTypingIndicator 演示中状态条 + >200 字符自动整段
+
+**报错与修改**：
+- Task 1：core 不能反向 import strands_backend（model_adapter 已依赖 core，实测会成环）→ decide 用运行时鸭子类型 + TYPE_CHECKING 标注
+- Task 3 调试期发现**确认模式真实卡死 300s**：`nslookup x 2>/dev/null || dig ...` 被重定向检测误判为文件写 L2 → 修 `_REDIRECT_WRITE_RE` 排除 fd 前缀与 /dev/null + getent 加只读白名单
+- Task 3 旧测试用 `rm -rf /` 作审批场景样本 → 现被 denylist 硬底线直接拦截（行为正确的变更），改用 `rm -rf /tmp/old-build`
+- Task 6 Rust 单测发现 dev 实例占用 exe（os error 5）→ `CARGO_TARGET_DIR=target-test` 隔离跑（既有惯例）；tauri:dev 前需 taskkill 残留 tdsf-terminal-agent.exe
+- Task 6.5 发现 needs_you 事件前端零消费（原任务假设"替换 AiToolApproval"不成立）→ 改为新增渲染位 + 本地 part 分支升级，四层数据仅在 needs_you 事件有（本地 part 自动降级 fallback）
+
+**复盘**：✅ spec 驱动 + 子代理分波执行（Task 1 → 2∥3+4 → 5∥6 → 7∥6.5 → 收尾）全程未降级；✅ 双轨反馈/硬底线/评估顺序三处硬条款均有单测锁定（deny 压倒白名单、L4 永远确认、dangerous_construct 永不放行）；✅ 借鉴落地：审批卡四层=Warp/OpenAI 官方、三按钮=Chaterm、免确认记忆=opencode/Claude Code、block 流水账=atuin、打字机=expect send_human、上下文分区=open-code-review；⚠️ 遗留：①审批 host 校验为唯一 fail-open 点（Rust 反向通道无 ssh_status，已注释）；②老 fish(<4.0)/csh 远端仅 OSC 7（降级不报错）；③AgentCapabilityMatrix 孤儿组件与 sidecar-bridge onAgentSwitch 死导出待清理；④permission_level 仅保留 schema 过滤与缓存 key 职责（三模式接管审批决策）。
+
+**待用户实测**（方案书 §7 验收 1-8，需 LLM key + SSH 目标机，dev 实例已启动）：①观察模式拒绝写操作且如实报告 ②Teach 皮肤 TeachCard 输出 ③确认模式 `systemctl restart` 四层审批卡 + 拒绝附言换方案 ④⚡免审/白名单放行/deny 不可绕 ⑤自动模式 L3 升级 L4 永远确认 ⑥T14 记忆注入 ⑦终端感知"刚才哪步失败了"+ yum 因地制宜 ⑧打字机逐字演示 + 任意键打断；红线 9 回归：SSH 终端 + 翻译选词 + 文件树联动。
