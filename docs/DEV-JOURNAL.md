@@ -1795,3 +1795,23 @@ P2（中优先级 — 清理 + 文档）：
 **报错与修改**：无（文档任务，未跑门禁——无代码改动；git diff 仅 docs/ 下新增/移动）
 
 **复盘**：✅ 上级目录资料全部入档且引用链未破坏（项目内 docs/ 文档只索引不移动）；✅ DSH 价值判断准确——借思想（四条设计）不借代码（Node/Cordos 生态不匹配 Python Sidecar）；⚠️ 遗留待用户拍板：① 分期顺序 ② D3/D4 删除确认 ③ P0 前真实 LLM 委派实测 ④ P3 是否纳入；⚠️ MCP 客户端（G2）是业界标配但排 P3，理由 = P0-P2 自有能力补齐优先，若用户在意可提级。
+
+## §37.80 P3-T14 会话记忆沉淀：LLM 摘要写 RAG + 技能包沉淀 + 开场记忆注入（2026-08-29 ✅ 全量门禁绿）
+
+**任务目标**（方案书 v3.0 P3，与 B3 /summary-to-skill 合并设计）：实现 agent 跨会话记忆——①会话结束时 LLM 生成结构化摘要（现象→根因→解法→教学要点）写入统一 RAG 决策库；②摘要经验一键沉淀为 SKILL.md 技能包并热重载；③新会话开场检索历史记忆注入上下文，提升连贯性。
+
+**方案与实施**（A 后端核心 → B agent 工具 → C1/C2 前端两钩子 → D 测试）：
+- **A `session_memory.py`**（新建，sidecar 根）：`summarize_session(session_id, transcript, title)`——幂等 ID `session-memory-<session_id>`，LLM 摘要（复用 long_context 的 OpenAI 兼容调用，max_tokens=1024），失败回退 `_fallback_summary` 截断；写统一 RAG `KnowledgeEntry(source="session-memory", tags=["会话记忆", f"session:{id}"])`，同 ID 重写自动覆盖（幂等）；`save_session_skill(name, description, content, triggers)`——合法名校验 + 写用户技能目录 SKILL.md（frontmatter 带 triggers/allowed-tools）+ `skills.registry.reload_global_registry()` 热重载；RPC 注册 `memory.summarize_session` / `memory.save_skill`（具名参数，非 dict）
+- **B agent 工具**：`strands_backend/tools/session_memory_tool.py` 工厂 `make_save_skill_tool(ctx)` 复用 invoke_save_skill；registry.py 加第 20 个 ToolSpec（readonly=False, needs_approval=False）
+- **C1 `chatStore.ts`**：`maybeSummarizeSession(id)`——newSession/deleteSession 切走旧会话时触发，extractTranscript 提取消息，`MIN_MEMORY_MESSAGES=3` 门槛 + 会话级 Set 去重，ipc_invoke 调 memory.summarize_session（best-effort，失败静默）
+- **C2 `transport.ts`**：`fetchMemoryHints(firstUserText)`——新会话首条用户消息时 knowledge.search（query 截 200 字，limit 6）→ 过滤 source∈{session-memory, session-case} 取 top3 → 格式化 `<session-memory>` 块（每条截 220 字）；`Promise.race` 3s 超时返回 null，任何异常静默跳过；run() 中 isFirstTurn 判断注入，与 envBlock/terminalBlock 合并
+- **D 测试**：`tests/test_session_memory.py` 10 测试（LLM 摘要/幂等覆盖/空输入拒绝/RAG 写入/技能覆盖重写/非法名拒绝/缺字段拒绝/热重载调用/RPC 注册可分发/agent 工具工厂）；transport.test.ts 补记忆注入场景
+
+**报错与修改**：
+- `TestRpcRegistration` TypeError：RPC 处理函数原收 dict，`_summarize(**params)` 展开后报 unexpected keyword → 处理函数改具名参数（session_id, transcript, title）
+- test_registry 19→20、test_e2e main agent 工具集 23→24 两处断言同步更新（T14 加工具的必然联动）
+- PowerShell 无 tail/pytest 环境：sidecar 测试用 `.venv\Scripts\python.exe -m pytest`（全局 python 3.14 无 pytest）
+
+**复盘**：✅ 幂等设计用固定 ID 覆盖取代追加，决策库不膨胀；✅ 开场注入 3s 超时 + source 白名单过滤，性能与上下文卫生双保证；✅ save_skill 走 TOOL_REGISTRY 注册表驱动，自动继承 fail-closed 审批/脱敏门禁（T2 解耦红利）；⚠️ 摘要质量依赖已配置 LLM，无 key 时回退截断（可用但不智能）；⚠️ 桌面端仅验证 sidecar 注册与启动健康，**记忆链路（对话→切会话→摘要→新会话注入）需真实 LLM 实测**。
+
+**待用户实测**：① 配好 LLM 后多轮对话 → 点"新会话"→ 旧会话被摘要写库（sidecar 日志出现 memory.summarize_session）；② 新会话首条消息提相关问题 → 回答应引用 `<session-memory>` 历史经验；③ 对话中让 agent "把这次排障沉淀成技能" → `~/.tdsf/skills/` 出现 SKILL.md 且立即可被 skill_invoke 调用。
