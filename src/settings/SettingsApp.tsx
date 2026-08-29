@@ -11,7 +11,6 @@ import {
   PaintBoardIcon,
   Settings01Icon,
   SourceCodeIcon,
-  TerminalIcon,
   UserMultiple02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -21,7 +20,6 @@ import { AboutSection } from "./sections/AboutSection";
 import { AgentsSection } from "./sections/AgentsSection";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
-import { LogsSection } from "./sections/LogsSection";
 import { ModelsSection } from "./sections/ModelsSection";
 import { ShortcutsSection } from "./sections/ShortcutsSection";
 import { ThemesSection } from "./sections/ThemesSection";
@@ -69,13 +67,6 @@ const TABS: {
     component: AgentsSection,
   },
   {
-    // TDSF 魔改 (2026-07-28): 子审查 agent 专用 tab
-    id: "logs",
-    label: "后端日志",
-    icon: TerminalIcon,
-    component: LogsSection,
-  },
-  {
     id: "about",
     label: "关于",
     icon: InformationCircleIcon,
@@ -90,7 +81,6 @@ const VALID_TABS: SettingsTab[] = [
   "shortcuts",
   "models",
   "agents",
-  "logs",
   "about",
 ];
 

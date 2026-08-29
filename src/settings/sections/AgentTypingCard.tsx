@@ -98,11 +98,6 @@ export function AgentTypingCard() {
           </span>
         </div>
       </SettingRow>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        逐字演示由 Rust 写入端按 expect send_human 算法（Weibull
-        随机节奏）驱动，远端回显即为真实击打效果；命令含 sudo
-        时密码输入不回显，将自动整段注入并提示你输入密码；演示中敲击任意键即可接管终端。
-      </p>
     </div>
   );
 }

@@ -14,11 +14,8 @@ import { usePresence } from "@/lib/usePresence";
 import { useZoom } from "@/lib/useZoom";
 import { isMarkdownPath } from "@/lib/utils";
 import {
-  type AgentLaunchRequest,
   AgentNotificationsBridge,
-  findAgentLauncher,
   nextAttentionTarget,
-  validateAgentLaunchCommand,
 } from "@/modules/agents";
 import {
   AgentRunBridge,
@@ -122,7 +119,6 @@ import {
   type PaneBounds,
   type TerminalPaneHandle,
   useTerminalFileDrop,
-  whenSessionReady,
   writeToSession,
 } from "@/modules/terminal";
 // TDSF 魔改 (2026-08-11 #21): effectiveLeafSsh 用于派生 sshActiveLeafIdRef
@@ -132,18 +128,12 @@ import {
   getRendererPoolDebug,
   getSlotTerm,
 } from "@/modules/terminal/lib/rendererPool";
-// P1-v5-6: asciicast 会话录制（命令面板 record.start/stop）
-import { AsciicastRecorder,
-  castFileName,
-} from "@/modules/recorder/asciicast"
-import { AsciicastPanel } from "@/modules/recorder/AsciicastPanel";
 // TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -194,7 +184,6 @@ export default function App() {
     newTab,
     newBlockTab,
     newAgentTab,
-    newAgentGroupTab,
     newPrivateTab,
     openFileTab,
     pinTab,
@@ -1298,45 +1287,6 @@ export default function App() {
     spaceSshCurrentPath,
   ]);
 
-  const launchAgentGroup = useCallback(
-    (request: AgentLaunchRequest) => {
-      const command = validateAgentLaunchCommand(request.command);
-      if (!command.ok) return;
-      const launcher = findAgentLauncher(request.agent);
-      const title =
-        request.instances === 1
-          ? launcher.label
-          : `${launcher.label} × ${request.instances}`;
-      const { leafIds: agentLeafIds } = newAgentGroupTab(
-        inheritedCwdForNewTab(),
-        title,
-        request.instances,
-      );
-      const hooksReady = launcher.supportsHooks
-        ? invoke("agent_enable_hooks", {
-            agent: request.agent,
-          }).catch((error) => {
-            console.warn(
-              `[tdsf] could not enable ${request.agent} notifications:`,
-              error,
-            );
-          })
-        : Promise.resolve();
-
-      for (const leafId of agentLeafIds) {
-        void (async () => {
-          await Promise.all([whenSessionReady(leafId), hooksReady]);
-          if (!writeToSession(leafId, `${command.command}\r`)) {
-            console.error(
-              `[tdsf] agent terminal ${leafId} closed before launch`,
-            );
-          }
-        })();
-      }
-    },
-    [inheritedCwdForNewTab, newAgentGroupTab],
-  );
-
   const sendCd = useCallback(
     (path: string) => {
       // TDSF 修复 2026-07-29: SSH 模式下状态栏路径显示远程位置,
@@ -1939,57 +1889,6 @@ export default function App() {
     [moveTabToSpace],
   );
 
-  // === P1-v5-6 / P2-2: asciicast 会话录制（命令面板 record.start/stop + 回放面板）===
-  const recorderRef = useRef<AsciicastRecorder | null>(null);
-  const [asciicastOpen, setAsciicastOpen] = useState(false);
-  const [pendingRecording, setPendingRecording] = useState<{
-    name: string;
-    content: string;
-  } | null>(null);
-  const startRecording = useCallback(() => {
-    if (recorderRef.current) {
-      toast.warning("录制已在进行中，请先停止");
-      return;
-    }
-    const term = activeLeafId !== null ? getSlotTerm(activeLeafId) : null;
-    if (!term) {
-      toast.warning("无活动终端可录制");
-      return;
-    }
-    const rec = new AsciicastRecorder();
-    rec.attach(term, `leaf-${activeLeafId}`);
-    recorderRef.current = rec;
-    toast.success("录制开始（命令面板 → 停止录制并导出）");
-  }, [activeLeafId]);
-
-  const stopRecording = useCallback(async () => {
-    const rec = recorderRef.current;
-    recorderRef.current = null;
-    if (!rec) {
-      toast.warning("当前没有进行中的录制");
-      return;
-    }
-    const term = activeLeafId !== null ? getSlotTerm(activeLeafId) : null;
-    const width = term?.cols ?? 80;
-    const height = term?.rows ?? 24;
-    const cast = rec.stop(width, height);
-    const stats = rec.stats;
-    const fileName = castFileName();
-    // P2-2: 打开回放面板预填保存（替代剪贴板导出——支持大录制 + 回放）
-    setPendingRecording({ name: fileName, content: cast });
-    setAsciicastOpen(true);
-    toast.success(
-      `已停止录制（${stats.events} 事件，${formatBytes(stats.bytes)}），可保存并回放`,
-      { duration: 5000 },
-    );
-  }, [activeLeafId]);
-
-  const formatBytes = (n: number): string => {
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  };
-
   const handleReorderTab = useCallback(
     (tabId: number, targetTabId: number, edge: "top" | "bottom") => {
       if (reorderTab(tabId, targetTabId, edge)) {
@@ -2072,9 +1971,6 @@ export default function App() {
             activeSpaceId,
             // TDSF 修复 2026-08-01: SSH 空间隐藏本地专属命令（网页预览）
             isSshSpace: activeSpace?.env.kind === "ssh",
-            recordStart: startRecording,
-            recordStop: () => void stopRecording(),
-            recordPlay: () => setAsciicastOpen(true),
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),
@@ -2101,8 +1997,6 @@ export default function App() {
       activeSpaceId,
       handleNewSpace,
       activeSpace,
-      startRecording,
-      stopRecording,
     ],
   );
 
@@ -2179,7 +2073,6 @@ export default function App() {
               showLocalExtras={activeSpace?.env.kind !== "ssh"}
               onNewEditor={() => setNewEditorOpen(true)}
               onNewGitGraph={openGitGraphFromContext}
-              onLaunchAgents={launchAgentGroup}
               onClose={handleClose}
               onPin={pinTab}
               onRename={handleRenameTab}
@@ -2531,14 +2424,6 @@ export default function App() {
 
           {/* TDSF 魔改 2026-08-09: 终端命令预测弹窗（本地+SSH 统一，通过 rendererPool 注入） */}
           <TerminalCompletionPopup />
-
-          {/* P2-2: asciicast 录制回放面板 */}
-          <AsciicastPanel
-            open={asciicastOpen}
-            onOpenChange={setAsciicastOpen}
-            home={home}
-            pendingRecording={pendingRecording}
-          />
 
           <CloseDialogs
             tabs={tabs}

@@ -28,12 +28,12 @@ type Props = {
 
 function relativeTime(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return "just now";
+  if (s < 60) return "刚刚";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return `${m} 分钟前`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
 }
 
 function StatusRow({
@@ -67,16 +67,16 @@ function StatusRow({
         )}
       >
         {waiting ? <span className="size-1.5 rounded-full bg-primary" /> : null}
-        {waiting ? "waiting" : "working"}
+        {waiting ? "等待输入" : "运行中"}
       </span>
     </button>
   );
 }
 
 const NOTIF_LABEL: Record<AgentNotification["kind"], string> = {
-  attention: "needs input",
-  finished: "finished",
-  error: "failed",
+  attention: "需要输入",
+  finished: "已完成",
+  error: "失败",
 };
 
 const HOOK_AGENTS = ["claude", "codex", "gemini", "pi"] as const;
@@ -111,7 +111,7 @@ function HookAgentRow({
             size={13}
             strokeWidth={1.75}
           />
-          enabled
+          已启用
         </span>
       ) : (
         <button
@@ -128,7 +128,7 @@ function HookAgentRow({
               className="animate-spin"
             />
           ) : null}
-          {installing ? "Enabling" : "Enable"}
+          {installing ? "启用中…" : "启用"}
         </button>
       )}
     </div>
@@ -252,7 +252,7 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
           variant="ghost"
           size="icon"
           className="relative size-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="Agent notifications"
+          title="智能体通知"
         >
           <HugeiconsIcon
             icon={Notification01Icon}
@@ -273,12 +273,12 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
       >
         <div className="flex h-10 items-center gap-2 px-3 pt-0.5">
           <span className="flex gap-1 text-[13px] text-foreground">
-            Notifications
+            通知
           </span>
           <div className="ml-auto flex items-center gap-2">
             {activeCount > 0 ? (
               <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-                {activeCount} active
+                {activeCount} 个活跃
               </span>
             ) : null}
             {notifications.length > 0 ? (
@@ -287,7 +287,7 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
                 onClick={clearNotifications}
                 className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
-                Clear
+                清除
               </button>
             ) : null}
           </div>
@@ -295,9 +295,9 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
 
         {empty ? (
           <div className="border-t border-border/60 px-3 py-5 text-center text-xs leading-relaxed text-muted-foreground">
-            No agent activity yet.
+            暂无智能体活动
             <br />
-            Run the TDSF agent or a coding agent to track it here.
+            运行 TDSF 智能体后在此跟踪
           </div>
         ) : (
           <div className="max-h-80 overflow-y-auto border-t border-border/60 p-1">
@@ -341,11 +341,11 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
               size={11}
               strokeWidth={2}
             />
-            Agent alerts
+            智能体提醒
             <span className="ml-auto flex items-center gap-1.5 normal-case tracking-normal">
               {enabledCount > 0 ? (
                 <span className="text-[10px] text-muted-foreground/60">
-                  {enabledCount} on
+                  {enabledCount} 项已开启
                 </span>
               ) : null}
               <HugeiconsIcon
