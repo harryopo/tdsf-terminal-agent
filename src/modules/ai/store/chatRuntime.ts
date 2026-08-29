@@ -6,6 +6,7 @@ import {
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from "ai";
 import { getModel, type ModelId, providerNeedsKey } from "../config";
+import { toSidecarMode } from "../agents/registry";
 import { BUILTIN_AGENTS } from "../lib/agents";
 import { createContextAwareTransport } from "../lib/transport";
 import type { ToolContext } from "../tools/tools";
@@ -125,8 +126,9 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
         // sidecar（adapter.py 读 state.live.agentMode / state.live.teach，
         // 缺省 confirm）。模式即时生效：切换后下一条消息即用新模式。
-        agentMode: useChatStore.getState().agentMode,
-        teach: useChatStore.getState().teach,
+        // v3.1.3 四档化：teach 是前端第四档（= observe + teach 预置组合），
+        // toSidecarMode 展开为 sidecar 认识的三模式 + teach 布尔。
+        ...toSidecarMode(useChatStore.getState().agentMode),
       };
     },
     getPlanMode: () => usePlanStore.getState().active,

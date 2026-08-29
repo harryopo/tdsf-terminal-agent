@@ -391,13 +391,18 @@ function persistModeToActiveSession(
 
 /** 从会话元数据恢复模式/教学开关到 store（缺字段回退默认值，兼容老会话） */
 function restoreModeFromMeta(meta: SessionMeta | undefined): void {
-  const mode =
+  let mode =
     meta?.agentMode && isAgentMode(meta.agentMode)
       ? meta.agentMode
       : DEFAULT_AGENT_MODE;
+  // v3.1 老结构迁移：旧版是「三档 + teach 独立开关」，老会话若存了
+  // observe + teach=true，等价于新四档的 teach 档（只读 + 教学 prompt）
+  if (mode === "observe" && meta?.teach === true) {
+    mode = "teach";
+  }
   useChatStore.setState({
     agentMode: mode,
-    teach: meta?.teach === true,
+    teach: mode === "teach",
     // Task 5: 会话级只读免审不落盘——切会话一律重置（spec「会话级不落盘」）
     sessionReadOnlyTrust: false,
   });
@@ -433,14 +438,21 @@ export const useChatStore = create<StoreState>((set, get) => ({
   tdsfAgentId: DEFAULT_TDSF_AGENT,
   setTdsfAgent: (id) => set({ tdsfAgentId: id }),
 
-  // Agent 信任模式（v3.1 三模式）：缺省 confirm + per-session 持久化
+  // Agent 信任模式（v3.1 四档）：缺省 confirm + per-session 持久化。
+  // teach 档（第四档，用户钦定 2026-08-29）= 只读 + 教学 prompt 预置组合：
+  // 选中时联动 teach=true（AiChat TeachCard 渲染 / live 下发都消费该布尔），
+  // 切回其他档自动 teach=false，保证两者永远一致。
   agentMode: DEFAULT_AGENT_MODE,
   setAgentMode: (mode) => {
-    set({ agentMode: mode });
-    persistModeToActiveSession(get(), { agentMode: mode });
+    set({ agentMode: mode, teach: mode === "teach" });
+    persistModeToActiveSession(get(), {
+      agentMode: mode,
+      teach: mode === "teach",
+    });
   },
 
-  // 教学皮肤开关（叠加在任意模式上）：缺省关 + per-session 持久化
+  // 教学皮肤开关（遗留兼容接口）：由 setAgentMode 联动维护，独立调用仅作
+  // 旧数据迁移兜底；per-session 持久化
   teach: false,
   setTeach: (on) => {
     set({ teach: on });

@@ -2,6 +2,8 @@ import { IS_MAC, MOD_PROP } from "@/lib/platform";
 
 /**
  * Single source of truth for keyboard shortcuts.
+ * TDSF 魔改 (2026-08-29): label 全面中文化（快捷键设置页 / 命令面板 / 状态栏
+ * 均消费此字段；本项目为中文教学产品，id 仍保持英文稳定标识）。
  */
 
 export type ShortcutId =
@@ -89,31 +91,31 @@ export type Shortcut = {
 export const SHORTCUTS: Shortcut[] = [
   {
     id: "commandPalette.open",
-    label: "Open command palette",
+    label: "打开命令面板",
     group: "General",
     defaultBindings: [{ [MOD_PROP]: true, key: "p" }],
   },
   {
     id: "commandPalette.content",
-    label: "Find in files",
+    label: "全局搜索文件",
     group: "General",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "p" }],
   },
   {
     id: "settings.open",
-    label: "Open settings",
+    label: "打开设置",
     group: "General",
     defaultBindings: [{ [MOD_PROP]: true, key: "," }],
   },
   {
     id: "tab.new",
-    label: "New tab",
+    label: "新建标签页",
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "t" }],
   },
   {
     id: "tab.newBlock",
-    label: "New Blocks terminal",
+    label: "新建 Blocks 终端",
     group: "Tabs",
     // TDSF 魔改: Ctrl/⌘+Shift+T 让位给 terminal.translate（终端翻译），
     // Blocks 终端默认不绑定，可在设置中自定义。
@@ -121,100 +123,138 @@ export const SHORTCUTS: Shortcut[] = [
   },
   {
     id: "tab.newPrivate",
-    label: "New private terminal",
+    label: "新建隐私终端",
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "r" }],
   },
   {
     id: "tab.newPreview",
-    label: "New web preview",
+    label: "新建网页预览",
     group: "Tabs",
     // Cmd/Ctrl+P now opens the command palette, so web preview moves here.
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "o" }],
   },
   {
     id: "tab.newEditor",
-    label: "New editor tab",
+    label: "新建编辑器标签",
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "e" }],
   },
   {
     id: "tab.close",
-    label: "Close tab or pane",
+    label: "关闭标签页或分屏",
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "w" }],
   },
   {
+    id: "tab.next",
+    label: "下一个标签页",
+    group: "Tabs",
+    defaultBindings: [{ ctrl: true, key: "Tab" }],
+    allowRepeat: true,
+  },
+  {
+    id: "tab.prev",
+    label: "上一个标签页",
+    group: "Tabs",
+    defaultBindings: [{ ctrl: true, shift: true, key: "Tab" }],
+    allowRepeat: true,
+  },
+  {
+    id: "tab.selectByIndex",
+    label: "跳转到标签页 1–9",
+    group: "Tabs",
+    defaultBindings: [{ [MOD_PROP]: true, key: "1" }],
+  },
+  {
+    id: "space.next",
+    label: "下一个工作区",
+    group: "Spaces",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "]" }],
+  },
+  {
+    id: "space.prev",
+    label: "上一个工作区",
+    group: "Spaces",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "[" }],
+  },
+  {
+    id: "space.overview",
+    label: "打开工作区列表",
+    group: "Spaces",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "s" }],
+  },
+  {
     id: "pane.splitRight",
-    label: "Split pane right",
+    label: "向右分屏",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, key: "d" }],
   },
   {
     id: "pane.splitDown",
-    label: "Split pane down",
+    label: "向下分屏",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "d" }],
   },
   {
     // TDSF 魔改 (2026-08-11): iTerm2 风格分屏（H=horizontal）。
     id: "pane.splitSshRight",
-    label: "Split pane right (Ctrl+Shift+H)",
+    label: "向右分屏（备选键）",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "h" }],
   },
   {
     // TDSF 魔改 (2026-08-11): iTerm2 风格分屏（V=vertical）。
     id: "pane.splitSshDown",
-    label: "Split pane down (Ctrl+Shift+V)",
+    label: "向下分屏（备选键）",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "v" }],
   },
   {
     id: "pane.focusNext",
-    label: "Focus next pane",
+    label: "聚焦下一个分屏",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, key: "]" }],
   },
   {
     id: "pane.focusPrev",
-    label: "Focus previous pane",
+    label: "聚焦上一个分屏",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, key: "[" }],
   },
   {
     id: "pane.swapLeft",
-    label: "Swap pane left",
+    label: "与左侧分屏交换位置",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, alt: true, key: "ArrowLeft" }],
   },
   {
     id: "pane.swapRight",
-    label: "Swap pane right",
+    label: "与右侧分屏交换位置",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, alt: true, key: "ArrowRight" }],
   },
   {
     id: "pane.swapUp",
-    label: "Swap pane up",
+    label: "与上方分屏交换位置",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, alt: true, key: "ArrowUp" }],
   },
   {
     id: "pane.swapDown",
-    label: "Swap pane down",
+    label: "与下方分屏交换位置",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, alt: true, key: "ArrowDown" }],
   },
   {
     id: "pane.source",
-    label: "Toggle source panel",
+    label: "切换来源面板",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, key: "g" }],
   },
   {
     id: "terminal.clear",
-    label: "Clear terminal",
+    label: "清空终端",
     group: "Terminal",
     // macOS Terminal's ⌘K (clear scrollback, keep the prompt). Default only on
     // macOS — on other platforms Ctrl+K is readline's kill-line, so we leave it
@@ -223,7 +263,7 @@ export const SHORTCUTS: Shortcut[] = [
   },
   {
     id: "terminal.toggleInput",
-    label: "Toggle Shell / AI input",
+    label: "切换终端 / AI 输入",
     group: "Terminal",
     defaultBindings: [{ [MOD_PROP]: true, key: "u" }],
   },
@@ -237,101 +277,63 @@ export const SHORTCUTS: Shortcut[] = [
   {
     // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索（Ctrl/Cmd+Shift+F）
     id: "terminal.find",
-    label: "Find in terminal",
+    label: "终端内查找",
     group: "Terminal",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "f" }],
   },
   {
     id: "blocks.prev",
-    label: "Previous command block",
+    label: "上一个命令块",
     group: "Terminal",
     defaultBindings: [{ [MOD_PROP]: true, key: "ArrowUp" }],
     allowRepeat: true,
   },
   {
     id: "blocks.next",
-    label: "Next command block",
+    label: "下一个命令块",
     group: "Terminal",
     defaultBindings: [{ [MOD_PROP]: true, key: "ArrowDown" }],
     allowRepeat: true,
   },
   {
-    id: "tab.next",
-    label: "Next tab",
-    group: "Tabs",
-    defaultBindings: [{ ctrl: true, key: "Tab" }],
-    allowRepeat: true,
-  },
-  {
-    id: "tab.prev",
-    label: "Previous tab",
-    group: "Tabs",
-    defaultBindings: [{ ctrl: true, shift: true, key: "Tab" }],
-    allowRepeat: true,
-  },
-  {
-    id: "tab.selectByIndex",
-    label: "Jump to tab 1–9",
-    group: "Tabs",
-    defaultBindings: [{ [MOD_PROP]: true, key: "1" }],
-  },
-  {
-    id: "space.next",
-    label: "Next space",
-    group: "Spaces",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "]" }],
-  },
-  {
-    id: "space.prev",
-    label: "Previous space",
-    group: "Spaces",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "[" }],
-  },
-  {
-    id: "space.overview",
-    label: "Open spaces",
-    group: "Spaces",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "s" }],
-  },
-  {
     id: "explorer.search",
-    label: "Search files",
+    label: "搜索文件",
     group: "Search",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "f" }],
   },
   {
     id: "search.focus",
-    label: "Find in tab",
+    label: "标签页内查找",
     group: "Search",
     defaultBindings: [{ [MOD_PROP]: true, key: "f" }],
   },
   {
     id: "ai.toggle",
-    label: "Toggle AI agent",
+    label: "显示 / 隐藏 AI 面板",
     group: "AI",
     defaultBindings: [{ [MOD_PROP]: true, key: "i" }],
   },
   {
     id: "ai.toggleMini",
-    label: "Toggle AI chat window",
+    label: "显示 / 隐藏 AI 小窗",
     group: "AI",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "i" }],
   },
   {
     id: "ai.askSelection",
-    label: "Ask AI about selection",
+    label: "询问 AI 选中内容",
     group: "AI",
     defaultBindings: [{ [MOD_PROP]: true, key: "j" }],
   },
   {
     id: "agent.focusAttention",
-    label: "Jump to agent needing attention",
+    label: "跳转到待处理 Agent",
     group: "AI",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "a" }],
   },
   {
     id: "sidebar.toggle",
-    label: "Toggle file explorer",
+    label: "显示 / 隐藏文件资源管理器",
     group: "View",
     // Plain Mod+B toggles the sidebar everywhere EXCEPT a focused terminal,
     // where it's handed to the shell / Claude Code (its "run in background"
@@ -343,13 +345,13 @@ export const SHORTCUTS: Shortcut[] = [
   },
   {
     id: "explorer.focus",
-    label: "Toggle file explorer focus",
+    label: "聚焦文件资源管理器",
     group: "View",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "e" }],
   },
   {
     id: "view.zoomIn",
-    label: "Zoom in",
+    label: "放大界面",
     group: "View",
     defaultBindings: [
       { [MOD_PROP]: true, key: "=" },
@@ -359,7 +361,7 @@ export const SHORTCUTS: Shortcut[] = [
   },
   {
     id: "view.zoomOut",
-    label: "Zoom out",
+    label: "缩小界面",
     group: "View",
     defaultBindings: [
       { [MOD_PROP]: true, key: "-" },
@@ -369,13 +371,13 @@ export const SHORTCUTS: Shortcut[] = [
   },
   {
     id: "view.zoomReset",
-    label: "Reset zoom",
+    label: "重置缩放",
     group: "View",
     defaultBindings: [{ [MOD_PROP]: true, key: "0" }],
   },
   {
     id: "view.zenMode",
-    label: "Toggle zen mode",
+    label: "切换专注模式",
     group: "View",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "'" }],
   },
@@ -386,25 +388,25 @@ export const SHORTCUTS: Shortcut[] = [
   // Also excluded from the customization UI in ShortcutsSection.
   {
     id: "editor.undo",
-    label: "Undo",
+    label: "撤销",
     group: "Editor",
     defaultBindings: [{ [MOD_PROP]: true, key: "z" }],
   },
   {
     id: "editor.redo",
-    label: "Redo",
+    label: "重做",
     group: "Editor",
     defaultBindings: [{ [MOD_PROP]: true, key: "y" }],
   },
   {
     id: "editor.aiComplete",
-    label: "Trigger AI completion",
+    label: "触发 AI 补全",
     group: "Editor",
     defaultBindings: [{ alt: true, key: "\\" }],
   },
   {
     id: "editor.codeComplete",
-    label: "Trigger code completion",
+    label: "触发代码补全",
     group: "Editor",
     defaultBindings: [{ ctrl: true, key: " " }],
   },
