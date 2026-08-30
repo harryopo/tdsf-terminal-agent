@@ -288,7 +288,10 @@ def register_methods(dispatcher: Any) -> None:
         return knowledge_stats()
 
     # 文件级聚合视图（同文件分片段落聚合浏览，配合标题边界分块）
-    def _list_files(source: str | None = None) -> dict[str, Any]:
+    def _list_files(
+        source: str | None = None,
+        group: str | None = None,
+    ) -> dict[str, Any]:
         """按 url 聚合列出文档文件
 
         同一文件（同 url）的全部分块聚合为一条；url 为空的条目
@@ -296,12 +299,15 @@ def register_methods(dispatcher: Any) -> None:
 
         Args:
             source: 可选，按来源过滤（如 "builtin-docs"）；None/空 = 全部
+            group: 可选，按 category 过滤（如 "linux-philosophy"，前端
+                   6+1 分组浏览用）；None/空 = 全部
 
         Returns:
-            {files: [{url, filename, title0, chunks, total_chars, source}], total}
+            {files: [{url, filename, title0, chunks, total_chars, source,
+             category}], total}
         """
         rag = get_global_rag()
-        files = rag.list_files(source=(source or None))
+        files = rag.list_files(source=(source or None), group=(group or None))
         return {"files": files, "total": len(files)}
 
     def _get_doc(url: str) -> dict[str, Any]:

@@ -8,7 +8,7 @@ knowledge/tests/test_clean.py — 爬虫/导入文本清洗管道测试（TDSF 2
 2. 代码块保护：围栏（```/~~~）与缩进代码块内 # 注释、示例词不误伤
 3. 幂等性
 4. clean_markdown：保留 # 标题 / 列表结构
-5. 繁体检测与简体转换（looks_traditional / to_simplified，C1）
+5. 繁体检测（looks_traditional；to_simplified 已按用户钦定丢弃策略移除）
 6. 接入点：GenericCrawler.to_entries（含质量门槛）/ _extract_page /
    _chunk_markdown 清洗生效
 """
@@ -20,7 +20,6 @@ from knowledge.crawlers.clean import (
     clean_content,
     clean_markdown,
     looks_traditional,
-    to_simplified,
 )
 
 
@@ -140,15 +139,15 @@ class TestCleanContentLanguageNav(unittest.TestCase):
         self.assertIn("正文继续", out)
 
 
-class TestTraditionalToSimplified(unittest.TestCase):
-    """繁体检测与简体转换（C1，zh_TW 手册页入库前转简）"""
+class TestTraditionalDetection(unittest.TestCase):
+    """繁体检测（TDSF 2026-08-30 用户钦定：繁体内容直接丢弃，不再繁转简）"""
 
     def test_looks_traditional_positive(self):
         """繁体特征字 ≥2 处 → 判定为繁体（bash.1.zh_TW 实测样本）"""
         self.assertTrue(looks_traditional("Bash是一個與sh相容的命令解釋程式"))
 
     def test_looks_traditional_negative_simplified(self):
-        """简体中文零繁体特征 → 不转换（防误伤 zh_CN 内容）"""
+        """简体中文零繁体特征 → 不误判（防误伤 zh_CN 内容）"""
         self.assertFalse(looks_traditional("Bash是一个与sh兼容的命令解释程序，可以读取文件"))
 
     def test_looks_traditional_negative_english(self):
@@ -157,20 +156,11 @@ class TestTraditionalToSimplified(unittest.TestCase):
             looks_traditional("The bash shell is a sh-compatible command interpreter")
         )
 
-    def test_to_simplified_converts(self):
-        """t2s 转换覆盖繁体字形（解釋→解释、檔案→档案、與→与）"""
-        out = to_simplified("是一個與sh相容的命令解釋程式，讀取檔案並執行命令")
-        self.assertIn("个", out)
-        self.assertIn("与", out)
-        self.assertIn("解释", out)
-        self.assertIn("档案", out)
-        self.assertNotIn("解釋", out)
-        self.assertNotIn("檔案", out)
+    def test_to_simplified_removed(self):
+        """to_simplified 已移除（用户钦定丢弃策略）：模块不应再导出该符号"""
+        import knowledge.crawlers.clean as clean_mod
 
-    def test_to_simplified_keeps_simplified(self):
-        """简体文本转换后原样（幂等安全）"""
-        text = "Bash是一个与sh兼容的命令解释程序"
-        self.assertEqual(to_simplified(text), text)
+        self.assertFalse(hasattr(clean_mod, "to_simplified"))
 
 
 class TestCleanContentEntities(unittest.TestCase):
@@ -296,18 +286,18 @@ class TestIntegrationPoints(unittest.TestCase):
         entries = crawler.to_entries(items)
         self.assertEqual([e.url for e in entries], ["u2"])
 
-    def test_generic_to_entries_t2s_zh_tw(self):
-        """繁体页面经 to_entries 自动转简 + 加「源自繁体」tag"""
+    def test_generic_to_entries_drops_traditional(self):
+        """繁体页面经 to_entries 整条丢弃（用户钦定，不再繁转简）"""
         from knowledge.crawlers.generic import GenericCrawler
 
         crawler = GenericCrawler(source="t-docs", base_url="https://example.com/")
         trad = "Bash是一個與sh相容的命令解釋程式，可以讀取檔案並執行命令。" * 20
-        items = [{"title": "名稱", "content": trad, "url": "u1", "tags": ["bash"]}]
+        items = [
+            {"title": "名稱", "content": trad, "url": "u1", "tags": ["bash"]},
+            {"title": "正常文章", "content": "足够长的简体正文内容。" * 100, "url": "u2", "tags": []},
+        ]
         entries = crawler.to_entries(items)
-        self.assertEqual(len(entries), 1)
-        self.assertIn("源自繁体", entries[0].tags)
-        self.assertNotIn("解釋", entries[0].content)
-        self.assertIn("解释", entries[0].content)
+        self.assertEqual([e.url for e in entries], ["u2"])  # 繁体条目被丢弃
 
     def test_nginx_to_entries_cleans(self):
         from knowledge.crawlers.nginx import NginxCrawler
@@ -333,8 +323,8 @@ class TestIntegrationPoints(unittest.TestCase):
         self.assertNotIn("\U0001F4CC", page["title"])
         self.assertNotIn("Previous", page["content"])
 
-    def test_extract_page_t2s_and_tag(self):
-        """_extract_page（BFS 路径）繁体内容转简 + tag 注入"""
+    def test_extract_page_drops_traditional(self):
+        """_extract_page（BFS 路径）繁体内容整页丢弃（返回 None）"""
         from knowledge.crawlers.generic import _extract_page
         from bs4 import BeautifulSoup
 
@@ -344,14 +334,10 @@ class TestIntegrationPoints(unittest.TestCase):
             "</body></html>"
         )
         page = _extract_page(BeautifulSoup(html, "html.parser"), "https://e.com/", ["bash"])
-        self.assertIsNotNone(page)
-        self.assertIn("源自繁体", page["tags"])
-        self.assertEqual(page["title"], "名称")
-        self.assertNotIn("解釋", page["content"])
-        self.assertIn("解释", page["content"])
+        self.assertIsNone(page)
 
-    def test_extract_page_simplified_not_tagged(self):
-        """简体正文不误加「源自繁体」tag"""
+    def test_extract_page_simplified_kept(self):
+        """简体正文正常返回（不误判为繁体）"""
         from knowledge.crawlers.generic import _extract_page
         from bs4 import BeautifulSoup
 
@@ -362,7 +348,7 @@ class TestIntegrationPoints(unittest.TestCase):
         )
         page = _extract_page(BeautifulSoup(html, "html.parser"), "https://e.com/", ["bash"])
         self.assertIsNotNone(page)
-        self.assertNotIn("源自繁体", page["tags"])
+        self.assertIn("兼容", page["content"])
 
     def test_extract_page_mediawiki_root_and_lead(self):
         """MediaWiki 页以 #mw-content-text 为正文根 + 导语段并入（整页合并）"""

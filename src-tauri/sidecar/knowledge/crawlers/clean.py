@@ -273,16 +273,15 @@ def clean_markdown(text: str) -> str:
 
 
 # ============================================================================
-# 4. 繁体检测与简体转换（C1，TDSF 2026-08-30）
+# 4. 繁体检测（TDSF 2026-08-30 用户钦定：繁体内容直接丢弃，不入库）
 # ============================================================================
 # 背景：Debian manpages-zh 的 bash.1.zh_TW.html 等繁体手册页曾漏过语言
-# 过滤入库（「Bash是一個與sh相容的命令解釋程式」）。zh_TW 内容有保留价值
-# （zh_CN 同源），入库前统一繁转简；德法西语类页面仍由 URL 语言过滤剔除。
+# 过滤入库（「Bash是一個與sh相容的命令解釋程式」）。早期方案为繁转简保留
+# （opencc t2s）；2026-08-30 用户钦定改为**直接丢弃**——zh_TW 手册页与
+# zh_CN 同源重复，保留价值有限，翻译管线（translate_knowledge.py）也只
+# 处理英文正文，繁体内容属"无用爬取内容"。
 #
-# 依赖：opencc-python-reimplemented（纯 Python 实现，requirements.txt 已收录）。
-# 缺失时优雅降级：log 一次 warning 后原样返回，绝不阻塞爬取链路。
-# 防误伤：仅当文本命中 ≥ _TRAD_MIN_HITS 个繁体特征字/词（简体不会出现的
-# 字形，如 解釋/程式/檔案/與）才转换；简体中文内容零命中，原样保留。
+# 德法西语类页面仍由 URL 语言过滤剔除；简体中文内容零命中，原样保留。
 
 # 繁体特征字/词（字形仅存在于繁体；简体文本不会出现）
 _TRAD_FEATURES: tuple[str, ...] = (
@@ -293,41 +292,20 @@ _TRAD_FEATURES: tuple[str, ...] = (
 )
 _TRAD_MIN_HITS = 2
 
-_opencc_warned = False
-
 
 def looks_traditional(text: str) -> bool:
-    """检测文本是否为繁体内容（繁体特征字命中 ≥ 2 处）"""
+    """检测文本是否为繁体内容（繁体特征字命中 ≥ 2 处）
+
+    调用方（generic.py to_entries/_extract_page）对命中内容**整条丢弃**
+    并计入 discarded_traditional，不再做繁转简。
+    """
     if not text:
         return False
     return sum(text.count(f) for f in _TRAD_FEATURES) >= _TRAD_MIN_HITS
-
-
-def to_simplified(text: str) -> str:
-    """繁转简（opencc t2s）；opencc 缺失时原样返回并告警一次"""
-    global _opencc_warned
-    if not text:
-        return ""
-    try:
-        from opencc import OpenCC
-    except ImportError:
-        if not _opencc_warned:
-            _opencc_warned = True
-            logger.warning(
-                "opencc 未安装（pip install opencc-python-reimplemented），"
-                "繁体内容跳过简体转换：fallback: skip t2s"
-            )
-        return text
-    try:
-        return OpenCC("t2s").convert(text)
-    except Exception as e:  # 转换器异常也不阻塞入库
-        logger.warning(f"opencc t2s convert failed: {e}，fallback: 原样保留")
-        return text
 
 
 __all__ = [
     "clean_content",
     "clean_markdown",
     "looks_traditional",
-    "to_simplified",
 ]

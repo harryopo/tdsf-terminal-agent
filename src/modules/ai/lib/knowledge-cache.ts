@@ -17,6 +17,8 @@ export interface KnowledgeFile {
   chunks: number;
   total_chars: number;
   source: string;
+  /** 6+1 分类 key（TDSF 2026-08-30；空 = 未分类，前端归「其他」） */
+  category?: string;
 }
 
 /** knowledge.get_doc 返回（ok=false 时带 error） */
@@ -36,14 +38,15 @@ export interface KnowledgeDoc {
   error?: string;
 }
 
-/** 组内文件级列表缓存：source → files */
+/** 组内文件级列表缓存：category（分组 key）→ files */
 export const filesCache = new Map<string, KnowledgeFile[]>();
 
 /** 完整文档缓存：url → doc（仅存 ok=true 的结果，失败不缓存以便重试） */
 export const docCache = new Map<string, KnowledgeDoc>();
 
-/** 中文标题映射缓存：source → (url → 中文标题)（knowledge.titles_zh 拉取，
- *  TDSF 魔改 2026-08-30：官方文档英文标题的中文预览名，per source 懒加载） */
+/** 中文标题映射缓存：category（分组 key）→ (url → 中文标题)。
+ *  TDSF 2026-08-30: 6+1 分类分组后按组缓存（组内多 source 的 titles_zh
+ *  合并结果）；底层请求仍 per source（knowledge.titles_zh） */
 export const titlesZhCache = new Map<string, Map<string, string>>();
 
 /** 测试专用：清空模块级浏览缓存（每个用例前调用，避免跨用例串扰） */
