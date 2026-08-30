@@ -1935,3 +1935,21 @@ P2（中优先级 — 清理 + 文档）：
 ### §37.81 补记 7：框架 v1.0 内容建设轮 1（2026-08-30，commit fe3f003）
 
 用户审核通过框架 → 立即执行：①mysql 403 反爬 → MariaDB KB（同族官方库，probe 637KB）；②新增 archwiki（Arch Wiki 系统管理教学金矿，100 页）/ dnf-docs / firewalld-docs；③全源加深 30→50 页；④17 源全量爬取**无一失败**，知识库 **369→784 条（+112%）**——archwiki 81 / rust 50 / nginx 49 / apache 49 / selinux 48 / k8s 48 / git 48 / docker 48 / systemd 46 / python 46 / bash 46 / ssh 45 / redis 44 / mariadb 40 / iptables 37 / firewalld 30 / dnf 29。框架文档标记 v1.0 通过+建设执行记录（源→八层分类映射）。爬前逐源 probe 连通性验证（man7 dir 页 404 → 弃用，Arch man 已覆盖）。test_crawlers 源数断言 14→17 同步。
+
+### §37.81 补记 8：知识库双库根因与彻底重建（2026-08-30，commit 15ed433，28 文件 +1983/-320）
+
+**用户暴怒点（"知识库还是没有修好"）**：上轮 purge 后应用里仍见 builtin-docs（三级Linux/知识图谱）/builtin-skills/test 条目、官方文档"不可见"、混入"四级翻译"内容、mermaid/ASCII 树渲染文字墙。
+
+**双库根因（本轮最重要教训）**：应用 sidecar（main.py L57-77）数据目录是 `<项目根>/.tdsf-data/`，而所有运维脚本/rebuild/purge 操作的是 `src-tauri/sidecar/data/rag.db`——**两个库**，之前所有清理/重建全修在应用不读的库上，应用自然"没修好"。修复：6 个脚本头部强制 `os.environ["TDSF_DATA_DIR"]=<项目根>/.tdsf-data`（rag.py 实例化时读 env 故有效）+ crawlers 缓存/BGE 模型迁移 .tdsf-data。
+
+**其余实施**：
+1. **清洗管道** clean.py：emoji（U+1F300-1FAFF/2600-27BF/FE0F/200D）/导航残渣整行/HTML 实体/页脚/空行 6 步，**行级正则+代码围栏状态机保护**（代码块内 # 注释与示例 "Next" 不误伤）；generic/nginx/sources 三接入点
+2. **"四级翻译"真相**：不是翻译——是 BFS 跟进了**语言变体页**（kubernetes.io/es/、man *.fr、wiki _(Español)）整页外语入库。修复：Accept-Language:en + `_is_language_variant()` 三模式过滤（路径语言段/man locale 后缀/wiki 翻译后缀，消歧义后缀保留）；重爬 781 条**语言残留扫描零命中**（check_lang_residue.py 全表扫描）
+3. **启动自动初始化**：空库（官方源计数=0）时 ready 后台线程爬 17 源（TDSF_KB_AUTO_INIT=0 / pytest 环境禁用；已有数据幂等跳过）——**新用户 clone 后开箱即官方库**，个人语料永不随源码分发
+4. **中文映射**：前端 17 源中文分组名（Nginx 官方文档/OpenSSH 手册/Arch Wiki 指南…）；**中文预览标题**：LLM 批量生成 doc_titles_zh 表（781/781 成功，deepseek 每批 20 条），条目=中文主行+英文原名副行，RPC knowledge.titles_zh
+5. **mermaid**：streamdown 需 @streamdown/mermaid 插件且被全局 code 覆盖绕开 → 自渲染 mermaid-block.tsx（懒加载 mermaid@11、securityLevel strict、失败回退源码不白屏）；ASCII 树文字墙实为旧库数据，重爬后官方文档零树字符
+6. **rebuild() 补清 embed_cache**：修 apache-docs 命中旧 hash 向量 bug（模型迁移前爬的内容 hash 缓存）；全库 784→781 条 BGE 重嵌入（unique_vals 509-511 全真向量）
+
+**终态**：`.tdsf-data/rag.db` = 17 官方源 781 条 207 万字符，零个人/测试/skill 内容；旧库备份 rag.db.bak-20260830。
+
+**教训固化**：①多进程/多入口的数据路径必须单一来源（main.py 的 TDSF_DATA_DIR 约定应第一时间 grep 全仓对齐）；②"修了没生效"先验证改的是不是运行时真正读的库/文件（双库/缓存/旧实例三查）；③用户说的"翻译内容"要拿证据定性（实为语言变体页整页外语，非翻译腔）。**待用户实测**：重启应用看知识库——应只见官方文档分组（中文名+中文标题），无 builtin/test。
