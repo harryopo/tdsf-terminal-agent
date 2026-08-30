@@ -1985,3 +1985,27 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：pytest 全量 1751 RC=0 ✅（另 knowledge/tests 70 ✅）｜tsc/eslint RC=0 ✅｜vitest 全量见 §37.83 收尾确认。
 
 **复盘**：做对——真相核查先行（语言协商假设被实测推翻→定位文件名后缀漏网）+ 抓住 A1/C1 矛盾调和（zh 放行）+ epub 顺藤摸瓜。改进——zh 放行决策宜先问用户（本次依 C1 文本自洽推导并显式声明）；BFS 内 _fetch_single 每页冗余 parse+to_entries（历史双解析，日志噪音来源）为遗留债未动。
+
+### 37.84 知识库 6+1 分类 + LLM 全量中文翻译 + Linux 哲学专属分类（2026-08-30 ✅）
+
+**任务目标**（用户钦定）：把无用爬取内容删去、有用翻译+整理格式方便 RAG、合并、搞几个分类、繁体无关删去；单独搞一个 Linux 哲学/命令中英文对照的专属知识库。拍板方案：6 大分类（基础概念/命令与工具/系统管理/网络与远程/安全加固/服务部署）+ 英文正文 LLM 全部翻译成中文 + 繁体直接删除 + Linux 哲学等个人内容整理为第 7 专属分类。
+
+**方案与实现**：
+1. **分类**：`sources.category_for(source, title)`——一源一主分类（17 官方源映射表；archwiki 双属按 title 关键词分流 sys-admin/basic-ops）；category key 存英文（basic-ops/cmd-tools/sys-admin/net-remote/security/services/linux-philosophy），前端 CATEGORY_LABELS 映射中文。rag.py entries 表加 category + content_zh 列（ALTER 幂等迁移）；add/list_entries/hybrid_search/get/get_doc/list_files 全链路带 category；list_files(source, group) 支持 category 过滤；RPC knowledge.list_files 加 group 参数
+2. **繁体丢弃**（推翻 §37.83 C1 繁转简）：clean.py 删 to_simplified（opencc 依赖解除），generic.py to_entries/_extract_page 命中 looks_traditional 即整条丢弃 + discarded_traditional 计数；BFS 测试同步改断言（zh_TW 页不入 entries）
+3. **译文**：rag.update_content_zh(entry_id, zh) 双写 entries.content_zh + fts_entries.content_zh_tokens（jieba 分词进 FTS——中文 query 直接命中译文）；fts_entries 虚拟表加列不可 ALTER → 旧表 DROP + CREATE + 按行回填（正文在 entries 不丢，重爬不需要）；official_entries() 供脚本遍历
+4. **translate_knowledge.py**：断点续跑（content_zh 非空跳过，可中断重跑）+ 小条目（<1500 字符）合批 3-5 条（===zh-sep-N=== 分隔符切回，LLM 漏段逐条单独兜底）+ 长度校验（<30% 或 >300% 原文视为失败重试 2 次）+ 每批进度打印；prompt 钦定（代码块/命令/参数原文保留、markdown 结构保留、术语括注英文）
+5. **philosophy/ 专属分类**：corpus_personal 12 文件读后取舍——linux_philosophy/command_etymology/linux_command_design/linux_directory_logic 4 个通用教学文档清洗重组（去 emoji/去"项目N"课程引用/去四级标注列），三级Linux_复习资料/knowledge_index/concept_map 剔除（个人备考/索引/课程对照）；`load_philosophy_docs()` 扫 knowledge/philosophy/*.md → _chunk_markdown 分块 → source=philosophy/category=linux-philosophy 幂等入库（delete_by_url 先清旧块）；main.py 启动 + rebuild_knowledge.py 重建后自动补齐
+6. **前端**：KnowledgeBrowser 分组从"按 source"改"按 category"（6+1 中文组头 + 组内来源中文副行合并显示 + 未分类归"其他"沉底 + 固定顺序）；list_files({group}) 懒加载 per category 缓存；titles_zh 组级合并（组内多 source 并发拉取合并 Map）；文件行/条目行 source 中文名副行
+7. **导出**：export_knowledge_md.py 两级层级 `knowledge-preview/<分类中文名>/<源名>/<标题>.md` + frontmatter category + 正文「## 中文译文」段（已翻译条目双语对照）；philosophy 纳入导出口径
+
+**重建统计**（--crawl-all --offline 缓存重放）：623 → **621 条 388 万字符**（繁体 2 条丢弃 ✓）+ philosophy 106 块 = 全库 727 条。分类分布：cmd-tools 200 / services 256 / security 82 / net-remote 43 / sys-admin 33 / basic-ops 7（archwiki 分流 7+9=16）/ linux-philosophy 106 块。
+
+**翻译进度**：deepseek-v4-flash，619 条待翻 585 批；冒烟 3 条 2 成功 1 失败（apache 条目代码占比高、译文长度 <30% 被校验拦截——重跑自动补翻）；全量后台运行中，实测 ~1-2 分钟/批，预计 10 小时量级（远超预估 1-3 小时，LLM 逐条生成长译文是瓶颈）；完成后中文 query 可直接命中译文（已端到端验证：取已译条目译文片段反查，match_type=both 命中）。
+
+**报错与修改**：①to_entries 引用 category_for 忘导入（NameError）→ 函数内延迟导入（sources → crawlers 包 __init__ → registry → generic 模块级循环，必须函数内 import）；②测试同 content 触发 dedupe 跳过导致 group 过滤断言失败 → 测试数据改不同 content；③前端文件行副行总是渲染 filename 与主行重复（Found multiple elements）→ 无中文映射时不重复显示；④CATEGORY_LABELS 导出触发 react-refresh/only-export-components 警告（--max-warnings 0 拦截）→ 去掉导出。
+
+**门禁**：pytest 全量 **1751** RC=0 ✅（新增 test_category.py 21 + test_translate_script.py 14）｜vitest KnowledgeBrowser **24** ✅｜tsc / eslint --max-warnings 0 / build:web ✅；**待用户实测**：pnpm tauri:dev 打开知识库浏览器看 6+1 中文分组（翻译完成后中文搜索命中译文）。
+
+**复盘**：做对——先 grep to_simplified 全部引用再删（测试同步改断言零遗漏）；FTS5 虚拟表不能 ALTER 列的约束第一时间确认（DROP+回填方案保数据）；philosophy 语料"读内容后按实际质量取舍"严格执行（12 文件只收 4 个，个人课程对照全剔除）。改进——翻译规模估算失准（任务估 1-3 小时，实测 10 小时量级，应在冒烟后立即修正预期并告知用户）；长度校验下限 30% 对代码占比高的手册页过严（产生少量重试浪费，可后续按代码块占比动态放宽）。
+
