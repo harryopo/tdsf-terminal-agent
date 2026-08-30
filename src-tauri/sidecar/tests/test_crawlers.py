@@ -244,17 +244,18 @@ def test_generic_crawler_network_error_fallback_cache(
 # ============================================================================
 
 
-def test_registry_list_crawlers_14_sources():
-    """测试注册表包含 14 个 source"""
+def test_registry_list_crawlers_17_sources():
+    """测试注册表包含 17 个 source（框架 v1.0 建设：+archwiki/dnf/firewalld，mysql→mariadb）"""
     reset_registry()
     sources = list_crawlers()
-    assert len(sources) == 14
+    assert len(sources) == 17
     # 验证所有预期 source 存在
     expected = {
-        "nginx-docs", "apache-docs", "mysql-docs", "redis-docs",
+        "nginx-docs", "apache-docs", "mariadb-docs", "redis-docs",
         "docker-docs", "kubernetes-docs", "systemd-docs", "selinux-docs",
         "iptables-docs", "ssh-docs", "bash-docs", "python-docs",
         "rust-docs", "git-docs",
+        "archwiki", "dnf-docs", "firewalld-docs",
     }
     assert expected.issubset(set(sources))
 
@@ -278,7 +279,7 @@ def test_registry_crawl_all_offline():
     # 使用临时缓存目录（每个爬虫内部 cache_root 是默认路径，但离线模式下
     # 无缓存会返回失败，不影响测试）
     results = crawl_all(offline=True)
-    assert len(results) == 14
+    assert len(results) == 17
     for source, result in results.items():
         assert isinstance(result, CrawlerResult)
         assert result.source == source
