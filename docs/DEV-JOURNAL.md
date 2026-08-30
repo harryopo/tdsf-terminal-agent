@@ -1931,3 +1931,7 @@ P2（中优先级 — 清理 + 文档）：
 **报错与修改**：①418/403 反爬——UA 已是浏览器式仍被拒，策略改为换可抓的官方镜像站（实测 200 才配）；②子代理测试误清真实 rag.db 的 264 条爬取条目（测试未隔离数据目录）——`--crawl-all` 幂等重爬恢复；③PowerShell 内联 python -c 多行引号断裂——改写临时脚本文件。
 
 **门禁**：pytest 1692 / vitest 315（src/modules/ai）/ tsc / lint 全绿。**待用户**：审核知识库框架（六项清单）→ 通过后按框架建设内容。
+
+### §37.81 补记 7：框架 v1.0 内容建设轮 1（2026-08-30，commit fe3f003）
+
+用户审核通过框架 → 立即执行：①mysql 403 反爬 → MariaDB KB（同族官方库，probe 637KB）；②新增 archwiki（Arch Wiki 系统管理教学金矿，100 页）/ dnf-docs / firewalld-docs；③全源加深 30→50 页；④17 源全量爬取**无一失败**，知识库 **369→784 条（+112%）**——archwiki 81 / rust 50 / nginx 49 / apache 49 / selinux 48 / k8s 48 / git 48 / docker 48 / systemd 46 / python 46 / bash 46 / ssh 45 / redis 44 / mariadb 40 / iptables 37 / firewalld 30 / dnf 29。框架文档标记 v1.0 通过+建设执行记录（源→八层分类映射）。爬前逐源 probe 连通性验证（man7 dir 页 404 → 弃用，Arch man 已覆盖）。test_crawlers 源数断言 14→17 同步。
