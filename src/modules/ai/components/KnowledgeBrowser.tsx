@@ -1,17 +1,20 @@
 /**
  * KnowledgeBrowser.tsx — 知识库浏览器（P2-4 可视化）
  * -----------------------------------------------------------------------------
- * 左侧栏「知识库」视图，双模式（TDSF 魔改 2026-08-29: 两级文件视图）：
+ * 左侧栏「知识库」视图，双模式（TDSF 魔改 2026-08-30: 6+1 分类两级文件视图）：
  *
- *   浏览模式（默认）：来源分组 → 组内列「文件」（knowledge.list_files，
- *     按 url 聚合的文件级条目：filename/块数），点文件弹出
- *     「完整文档」（knowledge.get_doc 拼接全部分块）。无 url 的来源
- *     （case-* 会话沉淀）保持原条目式展示。
+ *   浏览模式（默认）：分类分组（6+1：Linux 哲学与命令对照/基础概念/命令与工具/
+ *     系统管理/网络与远程/安全加固/服务部署；未分类归「其他」沉底）→
+ *     组内列「文件」（knowledge.list_files({group: category})，按 url 聚合的
+ *     文件级条目：filename/块数/source 中文名副行），点文件弹出「完整文档」
+ *     （knowledge.get_doc 拼接全部分块）。无 url 的条目（case-* 会话沉淀、
+ *     philosophy 卡片）保持原条目式展示。
  *
  *   搜索模式：输入搜索词走 knowledge.search（按块命中，语义不变），
- *     命中条目显示所属文件名（从 hit.url 提取）；点击优先打开完整文档
- *     （get_doc），并提示「来自搜索命中，第 N 块」（N 从分块 id 尾部序号
- *     提取，id 形如 doc-<hash>-<seq>，seq 从 0 起）；清空搜索回落浏览模式。
+ *     命中条目显示 source 中文名副行 + 所属文件名（从 hit.url 提取）；
+ *     点击优先打开完整文档（get_doc），并提示「来自搜索命中，第 N 块」
+ *     （N 从分块 id 尾部序号提取，id 形如 doc-<hash>-<seq>，seq 从 0 起）；
+ *     清空搜索回落浏览模式。
  *
  *   导入 md（TDSF 魔改 2026-08-30）：内置教学语料剔除（个人语料不随应用
  *     分发），头部「导入 md」按钮 → HTML input 多选 .md（WebView 下读
@@ -19,12 +22,13 @@
  *     清缓存 + 重载列表。
  *
  * 数据链路：
- *   knowledge.list(limit)          → 浏览模式来源清单 + 无 url 条目
- *   knowledge.list_files({source}) → 组内文件级列表（懒加载，per source 缓存）
- *   knowledge.get_doc({url})       → 完整文档 md（per url 缓存，弹窗重开不重复请求）
- *   knowledge.search(query, limit) → 搜索（按块命中，语义不变）
- *   knowledge.get(id)              → 无 url 条目详情（案例）
- *   knowledge.import_docs({files}) → 导入 md（{name, content} 列表）
+ *   knowledge.list(limit)              → 浏览模式分类清单 + 无 url 条目
+ *   knowledge.list_files({group})      → 组内文件级列表（懒加载，per category 缓存）
+ *   knowledge.get_doc({url})           → 完整文档 md（per url 缓存，弹窗重开不重复请求）
+ *   knowledge.search(query, limit)     → 搜索（按块命中，语义不变）
+ *   knowledge.get(id)                  → 无 url 条目详情（案例）
+ *   knowledge.import_docs({files})     → 导入 md（{name, content} 列表）
+ *   knowledge.titles_zh({source})      → 中文标题映射（组级合并 per source 请求）
  *
  * 设计规范：UI 组件套（Input/Button/Badge/Dialog）+ Hugeicons 图标，不使用 emoji。
  */
@@ -75,6 +79,8 @@ interface KnowledgeHit {
   content: string;
   url: string;
   tags: string[];
+  /** 6+1 分类 key（TDSF 2026-08-30；空/缺失 = 未分类，归「其他」） */
+  category?: string;
   match_type?: string;
   rrf_score?: number;
 }
@@ -99,11 +105,10 @@ type FilesLoadState =
   | { status: "error" };
 
 // ============================================================================
-// 来源分组（TDSF 魔改 2026-08-29: 按来源分组浏览，避免分块条目平铺）
+// 分类分组（TDSF 魔改 2026-08-30: 按 category 6+1 分组浏览，source 名作副行）
 // ============================================================================
 
-/** 17 官方文档源 → 中文组名（TDSF 魔改 2026-08-30，与 crawlers/registry.py
- *  注册源一一对应；用户要求官方文档显示中文名，agent 检索仍用英文 source id） */
+/** 17 官方文档源 → 中文名（副行小字；与 crawlers/registry.py 注册源一一对应） */
 const OFFICIAL_SOURCE_LABELS: Record<string, string> = {
   "nginx-docs": "Nginx 官方文档",
   "apache-docs": "Apache HTTP 文档",
@@ -122,20 +127,51 @@ const OFFICIAL_SOURCE_LABELS: Record<string, string> = {
   "dnf-docs": "DNF 手册",
   "firewalld-docs": "Firewalld 手册",
   archwiki: "Arch Wiki 指南",
+  philosophy: "教学语料",
 };
 
-/** source 原始值 → 中文组名；未知 *-docs 回退「<前缀> 文档」，其余原样显示
- *  TDSF 魔改 2026-08-30: 内置教学语料剔除（个人语料改为手动导入），
- *  删 builtin-skills/builtin-docs/builtin-corpus 映射；17 官方源全量中文映射 */
+/** source 原始值 → 中文名（分组头副行 / 条目副行小字）；未知 *-docs 回退
+ *  「<前缀> 文档」，其余原样显示。内置教学语料已剔除（个人语料改为手动
+ *  导入），删 builtin-skills/builtin-docs/builtin-corpus 映射 */
 function sourceGroupLabel(source: string): string {
   const mapped = OFFICIAL_SOURCE_LABELS[source];
   if (mapped) return mapped;
   if (source === "imported-docs") return "导入文档";
-  if (source.startsWith("case-") || source === "session-case") return "会话沉淀";
+  if (source === "session-case" || source.startsWith("case-"))
+    return "会话沉淀";
   if (source.endsWith("-docs")) {
     return `${source.slice(0, -"-docs".length)} 文档`;
   }
   return source;
+}
+
+/** 6+1 分类 key → 中文组名（category_for 映射，后端 knowledge.sources.py） */
+const CATEGORY_LABELS: Record<string, string> = {
+  "basic-ops": "基础概念",
+  "cmd-tools": "命令与工具",
+  "sys-admin": "系统管理",
+  "net-remote": "网络与远程",
+  security: "安全加固",
+  services: "服务部署",
+  "linux-philosophy": "Linux 哲学与命令对照",
+};
+
+/** 分类固定排列顺序（6+1；未分类「其他」沉底） */
+const CATEGORY_ORDER = [
+  "linux-philosophy",
+  "basic-ops",
+  "cmd-tools",
+  "sys-admin",
+  "net-remote",
+  "security",
+  "services",
+  "",
+];
+
+/** category key → 中文组名；空/未知 → 「其他」 */
+function categoryGroupLabel(category: string | undefined): string {
+  if (category && CATEGORY_LABELS[category]) return CATEGORY_LABELS[category];
+  return "其他";
 }
 
 /** 从 url 提取文件名（本地路径与 http URL 通用，与后端 _filename_from_url 对齐） */
@@ -168,32 +204,40 @@ function hitSeqSuffix(id: string): string {
 }
 
 type KnowledgeGroup = {
-  /** 原始 source（作为折叠状态 key） */
-  source: string;
+  /** category key（作为折叠状态 key；未分类为空串） */
+  category: string;
   label: string;
+  /** 组内出现的 source 集合（titles_zh / 副行中文名用） */
+  sources: string[];
   entries: KnowledgeHit[];
   /** 组内是否含带 url 的文档条目（决定浏览模式下是否列文件） */
   hasFiles: boolean;
 };
 
-/** 按来源分组（保持首次出现顺序；作用于当前搜索/过滤结果） */
+/** 按 category 分组（6+1 固定顺序，未分类沉底；作用于当前搜索/过滤结果） */
 function groupKnowledgeHits(hits: KnowledgeHit[]): KnowledgeGroup[] {
   const groups = new Map<string, KnowledgeGroup>();
   for (const hit of hits) {
-    let group = groups.get(hit.source);
+    const cat = hit.category ?? "";
+    let group = groups.get(cat);
     if (!group) {
       group = {
-        source: hit.source,
-        label: sourceGroupLabel(hit.source),
+        category: cat,
+        label: categoryGroupLabel(cat),
+        sources: [],
         entries: [],
         hasFiles: false,
       };
-      groups.set(hit.source, group);
+      groups.set(cat, group);
     }
+    if (!group.sources.includes(hit.source)) group.sources.push(hit.source);
     group.entries.push(hit);
     if (hit.url) group.hasFiles = true;
   }
-  return [...groups.values()];
+  return [...groups.values()].sort(
+    (a, b) =>
+      CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category),
+  );
 }
 
 // ============================================================================
@@ -243,11 +287,15 @@ async function listKnowledge(limit = 50): Promise<KnowledgeHit[]> {
   }
 }
 
-/** 组内文件级列表（不吞错：RPC 失败上抛，由调用方置 error 态，不伪装成空列表） */
-async function listKnowledgeFiles(source: string): Promise<KnowledgeFile[]> {
+/** 组内文件级列表（按 category 过滤；不吞错：RPC 失败上抛，由调用方置
+ *  error 态，不伪装成空列表） */
+async function listKnowledgeFiles(
+  group: string,
+  source?: string,
+): Promise<KnowledgeFile[]> {
   const res = await invokeRpc<{ files?: KnowledgeFile[] } | null>(
     "knowledge.list_files",
-    { source },
+    source ? { group, source } : { group },
   );
   return res?.files ?? [];
 }
@@ -284,7 +332,7 @@ function SourceFileList({
   onOpenDoc,
 }: {
   state: FilesLoadState;
-  /** url → 中文标题（knowledge.titles_zh；无映射回退英文 filename） */
+  /** url → 中文标题（knowledge.titles_zh 组级合并；无映射回退英文 filename） */
   titles: Map<string, string>;
   onOpenDoc: (url: string) => void;
 }) {
@@ -306,7 +354,7 @@ function SourceFileList({
   if (state.files.length === 0) {
     return (
       <div className="px-1 py-1 text-[10px] text-muted-foreground/60">
-        该来源暂无文档文件。
+        该分类暂无文档文件。
       </div>
     );
   }
@@ -342,11 +390,19 @@ function SourceFileList({
                 {file.chunks} 块
               </Badge>
             </div>
-            {zh && (
-              <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/70">
-                {file.filename}
-              </div>
-            )}
+            {/* TDSF 魔改 2026-08-30: 副行 = source 中文名（6+1 分组后同一分类
+                聚合多来源，source 名保留辨识度）；有中文映射时再补英文
+                filename（无映射时主行已是 filename，不重复显示） */}
+            <div className="mt-0.5 flex items-center gap-1.5">
+              <span className="shrink-0 truncate text-[10px] text-muted-foreground/70">
+                {sourceGroupLabel(file.source)}
+              </span>
+              {zh && (
+                <span className="truncate font-mono text-[10px] text-muted-foreground/50">
+                  {file.filename}
+                </span>
+              )}
+            </div>
           </button>
         );
       })}
@@ -364,23 +420,23 @@ export function KnowledgePanel() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [detail, setDetail] = useState<DetailTarget | null>(null);
-  // TDSF 魔改 2026-08-29: 可折叠分组（记录已折叠组的 source）
-  const [collapsedSources, setCollapsedSources] = useState<Set<string>>(
+  // TDSF 魔改 2026-08-30: 可折叠分组（记录已折叠组的 category key）
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     new Set(),
   );
-  // TDSF 魔改 2026-08-29: 组内文件级列表懒加载状态（per source）
-  const [filesBySource, setFilesBySource] = useState<
+  // 组内文件级列表懒加载状态（per category，6+1 分组浏览）
+  const [filesByCategory, setFilesByCategory] = useState<
     ReadonlyMap<string, FilesLoadState>
   >(new Map());
   // TDSF 魔改 2026-08-30: 导入 md（个人语料手动导入的唯一入口）
   const [importing, setImporting] = useState(false);
-  // TDSF 魔改 2026-08-30: 中文预览标题映射（per source 懒加载，knowledge.titles_zh）
-  const [titlesBySource, setTitlesBySource] = useState<
+  // 中文预览标题映射（组级合并：category → url→zh；底层仍 per source 缓存）
+  const [titlesByCategory, setTitlesByCategory] = useState<
     ReadonlyMap<string, Map<string, string>>
   >(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 分组作用于当前搜索/过滤结果（保持首次出现顺序）
+  // 分组作用于当前搜索/过滤结果（6+1 固定顺序，未分类沉底）
   const groups = useMemo(() => groupKnowledgeHits(results), [results]);
 
   /** 导入 md：HTML input 多选（WebView 下 File 无绝对路径，读内容传后端，
@@ -414,8 +470,8 @@ export function KnowledgePanel() {
         const rejected = res?.rejected ?? [];
         // 成功后刷新：清浏览缓存 + 组内文件态 + 中文标题态 + 重载列表（回落浏览模式）
         clearKnowledgeCaches();
-        setFilesBySource(new Map());
-        setTitlesBySource(new Map());
+        setFilesByCategory(new Map());
+        setTitlesByCategory(new Map());
         const hits = await listKnowledge(50);
         setResults(hits);
         setSearched(false);
@@ -438,67 +494,77 @@ export function KnowledgePanel() {
     [],
   );
 
-  const toggleGroup = useCallback((source: string) => {
-    setCollapsedSources((prev) => {
+  const toggleGroup = useCallback((category: string) => {
+    setCollapsedCategories((prev) => {
       const next = new Set(prev);
-      if (next.has(source)) next.delete(source);
-      else next.add(source);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
       return next;
     });
   }, []);
 
-  const loadFiles = useCallback((source: string) => {
-    const cached = filesCache.get(source);
+  const loadFiles = useCallback((category: string) => {
+    const cached = filesCache.get(category);
     if (cached) {
-      setFilesBySource((prev) =>
-        new Map(prev).set(source, { status: "ready", files: cached }),
+      setFilesByCategory((prev) =>
+        new Map(prev).set(category, { status: "ready", files: cached }),
       );
       return;
     }
-    setFilesBySource((prev) => new Map(prev).set(source, { status: "loading" }));
-    listKnowledgeFiles(source)
+    setFilesByCategory((prev) =>
+      new Map(prev).set(category, { status: "loading" }),
+    );
+    listKnowledgeFiles(category)
       .then((files) => {
-        filesCache.set(source, files);
-        setFilesBySource((prev) =>
-          new Map(prev).set(source, { status: "ready", files }),
+        filesCache.set(category, files);
+        setFilesByCategory((prev) =>
+          new Map(prev).set(category, { status: "ready", files }),
         );
       })
       .catch(() => {
-        setFilesBySource((prev) => new Map(prev).set(source, { status: "error" }));
+        setFilesByCategory((prev) =>
+          new Map(prev).set(category, { status: "error" }),
+        );
       });
   }, []);
 
-  // 浏览模式下为「已展开且含文档」的组懒加载 list_files（缓存 per source，跳过已加载组）
+  // 浏览模式下为「已展开且含文档」的组懒加载 list_files（缓存 per category，
+  // 跳过已加载组）
   useEffect(() => {
     if (searched) return;
     for (const group of groups) {
       if (!group.hasFiles) continue;
-      if (collapsedSources.has(group.source)) continue;
-      if (filesBySource.has(group.source)) continue;
-      loadFiles(group.source);
+      if (collapsedCategories.has(group.category)) continue;
+      if (filesByCategory.has(group.category)) continue;
+      loadFiles(group.category);
     }
-  }, [searched, groups, collapsedSources, filesBySource, loadFiles]);
+  }, [searched, groups, collapsedCategories, filesByCategory, loadFiles]);
 
-  /** 中文标题映射懒加载（per source；失败/无映射缓存空 Map，条目回退英文标题） */
-  const loadTitles = useCallback((source: string) => {
-    const cached = titlesZhCache.get(source);
+  /** 中文标题映射懒加载（组级：对组内每个 source 拉 titles_zh 后合并；
+   *  底层缓存 per source，组级合并结果缓存 per category，失败缓存空 Map） */
+  const loadTitlesForGroup = useCallback((group: KnowledgeGroup) => {
+    const cached = titlesZhCache.get(group.category);
     if (cached) {
-      setTitlesBySource((prev) => new Map(prev).set(source, cached));
+      setTitlesByCategory((prev) => new Map(prev).set(group.category, cached));
       return;
     }
-    void listTitlesZh(source).then((map) => {
-      titlesZhCache.set(source, map);
-      setTitlesBySource((prev) => new Map(prev).set(source, map));
+    Promise.all(group.sources.map((s) => listTitlesZh(s))).then((maps) => {
+      const merged = new Map<string, string>();
+      for (const m of maps) {
+        for (const [url, zh] of m) merged.set(url, zh);
+      }
+      titlesZhCache.set(group.category, merged);
+      setTitlesByCategory((prev) => new Map(prev).set(group.category, merged));
     });
   }, []);
 
   // 出现的组即预取中文标题（浏览/搜索两模式共用；缓存命中跳过，不阻塞列表渲染）
   useEffect(() => {
     for (const group of groups) {
-      if (titlesBySource.has(group.source)) continue;
-      loadTitles(group.source);
+      if (titlesByCategory.has(group.category)) continue;
+      loadTitlesForGroup(group);
     }
-  }, [groups, titlesBySource, loadTitles]);
+  }, [groups, titlesByCategory, loadTitlesForGroup]);
 
   const search = useCallback(async (q: string) => {
     const keyword = q.trim();
@@ -529,7 +595,9 @@ export function KnowledgePanel() {
   // 条目样式：搜索命中条目与无 url 条目（案例）复用；
   // TDSF 魔改 2026-08-30: 中文预览标题主行 + 英文原标题副行（无映射只显示英文）
   const renderEntry = (hit: KnowledgeHit) => {
-    const zh = hit.url ? titlesBySource.get(hit.source)?.get(hit.url) : undefined;
+    const zh = hit.url
+      ? titlesByCategory.get(hit.category ?? "")?.get(hit.url)
+      : undefined;
     return (
       <button
         key={hit.id}
@@ -559,8 +627,13 @@ export function KnowledgePanel() {
             </Badge>
           )}
         </div>
+        {/* TDSF 魔改 2026-08-30: source 中文名副行（6+1 分组后保留来源辨识度）；
+            有中文标题时英文原标题再降一级 */}
+        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
+          {sourceGroupLabel(hit.source)}
+        </div>
         {zh && (
-          <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
+          <div className="truncate font-mono text-[10px] text-muted-foreground/50">
             {hit.title}
           </div>
         )}
@@ -666,13 +739,21 @@ export function KnowledgePanel() {
         )}
         <div className="space-y-2.5">
           {groups.map((group) => {
-            const isCollapsed = collapsedSources.has(group.source);
+            const isCollapsed = collapsedCategories.has(group.category);
+            // 分组头副行：组内来源中文名（1 个直接显示；多个取前 2 个 + 等）
+            const sourceNames = group.sources.map(sourceGroupLabel);
+            const sourcesSubtitle =
+              sourceNames.length === 0
+                ? ""
+                : sourceNames.length <= 2
+                  ? sourceNames.join(" · ")
+                  : `${sourceNames[0]} · ${sourceNames[1]} 等 ${sourceNames.length} 个来源`;
             return (
-              <div key={group.source} className="space-y-1.5">
-                {/* 分组头：来源中文名 + 条数 badge，可折叠 */}
+              <div key={group.category || "(uncategorized)"} className="space-y-1.5">
+                {/* 分组头：分类中文名 + 来源副行 + 条数 badge，可折叠 */}
                 <button
                   type="button"
-                  onClick={() => toggleGroup(group.source)}
+                  onClick={() => toggleGroup(group.category)}
                   aria-expanded={!isCollapsed}
                   className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/40"
                 >
@@ -682,12 +763,19 @@ export function KnowledgePanel() {
                     strokeWidth={2}
                     className="shrink-0 text-muted-foreground/70"
                   />
-                  <span className="truncate text-[10.5px] font-semibold text-foreground/85">
-                    {group.label}
+                  <span className="min-w-0">
+                    <span className="block truncate text-[10.5px] font-semibold text-foreground/85">
+                      {group.label}
+                    </span>
+                    {sourcesSubtitle && (
+                      <span className="block truncate text-[9px] text-muted-foreground/60">
+                        {sourcesSubtitle}
+                      </span>
+                    )}
                   </span>
                   <Badge
                     variant="secondary"
-                    className="shrink-0 px-1 py-px text-[9px] tabular-nums"
+                    className="ml-auto shrink-0 px-1 py-px text-[9px] tabular-nums"
                   >
                     {group.entries.length}
                   </Badge>
@@ -699,16 +787,16 @@ export function KnowledgePanel() {
                       group.entries.map(renderEntry)
                     ) : (
                       <>
-                        {/* 浏览模式：含文档的组列文件级列表（懒加载） */}
+                        {/* 浏览模式：含文档的组列文件级列表（懒加载，按 category） */}
                         {group.hasFiles && (
                           <SourceFileList
                             state={
-                              filesBySource.get(group.source) ?? {
+                              filesByCategory.get(group.category) ?? {
                                 status: "loading",
                               }
                             }
                             titles={
-                              titlesBySource.get(group.source) ?? new Map()
+                              titlesByCategory.get(group.category) ?? new Map()
                             }
                             onOpenDoc={(url) => setDetail({ docUrl: url })}
                           />

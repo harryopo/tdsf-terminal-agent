@@ -200,16 +200,34 @@ class RagIndex:
                 content TEXT NOT NULL,
                 url TEXT NOT NULL DEFAULT '',
                 tags TEXT NOT NULL DEFAULT '[]',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                content_zh TEXT
             )"""
         )
         # FTS5（jieba 分词预处理：content_tokens 列存 tokenize 结果）
-        conn.execute(
-            """CREATE VIRTUAL TABLE IF NOT EXISTS fts_entries USING fts5(
-                title, content, content_tokens,
-                tokenize='unicode61'
-            )"""
-        )
+        # TDSF 2026-08-30: content_zh_tokens = 中文译文分词（translate_knowledge.py
+        # 离线翻译后写入）——中文 query 可直接命中译文；旧表缺列时 DROP 重建
+        # （正文仍在 entries，按行回填，无需重爬）。
+        fts_cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(fts_entries)")
+        }
+        if fts_cols and "content_zh_tokens" not in fts_cols:
+            logger.info("fts_entries 旧表缺 content_zh_tokens，重建 FTS（正文回填）")
+            old_rows = conn.execute(
+                "SELECT rowid, title, content, content_tokens FROM fts_entries"
+            ).fetchall()
+            conn.execute("DROP TABLE fts_entries")
+            self._create_fts(conn)
+            for r in old_rows:
+                conn.execute(
+                    "INSERT INTO fts_entries (rowid, title, content, "
+                    "content_tokens, content_zh_tokens) VALUES (?, ?, ?, ?, ?)",
+                    (r["rowid"], r["title"], r["content"], r["content_tokens"], ""),
+                )
+        else:
+            self._create_fts(conn)
         # 嵌入缓存（content hash → 向量）：启动幂等索引先删后加时，同内容
         # 直接命中缓存免重算——662 块全量真嵌入一次仅数秒，重启重建零推理
         conn.execute(
@@ -218,6 +236,17 @@ class RagIndex:
                 embedding BLOB NOT NULL
             )"""
         )
+        # 旧库迁移：已有 entries 表缺 category/content_zh 列时补列
+        # （TDSF 2026-08-30 知识库 6+1 分类 + LLM 全量中文翻译；幂等探测）
+        entry_cols = {
+            str(r[1]) for r in conn.execute("PRAGMA table_info(entries)")
+        }
+        if "category" not in entry_cols:
+            conn.execute(
+                "ALTER TABLE entries ADD COLUMN category TEXT NOT NULL DEFAULT ''"
+            )
+        if "content_zh" not in entry_cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN content_zh TEXT")
         # 中文标题映射（url → zh + summary_zh）：官方文档英文标题的中文预览
         # 名与 120 字中文内容摘要，由 scripts/gen_titles_zh.py 离线 LLM 批量
         # 生成（TDSF 2026-08-30；summary_zh 为 C2 新增列，前端知识详情弹窗
@@ -242,6 +271,16 @@ class RagIndex:
             )
         conn.commit()
         self._conn = conn
+
+    @staticmethod
+    def _create_fts(conn: sqlite3.Connection) -> None:
+        """创建 FTS5 虚拟表（content_zh_tokens 进索引：中文 query 命中译文）"""
+        conn.execute(
+            """CREATE VIRTUAL TABLE IF NOT EXISTS fts_entries USING fts5(
+                title, content, content_tokens, content_zh_tokens,
+                tokenize='unicode61'
+            )"""
+        )
 
     # ------------------------------------------------------------------
     # 写入
@@ -291,8 +330,9 @@ class RagIndex:
             # FTS5/vec0 的指定 rowid 不一致会导致检索回查为空）
             conn.execute(
                 "INSERT OR REPLACE INTO entries "
-                "(rowid, id, source, title, content, url, tags, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(rowid, id, source, title, content, url, tags, created_at, "
+                "category, content_zh) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rowid,
                     entry.id,
@@ -302,16 +342,21 @@ class RagIndex:
                     entry.url,
                     tags_json,
                     entry.created_at,
+                    entry.category,
+                    entry.content_zh,
                 ),
             )
             conn.execute(
-                "INSERT OR REPLACE INTO fts_entries (rowid, title, content, content_tokens) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO fts_entries "
+                "(rowid, title, content, content_tokens, content_zh_tokens) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     rowid,
                     entry.title,
                     entry.content,
                     tokenize(f"{entry.title} {entry.content}"),
+                    # 译文进 FTS：中文 query 直接命中译文（空译文=空 token）
+                    tokenize(entry.content_zh) if entry.content_zh else "",
                 ),
             )
             if self._vec_available:
@@ -533,6 +578,8 @@ class RagIndex:
                         "url": row["url"],
                         "tags": _json_loads(row["tags"]),
                         "created_at": row["created_at"],
+                        "category": str(row["category"] or ""),
+                        "content_zh": row["content_zh"],
                         "match_type": hit,
                         "rrf_score": round(m["score"], 4),
                     }
@@ -574,12 +621,18 @@ class RagIndex:
                     "url": r["url"],
                     "tags": _json_loads(r["tags"]),
                     "created_at": r["created_at"],
+                    "category": str(r["category"] or ""),
+                    "content_zh": r["content_zh"],
                     "match_type": "list",
                 }
                 for r in rows
             ]
 
-    def list_files(self, source: str | None = None) -> list[dict[str, Any]]:
+    def list_files(
+        self,
+        source: str | None = None,
+        group: str | None = None,
+    ) -> list[dict[str, Any]]:
         """按 url 聚合列出文档文件（文件级浏览视图）
 
         同一文件（同 url）的全部分片段落聚合为一条，便于"同文件的分片
@@ -587,22 +640,27 @@ class RagIndex:
 
         Args:
             source: 可选，按来源过滤（如 "builtin-docs"）；None = 全部
+            group: 可选，按 category 过滤（如 "linux-philosophy"，前端
+                   6+1 分组浏览用）；None = 全部
 
         Returns:
-            [{url, filename, title0, chunks, total_chars, source}, ...]
+            [{url, filename, title0, chunks, total_chars, source, category}, ...]
             title0 为该文件第一个块的标题（按块序号排序）
         """
         with self._lock:
             conn = self._conn
             assert conn is not None
             sql = (
-                "SELECT id, source, title, content, url, rowid "
+                "SELECT id, source, title, content, url, rowid, category "
                 "FROM entries WHERE url != ''"
             )
             params: list[Any] = []
             if source:
                 sql += " AND source = ?"
                 params.append(source)
+            if group:
+                sql += " AND category = ?"
+                params.append(group)
             sql += " ORDER BY url, rowid"
             rows = conn.execute(sql, params).fetchall()
 
@@ -611,9 +669,10 @@ class RagIndex:
             grouped.setdefault(str(r["url"]), []).append(r)
 
         files: list[dict[str, Any]] = []
-        for url, group in grouped.items():
+        for url, group_rows in grouped.items():
             ordered = sorted(
-                group, key=lambda r: (_chunk_seq(str(r["id"])), int(r["rowid"]))
+                group_rows,
+                key=lambda r: (_chunk_seq(str(r["id"])), int(r["rowid"])),
             )
             first = ordered[0]
             files.append(
@@ -624,6 +683,7 @@ class RagIndex:
                     "chunks": len(ordered),
                     "total_chars": sum(len(str(r["content"])) for r in ordered),
                     "source": str(first["source"]),
+                    "category": str(first["category"] or ""),
                 }
             )
         files.sort(key=lambda f: (str(f["source"]), str(f["filename"])))
@@ -644,8 +704,8 @@ class RagIndex:
             conn = self._conn
             assert conn is not None
             rows = conn.execute(
-                "SELECT id, source, title, content, url, rowid "
-                "FROM entries WHERE url = ?",
+                "SELECT id, source, title, content, url, rowid, category, "
+                "content_zh FROM entries WHERE url = ?",
                 (url,),
             ).fetchall()
             zh_row = conn.execute(
@@ -666,6 +726,10 @@ class RagIndex:
             "content": "\n\n".join(str(r["content"]) for r in ordered),
             "chunks": len(ordered),
             "total_chars": sum(len(str(r["content"])) for r in ordered),
+            "category": str(first["category"] or ""),
+            "content_zh": "\n\n".join(
+                str(r["content_zh"]) for r in ordered if r["content_zh"]
+            ),
             "title_zh": str(zh_row["zh"]) if zh_row and zh_row["zh"] else "",
             "summary_zh": (
                 str(zh_row["summary_zh"]) if zh_row and zh_row["summary_zh"] else ""
@@ -786,9 +850,90 @@ class RagIndex:
             "url": row["url"],
             "tags": _json_loads(row["tags"]),
             "created_at": row["created_at"],
+            "category": str(row["category"] or ""),
+            "content_zh": row["content_zh"],
             "score": 1.0,
             "match_type": "list",
         }
+
+    def update_content_zh(self, entry_id: str, content_zh: str) -> bool:
+        """写入单条中文译文（translate_knowledge.py 用）
+
+        同步更新 entries.content_zh（RAG 检索双语正文）与
+        fts_entries.content_zh_tokens（jieba 分词后进 FTS——中文 query
+        直接命中译文）。entry_id 不存在返回 False。
+
+        Returns:
+            是否写入成功
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            cur = conn.execute(
+                "UPDATE entries SET content_zh = ? WHERE id = ?",
+                (content_zh, entry_id),
+            )
+            if cur.rowcount == 0:
+                return False
+            conn.execute(
+                "UPDATE fts_entries SET content_zh_tokens = ? WHERE rowid = ?",
+                (tokenize(content_zh), _rowid_for(entry_id)),
+            )
+            conn.commit()
+        return True
+
+    def official_entries(self) -> list[dict[str, Any]]:
+        """官方文档源全部条目（*-docs 后缀 + archwiki；翻译/导出脚本用）
+
+        Returns:
+            [{id, source, title, content, url, category, content_zh}, ...]
+            （按 source、id 排序，稳定输出）
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            rows = conn.execute(
+                "SELECT id, source, title, content, url, category, content_zh "
+                "FROM entries "
+                "WHERE source LIKE '%-docs' OR source = 'archwiki' "
+                "ORDER BY source, id"
+            ).fetchall()
+        return [
+            {
+                "id": str(r["id"]),
+                "source": str(r["source"]),
+                "title": str(r["title"]),
+                "content": str(r["content"]),
+                "url": str(r["url"]),
+                "category": str(r["category"] or ""),
+                "content_zh": r["content_zh"],
+            }
+            for r in rows
+        ]
+
+    def stats_by_category(self) -> list[dict[str, Any]]:
+        """按 category 统计（块数/总字符数，重建脚本与前端统计用）"""
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            rows = conn.execute(
+                """SELECT category,
+                          COUNT(*) AS chunks,
+                          COUNT(DISTINCT CASE WHEN url != '' THEN url END) AS files,
+                          SUM(LENGTH(content)) AS total_chars
+                   FROM entries
+                   GROUP BY category
+                   ORDER BY category"""
+            ).fetchall()
+        return [
+            {
+                "category": str(r["category"] or ""),
+                "files": int(r["files"]),
+                "chunks": int(r["chunks"]),
+                "total_chars": int(r["total_chars"] or 0),
+            }
+            for r in rows
+        ]
 
     def close(self) -> None:
         with self._lock:

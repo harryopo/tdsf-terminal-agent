@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 from knowledge.crawlers.clean import clean_markdown
@@ -35,6 +36,70 @@ _SECTION_MAX_CHARS = 1200  # 章节段二次切分阈值（字符）
 
 # markdown 1-3 级标题行（4 级以下标题不作为段落边界，保持章内聚合）
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
+
+
+# ============================================================================
+# 0. 知识库 6+1 分类映射（TDSF 2026-08-30 用户钦定）
+# ============================================================================
+# category key 存英文（源码/检索稳定），前端 KnowledgeBrowser 映射中文：
+#   basic-ops       基础概念        cmd-tools       命令与工具
+#   sys-admin       系统管理        net-remote      网络与远程
+#   security        安全加固        services        服务部署
+#   linux-philosophy Linux 哲学与命令对照（第 7 专属分类，philosophy/ 语料）
+# 空串 = 未分类（用户导入文档、会话案例等），前端归「其他」。
+# 一源一主分类（archwiki 双属基础概念+系统管理，按 title 关键词分流），
+# 避免复杂多分类。
+
+# archwiki 页面 title 命中 → sys-admin（系统管理）；其余 → basic-ops
+_ARCHWIKI_SYS_ADMIN_KEYWORDS: tuple[str, ...] = (
+    "systemd", "pacman", "mkinitcpio", "grub", "kernel", "installation",
+    "内核", "安装", "fstab", "partition", "lvm", "swap", "boot", "udev",
+)
+
+# source → category 主映射（17 官方源全覆盖）
+_SOURCE_CATEGORY: dict[str, str] = {
+    # 命令与工具（man 手册/语言/版本控制类文档）
+    "bash-docs": "cmd-tools",
+    "python-docs": "cmd-tools",
+    "rust-docs": "cmd-tools",
+    "git-docs": "cmd-tools",
+    "systemd-docs": "cmd-tools",  # man 手册类主分类；同源兼属系统管理
+    # 系统管理
+    "dnf-docs": "sys-admin",
+    # 网络与远程
+    "ssh-docs": "net-remote",
+    # 安全加固
+    "selinux-docs": "security",
+    "iptables-docs": "security",
+    "firewalld-docs": "security",
+    # 服务部署
+    "nginx-docs": "services",
+    "apache-docs": "services",
+    "mariadb-docs": "services",
+    "redis-docs": "services",
+    "docker-docs": "services",
+    "kubernetes-docs": "services",
+}
+
+
+def category_for(source: str, title: str = "") -> str:
+    """source（+ title）→ category key
+
+    Args:
+        source: 来源标识（如 "nginx-docs" / "archwiki" / "philosophy"）
+        title: 条目标题（仅 archwiki 用于基础概念/系统管理分流）
+
+    Returns:
+        category key（6+1 之一）；未知来源返回空串（前端归「其他」）
+    """
+    if source == "philosophy":
+        return "linux-philosophy"
+    if source == "archwiki":
+        low = (title or "").lower()
+        if any(k in low for k in _ARCHWIKI_SYS_ADMIN_KEYWORDS):
+            return "sys-admin"
+        return "basic-ops"
+    return _SOURCE_CATEGORY.get(source, "")
 
 
 # ============================================================================
@@ -194,6 +259,71 @@ def _split_long_section(body: str) -> list[str]:
 
 
 # ============================================================================
+# 2. 专属分类语料：Linux 哲学与命令对照（TDSF 2026-08-30，第 7 分类）
+# ============================================================================
+# knowledge/philosophy/*.md 是**随源码分发的通用教学语料**（在 git 里），
+# 由 corpus_personal/ 个人语料清洗重组而来（剔除个人课程对照/备考内容）。
+# 启动时跟随 builtin 机制幂等入库（category=linux-philosophy、
+# source=philosophy），重建后自动包含，无需重爬。
+
+PHILOSOPHY_DIR = Path(__file__).parent / "philosophy"
+PHILOSOPHY_SOURCE = "philosophy"
+PHILOSOPHY_CATEGORY = "linux-philosophy"
+
+
+def load_philosophy_docs(rag=None) -> dict[str, Any]:
+    """扫描 knowledge/philosophy/*.md 分块入库（幂等）
+
+    - 每个文件一个 url（文件名），重入库前 delete_by_url 清旧块
+      （分块数变化时 INSERT OR REPLACE 清不掉残留尾部块）
+    - 分块复用 _chunk_markdown（标题边界优先 + 超 1200 字二次切分）
+    - 内容清洗复用 clean_markdown（_chunk_markdown 内置，去 emoji/导航）
+    - category 固定 linux-philosophy（第 7 专属分类，前端中文标签
+      「Linux 哲学与命令对照」）
+
+    Returns:
+        {files: 处理文件数, chunks: 入库块数, errors: 失败文件数}
+    """
+    rag = rag or get_global_rag()
+    if not PHILOSOPHY_DIR.is_dir():
+        return {"files": 0, "chunks": 0, "errors": 0}
+    files = sorted(PHILOSOPHY_DIR.glob("*.md"))
+    total_chunks = 0
+    errors = 0
+    for md_path in files:
+        try:
+            text = md_path.read_text(encoding="utf-8")
+            if not text.strip():
+                continue
+            url = md_path.name
+            rag.delete_by_url(url, id_prefix="phil-")
+            chunks = _chunk_markdown(text)
+            doc_hash = uuid.uuid5(uuid.NAMESPACE_URL, url)
+            for i, (heading, chunk) in enumerate(chunks):
+                title = f"{md_path.stem} · {heading}" if heading else md_path.stem
+                entry = KnowledgeEntry(
+                    id=f"phil-{doc_hash}-{i}",
+                    source=PHILOSOPHY_SOURCE,
+                    title=title,
+                    content=chunk,
+                    url=url,
+                    tags=["Linux 哲学", f"file:{url}"],
+                    category=PHILOSOPHY_CATEGORY,
+                )
+                rag.add(entry, min_chars=30)
+            total_chunks += len(chunks)
+        except Exception as e:
+            errors += 1
+            logger.warning(f"philosophy doc load failed {md_path.name}: {e}")
+    if files:
+        logger.info(
+            f"philosophy docs loaded: {len(files)} files, "
+            f"{total_chunks} chunks, {errors} errors"
+        )
+    return {"files": len(files), "chunks": total_chunks, "errors": errors}
+
+
+# ============================================================================
 # 3. 会话案例沉淀（决策库雏形）
 # ============================================================================
 
@@ -273,6 +403,9 @@ def crawl_and_index(
                     content=entry.content,
                     url=entry.url,
                     tags=entry.tags,
+                    category=category_for(
+                        entry.source or f"{source_key}-docs", entry.title
+                    ),
                 )
             )
             added += 1
@@ -304,7 +437,9 @@ def _embed_loaded() -> bool:
 
 
 __all__ = [
+    "category_for",
     "import_docs",
+    "load_philosophy_docs",
     "add_case",
     "crawl_and_index",
     "knowledge_stats",

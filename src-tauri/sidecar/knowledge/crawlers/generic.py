@@ -15,7 +15,8 @@ iptables/ssh/bash/python/rust/git）提供通用实现。
   整页合并一条而非碎片）
 - 质量门槛：正文 < 500 字的页面（纯导航/索引/meta 残页）直接丢弃并计入
   discarded 日志
-- 繁体内容（zh_TW 手册页）自动繁转简入库，tags 加「源自繁体」
+- 繁体内容（zh_TW 手册页）整条丢弃（TDSF 2026-08-30 用户钦定，计数
+  discarded_traditional）
 - 页间 sleep(delay) 限速（离线缓存模式不 sleep）；单页失败（超时 10s/
   非 200/解析空）记 warning 跳过继续；整体 try/except 不向上抛出
 - 单页缓存能力沿用 BaseCrawler._fetch_single（联网成功写缓存、失败读
@@ -37,7 +38,7 @@ from urllib.parse import unquote, urljoin, urlparse
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from knowledge.crawlers.base import BaseCrawler, CrawlerResult
-from knowledge.crawlers.clean import clean_content, looks_traditional, to_simplified
+from knowledge.crawlers.clean import clean_content, looks_traditional
 from knowledge.fts5 import KnowledgeEntry
 
 logger = logging.getLogger("sidecar.knowledge.crawlers.generic")
@@ -149,11 +150,16 @@ class GenericCrawler(BaseCrawler):
         """转换为 KnowledgeEntry（title/content 入库前清洗 + 质量门槛）
 
         TDSF 2026-08-30：content < _PAGE_MIN_CHARS 的页面（纯导航/索引
-        残页，如 134 字的 ArchWiki:Statistics）直接丢弃；繁体内容自动
-        繁转简并加「源自繁体」tag。
+        残页，如 134 字的 ArchWiki:Statistics）直接丢弃；繁体内容（zh_TW
+        手册页，用户钦定）整条丢弃并计入 discarded_traditional。
         """
         entries: list[KnowledgeEntry] = []
         discarded = 0
+        discarded_traditional = 0
+        # category_for 延迟导入（sources → crawlers.clean 经包 __init__
+        # 会触发 registry → generic 模块级循环，此处函数内导入规避）
+        from knowledge.sources import category_for
+
         for i, item in enumerate(items):
             content = clean_content(item.get("content", ""))
             # 质量门槛：超短页面丢弃（导航/索引残页无检索价值）
@@ -163,11 +169,11 @@ class GenericCrawler(BaseCrawler):
             raw_title = str(item.get("title", ""))
             title = clean_content(raw_title) or raw_title
             tags = list(item.get("tags", self.default_tags))
-            # 繁体检测与简体转换（zh_TW 手册页有保留价值，统一转简入库）
-            if looks_traditional(content):
-                title = to_simplified(title)
-                content = to_simplified(content)
-                tags = [*tags, "源自繁体"]
+            # 繁体检测（TDSF 2026-08-30 用户钦定）：zh_TW 手册页直接丢弃，
+            # 不再繁转简（zh_CN 同源重复、翻译管线只处理英文正文）
+            if looks_traditional(content) or looks_traditional(title):
+                discarded_traditional += 1
+                continue
             entry_id = self.build_entry_id(item, i)
             entries.append(KnowledgeEntry(
                 id=entry_id,
@@ -176,11 +182,17 @@ class GenericCrawler(BaseCrawler):
                 content=content,
                 url=item.get("url", self.base_url),
                 tags=tags,
+                category=category_for(self.source, title),
             ))
         if discarded:
             logger.info(
                 f"[{self.source}] to_entries discarded {discarded} short page(s) "
                 f"(<{_PAGE_MIN_CHARS} chars)"
+            )
+        if discarded_traditional:
+            logger.info(
+                f"[{self.source}] to_entries discarded_traditional="
+                f"{discarded_traditional} (zh_TW pages dropped)"
             )
         return entries
 
@@ -263,6 +275,10 @@ def crawl_site(
                     f"({len(page['content'])} < {_PAGE_MIN_CHARS}), discard: {url}"
                 )
             else:
+                # category_for 延迟导入（sources → crawlers.clean 经包 __init__
+                # 会触发 registry → generic 模块级循环，此处函数内导入规避）
+                from knowledge.sources import category_for
+
                 entries.append(
                     KnowledgeEntry(
                         id=crawler.build_entry_id(
@@ -273,6 +289,7 @@ def crawl_site(
                         content=page["content"],
                         url=url,
                         tags=page["tags"],
+                        category=category_for(crawler.source, page["title"]),
                     )
                 )
 
@@ -503,7 +520,7 @@ def _extract_page(
       此前从整树取 h1 兄弟会把 bodyContent 整个 div 灌进来并在 4000 字
       截断处混入语言导航/分类残渣）
     - 首个 header 之前的导语段（p/ul/ol/pre/table 等结构性标签）并入正文
-    - 繁体内容（zh_TW 手册页）自动繁转简，tags 加「源自繁体」
+    - 繁体内容（zh_TW 手册页）整页丢弃（用户钦定，不入库）
 
     Returns:
         {title, content, tags}；正文为空返回 None（调用方记 warning 跳过）
@@ -584,10 +601,8 @@ def _extract_page(
     if len(content) > _PAGE_MAX_CHARS:
         content = content[:_PAGE_MAX_CHARS]
 
-    page_tags = list(tags)
-    # 繁体检测与简体转换（zh_TW 手册页有保留价值，统一转简入库）
-    if looks_traditional(content):
-        title = to_simplified(title)
-        content = to_simplified(content)
-        page_tags.append("源自繁体")
-    return {"title": title, "content": content, "tags": page_tags}
+    # 繁体检测（TDSF 2026-08-30 用户钦定）：zh_TW 手册页直接丢弃，
+    # 不再繁转简（zh_CN 同源重复、翻译管线只处理英文正文）
+    if looks_traditional(content) or looks_traditional(title):
+        return None
+    return {"title": title, "content": content, "tags": list(tags)}
