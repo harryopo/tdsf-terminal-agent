@@ -151,6 +151,9 @@ class KnowledgeEntry:
         url: 原始 URL（点击 "查看详情" 跳转）
         tags: 标签列表（用于分类和过滤）
         created_at: 创建时间（ISO 8601 字符串，不提供则取当前 UTC 时间）
+        category: 分类 key（TDSF 2026-08-30 知识库 6+1 分类：basic-ops/
+                  cmd-tools/sys-admin/net-remote/security/services/
+                  linux-philosophy；空串 = 未分类，前端归「其他」）
     """
 
     id: str = field(default_factory=lambda: uuid4().hex)
@@ -162,6 +165,8 @@ class KnowledgeEntry:
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
+    category: str = ""
+    content_zh: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为 JSON 兼容字典"""
@@ -178,6 +183,8 @@ class KnowledgeEntry:
             url=data.get("url", ""),
             tags=list(data.get("tags", [])),
             created_at=data.get("created_at", ""),
+            category=str(data.get("category", "")),
+            content_zh=data.get("content_zh"),
         )
 
 

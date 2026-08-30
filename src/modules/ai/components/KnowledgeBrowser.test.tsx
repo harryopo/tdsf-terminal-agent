@@ -1,11 +1,11 @@
 /**
- * KnowledgeBrowser.test.tsx — 知识库浏览器测试（P2-4 + 两级文件视图）
+ * KnowledgeBrowser.test.tsx — 知识库浏览器测试（P2-4 + 两级文件视图 + 6+1 分类）
  * -----------------------------------------------------------------------------
  * 覆盖:
  *   浏览模式（默认）
  *     1. 挂载即浏览：调用 knowledge.list 渲染条目（无 url 来源保持条目式）
- *     2. 含文档来源组内列文件（knowledge.list_files：filename + 「N 块」徽章，
- *        不再显示 title0 副行与字数）
+ *     2. 含文档分类组内列文件（knowledge.list_files 按 {group: category}：
+ *        filename + 来源副行 + 「N 块」徽章）
  *     3. list_files 懒加载缓存：折叠再展开同组不重复请求
  *     4. 分组 → 文件 → 完整文档链路（knowledge.get_doc：标题=filename、
  *        「共 N 块 · 约 X 字」元信息、完整 md 渲染）
@@ -19,7 +19,8 @@
  *    10. 点击无 url 条目加载详情（knowledge.get）并渲染
  *    11. 详情弹窗返回按钮回到列表
  *    12. 搜索无结果 / 知识库为空空态
- *    13. 分组中文组头渲染 + 折叠展开（内置来源已剔除，未知 source 原样显示）
+ *    13. 6+1 分类分组（TDSF 2026-08-30）：分类中文组头 + 来源副行 +
+ *        未分类归「其他」+ 固定顺序 + source 中文映射保留在文件行副行
  *   导入 md（TDSF 魔改 2026-08-30）
  *    14. 选择 .md 文件 → knowledge.import_docs({files}) → 清缓存刷新列表
  *    15. 非 .md 文件 → 错误提示且不调导入 RPC（fail-closed）
@@ -62,7 +63,7 @@ function mockRpc(handler: RpcHandler) {
 // 测试数据
 // ---------------------------------------------------------------------------
 
-// 未知 source 的无 url 条目（映射表已删内置来源，原样显示；如历史沉淀数据）
+// 未知 source 的无 url 条目（无 category → 归「其他」组；source 原样显示在副行）
 const HIT = {
   id: "cmd-ls",
   source: "builtin-corpus",
@@ -73,7 +74,7 @@ const HIT = {
   match_type: "fts",
 };
 
-// imported-docs 文件级条目（knowledge.list_files 返回）
+// imported-docs 文件级条目（knowledge.list_files 返回；导入文档无分类）
 const DOC_FILE = {
   url: "linux-basics.md",
   filename: "linux-basics.md",
@@ -81,6 +82,7 @@ const DOC_FILE = {
   chunks: 3,
   total_chars: 1234,
   source: "imported-docs",
+  category: "",
 };
 
 // imported-docs 分块条目（knowledge.list / search 返回；id 尾部序号 = 块序号，从 0 起）
@@ -105,6 +107,7 @@ const DOC_FULL = {
   total_chars: 1234,
 };
 
+// 官方源条目：nginx-docs → category=services（服务部署）
 const CRAWL_HIT = {
   id: "crawl-1",
   source: "nginx-docs",
@@ -112,9 +115,10 @@ const CRAWL_HIT = {
   content: "nginx 配置说明。",
   url: "",
   tags: [],
+  category: "services",
 };
 
-// kubernetes-docs 文件级条目（官方源中文标题映射测试用）
+// kubernetes-docs 文件级条目（category=services；官方源中文标题映射测试用）
 const OFFICIAL_FILE = {
   url: "https://kubernetes.io/docs/concepts/",
   filename: "concepts",
@@ -122,6 +126,7 @@ const OFFICIAL_FILE = {
   chunks: 4,
   total_chars: 2048,
   source: "kubernetes-docs",
+  category: "services",
 };
 
 const OFFICIAL_CHUNK_HIT = {
@@ -131,6 +136,29 @@ const OFFICIAL_CHUNK_HIT = {
   content: "Kubernetes concepts body text.",
   url: "https://kubernetes.io/docs/concepts/",
   tags: [],
+  category: "services",
+};
+
+// ssh-docs 条目（category=net-remote，网络与远程——多分类排序测试用）
+const SSH_CHUNK_HIT = {
+  id: "doc-ssh-0",
+  source: "ssh-docs",
+  title: "ssh(1)",
+  content: "OpenSSH remote login client.",
+  url: "https://man.openbsd.org/ssh",
+  tags: [],
+  category: "net-remote",
+};
+
+// philosophy 条目（category=linux-philosophy，第 7 分类——排序置顶）
+const PHILOSOPHY_HIT = {
+  id: "phil-abc-0",
+  source: "philosophy",
+  title: "Linux 设计哲学 · 一切皆文件",
+  content: "键盘、硬盘、进程、网络连接……全都当成文件来操作。",
+  url: "",
+  tags: ["Linux 哲学"],
+  category: "linux-philosophy",
 };
 
 const CASE_HIT = {
@@ -166,12 +194,17 @@ describe("KnowledgePanel — 浏览模式", () => {
     });
   });
 
-  it("含文档来源组内列文件：只显示 filename + 「N 块」徽章（无 title0 副行/字数）", async () => {
+  it("含文档分类组内列文件：filename 主行 + 来源副行 + 「N 块」徽章", async () => {
     mockRpc((method, params) => {
-      if (method === "knowledge.list") return { results: [DOC_CHUNK_HIT] };
+      if (method === "knowledge.list")
+        return { results: [DOC_CHUNK_HIT, CRAWL_HIT] };
       if (method === "knowledge.list_files") {
-        expect(params).toEqual({ source: "imported-docs" });
-        return { files: [DOC_FILE], total: 1 };
+        // 6+1 分类分组：list_files 按 {group: category} 拉取（未分类 group=""）
+        if (params.group === "") {
+          expect(params).toEqual({ group: "" });
+          return { files: [DOC_FILE], total: 1 };
+        }
+        return { files: [], total: 0 };
       }
       return {};
     });
@@ -179,9 +212,9 @@ describe("KnowledgePanel — 浏览模式", () => {
 
     expect(await screen.findByText("linux-basics.md")).toBeTruthy();
     expect(screen.getByText("3 块")).toBeTruthy(); // 块数徽章
-    // 精简后不再显示 title0 副行与字数
-    expect(screen.queryByText("文件权限基础")).toBeNull();
-    expect(screen.queryByText(/1234 字/)).toBeNull();
+    // 副行显示 source 中文名（6+1 分组后保留来源辨识度；组头副行 +
+    // 文件行副行两处出现）
+    expect(screen.getAllByText("导入文档").length).toBe(2);
     // 组内不再平铺分块条目
     expect(screen.queryByText("修改文件权限")).toBeNull();
   });
@@ -196,10 +229,10 @@ describe("KnowledgePanel — 浏览模式", () => {
     render(<KnowledgePanel />);
     await screen.findByText("linux-basics.md");
 
-    // 折叠「导入文档」组（imported-docs 有映射）再展开
-    fireEvent.click(screen.getByText("导入文档"));
+    // 折叠「其他」组（未分类条目归「其他」）再展开
+    fireEvent.click(screen.getByText("其他"));
     expect(screen.queryByText("linux-basics.md")).toBeNull();
-    fireEvent.click(screen.getByText("导入文档"));
+    fireEvent.click(screen.getByText("其他"));
     expect(await screen.findByText("linux-basics.md")).toBeTruthy();
 
     const calls = vi.mocked(invokeRpc).mock.calls as unknown as [
@@ -352,7 +385,7 @@ describe("KnowledgePanel — 搜索模式", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 通用（条目详情 / 空态 / 分组交互）
+// 通用（条目详情 / 空态）
 // ---------------------------------------------------------------------------
 
 describe("KnowledgePanel — 条目详情与空态", () => {
@@ -426,63 +459,87 @@ describe("KnowledgePanel — 条目详情与空态", () => {
   });
 });
 
-describe("KnowledgePanel — 来源分组", () => {
-  it("按来源分组渲染组头与条数 badge（17 官方源中文映射 / 未知原样 / case- / imported-docs）", async () => {
+// ---------------------------------------------------------------------------
+// 6+1 分类分组（TDSF 2026-08-30：按 category 分组，source 名作副行）
+// ---------------------------------------------------------------------------
+
+describe("KnowledgePanel — 分类分组", () => {
+  it("按 category 分组：中文组头 + 来源副行 + 条数 badge", async () => {
     mockRpc((method) =>
       method === "knowledge.list"
-        ? { results: [HIT, DOC_CHUNK_HIT, CRAWL_HIT, CASE_HIT] }
+        ? { results: [CRAWL_HIT, OFFICIAL_CHUNK_HIT, PHILOSOPHY_HIT] }
         : method === "knowledge.list_files"
-          ? { files: [DOC_FILE], total: 1 }
+          ? { files: [], total: 0 }
           : {},
     );
     render(<KnowledgePanel />);
 
-    // 组头：未知 source 原样显示；nginx-docs 走全量中文映射表；
-    // case- → 会话沉淀；imported-docs → 导入文档
-    expect(await screen.findByText("builtin-corpus")).toBeTruthy();
-    expect(screen.getByText("导入文档")).toBeTruthy();
-    expect(screen.getByText("Nginx 官方文档")).toBeTruthy();
-    expect(screen.getByText("会话沉淀")).toBeTruthy();
-    // 无 url 来源组内条目仍在
+    // 组头 = 分类中文名；副行 = 组内来源中文名（多个合并显示）
+    expect(await screen.findByText("Linux 哲学与命令对照")).toBeTruthy();
+    expect(screen.getByText("服务部署")).toBeTruthy();
+    // 服务部署组副行：Nginx 官方文档 · Kubernetes 官方文档
+    expect(screen.getByText("Nginx 官方文档 · Kubernetes 官方文档")).toBeTruthy();
+    // 哲学组副行：教学语料（组头副行 + 组内条目副行两处出现）
+    expect(screen.getAllByText("教学语料").length).toBeGreaterThanOrEqual(1);
+    // 无 url 条目在组内保留条目式
     expect(screen.getByText("nginx 配置入门")).toBeTruthy();
-    // 文件来源组内是文件行
-    expect(screen.getByText("linux-basics.md")).toBeTruthy();
   });
 
-  it("未知 *-docs 源回退「<前缀> 文档」组名", async () => {
+  it("无 category 的条目归「其他」组（组头固定沉底）", async () => {
     mockRpc((method) =>
       method === "knowledge.list"
-        ? {
-            results: [
-              { ...CRAWL_HIT, id: "x1", source: "foo-docs", url: "" },
-            ],
-          }
+        ? { results: [HIT, CASE_HIT, CRAWL_HIT] }
         : {},
     );
     render(<KnowledgePanel />);
-    expect(await screen.findByText("foo 文档")).toBeTruthy();
+
+    expect(await screen.findByText("其他")).toBeTruthy();
+    // 「其他」组副行合并来源（≤2 个全显）：builtin-corpus · 会话沉淀
+    expect(screen.getByText("builtin-corpus · 会话沉淀")).toBeTruthy();
+    // 有分类的组也在
+    expect(screen.getByText("服务部署")).toBeTruthy();
+  });
+
+  it("分类固定顺序：linux-philosophy → … → services → 其他（未分类沉底）", async () => {
+    mockRpc((method) =>
+      method === "knowledge.list"
+        ? { results: [CRAWL_HIT, SSH_CHUNK_HIT, PHILOSOPHY_HIT, CASE_HIT] }
+        : {},
+    );
+    render(<KnowledgePanel />);
+
+    await screen.findByText("Linux 哲学与命令对照");
+    const allText = document.body.textContent ?? "";
+    const idxPhilosophy = allText.indexOf("Linux 哲学与命令对照");
+    const idxNet = allText.indexOf("网络与远程");
+    const idxServices = allText.indexOf("服务部署");
+    const idxOther = allText.indexOf("其他");
+    expect(idxPhilosophy).toBeGreaterThanOrEqual(0);
+    expect(idxNet).toBeGreaterThan(idxPhilosophy);
+    expect(idxServices).toBeGreaterThan(idxNet);
+    expect(idxOther).toBeGreaterThan(idxServices);
   });
 
   it("点击组头折叠该组（内容隐藏），再点展开恢复", async () => {
     mockRpc((method) =>
       method === "knowledge.list"
-        ? { results: [HIT, DOC_CHUNK_HIT] }
+        ? { results: [HIT, CRAWL_HIT] }
         : method === "knowledge.list_files"
-          ? { files: [DOC_FILE], total: 1 }
+          ? { files: [], total: 0 }
           : {},
     );
     render(<KnowledgePanel />);
     await screen.findByText("ls — 列出目录内容");
 
-    // 折叠「builtin-corpus」组（未知 source 原样显示）
-    fireEvent.click(screen.getByText("builtin-corpus"));
-    expect(screen.queryByText("ls — 列出目录内容")).toBeNull();
+    // 折叠「服务部署」组（nginx-docs 无 url 条目在组内）
+    fireEvent.click(screen.getByText("服务部署"));
+    expect(screen.queryByText("nginx 配置入门")).toBeNull();
     // 另一组不受影响
-    expect(screen.getByText("linux-basics.md")).toBeTruthy();
+    expect(screen.getByText("ls — 列出目录内容")).toBeTruthy();
 
     // 再点展开恢复
-    fireEvent.click(screen.getByText("builtin-corpus"));
-    expect(screen.getByText("ls — 列出目录内容")).toBeTruthy();
+    fireEvent.click(screen.getByText("服务部署"));
+    expect(screen.getByText("nginx 配置入门")).toBeTruthy();
   });
 });
 
@@ -528,8 +585,9 @@ describe("KnowledgePanel — 导入 md", () => {
         });
         return { imported: 1, skipped: 0, errors: 0, rejected: [] };
       }
-      // 导入后组内懒加载 list_files：返回导入的文件行
+      // 导入后组内懒加载 list_files（按 group）：返回导入的文件行
       if (method === "knowledge.list_files") {
+        expect(params.group).toBe("");
         return {
           files: [
             {
@@ -539,6 +597,7 @@ describe("KnowledgePanel — 导入 md", () => {
               chunks: 1,
               total_chars: 12,
               source: "imported-docs",
+              category: "",
             },
           ],
           total: 1,
@@ -560,8 +619,9 @@ describe("KnowledgePanel — 导入 md", () => {
     expect(await screen.findByText("my-notes.md")).toBeTruthy();
     expect(toast.success).toHaveBeenCalledWith("已导入 1 个文档");
     expect(listCalls).toBe(2); // 挂载 + 导入后刷新
-    // 浏览缓存被清理后随刷新重建（新文件进入缓存，旧缓存条目不存在）
-    expect(filesCache.get("imported-docs")?.[0]?.filename).toBe("my-notes.md");
+    // 浏览缓存被清理后随刷新重建（新文件进入缓存，旧缓存条目不存在；
+    // 缓存 key = category 分组 key，导入文档无分类 → ""）
+    expect(filesCache.get("")?.[0]?.filename).toBe("my-notes.md");
     expect(docCache.size).toBe(0);
   });
 
@@ -621,7 +681,7 @@ describe("KnowledgePanel — 导入 md", () => {
 // ---------------------------------------------------------------------------
 
 describe("KnowledgePanel — 中文预览标题", () => {
-  it("文件行：中文主行 + 英文 filename 副行（titles_zh 有映射）", async () => {
+  it("文件行：中文主行 + 来源与英文 filename 副行（titles_zh 有映射）", async () => {
     mockRpc((method) => {
       if (method === "knowledge.list") return { results: [OFFICIAL_CHUNK_HIT] };
       if (method === "knowledge.list_files")
@@ -636,9 +696,12 @@ describe("KnowledgePanel — 中文预览标题", () => {
     });
     render(<KnowledgePanel />);
 
-    expect(await screen.findByText("Kubernetes 官方文档")).toBeTruthy();
+    // 组头 = 分类中文名（服务部署），来源中文名在组头副行/文件行副行
+    expect(await screen.findByText("服务部署")).toBeTruthy();
     expect(await screen.findByText("核心概念")).toBeTruthy(); // 中文主行
     expect(screen.getByText("concepts")).toBeTruthy(); // 英文 filename 副行
+    // 来源副行：组头副行 + 文件行副行两处出现
+    expect(screen.getAllByText("Kubernetes 官方文档").length).toBe(2);
     expect(invokeRpc).toHaveBeenCalledWith("knowledge.titles_zh", {
       source: "kubernetes-docs",
     });
@@ -671,7 +734,7 @@ describe("KnowledgePanel — 中文预览标题", () => {
     expect(await screen.findByText("concepts")).toBeTruthy();
   });
 
-  it("搜索命中条目：中文主行 + 英文原标题副行", async () => {
+  it("搜索命中条目：中文主行 + 来源副行 + 英文原标题再降级", async () => {
     mockRpc((method) => {
       if (method === "knowledge.list") return { results: [] };
       if (method === "knowledge.search")
@@ -691,6 +754,8 @@ describe("KnowledgePanel — 中文预览标题", () => {
     fireEvent.click(screen.getByRole("button", { name: "检索" }));
 
     expect(await screen.findByText("核心概念")).toBeTruthy();
-    expect(screen.getByText("Concepts")).toBeTruthy(); // 英文原标题副行
+    // 来源副行：组头副行 + 条目副行两处出现
+    expect(screen.getAllByText("Kubernetes 官方文档").length).toBe(2);
+    expect(screen.getByText("Concepts")).toBeTruthy(); // 英文原标题再降级
   });
 });

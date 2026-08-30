@@ -731,12 +731,23 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     # T-P3-08: 知识库 JSON-RPC 方法（FTS5 + Vector 混合检索）
     # 提供 knowledge.search / .add / .rebuild / .get / .count
     # observe_node 自动检索知识卡注入 AgentState + 推送到前端 AgentPanel
-    # 注：内置教学语料已剔除（个人语料不随应用分发，2026-08-30），
-    #     不再启动自动索引；个人文档经 knowledge.import_docs 手动导入
+    # 注：个人语料已剔除（不随应用分发，2026-08-30）；个人文档经
+    #     knowledge.import_docs 手动导入。随源码分发的通用教学语料
+    #     philosophy/（Linux 哲学与命令对照，第 7 分类）启动幂等入库。
     try:
         from knowledge.rpc import register_methods as register_knowledge
         register_knowledge(dispatcher)
         logger.info("knowledge methods registered (FTS5 + Vector hybrid search)")
+        # TDSF 2026-08-30: philosophy 教学语料（4 个主题 md，几十 ms 分块）
+        # 幂等入库——delete_by_url 先清旧块再入新块，重复启动零副作用
+        from knowledge.sources import load_philosophy_docs
+
+        phil = load_philosophy_docs()
+        if phil["files"]:
+            logger.info(
+                f"philosophy corpus loaded: {phil['files']} files, "
+                f"{phil['chunks']} chunks"
+            )
     except Exception as e:
         logger.exception(f"failed to register knowledge: {e}")
 

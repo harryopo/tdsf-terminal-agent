@@ -94,9 +94,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             logger.info(f"crawl {name}: added {result['added']} entries")
 
-    # 2) 统计（各 source 文件数/块数/总字符数）
-    # 注：内置教学语料已剔除（个人语料改为用户手动导入，2026-08-30），
-    #     本脚本仅剩爬虫重建 + 清库 + 统计职责
+    # 2) 统计（各 source 文件数/块数/总字符数 + 各 category 分布）
+    # 注：内置教学语料已剔除（个人语料改为用户手动导入，2026-08-30）；
+    #     philosophy/（Linux 哲学与命令对照，第 7 分类）为随源码分发的
+    #     教学语料，重建后由 load_philosophy_docs 幂等补齐
     rows = rag.stats_by_source()
     total_files = sum(r["files"] for r in rows)
     total_chunks = sum(r["chunks"] for r in rows)
@@ -108,6 +109,26 @@ def main(argv: list[str] | None = None) -> int:
             f"{r['source']:<26}{r['files']:>8}{r['chunks']:>8}{r['total_chars']:>12}"
         )
     print(f"{'TOTAL':<26}{total_files:>8}{total_chunks:>8}{total_chars:>12}")
+
+    cat_rows = rag.stats_by_category()
+    if cat_rows:
+        from knowledge.sources import load_philosophy_docs
+
+        # 重建后 philosophy 教学语料幂等补齐（随源码分发，不依赖爬虫）
+        if not args.no_clear:
+            phil = load_philosophy_docs(rag)
+            logger.info(
+                f"philosophy corpus reloaded: {phil['files']} files, "
+                f"{phil['chunks']} chunks"
+            )
+            cat_rows = rag.stats_by_category()
+        print("\n=== 知识库统计（按 category，6+1 分类） ===")
+        print(f"{'category':<20}{'files':>8}{'chunks':>8}{'chars':>12}")
+        for r in cat_rows:
+            print(
+                f"{r['category'] or '(未分类)':<20}"
+                f"{r['files']:>8}{r['chunks']:>8}{r['total_chars']:>12}"
+            )
     print(f"\ndb: {rag.db_path}")
     return 0
 

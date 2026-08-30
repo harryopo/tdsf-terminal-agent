@@ -273,12 +273,13 @@ def test_bfs_skips_language_variant_links(crawler: GenericCrawler):
     assert "https://docs.test.com/es/a" not in urls
 
 
-def test_bfs_follows_zh_variants_with_t2s(crawler: GenericCrawler):
-    """zh 系变体放行跟进（C1：zh_TW 有价值转简保留）；其余外语变体（fr）剔除
+def test_bfs_follows_zh_variants_and_drops_traditional(crawler: GenericCrawler):
+    """zh 系变体放行跟进（C1）；zh_TW 繁体内容整条丢弃（2026-08-30 用户钦定）
 
-    - zh_TW：入库前繁转简 + tags 加「源自繁体」
-    - zh_CN：简体原样保留，不加 tag
+    - zh_TW：解析后 looks_traditional 命中 → 整页丢弃，不入 entries
+    - zh_CN：简体原样保留
     - bash.1.en.html：英文正常跟进
+    - 其余外语变体（fr）在链接发现处剔除
     """
     pages = dict(PAGES)
     pages[BASE] = (
@@ -317,17 +318,12 @@ def test_bfs_follows_zh_variants_with_t2s(crawler: GenericCrawler):
 
     urls = [e.url for e in result.entries]
     assert "https://docs.test.com/bookworm/bash/bash.1.en.html" in urls
-    assert "https://docs.test.com/bookworm/manpages-zh/bash.1.zh_TW.html" in urls
+    # zh_TW 繁体页面被丢弃（用户钦定：无用爬取内容不入库）
+    assert "https://docs.test.com/bookworm/manpages-zh/bash.1.zh_TW.html" not in urls
     assert "https://docs.test.com/bookworm/manpages-zh/bash.1.zh_CN.html" in urls
     assert "https://docs.test.com/bookworm/manpages-fr/bash.1.fr.html" not in urls
 
-    tw = next(e for e in result.entries if e.url.endswith("bash.1.zh_TW.html"))
-    assert "源自繁体" in tw.tags
-    assert "解釋" not in tw.content
-    assert "解释" in tw.content
-
     cn = next(e for e in result.entries if e.url.endswith("bash.1.zh_CN.html"))
-    assert "源自繁体" not in cn.tags
     assert "兼容" in cn.content
 
 
