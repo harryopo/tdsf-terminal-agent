@@ -91,6 +91,11 @@ src-tauri/sidecar/.coverage
 # Auto-generated Skills (KEPA 自动生成，不入库)
 src-tauri/sidecar/skills/auto-generated/
 
+# 知识库个人语料（内置教学文档/命令卡片/SKILL 已剔除不随应用分发，2026-08-30；
+# corpus_personal 为本地留存供用户手动导入，永不入库）
+src-tauri/sidecar/knowledge/corpus/
+src-tauri/sidecar/knowledge/corpus_personal/
+
 # IDE / Trae 临时
 .trae/specs/p5-advanced-ai/__pycache__/
 

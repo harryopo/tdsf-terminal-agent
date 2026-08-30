@@ -4,7 +4,10 @@
 @import "./fonts.css";
 @import "./code-highlight.css";
 
-@source "../../node_modules/streamdown/dist/index.js";
+/* streamdown 组件 JSX 与 Tailwind 类全在 dist 的 chunk 文件里（index.js 只是
+   re-export 壳）——必须扫整个 dist 目录，否则表格/引用块等样式类不生成
+   （2026-08-30 修复知识详情弹窗表格渲染异常） */
+@source "../../node_modules/streamdown/dist";
 
 @custom-variant dark (&:is(.dark *));
 
