@@ -4213,3 +4213,21 @@ CDP 全新状态实测通过。commit 见上。
 **当前 agent 架构一句话**（用户问"目前怎么设计的"）：Python Sidecar 内 Strands Agents 单框架——main 统一入口（23 工具）+ 4 个真实子 agent（teach/coding/explore/history，agent-as-tool 委派，schema 级工具白名单），四层安全（schema 白名单→RiskChecker 4 级权限+HITL→ToolCallLimitHook→redact 脱敏）+ audit_chain/evidence，RAG 知识库（FTS5+sqlite-vec+RRF），前端 registry/sidecar-adapter 事件流可视化。事实源 = `docs/Agent架构说明书.md`。
 
 **下一步（需用户拍板）**：① 方案书 v3.0 分期顺序（建议 P0 起步，T1 技能包先行——独立可验收、不碰终端链路）② D3（sidecar/ 旧遗产目录）与 D4（runtime.tsx）删除确认 ③ P0 前真实 LLM 委派实测 ④ P3（MCP/长期记忆）是否纳入。
+
+### 37.83 知识库爬取质量治理二期（2026-08-30 ✅）
+
+**背景**：用户暴怒五点——Arch Wiki 垃圾元页面（Statistics 134 字/Magyar 日本語 导航混入）、bash 手册 zh_TW 繁体漏网、每条太短、要求导出本地 md 预览。详见 DEV-JOURNAL §37.83。
+
+**根因（实测）**：zh_TW 漏网 = 语言码在文件名后缀带区域下划线（bash.1.zh_TW.html，旧过滤器只匹配纯语言码）；wiki 垃圾 = BFS 跟进 Special:/Talk:/Category:/ArchWiki: 命名空间 + 重定向 title 冒号（Restart→Help:Reading）+ 站点根；条目短 = 4000 截断 + 大量 <500 导航页。
+
+**改动文件**：
+- `knowledge/crawlers/generic.py`：语言后缀补漏（区域变体归一）+ `_is_chinese_variant` zh 系放行（配合 C1 转简）+ `_is_wiki_meta_page`/`_is_wiki_namespace_title` 命名空间过滤 + mw-content-text 正文根 + 导语段并入 + 4000→12000 整页合并 + <500 质量门槛（discarded 日志）+ 查询串 URL 不跟进 + .epub 等资源后缀 + 二进制内容防护
+- `knowledge/crawlers/clean.py`：语言切换残渣行 + 侧栏残渣清洗；`looks_traditional`/`to_simplified`（opencc t2s，特征字形 ≥2 才转，简体零误伤）
+- `knowledge/rag.py`：doc_titles_zh 加 summary_zh 列（幂等迁移）；titles_zh/get_doc 返回中文标题+摘要；upsert_titles_zh 支持摘要
+- `scripts/gen_titles_zh.py`：标题+120 字摘要双产物（deepseek 32 批，623/623 全覆盖）
+- `scripts/export_knowledge_md.py`（新）：导出 `knowledge-preview/<源名>/<标题>.md`（623 文件，frontmatter+中文标题+摘要，幂等）
+- `src/modules/ai/lib/knowledge-cache.ts` + `KnowledgeBrowser.tsx`：详情弹窗顶部中文摘要条
+- `requirements.txt`：+opencc-python-reimplemented；`.gitignore`：+knowledge-preview/
+- 测试：test_knowledge_crawler_bfs.py（+zh 变体放行转简/wiki 命名空间/质量门槛/12000 合并/epub+二进制防护/查询串）、test_clean.py（+语言导航/侧栏/繁简）、test_crawlers.py（mock 页 ≥500 字）、test_knowledge_aggregate.py（summary_zh 断言同步）
+
+**终态**：rag.db = 623 条 391 万字符（原 781 条），全库 ≥500 字/条、均值 6254 字，零外语/繁体/命名空间/epub 残留；zh_TW 2 条已转简并带「源自繁体」tag；中文摘要 623/623。**待用户**：重启应用看知识库（详情弹窗摘要条）+ 浏览 knowledge-preview/；**遗留债**：BFS 内 _fetch_single 冗余 parse+to_entries 双解析（日志噪音来源，未动）。
