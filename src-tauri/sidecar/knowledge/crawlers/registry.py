@@ -90,17 +90,21 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             max_depth=2,
             delay=1.0,
         ),
+        # TDSF 修复 2026-08-30: freedesktop.org 对非浏览器请求返回 418 反爬
+        # ——改用 Arch Linux 官方 man 托管（静态无反爬，含 systemd 全套手册）
         "systemd-docs": GenericCrawler(
             source="systemd-docs",
-            base_url="https://systemd.io/docs/",
-            tags=["systemd", "service"],
+            base_url="https://man.archlinux.org/",
+            tags=["systemd", "service", "man"],
             max_pages=30,
             max_depth=2,
             delay=1.0,
         ),
+        # TDSF 修复 2026-08-30: selinuxproject.org 站点 SSL 故障且年久失修、
+        # redhat 文档站 403 反爬 ——改用 Gentoo Wiki SELinux（官方维护、可抓）
         "selinux-docs": GenericCrawler(
             source="selinux-docs",
-            base_url="https://selinuxproject.org/page/Main_Page",
+            base_url="https://wiki.gentoo.org/wiki/SELinux",
             tags=["selinux", "security"],
             max_pages=30,
             max_depth=2,
@@ -114,17 +118,21 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             max_depth=2,
             delay=1.0,
         ),
+        # TDSF 修复 2026-08-30: ssh.com/docs/ 为 404 ——改用 OpenSSH 官方
+        # 手册（man.openbsd.org，OpenSSH 项目自己的 man 托管，实测可抓）
         "ssh-docs": GenericCrawler(
             source="ssh-docs",
-            base_url="https://www.ssh.com/docs/",
+            base_url="https://man.openbsd.org/ssh",
             tags=["ssh", "remote"],
             max_pages=30,
             max_depth=2,
             delay=1.0,
         ),
+        # TDSF 修复 2026-08-30: gnu.org 国内网络不可达（超时）——改用
+        # Debian 官方 manpages 托管的 bash(1) 完整手册（静态无反爬）
         "bash-docs": GenericCrawler(
             source="bash-docs",
-            base_url="https://www.gnu.org/software/bash/manual/",
+            base_url="https://manpages.debian.org/bookworm/bash/bash.1.en.html",
             tags=["bash", "shell"],
             max_pages=30,
             max_depth=2,

@@ -4,26 +4,33 @@
  * 左侧栏「知识库」视图，双模式（TDSF 魔改 2026-08-29: 两级文件视图）：
  *
  *   浏览模式（默认）：来源分组 → 组内列「文件」（knowledge.list_files，
- *     按 url 聚合的文件级条目：filename/title0/块数/字数），点文件弹出
+ *     按 url 聚合的文件级条目：filename/块数），点文件弹出
  *     「完整文档」（knowledge.get_doc 拼接全部分块）。无 url 的来源
- *     （builtin-corpus 命令卡片 / case-* 会话沉淀）保持原条目式展示。
+ *     （case-* 会话沉淀）保持原条目式展示。
  *
  *   搜索模式：输入搜索词走 knowledge.search（按块命中，语义不变），
  *     命中条目显示所属文件名（从 hit.url 提取）；点击优先打开完整文档
  *     （get_doc），并提示「来自搜索命中，第 N 块」（N 从分块 id 尾部序号
  *     提取，id 形如 doc-<hash>-<seq>，seq 从 0 起）；清空搜索回落浏览模式。
  *
+ *   导入 md（TDSF 魔改 2026-08-30）：内置教学语料剔除（个人语料不随应用
+ *     分发），头部「导入 md」按钮 → HTML input 多选 .md（WebView 下读
+ *     内容传后端）→ knowledge.import_docs（fail-closed 仅 .md）→
+ *     清缓存 + 重载列表。
+ *
  * 数据链路：
  *   knowledge.list(limit)          → 浏览模式来源清单 + 无 url 条目
  *   knowledge.list_files({source}) → 组内文件级列表（懒加载，per source 缓存）
  *   knowledge.get_doc({url})       → 完整文档 md（per url 缓存，弹窗重开不重复请求）
  *   knowledge.search(query, limit) → 搜索（按块命中，语义不变）
- *   knowledge.get(id)              → 无 url 条目详情（corpus 卡片/案例）
+ *   knowledge.get(id)              → 无 url 条目详情（案例）
+ *   knowledge.import_docs({files}) → 导入 md（{name, content} 列表）
  *
  * 设计规范：UI 组件套（Input/Button/Badge/Dialog）+ Hugeicons 图标，不使用 emoji。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +43,9 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import {
+  clearKnowledgeCaches,
   docCache,
   filesCache,
   type KnowledgeDoc,
@@ -47,6 +56,7 @@ import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
   BookOpen01Icon,
+  FileImportIcon,
   GlobalSearchIcon,
   SparklesIcon,
 } from "@hugeicons/core-free-icons";
@@ -72,7 +82,7 @@ interface KnowledgeHit {
 
 /** 详情弹窗打开目标：docUrl 优先走 get_doc 完整文档；entryId 走 get 条目详情 */
 type DetailTarget = {
-  /** 无 url 条目（corpus 卡片/案例沉淀）：走 knowledge.get(id) */
+  /** 无 url 条目（会话案例沉淀）：走 knowledge.get(id) */
   entryId?: string;
   /** 文档 url：走 knowledge.get_doc(url) 取完整文档 */
   docUrl?: string;
@@ -90,15 +100,14 @@ type FilesLoadState =
 // 来源分组（TDSF 魔改 2026-08-29: 按来源分组浏览，避免分块条目平铺）
 // ============================================================================
 
-/** source 原始值 → 中文组名；未知 source 原样显示 */
+/** source 原始值 → 中文组名；未知 source 原样显示
+ *  TDSF 魔改 2026-08-30: 内置教学语料剔除（个人语料改为手动导入），
+ *  删 builtin-skills/builtin-docs/builtin-corpus 映射；*-docs → 官方文档 */
 function sourceGroupLabel(source: string): string {
-  if (source === "builtin-docs") return "内置教学文档";
-  if (source === "builtin-corpus") return "内置命令卡片";
-  if (source === "builtin-skills") return "内置技能包";
   if (source === "imported-docs") return "导入文档";
   if (source.startsWith("case-")) return "会话沉淀";
   if (source.endsWith("-docs")) {
-    return `${source.slice(0, -"-docs".length)}文档`;
+    return `${source.slice(0, -"-docs".length)} 官方文档`;
   }
   return source;
 }
@@ -268,6 +277,7 @@ function SourceFileList({
             "transition-colors hover:border-border hover:bg-muted/40",
           )}
         >
+          {/* TDSF 魔改 2026-08-30: 列表只留标题 + 「N 块」徽章（去 title0 副行与字数） */}
           <div className="flex items-center gap-1.5">
             <span className="flex-1 truncate text-[11.5px] font-medium text-foreground">
               {file.filename}
@@ -276,14 +286,9 @@ function SourceFileList({
               variant="secondary"
               className="shrink-0 px-1 py-px text-[9px] tabular-nums"
             >
-              {file.chunks} 块 · {file.total_chars} 字
+              {file.chunks} 块
             </Badge>
           </div>
-          {file.title0 && (
-            <div className="mt-0.5 truncate text-[10px] text-muted-foreground/75">
-              {file.title0}
-            </div>
-          )}
         </button>
       ))}
     </div>
@@ -308,9 +313,67 @@ export function KnowledgePanel() {
   const [filesBySource, setFilesBySource] = useState<
     ReadonlyMap<string, FilesLoadState>
   >(new Map());
+  // TDSF 魔改 2026-08-30: 导入 md（个人语料手动导入的唯一入口）
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 分组作用于当前搜索/过滤结果（保持首次出现顺序）
   const groups = useMemo(() => groupKnowledgeHits(results), [results]);
+
+  /** 导入 md：HTML input 多选（WebView 下 File 无绝对路径，读内容传后端，
+   *  与 composer 附件/主题导入同款机制）→ knowledge.import_docs
+   *  （fail-closed 仅 .md）→ 清浏览缓存 + 重载列表 */
+  const handleImportFiles = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      e.target.value = ""; // 允许重复选择同一文件
+      if (files.length === 0) return;
+      const mdRe = /\.md$/i;
+      const mdFiles = files.filter((f) => mdRe.test(f.name));
+      const rejectedNames = files
+        .filter((f) => !mdRe.test(f.name))
+        .map((f) => f.name);
+      if (mdFiles.length === 0) {
+        toast.error("仅支持导入 .md 文件");
+        return;
+      }
+      setImporting(true);
+      try {
+        const payload = await Promise.all(
+          mdFiles.map(async (f) => ({ name: f.name, content: await f.text() })),
+        );
+        const { invokeRpc } = await import("@/lib/sidecar-bridge");
+        const res = await invokeRpc<{
+          imported?: number;
+          errors?: number;
+          rejected?: { name: string; reason: string }[];
+        }>("knowledge.import_docs", { files: payload });
+        const importedCount = res?.imported ?? 0;
+        const rejected = res?.rejected ?? [];
+        // 成功后刷新：清浏览缓存 + 组内文件态 + 重载列表（回落浏览模式）
+        clearKnowledgeCaches();
+        setFilesBySource(new Map());
+        const hits = await listKnowledge(50);
+        setResults(hits);
+        setSearched(false);
+        if (rejectedNames.length > 0 || rejected.length > 0) {
+          const names = [
+            ...new Set([...rejectedNames, ...rejected.map((r) => r.name)]),
+          ];
+          toast.warning(
+            `已导入 ${importedCount} 个文档，非 .md 文件被拒绝：${names.join("、")}`,
+          );
+        } else {
+          toast.success(`已导入 ${importedCount} 个文档`);
+        }
+      } catch {
+        toast.error("导入失败：知识库服务暂不可用，请稍后重试");
+      } finally {
+        setImporting(false);
+      }
+    },
+    [],
+  );
 
   const toggleGroup = useCallback((source: string) => {
     setCollapsedSources((prev) => {
@@ -379,8 +442,9 @@ export function KnowledgePanel() {
     });
   }, []);
 
-  // 条目样式：搜索命中条目与无 url 条目（corpus/案例）复用；
-  // hit.url 非空时显示所属文件名（从 url 提取）
+  // 条目样式：搜索命中条目与无 url 条目（案例）复用；
+  // TDSF 魔改 2026-08-30: 精简为 标题 + 文件名徽章（来源组头已显示分组名，
+  // 去掉 source 原文徽章副行）
   const renderEntry = (hit: KnowledgeHit) => (
     <button
       key={hit.id}
@@ -410,18 +474,11 @@ export function KnowledgePanel() {
           </Badge>
         )}
       </div>
-      {(hit.url || hit.source) && (
+      {hit.url && (
         <div className="mt-1 flex items-center gap-1">
-          {hit.url && (
-            <span className="rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/80">
-              {fileNameFromUrl(hit.url)}
-            </span>
-          )}
-          {hit.source && (
-            <span className="rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/80">
-              {hit.source}
-            </span>
-          )}
+          <span className="rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/80">
+            {fileNameFromUrl(hit.url)}
+          </span>
         </div>
       )}
     </button>
@@ -429,16 +486,38 @@ export function KnowledgePanel() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部 */}
+      {/* 隐藏的 md 文件选择 input（多选，仅 .md；WebView 下读内容传后端） */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".md,.markdown"
+        className="hidden"
+        onChange={(e) => void handleImportFiles(e)}
+      />
+
+      {/* 头部：标题 + 导入 md 按钮（TDSF 魔改 2026-08-30，个人语料手动导入入口） */}
       <div className="flex items-center gap-1.5 border-b border-border/50 px-3 py-2">
         <HugeiconsIcon icon={BookOpen01Icon} size={13} strokeWidth={1.75} />
         {/* TDSF 魔改 2026-08-29: 视图标签中文化（推翻 2026-08-18 统一英文决策），与侧边栏一致 */}
         <span className="text-[11px] font-medium uppercase tracking-wide text-foreground">
           知识库
         </span>
-        <span className="ml-auto text-[10px] text-muted-foreground/60">
-          搜索/浏览教学语料
-        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-6 gap-1 px-1.5 text-[10.5px] text-muted-foreground hover:text-foreground"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={importing}
+        >
+          {importing ? (
+            <Spinner className="size-3" />
+          ) : (
+            <HugeiconsIcon icon={FileImportIcon} size={11} strokeWidth={1.75} />
+          )}
+          {importing ? "导入中…" : "导入 md"}
+        </Button>
       </div>
 
       {/* 搜索区 */}
@@ -540,7 +619,7 @@ export function KnowledgePanel() {
                             onOpenDoc={(url) => setDetail({ docUrl: url })}
                           />
                         )}
-                        {/* 浏览模式：无 url 条目（corpus 卡片/案例）保持条目式 */}
+                        {/* 浏览模式：无 url 条目（案例）保持条目式 */}
                         {group.entries
                           .filter((e) => !e.url)
                           .map(renderEntry)}
@@ -564,7 +643,7 @@ export function KnowledgePanel() {
 // KnowledgeDetailDialog — 详情弹窗
 // 浏览模式点文件 / 搜索命中带 url → get_doc 完整文档（标题=filename，
 // 头部「共 N 块 · 约 X 字」元信息，保留 streamdown heading 紧凑覆盖）；
-// 无 url 条目（corpus/案例）→ knowledge.get 条目详情（原样式）。
+// 无 url 条目（案例）→ knowledge.get 条目详情（原样式）。
 // get_doc 失败（RPC 异常或 ok=false）→ 弹窗内错误提示（fail-closed）。
 // ============================================================================
 

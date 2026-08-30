@@ -728,22 +728,15 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register tools.rpc_methods: {e}")
 
-    # T-P3-08: 知识库 JSON-RPC 方法（FTS5 + ChromaDB 双路检索）
+    # T-P3-08: 知识库 JSON-RPC 方法（FTS5 + Vector 混合检索）
     # 提供 knowledge.search / .add / .rebuild / .get / .count
     # observe_node 自动检索知识卡注入 AgentState + 推送到前端 AgentPanel
+    # 注：内置教学语料已剔除（个人语料不随应用分发，2026-08-30），
+    #     不再启动自动索引；个人文档经 knowledge.import_docs 手动导入
     try:
         from knowledge.rpc import register_methods as register_knowledge
         register_knowledge(dispatcher)
         logger.info("knowledge methods registered (FTS5 + Vector hybrid search)")
-        # P2-4: 首次启动自动索引内置教学语料（幂等：已有数据跳过）
-        try:
-            from knowledge.sources import load_builtin_corpus
-
-            added = load_builtin_corpus()
-            if added:
-                logger.info(f"builtin knowledge corpus indexed: {added} entries")
-        except Exception as e:
-            logger.warning(f"builtin corpus auto-index skipped: {e}")
     except Exception as e:
         logger.exception(f"failed to register knowledge: {e}")
 
