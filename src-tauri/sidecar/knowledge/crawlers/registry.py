@@ -39,30 +39,36 @@ logger = logging.getLogger("sidecar.knowledge.crawlers.registry")
 
 
 def _make_crawlers() -> dict[str, BaseCrawler]:
-    """创建 14 个爬虫实例
+    """创建爬虫实例（框架 v1.0 审核通过后的内容建设配置，2026-08-30）
 
-    受控多页参数（与 GenericCrawler/NginxCrawler 默认一致，显式写出便于
-    按源调整）：max_pages=30（最多抓 30 页）、max_depth=2（BFS 深度）、
+    用户审核通过知识库框架（docs/knowledge-framework-审核.md）后按
+    P0→P1 层扩展：官方文档源加深至 50 页/源，Arch Wiki（系统管理教学
+    金矿）100 页，新增 dnf/firewalld（RHEL 系运维教学主线），mysql 官方
+    站 403 反爬改用 MariaDB KB（同族数据库、静态可抓）。
+
+    受控多页参数：max_pages=50（Arch Wiki 100）、max_depth=2（BFS 深度）、
     delay=1.0（页间限速秒数）。
 
     Returns:
         source → crawler 实例的字典
     """
     return {
-        "nginx-docs": NginxCrawler(max_pages=30, max_depth=2, delay=1.0),
+        "nginx-docs": NginxCrawler(max_pages=50, max_depth=2, delay=1.0),
         "apache-docs": GenericCrawler(
             source="apache-docs",
             base_url="https://httpd.apache.org/docs/",
             tags=["apache", "httpd"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
-        "mysql-docs": GenericCrawler(
-            source="mysql-docs",
-            base_url="https://dev.mysql.com/doc/",
-            tags=["mysql", "database"],
-            max_pages=30,
+        # TDSF 2026-08-30: dev.mysql.com 全站 403 反爬 ——改用 MariaDB KB
+        # （MySQL 同族分支官方知识库，静态可抓，实测 200/637KB）
+        "mariadb-docs": GenericCrawler(
+            source="mariadb-docs",
+            base_url="https://mariadb.com/kb/en/documentation/",
+            tags=["mariadb", "mysql", "database"],
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -70,7 +76,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="redis-docs",
             base_url="https://redis.io/docs/",
             tags=["redis", "cache"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -78,7 +84,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="docker-docs",
             base_url="https://docs.docker.com/",
             tags=["docker", "container"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -86,6 +92,34 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="kubernetes-docs",
             base_url="https://kubernetes.io/docs/",
             tags=["kubernetes", "k8s"],
+            max_pages=50,
+            max_depth=2,
+            delay=1.0,
+        ),
+        # TDSF 2026-08-30 框架建设新增: Arch Wiki 系统管理（P0 教学金矿，
+        # 官方维护、内容质量最高，实测 200/150KB）——100 页
+        "archwiki": GenericCrawler(
+            source="archwiki",
+            base_url="https://wiki.archlinux.org/title/Systemd",
+            tags=["系统管理", "arch", "wiki"],
+            max_pages=100,
+            max_depth=2,
+            delay=1.0,
+        ),
+        # TDSF 2026-08-30 框架建设新增: 软件包管理（P0，dnf 官方文档）
+        "dnf-docs": GenericCrawler(
+            source="dnf-docs",
+            base_url="https://dnf.readthedocs.io/en/latest/",
+            tags=["软件包管理", "dnf", "rpm"],
+            max_pages=30,
+            max_depth=2,
+            delay=1.0,
+        ),
+        # TDSF 2026-08-30 框架建设新增: 防火墙（P1，firewalld 官方文档）
+        "firewalld-docs": GenericCrawler(
+            source="firewalld-docs",
+            base_url="https://firewalld.org/documentation/",
+            tags=["安全加固", "firewalld", "防火墙"],
             max_pages=30,
             max_depth=2,
             delay=1.0,
@@ -96,7 +130,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="systemd-docs",
             base_url="https://man.archlinux.org/",
             tags=["systemd", "service", "man"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -106,7 +140,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="selinux-docs",
             base_url="https://wiki.gentoo.org/wiki/SELinux",
             tags=["selinux", "security"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -114,7 +148,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="iptables-docs",
             base_url="https://www.netfilter.org/documentation/",
             tags=["iptables", "firewall"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -124,7 +158,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="ssh-docs",
             base_url="https://man.openbsd.org/ssh",
             tags=["ssh", "remote"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -134,7 +168,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="bash-docs",
             base_url="https://manpages.debian.org/bookworm/bash/bash.1.en.html",
             tags=["bash", "shell"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -142,7 +176,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="python-docs",
             base_url="https://docs.python.org/3/",
             tags=["python", "language"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -150,7 +184,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="rust-docs",
             base_url="https://doc.rust-lang.org/",
             tags=["rust", "language"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),
@@ -158,7 +192,7 @@ def _make_crawlers() -> dict[str, BaseCrawler]:
             source="git-docs",
             base_url="https://git-scm.com/docs/",
             tags=["git", "vcs"],
-            max_pages=30,
+            max_pages=50,
             max_depth=2,
             delay=1.0,
         ),

@@ -1,7 +1,8 @@
-# Linux 运维教学知识库框架（待审核）
+# Linux 运维教学知识库框架（v1.0 已审核通过）
 
-> **状态：草案，等待审核。** 审核通过后按此框架导入/爬取内容；未通过的部分不入库。
-> 本框架回答三个问题：知识库装什么、从哪来、怎么组织。
+> **状态：已通过审核（2026-08-30），执行中。**
+> 用户拍板：八层分类/来源策略/导入机制全部认可，按框架建设内容。
+> 实施记录见本文档末尾「建设执行记录」。
 
 ## 一、定位与边界
 
@@ -63,3 +64,26 @@
 6. 每类内容的目标体量（当前每源 30 页上限，是否加深到 100 页/源）？
 
 > 审核意见直接批注本文档或对话告知；通过后按框架执行内容建设。
+
+## 七、建设执行记录
+
+**2026-08-30（审核通过，执行轮 1）：**
+
+| 动作 | 明细 |
+|------|------|
+| 源修复 | systemd→man.archlinux.org / ssh→man.openbsd.org/ssh / selinux→wiki.gentoo.org/SELinux / bash→manpages.debian.org（每源 probe 实测 200 才配置） |
+| mysql 换源 | dev.mysql.com 全站 403 反爬 → **MariaDB KB**（mariadb-docs，同族数据库官方知识库） |
+| 新增源 | **archwiki**（Arch Wiki，系统管理教学金矿，100 页）/ **dnf-docs**（软件包管理 P0）/ **firewalld-docs**（防火墙 P1） |
+| 加深 | 各源 max_pages 30→50（Arch Wiki 100） |
+| 爬取 | 17 源全量后台执行，统计见下轮更新 |
+
+**内容 → 八层分类映射（爬取源自动覆盖）**：
+
+- 基础概念/命令工具 ← man-pages 系列（systemd-docs/bash-docs 的 man 页）
+- 系统管理 ← archwiki + systemd-docs
+- 网络与远程 ← ssh-docs
+- 安全加固 ← selinux-docs + iptables-docs + firewalld-docs
+- 服务部署 ← nginx/apache/mariadb/redis/docker/kubernetes 各 docs
+- 软件包管理 ← dnf-docs
+- 故障排查 ← 会话沉淀（case-*，使用中积累）
+- 教学课程 ← 用户手动导入（「导入 md」按钮）
