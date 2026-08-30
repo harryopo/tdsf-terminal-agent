@@ -3,6 +3,7 @@
 import { isValidElement, type ReactNode } from "react";
 
 import { ChatCodeBlock } from "./chat-code";
+import { MermaidBlock } from "./mermaid-block";
 
 export function markdownCodeText(children?: ReactNode): string {
   if (children == null || typeof children === "boolean") return "";
@@ -44,5 +45,10 @@ export function MarkdownCode({
   }
 
   const code = markdownCodeText(children).replace(/\n$/, "");
+  // TDSF 魔改 2026-08-30: mermaid 围栏渲染为 SVG 图表（Arch Wiki 等官方文档含
+  // ```mermaid 块，纯文字墙不可读）；其余语言走原代码块渲染
+  if (match[1] === "mermaid") {
+    return <MermaidBlock code={code} />;
+  }
   return <ChatCodeBlock code={code} lang={match[1] ?? null} />;
 }

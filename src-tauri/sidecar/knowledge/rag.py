@@ -218,6 +218,17 @@ class RagIndex:
                 embedding BLOB NOT NULL
             )"""
         )
+        # 中文标题映射（url → zh）：官方文档英文标题的中文预览名，由
+        # scripts/gen_titles_zh.py 离线 LLM 批量生成（TDSF 2026-08-30）。
+        # 派生数据、非检索内容——rag.rebuild() 不清此表（重爬后 url 不变
+        # 仍可复用，新 url 缺映射时前端回退英文原标题）。
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS doc_titles_zh (
+                url TEXT PRIMARY KEY,
+                zh TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )"""
+        )
         conn.commit()
         self._conn = conn
 
@@ -378,12 +389,30 @@ class RagIndex:
             cur = self._conn.execute("SELECT COUNT(*) FROM entries")
             return int(cur.fetchone()[0])
 
+    def count_official_sources(self) -> int:
+        """官方文档源条目数（*-docs 后缀 + archwiki）
+
+        启动自动初始化用：为 0 视为全新安装 → 触发后台全量爬取。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT COUNT(*) FROM entries "
+                "WHERE source LIKE '%-docs' OR source = 'archwiki'"
+            )
+            return int(cur.fetchone()[0])
+
     def rebuild(self) -> int:
-        """全量清空索引（entries/fts_entries/vec_entries 三表，与 add 同源）
+        """全量清空索引（entries/fts_entries/vec_entries/embed_cache 四表）
 
         ⚠️ 必须与 add/list/search/get 使用同一 rag.db——历史实现清的是旧
         FTS5Index（knowledge.db）+ ChromaDB，与读路径（rag.db）割裂，导致
         rebuild 后前端列表毫无变化（2026-08-18 修复）。
+
+        ⚠️ embed_cache 一并清空（2026-08-30 修复）：它是"content hash → 向量"
+        的派生缓存。若保留，模型状态从"缺失(hash 兜底)"升级为"BGE 可用"后，
+        重爬相同内容会命中旧 hash 向量缓存，向量质量永久无法升级（实测：迁移
+        BGE 模型前爬的 apache-docs 50 条在重爬后仍是 hash 向量，语义检索失效）。
+        全量重建本就应重算向量，清缓存代价仅是一次批量嵌入（784 块 <10s）。
         """
         with self._lock:
             conn = self._conn
@@ -392,6 +421,7 @@ class RagIndex:
             conn.execute("DELETE FROM fts_entries")
             if self._vec_available:
                 conn.execute("DELETE FROM vec_entries")
+            conn.execute("DELETE FROM embed_cache")
             conn.commit()
         return self.count()
 
@@ -621,6 +651,59 @@ class RagIndex:
             "chunks": len(ordered),
             "total_chars": sum(len(str(r["content"])) for r in ordered),
         }
+
+    def titles_zh(self, source: str | None = None) -> list[dict[str, Any]]:
+        """读取中文标题映射（doc_titles_zh 表，前端知识浏览器预览用）
+
+        Args:
+            source: 可选，按来源过滤（与 entries.source 精确匹配）；
+                    None/空 = 全部
+
+        Returns:
+            [{url, zh}, ...]（按 url 排序，稳定输出）
+        """
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            sql = "SELECT url, zh FROM doc_titles_zh"
+            params: list[Any] = []
+            if source:
+                sql += " WHERE url IN (SELECT url FROM entries WHERE source = ?)"
+                params.append(source)
+            sql += " ORDER BY url"
+            rows = conn.execute(sql, params).fetchall()
+        return [{"url": str(r["url"]), "zh": str(r["zh"])} for r in rows]
+
+    def upsert_titles_zh(self, mapping: dict[str, str]) -> int:
+        """批量写入/更新中文标题映射（gen_titles_zh.py 运维脚本用）
+
+        Args:
+            mapping: {url: 中文标题}；空 url 或空标题条目跳过
+
+        Returns:
+            实际写入条数
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        n = 0
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            for url, zh in mapping.items():
+                url = str(url).strip()
+                zh = str(zh).strip()
+                if not url or not zh:
+                    continue
+                conn.execute(
+                    "INSERT INTO doc_titles_zh (url, zh, created_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(url) DO UPDATE SET zh = excluded.zh, "
+                    "created_at = excluded.created_at",
+                    (url, zh, now),
+                )
+                n += 1
+            conn.commit()
+        return n
 
     def stats_by_source(self) -> list[dict[str, Any]]:
         """按 source 统计（文件数/块数/总字符数，重建脚本与前端统计用）"""

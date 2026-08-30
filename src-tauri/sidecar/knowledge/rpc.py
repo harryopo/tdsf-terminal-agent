@@ -22,6 +22,7 @@ knowledge/rpc.py — 知识库 JSON-RPC 方法注册（T-P3-08）
                          chunks, total_chars, source}], total}
 - knowledge.get_doc:     {url} → {ok, url, filename, source, title,
                          content, chunks, total_chars}
+- knowledge.titles_zh:   {source?} → {titles: [{url, zh}], total}
 
 method 参数支持：
 - "fts5":    仅 FTS5 检索
@@ -326,4 +327,19 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.stats", _stats)
     dispatcher.register("knowledge.list_files", _list_files)
     dispatcher.register("knowledge.get_doc", _get_doc)
-    logger.info("knowledge.* methods registered (12 methods, RAG hybrid)")
+
+    # 中文标题映射（前端知识浏览器：中文主行 + 英文原名副行）
+    def _titles_zh(source: str | None = None) -> dict[str, Any]:
+        """返回 url → 中文标题 映射（doc_titles_zh 表，gen_titles_zh.py 生成）
+
+        Args:
+            source: 可选，按来源过滤；None/空 = 全部
+
+        Returns:
+            {titles: [{url, zh}, ...], total}
+        """
+        titles = get_global_rag().titles_zh(source=(source or None))
+        return {"titles": titles, "total": len(titles)}
+
+    dispatcher.register("knowledge.titles_zh", _titles_zh)
+    logger.info("knowledge.* methods registered (13 methods, RAG hybrid)")
