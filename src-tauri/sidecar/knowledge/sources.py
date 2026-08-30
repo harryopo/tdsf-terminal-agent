@@ -1,30 +1,28 @@
 """
-knowledge/sources.py — 知识库内容源（P2-4，四路）
+knowledge/sources.py — 知识库内容源（P2-4，三路）
 ===================================================
 
-1. **内置教学语料**：corpus/*.json，首次启动自动索引（count==0 时）
-2. **文档导入**：用户指定目录扫描 .md/.txt，分块入库（RPC knowledge.import_docs）
-3. **会话案例沉淀**：排障案例/经验从会话写入（RPC knowledge.add_case），
+1. **文档导入**：用户手动导入 .md（前端读文件内容后经 RPC
+   knowledge.import_docs 传入，fail-closed 仅接受 .md）——内置教学语料
+   （corpus/ 命令卡片、docs/ 教学文档、SKILL 技能包）属个人语料，不随
+   应用分发，已于 2026-08-30 从默认索引剔除，改为用户手动导入
+2. **会话案例沉淀**：排障案例/经验从会话写入（RPC knowledge.add_case），
    决策库雏形（链接 P2-4 长期规划）
-4. **在线爬取**：crawlers 框架（nginx/generic），RPC knowledge.crawl 触发
+3. **在线爬取**：crawlers 框架（nginx/generic），RPC knowledge.crawl 触发
 
 设计：
 - 所有入口统一转 KnowledgeEntry → RagIndex.add
-- 幂等：内置语料按 id 去重（INSERT OR REPLACE）；文档重索引前按 url
-  删除同 url 旧块（分块数变化时 INSERT OR REPLACE 清不掉残留尾部块）
+- 幂等：文档重导入前按 url 删除同 url 旧块（分块数变化时
+  INSERT OR REPLACE 清不掉残留尾部块）
 - 分块：**标题边界优先**——按 markdown 1-3 级标题切章节段，段超 ~1200 字
   再按段落二次切分（保持顺序编号）；替代旧 ~400 字固定切块（一篇文档
   曾被碎成几十片，无标题语义）
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from knowledge.fts5 import KnowledgeEntry
@@ -32,8 +30,6 @@ from knowledge.rag import get_global_rag
 
 logger = logging.getLogger("sidecar.knowledge.sources")
 
-_CORPUS_DIR = Path(__file__).parent / "corpus"
-_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "builtin"
 _SECTION_MAX_CHARS = 1200  # 章节段二次切分阈值（字符）
 
 # markdown 1-3 级标题行（4 级以下标题不作为段落边界，保持章内聚合）
@@ -41,153 +37,80 @@ _HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
 
 
 # ============================================================================
-# 1. 内置教学语料
+# 1. 文档导入（分块；个人语料改为用户手动导入的唯一通道）
 # ============================================================================
 
-def load_builtin_corpus() -> int:
-    """首次启动自动索引内置语料（幂等）
+def import_docs(
+    files: list[dict[str, str]],
+    source: str = "imported-docs",
+) -> dict[str, Any]:
+    """导入 md 文档入库（fail-closed：仅接受 .md，其他一律拒绝）
 
-    - corpus/*.json：结构化语料（命令/概念/哲学/排障），已有数据时跳过
-    - corpus/docs/*.md：精选教学文档（速查手册/备考资料），按文件分块
-      幂等索引（id = md5(文件名-块号)，重复运行无害）
-
-    Returns:
-        本次入库条数
-    """
-    rag = get_global_rag()
-    added = 0
-
-    # 1. JSON 结构化语料（首次启动索引，已有数据跳过）
-    if rag.count() == 0 and _CORPUS_DIR.exists():
-        for f in sorted(_CORPUS_DIR.glob("*.json")):
-            try:
-                with open(f, encoding="utf-8") as fh:
-                    items = json.load(fh)
-                for it in items:
-                    entry = KnowledgeEntry(
-                        id=it.get("id") or f"corpus-{uuid.uuid4().hex[:12]}",
-                        source=it.get("source", "builtin-corpus"),
-                        title=it.get("title", ""),
-                        content=it.get("content", ""),
-                        url=it.get("url", ""),
-                        tags=it.get("tags", []),
-                    )
-                    rag.add(entry)
-                    added += 1
-                logger.info(f"builtin corpus indexed: {f.name} ({len(items)} entries)")
-            except Exception as e:
-                logger.warning(f"corpus load failed {f.name}: {e}")
-
-    # 2. docs/*.md 精选教学文档（始终幂等索引，标题边界分块）
-    docs_dir = _CORPUS_DIR / "docs"
-    if docs_dir.exists():
-        for f in sorted(docs_dir.glob("*.md")):
-            try:
-                text = f.read_text(encoding="utf-8", errors="ignore").strip()
-                if not text:
-                    continue
-                # 旧块清理：同 url 旧块全删再入新块（分块数可能变少，仅
-                # INSERT OR REPLACE 会残留旧策略的尾部块）
-                rag.delete_by_url(str(f), id_prefix="doc-")
-                chunks = _chunk_markdown(text)
-                doc_hash = uuid.uuid5(uuid.NAMESPACE_URL, str(f))
-                for i, (heading, chunk) in enumerate(chunks):
-                    title = f"{f.stem} · {heading}" if heading else f.stem
-                    entry = KnowledgeEntry(
-                        id=f"doc-{doc_hash}-{i}",
-                        source="builtin-docs",
-                        title=title,
-                        content=chunk,
-                        url=str(f),
-                        tags=["教学文档", f"file:{f.name}"],
-                    )
-                    rag.add(entry)
-                added += len(chunks)
-                logger.info(f"builtin doc indexed: {f.name} ({len(chunks)} chunks)")
-            except Exception as e:
-                logger.warning(f"doc load failed {f.name}: {e}")
-
-    # 3. skills/builtin/*/SKILL.md 技能包入库（source=builtin-skills）
-    #    skill_invoke 是主动调用通道，RAG 是被动检索通道——把技能正文也
-    #    索引进知识库，用户问相关问题时能检索到（如 samba/SELinux 排障）
-    skills_dir = _SKILLS_DIR
-    if skills_dir.exists():
-        for f in sorted(skills_dir.glob("*/SKILL.md")):
-            try:
-                text = f.read_text(encoding="utf-8", errors="ignore").strip()
-                if not text:
-                    continue
-                rag.delete_by_url(str(f), id_prefix="skill-doc-")
-                chunks = _chunk_markdown(text)
-                doc_hash = uuid.uuid5(uuid.NAMESPACE_URL, str(f))
-                for i, (heading, chunk) in enumerate(chunks):
-                    title = f"{f.parent.name} · {heading}" if heading else f.parent.name
-                    entry = KnowledgeEntry(
-                        id=f"skill-doc-{doc_hash}-{i}",
-                        source="builtin-skills",
-                        title=title,
-                        content=chunk,
-                        url=str(f),
-                        tags=["技能包", f"file:{f.parent.name}"],
-                    )
-                    rag.add(entry)
-                added += len(chunks)
-                logger.info(
-                    f"builtin skill indexed: {f.parent.name} ({len(chunks)} chunks)"
-                )
-            except Exception as e:
-                logger.warning(f"skill load failed {f.parent.name}: {e}")
-
-    return added
-
-
-# ============================================================================
-# 2. 文档导入（分块）
-# ============================================================================
-
-def import_docs(directory: str, source: str = "imported-docs") -> dict[str, Any]:
-    """扫描目录下的 .md/.txt 文件并分块入库
+    内置教学语料已剔除（个人语料不随应用分发），本函数是个人文档
+    进入知识库的唯一通道。Web 安全模型下 file input 拿不到绝对路径，
+    前端读文件内容后按 {name, content} 传入（与 composer 附件/主题
+    导入同款文件选择机制）。
 
     Args:
-        directory: 待扫描目录
+        files: [{name: 文件名, content: 文件文本}]；name 用于 fail-closed
+               后缀校验（仅 .md）与 url/title 生成，content 为 md 全文
         source: 来源标记（默认 imported-docs）
 
     Returns:
-        {imported, skipped, errors}
+        {imported: 成功文件数, skipped: 空文件数, errors: 导入失败数,
+         rejected: [{name, reason}]（非 .md / 内容缺失，fail-closed）}
+
+    幂等：url = 文件名（不含路径），重导入同名文件自动清旧块再入新块
+    （同名视为同一文档的新版本）。
     """
-    root = Path(directory)
-    if not root.is_dir():
-        raise ValueError(f"目录不存在: {directory}")
     rag = get_global_rag()
     imported = 0
+    skipped = 0
     errors = 0
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in (".md", ".txt"):
+    rejected: list[dict[str, str]] = []
+    for item in files:
+        name = str(item.get("name", "")).strip()
+        content = item.get("content") or ""
+        # fail-closed：仅接受 .md（个人文档导入的唯一格式约定）
+        if not name.lower().endswith(".md"):
+            rejected.append({"name": name, "reason": f"仅支持 .md 文件: {name}"})
+            logger.warning(f"doc import rejected (not .md): {name}")
+            continue
+        if not name:
+            rejected.append({"name": name, "reason": "缺少文件名"})
+            continue
+        text = content.strip()
+        if not text:
+            skipped += 1
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore").strip()
-            if not text:
-                continue
+            url = name
             # 重导入旧块清理（同 url 全删再入新块，幂等）
-            rag.delete_by_url(str(path), id_prefix="doc-")
+            rag.delete_by_url(url, id_prefix="doc-")
             chunks = _chunk_markdown(text)
-            doc_hash = uuid.uuid5(uuid.NAMESPACE_URL, str(path))
+            doc_hash = uuid.uuid5(uuid.NAMESPACE_URL, url)
             for i, (heading, chunk) in enumerate(chunks):
-                title = f"{path.name} · {heading}" if heading else path.name
+                title = f"{name} · {heading}" if heading else name
                 entry = KnowledgeEntry(
                     id=f"doc-{doc_hash}-{i}",
                     source=source,
                     title=title,
                     content=chunk,
-                    url=str(path),
-                    tags=["用户文档", f"file:{path.name}"],
+                    url=url,
+                    tags=["用户文档", f"file:{name}"],
                 )
                 rag.add(entry)
             imported += 1
+            logger.info(f"doc imported: {name} ({len(chunks)} chunks)")
         except Exception as e:
-            logger.warning(f"doc import failed {path}: {e}")
+            logger.warning(f"doc import failed {name}: {e}")
             errors += 1
-    return {"imported": imported, "skipped": 0, "errors": errors}
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "rejected": rejected,
+    }
 
 
 def _chunk_markdown(text: str) -> list[tuple[str, str]]:
@@ -377,7 +300,6 @@ def _embed_loaded() -> bool:
 
 
 __all__ = [
-    "load_builtin_corpus",
     "import_docs",
     "add_case",
     "crawl_and_index",

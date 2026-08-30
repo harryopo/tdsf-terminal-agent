@@ -14,7 +14,7 @@ knowledge/rpc.py — 知识库 JSON-RPC 方法注册（T-P3-08）
 - knowledge.get:       {id} → {entry | null}
 - knowledge.count:     {} → {count}
 - knowledge.list:      {limit?, offset?} → {results, total, ...}
-- knowledge.import_docs: {directory, source?} → {imported, skipped, errors}
+- knowledge.import_docs: {files, source?} → {imported, skipped, errors, rejected}
 - knowledge.add_case:    {title, content, tags?} → {ok, id}
 - knowledge.crawl:       {source, url?} → {added, entries, error?}
 - knowledge.stats:       {} → {total_entries, embed_model_loaded}
@@ -113,7 +113,7 @@ def register_methods(dispatcher: Any) -> None:
     - knowledge.rebuild:  全量重建索引
     - knowledge.get:      按 ID 获取单条知识
     - knowledge.count:    返回知识库条目数
-    - knowledge.import_docs:  文档导入（目录扫描分块）
+    - knowledge.import_docs:  文档导入（{name, content} 列表，fail-closed 仅 .md）
     - knowledge.add_case:     会话案例沉淀（决策库雏形）
     - knowledge.crawl:        在线爬取入库
     - knowledge.stats:        知识库统计
@@ -244,11 +244,28 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.list", _list)
 
     # P2-4: 内容源管道
-    def _import_docs(directory: str, source: str = "imported-docs") -> dict[str, Any]:
-        """文档导入：扫描目录 .md/.txt 分块入库"""
+    def _import_docs(
+        files: list[dict[str, str]],
+        source: str = "imported-docs",
+    ) -> dict[str, Any]:
+        """文档导入：前端读好的 {name, content} 列表分块入库
+
+        fail-closed：仅接受 .md（sources.import_docs 内校验，非 md 进
+        rejected）。Web 安全模型下 file input 拿不到绝对路径，故传内容。
+        """
         from knowledge.sources import import_docs
 
-        return import_docs(directory, source)
+        if not isinstance(files, list) or not all(
+            isinstance(f, dict) for f in files
+        ):
+            return {
+                "imported": 0,
+                "skipped": 0,
+                "errors": 0,
+                "rejected": [],
+                "error": "files must be a list of {name, content} objects",
+            }
+        return import_docs(files, source)
 
     def _add_case(title: str, content: str, tags: list[str] | None = None) -> dict[str, Any]:
         """会话案例沉淀（决策库雏形）"""

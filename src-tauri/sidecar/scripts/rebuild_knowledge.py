@@ -4,9 +4,11 @@ scripts/rebuild_knowledge.py — 知识库重建运维脚本（一次性）
 ===========================================================
 
 用途：
-- 按新分块策略（标题边界优先，~1200 字章段）重建内置知识索引
 - 可选触发官方文档爬虫入库（--crawl <source> / --crawl-all）
 - 打印各 source 统计（文件数/块数/总字符数）
+
+注：内置教学语料已剔除（个人语料改为用户手动导入 knowledge.import_docs，
+2026-08-30），本脚本不再重建内置索引。
 
 用法（在 src-tauri/sidecar 下）：
     .venv/Scripts/python.exe scripts/rebuild_knowledge.py
@@ -86,11 +88,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             logger.info(f"crawl {name}: added {result['added']} entries")
 
-    # 2) 内置索引重建（新分块策略；docs 按文件删旧块再入新块）
-    added = sources.load_builtin_corpus()
-    logger.info(f"builtin corpus indexed: {added} entries")
-
-    # 3) 统计（各 source 文件数/块数/总字符数）
+    # 2) 统计（各 source 文件数/块数/总字符数）
+    # 注：内置教学语料已剔除（个人语料改为用户手动导入，2026-08-30），
+    #     本脚本仅剩爬虫重建 + 清库 + 统计职责
     rows = rag.stats_by_source()
     total_files = sum(r["files"] for r in rows)
     total_chunks = sum(r["chunks"] for r in rows)

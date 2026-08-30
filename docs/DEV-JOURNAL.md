@@ -1,4 +1,4 @@
-﻿# TDSF Terminal Agent · 开发日志（经验沉淀）
+# TDSF Terminal Agent · 开发日志（经验沉淀）
 
 > **用途**：每次任务收尾时追加一条记录——任务 / 方案 / 报错与修改 / 复盘（经验教训）。
 > **配套**：`docs/ROADMAP.md`（短/长期规划）、`docs/dev-state.md`（进度状态，§37.x 交接章）、`docs/方案书-v1.0.md`（总纲）。
@@ -1913,3 +1913,21 @@ P2（中优先级 — 清理 + 文档）：
 - "samba 共享目录 Windows 访问不了" → selinux-baseline samba 示例 **0.6943** + samba-setup **0.673**（入库前知识库无任何 samba 内容）
 
 **门禁**：pytest 1691 / vitest 1190 / tsc / lint 全绿。**遗留**：①4 个国外官方源（systemd/selinux/ssh/bash，gnu.org 等）网络超时未入库，网络好时 `rebuild_knowledge.py --no-clear --crawl <name>` 补抓；②真 cross-encoder rerank（bge-reranker-base）为可选后续（需 transformers 依赖，收益需评估）；③模型缓存目录换机需重下（data/models 不入 git，文档已写镜像命令）。
+
+### §37.81 补记 6：知识库重构——剔除个人语料与 SKILL、导入机制、官方源修复（2026-08-30）
+
+用户对知识库提出系统性批评：SKILL 不该进知识库；内置教学文档是个人语料开源不能带；列表显示丑；md 渲染有问题；要求爬官方教学文档为主体，先给框架审核。
+
+**定位澄清（回复用户）**：知识库="是什么/为什么"（RAG 检索引用，图书馆）；Skill="怎么做"（skill_invoke 主动调用，SOP 手册）。Agent 排障用 Skill 找路径、查知识库拿参数佐证——两者互补不混装。
+
+**实施**：
+1. **剔除**：sources.py 删 SKILL 索引段与 load_builtin_corpus 整函数（main.py/rebuild 脚本/测试调用方全同步）；`knowledge/corpus/` 13 文件移至 `corpus_personal/`（gitignore，本地留存供手动导入）；rag.db 清除 509 条 builtin-* 残留（purge_builtin.py）
+2. **导入机制**：knowledge.import_docs RPC 补全（`{files:[{name,content}], source?}` → `{imported, skipped, errors, rejected}`，非 .md fail-closed 拒绝；前端读文件内容传参——WebView2 拿不到绝对路径，沿用主题导入先例）；面板头部「导入 md」按钮（多选文件/导入中 Spinner/toast 反馈/成功后清缓存刷新）
+3. **显示简化**（用户钦定"只显示标题"）：文件行只留 标题+「N 块」徽章；搜索命中精简为 标题+文件名徽章
+4. **md 渲染修复（实锤）**：streamdown@2.5.0 是 Vercel 官方 LLM markdown 渲染器（已是开源主流，内置 remark-gfm）；表格等样式异常根因是 globals.css 的 `@source` 只指向 streamdown 入口壳文件——**Tailwind 从未扫描到 chunk-BO2N2NFS.js 里的组件类**；修复为 `@source "../../node_modules/streamdown/dist"`，表格/列表/引用样式全面恢复
+5. **官方源修复（4 源 base_url 错配）**：systemd.io/docs/=404→man.archlinux.org（freedesktop 418 反爬）；ssh.com/docs/=404→man.openbsd.org/ssh；selinuxproject SSL 故障+redhat 403 反爬→wiki.gentoo.org/SELinux；gnu.org 被墙→manpages.debian.org bash(1)。每源经 probe_sources*.py 实测 200 后才改配置。补抓 +30/+29/+29/+29
+6. **知识库框架文档**：docs/knowledge-framework-审核.md——定位边界/八层分类（基础概念/命令工具/系统管理/网络远程/安全加固/服务部署/故障排查/教学课程）/来源分发合规矩阵/检索规范/6 项审核清单，**待用户审核后按框架建设**
+
+**报错与修改**：①418/403 反爬——UA 已是浏览器式仍被拒，策略改为换可抓的官方镜像站（实测 200 才配）；②子代理测试误清真实 rag.db 的 264 条爬取条目（测试未隔离数据目录）——`--crawl-all` 幂等重爬恢复；③PowerShell 内联 python -c 多行引号断裂——改写临时脚本文件。
+
+**门禁**：pytest 1692 / vitest 315（src/modules/ai）/ tsc / lint 全绿。**待用户**：审核知识库框架（六项清单）→ 通过后按框架建设内容。
