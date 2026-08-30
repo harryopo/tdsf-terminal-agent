@@ -12,6 +12,7 @@
 | [agent-审批白名单.md](agent-审批白名单.md) | 免确认白名单的规则语法、三级记忆、安全黑名单优先级 |
 | [editor-语言服务器LSP.md](editor-语言服务器LSP.md) | LSP 是什么、有什么用、各语言服务器安装方法与注意事项 |
 | [knowledge-知识库使用.md](knowledge-知识库使用.md) | 知识库内容来源（自编语料+官方爬取）、文件式浏览、搜索、爬取脚本 |
+| [troubleshooting-黑屏与显示问题.md](troubleshooting-黑屏与显示问题.md) | 窗口黑屏（WebView2 GPU 加速崩溃）根因、已固化修复、手动应急与排查流程 |
 
 ## 约定
 

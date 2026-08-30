@@ -244,6 +244,18 @@ pub fn run() {
     let cli_dir = launch.dir.clone();
     workspace::init_launch_cwd(cli_dir.as_deref());
 
+    // TDSF 永久修复 (2026-08-30): WebView2 GPU 硬件加速在部分 Windows 环境
+    // （远程桌面/旧显卡驱动/多 GPU 切换）会间歇性崩溃 → 应用窗口黑屏且
+    // 重启偶发不恢复。实测 --disable-gpu 后渲染稳定（本应用为 DOM 终端
+    // 场景，软渲染性能足够）。必须在 webview 创建前设置。
+    // 如需恢复硬件加速：注释以下两行，并参见
+    // docs/guide/troubleshooting-黑屏与显示问题.md。
+    #[cfg(windows)]
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--disable-gpu",
+    );
+
     let builder = tauri::Builder::default();
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
