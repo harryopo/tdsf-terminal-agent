@@ -96,6 +96,10 @@ src-tauri/sidecar/skills/auto-generated/
 src-tauri/sidecar/knowledge/corpus/
 src-tauri/sidecar/knowledge/corpus_personal/
 
+# 知识库本地 md 预览导出（scripts/export_knowledge_md.py 产物，人工预览用，
+# 可随时重跑再生成，不入库；2026-08-30）
+knowledge-preview/
+
 # IDE / Trae 临时
 .trae/specs/p5-advanced-ai/__pycache__/
 

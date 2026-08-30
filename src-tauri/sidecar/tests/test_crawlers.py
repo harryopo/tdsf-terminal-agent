@@ -44,32 +44,45 @@ from knowledge.fts5 import KnowledgeEntry
 
 @pytest.fixture
 def nginx_mock_html() -> str:
-    """nginx 文档 mock HTML"""
-    return """
+    """nginx 文档 mock HTML（正文 ≥500 字，通过 2026-08-30 新增质量门槛）"""
+    filler = (
+        "<p>nginx 是高性能的 HTTP 与反向代理服务器，本节详细描述其架构、"
+        "进程模型与常见配置实践，内容用于通过知识库质量门槛。</p>" * 8
+    )
+    return f"""
     <html><body>
         <h1>nginx Beginner Guide</h1>
         <p>nginx is a web server. This guide describes the basics.</p>
         <p>Topics include installation, configuration, and usage.</p>
+        {filler}
         <h2>Starting nginx</h2>
         <p>To start nginx, run nginx executable.</p>
+        {filler}
         <h2>Configuration File Structure</h2>
         <p>nginx consists of modules controlled by directives.</p>
         <p>Directives are simple or block directives.</p>
+        {filler}
     </body></html>
     """
 
 
 @pytest.fixture
 def apache_mock_html() -> str:
-    """apache 文档 mock HTML"""
-    return """
+    """apache 文档 mock HTML（正文 ≥500 字，通过质量门槛）"""
+    filler = (
+        "<p>Apache HTTP Server 的模块体系与指令结构说明，涵盖虚拟主机、"
+        "认证授权与日志配置等主题，本段用于通过知识库质量门槛。</p>" * 10
+    )
+    return f"""
     <html><body>
         <h1>Apache HTTP Server Documentation</h1>
         <p>Apache is the most popular web server.</p>
+        {filler}
         <h2>Configuration</h2>
         <p>Configuration files use directives.</p>
         <h2>Modules</h2>
         <p>Apache supports many modules.</p>
+        {filler}
     </body></html>
     """
 

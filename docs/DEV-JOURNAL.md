@@ -1953,3 +1953,35 @@ P2（中优先级 — 清理 + 文档）：
 **终态**：`.tdsf-data/rag.db` = 17 官方源 781 条 207 万字符，零个人/测试/skill 内容；旧库备份 rag.db.bak-20260830。
 
 **教训固化**：①多进程/多入口的数据路径必须单一来源（main.py 的 TDSF_DATA_DIR 约定应第一时间 grep 全仓对齐）；②"修了没生效"先验证改的是不是运行时真正读的库/文件（双库/缓存/旧实例三查）；③用户说的"翻译内容"要拿证据定性（实为语言变体页整页外语，非翻译腔）。**待用户实测**：重启应用看知识库——应只见官方文档分组（中文名+中文标题），无 builtin/test。
+
+### 37.83 知识库爬取质量治理二期（2026-08-30 ✅）
+
+**任务目标**：治理用户暴怒五点——①Arch Wiki 垃圾元页面（Statistics/News/讨论:Requests 等且仅 134 字）②bash 手册繁体（zh_TW 页面漏网）③Statistics 页混入 Magyar/日本語 语言导航 ④每条知识太短 ⑤导出本地 md 人工预览。
+
+**真相核查（全部实测）**：
+1. bash.1.zh_TW.html 繁体入库根因 = **语言码在文件名后缀且带区域下划线**（`bash.1.zh_TW.html`/`bash.1.zh_CN.html`——旧过滤器只匹配纯语言码 `toks[-2].isdigit() and toks[-1] in codes`，`zh_tw`/`zh_cn` 不在表内漏网）；man.archlinux.org 的 `intro.1.zh_CN`/`zh_TW` 同理。Accept-Language:en 实测两 URL 均按 URL 精确返回（非协商问题），**是 BFS 从 en 页语言切换链接跟进了 zh_TW**。
+2. archwiki 81 条中 13+ 条命名空间/meta 垃圾（Special:*/Talk:/Category:/ArchWiki:*/Main_page/Getting_involved/站点根），且存在重定向场景：URL 干净但 h1 为命名空间（Restart→Help:Reading）。
+3. 长度分布：archwiki 均值仅 574（48/81 条 <500）、全库 p75/p90 顶在 4000 截断。
+
+**修复 A（knowledge/crawlers/）**：
+- `_is_language_variant` 模式 2 重写：语言码=文件名最后一个点段+区域变体归一（zh_TW→base zh），覆盖 `readline.3readline.fr.html` 子段 section
+- **zh 系放行设计决策**：C1 钦定"zh_TW 内容转简体保留"，故 `_is_chinese_variant()` 在链接过滤处放行 zh/zh_TW/zh_CN（转简入库），其余外语剔除——A1 与 C1 语义调和，避免 C1 成死代码（已在报告向用户声明此取舍）
+- Wiki 命名空间过滤：`_is_wiki_meta_page()`（/title/<Name>、/wiki/<Name>，Name 含 `:` 全排除 + Main_page/Getting_involved blocklist + 非文章路径排除）+ `_is_wiki_namespace_title()`（重定向 title 冒号兜底）；Wiki 正文根改 `#mw-content-text`（修 h1 兄弟把 bodyContent 整 div 灌入→语言导航/分类残渣混入+截断丢正文）
+- 质量门槛：crawl_site 与 to_entries 丢弃 content<500 页面 + discarded 计数日志；查询串 URL 不跟进（jump?q=/?search=）
+- 行级清洗（clean.py）：语言切换残渣行（短行混排 ≥2 语言名 + `\d+ languages`；含句读叙述句不误删）+ 侧栏残渣（move to sidebar hide）
+- 整页合并：4000→12000 + 首 header 前导语段并入
+- **附赠修复**：python-3.14-docs.epub 二进制被当 HTML 下载解析乱码入库——资源后缀补 .epub/.mobi/.jar/.war 等 + `_extract_page` 二进制防护（C0 控制字符占比 >5% 整页丢弃）
+
+**修复 B**：新建 `scripts/export_knowledge_md.py`——按源分文件夹导出 `knowledge-preview/<源名>/<标题>.md`（Windows 非法字符/保留名/重名 -2/-3、frontmatter source/url/title/zh_title/summary_zh、# 中文标题、幂等清空重导、每源统计）。已导出 623 文件至 `<项目根>/knowledge-preview`（.gitignore 已加）。
+
+**修复 C**：
+- C1 繁转简：clean.py `looks_traditional()`（繁体-only 特征字形 ≥2 处，简体零命中防误伤）+ `to_simplified()`（opencc-python-reimplemented t2s，缺失优雅降级）；_extract_page/to_entries 命中即转换 title+content + tag「源自繁体」
+- C2 中文摘要：doc_titles_zh 加 summary_zh 列（CREATE+ALTER 幂等迁移）；get_doc 联表返回 title_zh/summary_zh（RPC 自动透传）；gen_titles_zh.py 扩展标题+120 字摘要双产物（兼容旧字符串回复、缺摘要旧映射自动补）；前端 KnowledgeDoc 扩展 + 详情弹窗顶部中文摘要条。**明确不做整页 LLM 翻译**（token 成本大质量不可控；官方技术文档保持英文原文，检索命中时 Agent 现场解释）
+
+**重建结果**：781 → **623 条 391 万字符**（archwiki 81→16 纯文章、bash-docs 46→31 含 zh 转简、epub 乱码条目清除）；全库零 <500 条目、零外语/繁体残留、零命名空间页；均值 6254 字/条。doc_titles_zh 摘要 623/623 全覆盖（deepseek 32 批）。
+
+**报错与修改**：①新测试忘建 crawler 实例（AttributeError: FixtureFunctionDefinition）→补构造；②导语断言用了不存在的"导语"字样→改 startswith；③test_knowledge_aggregate 两处 titles_zh 精确断言缺 summary_zh 键→同步更新；④PS Out-File UTF-16 日志 \x00 解析踩坑→Python subprocess capture。
+
+**门禁**：pytest 全量 1751 RC=0 ✅（另 knowledge/tests 70 ✅）｜tsc/eslint RC=0 ✅｜vitest 全量见 §37.83 收尾确认。
+
+**复盘**：做对——真相核查先行（语言协商假设被实测推翻→定位文件名后缀漏网）+ 抓住 A1/C1 矛盾调和（zh 放行）+ epub 顺藤摸瓜。改进——zh 放行决策宜先问用户（本次依 C1 文本自洽推导并显式声明）；BFS 内 _fetch_single 每页冗余 parse+to_entries（历史双解析，日志噪音来源）为遗留债未动。

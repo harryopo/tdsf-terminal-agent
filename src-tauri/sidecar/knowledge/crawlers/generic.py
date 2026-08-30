@@ -8,9 +8,14 @@ iptables/ssh/bash/python/rust/git）提供通用实现。
 受控多页抓取（BFS）：
 - GenericCrawler(source, base_url, tags, max_pages=30, max_depth=2, delay=1.0)
 - 从 base_url 出发广度优先抓取同域页面：<a href> 过滤（同域名、去锚点、
-  去资源文件后缀、visited 去重）
-- 每页产出 1 条 KnowledgeEntry（title=页面标题，content=页面正文截断
-  ~4000 字；正文沿用 h1/h2/h3+段落解析逻辑合并）
+  去资源文件后缀、去查询串 URL、去语言变体、去 Wiki 命名空间/meta 页、
+  visited 去重）
+- 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文合并，
+  截断 ~12000 字；TDSF 2026-08-30 用户钦定「一条知识库弄多一些」：
+  整页合并一条而非碎片）
+- 质量门槛：正文 < 500 字的页面（纯导航/索引/meta 残页）直接丢弃并计入
+  discarded 日志
+- 繁体内容（zh_TW 手册页）自动繁转简入库，tags 加「源自繁体」
 - 页间 sleep(delay) 限速（离线缓存模式不 sleep）；单页失败（超时 10s/
   非 200/解析空）记 warning 跳过继续；整体 try/except 不向上抛出
 - 单页缓存能力沿用 BaseCrawler._fetch_single（联网成功写缓存、失败读
@@ -32,12 +37,13 @@ from urllib.parse import unquote, urljoin, urlparse
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from knowledge.crawlers.base import BaseCrawler, CrawlerResult
-from knowledge.crawlers.clean import clean_content
+from knowledge.crawlers.clean import clean_content, looks_traditional, to_simplified
 from knowledge.fts5 import KnowledgeEntry
 
 logger = logging.getLogger("sidecar.knowledge.crawlers.generic")
 
-_PAGE_MAX_CHARS = 4000  # 单页正文截断上限
+_PAGE_MAX_CHARS = 12000  # 单页正文截断上限（整页合并一条，TDSF 2026-08-30）
+_PAGE_MIN_CHARS = 500  # 质量门槛：低于此长度的页面视为导航/meta 残页丢弃
 
 # 视为资源文件的 URL 后缀（不作为文档页抓取）
 _RESOURCE_EXTS = (
@@ -45,6 +51,7 @@ _RESOURCE_EXTS = (
     ".css", ".js", ".json", ".xml", ".rss",
     ".pdf", ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
     ".rpm", ".deb", ".exe", ".dmg", ".iso",
+    ".epub", ".mobi", ".azw3", ".jar", ".war", ".bin", ".tar",
     ".mp3", ".mp4", ".avi", ".mkv", ".wav",
     ".woff", ".woff2", ".ttf", ".eot",
 )
@@ -139,20 +146,42 @@ class GenericCrawler(BaseCrawler):
         return items
 
     def to_entries(self, items: list[dict[str, Any]]) -> list[KnowledgeEntry]:
-        """转换为 KnowledgeEntry（title/content 入库前清洗）"""
+        """转换为 KnowledgeEntry（title/content 入库前清洗 + 质量门槛）
+
+        TDSF 2026-08-30：content < _PAGE_MIN_CHARS 的页面（纯导航/索引
+        残页，如 134 字的 ArchWiki:Statistics）直接丢弃；繁体内容自动
+        繁转简并加「源自繁体」tag。
+        """
         entries: list[KnowledgeEntry] = []
+        discarded = 0
         for i, item in enumerate(items):
-            entry_id = self.build_entry_id(item, i)
+            content = clean_content(item.get("content", ""))
+            # 质量门槛：超短页面丢弃（导航/索引残页无检索价值）
+            if len(content) < _PAGE_MIN_CHARS:
+                discarded += 1
+                continue
             raw_title = str(item.get("title", ""))
             title = clean_content(raw_title) or raw_title
+            tags = list(item.get("tags", self.default_tags))
+            # 繁体检测与简体转换（zh_TW 手册页有保留价值，统一转简入库）
+            if looks_traditional(content):
+                title = to_simplified(title)
+                content = to_simplified(content)
+                tags = [*tags, "源自繁体"]
+            entry_id = self.build_entry_id(item, i)
             entries.append(KnowledgeEntry(
                 id=entry_id,
                 source=self.source,
                 title=title,
-                content=clean_content(item.get("content", "")),
+                content=content,
                 url=item.get("url", self.base_url),
-                tags=item.get("tags", self.default_tags),
+                tags=tags,
             ))
+        if discarded:
+            logger.info(
+                f"[{self.source}] to_entries discarded {discarded} short page(s) "
+                f"(<{_PAGE_MIN_CHARS} chars)"
+            )
         return entries
 
 
@@ -172,8 +201,13 @@ def crawl_site(
 ) -> CrawlerResult:
     """从 crawler.base_url 出发 BFS 抓取同域页面
 
-    - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=正文截断 4000 字）
-    - 链接过滤：同域名、去锚点、去资源后缀、visited/queued 去重
+    - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文，
+      截断 12000 字）
+    - 质量门槛：正文 < 500 字的页面（纯导航/索引/meta 残页）丢弃，
+      计入 discarded 日志
+    - Wiki 命名空间标题丢弃（重定向导致 URL 干净但标题为 Help:X 等）
+    - 链接过滤：同域名、去锚点、去资源后缀、去查询串、去语言变体、
+      去 Wiki 命名空间/meta 页、visited/queued 去重
     - 单页失败/解析空 → warning 跳过继续；整体 try/except 不抛出
     - 页间 sleep(delay)（仅联网模式；离线缓存重放不限速）
     """
@@ -185,6 +219,9 @@ def crawl_site(
     last_error = ""
     any_success = False
     any_from_cache = False
+    discarded_short = 0
+    discarded_meta = 0
+    is_wiki_host = urlparse(crawler.base_url).netloc.lower() in _WIKI_HOSTS
 
     try:
         while queue and len(visited) < max_pages:
@@ -211,6 +248,20 @@ def crawl_site(
             page = _extract_page(soup, url, default_tags)
             if page is None:
                 logger.warning(f"[{crawler.source}] page parsed empty, skip: {url}")
+            elif is_wiki_host and _is_wiki_namespace_title(page["title"]):
+                # 重定向场景：URL 干净但标题为命名空间页（如 Restart→Help:Reading）
+                discarded_meta += 1
+                logger.info(
+                    f"[{crawler.source}] wiki namespace title, discard: "
+                    f"{page['title']!r} ({url})"
+                )
+            elif len(page["content"]) < _PAGE_MIN_CHARS:
+                # 质量门槛：纯导航/索引/meta 残页（如 134 字的 Statistics）
+                discarded_short += 1
+                logger.info(
+                    f"[{crawler.source}] page too short "
+                    f"({len(page['content'])} < {_PAGE_MIN_CHARS}), discard: {url}"
+                )
             else:
                 entries.append(
                     KnowledgeEntry(
@@ -238,6 +289,13 @@ def crawl_site(
         logger.exception(f"[{crawler.source}] crawl_site aborted: {e}")
         last_error = last_error or str(e)
 
+    if discarded_short or discarded_meta:
+        logger.info(
+            f"[{crawler.source}] crawl_site discarded: "
+            f"{discarded_short} short(<{_PAGE_MIN_CHARS} chars), "
+            f"{discarded_meta} wiki-namespace pages"
+        )
+
     return CrawlerResult(
         source=crawler.source,
         url=crawler.base_url,
@@ -250,20 +308,28 @@ def crawl_site(
 
 
 # ============================================================================
-# 语言变体 URL 过滤（TDSF 2026-08-30）
+# 语言变体 URL 过滤 + Wiki 命名空间页过滤（TDSF 2026-08-30）
 # ============================================================================
 # 多语言文档站按 URL 路径协商语言（Accept-Language 头对这类站无效）：
 #   kubernetes.io/es/docs/、man.archlinux.org/man/intro.1.fr、
 #   manpages.debian.org/.../bash.1.es.html、wiki.archlinux.org/title/X_(Español)
 # BFS 若跟进这些链接会把整页西语/法语灌进知识库（实测「Documentación」
 # 「NOMBRE」文字墙）。在链接发现处剔除，从源头防污染。
+#
+# TDSF 2026-08-30 二次漏网补漏（bash.1.zh_TW.html 繁体入库根因实测）：
+# debian manpages 的语言码在**文件名后缀**而非路径首段，且存在区域变体
+# （bash.1.zh_TW.html / bash.1.zh_CN.html——zh_TW/zh_CN 带下划线，不在纯
+# 语言码表内）；man 页 section 还可能带子段（readline.3readline.fr.html，
+# 倒数第二段非纯数字）。补漏后统一按「文件名最后一个点段」判定语言。
 
-# 非英文语言码（ISO 639-1）——en 不在内（英文/默认语言页保留）
+# 非英文语言码（ISO 639-1/2 常用集）——en 不在内（英文/默认语言页保留）
 _NON_ENGLISH_LANG_CODES: frozenset[str] = frozenset({
-    "ar", "bg", "bn", "cs", "da", "de", "el", "es", "fa", "fi", "fr", "gu",
-    "he", "hi", "hr", "hu", "id", "it", "ja", "kn", "ko", "ml", "mr", "nb",
-    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "ta", "te", "th",
-    "tr", "uk", "ur", "vi", "zh",
+    "ar", "be", "bg", "bn", "bs", "ca", "cs", "cy", "da", "de", "el", "eo",
+    "es", "et", "eu", "fa", "fi", "fr", "ga", "gl", "gu", "he", "hi", "hr",
+    "hu", "hy", "id", "is", "it", "ja", "ka", "kk", "kn", "ko", "ky", "lt",
+    "lv", "mk", "ml", "mr", "ms", "nb", "nl", "nn", "no", "oc", "pl", "pt",
+    "ro", "ru", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th", "tl",
+    "tr", "tt", "uk", "ur", "uz", "vi", "wa", "zh",
 })
 
 # Arch Wiki 翻译页后缀（非英文语言显示名）——title 形如 Systemd_(Español)
@@ -271,11 +337,18 @@ _NON_ENGLISH_WIKI_LANGS: frozenset[str] = frozenset({
     "Deutsch", "Español", "Français", "Italiano", "Português", "Polski",
     "Русский", "日本語", "한국어", "中文", "Bahasa Indonesia", "Nederlands",
     "Suomi", "Svenska", "Català", "Українська", "فارسی", "Türkçe", "עברית",
-    "ไทย", "Tiếng Việt",
+    "ไทย", "Tiếng Việt", "Magyar", "Ελληνικά", "Dansk", "Norsk", "Română",
 })
 
 # wiki 翻译后缀：末段 _(<语言名>) 或 /(<语言名>)
 _WIKI_LANG_SUFFIX_RE = re.compile(r"[_/]?\(([^)]+)\)\s*$")
+
+# MediaWiki 类站点（Arch/Gentoo Wiki）——命名空间页/meta 页过滤
+_WIKI_HOSTS: frozenset[str] = frozenset({"wiki.archlinux.org", "wiki.gentoo.org"})
+# 无冒号但也非教学内容的 wiki 页（门户/社区贡献页，title 归一后匹配）
+_WIKI_TITLE_BLOCKLIST: frozenset[str] = frozenset({
+    "main_page", "getting_involved", "table_of_contents",
+})
 
 
 def _is_language_variant(url: str) -> bool:
@@ -283,8 +356,9 @@ def _is_language_variant(url: str) -> bool:
 
     覆盖三种模式：
     1. 路径首段为语言码（kubernetes.io/es/docs/...；readthedocs /en/ 保留）
-    2. man 页 locale 后缀（intro.1.es、bash.1.es.html——倒数第二段为 man
-       section 数字，避免误伤 name.section 形式的英文页）
+    2. man 页 locale 文件名后缀：语言码 = 文件名最后一个点段——
+       bash.1.zh_TW.html / intro.1.fr / readline.3readline.fr.html；
+       区域变体（zh_TW/zh_CN/pt_BR）取下划线前基础码判定
     3. Arch Wiki 翻译后缀（Systemd_(Español)；消歧义后缀如 Firefox_(core) 保留）
     """
     parsed = urlparse(url)
@@ -294,7 +368,8 @@ def _is_language_variant(url: str) -> bool:
         first = segs[0].lower().split("-")[0]
         if first in _NON_ENGLISH_LANG_CODES:
             return True
-    # 模式 2：man locale 后缀（name.<section>.<lang>[.html]）
+    # 模式 2：man locale 后缀（name.<section>.<lang>[.<ext>]，
+    # 语言码 = 文件名最后一个点段；区域变体取基础码）
     if segs:
         last = unquote(segs[-1])
         for ext in (".html", ".htm"):
@@ -302,8 +377,11 @@ def _is_language_variant(url: str) -> bool:
                 last = last[: -len(ext)]
                 break
         toks = last.split(".")
-        if len(toks) >= 3 and toks[-2].isdigit() and toks[-1].lower() in _NON_ENGLISH_LANG_CODES:
-            return True
+        if len(toks) >= 2:
+            tail = toks[-1].lower().replace("-", "_")
+            base = tail.split("_", 1)[0]
+            if tail != "en" and base in _NON_ENGLISH_LANG_CODES:
+                return True
     # 模式 3：wiki 翻译后缀 _(Lang) / (Lang)
     m = _WIKI_LANG_SUFFIX_RE.search(unquote(parsed.path))
     if m and m.group(1) in _NON_ENGLISH_WIKI_LANGS:
@@ -311,10 +389,81 @@ def _is_language_variant(url: str) -> bool:
     return False
 
 
+def _wiki_article_name(url: str) -> str | None:
+    """MediaWiki 类站点 URL 的文章名（/title/<Name> 或 /wiki/<Name>）
+
+    非文章路径（站点首页 /、/index.php 等）返回 None。
+    """
+    parsed = urlparse(url)
+    segs = [s for s in parsed.path.split("/") if s]
+    if len(segs) >= 2 and segs[0] in ("title", "wiki"):
+        return unquote(segs[1])
+    return None
+
+
+def _is_wiki_meta_page(url: str) -> bool:
+    """判断是否 MediaWiki 命名空间页/meta 页（BFS 不跟进）
+
+    覆盖（实测混入库的垃圾页模式）：
+    - 命名空间页（文章名含 ':' 一律排除，Namespace:Title 结构）：
+      Special:Search / Talk:Systemd / Category:Init / ArchWiki:News /
+      ArchWiki:Statistics / Help:Reading / ArchWiki talk:Requests
+    - 门户/社区页（无冒号）：Main_page、Getting_involved
+    - 非文章路径：站点根 /（Main page）、/index.php 等
+    """
+    if urlparse(url).netloc.lower() not in _WIKI_HOSTS:
+        return False
+    name = _wiki_article_name(url)
+    if name is None:
+        return True
+    if ":" in name:
+        return True
+    norm = name.strip().lower().replace(" ", "_").replace("-", "_")
+    return norm in _WIKI_TITLE_BLOCKLIST
+
+
+def _is_wiki_namespace_title(title: str) -> bool:
+    """页面标题是否为 MediaWiki 命名空间页（重定向场景 title 与 URL 不一致：
+    实测 /title/Restart 页 h1 显示「Help:Reading」——URL 无冒号但标题有）"""
+    return ":" in title
+
+
+def _is_chinese_variant(url: str) -> bool:
+    """语言变体 URL 是否为中文系（zh / zh_TW / zh_CN / zh-Hant）
+
+    C1 取舍：zh 系变体**放行**跟进——zh_TW 手册页有价值，入库前由
+    clean 层繁转简（tags 加「源自繁体」）；zh_CN 本身就是简体直接保留。
+    其余非英文语言变体（fr/de/es/ja/...）在链接发现处剔除。
+    仅覆盖路径/文件名语言码两种形态；Wiki 显示名后缀（X_(中文)）不在此列
+    （Arch/Gentoo Wiki 中文翻译页多为残缺 stub，维持整站非英文过滤）。
+    """
+    parsed = urlparse(url)
+    segs = [s for s in parsed.path.split("/") if s]
+    if not segs:
+        return False
+    # 形态 1：路径首段语言码（/zh-cn/docs/、/zh_TW/）
+    first = segs[0].lower().replace("-", "_")
+    if first.split("_", 1)[0] == "zh":
+        return True
+    # 形态 2：man 页文件名尾段（bash.1.zh_TW.html / intro.1.zh_CN）
+    last = unquote(segs[-1])
+    for ext in (".html", ".htm"):
+        if last.lower().endswith(ext):
+            last = last[: -len(ext)]
+            break
+    toks = last.split(".")
+    if len(toks) >= 2:
+        tail = toks[-1].lower().replace("-", "_")
+        if tail.split("_", 1)[0] == "zh":
+            return True
+    return False
+
+
 def _extract_links(
     soup: BeautifulSoup, current_url: str, base_url: str
 ) -> list[str]:
-    """提取同域文档链接（同域名、去锚点、去资源文件、去语言变体、规范化绝对 URL）"""
+    """提取同域文档链接（同域名、去锚点、去资源文件、去查询串、
+    去语言变体、去 Wiki 命名空间/meta 页、规范化绝对 URL）"""
     base_netloc = urlparse(base_url).netloc
     links: list[str] = []
     for a in soup.find_all("a", href=True):
@@ -329,8 +478,17 @@ def _extract_links(
             continue  # 外域过滤
         if parsed.path.lower().endswith(_RESOURCE_EXTS):
             continue  # 资源文件
+        if parsed.query:
+            # 查询串 URL 一律不跟进（jump?q= 重定向、?search= 搜索等，
+            # 官方文档正文页均为静态路径）
+            continue
         clean = parsed._replace(fragment="").geturl()  # 去锚点
-        if clean and not _is_language_variant(clean):
+        if _is_language_variant(clean) and not _is_chinese_variant(clean):
+            # 非英文语言变体剔除；zh 系放行（C1 繁转简保留，见 _is_chinese_variant）
+            continue
+        if _is_wiki_meta_page(clean):
+            continue  # Wiki 命名空间/门户页
+        if clean:
             links.append(clean)
     return links
 
@@ -338,7 +496,14 @@ def _extract_links(
 def _extract_page(
     soup: BeautifulSoup, url: str, tags: list[str]
 ) -> dict[str, Any] | None:
-    """单页解析：页面标题 + 正文（沿用 h1/h2/h3+段落逻辑合并），每页 1 条
+    """单页解析：页面标题 + 整页正文（h1/h2/h3 章节合并），每页 1 条
+
+    TDSF 2026-08-30 整页合并增强：
+    - MediaWiki 页以 #mw-content-text 为正文根（排除页头/侧栏导航；
+      此前从整树取 h1 兄弟会把 bodyContent 整个 div 灌进来并在 4000 字
+      截断处混入语言导航/分类残渣）
+    - 首个 header 之前的导语段（p/ul/ol/pre/table 等结构性标签）并入正文
+    - 繁体内容（zh_TW 手册页）自动繁转简，tags 加「源自繁体」
 
     Returns:
         {title, content, tags}；正文为空返回 None（调用方记 warning 跳过）
@@ -353,9 +518,29 @@ def _extract_page(
         title = url
     title = clean_content(title) or title
 
+    # 正文根：MediaWiki 用 #mw-content-text（正文容器），其余站点用整树
+    root = soup.find(id="mw-content-text")
+    if root is None:
+        root = soup
+
+    headers = root.find_all(["h1", "h2", "h3"])
     parts: list[str] = []
+    # 导语段：首个 header 之前的段落/列表/表格（仅结构性标签，
+    # 避免把导航容器 div 灌进来）
+    if headers:
+        lead: list[str] = []
+        for sib in headers[0].find_previous_siblings():
+            if getattr(sib, "name", None) in (
+                "p", "ul", "ol", "pre", "table", "blockquote",
+            ):
+                text = sib.get_text(strip=True)
+                if text:
+                    lead.append(text)
+        if lead:
+            parts.extend(reversed(lead[:10]))
+
     # 策略 1：h1/h2/h3 章节（标题 + 后续段落；标题行并入正文保持结构）
-    for header in soup.find_all(["h1", "h2", "h3"]):
+    for header in headers:
         header_title = header.get_text(strip=True)
         if not header_title or len(header_title) < 2:
             continue
@@ -375,14 +560,14 @@ def _extract_page(
 
     # 策略 2：兜底，提取段落
     if not parts:
-        for p in soup.find_all("p")[:80]:
+        for p in root.find_all("p")[:80]:
             text = p.get_text(strip=True)
             if len(text) > 30:
                 parts.append(text)
 
     # 策略 3：再兜底，从 div/article 提取
     if not parts:
-        for div in soup.find_all(["div", "article"])[:20]:
+        for div in root.find_all(["div", "article"])[:20]:
             text = div.get_text(strip=True)
             if len(text) > 50:
                 parts.append(text[:_PAGE_MAX_CHARS])
@@ -390,6 +575,19 @@ def _extract_page(
     content = clean_content("\n\n".join(parts))
     if not content:
         return None
+    # 二进制内容防护：requests 对 .epub/.zip 等二进制响应解码出乱码文本，
+    # 控制字符（C0，除 \n\r\t）占比过高判为非 HTML 文档，整页丢弃
+    ctrl = sum(1 for ch in content if ord(ch) < 32 and ch not in "\n\r\t")
+    if ctrl and ctrl / len(content) > 0.05:
+        logger.info(f"binary-looking content ({ctrl}/{len(content)} ctrl chars), skip: {url}")
+        return None
     if len(content) > _PAGE_MAX_CHARS:
         content = content[:_PAGE_MAX_CHARS]
-    return {"title": title, "content": content, "tags": list(tags)}
+
+    page_tags = list(tags)
+    # 繁体检测与简体转换（zh_TW 手册页有保留价值，统一转简入库）
+    if looks_traditional(content):
+        title = to_simplified(title)
+        content = to_simplified(content)
+        page_tags.append("源自繁体")
+    return {"title": title, "content": content, "tags": page_tags}

@@ -218,17 +218,28 @@ class RagIndex:
                 embedding BLOB NOT NULL
             )"""
         )
-        # 中文标题映射（url → zh）：官方文档英文标题的中文预览名，由
-        # scripts/gen_titles_zh.py 离线 LLM 批量生成（TDSF 2026-08-30）。
-        # 派生数据、非检索内容——rag.rebuild() 不清此表（重爬后 url 不变
-        # 仍可复用，新 url 缺映射时前端回退英文原标题）。
+        # 中文标题映射（url → zh + summary_zh）：官方文档英文标题的中文预览
+        # 名与 120 字中文内容摘要，由 scripts/gen_titles_zh.py 离线 LLM 批量
+        # 生成（TDSF 2026-08-30；summary_zh 为 C2 新增列，前端知识详情弹窗
+        # 顶部显示中文摘要条）。派生数据、非检索内容——rag.rebuild() 不清
+        # 此表（重爬后 url 不变仍可复用，新 url 缺映射时前端回退英文原标题）。
         conn.execute(
             """CREATE TABLE IF NOT EXISTS doc_titles_zh (
                 url TEXT PRIMARY KEY,
                 zh TEXT NOT NULL,
+                summary_zh TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             )"""
         )
+        # 旧库迁移：已有表无 summary_zh 列时补列（幂等探测）
+        zh_cols = {
+            str(r[1]) for r in conn.execute("PRAGMA table_info(doc_titles_zh)")
+        }
+        if "summary_zh" not in zh_cols:
+            conn.execute(
+                "ALTER TABLE doc_titles_zh ADD COLUMN summary_zh "
+                "TEXT NOT NULL DEFAULT ''"
+            )
         conn.commit()
         self._conn = conn
 
@@ -625,8 +636,9 @@ class RagIndex:
             url: 文档 url（与入库时的条目 url 完全一致）
 
         Returns:
-            {url, filename, source, title, content, chunks, total_chars}；
-            url 不存在返回 None
+            {url, filename, source, title, content, chunks, total_chars,
+             title_zh, summary_zh}（title_zh/summary_zh 来自 doc_titles_zh，
+             无映射为空串）；url 不存在返回 None
         """
         with self._lock:
             conn = self._conn
@@ -636,6 +648,10 @@ class RagIndex:
                 "FROM entries WHERE url = ?",
                 (url,),
             ).fetchall()
+            zh_row = conn.execute(
+                "SELECT zh, summary_zh FROM doc_titles_zh WHERE url = ?",
+                (url,),
+            ).fetchone()
         if not rows:
             return None
         ordered = sorted(
@@ -650,6 +666,10 @@ class RagIndex:
             "content": "\n\n".join(str(r["content"]) for r in ordered),
             "chunks": len(ordered),
             "total_chars": sum(len(str(r["content"])) for r in ordered),
+            "title_zh": str(zh_row["zh"]) if zh_row and zh_row["zh"] else "",
+            "summary_zh": (
+                str(zh_row["summary_zh"]) if zh_row and zh_row["summary_zh"] else ""
+            ),
         }
 
     def titles_zh(self, source: str | None = None) -> list[dict[str, Any]]:
@@ -660,25 +680,38 @@ class RagIndex:
                     None/空 = 全部
 
         Returns:
-            [{url, zh}, ...]（按 url 排序，稳定输出）
+            [{url, zh, summary_zh}, ...]（按 url 排序，稳定输出）
         """
         with self._lock:
             conn = self._conn
             assert conn is not None
-            sql = "SELECT url, zh FROM doc_titles_zh"
+            sql = "SELECT url, zh, summary_zh FROM doc_titles_zh"
             params: list[Any] = []
             if source:
                 sql += " WHERE url IN (SELECT url FROM entries WHERE source = ?)"
                 params.append(source)
             sql += " ORDER BY url"
             rows = conn.execute(sql, params).fetchall()
-        return [{"url": str(r["url"]), "zh": str(r["zh"])} for r in rows]
+        return [
+            {
+                "url": str(r["url"]),
+                "zh": str(r["zh"]),
+                "summary_zh": str(r["summary_zh"] or ""),
+            }
+            for r in rows
+        ]
 
-    def upsert_titles_zh(self, mapping: dict[str, str]) -> int:
+    def upsert_titles_zh(
+        self,
+        mapping: dict[str, str],
+        summaries: dict[str, str] | None = None,
+    ) -> int:
         """批量写入/更新中文标题映射（gen_titles_zh.py 运维脚本用）
 
         Args:
             mapping: {url: 中文标题}；空 url 或空标题条目跳过
+            summaries: 可选，{url: 120 字中文摘要}（C2，gen_titles_zh.py
+                       生成；url 不在 mapping 中的条目忽略）
 
         Returns:
             实际写入条数
@@ -686,6 +719,7 @@ class RagIndex:
         from datetime import datetime, timezone
 
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        summaries = summaries or {}
         n = 0
         with self._lock:
             conn = self._conn
@@ -695,11 +729,14 @@ class RagIndex:
                 zh = str(zh).strip()
                 if not url or not zh:
                     continue
+                summary = str(summaries.get(url, "")).strip()
                 conn.execute(
-                    "INSERT INTO doc_titles_zh (url, zh, created_at) VALUES (?, ?, ?) "
+                    "INSERT INTO doc_titles_zh (url, zh, summary_zh, created_at) "
+                    "VALUES (?, ?, ?, ?) "
                     "ON CONFLICT(url) DO UPDATE SET zh = excluded.zh, "
+                    "summary_zh = excluded.summary_zh, "
                     "created_at = excluded.created_at",
-                    (url, zh, now),
+                    (url, zh, summary, now),
                 )
                 n += 1
             conn.commit()

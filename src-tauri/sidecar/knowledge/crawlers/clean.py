@@ -20,7 +20,10 @@ HTML 实体残留（bs4 get_text 对 &amp; 等字面量实体会漏出）、翻�
 """
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger("sidecar.knowledge.crawlers.clean")
 
 # ============================================================================
 # 1. emoji / 符号移除
@@ -82,6 +85,27 @@ _PURE_SYMBOL_RE = re.compile(
     r"^[\s\-_=*~·•|<>«»‹›→←✔✓✗✘★☆◆◇■□▲△▽▼]+$"
 )
 
+# MediaWiki 侧栏残渣行（Vector 皮肤 "move to sidebar hide" 等，整行匹配）
+_SIDEBAR_RE = re.compile(
+    r"^(move to sidebar|add to sidebar|hide|unhide)( (hide|unhide|show))?$",
+    re.IGNORECASE,
+)
+
+# 语言切换残渣：语言显示名集合（出现 ≥2 个不同语言名的短行 = 语言导航，
+# 如 Arch Wiki 统计页混入的「2 languages 日本語 Magyar」）
+_LANG_NAV_NAMES: tuple[str, ...] = (
+    "English", "Deutsch", "Español", "Français", "Italiano", "Magyar",
+    "Nederlands", "Polski", "Português", "Svenska", "Čeština", "Ελληνικά",
+    "Русский", "Українська", "日本語", "한국어", "中文", "Bahasa Indonesia",
+    "Bahasa Melayu", "Català", "Dansk", "Suomi", "Norsk", "Română",
+    "Türkçe", "Tiếng Việt", "فارسی",
+)
+# 句读符号：真实叙述句（如「支持中文、日本語等多语言」）不会被误删
+_LANG_NAV_PUNCT = tuple("，。、；：！？")
+
+# 独立成行的「2 languages」/「24 languages」语言计数残渣
+_LANG_COUNT_RE = re.compile(r"^\d+\s*[-~]?\s*languages?$", re.IGNORECASE)
+
 # 页脚版权行（Copyright © 单独成行时；长段落不碰）
 _COPYRIGHT_RE = re.compile(r"^(copyright|©|\(c\))[\s©\-]*\d{0,4}\b.*$", re.IGNORECASE)
 
@@ -119,6 +143,23 @@ def _fence_marker(stripped: str) -> str | None:
     return None
 
 
+def _is_lang_nav_line(s: str) -> bool:
+    """判断是否语言切换残渣行（传入已 strip 的行）
+
+    规则（TDSF 2026-08-30，针对 Arch Wiki 页混入的语言导航）：
+    1. 独立语言计数行：「2 languages」「24 languages」
+    2. 短行内混排 ≥2 个语言显示名（如「2 languages 日本語 Magyar」）；
+       含句读符号（，。、；：）的行视为真实叙述句不删，避免误伤
+       「支持中文、日本語等多语言界面」这类正文。
+    """
+    if _LANG_COUNT_RE.match(s):
+        return True
+    if len(s) > 80 or any(p in s for p in _LANG_NAV_PUNCT):
+        return False
+    hits = sum(1 for name in _LANG_NAV_NAMES if name in s)
+    return hits >= 2
+
+
 def _is_nav_line(s: str) -> bool:
     """判断是否导航残渣行（传入已 strip 的行；整行匹配）"""
     if not s:
@@ -126,6 +167,10 @@ def _is_nav_line(s: str) -> bool:
     if s.lower() in _NAV_EXACT:
         return True
     if _NAV_LINE_RE.match(s):
+        return True
+    if _SIDEBAR_RE.match(s):
+        return True
+    if _is_lang_nav_line(s):
         return True
     if _PURE_SYMBOL_RE.match(s):
         return True
@@ -227,4 +272,62 @@ def clean_markdown(text: str) -> str:
     return _clean_text(text, markdown=True)
 
 
-__all__ = ["clean_content", "clean_markdown"]
+# ============================================================================
+# 4. 繁体检测与简体转换（C1，TDSF 2026-08-30）
+# ============================================================================
+# 背景：Debian manpages-zh 的 bash.1.zh_TW.html 等繁体手册页曾漏过语言
+# 过滤入库（「Bash是一個與sh相容的命令解釋程式」）。zh_TW 内容有保留价值
+# （zh_CN 同源），入库前统一繁转简；德法西语类页面仍由 URL 语言过滤剔除。
+#
+# 依赖：opencc-python-reimplemented（纯 Python 实现，requirements.txt 已收录）。
+# 缺失时优雅降级：log 一次 warning 后原样返回，绝不阻塞爬取链路。
+# 防误伤：仅当文本命中 ≥ _TRAD_MIN_HITS 个繁体特征字/词（简体不会出现的
+# 字形，如 解釋/程式/檔案/與）才转换；简体中文内容零命中，原样保留。
+
+# 繁体特征字/词（字形仅存在于繁体；简体文本不会出现）
+_TRAD_FEATURES: tuple[str, ...] = (
+    "解釋", "程式", "檔案", "軟體", "硬體", "網路", "相容", "記憶體", "硬碟",
+    "伺服器", "系統", "資訊", "設定檔", "註記", "執行", "與", "這", "個",
+    "們", "裡", "後", "時", "說", "讀", "寫", "學", "會", "對", "開", "關",
+    "變", "圖", "點", "傳", "稱", "覽", "編譯", "環境",
+)
+_TRAD_MIN_HITS = 2
+
+_opencc_warned = False
+
+
+def looks_traditional(text: str) -> bool:
+    """检测文本是否为繁体内容（繁体特征字命中 ≥ 2 处）"""
+    if not text:
+        return False
+    return sum(text.count(f) for f in _TRAD_FEATURES) >= _TRAD_MIN_HITS
+
+
+def to_simplified(text: str) -> str:
+    """繁转简（opencc t2s）；opencc 缺失时原样返回并告警一次"""
+    global _opencc_warned
+    if not text:
+        return ""
+    try:
+        from opencc import OpenCC
+    except ImportError:
+        if not _opencc_warned:
+            _opencc_warned = True
+            logger.warning(
+                "opencc 未安装（pip install opencc-python-reimplemented），"
+                "繁体内容跳过简体转换：fallback: skip t2s"
+            )
+        return text
+    try:
+        return OpenCC("t2s").convert(text)
+    except Exception as e:  # 转换器异常也不阻塞入库
+        logger.warning(f"opencc t2s convert failed: {e}，fallback: 原样保留")
+        return text
+
+
+__all__ = [
+    "clean_content",
+    "clean_markdown",
+    "looks_traditional",
+    "to_simplified",
+]

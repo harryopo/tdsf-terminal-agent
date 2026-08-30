@@ -29,6 +29,10 @@ export interface KnowledgeDoc {
   content?: string;
   chunks?: number;
   total_chars?: number;
+  /** 中文标题（doc_titles_zh 映射，无映射为空串，TDSF 2026-08-30） */
+  title_zh?: string;
+  /** 120 字中文内容摘要（gen_titles_zh.py 生成，详情弹窗顶部摘要条） */
+  summary_zh?: string;
   error?: string;
 }
 
