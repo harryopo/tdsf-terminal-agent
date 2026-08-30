@@ -863,6 +863,96 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
 
 
 # ============================================================================
+# 知识库启动自动初始化（TDSF 2026-08-30 · 新用户开箱即用）
+# ============================================================================
+def _in_pytest_env() -> bool:
+    """pytest 环境检测（独立函数便于单测 monkeypatch 放行触发路径）"""
+    return "pytest" in sys.modules
+
+
+def _official_kb_entry_count() -> int:
+    """官方文档源条目数（独立函数便于单测 monkeypatch）"""
+    from knowledge.rag import get_global_rag
+
+    return get_global_rag().count_official_sources()
+
+
+def _kb_auto_init_worker() -> None:
+    """后台线程体：全量爬取 17 官方源（offline=False，delay 由爬虫实例内置 1.0s）
+
+    - 逐源 try/except：单源失败 warning 不抛、继续下一源
+    - 整体再包一层 try/except：本线程任何异常不得冒泡（daemon 线程未捕获
+      异常会打堆栈到 stderr 污染 Rust 转发日志）
+    """
+    total_added = 0
+    failed: list[str] = []
+    try:
+        from knowledge.crawlers.registry import list_crawlers
+        from knowledge.sources import crawl_and_index
+
+        sources = list_crawlers()
+        logger.info(
+            f"KB auto-init started: official sources empty, "
+            f"crawling {len(sources)} sources (background)"
+        )
+        for name in sources:
+            try:
+                result = crawl_and_index(name, offline=False)
+                if result.get("error"):
+                    failed.append(name)
+                    logger.warning(
+                        f"KB auto-init crawl {name} failed: {result['error']}"
+                    )
+                else:
+                    total_added += int(result.get("added", 0))
+            except Exception as e:
+                failed.append(name)
+                logger.warning(f"KB auto-init crawl {name} exception: {e}")
+        logger.info(
+            f"KB auto-init done: {total_added} entries added, "
+            f"{len(sources) - len(failed)}/{len(sources)} sources ok"
+            + (f", failed: {failed}" if failed else "")
+        )
+    except Exception:
+        logger.exception("KB auto-init aborted (unexpected error, non-fatal)")
+
+
+def schedule_kb_auto_init() -> threading.Thread | None:
+    """启动知识库自动初始化（懒加载，不阻塞 ready 通知）
+
+    触发条件（全部满足才启动后台 daemon 线程）：
+    1. 开关未禁用：TDSF_KB_AUTO_INIT != "0"
+    2. 非 pytest 环境（与文件日志 handler 同惯例，测试绝不触发真实爬网）
+    3. rag.db 官方源条目数为 0（全新安装；已有数据幂等跳过）
+
+    Returns:
+        启动的线程；未触发返回 None（调用方/测试断言用）
+    """
+    if os.environ.get("TDSF_KB_AUTO_INIT", "1") == "0":
+        logger.info("KB auto-init disabled via TDSF_KB_AUTO_INIT=0")
+        return None
+    if _in_pytest_env():
+        logger.debug("KB auto-init skipped in pytest environment")
+        return None
+    try:
+        official = _official_kb_entry_count()
+    except Exception as e:
+        # 库不可读等异常不阻断启动（知识库是增强能力，非核心链路）
+        logger.warning(f"KB auto-init check failed (skip auto-init): {e}")
+        return None
+    if official > 0:
+        logger.info(f"KB auto-init skipped: {official} official entries present")
+        return None
+    t = threading.Thread(
+        target=_kb_auto_init_worker,
+        name="kb-auto-init",
+        daemon=True,  # 不阻塞进程退出（sidecar os._exit 兜底）
+    )
+    t.start()
+    return t
+
+
+# ============================================================================
 # 主循环
 # ============================================================================
 def main() -> None:
@@ -926,6 +1016,10 @@ def main() -> None:
         },
     )
     logger.info("ready notification sent, entering main loop")
+
+    # 3.5 TDSF 2026-08-30: 知识库启动自动初始化（后台 daemon 线程，不阻塞
+    # ready/主循环；官方源为空才触发，TDSF_KB_AUTO_INIT=0 或 pytest 禁用）
+    schedule_kb_auto_init()
 
     # TDSF P1-NEW-1 修复 (2026-07-30): 初始化慢方法线程池
     # max_workers=2：允许一个 agent.invoke 在跑时，另一个工作线程处理

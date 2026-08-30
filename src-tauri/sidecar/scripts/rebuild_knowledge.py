@@ -23,8 +23,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
+
+# TDSF 2026-08-30 根因修复：与应用（main.py）读写同一个 rag.db（<项目根>/.tdsf-data）。
+# 此前本脚本落到 sidecar/data/rag.db（第二个库），清库/重爬全修在应用不读的库上。
+# RagIndex 实例化时才读 TDSF_DATA_DIR，先 set 再 import 即生效；强制 set 防环境缺失。
+os.environ["TDSF_DATA_DIR"] = str(Path(__file__).resolve().parents[3] / ".tdsf-data")
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:

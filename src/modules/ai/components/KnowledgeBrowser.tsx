@@ -43,11 +43,13 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
+import { invokeRpc } from "@/lib/sidecar-bridge";
 import { toast } from "sonner";
 import {
   clearKnowledgeCaches,
   docCache,
   filesCache,
+  titlesZhCache,
   type KnowledgeDoc,
   type KnowledgeFile,
 } from "@/modules/ai/lib/knowledge-cache";
@@ -100,14 +102,38 @@ type FilesLoadState =
 // 来源分组（TDSF 魔改 2026-08-29: 按来源分组浏览，避免分块条目平铺）
 // ============================================================================
 
-/** source 原始值 → 中文组名；未知 source 原样显示
+/** 17 官方文档源 → 中文组名（TDSF 魔改 2026-08-30，与 crawlers/registry.py
+ *  注册源一一对应；用户要求官方文档显示中文名，agent 检索仍用英文 source id） */
+const OFFICIAL_SOURCE_LABELS: Record<string, string> = {
+  "nginx-docs": "Nginx 官方文档",
+  "apache-docs": "Apache HTTP 文档",
+  "mariadb-docs": "MariaDB 知识库",
+  "redis-docs": "Redis 官方文档",
+  "docker-docs": "Docker 官方文档",
+  "kubernetes-docs": "Kubernetes 官方文档",
+  "systemd-docs": "systemd 手册",
+  "selinux-docs": "SELinux 指南",
+  "iptables-docs": "netfilter 文档",
+  "ssh-docs": "OpenSSH 手册",
+  "bash-docs": "Bash 手册",
+  "python-docs": "Python 官方文档",
+  "rust-docs": "Rust 官方文档",
+  "git-docs": "Git 官方文档",
+  "dnf-docs": "DNF 手册",
+  "firewalld-docs": "Firewalld 手册",
+  archwiki: "Arch Wiki 指南",
+};
+
+/** source 原始值 → 中文组名；未知 *-docs 回退「<前缀> 文档」，其余原样显示
  *  TDSF 魔改 2026-08-30: 内置教学语料剔除（个人语料改为手动导入），
- *  删 builtin-skills/builtin-docs/builtin-corpus 映射；*-docs → 官方文档 */
+ *  删 builtin-skills/builtin-docs/builtin-corpus 映射；17 官方源全量中文映射 */
 function sourceGroupLabel(source: string): string {
+  const mapped = OFFICIAL_SOURCE_LABELS[source];
+  if (mapped) return mapped;
   if (source === "imported-docs") return "导入文档";
-  if (source.startsWith("case-")) return "会话沉淀";
+  if (source.startsWith("case-") || source === "session-case") return "会话沉淀";
   if (source.endsWith("-docs")) {
-    return `${source.slice(0, -"-docs".length)} 官方文档`;
+    return `${source.slice(0, -"-docs".length)} 文档`;
   }
   return source;
 }
@@ -173,13 +199,16 @@ function groupKnowledgeHits(hits: KnowledgeHit[]): KnowledgeGroup[] {
 // ============================================================================
 // RPC + 模块级浏览缓存
 // ============================================================================
+// invokeRpc 静态导入（与 BackendPill/NeedsYouApprovalCards 一致）：动态
+// import("@/lib/sidecar-bridge") 在 Vite SSR 下对同一模块多 callsite 的
+// vi.mock 拦截不一致（实测 list_files 命中 mock、titles_zh 却解析到真实
+// 模块抛 browser-only 错误），故统一走静态导入。
 
 async function searchKnowledge(
   query: string,
   limit = 30,
 ): Promise<KnowledgeHit[]> {
   try {
-    const { invokeRpc } = await import("@/lib/sidecar-bridge");
     const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
       "knowledge.search",
       { query, limit, method: "hybrid" },
@@ -192,7 +221,6 @@ async function searchKnowledge(
 
 async function getKnowledge(id: string): Promise<KnowledgeHit | null> {
   try {
-    const { invokeRpc } = await import("@/lib/sidecar-bridge");
     const res = await invokeRpc<{ entry?: KnowledgeHit } | null>(
       "knowledge.get",
       { id },
@@ -205,7 +233,6 @@ async function getKnowledge(id: string): Promise<KnowledgeHit | null> {
 
 async function listKnowledge(limit = 50): Promise<KnowledgeHit[]> {
   try {
-    const { invokeRpc } = await import("@/lib/sidecar-bridge");
     const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
       "knowledge.list",
       { limit, offset: 0 },
@@ -218,7 +245,6 @@ async function listKnowledge(limit = 50): Promise<KnowledgeHit[]> {
 
 /** 组内文件级列表（不吞错：RPC 失败上抛，由调用方置 error 态，不伪装成空列表） */
 async function listKnowledgeFiles(source: string): Promise<KnowledgeFile[]> {
-  const { invokeRpc } = await import("@/lib/sidecar-bridge");
   const res = await invokeRpc<{ files?: KnowledgeFile[] } | null>(
     "knowledge.list_files",
     { source },
@@ -228,8 +254,24 @@ async function listKnowledgeFiles(source: string): Promise<KnowledgeFile[]> {
 
 /** 完整文档（不吞错：RPC 异常上抛，由弹窗统一显示错误态，fail-closed） */
 async function getKnowledgeDoc(url: string): Promise<KnowledgeDoc> {
-  const { invokeRpc } = await import("@/lib/sidecar-bridge");
   return invokeRpc<KnowledgeDoc>("knowledge.get_doc", { url });
+}
+
+/** 中文标题映射（knowledge.titles_zh，gen_titles_zh.py 离线 LLM 生成）：
+ *  url → 中文标题。吞错返回空 Map——无映射时前端回退英文原标题，不报错 */
+async function listTitlesZh(source: string): Promise<Map<string, string>> {
+  try {
+    const res = await invokeRpc<{
+      titles?: { url: string; zh: string }[];
+    } | null>("knowledge.titles_zh", { source });
+    const map = new Map<string, string>();
+    for (const t of res?.titles ?? []) {
+      if (t.url && t.zh) map.set(t.url, t.zh);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
 }
 
 // ============================================================================
@@ -238,9 +280,12 @@ async function getKnowledgeDoc(url: string): Promise<KnowledgeDoc> {
 
 function SourceFileList({
   state,
+  titles,
   onOpenDoc,
 }: {
   state: FilesLoadState;
+  /** url → 中文标题（knowledge.titles_zh；无映射回退英文 filename） */
+  titles: Map<string, string>;
   onOpenDoc: (url: string) => void;
 }) {
   if (state.status === "loading") {
@@ -267,30 +312,44 @@ function SourceFileList({
   }
   return (
     <div className="space-y-1">
-      {state.files.map((file) => (
-        <button
-          key={file.url}
-          type="button"
-          onClick={() => onOpenDoc(file.url)}
-          className={cn(
-            "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
-            "transition-colors hover:border-border hover:bg-muted/40",
-          )}
-        >
-          {/* TDSF 魔改 2026-08-30: 列表只留标题 + 「N 块」徽章（去 title0 副行与字数） */}
-          <div className="flex items-center gap-1.5">
-            <span className="flex-1 truncate text-[11.5px] font-medium text-foreground">
-              {file.filename}
-            </span>
-            <Badge
-              variant="secondary"
-              className="shrink-0 px-1 py-px text-[9px] tabular-nums"
-            >
-              {file.chunks} 块
-            </Badge>
-          </div>
-        </button>
-      ))}
+      {state.files.map((file) => {
+        const zh = titles.get(file.url);
+        return (
+          <button
+            key={file.url}
+            type="button"
+            onClick={() => onOpenDoc(file.url)}
+            className={cn(
+              "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
+              "transition-colors hover:border-border hover:bg-muted/40",
+            )}
+          >
+            {/* TDSF 魔改 2026-08-30: 中文预览标题主行 + 英文 filename 副行
+                （无中文映射时只显示英文 filename 主行，不报错） */}
+            <div className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "flex-1 truncate text-[11.5px] font-medium text-foreground",
+                  !zh && "font-mono text-[11px]",
+                )}
+              >
+                {zh ?? file.filename}
+              </span>
+              <Badge
+                variant="secondary"
+                className="shrink-0 px-1 py-px text-[9px] tabular-nums"
+              >
+                {file.chunks} 块
+              </Badge>
+            </div>
+            {zh && (
+              <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/70">
+                {file.filename}
+              </div>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -315,6 +374,10 @@ export function KnowledgePanel() {
   >(new Map());
   // TDSF 魔改 2026-08-30: 导入 md（个人语料手动导入的唯一入口）
   const [importing, setImporting] = useState(false);
+  // TDSF 魔改 2026-08-30: 中文预览标题映射（per source 懒加载，knowledge.titles_zh）
+  const [titlesBySource, setTitlesBySource] = useState<
+    ReadonlyMap<string, Map<string, string>>
+  >(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 分组作用于当前搜索/过滤结果（保持首次出现顺序）
@@ -342,7 +405,6 @@ export function KnowledgePanel() {
         const payload = await Promise.all(
           mdFiles.map(async (f) => ({ name: f.name, content: await f.text() })),
         );
-        const { invokeRpc } = await import("@/lib/sidecar-bridge");
         const res = await invokeRpc<{
           imported?: number;
           errors?: number;
@@ -350,9 +412,10 @@ export function KnowledgePanel() {
         }>("knowledge.import_docs", { files: payload });
         const importedCount = res?.imported ?? 0;
         const rejected = res?.rejected ?? [];
-        // 成功后刷新：清浏览缓存 + 组内文件态 + 重载列表（回落浏览模式）
+        // 成功后刷新：清浏览缓存 + 组内文件态 + 中文标题态 + 重载列表（回落浏览模式）
         clearKnowledgeCaches();
         setFilesBySource(new Map());
+        setTitlesBySource(new Map());
         const hits = await listKnowledge(50);
         setResults(hits);
         setSearched(false);
@@ -416,6 +479,27 @@ export function KnowledgePanel() {
     }
   }, [searched, groups, collapsedSources, filesBySource, loadFiles]);
 
+  /** 中文标题映射懒加载（per source；失败/无映射缓存空 Map，条目回退英文标题） */
+  const loadTitles = useCallback((source: string) => {
+    const cached = titlesZhCache.get(source);
+    if (cached) {
+      setTitlesBySource((prev) => new Map(prev).set(source, cached));
+      return;
+    }
+    void listTitlesZh(source).then((map) => {
+      titlesZhCache.set(source, map);
+      setTitlesBySource((prev) => new Map(prev).set(source, map));
+    });
+  }, []);
+
+  // 出现的组即预取中文标题（浏览/搜索两模式共用；缓存命中跳过，不阻塞列表渲染）
+  useEffect(() => {
+    for (const group of groups) {
+      if (titlesBySource.has(group.source)) continue;
+      loadTitles(group.source);
+    }
+  }, [groups, titlesBySource, loadTitles]);
+
   const search = useCallback(async (q: string) => {
     const keyword = q.trim();
     if (!keyword) {
@@ -443,46 +527,53 @@ export function KnowledgePanel() {
   }, []);
 
   // 条目样式：搜索命中条目与无 url 条目（案例）复用；
-  // TDSF 魔改 2026-08-30: 精简为 标题 + 文件名徽章（来源组头已显示分组名，
-  // 去掉 source 原文徽章副行）
-  const renderEntry = (hit: KnowledgeHit) => (
-    <button
-      key={hit.id}
-      type="button"
-      onClick={() =>
-        setDetail(hit.url ? { docUrl: hit.url, hit } : { entryId: hit.id, hit })
-      }
-      className={cn(
-        "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
-        "transition-colors hover:border-border hover:bg-muted/40",
-      )}
-    >
-      <div className="flex items-center gap-1.5">
-        <span className="flex-1 truncate text-[11.5px] font-medium text-foreground">
-          {hit.title}
-        </span>
-        {hit.match_type && (
-          <Badge
-            variant="secondary"
-            className="shrink-0 px-1 py-px text-[9px]"
-          >
-            {hit.match_type === "both"
-              ? "混合"
-              : hit.match_type === "fts"
-                ? "关键词"
-                : "语义"}
-          </Badge>
+  // TDSF 魔改 2026-08-30: 中文预览标题主行 + 英文原标题副行（无映射只显示英文）
+  const renderEntry = (hit: KnowledgeHit) => {
+    const zh = hit.url ? titlesBySource.get(hit.source)?.get(hit.url) : undefined;
+    return (
+      <button
+        key={hit.id}
+        type="button"
+        onClick={() =>
+          setDetail(hit.url ? { docUrl: hit.url, hit } : { entryId: hit.id, hit })
+        }
+        className={cn(
+          "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
+          "transition-colors hover:border-border hover:bg-muted/40",
         )}
-      </div>
-      {hit.url && (
-        <div className="mt-1 flex items-center gap-1">
-          <span className="rounded bg-muted px-1 py-px text-[9px] text-muted-foreground/80">
-            {fileNameFromUrl(hit.url)}
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="flex-1 truncate text-[11.5px] font-medium text-foreground">
+            {zh ?? hit.title}
           </span>
+          {hit.match_type && (
+            <Badge
+              variant="secondary"
+              className="shrink-0 px-1 py-px text-[9px]"
+            >
+              {hit.match_type === "both"
+                ? "混合"
+                : hit.match_type === "fts"
+                  ? "关键词"
+                  : "语义"}
+            </Badge>
+          )}
         </div>
-      )}
-    </button>
-  );
+        {zh && (
+          <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
+            {hit.title}
+          </div>
+        )}
+        {hit.url && (
+          <div className="mt-1 flex items-center gap-1">
+            <span className="rounded bg-muted px-1 py-px font-mono text-[9px] text-muted-foreground/80">
+              {fileNameFromUrl(hit.url)}
+            </span>
+          </div>
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -615,6 +706,9 @@ export function KnowledgePanel() {
                               filesBySource.get(group.source) ?? {
                                 status: "loading",
                               }
+                            }
+                            titles={
+                              titlesBySource.get(group.source) ?? new Map()
                             }
                             onOpenDoc={(url) => setDetail({ docUrl: url })}
                           />

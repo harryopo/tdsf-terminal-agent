@@ -191,7 +191,61 @@ def test_bfs_parse_empty_page_skipped(tmp_path: Path):
 
 
 # ============================================================================
-# 2. NginxCrawler 对齐（共享 BFS）
+# 2. 语言变体 URL 过滤（TDSF 2026-08-30：防西语/法语整页灌库）
+# ============================================================================
+
+from knowledge.crawlers.generic import _is_language_variant  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        # 实测残留样本（重爬前混入库的整页外语 URL）——必须剔除
+        ("https://kubernetes.io/es/docs/concepts/", True),
+        ("https://kubernetes.io/fr/docs/home/", True),
+        ("https://man.archlinux.org/man/intro.1.fr", True),
+        ("https://man.archlinux.org/man/intro.1.es", True),
+        ("https://manpages.debian.org/bookworm/manpages-es/bash.1.es.html", True),
+        ("https://wiki.archlinux.org/title/Systemd_(Espa%C3%B1ol)", True),
+        # 英文/默认语言页——必须保留
+        ("https://kubernetes.io/docs/concepts/", False),
+        ("https://man.archlinux.org/man/intro.1", False),
+        ("https://man.archlinux.org/man/systemd.1.en", False),
+        ("https://manpages.debian.org/bookworm/bash/bash.1.en.html", False),
+        ("https://dnf.readthedocs.io/en/latest/cli.html", False),
+        ("https://wiki.archlinux.org/title/Systemd", False),
+        ("https://wiki.archlinux.org/title/Firefox_(core)", False),  # 消歧义后缀
+        ("https://docs.python.org/3/library/os.html", False),
+    ],
+)
+def test_is_language_variant(url: str, expected: bool):
+    assert _is_language_variant(url) is expected
+
+
+def test_bfs_skips_language_variant_links(crawler: GenericCrawler):
+    """BFS 不跟进语言变体链接（/es/a 被剔除，/a 正常抓）"""
+    pages = dict(PAGES)
+    pages[BASE] = (
+        "<html><head><title>Test Docs</title></head><body>"
+        "<h1>Home</h1><p>home 页正文内容，足够长的段落文本用于解析。</p>"
+        '<a href="/a">A</a>'
+        '<a href="/es/a">西语 A</a>'
+        "</body></html>"
+    )
+
+    def fake(self, url: str) -> str:
+        return pages[url]
+
+    with patch.object(GenericCrawler, "_http_get", fake):
+        result = crawler.fetch()
+
+    urls = [e.url for e in result.entries]
+    assert "https://docs.test.com/a" in urls
+    assert "https://docs.test.com/es/a" not in urls
+
+
+# ============================================================================
+# 3. NginxCrawler 对齐（共享 BFS）
 # ============================================================================
 
 
