@@ -287,7 +287,9 @@ def test_titles_zh_source_filter(rag: RagIndex):
     rag.upsert_titles_zh({"D:/a.md": "甲文档", "https://n.test/b": "乙页面"})
 
     only_nginx = rag.titles_zh(source="nginx-docs")
-    assert only_nginx == [{"url": "https://n.test/b", "zh": "乙页面"}]
+    assert only_nginx == [
+        {"url": "https://n.test/b", "zh": "乙页面", "summary_zh": ""}
+    ]
     assert len(rag.titles_zh()) == 2
 
 
@@ -301,7 +303,9 @@ def test_rpc_titles_zh_dispatch(dispatcher: FakeDispatcher):
 
     res = dispatcher.dispatch("knowledge.titles_zh", {})
     assert res["total"] == 1
-    assert res["titles"] == [{"url": "D:/docs/guide.md", "zh": "指南"}]
+    assert res["titles"] == [
+        {"url": "D:/docs/guide.md", "zh": "指南", "summary_zh": ""}
+    ]
 
     res_filtered = dispatcher.dispatch(
         "knowledge.titles_zh", {"source": "imported-docs"}

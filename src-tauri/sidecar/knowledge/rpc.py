@@ -311,8 +311,9 @@ def register_methods(dispatcher: Any) -> None:
             url: 文档 url（必填，fail-closed）
 
         Returns:
-            {ok: True, url, filename, source, title, content, chunks, total_chars}
-            或 {ok: False, error}
+            {ok: True, url, filename, source, title, content, chunks,
+             total_chars, title_zh, summary_zh}（中文字段来自 doc_titles_zh，
+             无映射为空串）或 {ok: False, error}
         """
         if not url or not str(url).strip():
             return {"ok": False, "error": "url is required"}

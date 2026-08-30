@@ -3,18 +3,25 @@ knowledge/tests/test_clean.py — 爬虫/导入文本清洗管道测试（TDSF 2
 ============================================================================
 
 覆盖：
-1. clean_content：emoji 移除、导航残渣行移除、HTML 实体还原、空行压缩、
-   行尾空白、页脚版权行
+1. clean_content：emoji 移除、导航残渣行移除、语言切换残渣行移除、
+   HTML 实体还原、空行压缩、行尾空白、页脚版权行
 2. 代码块保护：围栏（```/~~~）与缩进代码块内 # 注释、示例词不误伤
 3. 幂等性
 4. clean_markdown：保留 # 标题 / 列表结构
-5. 接入点：GenericCrawler.to_entries / _chunk_markdown 清洗生效
+5. 繁体检测与简体转换（looks_traditional / to_simplified，C1）
+6. 接入点：GenericCrawler.to_entries（含质量门槛）/ _extract_page /
+   _chunk_markdown 清洗生效
 """
 from __future__ import annotations
 
 import unittest
 
-from knowledge.crawlers.clean import clean_content, clean_markdown
+from knowledge.crawlers.clean import (
+    clean_content,
+    clean_markdown,
+    looks_traditional,
+    to_simplified,
+)
 
 
 class TestCleanContentEmoji(unittest.TestCase):
@@ -94,6 +101,76 @@ class TestCleanContentNavigation(unittest.TestCase):
         self.assertNotIn("Copyright", out)
         self.assertIn("正文内容", out)
         self.assertIn("下一段", out)
+
+
+class TestCleanContentLanguageNav(unittest.TestCase):
+    """语言切换残渣行清洗（TDSF 2026-08-30，Arch Wiki Statistics 混入样本）"""
+
+    def test_lang_nav_mixed_line_removed(self):
+        """一行混排 ≥2 个语言名（「2 languages 日本語 Magyar」）整行移除"""
+        out = clean_content("真实正文一行。\n2 languages 日本語 Magyar\n后续正文。")
+        self.assertNotIn("Magyar", out)
+        self.assertNotIn("日本語", out)
+        self.assertIn("真实正文一行。", out)
+        self.assertIn("后续正文。", out)
+
+    def test_lang_count_line_removed(self):
+        """独立「24 languages」语言计数行移除"""
+        out = clean_content("正文A\n24 languages\n正文B")
+        self.assertNotIn("24 languages", out)
+        self.assertIn("正文A", out)
+        self.assertIn("正文B", out)
+
+    def test_language_sentence_kept(self):
+        """含句读的真实叙述句（支持中文、日本語等多语言）不误删"""
+        text = "本工具支持中文、日本語等多语言界面，可在设置中切换。"
+        out = clean_content(text)
+        self.assertIn("支持中文、日本語", out)
+
+    def test_single_language_name_line_kept(self):
+        """单个语言名成行（如导航里的 English）保守保留"""
+        out = clean_content("Documentation in English\n正文")
+        self.assertIn("English", out)
+
+    def test_sidebar_residue_removed(self):
+        """MediaWiki 侧栏残渣行（move to sidebar hide）移除"""
+        out = clean_content("正文开始\nmove to sidebar hide\n正文继续")
+        self.assertNotIn("move to sidebar", out)
+        self.assertIn("正文开始", out)
+        self.assertIn("正文继续", out)
+
+
+class TestTraditionalToSimplified(unittest.TestCase):
+    """繁体检测与简体转换（C1，zh_TW 手册页入库前转简）"""
+
+    def test_looks_traditional_positive(self):
+        """繁体特征字 ≥2 处 → 判定为繁体（bash.1.zh_TW 实测样本）"""
+        self.assertTrue(looks_traditional("Bash是一個與sh相容的命令解釋程式"))
+
+    def test_looks_traditional_negative_simplified(self):
+        """简体中文零繁体特征 → 不转换（防误伤 zh_CN 内容）"""
+        self.assertFalse(looks_traditional("Bash是一个与sh兼容的命令解释程序，可以读取文件"))
+
+    def test_looks_traditional_negative_english(self):
+        """英文内容零命中"""
+        self.assertFalse(
+            looks_traditional("The bash shell is a sh-compatible command interpreter")
+        )
+
+    def test_to_simplified_converts(self):
+        """t2s 转换覆盖繁体字形（解釋→解释、檔案→档案、與→与）"""
+        out = to_simplified("是一個與sh相容的命令解釋程式，讀取檔案並執行命令")
+        self.assertIn("个", out)
+        self.assertIn("与", out)
+        self.assertIn("解释", out)
+        self.assertIn("档案", out)
+        self.assertNotIn("解釋", out)
+        self.assertNotIn("檔案", out)
+
+    def test_to_simplified_keeps_simplified(self):
+        """简体文本转换后原样（幂等安全）"""
+        text = "Bash是一个与sh兼容的命令解释程序"
+        self.assertEqual(to_simplified(text), text)
 
 
 class TestCleanContentEntities(unittest.TestCase):
@@ -198,13 +275,39 @@ class TestIntegrationPoints(unittest.TestCase):
         crawler = GenericCrawler(source="t-docs", base_url="https://example.com/")
         items = [{
             "title": "示例页",
-            "content": "正文\U0001F44D\nPrevious\na &amp; b",
+            "content": "正文\U0001F44D\nPrevious\na &amp; b\n" + "足够长的正文内容。" * 100,
             "url": "https://example.com/",
             "tags": ["t"],
         }]
         entries = crawler.to_entries(items)
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0].content, "正文\na & b")
+        self.assertEqual(entries[0].content.splitlines()[0], "正文")
+        self.assertIn("a & b", entries[0].content)
+
+    def test_generic_to_entries_discards_short_pages(self):
+        """质量门槛：content < 500 字的页面（134 字 Statistics 类）直接丢弃"""
+        from knowledge.crawlers.generic import GenericCrawler
+
+        crawler = GenericCrawler(source="t-docs", base_url="https://example.com/")
+        items = [
+            {"title": "Statistics 残页", "content": "太短" * 10, "url": "u1", "tags": []},
+            {"title": "正常文章", "content": "足够长的正文内容，覆盖完整主题。" * 100, "url": "u2", "tags": []},
+        ]
+        entries = crawler.to_entries(items)
+        self.assertEqual([e.url for e in entries], ["u2"])
+
+    def test_generic_to_entries_t2s_zh_tw(self):
+        """繁体页面经 to_entries 自动转简 + 加「源自繁体」tag"""
+        from knowledge.crawlers.generic import GenericCrawler
+
+        crawler = GenericCrawler(source="t-docs", base_url="https://example.com/")
+        trad = "Bash是一個與sh相容的命令解釋程式，可以讀取檔案並執行命令。" * 20
+        items = [{"title": "名稱", "content": trad, "url": "u1", "tags": ["bash"]}]
+        entries = crawler.to_entries(items)
+        self.assertEqual(len(entries), 1)
+        self.assertIn("源自繁体", entries[0].tags)
+        self.assertNotIn("解釋", entries[0].content)
+        self.assertIn("解释", entries[0].content)
 
     def test_nginx_to_entries_cleans(self):
         from knowledge.crawlers.nginx import NginxCrawler
@@ -229,6 +332,57 @@ class TestIntegrationPoints(unittest.TestCase):
         self.assertIsNotNone(page)
         self.assertNotIn("\U0001F4CC", page["title"])
         self.assertNotIn("Previous", page["content"])
+
+    def test_extract_page_t2s_and_tag(self):
+        """_extract_page（BFS 路径）繁体内容转简 + tag 注入"""
+        from knowledge.crawlers.generic import _extract_page
+        from bs4 import BeautifulSoup
+
+        html = (
+            "<html><body><h1>名稱</h1>"
+            "<p>" + "Bash是一個與sh相容的命令解釋程式，可以讀取檔案並執行命令。" * 8 + "</p>"
+            "</body></html>"
+        )
+        page = _extract_page(BeautifulSoup(html, "html.parser"), "https://e.com/", ["bash"])
+        self.assertIsNotNone(page)
+        self.assertIn("源自繁体", page["tags"])
+        self.assertEqual(page["title"], "名称")
+        self.assertNotIn("解釋", page["content"])
+        self.assertIn("解释", page["content"])
+
+    def test_extract_page_simplified_not_tagged(self):
+        """简体正文不误加「源自繁体」tag"""
+        from knowledge.crawlers.generic import _extract_page
+        from bs4 import BeautifulSoup
+
+        html = (
+            "<html><body><h1>名称</h1>"
+            "<p>" + "Bash是一个与sh兼容的命令解释程序，可以读取文件并执行命令。" * 8 + "</p>"
+            "</body></html>"
+        )
+        page = _extract_page(BeautifulSoup(html, "html.parser"), "https://e.com/", ["bash"])
+        self.assertIsNotNone(page)
+        self.assertNotIn("源自繁体", page["tags"])
+
+    def test_extract_page_mediawiki_root_and_lead(self):
+        """MediaWiki 页以 #mw-content-text 为正文根 + 导语段并入（整页合并）"""
+        from knowledge.crawlers.generic import _extract_page
+        from bs4 import BeautifulSoup
+
+        lead = "本页概述 systemd 的单元类型与常用操作，面向 Linux 运维教学场景。" * 10
+        body = "systemd 单元类型详解：service、timer、socket 等各类单元的用途与示例。" * 60
+        html = (
+            "<html><body>"
+            "<div id='mw-content-text'>"
+            f"<p>{lead}</p>"
+            f"<h2>单元类型</h2><p>{body}</p>"
+            "</div>"
+            "</body></html>"
+        )
+        page = _extract_page(BeautifulSoup(html, "html.parser"), "https://e.com/", ["wiki"])
+        self.assertIsNotNone(page)
+        self.assertTrue(page["content"].startswith("本页概述"))  # 导语段并入且在最前
+        self.assertIn("单元类型", page["content"])
 
     def test_chunk_markdown_cleans(self):
         """_chunk_markdown 分块前清洗生效（导入路径）"""
