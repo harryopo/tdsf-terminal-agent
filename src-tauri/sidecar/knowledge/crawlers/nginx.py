@@ -16,6 +16,7 @@ from typing import Any
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from knowledge.crawlers.base import BaseCrawler, CrawlerResult
+from knowledge.crawlers.clean import clean_content
 from knowledge.crawlers.generic import crawl_site
 from knowledge.fts5 import KnowledgeEntry
 
@@ -92,15 +93,17 @@ class NginxCrawler(BaseCrawler):
         return items
 
     def to_entries(self, items: list[dict[str, Any]]) -> list[KnowledgeEntry]:
-        """转换为 KnowledgeEntry"""
+        """转换为 KnowledgeEntry（title/content 入库前清洗）"""
         entries: list[KnowledgeEntry] = []
         for i, item in enumerate(items):
             entry_id = self.build_entry_id(item, i)
+            raw_title = str(item.get("title", ""))
+            title = clean_content(raw_title) or raw_title
             entries.append(KnowledgeEntry(
                 id=entry_id,
                 source=self.source,
-                title=item.get("title", ""),
-                content=item.get("content", ""),
+                title=title,
+                content=clean_content(item.get("content", "")),
                 url=item.get("url", self.base_url),
                 tags=item.get("tags", ["nginx"]),
             ))

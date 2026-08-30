@@ -25,6 +25,7 @@ import re
 import uuid
 from typing import Any
 
+from knowledge.crawlers.clean import clean_markdown
 from knowledge.fts5 import KnowledgeEntry
 from knowledge.rag import get_global_rag
 
@@ -126,6 +127,9 @@ def _chunk_markdown(text: str) -> list[tuple[str, str]]:
     Returns:
         [(节标题, 块文本), ...]；节标题为 "" 表示无标题段
     """
+    # 分块前清洗（TDSF 2026-08-30）：导入的 md 同样混入 emoji/导航残渣/
+    # HTML 实体，统一走 clean_markdown（保留 # 标题与列表结构、保护代码块）
+    text = clean_markdown(text)
     sections: list[tuple[str, list[str]]] = []
     cur_title = ""
     cur_lines: list[str] = []

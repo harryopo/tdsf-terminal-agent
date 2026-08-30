@@ -23,14 +23,16 @@ nginx 专用爬虫通过 crawl_site() 共享同一 BFS 实现。
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import deque
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from knowledge.crawlers.base import BaseCrawler, CrawlerResult
+from knowledge.crawlers.clean import clean_content
 from knowledge.fts5 import KnowledgeEntry
 
 logger = logging.getLogger("sidecar.knowledge.crawlers.generic")
@@ -137,15 +139,17 @@ class GenericCrawler(BaseCrawler):
         return items
 
     def to_entries(self, items: list[dict[str, Any]]) -> list[KnowledgeEntry]:
-        """转换为 KnowledgeEntry"""
+        """转换为 KnowledgeEntry（title/content 入库前清洗）"""
         entries: list[KnowledgeEntry] = []
         for i, item in enumerate(items):
             entry_id = self.build_entry_id(item, i)
+            raw_title = str(item.get("title", ""))
+            title = clean_content(raw_title) or raw_title
             entries.append(KnowledgeEntry(
                 id=entry_id,
                 source=self.source,
-                title=item.get("title", ""),
-                content=item.get("content", ""),
+                title=title,
+                content=clean_content(item.get("content", "")),
                 url=item.get("url", self.base_url),
                 tags=item.get("tags", self.default_tags),
             ))
@@ -245,10 +249,72 @@ def crawl_site(
     )
 
 
+# ============================================================================
+# 语言变体 URL 过滤（TDSF 2026-08-30）
+# ============================================================================
+# 多语言文档站按 URL 路径协商语言（Accept-Language 头对这类站无效）：
+#   kubernetes.io/es/docs/、man.archlinux.org/man/intro.1.fr、
+#   manpages.debian.org/.../bash.1.es.html、wiki.archlinux.org/title/X_(Español)
+# BFS 若跟进这些链接会把整页西语/法语灌进知识库（实测「Documentación」
+# 「NOMBRE」文字墙）。在链接发现处剔除，从源头防污染。
+
+# 非英文语言码（ISO 639-1）——en 不在内（英文/默认语言页保留）
+_NON_ENGLISH_LANG_CODES: frozenset[str] = frozenset({
+    "ar", "bg", "bn", "cs", "da", "de", "el", "es", "fa", "fi", "fr", "gu",
+    "he", "hi", "hr", "hu", "id", "it", "ja", "kn", "ko", "ml", "mr", "nb",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "ta", "te", "th",
+    "tr", "uk", "ur", "vi", "zh",
+})
+
+# Arch Wiki 翻译页后缀（非英文语言显示名）——title 形如 Systemd_(Español)
+_NON_ENGLISH_WIKI_LANGS: frozenset[str] = frozenset({
+    "Deutsch", "Español", "Français", "Italiano", "Português", "Polski",
+    "Русский", "日本語", "한국어", "中文", "Bahasa Indonesia", "Nederlands",
+    "Suomi", "Svenska", "Català", "Українська", "فارسی", "Türkçe", "עברית",
+    "ไทย", "Tiếng Việt",
+})
+
+# wiki 翻译后缀：末段 _(<语言名>) 或 /(<语言名>)
+_WIKI_LANG_SUFFIX_RE = re.compile(r"[_/]?\(([^)]+)\)\s*$")
+
+
+def _is_language_variant(url: str) -> bool:
+    """判断 URL 是否为非英文语言变体页（BFS 不跟进）
+
+    覆盖三种模式：
+    1. 路径首段为语言码（kubernetes.io/es/docs/...；readthedocs /en/ 保留）
+    2. man 页 locale 后缀（intro.1.es、bash.1.es.html——倒数第二段为 man
+       section 数字，避免误伤 name.section 形式的英文页）
+    3. Arch Wiki 翻译后缀（Systemd_(Español)；消歧义后缀如 Firefox_(core) 保留）
+    """
+    parsed = urlparse(url)
+    segs = [s for s in parsed.path.split("/") if s]
+    # 模式 1：首段语言码（en / 非语言码 / 数字段 均保留）
+    if segs:
+        first = segs[0].lower().split("-")[0]
+        if first in _NON_ENGLISH_LANG_CODES:
+            return True
+    # 模式 2：man locale 后缀（name.<section>.<lang>[.html]）
+    if segs:
+        last = unquote(segs[-1])
+        for ext in (".html", ".htm"):
+            if last.lower().endswith(ext):
+                last = last[: -len(ext)]
+                break
+        toks = last.split(".")
+        if len(toks) >= 3 and toks[-2].isdigit() and toks[-1].lower() in _NON_ENGLISH_LANG_CODES:
+            return True
+    # 模式 3：wiki 翻译后缀 _(Lang) / (Lang)
+    m = _WIKI_LANG_SUFFIX_RE.search(unquote(parsed.path))
+    if m and m.group(1) in _NON_ENGLISH_WIKI_LANGS:
+        return True
+    return False
+
+
 def _extract_links(
     soup: BeautifulSoup, current_url: str, base_url: str
 ) -> list[str]:
-    """提取同域文档链接（同域名、去锚点、去资源文件、规范化绝对 URL）"""
+    """提取同域文档链接（同域名、去锚点、去资源文件、去语言变体、规范化绝对 URL）"""
     base_netloc = urlparse(base_url).netloc
     links: list[str] = []
     for a in soup.find_all("a", href=True):
@@ -264,7 +330,7 @@ def _extract_links(
         if parsed.path.lower().endswith(_RESOURCE_EXTS):
             continue  # 资源文件
         clean = parsed._replace(fragment="").geturl()  # 去锚点
-        if clean:
+        if clean and not _is_language_variant(clean):
             links.append(clean)
     return links
 
@@ -277,7 +343,7 @@ def _extract_page(
     Returns:
         {title, content, tags}；正文为空返回 None（调用方记 warning 跳过）
     """
-    # 页面标题：h1 优先，兜底 <title>，再兜底 URL
+    # 页面标题：h1 优先，兜底 <title>，再兜底 URL；统一清洗 emoji/实体
     h1 = soup.find("h1")
     if h1 is not None and h1.get_text(strip=True):
         title = h1.get_text(strip=True)
@@ -285,6 +351,7 @@ def _extract_page(
         title = soup.title.get_text(strip=True)
     else:
         title = url
+    title = clean_content(title) or title
 
     parts: list[str] = []
     # 策略 1：h1/h2/h3 章节（标题 + 后续段落；标题行并入正文保持结构）
@@ -320,7 +387,7 @@ def _extract_page(
             if len(text) > 50:
                 parts.append(text[:_PAGE_MAX_CHARS])
 
-    content = "\n\n".join(parts).strip()
+    content = clean_content("\n\n".join(parts))
     if not content:
         return None
     if len(content) > _PAGE_MAX_CHARS:

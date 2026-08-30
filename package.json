@@ -95,6 +95,7 @@
     "codemirror-languageserver": "^1.22.0",
     "fuzzysort": "^4.0.0",
     "lucide-react": "^0.460.0",
+    "mermaid": "^11.17.2",
     "radix-ui": "^1.6.7",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

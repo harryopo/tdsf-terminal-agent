@@ -114,6 +114,25 @@ const CRAWL_HIT = {
   tags: [],
 };
 
+// kubernetes-docs 文件级条目（官方源中文标题映射测试用）
+const OFFICIAL_FILE = {
+  url: "https://kubernetes.io/docs/concepts/",
+  filename: "concepts",
+  title0: "Concepts",
+  chunks: 4,
+  total_chars: 2048,
+  source: "kubernetes-docs",
+};
+
+const OFFICIAL_CHUNK_HIT = {
+  id: "doc-k8s-1",
+  source: "kubernetes-docs",
+  title: "Concepts",
+  content: "Kubernetes concepts body text.",
+  url: "https://kubernetes.io/docs/concepts/",
+  tags: [],
+};
+
 const CASE_HIT = {
   id: "case-1",
   source: "case-20260801-boot-repair",
@@ -408,7 +427,7 @@ describe("KnowledgePanel — 条目详情与空态", () => {
 });
 
 describe("KnowledgePanel — 来源分组", () => {
-  it("按来源分组渲染组头与条数 badge（内置来源已剔除：未知原样/case-/*-docs 映射）", async () => {
+  it("按来源分组渲染组头与条数 badge（17 官方源中文映射 / 未知原样 / case- / imported-docs）", async () => {
     mockRpc((method) =>
       method === "knowledge.list"
         ? { results: [HIT, DOC_CHUNK_HIT, CRAWL_HIT, CASE_HIT] }
@@ -418,16 +437,30 @@ describe("KnowledgePanel — 来源分组", () => {
     );
     render(<KnowledgePanel />);
 
-    // 组头：未知 source 原样显示；*-docs → 前缀 + 官方文档；case- → 会话沉淀；
-    // imported-docs → 导入文档
+    // 组头：未知 source 原样显示；nginx-docs 走全量中文映射表；
+    // case- → 会话沉淀；imported-docs → 导入文档
     expect(await screen.findByText("builtin-corpus")).toBeTruthy();
     expect(screen.getByText("导入文档")).toBeTruthy();
-    expect(screen.getByText("nginx 官方文档")).toBeTruthy();
+    expect(screen.getByText("Nginx 官方文档")).toBeTruthy();
     expect(screen.getByText("会话沉淀")).toBeTruthy();
     // 无 url 来源组内条目仍在
     expect(screen.getByText("nginx 配置入门")).toBeTruthy();
     // 文件来源组内是文件行
     expect(screen.getByText("linux-basics.md")).toBeTruthy();
+  });
+
+  it("未知 *-docs 源回退「<前缀> 文档」组名", async () => {
+    mockRpc((method) =>
+      method === "knowledge.list"
+        ? {
+            results: [
+              { ...CRAWL_HIT, id: "x1", source: "foo-docs", url: "" },
+            ],
+          }
+        : {},
+    );
+    render(<KnowledgePanel />);
+    expect(await screen.findByText("foo 文档")).toBeTruthy();
   });
 
   it("点击组头折叠该组（内容隐藏），再点展开恢复", async () => {
@@ -580,5 +613,84 @@ describe("KnowledgePanel — 导入 md", () => {
     expect(calls.filter(([m]) => m === "knowledge.import_docs")).toHaveLength(
       0,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 中文预览标题（TDSF 魔改 2026-08-30：knowledge.titles_zh 映射）
+// ---------------------------------------------------------------------------
+
+describe("KnowledgePanel — 中文预览标题", () => {
+  it("文件行：中文主行 + 英文 filename 副行（titles_zh 有映射）", async () => {
+    mockRpc((method) => {
+      if (method === "knowledge.list") return { results: [OFFICIAL_CHUNK_HIT] };
+      if (method === "knowledge.list_files")
+        return { files: [OFFICIAL_FILE], total: 1 };
+      if (method === "knowledge.titles_zh") {
+        return {
+          titles: [{ url: OFFICIAL_FILE.url, zh: "核心概念" }],
+          total: 1,
+        };
+      }
+      return {};
+    });
+    render(<KnowledgePanel />);
+
+    expect(await screen.findByText("Kubernetes 官方文档")).toBeTruthy();
+    expect(await screen.findByText("核心概念")).toBeTruthy(); // 中文主行
+    expect(screen.getByText("concepts")).toBeTruthy(); // 英文 filename 副行
+    expect(invokeRpc).toHaveBeenCalledWith("knowledge.titles_zh", {
+      source: "kubernetes-docs",
+    });
+  });
+
+  it("无中文映射 → 只显示英文 filename 主行（回退，不报错）", async () => {
+    mockRpc((method) => {
+      if (method === "knowledge.list") return { results: [OFFICIAL_CHUNK_HIT] };
+      if (method === "knowledge.list_files")
+        return { files: [OFFICIAL_FILE], total: 1 };
+      if (method === "knowledge.titles_zh") return { titles: [], total: 0 };
+      return {};
+    });
+    render(<KnowledgePanel />);
+
+    expect(await screen.findByText("concepts")).toBeTruthy();
+    expect(screen.queryByText("核心概念")).toBeNull();
+  });
+
+  it("titles_zh RPC 异常 → 吞错回退英文标题（列表仍渲染）", async () => {
+    mockRpc((method) => {
+      if (method === "knowledge.list") return { results: [OFFICIAL_CHUNK_HIT] };
+      if (method === "knowledge.list_files")
+        return { files: [OFFICIAL_FILE], total: 1 };
+      if (method === "knowledge.titles_zh") throw new Error("rpc down");
+      return {};
+    });
+    render(<KnowledgePanel />);
+
+    expect(await screen.findByText("concepts")).toBeTruthy();
+  });
+
+  it("搜索命中条目：中文主行 + 英文原标题副行", async () => {
+    mockRpc((method) => {
+      if (method === "knowledge.list") return { results: [] };
+      if (method === "knowledge.search")
+        return { results: [OFFICIAL_CHUNK_HIT] };
+      if (method === "knowledge.titles_zh")
+        return {
+          titles: [{ url: OFFICIAL_FILE.url, zh: "核心概念" }],
+          total: 1,
+        };
+      return {};
+    });
+    render(<KnowledgePanel />);
+    await screen.findByText(/知识库为空/);
+
+    const input = screen.getByPlaceholderText(/搜索命令/);
+    fireEvent.change(input, { target: { value: "concepts" } });
+    fireEvent.click(screen.getByRole("button", { name: "检索" }));
+
+    expect(await screen.findByText("核心概念")).toBeTruthy();
+    expect(screen.getByText("Concepts")).toBeTruthy(); // 英文原标题副行
   });
 });

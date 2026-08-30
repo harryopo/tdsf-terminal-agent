@@ -254,3 +254,57 @@ def test_rpc_get_doc_not_found(dispatcher: FakeDispatcher):
     assert res["ok"] is False
     assert "document not found" in res["error"]
     assert "D:/not-exist.md" in res["error"]
+
+
+# ============================================================================
+# 4. 中文标题映射（doc_titles_zh，TDSF 2026-08-30）
+# ============================================================================
+
+
+def test_upsert_and_read_titles_zh(rag: RagIndex):
+    """upsert 写入 + titles_zh 全量读取；空 url/空标题跳过；同 url 覆盖更新"""
+    n = rag.upsert_titles_zh({
+        "D:/docs/guide.md": "指南",
+        "": "空url被跳过",
+        "D:/docs/empty.md": "  ",
+        "https://x.test/p": "页面",
+    })
+    assert n == 2
+    titles = {t["url"]: t["zh"] for t in rag.titles_zh()}
+    assert titles == {"D:/docs/guide.md": "指南", "https://x.test/p": "页面"}
+
+    # 幂等覆盖（INSERT ... ON CONFLICT DO UPDATE）
+    rag.upsert_titles_zh({"D:/docs/guide.md": "新指南"})
+    titles = {t["url"]: t["zh"] for t in rag.titles_zh()}
+    assert titles["D:/docs/guide.md"] == "新指南"
+
+
+def test_titles_zh_source_filter(rag: RagIndex):
+    """source 过滤：仅返回该源条目 url 的映射（映射表无 source 列，经 entries 关联）"""
+    _add_doc_chunk(rag, 0, "甲", url="D:/a.md", source="builtin-docs")
+    rag.add(KnowledgeEntry(id="crawl-b-0", source="nginx-docs", title="t",
+                           content="正文", url="https://n.test/b"))
+    rag.upsert_titles_zh({"D:/a.md": "甲文档", "https://n.test/b": "乙页面"})
+
+    only_nginx = rag.titles_zh(source="nginx-docs")
+    assert only_nginx == [{"url": "https://n.test/b", "zh": "乙页面"}]
+    assert len(rag.titles_zh()) == 2
+
+
+def test_rpc_titles_zh_dispatch(dispatcher: FakeDispatcher):
+    """knowledge.titles_zh RPC：无参全量 / source 过滤"""
+    from knowledge.rag import get_global_rag
+
+    rag = get_global_rag()
+    _add_doc_chunk(rag, 0, "内容A", url="D:/docs/guide.md")
+    rag.upsert_titles_zh({"D:/docs/guide.md": "指南"})
+
+    res = dispatcher.dispatch("knowledge.titles_zh", {})
+    assert res["total"] == 1
+    assert res["titles"] == [{"url": "D:/docs/guide.md", "zh": "指南"}]
+
+    res_filtered = dispatcher.dispatch(
+        "knowledge.titles_zh", {"source": "imported-docs"}
+    )
+    assert res_filtered["titles"] == []
+    assert res_filtered["total"] == 0

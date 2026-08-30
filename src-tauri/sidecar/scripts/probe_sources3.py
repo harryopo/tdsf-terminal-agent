@@ -1,5 +1,11 @@
 """probe_sources3.py — 框架建设补充源探测（P0 层内容缺口）"""
-import requests
+import os
+from pathlib import Path
+
+# TDSF 2026-08-30: 统一数据目录到 <项目根>/.tdsf-data（与应用 main.py 一致）
+os.environ["TDSF_DATA_DIR"] = str(Path(__file__).resolve().parents[3] / ".tdsf-data")
+
+import requests  # noqa: E402
 
 UA = {
     "User-Agent": (

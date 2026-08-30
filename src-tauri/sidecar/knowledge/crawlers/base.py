@@ -41,14 +41,19 @@ logger = logging.getLogger("sidecar.knowledge.crawlers.base")
 # 常量定义
 # ============================================================================
 
-# 默认缓存根目录（dev: python-sidecar/data/crawlers-cache/; frozen: 数据目录下）
+# 默认缓存根目录（统一读 TDSF_DATA_DIR，与应用 rag.db 同库目录；
+# TDSF 2026-08-30 根因修复：dev 分支此前硬编码 sidecar/data/，与应用
+# 实际读的 <项目根>/.tdsf-data/ 割裂成第二个库）
 if getattr(sys, "frozen", False):
     _DEFAULT_CACHE_ROOT: Path = (
         Path(os.environ.get("TDSF_DATA_DIR", str(Path(sys.executable).resolve().parent / ".tdsf-data")))
         / "crawlers-cache"
     )
 else:
-    _DEFAULT_CACHE_ROOT: Path = Path(__file__).parent.parent.parent / "data" / "crawlers-cache"
+    _DEFAULT_CACHE_ROOT: Path = (
+        Path(os.environ.get("TDSF_DATA_DIR", str(Path(__file__).parent.parent.parent / "data")))
+        / "crawlers-cache"
+    )
 
 # 默认 User-Agent（避免被反爬虫机制拒绝）
 _DEFAULT_USER_AGENT: str = (
@@ -308,7 +313,13 @@ class BaseCrawler(abc.ABC):
 
         resp = requests.get(
             url,
-            headers={"User-Agent": _DEFAULT_USER_AGENT},
+            headers={
+                "User-Agent": _DEFAULT_USER_AGENT,
+                # TDSF 2026-08-30: 固定英文协商——部分官方站（kubernetes/
+                # bash 等）按 Accept-Language 返回西语/其他语言版本，
+                # 污染知识库正文（实测 "Documentación"/"NOMBRE" 混入）
+                "Accept-Language": "en-US,en;q=0.9",
+            },
             timeout=10,
         )
         resp.raise_for_status()
