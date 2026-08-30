@@ -11,9 +11,9 @@ import { SectionHeader } from "../components/SectionHeader";
 // TDSF 魔改: 链接更新为 TDSF 仓库（原 terax-ai 上游链接保留在注释中供溯源）
 // const UPSTREAM_REPO = "https://github.com/crynta/terax-ai";
 // const UPSTREAM_WEBSITE = "https://terax.app";
-const REPO_URL = "https://github.com/tdsf-linux-desktop/tdsf-terminal-agent";
-const WEBSITE =
-  "https://github.com/tdsf-linux-desktop/tdsf-terminal-agent#readme";
+// 2026-08-30: 仓库迁移至 harryopo 个人仓库（用户钦定）
+const REPO_URL = "https://github.com/harryopo/tdsf-terminal-agent";
+const WEBSITE = "https://github.com/harryopo/tdsf-terminal-agent#readme";
 
 const PLATFORM_LABEL: Record<string, string> = {
   macos: "macOS",
@@ -92,14 +92,16 @@ export function AboutSection() {
         </div>
       </div>
 
-      <dl className="grid grid-cols-[110px_1fr] gap-y-2.5 text-[12px]">
+      {/* 字体层级（用户钦定 2026-08-30）：构建/包 ID 等信息加大至 13px，
+          操作按钮缩小（text-xs）——与整体风格统一 */}
+      <dl className="grid grid-cols-[110px_1fr] gap-y-2.5 text-[13px]">
         <dt className="text-muted-foreground">构建</dt>
-        <dd className="font-mono text-[11.5px]">
+        <dd className="font-mono text-[13px]">
           {build ? `${build} · v${version}` : `v${version}`}
         </dd>
 
         <dt className="text-muted-foreground">包 ID</dt>
-        <dd className="font-mono text-[11.5px]">com.tdsf.terminal-agent</dd>
+        <dd className="font-mono text-[13px]">com.tdsf.terminal-agent</dd>
 
         <dt className="text-muted-foreground">许可证</dt>
         <dd>Apache 2.0</dd>
@@ -109,10 +111,10 @@ export function AboutSection() {
           <button
             type="button"
             onClick={() => void openUrl(REPO_URL)}
-            className="inline-flex items-center gap-1.5 rounded-md text-[12px] underline-offset-2 hover:text-foreground hover:underline"
+            className="inline-flex items-center gap-1.5 rounded-md text-[13px] underline-offset-2 hover:text-foreground hover:underline"
           >
-            <HugeiconsIcon icon={GithubIcon} size={12} strokeWidth={1.75} />
-            tdsf-linux-desktop/tdsf-terminal-agent
+            <HugeiconsIcon icon={GithubIcon} size={13} strokeWidth={1.75} />
+            harryopo/tdsf-terminal-agent
           </button>
         </dd>
         <dt className="text-muted-foreground">网站</dt>
@@ -120,9 +122,9 @@ export function AboutSection() {
           <button
             type="button"
             onClick={() => void openUrl(WEBSITE)}
-            className="inline-flex items-center gap-1.5 rounded-md text-[12px] underline-offset-2 hover:text-foreground hover:underline"
+            className="inline-flex items-center gap-1.5 rounded-md text-[13px] underline-offset-2 hover:text-foreground hover:underline"
           >
-            <HugeiconsIcon icon={Globe02Icon} size={12} strokeWidth={1.75} />
+            <HugeiconsIcon icon={Globe02Icon} size={13} strokeWidth={1.75} />
             TDSF 项目主页（GitHub README）
           </button>
         </dd>
@@ -132,6 +134,7 @@ export function AboutSection() {
         <div className="flex gap-2">
           <Button
             size="sm"
+            className="h-7 px-3 text-xs"
             onClick={onUpdateClick}
             disabled={checking || downloading || ready}
           >
@@ -140,8 +143,8 @@ export function AboutSection() {
           <Button
             variant="outline"
             size="sm"
+            className="h-7 gap-1.5 px-3 text-xs"
             onClick={() => void openUrl(REPO_URL)}
-            className="gap-1.5"
           >
             <HugeiconsIcon icon={GithubIcon} size={12} strokeWidth={1.75} />在
             GitHub 上查看
@@ -149,6 +152,7 @@ export function AboutSection() {
           <Button
             variant="ghost"
             size="sm"
+            className="h-7 px-3 text-xs"
             onClick={() => void openUrl(`${REPO_URL}/issues/new`)}
           >
             报告问题
