@@ -34,6 +34,7 @@ import {
   ComputerTerminal02Icon,
   GitCompareIcon,
   Globe02Icon,
+  HomeIcon,
   IncognitoIcon,
   Message02Icon,
   PencilEdit02Icon,
@@ -631,6 +632,17 @@ export function TabIcon({ tab }: { tab: Tab }) {
     return (
       <HugeiconsIcon
         icon={IncognitoIcon}
+        size={14}
+        strokeWidth={2}
+        className="shrink-0"
+      />
+    );
+  }
+  // cold 终端 tab = 欢迎引导页（shell 未启动），用「开始」图标而非终端图标
+  if (tab.kind === "terminal" && tab.cold) {
+    return (
+      <HugeiconsIcon
+        icon={HomeIcon}
         size={14}
         strokeWidth={2}
         className="shrink-0"
