@@ -232,6 +232,29 @@ from knowledge.crawlers.generic import _is_language_variant  # noqa: E402
         ("https://man.archlinux.org/man/intro.1.zh_TW", True),
         # man section 带子段（倒数第二段非纯数字）的语言后缀
         ("https://manpages.debian.org/bookworm/manpages-dev/readline.3readline.fr.html", True),
+        # TDSF 2026-08-31 三次漏网样本（德语 FAQ 入库根因）：Gentoo Wiki
+        # 翻译页 URL 是 /wiki/FAQ/<lang> 路径末段语言码（而非 _(Deutsch)
+        # 后缀式），实测 wiki.gentoo.org/wiki/FAQ/de 等 12 个语言 FAQ
+        # 整页混入合并库——必须剔除
+        ("https://wiki.gentoo.org/wiki/FAQ/de", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/nl", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/fr", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/es", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/it", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/pl", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/tr", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/el", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/ru", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/ja", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/ko", True),
+        ("https://wiki.gentoo.org/wiki/FAQ/pt-br", True),  # 区域变体取基础码
+        ("https://wiki.gentoo.org/wiki/FAQ/zh-cn", True),
+        ("https://wiki.gentoo.org/wiki/SELinux/FAQ/ja", True),  # 多段路径末段
+        # 路径末段非语言码/英文页——必须保留（防误伤）
+        ("https://wiki.gentoo.org/wiki/FAQ", False),
+        ("https://wiki.gentoo.org/wiki/SELinux/FAQ", False),
+        ("https://wiki.gentoo.org/wiki/Portage", False),
+        ("https://wiki.gentoo.org/wiki/Emerge", False),
         # 英文/默认语言页——必须保留
         ("https://kubernetes.io/docs/concepts/", False),
         ("https://man.archlinux.org/man/intro.1", False),
