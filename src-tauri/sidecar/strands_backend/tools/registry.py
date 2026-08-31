@@ -21,8 +21,8 @@ strands_backend/tools/registry.py — 工具三角色注册表（T2）
 
 行为不变量（迁移自 tools/__init__.py，P1-v5-2 语义保持）：
 - L1（免确认）权限下仅保留 policy.readonly=True 的工具。
-- knowledge_search 历史白名单（_L1_READONLY_TOOL_NAMES）未含它，L1 下被裁剪——
-  迁移时保持该行为（readonly=False + 注释），是否放开留待用户决策。
+- knowledge_search / knowledge_get_doc 为纯本地只读工具
+  （readonly=True，2026-08-31 语义修正：L1 免确认模式可用）。
 """
 
 from __future__ import annotations
@@ -95,8 +95,8 @@ def resolve_factory(spec: ToolSpec) -> Callable[..., Any]:
 
 
 # ============================================================================
-# 19 工具注册表（13 运维/知识 + 6 魔改增强；tools/__init__.py + ops_extended.py
-# + 2026-08-09 集成度补齐 6 工具收编）
+# 21 工具注册表（13 运维/知识 + 6 魔改增强 + knowledge_get_doc；tools/__init__.py
+# + ops_extended.py + 2026-08-09 集成度补齐 6 工具收编）
 # ============================================================================
 
 # 描述（Schema 角色）与各工具 docstring 首行对齐；改 docstring 时同步这里
@@ -149,10 +149,17 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "knowledge_search": ToolSpec(
         name="knowledge_search",
         factory="strands_backend.tools.knowledge_search:make_knowledge_search_tool",
-        description="检索本地知识库（TDSF.md 等）获取项目约定与领域知识",
-        # 历史行为对齐：P1-v5-2 白名单未含 knowledge_search，L1 下被裁剪。
-        # 语义上是只读工具，是否在 L1 放开留待用户决策（迁移时保持不变）。
-        policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False),
+        description="检索本地知识库精简版（中文提炼知识点，RAG 混合检索）返回相关片段",
+        # 2026-08-31 语义修正：纯本地只读检索（不触碰系统/远端），L1 免确认
+        # 模式可用（原 P1-v5-2 白名单未含属历史遗留，非安全考量）
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+    ),
+    "knowledge_get_doc": ToolSpec(
+        name="knowledge_get_doc",
+        factory="strands_backend.tools.knowledge_get_doc:make_knowledge_get_doc_tool",
+        description="按 url 读取知识库完整文档（检索结果 url → 全文 markdown）",
+        # 纯本地只读（同 knowledge_search，读精简库）
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
     # --- 扩展运维 5（ops_extended.py）---
     "service_manage": ToolSpec(

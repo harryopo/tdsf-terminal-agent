@@ -5,6 +5,10 @@ strands_backend/tools/knowledge_search.py — 知识库检索工具（P2-4）
 让 Strands agent 检索内置教学语料 / 导入文档 / 沉淀案例（RAG 混合检索）。
 
 - 走统一 RAG 引擎（knowledge.rag.RagIndex.hybrid_search：FTS5 + sqlite-vec + RRF）
+- **读精简库（rag_slim.db，中文提炼版，检索质量优）**——双库方案 TDSF
+  2026-08-31：全量库 rag.db（英文原文 4077 块）由爬取/沉淀管线写入，
+  精简库（661 块中文提炼）由 scripts/distill_knowledge.py 离线生成；
+  agent 检索主读精简库，全量库经 RPC knowledge.search_full 兜底。
 - 返回结构化结果（title/content/source/tags），LLM 据此回答/教学
 - 知识库为空时返回 empty 状态（引导 agent 诚实说明）
 
@@ -43,9 +47,11 @@ def invoke_knowledge_search_tool(params: dict[str, Any], ctx: Any = None) -> dic
         limit = 5
 
     try:
-        from knowledge.rag import get_global_rag
+        from knowledge.rag import get_slim_rag
 
-        results = get_global_rag().hybrid_search(query, top_k=limit)
+        # TDSF 2026-08-31: 读精简库（中文提炼版，检索质量优）；全量库经
+        # RPC knowledge.search_full 保留（会话沉淀/导入文档仍写全量库）
+        results = get_slim_rag().hybrid_search(query, top_k=limit)
     except Exception as e:
         logger.exception(f"knowledge_search failed: query={query[:50]}, error={e}")
         return {
@@ -79,17 +85,19 @@ def make_knowledge_search_tool(ctx: Any):
     """构建知识库检索工具（带 ctx 闭包，Strands @tool 装饰）"""
     @tool
     def knowledge_search(query: str, limit: int = 5) -> dict:
-        """检索内置 Linux 教学知识库（命令/概念/哲学/排障案例，RAG 混合检索）。
+        """检索内置 Linux 教学知识库精简版（中文提炼知识点，RAG 混合检索）。
 
-        用户询问 Linux 概念/命令用法/运维知识/历史案例时调用，返回最相关的
-        知识条目（标题 + 正文 + 来源）。知识库为空时返回 empty 状态。
+        用户询问 Linux 概念/命令用法/运维知识时调用，返回最相关的知识条目
+        （标题 + 正文 + 来源）。检索后如需某篇文档的完整内容，可用
+        knowledge_get_doc 按 url 读取全文。知识库为空时返回 empty 状态。
 
         Args:
             query (str): 检索主题，如 "systemctl 服务管理"、"nginx 502 排障"。
             limit (int): 返回条数上限，默认 5，最大 10。
 
         Returns:
-            dict: 含 status / results 列表（每条含 title / content / source / tags）。
+            dict: 含 status / results 列表（每条含 title / content / source /
+            url / tags），url 供 knowledge_get_doc 读取全文。
         """
         return invoke_knowledge_search_tool(
             params={"query": query, "limit": limit},

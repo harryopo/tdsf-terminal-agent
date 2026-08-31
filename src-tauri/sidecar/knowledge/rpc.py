@@ -4,30 +4,41 @@ knowledge/rpc.py — 知识库 JSON-RPC 方法注册（T-P3-08）
 
 职责：
 - 向 JSON-RPC dispatcher 注册 knowledge.* 方法
-- 整合 FTS5 + ChromaDB 双路检索
-- 提供 knowledge.search / knowledge.add / knowledge.rebuild / knowledge.get
+- 检索走统一 RAG 引擎（sqlite-vec + FTS5 + RRF）
+- 提供 knowledge.search / knowledge.search_full / knowledge.add /
+  knowledge.rebuild / knowledge.get 等方法
 
 注册的方法：
 - knowledge.search:    {query, limit?, method?} → {results, total}
-- knowledge.add:       {entry: KnowledgeEntry} → {id}
-- knowledge.rebuild:   {} → {ok, count}
-- knowledge.get:       {id} → {entry | null}
-- knowledge.count:     {} → {count}
-- knowledge.list:      {limit?, offset?} → {results, total, ...}
+                       （TDSF 2026-08-31 主读精简库 rag_slim.db）
+- knowledge.search_full: {query, limit?} → {results, total, query, method}
+                       （全量库 rag.db 兜底检索：会话记忆/沉淀案例只存在
+                       全量库，transport.fetchMemoryHints 用此方法）
+- knowledge.add:       {entry: KnowledgeEntry} → {id}（写全量库——爬取/
+                       导入/沉淀管线源头）
+- knowledge.rebuild:   {} → {ok, count}（重建全量库）
+- knowledge.get:       {id} → {entry | null}（读全量库——服务浏览模式
+                       会话沉淀卡片详情）
+- knowledge.count:     {} → {count}（读精简库）
+- knowledge.list:      {limit?, offset?} → {results, total, ...}（读全量库）
 - knowledge.import_docs: {files, source?} → {imported, skipped, errors, rejected}
 - knowledge.add_case:    {title, content, tags?} → {ok, id}
 - knowledge.crawl:       {source, url?} → {added, entries, error?}
 - knowledge.stats:       {} → {total_entries, embed_model_loaded}
-- knowledge.list_files:  {source?} → {files: [{url, filename, title0,
-                         chunks, total_chars, source}], total}
+- knowledge.list_files:  {source?, group?} → {files: [...], total}（读精简库）
 - knowledge.get_doc:     {url} → {ok, url, filename, source, title,
-                         content, chunks, total_chars}
-- knowledge.titles_zh:   {source?} → {titles: [{url, zh}], total}
+                         content, chunks, total_chars}（读精简库）
+- knowledge.titles_zh:   {source?} → {titles: [{url, zh}], total}（读精简库）
 
 method 参数支持：
 - "fts5":    仅 FTS5 检索
 - "vector":  仅向量检索
-- "hybrid":  双路检索合并去重（默认）
+- "hybrid":  双路检索合并去重（默认，读精简库）
+
+双库方案（TDSF 2026-08-31）：知识库主读精简库（rag_slim.db，中文提炼，
+检索质量优）；全量库（rag.db）是爬取/导入/沉淀的源头，经
+knowledge.search_full 保留检索入口。精简库由 scripts/distill_knowledge.py
++ insert_manual_distill.py 离线生成（启动不自动跑 LLM）。
 """
 
 from __future__ import annotations
@@ -38,7 +49,7 @@ from typing import Any
 from knowledge.fts5 import KnowledgeEntry, get_global_index
 from knowledge.vector import generate_embedding, get_global_vector
 
-from knowledge.rag import get_global_rag
+from knowledge.rag import get_global_rag, get_slim_rag
 
 logger = logging.getLogger("sidecar.knowledge.rpc")
 
@@ -144,8 +155,9 @@ def register_methods(dispatcher: Any) -> None:
         elif method_lower == "vector":
             results = _search_vector(query, limit=limit)
         else:
-            # P2-4: hybrid 走统一 RAG 引擎（sqlite-vec + FTS5 + RRF）
-            results = get_global_rag().hybrid_search(query, top_k=limit)
+            # TDSF 2026-08-31: hybrid 走统一 RAG 引擎，主读精简库
+            # （rag_slim.db 中文提炼）；全量库经 knowledge.search_full 保留
+            results = get_slim_rag().hybrid_search(query, top_k=limit)
 
         return {
             "results": results,
@@ -217,9 +229,10 @@ def register_methods(dispatcher: Any) -> None:
             return {"ok": False, "error": str(e)}
 
     def _count() -> dict[str, Any]:
-        """返回知识库条目总数（RAG entries 表，与 list/search/get 同源）"""
+        """返回知识库条目总数（TDSF 2026-08-31 主读精简库，与 search/list_files
+        同源——全量库计数经 knowledge.stats 查看）"""
         try:
-            rag = get_global_rag()
+            rag = get_slim_rag()
             return {"count": rag.count()}
         except Exception as e:
             logger.exception(f"knowledge.count failed: {e}")
@@ -230,6 +243,33 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.rebuild", _rebuild)
     dispatcher.register("knowledge.get", _get)
     dispatcher.register("knowledge.count", _count)
+
+    # TDSF 2026-08-31: 全量库检索兜底入口（会话沉淀/导入文档只存在全量库——
+    # transport.fetchMemoryHints 的 session-memory 检索走此方法）
+    def _search_full(
+        query: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """检索全量知识库（rag.db，英文原文，hybrid_search 同逻辑）
+
+        Args:
+            query: 查询字符串
+            limit: 返回 top-K（默认 10）
+
+        Returns:
+            {results: [...], total: int, query: str, method: "hybrid_full"}
+        """
+        if not query or not query.strip():
+            return {"results": [], "total": 0, "query": query, "method": "hybrid_full"}
+        results = get_global_rag().hybrid_search(query, top_k=max(1, int(limit)))
+        return {
+            "results": results,
+            "total": len(results),
+            "query": query,
+            "method": "hybrid_full",
+        }
+
+    dispatcher.register("knowledge.search_full", _search_full)
 
     # P2-4: 浏览模式（打开即列出，不依赖搜索词）
     def _list(limit: int = 50, offset: int = 0) -> dict[str, Any]:
@@ -306,7 +346,8 @@ def register_methods(dispatcher: Any) -> None:
             {files: [{url, filename, title0, chunks, total_chars, source,
              category}], total}
         """
-        rag = get_global_rag()
+        # TDSF 2026-08-31: 主读精简库（中文提炼文档，与 search 同源）
+        rag = get_slim_rag()
         files = rag.list_files(source=(source or None), group=(group or None))
         return {"files": files, "total": len(files)}
 
@@ -323,7 +364,8 @@ def register_methods(dispatcher: Any) -> None:
         """
         if not url or not str(url).strip():
             return {"ok": False, "error": "url is required"}
-        doc = get_global_rag().get_doc(str(url).strip())
+        # TDSF 2026-08-31: 主读精简库（中文提炼文档，与 search/list_files 同源）
+        doc = get_slim_rag().get_doc(str(url).strip())
         if doc is None:
             return {"ok": False, "error": f"document not found: {url}"}
         return {"ok": True, **doc}
@@ -345,13 +387,15 @@ def register_methods(dispatcher: Any) -> None:
         Returns:
             {titles: [{url, zh}, ...], total}
         """
-        titles = get_global_rag().titles_zh(source=(source or None))
+        # TDSF 2026-08-31: 主读精简库（映射与文档同源；slim 库映射由
+        # scripts/fill_slim_titles.py 离线生成）
+        titles = get_slim_rag().titles_zh(source=(source or None))
         return {"titles": titles, "total": len(titles)}
 
     dispatcher.register("knowledge.titles_zh", _titles_zh)
 
     # 精简知识库检索（双库方案 TDSF 2026-08-31：rag_slim.db，LLM 每章提炼
-    # 核心知识点。前端本期不接入——RPC 先行保证检索可用，冒烟脚本验证）
+    # 核心知识点。knowledge.search 已切精简库，本方法保留向后兼容）
     def _search_slim(
         query: str,
         limit: int = 10,
@@ -367,8 +411,6 @@ def register_methods(dispatcher: Any) -> None:
         """
         if not query or not query.strip():
             return {"results": [], "total": 0, "query": query, "method": "hybrid_slim"}
-        from knowledge.rag import get_slim_rag
-
         results = get_slim_rag().hybrid_search(query, top_k=max(1, int(limit)))
         return {
             "results": results,
@@ -378,4 +420,4 @@ def register_methods(dispatcher: Any) -> None:
         }
 
     dispatcher.register("knowledge.search_slim", _search_slim)
-    logger.info("knowledge.* methods registered (14 methods, RAG hybrid)")
+    logger.info("knowledge.* methods registered (15 methods, slim-first dual-db)")

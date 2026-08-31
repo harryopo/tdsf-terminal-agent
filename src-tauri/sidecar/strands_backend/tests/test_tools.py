@@ -863,16 +863,17 @@ class TestMakeAllOpsTools(unittest.TestCase):
 
     def test_returns_all_registered_tools(self):
         """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
-        （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill = 20）"""
+        （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
+        + 2026-08-31 knowledge_get_doc = 21）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 21)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 20 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 20)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 21 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 21)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1448,12 +1449,13 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         return {getattr(t, "__name__", str(t)) for t in tools}
 
     def test_main_gets_all_tools(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 20 工具"""
+        """main（唯一 agent）：TOOL_REGISTRY 全量 21 工具"""
         tools = make_all_ops_tools(self._ctx())
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 21)
         self.assertIn("ssh_command", names)
         self.assertIn("knowledge_search", names)
+        self.assertIn("knowledge_get_doc", names)
 
     def test_l1_readonly_filter(self):
         """L1（免确认）权限：仅保留 readonly=True 工具（schema-level safety）"""
@@ -1463,7 +1465,10 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         self.assertNotIn("skill_invoke", names)
         self.assertIn("read_remote_file", names)
         self.assertIn("suggest_command", names)
-        self.assertLessEqual(len(tools), 20)
+        # 2026-08-31 语义修正：knowledge_search/knowledge_get_doc 纯本地只读
+        self.assertIn("knowledge_search", names)
+        self.assertIn("knowledge_get_doc", names)
+        self.assertLessEqual(len(tools), 21)
 
     def test_filter_tools_readonly_helper(self):
         """P0-A1: filter_tools_readonly 帮助函数（观察模式/L1 共用单一真源）"""
@@ -1725,12 +1730,16 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertIn("security_audit", names)
         # T2 收编后：7 原只读 + 5 新只读增强（todo_write/get_terminal_output/
         # config_diff/assess_confidence/search_history）= 12
+        # 2026-08-31：+ knowledge_search（readonly 语义修正）
+        # + knowledge_get_doc（新工具）= 14
         self.assertIn("todo_write", names)
         self.assertIn("get_terminal_output", names)
         self.assertIn("assess_confidence", names)
+        self.assertIn("knowledge_search", names)
+        self.assertIn("knowledge_get_doc", names)
         # backup_restore（restore 写操作）L1 下被裁——schema-level safety 补口
         self.assertNotIn("backup_restore", names)
-        self.assertEqual(len(tools), 12)
+        self.assertEqual(len(tools), 14)
 
     def test_l2_keeps_all_tools(self):
         ctx = make_ctx()
@@ -1739,12 +1748,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 21)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 21)
 
 
 # ============================================================================
@@ -1752,27 +1761,32 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
 # ============================================================================
 
 class TestKnowledgeSearchTool(unittest.TestCase):
-    """知识库检索工具"""
+    """知识库检索工具（TDSF 2026-08-31 双库：主读精简库 rag_slim.db）"""
 
     def _populate(self):
-        """向全局 RAG 注入测试语料（隔离由 conftest 提供）"""
+        """向精简库注入测试语料（工具切 slim 后检索同源；全量库同步注入
+        独有条目用于验证不串库。隔离由 conftest 提供）"""
         from knowledge.fts5 import KnowledgeEntry
-        from knowledge.rag import get_global_rag
+        from knowledge.rag import get_global_rag, get_slim_rag
 
-        rag = get_global_rag()
-        rag.add(KnowledgeEntry(
+        get_slim_rag().add(KnowledgeEntry(
             title="systemctl 服务管理",
             content="systemctl 是 systemd 的服务管理命令，restart 停止再启动，reload 平滑重载。",
             source="test",
             tags=["systemd"],
         ))
-        rag.add(KnowledgeEntry(
+        # 全量库独有条目（knowledge_search 读 slim，不应命中它）
+        get_global_rag().add(KnowledgeEntry(
+            title="full-db-only 条目",
+            content="xyzqwentry 全量库独有内容标记。",
+            source="test",
+        ))
+        get_slim_rag().add(KnowledgeEntry(
             title="nginx 配置",
             content="server 块监听端口，location 匹配 URL 规则。",
             source="test",
             tags=["nginx"],
         ))
-        return rag
 
     def test_search_success(self):
         from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
@@ -1782,6 +1796,17 @@ class TestKnowledgeSearchTool(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertGreaterEqual(result["count"], 1)
         self.assertTrue(any("systemctl" in r["title"] for r in result["results"]))
+
+    def test_search_reads_slim_not_full(self):
+        """TDSF 2026-08-31: 检索读精简库——全量库独有条目不出现在结果"""
+        from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+        self._populate()
+        result = invoke_knowledge_search_tool({"query": "xyzqwentry 全量库独有"})
+        if result["status"] == "success":
+            self.assertFalse(
+                any("full-db-only" in r["title"] for r in result["results"])
+            )
 
     def test_search_empty_query_error(self):
         from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
@@ -1804,6 +1829,110 @@ class TestKnowledgeSearchTool(unittest.TestCase):
         tools = make_all_ops_tools(ctx)
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("knowledge_search", names)
+
+
+# ============================================================================
+# knowledge_get_doc 工具测试（TDSF 2026-08-31 双库）
+# ============================================================================
+
+class TestKnowledgeGetDocTool(unittest.TestCase):
+    """知识库整篇文档读取工具（三态：参数缺失 / 查无 / 正常）"""
+
+    def _populate(self):
+        """向精简库注入同一 url 的两个分块（验证按序拼接）"""
+        from knowledge.fts5 import KnowledgeEntry
+        from knowledge.rag import get_slim_rag
+
+        rag = get_slim_rag()
+        rag.add(KnowledgeEntry(
+            id="doc-testurl-0",
+            title="测试文档 · 第一节",
+            content="第一节内容：systemctl 用法。",
+            url="consolidated/services/Web 服务器（Nginx 与 Apache）.md",
+            source="test",
+            category="services",
+        ))
+        rag.add(KnowledgeEntry(
+            id="doc-testurl-1",
+            title="测试文档 · 第二节",
+            content="第二节内容：nginx 配置。",
+            url="consolidated/services/Web 服务器（Nginx 与 Apache）.md",
+            source="test",
+            category="services",
+        ))
+
+    def test_missing_url_error(self):
+        """fail-closed：url 参数缺失 → error"""
+        from strands_backend.tools.knowledge_get_doc import invoke_knowledge_get_doc_tool
+
+        self.assertEqual(
+            invoke_knowledge_get_doc_tool({})["status"], "error"
+        )
+        self.assertEqual(
+            invoke_knowledge_get_doc_tool({"url": "   "})["status"], "error"
+        )
+
+    def test_not_found(self):
+        """fail-closed：查无文档 → not_found"""
+        from strands_backend.tools.knowledge_get_doc import invoke_knowledge_get_doc_tool
+
+        result = invoke_knowledge_get_doc_tool({"url": "no-such-doc.md"})
+        self.assertEqual(result["status"], "not_found")
+
+    def test_success_returns_full_doc(self):
+        """正常：返回完整 markdown（块按序拼接）+ title/category"""
+        from strands_backend.tools.knowledge_get_doc import invoke_knowledge_get_doc_tool
+
+        self._populate()
+        result = invoke_knowledge_get_doc_tool(
+            {"url": "consolidated/services/Web 服务器（Nginx 与 Apache）.md"}
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["category"], "services")
+        self.assertEqual(result["chunks"], 2)
+        # 块按序拼接（第一节在前）
+        content = result["content"]
+        self.assertIn("第一节内容", content)
+        self.assertIn("第二节内容", content)
+        self.assertLess(
+            content.index("第一节内容"), content.index("第二节内容")
+        )
+        self.assertFalse(result["truncated"])
+
+    def test_long_content_truncated(self):
+        """超 30000 字符正文截断（truncated=True）"""
+        from strands_backend.tools.knowledge_get_doc import (
+            _MAX_CONTENT_CHARS,
+            invoke_knowledge_get_doc_tool,
+        )
+        from knowledge.fts5 import KnowledgeEntry
+        from knowledge.rag import get_slim_rag
+
+        get_slim_rag().add(KnowledgeEntry(
+            id="doc-long-0",
+            title="超长文档",
+            content="长" * (_MAX_CONTENT_CHARS + 100),
+            url="long-doc.md",
+            source="test",
+        ))
+        result = invoke_knowledge_get_doc_tool({"url": "long-doc.md"})
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["truncated"])
+        self.assertLessEqual(len(result["content"]), _MAX_CONTENT_CHARS + 80)
+
+    def test_factory_registered(self):
+        """registry 注册 + readonly 策略（L1 免确认可用）"""
+        from strands_backend.tools import make_all_ops_tools
+        from strands_backend.tools.registry import get_tool_policy
+
+        ctx = make_ctx()
+        tools = make_all_ops_tools(ctx)
+        names = {getattr(t, "__name__", "") for t in tools}
+        self.assertIn("knowledge_get_doc", names)
+        policy = get_tool_policy("knowledge_get_doc")
+        self.assertIsNotNone(policy)
+        self.assertTrue(policy.readonly)
+        self.assertFalse(policy.needs_approval)
 
 
 # ============================================================================
