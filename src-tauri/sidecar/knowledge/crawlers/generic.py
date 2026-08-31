@@ -408,12 +408,17 @@ _WIKI_TITLE_BLOCKLIST: frozenset[str] = frozenset({
 def _is_language_variant(url: str) -> bool:
     """判断 URL 是否为非英文语言变体页（BFS 不跟进）
 
-    覆盖三种模式：
+    覆盖四种模式：
     1. 路径首段为语言码（kubernetes.io/es/docs/...；readthedocs /en/ 保留）
     2. man 页 locale 文件名后缀：语言码 = 文件名最后一个点段——
        bash.1.zh_TW.html / intro.1.fr / readline.3readline.fr.html；
        区域变体（zh_TW/zh_CN/pt_BR）取下划线前基础码判定
     3. Arch Wiki 翻译后缀（Systemd_(Español)；消歧义后缀如 Firefox_(core) 保留）
+    4. **wiki 翻译页路径末段语言码**（TDSF 2026-08-31 补漏，德语 FAQ 入库
+       根因）：Gentoo Wiki 翻译页 URL 是 /wiki/FAQ/<lang> 路径式而非
+       _(Deutsch) 后缀式（实测 wiki.gentoo.org/wiki/FAQ/de 全量混入，
+       12 个语言 FAQ 章节；/wiki/SELinux/FAQ 末段 FAQ 不在语言码表不受
+       影响）；区域变体（pt-br）取连字符前基础码
     """
     parsed = urlparse(url)
     segs = [s for s in parsed.path.split("/") if s]
@@ -440,6 +445,17 @@ def _is_language_variant(url: str) -> bool:
     m = _WIKI_LANG_SUFFIX_RE.search(unquote(parsed.path))
     if m and m.group(1) in _NON_ENGLISH_WIKI_LANGS:
         return True
+    # 模式 4：wiki 翻译页路径末段语言码（wiki.gentoo.org/wiki/FAQ/de、
+    # /wiki/FAQ/pt-br；至少 2 个路径段，末段整段为语言码且非 en）
+    if len(segs) >= 2:
+        last = unquote(segs[-1]).lower()
+        for ext in (".html", ".htm"):
+            if last.endswith(ext):
+                last = last[: -len(ext)]
+                break
+        base = last.split("-", 1)[0].split("_", 1)[0]
+        if base != "en" and base in _NON_ENGLISH_LANG_CODES:
+            return True
     return False
 
 
