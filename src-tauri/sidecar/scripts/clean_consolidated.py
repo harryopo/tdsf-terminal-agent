@@ -7,6 +7,11 @@ scripts/clean_consolidated.py — 合并知识库全量清洗（TDSF 2026-08-31�
 后续中文翻译」。直接改写 knowledge-preview/ 合并 md（27 个文件，7 分类），
 章节级 + 内容级清洗，幂等可重跑。
 
+〇、整源文件排除（2026-08-31 二期，用户拍板删 Python+Rust 源）：
+    frontmatter source ∈ _EXCLUDED_SOURCES（python-docs/rust-docs，纯语言
+    API 文档，与 Linux 教学定位无关，52 万字）→ --apply 时直接删除该文件，
+    --scan 时报告。
+
 一、章节级删除（整章 `## 序号. xxx` 到下一个 `##` 前）：
     1. 语言变体整章（Gentoo Wiki 翻译页漏网，之前只过滤了 _(Español)）：
        FAQ（德语）/FAQ（韩语）/FAQ（俄语）... 及外文后缀
@@ -17,6 +22,11 @@ scripts/clean_consolidated.py — 合并知识库全量清洗（TDSF 2026-08-31�
        Guidelines / httpd Modules / Flood / Reporting Security /
        Verifying Apache HTTP Server Releases
     3. Apache 版本索引页（标题形如「Apache 2.0 文档」「Apache 2.2 文档」）
+    4. Git 官网纯导航章节（精确标题：外部链接 / Git 托管 / GUI 客户端 /
+       学习——全是链接列表，零命令知识，2026-08-31 二期实测确认）
+    5. 同页多变体重复章节：章节来源 URL 归一（去 .txt/.raw/.en 后缀）后
+       与已保留章节撞车 → 删后者（如 intro.2 / intro.2.txt / intro.2.raw
+       三变体只留首见者）
 
 二、内容级清洗（每个保留章节内，代码围栏保护）：
     1. 单独成行的 See also / SEE ALSO / **See also**（man/导航残渣）
@@ -25,7 +35,11 @@ scripts/clean_consolidated.py — 合并知识库全量清洗（TDSF 2026-08-31�
     4. 纯链接行（行内容全是 [text](url) 且链接数 >3，如语言切换链接墙）
     5. 模板导航行：This page is part of the ... documentation /
        Please send any comments to ...
-    6. 行尾空白 + 连续空行压 1（围栏保护）
+    6. ArchWiki 页头导航残渣（2026-08-31 二期，一期只处理了 Gentoo 漏了
+       Arch，实测 165 行）：From ArchWiki / (Redirected from ...) /
+       Retrieved from ... 单独行；「Related articles」行及其后连续的
+       相对 wiki 链接列表项（/title/... /index.php...，遇其他内容即止）
+    7. 行尾空白 + 连续空行压 1（围栏保护）
 
 三、清洗后：
     1. 章节序号重排 1..N
@@ -62,6 +76,11 @@ CATEGORY_DIR_NAMES: list[str] = [
     "安全加固",
     "服务部署",
 ]
+
+# 整源排除（2026-08-31 二期，用户拍板）：纯语言 API 文档与 Linux 教学
+# 定位无关（python 12.7 万字 34% 是版本索引导航页 / rust 39.2 万字）。
+# frontmatter source 命中 → --apply 直接删文件、--scan 报告。
+_EXCLUDED_SOURCES: frozenset[str] = frozenset({"python-docs", "rust-docs"})
 
 # ============================================================================
 # 章节级删除规则
@@ -105,15 +124,25 @@ _APACHE_KEYWORDS_PREFIXES: tuple[str, ...] = (
 # Apache 版本索引页（纯版本入口，无教学内容）
 _APACHE_INDEX_RE = re.compile(r"^Apache 2\.\d 文档$")
 
+# Git 官网纯导航章节（2026-08-31 二期实测：外部链接=教程/书籍/视频链接墙，
+# Git 托管=链接文本全是 XML 解析残渣的托管站列表，GUI 客户端/学习=资源列表；
+# 零命令知识，对检索纯噪音）。精确匹配防误伤（如 K8s「学习环境」是正文）。
+_GIT_NAV_TITLES: frozenset[str] = frozenset(
+    {"外部链接", "Git 托管", "GUI 客户端", "学习"}
+)
+
 
 def is_junk_chapter_title(title: str) -> bool:
-    """章节标题是否垃圾（语言变体 / Apache Keywords 页 / Apache 版本索引页）
+    """章节标题是否垃圾（语言变体 / Apache Keywords 页 / Apache 版本索引页 /
+    Git 纯导航章节）
 
     保守原则：只删明确实锤模式，不确定的标题保留。
     """
     t = (title or "").strip()
     if not t:
         return False
+    if t in _GIT_NAV_TITLES:
+        return True
     if _APACHE_INDEX_RE.match(t):
         return True
     if any(lang in t for lang in _LANG_NAMES):
@@ -121,6 +150,31 @@ def is_junk_chapter_title(title: str) -> bool:
     if t.startswith("要点 ·"):
         return any(t.startswith(p) for p in _APACHE_KEYWORDS_PREFIXES)
     return False
+
+
+# 章节来源注释格式：`<!-- 来源: <source> | <url> -->`
+_SOURCE_COMMENT_RE = re.compile(r"^<!--\s*来源:\s*([^|]*?)\s*\|\s*(.*?)\s*-->$")
+# 同一页面的格式变体后缀（爬虫重复抓取实锤：intro.2 / intro.2.txt /
+# intro.2.raw 三章内容同源；.raw 是未渲染 troff 源码）。归一后撞车即重复。
+_URL_VARIANT_SUFFIX_RE = re.compile(r"\.(txt|raw|en)$")
+
+
+def section_source_url(section_lines: list[str]) -> str:
+    """章节来源 URL（首条 `<!-- 来源 -->` 注释），无则空串"""
+    for ln in section_lines:
+        m = _SOURCE_COMMENT_RE.match(ln.strip())
+        if m:
+            return m.group(2)
+        if ln.strip() and not ln.startswith(("##", "<!--", "---")):
+            break  # 已进正文仍无来源注释，不再找
+    return ""
+
+
+def normalize_source_url(url: str) -> str:
+    """URL 归一：去格式变体后缀 + 去尾斜杠（仅路径比较，保守不动 query）"""
+    base, sep, query = url.partition("?")
+    base = _URL_VARIANT_SUFFIX_RE.sub("", base).rstrip("/")
+    return base + (sep + query if query else "")
 
 
 # ============================================================================
@@ -152,6 +206,13 @@ _TEMPLATE_LINE_RES = (
 # 且链接数 >3（<3 个链接的引用行保留，防误伤正常文档引用）
 _LINK_FARM_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+\.)?\s*(?:\[[^\]]*\]\([^)]*\)\s*)+$")
 
+# Git 文档站命令索引导航列表项（`- [cat-file](/docs/git-cat-file)`）：
+# 单行 1 个链接不算（防误伤），连续 ≥_GIT_NAV_MIN_RUN 行才整段丢
+_GIT_NAV_ITEM_RE = re.compile(
+    r"^\s*[-*]\s*\[[^\]]+\]\(/docs/[^)]*\)\s*$"
+)
+_GIT_NAV_MIN_RUN = 3
+
 # Gentoo Wiki 页头模板导航残渣（TDSF 2026-08-31 实测：全库 6+ 处，
 # 语言切换链接墙对中文翻译无价值）
 _FROM_GENTOO_RE = re.compile(r"^\s*From Gentoo Wiki\s*$")
@@ -170,6 +231,18 @@ _LANG_SWITCH_LINE_RE = re.compile(
     r"^\s*[-*]\s+"
     r"(?:\[(?:" + "|".join(map(re.escape, _LANG_SWITCH_NAMES)) + r")[^\]]{0,3}\]\(.*"
     r"|(?:" + "|".join(map(re.escape, _LANG_SWITCH_NAMES)) + r"))\s*$"
+)
+
+# ArchWiki 页头导航残渣（2026-08-31 二期实测 6 个 Arch 合并文件 165 行；
+# 一期 Gentoo 规则漏掉 Arch 形态）
+_FROM_ARCHWIKI_RE = re.compile(r"^\s*From ArchWiki\s*$")
+_REDIRECTED_RE = re.compile(r"^\s*\(Redirected from .*\)\s*$")
+_RETRIEVED_RE = re.compile(r"^\s*Retrieved from .*$")
+_RELATED_ARTICLES_RE = re.compile(r"^\s*Related articles\s*$")
+# Related articles 块内的列表项：单行全由相对 wiki 链接构成
+# （/title/Xxx 或 /index.php?title=...），绝对外链不算（防误伤正文引用）
+_RELATED_LINK_ITEM_RE = re.compile(
+    r"^\s*[-*]\s+(?:\[[^\]]*\]\((?:/title/|/index\.php)[^)]*\)\s*)+$"
 )
 
 
@@ -192,6 +265,12 @@ def _is_junk_line(line: str) -> bool:
         return True
     if _FROM_GENTOO_RE.match(line):
         return True
+    if _FROM_ARCHWIKI_RE.match(line):
+        return True
+    if _REDIRECTED_RE.match(line):
+        return True
+    if _RETRIEVED_RE.match(line):
+        return True
     if _OTHER_LANGS_RE.match(line):
         return True
     if _AVAILABLE_LANGS_RE.match(line):
@@ -212,6 +291,8 @@ def clean_section_lines(lines: list[str]) -> list[str]:
     in_fence = False
     fence_marker = ""
     blank_run = 0
+    in_related = False  # ArchWiki「Related articles」导航块跳过态
+    git_nav_buf: list[str] = []  # Git 导航链接列表缓冲（凑够阈值才整段丢）
     for line in lines:
         stripped = line.lstrip()
         # 代码围栏（``` / ~~~）内一律原样保留
@@ -230,10 +311,31 @@ def clean_section_lines(lines: list[str]) -> list[str]:
         if in_fence:
             out.append(line)
             continue
+        if in_related:
+            # 块内：空行与相对 wiki 链接列表项继续跳；其他内容 → 退出块态
+            if not stripped or _RELATED_LINK_ITEM_RE.match(line):
+                continue
+            in_related = False
+        if _RELATED_ARTICLES_RE.match(line):
+            in_related = True
+            continue
         if _is_junk_line(line):
             # 垃圾行跳过但不重置空行计数：前后段落边界（如围栏后空行）
             # 在下一个非空行 flush 时保留 1 个，避免段落粘连
             continue
+        # Git 文档站的纯导航链接列表段（2026-08-31 三期：restore/init 章节
+        # 混入的 `- [cat-file](/docs/git-cat-file)` 命令索引列表）：
+        # 连续 ≥_GIT_NAV_MIN_RUN 行相对 /docs/ 链接列表项 → 整段丢弃；
+        # 不足阈值（1-2 行）视为正常引用保留。缓冲到段尾再决定。
+        if _GIT_NAV_ITEM_RE.match(line):
+            git_nav_buf.append(line)
+            continue
+        if git_nav_buf:
+            if len(git_nav_buf) >= _GIT_NAV_MIN_RUN:
+                pass  # 整段丢弃：直接不输出
+            else:
+                out.extend(git_nav_buf)  # 少量引用行回填
+            git_nav_buf = []
         stripped_r = line.rstrip()
         if not stripped_r:
             blank_run += 1
@@ -242,6 +344,11 @@ def clean_section_lines(lines: list[str]) -> list[str]:
             out.append("")
             blank_run = 0
         out.append(stripped_r)
+    # 循环结束：未 flush 的 git 导航缓冲按同一阈值规则处理
+    if git_nav_buf:
+        if len(git_nav_buf) < _GIT_NAV_MIN_RUN:
+            out.extend(git_nav_buf)
+        git_nav_buf = []
     # 尾部连续空行压到 1 个
     while out and not out[-1]:
         out.pop()
@@ -325,10 +432,19 @@ def clean_consolidated_text(text: str) -> tuple[str, dict]:
     }
 
     kept: list[dict] = []
+    seen_urls: set[str] = set()  # 归一后来源 URL（同页多变体去重）
     for sec in sections:
         if is_junk_chapter_title(sec["title"]):
             stats["removed_chapters"].append((sec["num"], sec["title"]))
             continue
+        url = section_source_url(sec["lines"])
+        if url:
+            key = normalize_source_url(url)
+            if key in seen_urls:
+                stats["removed_chapters"].append((sec["num"], sec["title"]))
+                stats["duplicate_removed"] = stats.get("duplicate_removed", 0) + 1
+                continue
+            seen_urls.add(key)
         body = clean_section_lines(sec["lines"])
         # 章节正文 = 标题行 + 注释行 + 内容；清洗后仅剩标题/注释视为空章节删
         non_meta = [ln for ln in body if not ln.startswith("<!-- 来源:") and ln.strip()]
@@ -457,6 +573,7 @@ def scan_dir(preview_dir: Path) -> dict:
     """全量扫描：返回分类统计 {file, junk_chapters, junk_lines, lang_residue, ...}"""
     report: dict = {
         "files": 0,
+        "excluded_files": [],     # [(relpath, source)] 整源排除（待删文件）
         "junk_chapters": [],      # [(relpath, num, title)]
         "junk_lines": 0,
         "lang_residue": [],       # [(relpath, title, lang)]
@@ -470,8 +587,11 @@ def scan_dir(preview_dir: Path) -> dict:
         text = md_path.read_text(encoding="utf-8")
         meta, head, sections = split_document(text)
         report["files"] += 1
-        report["total_chapters"] += len(sections)
         rel = str(md_path.relative_to(preview_dir))
+        if meta.get("source", "") in _EXCLUDED_SOURCES:
+            report["excluded_files"].append((rel, meta.get("source", "")))
+            continue
+        report["total_chapters"] += len(sections)
         for sec in sections:
             if is_junk_chapter_title(sec["title"]):
                 report["junk_chapters"].append((rel, sec["num"], sec["title"]))
@@ -543,6 +663,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.scan:
         report = scan_dir(preview_dir)
         print(f"扫描文件数: {report['files']}  总章节: {report['total_chapters']}")
+        print(f"\n== 整源排除（待删文件）: {len(report['excluded_files'])} ==")
+        for rel, src in report["excluded_files"]:
+            print(f"  [{src}] {rel}")
         print(f"\n== 章节级垃圾: {len(report['junk_chapters'])} ==")
         for rel, num, title in report["junk_chapters"]:
             print(f"  [{rel}] ## {num}. {title}")
@@ -560,8 +683,26 @@ def main(argv: list[str] | None = None) -> int:
 
     total_removed = 0
     total_removed_lines = 0
+    total_excluded = 0
     for md_path in sorted(preview_dir.rglob("*.md")):
         text = md_path.read_text(encoding="utf-8")
+        fm = _FRONTMATTER_RE.match(text)
+        src = ""
+        if fm:
+            for line in fm.group(1).splitlines():
+                if line.startswith("source: "):
+                    src = line.split(": ", 1)[1].strip()
+                    break
+        if src in _EXCLUDED_SOURCES:
+            total_excluded += 1
+            if not args.dry_run:
+                md_path.unlink()
+                print(f"excluded: {md_path.relative_to(preview_dir)} "
+                      f"(整源 [{src}] 删除，用户拍板 2026-08-31)")
+            else:
+                print(f"[dry-run] excluded: {md_path.relative_to(preview_dir)} "
+                      f"(整源 [{src}] 待删)")
+            continue
         new_text, stats = clean_consolidated_text(text)
         if new_text != text:
             total_removed += len(stats["removed_chapters"])
@@ -579,7 +720,8 @@ def main(argv: list[str] | None = None) -> int:
                       f"删 {stats['removed_lines']} 行)")
         else:
             print(f"clean:   {md_path.relative_to(preview_dir)} (无变化)")
-    print(f"\n总计: 删除章节 {total_removed} 个, 删除行 {total_removed_lines}")
+    print(f"\n总计: 删除章节 {total_removed} 个, 删除行 {total_removed_lines}, "
+          f"整源删除文件 {total_excluded} 个")
     return 0
 
 
