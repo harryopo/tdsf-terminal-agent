@@ -276,6 +276,22 @@ class TestModeAwarePrompt:
         prompt = self._compose(AgentMode.CONFIRM, teach=False)
         assert "概念与原理" not in prompt
 
+    # TDSF 2026-08-31 (任务C 环境感知前置): 任何模式/开关下系统提示都必须含
+    # 前置感知流程约束（用户钦定方向——agent 回答前先确认环境再行动）
+    def test_env_awareness_section_always_present(self):
+        for mode in AgentMode:
+            for teach in (False, True):
+                prompt = self._compose(mode, teach)
+                assert "环境感知前置" in prompt, f"mode={mode}, teach={teach}"
+                # ① SSH → 远程 Linux 服务器（按发行版）
+                assert "远程 Linux 服务器" in prompt
+                # ② 仅本地终端 → Windows 本地环境
+                assert "Windows 本地环境" in prompt
+                # ③ 无终端会话 → 引导用户打开
+                assert "引导用户" in prompt
+                # 指向注入区数据源
+                assert "<environment>" in prompt or "live_context" in prompt
+
     def test_no_delegation_instructions_left(self):
         """委派指令段已删除：任何模式的 prompt 都不含子 agent 委派说明"""
         for mode in AgentMode:

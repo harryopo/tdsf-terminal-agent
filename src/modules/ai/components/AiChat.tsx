@@ -809,6 +809,19 @@ const RenderedPart = memo(function RenderedPart({
     part.type === "dynamic-tool" ||
     (typeof part.type === "string" && part.type.startsWith("tool-"))
   ) {
+    // TDSF 2026-08-31 (问题1修复): Teach 教学模式下不渲染命令预测卡片——
+    // suggest_command 的 SuggestCommandCard（含"预测回显"）属于终端补全链路
+    // UI，教学契约由 TeachCard 的「操作示例」命令块承担（复制/插入按钮齐全）。
+    // 双保险的后端配套：教学皮肤 prompt 已明令"严禁调用 suggest_command"。
+    // （过滤在 RenderedPart 分支处做——RenderedTool 内有 useCallback Hook，
+    //   early return 会触发 rules-of-hooks。）
+    const toolName =
+      part.type === "dynamic-tool"
+        ? part.toolName
+        : part.type.replace(/^tool-/, "");
+    if (toolName === "suggest_command" && useChatStore.getState().teach) {
+      return null;
+    }
     return (
       <RenderedTool
         part={part as unknown as AnyToolPart}

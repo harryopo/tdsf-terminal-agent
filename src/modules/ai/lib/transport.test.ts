@@ -167,14 +167,33 @@ const makeBlock = (over: Partial<TerminalBlock> = {}): TerminalBlock => ({
 });
 
 describe("formatEnvironmentBlock — <environment> 分区", () => {
-  it("输出发行版/内核/cwd/shell", () => {
-    const block = formatEnvironmentBlock(makeProbe(), makeLive({ cwd: "/etc/nginx" }));
+  it("输出连接模式（置顶）+ 发行版/内核/cwd/shell", () => {
+    const block = formatEnvironmentBlock(
+      makeProbe(),
+      makeLive({ cwd: "/etc/nginx", sshConnection: "root@192.168.45.130" }),
+    );
     expect(block).toContain("<environment>");
+    // TDSF 2026-08-31 (任务C 环境感知): connection_mode 置顶 + ssh_target
+    expect(block).toContain("connection_mode: ssh");
+    expect(block).toContain("ssh_target: root@192.168.45.130");
     expect(block).toContain("os_pretty_name: CentOS Linux 7 (Core)");
     expect(block).toContain("kernel: 3.10.0-1160.el7.x86_64");
     expect(block).toContain("cwd: /etc/nginx");
     expect(block).toContain("shell: /bin/bash");
     expect(block).toContain("</environment>");
+    // 连接模式是首行（agent 优先读到环境口径）
+    expect(block?.indexOf("connection_mode")).toBeLessThan(
+      block?.indexOf("os_pretty_name") ?? Infinity,
+    );
+  });
+
+  it("无 SSH 连接 → connection_mode: local，无 ssh_target", () => {
+    const block = formatEnvironmentBlock(
+      makeProbe(),
+      makeLive({ cwd: "C:\\proj", sshConnection: null }),
+    );
+    expect(block).toContain("connection_mode: local");
+    expect(block).not.toContain("ssh_target");
   });
 
   it("probe=null（探测失败降级）返回 null", () => {
@@ -187,13 +206,16 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
     ).toBeNull();
   });
 
-  it("字段全空的 probe 返回 null（不输出空标签）", () => {
-    expect(
-      formatEnvironmentBlock(
-        makeProbe({ os_pretty_name: "", kernel: "", shell: "" }),
-        makeLive(),
-      ),
-    ).toBeNull();
+  it("字段全空的 probe 仍输出 connection_mode（环境口径兜底）", () => {
+    // TDSF 2026-08-31: probe ok 但字段全空时，connection_mode 仍有价值
+    // （agent 至少知道本地/SSH 口径）；其余字段省略
+    const block = formatEnvironmentBlock(
+      makeProbe({ os_pretty_name: "", kernel: "", shell: "" }),
+      makeLive(),
+    );
+    expect(block).toContain("<environment>");
+    expect(block).toContain("connection_mode: local");
+    expect(block).not.toContain("os_pretty_name");
   });
 });
 

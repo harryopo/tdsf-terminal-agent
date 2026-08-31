@@ -574,6 +574,12 @@ export function formatEnvironmentBlock(
 ): string | null {
   if (!probe || !probe.ok) return null;
   const lines: string[] = [];
+  // TDSF 2026-08-31 (任务C 环境感知): 连接模式（ssh/local）置顶——agent 据此
+  // 决定回答口径（SSH → 远程 Linux 服务器 / 仅本地 → Windows PowerShell 语法）。
+  // 发行版(os_pretty_name)/cwd 已有；ssh_target 供 agent 自然表达连接对象。
+  const isSsh = Boolean(live.sshConnection);
+  lines.push(`connection_mode: ${isSsh ? "ssh" : "local"}`);
+  if (isSsh) lines.push(`ssh_target: ${live.sshConnection}`);
   if (probe.os_pretty_name) lines.push(`os_pretty_name: ${probe.os_pretty_name}`);
   if (probe.kernel) lines.push(`kernel: ${probe.kernel}`);
   if (live.cwd) lines.push(`cwd: ${live.cwd}`);
