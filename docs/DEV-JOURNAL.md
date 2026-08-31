@@ -2022,3 +2022,30 @@ P2（中优先级 — 清理 + 文档）：
 
 **复盘**：做对——先 grep to_simplified 全部引用再删（测试同步改断言零遗漏）；FTS5 虚拟表不能 ALTER 列的约束第一时间确认（DROP+回填方案保数据）；philosophy 语料"读内容后按实际质量取舍"严格执行（12 文件只收 4 个，个人课程对照全剔除）。改进——翻译规模估算失准（任务估 1-3 小时，实测 10 小时量级，应在冒烟后立即修正预期并告知用户）；长度校验下限 30% 对代码占比高的手册页过严（产生少量重试浪费，可后续按代码块占比动态放宽）。
 
+### 37.85 知识库大整合：7 分类 × ≤5 合并 md + 分块重建（2026-08-31 ✅）
+
+**任务目标**（用户钦定）：7 个分类目录不变，每目录内合并成 ≤5 个大 md（内容相似合并、格式整洁，方便 RAG 检索与人工阅读）；db 才是 RAG 主体，合并文件入库层按标题边界分块（块 title=`合并文件名 · 章节标题`，url=合并文件逻辑 id，检索命中块 → get_doc 按 url 聚合还原完整文档）。
+
+**映射表**（`scripts/consolidate_knowledge.py` 内置 CONSOLIDATED_DOCS，23 合并文件 + philosophy 4 篇独立 = 27）：
+- 服务部署 4：Web 服务器（Nginx 与 Apache）76 页 / 数据库（MariaDB 与 Redis）84 / 容器运行时（Docker）49 / 容器编排（Kubernetes）44
+- 命令与工具 5：Bash 与 Shell 手册 23 / Git 版本控制 42 / Python 官方文档 31 / Rust 语言与工具链 44 / Linux man 手册精选（systemd-docs 实为 man 手册页）37
+- 安全加固 3：SELinux 与强制访问控制 45 / netfilter 与 iptables 38 / firewalld 防火墙 21
+- 系统管理 2：DNF 包管理器 25 / 系统启动、内核与 systemd（Arch Wiki，sys-admin 整类）31
+- 基础概念 5（archwiki basic-ops 48 条按 title 分组）：网络基础 8 / 安全与访问控制 7 / 系统核心概念 18 / 存储与引导 4 / 桌面与终端应用 11
+- 网络与远程 4（ssh-docs 44 条按 title 分组）：OpenSSH 客户端与服务器 14 / 终端与 Shell 工具手册 15 / 压缩与 X11 工具手册 11 / 网络与 VPN 工具手册 4
+- Linux哲学与命令对照：philosophy 4 篇保持独立（load_philosophy_docs 负责，不参与合并）
+
+**方案与实现**：
+1. `scripts/consolidate_knowledge.py`：读 rag.db 官方条目按映射表合并（assign_doc 三种规则：整源 sources / archwiki 按 require_category 整类 / title 精确列表；**fail-closed**——任何条目未命中即 SystemExit 防漏）。合并文件 = frontmatter（source=主来源（字符数最多者）/category/url=`consolidated/<category>/<中文文件名>`/zh_title/summary_zh/sources_count）+ `# 大标题` + **目录** + 各来源章节（`## 序号. 标题`、`<!-- 来源: source | url -->` 注释、章节间 `---`）。格式整理四件套：demote_headings（来源内标题降 3 级围栏保护 6 级封顶——保证分块边界只落在 ## 来源章节）/ strip_leading_duplicate_heading / dedupe_adjacent_headings / collapse_blank_lines（围栏内不碰）。**中文标题组内重复时追加英文原标题消歧**（Apache 多页 LLM 译文撞车「要点」→「要点 · Apache Development Notes」）
+2. `scripts/rebuild_from_consolidated.py`：读 knowledge-preview 合并 md → parse_frontmatter → delete_by_url(consol-) → `_chunk_markdown` 分块（复用，块 title=`合并标题 · 章节标题`，导语段一级标题与合并标题相同时后缀去重）→ add（id=`consol-<uuid5(url)>-<seq>` 保序、min_chars=30、category/source 沿用 frontmatter）→ doc_titles_zh upsert（zh=合并中文标题，summary_zh=frontmatter 摘要——非 LLM 版，LLM 精修可后续跑 gen_titles_zh.py）。全量模式 rag.rebuild() 清空 + load_philosophy_docs 补齐；--file 单文件幂等模式
+3. `export_knowledge_md.py` 适配一级目录：`<分类>/<文件名>.md`（合并文件名 = url 最后段；zh_title 与正文自带 `# 大标题` 同文本时不再重复插入标题行）
+4. 前端 **零改动**：list_files/get_doc 按 url 聚合语义不变，搜索命中块 title 即「合并文件名 · 章节标题」；vitest src/modules/ai 321 全绿（KnowledgeBrowser 24）
+
+**终态统计**：knowledge-preview = 7 目录 × ≤5 = **27 文件**；rag.db = **4885 块**（4777 合并块 + 108 philosophy 块），27 个文件级文档（list_files 口径），errors=0。字符量：合并后 5,075,290 vs 原 5,093,610（**缩水 0.4%**，红线 20%）；分块 4872 次 add 调用中 95 块被同 content 去重跳过（净入库 4777）。
+
+**报错与修改**：①`_make_entry(entry_id=...)` 字段名错（KnowledgeEntry 是 `id`）→ 修正；②dedupe_adjacent_headings 空行误清「相邻」状态 → 空行保持、仅非空正文重置；③测试断言与来源章节排序（title.lower()）不符 → 修断言；④导语块 title 出现「Test 合并 · Test 合并」重复后缀 → heading==title 时去重；⑤**consolidate 二跑 fail-closed 拦截**（db 已是合并块结构，873 条未命中映射）→ 合并/重建是单向管道，给 consolidate 加「db 已含 consolidated/ 条目即拒绝」防误操作保护；⑥**sidecar auto-init 并发污染**：第一次 rebuild 清库后，运行中的旧 sidecar 实例检测 official==0 触发后台全量爬取，22 条 bash-docs 爬虫条目（id=bash-docs-*）在重建窗口混入并被 export 进预览目录 → 精确删除（id 非 consol- 前缀的官方源条目走 RagIndex.delete 三表同步）+ 重导出。**运维铁律沉淀：知识库重建（rag.rebuild 类全清操作）前必须关闭 TDSF 应用**——清库窗口会触发 sidecar 的 KB auto-init 自动重爬污染。
+
+**门禁**：pytest 全量 **1849** RC=0 ✅（新增 test_knowledge_consolidate.py 19）｜vitest src/modules/ai 321 ✅｜tsc / eslint --max-warnings 0 ✅（Python 改动不涉及前端源码）。
+
+**复盘**：做对——映射表先用临时脚本从 db dump 生成精确 title 分组再固化（避免手打 Unicode 变体出错）；archwiki 直接复用 db 已有 category 分组而非自造 title 规则；fail-closed 全覆盖校验第一时间抓住"db 已是合并结构"的二跑误操作；RAG 检索冒烟（3 组 query 命中块 → get_doc 聚合 → title_zh）端到端验证。改进——①首次合并未消歧导致返工一轮（应先抽查一份合并文件再全量重建 db，可省一次全量重放）；②任务预期「总块数应明显少于 682」与「复用 _chunk_markdown（1200 字上限）+ 字符不缩水 20%」三者数学上不可兼得（5.1M 字符 ÷1200 ≈ 4300 块下限）——实测 4777 块是检索粒度正确选择（每块 ≤1200 字嵌入覆盖完整 vs 旧整页 12000 字嵌入只看前 2000 字），提前识别并报告可避免预期落差。
+

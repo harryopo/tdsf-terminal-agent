@@ -4232,3 +4232,18 @@ CDP 全新状态实测通过。commit 见上。
 - 测试：test_knowledge_crawler_bfs.py（+zh 变体放行转简/wiki 命名空间/质量门槛/12000 合并/epub+二进制防护/查询串）、test_clean.py（+语言导航/侧栏/繁简）、test_crawlers.py（mock 页 ≥500 字）、test_knowledge_aggregate.py（summary_zh 断言同步）
 
 **终态**：rag.db = 623 条 391 万字符（原 781 条），全库 ≥500 字/条、均值 6254 字，零外语/繁体/命名空间/epub 残留；zh_TW 2 条已转简并带「源自繁体」tag；中文摘要 623/623。**待用户**：重启应用看知识库（详情弹窗摘要条）+ 浏览 knowledge-preview/；**遗留债**：BFS 内 _fetch_single 冗余 parse+to_entries 双解析（日志噪音来源，未动）。
+
+### 37.85 知识库大整合交接章（2026-08-31 ✅）
+
+**当前形态**（用户钦定「7 分类不变、每分类 ≤5 大 md」已落地）：
+- `knowledge-preview/` = 7 目录 × ≤5 = **27 个合并 md**（服务部署 4 / 命令与工具 5 / 安全加固 3 / 系统管理 2 / 基础概念 5 / 网络与远程 4 / Linux哲学与命令对照 4 篇 philosophy 独立）
+- `rag.db` = **4885 块**（4777 合并块 + 108 philosophy 块），文件级 27 个文档；合并块 id=`consol-<hash>-<seq>`、url=`consolidated/<category>/<中文文件名>.md`、块 title=`合并中文标题 · 章节标题`
+- 检索链路：hybrid_search 命中块 → get_doc(url) 聚合完整文档 → 前端显示中文标题/摘要——前端 **零改动**（vitest 321 绿）
+
+**改动文件**：`scripts/consolidate_knowledge.py`（新，映射表 CONSOLIDATED_DOCS + 合并生成）、`scripts/rebuild_from_consolidated.py`（新，分块重建）、`scripts/export_knowledge_md.py`（适配一级目录）、`tests/test_knowledge_consolidate.py`（新，19 测试）
+
+**三脚本管道（单向，勿逆跑）**：①`consolidate_knowledge.py`（原始条目 → 合并 md；db 已是合并结构时拒绝）→ ②`rebuild_from_consolidated.py`（合并 md → 分块重建 db；幂等）→ ③`export_knowledge_md.py`（db → 预览导出；幂等校验）。重新合并需先 `rebuild_knowledge.py --crawl-all --offline` 恢复原始条目。
+
+**⚠️ 运维铁律**：跑任何 rag 全清重建（rebuild/rebuild_from_consolidated）前**必须关闭 TDSF 应用**——清库窗口会触发 sidecar 的 KB auto-init（official==0 → 后台全量爬取）并发写入污染（本次实测混入 22 条爬虫条目，已清除）。
+
+**门禁**：pytest 1849 ✅｜vitest src/modules/ai 321 ✅｜tsc/eslint ✅。**遗留问题**：①doc_titles_zh 部分中文标题质量差（「要点」×N 已用英文消歧兜底；「Optional line:」等坏标题需 gen_titles_zh.py LLM 重生成）；②合并块 4777 > 原 682 条目数（检索粒度换嵌入覆盖完整性，符合入库层分块设计，非回归）；③content_zh 译文未迁移（原 682 条的逐条译文与合并块结构不对应，中文译文检索待翻译管线适配合并结构后重建）。
