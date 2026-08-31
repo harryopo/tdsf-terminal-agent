@@ -59,6 +59,7 @@ import {
 } from "@/modules/ai/lib/knowledge-cache";
 import {
   categoryGroupLabel,
+  plainSummary,
   sourceGroupLabel,
 } from "@/modules/ai/lib/knowledge-labels";
 import {
@@ -898,11 +899,12 @@ export function KnowledgeDetailDialog({
                 )}
               </div>
               {/* TDSF 魔改 2026-08-30: 中文摘要条（doc_titles_zh.summary_zh，
-                  gen_titles_zh.py 离线 LLM 生成；无摘要不占位） */}
+                  生成端已清洗；plainSummary 前端兜底剥残留 markdown 符号，
+                  TDSF 2026-08-31 用户实测反馈摘要以 ###/--- 开头） */}
               {doc.summary_zh && (
                 <div className="rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground/80">摘要：</span>
-                  {doc.summary_zh}
+                  {plainSummary(doc.summary_zh)}
                 </div>
               )}
               {/* TDSF 魔改 2026-08-18: 完整 md 渲染（MessageResponse = Streamdown），

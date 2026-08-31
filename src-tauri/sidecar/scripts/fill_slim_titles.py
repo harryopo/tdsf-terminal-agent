@@ -75,8 +75,46 @@ def _doc_name_from_consolidated_url(url: str) -> str | None:
     return None
 
 
+# 摘要清洗：markdown 语法符号剥离模式（用户实测反馈摘要以 ###/---/> 开头）
+_MD_NOISE_RE = re.compile(
+    r"```.*?```"          # 代码块整体删除（摘要里放命令堆无意义）
+    r"|^#{1,6}\s*"        # 标题前缀 ##/###
+    r"|^>\s?"             # 引用前缀
+    r"|^[-*]\s"           # 列表符
+    r"|^\|[-: |]+\|"      # 表格分隔行 |---|---|
+    r"|\|"                # 表格竖线
+    r"|`"                 # 行内代码反引号
+    r"|\*\*?"             # 粗体/斜体星号
+    r"|^\-{3,}\s*$",      # 分隔线 ---
+    re.M,
+)
+
+
 def _clean_summary(text: str) -> str:
-    """首块正文 → 单行摘要（压空白 + 截 100 字）"""
+    """首块正文 → 单行纯文本摘要（跳过开头标题/引用行 + 剥 markdown + 截 100 字）
+
+    实测教训：首块常以「## 30. 概述」「## sftp-server ...」等标题行开头，
+    只剥符号会把"30. 概述"留作摘要开头——先跳过开头的标题/引用/分隔行，
+    从首个叙述性正文行取摘要。
+    """
+    lines = text.splitlines()
+    body: list[str] = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        # 开头的结构行（标题/引用/分隔/表格头）跳过，遇正文段落即停
+        if not body and (
+            re.match(r"^#{1,6}\s", s)
+            or s.startswith(">")
+            or re.match(r"^\|", s)
+            or re.match(r"^-{3,}$", s)
+            or s.startswith("<!--")
+        ):
+            continue
+        body.append(s)
+    text = "\n".join(body) if body else text
+    text = _MD_NOISE_RE.sub(" ", text)
     return _WS_RE.sub(" ", text).strip()[:_SUMMARY_CHARS]
 
 
