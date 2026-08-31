@@ -349,4 +349,33 @@ def register_methods(dispatcher: Any) -> None:
         return {"titles": titles, "total": len(titles)}
 
     dispatcher.register("knowledge.titles_zh", _titles_zh)
-    logger.info("knowledge.* methods registered (13 methods, RAG hybrid)")
+
+    # 精简知识库检索（双库方案 TDSF 2026-08-31：rag_slim.db，LLM 每章提炼
+    # 核心知识点。前端本期不接入——RPC 先行保证检索可用，冒烟脚本验证）
+    def _search_slim(
+        query: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """检索精简知识库（rag_slim.db，hybrid_search 同逻辑）
+
+        Args:
+            query: 查询字符串
+            limit: 返回 top-K（默认 10）
+
+        Returns:
+            {results: [...], total: int, query: str, method: "hybrid_slim"}
+        """
+        if not query or not query.strip():
+            return {"results": [], "total": 0, "query": query, "method": "hybrid_slim"}
+        from knowledge.rag import get_slim_rag
+
+        results = get_slim_rag().hybrid_search(query, top_k=max(1, int(limit)))
+        return {
+            "results": results,
+            "total": len(results),
+            "query": query,
+            "method": "hybrid_slim",
+        }
+
+    dispatcher.register("knowledge.search_slim", _search_slim)
+    logger.info("knowledge.* methods registered (14 methods, RAG hybrid)")
