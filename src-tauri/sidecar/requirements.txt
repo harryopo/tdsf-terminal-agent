@@ -21,6 +21,16 @@ langgraph>=1.0
 # ----------------------------------------------------------------------------
 beautifulsoup4>=4.12
 
+# ----------------------------------------------------------------------------
+# HTML → GFM Markdown 转换（knowledge/crawlers/html2md.py，TDSF 2026-08-30 根因修复）
+#   - 旧 _extract_page 手动拼 h1/h2/h3+段落纯文本，丢失全部 HTML 结构
+#     （<table>→| 文字墙、<ul>/<ol> 粘连、<pre> 无围栏、导航混入）。
+#   - markdownify 实测择优：表格→标准 GFM（| --- | 分隔行）、列表→- /1.、
+#     代码→``` 围栏、标题→ATX #（html2text 表格缺前导 |、代码是 4 空格
+#     缩进，弃用）。
+# ----------------------------------------------------------------------------
+markdownify>=0.13
+
 # LLM 客户端（按需选择，P1-B 默认使用 OpenAI 兼容接口）
 #   - langchain-openai: core/llm_config.py 的 _make_openai_call() 依赖
 #     `from langchain_openai import ChatOpenAI`；缺失会导致 LLM 不可用

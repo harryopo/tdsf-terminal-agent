@@ -13,14 +13,22 @@ iptables/ssh/bash/python/rust/git）提供通用实现。
 - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文合并，
   截断 ~12000 字；TDSF 2026-08-30 用户钦定「一条知识库弄多一些」：
   整页合并一条而非碎片）
-- 质量门槛：正文 < 500 字的页面（纯导航/索引/meta 残页）直接丢弃并计入
-  discarded 日志
-- 繁体内容（zh_TW 手册页）整条丢弃（TDSF 2026-08-30 用户钦定，计数
-  discarded_traditional）
 - 页间 sleep(delay) 限速（离线缓存模式不 sleep）；单页失败（超时 10s/
   非 200/解析空）记 warning 跳过继续；整体 try/except 不向上抛出
 - 单页缓存能力沿用 BaseCrawler._fetch_single（联网成功写缓存、失败读
   缓存、offline 仅读缓存）
+
+正文提取（TDSF 2026-08-30 根因修复，替代旧「手动拼 h1/h2/h3+段落纯文本」）：
+- 旧实现丢失全部 HTML 结构：<table> 变成 | 分隔文字墙、<ul>/<ol> 列表项
+  粘连无换行、<pre> 代码块无围栏、导航 <div> 混进正文 → 用户第 N 轮不满
+- 新实现：html2md.html_to_markdown（语义正文容器 + 噪音剥离 + markdownify
+  → 标准 GFM markdown）→ clean.clean_markdown 行级清洗（保留结构）
+- 页面治理（_filter_reason 统一判定，BFS 与 to_entries 双路共用，各自计数）：
+  ① 垃圾标题（Search/Community/News/About/Index of ...）整条丢弃
+  ② 导航索引页（正文纯链接行占比 >60%，如 Apache 2.0 首页链接墙）丢弃
+  ③ 质量门槛：正文 < 500 字（纯导航/meta 残页）丢弃
+  ④ 繁体内容（zh_TW 手册页，用户钦定）丢弃
+  ⑤ 同 source 内标题完全重复 → 保留最长 content 一条（"要点"×5 问题）
 
 parse()/to_entries() 保留单页章节拆分逻辑（向后兼容与单页解析复用）；
 nginx 专用爬虫通过 crawl_site() 共享同一 BFS 实现。
@@ -38,7 +46,19 @@ from urllib.parse import unquote, urljoin, urlparse
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from knowledge.crawlers.base import BaseCrawler, CrawlerResult
-from knowledge.crawlers.clean import clean_content, looks_traditional
+from knowledge.crawlers.clean import (
+    _slug_to_title,
+    clean_content,
+    clean_markdown,
+    clean_title,
+    is_index_page_title,
+    is_junk_title,
+    is_link_farm,
+    is_section_heading,
+    looks_traditional,
+    title_from_html_title,
+)
+from knowledge.crawlers.html2md import extract_main_container, html_to_markdown
 from knowledge.fts5 import KnowledgeEntry
 
 logger = logging.getLogger("sidecar.knowledge.crawlers.generic")
@@ -147,54 +167,58 @@ class GenericCrawler(BaseCrawler):
         return items
 
     def to_entries(self, items: list[dict[str, Any]]) -> list[KnowledgeEntry]:
-        """转换为 KnowledgeEntry（title/content 入库前清洗 + 质量门槛）
+        """转换为 KnowledgeEntry（title/content 入库前清洗 + 页面治理）
 
-        TDSF 2026-08-30：content < _PAGE_MIN_CHARS 的页面（纯导航/索引
-        残页，如 134 字的 ArchWiki:Statistics）直接丢弃；繁体内容（zh_TW
-        手册页，用户钦定）整条丢弃并计入 discarded_traditional。
+        TDSF 2026-08-30 根因修复：治理判定统一走 _filter_reason（垃圾标题/
+        链接墙/短页/繁体），标题统一走 clean_title（去 .html/.cgi 后缀、
+        空标题 slug 化）；同标题去重保留最长正文。
+        items 带 _md 标记（_extract_page 产出的 markdown）时跳过二次
+        content 清洗（clean_markdown 已在 _extract_page 内完成）。
         """
         entries: list[KnowledgeEntry] = []
-        discarded = 0
-        discarded_traditional = 0
+        counters: dict[str, int] = {
+            "junk-title": 0, "index-page": 0, "link-farm": 0,
+            "short": 0, "traditional": 0,
+        }
         # category_for 延迟导入（sources → crawlers.clean 经包 __init__
         # 会触发 registry → generic 模块级循环，此处函数内导入规避）
         from knowledge.sources import category_for
 
         for i, item in enumerate(items):
-            content = clean_content(item.get("content", ""))
-            # 质量门槛：超短页面丢弃（导航/索引残页无检索价值）
-            if len(content) < _PAGE_MIN_CHARS:
-                discarded += 1
-                continue
+            if item.get("_md"):
+                content = str(item.get("content", ""))
+            else:
+                content = clean_content(item.get("content", ""))
             raw_title = str(item.get("title", ""))
-            title = clean_content(raw_title) or raw_title
+            url = str(item.get("url", self.base_url))
+            title = clean_title(clean_content(raw_title) or raw_title, url)
             tags = list(item.get("tags", self.default_tags))
-            # 繁体检测（TDSF 2026-08-30 用户钦定）：zh_TW 手册页直接丢弃，
-            # 不再繁转简（zh_CN 同源重复、翻译管线只处理英文正文）
-            if looks_traditional(content) or looks_traditional(title):
-                discarded_traditional += 1
+            reason = _filter_reason({"title": title, "content": content})
+            if reason is not None:
+                counters[reason] += 1
+                logger.info(f"[{self.source}] to_entries discard ({reason}): {title!r}")
                 continue
-            entry_id = self.build_entry_id(item, i)
+            entry_id = self.build_entry_id({"title": title, "url": url}, i)
             entries.append(KnowledgeEntry(
                 id=entry_id,
                 source=self.source,
                 title=title,
                 content=content,
-                url=item.get("url", self.base_url),
+                url=url,
                 tags=tags,
                 category=category_for(self.source, title),
             ))
-        if discarded:
+        discarded_total = sum(counters.values())
+        if discarded_total:
             logger.info(
-                f"[{self.source}] to_entries discarded {discarded} short page(s) "
-                f"(<{_PAGE_MIN_CHARS} chars)"
+                f"[{self.source}] to_entries discarded: "
+                f"{counters['junk-title']} junk-title, "
+                f"{counters['index-page']} index-page, "
+                f"{counters['link-farm']} link-farm, "
+                f"{counters['short']} short(<{_PAGE_MIN_CHARS} chars), "
+                f"{counters['traditional']} traditional"
             )
-        if discarded_traditional:
-            logger.info(
-                f"[{self.source}] to_entries discarded_traditional="
-                f"{discarded_traditional} (zh_TW pages dropped)"
-            )
-        return entries
+        return _dedupe_entries(entries, self.source)
 
 
 # ============================================================================
@@ -213,11 +237,12 @@ def crawl_site(
 ) -> CrawlerResult:
     """从 crawler.base_url 出发 BFS 抓取同域页面
 
-    - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文，
-      截断 12000 字）
-    - 质量门槛：正文 < 500 字的页面（纯导航/索引/meta 残页）丢弃，
-      计入 discarded 日志
+    - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文
+      GFM markdown，截断 12000 字）
+    - 页面治理（_filter_reason 统一判定，各类分别计数）：垃圾标题 /
+      导航索引页（链接墙）/ 正文 < 500 字残页 / 繁体内容 → 丢弃
     - Wiki 命名空间标题丢弃（重定向导致 URL 干净但标题为 Help:X 等）
+    - 同标题去重：保留最长 content 一条（"要点"×5 问题）
     - 链接过滤：同域名、去锚点、去资源后缀、去查询串、去语言变体、
       去 Wiki 命名空间/meta 页、visited/queued 去重
     - 单页失败/解析空 → warning 跳过继续；整体 try/except 不抛出
@@ -231,7 +256,10 @@ def crawl_site(
     last_error = ""
     any_success = False
     any_from_cache = False
-    discarded_short = 0
+    counters: dict[str, int] = {
+        "junk-title": 0, "index-page": 0, "link-farm": 0,
+        "short": 0, "traditional": 0,
+    }
     discarded_meta = 0
     is_wiki_host = urlparse(crawler.base_url).netloc.lower() in _WIKI_HOSTS
 
@@ -258,23 +286,25 @@ def crawl_site(
 
             soup = BeautifulSoup(result.html, "html.parser")
             page = _extract_page(soup, url, default_tags)
-            if page is None:
-                logger.warning(f"[{crawler.source}] page parsed empty, skip: {url}")
-            elif is_wiki_host and _is_wiki_namespace_title(page["title"]):
+            keep = True
+            if is_wiki_host and _is_wiki_namespace_title(page["title"]):
                 # 重定向场景：URL 干净但标题为命名空间页（如 Restart→Help:Reading）
                 discarded_meta += 1
+                keep = False
                 logger.info(
                     f"[{crawler.source}] wiki namespace title, discard: "
                     f"{page['title']!r} ({url})"
                 )
-            elif len(page["content"]) < _PAGE_MIN_CHARS:
-                # 质量门槛：纯导航/索引/meta 残页（如 134 字的 Statistics）
-                discarded_short += 1
-                logger.info(
-                    f"[{crawler.source}] page too short "
-                    f"({len(page['content'])} < {_PAGE_MIN_CHARS}), discard: {url}"
-                )
             else:
+                reason = _filter_reason(page)
+                if reason is not None:
+                    counters[reason] += 1
+                    keep = False
+                    logger.info(
+                        f"[{crawler.source}] page discarded ({reason}): "
+                        f"{page['title']!r} ({url})"
+                    )
+            if keep:
                 # category_for 延迟导入（sources → crawlers.clean 经包 __init__
                 # 会触发 registry → generic 模块级循环，此处函数内导入规避）
                 from knowledge.sources import category_for
@@ -306,11 +336,18 @@ def crawl_site(
         logger.exception(f"[{crawler.source}] crawl_site aborted: {e}")
         last_error = last_error or str(e)
 
-    if discarded_short or discarded_meta:
+    entries = _dedupe_entries(entries, crawler.source)
+
+    discarded_total = sum(counters.values()) + discarded_meta
+    if discarded_total:
         logger.info(
             f"[{crawler.source}] crawl_site discarded: "
-            f"{discarded_short} short(<{_PAGE_MIN_CHARS} chars), "
-            f"{discarded_meta} wiki-namespace pages"
+            f"{counters['junk-title']} junk-title, "
+            f"{counters['index-page']} index-page, "
+            f"{counters['link-farm']} link-farm, "
+            f"{counters['short']} short(<{_PAGE_MIN_CHARS} chars), "
+            f"{counters['traditional']} traditional, "
+            f"{discarded_meta} wiki-namespace"
         )
 
     return CrawlerResult(
@@ -512,97 +549,119 @@ def _extract_links(
 
 def _extract_page(
     soup: BeautifulSoup, url: str, tags: list[str]
-) -> dict[str, Any] | None:
-    """单页解析：页面标题 + 整页正文（h1/h2/h3 章节合并），每页 1 条
+) -> dict[str, Any]:
+    """单页解析：标题 + 整页正文（GFM Markdown），每页 1 条
 
-    TDSF 2026-08-30 整页合并增强：
-    - MediaWiki 页以 #mw-content-text 为正文根（排除页头/侧栏导航；
-      此前从整树取 h1 兄弟会把 bodyContent 整个 div 灌进来并在 4000 字
-      截断处混入语言导航/分类残渣）
-    - 首个 header 之前的导语段（p/ul/ol/pre/table 等结构性标签）并入正文
-    - 繁体内容（zh_TW 手册页）整页丢弃（用户钦定，不入库）
+    TDSF 2026-08-30 根因修复（替代旧「手动拼 h1/h2/h3+段落纯文本」）：
+    - 正文 = html2md.html_to_markdown（语义容器 + 噪音剥离 + markdownify
+      → GFM：表格→| --- |、列表→- /1.、代码→``` 围栏、标题→#）
+      再过 clean_markdown 行级清洗（emoji/导航残渣/实体，保留结构）
+    - 标题 = **正文容器内**首个非 man 章节名 h1（排除页头 chrome h1，
+      如 man.openbsd.org 的「OpenBSDmanual page server」；跳过 NAME/
+      SYNOPSIS 等 man 章节名，否则全站同标题被去重误杀）→ 兜底 <title>
+      去站点后缀（"ssh-askpass(1) - OpenBSD manual pages" → ssh-askpass(1)）
+      → 兜底 URL slug；统一 clean_content + clean_title 清洗
+    - 二进制内容防护（控制字符占比 >5% → 正文置空，_filter_reason 丢弃）
+
+    **不再在此处做质量门槛/繁体/垃圾标题/链接墙判定**——统一交给
+    _filter_reason（BFS 与 to_entries 双路共用，各自计数）。
 
     Returns:
-        {title, content, tags}；正文为空返回 None（调用方记 warning 跳过）
+        {title, content, tags, url, _md: True}（content 可为空串，
+        由 _filter_reason 决定去留；_md 标记 markdown 来源，to_entries
+        据此跳过二次清洗）
     """
-    # 页面标题：h1 优先，兜底 <title>，再兜底 URL；统一清洗 emoji/实体
-    h1 = soup.find("h1")
-    if h1 is not None and h1.get_text(strip=True):
-        title = h1.get_text(strip=True)
-    elif soup.title is not None and soup.title.get_text(strip=True):
-        title = soup.title.get_text(strip=True)
-    else:
+    # 正文容器（限定 h1 搜索范围，排除页头/页脚 chrome 标题）
+    container = extract_main_container(soup)
+
+    # 页面标题：容器内首个非 man 章节名 h1 → <title> 去站点后缀 → URL
+    title = ""
+    for h1 in container.find_all("h1"):
+        t = h1.get_text(strip=True)
+        if t and not is_section_heading(t):
+            title = t
+            break
+    if not title:
+        html_title = title_from_html_title(
+            soup.title.get_text(strip=True) if soup.title else ""
+        )
+        slug = _slug_to_title(url)
+        # <title> 首段是品牌级短词（git-scm.com 命令页 "Git - git-branch
+        # Documentation" 首段 "Git"，全站相同）时改用 URL slug（页面级唯一），
+        # 否则全站同标题被去重误杀（实测 git-docs 42→9）。man 站 <title>
+        # 首段是文档名（"ssh(1)"，≥4 字符且每页不同）→ 保留 <title>。
+        if slug and (len(html_title) < 4 or not html_title):
+            title = slug
+        elif html_title:
+            title = html_title
+        else:
+            title = slug
+    if not title:
         title = url
     title = clean_content(title) or title
+    title = clean_title(title, url)
 
-    # 正文根：MediaWiki 用 #mw-content-text（正文容器），其余站点用整树
-    root = soup.find(id="mw-content-text")
-    if root is None:
-        root = soup
-
-    headers = root.find_all(["h1", "h2", "h3"])
-    parts: list[str] = []
-    # 导语段：首个 header 之前的段落/列表/表格（仅结构性标签，
-    # 避免把导航容器 div 灌进来）
-    if headers:
-        lead: list[str] = []
-        for sib in headers[0].find_previous_siblings():
-            if getattr(sib, "name", None) in (
-                "p", "ul", "ol", "pre", "table", "blockquote",
-            ):
-                text = sib.get_text(strip=True)
-                if text:
-                    lead.append(text)
-        if lead:
-            parts.extend(reversed(lead[:10]))
-
-    # 策略 1：h1/h2/h3 章节（标题 + 后续段落；标题行并入正文保持结构）
-    for header in headers:
-        header_title = header.get_text(strip=True)
-        if not header_title or len(header_title) < 2:
-            continue
-        content_parts: list[str] = []
-        for sibling in header.find_next_siblings():
-            if sibling.name in ("h1", "h2", "h3"):
-                break
-            text = sibling.get_text(strip=True)
-            if text:
-                content_parts.append(text)
-        section = (
-            f"{header_title}\n" + "\n".join(content_parts)
-            if content_parts
-            else header_title
-        )
-        parts.append(section)
-
-    # 策略 2：兜底，提取段落
-    if not parts:
-        for p in root.find_all("p")[:80]:
-            text = p.get_text(strip=True)
-            if len(text) > 30:
-                parts.append(text)
-
-    # 策略 3：再兜底，从 div/article 提取
-    if not parts:
-        for div in root.find_all(["div", "article"])[:20]:
-            text = div.get_text(strip=True)
-            if len(text) > 50:
-                parts.append(text[:_PAGE_MAX_CHARS])
-
-    content = clean_content("\n\n".join(parts))
-    if not content:
-        return None
+    # 正文：markdownify → GFM markdown → clean_markdown 行级清洗
+    content = clean_markdown(html_to_markdown(soup))
     # 二进制内容防护：requests 对 .epub/.zip 等二进制响应解码出乱码文本，
     # 控制字符（C0，除 \n\r\t）占比过高判为非 HTML 文档，整页丢弃
-    ctrl = sum(1 for ch in content if ord(ch) < 32 and ch not in "\n\r\t")
-    if ctrl and ctrl / len(content) > 0.05:
-        logger.info(f"binary-looking content ({ctrl}/{len(content)} ctrl chars), skip: {url}")
-        return None
+    if content:
+        ctrl = sum(1 for ch in content if ord(ch) < 32 and ch not in "\n\r\t")
+        if ctrl and ctrl / len(content) > 0.05:
+            logger.info(
+                f"binary-looking content ({ctrl}/{len(content)} ctrl chars), skip: {url}"
+            )
+            content = ""
     if len(content) > _PAGE_MAX_CHARS:
         content = content[:_PAGE_MAX_CHARS]
+    return {"title": title, "content": content, "tags": list(tags), "url": url, "_md": True}
 
+
+# ============================================================================
+# 页面治理统一过滤（TDSF 2026-08-30 根因修复：垃圾页/垃圾标题/链接墙/繁体）
+# ============================================================================
+
+
+def _filter_reason(page: dict[str, Any]) -> str | None:
+    """页面治理统一判定：返回丢弃原因（junk-title/index-page/link-farm/
+    short/traditional）或 None（通过）。BFS（crawl_site）与 to_entries
+    双路共用，各自计数。
+
+    调用前提：page 含 title/content 键（_extract_page 或 parse 产出均可）。
+    """
+    title = str(page.get("title", ""))
+    content = str(page.get("content", ""))
+    if is_junk_title(title):
+        return "junk-title"
+    if is_index_page_title(title):
+        return "index-page"
+    if is_link_farm(content):
+        return "link-farm"
+    if len(content) < _PAGE_MIN_CHARS:
+        return "short"
     # 繁体检测（TDSF 2026-08-30 用户钦定）：zh_TW 手册页直接丢弃，
     # 不再繁转简（zh_CN 同源重复、翻译管线只处理英文正文）
     if looks_traditional(content) or looks_traditional(title):
-        return None
-    return {"title": title, "content": content, "tags": list(tags)}
+        return "traditional"
+    return None
+
+
+def _dedupe_entries(
+    entries: list[KnowledgeEntry], source: str
+) -> list[KnowledgeEntry]:
+    """同标题去重：保留最长 content 一条（"要点"×5 问题，TDSF 2026-08-30）
+
+    保持首次出现顺序（被保留条目放回其标题首次出现的位置）。
+    """
+    by_title: dict[str, KnowledgeEntry] = {}
+    order: list[str] = []
+    for e in entries:
+        if e.title not in by_title:
+            by_title[e.title] = e
+            order.append(e.title)
+        elif len(e.content) > len(by_title[e.title].content):
+            by_title[e.title] = e
+    removed = len(entries) - len(order)
+    if removed:
+        logger.info(f"[{source}] dedupe removed {removed} duplicate title(s)")
+    return [by_title[t] for t in order]
