@@ -20,7 +20,7 @@
 // 消费方：AiComposerInput 工具行、TdsfAgentPanel 头部。
 // ============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import {
@@ -50,26 +50,87 @@ function accentColorClass(mode: AgentMode): string {
     : "text-emerald-500 dark:text-emerald-400";
 }
 
+/** 卡片定位状态：top（向下弹）或 bottom（向上弹）二选一；
+ *  anchorBottom = 触发按钮视口底边（改换弹出方向时用） */
+type MenuPos = {
+  left: number;
+  top?: number;
+  bottom?: number;
+  anchorBottom: number;
+};
+
+/** 视口安全边距（卡片与窗口边缘最小间距） */
+const VIEWPORT_MARGIN = 8;
+
 export function AgentModeSwitcher({ className }: { className?: string }) {
   const agentMode = useChatStore((s) => s.agentMode);
   const setAgentMode = useChatStore((s) => s.setAgentMode);
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
+  const [pos, setPos] = useState<MenuPos | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const meta = AGENT_MODE_META[agentMode];
   const ActiveIcon = MODE_ICON[agentMode];
 
-  // 打开时按 trigger 位置计算 fixed 坐标（向上弹出），点外/Esc 关闭
+  // 打开：按 trigger 位置计算初始坐标（默认向上弹；渲染后 useLayoutEffect 实测校正）
   const openMenu = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setPos({
-        left: rect.left,
-        bottom: window.innerHeight - rect.top + 6,
-      });
-    }
+    if (!rect) return;
+    // 水平预 clamp：估算卡片宽（w-56=224px），防止靠右时伸出窗口
+    const estLeft = Math.max(
+      VIEWPORT_MARGIN,
+      Math.min(rect.left, window.innerWidth - 224 - VIEWPORT_MARGIN),
+    );
+    setPos({
+      left: estLeft,
+      bottom: window.innerHeight - rect.top + 6,
+      anchorBottom: rect.bottom,
+    });
     setOpen(true);
   };
+
+  // 渲染后实测卡片尺寸做自适应校正（一次）：
+  //   水平——按实际宽度 clamp；垂直——向上弹顶部放不下则改向下弹，向下也放不下则贴边
+  useLayoutEffect(() => {
+    if (!open || !menuRef.current) return;
+    const el = menuRef.current;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    setPos((prev) => {
+      if (!prev) return prev;
+      const left = Math.max(
+        VIEWPORT_MARGIN,
+        Math.min(prev.left, window.innerWidth - w - VIEWPORT_MARGIN),
+      );
+      if (prev.bottom !== undefined) {
+        const topEdge = window.innerHeight - prev.bottom - h;
+        if (topEdge < VIEWPORT_MARGIN) {
+          if (
+            prev.anchorBottom + h + VIEWPORT_MARGIN <=
+            window.innerHeight
+          ) {
+            // 上方放不下 → 翻转到触发按钮下方
+            return { left, top: prev.anchorBottom + 6, anchorBottom: prev.anchorBottom };
+          }
+          // 两头都放不下 → 贴视口底边
+          return {
+            left,
+            bottom: Math.max(VIEWPORT_MARGIN, window.innerHeight - h - VIEWPORT_MARGIN),
+            anchorBottom: prev.anchorBottom,
+          };
+        }
+      } else if (prev.top !== undefined) {
+        if (prev.top + h > window.innerHeight - VIEWPORT_MARGIN) {
+          return {
+            left,
+            top: Math.max(VIEWPORT_MARGIN, window.innerHeight - h - VIEWPORT_MARGIN),
+            anchorBottom: prev.anchorBottom,
+          };
+        }
+      }
+      return left === prev.left ? prev : { ...prev, left };
+    });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -127,15 +188,20 @@ export function AgentModeSwitcher({ className }: { className?: string }) {
         />
       </button>
 
-      {/* 抽屉卡片：Portal 到 body + fixed 定位（不受 overflow 祖先裁剪） */}
+      {/* 抽屉卡片：Portal 到 body + fixed 定位（不受 overflow 祖先裁剪），
+          位置经视口 clamp 自适应——靠右不伸出右缘，顶部放不下自动向下弹 */}
       {open &&
         pos &&
         createPortal(
           <div
+            ref={menuRef}
             role="listbox"
             aria-label="Agent 信任模式"
             data-testid="agent-mode-menu"
-            style={{ left: pos.left, bottom: pos.bottom }}
+            style={{
+              left: pos.left,
+              ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }),
+            }}
             className="fixed z-[100] w-56 overflow-hidden rounded-2xl border border-border/50 bg-popover p-1.5 text-popover-foreground shadow-xl shadow-black/30"
           >
             {AGENT_MODES.map((mode) => {
