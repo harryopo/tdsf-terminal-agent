@@ -71,17 +71,19 @@ type DisplayState = {
   pulse: boolean;
   /** tooltip 标题（一行，人类可读） */
   tooltipTitle: string;
-  /** tooltip 次要信息（可空：智能体数/运行时长/降级原因等） */
+  /** tooltip 次要信息（可空：运行时长/降级原因等） */
   tooltipDetail: string | null;
 };
 
-/** 拼接次要信息行：智能体数量 + 运行时长（缺失字段自动跳过） */
+/**
+ * 拼接 tooltip 副行：运行时长。
+ * 注意：不再显示 agents_count——sidecar.health 的该字段来自 LangGraph
+ * fallback 的 AGENT_REGISTRY（顶层 agents/ 遗产注册表），Strands 激活时
+ * 它与真实引擎无关（2026-08-31 用户质疑"9 个智能体是真的吗"，实测确认
+ * 是误导数据，移除显示；字段本身保留给后端调试）。
+ */
 function buildDetail(status: BackendStatus): string | null {
-  const parts = [
-    status.agents_count ? `${status.agents_count} 个智能体` : null,
-    status.uptime_seconds ? `已运行 ${Math.floor(status.uptime_seconds)}s` : null,
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join(" · ") : null;
+  return status.uptime_seconds ? `已运行 ${Math.floor(status.uptime_seconds)}s` : null;
 }
 
 /** 从 BackendStatus 派生显示态 */
@@ -271,10 +273,12 @@ export function BackendPill() {
           <span className="max-w-[5rem] truncate">{display.label}</span>
         </span>
       </TooltipTrigger>
-      {/* 主题化弹层：bg-popover 跟随明暗主题（深色主题 = 黑底），覆盖默认反色方案 */}
+      {/* 主题化弹层：bg-popover 跟随明暗主题（深色主题 = 黑底），覆盖默认反色方案。
+          flex-col 纵排覆盖默认 inline-flex items-center（否则标题/副行被挤成
+          同一行横排、基线错位——2026-08-31 用户反馈）。 */}
       <TooltipContent
         side="top"
-        className="max-w-72 border border-border bg-popover px-3 py-2 text-popover-foreground shadow-md"
+        className="max-w-72 flex-col items-start gap-0 border border-border bg-popover px-3 py-2 text-popover-foreground shadow-md"
       >
         <p className="text-[11px] font-medium leading-snug">
           {display.tooltipTitle}
