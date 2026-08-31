@@ -105,9 +105,12 @@ export function parseTeachSections(markdown: string): TeachSection[] {
       continue;
     }
     if (!current) {
-      // 标题前的导语 → 归入 concept 前置段
+      // 标题前的导语（自我介绍/开场白等）→ 归入「讲解」段。
+      // TDSF 2026-08-31 (问题4修复): 原硬编码 concept/"概念与原理" 导致导语
+      // 内容与「概念与原理」徽标不符（用户截图：徽标"概念与原理"但内容是
+      // 自我介绍）——导语不属于任何教学板块，回退为通用「讲解」徽标。
       if (line.trim()) {
-        current = { type: "concept", title: "概念与原理", content: "", commands: [] };
+        current = { type: "other", title: "讲解", content: "", commands: [] };
       } else {
         continue;
       }

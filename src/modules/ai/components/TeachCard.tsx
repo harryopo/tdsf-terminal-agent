@@ -45,7 +45,9 @@ const TYPE_META: Record<TeachSectionType, { label: string; icon: typeof BulbIcon
   example: { label: "操作示例", icon: TerminalIcon, cls: "border-border/50" },
   pitfall: { label: "易错点", icon: Alert02Icon, cls: "border-amber-500/40" },
   exercise: { label: "练习", icon: PencilEdit02Icon, cls: "border-emerald-500/30" },
-  other: { label: "说明", icon: CheckListIcon, cls: "border-border/50" },
+  // TDSF 2026-08-31 (问题4修复): other 兜底徽标「讲解」——承接标题前导语
+  // （自我介绍/开场白）与无法归类的标题，避免内容与徽标错位。
+  other: { label: "讲解", icon: CheckListIcon, cls: "border-border/50" },
 };
 
 export const TeachCard = memo(
