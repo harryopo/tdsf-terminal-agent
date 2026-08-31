@@ -1,15 +1,15 @@
 /**
- * AgentModeSwitcher.test.tsx — 四档信任模式折叠选择器测试（v3.1.4）
+ * AgentModeSwitcher.test.tsx — 四档信任模式抽屉卡片测试（v3.1.5）
  * -----------------------------------------------------------------------------
  * 覆盖:
- *   1. 默认收起：只有触发按钮（当前模式），面板不渲染
- *   2. 点击触发按钮 → 面板展开，渲染四档（观察/确认/自动/教学）
- *   3. 默认 confirm 档激活（aria-checked）
- *   4. 面板内每档带描述文字（原底部 hint 行已移除，描述移入面板）
- *   5. 点击档位 → chatStore.agentMode 更新 + 面板关闭 + 重开激活态跟随
+ *   1. 默认收起：只有触发按钮（当前模式），卡片不渲染
+ *   2. 点击触发按钮 → 卡片展开（Portal 到 body），渲染四档（观察/确认/自动/教学）
+ *   3. 默认 confirm 档选中（aria-selected）
+ *   4. 卡片内每档带简短说明（brief；长 desc 不再进卡片）
+ *   5. 点击档位 → chatStore.agentMode 更新 + 卡片关闭 + 重开选中态跟随
  *   6. 教学档联动 teach 布尔（选中 teach=true，切回其他档 teach=false）
  *   7. 逐字快捷开关已移除（设置页统一管理）
- *   8. Escape 关闭面板
+ *   8. Escape 关闭卡片
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -27,13 +27,14 @@ beforeEach(() => {
   });
 });
 
-/** 打开折叠面板（点击触发按钮） */
+/** 打开抽屉卡片（点击触发按钮；jsdom 下 getBoundingClientRect 返回 0，
+ *  pos 仍非 null → Portal 正常挂载到 body） */
 function openMenu() {
   fireEvent.click(screen.getByTestId("agent-mode-trigger"));
 }
 
 describe("AgentModeSwitcher — 渲染", () => {
-  it("默认收起：触发按钮显示当前模式，面板不渲染", () => {
+  it("默认收起：触发按钮显示当前模式，卡片不渲染", () => {
     render(<AgentModeSwitcher />);
     expect(screen.getByTestId("agent-mode-trigger").textContent).toContain(
       "确认",
@@ -41,7 +42,7 @@ describe("AgentModeSwitcher — 渲染", () => {
     expect(screen.queryByTestId("agent-mode-menu")).toBeNull();
   });
 
-  it("点击触发按钮 → 面板展开，渲染四档模式（观察/确认/自动/教学）", () => {
+  it("点击触发按钮 → 卡片展开，渲染四档模式（观察/确认/自动/教学）", () => {
     render(<AgentModeSwitcher />);
     openMenu();
     expect(screen.getByTestId("agent-mode-menu")).toBeTruthy();
@@ -51,30 +52,33 @@ describe("AgentModeSwitcher — 渲染", () => {
     expect(screen.getByTestId("agent-mode-teach")).toBeTruthy();
   });
 
-  it("默认 confirm 档激活（aria-checked），其余未激活", () => {
+  it("默认 confirm 档选中（aria-selected），其余未选中", () => {
     render(<AgentModeSwitcher />);
     openMenu();
     expect(
-      screen.getByTestId("agent-mode-confirm").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-confirm").getAttribute("aria-selected"),
     ).toBe("true");
     expect(
-      screen.getByTestId("agent-mode-observe").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-observe").getAttribute("aria-selected"),
     ).toBe("false");
     expect(
-      screen.getByTestId("agent-mode-auto").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-auto").getAttribute("aria-selected"),
     ).toBe("false");
     expect(
-      screen.getByTestId("agent-mode-teach").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-teach").getAttribute("aria-selected"),
     ).toBe("false");
   });
 
-  it("面板内每档带描述文字（描述从底部 hint 行移入面板）", () => {
+  it("卡片内每档带简短说明（brief），长描述不再进卡片", () => {
     render(<AgentModeSwitcher />);
-    expect(screen.queryByTestId("agent-mode-hint")).toBeNull();
     openMenu();
     const menu = screen.getByTestId("agent-mode-menu");
-    expect(menu.textContent).toContain("写操作逐条审批后执行");
-    expect(menu.textContent).toContain("只读分析，不执行任何写操作");
+    expect(menu.textContent).toContain("只读分析");
+    expect(menu.textContent).toContain("操作前确认");
+    expect(menu.textContent).toContain("自由执行");
+    expect(menu.textContent).toContain("讲解跟学");
+    // 长描述（desc）不进卡片——避免换行撑爆卡片
+    expect(menu.textContent).not.toContain("概念/示例/易错点/练习");
   });
 
   it("旧版「教学/逐字」独立开关已移除（教学入四档、逐字归设置页）", () => {
@@ -86,21 +90,21 @@ describe("AgentModeSwitcher — 渲染", () => {
 });
 
 describe("AgentModeSwitcher — 交互", () => {
-  it("点击观察档 → store.agentMode = observe，面板关闭，重开后激活态跟随", () => {
+  it("点击观察档 → store.agentMode = observe，卡片关闭，重开选中态跟随", () => {
     render(<AgentModeSwitcher />);
     openMenu();
     fireEvent.click(screen.getByTestId("agent-mode-observe"));
     expect(useChatStore.getState().agentMode).toBe("observe");
     expect(useChatStore.getState().teach).toBe(false);
-    // 选中后面板关闭
+    // 选中后卡片关闭
     expect(screen.queryByTestId("agent-mode-menu")).toBeNull();
-    // 重开验证激活态跟随
+    // 重开验证选中态跟随
     openMenu();
     expect(
-      screen.getByTestId("agent-mode-observe").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-observe").getAttribute("aria-selected"),
     ).toBe("true");
     expect(
-      screen.getByTestId("agent-mode-confirm").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-confirm").getAttribute("aria-selected"),
     ).toBe("false");
   });
 
@@ -112,7 +116,7 @@ describe("AgentModeSwitcher — 交互", () => {
     expect(useChatStore.getState().teach).toBe(true);
     openMenu();
     expect(
-      screen.getByTestId("agent-mode-teach").getAttribute("aria-checked"),
+      screen.getByTestId("agent-mode-teach").getAttribute("aria-selected"),
     ).toBe("true");
   });
 
@@ -127,7 +131,7 @@ describe("AgentModeSwitcher — 交互", () => {
     expect(useChatStore.getState().teach).toBe(false);
   });
 
-  it("Escape 键关闭面板", () => {
+  it("Escape 键关闭卡片", () => {
     render(<AgentModeSwitcher />);
     openMenu();
     expect(screen.getByTestId("agent-mode-menu")).toBeTruthy();
@@ -135,7 +139,7 @@ describe("AgentModeSwitcher — 交互", () => {
     expect(screen.queryByTestId("agent-mode-menu")).toBeNull();
   });
 
-  it("再次点击触发按钮收起面板", () => {
+  it("再次点击触发按钮收起卡片", () => {
     render(<AgentModeSwitcher />);
     openMenu();
     expect(screen.getByTestId("agent-mode-menu")).toBeTruthy();
