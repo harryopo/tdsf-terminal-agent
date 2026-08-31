@@ -91,6 +91,13 @@ _SIDEBAR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "跳到导航/正文" 锚链接行（manpages.debian.org maincontent 顶端
+# "[Scroll to navigation](#panels)"，markdownify 后成纯链接行，整行删）
+_SCROLL_NAV_RE = re.compile(
+    r"^\[\s*(?:scroll|jump|skip)\s+to\s+(?:navigation|top|content|main)\s*\]\([^)]*\)\s*$",
+    re.IGNORECASE,
+)
+
 # 语言切换残渣：语言显示名集合（出现 ≥2 个不同语言名的短行 = 语言导航，
 # 如 Arch Wiki 统计页混入的「2 languages 日本語 Magyar」）
 _LANG_NAV_NAMES: tuple[str, ...] = (
@@ -170,6 +177,8 @@ def _is_nav_line(s: str) -> bool:
         return True
     if _SIDEBAR_RE.match(s):
         return True
+    if _SCROLL_NAV_RE.match(s):
+        return True
     if _is_lang_nav_line(s):
         return True
     if _PURE_SYMBOL_RE.match(s):
@@ -241,7 +250,11 @@ def _clean_text(text: str, markdown: bool) -> str:
             flush_blanks()
             out.append(line)
             continue
-        if _is_nav_line(s) and not (markdown and re.match(r"[-*+]\s", s)):
+        if _is_nav_line(s) and not (
+            markdown and (re.match(r"[-*+]\s", s) or s.startswith("|"))
+        ):
+            # markdown 模式下列表项与表格行（含 | --- | 分隔行）是结构，
+            # 不作为纯符号/导航残渣移除（TDSF 2026-08-30 GFM 表格保护）
             continue
         flush_blanks()
         out.append(line)
@@ -304,8 +317,278 @@ def looks_traditional(text: str) -> bool:
     return sum(text.count(f) for f in _TRAD_FEATURES) >= _TRAD_MIN_HITS
 
 
+# ============================================================================
+# 5. 标题清洗与垃圾页判定（TDSF 2026-08-30 根因修复）
+# ============================================================================
+# 用户投诉实锤：.html/.cgi 文件名当标题（architecture.html）、空标题、
+# "Search/Community/News/About" 等站点 chrome 页混入、Apache 2.0 首页几百
+# 行链接墙当正文入库。以下三函数分别治理：标题清洗、垃圾标题丢弃、
+# 导航索引页（链接密度过高）丢弃。
+
+# 文件名后缀（标题里出现即剥离：architecture.html → architecture）
+_TITLE_EXT_RE = re.compile(r"\.(?:html?|cgi|txt|md|php|aspx?|jsp|shtml)$", re.IGNORECASE)
+
+# 站点 chrome / 元页面标题（归一小写后精确命中即整条丢弃；
+# 用精确匹配而非子串，避免误伤 "Editing configuration" 类真实标题）
+_JUNK_TITLES: frozenset[str] = frozenset({
+    "search", "sign in", "sign up", "log in", "login", "logout",
+    "community", "contact", "contact us", "news", "statistics",
+    "contributing", "getting involved", "main page",
+    "download", "downloads", "faq", "about", "about us", "sitemap",
+    "edit", "view source", "view history", "history", "table of contents",
+    "讨论", "贡献", "搜索", "登录", "注册", "首页", "下载", "关于",
+    "社区", "新闻", "统计", "常见问题", "帮助",
+})
+
+# 目录索引页标题前缀（Apache 风格 "Index of /docs"）
+_INDEX_OF_RE = re.compile(r"^index\s+of\b", re.IGNORECASE)
+
+# 站点 chrome / 社区页标题**子串**模式（带站名前缀时精确表抓不到，
+# 实测 Apache 混入：'About the Apache HTTP Server Project' /
+# 'Apache Contributors' / 'Apache HTTP Server Mailing Lists' / 'Welcome!'）。
+# 只收**高置信**词根（真实技术文档标题几乎不含这些词），避免误伤：
+#   contribut* — contributing/contributors/contribute（社区贡献页）
+#   mailing list(s) — 邮件列表页
+#   ^about\b / about the — 关于页（"About the X Project"）
+#   ^welcome — 站点首页欢迎页
+#   documentation project — 文档项目元页
+_JUNK_TITLE_PATTERNS = re.compile(
+    r"\bcontribut(?:e|es|ed|ing|ion|or|ors)\b"
+    r"|\bmailing\s+lists?\b"
+    r"|(^|\b)about(\s+the\b|\s*$)"
+    r"|(^|\b)welcome(\b|!|$)"
+    r"|\bdocumentation\s+project\b",
+    re.IGNORECASE,
+)
+
+# 标题至少含一个字母数字或 CJK 字符（纯符号/装饰标题无效）
+_TITLE_HAS_WORD_RE = re.compile(r"[A-Za-z0-9\u4e00-\u9fff]")
+
+
+def _slug_to_title(url: str) -> str:
+    """URL 末段 slug 化为标题：/docs/architecture.html → Architecture"""
+    from urllib.parse import unquote, urlparse
+
+    parsed = urlparse(url)
+    segs = [s for s in parsed.path.split("/") if s]
+    if not segs:
+        return ""
+    name = unquote(segs[-1])
+    name = _TITLE_EXT_RE.sub("", name)
+    name = re.sub(r"[_\-]+", " ", name).strip()
+    name = re.sub(r"\s+", " ", name)
+    if not name:
+        return ""
+    return name[0].upper() + name[1:]
+
+
+def clean_title(raw: str, url: str = "") -> str:
+    """标题清洗（入库前统一调用）
+
+    ① URL 形态标题（页面无 h1/<title>，调用方塞了 URL）→ slug 兜底；
+    ② 剥离 .html/.cgi/.txt/.md 等文件名后缀（architecture.html →
+       Architecture，下划线转空格、文件名形态首字母大写）；
+    ③ 清洗后为空/纯符号/<3 字符 → 用 URL 末段 slug 化兜底；
+    ④ URL 也救不了时返回清洗后的原值（调用方再判）。
+    """
+    t = (raw or "").strip()
+    # URL 形态标题（_extract_page 无 h1/<title> 时以 url 兜底传入）
+    if re.match(r"^https?://", t, re.IGNORECASE):
+        url = t
+        t = ""
+    modified = False
+    stripped_ext = _TITLE_EXT_RE.sub("", t)
+    if stripped_ext != t:
+        modified = True
+    t = stripped_ext
+    # 仅当标题本身像文件名（含下划线词）时才转空格，
+    # 正常标题里的连字符（"well-known"）不动
+    if "_" in t:
+        t = re.sub(r"[_]+", " ", t)
+        modified = True
+    t = re.sub(r"\s+", " ", t).strip(" -·|:")
+    if len(t) >= 3 and _TITLE_HAS_WORD_RE.search(t):
+        # 文件名清洗产物（全小写）首字母大写：read_me.md → Read me
+        if modified and t == t.lower() and t[:1].isalpha():
+            t = t[0].upper() + t[1:]
+        return t
+    slug = _slug_to_title(url) if url else ""
+    if len(slug) >= 3:
+        return slug
+    return t or slug
+
+
+def is_junk_title(title: str) -> bool:
+    """标题是否命中垃圾词表（站点 chrome/元页面，整条丢弃）
+
+    精确表（_JUNK_TITLES）+ 目录页前缀（Index of）+ 高置信子串模式
+    （contribut*/mailing list/about the/welcome/documentation project，
+    覆盖带站名前缀的社区页，实测 Apache 'About the ... Project' /
+    'Apache Contributors' / 'Mailing Lists' / 'Welcome!'）。
+    """
+    norm = re.sub(r"\s+", " ", (title or "").strip()).lower().rstrip(".!？?")
+    if not norm:
+        return True  # 空标题也算垃圾（调用方先 clean_title 兜底后仍空）
+    if norm in _JUNK_TITLES:
+        return True
+    if _INDEX_OF_RE.match(norm):
+        return True
+    return bool(_JUNK_TITLE_PATTERNS.search(norm))
+
+
+# man 手册页章节标题（NAME/SYNOPSIS/... ）。man 站（man.openbsd.org /
+# manpages.debian.org / man.archlinux.org）整页 h1 全是这些章节名，文档
+# 真实标识在 <title>（"ssh-askpass(1) - ..."）与 URL 末段——提取标题时须
+# 跳过，否则全站 h1 都相同 → 同标题去重误杀（实测 ssh-docs 43→1 根因）。
+# 章节名穷举不完（Debian 还有 ARGUMENTS/LIBRARY/CAUTION/SETUID AND SETGID
+# BITS 等），故叠加两条启发式（见 is_section_heading）：
+#   ① 以 ¶ 结尾（Debian manpages 每个 h1 带 pilcrow 锚记）
+#   ② 全大写 ASCII 词组（NAME / EXIT STATUS / HTTP/2 等，正常文档站
+#      h1 标题极少全大写，误伤概率低；命中后标题退化到 <title> 仍合理）
+_MAN_SECTIONS: frozenset[str] = frozenset({
+    "NAME", "NAMES", "SYNOPSIS", "DESCRIPTION", "OPTIONS", "COMMANDS",
+    "CONFIGURATION", "FILES", "SEE ALSO", "AUTHOR", "AUTHORS", "HISTORY",
+    "COPYRIGHT", "COPYRIGHT AND PERMISSIONS", "BUGS", "NOTES",
+    "EXIT STATUS", "ENVIRONMENT", "EXAMPLES", "RETURN VALUE",
+    "RETURN VALUES", "CONFORMING TO", "AVAILABILITY", "DIAGNOSTICS",
+    "ERRORS", "REPORTING BUGS", "STANDARDS", "INTRODUCTION",
+    "DEVELOPMENT", "CAVEATS", "SECURITY", "VERSIONS", "SIGNALS",
+    "COLOPHON", "PAGE INDEX", "OBSOLETE PAGES", "BUG REPORTS",
+    "ARGUMENTS", "LIBRARY", "CAUTION", "COMPATIBILITY", "SYNOPSIS",
+    "SETUP", "USAGE", "COMMAND-LINE", "OPERANDS", "EXTENDED DESCRIPTION",
+})
+
+# 全大写 ASCII 词组（至少 2 字符、含字母；允许空格与 man 章节常见标点）
+_ALL_CAPS_RE = re.compile(r"^[A-Z][A-Z0-9 .,/'()&:\-]*$")
+
+
+def is_section_heading(title: str) -> bool:
+    """标题是否为 man 手册页章节名（精确表 + ¶ 尾符 + 全大写启发式）
+
+    全大写判定用**原始**标题（t == t.upper()），不能先 upper() 再判——
+    否则 "Home"/"Index" 等正常标题 upper 后也"全大写"被误伤（实测 nginx
+    BFS 测试 'Home' 被当章节名跳过、标题退化到 <title>）。
+    """
+    t = (title or "").strip()
+    if not t:
+        return False
+    if t.endswith("¶"):  # Debian manpages h1 pilcrow 锚记
+        return True
+    norm = re.sub(r"\s+", " ", t.rstrip("¶").upper())
+    if norm in _MAN_SECTIONS:
+        return True
+    # 原始标题本身全大写（ASCII）：NAME / EXIT STATUS / SETUID AND SETGID BITS
+    # 排除含 '(' 的标题——那是 man 页引用格式（GIT-COMMIT(1)、ssh(1)），
+    # 是文档标识而非章节名（章节名永远是纯词组无 section 号括号）。
+    # 否则 git-scm.com 命令页 h1（GIT-COMMIT(1) 全大写）被误判跳过、
+    # 标题退化到 <title> 后全站同标题被去重误杀（实测 git-docs 42→9）。
+    if (
+        len(t) >= 2
+        and t == t.upper()
+        and "(" not in t
+        and _ALL_CAPS_RE.match(norm)
+        and any(c.isalpha() for c in norm)
+    ):
+        return True
+    return False
+
+
+# <title> 站点后缀分隔符：竖线、em/en dash（前后带空格）、双冒号
+_TITLE_SITE_SEP_RE = re.compile(r"\s*\|\s*|\s+[—–-]\s+|\s*::\s*")
+
+
+def title_from_html_title(raw: str) -> str:
+    """从 <title> 提取文档标题：剥离站点后缀（"ssh-askpass(1) - OpenBSD
+    manual pages" → "ssh-askpass(1)"；"Get started | Docker Docs" →
+    "Get started"）。取第一段（分隔符前）。"""
+    t = (raw or "").strip()
+    if not t:
+        return ""
+    head = _TITLE_SITE_SEP_RE.split(t, maxsplit=1)[0].strip()
+    return head or t
+
+
+_MD_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]+\)")
+_FENCE_RE = re.compile(r"^(```|~~~)")
+# 链接密度阈值：围栏外非空行中「纯链接行」占比（任务钦定 >60%）
+_LINK_FARM_RATIO = 0.6
+# 纯链接行判定：剥掉 [text](url) 后剩余说明文字 < 此长度
+_LINK_FARM_RESIDUE_CHARS = 20
+# 少于该行数不做链接密度判定（短页交给字数门槛，避免误伤）
+_LINK_FARM_MIN_LINES = 20
+# 纯链接行绝对数下限：护栏，避免误伤「每段带参考链接」的真实文档页。
+# residue<20 判定已把散文页内联链接排除（句子残余 >20 字），farm 行只
+# 来自裸链接列表项；真实文档页纯链接行通常 <20，站点级目录墙（Debian
+# Contents farm=42507、Arch manual pages farm=500）动辄数百+。小目录页
+# （'Manpages of X' farm=11）由 is_index_page_title 按标题兜底。
+_LINK_FARM_MIN_FARM = 20
+
+
+def is_link_farm(markdown: str) -> bool:
+    """正文是否为导航索引页（链接墙）——纯链接行占比 >60% 且绝对数 ≥20
+
+    判定基于 markdownify 输出的 GFM：
+    - 代码围栏（```/~~~）内的行**不参与**统计（man 页 SYNOPSIS 不误伤）
+    - 「纯链接行」= 含 [text](url) 且剥掉全部链接后剩余说明文字 < 20 字
+      （列表项几乎全是链接、无说明文字）；普通段落里内联少量链接的文档页
+      （docker/kubernetes 每段带参考链接）不会被误判
+    - 占比 >60% 且纯链接行绝对数 ≥20 双条件：真实文档页纯链接行少，
+      站点目录索引页（Apache 2.0 首页、netfilter 索引、Debian Contents
+      墙）纯链接行动辄数百
+    """
+    if not markdown:
+        return False
+    total = 0
+    farm_lines = 0
+    in_fence = False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if _FENCE_RE.match(stripped):
+            in_fence = not in_fence
+            continue
+        if in_fence or not stripped:
+            continue
+        total += 1
+        if _MD_LINK_RE.search(line):
+            residue = _MD_LINK_RE.sub("", line).strip(" \t-•*|>")
+            if len(residue) < _LINK_FARM_RESIDUE_CHARS:
+                farm_lines += 1
+    if total < _LINK_FARM_MIN_LINES or farm_lines < _LINK_FARM_MIN_FARM:
+        return False
+    return farm_lines / total > _LINK_FARM_RATIO
+
+
+# 站点级目录索引页标题模式（链接密度双条件抓不到的小目录页兜底，
+# man 站实测：'Manpages of X' farm=11、'index' farm=14 均低于绝对量阈值，
+# 但标题本身即目录页标志；真实文档页标题是 ssh(1)/bash(1) 不会命中）
+_INDEX_PAGE_TITLE_RE = re.compile(
+    r"^("
+    r"manpages?\s+of\s"          # Manpages of bash in Debian bookworm
+    r"|contents\s+of\s"          # Contents of Debian unstable
+    r"|index$"                   # index（Debian man 站包索引）
+    r"|(.*\s)?manual\s+pages?$"  # Arch manual pages / OpenBSD manual pages
+    r"|table\s+of\s+contents$"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_index_page_title(title: str) -> bool:
+    """标题是否为站点级目录索引页（man 站目录墙等，链接密度抓不到时兜底）"""
+    t = (title or "").strip()
+    if not t or "://" in t:  # URL 形态标题不是目录页（真实 man 页标题兜底用 URL）
+        return False
+    return bool(_INDEX_PAGE_TITLE_RE.match(t))
+
+
 __all__ = [
     "clean_content",
     "clean_markdown",
     "looks_traditional",
+    "clean_title",
+    "is_junk_title",
+    "is_section_heading",
+    "is_index_page_title",
+    "title_from_html_title",
+    "is_link_farm",
 ]
