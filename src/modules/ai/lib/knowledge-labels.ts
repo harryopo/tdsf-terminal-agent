@@ -59,3 +59,25 @@ export function categoryGroupLabel(category: string | undefined): string {
   if (category && CATEGORY_LABELS[category]) return CATEGORY_LABELS[category];
   return "其他";
 }
+
+/**
+ * 摘要纯文本化（TDSF 2026-08-31 用户实测反馈：摘要以 ###/---/表格竖线开头）。
+ * doc_titles_zh.summary_zh 生成端已清洗，此处前端兜底剥 markdown 语法符号——
+ * 任何来源（LLM 生成/首块截取/手工写入）的摘要进 UI 前统一过一遍。
+ */
+export function plainSummary(text: string | undefined, maxChars = 120): string {
+  if (!text) return "";
+  const oneLine = text
+    .replace(/```[\s\S]*?```/g, " ") // 代码块整体删
+    .replace(/^#{1,6}\s+/gm, "") // 标题前缀
+    .replace(/^>\s?/gm, "") // 引用
+    .replace(/^[-*]\s+/gm, "") // 列表符
+    .replace(/^\|[-: |]+\|/gm, "") // 表格分隔行 |---|
+    .replace(/\|/g, " ") // 表格竖线
+    .replace(/`/g, "") // 行内代码反引号
+    .replace(/\*\*?/g, "") // 粗体/斜体
+    .replace(/^-{3,}$/gm, "") // 分隔线
+    .replace(/\s+/g, " ")
+    .trim();
+  return oneLine.length > maxChars ? `${oneLine.slice(0, maxChars)}…` : oneLine;
+}
