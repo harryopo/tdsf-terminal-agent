@@ -32,6 +32,7 @@ import {
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import {
   categoryGroupLabel,
+  plainSummary,
   sourceGroupLabel,
 } from "@/modules/ai/lib/knowledge-labels";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -1023,7 +1024,8 @@ function KnowledgeSearchOutput({ data }: { data: Record<string, unknown> }) {
       <div className="space-y-1">
         {hits.map((hit, idx) => {
           const title = hit.title || "（无标题）";
-          const snippet = (hit.content || "").replace(/\s+/g, " ").trim();
+          // plainSummary 剥残留 markdown 符号（###/---/表格竖线），TDSF 2026-08-31
+          const snippet = plainSummary(hit.content, KNOWLEDGE_SNIPPET_CHARS);
           const truncatedSnippet =
             snippet.length > KNOWLEDGE_SNIPPET_CHARS
               ? `${snippet.slice(0, KNOWLEDGE_SNIPPET_CHARS)}…`
