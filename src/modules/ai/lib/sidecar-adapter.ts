@@ -249,6 +249,14 @@ export interface SidecarStreamOptions {
     workspaceRoot: string | null;
     activeFile: string | null;
     sshSessionId: number | null;
+    /**
+     * TDSF 2026-08-31 (问题1修复): 活动终端会话权威信号（"ssh"|"local"|"none"）。
+     * 随 state.live 透传到 Python adapter._build_prompt，供 <live_context>
+     * 区分"本地终端在跑"（local）与"仅有默认 workspace 路径、无终端"（none），
+     * 防止 agent 在用户未开终端时自称"本地终端模式"。缺省（旧调用方未注入）
+     * 时 Python 侧回退 workspace/cwd 启发式。
+     */
+    terminalSession?: "ssh" | "local" | "none" | null;
     agentMode?: AgentMode;
     teach?: boolean;
   };

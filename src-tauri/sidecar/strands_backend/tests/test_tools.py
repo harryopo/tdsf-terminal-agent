@@ -1074,7 +1074,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
 # ============================================================================
 
 class TestBuildPromptWorkspaceStates(unittest.TestCase):
-    """_build_prompt 三分支：SSH 会话 / 本地环境（终端在跑）/ 欢迎页无环境"""
+    """_build_prompt 分支：SSH 会话 / 本地环境（终端在跑）/ 欢迎页无环境"""
 
     def _make_adapter(self) -> StrandsAgentAdapter:
         return StrandsAgentAdapter(event_bus=make_mock_event_bus(), backend_enabled=False)
@@ -1108,6 +1108,56 @@ class TestBuildPromptWorkspaceStates(unittest.TestCase):
         self.assertIn("已连接 SSH 会话", prompt)
         self.assertNotIn("未打开任何工作区", prompt)
 
+    # ========================================================================
+    # TDSF 2026-08-31 (问题1修复): terminalSession 权威信号分支
+    # ========================================================================
+
+    def test_terminal_session_none_with_workspace_does_not_claim_local(self):
+        """terminalSession="none"：即使有默认 workspace 路径也严禁自称本地终端模式
+
+        用户实测：没开任何终端时 agent 断言"当前环境是 Windows 本地终端
+        （工作区：C:/Users/Administrator）"——根因是 workspace cwd（默认主目录）
+        被当成"本地终端已打开"。terminalSession="none" 必须走无终端分支。
+        """
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt(
+            "hi",
+            {
+                "session_id": "s1",
+                "live": {
+                    "workspaceRoot": "C:/Users/Administrator",
+                    "cwd": "C:/Users/Administrator",
+                    "terminalSession": "none",
+                },
+            },
+        )
+        self.assertNotIn("本地终端模式", prompt)
+        self.assertIn("当前未打开任何终端会话", prompt)
+        self.assertIn("不代表终端已打开", prompt)
+        self.assertIn("新建本地终端或建立 SSH 连接", prompt)
+        # 工作区路径仍注入（供 LLM 知道默认路径），但语义是 workspace 而非终端
+        self.assertIn("C:/Users/Administrator", prompt)
+
+    def test_terminal_session_local_claims_local_explicitly(self):
+        """terminalSession="local"：显式走本地终端分支（即使无 cwd）"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt(
+            "hi", {"session_id": "s1", "live": {"terminalSession": "local"}}
+        )
+        self.assertIn("本地终端模式", prompt)
+
+    def test_terminal_session_none_overrides_workspace_heuristic(self):
+        """terminalSession="none" 优先于旧启发式（workspace/cwd 存在）"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt(
+            "hi",
+            {
+                "session_id": "s1",
+                "live": {"activeFile": "/x/y.py", "terminalSession": "none"},
+            },
+        )
+        self.assertNotIn("本地终端模式", prompt)
+
 
 # ============================================================================
 # system prompt skill 清单同步测试（2026-08-29 修复：清单动态生成防漂移）
@@ -1140,6 +1190,76 @@ class TestSystemPromptSkillListSync(unittest.TestCase):
         line = _skill_names_line()
         for name in registered:
             self.assertIn(name, line)
+
+
+# ============================================================================
+# system prompt 环境感知 + 输出格式约束测试（2026-08-31 问题1/问题2修复）
+# ============================================================================
+
+class TestSystemPromptEnvironmentAndFormat(unittest.TestCase):
+    """环境感知段以 connection_mode 为唯一口径 + 禁 emoji 格式约束"""
+
+    def test_environment_awareness_anchors_on_connection_mode(self):
+        """环境感知段应要求 agent 先读 connection_mode 再回答"""
+        self.assertIn("connection_mode", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("Environment awareness", _DEFAULT_SYSTEM_PROMPT)
+
+    def test_environment_awareness_none_branch_forbids_local_claim(self):
+        """connection_mode=none 分支：明确告知未开终端，严禁自称本地终端模式"""
+        self.assertIn("connection_mode: none", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("当前未打开终端", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("新建本地", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("建立 SSH 连接", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("我不会假设环境", _DEFAULT_SYSTEM_PROMPT)
+        # 禁止臆测本地终端
+        self.assertIn("严禁自称", _DEFAULT_SYSTEM_PROMPT)
+
+    def test_no_emoji_format_constraint(self):
+        """Constraints 应含禁 emoji 格式约束（用户实测反馈回答含 👋💻🔧📚）"""
+        self.assertIn("emoji", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("纯文本或 markdown", _DEFAULT_SYSTEM_PROMPT)
+
+
+# ============================================================================
+# invoke 调度日志测试（2026-08-31 问题5修复：不再向 thinking 流注入"开始处理"）
+# ============================================================================
+
+class TestInvokeNoProcessingBanner(unittest.TestCase):
+    """invoke 前的"开始处理: ..."thinking 消息已删除（污染前端 Thinking 区）"""
+
+    def test_invoke_does_not_emit_processing_banner(self):
+        """mock agent（不触发 callback handler）时 emit_agent_message 应零调用
+
+        原实现在 invoke 前推送 content="开始处理: ..."（msg_type=thinking），
+        前端把它作为 reasoning-delta 拼进 Thinking 区开头，与模型真实推理
+        混在一行（用户截图："开始处理:hi The user just said hi..."）。
+        删除后 adapter 自身不应再 emit 任何 agent_message。
+        """
+        bus = make_mock_event_bus()
+        adapter = StrandsAgentAdapter(event_bus=bus, backend_enabled=True)
+
+        mock_response = MagicMock()
+        mock_response.__str__ = MagicMock(return_value="ok")
+        mock_agent = MagicMock(return_value=mock_response)
+        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
+        adapter._strands_available = True
+        adapter._model_available = True
+
+        adapter.invoke("main", "hi", {"session_id": "s1"})
+
+        bus.emit_agent_message.assert_not_called()
+
+    def test_invoke_does_not_leak_injection_blocks_in_ui_stream(self):
+        """即使未来恢复调度日志，注入块也不得进入 UI 流（_split_input_for_log 剥离）"""
+        from strands_backend.adapter import _split_input_for_log
+
+        user_part, ctx_part = _split_input_for_log(
+            "<env>\nworkspace_root: C:/x\n</env>\n\n"
+            "<environment>\nconnection_mode: none\n</environment>\n\n"
+            "hi"
+        )
+        self.assertEqual(user_part, "hi")
+        self.assertIn("connection_mode", ctx_part)
 
 
 # ============================================================================
@@ -1203,24 +1323,10 @@ class TestTdsfStrandsCallbackHandler(unittest.TestCase):
         self.assertEqual(kwargs["content"], "让我先分析一下")
         self.assertEqual(kwargs["message_type"], "thinking")
 
-    def test_strip_env_block(self):
-        """_strip_env_block 应剥离 <env> 块（thinking 展示不泄漏内部上下文）"""
-        from strands_backend.adapter import _strip_env_block
-
-        # 头部 env 块
-        text = "<env>\nworkspace_root: /\nactive_terminal_cwd: C:/Users/Lenovo\n</env>\n\n帮我看看负载"
-        self.assertEqual(_strip_env_block(text), "帮我看看负载")
-        # 无 env 块原样返回
-        self.assertEqual(_strip_env_block("普通问题"), "普通问题")
-        # 空串安全
-        self.assertEqual(_strip_env_block(""), "")
-        # 未闭合 env 块（防御）
-        self.assertEqual(_strip_env_block("<env>abc"), "")
-        # 中间 env 块
-        self.assertEqual(
-            _strip_env_block("前缀<env>x</env>后缀"),
-            "前缀后缀",
-        )
+    # TDSF 2026-08-31 (问题5修复): test_strip_env_block 已随 _strip_env_block
+    # 一并删除——该函数唯一调用方是已移除的"开始处理: ..."invoke 调度日志；
+    # 注入块剥离职责由 _split_input_for_log（agent_log 落盘）承担，
+    # 见 test_agent_log.py::test_live_context_block_recognized。
 
     def test_no_event_bus_does_not_raise(self):
         """event_bus=None 时不应抛错"""

@@ -86,6 +86,16 @@ type LiveSnapshot = {
    */
   terminalOutput: string | null;
   /**
+   * TDSF 2026-08-31 (问题1修复): 活动终端会话权威信号（chatRuntime 从
+   * Live.getActiveTerminalSession 注入）。
+   * "ssh"=SSH 终端活跃 / "local"=本地终端 tab 活跃 / null=无任何终端会话。
+   * 未注入（旧调用方/测试）时 resolveConnectionMode 回退用
+   * sshConnection/terminalOutput 推断。注意"有 workspace cwd"≠"有终端"——
+   * findCwd 会回退到 explorerRoot/launchCwd/home（默认主目录），不能作为
+   * "本地终端已打开"的证据（用户实测反馈 agent 误称"本地终端"的根因）。
+   */
+  terminalSession?: "ssh" | "local" | "none" | null;
+  /**
    * TDSF B1 (2026-08-29, 方案书 §4.7): 环境探测（os-release/内核/shell，
    * sidecar system.probe_env 会话级缓存；useAiLiveBridge 注册实现）。
    * 失败返回 null（<environment> 分区静默省略）。旧调用方未注册时
@@ -494,13 +504,39 @@ function injectEnvIntoLastUser(
   return messages;
 }
 
+/**
+ * TDSF 2026-08-31 (问题1修复): 解析当前连接模式（唯一环境口径）。
+ *
+ * 判定优先级：
+ *   1. sshConnection 存在（或 terminalSession === "ssh"）→ "ssh"
+ *   2. terminalSession === "local" → "local"
+ *   3. terminalSession === "none" → "none"（无任何终端会话，即使有 workspace cwd）
+ *   4. terminalSession 未注入（旧调用方）→ 回退：有终端输出视为 local，
+ *      否则 none（保守——不再把默认 workspace cwd 当"本地终端已打开"）。
+ */
+export function resolveConnectionMode(
+  live: Pick<LiveSnapshot, "sshConnection" | "terminalOutput" | "terminalSession">,
+): "ssh" | "local" | "none" {
+  if (live.sshConnection || live.terminalSession === "ssh") return "ssh";
+  if (live.terminalSession === "local") return "local";
+  if (live.terminalSession === "none") return "none";
+  // 旧调用方回退（terminalSession 未注入）：终端有输出 → 本地终端在跑
+  if (live.terminalOutput) return "local";
+  return "none";
+}
+
 // TDSF 修复 2026-07-30 (Bug 3): 导出 formatEnvBlock 供 CDP 调试验证 <env> 注入
 // 之前未 export, App.tsx 的 __TDSF_DBG__ 无法暴露此函数, CDP 没法验证
 // Python agent 收到的 input 是否含 <env> 块
 export function formatEnvBlock(live: LiveSnapshot): string | null {
   const lines: string[] = [];
   if (live.workspaceRoot) lines.push(`workspace_root: ${live.workspaceRoot}`);
-  if (live.cwd) lines.push(`active_terminal_cwd: ${live.cwd}`);
+  // TDSF 2026-08-31 (问题1修复): 无终端会话（connection_mode=none）时不注入
+  // active_terminal_cwd——此时 cwd 是 findCwd() 回退的默认工作区路径，
+  // 标注成"终端 cwd"正是"未开终端却自称本地终端"的误导源。
+  if (live.cwd && resolveConnectionMode(live) !== "none") {
+    lines.push(`active_terminal_cwd: ${live.cwd}`);
+  }
   if (live.activeFile) lines.push(`active_file: ${live.activeFile}`);
   if (live.terminalPrivate) lines.push("active_terminal_mode: private");
   // TDSF 魔改 (2026-08-09): 不再向 <env> 块注入 ssh_session_id 数字。
@@ -576,13 +612,27 @@ export function formatEnvironmentBlock(
   const lines: string[] = [];
   // TDSF 2026-08-31 (任务C 环境感知): 连接模式（ssh/local）置顶——agent 据此
   // 决定回答口径（SSH → 远程 Linux 服务器 / 仅本地 → Windows PowerShell 语法）。
-  // 发行版(os_pretty_name)/cwd 已有；ssh_target 供 agent 自然表达连接对象。
-  const isSsh = Boolean(live.sshConnection);
-  lines.push(`connection_mode: ${isSsh ? "ssh" : "local"}`);
-  if (isSsh) lines.push(`ssh_target: ${live.sshConnection}`);
+  // TDSF 2026-08-31 (问题1修复): 新增 none 态——无活动终端会话时不再误报
+  // "local"（此前把"注入了默认 workspace cwd"当成"本地终端已打开"，
+  // agent 遂向用户断言"当前环境是 Windows 本地终端"）。发行版(os_pretty_name)/
+  // cwd 已有；ssh_target 供 agent 自然表达连接对象。
+  const mode = resolveConnectionMode(live);
+  lines.push(`connection_mode: ${mode}`);
+  if (mode === "ssh") {
+    if (live.sshConnection) lines.push(`ssh_target: ${live.sshConnection}`);
+  } else if (mode === "none") {
+    lines.push(
+      "note: 当前未打开任何终端会话（workspace 仅为默认工作区路径，不代表终端已打开）",
+    );
+  }
   if (probe.os_pretty_name) lines.push(`os_pretty_name: ${probe.os_pretty_name}`);
   if (probe.kernel) lines.push(`kernel: ${probe.kernel}`);
-  if (live.cwd) lines.push(`cwd: ${live.cwd}`);
+  // none 态下 cwd 实为默认工作区路径（非终端 cwd），改用 workspace_path 标注
+  if (live.cwd) {
+    lines.push(
+      mode === "none" ? `workspace_path: ${live.cwd}` : `cwd: ${live.cwd}`,
+    );
+  }
   if (probe.shell) lines.push(`shell: ${probe.shell}`);
   if (lines.length === 0) return null;
   return `<environment>\n${lines.join("\n")}\n</environment>`;
