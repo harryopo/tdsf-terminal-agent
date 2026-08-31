@@ -674,6 +674,20 @@ docker model package --from ai/gpt-oss --context-size 128000 gpt-oss:128k
 
 **排错**：`docker model status` 查服务状态；`docker model ls` 确认模型名与配置一致。
 
+**端点与认证**
+- `POST https://api.dso.docker.com/v1/graphql`，Bearer 认证，Body 含 `query`、`variables.ctx`（`{ organization: "<org>" }`）
+- PAT/OAT 不能直接作 Bearer，先换 token：
+```bash
+curl -X POST https://hub.docker.com/v2/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"identifier": "<username或org名>", "secret": "<PAT或OAT>"}'
+```
+- `identifier`：PAT 用用户名、OAT 用组织名；响应 `access_token` 作 Bearer
+
+**查询 `imagePackagesForImageCoords`**
+- 必填：`digest`（平台 digest）、`hostName`、`repoName`；可选：`includeExcepted`/`includeNodsa`/`includePublic`
+- `vulnerabilityExceptions`：空数组=未抑制，用 `isExcepted` 过滤；`FALSE_POSITIVE`/`ACCEPTED_RISK`=抑制
+
 - 构建缓存：Docker 逐条执行 Dockerfile 指令，每指令生成一层；若指令与之前相同，复用缓存层，避免重复执行。
 - 缓存失效条件：
   - `RUN` 指令命令内容变化

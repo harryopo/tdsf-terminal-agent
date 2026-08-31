@@ -2,8 +2,10 @@
 source: archwiki
 category: basic-ops
 url: consolidated/basic-ops/系统核心概念（Arch Wiki）.md
-title: 1. cgroups
+title: 系统核心概念（Arch Wiki）
 ---
+
+- 系统核心：`cgroups` 资源隔离，`cron` 定时，`D-Bus` 消息，`init`/`getty` 启动，`rsyslog`/`syslog-ng` 日志，`udisks` 设备。
 
 **cgroups**：内核功能，管理/限制进程组。
 
@@ -260,6 +262,27 @@ ExecStart=/usr/bin/dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2376
   ```
 - **Wayland**：GDM/Plasma 用 `~/.config/environment.d/envvars.conf`（`GUI_VAR=value`）；SDDM 不支持。
 - greetd 默认 source `/etc/profile`、`~/.profile`（`source_profile` 控制）。若 DM 仅 source 登录 shell，可手动加载 `environment.d`。
+
+## udisks（核心要点）
+
+**定位**：udisks2 是桌面环境的**磁盘管理守护进程**（D-Bus 服务 org.freedesktop.UDisks2），让文件管理器（Nautilus/Dolphin）免 root 挂载/卸载/格式化 U 盘与移动硬盘。
+
+**命令行工具 `udisksctl`**：
+
+```bash
+udisksctl status                     # 块设备概览
+udisksctl info -b /dev/sdb1          # 设备详情（文件系统/挂载点/UUID）
+udisksctl mount -b /dev/sdb1         # 挂载（polkit 授权，桌面会话免密）
+udisksctl unmount -b /dev/sdb1       # 卸载
+udisksctl lock/unlock -b /dev/sdb1   # LUKS 加密卷
+udisksctl loop-setup -f image.iso    # 挂载 ISO 镜像
+```
+
+**与传统工具关系**：底层仍是 mount/umount；udisks 加了 polkit 权限层与桌面通知。服务器/脚本场景直接用 mount（无需 udisks 依赖）。
+
+**屏蔽桌面自动挂载**：udev 规则 `ENV{UDISKS_IGNORE}="1"`（隐藏分区/恢复分区常用）或 `ENV{UDISKS_AUTOOPEN}="0"`。
+
+**易错点**：①SSH 会话里 udisksctl 报 "Not authorized"——polkit 规则限制活动会话才免密（`loginctl` 看 session active）；②卸载报 busy 用 `lsof +f -- /dev/sdb1` 找占用进程；③NTFS 读写需 ntfs-3g。
 
 ## 通用故障排除
 

@@ -396,6 +396,207 @@ if (errno != 0 || fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW | FE_UNDE
 - /proc 调优（`/proc/sys/fs/mqueue/`）：`msg_max` 队列消息数上限，默认 10，硬上限 65536；`msg_default` 默认 `mq_maxmsg`，默认 10；`msgsize_max` 消息大小上限，默认 8192，硬上限 16777216；`msgsize_default` 默认 `mq_msgsize`，默认 8192；`queues_max` 系统队列总数上限，默认 256；`RLIMIT_MSGQUEUE` 限制真实用户 ID 队列总占用。
 - 易错：队列名只能有一个前导斜杠；`attr=NULL` 使用 `/proc` 默认值；忘记 `-lrt` 链接失败。
 
+## POSIX 消息队列 (mqueue)
+
+- 挂载：`mount -t mqueue none /dev/mqueue`（目录自动启用 sticky bit）
+- 队列文件内容为单行，字段：`QSIZE`（消息数据字节）、`NOTIFY_PID`（非零表示已注册 `mq_notify(3)`）、`NOTIFY`（通知方式：0=`SIGEV_SIGNAL`，1=`SIGEV_NONE`，2=`SIGEV_THREAD`）、`SIGNO`（信号编号）
+- Linux 实现：描述符本质为 fd，可被 `select(2)`/`poll(2)`/`epoll(7)` 监视（不可移植）；`mq_open(2)` 返回 fd 自动 close-on-exec
+- 对比 System V：设计更好，但可用性不如；Linux 无 ACL
+- 已知 BUG：Linux 3.5–3.14 `queues_max` 有 1024 上限；3.5–4.1 `QSIZE` 误计内核开销（4.2 修复）
+
+## 路径解析 (path_resolution)
+
+- **起点**：绝对路径从根目录（可被 `chroot(2)` 改变；`openat2(2)` 加 `RESOLVE_IN_ROOT` 临时改变）；相对路径基于 cwd，可用 `openat(2)` 的 `dfd` 指定（`AT_FDCWD` 表示 cwd）；`clone(2)` 加 `CLONE_NEWNS` 创建私有挂载命名空间
+- **遍历非最终组件**：
+  - 无搜索权限 → `EACCES`
+  - 组件不存在 → `ENOENT`
+  - 组件不是目录/符号链接 → `ENOTDIR`
+  - 符号链接解析失败或递归过深 → `ENOTDIR` / `ELOOP`
+
+## 路径解析
+
+- 符号链接解析上限：整个路径名最多 40 次；2.6.18 前递归深度 5，2.6.18 起 8，4.2 重写后仅剩总数 40
+- 可用 `openat2(2)` + `RESOLVE_NO_SYMLINKS` 阻止符号链接解析
+- 最终分量：不要求是目录；不存在不算错误（可能正创建）
+- `.` 和 `..` 按约定含义处理，与物理文件系统是否真实存在无关；不能越过根：`/..` = `/`
+- 挂载点：挂载后 `path` 指新文件系统根；`path/..` 可走出挂载点；`RESOLVE_NO_XDEV` 阻止遍历挂载点（同时限制 bind mount）
+- 尾部 `/`：强制前一分量解析为目录，否则忽略
+- 最后符号链接：`lstat(2)` 操作链接本身，`stat(2)` 操作目标
+- 路径过长返回 `ENAMETOOLONG`；空路径名返回 `ENOENT`
+- 权限检查：三组三位；euid=文件属主用第一组，egid/补充组匹配用第二组，否则第三组
+- Linux 用 fsuid/fsgid 代替 euid/egid（`setfsuid(2)`/`setfsgid(2)`，已过时勿用）
+- 超级用户权限拆分：`CAP_DAC_OVERRIDE` 覆盖全部权限检查（执行权限需至少一个执行位）；`CAP_DAC_READ_SEARCH` 授予目录读/搜索、普通文件读
+
+## 管道
+
+- pipe 与 FIFO：单向 IPC 通道，分读端/写端
+- `pipe(2)` 创建管道，返回两个 fd；FIFO 经 `mkfifo(3)` 命名创建，`open(2)` 打开：读端 `O_RDONLY`、写端 `O_WRONLY`
+- FIFO 虽有路径名，但 I/O 不涉及底层设备操作
+- 创建/打开后二者 I/O 语义相同：读空管道 `read(2)` 阻塞；写满管道 `write(2)` 阻塞
+
+- 非阻塞 I/O：`fcntl(fd, F_SETFL, O_NONBLOCK)` 或打开 FIFO 时加 `O_NONBLOCK`。
+- 无数据且写端存在 → `read()` 返回 `EAGAIN`；写端全关 → 返回 0（EOF）。
+- 管道是字节流，无消息边界；不支持 `lseek()`。
+- 所有写端关闭后 `read()` 返回 0；所有读端关闭后 `write()` 产生 `SIGPIPE`，忽略则返回 `EPIPE`。`pipe()+fork()` 后须关闭不需要的 fd。
+- 容量有限：满时 `write()` 阻塞或失败（依据 `O_NONBLOCK`）。
+- 容量：Linux 2.6.11 前 = 页大小；2.6.11 起 = 16 页；2.6.35 起可用 `fcntl()` 的 `F_GETPIPE_SZ`/`F_SETPIPE_SZ` 查询/设置。
+- 查询未读字节数：
+```c
+ioctl(fd, FIONREAD, &nbytes);
+```
+- `/proc/sys/fs/pipe-max-size`：非特权用户单管道最大字节数，默认 1048576；小于页大小设置返回 `EINVAL`。Linux 4.9 起也是新管道默认上限。
+- `/proc/sys/fs/pipe-user-pages-hard`：单用户所有管道总页数硬限制，默认 0（无限制）；超限禁止新建/扩容。
+- `/proc/sys/fs/pipe-user-pages-soft`：软限制，默认 16384 页；超限后新管道容量限 2 页，扩容被拒。
+- `PIPE_BUF`：Linux 为 4096。
+- 写入 `n ≤ PIPE_BUF`：原子。阻塞模式空间不足则等待；非阻塞模式空间不足返回 `EAGAIN`，有空间一次写全。
+- 写入 `n > PIPE_BUF`：非原子，可交错。阻塞模式写满 n 字节；非阻塞模式满则 `EAGAIN`，非满可部分写。
+- 管道/FIFO 仅支持 `O_NONBLOCK` 与 `O_ASYNC`。
+- `O_ASYNC`：读端有新数据时产生 `SIGIO`，用 `fcntl(fd, F_SETOWN, pid)` 指定进程。
+
+POSIX 线程 (pthreads)
+
+- **概念**：单进程可含多线程，共享全局内存（数据段、堆），各线程独立栈。
+- **共享属性**：进程/父进程ID、进程组/会话/控制终端、用户/组ID、打开文件描述符、fcntl锁、信号处置、umask、工作目录/根目录、定时器、nice值、资源限制、CPU时间等。
+- **每线程独立**：线程ID（`pthread_t`）、信号掩码（`pthread_sigmask`）、`errno`、备选信号栈、实时调度策略/优先级；Linux特有：capabilities、CPU亲和性。
+- **返回值**：pthreads 函数成功返回0，失败返回错误号（同 `errno` 含义），但**不设置 `errno`**；不返回 `EINTR`。
+- **线程ID**：仅进程内唯一；线程被 join 或 detached 终止后 ID 可复用；使用已结束生命周期的 ID 未定义。
+- **线程安全例外**（标准函数多数安全，以下不保证）：`asctime, ctime, localtime, gmtime, strtok, getenv, readdir, rand, dlerror, inet_ntoa` 等；完整列表见 `man 7 pthreads`。
+- **异步取消安全函数**：可在启用异步取消（`pthread_setcancelstate`）时安全调用。
+
+## 线程取消
+
+POSIX 规定仅以下函数 **async-cancel-safe**：
+```c
+pthread_cancel()
+pthread_setcancelstate()
+pthread_setcanceltype()
+```
+
+**取消点**：可取消线程 + 取消类型为 deferred（延迟）+ 有挂起取消请求 → 调用取消点函数时被取消。
+
+**必须取消点**（节选）：`accept() close() connect() open() read() write() pread() pwrite() fsync() msync() nanosleep() pause() select() poll() wait() waitpid() sem_wait() pthread_cond_wait() pthread_join() pthread_testcancel()`
+
+**可能取消点**（节选）：`fopen() fclose() fread() fwrite() printf() scanf() opendir() readdir() getaddrinfo() ioctl() lseek() mkstemp() glob()`；实现还可标记其他可能阻塞的函数。
+
+**易错点**：即使不用异步取消，在异步信号处理器中调用上述函数也可能等效异步取消，破坏用户数据一致性；延迟取消区域慎用信号。
+
+**Linux 编译**：
+```sh
+cc -pthread
+```
+
+**线程实现**：LinuxThreads（旧，glibc 2.4 起不再支持）；NPTL（Native POSIX Threads Library，当前）。
+
+## pty(7) 伪终端
+
+- 一对虚拟字符设备，提供双向通信：**master** 端 + **slave** 端。
+- slave 端行为等同经典终端：期望连接终端的进程打开 slave，由打开 master 的程序驱动。
+- 写 master → slave 进程如同终端键入；如写中断字符 Ctrl-C 到 master，向前台进程组产生 `SIGINT`。
+- 写 slave → master 端进程可读取。
+
+# 伪终端（pty）
+
+- 主从异步流：slave→master 及时但非立即；master→slave 有处理延迟。
+- 两套 API：BSD 与 System V；SUSv1 标准化 System V（UNIX 98），新程序应使用；BSD 型自 2.6.4 废弃（可 `CONFIG_LEGACY_PTYS` 禁用）。
+- UNIX 98 主从打开流程：
+```c
+fd = posix_openpt(O_RDWR);
+grantpt(fd);
+unlockpt(fd);
+sfd = open(ptsname(fd));
+```
+- 数量：`/proc/sys/kernel/pty/max` 动态调整，`nr` 显示当前数。
+- BSD 对：`/dev/ptyXY`（主）/`/dev/ttyXY`（从），逐个 open 找空闲。
+- 典型：ssh、xterm、script、screen/tmux、expect。
+- 易错：Linux 未实现 BSD `TIOCSTOP`/`TIOCSTART`/`TIOCUCNTL`/`TIOCREMOTE`；包模式用 `TIOCPKT`。
+
+# POSIX 信号量
+
+- 计数器永不为负；`sem_post` 加 1；`sem_wait` 减 1，为 0 时阻塞。
+- 命名信号量：名 `/somename`，≤251 字符，首字符 `/` 且其余不含 `/`；API：`sem_open`/`sem_post`/`sem_wait`/`sem_close`/`sem_unlink`。
+- 未命名：须在共享内存；线程共享用全局变量，进程共享用 `shmget`/`shm_open` 区；`sem_init`/`sem_destroy`。
+- 持久性：命名信号量除非 `sem_unlink`，否则存在至系统关机。
+- 链接：`cc -pthread`。
+
+### POSIX 信号量
+- 命名信号量存于 `/dev/shm`，名称格式 `sem.`+名称，长度上限 `NAME_MAX-4`。
+- 核心 API：`sem_open()`、`sem_wait()`、`sem_post()`、`sem_close()`、`sem_unlink()`。
+- Linux 2.6.19+ 支持 ACL；相比 System V 接口更简单，旧系统支持度低。
+
+### POSIX 共享内存
+```c
+fd = shm_open(name, flags, mode);
+ftruncate(fd, size);
+addr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+// 访问共享内存
+munmap(addr, size);
+shm_unlink(name);
+```
+- 辅助接口：`fstat()`（获取 `st_size`/`st_mode`/`st_uid`/`st_gid`）、`fchown()`、`fchmod()`。
+- 对象存于 `/dev/shm`（tmpfs）；内核持久，需 `shm_unlink()` 且所有进程 unmap 后才消失。
+- 编译链接：`cc -lrt prog.c`；常需配合 POSIX 信号量同步。
+
+### 信号
+- 分标准与实时信号；用 `sigaction()`/`signal()` 修改处置，可用 `sigaltstack()` 设备用栈。
+- 默认动作：`Term` 终止、`Ign` 忽略、`Core` 终止并转储、`Stop` 停止、`Cont` 继续。
+- 处置是进程属性：多线程共享；`fork()` 继承，`execve()` 后捕获的信号重置为默认，忽略的信号保持不变。
+- 发送：`raise()`（调用线程）、`kill()`（进程/进程组/全体）、`killpg()`（进程组）、`pidfd_send_signal()`（PID 文件描述符）。
+
+### 信号发送
+- `pthread_kill(3)`：向同进程指定线程发信号；`tgkill(2)` 是其系统调用实现
+- `sigqueue(3)`：向进程发送实时信号并附带数据
+
+### 等待信号
+- `pause(2)`：挂起直到捕获任意信号
+- `sigsuspend(2)`：临时改变掩码并挂起，直到未屏蔽信号被捕获
+
+### 同步接收
+- `sigwaitinfo(2)` / `sigtimedwait(2)` / `sigwait(3)`：挂起直到指定信号集有信号
+- `signalfd(2)`：返回 fd，`read(2)` 阻塞直到信号送达
+
+### 掩码与 pending
+- 信号被阻塞则不投递，生成到投递间为 **pending**
+- 线程独立掩码：`pthread_sigmask(3)`；单线程可用 `sigprocmask(2)`
+- `fork(2)` 继承掩码，pending 清空；`execve(2)` 保留掩码与 pending
+- 进程定向信号（`kill`/`sigqueue`）投递给任一未阻塞线程；线程定向信号（硬件异常、`tgkill`/`pthread_kill`）投递给指定线程
+- `sigpending(2)` 获取当前线程 pending 集
+
+### handler 执行
+- 内核→用户态转换时检查未阻塞 pending
+1. 从 pending 集移除该信号
+2. 若 `SA_ONSTACK` 且已定义备选栈，则切换（`sigaltstack(2)`）
+3. 保存上下文（PC、寄存器、掩码、备选栈设置）；`SA_SIGINFO` 时 handler 第三参为 `ucontext_t`
+4. `sa_mask` 与当前信号加入掩码（除非 `SA_NODEFER`），执行期间阻塞
+5. 返回地址指向 trampoline，handler 返回后 `sigreturn(2)` 恢复状态
+
+### Linux socket(7) 核心知识点
+
+- socket 是用户进程与内核网络协议栈的统一接口。
+- 协议族：`AF_INET` 等；类型：`SOCK_STREAM`、`SOCK_DGRAM`。
+- 创建套接字：
+
+```c
+#include <sys/socket.h>
+sockfd = socket(int socket_family, int socket_type, int protocol);
+```
+
+- 核心系统调用：`connect`/`bind`/`listen`/`accept`；收发 `send`/`recv`（UDP 用 `sendto`/`recvfrom`），也可用 `read`/`write`；等待 `poll`/`select`；选项 `getsockopt`/`setsockopt`；关闭 `close`/`shutdown`。
+- 套接字**不支持** `seek`、`pread`、`pwrite`。
+- 非阻塞 I/O：`fcntl` 设置 `O_NONBLOCK`；阻塞操作返回 `EAGAIN`；`connect` 返回 `EINPROGRESS`，用 `poll`/`select` 等待。
+- poll 事件：`POLLIN`（数据或连接完成）、`POLLOUT`（可写）、`POLLHUP`（对端断开，写可能触发 `SIGPIPE`）、`POLLERR`（异步错误）。
+- 地址结构：各结构以 `sa_family_t` 开头；`struct sockaddr` 仅作通用类型转换；通用存储用 `struct sockaddr_storage`（足够大且对齐，可容纳 IPv6）。
+- 通用选项：`level=SOL_SOCKET`，`optval` 指向 `int`。
+
+- **SO_ACCEPTCONN**：只读；1=已监听，0=未监听。
+
+- **SO_ATTACH_FILTER / SO_ATTACH_BPF**：附加 BPF 过滤器；返回值：0 丢包，<包长截断，≥包长放行。`SO_ATTACH_FILTER` 用 `struct sock_fprog`；`SO_ATTACH_BPF` 用 `bpf()` fd，程序类型须为 `BPF_PROG_TYPE_SOCKET_FILTER`。多次设置后替前，同 socket 仅一个过滤器。
+
+- **SO_ATTACH_REUSEPORT_CBPF/EBPF**：配合 `SO_REUSEPORT` 自定义选 socket。CBPF/EBPF 返回索引 0~N-1，非法回退默认；EBPF `BPF_PROG_TYPE_SK_REUSEPORT`（4.19+）返回 `SK_PASS`/`SK_DROP`，可用 `bpf_sk_select_reuseport`。新 socket 继承，移除补位，可替换；UDP 4.5+、TCP 4.6+。
+
+- **SO_BINDTODEVICE**：绑定接口（如 `eth0`）；空串/optlen=0 解绑，名限 `IFNAMSIZ`。仅处理该接口包；不支持 packet socket（用 `bind(2)`）。3.8 前仅可设置；读取 optlen 建议 `IFNAMSIZ`。
+
+- **SO_BROADCAST**：允许数据报 socket 广播地址；对流 socket 无效。
+
 `standards(7)` 列出 man 手册 STANDARDS 部分引用的标准：
 
 - **Unix 分支**：`V7`（1979）为分水岭，后分化为 BSD 与 System V。BSD：`4.2BSD`（1983，TCP/IP + sockets）、`4.3BSD`（1986）、`4.4BSD`（1993）。System V：`System III`（1981）、`SVr1`（1983）、`SVr2`（1985，SVID 1）、`SVr3`（1986，SVID 2）、`SVr4`（1989，SVID 3，权威版）、`SVID 4`（1995）；内部版 `Unix/TS 4` 未公开。

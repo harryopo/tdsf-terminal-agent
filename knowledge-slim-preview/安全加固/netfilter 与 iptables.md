@@ -157,6 +157,60 @@ GPL FAQ:    http://www.fsf.org/licenses/gpl-faq.html
 - 本地时间必须正确，否则归档错乱。
 - 勿加法律免责声明；公司强制时用 webmail 或别发。
 
+## Netfilter 双重 NAT HOWTO（核心要点）
+
+**场景**：两个子网使用**重叠地址段**（均为 192.168.150.0/24，公司网 + 不可信网）需要互访。
+
+**单 NAT 失败原因**：Linux 本机路由策略按「直连接口 > 静态路由 > 默认路由」排序——NAT 盒子直连了 192.168.150.0 的"分身"，永远无法路由到真正的 Network 1。
+
+**双重 NAT 方案**：中间引入 192.168.180.0 过渡网，两台 NAT 盒子串联，把重叠地址解耦到独立地址空间：
+
+```
+Corp 192.168.150.0 ─ NAT BOX1 (eth1 10.15.15.1) ─ NAT BOX2 (eth1 192.168.150.252) ─ Untrusted 192.168.150.0
+```
+
+**实施三步**（示例：访问 Network 3 的 192.168.150.10-12）：
+
+1. **别名 IP**：两台盒子 eth0 各建 3 个别名
+   - BOX1: `ifconfig eth0:0 192.168.180.181 netmask 255.255.255.0`（.181-.183）
+   - BOX2: `ifconfig eth0:0 10.15.15.181 netmask 255.255.255.0`
+2. **BOX1 静态映射**：DNAT 进 + SNAT 出
+   ```bash
+   iptables -t nat -A PREROUTING -d 192.168.180.181 -i eth0 -j DNAT --to-destination 10.15.15.181
+   iptables -A POSTROUTING -s 192.168.150.0/24 -d 10.15.15.0/24 -j SNAT -o eth1 --to-source 10.15.15.1
+   ```
+3. **BOX2 静态映射**：DNAT 到真实目标 + SNAT 回源
+   ```bash
+   iptables -t nat -A PREROUTING -d 10.15.15.181 -i eth0 -j DNAT --to-destination 192.168.150.10
+   iptables -A POSTROUTING -s 10.15.15.0/24 -d 192.168.150.0/24 -j SNAT -o eth1 --to-source 192.168.150.252
+   ```
+
+**易错点**：①忘记开 IP 转发（`net.ipv4.ip_forward=1`）整个链路不通；②基础包过滤先行（RELATED,ESTABLISHED 放行 + NEW 限入），`iptables-save > /etc/sysconfig/iptables` 持久化；③用 ssh 别名地址验证每一跳。
+
+## conntrack-tools 项目（核心要点）
+
+**定位**：conntrack-tools 是 netfilter 的**连接跟踪用户态工具集**，包含守护进程 `conntrackd` 与命令行 `conntrack`——实现**有状态防火墙集群**（状态同步/冗余）。
+
+**核心命令**：
+
+```bash
+conntrack -L                  # 列出连接跟踪表
+conntrack -L -p tcp --dport 22 # 过滤查看
+conntrack -E                  # 实时监听连接事件
+conntrack -F                  # 清空跟踪表
+conntrack -D -s 192.168.1.5   # 删除指定源的跟踪项
+conntrack -U -s 192.168.1.5 --mark 1 --label web  # 更新标记
+```
+
+**conntrackd 三种模式**：
+- **FTFW（firewall）**：主备防火墙间同步连接状态，故障切换不丢会话（keeplived 常配合）
+- **statistics**：汇总多节点流量统计
+- **alarm**：按阈值告警同步
+
+**配置要点**：`/etc/conntrackd/conntrackd.conf` 定义 Sync（组播地址 224.0.0.50、专网接口）与 NFCT（跟踪表 hook）；集群节点需 `Netlink` 事件可靠传输。
+
+**易错点**：①内核需加载 `nf_conntrack_netlink`；②只同步 TCP established 等稳定状态，不做 SYNFlood 场景同步；③`conntrack -S` 查看各 CPU 桶占用，表满（nf_conntrack_max）会丢包——调大需同时看内存。
+
 ## 双重 NAT 核心知识点
 
 - **用途/架构**：子网冲突时，双 NAT 经中间网重映射，两侧各做 DNAT+SNAT。
@@ -176,6 +230,31 @@ NAT BOX 2 对称，映射到真实内网 IP；`.182/.183 → .11/.12` 同理。
 - 单 NAT 因路由优先直连失效
 - 放行 FORWARD NEW
 - 保存：`iptables-save > /etc/sysconfig/iptables`
+
+## iptables 项目（核心要点）
+
+**定位**：iptables 是 Linux 2.4/2.6 内核包过滤框架 netfilter 的用户态配置工具（取代 ipchains；nftables 为其后继）。
+
+**四表五链**（优先级 raw > mangle > nat > filter）：
+- 表：raw（连接跟踪豁免）/ mangle（改包）/ nat（地址转换）/ filter（过滤）
+- 链：PREROUTING → INPUT →（转发）FORWARD → POSTROUTING；本机出：OUTPUT → POSTROUTING
+
+**核心语法**：
+
+```bash
+iptables -t filter -A INPUT -p tcp --dport 22 -j ACCEPT   # 追加规则
+iptables -I INPUT 1 -s 10.0.0.0/8 -j DROP                 # 插入首位
+iptables -D INPUT 1                                       # 按序号删
+iptables -L -n -v --line-numbers                          # 查看含计数
+iptables -F INPUT                                         # 清空链
+iptables -P FORWARD DROP                                  # 默认策略
+```
+
+**常用匹配模块**：`-m state --state NEW,ESTABLISHED`（ conntrack 状态）、`-m multiport --dports 80,443`、`-m iprange`、`-m limit --limit 5/s`（限速防爆破）、`-m mac --mac-source`。
+
+**NAT**：SNAT（`-t nat -A POSTROUTING -o eth0 -j SNAT --to-source x.x.x.x`，出口固定）与 MASQUERADE（动态 IP）；DNAT（PREROUTING，端口映射）。
+
+**易错点**：①规则自上而下首条命中即止，插入顺序错=规则不生效；②只改 filter 表不影响 nat；③持久化用 `iptables-save/restore` 或 netfilter-persistent；④nftables 迁移：`iptables-translate` 逐条转换。
 
 - Netfilter 扩展默认不编译，需用 **patch-o-matic-ng** 打补丁。
 - 获取最新源码：
@@ -500,6 +579,39 @@ netfilter.org 是 Linux 内核网络包处理（防火墙/NAT/连接跟踪）的
 
 - 团队变动（2023-11-17）：Arturo Borrero、Eric Leblond 转为荣誉成员；分别对 nftables 早期开发和 `nfnetlink_*`、ulogd2 维护有重要贡献。
 
+## 包过滤 HOWTO（核心要点）
+
+**防火墙设计三原则**：①默认拒绝（policy DROP），逐条放行；②先放行 RELATED,ESTABLISHED（回应流量）；③最小暴露——只开业务端口。
+
+**标准三链骨架**：
+
+```bash
+iptables -P INPUT DROP && iptables -P FORWARD DROP
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -i lo -j ACCEPT                       # 环回必放
+iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 1/s -j ACCEPT
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT           # SSH
+iptables -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+```
+
+**FORWARD 网关场景**（内网出网）：
+
+```bash
+iptables -A FORWARD -i eth-lan -o eth-wan -j ACCEPT
+iptables -A FORWARD -i eth-wan -o eth-lan -m state --state RELATED,ESTABLISHED -j ACCEPT
+# NAT 上网
+iptables -t nat -A POSTROUTING -o eth-wan -j MASQUERADE
+```
+
+**SYN 防护与日志**：
+
+```bash
+iptables -A INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 4 -j ACCEPT
+iptables -A INPUT -m limit --limit 5/m -j LOG --log-prefix "IPT DROP: "
+```
+
+**易错点**：①INPUT 影响本机、FORWARD 影响转发，网关机器两条链都要管；②`-m limit` 是令牌桶，`--limit-burst` 决定容忍突发；③规则持久化（重启丢失）；④调试用 `iptables -L -v` 看 pkts 计数定位规则是否命中。
+
 未提供正文内容，无法提炼。
 
 - **iptables**：Linux 包过滤工具。表/链：`filter`(INPUT/OUTPUT/FORWARD)、`nat`(PREROUTING/POSTROUTING/OUTPUT)、`mangle`(改 TTL/TOS)。
@@ -587,6 +699,48 @@ iptables -A POSTROUTING -s 10.15.15.0/24 -d 192.168.150.0/24 -j SNAT -o eth1 --t
 
 - 验证：`ssh 192.168.180.181` 应先登录盒2；最终用 .181-.183 访问 .10-.12。
 - 易错：忘开IP转发；DNAT/SNAT须成对；`-i/-o`接口方向不能错。
+
+- 项目：`conntrack-tools`
+- 核心资源：
+  - 代码库：`git.netfilter.org`
+  - 缺陷跟踪：`bugzilla.netfilter.org`
+  - 技术维基：`wiki.nftables.org`
+
+## conntrack-tools 核心知识点
+
+- **conntrack**：用户态 CLI，替代旧 `/proc/net/ip_conntrack`，用于查看和管理内核连接跟踪状态表。
+- **conntrackd**：用户态守护进程，面向有状态防火墙高可用场景，也可作统计收集器。
+- **nfct**：自 1.2.0 引入；当前仅支持 `nfnetlink_cttimeout`，未来拟以类 `nftables` 语法替代 `conntrack`。
+
+### 主要功能
+
+- 列出 conntrack 表内容（plain text / XML）
+- 搜索 conntrack 表中的单个条目
+- 向 conntrack 表添加新条目
+- 列出 expect 表条目
+- 向 expect 表添加新条目
+- 添加 / 删除 / 更新连接跟踪超时策略
+
+### 依赖与内核要求
+
+- 依赖库：
+  - `libnetfilter_conntrack`
+  - `libnfnetlink`
+  - `libmnl`
+  - `libnetfilter_cttimeout`
+- 内核需支持 `nf_conntrack_netlink` 子系统：
+  - 官方内核最低 `2.6.14`，建议 `2.6.18` 或更高
+  - 支持 `nfnetlink_cttimeout`：内核 `3.4.0` 或更高
+  - 支持 `nfnetlink_cthelper`：内核 `3.6.0` 或更高
+
+### 文档与源码
+
+- 用户手册：`conntrack-tools.netfilter.org/manual.html`
+- 高可用 Primary-Backup 测试环境：`conntrack-tools.netfilter.org/testcase.html`
+- 手册页：`conntrack(8)`、`conntrackd(8)`
+- Git 仓库：`https://git.netfilter.org/conntrack-tools/`
+
+无有效技术内容。
 
 - **ipset** 是 Linux 2.4.x+ 内核中的 IP 集合框架，通过 `ipset` 工具管理。
 - 可存储：IP 地址、(TCP/UDP) 端口号、IP+MAC 地址；匹配集合条目速度极快。

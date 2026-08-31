@@ -189,6 +189,49 @@ LogDenied=off
 - 典型用法：大量地址的 allow/block 规则缩减为少量规则
 - 选项、示例及更多配置见 `firewalld.ipset` 手册页
 
+### 策略集（Policy Sets）
+预定义策略集（如网关），默认禁用。
+激活：`firewall-cmd --policy-set gateway --remove-disable`
+转发示例：
+```bash
+firewall-cmd --permanent --policy gateway-world-to-HOST \
+             --add-forward-port port=2222:proto=tcp:toport=22:toaddr=10.0.0.22
+firewall-cmd --reload
+```
+
+### StrictForwardPorts 严格转发端口
+控制容器发布端口是否默认放行，配置于`/etc/firewalld/firewalld.conf`：
+```
+StrictForwardPorts=no   # 默认no，隐式放行；yes仅放行显式转发端口
+```
+`yes`时容器发布端口全阻，需显式添加；容器IP动态，运行时获取：
+```bash
+CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container_name>)
+firewall-cmd --zone public --add-forward-port=port=8080:proto=tcp:toport=80:toaddr=${CONTAINER_IP}
+```
+
+### Docker 严格过滤（配合firewalld）
+`daemon.json`设`"iptables": false`，重启主机（仅重启Docker不够）。Docker不自动创建规则，随后自定义zone：
+```bash
+firewall-cmd --permanent --zone docker --add-source 172.17.0.1/16
+```
+
+**firewalld 管理 Docker 网络**
+
+Docker 弃用 iptables 后 `--publish` 失效，改用 firewalld。
+
+容器外网访问：新建策略 `dockerToWorld`，ingress `docker`，egress `ANY`，target `ACCEPT`，加 masquerade。
+
+端口转发：
+```bash
+firewall-cmd --permanent --new-policy dockerFwdPort
+firewall-cmd --permanent --policy dockerFwdPort --add-ingress-zone ANY
+firewall-cmd --permanent --policy dockerFwdPort --add-egress-zone HOST
+firewall-cmd --permanent --policy dockerFwdPort --add-forward-port port=8080:proto=tcp:toport=80:toaddr=172.17.0.2
+```
+- 最后 `firewall-cmd --reload`；需提前知道容器 IP；容器内 `apt update` 验证。
+- 旧版 v2.0.z 前 egress 用 ANY。
+
 firewalld 预定义区域按信任级别从低到高：
 
 - `drop`：丢弃所有入站包，无回复；仅允许出站连接。
