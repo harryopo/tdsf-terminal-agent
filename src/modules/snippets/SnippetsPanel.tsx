@@ -6,16 +6,16 @@
 //   ├─────────────────────────────────────┤
 //   │ 搜索框 + 标签 tabs (全部 + 动态标签) │
 //   ├─────────────────────────────────────┤
-//   │ 片段列表（Frecency 排序）           │
+//   │ 片段列表（置顶优先 → 创建时间降序） │
 //   │  - 空状态: 引导新建                 │
 //   └─────────────────────────────────────┘
 //
 // 数据流:
 //   - mount 时调用 store.hydrate() 加载片段（LazyStore / localStorage 降级）
-//   - 搜索/标签切换本地筛选 + Frecency 排序
+//   - 搜索/标签切换本地筛选 + 置顶排序
 //   - 点击"插入"→ 有变量弹 SnippetRunDialog（变量解析 + 确认），无变量直接写入终端
 //   - 点击"编辑/删除"→ 弹 SnippetEditorDialog / 删除确认 Dialog
-//   - 插入成功后 recordUsage 更新 Frecency
+//   - 排序：置顶优先（最后置顶最靠上）→ 创建时间降序；插入不改变位置
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +32,8 @@ import {
   CodeIcon,
   Delete02Icon,
   Edit02Icon,
+  PinIcon,
+  PinOffIcon,
   PlusSignIcon,
   Search01Icon,
 } from "@hugeicons/core-free-icons";
@@ -113,11 +115,7 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
         return;
       }
       const ok = onInsertCommand(snippet.command);
-      if (ok) {
-        useSnippetsStore.getState().recordUsage(snippet.id);
-      } else {
-        toast.error("没有活动的终端，无法插入片段");
-      }
+      if (!ok) toast.error("没有活动的终端，无法插入片段");
     },
     [onInsertCommand],
   );
@@ -264,6 +262,9 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
                 onInsert={() => handleInsert(snippet)}
                 onEdit={() => setEditorTarget({ mode: "edit", snippet })}
                 onDelete={() => setDeleting(snippet)}
+                onTogglePin={() =>
+                  useSnippetsStore.getState().togglePin(snippet.id)
+                }
               />
             ))}
           </div>
@@ -317,42 +318,51 @@ function SnippetRow({
   onInsert,
   onEdit,
   onDelete,
+  onTogglePin,
 }: {
   snippet: Snippet;
   onInsert: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onTogglePin: () => void;
 }) {
+  const pinned = snippet.pinnedAt !== undefined;
   return (
     <div
-      className="group relative cursor-pointer rounded-md border border-border/50 bg-background/60 px-2.5 py-2 transition-colors hover:border-border hover:bg-muted/40"
+      className={cn(
+        "group relative cursor-pointer rounded-md border border-border/50 bg-background/60 px-2.5 py-2 transition-colors hover:border-border hover:bg-muted/40",
+        pinned && "border-primary/40 bg-primary/[0.04]",
+      )}
       onClick={onInsert}
       data-testid={`snippet-row-${snippet.name}`}
     >
       <div className="flex items-center gap-2">
+        {pinned && (
+          <HugeiconsIcon
+            icon={PinIcon}
+            size={11}
+            strokeWidth={2}
+            className="shrink-0 text-primary"
+          />
+        )}
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">
           {snippet.name}
         </span>
-        {snippet.usageCount > 0 && (
-          <span className="shrink-0 rounded-full border border-border/60 bg-card px-1.5 py-px text-[9.5px] tabular-nums text-muted-foreground">
-            ×{snippet.usageCount}
-          </span>
-        )}
-        {/* hover 操作按钮 */}
+        {/* hover 操作按钮：点击行本身即插入终端，这里只留置顶/编辑/删除 */}
         <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
           <RowAction
-            label="插入"
-            title="插入到终端"
+            label={pinned ? "取消置顶" : "置顶"}
+            title={pinned ? "取消置顶" : "置顶（按置顶顺序排列）"}
             onClick={(e) => {
               e.stopPropagation();
-              onInsert();
+              onTogglePin();
             }}
           >
             <HugeiconsIcon
-              icon={CodeIcon}
+              icon={pinned ? PinOffIcon : PinIcon}
               size={12}
               strokeWidth={1.75}
-              className="text-primary"
+              className={pinned ? "text-primary" : undefined}
             />
           </RowAction>
           <RowAction
@@ -385,6 +395,14 @@ function SnippetRow({
       {snippet.command && (
         <p className="mt-1 truncate font-mono text-[10.5px] leading-relaxed text-muted-foreground/80">
           {snippet.command}
+        </p>
+      )}
+      {snippet.description && (
+        <p
+          className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground/70"
+          title={snippet.description}
+        >
+          {snippet.description}
         </p>
       )}
       {snippet.tags.length > 0 && (

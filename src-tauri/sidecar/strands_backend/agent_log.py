@@ -16,6 +16,11 @@ strands_backend/agent_log.py — 会话流水日志（2026-08-31，用户钦定�
 - reasoning:     深度思考段（callback_handler 聚合增量后落盘）
 - tool_call:     工具调用开始（event_bus tool_call status=started）
 - tool_result:   工具调用完成/失败（event_bus tool_call status=completed/error）
+- loop_progress: 循环进度（T2 循环护栏，ToolCallLimitHook 每次工具调用后落盘：
+                 content 为 {round, tool_count, tool_name, status} JSON；
+                 meta.status=breaker 时 content 为熔断解释全文）
+- todo_followup: T3 规划-执行回环收尾校验触发的追加轮提示（invoke 后检测到
+                 todo 未完成项，以系统身份注入"继续执行或向用户说明原因"）
 
 与既有设施的区别（防重复建设）：
 - core/log_capture.py 是全局 logging ringbuffer（内存，非会话维度，进程退出即丢）
@@ -94,7 +99,7 @@ def log_event(
     Args:
         session_id: 会话 ID（空串写入 default.jsonl——env 分区等仍有排查价值）
         event_type: user_msg / env_inject / assistant_msg / reasoning /
-                    tool_call / tool_result
+                    tool_call / tool_result / loop_progress / todo_followup
         content: 事件内容（任意类型，str() 后截断 ≤2000 字符）
         meta: 附加元数据（mode/teach/agent_id/tool_name/status 等，可选）
 

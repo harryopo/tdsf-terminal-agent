@@ -7,6 +7,13 @@ export type Todo = {
   title: string;
   description?: string;
   status: TodoStatus;
+  /**
+   * 完成时间（T3 规划-执行回环，2026-08-31 spec add-agent-loop-closure）
+   *
+   * Python todo_write 工具自动维护（ISO 8601 本地时区）；旧数据/未完成项
+   * 无此字段。TodoStrip 完成项以小字显示。
+   */
+  completedAt?: string | null;
 };
 
 // TDSF 魔改: store path 改为 tdsf-todos.json(原 "terax-ai-todos.json" 保留为注释供溯源)

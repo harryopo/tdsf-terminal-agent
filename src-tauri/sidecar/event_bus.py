@@ -62,6 +62,11 @@ class EventType(str, Enum):
     # 之前因 EventType 缺失 + base.py 调用 publish 签名错误（传 3 参数而非 Event 对象）
     # 导致事件连 EventBus 都进不去，前端永远不显示告警（三重断裂）
     MOCK_LLM_ACTIVE = "mock_llm_active"
+    # T2 循环护栏 (2026-08-31, spec add-agent-loop-closure): 循环进度事件
+    # strands_backend/adapter.py ToolCallLimitHook 每次工具调用完成时推送
+    # （轮次/工具计数/成功失败），前端 AgentStatusPill 订阅 sidecar:loop_progress
+    # 实时显示"第 N 轮 · 已用工具 M"。
+    LOOP_PROGRESS = "loop_progress"
 
 
 # 所有合法的事件类型字符串
@@ -449,6 +454,43 @@ class EventBus:
         return self.publish(
             Event(
                 event_type=EventType.TOOL_CALL.value,
+                payload=payload,
+                session_id=session_id,
+                source=source,
+            )
+        )
+
+    def emit_loop_progress(
+        self,
+        round: int,
+        tool_count: int,
+        tool_name: str,
+        status: str,
+        session_id: str | None = None,
+        source: str | None = None,
+    ) -> int:
+        """发布 loop_progress 事件（T2 循环护栏，2026-08-31）
+
+        Args:
+            round: 当前 LLM 推理轮次（第 N 轮，BeforeModelCallEvent 计数）
+            tool_count: 本次 invoke 已用工具调用总数（含本次）
+            tool_name: 本次调用的工具名
+            status: 本次调用结果（success / failed / breaker）
+            session_id: 会话 ID
+            source: 来源（如 "main_agent.strands.hook"）
+
+        前端 AgentStatusPill 订阅 sidecar:loop_progress 显示
+        "第 N 轮 · 已用工具 M"；status=breaker 表示熔断（含解释文案）。
+        """
+        payload = {
+            "round": round,
+            "tool_count": tool_count,
+            "tool_name": tool_name,
+            "status": status,
+        }
+        return self.publish(
+            Event(
+                event_type=EventType.LOOP_PROGRESS.value,
                 payload=payload,
                 session_id=session_id,
                 source=source,

@@ -10,7 +10,8 @@ strands_backend/tests/test_e2e_strands.py — Strands 真实端到端测试（P0
    （schema-level safety 在模式过滤下生效）
 3. confirm/auto 模式：全量 21 工具（TOOL_REGISTRY 全量，委派 4 子 agent
    工具已删除）
-4. 模式缓存隔离：同 session 切换模式 → 重建 agent
+4. T1 上下文连续性 (2026-08-31)：模式切换不再重建实例（缓存 key 移除
+   mode/teach），工具集/prompt 每次 invoke 动态刷新
 
 策略：
 - 需要真实 strands 包（skipif 未安装）
@@ -184,6 +185,11 @@ class TestStrandsRealE2E(unittest.TestCase):
 
         spec 验收「观察模式 schema 级隔离」：LLM 无法调用不存在于 schema
         的执行/写类工具（原 explore agent 只读语义由模式过滤承接）。
+
+        T1 (2026-08-31, 方案书 v4.0): 模式不再触发实例重建（缓存 key
+        移除 mode/teach）——切到 confirm 后是**同一实例**，工具集由
+        _refresh_agent_runtime 动态刷回全量（原"模式缓存隔离"断言随
+        T1 行为变更而更新）。
         """
         from strands_backend.tools.registry import (
             READONLY_TOOL_NAMES,
@@ -208,12 +214,14 @@ class TestStrandsRealE2E(unittest.TestCase):
         self.assertIn("read_remote_file", tool_names)
         self.assertIn("suggest_command", tool_names)
 
-        # observe 与 confirm 是不同实例（模式缓存隔离）
+        # T1: observe 与 confirm 是同一实例（模式不再重建），
+        # 工具集动态刷新回全量（schema 随 invoke 即时切换）
         confirm_agent = adapter._get_or_create_agent(
             "main", ctx, mode=AgentMode.CONFIRM, teach=False
         )
-        self.assertIsNot(observe_agent, confirm_agent)
+        self.assertIs(observe_agent, confirm_agent)
         self.assertIn("ssh_command", set(confirm_agent.tool_names))
+        self.assertEqual(len(set(confirm_agent.tool_names)), 21)
 
     def test_main_agent_has_full_toolset(self):
         """main（唯一 agent）：TOOL_REGISTRY 全量 21 工具

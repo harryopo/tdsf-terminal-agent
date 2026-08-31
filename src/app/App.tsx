@@ -133,7 +133,11 @@ import {
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
-import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
+import {
+  LOCAL_WORKSPACE,
+  useWorkspaceEnvStore,
+  type WorkspaceEnv,
+} from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -669,6 +673,9 @@ export default function App() {
                 .sessions.some((s) => s.id === ghostSshSessionId)
             ) {
               useSpaces.getState().setEnv(spaceId!, { kind: "local" });
+              // TDSF 修复 2026-08-31: 降级时同步清掉远程 root（/home/... 是
+              // Linux 路径，本地文件树校验会报 InvalidPath）
+              useSpaces.getState().setRoot(spaceId!, null);
               console.warn(
                 "[App] auto-connect failed, downgraded ghost SSH space to local",
                 space?.name,
@@ -721,6 +728,9 @@ export default function App() {
           sp.name,
         );
         useSpaces.getState().setEnv(sp.id, { kind: "local" });
+        // TDSF 修复 2026-08-31: 降级时清掉远程 root，否则本地文件树打开
+        // /home/... 报 InvalidPath（用户实测截图里的报错）
+        useSpaces.getState().setRoot(sp.id, null);
       }
     }, 6000);
     return () => window.clearTimeout(timer);
@@ -762,35 +772,20 @@ export default function App() {
         // 资源管理器会一直显示错误而非远程文件。
         useWorkspaceFsStore.getState().setFatalError(null);
 
-        // TDSF 修复 2026-08-01: 目标 Space 按连接来源区分——
-        //   - 自动连接（connectWithSaved，state.autoConnectSessionId 标记）：
-        //     只升级 host/user 匹配的既有 SSH Space（恢复上次的 SSH 工作区），
-        //     绝不抢占当前活跃的本地 Space（此前自动连接会把本地 Space 升级
-        //     成 SSH 并误绑其 terminal tab，造成"本地工作区变远程"混乱）。
-        //   - 手动连接（对话框/列表一键登录）：保持"连接成功后当前 Space
-        //     升级为 SSH Space"的用户需求。
-        const isAutoConnect = state.autoConnectSessionId === session.id;
+        // TDSF 修复 2026-08-31（用户实测：新建本地工作区被自动导向服务器）:
+        // 连接成功只允许绑定"专属 SSH Space"（env.kind==="ssh" 且 host/user 匹配），
+        // 绝不改写本地/WSL Space——Space 类型由创建时的用户意图决定，连接是会话级
+        // 动作，不应污染工作区。找不到匹配 Space 时新建一个 SSH Space 并切换过去
+        // （覆盖欢迎页 cold tab 场景：用户点"连接 SSH"但尚无 Space）。
         const spaces = useSpaces.getState();
-        const currentSpaceId = spaces.activeId;
-        const currentSpace = spaces.spaces.find(
-          (s) => s.id === currentSpaceId,
-        );
         let targetSpace =
-          currentSpaceId && currentSpace ? currentSpace : null;
-        if (isAutoConnect) {
-          targetSpace =
-            spaces.spaces.find(
-              (s) =>
-                s.env.kind === "ssh" &&
-                s.env.host === session.params.host &&
-                s.env.user === session.params.user,
-            ) ?? null;
-        }
-        if (
-          targetSpace &&
-          (targetSpace.env.kind !== "ssh" ||
-            targetSpace.env.sessionId !== session.id)
-        ) {
+          spaces.spaces.find(
+            (s) =>
+              s.env.kind === "ssh" &&
+              s.env.host === session.params.host &&
+              s.env.user === session.params.user,
+          ) ?? null;
+        if (targetSpace && targetSpace.env.sessionId !== session.id) {
           useSpaces.getState().setEnv(targetSpace.id, {
             kind: "ssh",
             host: session.params.host,
@@ -799,6 +794,26 @@ export default function App() {
             sessionId: session.id,
             label: `${session.params.user}@${session.params.host}`,
           });
+        }
+        if (!targetSpace) {
+          // 无匹配 SSH Space：新建并激活。SpaceCreateDialog 创建的 SSH Space
+          // 已带 sessionId（上面 find 即命中），走到这里说明连接来自其他入口
+          // （SshExplorer 面板/欢迎页 cold tab），需要工作区承载。
+          const created = useSpaces.getState().create({
+            name: `${session.params.user}@${session.params.host}`,
+            root: `/home/${session.params.user}`,
+            env: {
+              kind: "ssh",
+              host: session.params.host,
+              user: session.params.user,
+              port: session.params.port ?? 22,
+              sessionId: session.id,
+              label: `${session.params.user}@${session.params.host}`,
+            },
+          });
+          targetSpace = created;
+          setActiveSpaceForNewTabs(created.id);
+          useSpaces.getState().setActive(created.id);
         }
 
         // TDSF 修复 2026-08-01: 新连接成功时同步 activeSessionId。
@@ -825,7 +840,8 @@ export default function App() {
         // 切到其它 Space 后新连接误绑到错误 Space 的 terminal tab。
         // TDSF 修复 2026-08-01: 查找范围限定 targetSpace.id 内的 tab，
         // 防止自动连接把其它 Space（如本地工作区）的 terminal tab 误绑成 SSH。
-        const targetSpaceId = targetSpace ? targetSpace.id : currentSpaceId;
+        // TDSF 修复 2026-08-31: targetSpace 现在恒非空（无匹配则新建）。
+        const targetSpaceId = targetSpace.id;
         const currentTabs = tabsRef.current;
         const currentActiveId = activeIdRef.current;
         // TDSF 修复 2026-08-07: tab 绑定条件放宽——绑定的 sessionId 若已失效
@@ -839,6 +855,13 @@ export default function App() {
             .sessions.some((s) => s.id === id);
         const canRebind = (id: string | null | undefined) =>
           !id || !sessionExists(id) || id === session.id;
+        // 在 subscribe 回调里用 getState() 读取最新远程路径, 避免 stale closure
+        const remoteCwd =
+          useSshStore.getState().currentPathBySession[session.id] ?? "/";
+        // TDSF 修复 2026-08-31: 只在"属于本 Space 且是本地 shell（未绑会话）或
+        // 幽灵绑定"的 terminal tab 上重绑。绝不跨 Space 抢占——此前 canRebind
+        // 对无 sshSessionId 的本地 tab 返回 true，若 targetSpace 判定失误会把
+        // 别的工作区的本地终端改成 SSH。
         let targetTab = currentTabs.find(
           (t) =>
             t.spaceId === targetSpaceId &&
@@ -863,23 +886,29 @@ export default function App() {
           );
         }
         if (targetTab) {
-          // TDSF 修复 2026-07-31: 绑定 SSH 会话时同步设置 tab 标题为 user@host,
-          //   并把 cwd 设为远程当前路径, 这样 tab 标签会显示服务器标识。
-          const sshHostLabel = `${session.params.user}@${session.params.host}`;
-          // 在 subscribe 回调里用 getState() 读取最新远程路径, 避免 stale closure
-          const remoteCwd =
-            useSshStore.getState().currentPathBySession[session.id] ?? "/";
+          // TDSF 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（服务器标识已在
+          // Space 名 / 左下角状态栏展示，tab 不重复显示 user@host）。
           updateTab(targetTab.id, {
             sshSessionId: session.id,
-            customTitle: sshHostLabel,
+            customTitle: "shell",
             cwd: remoteCwd,
           });
           // 切到该 tab, 让用户立即看到 SSH 终端
           if (targetTab.id !== currentActiveId) {
             setActiveId(targetTab.id);
           }
+        } else {
+          // TDSF 修复 2026-08-31: 新建的 SSH Space 里还没有任何 terminal tab
+          // （连接来自 SshExplorer 面板 / 欢迎页 cold tab 等无 Space 上下文入口），
+          // 主动补一个 shell tab，避免"连上了却没有终端"。
+          const tabId = newTabInSpace(targetSpaceId, remoteCwd);
+          updateTab(tabId, {
+            sshSessionId: session.id,
+            customTitle: "shell",
+            cwd: remoteCwd,
+          });
+          setActiveId(tabId);
         }
-        // 如果没有任何可绑定的 terminal tab, 不强制新建 (用户可能正在看 editor)
       }
 
       // 处理真正断开的会话: 解绑对应的 terminal tab, 并清除 SSH 自定义标题。
@@ -906,16 +935,21 @@ export default function App() {
               });
             }
           }
-          // WorkspaceFs P2-4: 当前 Space 的 SSH 会话断开 → 明确降级提示
-          // (资源管理器显示 fatalError, 而非静默回退本地/空白)
-          const spacesState = useSpaces.getState();
-          const cur = spacesState.spaces.find(
-            (s) => s.id === spacesState.activeId,
-          );
-          if (cur?.env.kind === "ssh" && cur.env.sessionId === sessionId) {
-            useWorkspaceFsStore
-              .getState()
-              .setFatalError("SSH 连接已断开，请重新连接");
+        }
+        // TDSF 修复 2026-08-31: 会话断开 → 所有绑定该会话的 Space 降级为本地
+        // （env→local、root→null 让资源管理器回退本地 home）。此前只给"当前
+        // Space"设 fatalError 且保留 env.kind=ssh，导致：① 幽灵 SSH Space 的
+        // root 还是远程 Linux 路径，本地文件树报 InvalidPath；② 用户删掉工作区
+        // 重开时残留 env 继续把新界面导向服务器。降级后重连会生成干净的专属
+        // SSH Space（见上方 connected 分支），本地/WSL Space 永不受连接污染。
+        const spacesState = useSpaces.getState();
+        for (const sp of spacesState.spaces) {
+          if (sp.env.kind === "ssh" && sp.env.sessionId === sessionId) {
+            spacesState.setEnv(sp.id, { kind: "local" });
+            useSpaces.getState().setRoot(sp.id, null);
+            if (spacesState.activeId === sp.id) {
+              useWorkspaceFsStore.getState().setFatalError(null);
+            }
           }
         }
         // 从 store 移除会话（closed/failed 均无继续存在的价值）
@@ -927,7 +961,14 @@ export default function App() {
       }
     });
     return () => unsub();
-  }, [persistSidebarView, sidebarView, updateTab, setActiveId]);
+  }, [
+    persistSidebarView,
+    sidebarView,
+    updateTab,
+    setActiveId,
+    newTabInSpace,
+    setActiveSpaceForNewTabs,
+  ]);
 
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
@@ -1849,13 +1890,15 @@ export default function App() {
         const tabId = newTab(undefined);
         setActiveId(tabId);
       } else {
-        const tabId = newTab(activeCwd ?? space.root ?? undefined);
+        // TDSF 修复 2026-08-31: 用新 Space 自己的 root（创建对话框已保证是
+        // 本地路径），不再继承 activeCwd——当前激活 tab 是 SSH/WSL 终端时
+        // activeCwd 是远程路径，会让新本地工作区的第一个终端跑错目录。
+        const tabId = newTab(space.root ?? undefined);
         setActiveId(tabId);
       }
       useSpaces.getState().setActive(space.id);
     },
     [
-      activeCwd,
       newTab,
       newTabInSpace,
       setActiveId,
@@ -1866,7 +1909,25 @@ export default function App() {
 
   const handleDeleteSpace = useCallback(
     (id: string) => {
-      const nextSpaceId = useSpaces.getState().remove(id);
+      // TDSF 修复 2026-08-31（用户实测：关工作区不关 SSH 连接 → 残留会话把
+      // 后续新建的工作区污染成 SSH）：删除前取出该 Space 绑定的 SSH 会话，
+      // 若无其他 Space 共用同一会话则一并断开（连接随工作区一起关闭）。
+      const spacesState = useSpaces.getState();
+      const doomed = spacesState.spaces.find((s) => s.id === id);
+      const doomedSessionId =
+        doomed?.env.kind === "ssh" ? doomed.env.sessionId : undefined;
+      const stillShared =
+        !!doomedSessionId &&
+        spacesState.spaces.some(
+          (s) =>
+            s.id !== id &&
+            s.env.kind === "ssh" &&
+            s.env.sessionId === doomedSessionId,
+        );
+      const nextSpaceId = spacesState.remove(id);
+      if (doomedSessionId && !stillShared) {
+        void useSshStore.getState().disconnect(doomedSessionId);
+      }
       if (!nextSpaceId) {
         // TDSF 修复 2026-08-01: 最后一个工作区删除 → 清空 tabs 进入欢迎界面
         clearTabs();
@@ -1903,12 +1964,11 @@ export default function App() {
     (spaceId: string) => {
       const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
       const root = space?.root;
+      // newTabInSpace 内部已按 Space env 绑定有效 sshSessionId（幽灵 id 有校验）
       const tabId = newTabInSpace(spaceId, root ?? undefined);
       if (space?.env.kind === "ssh" && space.env.sessionId) {
-        updateTab(tabId, {
-          sshSessionId: space.env.sessionId,
-          customTitle: `${space.env.user}@${space.env.host}`,
-        });
+        // TDSF 用户钦定 2026-08-28: SSH tab 固定叫 "shell"
+        updateTab(tabId, { customTitle: "shell" });
       }
     },
     [newTabInSpace, updateTab],
@@ -2404,8 +2464,22 @@ export default function App() {
           <SpaceCreateDialog
             open={spaceCreateOpen}
             onOpenChange={setSpaceCreateOpen}
-            defaultEnv={workspaceEnv}
-            defaultRoot={activeCwd ?? home ?? null}
+            // TDSF 修复 2026-08-31: 当前 Space 是 SSH 时 workspaceEnv 为 ssh——
+            // 直接透传会让"新建本地工作区"创建出 env.kind=ssh 的幽灵 Space
+            // （无会话可用 → 左侧资源管理器/终端行为按 SSH 判定但连不上）。
+            // 本地模式只允许继承 local/WSL 环境。
+            defaultEnv={
+              workspaceEnv.kind === "ssh" ? LOCAL_WORKSPACE : workspaceEnv
+            }
+            // TDSF 修复 2026-08-31: 本地 Space 的默认根目录必须是本地路径——
+            // activeCwd 在 SSH/WSL 终端下是远程 Linux 路径（/root 等），直接
+            // 塞给新建本地工作区会让资源管理器打开无效路径（InvalidPath）。
+            // 仅当前 Space 是本地时才继承 cwd，否则回退本地 home。
+            defaultRoot={
+              (activeSpace?.env.kind === "local" ? activeCwd : null) ??
+              home ??
+              null
+            }
             initialMode={spaceCreateMode}
             onCreated={handleSpaceCreated}
           />

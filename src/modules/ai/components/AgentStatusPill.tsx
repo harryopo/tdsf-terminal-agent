@@ -57,7 +57,11 @@ export function AgentStatusPill({
   const agentMode = useChatStore((s) => s.agentMode);
   const teach = useChatStore((s) => s.teach);
   const status = useChatStore((s) => s.agentMeta.status);
+  const loopProgress = useChatStore((s) => s.agentMeta.loopProgress);
   const isBusy = status === "thinking" || status === "streaming";
+  // T2 循环护栏: invoke 期间显示"第 N 轮 · 已用工具 M"（sidecar:loop_progress
+  // 事件推流；新一轮 thinking / 终态时由 chatRuntime 清空）
+  const showLoopProgress = isBusy && loopProgress !== null;
 
   const meta = AGENT_MODE_META[agentMode];
   const ModeIcon = MODE_ICON[agentMode];
@@ -101,6 +105,19 @@ export function AgentStatusPill({
       <span className="max-w-[8rem] truncate text-muted-foreground">
         {meta.badge}
       </span>
+      {/* T2 循环护栏: invoke 期间循环进度（第 N 轮 · 已用工具 M） */}
+      {showLoopProgress && loopProgress && (
+        <span
+          data-testid="agent-loop-progress"
+          className="hidden shrink-0 items-center gap-0.5 font-mono text-[9.5px] tabular-nums text-muted-foreground/70 md:flex"
+          title={`循环进度：第 ${loopProgress.round} 轮推理 · 已用工具 ${loopProgress.toolCount} 次（单任务上限 50）`}
+        >
+          <span>·</span>
+          <span>
+            第 {loopProgress.round} 轮 · 工具 {loopProgress.toolCount}
+          </span>
+        </span>
+      )}
       {teach && agentMode !== "teach" && (
         <span className="flex items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-violet-600 dark:text-violet-400">
           <HugeiconsIcon icon={BookOpen01Icon} size={9} strokeWidth={1.75} />
