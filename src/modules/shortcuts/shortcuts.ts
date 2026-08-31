@@ -10,9 +10,6 @@ export type ShortcutId =
   | "commandPalette.open"
   | "commandPalette.content"
   | "tab.new"
-  | "tab.newBlock"
-  | "tab.newPrivate"
-  | "tab.newPreview"
   | "tab.newEditor"
   | "tab.close"
   | "tab.next"
@@ -113,27 +110,9 @@ export const SHORTCUTS: Shortcut[] = [
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "t" }],
   },
-  {
-    id: "tab.newBlock",
-    label: "新建 Blocks 终端",
-    group: "Tabs",
-    // TDSF 魔改: Ctrl/⌘+Shift+T 让位给 terminal.translate（终端翻译），
-    // Blocks 终端默认不绑定，可在设置中自定义。
-    defaultBindings: [],
-  },
-  {
-    id: "tab.newPrivate",
-    label: "新建隐私终端",
-    group: "Tabs",
-    defaultBindings: [{ [MOD_PROP]: true, key: "r" }],
-  },
-  {
-    id: "tab.newPreview",
-    label: "新建网页预览",
-    group: "Tabs",
-    // Cmd/Ctrl+P now opens the command palette, so web preview moves here.
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "o" }],
-  },
+  // TDSF 魔改 2026-08-31（用户钦定）: 删 tab.newBlock / tab.newPrivate /
+  // tab.newPreview 三项——Blocks/隐私终端/网页预览入口与本项目定位无关，
+  // 已从 + 菜单与命令面板整体移除（原 Ctrl+R / Ctrl+Shift+O 绑定随之释放）。
   {
     id: "tab.newEditor",
     label: "新建编辑器标签",

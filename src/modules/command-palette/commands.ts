@@ -6,8 +6,6 @@ import {
   DashboardSquare01Icon,
   FileEditIcon,
   FileSearchIcon,
-  Globe02Icon,
-  IncognitoIcon,
   KeyboardIcon,
   LayoutTwoColumnIcon,
   LayoutTwoRowIcon,
@@ -39,11 +37,7 @@ export type CommandPaletteActionContext = {
   explorerRoot: string | null;
   home: string | null;
   openNewTab: () => void;
-  openNewBlock: () => void;
-  openNewPrivate: () => void;
   openNewEditor: () => void;
-  openNewPreview: () => void;
-  openGitGraph: () => void;
   toggleSourceControl: () => void;
   closeActiveTabOrPane: () => void;
   splitPaneRight: () => void;
@@ -152,27 +146,8 @@ export function createCommandItems(
       shortcutId: "tab.new",
       run: ctx.openNewTab,
     },
-    {
-      id: "tab.newBlock",
-      title: "新建块状终端",
-      group: "标签页",
-      keywords: ["blocks", "warp", "command blocks", "terminal", "new block terminal"],
-      icon: DashboardSquare01Icon,
-      // TDSF 魔改 2026-08-28: SSH 空间隐藏本地专属入口（块状终端基于本地 PTY）
-      hidden: ctx.isSshSpace === true,
-      run: ctx.openNewBlock,
-    },
-    {
-      id: "tab.newPrivate",
-      title: "新建隐私终端",
-      group: "标签页",
-      keywords: ["privacy", "private", "incognito", "hidden from ai", "new private terminal"],
-      icon: IncognitoIcon,
-      shortcutId: "tab.newPrivate",
-      // TDSF 魔改 2026-08-28: SSH 空间隐藏（用户钦定，隐私终端属本地工作区功能）
-      hidden: ctx.isSshSpace === true,
-      run: ctx.openNewPrivate,
-    },
+    // TDSF 魔改 2026-08-31（用户钦定）: 删"新建块状终端/隐私终端/网页预览"
+    // 三条命令——入口与本项目 Linux 运维教学定位无关，点击后功能残缺。
     {
       id: "tab.newEditor",
       title: "新建编辑器标签页",
@@ -184,18 +159,6 @@ export function createCommandItems(
       // TDSF 魔改 2026-08-28: SSH 空间隐藏（新建文件走远程文件树，非本地编辑器）
       hidden: ctx.isSshSpace === true,
       run: ctx.openNewEditor,
-    },
-    {
-      id: "tab.newPreview",
-      title: "新建网页预览",
-      group: "标签页",
-      keywords: ["browser", "web", "localhost", "preview", "new web preview"],
-      icon: Globe02Icon,
-      shortcutId: "tab.newPreview",
-      // TDSF 修复 2026-08-01: SSH 空间无本地网页预览（预览指向本地 localhost 服务），
-      // 隐藏该命令避免用户误操作。
-      hidden: ctx.isSshSpace === true,
-      run: ctx.openNewPreview,
     },
     {
       id: "tab.close",
@@ -227,16 +190,8 @@ export function createCommandItems(
       disabledReason: splitDisabled,
       run: ctx.splitPaneDown,
     },
-    {
-      id: "git.graph",
-      title: "打开 Git 提交图",
-      group: "Git",
-      keywords: ["git", "graph", "history", "log", "commits", "open git graph"],
-      icon: SourceCodeIcon,
-      // TDSF 魔改 2026-08-28: SSH 空间隐藏（Git 图扫的是本地仓库，远程无意义）
-      hidden: ctx.isSshSpace === true,
-      run: ctx.openGitGraph,
-    },
+    // TDSF 魔改 2026-08-31（用户钦定）: 删"打开 Git 提交图"命令——Git Graph
+    // 入口与 + 菜单同步移除（源代码管理面板仍可从侧栏打开）。
     {
       id: "git.source",
       title: "切换源代码管理",

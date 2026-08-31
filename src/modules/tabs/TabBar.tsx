@@ -58,15 +58,7 @@ type Props = {
   activeId: number;
   onSelect: (id: number) => void;
   onNew: () => void;
-  onNewBlock: () => void;
-  onNewPrivate: () => void;
-  onNewPreview: () => void;
-  /** TDSF 修复 2026-08-01: SSH 空间隐藏本地预览菜单项 */
-  showPreview?: boolean;
-  /** TDSF 魔改 2026-08-28: SSH 空间隐藏本地专属菜单项（Blocks/Privacy/Editor/GitGraph） */
-  showLocalExtras?: boolean;
   onNewEditor: () => void;
-  onNewGitGraph: () => void;
   onClose: (id: number) => void;
   /** Pin (promote) a preview tab to persistent on double-click. */
   onPin: (id: number) => void;
@@ -83,13 +75,7 @@ export function TabBar({
   activeId,
   onSelect,
   onNew,
-  onNewBlock,
-  onNewPrivate,
-  onNewPreview,
-  showPreview = true,
-  showLocalExtras = true,
   onNewEditor,
-  onNewGitGraph,
   onClose,
   onPin,
   onRename,

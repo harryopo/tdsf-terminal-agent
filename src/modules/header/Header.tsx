@@ -59,15 +59,7 @@ type Props = {
   activeId: number;
   onSelect: (id: number) => void;
   onNew: () => void;
-  onNewBlock: () => void;
-  onNewPrivate: () => void;
-  onNewPreview: () => void;
-  /** TDSF 修复 2026-08-01: SSH 空间隐藏本地预览菜单项 */
-  showPreview?: boolean;
-  /** TDSF 魔改 2026-08-28: SSH 空间隐藏本地专属菜单项（Blocks/Privacy/Editor/GitGraph） */
-  showLocalExtras?: boolean;
   onNewEditor: () => void;
-  onNewGitGraph: () => void;
   onClose: (id: number) => void;
   /** Promote a preview (transient) tab to persistent. */
   onPin: (id: number) => void;
@@ -94,13 +86,7 @@ export function Header({
   activeId,
   onSelect,
   onNew,
-  onNewBlock,
-  onNewPrivate,
-  onNewPreview,
-  showPreview = true,
-  showLocalExtras = true,
   onNewEditor,
-  onNewGitGraph,
   onClose,
   onPin,
   onRename,
@@ -239,13 +225,7 @@ export function Header({
           activeId={activeId}
           onSelect={onSelect}
           onNew={onNew}
-          onNewBlock={onNewBlock}
-          onNewPrivate={onNewPrivate}
-          onNewPreview={onNewPreview}
-          showPreview={showPreview}
-          showLocalExtras={showLocalExtras}
           onNewEditor={onNewEditor}
-          onNewGitGraph={onNewGitGraph}
           onClose={onClose}
           onPin={onPin}
           onRename={onRename}
