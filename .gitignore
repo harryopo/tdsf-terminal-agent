@@ -147,3 +147,5 @@ src-tauri/sidecar/dist-sidecar/
 src-tauri/sidecar/build-sidecar/
 src-tauri/sidecar/tdsf-sidecar.exe
 src-tauri/sidecar/tdsf-sidecar/
+
+src-tauri/sidecar/agent-logs/
