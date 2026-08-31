@@ -78,16 +78,16 @@ def build(size: int) -> Image.Image:
     if CHEVRON_ROUND > 0:
         # 圆角化：逻辑坐标算贝塞尔采样点，再映射到超采样像素坐标
         smooth = rounded_polygon_pts(chevron_pts, CHEVRON_ROUND)
-        d.polygon([(round(x * k), round(y * k)) for x, y in smooth], fill=FG)
+        d.polygon([(round(x * k), round(y * k)) for x, y in smooth], fill=GREEN)
     else:
-        d.polygon(chevron_pts, fill=FG)
+        d.polygon(chevron_pts, fill=GREEN)
 
     # 3) 光标 "_"：加大后的圆角方块，底边与箭头底对齐
     cu = {key: round(val * k) for key, val in CURSOR.items()}
     d.rounded_rectangle(
         [cu["x"], cu["y"], cu["x"] + cu["size"], cu["y"] + cu["size"]],
         radius=cu["radius"],
-        fill=FG,
+        fill=GREEN,
     )
 
     # 4) 高质量下采样回目标尺寸（超采样抗锯齿的核心步骤）

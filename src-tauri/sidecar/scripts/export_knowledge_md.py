@@ -20,6 +20,9 @@ scripts/export_knowledge_md.py — 知识库导出本地 md 预览（TDSF 2026-0
 - doc_titles_zh 的中文标题写进 frontmatter + 正文顶部「# 中文标题」
 - 幂等：重跑覆盖（先清空导出目录再导出，条目减少不留陈旧文件）
 - 导出后打印导出位置与每分类/每源文件数统计
+- **格式校验（TDSF 2026-08-30 根因修复）**：正文含 <!DOCTYPE/<html/<table
+  等原始 HTML 标记 → 该条**拒绝导出**并告警（爬虫 HTML→MD 转换失效的信号，
+  脏数据不进预览目录）
 
 用法（在 src-tauri/sidecar 下）：
     .venv/Scripts/python.exe scripts/export_knowledge_md.py
@@ -75,6 +78,20 @@ def category_dir_name(category: str) -> str:
     return CATEGORY_DIR_NAMES.get(category or "", "其他")
 
 
+# 原始 HTML 标记（正文头部出现 = 爬虫 HTML→MD 转换失效，脏数据拒绝导出）。
+# 只取"整页 HTML 未转换"的强信号（<table>/<html>/<!doctype/<body>），不含
+# <div>/<span>——代码示例正文里合法出现的内联标签不误伤（TDSF 2026-08-30）
+_RAW_HTML_RE = re.compile(
+    r"<!doctype\s|<html[\s>]|<table[\s>]|<body[\s>]",
+    re.IGNORECASE,
+)
+
+
+def has_raw_html(content: str) -> bool:
+    """正文前 2000 字符含原始 HTML 标记 → True（导出校验，TDSF 2026-08-30）"""
+    return bool(_RAW_HTML_RE.search(content[:2000]))
+
+
 def slugify_filename(title: str, fallback: str) -> str:
     """标题 → Windows 安全文件名（保留中文；非法字符替换为 _）"""
     name = _WIN_ILLEGAL_RE.sub("_", title).strip(" .")
@@ -109,12 +126,22 @@ def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
     titles = {t["url"]: t for t in rag.titles_zh()}
 
     counts: dict[str, int] = {}
+    rejected_raw_html = 0
     for f in official:
         source = str(f["source"])
         category = str(f.get("category", ""))
         url = str(f["url"])
         doc = rag.get_doc(url)
         if doc is None or not str(doc.get("content", "")).strip():
+            continue
+        content = str(doc.get("content", ""))
+        # 格式校验：正文含原始 HTML 标记 = 转换器失效脏数据，拒绝导出并告警
+        if has_raw_html(content):
+            rejected_raw_html += 1
+            logger.warning(
+                f"REJECT export (raw HTML in content, crawler bug): "
+                f"{source} {url} title={doc.get('title', '')!r}"
+            )
             continue
         zh_row = titles.get(url, {})
         zh_title = str(zh_row.get("zh", "")).strip()
@@ -149,7 +176,7 @@ def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
         if zh_title:
             lines.append(f"# {zh_title}")
             lines.append("")
-        lines.append(str(doc.get("content", "")).rstrip())
+        lines.append(content.rstrip())
         lines.append("")
         # 中文译文（translate_knowledge.py 已翻译时导出——双语对照）
         if content_zh:

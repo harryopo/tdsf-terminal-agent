@@ -303,8 +303,10 @@ class TestIntegrationPoints(unittest.TestCase):
         from knowledge.crawlers.nginx import NginxCrawler
 
         crawler = NginxCrawler(cache_root=__import__("tempfile").mkdtemp())
-        items = [{"title": "t", "content": "内容\U0001F680 Next", "url": "u", "tags": []}]
+        body = "足够长的 nginx 正文内容，用于通过质量门槛。" * 30
+        items = [{"title": "t", "content": f"内容\U0001F680 Next\n{body}", "url": "u", "tags": []}]
         entries = crawler.to_entries(items)
+        self.assertEqual(len(entries), 1)
         self.assertNotIn("\U0001F680", entries[0].content)
 
     def test_extract_page_cleans(self):
@@ -324,17 +326,18 @@ class TestIntegrationPoints(unittest.TestCase):
         self.assertNotIn("Previous", page["content"])
 
     def test_extract_page_drops_traditional(self):
-        """_extract_page（BFS 路径）繁体内容整页丢弃（返回 None）"""
-        from knowledge.crawlers.generic import _extract_page
+        """繁体内容整页丢弃（TDSF 2026-08-30 根因修复后：判定移至 _filter_reason，
+        _extract_page 只负责转换，BFS 由 _filter_reason 决定去留）"""
+        from knowledge.crawlers.generic import _extract_page, _filter_reason
         from bs4 import BeautifulSoup
 
         html = (
             "<html><body><h1>名稱</h1>"
-            "<p>" + "Bash是一個與sh相容的命令解釋程式，可以讀取檔案並執行命令。" * 8 + "</p>"
+            "<p>" + "Bash是一個與sh相容的命令解釋程式，可以讀取檔案並執行命令。" * 20 + "</p>"
             "</body></html>"
         )
         page = _extract_page(BeautifulSoup(html, "html.parser"), "https://e.com/", ["bash"])
-        self.assertIsNone(page)
+        self.assertEqual(_filter_reason(page), "traditional")
 
     def test_extract_page_simplified_kept(self):
         """简体正文正常返回（不误判为繁体）"""

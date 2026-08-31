@@ -11,14 +11,17 @@ knowledge/crawlers/nginx.py — nginx 文档爬虫（T-P3-03，深度抓取增�
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from knowledge.crawlers.base import BaseCrawler, CrawlerResult
-from knowledge.crawlers.clean import clean_content
-from knowledge.crawlers.generic import crawl_site
+from knowledge.crawlers.clean import clean_content, clean_title
+from knowledge.crawlers.generic import _dedupe_entries, _filter_reason, crawl_site
 from knowledge.fts5 import KnowledgeEntry
+
+logger = logging.getLogger("sidecar.knowledge.crawlers.nginx")
 
 
 class NginxCrawler(BaseCrawler):
@@ -93,18 +96,39 @@ class NginxCrawler(BaseCrawler):
         return items
 
     def to_entries(self, items: list[dict[str, Any]]) -> list[KnowledgeEntry]:
-        """转换为 KnowledgeEntry（title/content 入库前清洗）"""
+        """转换为 KnowledgeEntry（清洗 + 页面治理，与 GenericCrawler 对齐）
+
+        TDSF 2026-08-30 根因修复：标题走 clean_title（去 .html/.cgi 后缀、
+        slug 兜底），条目统一过 _filter_reason（垃圾标题/链接墙/短页/
+        繁体）+ 同标题去重。BFS 主路径经 crawl_site._extract_page 已治理，
+        此处覆盖 parse() 单页拆分路径。
+        """
+        from knowledge.sources import category_for
+
         entries: list[KnowledgeEntry] = []
+        discarded = 0
         for i, item in enumerate(items):
-            entry_id = self.build_entry_id(item, i)
+            content = clean_content(item.get("content", ""))
             raw_title = str(item.get("title", ""))
-            title = clean_content(raw_title) or raw_title
+            url = str(item.get("url", self.base_url))
+            title = clean_title(clean_content(raw_title) or raw_title, url)
+            if _filter_reason({"title": title, "content": content}) is not None:
+                discarded += 1
+                continue
             entries.append(KnowledgeEntry(
-                id=entry_id,
+                id=self.build_entry_id({"title": title, "url": url}, i),
                 source=self.source,
                 title=title,
-                content=clean_content(item.get("content", "")),
-                url=item.get("url", self.base_url),
+                content=content,
+                url=url,
                 tags=item.get("tags", ["nginx"]),
+                category=category_for(self.source, title),
             ))
-        return entries
+        if discarded:
+            from knowledge.crawlers.generic import _PAGE_MIN_CHARS
+
+            logger.info(
+                f"[{self.source}] to_entries discarded {discarded} page(s) "
+                f"(junk-title/link-farm/short<{_PAGE_MIN_CHARS}/traditional)"
+            )
+        return _dedupe_entries(entries, self.source)
