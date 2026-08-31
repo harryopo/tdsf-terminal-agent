@@ -2,7 +2,27 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-31 · **知识库全链路治理完成：垃圾清洗 + 合并 27 文件 + 块级重建 4647 块；翻译任务交接给外部 AI（`docs/知识库中文翻译-交接说明.md`）**。接手请先读 **DEV-JOURNAL §37.85 开发铁律** + **`docs/知识库中文翻译-交接说明.md`**（翻译任务完整任务书）。知识库状态：`knowledge-preview/` 27 个合并 md（7 分类 ≤5 文件，已清洗 25 垃圾章节+42 行残渣，德语/韩语等语言变体 0 残留），`.tdsf-data/rag.db` 4647 块（官方 4539 + philosophy 108），**content_zh 翻译 = 0，待外部 AI 执行**（脚本 `translate_knowledge.py` 断点续跑就绪，范围 A/B/C 先问用户）。下一步 = 翻译 → 重导 knowledge-preview → 用户桌面实测 → T13（MCP 客户端）
+> **最后更新**：2026-08-31 · **知识库项目全部收官（§37.86-88，至 commit 9dae6be）：精简库 660 块中文提炼全链路接入（agent 工具/RPC/前端三端），knowledge_get_doc 新工具，知识卡片 UI，摘要/层级/计数三修**。知识库阶段完结——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致。**下一步主攻 Agent 模块**（方案书 v3.1 三模式已落地，P1 事件源日志/回放/token 计量待启动）。接手先读 DEV-JOURNAL「开发铁律」+「§37.87 知识库收官」
+
+---
+
+## 知识库阶段总结（2026-08-31 收官，细节见 DEV-JOURNAL §37.86-87）
+
+| 项 | 终态 |
+|---|---|
+| 双库 | 全量 `rag.db` 4077 块英文（源头+兜底，knowledge.search_full）/ 精简 `rag_slim.db` 660 块中文提炼（主库） |
+| 三端接入 | agent 工具 knowledge_search（readonly，L1 可用）+ **knowledge_get_doc**（url 读全文）/ RPC search·list_files·get_doc·titles_zh·count / 前端 KnowledgeBrowser + 对话流知识卡片 |
+| RAG 引擎 | sqlite-vec + FTS5/BM25 + RRF 混合检索 + bi-encoder 重排（与 2026 主流一致）；可选升级：cross-encoder、bge-m3 |
+| 质量 | 繁体/外语/垃圾页/占位块 0 残留；检索 7 组中文 query 精简库显著更优；摘要纯文本化（无 ###/---） |
+| 预览 | knowledge-preview/（全量 27 文件）+ knowledge-slim-preview/（精简 25 文件） |
+| 待办（可选） | --recompress 二次压缩 57万→30万字；cross-encoder 精排；chromadb 旧依赖清理 |
+
+## 知识库教训速查（细节在 DEV-JOURNAL 开发铁律+§37.86-87）
+1. 双库事故：数据路径单一来源，改前先查运行时真正读的文件
+2. 手写 HTML 解析是坑，markdownify 等成熟库第一天就用
+3. 不在脏数据上做下游处理（623 篇翻译作废教训）
+4. LLM 批处理：低并发（1-3）、先冒烟估成本、失败先定性再重试；免费 API 额度绑账户不适合批处理；**主 agent 自己能做的（提炼/翻译）零成本直接做**
+5. UI 计数口径必须同源（采样数 vs 块数对不上=误导）
 
 ---
 
