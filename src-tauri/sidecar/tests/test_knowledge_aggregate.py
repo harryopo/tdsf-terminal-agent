@@ -186,7 +186,11 @@ class FakeDispatcher:
 
 @pytest.fixture
 def dispatcher(tmp_path, monkeypatch) -> FakeDispatcher:
-    """隔离 rag + patch embedding + 注册 knowledge.* 方法"""
+    """隔离 rag + patch embedding + 注册 knowledge.* 方法
+
+    TDSF 2026-08-31 双库：knowledge.list_files / get_doc / titles_zh 主读
+    精简库 → 全量/精简两个单例都重定向到 tmp_path 隔离。
+    """
     import knowledge.rag as rag_mod
     from knowledge.rpc import register_methods
 
@@ -196,6 +200,7 @@ def dispatcher(tmp_path, monkeypatch) -> FakeDispatcher:
         rag_mod, "_load_embed_model", lambda: None
     )
     rag = rag_mod.reset_global_rag(db_path=str(tmp_path / "rpc-rag.db"))
+    rag_mod.reset_slim_rag(db_path=str(tmp_path / "rpc-slim.db"))
     try:
         d = FakeDispatcher()
         register_methods(d)
@@ -203,12 +208,13 @@ def dispatcher(tmp_path, monkeypatch) -> FakeDispatcher:
     finally:
         rag_mod._load_embed_model = original
         rag_mod.reset_global_rag(db_path=str(tmp_path / "rpc-after.db"))
+        rag_mod.reset_slim_rag(db_path=str(tmp_path / "rpc-after-slim.db"))
 
 
 def test_rpc_list_files_dispatch(dispatcher: FakeDispatcher):
-    from knowledge.rag import get_global_rag
+    from knowledge.rag import get_slim_rag
 
-    rag = get_global_rag()
+    rag = get_slim_rag()
     _add_doc_chunk(rag, 0, "内容A")
     _add_doc_chunk(rag, 1, "内容B")
 
@@ -225,9 +231,9 @@ def test_rpc_list_files_dispatch(dispatcher: FakeDispatcher):
 
 
 def test_rpc_get_doc_dispatch(dispatcher: FakeDispatcher):
-    from knowledge.rag import get_global_rag
+    from knowledge.rag import get_slim_rag
 
-    rag = get_global_rag()
+    rag = get_slim_rag()
     _add_doc_chunk(rag, 0, "内容A")
     _add_doc_chunk(rag, 1, "内容B")
 
@@ -294,10 +300,10 @@ def test_titles_zh_source_filter(rag: RagIndex):
 
 
 def test_rpc_titles_zh_dispatch(dispatcher: FakeDispatcher):
-    """knowledge.titles_zh RPC：无参全量 / source 过滤"""
-    from knowledge.rag import get_global_rag
+    """knowledge.titles_zh RPC：无参全量 / source 过滤（TDSF 2026-08-31 主读精简库）"""
+    from knowledge.rag import get_slim_rag
 
-    rag = get_global_rag()
+    rag = get_slim_rag()
     _add_doc_chunk(rag, 0, "内容A", url="D:/docs/guide.md")
     rag.upsert_titles_zh({"D:/docs/guide.md": "指南"})
 

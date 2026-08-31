@@ -163,3 +163,121 @@ describe("Tool — approval-requested 分支", () => {
     expect(screen.queryByText("需要你的确认")).toBeNull();
   });
 });
+
+describe("Tool — knowledge_search 知识卡片（TDSF 2026-08-31 双库）", () => {
+  const SEARCH_OUTPUT = {
+    status: "success",
+    query: "systemctl 服务",
+    count: 2,
+    results: [
+      {
+        id: "slim-1",
+        title: "systemctl 服务管理",
+        content:
+          "systemctl 是 systemd 的服务管理命令，restart 停止再启动，reload 平滑重载。",
+        source: "systemd-docs",
+        url: "consolidated/sys-admin/系统启动、内核与 systemd（Arch Wiki）.md",
+        category: "sys-admin",
+      },
+      {
+        id: "slim-2",
+        title: "firewalld 防火墙",
+        content: "firewall-cmd 是 firewalld 的管理命令。",
+        source: "firewalld-docs",
+        url: "consolidated/security/firewalld 防火墙.md",
+        category: "security",
+      },
+    ],
+  };
+
+  it("渲染知识卡片列表：title + source 中文标签 + 摘要 + category 徽标", () => {
+    render(
+      <Tool
+        toolName="knowledge_search"
+        state="output-available"
+        input={{ query: "systemctl 服务" }}
+        output={SEARCH_OUTPUT}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("systemctl 服务管理")).toBeTruthy();
+    expect(screen.getByText("systemd 手册")).toBeTruthy();
+    expect(screen.getByText("系统管理")).toBeTruthy();
+    expect(screen.getByText("安全加固")).toBeTruthy();
+    // 摘要（content 前 150 字内原文）
+    expect(
+      screen.getByText(/restart 停止再启动/),
+    ).toBeTruthy();
+    // 裸 JSON 不再出现（title 不以 JSON 形式整体渲染）
+    // 注：JSX 插值把 "2 条结果" 拆为多文本节点，用 textContent 正则匹配
+    expect(
+      screen.getByText((_, el) => el?.textContent === "2 条结果 · 「systemctl 服务」"),
+    ).toBeTruthy();
+  });
+
+  it("empty 状态渲染空态文案", () => {
+    render(
+      <Tool
+        toolName="knowledge_search"
+        state="output-available"
+        input={{ query: "x" }}
+        output={{ status: "empty", query: "x", count: 0, results: [] }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("知识库暂无相关内容")).toBeTruthy();
+  });
+
+  it("error 状态渲染错误信息", () => {
+    render(
+      <Tool
+        toolName="knowledge_search"
+        state="output-available"
+        input={{}}
+        output={{ status: "error", message: "知识库检索异常: boom" }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText(/知识库检索异常/)).toBeTruthy();
+  });
+});
+
+describe("Tool — knowledge_get_doc 文档卡片（TDSF 2026-08-31 双库）", () => {
+  it("渲染文档卡片：title + category 徽标 + 块数，全文默认折叠", () => {
+    render(
+      <Tool
+        toolName="knowledge_get_doc"
+        state="output-available"
+        input={{ url: "consolidated/services/Web 服务器（Nginx 与 Apache）.md" }}
+        output={{
+          status: "success",
+          url: "consolidated/services/Web 服务器（Nginx 与 Apache）.md",
+          title: "Web 服务器（Nginx 与 Apache）",
+          category: "services",
+          content: "## Nginx\n\n反向代理配置示例…",
+          chunks: 12,
+          truncated: false,
+        }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("Web 服务器（Nginx 与 Apache）")).toBeTruthy();
+    expect(screen.getByText("服务部署")).toBeTruthy();
+    expect(screen.getByText("12 块")).toBeTruthy();
+    // 全文折叠：内容默认不可见
+    expect(screen.queryByText(/反向代理配置示例/)).toBeNull();
+  });
+
+  it("not_found 状态渲染提示", () => {
+    render(
+      <Tool
+        toolName="knowledge_get_doc"
+        state="output-available"
+        input={{ url: "no-such.md" }}
+        output={{ status: "not_found", url: "no-such.md" }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText(/不存在该文档/)).toBeTruthy();
+  });
+});

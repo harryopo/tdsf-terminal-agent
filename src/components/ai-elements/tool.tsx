@@ -30,6 +30,10 @@ import {
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
 import { useChatStore } from "@/modules/ai/store/chatStore";
+import {
+  categoryGroupLabel,
+  sourceGroupLabel,
+} from "@/modules/ai/lib/knowledge-labels";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import type { ComponentProps, ReactNode } from "react";
@@ -345,6 +349,8 @@ const TOOL_META: Record<string, { label: string; icon: typeof File01Icon }> = {
   todo_write: { label: "Todos", icon: CheckListIcon },
   // P2-4: 知识库检索（RAG 混合检索工具）
   knowledge_search: { label: "知识库", icon: BookOpen01Icon },
+  // TDSF 2026-08-31 双库: 知识库完整文档读取（knowledge_get_doc）
+  knowledge_get_doc: { label: "文档", icon: BookOpen01Icon },
   // P2-3: 扩展运维工具
   service_manage: { label: "服务", icon: TerminalIcon },
   package_manage: { label: "包管理", icon: TerminalIcon },
@@ -428,6 +434,8 @@ function deriveSummary(toolName: string, input: unknown): string | null {
       return str("intent") ?? str("description");
     case "knowledge_search":
       return str("query") ?? str("intent");
+    case "knowledge_get_doc":
+      return str("url");
     case "open_preview":
       return str("path") ?? str("url");
     case "run_subagent":
@@ -808,6 +816,17 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     return <BashRunOutput data={o} />;
   }
 
+  // TDSF 2026-08-31 双库: 知识检索结果 → 知识卡片列表（title + source 中文
+  // 标签 + 摘要 + category 徽标），替代裸 JSON
+  if (toolName === "knowledge_search") {
+    return <KnowledgeSearchOutput data={o} />;
+  }
+
+  // TDSF 2026-08-31 双库: 完整文档读取 → 文档卡片（title + 折叠全文）
+  if (toolName === "knowledge_get_doc") {
+    return <KnowledgeDocCard data={o} />;
+  }
+
   if (toolName === "suggest_command") {
     const cmd = typeof o.command === "string" ? o.command : null;
     const explanation =
@@ -959,6 +978,153 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
   }
 
   return null;
+}
+
+// ============================================================================
+// TDSF 2026-08-31 双库: 知识工具卡片（knowledge_search / knowledge_get_doc）
+// ============================================================================
+
+/** knowledge_search 单条结果（与后端 invoke_knowledge_search_tool 返回对齐） */
+type KnowledgeSearchHit = {
+  title?: string;
+  content?: string;
+  source?: string;
+  url?: string;
+  category?: string;
+};
+
+/** 摘要截取长度（卡片副文，任务书钦定 150 字） */
+const KNOWLEDGE_SNIPPET_CHARS = 150;
+
+function KnowledgeSearchOutput({ data }: { data: Record<string, unknown> }) {
+  const status = typeof data.status === "string" ? data.status : "";
+  const hits = Array.isArray(data.results)
+    ? (data.results as KnowledgeSearchHit[])
+    : [];
+
+  if (status === "empty" || (status !== "error" && hits.length === 0)) {
+    return (
+      <div className="text-[11px] italic text-muted-foreground">
+        知识库暂无相关内容
+      </div>
+    );
+  }
+  if (status === "error" && hits.length === 0) {
+    const message = typeof data.message === "string" ? data.message : "";
+    return (
+      <div className="text-[11px] text-destructive">
+        {message || "知识库检索失败"}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="space-y-1">
+        {hits.map((hit, idx) => {
+          const title = hit.title || "（无标题）";
+          const snippet = (hit.content || "").replace(/\s+/g, " ").trim();
+          const truncatedSnippet =
+            snippet.length > KNOWLEDGE_SNIPPET_CHARS
+              ? `${snippet.slice(0, KNOWLEDGE_SNIPPET_CHARS)}…`
+              : snippet;
+          return (
+            <div
+              key={hit.url ? `${hit.url}-${idx}` : idx}
+              className="rounded border border-border/40 bg-muted/20 px-2 py-1.5"
+            >
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground">
+                  {title}
+                </span>
+                {hit.category ? (
+                  <span className="shrink-0 rounded bg-foreground/8 px-1 py-0.5 text-[9px] text-muted-foreground">
+                    {categoryGroupLabel(hit.category)}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                  {sourceGroupLabel(hit.source || "")}
+                </span>
+              </div>
+              {truncatedSnippet ? (
+                <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                  {truncatedSnippet}
+                </p>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-[10px] text-muted-foreground">
+        {hits.length} 条结果
+        {typeof data.query === "string" && data.query
+          ? ` · 「${data.query}」`
+          : ""}
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeDocCard({ data }: { data: Record<string, unknown> }) {
+  const status = typeof data.status === "string" ? data.status : "";
+  const title = typeof data.title === "string" ? data.title : "";
+  const content = typeof data.content === "string" ? data.content : "";
+  const category = typeof data.category === "string" ? data.category : "";
+  const chunks = typeof data.chunks === "number" ? data.chunks : null;
+  const truncated = data.truncated === true;
+
+  if (status === "not_found" || status === "error") {
+    const message = typeof data.message === "string" ? data.message : "";
+    return (
+      <div className="text-[11px] text-muted-foreground">
+        {status === "not_found"
+          ? message || "知识库中不存在该文档"
+          : message || "知识库文档读取失败"}
+      </div>
+    );
+  }
+  if (!content) return null;
+
+  return (
+    <Collapsible className="rounded border border-border/40 bg-muted/20">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left">
+        <HugeiconsIcon
+          icon={BookOpen01Icon}
+          size={12}
+          strokeWidth={1.75}
+          className="shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground">
+          {title || "知识文档"}
+        </span>
+        {category ? (
+          <span className="shrink-0 rounded bg-foreground/8 px-1 py-0.5 text-[9px] text-muted-foreground">
+            {categoryGroupLabel(category)}
+          </span>
+        ) : null}
+        {chunks != null ? (
+          <span className="shrink-0 text-[10px] text-muted-foreground/70">
+            {chunks} 块
+          </span>
+        ) : null}
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          全文
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="terax-collapsible-content">
+        <pre className="max-h-72 overflow-auto border-t border-border/40 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+          {content}
+        </pre>
+        {truncated ? (
+          <div className="border-t border-border/40 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-400">
+            内容已截断（超 30000 字符）
+          </div>
+        ) : null}
+      </CollapsibleContent>
+    </Collapsible>
+  );
 }
 
 function BashRunOutput({ data }: { data: Record<string, unknown> }) {

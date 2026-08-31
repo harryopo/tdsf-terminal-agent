@@ -888,6 +888,37 @@ def _official_kb_entry_count() -> int:
     return get_global_rag().count_official_sources()
 
 
+def _slim_kb_chunk_count() -> int:
+    """精简库块数（独立函数便于单测 monkeypatch）"""
+    from knowledge.rag import get_slim_rag
+
+    return get_slim_rag().count()
+
+
+def _maybe_hint_slim_distill() -> None:
+    """精简库为空/过小时打日志提示（双库方案 TDSF 2026-08-31）
+
+    agent 检索（knowledge_search 工具）与前端知识浏览器主读精简库
+    rag_slim.db。精简库由 scripts/distill_knowledge.py（LLM 每章提炼）
+    + scripts/insert_manual_distill.py + scripts/fill_slim_titles.py
+    离线生成——启动流程**不自动跑 LLM**（成本/时长不可控，且 distill
+    依赖用户已配置的 LLM key），仅提示运维执行。
+    """
+    try:
+        slim_n = _slim_kb_chunk_count()
+        if slim_n < 100:
+            logger.warning(
+                f"精简知识库仅 {slim_n} 块（<100），agent 知识检索主读精简库，"
+                "当前覆盖不足——请在离线环境运行 "
+                "scripts/distill_knowledge.py（LLM 提炼全量库为中文知识点）"
+                "+ scripts/insert_manual_distill.py + scripts/fill_slim_titles.py"
+                "（中文标题映射与占位块清理）后重启"
+            )
+    except Exception as e:
+        # 提示是 best-effort，不阻断启动
+        logger.debug(f"slim kb distill hint check failed: {e}")
+
+
 def _kb_auto_init_worker() -> None:
     """后台线程体：全量爬取 17 官方源（offline=False，delay 由爬虫实例内置 1.0s）
 
@@ -924,6 +955,9 @@ def _kb_auto_init_worker() -> None:
             f"{len(sources) - len(failed)}/{len(sources)} sources ok"
             + (f", failed: {failed}" if failed else "")
         )
+        # TDSF 2026-08-31: 全量库爬完 → 检查精简库是否需要离线 distill（仅提示，
+        # 精简库由 scripts/distill_knowledge.py 离线生成，启动不自动跑 LLM）
+        _maybe_hint_slim_distill()
     except Exception:
         logger.exception("KB auto-init aborted (unexpected error, non-fatal)")
 
@@ -953,6 +987,8 @@ def schedule_kb_auto_init() -> threading.Thread | None:
         return None
     if official > 0:
         logger.info(f"KB auto-init skipped: {official} official entries present")
+        # TDSF 2026-08-31: 全量库已有数据 → 检查精简库是否需要离线 distill（仅提示）
+        _maybe_hint_slim_distill()
         return None
     t = threading.Thread(
         target=_kb_auto_init_worker,

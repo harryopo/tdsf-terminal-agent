@@ -28,3 +28,13 @@ def _isolate_knowledge(tmp_path):
     reset_global_rag(db_path=str(tmp_path / "rag-test.db"))
     yield
     reset_global_rag()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_slim_knowledge(tmp_path):
+    """TDSF 2026-08-31 双库: 隔离精简库全局单例（防测试污染真实 rag_slim.db）"""
+    from knowledge.rag import reset_slim_rag
+
+    reset_slim_rag(db_path=str(tmp_path / "rag-slim-test.db"))
+    yield
+    reset_slim_rag()

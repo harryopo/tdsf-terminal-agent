@@ -8,7 +8,7 @@ strands_backend/tests/test_e2e_strands.py — Strands 真实端到端测试（P0
    read_remote_file → 工具经 mock RustBridge 执行 → 第二轮输出教学文本
 2. observe 模式：真实 Strands Agent 工具集无任何 readonly=False 工具
    （schema-level safety 在模式过滤下生效）
-3. confirm/auto 模式：全量 20 工具（TOOL_REGISTRY 全量，委派 4 子 agent
+3. confirm/auto 模式：全量 21 工具（TOOL_REGISTRY 全量，委派 4 子 agent
    工具已删除）
 4. 模式缓存隔离：同 session 切换模式 → 重建 agent
 
@@ -216,20 +216,21 @@ class TestStrandsRealE2E(unittest.TestCase):
         self.assertIn("ssh_command", set(confirm_agent.tool_names))
 
     def test_main_agent_has_full_toolset(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 20 工具
+        """main（唯一 agent）：TOOL_REGISTRY 全量 21 工具
 
         P0-A1 BREAKING：原 24 = 20 registry + 4 子 agent（agent-as-tool）
-        ——委派删除后收敛为 20。
+        ——委派删除后收敛为 20；2026-08-31 + knowledge_get_doc = 21。
         """
         model = FakeStrandsModel(file_content=b"", final_text="ok")
         adapter, _ = self._make_adapter(model)
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
         agent = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM)
         tool_names = set(agent.tool_names)
-        self.assertEqual(len(tool_names), 20)
+        self.assertEqual(len(tool_names), 21)
         # 核心工具齐全
         for name in (
             "ssh_command", "skill_invoke", "knowledge_search",
+            "knowledge_get_doc",
             "service_manage", "package_manage", "firewall_manage",
             "security_audit", "performance_analyze", "save_skill",
         ):
@@ -248,7 +249,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         tool_names = set(agent.tool_names)
         self.assertIn("ssh_command", tool_names)
-        self.assertEqual(len(tool_names), 20)
+        self.assertEqual(len(tool_names), 21)
 
 
 if __name__ == "__main__":

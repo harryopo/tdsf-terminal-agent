@@ -46,6 +46,8 @@ export function evidenceLabel(toolName: string): string {
     network_diagnose: "网络诊断",
     skill_invoke: "技能调用",
     suggest_command: "命令建议",
+    knowledge_search: "知识库检索",
+    knowledge_get_doc: "知识库文档",
   };
   return map[toolName] ?? toolName;
 }

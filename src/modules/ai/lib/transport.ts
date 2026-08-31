@@ -354,7 +354,9 @@ async function fetchMemoryHints(firstUserText: string): Promise<string | null> {
   try {
     const r = await Promise.race([
       invoke<{ results: KnowledgeSearchResult[] }>("ipc_invoke", {
-        method: "knowledge.search",
+        // TDSF 2026-08-31 双库：knowledge.search 主读精简库（无会话沉淀条目），
+        // 会话记忆只存在全量库 → 走 knowledge.search_full
+        method: "knowledge.search_full",
         params: { query, limit: MEMORY_HINTS_TOP_K * 2 },
       }),
       new Promise<null>((resolve) =>
