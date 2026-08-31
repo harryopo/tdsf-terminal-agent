@@ -19,6 +19,26 @@
 
 ---
 
+## 2026-08-31 · UI 三修：Strands 弹窗主题化 / Agent 模式折叠面板 / 工作区菜单精简（§37.87，commit a990289）
+
+**任务**：用户三项 UI 反馈——①Strands 状态 pill 悬浮弹出白色窗口（要求跟主题黑配黑+描述精简）；②Agent 模式选择器（观察/确认/自动/教学）描述文字与按钮间距太紧，改为折叠窗口+每档带文字解释；③左下角工作区菜单删 SSH 齿轮、删 Refresh、三条目间距统一。
+
+**方案与修改**：
+1. `BackendPill.tsx`：白屏根因 = shadcn TooltipContent 默认 `bg-foreground text-background` 反色方案（深色主题下 = 白底黑字）→ TooltipContent 覆盖为 `bg-popover text-popover-foreground border-border shadow-md`（跟随明暗主题）；tooltip 内容从调试串（`rust_bridge_active=true` 等 5 行）精简为标题+副行两段结构（`Strands 引擎已激活` + `N 个智能体 · 已运行 Xs`；降级保留 fallback_reason 排障；LLM 未配置时提示）。
+2. `AgentModeSwitcher.tsx`：四档横排 segmented control + 底部常驻说明行 → **折叠面板**：触发按钮只显示当前模式（激活色跟随档位），点击向上弹面板，每档 = 图标+名称+描述两行；点外/Esc/选中后关闭。**有意不用 Radix Popover**——自实现受控面板无 Portal，vitest 可直接查询，也避免弹层焦点问题。
+3. `WorkspaceEnvSelector.tsx`：SSH 行删齿轮图标（三条目纯文字间距自然统一）；Refresh 菜单项删除，其唯一功能（刷新 WSL 发行版列表）改为**每次打开菜单自动 refresh**（原逻辑只在列表为空时拉取），功能无损。
+
+**报错与修改（根因+解法）**：
+1. typecheck 报 `aria-haspopup="radiogroup"` 非法（React 类型只允许 dialog/menu/listbox/grid/tree 等）→ 改 `"listbox"`。
+2. 全量 vitest 出现 1 失败 `SnippetsPanel.test.tsx`（懒加载 Dialog findByText 超时）→ 与本次 4 文件零交集，单文件重跑 6/6 过，定性 flaky（全量并发时 collect 206s 拖慢异步挂载）。
+
+**复盘**：
+- 做对：改 UI 前先 grep 定位全部三处组件 + 通读 tooltip/popover 基础组件确认根因（白屏不是 Radix bug 而是设计如此的反色）；测试先行同步重写（12 项含 Esc/点外关闭交互）。
+- 做对：删 Refresh 不是简单删除——分析出它承载"手动刷新 WSL 列表"功能，打开时自动 refresh 补位，避免功能回退。
+- 注意：另一对话在跑知识库 distill，本次 commit 精确 add 4 文件，未卷入其未提交现场；文档追加与该对话存在并发写可能，条目已尽量原子。
+
+---
+
 ### §37.86 知识库翻译交接外部 AI（2026-08-31，commit fb0d76d 之后）
 
 用户将「知识库中文翻译」任务**交给外部 AI 执行**，本会话只做记忆沉淀与规划落档。
