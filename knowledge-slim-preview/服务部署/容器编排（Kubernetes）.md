@@ -105,6 +105,51 @@ spec:
 
 - 资源层级：Cluster → Node → Pod → Container；Pod 是运行容器化应用的基本调度单位。
 
+## kubeadm 配置 kubelet
+
+- kubeadm CLI 与 kubelet 守护进程生命周期解耦；kubelet 由 systemd 托管（DEB/RPM 安装时）。
+- 集群级配置用 `KubeletConfiguration` API 统一管理；实例级配置建议用 patches。
+
+关键参数：
+- `kubeadm init --service-cidr 10.96.0.0/12`：设置 Service 子网
+- `--cluster-dns`：kubelet DNS 地址，集群内所有节点须一致
+- `--resolv-conf`：DNS 解析文件路径，因系统而异（systemd-resolved），错误导致 DNS 解析失败
+- `--hostname-override`：覆盖 Node 名称（默认主机名）
+- `--cgroup-driver`：须与容器运行时 cgroup 驱动一致
+- `--container-runtime-endpoint=<path>`：指定容器运行时端点
+
+KubeletConfiguration 示例：
+```yaml
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+clusterDNS:
+- 10.96.0.10
+```
+
+查看默认值：`kubeadm config print init-defaults --component-configs KubeletConfiguration`
+
+**kubeadm init 流程**：
+- 配置写入 `/var/lib/kubelet/config.yaml`，并上传至 `kube-system` 的 `kubelet-config` ConfigMap
+- 检测 CRI socket → `/var/lib/kubelet/instance-config.yaml`
+- 集群级配置+客户端证书 → `/etc/kubernetes/kubelet.conf`
+- 动态参数写入 `/var/lib/kubelet/kubeadm-flags.env`：
+  ```
+  KUBELET_KUBEADM_ARGS="--flag1=value1 --flag2=value2 ..."
+  ```
+- 执行：`systemctl daemon-reload && systemctl restart kubelet`
+
+**kubeadm join 流程**：
+- 用 Bootstrap Token TLS bootstrap，下载 `kubelet-config` ConfigMap → `/var/lib/kubelet/config.yaml`
+- 同样检测 CRI socket、生成环境文件
+- 重启 kubelet 后写 `/etc/kubernetes/bootstrap-kubelet.conf`（CA 证书+Bootstrap Token）
+- 唯一凭证存于 `/etc/kubernetes/kubelet.conf`
+
+- TLS Bootstrap 完成：`/etc/kubernetes/kubelet.conf` 写入后，`kubeadm` 删除 `/etc/kubernetes/bootstrap-kubelet.conf`。
+- kubeadm 安装的 drop-in：`/usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf`（kubeadm 不修改）。自定义覆盖放 `/etc/systemd/system/kubelet.service.d/local-overrides.conf`。
+- 默认 drop-in 关键参数：`--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf --config=/var/lib/kubelet/config.yaml`，最终执行 `/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS`。
+- 关键文件：`--bootstrap-kubeconfig` 仅当 `kubelet.conf` 不存在时用；`--kubeconfig` 唯一身份；`--config` ComponentConfig。
+- `KUBELET_KUBEADM_ARGS` 来自 `/var/lib/kubelet/kubeadm-flags.env`；`KUBELET_EXTRA_ARGS` 用户覆盖：DEB `/etc/default/kubelet`，RPM `/etc/sysconfig/kubelet`；参数链末尾，冲突时优先级最高（推荐 `.NodeRegistration.KubeletExtraArgs`）。
+
 ## 大规模集群考量
 
 **支持上限（K8s v1.37）**
@@ -266,6 +311,340 @@ sysctl net.ipv6.conf.all.forwarding
 - 地址段无需公网路由，大小应匹配 Pod/Service 规模
 - 注意：`kubeadm upgrade` 不支持修改 Pod CIDR 或 Service CIDR
 - 创建双栈集群：`kubeadm init` 命令行参数指定双栈 CIDR 范围
+
+## kubeadm 双栈集群
+
+- 主节点初始化：
+```bash
+kubeadm init --pod-network-cidr=10.244.0.0/16,2001:db8:42:0::/56 --service-cidr=10.96.0.0/16,2001:db8:42:1::/112
+```
+- 配置文件关键字段（`kubeadm-config.yaml`）：
+```yaml
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+networking:
+  podSubnet: 10.244.0.0/16,2001:db8:42:0::/56
+  serviceSubnet: 10.96.0.0/16,2001:db8:42:1::/112
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: "10.100.0.1"
+  bindPort: 6443
+nodeRegistration:
+  kubeletExtraArgs:
+  - name: "node-ip"
+    value: "10.100.0.2,fd00:1:2:3::2"
+```
+- `advertiseAddress` 等同 `--apiserver-advertise-address`，**不支持双栈**。
+- 执行 `kubeadm init --config=kubeadm-config.yaml`。
+- 控制器管理器 `--node-cidr-mask-size-ipv4|--node-cidr-mask-size-ipv6` 有默认值。
+- 加入节点：`JoinConfiguration` 中 `discovery.bootstrapToken.apiServerEndpoint` 指定 API 端点，`nodeRegistration.kubeletExtraArgs` 设置双栈 `node-ip`。
+- 加入控制面：在 `JoinConfiguration.controlPlane.localAPIEndpoint.advertiseAddress` 指定地址，执行 `kubeadm join --config=...`。
+- 双栈特性不强制使用双栈寻址，可部署单栈集群。
+
+## Pod 安全标准
+
+- 内置 Pod Security Admission Controller（v1.25 起稳定），取代废弃的 PodSecurityPolicies。
+- 所有命名空间都应配置安全级别标签；未配置的命名空间是安全模型缺口。
+- 最小权限原则：尽量满足 `restricted`；允许 `privileged` 的命名空间需加访问控制并文档化特例。
+- 多模式策略：对所有命名空间启用 `audit` 和 `warn` 模式，并设为期望的 `enforce` 级别；`warn` 提示负载作者修改，`audit` 记录审计日志以驱动后续收敛。即使完成 `enforce`，这两种模式仍可提供安全洞察。
+
+## Pod 安全准入（warn/audit/enforce）
+
+- `warn` 与 `enforce` 同级：客户端创建不合规 Pod（或含 Pod 模板资源）时收到警告，促其更新合规
+- 命名空间将 `enforce` 固定为非 latest 版本时，`audit`/`warn` 指向 `latest`，可发现旧版本放行但当前最佳实践禁止的配置
+- 第三方替代：Kubewarden、Kyverno、OPA Gatekeeper
+- 内置 PodSecurity 与第三方工具的选择取决于自身情况，供应链信任是评估关键
+
+## 字段选择器
+
+按资源字段值过滤对象。默认无过滤，`kubectl get pods` 等价于 `kubectl get pods --field-selector ""`。
+
+```bash
+kubectl get pods --field-selector status.phase=Running
+```
+
+- 通用字段：所有资源类型支持 `metadata.name`、`metadata.namespace`；使用未知字段会报错
+- 常用可用字段：
+  - Pod：`spec.nodeName` `spec.restartPolicy` `spec.schedulerName` `spec.serviceAccountName` `spec.hostNetwork` `status.phase` `status.podIP` `status.nominatedNodeName`
+  - Service：`spec.clusterIP` `spec.type`
+  - Secret：`type`；Namespace：`status.phase`；Node：`spec.unschedulable`
+  - 其他：Event、ReplicaSet、ReplicationController、Job、CertificateSigningRequest 各有专属字段
+- 自定义资源：CRD 的 `spec.versions[*].selectableFields` 声明可作选择器的字段
+- 操作符：`=`、`==`、`!=`（`=` 与 `==` 等价）；**不支持** `in`、`notin`、`exists`
+- 链式与多类型：
+
+```bash
+kubectl get pods --field-selector=status.phase!=Running,spec.restartPolicy=Always
+kubectl get statefulsets,services --all-namespaces --field-selector metadata.namespace!=default
+```
+
+- **定义**：Finalizers 是 namespace 级键，告知 Kubernetes 等待特定条件满足后才彻底删除标记为删除的资源；用于控制垃圾回收，提醒控制器清理被删除对象拥有的资源。
+- **机制**：删除带 finalizer 的对象时，API server 填充 `.metadata.deletionTimestamp` 并返回 `202`（HTTP "Accepted"）；对象保持 `Terminating` 状态，直到控制器完成动作并清空 `metadata.finalizers` 字段，字段为空后对象被自动删除。
+- **使用**：在 manifest 的 `metadata.finalizers` 字段指定；finalizer 只是键列表，不指定执行代码（类似 annotations）。
+
+**删除流程**
+
+```yaml
+metadata:
+  finalizers:
+  - example.com/finalizer-name
+```
+
+1. API server 添加 `metadata.deletionTimestamp`
+2. 阻止对象移除，直到 `finalizers` 字段清空
+3. 返回 `202`
+4. 控制器满足条件后逐个移除 key，字段清空后自动删除
+
+**典型示例**：`kubernetes.io/pv-protection` 防止误删 PersistentVolume；PV 被 Pod 使用时挂上该 finalizer，删除时进入 `Terminating`，Pod 停止使用后 Kubernetes 清除 finalizer 并删除卷。
+
+**易错点**
+- DELETE 后只能移除已有 finalizers，不能新增；`deletionTimestamp` 不可修改
+- 删除请求发出后对象不可恢复，只能删除重建
+- 自定义 finalizer 必须用限定名格式 `example.com/finalizer-name`，API server 拒绝非限定名
+- Owner references（非 labels）决定依赖对象清理（如 Job 删除 Pods）；finalizer 可能阻塞依赖对象删除，排查卡删时检查目标 owner 和依赖对象的 finalizers 与 owner references
+- 避免手动强删 finalizer；仅在明确其目的且已用其它方式达成时操作
+
+## 入门与 kubeadm 安装
+
+### 集群安装方式
+- 依据维护难度、安全、控制、资源、运维经验选择安装类型。
+- 可部署到本地机器、云或自有数据中心。
+- 核心组件（如 `kube-apiserver`、`kube-proxy`）**推荐**以容器镜像运行并由 Kubernetes 管理；例外：`kubelet` 等运行容器的组件不能。
+- 不想自管集群可选托管服务（certified platforms）。
+
+### 学习 vs 生产
+- 学习环境：使用社区工具在本地搭建集群。
+- 生产环境：官方支持的自管理工具为 `kubeadm`；需明确自管哪些抽象。
+
+### 安装 kubeadm
+- 安装指南针对 Kubernetes v1.37；其他版本见对应文档。
+
+**前置要求**
+- 兼容 Linux 主机（Debian/Red Hat 系或无包管理器发行版）。
+- 每台机器 ≥2GB RAM；控制平面机器 ≥2 CPU。
+- 所有机器间网络完全连通（公网/私网均可）。
+- 每节点唯一 `hostname`、MAC 地址、`product_uuid`；开放所需端口。
+- kubeadm 二进制动态链接依赖 `glibc`；Alpine 等无 glibc 发行版需兼容层。
+
+**检查 OS 版本**
+```bash
+uname -r   # Linux，需 LTS 内核
+systeminfo # Windows
+```
+
+### 后续步骤
+- 下载 Kubernetes，安装 `kubectl`，选择容器运行时，参考集群搭建最佳实践。
+- 控制平面运行于 Linux；集群内可运行 Linux 或 Windows 应用。
+
+### kubeadm 集群前置检查与安装要点
+
+#### 前置检查
+- 内核版本：kubeadm 预检 SystemVerification；确认支持可 `--ignore-preflight-errors=SystemVerification` 跳过。
+- 节点唯一性：MAC 和 product_uuid 必须唯一：
+  ```bash
+  ip link
+  sudo cat /sys/class/dmi/id/product_uuid
+  ```
+- 多网卡：默认路由不达集群地址时需加路由。
+- 端口：netcat 检查，如 `nc 127.0.0.1 6443 -zv -w 2`；Pod 网络插件可能额外要求。
+- Swap：kubelet 检测 swap 即失败。禁用：`sudo swapoff -a`，并改 /etc/fstab、systemd.swap；或 kubelet 设 `failSwapOn: false`（默认工作负载仍不可用 swap，需 `swapBehavior`）。
+
+#### 容器运行时
+- Kubernetes 经 CRI 通信；kubeadm 自动扫描端点，零/多个需指定。
+- Docker Engine 需额外装 cri-dockerd。
+- 常见端点：
+  - containerd: `unix:///var/run/containerd/containerd.sock`
+  - CRI-O: `unix:///var/run/crio/crio.sock`
+  - Docker Engine (cri-dockerd): `unix:///var/run/cri-dockerd.sock`
+
+#### 安装
+- kubeadm 引导集群；kubelet 节点代理；kubectl 交互；kubeadm 不安装/管理后两者。
+- 版本：kubelet 可低于 API server 一个次要版本，不可高于；升级需特殊处理，包排除自动升级。
+- 旧仓库已冻结弃用，必须用新仓库 `pkgs.k8s.io`（v1.24.0 起）。本指南针对 v1.37。
+- 安装示例（Debian/Ubuntu）：
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+  ```
+
+### apt 仓库配置（kubeadm）
+
+- 所有仓库共用同一签名公钥，URL 中版本号可忽略：
+```bash
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.37/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+```
+- 易错点：Debian 12 / Ubuntu 22.04 之前，`/etc/apt/keyrings` 默认不存在，需先创建：
+```bash
+sudo mkdir -p -m 755 /etc/apt/keyrings
+```
+- 随后添加对应的 Kubernetes `apt` 仓库（需指定 `signed-by` 指向该 keyring）。
+
+### 部署工具
+
+- **kubeadm**：官方集群部署工具。
+- **Cluster API**：Kubernetes 子项目，声明式 API 简化多集群配置、升级、运维。
+- **kops**：自动化集群配置工具。
+- **kubespray**：基于 Ansible playbook 的通用 OS/K8s 集群配置管理。
+
+### Kubernetes 核心概念
+
+- 开源系统，用于容器化应用的自动化部署、扩缩容与管理。
+- 将应用容器分组为逻辑单元，便于管理与发现。
+- 融合 Google 15 年生产经验与社区最佳实践。
+
+### 社区
+
+- 参与方式：GitHub、Slack、论坛、Meetup 等。
+- 社区价值观：尊重与包容，所有互动遵循行为准则。
+
+## Kubernetes 核心特性
+
+- **可扩展性**：基于 Google 每周运行数十亿容器的调度原理，规模增长无需扩大运维团队。
+- **灵活部署**：开源，支持本地、混合云、公有云，工作负载可无缝迁移。
+- **自动发布/回滚**：渐进式更新并持续监控应用健康，异常时自动回滚。
+- **服务发现与负载均衡**：每个 Pod 有独立 IP；一组 Pod 提供统一 DNS 名，自动负载均衡。
+- **存储编排**：自动挂载本地存储、云存储或网络存储（iSCSI/NFS 等）。
+- **密钥与配置管理**：无需重建镜像即可更新 Secret 和应用配置，且不暴露于配置清单。
+- **自动装箱**：按资源需求和约束自动放置容器，混合关键任务与尽力而为工作负载，提高资源利用率。
+- **批处理与 CI**：管理批处理和 CI 任务，容器失败时自动替换。
+- **自愈**：自动重启崩溃容器、替换故障 Pod、重新挂载存储，并可联动节点自动缩放器。
+- **水平缩放**：通过命令行、UI 或基于 CPU 使用率自动扩展/缩减 Pod 副本。
+- **垂直缩放**：根据实际使用情况自动调整资源请求与限制。
+- **双栈网络**：Pod 和 Service 支持 IPv4/IPv6 双栈地址。
+- **可扩展性**：无需修改上游源码即可为集群增加自定义功能。
+
+## 近期版本要点
+
+- **Kubernetes v1.37**：`metrics.k8s.io/v1` 正式 GA，支持 `kubectl top` 及基于资源指标的 HPA。
+- **Gateway API v1.6**：`TCPRoute`、`UDPRoute` 升级为标准 API。
+- **KYAML**：用于规范化 Kubernetes YAML 格式，提升可读性。
+
+## Kubernetes 组件
+- 集群由**控制平面（Control Plane）** 与**工作节点（Worker Nodes）** 组成。
+- 控制平面组件：
+  - `kube-apiserver`：暴露 Kubernetes HTTP API 的核心组件。
+  - `etcd`：一致且高可用的键值存储，保存所有 API 数据。
+  - `kube-scheduler`：为未绑定节点的 Pod 分配合适节点。
+  - `kube-controller-manager`：运行控制器，实现 API 行为。
+  - `cloud-controller-manager`（可选）：集成云厂商。
+- 节点组件：
+  - `kubelet`：确保 Pod 及其容器运行。
+  - `kube-proxy`（可选）：维护网络规则，实现 Service。
+  - 容器运行时（Container runtime）：负责运行容器。
+- 插件（Addons）：DNS、Web UI（Dashboard）、容器资源监控、集群级日志。
+
+## Kubernetes 对象管理
+- `kubectl` 支持三种管理方式：**命令式命令**、**命令式对象配置**、**声明式对象配置**。
+- **警告**：同一对象只能使用一种方式管理，混用会导致未定义行为。
+
+| 方式 | 操作对象 | 推荐环境 | 写者数 | 学习曲线 |
+| --- | --- | --- | --- | --- |
+| 命令式命令 | 活动对象 | 开发项目 | 1+ | 最低 |
+| 命令式对象配置 | 单个文件 | 生产项目 | 1 | 中等 |
+| 声明式对象配置 | 文件目录 | 生产项目 | 1+ | 最高 |
+
+## Kubernetes 对象管理
+
+**命令式命令**：直接操作集群实时对象，无历史。适合入门/一次性任务。
+```bash
+kubectl create deployment nginx --image nginx
+```
+优点：单一动作词、单步完成。缺点：无变更审查、无审计追踪、无记录、无模板。
+
+**命令式对象配置**：指定操作 + YAML/JSON 文件（须含完整对象定义）：
+```bash
+kubectl create -f nginx.yaml
+kubectl delete -f nginx.yaml -f redis.yaml
+kubectl replace -f nginx.yaml
+```
+⚠️ `replace` 覆盖现有 spec，丢弃文件中缺失的变更；勿用于 `LoadBalancer` 等 spec 被独立更新的资源（如 `externalIPs`）。
+优点：可存 Git、集成审查/审计、可作模板。缺点：需理解对象 schema；变更未同步回文件会在下次 replace 丢失；仅适合文件，不适合目录。
+
+**声明式对象配置**：kubectl 自动检测每对象的 create/patch/delete：
+```bash
+kubectl diff -f configs/    # 先预览
+kubectl apply -f configs/
+kubectl apply -R -f configs/  # 递归
+```
+用 `patch` 只写差异，保留其他写入者的变更。优点：保留实时对象变更、支持目录操作。缺点：难调试、diff 合并复杂。
+
+## 标签与选择器
+
+- Labels 是附加于对象（如 Pod）的 key/value 对，用于组织与选择对象子集；key 在同一对象内唯一；可随时增改。
+- 非标识信息用 annotations，不用 labels。
+```yaml
+metadata:
+  labels:
+    release: stable
+    environment: production
+    tier: frontend
+```
+- 动机：将组织结构松耦合映射到系统对象；部署/流水线是多维实体（分区、发布轨、层级、微服务），管理需跨维度操作。
+- 常见约定：`release`（stable/canary）、`environment`（dev/qa/production）、`tier`（frontend/backend/cache）、`partition`、`track`。
+
+- 标签键值对：键`[前缀/]名称`。名称≤63字符，首尾`[a-z0-9A-Z]`，中间`-_.`；前缀为DNS子域≤253字符，可省略；系统组件强制带前缀；`kubernetes.io/`、`k8s.io/`保留。值≤63字符，可为空，非空时同名称规则。
+- 选择器逗号=AND，无OR。
+
+- 等值选择器：`=`、`==`、`!=`。
+  - `environment=production,tier!=frontend`
+  - 用于nodeSelector：
+```yaml
+spec:
+  nodeSelector:
+    accelerator: nvidia-tesla-p100
+```
+
+- 集合选择器：`in`、`notin`、`exists`（键名）、`!`（键不存在）。
+  - `environment in (production, qa)`
+  - `tier notin (frontend, backend)`
+  - `partition` / `!partition`
+  - `environment=production` ≡ `environment in (production)`
+  - 可混合：`partition in (customerA,customerB),environment!=qa`
+
+- API过滤：
+  - `?labelSelector=environment%3Dproduction,tier%3Dfrontend`
+  - `?labelSelector=environment+in+%28production%2Cqa%29`
+  - kubectl：
+```bash
+kubectl get pods -l environment=production,tier=frontend
+kubectl get pods -l 'environment in (production),tier in (frontend)'
+kubectl get pods -l 'environment in (production, qa)'
+kubectl get pods -l 'environment,environment notin (frontend)'
+```
+
+- Service、ReplicationController等用等值选择器（map形式，不支持集合运算符）：
+```yaml
+selector:
+  component: redis
+```
+- ReplicaSet等支持集合选择器。同一命名空间内两个实例的标签选择器不能重叠，否则控制器无法确定副本数。
+
+- Job/Deployment/ReplicaSet/DaemonSet 支持**集合式选择器**（set-based）。
+- 选择器由 `matchLabels` 与 `matchExpressions` 组成，两者条件**AND**，需全部满足。
+
+```yaml
+selector:
+  matchLabels:
+    component: redis
+  matchExpressions:
+    - { key: tier, operator: In, values: [cache] }
+    - { key: environment, operator: NotIn, values: [dev] }
+```
+
+- `matchLabels`：`{key,value}` 映射；一个键值对等价于 `matchExpressions` 中 `operator: In`、`values: [value]`。
+- `matchExpressions`：选择器需求列表，操作符含 `In`, `NotIn`, `Exists`, `DoesNotExist`；`In`/`NotIn` 时 `values` 必须非空。
+- 典型用途：通过标签约束 Pod 可调度节点集合（node selection）。
+- 标签使用建议：单标签不足以区分资源集合，应多用标签。例如前端可带：
+
+```yaml
+labels:
+  app: guestbook
+  app.kubernetes.io/name: guestbook-frontend
+```
+
+- 使用 `app` 便于手工查询/CLI；`app.kubernetes.io/name` 遵循推荐约定，适合工具自动化。
 
 ## 学习环境
 
@@ -464,6 +843,36 @@ kubectl get events -A --field-selector=reason=OwnerRefInvalidNamespace
   - KCSP：`https://www.cncf.io/certification/kcsp/`
   - 软件一致性：`https://www.cncf.io/certification/software-conformance/`
   - 培训：`https://www.cncf.io/certification/training/`
+
+## kubeadm 证书与控制平面命令（核心要点）
+
+**证书体系**：kubeadm init 生成 PKI 于 `/etc/kubernetes/pki/`（ca.crt/ca.key、apiserver 各组件证书、etcd、front-proxy）。证书默认 **1 年**有效（CA 10 年）。
+
+**证书检查与续期**：
+
+```bash
+kubeadm certs check-expiration            # 查看过期时间
+kubeadm certs renew all                   # 全部续期（重启控制面 pod）
+kubeadm certs renew apiserver kubelet-client  # 指定组件
+```
+
+**控制平面常用命令**：
+
+```bash
+kubeadm init --pod-network-cidr=10.244.0.0/16 --control-plane-endpoint "LB:6443"
+kubeadm token create --print-join-command   # 生成 worker 加入命令
+kubeadm token create --print-join-command --certificate-key $(kubeadm init phase upload-certs --upload-certs | tail -1)  # 控制面加入
+kubeadm reset                                # 清理节点（含 /etc/cni、iptables 需手动清）
+```
+
+**etcd 备份恢复**：
+
+```bash
+ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379   --cacert=/etc/kubernetes/pki/etcd/ca.crt   --cert=/etc/kubernetes/pki/etcd/server.crt   --key=/etc/kubernetes/pki/etcd/server.key   snapshot save /backup/etcd.db
+# 恢复: etcdctl snapshot restore + 重启 kube-apiserver/etcd 静态 pod
+```
+
+**易错点**：①renew 后必须重启静态 pod（`crictl ps | grep apiserver` → 删 pod 自动重建）或 kubelet；②多控制面证书要逐台 renew；③升级集群（kubeadm upgrade）会自动续证书——1 年期不是问题。
 
 ## 推荐标签
 

@@ -2,8 +2,10 @@
 source: archwiki
 category: basic-ops
 url: consolidated/basic-ops/桌面与终端应用（Arch Wiki）.md
-title: 1. awesome
+title: 桌面与终端应用（Arch Wiki）
 ---
+
+- 桌面/终端：`Xorg`/`xinit` 显示栈，`awesome`/`KDE` 桌面，`tmux`/`GNU Screen` 复用，`Emacs` 编辑。
 
 - **awesome**：基于 Xorg 的平铺窗口管理器，高度可配置。
 - **安装**：`pacman -S awesome`；如需最新版，用 AUR 包 `awesome-git`。

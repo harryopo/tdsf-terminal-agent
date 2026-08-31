@@ -83,6 +83,33 @@ RewriteRule "^/fridge" "-" [F]
 - 2.4 起优先用 `<If>`，多数场景不必用 `mod_rewrite`
 - `<Limit>` 在 `<Location>` 内会静默覆盖 `<Directory>` 限制
 
+## Nginx 缓存指南（核心要点）
+
+**代理缓存三件套**：`proxy_cache_path`（共享内存+目录）→ `proxy_cache`（location 启用）→ 响应头控制。
+
+```nginx
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=mycache:10m
+                 max_size=1g inactive=60m use_temp_path=off;
+
+server {
+    location / {
+        proxy_cache mycache;
+        proxy_cache_key "$scheme$request_method$host$request_uri";
+        proxy_cache_valid 200 302 10m;      # 按状态码设 TTL
+        proxy_cache_valid 404      1m;
+        proxy_cache_use_stale error timeout updating;  # 后端挂了用旧缓存
+        proxy_cache_background_update on;   # 后台刷新
+        add_header X-Cache-Status $upstream_cache_status;  # 调试: HIT/MISS/EXPIRED
+    }
+}
+```
+
+**缓存键与绕过**：默认 key 含 $request_uri；带 Cookie/Authorization 的响应默认不缓存。绕过：`proxy_cache_bypass $cookie_nocache $arg_nocache;`；客户端刷新头 `Cache-Control: no-cache` 用 `proxy_cache_revalidate on` 配合 304。
+
+**清理**：官方无主动 purge（Plus 版有）——开源方案：缓存 key 定向删除模块或 `inactive=60m` 自然淘汰 + `rm -rf` 全量清。
+
+**易错点**：①`proxy_buffering off` 时缓存不生效；②上游响应含 `Set-Cookie` 默认不缓存（可用 `proxy_ignore_headers` 覆盖，慎用）；③磁盘满：max_size+inactive 双控，worker 进程淘汰；④microcaching（短 TTL 如 5s）是高并发站性价比最高的方案。
+
 - `.htaccess` 按目录修改配置，无需改主配置；语法与主配置相同。
 - 可改名：`AccessFileName ".config"`
 - 生效由 `AllowOverride`/`AllowOverrideList` 决定；默认 `AllowOverride None` 忽略。
@@ -837,6 +864,21 @@ typedef ngx_http_request_body_t void;
 ```
 dtrace -C -I ./objs -s trace_process_request.d -p 4848
 ```
+
+- 无正式公共/私有 API 区分；头文件可被第三方包含，内部便利实现应避免依赖。
+- 目录：`auto`、`src/core`、`src/event`、`src/http`、`src/mail`、`src/os`、`src/stream`。
+- 源文件必须 `#include <ngx_config.h>`、`#include <ngx_core.h>`；HTTP/mail/stream 额外对应 `#include <ngx_http.h>`/`#include <ngx_mail.h>`/`#include <ngx_stream.h>`。
+- 整数：`ngx_int_t`→`intptr_t`，`ngx_uint_t`→`uintptr_t`。
+- 返回码：`NGX_OK`成功，`NGX_ERROR`失败，`NGX_AGAIN`重试，`NGX_DECLINED`拒绝，`NGX_BUSY`忙，`NGX_DONE`完成/他处继续，`NGX_ABORT`中止。
+- 错误：`ngx_errno`/`ngx_socket_errno` 获取系统/套接字错误（POSIX→errno；Windows→GetLastError/WSAGetLastError）；避免重复读宏，存 `ngx_err_t`；设置用 `ngx_set_errno(errno)`/`ngx_set_socket_errno(errno)`；错误码直接传给 `ngx_log_error()`/`ngx_log_debugX()`，自动附加错误文本。
+- 字符串：C 字符串用 `u_char *`；`ngx_str_t` 含 `len`/`data`，data 不保证 `\0` 结尾。函数在 `ngx_string.h`，多为标准封装：`ngx_strcmp`/`ngx_strncmp`/`ngx_strstr`/`ngx_strlen`/`ngx_strchr`/`ngx_memcmp`/`ngx_memset`/`ngx_memcpy`/`ngx_memmove`，其余为 nginx 专有。
+
+- **内存**：`ngx_memzero()`/`ngx_explicit_memzero()`（填零；后者防死存储消除，清敏感数据）、`ngx_cpymem()`/`ngx_movemem()`（返回目标终点）、`ngx_strlchr()`（限界查字符）。
+- **大小写/比较**：`ngx_tolower()` `ngx_toupper()` `ngx_strlow()` `ngx_strcasecmp()` `ngx_strncasecmp()`。
+- **字符串宏**：`ngx_string(text)`/`ngx_null_string` 静态初始化 `ngx_str_t`；`ngx_str_set(str,text)`/`ngx_str_null(str)` 初始化 `ngx_str_t*`。
+- **格式化**：`ngx_sprintf()` `ngx_snprintf()` `ngx_slprintf()` `ngx_vslprintf()` `ngx_vsnprintf()`；格式符 `%O`(off_t)、`%T`(time_t)、`%z`(ssize_t)、`%i`(ngx_int_t)、`%p`(void*)、`%V`(ngx_str_t*)、`%s`(u_char*)、`%*s`(size_t+u_char*)；`u` 前缀无符号，`X/x` 十六进制。例 `ngx_sprintf(buf,"%ui",n)`。
+- **数字转换**：`ngx_atoi()`/`ngx_atosz()`/`ngx_atoof()`/`ngx_atotm()` 转整数，错返 `NGX_ERROR`；`ngx_atofp()` 定点小数，如 `ngx_atofp("10.5",4,2)`→1050；`ngx_hextoi()` 转十六进制。
+- **正则**：PCRE 需 `NGX_PCRE`；`ngx_regex_compile(&rc)` 编译，成功 `re=rc.regex`；`rc.options` 可设 `NGX_REGEX_CASELESS`；匹配需分配 `(1+rc.captures)*3` 个 `int`。
 
 - **功能**：Apache 配置指令快速参考，列出每条指令的用法、默认值、状态与可用上下文。
 - **表格列**：①指令名及用法；②默认值（过长截断，后加 `+`）；③允许的上下文；④指令状态。
@@ -1725,6 +1767,65 @@ F5, Inc. 自 2019 年收购 NGINX, Inc. 后成为 NGINX 主要维护者、赞助
 - mod_auth_basic：提供伪造basic认证机制（2.4.5+）。
 - 程序增强：`fcgistarter`启动FastCGI；`htcacheclean`列出/删除缓存URL、大小按块取整、支持inode限制；`rotatelogs`创建日志符号链接、调用轮转后脚本；`htpasswd`/`htdbm`支持bcrypt（2.4.4+）。
 - 模块开发者：新增`check_config`钩子，在`pre_config`和`open_logs`之间，`-t`时在`test_config`之前。
+
+## 反向代理
+
+Apache httpd 可作反向代理（网关）：自身不生成内容，将客户端请求转发给后端服务器，再返回响应。用途：安全、高可用、负载均衡、集中认证。后端须隔离于外部网络。
+
+### 简单代理
+- `ProxyPass`：URL 映射到后端
+- `ProxyPassReverse`：改写后端 `Location:` 头，使重定向指向代理自身
+```
+ProxyPass "/" "http://www.example.com/"
+ProxyPassReverse "/" "http://www.example.com/"
+```
+可只代理特定路径（如 `/images`），其余本地处理。
+
+### 负载均衡（Balancer）
+- `balancer://` 定义集群；`BalancerMember`（即 worker）声明后端
+```
+<Proxy balancer://myset>
+  BalancerMember http://www2.example.com:8080
+  BalancerMember http://www3.example.com:8080
+  ProxySet lbmethod=bytraffic
+</Proxy>
+ProxyPass "/images/" "balancer://myset/"
+ProxyPassReverse "/images/" "balancer://myset/"
+```
+- 关键参数：`lbmethod=bytraffic`（按 I/O 流量）/`byrequests`（按请求数）；`loadfactor=3`（权重）；`timeout=1`（秒）
+
+### 故障转移
+- `status=+R`：热备，替代同集合内故障 worker
+- `status=+H`：热待机，仅当同集合所有 worker 和 spare 不可用才激活
+- `lbset=1`：集合编号，按小到大依次尝试
+```
+BalancerMember http://spare1.example.com:8080 status=+R
+BalancerMember http://hstandby.example.com:8080 status=+H
+BalancerMember http://bkup1.example.com:8080 lbset=1
+```
+
+### Balancer Manager
+```
+<Location "/balancer-manager">
+  SetHandler balancer-manager
+  Require host localhost
+</Location>
+```
+- 运行时查看/调整 worker 状态、新增后端；**须先做好访问控制**；`BalancerPersist` 使修改跨重启生效
+
+### 健康检查
+- `ProxyPass` 的 `ping` 参数可代理前探测；`mod_proxy_hcheck` 提供带外（out-of-band）健康检查
+
+- `D` Dis：禁用，不接收请求，会自动重试。
+- `S` Stop：管理停止，不接收请求，且不自动重试。
+- `I` Ign：忽略错误模式，始终视为可用。
+- `R` Spar：热备，当 lbset 中某 worker 不可用时（draining、停止、错误等），用同 lbset 的可用热备替代。
+- `H` Stby：热待机，仅当平衡器集合中无其他可用 worker/备用时使用。
+- `E` Err：错误状态（通常因预检失败），不代理请求，按 worker 的 `retry` 设置重试。
+- `N` Drn：排空模式，仅接受发给自身的现有粘性会话，忽略其他请求。
+- `C` HcFl：动态健康检查失败，通过后续检查前不被使用。
+
+无标志：`Ok`（可用）、`Init`（已初始化）。
 
 ## 安全要点
 

@@ -2,8 +2,12 @@
 source: ssh-docs
 category: net-remote
 url: consolidated/net-remote/OpenSSH 客户端与服务器.md
-title: 1. OpenBSD手册页服务器
+title: OpenSSH 客户端与服务器
 ---
+
+- ssh/scp，~/.ssh/config；sshd，/etc/ssh/sshd_config
+- ssh-keygen 生成，ssh-agent 缓存，私钥权限严格
+- X11 转发需 -X，known_hosts 校验主机
 
 `/etc/moduli`：存放 Diffie-Hellman 素数模数与生成元，供 sshd(8) 的 DH Group Exchange 密钥交换使用。
 
