@@ -82,8 +82,9 @@ export function StatusBar({
           点击 pill 打开 AI 面板, Ctrl+I 切换面板。移除重复的 "Open AI agent" 按钮。 */}
       <div className="flex shrink-0 items-center gap-1.5">
         <MockLLMWarning />
-        <BackendPill />
+        {/* 2026-08-31 用户钦定调换：Agent 模式在前、Strands 后端在后（显示更全面） */}
         <AgentStatusPill data-testid="statusbar-agent-status-pill" onClick={onOpenMini} />
+        <BackendPill />
         {panelOpen && hasComposer ? <AiStatusBarControls /> : null}
       </div>
     </footer>
