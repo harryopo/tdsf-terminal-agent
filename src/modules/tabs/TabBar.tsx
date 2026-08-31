@@ -549,16 +549,7 @@ export function TabBar({
             })}
           </TabsList>
         </Tabs>
-        <NewTabMenu
-          showPreview={showPreview}
-          showLocalExtras={showLocalExtras}
-          onNew={onNew}
-          onNewBlock={onNewBlock}
-          onNewPrivate={onNewPrivate}
-          onNewPreview={onNewPreview}
-          onNewEditor={onNewEditor}
-          onNewGitGraph={onNewGitGraph}
-        />
+        <NewTabMenu onNew={onNew} onNewEditor={onNewEditor} />
       </div>
     </div>
   );

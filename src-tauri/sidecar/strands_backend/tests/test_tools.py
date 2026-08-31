@@ -62,9 +62,8 @@ from strands_backend.adapter import (
     _skill_names_line,
 )
 
-# P0-A1: adapter 缓存 key = (agent_id, session_id, perm, mode, teach)；
-# mock 塞缓存统一用缺省模式/无教学皮肤（invoke 未传 mode 时 parse 到 CONFIRM）
-_CACHE_DEFAULTS = (AgentMode.CONFIRM, False)
+# T1 (2026-08-31, 方案书 v4.0): adapter 缓存 key = (agent_id, session_id, perm)
+# ——mode/teach 已移出（模式/教学不再重建实例，prompt/工具集每次 invoke 动态刷新）
 
 
 # ============================================================================
@@ -996,7 +995,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response.metrics = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent  # cache 键为 (agent_id, session_id, perm, mode, teach)
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent  # T1: cache 键为 (agent_id, session_id, perm)
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1016,7 +1015,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="ok")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1039,7 +1038,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         adapter = StrandsAgentAdapter(event_bus=bus, backend_enabled=True)
 
         mock_agent = MagicMock(side_effect=RuntimeError("strands internal error"))
-        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1059,7 +1058,7 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="done")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1241,7 +1240,7 @@ class TestInvokeNoProcessingBanner(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.__str__ = MagicMock(return_value="ok")
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[("main", "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
+        adapter._agent_cache[("main", "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
 
@@ -1260,6 +1259,21 @@ class TestInvokeNoProcessingBanner(unittest.TestCase):
         )
         self.assertEqual(user_part, "hi")
         self.assertIn("connection_mode", ctx_part)
+
+    def test_memory_blocks_classified_as_env_inject(self):
+        """T4 (2026-08-31): <session-memory>/<recalled-memory> 归入 env_inject
+        而非 user_msg——agent_log 排障时"用户原文"不被记忆注入区污染。
+        """
+        from strands_backend.adapter import _split_input_for_log
+
+        user_part, ctx_part = _split_input_for_log(
+            "<session-memory>\n1. 《历史案例》...\n</session-memory>\n\n"
+            "<recalled-memory>\n1. 《相关历史案例（自动召回）》...\n</recalled-memory>\n\n"
+            "nginx 502 怎么排查"
+        )
+        self.assertEqual(user_part, "nginx 502 怎么排查")
+        self.assertIn("<session-memory>", ctx_part)
+        self.assertIn("<recalled-memory>", ctx_part)
 
 
 # ============================================================================
@@ -1413,7 +1427,8 @@ class TestToolCallLimitHook(unittest.TestCase):
         hook = ToolCallLimitHook()
         registry = MagicMock()
         hook.register_hooks(registry)
-        self.assertEqual(registry.add_callback.call_count, 2)
+        # T2 (2026-08-31): Before/AfterToolCall + BeforeModelCall（轮次计数）
+        self.assertEqual(registry.add_callback.call_count, 3)
 
     def test_total_calls_limit_cancels(self):
         from strands_backend.adapter import ToolCallLimitHook
@@ -1500,7 +1515,7 @@ class TestAgentSwitchEmission(unittest.TestCase):
         mock_response.__str__ = MagicMock(return_value="回答内容")
         mock_response.metrics = {}
         mock_agent = MagicMock(return_value=mock_response)
-        adapter._agent_cache[(agent_id, "s1", 2, *_CACHE_DEFAULTS)] = mock_agent
+        adapter._agent_cache[(agent_id, "s1", 2)] = mock_agent
         adapter._strands_available = True
         adapter._model_available = True
         return adapter, bus, mock_agent

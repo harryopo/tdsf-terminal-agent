@@ -212,6 +212,16 @@ export function unwrapEventPayload<T>(payload: unknown): T | undefined {
  */
 const EVENT_AGENT_MESSAGE = "sidecar:agent_message";
 
+/**
+ * T2 循环护栏 (2026-08-31, spec add-agent-loop-closure): 循环进度事件订阅。
+ *
+ * Python 端 ToolCallLimitHook 每次工具调用完成时通过
+ * event_bus.emit_loop_progress 推送 {round, tool_count, tool_name, status}，
+ * Rust 转发 sidecar:loop_progress → 这里回调 onLoopProgress →
+ * AgentStatusPill 显示"第 N 轮 · 已用工具 M"。
+ */
+const EVENT_LOOP_PROGRESS = "sidecar:loop_progress";
+
 // === 类型 ====================================================================
 
 /** `runSidecarStream` 调用参数 */
@@ -266,6 +276,11 @@ export interface SidecarStreamOptions {
   onStep?: (step: string | null) => void;
   /** mood 变更回调（如 "thinking" / "streaming"） */
   onMood?: (mood: string) => void;
+  /**
+   * 循环进度回调（T2 循环护栏）：每次工具调用完成推送
+   * （第 N 轮推理 / 已用工具 M 次），驱动 AgentStatusPill 进度显示
+   */
+  onLoopProgress?: (progress: { round: number; toolCount: number }) => void;
   /** token 使用量增量回调 */
   onUsage?: (delta: { inputTokens: number; outputTokens: number }) => void;
 }
@@ -547,6 +562,7 @@ async function registerSidecarListeners(
   onStep?: (step: string | null) => void,
   onToolCall?: (payload: ToolCallPayload) => void,
   onAgentMessage?: (payload: AgentMessagePayload) => void,
+  onLoopProgress?: (progress: { round: number; toolCount: number }) => void,
 ): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [];
 
@@ -562,6 +578,26 @@ async function registerSidecarListeners(
       );
     } catch {
       // 非 Tauri 环境（如 vitest）listen 会 reject，忽略
+    }
+  }
+
+  // T2 循环护栏: 循环进度事件（第 N 轮 / 已用工具 M）——AgentStatusPill 显示
+  if (onLoopProgress) {
+    try {
+      unlisteners.push(
+        await listen<unknown>(EVENT_LOOP_PROGRESS, (e) => {
+          const p = unwrapEventPayload<{
+            round?: number;
+            tool_count?: number;
+          }>(e.payload);
+          if (!p || typeof p.round !== "number") return;
+          const toolCount =
+            typeof p.tool_count === "number" ? p.tool_count : 0;
+          onLoopProgress({ round: p.round, toolCount });
+        }),
+      );
+    } catch {
+      // 非 Tauri 环境忽略
     }
   }
 
@@ -770,12 +806,14 @@ export async function* runSidecarStream(
     // type="tool_call" / "working" 已被 sidecar:tool_call / sidecar:mood_change 覆盖，忽略
   };
 
-  // 1. 注册事件监听器（传入 onAgentMessage 订阅 sidecar:agent_message）
+  // 1. 注册事件监听器（传入 onAgentMessage 订阅 sidecar:agent_message；
+  //    onLoopProgress 订阅 sidecar:loop_progress——T2 循环进度推流）
   const unlisten = await registerSidecarListeners(
     onMood,
     onStep,
     onToolCall,
     onAgentMessage,
+    opts.onLoopProgress,
   );
 
   try {

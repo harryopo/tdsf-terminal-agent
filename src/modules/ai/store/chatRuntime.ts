@@ -145,8 +145,20 @@ function makeChat(sessionId: string): Chat<UIMessage> {
     onMood: (mood) => {
       const status = moodToStatus(mood);
       if (status) {
-        useChatStore.getState().patchAgentMeta({ status });
+        // T2 循环护栏: 新一轮 thinking 开始时清空上一轮进度
+        // （防旧值闪烁），终态（idle/error）一并归位
+        useChatStore.getState().patchAgentMeta({
+          status,
+          ...(status === "thinking" || status === "idle" || status === "error"
+            ? { loopProgress: null }
+            : {}),
+        });
       }
+    },
+    // T2 循环护栏 (2026-08-31): 循环进度（第 N 轮 / 已用工具 M）——
+    // sidecar:loop_progress 事件驱动 AgentStatusPill 进度显示
+    onLoopProgress: (progress) => {
+      useChatStore.getState().patchAgentMeta({ loopProgress: progress });
     },
     getLmstudioBaseURL: () => usePreferencesStore.getState().lmstudioBaseURL,
     getLmstudioModelId: () => usePreferencesStore.getState().lmstudioModelId,

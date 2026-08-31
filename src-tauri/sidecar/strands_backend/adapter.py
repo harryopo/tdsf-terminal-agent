@@ -149,8 +149,12 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 回答用中文，简洁明了，给出可执行建议。\n"
     "\n"
     "Task planning:\n"
-    "- 遇到多步骤任务（≥3 步）时，先用 todo_write 工具创建任务列表，让用户看到你的规划。\n"
-    "- 开始一个步骤时标记为 in_progress，完成后标记为 completed 并推进下一个。\n"
+    # T3 规划-执行回环 (2026-08-31): 规划段从"建议"升格为"必须"——
+    # ≥3 步任务先建清单再行动（TodoStrip 可见），完成即更新驱动执行回环；
+    # 单步/澄清类明确豁免，防简单问答被清单仪式拖慢。
+    "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单再行动，让用户看到你的规划。\n"
+    "- 每完成一项立即用 todo_write 更新状态为 completed，再推进下一项。\n"
+    "- 单步问题或澄清类问题无需任务清单，直接回答。\n"
     "- 任务全部完成后简要总结结果。\n"
     "- 不确定下一步时，向用户提问而不是自行假设。\n"
     "\n"
@@ -169,9 +173,13 @@ _DEFAULT_SYSTEM_PROMPT = (
 # 会话流水日志（agent_log，2026-08-31 用户钦定调试后端）
 # ============================================================================
 # 注入区标签全集：前端 transport.ts（<env>/<environment>/<terminal-context>/
-# <terminal-history>）+ adapter._build_prompt（<live_context>）。
+# <terminal-history>/<session-memory>/<recalled-memory>）+ adapter._build_prompt
+# （<live_context>）。T4 (2026-08-31): <recalled-memory>（每轮召回）与
+# <session-memory>（T14 首轮摘要）一并纳入——agent_log 落盘时归入 env_inject
+# 而非 user_msg，排障时"用户原文"不被注入区污染。
 _CONTEXT_BLOCK_RE = re.compile(
-    r"<(env|environment|terminal-context|terminal-history|live_context)>"
+    r"<(env|environment|terminal-context|terminal-history|live_context|"
+    r"session-memory|recalled-memory)>"
     r"[\s\S]*?</\1>"
 )
 
@@ -199,12 +207,14 @@ def _split_input_for_log(input: str) -> tuple[str, str]:
 try:
     from strands.hooks.events import (  # type: ignore[import]
         AfterToolCallEvent,
+        BeforeModelCallEvent,
         BeforeToolCallEvent,
     )
 
     _STRANDS_HOOKS_AVAILABLE = True
 except ImportError:
     AfterToolCallEvent = None  # type: ignore[assignment]
+    BeforeModelCallEvent = None  # type: ignore[assignment]
     BeforeToolCallEvent = None  # type: ignore[assignment]
     _STRANDS_HOOKS_AVAILABLE = False
 
@@ -215,34 +225,68 @@ class ToolCallLimitHook:
     LangGraph 路径有 BaseAgent._check_fix_loop 防重试风暴；Strands override
     路径的工具调用由 Strands event loop 驱动，绕过该保护。本 hook 用
     Strands 公共 Hook API（Before/AfterToolCallEvent）实现同等语义：
-    - 单次 invoke 总工具调用数超过 max_tool_calls → 取消后续调用（防死循环）
-    - 同一工具连续失败 max_failures 次 → 取消该工具的后续调用
+    - 单次 invoke 总工具调用数超过 max_tool_calls → 熔断（防死循环）
+    - 同一工具连续失败 max_failures 次 → 熔断
       （成功调用重置该工具失败计数，与 fix_loop 的 reset 语义一致）
 
-    注意：LimitToolCounts 在当前 strands 版本不存在（构造处旧注释过时），
-    此为自实现等价物。hook 实例按 (agent_id, session_id) 缓存于 adapter，
-    跨 invoke 累计计数（与 fix_loop 跨会话保护一致）。
+    T2 循环护栏 (2026-08-31, spec add-agent-loop-closure)：
+    - max_tool_calls 12 → 50（放开长任务自由度，spec"单任务工具调用上限 50"）
+    - 熔断语义升级为"停止整个循环"：置 cancelled 后所有后续工具调用一律
+      cancel_tool，LLM 收到熔断消息后只能收尾输出（无工具可调）
+    - 熔断解释双通道（不只静默停止）：
+      ① event_bus.emit_agent_message(type="output") → 用户立即看到含失败
+        工具名与错误摘要的解释（确定性，不依赖 LLM 转述）
+      ② cancel_tool 消息作为 error tool result 返回 → LLM 下一次调用
+        自带熔断上下文，可向用户解释收尾
+    - 进度上报：每次工具调用完成（AfterToolCallEvent）记录
+      （轮次 round / 工具计数 tool_count / 成功失败 status）：
+      ① agent_log 落盘新事件类型 loop_progress（排障）
+      ② event_bus.emit_loop_progress → Rust 转发 sidecar:loop_progress →
+        前端 AgentStatusPill 显示"第 N 轮 · 已用工具 M"
+    - round 由 BeforeModelCallEvent 计数（LLM 推理轮次；一轮可发多工具）
+    - 单任务语义：adapter 在每次 invoke 开始时 reset()（计数不跨 invoke
+      累计，"单任务上限 50"——旧版跨 invoke 累计会让第二次对话直接熔断）
+
+    hook 实例按 (agent_id, session_id) 缓存于 adapter（与 Agent 实例
+    (agent_id, session_id, perm) 缓存解耦——护栏只跟会话走，perm 重建
+    实例不重置护栏）。
     """
 
     def __init__(
         self,
-        max_tool_calls: int = 12,
+        max_tool_calls: int = 50,
         max_failures: int = 3,
         agent_name: str = "main",
+        event_bus: Any = None,
+        session_id: str = "",
     ) -> None:
         self.max_tool_calls = max_tool_calls
         self.max_failures = max_failures
         self.agent_name = agent_name
+        self.event_bus = event_bus
+        self.session_id = session_id
         self.total_calls = 0
         self.failures_by_tool: dict[str, int] = {}
         self.cancelled = False
+        # T2: LLM 推理轮次（BeforeModelCallEvent 计数）
+        self.round = 0
+        # T2: 最近一次失败 (tool_name, error_summary)——熔断解释引用
+        self._last_failure: tuple[str, str] | None = None
+        # T2: 熔断解释只 emit 一次（cancelled 后每次工具调用都会进
+        # _before_tool_call，防重复刷屏）
+        self._breaker_emitted = False
 
     def register_hooks(self, registry: Any) -> None:
-        """HookProvider 协议：注册 Before/AfterToolCallEvent 回调"""
+        """HookProvider 协议：注册 Before/AfterToolCall/BeforeModelCall 回调"""
         if not _STRANDS_HOOKS_AVAILABLE:
             return
         registry.add_callback(BeforeToolCallEvent, self._before_tool_call)
         registry.add_callback(AfterToolCallEvent, self._after_tool_call)
+        registry.add_callback(BeforeModelCallEvent, self._before_model_call)
+
+    def _before_model_call(self, event: Any) -> None:
+        """LLM 调用前 → 轮次 +1（一轮推理可发多个工具调用）"""
+        self.round += 1
 
     def _tool_name(self, event: Any) -> str:
         tool_use = getattr(event, "tool_use", None)
@@ -256,30 +300,142 @@ class ToolCallLimitHook:
             return
         self.total_calls += 1
         if self.total_calls > self.max_tool_calls:
-            self.cancelled = True
-            event.cancel_tool = (
-                f"工具调用次数超过上限（{self.max_tool_calls}），已终止任务"
+            self._trip_breaker(
+                event,
+                f"工具调用次数超过上限（{self.max_tool_calls}）",
             )
             return
         name = self._tool_name(event)
         if self.failures_by_tool.get(name, 0) >= self.max_failures:
-            event.cancel_tool = (
-                f"工具 {name} 连续失败 {self.max_failures} 次，已停止调用该工具"
+            self._trip_breaker(
+                event,
+                f"工具 {name} 连续失败 {self.max_failures} 次",
             )
+
+    def _trip_breaker(self, event: Any, reason: str) -> None:
+        """熔断：取消当前工具 + 停止后续所有工具调用 + 输出解释"""
+        self.cancelled = True
+        message = f"{reason}，已熔断停止任务"
+        event.cancel_tool = message
+        self._emit_breaker_explanation(reason)
+
+    def _emit_breaker_explanation(self, reason: str) -> None:
+        """熔断解释：agent_log 落盘 + event_bus 推送（用户可见，只发一次）"""
+        if self._breaker_emitted:
+            return
+        self._breaker_emitted = True
+        detail = ""
+        if self._last_failure:
+            detail = f"；最近失败工具：{self._last_failure[0]}（{self._last_failure[1]}）"
+        text = (
+            f"[循环护栏] {reason}{detail}。"
+            f"我已停止继续调用工具，避免无效重试消耗资源；"
+            f"请检查环境/参数后重试，或告诉我换个思路。"
+        )
+        # agent_log 落盘（loop_progress 事件，meta.status=breaker 便于过滤；
+        # 空 session_id 跳过——与 callback_handler._flush_reasoning 口径一致）
+        if self.session_id:
+            try:
+                from strands_backend.agent_log import log_event
+
+                log_event(
+                    self.session_id,
+                    "loop_progress",
+                    text,
+                    meta={
+                        "agent": self.agent_name,
+                        "status": "breaker",
+                        "round": self.round,
+                        "tool_count": self.total_calls,
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — 流水日志失败不影响护栏
+                logger.debug(f"agent_log loop_progress breaker failed: {e}")
+        # 用户可见的熔断解释（type=output 流式推送）
+        if self.event_bus is not None:
+            try:
+                self.event_bus.emit_agent_message(
+                    content=text,
+                    message_type="output",
+                    session_id=self.session_id or None,
+                    source=f"{self.agent_name}_agent.strands.hook",
+                )
+            except Exception as e:  # noqa: BLE001 — 事件推送失败不影响护栏
+                logger.debug(f"emit breaker explanation failed: {e}")
+
+    @staticmethod
+    def _error_summary(event: Any) -> str:
+        """从 AfterToolCallEvent 提取失败摘要（exception 优先，截断 120 字）"""
+        exc = getattr(event, "exception", None)
+        if exc is not None:
+            return str(exc)[:120]
+        result = getattr(event, "result", None)
+        # ToolResult.status == "error"（工具内部返回错误态）
+        if getattr(result, "status", None) == "error":
+            content = getattr(result, "content", None)
+            text = content if isinstance(content, str) else str(content or "")
+            return (text or "tool error")[:120]
+        return "tool error"
 
     def _after_tool_call(self, event: Any) -> None:
         name = self._tool_name(event)
-        failed = getattr(event, "exception", None) is not None
+        failed = (
+            getattr(event, "exception", None) is not None
+            or getattr(getattr(event, "result", None), "status", "success") == "error"
+        )
         if failed:
             self.failures_by_tool[name] = self.failures_by_tool.get(name, 0) + 1
+            self._last_failure = (name, self._error_summary(event))
         else:
             self.failures_by_tool[name] = 0
+        self._report_progress(name, "failed" if failed else "success")
+
+    def _report_progress(self, tool_name: str, status: str) -> None:
+        """T2 进度上报：agent_log 落盘 loop_progress + event_bus 推流"""
+        payload = {
+            "round": self.round,
+            "tool_count": self.total_calls,
+            "tool_name": tool_name,
+            "status": status,
+        }
+        # agent_log 落盘（写失败静默——流水是排障加分项，绝不影响主链路；
+        # 空 session_id 跳过——匿名调用无会话归属，写 default 无排障价值）
+        if self.session_id:
+            try:
+                import json as _json
+
+                from strands_backend.agent_log import log_event
+
+                log_event(
+                    self.session_id,
+                    "loop_progress",
+                    _json.dumps(payload, ensure_ascii=False),
+                    meta={"agent": self.agent_name, **payload},
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"agent_log loop_progress failed: {e}")
+        # 前端推流（AgentStatusPill"第 N 轮 · 已用工具 M"）
+        if self.event_bus is not None:
+            try:
+                self.event_bus.emit_loop_progress(
+                    round=self.round,
+                    tool_count=self.total_calls,
+                    tool_name=tool_name,
+                    status=status,
+                    session_id=self.session_id or None,
+                    source=f"{self.agent_name}_agent.strands.hook",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"emit_loop_progress failed: {e}")
 
     def reset(self) -> None:
-        """重置计数（agent 缓存清理时调用）"""
+        """重置计数（每次 invoke 开始时调用——单任务护栏语义）"""
         self.total_calls = 0
         self.failures_by_tool.clear()
         self.cancelled = False
+        self.round = 0
+        self._last_failure = None
+        self._breaker_emitted = False
 
 
 class TdsfStrandsCallbackHandler:
@@ -515,9 +671,22 @@ class StrandsAgentAdapter:
     BaseAgent PAOR 架构协作。
 
     P0-A1: main 是唯一 agent 实例（4 子 agent 委派已删除）。每次 invoke
-    携带模式（observe/confirm/auto，缺省 confirm）与教学开关（teach bool），
-    Agent 实例按 (agent_id, session, 权限级, mode, teach) 缓存——模式/开关
-    变化即重建（prompt 与工具集都随模式变化）。
+    携带模式（observe/confirm/auto，缺省 confirm）与教学开关（teach bool）。
+
+    T1 上下文连续性 (2026-08-31, 方案书 v4.0): Agent 实例按 (agent_id,
+    session, 权限级) 缓存——mode/teach 移出缓存 key（不再触发重建），
+    其对 prompt 与工具集的影响改为每次 invoke 动态刷新
+    （_refresh_agent_runtime）；messages 历史 per-session 独立存储
+    （_session_messages），实例重建（perm 变化/update_model）时迁移，
+    切模式/教学开关对话历史零丢失；context_manager="auto" 长对话自动压缩。
+
+    T2 循环护栏 (2026-08-31): 每会话挂载 ToolCallLimitHook——单次
+    invoke 工具调用上限 MAX_TOOL_CALLS（50）、同一工具连续失败 ≥3 熔断
+    （熔断解释 emit 用户可见 + cancel 消息回传 LLM）；每次工具调用
+    记录 loop_progress（agent_log 落盘 + 前端状态条推流）。
+
+    T3 规划-执行回环 (2026-08-31): invoke 收尾校验 todo 未完成项 →
+    追加一轮续做提示（限一次，_todo_followup_done 会话级 flag）。
 
     Args:
         event_bus: EventBus 实例（用于推送 mood_change / agent_message / tool_call / needs_you）
@@ -539,6 +708,10 @@ class StrandsAgentAdapter:
         result = adapter.invoke("main", "检查 nginx 状态", state={...})
         # result: {observation, next_step, mood, intermediate_results, ...}
     """
+
+    # T2: 单次 invoke 工具调用总上限（spec"单任务工具调用上限 50"——
+    # 放开长任务自由度；计数每次 invoke 开始时 reset，不跨对话累计）
+    MAX_TOOL_CALLS: int = 50
 
     def __init__(
         self,
@@ -566,14 +739,35 @@ class StrandsAgentAdapter:
         # P1-NEW-v2-2 修复 (2026-07-30): 缓存 key 从 agent_id 改为 (agent_id, session_id)，
         # 避免 multi-session 并发时 callback_handler 和工具闭包绑定的首次 session_id
         # 导致事件路由到错误会话（needs_you 审批卡片错会话）。
-        # P0-A1 (2026-08-29): key 扩展为 (agent_id, session_id, permission_level,
-        # mode, teach)——模式/教学开关变化即重建 agent（prompt + 工具集都随模式变化）。
-        self._agent_cache: dict[tuple[str, str, int, AgentMode, bool], Any] = {}
+        # T1 上下文连续性 (2026-08-31, 方案书 v4.0 感知→思考断点修复):
+        # key 从 (agent_id, session_id, permission_level, mode, teach) 收窄为
+        # (agent_id, session_id, permission_level)——mode/teach 只影响 system
+        # prompt 与工具集，两者改为每次 invoke 动态刷新（_refresh_agent_runtime），
+        # 不再触发实例重建；切模式/教学开关 = 历史零丢失。perm 保留（权限影响
+        # 工具集合法性，重建合理），重建时从 _session_messages 迁移历史。
+        self._agent_cache: dict[tuple[str, str, int], Any] = {}
+
+        # T1: per-session 消息历史（(agent_id, session_id) -> messages 快照）。
+        # messages 与 Agent 实例解耦的单一真源：每次 invoke 后从当前实例
+        # agent.messages 同步（含 conversation_manager auto 压缩后的状态）；
+        # 实例重建（perm 变化 / update_model 清缓存）时装载进新 Agent 构造
+        # 参数 messages，保证跨实例的对话连续性。
+        self._session_messages: dict[tuple[str, str], list] = {}
+
+        # T2 循环护栏: ToolCallLimitHook 实例按 (agent_id, session_id) 缓存
+        # （与 Agent 实例缓存 (agent_id, session_id, perm) 解耦——护栏只跟
+        # 会话走；perm 重建实例不重置护栏，计数由 invoke 开始时 reset 单任务化）。
+        self._limit_hooks: dict[tuple[str, str], ToolCallLimitHook] = {}
+
+        # T3 规划-执行回环: 已触发过收尾追加轮的会话（限一次，防死循环）。
+        # 会话生命周期内最多追加一轮"继续执行或向用户说明原因"。
+        self._todo_followup_done: set[tuple[str, str]] = set()
 
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
         # 用户停止+立即重发会导致前后请求竞态崩溃。锁确保排队等待。
-        self._agent_locks: dict[tuple[str, str, int, AgentMode, bool], threading.RLock] = {}
+        # T1: 锁 key 随缓存 key 同步收窄（mode/teach 不再是实例身份）。
+        self._agent_locks: dict[tuple[str, str, int], threading.RLock] = {}
 
         logger.info(
             f"StrandsAgentAdapter initialized: "
@@ -659,6 +853,10 @@ class StrandsAgentAdapter:
         # 2. 推送 mood=thinking（前端 AgentStatusPill 显示"思考中"）
         self._emit_mood("thinking", agent_id, session_id)
 
+        # T1: 提前初始化——异常发生在 _get_or_create_agent 之前时，
+        # except 分支的 best-effort 历史同步仍可安全引用（None 直接跳过）。
+        strands_agent: Any = None
+
         try:
             # 3. 构建工具上下文（Task 3: 传入 invoke 已解析的三模式，
             #    供执行链 decide(risk_l, mode) 消费）
@@ -668,8 +866,9 @@ class StrandsAgentAdapter:
             strands_agent = self._get_or_create_agent(agent_id, ctx, mode=mode, teach=teach)
             # TDSF 修复 2026-08-09: 防并发崩溃——Strands Agent 有内部状态，
             # 同一实例被并发调用会抛 "already processing a request"。
-            # 用 per-(agent, session, perm, mode, teach) RLock 确保排队等待。
-            lock_key = (agent_id, ctx.session_id, ctx.permission_level, mode, teach)
+            # 用 per-(agent, session, perm) RLock 确保排队等待。
+            # T1: mode/teach 移出锁 key——不再是实例身份的一部分（动态刷新）。
+            lock_key = (agent_id, ctx.session_id, ctx.permission_level)
             agent_lock = self._agent_locks.setdefault(lock_key, threading.RLock())
 
             # 5. 构建 prompt（注入 live 上下文）
@@ -716,10 +915,34 @@ class StrandsAgentAdapter:
             # 落盘（排障可查），无需再向 UI 流注入该消息。
 
             with agent_lock:
+                # T2: 单任务护栏——每次 invoke 开始重置计数（总上限 50 /
+                # 连续失败 3 熔断均按"单次 invoke"口径，不跨对话累计误杀）
+                limit_hook = self._limit_hooks.get((agent_id, ctx.session_id))
+                if limit_hook is not None:
+                    limit_hook.reset()
+
                 response = strands_agent(prompt)
 
-            # 8. 提取最终输出
+                # T3 (2026-08-31): 收尾校验——todo 存在未完成项（pending/
+                # in_progress）时以系统身份追加一轮"继续执行或向用户说明
+                # 原因"（锁内调用，限一次防死循环）。追加轮与主轮共享
+                # 护栏计数（同一 invoke 周期），超限同样熔断。
+                followup_observation = self._maybe_todo_followup(
+                    strands_agent, agent_id, session_id
+                )
+
+            # T1 (2026-08-31): 同步 per-session 消息历史——messages 与实例解耦的
+            # 单一真源。放在锁释放后（invoke 已完成，messages 处于稳定态）。
+            # 注：conversation_manager="auto" 的压缩发生在 strands_agent(prompt)
+            # 内部（SummarizingConversationManager 直接改写 agent.messages），
+            # 此处同步的即压缩后状态——长对话历史按压缩结果迁移，正是期望行为。
+            self._sync_session_messages(agent_id, session_id, strands_agent)
+
+            # 8. 提取最终输出（T3 追加轮有输出则覆盖主轮——追加轮是主轮的
+            # "继续"，其最终答复才是用户应看到的收尾结果；空输出沿用主轮）
             observation = self._extract_response_text(response)
+            if followup_observation:
+                observation = followup_observation
 
             # 会话流水日志：assistant_msg（最终回答全文）落盘
             if observation:
@@ -779,6 +1002,10 @@ class StrandsAgentAdapter:
             )
             self._emit_mood("error", agent_id, session_id)
             self._emit_needs_you_for_error(agent_id, session_id, input, e)
+            # T1: 异常轮次 best-effort 同步历史——用户消息/已完成的工具轮
+            # 已进 agent.messages，同步后 perm 变化重建实例时仍保留本轮上下文
+            # （失败同步只降级为丢本轮，不影响主流程错误上报）。
+            self._sync_session_messages(agent_id, session_id, strands_agent)
 
             # P0-4 (2026-08-01): 运行时失败返回 degraded 标志，
             # 前端据此显示友好降级提示（而非把错误当正常输出流式显示）
@@ -886,13 +1113,25 @@ class StrandsAgentAdapter:
         mode: AgentMode = AgentMode.CONFIRM,
         teach: bool = False,
     ) -> Any:
-        """获取或创建 Strands Agent 实例（按 agent_id + 模式缓存）
+        """获取或创建 Strands Agent 实例（按 agent_id + session + 权限级缓存）
 
         P0-A1 (2026-08-29, 方案书 v3.1 三模式): main 是唯一 agent——
         原 _SUB_AGENT_SPECS 角色裁剪与 agent-as-tool 委派挂载已删除。
         工具集 = TOOL_REGISTRY 全量 × 模式过滤（observe → 只读白名单
         filter_tools_readonly；confirm/auto → 全量）。system prompt =
         基础段 + 模式指令 (+ teach 教学皮肤)。
+
+        T1 上下文连续性 (2026-08-31, 方案书 v4.0):
+        - 缓存 key 收窄为 (agent_id, session_id, permission_level)——mode/teach
+          移出（切模式/教学开关不再重建实例，messages 零丢失）。
+        - 模式/教学对 prompt 与工具集的影响改为每次 invoke 动态刷新
+          （_refresh_agent_runtime：system_prompt setter + tool_registry
+          重填——SDK 侧 get_all_tools_config 每次动态生成，无缓存陷阱）。
+        - perm 变化仍重建实例（权限影响工具集合法性），历史从
+          _session_messages 迁移（messages 构造参数装载）。
+        - context_manager="auto"：SummarizingConversationManager
+          （summary_ratio=0.3, compression_threshold=0.85）+ ContextOffloader，
+          长对话自动压缩不报错。
 
         Args:
             agent_id: Agent 标识（缓存键 + 事件 source；未知 agent_id
@@ -904,71 +1143,243 @@ class StrandsAgentAdapter:
         Returns:
             Strands Agent 实例
         """
-        # 缓存 key 含 permission_level（P1-v5-2：L1 只读过滤）+ mode/teach
-        # （P0-A1：prompt 与工具集都随模式/开关变化，必须重建）
-        cache_key = (agent_id, ctx.session_id, ctx.permission_level, mode, teach)
+        # T1: 缓存 key 含 permission_level（P1-v5-2：L1 只读过滤；
+        # 权限变化影响工具集合法性 → 重建合理），不含 mode/teach
+        cache_key = (agent_id, ctx.session_id, ctx.permission_level)
         if cache_key in self._agent_cache:
-            return self._agent_cache[cache_key]
+            agent = self._agent_cache[cache_key]
+        else:
+            # 构建 callback_handler（main 事件流转发；P0-A1 委派删除后
+            # 无静默 handler 需求）
+            handler = TdsfStrandsCallbackHandler(
+                event_bus=self.event_bus,
+                agent_name=agent_id,
+                session_id=ctx.session_id,
+            )
 
+            # T1: per-session 历史迁移——实例重建（perm 变化）时把
+            # _session_messages 快照装载进新 Agent（Strands Agent 构造
+            # 支持 messages 参数：pre-load 进对话历史）。浅拷贝 list 防
+            # 新旧实例共享同一 list 对象（旧实例后续写入会串改新实例）。
+            history = self._session_messages.get((agent_id, ctx.session_id))
+            migrated = list(history) if history else None
+            if migrated:
+                logger.info(
+                    f"T1 messages migrated: agent_id={agent_id}, "
+                    f"session={ctx.session_id}, msgs={len(migrated)}"
+                )
+
+            # 创建 Strands Agent
+            # mypy: _StrandsAgent 在降级路径已被排除，这里必有值
+            #
+            # TDSF 魔改 2026-07-30 P0-E: Strands 1.50.2 API 变更
+            #   Agent.__init__() 移除了 max_iterations 参数（实测装 1.50.2 后
+            #   报 "Agent.__init__() got an unexpected keyword argument 'max_iterations'"）。
+            #   当前移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
+            #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
+            # T2 循环护栏 (2026-08-31, spec add-agent-loop-closure): 重新挂载
+            #   ToolCallLimitHook——2026-08-09 曾因"12 次上限误伤长排查任务"整体
+            #   摘除；现参数调整后回归：总上限 12→50（放开长任务自由度）+
+            #   连续失败 ≥3 熔断 + 熔断解释双通道（用户可见）+ loop_progress
+            #   进度上报（agent_log 落盘 + 前端状态条）。计数在每次 invoke
+            #   开始时 reset（单任务语义），不再跨 invoke 累计误杀。
+            limit_hook = self._get_limit_hook(agent_id, ctx.session_id)
+            agent = _StrandsAgent(  # type: ignore[misc]
+                model=self.strands_model,
+                # T1: 工具集改由 _refresh_agent_runtime 动态填充（创建路径
+                # 也走刷新，保证 prompt/工具集组装逻辑单一真源）
+                tools=[],
+                system_prompt=self.system_prompt,
+                messages=migrated,
+                callback_handler=handler,
+                # T1 (spec add-agent-loop-closure Task 1.3): auto 上下文管理
+                # ——SDK 1.53.0 组合 SummarizingConversationManager
+                # (summary_ratio=0.3, compression_threshold=0.85) +
+                # ContextOffloader(max_result_tokens=1500, preview_tokens=750)，
+                # 长对话在上下文窗口 85% 时主动压缩摘要（方案书 v4.0 T1）。
+                context_manager="auto",
+                # T2: 循环护栏（50 上限 / 连续失败 3 熔断 / 进度上报）
+                hooks=[limit_hook],
+                name=agent_id,
+                # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
+            )
+
+            self._agent_cache[cache_key] = agent
+            logger.info(
+                f"Strands Agent created: agent_id={agent_id}, "
+                f"session_id={ctx.session_id}, mode={mode.value}, teach={teach}, "
+                f"context_manager=auto, migrated_msgs={len(migrated) if migrated else 0}"
+            )
+
+        # T1: 每次 invoke（无论新建还是缓存命中）都刷新 prompt 与工具集
+        # ——mode/teach/ctx 的运行时影响在此组装，与实例生命周期解耦。
+        self._refresh_agent_runtime(agent, ctx, mode=mode, teach=teach)
+        return agent
+
+    def _refresh_agent_runtime(
+        self,
+        agent: Any,
+        ctx: ToolContext,
+        mode: AgentMode = AgentMode.CONFIRM,
+        teach: bool = False,
+    ) -> None:
+        """每次 invoke 动态刷新实例的 system prompt 与工具集（T1 解耦核心）
+
+        Strands Agent 支持运行时更新：
+        - system_prompt 是 property（setter 重解析为 content blocks）
+        - tool_registry.registry 清空后 process_tools 重填；
+          get_all_tools_config 每次动态生成（无缓存），event_loop 每次
+          invoke 从 agent.tool_registry 取最新工具集
+
+        模式影响：
+        - system_prompt = 基础段 + 模式指令 (+ 教学皮肤)
+        - observe → 工具集裁剪为只读白名单（schema 级隔离，
+          extra_tools 未注册项同样被裁，fail-closed）
+
+        顺带收益：工具闭包每次重建绑定最新 ctx（ssh_host / cwd 等
+        live 字段变化即时生效，修复缓存命中路径闭包陈旧的隐患）。
+        """
         # 构建运维工具（TOOL_REGISTRY 全量，带 ctx 闭包；L1 权限由
         # make_all_ops_tools 内部按 READONLY_TOOL_NAMES 过滤）
         all_tools = make_all_ops_tools(ctx) + self.extra_tools
 
         # P0-A1 观察模式 schema 级隔离：裁剪为只读白名单——LLM 无法调用
         # 不存在于 schema 的执行/写类工具（remove 优于 instruct+intercept）。
-        # extra_tools 未注册项同样被裁（fail-closed）。
         if mode == AgentMode.OBSERVE:
             all_tools = filter_tools_readonly(all_tools)
 
         # 模式感知 prompt：基础段 + 模式指令 (+ 教学皮肤)
-        system_prompt = _compose_system_prompt(mode, teach, base=self.system_prompt)
+        agent.system_prompt = _compose_system_prompt(mode, teach, base=self.system_prompt)
 
-        # T2 (2026-08-28): 全部 20 工具已收编入 TOOL_REGISTRY（tools/registry.py），
-        # 由 make_all_ops_tools 统一构建（含 service/package/firewall 等 5 个
-        # 扩展运维工具）；原 P2-3 AGENT_EXTENDED_TOOLS 重复挂载块随委派机制
-        # 一并删除（T2 后为冗余路径）。
+        # 工具集重填（保留 ToolRegistry 对象，清空 dict 后 process_tools——
+        # _ToolCaller/event_loop 均经由 agent.tool_registry 动态访问，安全）
+        registry = agent.tool_registry
+        registry.registry.clear()
+        registry.dynamic_tools.clear()
+        registry.process_tools(all_tools)
 
-        # 构建 callback_handler（main 事件流转发；P0-A1 委派删除后
-        # 无静默 handler 需求）
-        handler = TdsfStrandsCallbackHandler(
-            event_bus=self.event_bus,
-            agent_name=agent_id,
-            session_id=ctx.session_id,
+    def _sync_session_messages(
+        self,
+        agent_id: str,
+        session_id: str,
+        agent: Any,
+    ) -> None:
+        """T1: 把当前实例的 messages 快照同步进 per-session 存储
+
+        invoke 完成（含异常轮 best-effort）后调用；失败静默（历史同步
+        是加分项，绝不影响主链路）。session_id 为空（匿名调用）不同步。
+        """
+        if not session_id or agent is None:
+            return
+        try:
+            msgs = getattr(agent, "messages", None)
+            if msgs is not None:
+                self._session_messages[(agent_id, session_id)] = list(msgs)
+        except Exception as e:  # noqa: BLE001 — 历史同步失败不阻塞主流程
+            logger.debug(f"session messages sync skipped: {e}")
+
+    def _get_limit_hook(self, agent_id: str, session_id: str) -> ToolCallLimitHook:
+        """T2: 获取或创建会话级循环护栏 hook（(agent_id, session_id) 缓存）
+
+        hook 与 Agent 实例缓存解耦（perm 重建实例仍复用同一护栏）；
+        计数在每次 invoke 开始时 reset（单任务上限语义）。
+        """
+        key = (agent_id, session_id)
+        hook = self._limit_hooks.get(key)
+        if hook is None:
+            hook = ToolCallLimitHook(
+                max_tool_calls=self.MAX_TOOL_CALLS,
+                max_failures=3,
+                agent_name=agent_id,
+                event_bus=self.event_bus,
+                session_id=session_id,
+            )
+            self._limit_hooks[key] = hook
+            logger.info(
+                f"T2 loop guard hook created: agent_id={agent_id}, "
+                f"session={session_id}, max_tool_calls={self.MAX_TOOL_CALLS}"
+            )
+        return hook
+
+    # ========================================================================
+    # T3 规划-执行回环：invoke 收尾校验（todo 未完成 → 追加一轮，限一次）
+    # ========================================================================
+
+    def _maybe_todo_followup(
+        self,
+        strands_agent: Any,
+        agent_id: str,
+        session_id: str,
+    ) -> str:
+        """T3.2: invoke 后收尾校验——todo 有未完成项则追加一轮续做提示
+
+        数据源：todo_write 工具维护的 per-session 镜像（tools/todo_write.py
+        _session_todos）——sidecar 无法直接读前端 TodoStore，以镜像为准。
+
+        防死循环：会话级 flag（_todo_followup_done，(agent_id, session_id)），
+        触发前先置位——追加轮内即使又写新 todo 且未完成，也不再触发；
+        追加轮异常同样不重试。调用方须持有 agent_lock（本方法在锁内调用，
+        与主轮共享护栏计数，追加轮超 50 上限同样熔断）。
+
+        Args:
+            strands_agent: 当前会话的 Strands Agent 实例（锁内已持有）
+            agent_id: Agent 标识
+            session_id: 会话 ID
+
+        Returns:
+            追加轮的最终文本（未触发 / 触发但无输出时为空串，调用方沿用主轮结果）
+        """
+        if not session_id:
+            return ""
+        if (agent_id, session_id) in self._todo_followup_done:
+            return ""
+        try:
+            from strands_backend.tools.todo_write import get_unfinished_todos
+
+            unfinished = get_unfinished_todos(session_id)
+        except Exception as e:  # noqa: BLE001 — 校验失败不阻塞返回主轮结果
+            logger.debug(f"todo followup check skipped: {e}")
+            return ""
+        if not unfinished:
+            return ""
+
+        # 限一次：先置位再追加（防追加轮内异常/新未完成项导致重复触发）
+        self._todo_followup_done.add((agent_id, session_id))
+
+        lines = "\n".join(
+            f"- [{t.get('status', 'pending')}] {t.get('title', '')}"
+            for t in unfinished
+        )
+        followup_prompt = (
+            f"[TDSF] 任务清单还有 {len(unfinished)} 项未完成：\n{lines}\n"
+            f"请继续执行这些任务并逐项更新 todo_write 状态；"
+            f"若确认无法继续（被拒/环境限制/依赖用户决策），"
+            f"请向用户说明原因，不要静默留下未完成项。"
         )
 
-        # 创建 Strands Agent
-        # mypy: _StrandsAgent 在降级路径已被排除，这里必有值
-        #
-        # TDSF 魔改 2026-07-30 P0-E: Strands 1.50.2 API 变更
-        #   Agent.__init__() 移除了 max_iterations 参数（实测装 1.50.2 后
-        #   报 "Agent.__init__() got an unexpected keyword argument 'max_iterations'"）。
-        #   当前移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
-        #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
-        # TDSF 修复 2026-08-09: 移除工具调用上限（用户要求）。
-        #   原 ToolCallLimitHook(max_tool_calls=12) 会强制终止超过 12 次工具调用的
-        #   会话，用户反馈"本次排查已到达工具调用上限"影响教学体验。
-        #   现改为不挂 hook，让 agent 自由调用工具直到任务完成。
-        agent = _StrandsAgent(  # type: ignore[misc]
-            model=self.strands_model,
-            tools=all_tools,
-            system_prompt=system_prompt,
-            callback_handler=handler,
-            hooks=[],
-            name=agent_id,
-            # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
-        )
+        # 流水落盘（todo_followup 事件，排障可见追加轮的注入内容）
+        try:
+            from strands_backend.agent_log import log_event
 
-        self._agent_cache[cache_key] = agent
+            log_event(
+                session_id,
+                "todo_followup",
+                followup_prompt,
+                meta={"agent": agent_id, "unfinished": len(unfinished)},
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"agent_log todo_followup failed: {e}")
+
         logger.info(
-            f"Strands Agent created: agent_id={agent_id}, session_id={ctx.session_id}, "
-            f"mode={mode.value}, teach={teach}, "
-            f"tools={[t.__name__ if hasattr(t, '__name__') else str(t) for t in all_tools]}"
+            f"T3 todo followup round: agent_id={agent_id}, "
+            f"session={session_id}, unfinished={len(unfinished)}"
         )
-        return agent
-
-    # ========================================================================
-    # 工具上下文构建
-    # ========================================================================
+        try:
+            resp = strands_agent(followup_prompt)
+            return self._extract_response_text(resp)
+        except Exception as e:  # noqa: BLE001 — 追加轮失败降级用主轮结果
+            logger.warning(f"todo followup round failed (fallback: main result): {e}")
+            return ""
 
     def _build_tool_context(
         self,
@@ -1318,7 +1729,12 @@ class StrandsAgentAdapter:
             logger.debug(f"auto sink case skipped: {e}")
 
     def clear_cache(self) -> None:
-        """清空 Agent 缓存（配置变更后调用）"""
+        """清空 Agent 缓存（配置变更后调用）
+
+        T1: 只清实例缓存（agent 绑定旧 model/闭包必须重建），不清
+        _session_messages——历史与实例解耦后，重建实例从历史装载，
+        换模型/清缓存不再丢对话上下文（方案书 v4.0 T1 断点修复）。
+        """
         count = len(self._agent_cache)
         self._agent_cache.clear()
         # TDSF 修复 2026-08-09: 一并清空锁字典
@@ -1359,11 +1775,13 @@ class StrandsAgentAdapter:
             "strands_available": self._strands_available,
             "model_available": self._model_available,
             "rust_bridge_type": type(self.rust_bridge).__name__,
+            # T1: 缓存 key 已收窄（mode/teach 移除），mode 不再是实例属性
             "cached_agents": [
-                f"{agent_id}:{session_id}:{mode.value}"
-                f"{'+' if teach else ''}"
-                for (agent_id, session_id, _perm, mode, teach) in self._agent_cache.keys()
+                f"{agent_id}:{session_id}:L{perm}"
+                for (agent_id, session_id, perm) in self._agent_cache.keys()
             ],
+            # T1: per-session 历史条数（messages 解耦状态可见性）
+            "session_history_entries": len(self._session_messages),
             "max_iterations": self.max_iterations,
             "extra_tools_count": len(self.extra_tools),
         }

@@ -3,10 +3,11 @@
  * -----------------------------------------------------------------------------
  * 覆盖（P2 代码片段管理）:
  *   1. 空状态显示引导文案
- *   2. 有片段时渲染列表（Frecency 排序由 store 纯函数单测覆盖）
- *   3. 无变量片段点击行 → 直接插入终端 + recordUsage 计数
+ *   2. 有片段时渲染列表（置顶排序由 store 纯函数单测覆盖）
+ *   3. 无变量片段点击行 → 直接插入终端
  *   4. 有变量片段点击行 → 弹出变量解析 Dialog（不直接插入）
  *   5. 搜索过滤
+ *   6. 置顶 / 取消置顶
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -26,7 +27,6 @@ function makeSnippet(over: Partial<Snippet> = {}): Snippet {
     variables: [],
     createdAt: 1,
     updatedAt: 1,
-    usageCount: 0,
     ...over,
   };
 }
@@ -74,7 +74,7 @@ describe("SnippetsPanel — 面板渲染", () => {
 });
 
 describe("SnippetsPanel — 插入行为", () => {
-  it("无变量片段点击行 → 直接插入终端并记录使用次数", () => {
+  it("无变量片段点击行 → 直接插入终端", () => {
     useSnippetsStore.setState({
       snippets: [makeSnippet({ id: "df-id", name: "磁盘占用", command: "df -h" })],
       hydrated: true,
@@ -83,7 +83,6 @@ describe("SnippetsPanel — 插入行为", () => {
     fireEvent.click(screen.getByTestId("snippet-row-磁盘占用"));
     expect(onInsertCommand).toHaveBeenCalledTimes(1);
     expect(onInsertCommand).toHaveBeenCalledWith("df -h");
-    expect(useSnippetsStore.getState().snippets[0].usageCount).toBe(1);
   });
 
   it("有变量片段点击行 → 弹出确认 Dialog，不直接插入", async () => {
@@ -105,7 +104,7 @@ describe("SnippetsPanel — 插入行为", () => {
     expect(onInsertCommand).not.toHaveBeenCalled();
   });
 
-  it("无活动终端时插入失败 → 提示且不计数", () => {
+  it("无活动终端时插入失败 → 仅提示不崩溃", () => {
     onInsertCommand.mockReturnValue(false);
     useSnippetsStore.setState({
       snippets: [makeSnippet({ id: "df-id", name: "磁盘占用", command: "df -h" })],
@@ -113,6 +112,40 @@ describe("SnippetsPanel — 插入行为", () => {
     });
     render(<SnippetsPanel onInsertCommand={onInsertCommand} />);
     fireEvent.click(screen.getByTestId("snippet-row-磁盘占用"));
-    expect(useSnippetsStore.getState().snippets[0].usageCount).toBe(0);
+    expect(onInsertCommand).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SnippetsPanel — 置顶", () => {
+  it("hover 置顶按钮 → togglePin 写入 pinnedAt", () => {
+    useSnippetsStore.setState({
+      snippets: [makeSnippet({ id: "df-id", name: "磁盘占用", command: "df -h" })],
+      hydrated: true,
+    });
+    render(<SnippetsPanel onInsertCommand={onInsertCommand} />);
+    fireEvent.click(screen.getByTitle("置顶（按置顶顺序排列）"));
+    expect(useSnippetsStore.getState().snippets[0].pinnedAt).toBeDefined();
+  });
+
+  it("已置顶片段再点 → 取消置顶", () => {
+    useSnippetsStore.setState({
+      snippets: [
+        makeSnippet({ id: "df-id", name: "磁盘占用", command: "df -h", pinnedAt: 100 }),
+      ],
+      hydrated: true,
+    });
+    render(<SnippetsPanel onInsertCommand={onInsertCommand} />);
+    fireEvent.click(screen.getByTitle("取消置顶"));
+    expect(useSnippetsStore.getState().snippets[0].pinnedAt).toBeUndefined();
+  });
+
+  it("置顶不触发插入终端", () => {
+    useSnippetsStore.setState({
+      snippets: [makeSnippet({ id: "df-id", name: "磁盘占用", command: "df -h" })],
+      hydrated: true,
+    });
+    render(<SnippetsPanel onInsertCommand={onInsertCommand} />);
+    fireEvent.click(screen.getByTitle("置顶（按置顶顺序排列）"));
+    expect(onInsertCommand).not.toHaveBeenCalled();
   });
 });
