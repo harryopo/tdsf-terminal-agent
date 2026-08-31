@@ -4,22 +4,25 @@ scripts/export_knowledge_md.py — 知识库导出本地 md 预览（TDSF 2026-0
 ===========================================================================
 
 用途：读 .tdsf-data/rag.db 官方条目（*-docs + archwiki + philosophy），按
-**分类/源** 两级文件夹导出为本地 md 文件，供人工预览（用户钦定：「本质上
+**分类** 一级文件夹导出为本地 md 文件，供人工预览（用户钦定：「本质上
 不就是 md 文件吗」）：
 
-    <项目根>/knowledge-preview/<分类中文名>/<源名>/<标题>.md
+    <项目根>/knowledge-preview/<分类中文名>/<文件名>.md
 
 - 分类 = 6+1 知识库分类（entries.category，category_for 映射），中文目录名：
   Linux哲学与命令对照 / 基础概念 / 命令与工具 / 系统管理 / 网络与远程 /
   安全加固 / 服务部署；category 为空归「其他」
-- 一条知识 = 一个 md 文件（整页合并条目）；同 url 多块时正文按序拼接
-- 文件名 = 标题 slug 化（Windows 非法字符 <>:"/\\|?* 与控制符替换为 _，
-  保留中文；截断 80 字符；空标题回退 url 文件名；重名自动追加 -2/-3）
+- **TDSF 2026-08-31 知识库大整合新结构**：合并文档（url 以 consolidated/
+  开头，7 分类 × ≤5 大文件）一级目录导出，文件名 = 合并中文文件名
+  （url 最后段）；get_doc 按 url 聚合分块还原完整文档，整页内容与
+  consolidate_knowledge.py 生成的合并文件一致（幂等校验）
+- 同 url 多块时正文按序拼接（get_doc 语义）
+- 文件名 slug 化消毒（Windows 非法字符替换为 _，保留中文；重名追加 -2/-3）
 - 头部 frontmatter：source / url / title / category / zh_title / summary_zh
   （有则写）+ content_zh 全文译文（translate_knowledge.py 已翻译时）
 - doc_titles_zh 的中文标题写进 frontmatter + 正文顶部「# 中文标题」
 - 幂等：重跑覆盖（先清空导出目录再导出，条目减少不留陈旧文件）
-- 导出后打印导出位置与每分类/每源文件数统计
+- 导出后打印导出位置与每分类文件数统计
 - **格式校验（TDSF 2026-08-30 根因修复）**：正文含 <!DOCTYPE/<html/<table
   等原始 HTML 标记 → 该条**拒绝导出**并告警（爬虫 HTML→MD 转换失效的信号，
   脏数据不进预览目录）
@@ -108,7 +111,7 @@ def slugify_filename(title: str, fallback: str) -> str:
 
 
 def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
-    """导出官方条目为 md 文件（<分类>/<源>/<标题>.md），返回 {分类/源: 文件数}"""
+    """导出官方条目为 md 文件（<分类>/<文件名>.md 一级目录），返回 {分类: 文件数}"""
     from knowledge.rag import get_global_rag
 
     rag = get_global_rag()
@@ -120,7 +123,7 @@ def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
         or f["source"] in ("archwiki", "philosophy")
     ]
     if not official:
-        logger.warning("no exportable files found（先跑 rebuild_knowledge.py --crawl-all）")
+        logger.warning("no exportable files found（先跑 rebuild_from_consolidated.py）")
         return {}
 
     titles = {t["url"]: t for t in rag.titles_zh()}
@@ -148,16 +151,23 @@ def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
         summary = str(zh_row.get("summary_zh", "")).strip()
         content_zh = str(doc.get("content_zh", "") or "").strip()
 
-        # 两级目录：<分类中文名>/<源名>/
-        source_dir = out_dir / category_dir_name(category) / source
-        source_dir.mkdir(parents=True, exist_ok=True)
+        # 一级目录：<分类中文名>/<文件名>.md
+        # 合并文档（url 以 consolidated/ 开头）文件名 = url 最后段（中文合并
+        # 文件名）；philosophy 等回退 slug 化标题
+        category_dir = out_dir / category_dir_name(category)
+        category_dir.mkdir(parents=True, exist_ok=True)
 
-        base = slugify_filename(str(doc.get("title") or f.get("title0") or ""), f.get("filename", url))
-        path = source_dir / f"{base}.md"
-        # 重名自动追加序号（同源不同文档同标题的场景）
+        base = slugify_filename(
+            str(doc.get("filename") or f.get("title0") or ""), f.get("filename", url)
+        )
+        if not base.lower().endswith(".md"):
+            base += ".md"
+        path = category_dir / base
+        # 重名自动追加序号（同分类不同文档同文件名的场景）
         seq = 2
         while path.exists():
-            path = source_dir / f"{base}-{seq}.md"
+            stem, dot, ext = base.rpartition(".")
+            path = category_dir / f"{stem}-{seq}{dot}{ext}"
             seq += 1
 
         lines: list[str] = [
@@ -173,7 +183,10 @@ def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
             lines.append(f"summary_zh: {summary}")
         lines.append("---")
         lines.append("")
-        if zh_title:
+        # 中文标题顶部行：合并文档正文已自带 `# 大标题`（与 zh_title 同文本）
+        # 时不重复插入（TDSF 2026-08-31 大整合新结构）
+        head = content.lstrip()
+        if zh_title and not head.startswith(f"# {zh_title}"):
             lines.append(f"# {zh_title}")
             lines.append("")
         lines.append(content.rstrip())
@@ -187,7 +200,7 @@ def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
         lines.append("---")
         lines.append(f"来源：{url}")
         path.write_text("\n".join(lines), encoding="utf-8")
-        count_key = f"{category_dir_name(category)}/{source}"
+        count_key = category_dir_name(category)
         counts[count_key] = counts.get(count_key, 0) + 1
     return counts
 
