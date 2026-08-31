@@ -237,25 +237,68 @@ export function SpaceSwitcher({
 
   if (!current) return null;
 
+  // TDSF 魔改 2026-08-31（用户钦定）: 顶栏工作区横向标签。
+  // 原触发器只显示"当前 Space 名 >"，切换工作区必须先弹总览面板再点选，
+  // 多工作区时不直观。现在每个 Space 一个横向 chip 直接点击切换；
+  // 点击"当前激活"的 chip 打开总览面板（重命名/删除/管理 tab 仍在那里）；
+  // 行尾 + 号新建工作区。
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger asChild>
+      <div
+        className="flex min-w-20 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-testid="space-tabs-row"
+      >
+        {spaces.map((sp) => {
+          const isActive = sp.id === activeId;
+          return (
+            <button
+              key={sp.id}
+              type="button"
+              title={isActive ? "打开工作区总览" : `切换到 ${sp.name}`}
+              onClick={() => {
+                if (isActive) onOpenChange(true);
+                else {
+                  setActive(sp.id);
+                  onOpenChange(false);
+                }
+              }}
+              className={cn(
+                "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium outline-none transition-colors",
+                isActive
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground/90 hover:bg-accent/50 hover:text-foreground",
+              )}
+            >
+              <SpaceAvatar space={sp} size="sm" active={isActive} />
+              <span className="max-w-28 truncate">{sp.name}</span>
+            </button>
+          );
+        })}
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            title={shortcut ? `工作区总览 · ${shortcut}` : "工作区总览"}
+            aria-label="工作区总览"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          >
+            <HugeiconsIcon
+              icon={ArrowDown01Icon}
+              size={13}
+              strokeWidth={2}
+              className="shrink-0 opacity-80"
+            />
+          </button>
+        </PopoverTrigger>
         <button
           type="button"
-          title={shortcut ? `Spaces · ${shortcut}` : "Spaces"}
-          className="flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-muted-foreground/90 outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          title="新建工作区"
+          aria-label="新建工作区"
+          onClick={onNewSpace}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 outline-none transition-colors hover:bg-accent hover:text-foreground"
         >
-          <span className="max-w-36 truncate text-xs font-medium">
-            {current.name}
-          </span>
-          <HugeiconsIcon
-            icon={ArrowRight01Icon}
-            size={14}
-            strokeWidth={1.75}
-            className="shrink-0 opacity-65"
-          />
+          <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={2} />
         </button>
-      </PopoverTrigger>
+      </div>
       <PopoverContent align="start" sideOffset={6} className="w-[20rem] p-1.5">
         <div className="flex items-center justify-between px-1.5 pb-1.5 pt-0.5">
           <span className="text-xs font-semibold text-foreground">Spaces</span>

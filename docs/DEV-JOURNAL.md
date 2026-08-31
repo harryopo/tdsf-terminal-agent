@@ -77,6 +77,41 @@
 3. **T13 MCP 客户端**（方案书 v3.0 P3）——外部工具生态接入，调研 strands MCPClient
 4. 知识库遗留可选项（低优先）：--recompress 二次压缩 / cross-encoder 精排 / chromadb 旧依赖清理
 
+---
+
+## 2026-08-31 · 工作区逻辑系统修复（§37.89）：SSH 不再污染本地/WSL Space + 顶栏横向工作区标签
+
+**任务**：用户实测七问题——①新建本地工作区自动导向服务器；②本地 Space 左侧资源管理器显示服务器文件；③关工作区不关 SSH 连接（残留污染后续）；④左侧 `[InvalidPath] C:/Users/...` 报错；⑤WSL 工作区被命名成服务器 IP；⑥+ 菜单有 Blocks/Privacy/Preview/Git Graph 无关入口；⑦打开的窗口要顶端横向展开。
+
+**根因（全部代码证据定位，非猜测）**：
+1. **连接改写 Space**：`App.tsx` SSH connected 订阅处理器把"当前 Space"整体 `setEnv(ssh)`——用户在本地/WSL Space 里连服务器，该 Space 就被改写成 SSH（WSL 显示 IP、tab 变 user@host 皆源于此）；自动连接无匹配 Space 时还兜底绑当前 Space 的 tab。
+2. **删 Space 不断连**：`handleDeleteSpace` 只删 Space/tabs，session 留后台。
+3. **InvalidPath**：Space 升级 SSH 后 root 是远程 Linux 路径 / 降级后 root 未清，本地文件树校验拒绝。
+4. **本地 Space 继承远程 cwd**：`defaultRoot={activeCwd ?? home}`——当前 tab 是 SSH 时 activeCwd 是远程路径。
+
+**方案与修改（7 文件）**：
+1. `App.tsx` 订阅处理器：连接只绑**专属 SSH Space**（host/user 匹配）；自动连接无匹配 → 跳过+断开孤儿会话；手动连接无匹配 → 新建 SSH Space 并切换。`autoConnect` 标记从 store 级 `autoConnectSessionId`（有竞态：connect 返回后才设，connected 转换更早触发）改为**会话创建时写入** `session.autoConnect`（`sshStore.ts` 的 `connect(params, opts)` + `connectWithSaved` 透传）。
+2. 启动自动连接 effect：仅当存在 host/user 匹配的既有 SSH Space 才连（删过工作区不再连回）。
+3. `handleDeleteSpace`：删 Space 时若无其他 Space 共用该 session → `disconnect()`。
+4. 断线/启动降级：`setEnv(local)` + `setRoot(null)` 成对执行（`useSpaces.ts` 新增 `setRoot` action）。
+5. `SpaceCreateDialog` 调用点：`defaultEnv` SSH 时降级 LOCAL_WORKSPACE；`defaultRoot` 仅本地 Space 继承 cwd。
+6. SSH tab 绑定标题统一 "shell"（用户钦定 2026-08-28 一致性收口，3 处）。
+7. `NewTabMenu` 只留 Terminal+Editor；同步删命令面板 4 条 + 快捷键 3 项（`blocks.prev/next` 导航保留）。
+8. `SpaceSwitcher` 触发器改顶栏横向标签：每 Space 一个 chip（点非激活=切换，点激活=开总览面板），行尾 ⌄ 总览 + 新建。
+
+**报错与修改**：
+1. typecheck 报 `targetSpace.env.sessionId` 不存在于联合类型 local 分支 → 加 `env.kind === "ssh"` 收窄。
+2. `setRoot` 未定义 → `useSpaces.ts` 补 action（type+实现）。
+
+**复盘**：
+- 做对：动手前 AskUserQuestion 确认两个 UI 决策（菜单删哪些、"横向展开"指 Space 还是 tab），避免猜错方向返工。
+- 做对：识别出 `autoConnectSessionId` 竞态（原代码就有，是"开机被导向服务器"的深层原因之一），改会话级标记根治。
+- 教训重现：并行 agent 对话用 `git add -A` 把我早先的 App.tsx/useSpaces.ts/NewTabMenu.tsx 卷进它的 commit `375903d`（§37.87 同款教训第三次发生）。代码无损、build 通过，但历史归属混乱。**并行开发时各自精确 add 自己声明的文件**——本轮 commit 只 add 我的 7 个前端文件 + 交接文档，不碰 sidecar。
+- 交接：`docs/工作区逻辑修复-交接说明-2026-08-31.md`（面向 Agent 对话：感知字段语义表 + 判定建议）。
+- 门禁：tsc/lint/vitest 1268/build 四绿；**待 tauri:dev 桌面实测**（见交接文档 §五清单）。
+
+---
+
 ## 2026-08-28 · Agent 能力升级 P0 全四项收尾（T1 技能包 / T2 工具三角色解耦 / T3 fail-closed 门禁 / T4 债务清理）+ P3 拍板落档
 
 **任务**：用户拍板方案书 v3.0——P0 起步、T1 技能包先行、删除 sidecar 旧遗产与 runtime.tsx 死代码、P3（MCP/长期记忆）纳入近期。执行 P0 全部四项并收尾。

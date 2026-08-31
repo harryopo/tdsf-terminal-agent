@@ -186,9 +186,8 @@ export default function App() {
     setActiveSpaceForNewTabs,
     warmUpTab,
     newTab,
-    newBlockTab,
+    // TDSF 魔改 2026-08-31: newBlockTab / newPrivateTab 入口已移除（Blocks/隐私终端）
     newAgentTab,
-    newPrivateTab,
     openFileTab,
     pinTab,
     newPreviewTab,
@@ -648,12 +647,24 @@ export default function App() {
       // 已按 lastUsed 倒序, 取第一个 = 最近使用的
       if (list.length > 0 && list[0]) {
         const profile = list[0];
+        // TDSF 修复 2026-08-31: 仅当存在 host/user 匹配的既有 SSH Space 时才
+        // 自动连接。用户删除了服务器工作区后，开机不该再把它连回来（残留会话
+        // 正是"关闭工作区却没关连接 → 新建本地工作区被导向服务器"的来源）。
+        const hasMatchingSpace = useSpaces
+          .getState()
+          .spaces.some(
+            (s) =>
+              s.env.kind === "ssh" &&
+              s.env.host === profile.host &&
+              s.env.user === profile.user,
+          );
+        if (!hasMatchingSpace) return;
         try {
-          const id = await useSshStore.getState().connectWithSaved(profile);
+          const id = await useSshStore
+            .getState()
+            .connectWithSaved(profile, { autoConnect: true });
           if (cancelled) return;
-          if (id) {
-            useSshStore.setState({ autoConnectSessionId: id });
-          } else {
+          if (!id) {
             // TDSF 修复 2026-08-01: 自动连接失败时把当前 Space 的幽灵 SSH env
             // 降级为 local——Space env 持久化可能引用已不存在的 session UUID
             //（上个生命周期遗留），若一直保持 env.kind=ssh 会导致该 Space
@@ -774,10 +785,14 @@ export default function App() {
 
         // TDSF 修复 2026-08-31（用户实测：新建本地工作区被自动导向服务器）:
         // 连接成功只允许绑定"专属 SSH Space"（env.kind==="ssh" 且 host/user 匹配），
-        // 绝不改写本地/WSL Space——Space 类型由创建时的用户意图决定，连接是会话级
-        // 动作，不应污染工作区。找不到匹配 Space 时新建一个 SSH Space 并切换过去
-        // （覆盖欢迎页 cold tab 场景：用户点"连接 SSH"但尚无 Space）。
+        // 绝不改写本地/WSL Space——Space 类型由创建时的用户意图决定。
+        //   - 自动连接（开机 connectWithSaved）：只恢复 host/user 匹配的既有 SSH
+        //     Space；若无匹配 Space，说明用户此前已删除该服务器工作区 → 直接跳过，
+        //     绝不凭空新建并切换（这正是"本地工作区被导向服务器"的根因）。
+        //   - 手动连接（对话框 / SSH 面板）：无匹配 Space 时新建一个并切换过去，
+        //     给这次连接一个工作区承载。
         const spaces = useSpaces.getState();
+        const isAutoConnect = session.autoConnect === true;
         let targetSpace =
           spaces.spaces.find(
             (s) =>
@@ -785,20 +800,14 @@ export default function App() {
               s.env.host === session.params.host &&
               s.env.user === session.params.user,
           ) ?? null;
-        if (targetSpace && targetSpace.env.sessionId !== session.id) {
-          useSpaces.getState().setEnv(targetSpace.id, {
-            kind: "ssh",
-            host: session.params.host,
-            user: session.params.user,
-            port: session.params.port ?? 22,
-            sessionId: session.id,
-            label: `${session.params.user}@${session.params.host}`,
-          });
-        }
         if (!targetSpace) {
-          // 无匹配 SSH Space：新建并激活。SpaceCreateDialog 创建的 SSH Space
-          // 已带 sessionId（上面 find 即命中），走到这里说明连接来自其他入口
-          // （SshExplorer 面板/欢迎页 cold tab），需要工作区承载。
+          if (isAutoConnect) {
+            // 兜底（正常不会走到——启动 effect 已按"存在匹配 Space"才自动连接）：
+            // 孤儿自动连接会话立即断开，不留后台活连接。
+            boundSshSessionsRef.current.delete(session.id);
+            void useSshStore.getState().disconnect(session.id);
+            continue;
+          }
           const created = useSpaces.getState().create({
             name: `${session.params.user}@${session.params.host}`,
             root: `/home/${session.params.user}`,
@@ -814,6 +823,18 @@ export default function App() {
           targetSpace = created;
           setActiveSpaceForNewTabs(created.id);
           useSpaces.getState().setActive(created.id);
+        } else if (
+          targetSpace.env.kind === "ssh" &&
+          targetSpace.env.sessionId !== session.id
+        ) {
+          useSpaces.getState().setEnv(targetSpace.id, {
+            kind: "ssh",
+            host: session.params.host,
+            user: session.params.user,
+            port: session.params.port ?? 22,
+            sessionId: session.id,
+            label: `${session.params.user}@${session.params.host}`,
+          });
         }
 
         // TDSF 修复 2026-08-01: 新连接成功时同步 activeSessionId。
@@ -1294,40 +1315,6 @@ export default function App() {
     spaceSshCurrentPath,
   ]);
 
-  const openNewPrivateTab = useCallback(() => {
-    // TDSF 修复 2026-08-01: SSH Space 的隐私终端同样继承远程 cwd
-    const isSshSpace = activeSpace?.env.kind === "ssh";
-    const cwd = isSshSpace
-      ? (spaceSshCurrentPath ?? "/")
-      : inheritedCwdForNewTab();
-    const tabId = newPrivateTab(cwd);
-    bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
-  }, [
-    newPrivateTab,
-    inheritedCwdForNewTab,
-    bindTabToSshSpace,
-    activeSpaceId,
-    activeSpace,
-    spaceSshCurrentPath,
-  ]);
-
-  const openNewBlockTab = useCallback(() => {
-    // TDSF 修复 2026-08-01: SSH Space 的块状终端同样继承远程 cwd
-    const isSshSpace = activeSpace?.env.kind === "ssh";
-    const cwd = isSshSpace
-      ? (spaceSshCurrentPath ?? "/")
-      : inheritedCwdForNewTab();
-    const tabId = newBlockTab(cwd);
-    bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
-  }, [
-    newBlockTab,
-    inheritedCwdForNewTab,
-    bindTabToSshSpace,
-    activeSpaceId,
-    activeSpace,
-    spaceSshCurrentPath,
-  ]);
-
   const sendCd = useCallback(
     (path: string) => {
       // TDSF 修复 2026-07-29: SSH 模式下状态栏路径显示远程位置,
@@ -1546,9 +1533,7 @@ export default function App() {
       "commandPalette.open": () => openCommandPalette("commands"),
       "commandPalette.content": () => openCommandPalette("content"),
       "tab.new": openNewTab,
-      "tab.newBlock": openNewBlockTab,
-      "tab.newPrivate": openNewPrivateTab,
-      "tab.newPreview": () => openPreviewTab(""),
+      // TDSF 魔改 2026-08-31（用户钦定）: Blocks/Privacy/Preview 入口整体移除
       "tab.newEditor": () => setNewEditorOpen(true),
       "tab.close": handleCloseTabOrPane,
       "tab.next": () => stepSwitcher(1),
@@ -1645,9 +1630,6 @@ export default function App() {
       cycleSpace,
       handleCloseTabOrPane,
       openNewTab,
-      openNewBlockTab,
-      openNewPrivateTab,
-      openPreviewTab,
       activeSpaceId,
       selectByIndex,
       splitActivePaneInActiveTab,
@@ -2011,11 +1993,7 @@ export default function App() {
             explorerRoot,
             home,
             openNewTab,
-            openNewBlock: openNewBlockTab,
-            openNewPrivate: openNewPrivateTab,
             openNewEditor: () => setNewEditorOpen(true),
-            openNewPreview: () => openPreviewTab(""),
-            openGitGraph: openGitGraphFromContext,
             toggleSourceControl,
             closeActiveTabOrPane: handleCloseTabOrPane,
             splitPaneRight: () => splitActivePaneInActiveTab("row"),
@@ -2044,10 +2022,6 @@ export default function App() {
       explorerRoot,
       home,
       openNewTab,
-      openNewBlockTab,
-      openNewPrivateTab,
-      openPreviewTab,
-      openGitGraphFromContext,
       toggleSourceControl,
       handleCloseTabOrPane,
       splitActivePaneInActiveTab,
@@ -2126,13 +2100,7 @@ export default function App() {
               activeId={activeId}
               onSelect={setActiveId}
               onNew={openNewTab}
-              onNewBlock={openNewBlockTab}
-              onNewPrivate={openNewPrivateTab}
-              onNewPreview={() => openPreviewTab("")}
-              showPreview={activeSpace?.env.kind !== "ssh"}
-              showLocalExtras={activeSpace?.env.kind !== "ssh"}
               onNewEditor={() => setNewEditorOpen(true)}
-              onNewGitGraph={openGitGraphFromContext}
               onClose={handleClose}
               onPin={pinTab}
               onRename={handleRenameTab}

@@ -16,6 +16,7 @@ import {
   sshCredentialsList,
   sshCredentialsSave,
   sshCredentialsTouch,
+  sshCommand,
   sshTest,
   type SshConnectParams,
   type SshCredentialProfile,
@@ -127,6 +128,14 @@ export interface SshSessionInfo {
   connectedAt: number;
   /** SshSession 句柄 (含 write/resize/close) */
   handle: SshSession | null;
+  /**
+   * TDSF 修复 2026-08-31: 标记该会话是否来自"开机自动连接"（connectWithSaved）。
+   * 自动连接只恢复既有 SSH Space、绝不凭空新建工作区（否则本地用户开机被导向
+   * 服务器）。在 connect() 创建会话时同步写入——避免用 store 级
+   * autoConnectSessionId 标记的竞态（它在 connect 返回后才设，而 connected 状态
+   * 转换在其之前就已触发订阅）。
+   */
+  autoConnect?: boolean;
 }
 
 /** 远程文件编辑状态 */
@@ -215,8 +224,6 @@ interface SshExplorerState {
   savedConnections: SshCredentialProfile[];
   /** 是否正在加载已保存连接 */
   savedConnectionsLoading: boolean;
-  /** 自动登录的会话 id (启动时尝试自动连接 lastUsed 最近的那个) */
-  autoConnectSessionId: string | null;
 
   // === TDSF 2026-08-28: 远端 carapace 检测状态 (per 会话, 无弹窗设计) ===
   /** 前端会话 id → 检测状态；键不存在 = 未检测（连接成功后静默异步检测） */
@@ -225,7 +232,14 @@ interface SshExplorerState {
   // === Actions ===
   openConnectDialog: () => void;
   closeConnectDialog: () => void;
-  connect: (params: SshConnectParams) => Promise<string | null>;
+  /**
+   * TDSF 修复 2026-08-31: opts.autoConnect=true 标记开机自动连接——
+   * 订阅处理器据此决定"无匹配 SSH Space"时跳过（自动）还是新建（手动）。
+   */
+  connect: (
+    params: SshConnectParams,
+    opts?: { autoConnect?: boolean },
+  ) => Promise<string | null>;
   disconnect: (sessionId: string) => Promise<void>;
   setActiveSession: (id: string) => void;
   updateSessionStatus: (
@@ -304,7 +318,10 @@ interface SshExplorerState {
   /** 删除已保存的连接 */
   deleteSavedConnection: (id: string) => Promise<void>;
   /** 用已保存的连接配置自动登录 (从 keyring 取敏感字段后调用 connect) */
-  connectWithSaved: (profile: SshCredentialProfile) => Promise<string | null>;
+  connectWithSaved: (
+    profile: SshCredentialProfile,
+    opts?: { autoConnect?: boolean },
+  ) => Promise<string | null>;
 
   // === TDSF 2026-08-28: 远端 carapace 检测 (无弹窗设计) ===
   /** 连接成功后静默异步检测远端 carapace（preferences 开着才检测；不阻塞、不弹 UI） */
@@ -514,7 +531,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   // TDSF 魔改: 凭据持久化初始状态
   savedConnections: [],
   savedConnectionsLoading: false,
-  autoConnectSessionId: null,
   // TDSF 2026-08-28: 远端 carapace 检测状态初始（键不存在 = 未检测）
   remoteCarapaceBySession: {},
 
@@ -522,7 +538,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   openConnectDialog: () => set({ connectDialogOpen: true }),
   closeConnectDialog: () => set({ connectDialogOpen: false }),
 
-  connect: async (params) => {
+  connect: async (params, opts) => {
     const sessionId = genId();
     // TDSF 魔改 2026-08-18 (P1-9): 明文凭据不落 store——auth.password/
     // passphrase 是明文, 原实现连同完整 params 存入 zustand, 任何订阅者/
@@ -545,6 +561,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       state: 'connecting',
       connectedAt: Date.now(),
       handle: null,
+      autoConnect: opts?.autoConnect,
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -590,11 +607,31 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         ),
       }));
 
-      // TDSF 魔改: 默认列出根目录, 但失败不影响连接状态 (连接已成功, 仅文件树加载失败)
-      // 用户可手动刷新或切换目录, 不应因 SFTP 列目录失败而回滚已建立的 SSH 连接
-      // 默认列出用户 home 目录 (Linux 服务器通常 ~ 解析为 /home/user)
-      // 用 "/" 作为起点更通用, 用户可导航到 /home/user
-      void get().navigateTo(sessionId, '/').catch((e) => {
+      // TDSF 魔改 2026-08-31: 连接后默认进入远端家目录 (而非硬编码 "/")。
+      // 用户实测: 参考软件连接后资源管理器显示 /root (家目录), 本项目却进 /。
+      // 解析方式: ssh_command exec 'echo $HOME' (exec 模式, 不污染 PTY)。
+      // 失败 (超时/非零退出/空输出) 降级 "/" —— 连接已成功, 仅文件树起点降级,
+      // 用户仍可经路径栏手动导航。
+      void (async () => {
+        let initial = '/';
+        try {
+          const sid = get().sessions.find((s) => s.id === sessionId)
+            ?.rustSessionId;
+          if (sid != null) {
+            const r = await sshCommand(sid, 'echo $HOME', 5);
+            const home = r.output.trim().split('\n')[0]?.trim() ?? '';
+            if (r.ok && r.exitCode === 0 && home.startsWith('/')) {
+              initial = home;
+            }
+          }
+        } catch (e) {
+          console.warn('[sshStore] resolve $HOME failed, fallback /:', e);
+        }
+        // 会话可能在解析期间已断开 —— 断开时 currentPathBySession 已清理,
+        // navigateTo 会重新写入孤儿键; 守卫: 仅当会话仍存在时导航。
+        if (!get().sessions.some((s) => s.id === sessionId)) return;
+        await get().navigateTo(sessionId, initial);
+      })().catch((e) => {
         console.warn('[sshStore] initial navigateTo failed:', e);
       });
 
@@ -1127,7 +1164,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
    *
    * @returns 成功时返回 sessionId, 失败返回 null (并 toast 提示)
    */
-  connectWithSaved: async (profile) => {
+  connectWithSaved: async (profile, opts) => {
     try {
       // 1. 从 keyring 取敏感字段
       const secret = await sshCredentialsGetSecret(profile.id);
@@ -1158,8 +1195,11 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         term: 'xterm-256color',
       };
 
-      // 3. 调用 connect
-      const sessionId = await get().connect(params);
+      // 3. 调用 connect（透传 autoConnect 标记，订阅处理器据此决定
+      //    "无匹配 SSH Space"时跳过（开机自动）还是新建（对话框手动））
+      const sessionId = await get().connect(params, {
+        autoConnect: opts?.autoConnect,
+      });
 
       // 4. 连接成功后更新 lastUsed
       if (sessionId) {
