@@ -400,6 +400,26 @@ ls /usr/lib/kernel/install.d/
 - 插件目录：`/etc/kernel/install.d/`
 - 手动安装：`kernel-install add`
 
+## fstab（核心要点）
+
+**作用**：`/etc/fstab` 定义文件系统静态挂载（设备/挂载点/类型/选项/dump/fsck 六列）。systemd 时代由 fstab 生成 mount unit，仍以 fstab 为配置源头。
+
+**列结构**：`UUID=xxx  /mnt/data  ext4  defaults,nofail  0  2`
+
+**设备名**：必须用**持久命名**——`UUID=`（`lsblk -f` 或 `blkid` 查）/ `PARTUUID=`/ `LABEL=`；禁用 `/dev/sda1`（重启可能漂移）。
+
+**关键选项**：
+- `defaults` = rw,suid,dev,exec,auto,nouser,async
+- `noauto`：不随开机挂（配合 systemd automount 手动触发）
+- `nofail`：设备缺失不阻塞启动（外置盘/网络盘必加）
+- `x-systemd.automount`：首次访问才挂载（大分区/网络盘体验佳）
+- `x-systemd.device-timeout=5s`：设备等待超时
+- 网络盘加 `_netdev`（等网络就绪）
+
+**fsck 列**：根分区 `1`，其他 `2`（btrfs/XFS 一律 `0`——自身日志校验，无需 fsck）。
+
+**易错点**：①改完先 `mount -a` 或 `findmnt --verify` 验证再重启，写错=启动失败；②swap 行 fsck 列为 0；③临时挂载测试：`mount -o ro /dev/disk/by-uuid/xxx /mnt`。
+
 - 自动触发 `kernel-install` 及插件：安装 `pacman-hook-kernel-install` (AUR)  
 - `mkinitcpio` 的 pacman hooks 已有类似功能，需手动屏蔽避免重复
 
@@ -1135,7 +1155,130 @@ syslog 严重级别（RFC 5424），值 0-7，由应用开发者自定：
 - 评估：`systemd-analyze security unit` 生成安全评分；评分有误导性，实际无法满分
 - 配置错误信息含糊时，临时设日志级别 `debug` 获取有效信息
 
+- `AmbientCapabilities=` 与 `CapabilityBoundingSet=` 必须同用；`CAP_NET_BIND_SERVICE` 可绑 <1024 端口。
+- 布尔指令：`NoNewPrivileges`、`PrivateDevices`、`PrivateTmp`、`PrivateNetwork`、`PrivateUsers`、`RestrictSUIDSGID`（配 `NoNewPrivileges`）、`MemoryDenyWriteExecute`（不兼容 JIT）。
+- `ProtectSystem=strict|full|true`（strict 配 `ReadWritePaths=`；full 破坏 ACME 续期）；`ProtectHome=true|tmpfs|read-only`。
+- `RestrictAddressFamilies=` 限定协议族，如 `AF_UNIX AF_INET AF_INET6`。
+- `DynamicUser=true` 配 `StateDirectory=`/`RuntimeDirectory=`。
+- `RestrictFileSystems=`（如 `ext4 tmpfs`）；`SystemCallFilter=@system-service` 漏一个 syscall 即段错误。
+- `SocketBindAllow/Deny=`（如 `ipv4:22`），配 `CAP_NET_BIND_SERVICE`。
+- `TemporaryFileSystem=/:ro` 配 `BindReadOnlyPaths=`/`BindPaths=`；与 `ProtectSystem`/`ProtectHome` 不兼容，官方不支持。
+
+### systemd 服务沙箱
+
+- `TemporaryFileSystem=/:ro` 根只读；`BindReadOnlyPaths=` 只读绑定；`BindPaths=` 可写绑定。
+- 常用白名单：`/etc/ssl`、`/etc/resolv.conf`、`/usr/share/zoneinfo`、socket 文件。
+- 失败 `status=203/EXEC`：可执行文件或库不可访问，可先放开 `/usr` 再收紧。
+
+### systemd 全局
+
+- `SystemCallArchitectures=native` 禁用非本机架构 syscall（影响 32 位/Wine）。
+- `Default*Accounting` 可开启资源统计。
+
+### systemd 定时器
+
+- timer 控制同名 `.service`。两种：
+  - **实时**：`OnCalendar=`（类 cron）
+  - **单调**：`On*Sec=`（如 `OnBootSec=15min`、`OnUnitActiveSec=1w`）
+- 启用：`[Install] WantedBy=timers.target`，enable timer；service 无需 `[Install]`。
+- 管理：`systemctl list-timers`；时间错乱时删 `/var/lib/systemd/timers/stamp-*`。
+- `OnCalendar` 格式：`DayOfWeek Year-Month-Day Hour:Minute:Second`；支持 `*`、`,`、`..`。
+- 例：`OnCalendar=Mon..Fri 22:30`；`OnCalendar=*-*-* 02:00:00`；加 `Persistent=true` 可补执行。
+
+- `OnCalendar` 规格用 `systemd-analyze calendar` 验证并计算下次触发时间：`systemd-analyze calendar weekly`、`systemd-analyze calendar "Mon,Tue *-*-01..04 12:00:00"`；加 `--iterations=N` 显示多轮。
+- `faketime` 可配合测试不同场景（libfaketime 包）。
+- `daily`/`weekly` 等特殊表达式共享同一开始时间，同时触发易致资源竞争；在 `[Timer]` 段设 `RandomizedDelaySec` 随机错开。
+- 默认 `AccuracySec=1m` 不精确，可在 `[Timer]` 段设 `AccuracySec=1us`。
+- `WakeSystem` 选项可能需要系统能力，失败时报 `Failed to enter waiting state: Operation not supported` 或 `Failed with result 'resources'.`
+- `systemd-run` 可创建瞬时 timer（无需 service 文件），例如 `systemd-run --on-active=30 /bin/touch /tmp/foo`。
+
 - `systemd-run --on-active=<时间>` 免 .timer，时间默认秒；可对已有单元（如 `someunit.service`）设延迟（12.5h）。
+
+- `systemd-run --on-active="12h 30m" --unit someunit.service`：延迟执行服务。
+- 定时器替代 cron 优势：每个任务独立 service，可独立调试、自定义环境（systemd.exec）、cgroup 控制、依赖其他单元、日志统一。
+- 缺点：需创建两个文件并执行 `systemctl`；无内置 `MAILTO`，可用 `OnFailure=` 实现邮件通知。
+- 用户级 timer 默认仅活跃登录会话时运行；启用 lingering 可在无登录时启动。
+- 可用 `systemd-cron` 解析传统 crontab 并处理 `MAILTO`。
+- 手动模板示例 `/etc/systemd/system/monthly@.timer`：
+```ini
+[Unit]
+Description=Monthly Timer for %i service
+[Timer]
+OnCalendar=*-*-1 02:00:00
+AccuracySec=6h
+RandomizedDelaySec=1h
+Persistent=true
+Unit=%i.service
+[Install]
+WantedBy=default.target
+```
+启用：`systemctl enable --now monthly@unit_name.timer`。
+- 注意：用 `RandomizedDelaySec` 而非仅 `AccuracySec`，避免所有任务同时触发。
+- 处理“距上次运行时间”：用 `OnUnitInactiveSec=1day1sec` 追踪任务结束后的间隔；可配合 `Restart=on-failure`、`RestartSec` 实现差异化重启策略。
+- 桌面通知：`systemd-timer-notify`。
+
+## systemd 用户
+
+- 原理：`pam_systemd` 在首次登录时自动启动 `systemd --user` 实例；最后一个会话关闭时终止。启用 lingering 后开机启动且不随会话结束终止。
+- 用户单元目录（优先级递增）：`/usr/lib/systemd/user/`、`~/.local/share/systemd/user/`、`/etc/systemd/user/`、`~/.config/systemd/user/`。
+- 实例默认启动 `default.target`；用 `systemctl --user` 管理。
+- 注意：`systemd --user` 是 per-user 进程而非 per-session；用户单元不能引用或依赖系统单元或其他用户单元。
+- 基本设置：用户单元放 `~/.config/systemd/user/`，启用执行 `systemctl --user enable unit`；全局启用用 `systemctl --global enable unit`（root）。
+- 环境变量：用户实例不继承 `.bashrc` 等设置，需另行配置。
+
+- **当前用户**：`~/.config/environment.d/*.conf`（`NAME=VAL`）
+- **全局 user unit**：`/etc/systemd/user.conf` 的 `DefaultEnvironment=`
+- **指定 UID**：`/etc/systemd/system/user@UID.service.d/*.conf`
+- **所有用户**：`/etc/systemd/system/user@.service.d/*.conf`
+- **运行时**：`systemctl --user set-environment` / `import-environment`，仅影响之后启动的 unit
+- **导入 D-Bus 会话**：`dbus-update-activation-environment --systemd --all`
+- **动态生成**：systemd.environment-generator
+
+验证/生效：
+
+```bash
+systemctl --user show-environment
+systemctl --user daemon-reload
+```
+
+Drop-in 示例：
+
+```ini
+[Service]
+Environment="PATH=/usr/lib/ccache/bin:/usr/local/sbin:/usr/local/bin:/usr/bin"
+Environment="EDITOR=nano -c"
+Environment="BROWSER=firefox"
+Environment="NO_AT_BRIDGE=1"
+Environment="XDG_STATE_HOME=%h/.local/var/state"
+```
+
+复用登录 shell 环境（`/etc/systemd/user-environment-generators/10-profile`）：
+
+```sh
+#!/bin/sh
+env -i -- $SHELL --login -c env | grep -vE '^(_|SHLVL|PWD|OLDPWD)='
+```
+
+- 仅启动时执行一次，`daemon-reload` 可重载
+- 含 `/etc/profile`、`/etc/profile.d`，不含 `~/.bashrc`、`~/.zshrc`
+
+特殊变量：
+
+- **DISPLAY/XAUTHORITY**：X 启动时由 `50-systemd-user.sh` 导入；非标准 X 启动需手动设置
+- **PATH**：若在 `.bash_profile` 自定义，追加 `systemctl --user import-environment PATH`；不影响已启动服务；systemd 解析非绝对路径命令时不用它
+
+易错点：
+
+- systemd 用户实例**不解析 environment.d**；需要时用 drop-in 设置
+- `pam_env.so` 方式已弃用
+- 用 `%C`、`%E`、`%L`、`%S`、`%t` 等 specifier 检查展开值
+
+lingering：
+
+```bash
+loginctl enable-linger             # 当前用户，需 polkit
+loginctl enable-linger <用户>       # 非当前用户，root 可执行
+```
 
 - `loginctl enable-linger username`
 - 勿作自动登录（非会话）

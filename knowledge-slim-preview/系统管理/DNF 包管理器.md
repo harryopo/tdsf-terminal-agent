@@ -171,6 +171,25 @@ dnf.comps.OPTIONAL
   - 覆盖后需 `fill_sack()`；`update_from_etc()` 读 `/etc/yum/vars/`、`/etc/dnf/vars/`
 - 易错：`read()` 仅读 `main`；`releasever` 默认未设；低优先级不能覆盖高优先级。
 
+# dnf-automatic
+
+DNF 自动升级工具，用法：`dnf-automatic [配置]`，默认 `/etc/dnf/automatic.conf`。流程：同步元数据→检查更新→退出/下载/安装，结果经 stdio/email/motd 报告。
+
+## systemd timer
+- 对应专用单元：`dnf-automatic-notifyonly.timer`（仅通知）、`dnf-automatic-download.timer`（仅下载）、`dnf-automatic-install.timer`（下载并安装）。
+- 启用：`systemctl enable --now dnf-automatic-install.timer`
+
+## [commands] 关键项
+- `apply_updates`（默认 False）：安装更新，隐含 `download_updates`。
+- `upgrade_type`：`default`（全部）/ `security`（仅安全）。
+- `reboot`：`never` / `when-changed` / `when-needed`。
+- `random_sleep`：下载前随机延迟上限（秒）；注意 timer 默认另有最长 1h 随机延迟。
+- `network_online_timeout`（默认 60s，0 跳过）。
+- `systemd_inhibit`（默认 True）：阻止关机，容器内无效。
+
+## [emitters]
+- `emit_via`：默认 `email, stdio, motd`。
+
 `dnf [options] <command> [<args>...]` — RPM 系包管理器，兼容 YUM CLI，支持插件。
 
 返回码：0 成功；1 错误已处理；3 未处理错误；100 有可用更新（check-update）；200 锁获取/释放失败。
