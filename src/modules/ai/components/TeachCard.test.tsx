@@ -50,10 +50,33 @@ describe("parseTeachSections — 教学结构解析", () => {
     expect(sections[1].type).toBe("philosophy");
   });
 
-  it("无结构文本归入 concept 前置段（TeachCard 渲染由 isTeachMessage 拦截）", () => {
+  it("无结构文本归入 other 前置段（TeachCard 渲染由 isTeachMessage 拦截）", () => {
+    // TDSF 2026-08-31 (问题4修复): 前置段徽标从「概念与原理」回退「讲解」
     const sections = parseTeachSections("普通文本内容");
     expect(sections.length).toBe(1);
-    expect(sections[0].type).toBe("concept");
+    expect(sections[0].type).toBe("other");
+    expect(sections[0].title).toBe("讲解");
+  });
+
+  it("标题前导语归入讲解段，不误标「概念与原理」（问题4回归）", () => {
+    const md = `你好！我是 Teach Agent，很高兴为你讲解 Linux 知识。
+
+## 1. 概念与原理
+grep 是文本搜索工具。
+
+## 2. 操作示例
+\`\`\`bash
+grep -i error app.log
+\`\`\``;
+    const sections = parseTeachSections(md);
+    expect(sections.length).toBe(3);
+    // 导语段：通用「讲解」徽标，内容是自我介绍
+    expect(sections[0].type).toBe("other");
+    expect(sections[0].title).toBe("讲解");
+    expect(sections[0].content).toContain("Teach Agent");
+    // 正式教学板块不受影响
+    expect(sections[1].type).toBe("concept");
+    expect(sections[2].type).toBe("example");
   });
 });
 

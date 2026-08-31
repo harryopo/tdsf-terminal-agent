@@ -535,6 +535,18 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register env_probe: {e}")
 
+    # 会话流水日志（2026-08-31，用户钦定调试后端）：agent 流式输出/工具调用/
+    # 输入注入事件 → <TDSF_DATA_DIR>/agent-logs/<session_id>.jsonl；
+    # debug.agent_log_tail({session_id?, lines, type?}) 查最近流水。
+    # 必须在 event_bus 注册之后（订阅全局 bus 的 tool_call 事件）。
+    try:
+        from strands_backend import agent_log as _agent_log
+
+        _agent_log.register_methods(dispatcher)
+        logger.info("agent_log methods registered (debug.agent_log_tail)")
+    except Exception as e:
+        logger.exception(f"failed to register agent_log: {e}")
+
     # T-P1-09: TDSF.md 指令文件加载（启动加载 + watcher + system prompt 注入）
     try:
         import tdsf_loader

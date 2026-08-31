@@ -36,6 +36,7 @@ P0-A1 (2026-08-29, 方案书 v3.1 三模式信任体系)：
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Any, Callable
@@ -113,6 +114,17 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- knowledge_search(query, limit): 检索内置 Linux 教学知识库（中文提炼知识点，RAG 混合检索）\n"
     "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n"
     "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需要全文/完整配置示例时用，url 取自检索结果的 url 字段）\n\n"
+    # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
+    # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
+    # 环境数据源 = <environment> / <live_context> 注入区（transport.ts + _build_prompt）。
+    "Environment awareness (环境感知前置——每次回答/操作前必须先执行):\n"
+    "- 先读 <environment> 与 <live_context> 注入区确认当前环境，再决定回答内容与命令风格：\n"
+    "  ① 当前会话已连接 SSH → 目标是远程 Linux 服务器：命令/路径/包管理按服务器发行版\n"
+    "    （Debian 系 apt / RHEL 系 yum/dnf），远程操作用 ssh_command 工具执行。\n"
+    "  ② 仅本地终端（无 SSH 连接）→ Windows 本地环境：按 PowerShell/cmd 语法给出命令，\n"
+    "    不要给 Linux 命令或声称可在远程服务器上执行。\n"
+    "  ③ 无任何终端会话/工作区 → 先引导用户打开终端或建立 SSH 连接，不要臆测环境、\n"
+    "    不要编造命令执行结果。\n\n"
     "Constraints:\n"
     "- 高危命令（rm -rf / reboot / shutdown / mkfs / dd 等）会触发 needs_you 审批，不要试图绕过。\n"
     # TDSF 魔改 2026-08-28 (B1-G2 防伪造): RiskGuard 拦截/用户拒绝后 LLM 必须如实报告。
@@ -161,6 +173,32 @@ def _strip_env_block(text: str) -> str:
             break
         stripped = (stripped[:start] + stripped[end + len("</env>") :]).strip()
     return stripped
+
+
+# ============================================================================
+# 会话流水日志（agent_log，2026-08-31 用户钦定调试后端）
+# ============================================================================
+# 注入区标签全集：前端 transport.ts（<env>/<environment>/<terminal-context>/
+# <terminal-history>）+ adapter._build_prompt（<live_context>）。
+_CONTEXT_BLOCK_RE = re.compile(
+    r"<(env|environment|terminal-context|terminal-history|live_context)>"
+    r"[\s\S]*?</\1>"
+)
+
+
+def _split_input_for_log(input: str) -> tuple[str, str]:
+    """把 invoke input 拆为 (用户文本, 注入上下文块)
+
+    供 agent_log 落盘：user_msg 记用户原文、env_inject 记注入分区——
+    排障时可直接看"agent 到底看到了什么环境信息"。
+    """
+    if not input:
+        return "", ""
+    context_part = "\n\n".join(
+        m.group(0) for m in _CONTEXT_BLOCK_RE.finditer(input)
+    )
+    user_part = _CONTEXT_BLOCK_RE.sub("", input).strip()
+    return user_part, context_part
 
 
 # ============================================================================
@@ -288,12 +326,16 @@ class TdsfStrandsCallbackHandler:
         self.event_bus = event_bus
         self.agent_name = agent_name
         self.session_id = session_id
+        # 会话流水日志：reasoning 增量聚合缓冲（正文 data 到来 / 循环边界时落盘，
+        # 防止逐 token 写日志爆体积——agent_log.content 上限 2000 字符）
+        self._reasoning_buf: list[str] = []
         # 统计（调试用）
         self._stats = {
             "events_received": 0,
             "messages_emitted": 0,
             "tool_calls_emitted": 0,
             "mood_changes_emitted": 0,
+            "reasoning_logged": 0,
         }
 
     def __call__(self, **kwargs: Any) -> None:
@@ -306,31 +348,57 @@ class TdsfStrandsCallbackHandler:
 
     def _handle_event(self, event: dict) -> None:
         """处理单个 Strands 事件（main 事件流）"""
-        # 深度思考流（模型 reasoningContent 增量）→ thinking 消息
+        # 深度思考流（模型 reasoningContent 增量）→ thinking 消息 + 流水聚合
         reasoning_text = event.get("reasoningText")
         if reasoning_text and isinstance(reasoning_text, str):
             self._emit_agent_message(reasoning_text, msg_type="thinking")
+            self._reasoning_buf.append(reasoning_text)
 
-        # 文本增量 → agent_message（流式推送）
+        # 文本增量 → agent_message（流式推送）；正文开始 = 推理段结束 → 落盘
         data = event.get("data")
         if data and isinstance(data, str):
+            self._flush_reasoning()
             self._emit_agent_message(data, msg_type="output")
 
-        # 循环开始 → mood=thinking
+        # 循环开始 → mood=thinking（循环边界 flush，防跨轮混合）
         if event.get("start"):
+            self._flush_reasoning()
             self._emit_mood("thinking")
 
         # 循环完成 → mood=working（仍在处理，最终 mood 由 invoke() 设 done）
         elif event.get("complete"):
+            self._flush_reasoning()
             self._emit_mood("working")
 
         # 强制停止 → mood=error
         if event.get("force_stop"):
+            self._flush_reasoning()
             self._emit_mood("error")
             logger.warning(
                 f"strands force_stop: agent={self.agent_name}, "
                 f"reason={event.get('force_stop_reason', 'unknown')}"
             )
+
+    def _flush_reasoning(self) -> None:
+        """聚合缓冲的 reasoning 增量 → agent_log 落盘（一条 reasoning 事件）"""
+        if not self._reasoning_buf:
+            return
+        text = "".join(self._reasoning_buf).strip()
+        self._reasoning_buf.clear()
+        if not text or not self.session_id:
+            return
+        try:
+            from strands_backend.agent_log import log_event
+
+            if log_event(
+                self.session_id,
+                "reasoning",
+                text,
+                meta={"agent": self.agent_name},
+            ):
+                self._stats["reasoning_logged"] += 1
+        except Exception as e:  # noqa: BLE001 — 流水日志失败不影响事件流
+            logger.debug(f"flush reasoning to agent_log failed: {e}")
 
     def _emit_mood(self, mood: str) -> None:
         if self.event_bus is None:
@@ -420,8 +488,12 @@ _TEACH_SKIN_PROMPT = (
     "（命令词源/设计哲学/FHS/90 命令档案），基于权威内容讲解，"
     "不要凭空发挥；需要完整文档/配置示例时用 knowledge_get_doc(url) 读取全文。\n"
     "- 可用 skill_invoke 查阅领域知识（linux-ops / ssh-troubleshoot 等）。\n"
-    "- 需要演示命令时用 suggest_command 生成并提示用户可点击 Insert "
-    "插入终端；观察模式下等待用户执行，确认/自动模式按当前模式规则执行。\n"
+    # TDSF 2026-08-31 (问题1修复): 教学模式严禁调用 suggest_command——该工具的
+    # 命令预测卡片（含"预测回显"）是终端补全链路 UI，Teach 契约由教学卡片的
+    # 「操作示例」命令块承担（前端 AiChat.RenderedTool 同步过滤兜底）。
+    "- 严禁调用 suggest_command 工具（教学卡片不渲染该工具的命令预测 UI）；"
+    "需要演示的命令直接写入「操作示例」板块的 bash 代码块，"
+    "用户可从教学卡片一键复制/插入终端。\n"
     "- 你是唯一 agent，直接讲解；不得声称把任务委派给其他 agent。"
 )
 
@@ -613,6 +685,30 @@ class StrandsAgentAdapter:
             # 5. 构建 prompt（注入 live 上下文）
             prompt = self._build_prompt(input, state)
 
+            # 会话流水日志（agent_log，2026-08-31）：user_msg + env_inject 落盘
+            # ——排障时直接看"用户问了什么 + agent 看到了什么环境注入"。
+            # 写失败静默（agent_log 内部降级），绝不影响 invoke 主链路。
+            try:
+                from strands_backend.agent_log import log_event as _log_event
+
+                _log_user, _log_ctx = _split_input_for_log(input)
+                if _log_ctx:
+                    _log_event(
+                        session_id,
+                        "env_inject",
+                        _log_ctx,
+                        meta={"agent": agent_id, "mode": mode.value, "teach": teach},
+                    )
+                if _log_user:
+                    _log_event(
+                        session_id,
+                        "user_msg",
+                        _log_user,
+                        meta={"agent": agent_id, "mode": mode.value, "teach": teach},
+                    )
+            except Exception as _e:  # noqa: BLE001 — 流水日志失败不影响主链路
+                logger.debug(f"agent_log user_msg/env_inject failed: {_e}")
+
             # P0-A1 (2026-08-29): agent_switch 事件保留 emit（agent_id 透传，
             # Pill 同步）。委派删除后仅 main 常驻；"agent:" 前缀子 agent 事件
             # 不再产生，前端兼容逻辑由 Task 2 处理。
@@ -635,6 +731,20 @@ class StrandsAgentAdapter:
 
             # 8. 提取最终输出
             observation = self._extract_response_text(response)
+
+            # 会话流水日志：assistant_msg（最终回答全文）落盘
+            if observation:
+                try:
+                    from strands_backend.agent_log import log_event as _log_event
+
+                    _log_event(
+                        session_id,
+                        "assistant_msg",
+                        observation,
+                        meta={"agent": agent_id, "mode": mode.value, "teach": teach},
+                    )
+                except Exception as _e:  # noqa: BLE001
+                    logger.debug(f"agent_log assistant_msg failed: {_e}")
 
             # P2-4 决策库: AI 排障成功自动沉淀案例（教学复盘/历史检索）
             # 条件: 会话有工具调用证据 + 有结论输出 + 输入像排障请求
