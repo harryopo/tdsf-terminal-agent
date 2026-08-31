@@ -24,10 +24,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.clean_consolidated import (
+    _EXCLUDED_SOURCES,
     _is_junk_line,
     clean_consolidated_text,
     clean_section_lines,
     is_junk_chapter_title,
+    normalize_source_url,
+    section_source_url,
     split_document,
 )
 
@@ -175,6 +178,56 @@ def test_clean_section_lines_fence_protected():
         "",
         "尾部正文",
     ]
+
+
+def test_git_nav_list_dropped_when_run_ge_3():
+    """Git 文档站命令索引列表（≥3 行 /docs/ 链接列表项）整段丢弃"""
+    lines = [
+        "## 1. restore",
+        "",
+        "正文说明",
+        "",
+        "- [cat-file](/docs/git-cat-file)",
+        "- [check-ignore](/docs/git-check-ignore)",
+        "- [clean](/docs/git-clean)",
+        "",
+        "尾部正文",
+    ]
+    out = clean_section_lines(lines)
+    joined = "\n".join(out)
+    assert "cat-file" not in joined
+    assert "check-ignore" not in joined
+    assert "正文说明" in joined
+    assert "尾部正文" in joined
+
+
+def test_git_nav_single_link_kept():
+    """1-2 行 /docs/ 链接列表项是正常引用，保留"""
+    lines = [
+        "## 1. demo",
+        "",
+        "- [cat-file](/docs/git-cat-file)",
+        "",
+        "正文",
+    ]
+    out = clean_section_lines(lines)
+    assert "cat-file" in "\n".join(out)
+
+
+def test_chunk_markdown_subtitle_for_split_sections():
+    """超长章节二切块 title 带子段语义与序号（修 94 块同名问题）"""
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from knowledge.sources import _chunk_markdown
+
+    body = "## 1. 大章节\n\n" + "\n\n".join(
+        f"[`opt-{i}`](#opt{i})\n:   说明文字 " + "x" * 300 for i in range(12)
+    )
+    chunks = _chunk_markdown(body)
+    assert len(chunks) > 1
+    titles = [t for t, _ in chunks[1:]]  # 第一块是章节标题段
+    assert all(" · #" in t for t in titles), titles
+    assert len(set(titles)) == len(titles), "同章节二切块 title 必须唯一"
+    assert any("opt-3" in t for t in titles), "子标题应含锚点语义"
 
 
 # ============================================================================
@@ -333,3 +386,124 @@ title: linux_philosophy · Linux 设计哲学
     assert "sources_count" not in meta
     assert "summary_zh" not in meta
     assert "共 0 个官方文档页" not in new
+
+
+# ============================================================================
+# 5. 二期：Git 导航章节 / ArchWiki 残渣 / URL 归一去重 / 整源排除
+# ============================================================================
+
+
+def test_junk_title_git_nav():
+    """Git 官网纯导航章节精确匹配删除；正常教学章节保留"""
+    for t in ["外部链接", "Git 托管", "GUI 客户端", "学习"]:
+        assert is_junk_chapter_title(t), t
+    # 防误伤：含这些词的正常标题不删
+    for t in ["学习环境", "GUI 客户端配置", "Git 学习路径", "链接与外部引用"]:
+        assert not is_junk_chapter_title(t), t
+
+
+def test_junk_line_archwiki_residue():
+    """ArchWiki 页头导航残渣行判定"""
+    assert _is_junk_line("From ArchWiki")
+    assert _is_junk_line("(Redirected from [Control groups](/index.php?title=Control_groups))")
+    assert _is_junk_line("Retrieved from \"https://wiki.archlinux.org/title/Cron\"")
+    # 正文不误伤
+    assert not _is_junk_line("From ArchWiki you can learn Linux.")
+    assert not _is_junk_line("Redirected from the old path, run it again.")
+
+
+def test_clean_section_related_articles_block():
+    """Related articles 行及其后相对链接列表项整块跳过，正文保留"""
+    lines = [
+        "## 1. cgroups",
+        "",
+        "<!-- 来源: archwiki | https://wiki.archlinux.org/title/Control_groups -->",
+        "",
+        "Related articles",
+        "",
+        '- [Linux Containers](/title/Linux_Containers "Linux Containers")',
+        '- [systemd-nspawn](/title/Systemd-nspawn "systemd-nspawn")',
+        "",
+        "**Control groups** 是内核提供的进程组管理特性。",
+    ]
+    out = clean_section_lines(lines)
+    joined = "\n".join(out)
+    assert "Related articles" not in joined
+    assert "Linux Containers" not in joined
+    assert "systemd-nspawn" not in joined
+    assert "**Control groups** 是内核提供的进程组管理特性。" in joined
+
+
+def test_normalize_source_url_variants():
+    """同页格式变体后缀归一（.txt/.raw/.en）；query 与路径区分保留"""
+    base = "https://man.archlinux.org/man/intro.2"
+    assert normalize_source_url(base) == base
+    assert normalize_source_url(base + ".txt") == base
+    assert normalize_source_url(base + ".raw") == base
+    assert normalize_source_url(base + ".en") == base
+    assert normalize_source_url(base + "/") == base
+    # 不同页不归一
+    assert normalize_source_url("https://x/man/syscall.2.en") != base
+    # query 保留
+    assert normalize_source_url("https://x/a.txt?q=1") == "https://x/a?q=1"
+
+
+def test_section_source_url_extract():
+    """章节来源 URL 提取（首条来源注释）"""
+    sec = [
+        "## 1. intro(2)",
+        "",
+        "<!-- 来源: systemd-docs | https://man.archlinux.org/man/intro.2 -->",
+        "",
+        "正文。",
+    ]
+    assert section_source_url(sec) == "https://man.archlinux.org/man/intro.2"
+    assert section_source_url(["## 1. 无来源", "", "正文。"]) == ""
+
+
+def test_clean_dedup_same_page_variants():
+    """同页多变体（intro.2 / intro.2.txt / intro.2.raw）只留首见者"""
+    md = """---
+source: systemd-docs
+category: cmd-tools
+url: consolidated/cmd-tools/Linux man 手册精选.md
+title: Linux man 手册精选
+---
+
+# Linux man 手册精选
+
+**目录**
+
+1. intro(2)
+2. intro(2) txt 变体
+3. intro(2) raw 变体
+
+## 1. intro(2)
+
+<!-- 来源: systemd-docs | https://man.archlinux.org/man/intro.2 -->
+
+系统调用介绍正文。
+
+## 2. intro(2) txt 变体
+
+<!-- 来源: systemd-docs | https://man.archlinux.org/man/intro.2.txt -->
+
+重复的 txt 正文。
+
+## 3. intro(2) raw 变体
+
+<!-- 来源: systemd-docs | https://man.archlinux.org/man/intro.2.raw -->
+
+.TH intro 2 raw troff 源码。
+"""
+    new, stats = clean_consolidated_text(md)
+    _, _, secs = split_document(new)
+    titles = [s["title"] for s in secs]
+    assert titles == ["intro(2)"], titles
+    assert stats.get("duplicate_removed") == 2
+    assert "raw troff" not in new
+
+
+def test_excluded_sources_set():
+    """整源排除名单与用户拍板一致（删 Python + Rust 语言文档源）"""
+    assert _EXCLUDED_SOURCES == {"python-docs", "rust-docs"}

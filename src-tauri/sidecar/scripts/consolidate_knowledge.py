@@ -22,9 +22,10 @@ scripts/consolidate_knowledge.py — 知识库大整合：7 分类 × ≤5 合�
    前端 get_doc 按 url 聚合显示完整合并文档）
 3. export_knowledge_md.py：rag.db → 重新导出 preview（幂等校验）
 
-映射表：CONSOLIDATED_DOCS（27 个合并文件；archwiki basic-ops 与 ssh-docs
+映射表：CONSOLIDATED_DOCS（25 个合并文件；archwiki basic-ops 与 ssh-docs
 按 title 精确列表分组，其余按 source 整源归入）。fail-closed：任何官方条目
-未被映射覆盖 → 报错退出（防漏）。
+未被映射覆盖 → 报错退出（防漏）；_EXCLUDED_SOURCES 删源（python-docs/
+rust-docs，2026-08-31 用户拍板）豁免跳过。
 
 幂等：重跑覆盖（先清空 knowledge-preview 再写）。
 
@@ -54,7 +55,7 @@ if str(SIDECAR_ROOT) not in sys.path:
 logger = logging.getLogger("sidecar.scripts.consolidate_knowledge")
 
 # ============================================================================
-# 1. 合并映射表（用户钦定 7 分类 × ≤5 文件，共 27 个合并文件）
+# 1. 合并映射表（用户钦定 7 分类 × ≤5 文件，共 25 个合并文件）
 # ============================================================================
 # 匹配规则（按顺序，assign_doc 逐条尝试）：
 # - "sources": [source, ...]     → 整源全部条目归入（跨源合并）
@@ -93,7 +94,7 @@ CONSOLIDATED_DOCS: list[dict] = [
         "category": "services",
         "sources": ["kubernetes-docs"],
     },
-    # ── 命令与工具（cmd-tools，177 条 → 5 文件）─────────────────────
+    # ── 命令与工具（cmd-tools，102 条 → 3 文件；删 python 31+rust 44 源）──
     {
         "dir": "命令与工具",
         "filename": "Bash 与 Shell 手册.md",
@@ -108,20 +109,8 @@ CONSOLIDATED_DOCS: list[dict] = [
         "category": "cmd-tools",
         "sources": ["git-docs"],
     },
-    {
-        "dir": "命令与工具",
-        "filename": "Python 官方文档.md",
-        "title": "Python 官方文档",
-        "category": "cmd-tools",
-        "sources": ["python-docs"],
-    },
-    {
-        "dir": "命令与工具",
-        "filename": "Rust 语言与工具链.md",
-        "title": "Rust 语言与工具链",
-        "category": "cmd-tools",
-        "sources": ["rust-docs"],
-    },
+    # python-docs / rust-docs 已删源（2026-08-31 用户拍板：纯语言 API 文档
+    # 与 Linux 教学定位无关）→ 不进映射表，_EXCLUDED_SOURCES 豁免 fail-closed
     # systemd-docs 实际内容为 Linux man 手册（intro/signal/socket/pthreads 等
     # libc 与系统调用页），故命名「Linux man 手册精选」而非 systemd 文档
     {
@@ -355,6 +344,12 @@ CATEGORY_DIR_NAMES: dict[str, str] = {
     "security": "安全加固",
     "services": "服务部署",
 }
+
+# 删源豁免（2026-08-31 用户拍板）：纯语言 API 文档与 Linux 教学定位无关，
+# 重新合并（rebuild_knowledge.py --crawl-all --offline 恢复原始条目后）时
+# 这些源的条目直接跳过，不计入 fail-closed 未映射。与
+# clean_consolidated._EXCLUDED_SOURCES 同源同名单。
+_EXCLUDED_SOURCES: frozenset[str] = frozenset({"python-docs", "rust-docs"})
 
 _FENCE_RE = re.compile(r"^(```|~~~)")
 _HEADING_RE = re.compile(r"^(#+)(\s+.*)?$")
@@ -613,16 +608,23 @@ def consolidate(out_dir: Path) -> dict[str, dict]:
         )
     zh_map = {str(t["url"]): str(t.get("zh") or "") for t in rag.titles_zh()}
 
-    # fail-closed 分组：任何未映射条目报错退出（防漏）
+    # fail-closed 分组：任何未映射条目报错退出（防漏）；
+    # _EXCLUDED_SOURCES 删源条目直接跳过（2026-08-31 用户拍板，不进合并文件）
     groups: dict[str, list[dict]] = {}
     unmatched: list[dict] = []
+    excluded_n = 0
     for e in entries:
+        if str(e.get("source", "")) in _EXCLUDED_SOURCES:
+            excluded_n += 1
+            continue
         doc = assign_doc(e)
         if doc is None:
             unmatched.append(e)
             continue
         groups.setdefault(consolidated_url(doc), {"doc": doc, "entries": []})
         groups[consolidated_url(doc)]["entries"].append(e)
+    if excluded_n:
+        logger.info(f"删源豁免跳过 {excluded_n} 条（python-docs/rust-docs，用户拍板 2026-08-31）")
     if unmatched:
         for e in unmatched[:20]:
             logger.error(
