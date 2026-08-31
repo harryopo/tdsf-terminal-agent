@@ -22,7 +22,11 @@ import {
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
 // TDSF 魔改: 接入 Confidence 评分 (2026-07-30 重构: 只保留 score, 移除 border/label)
-import { scoreConfidenceRpc } from "@/lib/confidence/client";
+// 2026-08-31 (问题3): 低置信度标签附原因（ConfidenceRpcResult.reason）
+import {
+  scoreConfidenceRpc,
+  type ConfidenceRpcResult,
+} from "@/lib/confidence/client";
 import { cn } from "@/lib/utils";
 import {
   ArrowRight01Icon,
@@ -39,7 +43,7 @@ import type {
   UIMessage,
   UIMessagePart,
 } from "ai";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SLASH_COMMANDS, TDSF_CMD_RE } from "../lib/slashCommands";
 import { sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
@@ -296,20 +300,51 @@ export function AiChatView({
 // ============================================================================
 // EvidencePanel — 会话证据折叠区（P1-2）
 // ============================================================================
+// TDSF 2026-08-31 (问题4修复): 用户实测反馈"证据区展开只有一句
+// 『本次会话暂无工具调用记录（纯问答无需工具）』很鸡肋"。改为：
+// 无工具调用记录时证据区整体不渲染（不再显示空说明）。
+// 数据获取时机：
+//   1. mount / 会话切换 → 拉取一次（原先点开才拉，无法判断是否该渲染）
+//   2. agent 一轮结束（agentMeta.status 进入 idle/error）→ 重拉，
+//      捕获本轮新产生的工具调用（新调用出现后证据区重新出现）
 
 const EvidencePanel = memo(function EvidencePanel() {
   const sessionId = useChatStore((s) => s.activeSessionId);
+  const agentStatus = useChatStore((s) => s.agentMeta.status);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<EvidenceItem[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [fetched, setFetched] = useState(false);
+  const prevStatusRef = useRef(agentStatus);
 
   useEffect(() => {
-    if (!open || loaded) return;
-    setLoaded(true);
-    void fetchEvidence(sessionId).then((evs) => setItems(evs));
-  }, [open, loaded, sessionId]);
+    if (!sessionId) return;
+    let cancelled = false;
+    void fetchEvidence(sessionId).then((evs) => {
+      if (!cancelled) {
+        setItems(evs);
+        setFetched(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
-  if (!sessionId) return null;
+  // agent 一轮结束 → 重拉（流式/审批中证据仍在增长，结束时才完整）
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = agentStatus;
+    if (!sessionId || prev === agentStatus) return;
+    if (agentStatus === "idle" || agentStatus === "error") {
+      void fetchEvidence(sessionId).then((evs) => {
+        setItems(evs);
+        setFetched(true);
+      });
+    }
+  }, [agentStatus, sessionId]);
+
+  // 无会话 / 首拉未完成 / 无工具调用 → 整体不渲染（问题4修复核心）
+  if (!sessionId || !fetched || items.length === 0) return null;
 
   return (
     <Collapsible
@@ -326,17 +361,12 @@ const EvidencePanel = memo(function EvidencePanel() {
       >
         <span className="size-1.5 shrink-0 rounded-full bg-sky-500/70" />
         <span className="font-medium">证据</span>
-        {!open && items.length > 0 && (
+        {!open && (
           <span className="tabular-nums">（{items.length} 条工具调用）</span>
         )}
         <span className="ml-auto">{open ? "收起" : "展开"}</span>
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-1 space-y-1">
-        {items.length === 0 && (
-          <div className="rounded-md border border-border/30 bg-muted/20 px-2.5 py-2 text-[11px] text-muted-foreground/80">
-            本次会话暂无工具调用记录（纯问答无需工具）。
-          </div>
-        )}
         {items.map((ev, i) => (
           <div
             key={`${ev.timestamp}-${i}`}
@@ -440,6 +470,8 @@ const ContinueRow = memo(function ContinueRow({
 //   - score < 0.5: 显示小灰字 "置信度 较低" + tooltip 显示具体分数
 //   - score < 0.3: 显示小灰字 "置信度 低" + amber 色调
 // 保留 scoreConfidenceRpc 调用和数据收集, 只改呈现方式。
+// TDSF 2026-08-31 (问题3修复): 用户实测反馈"置信度 低"没有标准——
+// 低置信度必须附原因（如"未引用权威来源"），无原因可生成时不显示标签。
 const ConfidenceMarker = memo(function ConfidenceMarker({
   message,
   streaming,
@@ -449,11 +481,11 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
   streaming: boolean;
   children: React.ReactNode;
 }) {
-  const [score, setScore] = useState<number | null>(null);
+  const [result, setResult] = useState<ConfidenceRpcResult | null>(null);
 
   useEffect(() => {
     if (streaming) {
-      setScore(null);
+      setResult(null);
       return;
     }
     if (message.role !== "assistant") return;
@@ -464,17 +496,25 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
     if (!text.trim()) return;
     let cancelled = false;
     void scoreConfidenceRpc(text).then((r) => {
-      if (!cancelled) setScore(r.score);
+      if (!cancelled) setResult(r);
     });
     return () => {
       cancelled = true;
     };
   }, [streaming, message.role, message.parts]);
 
-  // 只在低置信度时显示标记 (>= 0.5 完全无标记, 保持气泡整洁)
+  // 只在低置信度且可给出原因时显示标记（a+b 组合约定）：
+  //   - score >= 0.5：无标记，保持气泡整洁
+  //   - score < 0.5 且有 reason：显示 "置信度 较低/低：<原因>"
+  //   - score < 0.5 但 reason=null（无可解释维度）：不显示，避免无标准空标签
+  const score = result?.score ?? null;
   const isLow = score !== null && score < 0.5;
   const isVeryLow = score !== null && score < 0.3;
-  const labelText = isVeryLow ? "置信度 低" : isLow ? "置信度 较低" : null;
+  const reason = result?.reason ?? null;
+  const labelText =
+    isLow && reason
+      ? `置信度 ${isVeryLow ? "低" : "较低"}：${reason}`
+      : null;
 
   return (
     <div>
@@ -487,7 +527,7 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
               ? "text-amber-600 dark:text-amber-400"
               : "text-muted-foreground/70",
           )}
-          title={`AI 回复置信度评分: ${score?.toFixed(2)}（0-1 区间，越低越需要人工核对）`}
+          title={`AI 回复置信度评分: ${score?.toFixed(2)}（0-1 区间，越低越需要人工核对）${reason ? `；原因: ${reason}` : ""}`}
         >
           {labelText}
         </div>

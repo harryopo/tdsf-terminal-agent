@@ -121,6 +121,13 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         // transport.ts formatTerminalContextBlock 会注入 <terminal-context> 块，
         // 让 agent 每轮自动看到用户最近的终端输出，无需额外工具调用。
         terminalOutput: live.getTerminalContext(),
+        // TDSF 2026-08-31 (问题1修复): 活动终端会话权威信号（"ssh"|"local"|"none"），
+        // transport 据此判定 connection_mode；无终端时标 none（非 local），
+        // 防止"注入了默认 workspace cwd"被误判为"本地终端已打开"。
+        // 注意：getter 返回 null 必须显式转 "none" 再透传——Python 侧
+        // terminalSession 缺省（undefined）才走旧调用方启发式回退，
+        // null（明确的"无终端"）若与缺省混同，无终端场景仍会误报 local。
+        terminalSession: live.getActiveTerminalSession?.() ?? "none",
         // TDSF 魔改 (2026-08-09): 终端执行模式开关传给 Python sidecar
         autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发

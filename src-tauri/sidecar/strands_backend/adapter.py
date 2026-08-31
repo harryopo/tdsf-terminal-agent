@@ -116,15 +116,20 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需要全文/完整配置示例时用，url 取自检索结果的 url 字段）\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
-    # 环境数据源 = <environment> / <live_context> 注入区（transport.ts + _build_prompt）。
+    # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
+    # "注入了 workspace cwd（默认主目录）"被当成"本地终端已打开"。现以
+    # <environment> 的 connection_mode 字段（ssh/local/none）为唯一环境口径：
+    # none = 无任何终端会话，必须如实告知用户，不臆测"本地终端"。
     "Environment awareness (环境感知前置——每次回答/操作前必须先执行):\n"
-    "- 先读 <environment> 与 <live_context> 注入区确认当前环境，再决定回答内容与命令风格：\n"
-    "  ① 当前会话已连接 SSH → 目标是远程 Linux 服务器：命令/路径/包管理按服务器发行版\n"
+    "- 先读 <environment> 注入区的 connection_mode 字段确认当前环境，再决定回答内容与命令风格：\n"
+    "  ① connection_mode: ssh → 目标是远程 Linux 服务器：命令/路径/包管理按服务器发行版\n"
     "    （Debian 系 apt / RHEL 系 yum/dnf），远程操作用 ssh_command 工具执行。\n"
-    "  ② 仅本地终端（无 SSH 连接）→ Windows 本地环境：按 PowerShell/cmd 语法给出命令，\n"
+    "  ② connection_mode: local（本地终端已打开）→ Windows 本地环境：按 PowerShell/cmd 语法给出命令，\n"
     "    不要给 Linux 命令或声称可在远程服务器上执行。\n"
-    "  ③ 无任何终端会话/工作区 → 先引导用户打开终端或建立 SSH 连接，不要臆测环境、\n"
-    "    不要编造命令执行结果。\n\n"
+    "  ③ connection_mode: none（未打开任何终端会话）→ 明确告知用户：当前未打开终端，\n"
+    "    请先新建本地终端或建立 SSH 连接，我不会假设环境；严禁自称处于\"本地终端模式\"\n"
+    "    或\"本地环境\"，严禁臆测环境、严禁编造命令执行结果（<environment> 里只有默认\n"
+    "    工作区路径，不代表终端已打开）。\n\n"
     "Constraints:\n"
     "- 高危命令（rm -rf / reboot / shutdown / mkfs / dd 等）会触发 needs_you 审批，不要试图绕过。\n"
     # TDSF 魔改 2026-08-28 (B1-G2 防伪造): RiskGuard 拦截/用户拒绝后 LLM 必须如实报告。
@@ -139,6 +144,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"
     "- skill_invoke 返回 content 字段时是知识卡模式（参考内容），返回 stdout 字段时是 executor 模式（已执行）。\n"
     "- 使用 suggest_command 后，向用户说明命令作用并提示可点击 Insert 插入终端执行。\n"
+    # TDSF 2026-08-31 (问题2修复): 用户实测反馈回答含大量 emoji（👋💻🔧📚）。
+    "- 格式约束：回答避免使用 emoji（用户明确要求时除外）；用纯文本或 markdown 结构化表达。\n"
     "- 回答用中文，简洁明了，给出可执行建议。\n"
     "\n"
     "Task planning:\n"
@@ -153,26 +160,9 @@ _DEFAULT_SYSTEM_PROMPT = (
 )
 
 
-def _strip_env_block(text: str) -> str:
-    """剥离前端注入的 <env>...</env> 上下文块
-
-    前端 transport.ts 会把 <env>workspace_root/active_terminal_cwd/...</env>
-    前缀注入到 input，只用于 LLM 上下文提示。若直接显示给用户（如 thinking
-    提示"开始处理: ..."）会泄漏内部上下文。此 helper 在展示前剥离该块。
-    """
-    if not text:
-        return text
-    stripped = text
-    while True:
-        start = stripped.find("<env>")
-        if start == -1:
-            break
-        end = stripped.find("</env>", start)
-        if end == -1:
-            stripped = stripped[:start].rstrip()
-            break
-        stripped = (stripped[:start] + stripped[end + len("</env>") :]).strip()
-    return stripped
+# TDSF 2026-08-31 (问题5修复): _strip_env_block 已删除——唯一调用方是已移除的
+# "开始处理: ..."invoke 调度日志。注入上下文块的剥离职责由下方
+# _split_input_for_log（_CONTEXT_BLOCK_RE，agent_log 落盘用）承担。
 
 
 # ============================================================================
@@ -719,12 +709,11 @@ class StrandsAgentAdapter:
 
             # 7. 调用 Strands Agent（同步，agentic loop 内部触发 callback_handler）
             # TDSF 修复 2026-08-09: 用锁保护 agent 调用——防止并发崩溃
-            self._emit_agent_message(
-                agent_id=agent_id,
-                session_id=session_id,
-                content=f"开始处理: {_strip_env_block(input)[:100]}",
-                msg_type="thinking",
-            )
+            # TDSF 2026-08-31 (问题5修复): 删除 invoke 前的"开始处理: ..."thinking
+            # 消息——它是内部调度日志，混入前端 reasoning 流（Thinking 区以
+            # "开始处理:hi..." 开头，与模型真实推理混在一行，用户反馈累赘）。
+            # 处理中状态已由 mood=thinking 表达；用户输入已由 agent_log.user_msg
+            # 落盘（排障可查），无需再向 UI 流注入该消息。
 
             with agent_lock:
                 response = strands_agent(prompt)
@@ -1072,7 +1061,20 @@ class StrandsAgentAdapter:
         # TDSF 修复 2026-08-29: 区分"本地终端在跑/WSL"与"欢迎页啥都没开"。
         # 欢迎页（无任何环境线索）时原 else 分支让 LLM 自称"本地终端模式"并幻觉
         # 本地诊断工具可直接用，故拆出无环境分支引导用户先建工作区。
-        elif live.get("workspaceRoot") or live.get("cwd") or live.get("activeFile"):
+        # TDSF 2026-08-31 (问题1修复): 前端新增 live.terminalSession
+        # （"ssh"|"local"|"none"）作为"有无活动终端会话"的权威信号——
+        # workspace cwd（默认主目录）存在不代表终端已打开。terminalSession
+        # 显式给出时优先生效；缺省（旧调用方）回退原 workspace/cwd 启发式。
+        elif live.get("terminalSession") == "none":
+            lines.append(
+                "当前未打开任何终端会话——workspace 仅为默认工作区路径（不代表终端已打开）。"
+                "请告知用户：当前未打开终端，请先新建本地终端或建立 SSH 连接，我不会假设环境；"
+                "严禁把自己当成已连接本地终端或远程服务器，不要声称任何工具可以直接使用。"
+            )
+        elif live.get("terminalSession") == "local" or (
+            live.get("terminalSession") is None
+            and (live.get("workspaceRoot") or live.get("cwd") or live.get("activeFile"))
+        ):
             lines.append("未连接 SSH 会话（本地终端模式，ssh_command 工具将返回 unavailable）")
         else:
             lines.append(
@@ -1174,24 +1176,10 @@ class StrandsAgentAdapter:
         except Exception as e:
             logger.debug(f"emit_mood_change failed: {e}")
 
-    def _emit_agent_message(
-        self,
-        agent_id: str,
-        session_id: str,
-        content: str,
-        msg_type: str = "output",
-    ) -> None:
-        if self.event_bus is None or not content:
-            return
-        try:
-            self.event_bus.emit_agent_message(
-                content=content,
-                message_type=msg_type,
-                session_id=session_id or None,
-                source=f"{agent_id}_agent.strands",
-            )
-        except Exception as e:
-            logger.debug(f"emit_agent_message failed: {e}")
+    # TDSF 2026-08-31 (问题5修复): StrandsAgentAdapter._emit_agent_message 已删除。
+    # 它唯一的调用方是已移除的"开始处理: ..."thinking 消息（invoke 调度日志，
+    # 混入前端 reasoning 流污染 Thinking 区展示）。模型 reasoningText/output
+    # 增量由 TdsfStrandsCallbackHandler._emit_agent_message 转发，不受影响。
 
     def _emit_needs_you_for_error(
         self,
