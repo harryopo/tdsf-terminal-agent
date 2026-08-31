@@ -110,11 +110,22 @@ def slugify_filename(title: str, fallback: str) -> str:
     return name
 
 
-def export_all(out_dir: Path, source_filter: str | None) -> dict[str, int]:
-    """导出官方条目为 md 文件（<分类>/<文件名>.md 一级目录），返回 {分类: 文件数}"""
-    from knowledge.rag import get_global_rag
+def export_all(
+    out_dir: Path,
+    source_filter: str | None,
+    rag=None,
+) -> dict[str, int]:
+    """导出官方条目为 md 文件（<分类>/<文件名>.md 一级目录），返回 {分类: 文件数}
 
-    rag = get_global_rag()
+    Args:
+        out_dir: 导出根目录
+        source_filter: 可选，仅导出指定 source
+        rag: 可选，RagIndex 实例（--slim 模式传精简库；None = 全量库）
+    """
+    if rag is None:
+        from knowledge.rag import get_global_rag
+
+        rag = get_global_rag()
     files = rag.list_files(source=source_filter)
     # 官方源 + philosophy 教学语料（imported-docs/case 为个人语料不导出）
     official = [
@@ -218,6 +229,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="保留目标目录中本次未导出的旧文件（默认清空各源目录，幂等）",
     )
+    parser.add_argument(
+        "--slim",
+        action="store_true",
+        help=(
+            "导出精简库 rag_slim.db（distill_knowledge.py 生成的 LLM 每章"
+            "提炼版）到 knowledge-slim-preview/，供用户预览"
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -225,7 +244,18 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    out_dir = Path(args.out) if args.out else PROJECT_ROOT / "knowledge-preview"
+    rag = None
+    if args.slim:
+        from knowledge.rag import get_slim_rag
+
+        rag = get_slim_rag()
+    out_dir = (
+        Path(args.out)
+        if args.out
+        else PROJECT_ROOT / (
+            "knowledge-slim-preview" if args.slim else "knowledge-preview"
+        )
+    )
 
     # 幂等：默认先清空导出目录（条目减少后不留陈旧 md 文件）
     if out_dir.exists() and not args.keep_stale:
@@ -234,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    counts = export_all(out_dir, args.source)
+    counts = export_all(out_dir, args.source, rag=rag)
     if not counts:
         return 1
 

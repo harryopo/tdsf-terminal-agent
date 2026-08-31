@@ -1035,4 +1035,50 @@ def reset_global_rag(db_path: Path | str | None = None) -> RagIndex:
         return _global_rag
 
 
-__all__ = ["RagIndex", "get_global_rag", "reset_global_rag", "embed_text", "hash_embedding"]
+# ============================================================================
+# 精简库单例（双库方案 TDSF 2026-08-31：rag_slim.db 独立于全量 rag.db，
+# LLM 每章提炼核心知识点（distill_knowledge.py 生成），检索同引擎）
+# ============================================================================
+
+_global_slim_rag: RagIndex | None = None
+
+
+def _slim_db_path() -> Path:
+    data_dir = Path(
+        os.environ.get("TDSF_DATA_DIR", str(Path(__file__).parent.parent / "data"))
+    )
+    return data_dir / "rag_slim.db"
+
+
+def get_slim_rag() -> RagIndex:
+    """精简知识库单例（<TDSF_DATA_DIR>/rag_slim.db）
+
+    与 get_global_rag（rag.db）同 schema 同引擎（sqlite-vec + FTS5 + RRF），
+    仅 db 文件不同——前端本期不接入，RPC knowledge.search_slim 供冒烟验证。
+    """
+    global _global_slim_rag
+    with _global_rag_lock:
+        if _global_slim_rag is None:
+            _global_slim_rag = RagIndex(db_path=_slim_db_path())
+        return _global_slim_rag
+
+
+def reset_slim_rag() -> RagIndex:
+    """重建精简库单例（测试/运维脚本用：换 db 后强制重开连接）"""
+    global _global_slim_rag
+    with _global_rag_lock:
+        if _global_slim_rag is not None:
+            _global_slim_rag.close()
+        _global_slim_rag = RagIndex(db_path=_slim_db_path())
+        return _global_slim_rag
+
+
+__all__ = [
+    "RagIndex",
+    "get_global_rag",
+    "reset_global_rag",
+    "get_slim_rag",
+    "reset_slim_rag",
+    "embed_text",
+    "hash_embedding",
+]
