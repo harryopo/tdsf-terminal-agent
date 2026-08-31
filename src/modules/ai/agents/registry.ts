@@ -45,27 +45,31 @@ export const AGENT_MODES: readonly AgentMode[] = [
 /** 模式元数据（切换器 + AgentStatusPill + TdsfAgentPanel 显示用） */
 export const AGENT_MODE_META: Record<
   AgentMode,
-  { label: string; badge: string; desc: string }
+  { label: string; badge: string; desc: string; brief: string }
 > = {
   observe: {
     label: "观察",
     badge: "观察 · 只读",
     desc: "只读分析，不执行任何写操作",
+    brief: "只读分析",
   },
   confirm: {
     label: "确认",
     badge: "确认 · 审批",
     desc: "写操作逐条审批后执行",
+    brief: "操作前确认",
   },
   auto: {
     label: "自动",
     badge: "自动 · 执行",
     desc: "低危自动放行，高危仍需确认",
+    brief: "自由执行",
   },
   teach: {
     label: "教学",
     badge: "教学 · 讲解",
     desc: "只读 + 结构化教学输出（概念/示例/易错点/练习），适合跟学，不改系统",
+    brief: "讲解跟学",
   },
 };
 

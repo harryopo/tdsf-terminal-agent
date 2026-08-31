@@ -7,7 +7,6 @@ import { SLASH_COMMANDS } from "../lib/slashCommands";
 import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
 import { AgentModeSwitcher } from "./AgentModeSwitcher";
-import { AgentStatusPill } from "./AgentStatusPill";
 import { FilePickerContent } from "./FilePicker";
 import { type PickerItem, SnippetPickerContent } from "./SnippetPicker";
 
@@ -256,10 +255,10 @@ export function AiComposerInput() {
                 "placeholder:text-muted-foreground/60",
               )}
             />
-            {/* v3.1 三模式信任体系：输入区工具行——模式切换器（观察/确认/自动 + 教学）
-                + 模式指示 pill。状态存 chatStore（per-session 持久化），切换即时生效。 */}
+            {/* v3.1 三模式信任体系：输入区工具行——模式切换器（观察/确认/自动/教学）。
+                模式显示只此一处（2026-08-31 用户反馈：原并列 AgentStatusPill 导致
+                模式显示两次，已删；状态栏仍保留 AgentStatusPill 作入口）。 */}
             <AgentModeSwitcher />
-            <AgentStatusPill />
           </div>
         </PopoverAnchor>
         {fileTrigger ? (
