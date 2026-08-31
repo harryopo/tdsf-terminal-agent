@@ -37,6 +37,16 @@
 - 做对：删 Refresh 不是简单删除——分析出它承载"手动刷新 WSL 列表"功能，打开时自动 refresh 补位，避免功能回退。
 - 注意：另一对话在跑知识库 distill，本次 commit 精确 add 4 文件，未卷入其未提交现场；文档追加与该对话存在并发写可能，条目已尽量原子。
 
+**第二轮（v3.1.5，commit e7cde62）——用户实测四问**：
+1. **模式显示两次**：`AiComposerInput` 工具行把 `AgentModeSwitcher` 与 `AgentStatusPill` 并排挂载（同一视野最多 3 处模式显示）→ 删输入区的 AgentStatusPill（切换器已承载显示+切换；状态栏 Pill 保留作 Ctrl+I 小窗入口）。
+2. **弹层被遮盖**：absolute 面板受输入区容器 overflow 裁剪 → 改 **Portal 到 body + fixed 定位**（打开时按 trigger rect 计算坐标），彻底脱离裁剪链。
+3. **「9 个智能体」真伪**：用户质疑属实——`sidecar.health` 的 agents_count 来自**顶层 agents/ 的 LangGraph fallback AGENT_REGISTRY**（9 个遗产 agent），Strands 激活时与真实引擎无关 → 前端移除该字段显示（字段保留给后端调试），副行只留运行时长。
+4. **tooltip 两行挤成横排**：shadcn TooltipContent 默认 `inline-flex items-center gap-1.5` 把标题/副行两个 `<p>` 横排 + 基线错位 → 覆盖 `flex-col items-start gap-0`。
+5. **参考图复刻**（用户给图3）：卡片行布局 = [✓选中勾][彩色图标][名称][右侧灰色简短说明]；registry META 新增 `brief` 字段（观察=只读分析/确认=操作前确认/自动=自由执行/教学=讲解跟学），长 desc 不再进卡片；`role=radiogroup/radio+aria-checked` 升级 `listbox/option+aria-selected`。
+6. **位置调换**（用户钦定）：StatusBar 右侧 [Agent 模式][Strands] 互换。
+
+**第二轮教训**：①并行对话用 `git add -A` 全量提交会把别人的工作树改动卷进自己的 commit——本轮 4 个 UI 文件被知识库对话的 `af9e9a3`（docs commit）抢先提交，我方 commit 只剩 2 文件；代码无损但历史归属混乱，多对话并行时应约定精确 add 或先沟通。②shadcn 弹层组件（Tooltip/Popover）默认是反色+横排设计，定制内容结构时必须显式覆盖布局类。
+
 ---
 
 ### §37.86 知识库翻译交接外部 AI（2026-08-31，commit fb0d76d 之后）
