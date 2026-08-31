@@ -1050,26 +1050,26 @@ def _slim_db_path() -> Path:
     return data_dir / "rag_slim.db"
 
 
-def get_slim_rag() -> RagIndex:
-    """精简知识库单例（<TDSF_DATA_DIR>/rag_slim.db）
+def get_slim_rag(db_path: Path | str | None = None) -> RagIndex:
+    """精简知识库单例（默认 <TDSF_DATA_DIR>/rag_slim.db）
 
     与 get_global_rag（rag.db）同 schema 同引擎（sqlite-vec + FTS5 + RRF），
-    仅 db 文件不同——前端本期不接入，RPC knowledge.search_slim 供冒烟验证。
+    仅 db 文件不同。db_path 参数对齐 get_global_rag（测试隔离用）。
     """
     global _global_slim_rag
     with _global_rag_lock:
         if _global_slim_rag is None:
-            _global_slim_rag = RagIndex(db_path=_slim_db_path())
+            _global_slim_rag = RagIndex(db_path=db_path or _slim_db_path())
         return _global_slim_rag
 
 
-def reset_slim_rag() -> RagIndex:
+def reset_slim_rag(db_path: Path | str | None = None) -> RagIndex:
     """重建精简库单例（测试/运维脚本用：换 db 后强制重开连接）"""
     global _global_slim_rag
     with _global_rag_lock:
         if _global_slim_rag is not None:
             _global_slim_rag.close()
-        _global_slim_rag = RagIndex(db_path=_slim_db_path())
+        _global_slim_rag = RagIndex(db_path=db_path or _slim_db_path())
         return _global_slim_rag
 
 
