@@ -12,9 +12,7 @@ import {
   type WorkspaceEnv,
 } from "@/modules/workspace";
 import {
-  Refresh01Icon,
   ServerStack03Icon,
-  Settings01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -43,8 +41,10 @@ export function WorkspaceEnvSelector({
 
   if (!IS_WINDOWS) return null;
 
+  // 每次打开菜单都重新拉取 WSL 发行版列表（取代已删除的手动 Refresh 项，
+  // 保证新建/删除发行版后列表始终最新）
   const handleOpenChange = (open: boolean) => {
-    if (open && distros.length === 0 && !loading) {
+    if (open && !loading) {
       void refreshDistros();
     }
   };
@@ -77,10 +77,8 @@ export function WorkspaceEnvSelector({
         <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
           Windows Local
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onSelectSsh}>
-          <HugeiconsIcon icon={Settings01Icon} size={13} strokeWidth={1.75} />
-          SSH Server...
-        </DropdownMenuItem>
+        {/* TDSF 2026-08-31（用户反馈）：齿轮图标删除——三个条目纯文字、间距统一 */}
+        <DropdownMenuItem onSelect={onSelectSsh}>SSH Server...</DropdownMenuItem>
         <DropdownMenuSeparator />
         {distros.length === 0 ? (
           <DropdownMenuItem disabled>
@@ -100,11 +98,6 @@ export function WorkspaceEnvSelector({
             </DropdownMenuItem>
           ))
         )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => void refreshDistros()}>
-          <HugeiconsIcon icon={Refresh01Icon} size={13} strokeWidth={1.75} />
-          Refresh
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

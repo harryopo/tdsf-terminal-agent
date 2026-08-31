@@ -69,9 +69,20 @@ type DisplayState = {
   label: string;
   /** 是否有 pulse 动画（降级时） */
   pulse: boolean;
-  /** tooltip 详细信息（多行） */
-  tooltip: string;
+  /** tooltip 标题（一行，人类可读） */
+  tooltipTitle: string;
+  /** tooltip 次要信息（可空：智能体数/运行时长/降级原因等） */
+  tooltipDetail: string | null;
 };
+
+/** 拼接次要信息行：智能体数量 + 运行时长（缺失字段自动跳过） */
+function buildDetail(status: BackendStatus): string | null {
+  const parts = [
+    status.agents_count ? `${status.agents_count} 个智能体` : null,
+    status.uptime_seconds ? `已运行 ${Math.floor(status.uptime_seconds)}s` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
 
 /** 从 BackendStatus 派生显示态 */
 function deriveDisplay(status: BackendStatus | null): DisplayState {
@@ -83,11 +94,12 @@ function deriveDisplay(status: BackendStatus | null): DisplayState {
       bgColor: "bg-card/40",
       label: "Backend…",
       pulse: false,
-      tooltip: "正在查询后端状态…",
+      tooltipTitle: "正在查询后端状态…",
+      tooltipDetail: null,
     };
   }
 
-  // 降级：Strands 启动失败回退 LangGraph
+  // 降级：Strands 启动失败回退 LangGraph（原因保留，排障关键）
   if (status.fallback_reason) {
     return {
       dotColor: "bg-rose-500",
@@ -95,14 +107,8 @@ function deriveDisplay(status: BackendStatus | null): DisplayState {
       bgColor: "bg-rose-500/10",
       label: "Degraded",
       pulse: true,
-      tooltip: [
-        `后端：LangGraph（Strands 降级）`,
-        `降级原因：${status.fallback_reason}`,
-        `strands_available=${status.strands_available}`,
-        `rust_bridge_active=${status.rust_bridge_active}`,
-        `llm_configured=${status.llm_configured}`,
-        status.agents_count ? `agents_count=${status.agents_count}` : "",
-      ].filter(Boolean).join("\n"),
+      tooltipTitle: "Strands 启动失败，已降级 LangGraph",
+      tooltipDetail: status.fallback_reason,
     };
   }
 
@@ -114,15 +120,10 @@ function deriveDisplay(status: BackendStatus | null): DisplayState {
       bgColor: "bg-emerald-500/10",
       label: "Strands",
       pulse: false,
-      tooltip: [
-        `后端：Strands（已激活）`,
-        `rust_bridge_active=${status.rust_bridge_active}`,
-        `llm_configured=${status.llm_configured}`,
-        status.agents_count ? `agents_count=${status.agents_count}` : "",
-        status.uptime_seconds
-          ? `uptime=${Math.floor(status.uptime_seconds)}s`
-          : "",
-      ].filter(Boolean).join("\n"),
+      tooltipTitle: "Strands 引擎已激活",
+      tooltipDetail: status.llm_configured
+        ? buildDetail(status)
+        : ["LLM 未配置", buildDetail(status)].filter(Boolean).join(" · "),
     };
   }
 
@@ -133,15 +134,8 @@ function deriveDisplay(status: BackendStatus | null): DisplayState {
     bgColor: "bg-amber-500/10",
     label: "LangGraph",
     pulse: false,
-    tooltip: [
-      `后端：LangGraph（默认 PAOR）`,
-      `strands_available=${status.strands_available}`,
-      `llm_configured=${status.llm_configured}`,
-      status.agents_count ? `agents_count=${status.agents_count}` : "",
-      status.uptime_seconds
-        ? `uptime=${Math.floor(status.uptime_seconds)}s`
-        : "",
-    ].filter(Boolean).join("\n"),
+    tooltipTitle: "LangGraph 引擎（默认 PAOR）",
+    tooltipDetail: buildDetail(status),
   };
 }
 
@@ -277,11 +271,19 @@ export function BackendPill() {
           <span className="max-w-[5rem] truncate">{display.label}</span>
         </span>
       </TooltipTrigger>
+      {/* 主题化弹层：bg-popover 跟随明暗主题（深色主题 = 黑底），覆盖默认反色方案 */}
       <TooltipContent
         side="top"
-        className="max-w-80 whitespace-pre-line text-[11px] leading-relaxed"
+        className="max-w-72 border border-border bg-popover px-3 py-2 text-popover-foreground shadow-md"
       >
-        {display.tooltip}
+        <p className="text-[11px] font-medium leading-snug">
+          {display.tooltipTitle}
+        </p>
+        {display.tooltipDetail && (
+          <p className="mt-0.5 break-words text-[10.5px] leading-snug text-muted-foreground">
+            {display.tooltipDetail}
+          </p>
+        )}
       </TooltipContent>
     </Tooltip>
   );
