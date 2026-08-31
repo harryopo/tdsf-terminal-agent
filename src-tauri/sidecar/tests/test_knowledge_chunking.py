@@ -102,14 +102,19 @@ def test_chunk_markdown_code_fence_hash_not_heading():
 
 
 def test_chunk_markdown_long_section_split_order():
-    """超 ~1200 字的章节按段落二次切分：多块、全部同标题、顺序保持、内容无丢失"""
+    """超 ~1200 字的章节按段落二次切分：多块、标题带子段语义与序号、
+    顺序保持、内容无丢失（2026-08-31：块 title 追加「· 子标题 · #序」，
+    修同章节 94 块同名不可区分问题）"""
     paragraphs = "\n\n".join(
         f"段落{i}开始。" + "系统管理实践细节。" * 30 for i in range(10)
     )
     text = f"# 大章\n\n{paragraphs}"
     chunks = _chunk_markdown(text)
     assert len(chunks) > 1
-    assert all(t == "大章" for t, _ in chunks)
+    # 二切块标题以原章节标题为前缀、带序号后缀（唯一可区分）
+    assert all(t.startswith("大章") for t, _ in chunks)
+    suffixes = [t for t, _ in chunks]
+    assert len(set(suffixes)) == len(suffixes), "同章节二切块 title 必须唯一"
     joined = "\n\n".join(c for _, c in chunks)
     for i in range(10):
         assert f"段落{i}开始。" in joined

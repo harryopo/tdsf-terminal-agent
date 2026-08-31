@@ -232,8 +232,16 @@ def _chunk_markdown(text: str) -> list[tuple[str, str]]:
         if len(body) <= _SECTION_MAX_CHARS:
             chunks.append((title, body))
         else:
-            for part in _split_long_section(body):
-                chunks.append((title, part))
+            # 超长章节二切：块标题追加子段语义（「章节 · 子标题 · #序」），
+            # 避免同章节 94 块全部同名（检索命中列表无法区分）
+            parts = _split_long_section(body)
+            multi = len(parts) > 1
+            for k, part in enumerate(parts, 1):
+                sub = _sub_heading_of(part) if multi else ""
+                t = f"{title} · {sub}" if sub else title
+                if multi:
+                    t = f"{t} · #{k}"
+                chunks.append((t, part))
     return chunks
 
 
@@ -256,6 +264,30 @@ def _split_long_section(body: str) -> list[str]:
     if buf:
         parts.append("\n\n".join(buf))
     return parts
+
+
+def _sub_heading_of(part: str) -> str:
+    """提取超长章节二切块的子标题语义（用于区分同章节的多块）
+
+    man 页选项段落（``[\\`-X\\`](#x)\\n:   说明``）取锚点名；通用段落取
+    首个 4-6 级标题或首个非空行前 40 字。无可用语义返回 ""。
+    """
+    first = part.strip().splitlines()[0].strip() if part.strip() else ""
+    # man 页定义列表锚点：[`-C`](#C) connection_spec / [`AuthenticationMethods`](#...)
+    m = re.match(r"\[`?([^`\]]+)`?\]\(#[^)]*\)", first)
+    if m:
+        return m.group(1).strip()[:40]
+    # 深层标题（#### ...）
+    m = re.match(r"^#{4,6}\s+(.+)$", first)
+    if m:
+        return m.group(1).strip()[:40]
+    # 表格首行取首单元格文本
+    if first.startswith("|"):
+        cells = [c.strip() for c in first.strip("|").split("|") if c.strip()]
+        if cells:
+            return cells[0][:40]
+    # 普通段落：首行截断
+    return first[:40] if first else ""
 
 
 # ============================================================================
