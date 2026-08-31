@@ -312,7 +312,7 @@ function SourceFileList({
     );
   }
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 pl-5">
       {state.files.map((file) => {
         const zh = titles.get(file.url);
         return (
@@ -321,17 +321,20 @@ function SourceFileList({
             type="button"
             onClick={() => onOpenDoc(file.url)}
             className={cn(
-              "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
+              "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-1.5 text-left",
               "transition-colors hover:border-border hover:bg-muted/40",
             )}
           >
             {/* TDSF 魔改 2026-08-30: 中文预览标题主行 + 英文 filename 副行
-                （无中文映射时只显示英文 filename 主行，不报错） */}
+                （无中文映射时只显示英文 filename 主行，不报错）
+                TDSF 魔改 2026-08-31: 层级修复——主行 10.5px 与组头同级
+                （原 11.5px 比组头还大），缩进 pl-5 体现从属关系；计数
+                badge 统一为纯数字 + 块数与组头同款式 */}
             <div className="flex items-center gap-1.5">
               <span
                 className={cn(
-                  "flex-1 truncate text-[11.5px] font-medium text-foreground",
-                  !zh && "font-mono text-[11px]",
+                  "flex-1 truncate text-[10.5px] font-medium text-foreground",
+                  !zh && "font-mono text-[10px]",
                 )}
               >
                 {zh ?? file.filename}
@@ -339,6 +342,7 @@ function SourceFileList({
               <Badge
                 variant="secondary"
                 className="shrink-0 px-1 py-px text-[9px] tabular-nums"
+                title={`此文档共 ${file.chunks} 个知识块（检索/引用的最小单位）`}
               >
                 {file.chunks} 块
               </Badge>
@@ -730,7 +734,11 @@ export function KnowledgePanel() {
                     variant="secondary"
                     className="ml-auto shrink-0 px-1 py-px text-[9px] tabular-nums"
                   >
-                    {group.entries.length}
+                    {/* 计数口径统一（TDSF 2026-08-31 用户反馈"有的数字有的N块
+                        看不懂"）：仅搜索模式显示"N 条"（命中条目数）；浏览模式
+                        不显示——组头 list 采样计数与组内文件卡块数不同源，数字
+                        对不上反而误导，文件卡块数与详情弹窗"共 N 块"同口径 */}
+                    {searched ? `${group.entries.length} 条` : null}
                   </Badge>
                 </button>
                 {!isCollapsed && (

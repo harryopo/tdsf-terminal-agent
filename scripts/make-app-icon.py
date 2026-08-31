@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+﻿﻿# -*- coding: utf-8 -*-
 """
 应用图标生成脚本（Tauri 源图 1024x1024）
 用法：python scripts/make-app-icon.py
