@@ -16,6 +16,8 @@ import {
   formatEnvironmentBlock,
   formatTerminalHistoryBlock,
   TERMINAL_HISTORY_MAX_BLOCKS,
+  // TDSF 2026-08-31 (问题1修复): connection_mode 三态判定
+  resolveConnectionMode,
 } from "./transport";
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 import type { EnvironmentProbe } from "../store/chatStore";
@@ -28,6 +30,7 @@ type LiveSnapshot = {
   sshSessionId: number | null;
   sshConnection: string | null;
   terminalOutput: string | null;
+  terminalSession?: "ssh" | "local" | "none" | null;
 };
 
 const makeLive = (over: Partial<LiveSnapshot> = {}): LiveSnapshot => ({
@@ -52,6 +55,7 @@ describe("formatEnvBlock — env 上下文块生成", () => {
         cwd: "/etc/nginx",
         workspaceRoot: "/home/user",
         activeFile: "/etc/nginx/nginx.conf",
+        terminalSession: "local",
       }),
     );
     expect(block).toContain("<env>");
@@ -59,6 +63,21 @@ describe("formatEnvBlock — env 上下文块生成", () => {
     expect(block).toContain("active_terminal_cwd: /etc/nginx");
     expect(block).toContain("active_file: /etc/nginx/nginx.conf");
     expect(block).toContain("</env>");
+  });
+
+  it("无终端会话（none）时不注入 active_terminal_cwd（默认工作区路径非终端 cwd）", () => {
+    // TDSF 2026-08-31 (问题1修复): 用户没开终端时 findCwd() 回退到
+    // explorerRoot/launchCwd/home（如 C:/Users/Administrator）——把它标注成
+    // "active_terminal_cwd" 正是 agent 误称"本地终端已打开"的误导源
+    const block = formatEnvBlock(
+      makeLive({
+        cwd: "C:/Users/Administrator",
+        workspaceRoot: "C:/Users/Administrator",
+        terminalSession: "none",
+      }),
+    );
+    expect(block).toContain("workspace_root: C:/Users/Administrator");
+    expect(block).not.toContain("active_terminal_cwd");
   });
 
   it("terminalPrivate 注入 private 标记", () => {
@@ -77,7 +96,7 @@ describe("formatEnvBlock — env 上下文块生成", () => {
 
   it("sshConnection 为 null 时不注入 connected_to", () => {
     const block = formatEnvBlock(
-      makeLive({ cwd: "/tmp", sshConnection: null }),
+      makeLive({ cwd: "/tmp", sshConnection: null, terminalSession: "local" }),
     );
     expect(block).not.toContain("connected_to");
   });
@@ -187,12 +206,13 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
     );
   });
 
-  it("无 SSH 连接 → connection_mode: local，无 ssh_target", () => {
+  it("无 SSH 连接但本地终端已打开 → connection_mode: local，无 ssh_target", () => {
     const block = formatEnvironmentBlock(
       makeProbe(),
-      makeLive({ cwd: "C:\\proj", sshConnection: null }),
+      makeLive({ cwd: "C:\\proj", sshConnection: null, terminalSession: "local" }),
     );
     expect(block).toContain("connection_mode: local");
+    expect(block).toContain("cwd: C:\\proj");
     expect(block).not.toContain("ssh_target");
   });
 
@@ -208,14 +228,102 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
 
   it("字段全空的 probe 仍输出 connection_mode（环境口径兜底）", () => {
     // TDSF 2026-08-31: probe ok 但字段全空时，connection_mode 仍有价值
-    // （agent 至少知道本地/SSH 口径）；其余字段省略
+    // （agent 至少知道本地/SSH/无终端口径）；其余字段省略
     const block = formatEnvironmentBlock(
       makeProbe({ os_pretty_name: "", kernel: "", shell: "" }),
-      makeLive(),
+      makeLive({ terminalSession: "local" }),
     );
     expect(block).toContain("<environment>");
     expect(block).toContain("connection_mode: local");
     expect(block).not.toContain("os_pretty_name");
+  });
+
+  it("无活动终端会话 → connection_mode: none + 说明行，cwd 标注为 workspace_path", () => {
+    // TDSF 2026-08-31 (问题1修复): 用户没选工作区/没开终端时，此前误报
+    // "local"（把默认 workspace cwd 当成"本地终端已打开"），agent 遂断言
+    // "当前环境是 Windows 本地终端"。现显式标 none 并说明。
+    const block = formatEnvironmentBlock(
+      makeProbe(),
+      makeLive({
+        cwd: "C:/Users/Administrator",
+        workspaceRoot: "C:/Users/Administrator",
+        terminalSession: "none",
+      }),
+    );
+    expect(block).toContain("connection_mode: none");
+    expect(block).toContain(
+      "note: 当前未打开任何终端会话（workspace 仅为默认工作区路径，不代表终端已打开）",
+    );
+    // 默认工作区路径不再伪装成终端 cwd
+    expect(block).toContain(
+      "workspace_path: C:/Users/Administrator",
+    );
+    expect(block).not.toContain("cwd: C:/Users/Administrator");
+    expect(block).not.toContain("ssh_target");
+  });
+
+  it("terminalSession=ssh 但 sshConnection 未取到时仍判为 ssh", () => {
+    const block = formatEnvironmentBlock(
+      makeProbe(),
+      makeLive({ terminalSession: "ssh", sshConnection: null }),
+    );
+    expect(block).toContain("connection_mode: ssh");
+    expect(block).not.toContain("ssh_target");
+  });
+});
+
+describe("resolveConnectionMode — 连接模式三态判定（问题1）", () => {
+  it("sshConnection 存在 → ssh", () => {
+    expect(
+      resolveConnectionMode(
+        makeLive({ sshConnection: "root@1.2.3.4", terminalSession: null }),
+      ),
+    ).toBe("ssh");
+  });
+
+  it("terminalSession=ssh（sshConnection 未取到）→ ssh", () => {
+    expect(
+      resolveConnectionMode(makeLive({ terminalSession: "ssh" })),
+    ).toBe("ssh");
+  });
+
+  it("terminalSession=local → local", () => {
+    expect(
+      resolveConnectionMode(
+        makeLive({ terminalSession: "local", cwd: "C:/x" }),
+      ),
+    ).toBe("local");
+  });
+
+  it("terminalSession=none（即使有默认 workspace cwd）→ none", () => {
+    expect(
+      resolveConnectionMode(
+        makeLive({
+          terminalSession: "none",
+          cwd: "C:/Users/Administrator",
+          workspaceRoot: "C:/Users/Administrator",
+        }),
+      ),
+    ).toBe("none");
+  });
+
+  it("terminalSession 未注入（旧调用方）回退：有终端输出 → local", () => {
+    expect(
+      resolveConnectionMode(
+        makeLive({ terminalOutput: "$ ls", terminalSession: undefined }),
+      ),
+    ).toBe("local");
+  });
+
+  it("terminalSession 未注入且无终端输出 → none（不再把 workspace cwd 当本地终端）", () => {
+    expect(
+      resolveConnectionMode(
+        makeLive({
+          terminalSession: undefined,
+          cwd: "C:/Users/Administrator",
+        }),
+      ),
+    ).toBe("none");
   });
 });
 

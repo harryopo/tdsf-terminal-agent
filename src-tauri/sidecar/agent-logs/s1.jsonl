@@ -1,0 +1,48 @@
+{"ts": 1788183061.98, "type": "user_msg", "content": "hello", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183061.982, "type": "assistant_msg", "content": "done", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183062.087, "type": "user_msg", "content": "hello", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183062.189, "type": "user_msg", "content": "检查 nginx 状态", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183062.19, "type": "assistant_msg", "content": "nginx is running", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183062.284, "type": "user_msg", "content": "ls", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183062.285, "type": "assistant_msg", "content": "ok", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183064.212, "type": "user_msg", "content": "hi", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183064.214, "type": "assistant_msg", "content": "ok", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.007, "type": "user_msg", "content": "解释一下什么是负载均衡", "meta": {"agent": "coding", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.008, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "coding", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.1, "type": "user_msg", "content": "nginx 服务状态如何", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.101, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.199, "type": "user_msg", "content": "解释一下什么是负载均衡", "meta": {"agent": "teach", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.2, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "teach", "mode": "confirm", "teach": false}}
+{"ts": 1788183067.902, "type": "user_msg", "content": "hello", "meta": {"agent": "not_exist", "mode": "confirm", "teach": false}}
+{"ts": 1788183129.777, "type": "user_msg", "content": "hello", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183129.777, "type": "assistant_msg", "content": "done", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183129.899, "type": "user_msg", "content": "hello", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183130.051, "type": "user_msg", "content": "检查 nginx 状态", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183130.052, "type": "assistant_msg", "content": "nginx is running", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183130.194, "type": "user_msg", "content": "ls", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183130.197, "type": "assistant_msg", "content": "ok", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183131.532, "type": "user_msg", "content": "hi", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183131.533, "type": "assistant_msg", "content": "ok", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183134.295, "type": "user_msg", "content": "解释一下什么是负载均衡", "meta": {"agent": "coding", "mode": "confirm", "teach": false}}
+{"ts": 1788183134.296, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "coding", "mode": "confirm", "teach": false}}
+{"ts": 1788183134.392, "type": "user_msg", "content": "nginx 服务状态如何", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183134.393, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183134.489, "type": "user_msg", "content": "解释一下什么是负载均衡", "meta": {"agent": "teach", "mode": "confirm", "teach": false}}
+{"ts": 1788183134.49, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "teach", "mode": "confirm", "teach": false}}
+{"ts": 1788183135.576, "type": "user_msg", "content": "hello", "meta": {"agent": "not_exist", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.289, "type": "user_msg", "content": "hello", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.29, "type": "assistant_msg", "content": "done", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.397, "type": "user_msg", "content": "hello", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.509, "type": "user_msg", "content": "检查 nginx 状态", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.51, "type": "assistant_msg", "content": "nginx is running", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.621, "type": "user_msg", "content": "ls", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183748.622, "type": "assistant_msg", "content": "ok", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183750.058, "type": "user_msg", "content": "hi", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183750.06, "type": "assistant_msg", "content": "ok", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183752.736, "type": "user_msg", "content": "解释一下什么是负载均衡", "meta": {"agent": "coding", "mode": "confirm", "teach": false}}
+{"ts": 1788183752.737, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "coding", "mode": "confirm", "teach": false}}
+{"ts": 1788183752.831, "type": "user_msg", "content": "nginx 服务状态如何", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183752.832, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "main", "mode": "confirm", "teach": false}}
+{"ts": 1788183752.928, "type": "user_msg", "content": "解释一下什么是负载均衡", "meta": {"agent": "teach", "mode": "confirm", "teach": false}}
+{"ts": 1788183752.928, "type": "assistant_msg", "content": "回答内容", "meta": {"agent": "teach", "mode": "confirm", "teach": false}}
+{"ts": 1788183753.649, "type": "user_msg", "content": "hello", "meta": {"agent": "not_exist", "mode": "confirm", "teach": false}}

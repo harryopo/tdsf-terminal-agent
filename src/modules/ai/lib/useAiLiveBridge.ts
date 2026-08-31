@@ -375,6 +375,18 @@ export function useAiLiveBridge(params: Params) {
         }
         return [];
       },
+      // TDSF 2026-08-31 (问题1修复): 当前是否有活动终端会话（权威信号）。
+      // "ssh"=SSH 终端活跃 / "local"=本地终端 tab 活跃 / null=无任何终端会话。
+      // workspace cwd（explorerRoot/launchCwd/home 回退）存在 ≠ 终端已打开——
+      // 无终端时 transport 据此把 connection_mode 标为 none（而非误报 local）。
+      // 判定逻辑与 getTerminalContext 的活跃终端判定保持一致（SSH 优先）。
+      getActiveTerminalSession: (): "ssh" | "local" | null => {
+        const sshLeafId = ref.current.getSshLeafId?.();
+        if (sshLeafId !== null && sshLeafId !== undefined) return "ssh";
+        const { activeId, tabs } = ref.current;
+        const t = tabs.find((x) => x.id === activeId);
+        return t?.kind === "terminal" ? "local" : null;
+      },
     });
 
     // TDSF 魔改 (2026-08-09): 监听 sidecar inject_terminal notification

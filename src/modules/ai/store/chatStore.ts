@@ -73,6 +73,14 @@ export type Live = {
    * <terminal-history> 注入。无活跃终端返回 []。
    */
   getTerminalHistory?: () => TerminalBlock[];
+  /**
+   * TDSF 2026-08-31 (问题1修复): 当前是否有活动终端会话（权威信号）。
+   * "ssh"=SSH 终端活跃 / "local"=本地终端 tab 活跃 / null=无任何终端会话。
+   * 与 getTerminalContext 的活跃终端判定一致；transport 据此判定
+   * connection_mode（无终端时标 none，而非误报 local）。旧调用方未注入
+   * 时 transport 回退用 sshConnection/terminalOutput 推断。
+   */
+  getActiveTerminalSession?: () => "ssh" | "local" | null;
 };
 
 /** 环境探测结果（sidecar system.probe_env 返回，snake_case 对齐协议） */

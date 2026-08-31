@@ -283,12 +283,16 @@ class TestModeAwarePrompt:
             for teach in (False, True):
                 prompt = self._compose(mode, teach)
                 assert "环境感知前置" in prompt, f"mode={mode}, teach={teach}"
-                # ① SSH → 远程 Linux 服务器（按发行版）
+                # ① connection_mode: ssh → 远程 Linux 服务器（按发行版）
                 assert "远程 Linux 服务器" in prompt
-                # ② 仅本地终端 → Windows 本地环境
+                # ② connection_mode: local（本地终端已打开）→ Windows 本地环境
                 assert "Windows 本地环境" in prompt
-                # ③ 无终端会话 → 引导用户打开
-                assert "引导用户" in prompt
+                # ③ connection_mode: none → 明确告知未开终端并引导
+                #    （2026-08-31 问题1修复：以 connection_mode 为唯一口径，
+                #    none 分支严禁自称"本地终端模式"，要求如实告知用户）
+                assert "connection_mode: none" in prompt
+                assert "当前未打开终端" in prompt
+                assert "新建本地终端" in prompt
                 # 指向注入区数据源
                 assert "<environment>" in prompt or "live_context" in prompt
 
