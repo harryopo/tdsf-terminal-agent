@@ -150,9 +150,11 @@ class TestDistillCheck(unittest.TestCase):
         self.assertFalse(dk._is_distill_ok("a" * 1093, "精" * 438))
 
     def test_long_slice_abs_cap(self):
-        """verify(7563)=950（绝对上限封顶）：src=7563 out=940 通过"""
-        self.assertTrue(dk._is_distill_ok("a" * 7563, "精" * 940))
-        self.assertFalse(dk._is_distill_ok("a" * 7563, "精" * 951))
+        """长源（>4000）绝对上限放宽为 20% 源长：src=7563 → 1512（20%），
+        950 硬顶曾误杀 18 个密集大章（输出 1200-1500 字压缩比 16-19% 合格）"""
+        self.assertTrue(dk._is_distill_ok("a" * 7563, "精" * 1400))
+        self.assertTrue(dk._is_distill_ok("a" * 7563, "精" * 1512))
+        self.assertFalse(dk._is_distill_ok("a" * 7563, "精" * 1513))
 
     def test_copy_expand_rejected(self):
         """输出 >0.9×源长 = 照抄/扩写（含短片幻扩场景）"""
@@ -169,10 +171,11 @@ class TestDistillCheck(unittest.TestCase):
         self.assertFalse(dk._is_distill_ok("a" * 100, "   "))
 
     def test_verify_limit_bounds(self):
-        """校验上限：min(40% 源长, 950)"""
-        self.assertEqual(dk._verify_limit("x" * 1000), 400)   # 40%
-        self.assertEqual(dk._verify_limit("x" * 7563), 950)   # 绝对封顶
-        self.assertEqual(dk._verify_limit("x" * 5000), 950)   # 2000 > 950
+        """校验上限：短源 min(40% 源长, 950)；长源(>4000) max(950, 20% 源长)"""
+        self.assertEqual(dk._verify_limit("x" * 1000), 400)    # 40%
+        self.assertEqual(dk._verify_limit("x" * 7563), 1512)   # 20% 源长放宽
+        self.assertEqual(dk._verify_limit("x" * 5000), 1000)   # 20% 源长
+        self.assertEqual(dk._verify_limit("x" * 4000), 950)    # 边界：短源封顶
 
     def test_recompress_ok(self):
         """二次压缩校验：非空且 200 ≤ len ≤ 650"""

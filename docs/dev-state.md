@@ -4248,3 +4248,19 @@ CDP 全新状态实测通过。commit 见上。
 **⚠️ 运维铁律**：跑任何 rag 全清重建（rebuild/rebuild_from_consolidated）前**必须关闭 TDSF 应用**——清库窗口会触发 sidecar 的 KB auto-init（official==0 → 后台全量爬取）并发写入污染（本次实测混入 22 条爬虫条目，已清除）。
 
 **门禁**：pytest 1849 ✅｜vitest src/modules/ai 321 ✅｜tsc/eslint ✅。**遗留问题**：①doc_titles_zh 部分中文标题质量差（「要点」×N 已用英文消歧兜底；「Optional line:」等坏标题需 gen_titles_zh.py LLM 重生成）；②合并块 4777 > 原 682 条目数（检索粒度换嵌入覆盖完整性，符合入库层分块设计，非回归）；③content_zh 译文未迁移（原 682 条的逐条译文与合并块结构不对应，中文译文检索待翻译管线适配合并结构后重建）。
+
+### 37.87 UI 三修：Strands 弹窗主题化 / Agent 模式折叠面板 / 工作区菜单精简（2026-08-31 ✅，commit a990289）
+
+**背景**：用户三项 UI 反馈（后续将重点优化 agent 模块，本轮先打磨 UI 细节）。**注意**：本轮开发期间另一对话正在跑知识库 distill 精简任务（`.tdsf-data/rag_slim.db` + `scripts/distill_knowledge.py` 等未提交现场），commit 与文档更新均避开其文件。
+
+**改动文件**（4）：
+- `src/modules/ai/components/BackendPill.tsx`：Strands 悬浮弹窗白屏根因 = shadcn TooltipContent 默认 `bg-foreground text-background` 反色（深色主题 = 白底黑字）→ 覆盖 `bg-popover text-popover-foreground border-border shadow-md` 跟随明暗主题；tooltip 从调试串 5 行精简为标题+副行（`Strands 引擎已激活` / `N 个智能体 · 已运行 Xs`；降级保留 fallback_reason；LLM 未配置提示）；`rust_bridge_active`/`strands_available` 等布尔调试字段移除。
+- `src/modules/ai/components/AgentModeSwitcher.tsx`：四档横排 segmented control + 底部常驻说明行 → **折叠面板**（用户钦定）：触发按钮只显示当前模式，点击向上弹面板，每档 = 图标+名称+描述两行；点外/Esc/选中后关闭；**有意不用 Radix Popover**（自实现无 Portal，vitest 直接查询，避免弹层焦点问题）。测试重写 12 项全绿。
+- `src/modules/statusbar/WorkspaceEnvSelector.tsx`：SSH Server... 行删齿轮图标（三条目纯文字间距统一）；Refresh 菜单删除，功能改为每次打开菜单自动 `refreshDistros()`（原仅列表为空时拉取），功能无损。
+- `AgentModeSwitcher.test.tsx`：同步折叠面板交互重写（默认收起/展开四档/aria-checked/描述入面板/Esc/重开跟随）。
+
+**门禁**：tsc ✅ / lint 0 ✅ / vitest 1205（SnippetsPanel 1 例 flaky 与本次无关，单跑 6/6 过）/ build:web ✅。
+
+**踩坑**：①`aria-haspopup="radiogroup"` React 类型不合法 → `"listbox"`；②Edit 追加 DEV-JOURNAL 时误吞 §37.86 标题行 → 已补回（教训：追加式编辑 old_string 含相邻标题时必须在新串中保留）；③全量 vitest 的 flaky（懒加载 Dialog findByText 超时）单跑即过，与改动无关。
+
+**待用户桌面实测**：Strands 悬浮弹窗黑底+精简文案 / 模式折叠面板交互 / 工作区菜单三项（齿轮消失+无 Refresh+间距一致）。

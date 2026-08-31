@@ -94,8 +94,15 @@ _MAX_OUT_CHARS = 600  # 单片 prompt 输出上限（任务书钦定）
 # 校验绝对上限 950（实测 2026-08-31：850 会把级联收敛到 902-940 的高价值
 # 密集章节（如 Limine 引导、压缩比已到 12%）在"差几十字"处误杀——
 # 绝对上限只负责防失控，40% 比率线才负责删减质量；两者取小）
+# 补提轮实测（2026-08-31）：_VERIFY_ABS=950 对 7000-8000 字密集大章
+# （netfilter NAT/iptables/PostScript）误杀 18 章——模型输出 1200-1500 字
+# 压缩比已 16-19%（质量合格），级联压缩也压不进 950。修复：绝对上限对
+# 长源按 20% 源长放宽（长源 40% 比率线本来就极宽松，防失控只防"没精简"），
+# 短源仍 950 封顶。
 _VERIFY_ABS = 950
 _SLIM_RATIO = 0.4  # 任务书钦定：输出 >40% 源长 = 没精简到位
+_VERIFY_LONG_SRC = 4000  # 源长超过此值时绝对上限放宽为 20% 源长
+_VERIFY_LONG_RATIO = 0.2
 
 
 def _max_out_chars(source: str) -> int:
@@ -104,8 +111,14 @@ def _max_out_chars(source: str) -> int:
 
 
 def _verify_limit(source: str) -> int:
-    """单片校验上限：min(40% 源长, 950)——任务书 40% 钦定为主，
-    950 绝对上限封顶（密集长章节靠级联压缩收敛）"""
+    """单片校验上限：min(40% 源长, 绝对上限)
+
+    绝对上限：短源（≤_VERIFY_LONG_SRC）950 封顶；长源放宽为
+    max(950, 20% 源长)——7-8 千字密集章允许 1400-1600 字（压缩比
+    16-20% 已达标），防"差几十字"误杀高价值章节（两轮实测教训）。
+    """
+    if len(source) > _VERIFY_LONG_SRC:
+        return max(_VERIFY_ABS, int(_VERIFY_LONG_RATIO * len(source)))
     return min(int(_SLIM_RATIO * len(source)), _VERIFY_ABS)
 
 
@@ -420,7 +433,12 @@ def _distill_batch(llm_call, sources: list[str]) -> list[str | None]:
 
 
 def distill_section(llm_call, section: dict) -> str | None:
-    """单章节提炼：大章节切片逐片提炼后拼接；任一片失败返回 None"""
+    """单章节提炼：大章节切片逐片提炼后拼接；任一片失败返回 None
+
+    短片（< _MIN_SECTION_CHARS）幻扩失败时**跳过该片**（不重试）——
+    115 字的命令堆章模型必然扩写（实测 3 轮 206-366 字），烧 token
+    无意义；超短碎片章节在聚合层本就被跳过，此处是切片残片兜底。
+    """
     slices = slice_content(section["content"])
     if len(slices) == 1:
         return _distill_single(llm_call, slices[0])
@@ -428,12 +446,20 @@ def distill_section(llm_call, section: dict) -> str | None:
     for j, piece in enumerate(slices):
         out = _distill_single(llm_call, piece)
         if out is None:
+            if len(piece) < _MIN_SECTION_CHARS:
+                logger.warning(
+                    f"slice {j + 1}/{len(slices)} short-fragment skipped: "
+                    f"{section['title'][:50]}"
+                )
+                continue
             logger.warning(
                 f"slice {j + 1}/{len(slices)} failed: "
                 f"{section['title'][:50]}"
             )
             return None
         outs.append(out)
+    if not outs:
+        return None
     return "\n\n".join(outs)
 
 
