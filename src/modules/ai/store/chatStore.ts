@@ -110,6 +110,14 @@ export type AgentMeta = {
   lastCachedTokens: number;
   hitStepCap: boolean;
   compactionNotice: { droppedCount: number; at: number } | null;
+  /**
+   * 循环进度（T2 循环护栏，2026-08-31 spec add-agent-loop-closure）
+   *
+   * 数据源 sidecar:loop_progress 事件（Python ToolCallLimitHook 每次工具
+   * 调用完成推送 round/tool_count）；invoke 期间 AgentStatusPill 显示
+   * "第 N 轮 · 已用工具 M"，新一轮 thinking 时清空。
+   */
+  loopProgress: { round: number; toolCount: number } | null;
 };
 
 const ZERO_USAGE: AgentUsage = {
@@ -128,6 +136,7 @@ const IDLE_META: AgentMeta = {
   lastCachedTokens: 0,
   hitStepCap: false,
   compactionNotice: null,
+  loopProgress: null,
 };
 
 export type MiniState = {

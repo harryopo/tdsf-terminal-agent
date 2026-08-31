@@ -419,7 +419,14 @@ export function useAiLiveBridge(params: Params) {
       const { useTodosStore } = await import("../store/todoStore");
       unlistenTodos = await listen<{
         sessionId: string;
-        todos: Array<{ id: string; title: string; description?: string; status: string }>;
+        // T3 (2026-08-31): completedAt 完成时间由 Python todo_write 自动维护
+        todos: Array<{
+          id: string;
+          title: string;
+          description?: string;
+          status: string;
+          completedAt?: string | null;
+        }>;
       }>("sidecar:update_todos", (event) => {
         const { sessionId, todos } = event.payload;
         if (!sessionId || !Array.isArray(todos)) return;

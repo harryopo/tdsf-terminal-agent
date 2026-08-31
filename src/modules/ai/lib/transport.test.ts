@@ -5,8 +5,19 @@
  *   1. formatEnvBlock: env 块生成（cwd/activeFile/workspaceRoot/private/ssh）
  *   2. stripContextBlock: terminal-context 块剥离
  *   3. formatEnvBlock 空 live 返回 null
+ *   4. T4 (2026-08-31, spec add-agent-loop-closure): 每轮记忆主动召回——
+ *      <recalled-memory> 格式化 / 与首轮 <session-memory> 去重 / 3s 超时跳过
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// T4 记忆召回测试需要 mock Tauri invoke（检索走 knowledge.search_full）。
+// mock 必须在 import 之前（vitest 自动 hoist）；纯函数用例不受影响
+// （formatEnvBlock 等不触达 invoke）。
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
+import { invoke } from "@tauri-apps/api/core";
 import {
   CONTEXT_BLOCK_RE,
   formatEnvBlock,
@@ -18,6 +29,10 @@ import {
   TERMINAL_HISTORY_MAX_BLOCKS,
   // TDSF 2026-08-31 (问题1修复): connection_mode 三态判定
   resolveConnectionMode,
+  // T4 (2026-08-31): 每轮记忆主动召回
+  fetchRecalledMemory,
+  formatMemoryHintBlock,
+  type KnowledgeSearchResult,
 } from "./transport";
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 import type { EnvironmentProbe } from "../store/chatStore";
@@ -397,5 +412,147 @@ describe("formatTerminalHistoryBlock — <terminal-history> 分区", () => {
     const block = formatTerminalHistoryBlock([makeBlock({ outputTail: longTail })]);
     expect(block).toContain(`${"y".repeat(160)}…`);
     expect(block).not.toContain("y".repeat(200));
+  });
+});
+
+// ============================================================================
+// T4 (2026-08-31, spec add-agent-loop-closure Task 4): 每轮记忆主动召回
+// ============================================================================
+
+const makeEntry = (
+  over: Partial<KnowledgeSearchResult> = {},
+): KnowledgeSearchResult => ({
+  id: "case-1",
+  source: "session-case",
+  title: "案例：nginx 502 排障",
+  content: "## 现象\n502 Bad Gateway\n## 结论\nupstream 超时",
+  ...over,
+});
+
+describe("formatMemoryHintBlock — T4 召回块格式化", () => {
+  it("recalled kind 输出 <recalled-memory> 块（标题 + 内容 + ids）", () => {
+    const r = formatMemoryHintBlock([makeEntry()], {
+      kind: "recalled",
+      topK: 3,
+    });
+    expect(r).not.toBeNull();
+    expect(r!.block).toContain("<recalled-memory>");
+    // 标注"自动召回"——与首轮 <session-memory>（会话级摘要）明确区分
+    expect(r!.block).toContain("相关历史案例（自动召回）");
+    expect(r!.block).toContain("《案例：nginx 502 排障》");
+    expect(r!.block).toContain("502 Bad Gateway");
+    expect(r!.block).toContain("</recalled-memory>");
+    expect(r!.ids).toEqual(["case-1"]);
+  });
+
+  it("与首轮 <session-memory> 职责区分：session kind 保持 T14 标签与文案", () => {
+    const r = formatMemoryHintBlock([makeEntry()], {
+      kind: "session",
+      topK: 3,
+    });
+    expect(r!.block).toContain("<session-memory>");
+    expect(r!.block).not.toContain("<recalled-memory>");
+    expect(r!.block).toContain("过往会话沉淀的相关记忆");
+    expect(r!.block).toContain("</session-memory>");
+  });
+
+  it("空结果不注入 → null（分区整体省略）", () => {
+    expect(
+      formatMemoryHintBlock([], { kind: "recalled", topK: 3 }),
+    ).toBeNull();
+  });
+
+  it("与首轮去重：excludeIds 命中即跳过；全命中 → null", () => {
+    // 部分命中：只注入未命中的条目
+    const r = formatMemoryHintBlock(
+      [makeEntry({ id: "a" }), makeEntry({ id: "b" })],
+      { kind: "recalled", topK: 3, excludeIds: new Set(["a"]) },
+    );
+    expect(r).not.toBeNull();
+    expect(r!.ids).toEqual(["b"]);
+    // 全部命中去重 → 不注入（不输出空块）
+    expect(
+      formatMemoryHintBlock([makeEntry({ id: "a" })], {
+        kind: "recalled",
+        topK: 3,
+        excludeIds: new Set(["a"]),
+      }),
+    ).toBeNull();
+  });
+
+  it("topK 截断：超过上限只注入前 topK 条", () => {
+    const entries = ["a", "b", "c", "d"].map((id) => makeEntry({ id }));
+    const r = formatMemoryHintBlock(entries, { kind: "recalled", topK: 3 });
+    expect(r!.ids).toEqual(["a", "b", "c"]);
+  });
+
+  it("单条内容超 220 字符截断加省略号", () => {
+    const r = formatMemoryHintBlock(
+      [makeEntry({ content: "x".repeat(300) })],
+      { kind: "recalled", topK: 3 },
+    );
+    expect(r!.block).toContain(`${"x".repeat(220)}…`);
+    expect(r!.block).not.toContain(`${"x".repeat(221)}`);
+  });
+});
+
+describe("fetchRecalledMemory — 检索/超时/去重（mock invoke）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("检索命中会话沉淀条目 → 返回 <recalled-memory> 块与 ids", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      results: [
+        makeEntry({ id: "c1", source: "session-memory" }),
+        // 非会话沉淀条目（教学语料）不注入
+        makeEntry({ id: "c2", source: "linux-ops-doc" }),
+      ],
+    });
+    const r = await fetchRecalledMemory("nginx 502 怎么排查", new Set());
+    expect(r).not.toBeNull();
+    expect(r!.ids).toEqual(["c1"]);
+    expect(r!.block).toContain("<recalled-memory>");
+    // 检索参数：query=当前消息 + limit=top3*2（source 过滤前的池子）
+    expect(invoke).toHaveBeenCalledWith("ipc_invoke", {
+      method: "knowledge.search_full",
+      params: { query: "nginx 502 怎么排查", limit: 6 },
+    });
+  });
+
+  it("3s 超时静默跳过 → null（不阻塞对话）", async () => {
+    vi.useFakeTimers();
+    // invoke 永不 resolve（模拟 sidecar 检索卡死）
+    vi.mocked(invoke).mockImplementation(
+      () => new Promise(() => {}) as never,
+    );
+    const pending = fetchRecalledMemory("查询", new Set());
+    // 推进 3s 触发 Promise.race 超时分支
+    await vi.advanceTimersByTimeAsync(3000);
+    const r = await pending;
+    expect(r).toBeNull();
+  });
+
+  it("检索失败（invoke reject）→ null（静默降级）", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("sidecar not ready"));
+    expect(await fetchRecalledMemory("x", new Set())).toBeNull();
+  });
+
+  it("空文本（trim 后为空）不发起检索 → null", async () => {
+    expect(await fetchRecalledMemory("   ", new Set())).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("命中条目与 excludeIds（首轮已注入）全部重复 → null（去重生效）", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      results: [makeEntry({ id: "dup-1" })],
+    });
+    expect(
+      await fetchRecalledMemory("nginx 502", new Set(["dup-1"])),
+    ).toBeNull();
   });
 });

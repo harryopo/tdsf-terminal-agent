@@ -18,6 +18,30 @@ type Props = { sessionId: string | null };
 
 const EMPTY_TODOS: Todo[] = [];
 
+/**
+ * T3 规划-执行回环: completedAt（ISO 8601）→ 展示文案（"HH:MM"，跨天补日期）
+ *
+ * 解析失败 / 空值返回 null（不渲染时间戳）。
+ */
+function formatCompletedAt(completedAt?: string | null): string | null {
+  if (!completedAt) return null;
+  const date = new Date(completedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  const now = new Date();
+  const hm = `${String(date.getHours()).padStart(2, "0")}:${String(
+    date.getMinutes(),
+  ).padStart(2, "0")}`;
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (sameDay) return hm;
+  const md = `${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+  return `${md} ${hm}`;
+}
+
 export function TodoStrip({ sessionId }: Props) {
   const hydrate = useTodosStore((s) => s.hydrate);
   const todos =
@@ -55,6 +79,10 @@ export function TodoStrip({ sessionId }: Props) {
 
 function TodoRow({ todo }: { todo: Todo }) {
   const isInProgress = todo.status === "in_progress";
+  // T3 规划-执行回环: 完成项显示完成时间小字（Python todo_write 自动维护
+  // completedAt，ISO 8601；旧数据/未完成项无此字段不显示）
+  const completedAtLabel =
+    todo.status === "completed" ? formatCompletedAt(todo.completedAt) : null;
   const row = (
     <li
       className={cn(
@@ -86,6 +114,15 @@ function TodoRow({ todo }: { todo: Todo }) {
       >
         {todo.title}
       </span>
+      {completedAtLabel && (
+        <span
+          data-testid="todo-completed-at"
+          className="ml-auto shrink-0 self-center font-mono text-[9.5px] tabular-nums text-muted-foreground/50"
+          title={`完成于 ${completedAtLabel}`}
+        >
+          {completedAtLabel}
+        </span>
+      )}
     </li>
   );
 

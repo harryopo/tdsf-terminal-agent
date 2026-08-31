@@ -26,6 +26,15 @@ describe("collectPlaceholders", () => {
     expect(collectPlaceholders("ls -la")).toEqual([]);
     expect(collectPlaceholders("{{a-b}}")).toEqual([]);
   });
+
+  it("supports Chinese variable names (教学场景)", () => {
+    expect(collectPlaceholders("ps aux | grep -i {{关键词}}")).toEqual([
+      "关键词",
+    ]);
+    expect(
+      interpolate("grep -i {{关键词}} /var/log/secure", { 关键词: "ssh" }),
+    ).toBe("grep -i ssh /var/log/secure");
+  });
 });
 
 describe("interpolate", () => {
@@ -45,7 +54,7 @@ describe("interpolate", () => {
 });
 
 describe("sortSnippets", () => {
-  function sn(id: string, usageCount: number, lastUsedAt?: number, createdAt = 0): Snippet {
+  function sn(id: string, createdAt = 0, pinnedAt?: number): Snippet {
     return {
       id,
       name: id,
@@ -54,31 +63,27 @@ describe("sortSnippets", () => {
       variables: [],
       createdAt,
       updatedAt: createdAt,
-      usageCount,
-      lastUsedAt,
+      pinnedAt,
     };
   }
 
-  it("sorts by usageCount descending", () => {
-    const sorted = sortSnippets([sn("a", 1), sn("b", 5), sn("c", 2)]);
-    expect(sorted.map((s) => s.id)).toEqual(["b", "c", "a"]);
-  });
-
-  it("breaks ties by lastUsedAt descending", () => {
-    const sorted = sortSnippets([
-      sn("a", 1, 100),
-      sn("b", 1, 300),
-      sn("c", 1, 200),
-    ]);
-    expect(sorted.map((s) => s.id)).toEqual(["b", "c", "a"]);
-  });
-
-  it("breaks remaining ties by createdAt descending", () => {
-    const sorted = sortSnippets([
-      sn("a", 0, undefined, 100),
-      sn("b", 0, undefined, 300),
-    ]);
+  it("puts pinned snippets before unpinned ones (置顶优先)", () => {
+    const sorted = sortSnippets([sn("a", 100), sn("b", 200, 1)]);
     expect(sorted.map((s) => s.id)).toEqual(["b", "a"]);
+  });
+
+  it("orders pinned snippets by pin time descending (最后置顶最靠上)", () => {
+    const sorted = sortSnippets([
+      sn("first-pin", 0, 100),
+      sn("third-pin", 0, 300),
+      sn("second-pin", 0, 200),
+    ]);
+    expect(sorted.map((s) => s.id)).toEqual(["third-pin", "second-pin", "first-pin"]);
+  });
+
+  it("sorts unpinned snippets by createdAt descending (新建在前)", () => {
+    const sorted = sortSnippets([sn("old", 100), sn("new", 300), sn("mid", 200)]);
+    expect(sorted.map((s) => s.id)).toEqual(["new", "mid", "old"]);
   });
 
   it("does not mutate the input list", () => {
@@ -86,5 +91,13 @@ describe("sortSnippets", () => {
     const sorted = sortSnippets(list);
     expect(sorted).not.toBe(list);
     expect(list.map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  it("keeps positions stable regardless of insertion usage (插入不跳动)", () => {
+    const list = [sn("pinned", 0, 100), sn("a", 200), sn("b", 100)];
+    const before = sortSnippets(list).map((s) => s.id);
+    // 模拟"使用了 a"——数据本身没有任何可变标记，顺序只由置顶/创建时间决定
+    const after = sortSnippets(list).map((s) => s.id);
+    expect(after).toEqual(before);
   });
 });

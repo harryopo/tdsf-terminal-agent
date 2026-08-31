@@ -164,6 +164,13 @@ type Deps = {
    * Vercel SDK 路径不需要此回调（status 由 streamText 内部状态推断）
    */
   onMood?: (mood: string) => void;
+  /**
+   * 循环进度回调（T2 循环护栏，sidecar 路径专用）
+   *
+   * Python ToolCallLimitHook 每次工具调用完成推送（第 N 轮 / 已用工具 M），
+   * 用于更新 agentMeta.loopProgress（AgentStatusPill 进度显示）
+   */
+  onLoopProgress?: (progress: { round: number; toolCount: number }) => void;
 };
 
 type SendOptions = {
@@ -204,15 +211,29 @@ export function createContextAwareTransport(deps: Deps) {
     // （只在首条 user 消息时检索一次，后续轮次不重复注入，控制 token 开销）
     const isFirstTurn =
       options.messages.filter((m) => m.role === "user").length === 1;
-    const memoryBlock = isFirstTurn
-      ? await fetchMemoryHints(extractLastUserText(options.messages))
+    const lastUserText = extractLastUserText(options.messages);
+    const firstMemory = isFirstTurn
+      ? await fetchMemoryHints(lastUserText)
       : null;
+    const memoryBlock = firstMemory?.block ?? null;
+    // T4 (2026-08-31, spec add-agent-loop-closure): 每轮记忆主动召回——
+    // 每条 user 消息发送时检索 top-3 相关历史案例注入 <recalled-memory>。
+    // 与首轮 <session-memory>（会话级开场摘要，一次性）职责区分：这是
+    // 与当前消息语义相关的持续召回（3s 超时静默；空结果/全被去重不注入）。
+    // 首轮召回 query 与首条消息相同 → 命中即首轮已注入的同 id 条目 →
+    // 自然去重为空，不会重复注入。
+    const recalledMemory = await fetchRecalledMemory(
+      lastUserText,
+      new Set(firstMemory?.ids ?? []),
+    );
+    const recalledBlock = recalledMemory?.block ?? null;
     const contextBlock = [
       envBlock,
       environmentBlock,
       terminalBlock,
       historyBlock,
       memoryBlock,
+      recalledBlock,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -253,6 +274,7 @@ export function createContextAwareTransport(deps: Deps) {
         abortSignal: options.abortSignal,
         onStep: deps.onStep,
         onMood: deps.onMood,
+        onLoopProgress: deps.onLoopProgress,
         onUsage: deps.onUsage
           ? (delta) =>
               deps.onUsage?.({
@@ -336,7 +358,17 @@ function extractLastUserText(messages: UIMessage[]): string {
 
 // ============================================================================
 // T14 (2026-08-28): 新会话开场检索注入相关历史（会话记忆）
+// T4 (2026-08-31, spec add-agent-loop-closure): 每轮记忆主动召回
 // ============================================================================
+//
+// 两条注入链路的职责区分（命名即契约，勿混用）：
+//   <session-memory>  首轮一次——会话级开场记忆摘要（T14）：新会话首条
+//                     user 消息触发一次检索，注入"过往会话沉淀的相关记忆"
+//                     给 agent 开场上下文；后续轮次不重复注入（控 token）。
+//   <recalled-memory>  每轮召回——与当前消息语义相关的历史案例（T4）：
+//                     每条 user 消息发送时检索 top-3（source 同
+//                     session-memory/session-case），注入"相关历史案例
+//                     （自动召回）"；与首轮已注入内容同 id 去重。
 
 /** 开场记忆检索超时（ms）——超时静默跳过，绝不阻塞首响 */
 const MEMORY_HINTS_TIMEOUT_MS = 3000;
@@ -344,12 +376,104 @@ const MEMORY_HINTS_TIMEOUT_MS = 3000;
 const MEMORY_HINTS_TOP_K = 3;
 const MEMORY_HINTS_SNIPPET_CHARS = 220;
 
-type KnowledgeSearchResult = {
+/** T4: 每轮召回超时/条数（与首轮对齐：3s 超时静默、top-3） */
+const RECALLED_MEMORY_TIMEOUT_MS = 3000;
+const RECALLED_MEMORY_TOP_K = 3;
+
+export type KnowledgeSearchResult = {
   id: string;
   source: string;
   title: string;
   content: string;
 };
+
+/** 记忆注入块格式化结果：block = 拼好的分区文本；ids = 已注入条目 id（去重用） */
+export type MemoryHintBlock = {
+  block: string;
+  ids: string[];
+};
+
+/**
+ * 检索决策库中的会话沉淀条目（T14/T4 公共检索层）
+ *
+ * source = session-memory（T14 会话摘要）/ session-case（排障案例），
+ * 走 knowledge.search_full（会话沉淀只存在全量库，精简库无此类条目）。
+ * 超时（timeoutMs）/失败/空 → []（静默，不阻塞对话）。
+ */
+async function searchSessionMemoryEntries(
+  userText: string,
+  timeoutMs: number,
+  limit: number,
+): Promise<KnowledgeSearchResult[]> {
+  const query = userText.trim().slice(0, 200);
+  if (!query) return [];
+  try {
+    const r = await Promise.race([
+      invoke<{ results: KnowledgeSearchResult[] }>("ipc_invoke", {
+        // TDSF 2026-08-31 双库：knowledge.search 主读精简库（无会话沉淀条目），
+        // 会话记忆只存在全量库 → 走 knowledge.search_full
+        method: "knowledge.search_full",
+        params: { query, limit },
+      }),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), timeoutMs),
+      ),
+    ]);
+    if (!r?.results?.length) return [];
+    // 只注入会话沉淀类条目，避免把整篇教学语料灌进上下文
+    return r.results.filter(
+      (e) => e.source === "session-memory" || e.source === "session-case",
+    );
+  } catch {
+    // 静默：sidecar 未就绪 / 检索失败都不应影响对话
+    return [];
+  }
+}
+
+/**
+ * 把检索命中的会话沉淀条目格式化为注入块（T14/T4 公共格式化层）
+ *
+ * - kind="session"（首轮）：`<session-memory>` 会话级开场记忆摘要
+ * - kind="recalled"（每轮）：`<recalled-memory>` 相关历史案例（自动召回）
+ * - excludeIds：已注入过的条目 id（同 id 去重，防与首轮重复）
+ * - 无可注入条目（空/全被去重）→ null（分区整体省略）
+ *
+ * 导出供 transport.test.ts 单测（格式/去重/空结果语义）。
+ */
+export function formatMemoryHintBlock(
+  entries: KnowledgeSearchResult[],
+  opts: {
+    kind: "session" | "recalled";
+    topK: number;
+    excludeIds?: ReadonlySet<string>;
+  },
+): MemoryHintBlock | null {
+  const hints = entries
+    .filter((e) => !(opts.excludeIds ?? new Set<string>()).has(e.id))
+    .slice(0, opts.topK);
+  if (!hints.length) return null;
+
+  const lines = hints.map(
+    (e, i) =>
+      `${i + 1}. 《${e.title}》${e.content.slice(0, MEMORY_HINTS_SNIPPET_CHARS)}${
+        e.content.length > MEMORY_HINTS_SNIPPET_CHARS ? "…" : ""
+      }`,
+  );
+  const [tag, header] =
+    opts.kind === "session"
+      ? [
+          "<session-memory>",
+          "以下是过往会话沉淀的相关记忆，供参考（与当前问题无关请忽略）：",
+        ]
+      : [
+          "<recalled-memory>",
+          "以下是相关历史案例（自动召回），与当前消息相关时供参考（无关请忽略）：",
+        ];
+  return {
+    block: [tag, header, ...lines, `</${tag.slice(1, -1)}>`].join("\n"),
+    ids: hints.map((h) => h.id),
+  };
+}
 
 /**
  * 新会话首轮：用用户首条消息检索决策库中的历史会话记忆
@@ -358,49 +482,47 @@ type KnowledgeSearchResult = {
  *
  * 失败/超时/无命中 → null（静默，不阻塞对话）。
  */
-async function fetchMemoryHints(firstUserText: string): Promise<string | null> {
-  const query = firstUserText.trim().slice(0, 200);
-  if (!query) return null;
-  try {
-    const r = await Promise.race([
-      invoke<{ results: KnowledgeSearchResult[] }>("ipc_invoke", {
-        // TDSF 2026-08-31 双库：knowledge.search 主读精简库（无会话沉淀条目），
-        // 会话记忆只存在全量库 → 走 knowledge.search_full
-        method: "knowledge.search_full",
-        params: { query, limit: MEMORY_HINTS_TOP_K * 2 },
-      }),
-      new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), MEMORY_HINTS_TIMEOUT_MS),
-      ),
-    ]);
-    if (!r?.results?.length) return null;
+async function fetchMemoryHints(
+  firstUserText: string,
+): Promise<MemoryHintBlock | null> {
+  const entries = await searchSessionMemoryEntries(
+    firstUserText,
+    MEMORY_HINTS_TIMEOUT_MS,
+    MEMORY_HINTS_TOP_K * 2,
+  );
+  return formatMemoryHintBlock(entries, {
+    kind: "session",
+    topK: MEMORY_HINTS_TOP_K,
+  });
+}
 
-    // 只注入会话沉淀类条目（session-memory = T14 摘要；session-case = 排障案例），
-    // 避免把整篇教学语料灌进首轮上下文
-    const hints = r.results
-      .filter(
-        (e) =>
-          e.source === "session-memory" || e.source === "session-case",
-      )
-      .slice(0, MEMORY_HINTS_TOP_K);
-    if (!hints.length) return null;
-
-    const lines = hints.map(
-      (e, i) =>
-        `${i + 1}. 《${e.title}》${e.content.slice(0, MEMORY_HINTS_SNIPPET_CHARS)}${
-          e.content.length > MEMORY_HINTS_SNIPPET_CHARS ? "…" : ""
-        }`,
-    );
-    return [
-      "<session-memory>",
-      "以下是过往会话沉淀的相关记忆，供参考（与当前问题无关请忽略）：",
-      ...lines,
-      "</session-memory>",
-    ].join("\n");
-  } catch {
-    // 静默：sidecar 未就绪 / 检索失败都不应影响首响
-    return null;
-  }
+/**
+ * T4 记忆主动召回（每轮）：用当前 user 消息检索 top-3 相关历史案例
+ *
+ * 与首轮 fetchMemoryHints 的职责差异（spec add-agent-loop-closure Task 4）：
+ * - 首轮 <session-memory> = 会话级开场摘要（一次性，给 agent 开场上下文）；
+ * - 每轮 <recalled-memory> = 与当前消息语义相关的历史案例（持续召回，
+ *   行动→记忆断点修复：agent 每轮都能参考相似排障案例，不只首轮）。
+ * - 同 id 去重：首轮已注入的条目不再重复注入。
+ *
+ * 失败/超时(3s)/无命中/全被去重 → null（静默，不阻塞对话）。
+ *
+ * 导出供 transport.test.ts 单测（超时跳过/空结果语义）。
+ */
+export async function fetchRecalledMemory(
+  userText: string,
+  excludeIds: ReadonlySet<string>,
+): Promise<MemoryHintBlock | null> {
+  const entries = await searchSessionMemoryEntries(
+    userText,
+    RECALLED_MEMORY_TIMEOUT_MS,
+    RECALLED_MEMORY_TOP_K * 2,
+  );
+  return formatMemoryHintBlock(entries, {
+    kind: "recalled",
+    topK: RECALLED_MEMORY_TOP_K,
+    excludeIds,
+  });
 }
 
 /**

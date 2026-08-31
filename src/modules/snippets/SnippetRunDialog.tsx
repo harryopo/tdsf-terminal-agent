@@ -4,7 +4,7 @@
 //   - 内置变量 {{cwd}}: 自动解析为当前活动终端目录（只读展示）
 //   - 自定义变量 {{name}}: 输入框（预填 defaultValue）
 //   - 实时预览插值后的最终命令（mono 字体）
-//   - 确认 → onInsertCommand(final) + recordUsage(id)
+//   - 确认 → onInsertCommand(final)
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,11 +23,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { BUILTIN_VARS, type Snippet } from "./types";
-import {
-  collectPlaceholders,
-  interpolate,
-  useSnippetsStore,
-} from "./lib/snippetStore";
+import { collectPlaceholders, interpolate } from "./lib/snippetStore";
 
 interface Props {
   snippet: Snippet;
@@ -83,7 +79,6 @@ export function SnippetRunDialog({
     if (!canInsert) return;
     const ok = onInsertCommand(finalCommand);
     if (ok) {
-      useSnippetsStore.getState().recordUsage(snippet.id);
       onOpenChange(false);
     } else {
       toast.error("没有活动的终端，无法插入片段");

@@ -2,7 +2,7 @@
  * snippets/types.ts — 代码片段数据模型
  *
  * P2 代码片段管理（方案书 v1.1 §5）：常用 Linux 命令片段一键插入终端。
- * 支持标签分组、自定义变量插值（{{name}}）、使用次数排序（Frecency）。
+ * 支持标签分组、自定义变量插值（{{name}}）、置顶排序（最后置顶最靠上）。
  */
 
 /** 片段自定义变量定义（{{name}} 占位符） */
@@ -29,9 +29,8 @@ export interface Snippet {
   variables: SnippetVar[];
   createdAt: number;
   updatedAt: number;
-  /** 使用次数（Frecency 排序） */
-  usageCount: number;
-  lastUsedAt?: number;
+  /** 置顶时间戳（存在即置顶；列表按置顶先后排列，最后置顶的最靠上） */
+  pinnedAt?: number;
 }
 
 /** 内置变量（插入时自动解析，无需用户填写） */
