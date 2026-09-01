@@ -29,6 +29,17 @@ export type EntryRowProps = {
   onSelectPath: (path: string) => void;
   gitStatusCode?: GitStatusCode | null;
   gitignored?: boolean;
+  /**
+   * TDSF 魔改 2026-08-31: HTML5 拖拽源——文件/目录行可拖到 AI 对话框
+   * (attach 引用)。本地行写 application/x-tdsf-path, 远程行写
+   * application/x-tdsf-remote, 由 FileExplorer 注入。
+   */
+  onDragStartRow?: (
+    e: React.DragEvent,
+    path: string,
+    name: string,
+    isDir: boolean,
+  ) => void;
 };
 
 function EntryRowImpl(props: EntryRowProps) {
@@ -47,6 +58,7 @@ function EntryRowImpl(props: EntryRowProps) {
     onSelectPath,
     gitStatusCode,
     gitignored = false,
+    onDragStartRow,
   } = props;
 
   const iconUrl = isDir ? folderIconUrl(name, isExpanded) : fileIconUrl(name);
@@ -84,6 +96,12 @@ function EntryRowImpl(props: EntryRowProps) {
     <button
       type="button"
       data-fs-path={path}
+      draggable={onDragStartRow != null}
+      onDragStart={
+        onDragStartRow
+          ? (e) => onDragStartRow(e, path, name, isDir)
+          : undefined
+      }
       onClick={handleClick}
       onDoubleClick={() => !isDir && actions.beginRename(path)}
       className={cn(

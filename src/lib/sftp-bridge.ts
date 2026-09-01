@@ -177,6 +177,26 @@ export async function sftpRename(
   await invoke('sftp_rename', { sessionId, from, to });
 }
 
+/**
+ * 上传本地文件到远程 (TDSF 魔改 2026-08-31: 资源管理器上传功能)
+ *
+ * Rust 端 param_complete::sftp_upload_file: 读盘 + SFTP 写都在 Rust 完成,
+ * 前端只传路径, 大文件不经 IPC 搬运字节 (区别于 sftpWrite 的 number[] 中转)。
+ *
+ * @returns 上传字节数
+ */
+export async function sftpUploadFile(
+  sessionId: number,
+  localPath: string,
+  remotePath: string,
+): Promise<number> {
+  return invoke<number>('sftp_upload_file', {
+    sessionId,
+    localPath,
+    remotePath,
+  });
+}
+
 // === 辅助函数 ================================================================
 
 /**
