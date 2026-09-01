@@ -73,6 +73,33 @@ export const AGENT_MODE_META: Record<
   },
 };
 
+/**
+ * 四档模式强调色（用户钦定 2026-09-01：观察=黄 / 确认=绿 / 自动=红 / 教学=紫）。
+ * 单一真源——AgentModeSwitcher 卡片、AgentStatusPill 徽章等统一消费，
+ * 保证同一模式在任何 UI 处颜色一致。
+ */
+export const AGENT_MODE_ACCENT: Record<
+  AgentMode,
+  { text: string; softBg: string }
+> = {
+  observe: {
+    text: "text-amber-500 dark:text-amber-400",
+    softBg: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  },
+  confirm: {
+    text: "text-emerald-500 dark:text-emerald-400",
+    softBg: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  },
+  auto: {
+    text: "text-red-500 dark:text-red-400",
+    softBg: "bg-red-500/10 text-red-600 dark:text-red-400",
+  },
+  teach: {
+    text: "text-violet-500 dark:text-violet-400",
+    softBg: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  },
+};
+
 /** 类型守卫：字符串是否为合法 AgentMode（会话元数据反序列化用） */
 export function isAgentMode(v: string): v is AgentMode {
   return v === "observe" || v === "confirm" || v === "auto" || v === "teach";

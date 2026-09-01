@@ -32,7 +32,12 @@ import {
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AGENT_MODES, AGENT_MODE_META, type AgentMode } from "../agents/registry";
+import {
+  AGENT_MODES,
+  AGENT_MODE_ACCENT,
+  AGENT_MODE_META,
+  type AgentMode,
+} from "../agents/registry";
 import { useChatStore } from "../store/chatStore";
 
 /** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电 / 教学=书，与 AgentStatusPill 一致） */
@@ -43,11 +48,9 @@ const MODE_ICON: Record<AgentMode, typeof EyeIcon> = {
   teach: BookOpen01Icon,
 };
 
-/** 模式强调色（教学档 violet，其余 emerald——与激活 pill/说明色一致） */
+/** 模式强调色（用户钦定 2026-09-01：观察黄/确认绿/自动红/教学紫，单一真源 registry） */
 function accentColorClass(mode: AgentMode): string {
-  return mode === "teach"
-    ? "text-violet-500 dark:text-violet-400"
-    : "text-emerald-500 dark:text-emerald-400";
+  return AGENT_MODE_ACCENT[mode].text;
 }
 
 /** 卡片定位状态：top（向下弹）或 bottom（向上弹）二选一；
