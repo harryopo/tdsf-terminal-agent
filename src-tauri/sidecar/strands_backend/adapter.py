@@ -116,19 +116,17 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- network_diagnose(mode, target, count, port, ssh_session_id): 网络诊断\n"
     "- skill_invoke(skill_name, input): 调用已注册的 Skill 获取领域知识或执行特定任务\n"
     f"  可用 Skill: {_skill_names_line()}\n"
-    "  何时使用: 用户询问特定领域知识时、"
-    "需要查阅权威操作步骤时、需要执行预定义脚本时\n"
+    "  何时使用: 领域知识/权威操作步骤/预定义脚本类需求\n"
     "- suggest_command(intent, target_os): 根据用户意图生成一条可执行的 Linux 命令及解释\n"
-    "  何时使用: 用户想要执行某个操作但不知道具体命令时（如\"查看系统负载\"\"列出当前目录\"）\n"
-    "  注意: 生成命令后不要自动执行，等待用户确认；前端会展示 Insert 按钮供用户一键插入终端\n"
+    "  何时使用: 用户想执行某个操作但不知道具体命令时\n"
+    "  注意: 生成后不自动执行，等用户确认；前端有 Insert 一键插入终端\n"
     "- knowledge_search(query, limit): 检索内置 Linux 教学知识库（中文提炼知识点，RAG 混合检索）\n"
     "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n"
-    "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需要全文/完整配置示例时用，url 取自检索结果的 url 字段）\n"
+    "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需全文/完整配置示例时用；url 取自检索结果）\n"
     # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具指引
     # ——多文件交叉统计/复杂解析/批量操作一段代码一次完成
     "- python_run(code): 在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）\n"
-    "  何时使用: 多文件交叉统计、复杂解析、批量操作时，写一段 Python 一次完成；"
-    "本地工作区可用（SSH 会话下不可用，会返回 error）\n\n"
+    "  何时使用: 多文件统计/复杂解析/批量操作一次完成；仅本地工作区可用（SSH 下报 error）\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
     # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
@@ -152,15 +150,16 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 安全拦截诚实条款：若命令被 RiskGuard 拦截、needs_you 审批被拒、或工具上下文出现"
     "\"[TDSF] 最近被安全拦截的命令（未执行）\"提示，必须如实告知用户该命令未执行；"
     "严禁编造执行结果或假装命令已运行；应主动给出替代方案（更安全的拆分步骤或让用户手动执行）。\n"
-    "- 工具返回 status=unavailable 时，说明 RustBridge 未配置，"
-    "应告知用户当前为只读模式。\n"
-    "- live_context 显示\"未打开任何工作区\"时，告知用户先创建工作区（本地/WSL/SSH），"
-    "不要声称本地诊断工具可用。\n"
+    "- 工具返回 unavailable = RustBridge 未配置，告知用户当前为只读模式。\n"
+    "- 未打开工作区时告知用户先创建（本地/WSL/SSH），勿声称本地诊断工具可用。\n"
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"
     "- skill_invoke 返回 content 字段时是知识卡模式（参考内容），返回 stdout 字段时是 executor 模式（已执行）。\n"
     "- 使用 suggest_command 后，向用户说明命令作用并提示可点击 Insert 插入终端执行。\n"
     # TDSF 2026-08-31 (问题2修复): 用户实测反馈回答含大量 emoji（👋💻🔧📚）。
-    "- 格式约束：回答避免使用 emoji（用户明确要求时除外）；用纯文本或 markdown 结构化表达。\n"
+    # 2026-09-01 (用户实测): 目录树/架构图被写进普通段落，等宽对齐全毁——
+    # 强制 fenced code block。
+    "- 格式约束：回答避免使用 emoji（用户明确要求时除外）；用纯文本或 markdown 结构化表达；"
+    "目录树/架构图/流程图一律放 ``` 围栏代码块保持等宽对齐，禁止写进普通段落。\n"
     "- 回答用中文，简洁明了，给出可执行建议。\n"
     "\n"
     "Task planning:\n"
@@ -168,9 +167,9 @@ _DEFAULT_SYSTEM_PROMPT = (
     # ≥3 步任务先建清单再行动（TodoStrip 可见），完成即更新驱动执行回环；
     # 单步/澄清类明确豁免，防简单问答被清单仪式拖慢。
     "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单再行动，让用户看到你的规划。\n"
-    "- 每完成一项立即用 todo_write 更新状态为 completed，再推进下一项。\n"
+    "- 每完成一项立即 todo_write 更新 completed 再推进。\n"
     # T6 剧本 (2026-08-31): skill_invoke 命中带 steps 剧本的技能时按剧本执行
-    "- skill_invoke 返回 playbook_text 时，按其步骤顺序执行，每步完成后用工具验证成功判据再推进；步骤已同步进任务清单，完成一步更新一项状态。\n"
+    "- skill_invoke 返回 playbook_text 时按步骤执行，逐步验证并更新任务清单。\n"
     "- 单步问题或澄清类问题无需任务清单，直接回答。\n"
     "- 任务全部完成后简要总结结果。\n"
     "- 不确定下一步时，向用户提问而不是自行假设。\n"
@@ -178,11 +177,11 @@ _DEFAULT_SYSTEM_PROMPT = (
     # T7 执行后验证回环 (2026-08-31, spec add-agent-loop-closure): 行动约束——
     # 写操作后必须只读验证才能宣告完成（配套收尾检测 _maybe_verify_followup）
     "Post-change verification:\n"
-    "- 凡执行写操作（写文件/执行修改类命令/改配置），必须随后用只读工具验证结果"
-    "（如 systemctl status / cat / ls / 测试命令）才能宣告任务完成；未验证不得声称成功。\n"
+    "- 写操作（写文件/改配置/修改类命令）后必须用只读工具验证"
+    "（systemctl status/cat/ls 等）才能宣告完成；未验证不得声称成功。\n"
     "\n"
     "Decision history:\n"
-    "- 排障前先调 search_history 检索历史案例库，参考之前类似问题的解决方案。\n"
+    "- 排障前先 search_history 检索历史案例，参考类似问题的解法。\n"
     "- 给出建议后调 assess_confidence 评估可信度，让用户了解结论的可靠程度。\n"
 )
 
@@ -703,12 +702,13 @@ class TdsfStrandsCallbackHandler:
 _MODE_PROMPTS: dict[AgentMode, str] = {
     AgentMode.OBSERVE: (
         "\n\nCurrent mode: OBSERVE (read-only).\n"
-        "- 你处于只读观察模式，一切写操作与命令执行被禁止"
-        "（工具集已裁剪为只读白名单，LLM 无法调用不存在的执行工具）。\n"
-        "- 专注解释与教学：读文件/分析日志/检查进程/诊断网络，"
-        "需要执行时用 suggest_command 生成命令并说明作用，等待用户自己执行。\n"
-        "- 不要尝试绕过只读限制；若工具返回 status=command_blocked，"
-        "必须如实报告未执行，严禁编造结果。"
+        "- 只读观察模式：写操作与命令执行被禁止，工具集已裁剪为只读白名单——"
+        "ssh_command 等执行类工具已从 schema 移除，调用会报 Unknown tool；"
+        "此前轮次用过执行类工具也不例外，不要重复尝试。\n"
+        "- 专注解释与教学：读文件/分析日志/检查进程/诊断网络；"
+        "需要执行时用 suggest_command 生成命令并说明作用，等用户自己执行。\n"
+        "- 若工具返回 command_blocked 或 Unknown tool，如实报告未执行，"
+        "严禁编造结果。"
     ),
     AgentMode.CONFIRM: (
         "\n\nCurrent mode: CONFIRM.\n"
@@ -741,7 +741,8 @@ _TEACH_SKIN_PROMPT = (
     "Output contract: 每个板块标题必须用 `## 数字. 标题` 格式，"
     "且标题含板块关键词，例如 `## 1. 概念与原理`、`## 4. 操作示例`、"
     "`## 5. 易错点与考点`——前端按此格式渲染教学卡片，缺编号或缺关键词"
-    "会退化为普通 markdown。\n\n"
+    "会退化为普通 markdown。代码围栏（```)必须成对闭合，未闭合会把"
+    "后续板块渲染成乱码（2026-09-01 用户实测）。\n\n"
     "Constraints:\n"
     "- 讲解命令/概念前，先调 knowledge_search 检索知识库"
     "（命令词源/设计哲学/FHS/90 命令档案），基于权威内容讲解，"
