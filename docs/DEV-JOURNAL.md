@@ -2142,3 +2142,49 @@ P2（中优先级 — 清理 + 文档）：
 
 **复盘**：做对——映射表先用临时脚本从 db dump 生成精确 title 分组再固化（避免手打 Unicode 变体出错）；archwiki 直接复用 db 已有 category 分组而非自造 title 规则；fail-closed 全覆盖校验第一时间抓住"db 已是合并结构"的二跑误操作；RAG 检索冒烟（3 组 query 命中块 → get_doc 聚合 → title_zh）端到端验证。改进——①首次合并未消歧导致返工一轮（应先抽查一份合并文件再全量重建 db，可省一次全量重放）；②任务预期「总块数应明显少于 682」与「复用 _chunk_markdown（1200 字上限）+ 字符不缩水 20%」三者数学上不可兼得（5.1M 字符 ÷1200 ≈ 4300 块下限）——实测 4777 块是检索粒度正确选择（每块 ≤1200 字嵌入覆盖完整 vs 旧整页 12000 字嵌入只看前 2000 字），提前识别并报告可避免预期落差。
 
+### 37.86 Agent 架构闭环升级：方案书 v4.0 → Spec P0（T1-T4）+ P1（T5-T7）（2026-09-01 ✅）
+
+**任务目标**（用户钦定）：参考 DeepSeek Harness 开源框架（"Model + Harness = Agent"），把 agent 从"工具袋"升级为感知→思考→行动→记忆闭环架构。用户先要求出方案书（精简有力不杂糅），后 `/spec` 拍板：**沙箱安全暂缓**（P3 列外），其余按方案书全量实施。
+
+**文档产物**：
+- `docs/agent/方案书-v4.0-Agent架构闭环升级.md`（用户审批原件：明确不做 Cordis 迁移/MCP/子 Agent/RAG 引擎升级/沙箱）
+- `.trae/specs/add-agent-loop-closure/`（spec.md 10 Requirement / tasks.md Task 1-10 分 P0-P1-P2 / checklist.md 三段验收）
+- 12 项架构差距盘点 → 4 个闭环断点（感知→思考实例缓存 key 卷入 mode/teach 丢历史；思考→行动 todo 不驱动执行；行动护栏 ToolCallLimitHook 没挂；行动→记忆无主动召回）+ 3 个"写了没接线"资产（ToolCallLimitHook / long_context.py / SDK context_manager）
+
+**P0 闭环修复（T1-T4，commit 375903d）**：
+- **T1 上下文连续性**：adapter.py 实例缓存 key 收窄为 `(agent_id, session_id, permission_level)`（mode/teach 移出）；新增 `_session_messages` dict 单一真源（invoke 后快照同步）；实例重建时迁移 messages；`context_manager="auto"`（SummarizingConversationManager 0.85 阈值）。**SDK 参数实测教训：任务文档写 conversation_manager，1.53.0 实际是 context_manager（keyword-only）**
+- **T2 循环护栏**：ToolCallLimitHook 真正挂载（MAX_TOOL_CALLS=50，连续失败 3 熔断双通道：event_bus.emit_agent_message + cancel_tool error result）；agent_log 新增 loop_progress 事件；前端 AgentStatusPill 显示"第 N 轮 · 工具 M"
+- **T3 规划回环**：系统提示规划段（≥3 步必须先 todo_write）+ `_maybe_todo_followup` 收尾校验（有未完成 todo → 追加一轮续做提示，会话级 flag 限一次防死循环）；TodoStrip per-item 完成时间戳（当天 HH:MM / 跨天 MM-DD HH:MM，全量替换时按 id→title 兜底合并旧 completedAt）
+- **T4 记忆主动召回**：transport.ts fetchRecalledMemory 每轮注入 `<recalled-memory>`（top-3，3s Promise.race 超时静默跳过，按 content 去重；formatMemoryHintBlock 公共层与首轮会话摘要职责分离）
+
+**P1 真实能力（T5-T7，commit f2db89f，16 文件 +2013 行）**：
+- **T5 python_run PTC**（无沙箱进程级受控版，用户拍板）：`tools/python_run.py` subprocess.run 执行（timeout 30s、stdout/stderr 各截 10KB、cwd=ctx.workspace）；fail-closed 四路（code 缺失/SSH 会话拒绝"仅支持本地工作区"/workspace 不可得/OSError）；registry 注册 ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False)——**审批走三模式管控**（observe 模式写类工具 schema 级裁剪，confirm 模式前端审批，auto 免审），21→22 工具；系统提示补 PTC 用途指引（多文件交叉统计/复杂解析/批量操作优先一次完成）
+- **T6 Skill 剧本化**：parser.py Skill dataclass 新增 `playbook: list[dict]`（frontmatter `steps:` YAML：description/tool_hint/success_criteria，容错跳过缺 description 项）；skill_invoke 命中带剧本技能返回 playbook + playbook_text 并**自动调 todo_write 写入步骤**（`[skill名] i/N 描述`，按 title 去重合并——经 T3 链路驱动 TodoStrip）；两样板：systemd-troubleshoot 五步 / selinux-baseline 四步
+- **T7 验证回环**：registry 写类常量（ssh_command/python_run/service_manage/package_manage/firewall_manage/backup_restore/save_skill）/ 验证类常量（read_remote_file/config_diff/analyze_logs/inspect_processes/network_diagnose/get_terminal_output/knowledge_search 等）；系统提示 Post-change verification 段；`_maybe_verify_followup` 收尾检测（有写无验证 → 追加补验证提示，限一次）；**ssh_command 按命令级细分**（复用 RiskChecker：status/cat/ls 只读命令算验证证据而非写操作，避免纯 SSH 查询误报）
+
+**并行协作教训**：T5 与 T6+T7 用两个并行子代理实施，**同一文件（test_tools.py）一处 Edit 被回退**（竞态）→ 补改；沉淀规则：多代理并行时同文件串行编辑或按文件锁分区。
+
+**门禁**：pytest **2029** 全绿（新增 test_python_run 17 / test_skill_playbook 20 / test_verify_followup 26 / adapter 语境 9 / hook 15 / todo 15）｜vitest src/modules/ai **354** ✅｜typecheck / lint --max-warnings 0 ✅。
+
+**复盘**：做对——"先接线再造轮子"（ToolCallLimitHook/SummarizingConversationManager 全复用 SDK 现成件，自研量极小）；单测先行覆盖熔断/限次/超时/三模式可见性；收尾钩子会话级 flag 限一次从设计上防死循环。改进——①SDK 关键字参数名应先查已装版本源码再写任务书（conversation_manager vs context_manager 浪费一轮排错）；②P1 前端文件（sidecar-adapter/transport/chatRuntime/chatStore）出现行尾假 modified，commit 时按文件清单精确 add 避免混入噪声。**多对话并发警示**：dev-state §37.88 显示另有资源管理器线并行开发（commit d8260e2/b0cdd20），dev-state.md 由多对话并发追加——接手 AI 写入前先 tail 读最新，按文件锁矩阵领地操作（本 agent 线领地 = sidecar 全部 + ai 模块；explorer 线领地 = modules/explorer + sftp-bridge）。
+
+### 37.88 资源管理器模块线（WIP 半成品保存，2026-08-31 ⏳）
+
+**任务**（用户四合一，参考截图 = 其他 SSH 软件）：①资源管理器自定义加载目录（路径栏输入弹子目录建议）②修复 SSH 连接后进 `/` 而非家目录 ③上传（选择+拖拽）④文件拖进 agent 对话框/@ 引用。本对话主攻资源管理器，agent 模块归另一对话。
+
+**调研关键结论**（省下接手者重复探索）：
+1. 家目录问题根因 = `sshStore.connect` 成功后硬编码 `navigateTo(sessionId, '/')`（sshStore.ts:597 旧）。
+2. **远程文件树真数据源是 `useFileTree` 的 fsb_\* 分支**（`fsSource.kind==="sftp"` 时 FileExplorer 内部走 fsb_list 等），`useRemoteFileTree.ts` + `sshStore` 的文件树 actions 是**死代码**——这是本次调研最大的"避免重复造轮子"发现，新功能绝不能加在死代码路径。
+3. 上传零新依赖：拖拽 = Rust 已有 `sftp_upload_file`（Rust 读盘+SFTP 写，Tauri `onDragDropEvent` payload 恰好是本地路径）；选择 = `input[type=file]` + `sftpWrite`（Rust 无 dialog/fs 插件，不引入）。
+4. attach 链路 = window 事件 `tdsf:ai-attach-file` → `composer.attachFileByPath`（`fs_read_file` 仅本地）；App.tsx ssh 分支 `onAttachToAgent` 当前 undefined。
+
+**已做**：`sftp-bridge.ts` 补 `sftpUploadFile`；`sshStore` 连接后 `echo $HOME` 解析家目录（失败降级 `/` + 断开守卫）；`TreeRow.EntryRow` 加 `onDragStartRow?` 拖拽源 prop。WIP commit **b0cdd20**；前三绿过（tsc/lint 0/vitest 1268）。
+
+**报错与坑**：
+- ① **工作区混提交**：我改的 `sshStore.ts` 被另一对话的 commit d8260e2 一并带入（它提交时我的改动还在工作区）——多对话并发下"git status 归属"不可靠，提交前必须 `git diff <file>` 核对内容归属；好在结果正确（我的家目录改动完整入库）。
+- ② `@hugeicons` 图标名用 CJS `require()` 验证全返回 false（包是 ESM），改 `import()` 动态导入验证才准确（最终用 `Upload`/`Import` 系图标存在性确认）。
+
+**复盘**：做对——动工前全链路调研（先确认数据源/上传通道/attach 机制再写码，避免在死代码上开发）；边界冲突用 AskUserQuestion 让用户拍板（composer 最小接收端 vs 全留给 agent 线）；半成品按规范 WIP commit + 交接章固化。待改进——①发现 sshStore 改动被 d8260e2 混提交后应更早核对（是用户要保存记忆时才发现）；②`composer.tsx` 与 agent 线领地声明（"ai 模块"）重叠，动工最小接收端前应先与该线协调或等其 commit。
+
+**下一步**（完整步骤清单见 dev-state §37.88「进行中」）：FileExplorer 可编辑路径栏+建议下拉 → 上传按钮+useRemoteFileDrop → 拖拽源接线+远程 Attach 菜单 → composer 最小接收端（需与 agent 线协调）→ 全量门禁+拆分 commit。
+

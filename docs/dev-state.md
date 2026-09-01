@@ -4286,3 +4286,65 @@ CDP 全新状态实测通过。commit 见上。
 **踩坑**：①`aria-haspopup="radiogroup"` React 类型不合法 → `"listbox"`；②Edit 追加 DEV-JOURNAL 时误吞 §37.86 标题行 → 已补回（教训：追加式编辑 old_string 含相邻标题时必须在新串中保留）；③全量 vitest 的 flaky（懒加载 Dialog findByText 超时）单跑即过，与改动无关。
 
 **待用户桌面实测**：Strands 悬浮弹窗黑底+精简文案 / 模式折叠面板交互 / 工作区菜单三项（齿轮消失+无 Refresh+间距一致）。
+
+### 37.88 资源管理器模块线（进行中·半成品 WIP，2026-08-31 ⏳）
+
+> 本节由**资源管理器对话的 AI** 写入。同一时间另一对话在开发 agent 模块（sidecar/skills/strands_backend/ai 4 文件 + python_run.py 等未提交现场）——**那些文件与本线无关，接手 AI 勿动勿 add**。
+
+**用户需求四项**（参考截图 = 别的 SSH 软件）：
+1. 资源管理器可自定义加载目录（参考软件：路径栏输入 `/root` 弹子目录建议下拉）
+2. 修复：SSH 连接后资源管理器直接进 `/`，应该进家目录（参考软件显示 `/root`）
+3. 上传功能：本地选择文件 + 拖拽上传到远程
+4. 文件能拖进 agent 对话框 / @ 引用
+
+**根因与关键调研结论**（接手必读）：
+- **家目录问题根因**：`sshStore.ts` connect 成功后硬编码 `navigateTo(sessionId, '/')` → **已修**：改为 `sshCommand(sid, 'echo $HOME', 5)` 解析（exec 模式不污染 PTY），失败/超时/非零退出降级 `/`；会话中途断开有守卫（不写孤儿键）。⚠️ 该文件改动已被另一对话的 commit d8260e2 一并带入（当时工作区混提交）。
+- **远程文件树真数据源**：`FileExplorer` 的 `fsSource.kind==="sftp"` 时走 `useFileTree` 的 **fsb_\* 分支**（fsb_list/fsb_mkdir/fsb_write/fsb_rename/fsb_delete），`useRemoteFileTree`/`sshStore` 的文件树 actions（childrenByPathBySession 那套）是**死代码路径**——新功能不要加在那里。
+- **上传通道选型**：拖拽上传用 Rust 已有 `sftp_upload_file`（param_complete.rs，Rust 读本地盘+SFTP 写，不经 IPC 搬字节——Tauri `onDragDropEvent` 的 payload 正好是本地路径，完美匹配）；「选择文件」上传用 `input[type=file]` + `File.arrayBuffer()` + `sftpWrite`（**零新依赖**，Rust 无 dialog/fs 插件，不引入）。
+- **attach 现状**：右键 Attach to Agent = window 事件 `tdsf:ai-attach-file` → `composer.tsx` `attachFileByPath`（`fs_read_file` **只支持本地路径**）；App.tsx:2161 FileExplorer 的 `onAttachToAgent` 在 ssh 分支当前是 `undefined`。
+
+**已完成**：
+1. ✅ `sftp-bridge.ts`：补 `sftpUploadFile` 封装（invoke `sftp_upload_file`）
+2. ✅ `sshStore.ts`：连接后解析 `$HOME` 替代硬编码 `/`（见上，随 d8260e2 入库）
+3. ✅ `TreeRow.tsx`：`EntryRow` 加 `onDragStartRow?` 可选拖拽源 prop（draggable + onDragStart，由 FileExplorer 注入）
+4. ✅ WIP commit **b0cdd20**（sftp-bridge + TreeRow 两文件）；前三绿已过：tsc ✅ / lint 0 ✅ / vitest 1268 ✅
+
+**进行中（下一步按序）**：
+1. `FileExplorer.tsx` 可编辑路径栏 + 建议下拉：远程模式下点击路径栏变输入框，输入时 `sftpList(父目录)` 过滤出前缀匹配的子目录建议（参考截图交互）；Enter/点击建议 → `navigateTo`；本地模式可后续复用（`fs_read_dir`）
+2. 上传：①工具栏「上传文件」按钮（远程模式显示，input[type=file] 多选 + sftpWrite + 刷新父目录）；②新 hook `useRemoteFileDrop`（仿 `useExplorerFileDrop`：`getCurrentWebview().onDragDropEvent` 拿本地路径 → `sftpUploadFile` → `tree.refresh`），`FileExplorer` 里 `isRemote` 时启用它、禁用本地版 `useExplorerFileDrop`
+3. explorer 侧拖拽源接线：`FileExplorer` 注入 `onDragStartRow`（本地行 dataTransfer 写 `application/x-tdsf-path`，远程行写 `application/x-tdsf-remote`；`e.dataTransfer.effectAllowed="copy"`）；远程行右键菜单补「Attach to Agent」→ App.tsx ssh 分支放开 `onAttachToAgent`，派发**新事件** `tdsf:ai-attach-remote-file`（detail={path, sessionId(rust)}），与本地事件区分
+4. ai 最小接收端（**边界经用户拍板：只做最小**）：`composer.tsx` +~40 行——①监听 `tdsf:ai-attach-remote-file`：`sftpRead` → 文本类构造 FileAttachment（复用 MAX_TEXT_INLINE 限制）；②AI 面板容器 HTML5 drop 接收（读 `application/x-tdsf-path|remote` 两类 MIME）。**@ 选择器的远程文件支持留给 agent 对话**（不碰 AiComposerInput/useWorkspaceFiles）
+5. 全量门禁 + commit 拆分：`feat(explorer): 家目录起点+路径栏导航+上传` / `feat(explorer): 文件拖拽引用 agent` / `feat(ai): composer 最小接收端`
+
+**边界与协作**（本线文件锁）：
+- 本线可写：`src/modules/explorer/`、`src/modules/ssh-explorer/sshStore.ts`（仅家目录段）、`src/lib/sftp-bridge.ts`、`src/modules/explorer/TreeRow.tsx`、`composer.tsx`（最小接收端 ~40 行）
+- 禁碰：`AiComposerInput.tsx`、`useWorkspaceFiles.ts`、sidecar 全部、另一对话工作区未提交文件（git status 里的 skills/strands_backend/ai 4 文件/python_run.py）
+- App.tsx 只动 FileExplorer 挂载点的 props（onAttachToAgent ssh 分支），如另一对话持有 App.tsx 需先协调
+
+**接手提示**：`docs/dev-state.md` 由多对话并发追加，写入前先 tail 读最新；本线 WIP 基点 = commit b0cdd20。
+
+### 37.89 Agent 架构闭环升级线（Spec P0+P1 完成已提交，P2 待做，2026-09-01 ⏳）
+
+> 本节由 **agent 线对话**（本 §37.88 提到的"另一对话"）写入。explorer 线的领地边界见 §37.88；本线领地 = `src-tauri/sidecar/` 全部 + `src/modules/ai/`。P1 commit **f2db89f** 已含 explorer 线的 d8260e2/b0cdd20 一并推送（375903d..f2db89f），无文件冲突。
+
+**任务背景**：用户参考 DeepSeek Harness（Model + Harness = Agent）要求 agent 架构闭环升级 → 方案书 v4.0（`docs/agent/方案书-v4.0-Agent架构闭环升级.md`，用户审批）→ Spec 三件套 `.trae/specs/add-agent-loop-closure/`（沙箱经用户拍板剔除，列 P3 未来项）。
+
+**已完成**：
+- **P0（T1-T4，commit 375903d）**：T1 上下文连续性（实例缓存 key 收窄 (agent_id, session_id, permission_level) + `_session_messages` 单一真源 + `context_manager="auto"` 0.85 压缩）；T2 循环护栏（ToolCallLimitHook 挂载：50 上限/连续失败 3 熔断双通道 + loop_progress 日志 + AgentStatusPill"第 N 轮 · 工具 M"）；T3 规划回环（todo 驱动系统提示 + `_maybe_todo_followup` 收尾校验限一次 + TodoStrip 完成时间戳 id→title 合并）；T4 记忆主动召回（transport.ts 每轮 `<recalled-memory>` top-3，3s 超时静默，与首轮会话摘要职责分离）
+- **P1（T5-T7，commit f2db89f）**：T5 python_run PTC（无沙箱进程级受控：subprocess timeout 30s/输出截 10KB/cwd=workspace/fail-closed 四路含 SSH 会话拒绝；22 工具，审批走三模式管控）；T6 Skill 剧本化（frontmatter `steps:` 解析 playbook + skill_invoke 注入并自动 todo_write 同步 TodoStrip + systemd-troubleshoot/selinux-baseline 两样板）；T7 验证回环（写类/验证类常量 + Post-change verification 系统提示 + `_maybe_verify_followup` 收尾检测限一次 + ssh_command 按命令级 RiskChecker 细分）
+- **门禁全绿**：pytest 2029 / vitest src/modules/ai 354 / typecheck / lint --max-warnings 0（详复盘见 DEV-JOURNAL §37.86）
+
+**进行中（下一步按序，P2 稳定性与测试）**：
+1. **T8 回放测试**：replay 测试工具读 agent_log JSONL 重放 user_msg/tool_result 序列断言行为（工具选择/顺序/验证）；沉淀 5 场景回放集（模式切换连续性/熔断/todo 长任务/验证回环/记忆召回）；pytest mark replay。依赖 T2（loop_progress）/T3/T7 已就绪
+2. **T9 稳定性补强**：model_adapter 显式超时 + invoke watchdog（10 分钟无输出超时报告）；LLM 不可用降级只读问答（不中断对话报错卡）；提示词鼓励独立信息收集并行多工具（吃 ConcurrentToolExecutor 红利）
+3. **T10 置信度深化**：三档标准固化（高=工具证据+知识库佐证/中=其一/低=纯推理附原因——用户要求"低"必须说明原因）；证据区 UI 按"收集→执行→验证"分组
+4. P2 完成后：勾 spec tasks.md Task 8/9/10 → checklist.md 全勾 → commit push → **用户桌面实测验收**（pnpm tauri:dev 全链路：三模式/python_run/skill 剧本/验证回环/置信度/循环进度条）
+
+**关键工程事实（接手必读）**：
+- SDK 1.53.0 参数名是 `context_manager`（keyword-only），不是 conversation_manager
+- 收尾钩子两个：`_maybe_todo_followup`（T3）+ `_maybe_verify_followup`（T7），均会话级 flag 限一次防死循环，勿改成每轮触发
+- python_run 在 SSH 会话中拒绝执行（"仅支持本地工作区"）——远程操作走 ssh_command
+- ToolCallLimitHook 的 tool_log 是单次 invoke 口径的内存真源（T7 验证检测用它），event_bus/agent_log 均不适合
+- spec 文件：`.trae/specs/add-agent-loop-closure/tasks.md` Task 1-7 已勾，Task 8-10 待做；checklist.md P0/P1 段对应项需在 T8-T10 后统一核销
+
+**接手提示**：本线与 explorer 线（§37.88）并行中；写 dev-state 前先 tail 读最新防覆盖。P2 全部在 sidecar 侧 + 少量 ai 前端（置信度分组 UI），与 explorer 线领地无交集。
