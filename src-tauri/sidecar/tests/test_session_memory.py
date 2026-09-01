@@ -96,6 +96,27 @@ class TestSummarizeSession(unittest.TestCase):
         self.assertIn("[会话摘要·截断]", entry["content"])
         self.assertIn("nginx 502", entry["content"])  # 截断摘要保留首部原文
 
+    def test_summarize_scope_id_adds_workspace_tag(self):
+        """A1 工作区隔离 (2026-09-01): scope_id → 条目带 workspace:<id> 标签"""
+        with patch.object(session_memory, "_llm_complete", return_value="摘要"):
+            result = summarize_session(
+                "sess-ws-1", _SAMPLE_TRANSCRIPT, scope_id="sp-42"
+            )
+        self.assertTrue(result["ok"])
+        entry = self.rag.get(result["case_id"])
+        self.assertIn("workspace:sp-42", entry["tags"])
+
+    def test_summarize_without_scope_keeps_global_tags(self):
+        """不传 scope_id → 无 workspace 标签（存量全局行为不变）"""
+        with patch.object(session_memory, "_llm_complete", return_value="摘要"):
+            result = summarize_session("sess-global-1", _SAMPLE_TRANSCRIPT)
+        self.assertTrue(result["ok"])
+        entry = self.rag.get(result["case_id"])
+        self.assertFalse(
+            any(t.startswith("workspace:") for t in entry["tags"]),
+            f"不应有 workspace 标签: {entry['tags']}",
+        )
+
     def test_summarize_idempotent_same_session(self):
         """同 session 两次沉淀 → 同条目覆盖（总数不增，reused=True）"""
         with patch.object(session_memory, "_llm_complete", return_value="摘要V1"):

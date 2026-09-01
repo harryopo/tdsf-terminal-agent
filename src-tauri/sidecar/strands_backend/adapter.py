@@ -1148,7 +1148,14 @@ class StrandsAgentAdapter:
 
             # P2-4 决策库: AI 排障成功自动沉淀案例（教学复盘/历史检索）
             # 条件: 会话有工具调用证据 + 有结论输出 + 输入像排障请求
-            self._auto_sink_case(agent_id, input, observation, session_id)
+            # A1 隔离: 工作区会话的案例打 workspace 标签（state.live.scopeId）
+            self._auto_sink_case(
+                agent_id,
+                input,
+                observation,
+                session_id,
+                scope_id=live_state.get("scopeId") or None,
+            )
 
             self._emit_mood("done", agent_id, session_id)
             # P0-A1: main invoke 结束后 Pill 归位（P0-6 委派期间显示子 agent
@@ -1933,6 +1940,7 @@ class StrandsAgentAdapter:
         user_input: str,
         observation: str,
         session_id: str,
+        scope_id: str | None = None,
     ) -> None:
         """P2-4 决策库: AI 排障成功自动沉淀案例
 
@@ -1994,7 +2002,12 @@ class StrandsAgentAdapter:
                     source="auto-case",
                     title=f"案例：{user_input[:50]}",
                     content=content,
-                    tags=["自动沉淀", "排障"],
+                    # A1 工作区隔离: 工作区会话沉淀的案例打 workspace 标签
+                    tags=[
+                        "自动沉淀",
+                        "排障",
+                        *( [f"workspace:{scope_id}"] if scope_id else [] ),
+                    ],
                 )
             )
             logger.info(f"auto case sunk: {case_id} ({agent_id})")

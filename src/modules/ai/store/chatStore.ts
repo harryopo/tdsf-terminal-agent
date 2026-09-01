@@ -395,9 +395,15 @@ async function maybeSummarizeSession(id: string): Promise<void> {
     if (transcript.length < MIN_MEMORY_MESSAGES) return;
 
     summarizedSessions.add(id);
+    // A1 工作区隔离: 会话绑定工作区时传 scope_id——沉淀条目打
+    // workspace:<spaceId> 标签，recall 按工作区过滤（同工作区跨对话共享）
+    const metaScope = useChatStore
+      .getState()
+      .sessions.find((s: SessionMeta) => s.id === id)?.scope;
+    const scopeId = metaScope?.kind === "workspace" ? metaScope.spaceId : null;
     await invoke("ipc_invoke", {
       method: "memory.summarize_session",
-      params: { session_id: id, transcript },
+      params: { session_id: id, transcript, scope_id: scopeId },
     });
   } catch {
     // 静默：会话记忆沉淀失败不影响用户操作
