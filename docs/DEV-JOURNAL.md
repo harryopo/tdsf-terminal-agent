@@ -2188,3 +2188,24 @@ P2（中优先级 — 清理 + 文档）：
 
 **下一步**（完整步骤清单见 dev-state §37.88「进行中」）：FileExplorer 可编辑路径栏+建议下拉 → 上传按钮+useRemoteFileDrop → 拖拽源接线+远程 Attach 菜单 → composer 最小接收端（需与 agent 线协调）→ 全量门禁+拆分 commit。
 
+### 37.91 SSH 稳定性 #42：P1 重连资源失效修复 + P3 顺手修（2026-09-01 ✅）
+
+**任务**：执行 §37.90 检查报告排期——P1（重连后 SFTP 缓存+隧道失效）+ P3-2（ssh_command.py 过时注释）+ P3-3（/tmp 注入脚本清理）。commit 775d82f。P2（agent 会话枚举）待下一轮。
+
+**方案与实现**：
+1. **P1 回调注入链路**：`SshReconnectConfig` 新增 `on_reconnected: Option<OnReconnectedCallback>`（`Arc<dyn Fn() -> Pin<Box<dyn Future<Output=()> + Send>> + Send + Sync>`，async 回调——清理 await 完成后才继续）；`perform_reconnect` 在热替换+标志重置（3.4）之后、状态广播（3.5）之前调用——**时序保证**前端收到 connected 后发起的 SFTP 不会命中失效缓存。`ssh_connect` 注入闭包：`AppHandle::state::<SshState>()` 取回 state（SshState 是 Tauri State 非 Arc，经 app handle 取回是**最小侵入方案**，免去 `Arc<SshState>` 包装重构/全命令签名改动）→ `SshState::invalidate_session_resources(session_id)`：remove_sftp（启用原 `#[allow(dead_code)]` 方法 + 与 take() 同款 spawn close）+ stop_tunnels_for_session。
+2. **锁与竞态**：回调在 perform_reconnect 无会话锁处调用（锁三不变量）；invalidate 幂等，与用户 close 竞态时清理是安全方向（双清理无副作用）；`user_closed` 只增不减语义未动。
+3. **P3-3**：脚本组装抽纯函数 `build_integration_commands(kind, tmp)`（write_shell_integration 只剩 uuid+exec，可离线单测）；bash/zsh 用 `trap 'rm ...' EXIT`，fish 用 `function --on-event fish_exit` 处理器；清理行**必须写在 heredoc 内容内、注入脚本 const 之前**——先于 const 才能覆盖 const 内 early-return（非交互/TERM=dumb）路径；连接异常断开时 shell 无机会执行清理，残留属 best-effort 卫生范畴。
+4. **顺手**：human_type.rs clippy 8 警告清零（doc 续行缩进 ×7 + `split([';','&','|','\n','\r'])` 字符比较简写 ×1，B2 打字机提交遗留，恢复 clippy-0 惯例）。
+
+**报错与修改**：
+- ① **新测试首跑抓到真 bug**：bash/fish 清理行初版写在了写命令层（heredoc 外）——那样清理函数只存在于瞬态 exec shell、永不触发。静态断言测试（`heredoc_idx < cleanup_idx < script_idx`）当场拦截，修正为 heredoc 内容内。"先写断言"的顺序这次救了一次带病提交。
+- ② `make_test_tunnel` 的 session_id 硬编码为 1，"其他会话的隧道"须手动 `SshTunnel::new(2, spec{session_id:99}, ...)`（同现有 test_ssh_state_stop_tunnels_for_session 做法），首版误用 `make_test_tunnel(99,...)` 被测试抓住。
+- ③ `pytest -k ssh_command` 零匹配——工具行为测试分散在 test_rust_bridge.py / test_modes.py，改跑两文件 69 过。
+
+**门禁**：cargo test 全绿（**lib 360，净增 6**：invalidate 1 / 回调 1 / 清理断言 4）+ 集成 25+27+1 ✅；clippy --all-targets **0 警告** ✅；pytest rust_bridge+modes 69 ✅（P3-2 纯注释按报告免全量）。前端门禁未跑（无 TS 改动；工作树 4 个 ai 文件为 CRLF 假差异）。**待用户 tauri:dev 实测（红线 9）**：①连 SSH → SFTP 列目录（建立缓存）→ 断网触发自动重连 → 重连成功后**立即** SFTP 列目录应正常（P1）；②多次连接/退出后 `ls /tmp | grep tdsf` 无累积（P3-3，注意 exit 后才清理）；③agent ssh_command 无行为回归（P3-2）。
+
+**复盘**：做对——动工前通读 supervisor/perform_reconnect/SshState 全部相关代码并核对检查报告方案；回调选 AppHandle::state 方案避免大改面；时序约束（失效先于 connected 广播）写进代码注释与测试。改进——P1 与 P3-3 同落 session.rs 且 git add -p 不可用（无交互终端），无法按任务拆 commit，合并为一个 commit 靠 message 分节。
+
+**下一步**：#42 剩 **P2**（ssh_status 接 sidecar 反向路由 + ssh_list_sessions readonly 工具 + host 校验放宽到任一连接中会话，安全相关改动需先写威胁模型）与 P3-1（断连通知 sidecar，先调研 Rust→Python 通道）、P3-4（可选暂缓）；agent 线 P2（T8-T10）与 explorer 线 WIP 并行待续。
+
