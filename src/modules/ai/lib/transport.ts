@@ -75,6 +75,13 @@ type LiveSnapshot = {
    */
   sshConnection: string | null;
   /**
+   * A1 多服务器隔离 (2026-09-01): 会话绑定的服务器提示（仅 ssh scope 有值）。
+   * formatEnvBlock 渲染为 conversation_server 行——绑定服务器离线时 agent
+   * 仍知道本对话属于哪台服务器，可引导用户重连，而不是茫然报"未连接"。
+   * null = legacy/local scope 无此概念。
+   */
+  conversationServer?: { user: string; host: string; connected: boolean } | null;
+  /**
    * 活跃终端的 scrollback 尾部摘要（已脱敏）。
    *
    * TDSF 魔改 (2026-08-09): 用户反馈"agent 看不到终端，不知道我在干啥"。
@@ -668,6 +675,14 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
   // 真正传给 Rust 的 sessionId 通过 state.live.sshSessionId 单独走（见 runSidecarStream）。
   if (live.sshConnection) {
     lines.push(`connected_to: ${live.sshConnection}`);
+  }
+  // A1 多服务器隔离: 绑定服务器提示（连接中时 connected_to 已表达，此行
+  // 只在离线时有增量信息——agent 知道对话属于哪台服务器并引导重连）
+  if (live.conversationServer && !live.conversationServer.connected) {
+    lines.push(
+      `conversation_server: ${live.conversationServer.user}@${live.conversationServer.host}` +
+        ` (未连接——本对话绑定的服务器当前离线，请引导用户重连后再执行远程操作)`,
+    );
   }
   if (lines.length === 0) return null;
   return `<env>\n${lines.join("\n")}\n</env>`;
