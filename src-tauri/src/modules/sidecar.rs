@@ -1168,6 +1168,7 @@ async fn kill_process(pid: u32) -> bool {
 ///
 /// 支持的方法（参数用 camelCase，与前端 invoke 一致，便于复用 Tauri 命令）：
 /// - `ssh_command`: 执行 SSH 命令（exec 模式，非 PTY）— P0-D 实现
+/// - `ssh_status`: 枚举全部 SSH 会话详情（sessionId/host/port/user/state）— P2 #42 实现
 /// - `sftp_read`: 读取远程文件内容（返回 number[]）
 /// - `sftp_write`: 写入远程文件（接收 number[] content）
 /// - `sftp_stat`: 查询文件属性
@@ -1216,6 +1217,16 @@ async fn handle_reverse_request(
 
             serde_json::to_value(&result)
                 .map_err(|e| format!("ssh_command serialize failed: {}", e))
+        }
+
+        // === SSH 会话枚举（P2 #42 agent 多主机运维, 2026-09-01）===
+        // 返回 Vec<SshSessionDetail>（camelCase: sessionId/host/port/user/state）。
+        // agent 的 ssh_list_sessions 工具消费；host 校验放宽也以此为权威数据源。
+        "ssh_status" => {
+            let ssh_state = app.state::<crate::ssh::SshState>();
+            let details = crate::ssh::sessions_detail(&ssh_state).await;
+            serde_json::to_value(&details)
+                .map_err(|e| format!("ssh_status serialize failed: {}", e))
         }
 
         // === SFTP 读取远程文件 ===
@@ -1417,7 +1428,7 @@ async fn handle_reverse_request(
         }
 
         _ => Err(format!(
-            "reverse route not found: {} (supported: ssh_command, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename, get_terminal_scrollback)",
+            "reverse route not found: {} (supported: ssh_command, ssh_status, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename, get_terminal_scrollback)",
             method
         )),
     }

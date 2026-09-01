@@ -315,12 +315,9 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     user_closed: Arc<AtomicBool>,
 
     /// 主机信息 (用于状态事件 + P2-04 多标签会话标识)
-    /// 注: 当前仅在日志/host 字段使用,port/user 预留给 P2-04 SSH 多标签
-    #[allow(dead_code)]
+    /// 注: 经 host()/port()/user() 访问器对外暴露 (P2 #42 会话枚举也用)
     host: String,
-    #[allow(dead_code)]
     port: u16,
-    #[allow(dead_code)]
     user: String,
 
     /// PTY 断开通知器 (P3 #20)
@@ -940,6 +937,21 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 获取当前状态
     pub fn state(&self) -> SshSessionState {
         self.state.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// 会话主机 (P2 #42 agent 会话枚举: ssh_sessions_detail 展示 user@host 用)
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// 会话端口 (P2 #42 agent 会话枚举)
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// 会话用户名 (P2 #42 agent 会话枚举)
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// 是否已退出 (PTY 通道退出 或 SSH 连接关闭)
@@ -1724,6 +1736,22 @@ pub(crate) mod tests {
             user_input_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             typing_active: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// 构造测试用 SshSession（带端点信息）
+    ///
+    /// P2 #42 (2026-09-01): sessions_detail 映射测试用 —— make_test_session
+    /// 的 host/port/user 为空串/0, 无法验证枚举详情的字段映射。
+    pub(crate) fn make_test_session_with_endpoint<R: tauri::Runtime>(
+        host: &str,
+        port: u16,
+        user: &str,
+    ) -> SshSession<R> {
+        let mut s = make_test_session::<R>(false, false);
+        s.host = host.to_string();
+        s.port = port;
+        s.user = user.to_string();
+        s
     }
 
     // === P3 #20 自动重连测试 ====================================================

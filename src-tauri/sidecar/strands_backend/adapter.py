@@ -103,13 +103,14 @@ _DEFAULT_SYSTEM_PROMPT = (
     "You help users diagnose and resolve Linux server issues via SSH.\n\n"
     "Available tools:\n"
     "- ssh_command(command, ssh_session_id, explanation, timeout): 执行 SSH 命令\n"
+    "- ssh_list_sessions(): 枚举已连接 SSH 会话，多主机先调用它确定 ssh_session_id\n"
     "- read_remote_file(path, ssh_session_id, max_size, encoding): 读远程文件\n"
     "- analyze_logs(log_path, mode, lines, pattern, ssh_session_id): 分析日志\n"
     "- inspect_processes(mode, filter_user, filter_name, pid, top_n, ssh_session_id): 进程检查\n"
     "- network_diagnose(mode, target, count, port, ssh_session_id): 网络诊断\n"
     "- skill_invoke(skill_name, input): 调用已注册的 Skill 获取领域知识或执行特定任务\n"
     f"  可用 Skill: {_skill_names_line()}\n"
-    "  何时使用: 用户询问特定领域知识时（如\"如何排查 nginx 502\"）、"
+    "  何时使用: 用户询问特定领域知识时、"
     "需要查阅权威操作步骤时、需要执行预定义脚本时\n"
     "- suggest_command(intent, target_os): 根据用户意图生成一条可执行的 Linux 命令及解释\n"
     "  何时使用: 用户想要执行某个操作但不知道具体命令时（如\"查看系统负载\"\"列出当前目录\"）\n"
@@ -118,10 +119,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n"
     "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需要全文/完整配置示例时用，url 取自检索结果的 url 字段）\n"
     # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具指引
-    # ——多文件交叉统计/复杂解析/批量操作一段代码一次完成，优于逐工具往返
+    # ——多文件交叉统计/复杂解析/批量操作一段代码一次完成
     "- python_run(code): 在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）\n"
-    "  何时使用: 多文件交叉统计、复杂解析、批量操作时，写一段 Python 一次完成，"
-    "优于逐工具往返；本地工作区可用（SSH 会话下不可用，会返回 error）\n\n"
+    "  何时使用: 多文件交叉统计、复杂解析、批量操作时，写一段 Python 一次完成；"
+    "本地工作区可用（SSH 会话下不可用，会返回 error）\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
     # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
@@ -145,7 +146,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 安全拦截诚实条款：若命令被 RiskGuard 拦截、needs_you 审批被拒、或工具上下文出现"
     "\"[TDSF] 最近被安全拦截的命令（未执行）\"提示，必须如实告知用户该命令未执行；"
     "严禁编造执行结果或假装命令已运行；应主动给出替代方案（更安全的拆分步骤或让用户手动执行）。\n"
-    "- 工具返回 status=unavailable 时，说明 RustBridge 未配置（P2 双向 JSON-RPC 未启用），"
+    "- 工具返回 status=unavailable 时，说明 RustBridge 未配置，"
     "应告知用户当前为只读模式。\n"
     "- live_context 显示\"未打开任何工作区\"时，告知用户先创建工作区（本地/WSL/SSH），"
     "不要声称本地诊断工具可用。\n"
@@ -1678,6 +1679,11 @@ class StrandsAgentAdapter:
         if live.get("sshSessionId"):
             lines.append(
                 f"已连接 SSH 会话: {live['sshSessionId']}（可调用 ssh_command 工具执行远程命令）"
+            )
+            # P2 #42: 多主机提示——其余会话不在 env 注入（省 token），
+            # LLM 需要时经 ssh_list_sessions 工具按需枚举
+            lines.append(
+                "如需操作其他 SSH 会话（多主机），先调用 ssh_list_sessions 枚举全部会话"
             )
         # TDSF 修复 2026-08-29: 区分"本地终端在跑/WSL"与"欢迎页啥都没开"。
         # 欢迎页（无任何环境线索）时原 else 分支让 LLM 自称"本地终端模式"并幻觉

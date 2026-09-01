@@ -95,8 +95,9 @@ def resolve_factory(spec: ToolSpec) -> Callable[..., Any]:
 
 
 # ============================================================================
-# 22 工具注册表（13 运维/知识 + 6 魔改增强 + knowledge_get_doc + T5 python_run；
-# tools/__init__.py + ops_extended.py + 2026-08-09 集成度补齐 6 工具收编）
+# 23 工具注册表（13 运维/知识 + 6 魔改增强 + knowledge_get_doc + T5 python_run
+# + P2 #42 ssh_list_sessions；tools/__init__.py + ops_extended.py
+# + 2026-08-09 集成度补齐 6 工具收编）
 # ============================================================================
 
 # 描述（Schema 角色）与各工具 docstring 首行对齐；改 docstring 时同步这里
@@ -107,6 +108,14 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         factory="strands_backend.tools.ssh_command:make_ssh_command_tool",
         description="在远程 SSH 会话执行命令，返回 stdout/stderr/exit_code（高危命令触发审批）",
         policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
+    ),
+    "ssh_list_sessions": ToolSpec(
+        name="ssh_list_sessions",
+        factory="strands_backend.tools.ssh_sessions:make_ssh_list_sessions_tool",
+        description="列出当前所有已连接的 SSH 会话（session_id + user@host + 状态，只读；多主机场景先用它确定目标 ssh_session_id）",
+        # P2 #42: 纯枚举只读（observe/L1 schema 可见），数据源为 Rust SshState
+        # 权威注册表，无命令执行面。host 校验放宽（execute_via_ssh）也以此为据。
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
     "read_remote_file": ToolSpec(
         name="read_remote_file",
