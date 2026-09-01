@@ -2209,3 +2209,29 @@ P2（中优先级 — 清理 + 文档）：
 
 **下一步**：#42 剩 **P2**（ssh_status 接 sidecar 反向路由 + ssh_list_sessions readonly 工具 + host 校验放宽到任一连接中会话，安全相关改动需先写威胁模型）与 P3-1（断连通知 sidecar，先调研 Rust→Python 通道）、P3-4（可选暂缓）；agent 线 P2（T8-T10）与 explorer 线 WIP 并行待续。
 
+
+### 37.92 SSH 稳定性 #42 P2：agent 会话枚举 + host 校验放宽（2026-09-01 ✅）
+
+**任务**：§37.90 检查报告排期第 2 项——P2 多主机运维。commit c20a3e1（12 文件 +700/-52）。用户钦定流程：先深入调研三链路再动工。
+
+**调研结论（接手省时）**：
+1. Rust 反向路由模式：`handle_reverse_request` 用 `app.state::<SshState>()` 直调命令函数；`ssh_status` 命令只返回 `(id, state)` 元组且有前端消费方（ssh-bridge.ts L274），**不能改其契约**——枚举详情须新通道。
+2. Python host 校验（tools/__init__.py execute_via_ssh 第 3 步）：原规则目标会话 == ctx.ssh_session_id（前端 live 下发的激活会话）+ ctx.ssh_host 比对；`execute_via_ssh` 经 `rust_bridge.ipc_invoke("ssh_command", {...})` 走 DefaultRustBridge（send_request 注入式，mock 友好）。
+3. 测试基建：`make_dispatch_bridge` 按 method 分发 mock；工具计数断言散落 5 处 + prompt 长度预算测试（_compose_system_prompt < 4000，OBSERVE+teach 最长）。
+
+**方案与实现**：
+1. **Rust**：`SshSession` 补 host()/port()/user() 访问器（消除 port/user dead_code allow）→ `SshSessionDetail`（serde camelCase）+ `sessions_detail(&SshState)` 纯函数（离线可测）+ `#[tauri::command] ssh_sessions_detail`（lib.rs 注册）→ sidecar.rs 反向路由 `"ssh_status"`（文档 + 不支持清单同步）。
+2. **Python 新工具** `tools/ssh_sessions.py`：`parse_live_sessions(resp)` 纯函数（非 list/条目缺字段/类型错 → None，调用方据此回退 fail-closed）+ `invoke_ssh_list_sessions_tool`（success/unavailable/error 三态结构化）+ `make_ssh_list_sessions_tool` @tool 工厂；TOOL_REGISTRY 注册 readonly=True（observe/L1 schema 可见、无执行面），22→**23** 工具。
+3. **host 校验放宽**（execute_via_ssh 第 3 步重写）：bridge 可用且目标 id 为数字 → 先查 `ipc_invoke("ssh_status")` live 列表（权威数据源，不信任 LLM 传值）→ 目标存在且 state=connected 才放行，附 `target_endpoint`（user@host:port）进结果与审计；**查询失败/结构不可识别 → 回退旧严格校验**（原逻辑原样保留，fail-closed 方向：只可能收紧）。威胁模型：deny 硬底线/审批链/observe 裁剪在第 1-2 步不受影响；reconnecting/failed/不存在一律拦截。
+4. **提示**：_DEFAULT_SYSTEM_PROMPT +1 工具行；_build_prompt env 区 SSH 分支加多主机提示（省 token 不注入列表，按需枚举）。
+
+**报错与修改**：
+- ① 工具计数断言散落 5 处（test_registry 23 + expected 集合 / test_tools 3 处 / test_e2e 3 处 / L1 只读 14→15）——首跑定向测试抓全，逐一同步。
+- ② **prompt 长度预算撞线**：系统提示加 3 行后 _compose_system_prompt 达 4129 > 4000 上限（test_prompt_length_controlled）。压缩新增为 1 行 + 清 3 处既有冗余（过时"（P2 双向 JSON-RPC 未启用）"注、skill_invoke 冗余示例、python_run"优于逐工具往返"）→ **3983** 达标；连锁修 test_python_run 的"优于逐工具往返"断言改为"写一段 Python 一次完成"（指引实质保留）。
+- ③ cargo test 后台任务 exit 1 是 `grep -c` 零匹配返回码的假信号，实际 361 全绿——管道退出码要分辨。
+
+**门禁**：pytest 全量 **2044**（+15：parse 3/工具 4/放宽校验 6/工厂 2）✅ / cargo test lib **361**（+1 sessions_detail 映射）+ 集成全绿 ✅ / clippy --all-targets **0** ✅。**待用户实测（红线 9）**：双会话连接 → agent 对话"列出可操作的服务器"（应返回会话列表）→ 指定非激活主机的会话执行 `ssh_command uptime`（应成功且结果含 target_endpoint）→ 断开其一后再指定（应 command_blocked）。
+
+**复盘**：做对——先通读三链路再动工（反向路由模式/契约边界/测试基建全部预判到位，实现一次成型）；威胁模型写进代码注释，fail-closed 回退方向明确。改进——工具计数断言应 grep 全部数字断言再动手（本次漏 5 处）；prompt 是**预算制**资源，加内容前先查 4000 上限余量。
+
+**下一步**：#42 剩 P3-1（断连事件通知 sidecar，先调研 Rust→Python 通知通道，可能并入方案书 v3.0 T5 事件源统一设计）、P3-4（可选暂缓）；agent 线 P2（T8-T10）与 explorer 线 WIP 并行待续。
