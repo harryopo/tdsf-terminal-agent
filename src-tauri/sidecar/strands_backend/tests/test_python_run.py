@@ -239,11 +239,15 @@ class TestPythonRunVisibility(unittest.TestCase):
         self.assertEqual(getattr(tool_fn, "__name__", ""), "python_run")
 
     def test_system_prompt_mentions_python_run(self):
-        """系统提示含 python_run 用途指引（T5.3）"""
+        """系统提示含 python_run 用途指引（T5.3）
+
+        P2 #42 (2026-09-01)：prompt 长度预算（test_modes 4000 上限）下
+        把"优于逐工具往返"精简掉，指引核心保留为"写一段 Python 一次完成"。
+        """
         from strands_backend.adapter import _DEFAULT_SYSTEM_PROMPT
 
         self.assertIn("python_run(code)", _DEFAULT_SYSTEM_PROMPT)
-        self.assertIn("优于逐工具往返", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("写一段 Python 一次完成", _DEFAULT_SYSTEM_PROMPT)
 
 
 if __name__ == "__main__":

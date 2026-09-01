@@ -516,6 +516,9 @@ pub fn run() {
             // TDSF 魔改 P0-D (2026-07-30): SSH exec 命令执行 (运维 Agent 用)
             // 复用 Handle 开 channel.exec(),返回 {ok, output, stderr, exit_code, duration}
             ssh::ssh_command,
+            // TDSF P2 #42 (2026-09-01): SSH 会话枚举详情 (agent 多主机运维 +
+            // sidecar 反向路由 "ssh_status" 数据源; ssh_status 的富化版)
+            ssh::ssh_sessions_detail,
             // TDSF 魔改 P2 #23 (2026-08-11): SSH 隧道与端口转发
             // 本地端口转发: start (校验会话 + 端口占用) / stop / list
             ssh::tunnel_start,

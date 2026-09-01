@@ -563,6 +563,51 @@ pub async fn ssh_status(
     Ok(result)
 }
 
+/// 会话详情 (P2 #42 agent 会话枚举, 2026-09-01)
+///
+/// `ssh_status` 只返回 (id, state) 元组（前端状态栏契约, 勿改），agent 的
+/// `ssh_list_sessions` 工具需要 user@host 才能区分多台主机, 故新增此结构。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshSessionDetail {
+    pub session_id: u32,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub state: SshSessionState,
+}
+
+/// 列出全部会话详情 (按 session_id 升序)
+///
+/// 纯函数版便于离线单测（tauri::State 无法离线构造）;
+/// `ssh_sessions_detail` 命令与 sidecar 反向路由 `"ssh_status"` 均委托此函数。
+pub async fn sessions_detail(state: &SshState) -> Vec<SshSessionDetail> {
+    let sessions = state.sessions.read().await;
+    let mut result: Vec<SshSessionDetail> = sessions
+        .iter()
+        .map(|(id, s)| SshSessionDetail {
+            session_id: *id,
+            host: s.host().to_string(),
+            port: s.port(),
+            user: s.user().to_string(),
+            state: s.state(),
+        })
+        .collect();
+    result.sort_by_key(|d| d.session_id);
+    result
+}
+
+/// ssh_sessions_detail 命令: 列出全部 SSH 会话详情 (含 user@host)
+///
+/// 消费方: sidecar 反向路由 `"ssh_status"` (agent 的 ssh_list_sessions 工具);
+/// 前端如需多会话列表也可 invoke（ssh_status 的富化版, 原命令保持兼容）。
+#[tauri::command]
+pub async fn ssh_sessions_detail(
+    state: tauri::State<'_, SshState>,
+) -> Result<Vec<SshSessionDetail>, String> {
+    Ok(sessions_detail(&state).await)
+}
+
 /// ssh_approve_host 命令: 用户确认信任未知主机 (TOFU)
 ///
 /// 当 check_server_key 回调推送 HostVerify 事件到前端后,
@@ -1389,5 +1434,40 @@ mod tests {
         // 重复调用安全 (幂等)
         state.invalidate_session_resources(1).await;
         assert!(state.get_tunnel(1).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ssh_sessions_detail_mapping() {
+        // P2 #42 (2026-09-01): 会话枚举详情 —— 按 session_id 升序,
+        // host/port/user/state 逐字段映射正确
+        let state = SshState::default();
+        state
+            .insert(
+                2,
+                Arc::new(super::session::tests::make_test_session_with_endpoint::<
+                    tauri::Wry,
+                >("10.0.0.2", 2222, "deploy")),
+            )
+            .await;
+        state
+            .insert(
+                1,
+                Arc::new(super::session::tests::make_test_session_with_endpoint::<
+                    tauri::Wry,
+                >("10.0.0.1", 22, "root")),
+            )
+            .await;
+
+        let details = sessions_detail(&state).await;
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].session_id, 1);
+        assert_eq!(details[0].host, "10.0.0.1");
+        assert_eq!(details[0].port, 22);
+        assert_eq!(details[0].user, "root");
+        assert_eq!(details[0].state, SshSessionState::Connected);
+        assert_eq!(details[1].session_id, 2);
+        assert_eq!(details[1].host, "10.0.0.2");
+        assert_eq!(details[1].port, 2222);
+        assert_eq!(details[1].user, "deploy");
     }
 }
