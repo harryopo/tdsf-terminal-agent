@@ -253,7 +253,10 @@ class TestModeAwarePrompt:
     def test_mode_instruction_composed(self):
         observe_prompt = self._compose(AgentMode.OBSERVE, teach=False)
         assert "只读观察模式" in observe_prompt
-        assert "一切写操作" in observe_prompt
+        # 2026-09-01: 观察模式告知升级——明确"执行类工具已移除、调用报
+        # Unknown tool、此前轮次用过也不例外"（用户实测模型困惑空转的修复）
+        assert "写操作与命令执行被禁止" in observe_prompt
+        assert "Unknown tool" in observe_prompt
 
     def test_confirm_mode_instruction_composed(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=False)

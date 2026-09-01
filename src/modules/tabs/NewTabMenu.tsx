@@ -16,6 +16,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
+import { useSpaces } from "@/modules/spaces";
 
 type Props = {
   onNew: () => void;
@@ -24,6 +25,13 @@ type Props = {
 
 export function NewTabMenu({ onNew, onNewEditor }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // 用户钦定 2026-09-01: SSH 连接/WSL 工作区新建的是 "shell"，Windows 本地
+  // 才叫 "Terminal"——菜单标签随当前工作区环境分流（与 tab 命名口径一致）。
+  const activeSpace = useSpaces((s) =>
+    s.spaces.find((x) => x.id === s.activeId),
+  );
+  const newTabLabel =
+    activeSpace && activeSpace.env.kind !== "local" ? "Shell" : "Terminal";
 
   return (
     <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -44,7 +52,7 @@ export function NewTabMenu({ onNew, onNewEditor }: Props) {
             size={14}
             strokeWidth={1.75}
           />
-          <span className="flex-1">Terminal</span>
+          <span className="flex-1">{newTabLabel}</span>
           <span className="text-xs text-muted-foreground">
             {fmtShortcut(MOD_KEY, "T")}
           </span>
