@@ -15,9 +15,10 @@ TDSF 魔改 2026-07-30 P0-C4:
 - 原 docstring / 注释引用 "ssh_exec_in_session"，与 Rust 侧命名约定不一致。
   Rust 侧实际命令风格为 ssh_<verb>（如 ssh_connect/ssh_write/ssh_disconnect），
   故对齐为 "ssh_command"。
-- 当前 Rust 侧尚未实现 ssh_command 命令（属 PTY 模式，无 exec 模式），
-  P2 backlog: 新增 Rust ssh_command Tauri command（基于 russh channel exec）。
-  当前架构下 rust_bridge=None，execute_via_ssh 返回 unavailable，工具降级。
+- 2026-08-18 P0-D 已完成：Rust 侧 ``ssh_command`` Tauri command（russh exec
+  模式，非 PTY）+ sidecar.rs ``handle_reverse_request`` 反向 JSON-RPC 路由，
+  rust_bridge 传递可用，工具经 ``execute_via_ssh`` 真实执行
+  （30s 超时 + 8MiB 输出上限 + 被拒立即返回，见 ssh/mod.rs 与 sidecar.rs）。
 
 设计：
 - ``invoke_ssh_command_tool(params, ctx)``：核心实现，无 Strands 依赖，便于单测。
