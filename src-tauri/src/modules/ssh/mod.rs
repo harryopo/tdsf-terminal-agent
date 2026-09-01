@@ -48,6 +48,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use tauri::ipc::Channel;
+// P1 §37.90: ssh_connect 的重连回调经 AppHandle::state 取回 SshState
+use tauri::Manager;
 use tokio::sync::RwLock;
 
 // TDSF B2 (2026-08-29): 可视教学打字机（human_type pump 编排）
@@ -171,10 +173,36 @@ impl SshState {
         Ok(sftp)
     }
 
-    /// 移除 SFTP 会话 (用于主动关闭 SFTP)
-    #[allow(dead_code)]
+    /// 移除 SFTP 会话 (重连失效/主动关闭 SFTP 时用)
     pub async fn remove_sftp(&self, session_id: u32) -> Option<Arc<SftpSession>> {
         self.sftp_sessions.write().await.remove(&session_id)
+    }
+
+    /// 失效指定会话的全部外部资源 (P1 §37.90, 2026-09-01)
+    ///
+    /// `perform_reconnect` 自动重连成功后由 `on_reconnected` 回调调用:
+    /// 重连只热替换了 SshSession 底层的 handle/channel, 但
+    /// `sftp_sessions` 缓存的 SftpSession 与该会话注册的隧道仍挂在
+    /// **旧连接**的 channel 上, 不清理则下次 SFTP 操作必失败、隧道转发
+    /// 静默断流。语义与 `ssh_disconnect` 的 take()+stop_tunnels_for_session
+    /// 对齐, 但**不移除会话本体** (已热替换, 继续有效)。
+    ///
+    /// 幂等: SFTP 缓存为空 / 无隧道时为 no-op; 与用户 close() 竞态时
+    /// 清理是安全方向 (close 路径会再清理一次, 双清理无副作用)。
+    pub async fn invalidate_session_resources(&self, session_id: u32) {
+        if let Some(sftp) = self.remove_sftp(session_id).await {
+            log::info!(
+                "[ssh] invalidated stale SFTP cache after reconnect: id={}",
+                session_id
+            );
+            // 异步关闭旧 SFTP 会话 (与 take() 相同的 spawn close 模式)
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = sftp.close().await {
+                    log::warn!("[ssh] SFTP close on reconnect-invalidate failed: {}", e);
+                }
+            });
+        }
+        self.stop_tunnels_for_session(session_id).await;
     }
 
     // === SSH 隧道注册表管理 (P2 #23 新增) ===
@@ -371,6 +399,14 @@ pub async fn ssh_connect(
 
     // P3 #20: 启用自动重连 (网络抖动/服务器重启自动恢复, 前端无需感知)。
     // 凭据 (含密码/私钥路径) 保存在内存中供重连使用; 不持久化到磁盘。
+    //
+    // P1 §37.90 (2026-09-01): 注入重连成功回调 —— 重连热替换底层连接后,
+    // 本 state 里缓存的 SftpSession 与该会话隧道仍挂在旧连接 channel 上,
+    // 必须失效。SshState 由 Tauri State 管理 (非 Arc), 回调经 AppHandle
+    // 取回 (ssh_connect 与重连回调都运行在同一 App 的 tokio 运行时,
+    // state() 必然已 manage)。
+    let app_for_reconnect_cb = app.clone();
+    let reconnect_session_id = session_id;
     session_arc
         .enable_reconnect(SshReconnectConfig {
             app_handle: app.clone(),
@@ -381,6 +417,14 @@ pub async fn ssh_connect(
             on_data: on_data.clone(),
             on_status: on_status.clone(),
             on_exit: on_exit.clone(),
+            on_reconnected: Some(Arc::new(move || {
+                let app = app_for_reconnect_cb.clone();
+                Box::pin(async move {
+                    app.state::<SshState>()
+                        .invalidate_session_resources(reconnect_session_id)
+                        .await;
+                })
+            })),
         })
         .await;
     {
@@ -1296,5 +1340,54 @@ mod tests {
         assert!(state.get_tunnel(1).await.is_none());
         assert!(state.get_tunnel(2).await.is_none());
         assert!(state.get_tunnel(3).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_ssh_state_invalidate_session_resources() {
+        // P1 §37.90 (2026-09-01): 重连成功回调的失效逻辑 ——
+        // 该会话的隧道全部停止移除, 其他会话的隧道保留; SFTP 缓存
+        // 无条目时幂等 no-op (真实 SftpSession 需 russh channel,
+        // 离线不可构造, 其 close 路径与 take() 共用同一 spawn 模式)。
+        let state = SshState::default();
+        state
+            .insert_tunnel(1, Arc::new(make_test_tunnel(1, 3306)))
+            .await;
+        // make_test_tunnel 的 session_id 固定为 1 (见 helper 注释),
+        // 其他会话的隧道须手动构造 (同 test_ssh_state_stop_tunnels_for_session)
+        let other = SshTunnel::new(
+            2,
+            TunnelSpec {
+                name: "other-session".to_string(),
+                session_id: 99,
+                kind: TunnelKind::Local,
+                local_host: "127.0.0.1".to_string(),
+                local_port: 5432,
+                remote_host: "r".to_string(),
+                remote_port: 80,
+                bind_address: "127.0.0.1".to_string(),
+                bind_port: None,
+                local_target_host: None,
+                local_target_port: None,
+            },
+            Arc::new(super::session::tests::make_test_session::<tauri::Wry>(
+                false,
+                false,
+            )),
+        );
+        state.insert_tunnel(2, Arc::new(other)).await;
+
+        // 幂等性: 先对无 SFTP 缓存 + 隧道不匹配的会话调用一次 (no-op)
+        state.invalidate_session_resources(42).await;
+        assert!(state.get_tunnel(1).await.is_some());
+        assert!(state.get_tunnel(2).await.is_some());
+
+        // 失效 session 1 → 隧道 1 移除, session 99 的隧道 2 保留
+        state.invalidate_session_resources(1).await;
+        assert!(state.get_tunnel(1).await.is_none());
+        assert!(state.get_tunnel(2).await.is_some());
+
+        // 重复调用安全 (幂等)
+        state.invalidate_session_resources(1).await;
+        assert!(state.get_tunnel(1).await.is_none());
     }
 }

@@ -194,6 +194,16 @@ pub enum SshSessionError {
     Other(String),
 }
 
+/// 重连成功回调 (P1 §37.90, 2026-09-01)
+///
+/// `perform_reconnect` 热替换底层连接后、广播 "connected" 状态**之前** await,
+/// 用于失效仍挂在旧连接 channel 上的外部资源 (SshState 的 SFTP 缓存 +
+/// 该会话的隧道注册表)。返回 boxed future 以便回调内执行异步清理;
+/// 回调自身不得持有 SshSession 的任何锁 (锁三不变量)。
+pub type OnReconnectedCallback = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+>;
+
 /// 自动重连配置 (P3 #20)
 ///
 /// 由 `ssh_connect` 命令在 `open_pty` 成功后调用 `enable_reconnect` 注入。
@@ -219,11 +229,17 @@ pub struct SshReconnectConfig<R: tauri::Runtime = tauri::Wry> {
     pub on_status: Channel<SshStatusEvent>,
     /// 退出码推送 channel (同上)
     pub on_exit: Channel<i32>,
+    /// 重连成功回调 (P1 §37.90, 可选)
+    ///
+    /// `ssh_connect` 注入: 通过 AppHandle 取回 SshState 并
+    /// `invalidate_session_resources` (失效 SFTP 缓存 + 停掉该会话隧道)。
+    /// None = 无外部资源需清理 (测试场景 / 未启用)。
+    pub on_reconnected: Option<OnReconnectedCallback>,
 }
 
 // 手动实现 Clone (不用 derive): derive 会给泛型参数 R 添加 `R: Clone` 约束,
 // 而 tauri::Runtime 不要求 Clone, 导致 `SshReconnectConfig<R>: Clone` 不成立。
-// 各字段本身无条件 Clone (AppHandle<R>/Channel/参数), 手动 impl 可省去该约束。
+// 各字段本身无条件 Clone (AppHandle<R>/Channel/参数/Arc 回调), 手动 impl 可省去该约束。
 impl<R: tauri::Runtime> Clone for SshReconnectConfig<R> {
     fn clone(&self) -> Self {
         Self {
@@ -235,6 +251,7 @@ impl<R: tauri::Runtime> Clone for SshReconnectConfig<R> {
             on_data: self.on_data.clone(),
             on_status: self.on_status.clone(),
             on_exit: self.on_exit.clone(),
+            on_reconnected: self.on_reconnected.clone(),
         }
     }
 }
@@ -893,6 +910,16 @@ impl<R: tauri::Runtime> SshSession<R> {
             self.connection_closed.store(true, Ordering::Release);
         }
 
+        // 3.45 P1 §37.90 (2026-09-01): 失效旧连接上的外部资源 (SFTP 缓存/隧道)。
+        // 本函数只热替换了 handle/channel, SshState.sftp_sessions 缓存的
+        // SftpSession 与该会话的隧道注册表仍挂在旧连接 channel 上, 下次操作
+        // 必失败。回调内部自行取 SshState (本会话不持有其引用), 不持自身锁。
+        // 时序约束: 必须在 3.5 的 "connected" 状态广播前完成, 保证前端收到
+        // connected 后发起的 SFTP 请求不会命中失效缓存。
+        if let Some(cb) = &config.on_reconnected {
+            cb().await;
+        }
+
         // 3.5 状态 → Connected + 推送状态事件 (前端状态栏恢复 "已连接")
         *self.state.write().unwrap_or_else(|e| e.into_inner()) = SshSessionState::Connected;
         let _ = config.on_status.send(SshStatusEvent::connected(
@@ -1515,43 +1542,63 @@ async fn write_shell_integration<R: tauri::Runtime>(
     let id = uuid::Uuid::new_v4().simple().to_string();
     let tmp = format!("/tmp/tdsf-osc7-{id}");
 
-    let (write_cmd, launch_cmd) = match kind {
-        RemoteShellKind::Bash => {
-            let script = format!(
-                "cat > {tmp}.bash <<'TDSF_OSC7'\n{BASH_INTEGRATION_SCRIPT}TDSF_OSC7"
-            );
-            let launch = format!("exec bash --rcfile {tmp}.bash -i");
-            (script, launch)
-        }
-        RemoteShellKind::Zsh => {
-            // zdotdir 方式: ZDOTDIR 替换整个 dotfile 目录, 需要 .zshenv + .zshrc
-            let script = format!(
-                "mkdir -p {tmp}.zdotdir\n\
-                 cat > {tmp}.zdotdir/.zshenv <<'TDSF_OSC7'\n{ZSH_ZSENV_SCRIPT}TDSF_OSC7\n\
-                 cat > {tmp}.zdotdir/.zshrc <<'TDSF_OSC7_2'\n{ZSH_ZSHRC_SCRIPT}TDSF_OSC7_2"
-            );
-            let launch = format!("exec env ZDOTDIR={tmp}.zdotdir zsh -i");
-            (script, launch)
-        }
-        RemoteShellKind::Fish => {
-            let script = format!(
-                "cat > {tmp}.fish <<'TDSF_OSC7'\n{FISH_INTEGRATION_SCRIPT}TDSF_OSC7"
-            );
-            let launch = format!("exec fish -C 'source {tmp}.fish' -i");
-            (script, launch)
-        }
-        RemoteShellKind::Other => {
-            // 非 bash/zsh/fish (csh/tcsh/ash 等): 不支持注入, 降级 request_shell
-            log::info!("[ssh] unsupported remote shell kind, skip integration");
-            return Err(SshSessionError::Other(
-                "unsupported remote shell for integration".to_string(),
-            ));
-        }
-    };
+    let (write_cmd, launch_cmd) = build_integration_commands(kind, &tmp)?;
 
     // 写脚本 (非 PTY exec, 失败不影响 PTY 建立——降级 request_shell)
     exec_simple(handle, &write_cmd).await?;
     Ok(launch_cmd)
+}
+
+/// 组装注入脚本写命令 + PTY 启动命令 (纯函数, 可单测)
+///
+/// P3 §37.90 (2026-09-01): 清理行放在脚本**最前** (const 的 guard /
+/// early-return 之前), 保证 TERM=dumb / 非交互等提前 return 的路径也已注册
+/// 退出清理。连接异常断开时 shell 无机会执行清理, 该残留属 best-effort
+/// 卫生范畴 (原缺陷: 每次连接固定写入 /tmp/tdsf-osc7-<uuid>, 多次连接
+/// 无限累积, 见检查报告 P3-3)。
+fn build_integration_commands(
+    kind: RemoteShellKind,
+    tmp: &str,
+) -> Result<(String, String), SshSessionError> {
+    match kind {
+        RemoteShellKind::Bash => {
+            // EXIT trap 清理 rcfile (交互 bash 退出时执行)。
+            // 清理行必须在 heredoc 内容里 (写入 .bash 文件本身), 不能放在
+            // 写命令层 —— 否则只存在于瞬态 exec shell, 永远不会触发。
+            let script = format!(
+                "cat > {tmp}.bash <<'TDSF_OSC7'\ntrap 'rm -f {tmp}.bash' EXIT\n{BASH_INTEGRATION_SCRIPT}TDSF_OSC7"
+            );
+            let launch = format!("exec bash --rcfile {tmp}.bash -i");
+            Ok((script, launch))
+        }
+        RemoteShellKind::Zsh => {
+            // zdotdir 方式: ZDOTDIR 替换整个 dotfile 目录, 需要 .zshenv + .zshrc
+            // 清理行写入 .zshrc 头部 (交互 zsh 必读), 退出时 rm -rf 整个 zdotdir
+            let script = format!(
+                "mkdir -p {tmp}.zdotdir\n\
+                 cat > {tmp}.zdotdir/.zshenv <<'TDSF_OSC7'\n{ZSH_ZSENV_SCRIPT}TDSF_OSC7\n\
+                 cat > {tmp}.zdotdir/.zshrc <<'TDSF_OSC7_2'\ntrap 'rm -rf {tmp}.zdotdir' EXIT\n{ZSH_ZSHRC_SCRIPT}TDSF_OSC7_2"
+            );
+            let launch = format!("exec env ZDOTDIR={tmp}.zdotdir zsh -i");
+            Ok((script, launch))
+        }
+        RemoteShellKind::Fish => {
+            // fish 无 trap, 用 fish_exit 事件处理器等价清理 (同样必须在
+            // heredoc 内容里 —— 写进 .fish 文件由 fish 会话加载才生效)
+            let script = format!(
+                "cat > {tmp}.fish <<'TDSF_OSC7'\nfunction __tdsf_tmp_cleanup --on-event fish_exit; rm -f {tmp}.fish; end\n{FISH_INTEGRATION_SCRIPT}TDSF_OSC7"
+            );
+            let launch = format!("exec fish -C 'source {tmp}.fish' -i");
+            Ok((script, launch))
+        }
+        RemoteShellKind::Other => {
+            // 非 bash/zsh/fish (csh/tcsh/ash 等): 不支持注入, 降级 request_shell
+            log::info!("[ssh] unsupported remote shell kind, skip integration");
+            Err(SshSessionError::Other(
+                "unsupported remote shell for integration".to_string(),
+            ))
+        }
+    }
 }
 
 /// SSH exec 命令执行结果（exec 模式，非 PTY）
@@ -1733,6 +1780,7 @@ pub(crate) mod tests {
             on_data: Channel::new(|_| Ok(())),
             on_status: Channel::new(|_| Ok(())),
             on_exit: Channel::new(|_| Ok(())),
+            on_reconnected: None,
         })
         .await;
         let stored = session.reconnect.lock().await;
@@ -1741,6 +1789,36 @@ pub(crate) mod tests {
         assert_eq!(cfg.params.host, "example.com");
         assert_eq!(cfg.cols, 80);
         assert_eq!(cfg.rows, 24);
+    }
+
+    // === P1 §37.90 重连资源失效测试 (2026-09-01) ================================
+
+    #[tokio::test]
+    async fn test_on_reconnected_callback_invocable_and_cloneable() {
+        // 回调类型层面验证: Option<OnReconnectedCallback> 可调用、可 Clone
+        // (Arc 共享同一计数器), 且 None 语义安全跳过。
+        // perform_reconnect 内部对回调的真实触发依赖 SshClient::connect
+        // (需真实 SSH 服务器), 离线不可测 —— 真实链路验证靠 tauri:dev 实测
+        // (连 SSH → SFTP 列目录 → 断网重连 → 重连后 SFTP 立即可用)。
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cb_counter = counter.clone();
+        let cb: OnReconnectedCallback = Arc::new(move || {
+            let c = cb_counter.clone();
+            Box::pin(async move {
+                c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        });
+
+        // Clone 共享底层计数器 (enable_reconnect → supervisor 每轮 reconnect_config
+        // 都会 clone config, 回调必须同步 clone 才能指向同一闭包)
+        let cb_clone = cb.clone();
+        cb_clone().await;
+        cb().await;
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // None 分支: perform_reconnect 的 `if let Some(cb)` 对 None 安全跳过
+        let none: Option<OnReconnectedCallback> = None;
+        assert!(none.is_none());
     }
 
     #[test]
@@ -1945,5 +2023,67 @@ pub(crate) mod tests {
         assert!(FISH_INTEGRATION_SCRIPT.contains("]7;file://"));
         assert!(!FISH_INTEGRATION_SCRIPT.contains("133;"), "fish 脚本不应发 133");
         assert!(FISH_INTEGRATION_SCRIPT.contains("__TDSF_OSC7_LOADED"), "fish 幂等 guard 缺失");
+    }
+
+    // === P3 §37.90 /tmp 注入脚本清理行测试 (2026-09-01) =========================
+
+    #[test]
+    fn test_integration_cleanup_line_prepended_bash() {
+        // 清理行必须在 heredoc 内、且位于注入脚本 const 之前 ——
+        // 覆盖 const 内 early-return 路径 (非交互/TERM=dumb), 保证 trap 已注册
+        let (write_cmd, launch) =
+            build_integration_commands(RemoteShellKind::Bash, "/tmp/tdsf-osc7-abc123").unwrap();
+        let cleanup_idx = write_cmd
+            .find("trap 'rm -f /tmp/tdsf-osc7-abc123.bash' EXIT")
+            .expect("bash 清理行缺失");
+        let heredoc_idx = write_cmd.find("<<'TDSF_OSC7'").unwrap();
+        let script_idx = write_cmd.find(BASH_INTEGRATION_SCRIPT).unwrap();
+        assert!(
+            heredoc_idx < cleanup_idx && cleanup_idx < script_idx,
+            "bash 清理行必须位于 heredoc 内且先于注入脚本"
+        );
+        assert_eq!(launch, "exec bash --rcfile /tmp/tdsf-osc7-abc123.bash -i");
+    }
+
+    #[test]
+    fn test_integration_cleanup_line_zsh_removes_zdotdir() {
+        // zsh: trap 写入 .zshrc 头部, 退出 rm -rf 整个 zdotdir 目录
+        // (.zshenv/.zshrc 两文件一并清理)
+        let (write_cmd, launch) =
+            build_integration_commands(RemoteShellKind::Zsh, "/tmp/tdsf-osc7-abc").unwrap();
+        let cleanup_idx = write_cmd
+            .find("trap 'rm -rf /tmp/tdsf-osc7-abc.zdotdir' EXIT")
+            .expect("zsh 清理行缺失");
+        let zshrc_heredoc_idx = write_cmd.find("<<'TDSF_OSC7_2'").unwrap();
+        let script_idx = write_cmd.find(ZSH_ZSHRC_SCRIPT).unwrap();
+        assert!(
+            zshrc_heredoc_idx < cleanup_idx && cleanup_idx < script_idx,
+            "zsh 清理行必须位于 .zshrc heredoc 内且先于注入脚本"
+        );
+        assert!(launch.contains("ZDOTDIR=/tmp/tdsf-osc7-abc.zdotdir"));
+    }
+
+    #[test]
+    fn test_integration_cleanup_fish_exit_handler() {
+        // fish 无 trap: 用 fish_exit 事件处理器等价清理
+        // (与 bash/zsh 同约束: 清理行在 heredoc 内容里、先于注入脚本)
+        let (write_cmd, launch) =
+            build_integration_commands(RemoteShellKind::Fish, "/tmp/tdsf-osc7-abc").unwrap();
+        let cleanup_idx = write_cmd
+            .find("function __tdsf_tmp_cleanup --on-event fish_exit; rm -f /tmp/tdsf-osc7-abc.fish; end")
+            .expect("fish 清理行缺失");
+        let heredoc_idx = write_cmd.find("<<'TDSF_OSC7'").unwrap();
+        let script_idx = write_cmd.find(FISH_INTEGRATION_SCRIPT).unwrap();
+        assert!(
+            heredoc_idx < cleanup_idx && cleanup_idx < script_idx,
+            "fish 清理行必须位于 heredoc 内且先于注入脚本"
+        );
+        assert!(launch.contains("source /tmp/tdsf-osc7-abc.fish"));
+    }
+
+    #[test]
+    fn test_integration_commands_unsupported_shell_errors() {
+        // 其他 shell (csh/tcsh/ash 等) 维持降级语义: Err → request_shell
+        assert!(build_integration_commands(RemoteShellKind::Other, "/tmp/x").is_err());
     }
 }

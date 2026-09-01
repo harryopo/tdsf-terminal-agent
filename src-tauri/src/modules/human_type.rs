@@ -17,19 +17,19 @@
 //! ## 8 项注意事项的分工（§4.8.2）
 //!
 //! 1. 清行等 prompt      → 调用方命令（`pty_write_human` / `ssh_write_human`）：
-//!                          pump 前写 `\x03` + 固定 300ms 等待（Rust 侧无
-//!                          OSC 133 block 状态，采用简单超时等待的最小实现）
+//!    pump 前写 `\x03` + 固定 300ms 等待（Rust 侧无
+//!    OSC 133 block 状态，采用简单超时等待的最小实现）
 //! 2. 控制字符禁令       → `sanitize_typing_text`：剥 `\t` 与转义序列，
-//!                          只允许可打印字符 + `\r`；多字节整块写
+//!    只允许可打印字符 + `\r`；多字节整块写
 //! 3. 随机延迟           → `weibull_delay`（本模块内置，禁止匀速）
 //! 4. `!` 告警 / sudo 降级 → `sanitize_typing_text` 告警 + `is_sudo_password_risk`
-//!                          （echo 关闭视觉无效 → 整段注入交还用户输密码）
+//!    （echo 关闭视觉无效 → 整段注入交还用户输密码）
 //! 5. 用户按键停 pump    → 调用方 should_stop 闭包（pty_write / ssh_write
-//!                          每次用户键盘写入 bump 会话计数器，pump 轮询）
+//!    每次用户键盘写入 bump 会话计数器，pump 轮询）
 //! 6. 等上条 133;D       → 调用方串行（当前场景单命令注入，Agent 侧逐条
-//!                          审批天然串行；多次注入由调用方保证）
+//!    审批天然串行；多次注入由调用方保证）
 //! 7. russh 背压         → channel `data_bytes` 自带 SSH 流控窗口（写侧阻塞
-//!                          至窗口可用），逐字低速模式天然无压力
+//!    至窗口可用），逐字低速模式天然无压力
 //! 8. >200 字符走整段    → 前端调用前判断（useAiLiveBridge）
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -161,7 +161,7 @@ pub fn sanitize_typing_text(text: &str) -> (String, Vec<String>) {
 /// 命令含 `sudo`（除 `sudo -n`）→ 打字机视觉无效（echo 关闭），整段注入
 /// 后交还用户输密码。按 `;`/`&`/`|`/换行拆段逐段判定，覆盖复合命令。
 pub fn is_sudo_password_risk(text: &str) -> bool {
-    text.split(|c: char| c == ';' || c == '&' || c == '|' || c == '\n' || c == '\r')
+    text.split([';', '&', '|', '\n', '\r'])
         .any(|seg| {
             let seg = seg.trim_start();
             // `sudo` 必须是独立词（排除 `sudoers` 等以 sudo 开头的词）
