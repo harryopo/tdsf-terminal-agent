@@ -26,8 +26,10 @@ import {
   Cancel01Icon,
   Delete02Icon,
   FilterIcon,
+  PlusSignIcon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
+import { useSpaces } from "@/modules/spaces";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo } from "react";
 import {
@@ -42,9 +44,9 @@ import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
 import { useAgentsStore } from "../store/agentsStore";
 import { getOrCreateChat } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
-import { useSpaces } from "@/modules/spaces";
 import { usePlanStore } from "../store/planStore";
 import { AgentStatusPill } from "./AgentStatusPill";
+import { WorkspaceGate } from "./WorkspaceGate";
 import { AiChatView } from "./AiChat";
 import { PlanDiffReview } from "./PlanDiffReview";
 import { TodoStrip } from "./TodoStrip";
@@ -185,6 +187,11 @@ function Body({
   const helpers = useChat<UIMessage>({ chat });
   const isBusy =
     helpers.status === "submitted" || helpers.status === "streaming";
+  // 工作区门控（用户钦定 2026-09-01）: 未绑定工作区的会话 agent 不运行
+  const sessionScope = useChatStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.scope,
+  );
+  const gated = sessionScope?.kind !== "workspace";
 
   return (
     <>
@@ -200,7 +207,9 @@ function Body({
       <PlanModeStrip />
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {helpers.messages.length === 0 ? (
+        {gated ? (
+          <WorkspaceGate />
+        ) : helpers.messages.length === 0 ? (
           <EmptyState onPick={focusInput} />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col [&_.text-sm]:text-[12px] [&_p]:leading-relaxed">
@@ -293,7 +302,10 @@ function Header({
       className="relative flex h-11 shrink-0 cursor-grab items-center justify-between gap-2 border-b border-border/60 px-3 active:cursor-grabbing"
     >
       <div className="flex min-w-0 items-center gap-1.5">
+        {/* 用户钦定 2026-09-01: 最左侧新建对话（须绑定工作区，否则引导创建） */}
+        <NewChatButton />
         <AgentStatusPill isMiniWindow />
+        <WorkspaceChip />
         {messages !== undefined ? (
           <ContextIndicator messages={messages} />
         ) : null}
@@ -322,8 +334,56 @@ function Header({
   );
 }
 
-function estimateTokens(messages: UIMessage[]): number {
-  let chars = 0;
+/** 最左侧新建对话（用户钦定 2026-09-01）——无工作区时引导创建而非直接建会话 */
+function NewChatButton() {
+  const newSession = useChatStore((s) => s.newSession);
+  const hasSpace = useSpaces((s) => s.activeId !== null);
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      className="size-6 shrink-0"
+      aria-label="新建对话"
+      title={hasSpace ? "新建对话" : "请先创建/选择工作区"}
+      data-testid="new-chat-button"
+      onClick={() => {
+        if (hasSpace) newSession();
+        else window.dispatchEvent(new CustomEvent("tdsf:spaces-create"));
+      }}
+    >
+      <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
+    </Button>
+  );
+}
+
+/** 工作区徽章：显示当前绑定的工作区，点击打开工作区总览 */
+function WorkspaceChip() {
+  const active = useSpaces((s) =>
+    s.spaces.find((x) => x.id === s.activeId),
+  );
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        window.dispatchEvent(new CustomEvent("tdsf:spaces-overview"))
+      }
+      className={cn(
+        "flex h-6 min-w-0 max-w-32 shrink-0 items-center rounded-md px-1.5",
+        "text-[10.5px] transition-colors",
+        active
+          ? "text-muted-foreground hover:bg-accent hover:text-foreground"
+          : "font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400",
+      )}
+      title="切换工作区（agent 按工作区隔离运行）"
+      data-testid="workspace-chip"
+    >
+      <span className="truncate">{active ? active.name : "选择工作区"}</span>
+    </button>
+  );
+}
+
+function estimateTokens(messages: UIMessage[]): number {  let chars = 0;
   for (const m of messages) {
     for (const p of m.parts) {
       if (p.type === "text") {
@@ -344,6 +404,36 @@ function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/**
+ * 上下文模块占比分解（参照主流 AI IDE，2026-09-01）。
+ * 固定件为保守估算（工具 schema/组合系统提示/技能描述），消息为真实
+ * chars/4 估算；真实 lastInput 可用时其他行按剩余量封顶。
+ */
+const CONTEXT_TOOL_DEF_TOKENS = 3600; // 23 工具 schema 估算
+const CONTEXT_SYS_PROMPT_TOKENS = 1000; // 组合系统提示 ~3.9k chars / 4
+const CONTEXT_SKILL_TOKENS = 600; // 7 技能包描述估算
+
+function contextBreakdownRows(
+  messages: UIMessage[],
+  used: number,
+): { label: string; tokens: number }[] {
+  const msgTokens = estimateTokens(messages);
+  const total = used > 0 ? used : msgTokens + CONTEXT_TOOL_DEF_TOKENS + CONTEXT_SYS_PROMPT_TOKENS + CONTEXT_SKILL_TOKENS;
+  let remaining = Math.max(0, total);
+  const rows = [
+    { label: "消息", tokens: msgTokens },
+    { label: "工具定义", tokens: CONTEXT_TOOL_DEF_TOKENS },
+    { label: "系统提示词", tokens: CONTEXT_SYS_PROMPT_TOKENS },
+    { label: "技能", tokens: CONTEXT_SKILL_TOKENS },
+  ].map((p) => {
+    const v = Math.min(p.tokens, remaining);
+    remaining -= v;
+    return { label: p.label, tokens: v };
+  });
+  rows.push({ label: "其他", tokens: Math.max(0, remaining) });
+  return rows;
 }
 
 function ContextIndicator({ messages }: { messages: UIMessage[] }) {
@@ -372,11 +462,33 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
       : 0;
 
   return (
-    <Context usedTokens={used} maxTokens={max}>
+      <Context usedTokens={used} maxTokens={max}>
       <ContextTrigger className="h-6 gap-1 px-0 text-[10.5px]" />
       <ContextContent className="w-64 text-[11px]">
         <ContextContentHeader />
         <ContextContentBody>
+          {/* 模块占比分解（参照主流 AI IDE 上下文面板，2026-09-01） */}
+          <div className="space-y-1 border-b border-border/40 pb-2">
+            {contextBreakdownRows(messages, used).map((row) => (
+              <div
+                key={row.label}
+                className="flex items-center justify-between"
+              >
+                <span className="text-muted-foreground">{row.label}</span>
+                <span className="font-mono text-foreground">
+                  {used > 0
+                    ? `${Math.round((row.tokens / Math.max(used, 1)) * 100)}%`
+                    : "—"}
+                </span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">平均缓存命中率</span>
+              <span className="font-mono text-foreground">
+                {tokens.inputTokens > 0 ? `${cacheRate}%` : "—"}
+              </span>
+            </div>
+          </div>
           <div className="flex items-center justify-between text-muted-foreground">
             <span>Model</span>
             <span className="font-mono text-foreground">{modelLabel}</span>
