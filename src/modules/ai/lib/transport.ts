@@ -82,6 +82,12 @@ type LiveSnapshot = {
    */
   conversationServer?: { user: string; host: string; connected: boolean } | null;
   /**
+   * A1 工作区隔离: 会话绑定的工作区 id（仅 workspace scope 有值）。
+   * 记忆召回按 workspace:<scopeId> 标签过滤（同工作区跨对话共享沉淀）；
+   * null = legacy/ssh/local scope 不参与过滤（全局超集）。
+   */
+  scopeId?: string | null;
+  /**
    * 活跃终端的 scrollback 尾部摘要（已脱敏）。
    *
    * TDSF 魔改 (2026-08-09): 用户反馈"agent 看不到终端，不知道我在干啥"。
@@ -220,7 +226,7 @@ export function createContextAwareTransport(deps: Deps) {
       options.messages.filter((m) => m.role === "user").length === 1;
     const lastUserText = extractLastUserText(options.messages);
     const firstMemory = isFirstTurn
-      ? await fetchMemoryHints(lastUserText)
+      ? await fetchMemoryHints(lastUserText, live.scopeId ?? null)
       : null;
     const memoryBlock = firstMemory?.block ?? null;
     // T4 (2026-08-31, spec add-agent-loop-closure): 每轮记忆主动召回——
@@ -232,6 +238,7 @@ export function createContextAwareTransport(deps: Deps) {
     const recalledMemory = await fetchRecalledMemory(
       lastUserText,
       new Set(firstMemory?.ids ?? []),
+      live.scopeId ?? null,
     );
     const recalledBlock = recalledMemory?.block ?? null;
     const contextBlock = [
@@ -392,6 +399,8 @@ export type KnowledgeSearchResult = {
   source: string;
   title: string;
   content: string;
+  /** A1 工作区隔离: 条目标签（workspace:<spaceId> 等），recall 过滤维度 */
+  tags?: string[];
 };
 
 /** 记忆注入块格式化结果：block = 拼好的分区文本；ids = 已注入条目 id（去重用） */
@@ -405,22 +414,30 @@ export type MemoryHintBlock = {
  *
  * source = session-memory（T14 会话摘要）/ session-case（排障案例），
  * 走 knowledge.search_full（会话沉淀只存在全量库，精简库无此类条目）。
+ *
+ * A1 工作区隔离（2026-09-01）：scopeId 存在时只保留本工作区的条目
+ * （tags 含 workspace:<scopeId>）；**无任何 workspace 标签的存量记忆
+ * 保持可见**（向后兼容超集——老记忆没有归属信息，直接隐藏会凭空丢上下文）。
+ * 带过滤时请求 3× 候选再过滤，避免 top-K 被其他工作区条目挤占。
+ *
  * 超时（timeoutMs）/失败/空 → []（静默，不阻塞对话）。
  */
 async function searchSessionMemoryEntries(
   userText: string,
   timeoutMs: number,
   limit: number,
+  scopeId?: string | null,
 ): Promise<KnowledgeSearchResult[]> {
   const query = userText.trim().slice(0, 200);
   if (!query) return [];
+  const workspaceTag = scopeId ? `workspace:${scopeId}` : null;
   try {
     const r = await Promise.race([
       invoke<{ results: KnowledgeSearchResult[] }>("ipc_invoke", {
         // TDSF 2026-08-31 双库：knowledge.search 主读精简库（无会话沉淀条目），
         // 会话记忆只存在全量库 → 走 knowledge.search_full
         method: "knowledge.search_full",
-        params: { query, limit },
+        params: { query, limit: workspaceTag ? limit * 3 : limit },
       }),
       new Promise<null>((resolve) =>
         setTimeout(() => resolve(null), timeoutMs),
@@ -428,9 +445,15 @@ async function searchSessionMemoryEntries(
     ]);
     if (!r?.results?.length) return [];
     // 只注入会话沉淀类条目，避免把整篇教学语料灌进上下文
-    return r.results.filter(
-      (e) => e.source === "session-memory" || e.source === "session-case",
-    );
+    return r.results.filter((e) => {
+      if (e.source !== "session-memory" && e.source !== "session-case")
+        return false;
+      if (!workspaceTag) return true;
+      const wsTags = (e.tags ?? []).filter((t) =>
+        t.startsWith("workspace:"),
+      );
+      return wsTags.length === 0 || wsTags.includes(workspaceTag);
+    });
   } catch {
     // 静默：sidecar 未就绪 / 检索失败都不应影响对话
     return [];
@@ -491,11 +514,13 @@ export function formatMemoryHintBlock(
  */
 async function fetchMemoryHints(
   firstUserText: string,
+  scopeId?: string | null,
 ): Promise<MemoryHintBlock | null> {
   const entries = await searchSessionMemoryEntries(
     firstUserText,
     MEMORY_HINTS_TIMEOUT_MS,
     MEMORY_HINTS_TOP_K * 2,
+    scopeId,
   );
   return formatMemoryHintBlock(entries, {
     kind: "session",
@@ -519,11 +544,13 @@ async function fetchMemoryHints(
 export async function fetchRecalledMemory(
   userText: string,
   excludeIds: ReadonlySet<string>,
+  scopeId?: string | null,
 ): Promise<MemoryHintBlock | null> {
   const entries = await searchSessionMemoryEntries(
     userText,
     RECALLED_MEMORY_TIMEOUT_MS,
     RECALLED_MEMORY_TOP_K * 2,
+    scopeId,
   );
   return formatMemoryHintBlock(entries, {
     kind: "recalled",

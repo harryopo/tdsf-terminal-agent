@@ -139,6 +139,7 @@ def summarize_session(
     session_id: str,
     transcript: list[dict[str, Any]],
     title: str | None = None,
+    scope_id: str | None = None,
 ) -> dict[str, Any]:
     """把会话 transcript 摘要后写入决策库（幂等）。
 
@@ -146,6 +147,9 @@ def summarize_session(
         session_id: 会话 id（幂等 key 的一部分）
         transcript: [{role, content}, ...] 消息列表（前端裁剪后）
         title: 可选标题（None 时自动取"会话记忆：<首条用户消息前 40 字>"）
+        scope_id: 工作区 id（A1 隔离，可选）——提供时给条目打
+            ``workspace:<scope_id>`` 标签，recall 按工作区过滤可见性；
+            None = 不打标签（存量全局行为）
 
     Returns:
         {ok, case_id, summary, reused}
@@ -192,7 +196,12 @@ def summarize_session(
             source="session-memory",
             title=str(title),
             content=summary,
-            tags=["会话记忆", f"session:{session_id}"],
+            # A1 工作区隔离: scope_id 存在时打 workspace 标签（recall 过滤维度）
+            tags=[
+                "会话记忆",
+                f"session:{session_id}",
+                *( [f"workspace:{scope_id}"] if scope_id else [] ),
+            ],
         )
         get_global_rag().add(entry)
         logger.info(f"session memory saved: {case_id} (reused={reused})")
@@ -302,11 +311,13 @@ def register_methods(dispatcher: Any) -> None:
         session_id: str,
         transcript: list[dict[str, Any]] | None = None,
         title: str | None = None,
+        scope_id: str | None = None,
     ) -> dict[str, Any]:
         return summarize_session(
             session_id=str(session_id or ""),
             transcript=list(transcript or []),
             title=title,
+            scope_id=(str(scope_id).strip() or None) if scope_id else None,
         )
 
     def _save_skill(
