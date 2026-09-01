@@ -22,7 +22,6 @@ import { InlineRename } from "./components/InlineRename";
 import { accentFor } from "./lib/spaceColor";
 import type { SpaceMeta } from "./lib/store";
 import { useSpaces } from "./lib/useSpaces";
-import { SpaceAvatar } from "./SpaceAvatar";
 
 type Props = {
   open: boolean;
@@ -43,6 +42,13 @@ type Props = {
 };
 
 type Edge = "top" | "bottom";
+
+/** 环境徽章文案（命名撞车时凭环境可分：本地 / WSL·发行版 / user@host） */
+function envBadge(env: SpaceMeta["env"]): string {
+  if (env.kind === "ssh") return env.label || `${env.user}@${env.host}`;
+  if (env.kind === "wsl") return `WSL · ${env.distro}`;
+  return "本地";
+}
 
 type DragState = {
   pointerId: number;
@@ -237,50 +243,28 @@ export function SpaceSwitcher({
 
   if (!current) return null;
 
-  // TDSF 魔改 2026-08-31（用户钦定）: 顶栏工作区横向标签。
-  // 原触发器只显示"当前 Space 名 >"，切换工作区必须先弹总览面板再点选，
-  // 多工作区时不直观。现在每个 Space 一个横向 chip 直接点击切换；
-  // 点击"当前激活"的 chip 打开总览面板（重命名/删除/管理 tab 仍在那里）；
-  // 行尾 + 号新建工作区。
+  // TDSF 2026-09-01（用户钦定工作区-窗口重构）: 顶栏收敛为"单触发器 + 单窗口栏"。
+  // 旧版每 Space 一个 chip（带字母头像）+ 独立新建加号，与 TabBar 的窗口加号
+  // 并存——用户反馈"两个加号 / R 头像多余 / 工作区与窗口混一行分不清"。
+  // 现在：触发器只显示当前工作区名（无头像），点击弹总览面板（切换/重命名/
+  // 删除/管理窗口都在面板里）；TabBar 只展示当前工作区的窗口 + 唯一加号，
+  // 即"窗口栏只展示一个工作区打开的窗口"。
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <div
-        className="flex min-w-20 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        data-testid="space-tabs-row"
-      >
-        {spaces.map((sp) => {
-          const isActive = sp.id === activeId;
-          return (
-            <button
-              key={sp.id}
-              type="button"
-              title={isActive ? "打开工作区总览" : `切换到 ${sp.name}`}
-              onClick={() => {
-                if (isActive) onOpenChange(true);
-                else {
-                  setActive(sp.id);
-                  onOpenChange(false);
-                }
-              }}
-              className={cn(
-                "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium outline-none transition-colors",
-                isActive
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground/90 hover:bg-accent/50 hover:text-foreground",
-              )}
-            >
-              <SpaceAvatar space={sp} size="sm" active={isActive} />
-              <span className="max-w-28 truncate">{sp.name}</span>
-            </button>
-          );
-        })}
+      <div className="flex min-w-0 items-center" data-testid="space-tabs-row">
         <PopoverTrigger asChild>
           <button
             type="button"
-            title={shortcut ? `工作区总览 · ${shortcut}` : "工作区总览"}
+            title={
+              shortcut
+                ? `工作区总览（切换/重命名/删除工作区） · ${shortcut}`
+                : "工作区总览（切换/重命名/删除工作区）"
+            }
             aria-label="工作区总览"
-            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+            data-testid="space-trigger"
+            className="flex h-7 max-w-44 min-w-0 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
           >
+            <span className="truncate">{current?.name ?? "工作区"}</span>
             <HugeiconsIcon
               icon={ArrowDown01Icon}
               size={13}
@@ -289,15 +273,6 @@ export function SpaceSwitcher({
             />
           </button>
         </PopoverTrigger>
-        <button
-          type="button"
-          title="新建工作区"
-          aria-label="新建工作区"
-          onClick={onNewSpace}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 outline-none transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={2} />
-        </button>
       </div>
       <PopoverContent align="start" sideOffset={6} className="w-[20rem] p-1.5">
         <div className="flex items-center justify-between px-1.5 pb-1.5 pt-0.5">
@@ -480,7 +455,7 @@ function SpaceRow({
             strokeWidth={2}
           />
         </button>
-        <SpaceAvatar space={space} size="sm" active={isActive} />
+        {/* 用户钦定 2026-09-01: 工作区不再放字母头像（R 图标）——环境凭徽章区分 */}
         {editing ? (
           <InlineRename
             initial={space.name}
@@ -491,16 +466,20 @@ function SpaceRow({
         ) : (
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
             {space.name}
+            {/* 环境徽章：命名撞车时（如 WSL 用户名 == 服务器用户名）凭环境可分 */}
+            <span className="ml-1.5 text-[10px] font-normal text-muted-foreground/60">
+              {envBadge(space.env)}
+            </span>
           </span>
         )}
         {!editing && (
           <>
-            <span className="shrink-0 px-1 text-[10px] tabular-nums text-muted-foreground/50 group-hover:hidden">
+            <span className="shrink-0 px-1 text-[10px] tabular-nums text-muted-foreground/50">
               {tabs.length}
             </span>
             <div
               data-no-drag
-              className="hidden shrink-0 items-center gap-0.5 group-hover:flex"
+              className="flex shrink-0 items-center gap-0.5"
             >
               <RowAction
                 icon={PencilEdit02Icon}

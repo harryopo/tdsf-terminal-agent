@@ -1,5 +1,6 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { useSpaces } from "@/modules/spaces";
 import { Chat, type UIMessage } from "@ai-sdk/react";
 import {
   type ChatTransport,
@@ -98,19 +99,50 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       const scope =
         sessions.find((s) => s.id === activeSessionId)?.scope ?? null;
 
+      // 工作区 scope 归一化：workspace → ssh 绑定 或 local（含 WSL）。
+      // 工作区被删除 → 回退全局行为（scopeKind=null）。
+      let sshBinding: { host: string; user: string; port: number } | null =
+        null;
+      let spaceRoot: string | null = null;
+      let scopeKind: "ssh" | "local" | null = null;
+      if (scope?.kind === "ssh") {
+        sshBinding = scope;
+        scopeKind = "ssh";
+      } else if (scope?.kind === "workspace") {
+        const space = useSpaces
+          .getState()
+          .spaces.find((s) => s.id === scope.spaceId);
+        if (space) {
+          spaceRoot = space.root;
+          if (space.env.kind === "ssh") {
+            sshBinding = {
+              host: space.env.host,
+              user: space.env.user,
+              port: space.env.port,
+            };
+            scopeKind = "ssh";
+          } else {
+            // local / wsl 都按本地口径（WSL 终端是本地 tab，命令集 linux）
+            scopeKind = "local";
+          }
+        }
+      } else if (scope?.kind === "local") {
+        scopeKind = "local";
+      }
+
       // B1 (2026-09-01, 用户实测): 欢迎页（无任何终端会话）不得把
       // explorerRoot/launchCwd/home 回退链的默认路径当"本地工作区"上报
       // ——agent 因此误答"当前在本地工作区"而不引导建工作区/连服务器。
       const activeTerminal = live.getActiveTerminalSession?.() ?? "none";
 
-      // === SSH scope：环境只看绑定的那台服务器 ===
-      if (scope?.kind === "ssh") {
+      // === SSH scope：环境只看绑定（工作区或会话）的那台服务器 ===
+      if (scopeKind === "ssh" && sshBinding) {
         const sshState = useSshStore.getState();
         const bound = sshState.sessions.find(
           (s) =>
-            s.params.host === scope.host &&
-            s.params.user === scope.user &&
-            (s.params.port ?? 22) === scope.port,
+            s.params.host === sshBinding.host &&
+            s.params.user === sshBinding.user &&
+            (s.params.port ?? 22) === sshBinding.port,
         );
         const connected = bound && isSessionConnected(bound) ? bound : null;
         // 终端上下文只在绑定会话恰为全局活跃 SSH 会话时注入
@@ -135,8 +167,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           // 绑定服务器提示（formatEnvBlock 渲染 conversation_server 行）：
           // 未连接时 agent 仍知道本对话属于哪台服务器，可引导重连
           conversationServer: {
-            user: scope.user,
-            host: scope.host,
+            user: sshBinding.user,
+            host: sshBinding.host,
             connected: Boolean(connected),
           },
           terminalOutput,
@@ -146,20 +178,20 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         };
       }
 
-      const isLocalScope = scope?.kind === "local";
+      const isLocalScope = scopeKind === "local";
       const noTerminal = activeTerminal === "none";
       const localActive = activeTerminal === "local";
       return {
         // B1: 无终端（欢迎页）→ cwd/workspace 置 null；local scope 只认
-        // 本地终端（SSH 活跃也不算本对话的终端）
+        // 本地终端（SSH 活跃也不算本对话的终端）；工作区有显式 root 时优先
         cwd:
           localActive || (!isLocalScope && !noTerminal)
-            ? live.getCwd()
+            ? (spaceRoot ?? live.getCwd())
             : null,
         terminalPrivate: live.isActiveTerminalPrivate(),
         workspaceRoot:
           localActive || (!isLocalScope && !noTerminal)
-            ? live.getWorkspaceRoot()
+            ? (spaceRoot ?? live.getWorkspaceRoot())
             : null,
         activeFile: live.getActiveFile(),
         // A1: 本地 scope 的对话绝不操作 SSH（即便全局活跃着 SSH 会话）
