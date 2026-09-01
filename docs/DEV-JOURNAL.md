@@ -2281,3 +2281,18 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：pytest **2053**（改写断言 3 处同步：test_modes 一切写操作→写操作与命令执行被禁止+Unknown tool / test_python_run / test_verify_followup）/ vitest **404**（ai+tabs+spaces）/ tsc 0 / lint 0。tabs↔spaces 循环导入核查（SpaceSwitcher↔NewTabMenu 双向引用）运行时安全。
 
 **遗留下一批**：①@ 远程文件引用（explorer 侧 Attach 菜单 + composer 接收端，§37.88 计划照做）；②同工作区跨对话记忆按 spaceId 过滤；③C4 深度验证（围栏闭合提示词已加，真机确认教学卡流式渲染）；④打字机真机复测（C3 修复后经 tauri 重启生效——sidecar/前端重启加载）。
+
+### 37.96 @ 远程文件引用接通（§37.88 最小接收端收尾）（2026-09-01 ✅）
+
+**任务**：遗留清单第 1 项——文件服务器远程文件引用 agent。commit d44a772（2 文件 +106）。
+
+**实现**（§37.88 计划照做，两对话边界已失效故合并实施）：
+1. **composer.tsx**：`attachRemoteFile(path, sessionId)`——sftpRead 读字节，文本类（≤MAX_TEXT_INLINE=200KB、无 NUL 字节）构造 FileAttachment（id=`remote-<sid>-<path>` 防重），与本地 attachFileByPath 同构；监听 `tdsf:ai-attach-remote-file`（detail={path, sessionId}）。
+2. **App.tsx**：`handleAttachRemoteFileToAgent`——取当前连接中 SSH 会话的 **rustSessionId**（Rust u32；SshSessionInfo.id 是前端 uuid 勿混用——typecheck 曾在此抓过同类错），派发事件；ssh 分支 `onAttachToAgent` 从 undefined 放开接通，FileExplorer 远程行右键 "Attach to Agent" 菜单随之出现。
+3. 边界保持：@ 选择器的远程文件支持仍留 agent 对话（§37.88 用户拍板）。
+
+**门禁**：tsc 0 / vitest 376 / lint 0。**待真机**：SSH 工作区右键远程文本文件 → Attach → composer 出附件 chip → 发消息 agent 能读内容。
+
+**复盘**：链路两端（菜单触发、composer 接收）都是已验证模式（本地 attach 同构），只补中间的 App 分支与远程读取——复用既有协议零新事件设计。改进：一眼能看出 rustSessionId/uuid 混用坑（§37.93 教训已内化）。
+
+**下一批**：①同工作区跨对话记忆按 spaceId 过滤（需记忆写入打标签+recall 过滤，中改动）；②C4 教学卡流式渲染真机确认；③方案书 v4.0 P2 T8-T10；④explorer 线剩余（路径栏/上传）。
