@@ -175,9 +175,10 @@ export function ToolApprovalCard({
           {semantic || "Agent 请求执行操作"}
         </div>
 
-        {/* ② 命令原文（永不改写） */}
+        {/* ② 命令原文（永不改写）——C1 (2026-09-01) whitespace-pre-wrap：
+            长命令自动换行完整可见，不再右侧截断（overflow-auto 保留横向兜底） */}
         {command ? (
-          <pre className="max-h-40 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] leading-relaxed text-foreground">
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/60 p-2 font-mono text-[11px] leading-relaxed text-foreground">
             {command}
           </pre>
         ) : null}

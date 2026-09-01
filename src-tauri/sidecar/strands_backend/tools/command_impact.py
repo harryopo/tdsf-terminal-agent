@@ -308,6 +308,26 @@ _SERVICE_READONLY_ACTIONS = {
     "cat", "help", "show-environment", "get-default",
 }
 
+# C2 (2026-09-01, 用户实测: `docker ps` 被判"未知操作"抬到 L3 审批):
+# 容器/编排工具按子命令细分——只读子命令放行，其余（run/exec/cp/rm 等有
+# 副作用的）fail-closed 走 unknown L3。管理组 token（image/container 等）
+# 不展开——`docker container ls` 只读但 `docker container rm` 写，保守拦。
+_CONTAINER_TOOLS = {"docker", "podman", "nerdctl", "kubectl"}
+_CONTAINER_READONLY = {
+    "ps", "images", "image", "inspect", "version", "info", "logs", "top",
+    "stats", "port", "search", "list", "events",
+    # kubectl 只读
+    "get", "describe", "cluster-info", "explain", "api-resources",
+}
+
+# C2: 无对象语义的只读命令（参数是 flags/无意义，展示对象只产生噪声）
+_NO_OBJECT_READONLY = {
+    "echo", "printf", "pwd", "date", "uptime", "uname", "whoami", "id",
+    "hostname", "ps", "top", "free", "df", "du", "vmstat", "iostat", "sar",
+    "lsmod", "lscpu", "lspci", "lsusb", "lsblk", "env", "printenv",
+    "history", "alias", "true", "false", "sleep", "wait", "wc", "seq",
+}
+
 
 # ============================================================================
 # 对象提取
@@ -356,7 +376,19 @@ def _extract_objects(category: str, base: str, toks: list[str]) -> list[str]:
         # mv/cp/ln 目标取最后；mkdir/touch/tee 取第一
         return _last_arg(args) if base in _FILE_WRITE_LAST else _first_arg(args)
 
-    # network / readonly / unknown：第一个参数
+    # C2 (2026-09-01): 只读命令对象提取——无对象语义的命令（ps/echo/df 等）
+    # 返回空（此前显示 "只读查询: aux"、"只读查询: —" 之类噪声）；对象型
+    # 命令（which/ls/cat/grep 等）取前 3 个参数（此前只取第一个，
+    # "which nginx docker python3" 误导性地只显示 "nginx"）
+    if category == CATEGORY_READONLY:
+        if base in _NO_OBJECT_READONLY:
+            return []
+        # systemctl is-active nginx → 动作词不算对象（服务名才是）
+        if base in ("systemctl", "service", "chkconfig"):
+            svcs = [a for a in args if a.lower() not in _SERVICE_READONLY_ACTIONS]
+            return svcs[:3] or args[:1]
+        return args[:3]
+    # network / unknown：第一个参数
     return _first_arg(args)
 
 
@@ -409,6 +441,15 @@ def classify_segment(seg: str) -> dict:
     # "nslookup x 2>/dev/null" 会被误判为文件写 L2 触发审批）
     elif _REDIRECT_WRITE_RE.search(seg):
         category = CATEGORY_FILE_WRITE
+    # --- 容器/编排工具按子命令细分（C2: docker ps 只读，docker run 写）---
+    # 无参数/仅 flags（docker --version）视为只读；子命令不在只读集 → unknown
+    elif base in _CONTAINER_TOOLS:
+        sub = next((t.lower() for t in toks[1:] if not t.startswith("-")), "")
+        category = (
+            CATEGORY_READONLY
+            if (not sub or sub in _CONTAINER_READONLY)
+            else CATEGORY_UNKNOWN
+        )
     # --- 只读白名单 ---
     elif base in _READONLY_CMDS:
         category = CATEGORY_READONLY

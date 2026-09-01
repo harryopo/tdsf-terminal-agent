@@ -2,6 +2,20 @@ import type { UIMessage } from "@ai-sdk/react";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import type { AgentMode } from "../agents/registry";
 
+/**
+ * 会话环境范围（A1 多服务器隔离，2026-09-01 用户钦定）。
+ *
+ * 类比 AI 编程 agent 的工作目录隔离：这里每个对话创建时绑定一个
+ * 环境范围——本地 或 某台 SSH 服务器（按 user+host+port 身份绑定，
+ * 重连后 rust session id 变化不影响归属）。对话内的环境感知
+ * （<env> 块 / sshSessionId / 终端上下文）都按 scope 解析，
+ * 不再全局跟随"当前活跃终端"，跨服务器上下文不再互相污染。
+ * 可选：老会话无此字段 → 回退全局行为（兼容不迁移）。
+ */
+export type SessionScope =
+  | { kind: "local" }
+  | { kind: "ssh"; host: string; user: string; port: number };
+
 export type SessionMeta = {
   id: string;
   title: string;
@@ -14,6 +28,8 @@ export type SessionMeta = {
   agentMode?: AgentMode;
   /** 教学皮肤开关（叠加在任意模式上，不改变权限矩阵）。可选，缺省 false。 */
   teach?: boolean;
+  /** 环境范围（A1 隔离）。可选：老会话缺省 → 全局行为。 */
+  scope?: SessionScope;
 };
 
 // TDSF 魔改: store path 改为 tdsf-sessions.json(原 "terax-ai-sessions.json" 保留为注释供溯源)
