@@ -44,9 +44,12 @@ from typing import Any, Callable
 from strands_backend.modes import AgentMode, parse_mode
 from strands_backend.tools import (
     DefaultRustBridge,
+    RiskChecker,
     RustBridge,
     ToolContext,
     TOOL_DECORATOR_AVAILABLE,
+    VERIFY_CLASS_TOOL_NAMES,
+    WRITE_CLASS_TOOL_NAMES,
     filter_tools_readonly,
     make_all_ops_tools,
 )
@@ -113,7 +116,12 @@ _DEFAULT_SYSTEM_PROMPT = (
     "  注意: 生成命令后不要自动执行，等待用户确认；前端会展示 Insert 按钮供用户一键插入终端\n"
     "- knowledge_search(query, limit): 检索内置 Linux 教学知识库（中文提炼知识点，RAG 混合检索）\n"
     "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n"
-    "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需要全文/完整配置示例时用，url 取自检索结果的 url 字段）\n\n"
+    "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需要全文/完整配置示例时用，url 取自检索结果的 url 字段）\n"
+    # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具指引
+    # ——多文件交叉统计/复杂解析/批量操作一段代码一次完成，优于逐工具往返
+    "- python_run(code): 在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）\n"
+    "  何时使用: 多文件交叉统计、复杂解析、批量操作时，写一段 Python 一次完成，"
+    "优于逐工具往返；本地工作区可用（SSH 会话下不可用，会返回 error）\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
     # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
@@ -154,9 +162,17 @@ _DEFAULT_SYSTEM_PROMPT = (
     # 单步/澄清类明确豁免，防简单问答被清单仪式拖慢。
     "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单再行动，让用户看到你的规划。\n"
     "- 每完成一项立即用 todo_write 更新状态为 completed，再推进下一项。\n"
+    # T6 剧本 (2026-08-31): skill_invoke 命中带 steps 剧本的技能时按剧本执行
+    "- skill_invoke 返回 playbook_text 时，按其步骤顺序执行，每步完成后用工具验证成功判据再推进；步骤已同步进任务清单，完成一步更新一项状态。\n"
     "- 单步问题或澄清类问题无需任务清单，直接回答。\n"
     "- 任务全部完成后简要总结结果。\n"
     "- 不确定下一步时，向用户提问而不是自行假设。\n"
+    "\n"
+    # T7 执行后验证回环 (2026-08-31, spec add-agent-loop-closure): 行动约束——
+    # 写操作后必须只读验证才能宣告完成（配套收尾检测 _maybe_verify_followup）
+    "Post-change verification:\n"
+    "- 凡执行写操作（写文件/执行修改类命令/改配置），必须随后用只读工具验证结果"
+    "（如 systemctl status / cat / ls / 测试命令）才能宣告任务完成；未验证不得声称成功。\n"
     "\n"
     "Decision history:\n"
     "- 排障前先调 search_history 检索历史案例库，参考之前类似问题的解决方案。\n"
@@ -197,6 +213,74 @@ def _split_input_for_log(input: str) -> tuple[str, str]:
     )
     user_part = _CONTEXT_BLOCK_RE.sub("", input).strip()
     return user_part, context_part
+
+
+# ============================================================================
+# T7 执行后验证回环 — "写后未验证"判定（纯函数，便于单测）
+# ============================================================================
+# 工具调用记录来源：ToolCallLimitHook.tool_log（AfterToolCallEvent 逐次
+# 记录 name + input + success，与护栏计数同生命周期，单次 invoke 口径）。
+# 不选 event_bus 历史（无会话内查询接口）/ agent_log（落盘排障日志，读回
+# 成本高且非结构化）——hook 流水是内存中现成的结构化真源。
+
+def _tool_call_is_write_class(name: str, tool_input: dict[str, Any]) -> bool:
+    """判定一次工具调用是否写类（修改系统/文件/运行状态）
+
+    工具名级分类为主（WRITE_CLASS_TOOL_NAMES）；ssh_command 特例按命令
+    内容细分——只读命令（status/cat/ls 等不命中 RiskChecker 写模式的命令）
+    不算写，避免纯查询会话被误判（spec 钦定 "ssh_command(执行)" 指执行
+    修改类命令）。
+    """
+    if name not in WRITE_CLASS_TOOL_NAMES:
+        return False
+    if name == "ssh_command":
+        command = str(tool_input.get("command", "") or "")
+        return bool(RiskChecker.check(command).get("write"))
+    return True
+
+
+def _tool_call_is_verify_class(name: str, tool_input: dict[str, Any]) -> bool:
+    """判定一次工具调用是否只读验证类
+
+    验证类工具名直接命中；ssh_command 执行只读命令（systemctl status /
+    cat / ls 等）同样算验证——系统提示的 Post-change verification 段钦定
+    "用只读工具验证结果（如 systemctl status / cat）"，SSH 场景下这些
+    命令正是经 ssh_command 执行的。
+    """
+    if name in VERIFY_CLASS_TOOL_NAMES:
+        return True
+    if name == "ssh_command":
+        command = str(tool_input.get("command", "") or "")
+        return not RiskChecker.check(command).get("write")
+    return False
+
+
+def _needs_verify_followup(tool_log: list[dict[str, Any]]) -> bool:
+    """判定是否需要追加"验证改动生效"轮（T7 收尾检测核心）
+
+    规则：存在写类工具成功调用，且其后（含后续写类调用之后）无任何
+    只读验证类调用 → True。
+
+    Args:
+        tool_log: ToolCallLimitHook.tool_log（本单次 invoke 的调用流水）
+
+    Returns:
+        True = 写后未验证，需追加一轮提示
+    """
+    last_write_idx = -1
+    for idx, entry in enumerate(tool_log):
+        if entry.get("success") and _tool_call_is_write_class(
+            str(entry.get("name", "")), entry.get("input") or {}
+        ):
+            last_write_idx = idx
+    if last_write_idx < 0:
+        return False  # 无写类成功调用（纯读会话/写全失败）→ 不触发
+    for entry in tool_log[last_write_idx + 1:]:
+        if _tool_call_is_verify_class(
+            str(entry.get("name", "")), entry.get("input") or {}
+        ):
+            return False  # 最后一次写类成功之后已有验证 → 不触发
+    return True
 
 
 # ============================================================================
@@ -275,6 +359,11 @@ class ToolCallLimitHook:
         # T2: 熔断解释只 emit 一次（cancelled 后每次工具调用都会进
         # _before_tool_call，防重复刷屏）
         self._breaker_emitted = False
+        # T7 (2026-08-31, spec add-agent-loop-closure): 本轮 invoke 的工具
+        # 调用流水（name + input + 成功与否）——adapter 收尾检测
+        # _maybe_verify_followup 判定"写类成功调用后无验证类调用"的数据源
+        # （reset 时清空，与护栏计数同生命周期：单次 invoke 口径）
+        self.tool_log: list[dict[str, Any]] = []
 
     def register_hooks(self, registry: Any) -> None:
         """HookProvider 协议：注册 Before/AfterToolCall/BeforeModelCall 回调"""
@@ -293,6 +382,15 @@ class ToolCallLimitHook:
         if isinstance(tool_use, dict):
             return str(tool_use.get("name", "?"))
         return str(getattr(tool_use, "get", lambda k, d=None: d)("name", "?"))
+
+    @staticmethod
+    def _tool_input(event: Any) -> dict[str, Any]:
+        """从 hook 事件提取工具入参（T7：ssh_command 命令级写/读细分用）"""
+        tool_use = getattr(event, "tool_use", None)
+        if isinstance(tool_use, dict):
+            raw_input = tool_use.get("input")
+            return raw_input if isinstance(raw_input, dict) else {}
+        return {}
 
     def _before_tool_call(self, event: Any) -> None:
         if self.cancelled:
@@ -388,6 +486,12 @@ class ToolCallLimitHook:
             self._last_failure = (name, self._error_summary(event))
         else:
             self.failures_by_tool[name] = 0
+        # T7: 工具调用流水（name + input + 成功与否）——收尾验证判定数据源
+        self.tool_log.append({
+            "name": name,
+            "input": self._tool_input(event),
+            "success": not failed,
+        })
         self._report_progress(name, "failed" if failed else "success")
 
     def _report_progress(self, tool_name: str, status: str) -> None:
@@ -436,6 +540,8 @@ class ToolCallLimitHook:
         self.round = 0
         self._last_failure = None
         self._breaker_emitted = False
+        # T7: 工具调用流水同步清空（单次 invoke 口径）
+        self.tool_log.clear()
 
 
 class TdsfStrandsCallbackHandler:
@@ -688,6 +794,12 @@ class StrandsAgentAdapter:
     T3 规划-执行回环 (2026-08-31): invoke 收尾校验 todo 未完成项 →
     追加一轮续做提示（限一次，_todo_followup_done 会话级 flag）。
 
+    T7 执行后验证回环 (2026-08-31, spec add-agent-loop-closure):
+    - 系统提示 Post-change verification 行动段（写后必须只读验证）。
+    - invoke 收尾检测 _maybe_verify_followup：hook.tool_log 中写类工具
+      成功调用后无只读验证类调用 → 追加一轮"用只读工具验证改动生效"
+      （限一次，_verify_followup_done 与 T3 独立计数）。
+
     Args:
         event_bus: EventBus 实例（用于推送 mood_change / agent_message / tool_call / needs_you）
         rust_bridge: RustBridge 实例（工具调 Rust 后端的抽象层），None 时用 DefaultRustBridge()
@@ -762,6 +874,10 @@ class StrandsAgentAdapter:
         # T3 规划-执行回环: 已触发过收尾追加轮的会话（限一次，防死循环）。
         # 会话生命周期内最多追加一轮"继续执行或向用户说明原因"。
         self._todo_followup_done: set[tuple[str, str]] = set()
+
+        # T7 执行后验证回环: 已触发过"写后未验证"追加轮的会话（限一次，
+        # 与 _todo_followup_done 独立计数——两种收尾检测互不挤占机会）。
+        self._verify_followup_done: set[tuple[str, str]] = set()
 
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
@@ -931,6 +1047,17 @@ class StrandsAgentAdapter:
                     strands_agent, agent_id, session_id
                 )
 
+                # T7 (2026-08-31, spec add-agent-loop-closure): 执行后验证
+                # 回环——写类工具成功调用后无只读验证类调用时追加一轮
+                # "用只读工具验证改动生效"（锁内调用，限一次，数据源为
+                # hook.tool_log 本轮调用流水；与 T3 追加轮独立计数）。
+                verify_observation = self._maybe_verify_followup(
+                    strands_agent,
+                    agent_id,
+                    session_id,
+                    limit_hook.tool_log if limit_hook is not None else [],
+                )
+
             # T1 (2026-08-31): 同步 per-session 消息历史——messages 与实例解耦的
             # 单一真源。放在锁释放后（invoke 已完成，messages 处于稳定态）。
             # 注：conversation_manager="auto" 的压缩发生在 strands_agent(prompt)
@@ -938,11 +1065,14 @@ class StrandsAgentAdapter:
             # 此处同步的即压缩后状态——长对话历史按压缩结果迁移，正是期望行为。
             self._sync_session_messages(agent_id, session_id, strands_agent)
 
-            # 8. 提取最终输出（T3 追加轮有输出则覆盖主轮——追加轮是主轮的
-            # "继续"，其最终答复才是用户应看到的收尾结果；空输出沿用主轮）
+            # 8. 提取最终输出（T3/T7 追加轮有输出则覆盖主轮——追加轮是主轮的
+            # "继续"，其最终答复才是用户应看到的收尾结果；空输出沿用主轮。
+            # T7 验证轮在 T3 续做轮之后触发，覆盖优先级最高）
             observation = self._extract_response_text(response)
             if followup_observation:
                 observation = followup_observation
+            if verify_observation:
+                observation = verify_observation
 
             # 会话流水日志：assistant_msg（最终回答全文）落盘
             if observation:
@@ -1381,6 +1511,80 @@ class StrandsAgentAdapter:
             logger.warning(f"todo followup round failed (fallback: main result): {e}")
             return ""
 
+    def _maybe_verify_followup(
+        self,
+        strands_agent: Any,
+        agent_id: str,
+        session_id: str,
+        tool_log: list[dict[str, Any]],
+    ) -> str:
+        """T7: invoke 后收尾检测——写类成功调用后无验证类调用则追加一轮
+
+        复用 T3 _maybe_todo_followup 同款机制（系统身份追加一轮提示 +
+        会话级 flag 限一次），数据源为 ToolCallLimitHook.tool_log（本单次
+        invoke 的工具调用流水，见 _needs_verify_followup 判定规则）。
+
+        防死循环：_verify_followup_done 会话级 flag 触发前先置位，与
+        _todo_followup_done 独立计数（两检测各有一次追加机会）。调用方须
+        持有 agent_lock（本方法在锁内调用，追加轮与主轮共享护栏计数）。
+
+        Args:
+            strands_agent: 当前会话的 Strands Agent 实例（锁内已持有）
+            agent_id: Agent 标识
+            session_id: 会话 ID
+            tool_log: 本轮 invoke 的工具调用流水（hook.tool_log）
+
+        Returns:
+            追加轮的最终文本（未触发 / 触发但无输出时为空串，调用方沿用主轮结果）
+        """
+        if not session_id:
+            return ""
+        if (agent_id, session_id) in self._verify_followup_done:
+            return ""
+        if not _needs_verify_followup(tool_log):
+            return ""
+
+        # 限一次：先置位再追加（防追加轮内异常/新写后未验导致重复触发）
+        self._verify_followup_done.add((agent_id, session_id))
+
+        followup_prompt = (
+            "[TDSF] 检测到你在本轮执行了修改类操作（写文件/执行修改类命令/"
+            "改配置），但之后未用只读工具验证改动是否生效。"
+            "请立即用只读工具验证改动结果（如 systemctl status / cat / ls / "
+            "测试命令），基于验证输出确认改动生效后再收尾；"
+            "若验证发现问题请继续修复。未经验证不得声称操作成功。"
+        )
+
+        # 流水落盘（verify_followup 事件，排障可见追加轮的注入内容）
+        try:
+            from strands_backend.agent_log import log_event
+
+            log_event(
+                session_id,
+                "verify_followup",
+                followup_prompt,
+                meta={
+                    "agent": agent_id,
+                    "tool_log_len": len(tool_log),
+                    "last_tools": [
+                        str(e.get("name", "")) for e in tool_log[-3:]
+                    ],
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"agent_log verify_followup failed: {e}")
+
+        logger.info(
+            f"T7 verify followup round: agent_id={agent_id}, "
+            f"session={session_id}, tool_calls={len(tool_log)}"
+        )
+        try:
+            resp = strands_agent(followup_prompt)
+            return self._extract_response_text(resp)
+        except Exception as e:  # noqa: BLE001 — 追加轮失败降级用主轮结果
+            logger.warning(f"verify followup round failed (fallback: main result): {e}")
+            return ""
+
     def _build_tool_context(
         self,
         agent_id: str,
@@ -1424,6 +1628,11 @@ class StrandsAgentAdapter:
         ssh_conn = str(live.get("sshConnection", "") or "")
         ssh_host = ssh_conn.split("@", 1)[1] if "@" in ssh_conn else ssh_conn
 
+        # T5 (2026-08-31, spec add-agent-loop-closure): 本地工作区路径
+        # （workspaceRoot 优先，cwd 兜底）——python_run 的 subprocess cwd；
+        # 空 = 不可得（python_run fail-closed 拒绝）
+        workspace = str(live.get("workspaceRoot") or live.get("cwd") or "")
+
         return ToolContext(
             event_bus=self.event_bus,
             rust_bridge=self.rust_bridge,
@@ -1436,6 +1645,7 @@ class StrandsAgentAdapter:
             ssh_host=ssh_host,
             # TDSF 魔改 (2026-08-09): 终端执行模式开关
             auto_execute_in_terminal=bool(live.get("autoExecuteInTerminal", False)),
+            workspace=workspace,
         )
 
     # ========================================================================

@@ -19,9 +19,10 @@ skills/registry.py — SkillRegistry（T-P3-05）
   便于后续在 Settings 中显式启用"市场/Marketplace"时重新加载）
 
 invoke 行为：
-- 内置 Skill（有 executor）: 真正执行 → {success, output: stdout+stderr, exit_code, executor}
-- 内置 Skill（无 executor）: 返回 {content: skill.body, when_to_use, steps, examples, source: "builtin"}
+- 内置 Skill（有 executor）: 真正执行 → {success, output: stdout+stderr, exit_code, executor, playbook?}
+- 内置 Skill（无 executor）: 返回 {content: skill.body, when_to_use, steps, examples, playbook?, source: "builtin"}
 - mock Skill:            返回 {content: "mock skill: ..."} (占位，无实际功能)
+（playbook = T6 2026-08-31 剧本：frontmatter steps 结构化列表，两模式均返回）
 """
 
 from __future__ import annotations
@@ -320,6 +321,10 @@ class SkillRegistry:
                     "duration_ms": exec_result["duration_ms"],
                     "params": params,
                     "source": "builtin",
+                    # TDSF 魔改 (T6 2026-08-31): 剧本随 executor 结果一并返回——
+                    # 执行器输出只是剧本第 1 步的快照，后续步骤由 agent 按
+                    # playbook 驱动工具序列推进
+                    "playbook": list(skill.playbook),
                 }
             except Exception as e:
                 # 执行器本身抛错（不是被调命令出错）→ 记录并降级到知识卡
@@ -338,6 +343,8 @@ class SkillRegistry:
                     "params": params,
                     "source": "builtin",
                     "error": str(e),
+                    # TDSF 魔改 (T6 2026-08-31): 执行器异常时剧本仍返回（后续步骤可继续）
+                    "playbook": list(skill.playbook),
                 }
 
         # === 分支 2: 无 executor → 返回 SKILL.md 内容（知识卡） ===
@@ -354,6 +361,9 @@ class SkillRegistry:
                 "tags": skill.tags,
                 "triggers": skill.triggers,
                 "allowed_tools": skill.allowed_tools,
+                # TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 贯通剧本
+                # （frontmatter steps 结构化列表，驱动 agent 工具序列）
+                "playbook": list(skill.playbook),
                 "params": params,
                 "source": "builtin",
             }

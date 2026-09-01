@@ -27,21 +27,21 @@
 
 ## P1 真实能力
 
-- [ ] Task 5: T5 python_run PTC 工具（无沙箱，进程级受控）
-  - [ ] 5.1 新建 tools/python_run.py：subprocess 执行（timeout 30s、输出截断 10KB、cwd 锁定 workspace、失败返回 exit_code+stderr）
-  - [ ] 5.2 registry 注册：ToolPolicy(readonly=False, needs_approval 默认 true observe 裁剪/confirm 审批/auto 免审)
-  - [ ] 5.3 系统提示：明确用途（多文件交叉统计/复杂解析/批量操作优先 python_run 一次完成）
-  - [ ] 5.4 单测：超时 kill、输出截断、cwd 锁定、三模式可见性
-- [ ] Task 6: T6 Skill 剧本化
-  - [ ] 6.1 SKILL.md 解析器支持 `steps:` 段（有序步骤：描述+工具意图+成功判据）
-  - [ ] 6.2 skill_invoke 命中带 steps 技能 → 剧本注入对话（agent 按步驱动工具序列）
-  - [ ] 6.3 改造样板：systemd-troubleshoot（查状态→看日志→定位→修复→验证 五步）、selinux-baseline（查模式→看上下文→策略调整→audit 验证）
-  - [ ] 6.4 步骤进度同步 TodoStrip（与 T3 共用）
-  - [ ] 6.5 单测：steps 解析、注入格式、样板技能结构
-- [ ] Task 7: T7 执行后验证回环
-  - [ ] 7.1 系统提示行动段：凡写操作（写文件/执行命令/改配置）必须只读工具验证（status/cat/test）才宣告完成
-  - [ ] 7.2 收尾检测（与 T3.2 共用钩子）：有写无验证 → 追加补验证提示
-  - [ ] 7.3 单测：写后未验证触发提示；已验证不触发
+- [x] Task 5: T5 python_run PTC 工具（无沙箱，进程级受控）
+  - [x] 5.1 新建 tools/python_run.py：subprocess 执行（timeout 30s、输出截断 10KB、cwd 锁定 workspace、失败返回 exit_code+stderr）；fail-closed 四路（code 缺失/SSH 会话拒绝/workspace 不可得/OSError）
+  - [x] 5.2 registry 注册：ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False)——审批走三模式管控（observe 模式写类工具被 schema 级裁剪）
+  - [x] 5.3 系统提示：明确用途（多文件交叉统计/复杂解析/批量操作优先 python_run 一次完成）+ Post-change verification 指引
+  - [x] 5.4 单测：超时 kill、输出截断、cwd 锁定、三模式可见性（test_python_run.py，17 例）
+- [x] Task 6: T6 Skill 剧本化
+  - [x] 6.1 SKILL.md 解析器支持 `steps:` 段（有序步骤：description+tool_hint+success_criteria；容错跳过缺 description 项）
+  - [x] 6.2 skill_invoke 命中带 steps 技能 → 返回 playbook + playbook_text 注入对话，自动调 todo_write 写入步骤（`[skill名] i/N 描述`，按 title 去重合并）
+  - [x] 6.3 改造样板：systemd-troubleshoot（五步）、selinux-baseline（四步）
+  - [x] 6.4 步骤进度同步 TodoStrip（经 todo_write 走 T3 链路）
+  - [x] 6.5 单测：steps 解析、注入格式、样板技能结构（test_skill_playbook.py，20 例）
+- [x] Task 7: T7 执行后验证回环
+  - [x] 7.1 系统提示行动段：凡写操作（写文件/执行命令/改配置）必须只读工具验证（status/cat/test）才宣告完成；写类/验证类常量入 registry；ssh_command 按命令级细分（RiskChecker：只读命令算验证而非写操作）
+  - [x] 7.2 收尾检测（与 T3.2 共用钩子 `_maybe_verify_followup`）：有写无验证 → 追加补验证提示（会话级 flag 限一次）
+  - [x] 7.3 单测：写后未验证触发提示；已验证不触发（test_verify_followup.py，26 例）
 
 ## P2 稳定性与测试
 

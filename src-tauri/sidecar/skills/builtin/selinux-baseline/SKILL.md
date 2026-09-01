@@ -1,7 +1,7 @@
 ---
 name: selinux-baseline
 description: SELinux 基线排查 Skill，处理 AVC denied、模式切换、文件与端口标签、布尔值及策略模块的生成与安装
-version: 2.0.0
+version: 2.1.0
 author: TDSF
 tags: [selinux, security, avc, label, boolean, enforcing]
 # TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
@@ -11,6 +11,21 @@ executor:
   command: "sestatus"
   timeout: 5
   description: "查询 SELinux 完整状态（当前模式 Enforcing/Permissive/Disabled、策略版本、配置文件模式）. Windows 或未装 SELinux 时自动降级."
+# TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 四步基线剧本
+# —— skill_invoke 命中时注入 LLM 驱动工具序列，并同步任务清单跟踪完成度
+steps:
+  - description: "查询当前 SELinux 模式（getenforce），确认是否与 SELinux 相关"
+    tool_hint: "ssh_command"
+    success_criteria: "输出为 Enforcing/Permissive/Disabled 之一；Disabled 则说明与 SELinux 无关，转常规权限排查"
+  - description: "查看目标文件/进程的安全上下文（ls -Z <path> / ps -Z）"
+    tool_hint: "ssh_command"
+    success_criteria: "拿到 user:role:type:level 四元组，type 是否符合预期（如 httpd_sys_content_t），识别 default_t 等异常标签"
+  - description: "需要时调整标签或策略（semanage fcontext + restorecon / setsebool -P / semanage port，须先说明安全影响并经用户确认）"
+    tool_hint: "ssh_command"
+    success_criteria: "调整命令执行成功（exit_code=0），且已向用户说明该操作对系统安全姿态的影响（L3 级变更）"
+  - description: "验证无新增拒绝（重现原操作后 ausearch -m AVC -ts recent / audit2allow -w 复查）"
+    tool_hint: "ssh_command"
+    success_criteria: "重现原操作后 ausearch 无新增 denied 记录（或 ls -Z 显示预期 type），问题现象消失"
 ---
 
 # SELinux 基线排查 Skill

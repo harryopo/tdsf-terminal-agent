@@ -95,8 +95,8 @@ def resolve_factory(spec: ToolSpec) -> Callable[..., Any]:
 
 
 # ============================================================================
-# 21 工具注册表（13 运维/知识 + 6 魔改增强 + knowledge_get_doc；tools/__init__.py
-# + ops_extended.py + 2026-08-09 集成度补齐 6 工具收编）
+# 22 工具注册表（13 运维/知识 + 6 魔改增强 + knowledge_get_doc + T5 python_run；
+# tools/__init__.py + ops_extended.py + 2026-08-09 集成度补齐 6 工具收编）
 # ============================================================================
 
 # 描述（Schema 角色）与各工具 docstring 首行对齐；改 docstring 时同步这里
@@ -244,6 +244,19 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         # 只写 ~/.tdsf/skills/<name>/SKILL.md（name 有 slug 校验，非系统命令）→ 免审批
         policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False),
     ),
+    # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具
+    # （无沙箱版）——本地 subprocess 受控执行（30s 超时 / 输出截断 10KB /
+    # cwd 锁定 workspace；SSH 会话与无工作区 fail-closed 拒绝）
+    "python_run": ToolSpec(
+        name="python_run",
+        factory="strands_backend.tools.python_run:make_python_run_tool",
+        description="在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）",
+        # 进程级受控（无沙箱）：本地 subprocess 执行 → 非 readonly（observe/L1
+        # 模式 schema 裁剪）。needs_approval=False 对齐 save_skill/skill_invoke
+        # 哲学——审批链路（RiskChecker/needs_you）针对 shell 命令，python 源码
+        # 不走该链路，由三模式 schema 门禁 + 进程级受控边界管控
+        policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False),
+    ),
 }
 
 # 派生只读集合（替代原 _L1_READONLY_TOOL_NAMES 硬编码）
@@ -255,6 +268,42 @@ READONLY_TOOL_NAMES: frozenset[str] = frozenset(
 APPROVAL_TOOL_NAMES: frozenset[str] = frozenset(
     spec.name for spec in TOOL_REGISTRY.values() if spec.policy.needs_approval
 )
+
+# ============================================================================
+# T7 (2026-08-31, spec add-agent-loop-closure): 执行后验证回环——工具分类
+# ============================================================================
+# 写类/验证类两清单是 adapter._needs_verify_followup 判定"写后未验证"的
+# 输入（spec Task 7 钦定，对齐本项目现有工具名）：
+#
+# - WRITE_CLASS_TOOL_NAMES（写类）= spec 的 write_file/edit_file/ssh_command(执行)
+#   /python_run/config_diff 应用 对齐到本项目：执行/修改类工具。ssh_command
+#   在判定层还会按命令内容细分（只读命令如 status/cat 不算写，见 adapter）。
+# - VERIFY_CLASS_TOOL_NAMES（验证类）= spec 的 read_file/list_directory/grep
+#   /get_terminal_output/knowledge_search 对齐到本项目：只读查询类工具。
+#
+# 注意：config_diff 在本项目是只读 diff（远端 diff -u），归验证类；
+# skill_invoke 主语义是获取知识卡（虽可带 executor），不入写类防误报。
+WRITE_CLASS_TOOL_NAMES: frozenset[str] = frozenset({
+    "ssh_command",       # 执行命令（判定层按命令细分只读/写）
+    "python_run",       # 本地 Python 执行（可写文件/起进程）
+    "service_manage",   # systemd 服务管理（start/stop/restart/enable）
+    "package_manage",   # 软件包管理（install/remove）
+    "firewall_manage",  # 防火墙规则管理
+    "backup_restore",   # 备份/恢复（restore 为远端写）
+    "save_skill",       # 写用户技能目录（~/.tdsf/skills/）
+})
+
+VERIFY_CLASS_TOOL_NAMES: frozenset[str] = frozenset({
+    "read_remote_file",   # 读远程文件（spec: read_file）
+    "analyze_logs",       # 日志分析（spec: grep）
+    "inspect_processes",  # 进程检查
+    "network_diagnose",   # 网络诊断（ping/端口/DNS）
+    "get_terminal_output",  # 终端回读（spec: get_terminal_output）
+    "config_diff",        # 配置差异对比（只读 diff -u）
+    "knowledge_search",  # 知识库检索（spec: knowledge_search）
+    "knowledge_get_doc",  # 知识库文档读取
+    "suggest_command",    # 命令建议（纯生成，不执行）
+})
 
 
 def get_tool_policy(name: str) -> ToolPolicy | None:
@@ -298,6 +347,8 @@ __all__ = [
     "TOOL_REGISTRY",
     "READONLY_TOOL_NAMES",
     "APPROVAL_TOOL_NAMES",
+    "WRITE_CLASS_TOOL_NAMES",
+    "VERIFY_CLASS_TOOL_NAMES",
     "OPS_TOOL_ALIASES",
     "resolve_factory",
     "get_tool_policy",

@@ -7,7 +7,7 @@ skills/parser.py — SKILL.md 解析器（T-P3-06）
 - 返回 Skill dataclass（name/description/version/author/tags + body sections）
 - 兼容 PyYAML 不可用时退化为简单 key:value 解析
 
-SKILL.md 格式（DEC-V321-13 标准 + T1 2026-08-28 扩展）：
+SKILL.md 格式（DEC-V321-13 标准 + T1 2026-08-28 扩展 + T6 2026-08-31 剧本化）：
     ---
     name: <skill-name>
     description: <一句话描述>
@@ -16,6 +16,10 @@ SKILL.md 格式（DEC-V321-13 标准 + T1 2026-08-28 扩展）：
     tags: [linux, ops]
     triggers: [systemd, 服务启动失败]   # T1: 触发词（可选，search 命中用）
     allowed-tools: [ssh_command, read_remote_file]  # T1: 工具白名单（可选）
+    steps:                              # T6: 剧本（可选，frontmatter YAML 列表）
+      - description: <步骤描述>
+        tool_hint: <建议工具>           # 可选
+        success_criteria: <成功判据>    # 可选
     ---
 
     # <Skill Name>
@@ -37,8 +41,10 @@ Skill dataclass 字段：
 - tags:        标签列表
 - triggers:    触发词列表（T1 2026-08-28，search 命中扩展；空 = 不参与触发匹配）
 - when_to_use: "When to use" 章节内容
-- steps:       "Steps" 章节内容
+- steps:       "Steps" 章节内容（body 文本，知识卡参考）
 - examples:    "Examples" 章节内容
+- playbook:    结构化剧本（T6 2026-08-31，frontmatter steps: YAML 列表；
+               每项 {description, tool_hint?, success_criteria?}；空 = 无剧本）
 - body:        完整 Markdown body（备用）
 - file_path:   源文件路径（None 表示内存创建）
 
@@ -121,6 +127,13 @@ class Skill:
     # 语义：该技能执行/推荐时允许使用的 Strands 工具名列表（对齐 Claude Code
     # Agent Skills 的 allowed-tools 前置声明）；空列表 = 不限制
     allowed_tools: list[str] = field(default_factory=list)
+    # TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 结构化剧本
+    # 来自 SKILL.md frontmatter 的 steps 字段（YAML 列表），每项：
+    #   {description: 步骤描述, tool_hint: 建议工具(可选), success_criteria: 成功判据(可选)}
+    # 语义：skill_invoke 命中带剧本的技能时注入 LLM 驱动工具序列，
+    # 并同步 todo_write（每步一项，复用 T3 收尾校验覆盖完成度）。
+    # 空 = 无剧本（纯知识卡，行为不变）。
+    playbook: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为 JSON 兼容字典"""
@@ -141,6 +154,8 @@ class Skill:
             "executor": dict(self.executor) if self.executor else None,
             # TDSF 魔改 (T1 2026-08-28): 序列化 allowed-tools
             "allowed_tools": list(self.allowed_tools),
+            # TDSF 魔改 (T6 2026-08-31): 序列化剧本（浅拷贝每步 dict）
+            "playbook": [dict(step) for step in self.playbook],
         }
 
     @classmethod
@@ -163,6 +178,8 @@ class Skill:
             executor=data.get("executor"),
             # TDSF 魔改 (T1 2026-08-28): 反序列化 allowed-tools
             allowed_tools=list(data.get("allowed_tools") or []),
+            # TDSF 魔改 (T6 2026-08-31): 反序列化剧本（容忍缺失/非法）
+            playbook=_parse_playbook(data.get("playbook")),
         )
 
 
@@ -247,6 +264,10 @@ def parse_skill_content(content: str) -> Skill:
         # TDSF 魔改 (T1 2026-08-28): 解析 allowed-tools 工具白名单
         allowed_tools=_normalize_tags(meta.get("allowed-tools")
                                       or meta.get("allowed_tools")),
+        # TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 解析剧本
+        # frontmatter steps: YAML 列表（与 body 的 "## Steps" 知识章节并存：
+        # steps[str] 是人读的参考文本，playbook[list] 是机器执行的结构化剧本）
+        playbook=_parse_playbook(meta.get("steps")),
     )
 
 
@@ -403,6 +424,69 @@ def _parse_sections(body: str) -> dict[str, str]:
         content: str = match.group(2).strip()
         sections[title.lower()] = content
     return sections
+
+
+# TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 剧本解析
+# ---------------------------------------------------------------------------
+# SKILL.md frontmatter 的 steps 字段（YAML 列表）解析为结构化剧本：
+#
+#   steps:
+#     - description: "查服务状态"
+#       tool_hint: "ssh_command"
+#       success_criteria: "拿到 active/failed 与退出码"
+#
+# 返回值:
+#   - []: 无 steps / steps 非 list / 全部项非法（容错，不抛错）
+#   - list[dict]: 每项 {description: str}，含可选 tool_hint / success_criteria
+#
+# 容错规则:
+#   - 非 list（str/None/dict）→ []（_simple_yaml_parse 降级路径下 steps 会
+#     被解析为 list[str]——非 dict 项逐个跳过，最终 []，安全降级为纯知识卡）
+#   - 非 dict 项 → 跳过 + warning
+#   - description 缺失/为空 → 跳过 + warning（步骤必须有可执行的描述）
+#   - tool_hint / success_criteria 缺失 → 空串省略（可选字段）
+# ---------------------------------------------------------------------------
+def _parse_playbook(raw: Any) -> list[dict[str, str]]:
+    """解析 frontmatter 中的 steps 剧本列表
+
+    Args:
+        raw: frontmatter 中 steps 字段的原始值（None / list / 其他）
+
+    Returns:
+        结构化剧本列表（每项含 description + 可选 tool_hint / success_criteria）
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        logger.warning(
+            f"_parse_playbook: steps must be a list, got {type(raw).__name__}, "
+            f"playbook ignored"
+        )
+        return []
+
+    playbook: list[dict[str, str]] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            logger.warning(
+                f"_parse_playbook: step #{idx + 1} is {type(item).__name__} "
+                f"(expect dict), skipped"
+            )
+            continue
+        description = str(item.get("description", "")).strip()
+        if not description:
+            logger.warning(
+                f"_parse_playbook: step #{idx + 1} missing 'description', skipped"
+            )
+            continue
+        step: dict[str, str] = {"description": description}
+        tool_hint = str(item.get("tool_hint", "") or "").strip()
+        if tool_hint:
+            step["tool_hint"] = tool_hint
+        criteria = str(item.get("success_criteria", "") or "").strip()
+        if criteria:
+            step["success_criteria"] = criteria
+        playbook.append(step)
+    return playbook
 
 
 # TDSF 魔改 (P0-2 修复 2026-07-28): 解析 executor 元数据
