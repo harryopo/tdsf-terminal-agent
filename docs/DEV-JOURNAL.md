@@ -2269,3 +2269,15 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：tsc 0 / vitest spaces+ai 373 / lint 0。**遗留**：①同工作区跨对话共享记忆=当前全局共享是超集，按工作区过滤（recall 加 spaceId 维度）为后续项；②C3 打字机/C4 教学卡流式渲染/observe 模式工具矛盾告知（用户第二批实测反馈）待真机调试；③md 目录树渲染失败（提示词强制 fenced code block 方案）待做。
 
 **复盘**：工作区-窗口模型已在数据层存在（每 Space 独立 tabs+activeTabIndex），重构只动 SpaceSwitcher 展示层——App.tsx/TabBar 零改动，风险面小；scope 三态（workspace/ssh/local+legacy）用归一化中间变量避免分支爆炸。
+
+### 37.95 第二批续：C3 打字机根因修复 + 命名分流 + observe 告知 + 树图围栏（2026-09-01 ✅）
+
+**用户补充反馈**：①SSH/WSL 新建窗口应叫 shell、Windows 才是 terminal（+菜单标签分流）；②打字机仍未展现；③文件服务器 @ 引用未实现；④md 树/流程图渲染失败；⑤observe 工具矛盾（模型 thinking 空转）。commit ba25f3a。
+
+**C3 真凶定位（静态链路追踪）**：useAiLiveBridge 的 `sidecar:inject_terminal` 事件监听器调用**捕获变量 injectFn**——它仅在 `injectIntoActivePty` 被调用过一次后才被赋真值，此前是 `() => false` no-op 存根。可视执行（ssh_command visible=True / 终端执行模式）走该事件路径，会话内首次事件早于任何手动注入 → **命令被静默丢弃**：打字机不触发、整段回落也不触发、终端无回显——与用户"打字机开了没用 + 命令输出不自动显示到 shell"完全吻合。修复=监听器始终经 `useChatStore.getState().live.injectIntoActivePty(text)`（打字机优先→失败回落整段），零状态依赖。
+
+**其余修复**：①NewTabMenu 标签按当前工作区 env 分流（SSH/WSL=Shell，本地=Terminal）；②observe 模式提示明确"执行类工具已从 schema 移除，调用报 Unknown tool，此前轮次用过也不例外"（修模型 thinking 空转困惑）；③格式约束强制"目录树/架构图/流程图一律放 ``` 围栏代码块"（FHS 树渲染错乱根因=模型把树写进普通段落）；④教学契约补"代码围栏必须成对闭合，未闭合会把后续板块渲染成乱码"（截图 4 裸 ** 的根因假设）；⑤同步精简 Task planning/Post-change verification 等段保 4000 预算（3937）。
+
+**门禁**：pytest **2053**（改写断言 3 处同步：test_modes 一切写操作→写操作与命令执行被禁止+Unknown tool / test_python_run / test_verify_followup）/ vitest **404**（ai+tabs+spaces）/ tsc 0 / lint 0。tabs↔spaces 循环导入核查（SpaceSwitcher↔NewTabMenu 双向引用）运行时安全。
+
+**遗留下一批**：①@ 远程文件引用（explorer 侧 Attach 菜单 + composer 接收端，§37.88 计划照做）；②同工作区跨对话记忆按 spaceId 过滤；③C4 深度验证（围栏闭合提示词已加，真机确认教学卡流式渲染）；④打字机真机复测（C3 修复后经 tauri 重启生效——sidecar/前端重启加载）。
