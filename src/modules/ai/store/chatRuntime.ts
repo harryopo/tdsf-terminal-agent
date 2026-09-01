@@ -98,6 +98,9 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       const { activeSessionId, sessions } = useChatStore.getState();
       const scope =
         sessions.find((s) => s.id === activeSessionId)?.scope ?? null;
+      // 记忆隔离维度：workspace scope → spaceId（写入打标签 + recall 过滤）
+      const memoryScopeId =
+        scope?.kind === "workspace" ? scope.spaceId : null;
 
       // 工作区 scope 归一化：workspace → ssh 绑定 或 local（含 WSL）。
       // 工作区被删除 → 回退全局行为（scopeKind=null）。
@@ -173,6 +176,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           },
           terminalOutput,
           terminalSession: connected ? "ssh" : "none",
+          // 记忆召回过滤维度（同工作区跨对话共享沉淀）
+          scopeId: memoryScopeId,
           autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
           ...toSidecarMode(useChatStore.getState().agentMode),
         };
@@ -230,6 +235,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
             ? "local"
             : "none"
           : activeTerminal,
+        // 记忆召回过滤维度（同工作区跨对话共享沉淀）
+        scopeId: memoryScopeId,
         // TDSF 魔改 (2026-08-09): 终端执行模式开关传给 Python sidecar
         autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
