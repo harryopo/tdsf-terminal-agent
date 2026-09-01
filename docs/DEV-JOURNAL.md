@@ -2311,3 +2311,18 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：pytest **2055**（+2：scope_id 打标签/不传无标签）/ vitest 354 / tsc 0 / lint 0。**真机验证**：工作区 A 对话沉淀记忆（切走会话触发 summarize）→ 工作区 A 新对话首条消息应注入 <session-memory>；工作区 B 对话不应看到 A 的沉淀。
 
 **复盘**：tags 字段本就存在（hybrid_search 结果也带 tags），整条链路零 schema 变更；"存量记忆保持可见"的兼容设计避免了静默丢上下文。改进——TS 模块级函数误用 store 内部 `get()`（两次 typecheck 才修正为 useChatStore.getState()）。
+
+### 37.98 工作区门控 + 对话栏重构 + 上下文面板 + 真实 usage 修复（2026-09-01 ✅）
+
+**用户钦定**：①未选工作区 agent 不运行（需选工作区并在其中新建对话）；②对话栏最左侧=新建对话，随后显示模式/工作区/上下文占用量；③上下文圈点击才弹详情（此前"一闪一闪"），显示各模块占用+缓存命中率；④稳定性为主，省 token/缓存命中设计参照开源主流方案。commit 4f8d704（9 文件 +243/-22）。
+
+**实现**：
+1. **门控**：新组件 WorkspaceGate——AiMiniWindow.Body 与 TdsfAgentPanel.Body 在 `sessionScope?.kind !== "workspace"` 时渲染门控空态（新建工作区/切换工作区 CTA 经 `tdsf:spaces-create`/`tdsf:spaces-overview` window 事件 → App 打开 SpaceCreateDialog/Switcher 总览）；NewChatButton 无工作区时同样引导创建。⚠️ rules-of-hooks：TdsfAgentPanel.Body 的 early return 必须放在全部 hooks 之后（lint 三连错教训）。
+2. **对话栏重排**：[新建对话+] [AgentStatusPill 模式] [工作区徽章] [上下文圈] | 右区保留 busy/SessionPicker/关闭。
+3. **上下文面板**：context.tsx HoverCard→Popover（点击弹出，流式 re-render 不再闪烁）；新增模块占比行（消息=chars/4 实估，工具定义 23 工具≈3.6k/系统提示词≈1.0k/技能≈0.6k 保守估算，其他=剩余量封顶）+ 平均缓存命中率（真实 usage 缺失时显示 —）。
+4. **真实 usage 修复（真 bug）**：adapter._extract_tokens 返回 snake_case（input_tokens），sidecar-adapter 读 tokens.input（camelCase）——**sidecar 路径真实 token 用量从未上报**，上下文面板恒显估算 0。修=兼容双字段名 + 新增 cached_input_tokens（DeepSeek prompt_cache_hit_tokens / OpenAI prompt_tokens_details.cached_tokens / Strands cache_read_input_tokens 三形态）+ transport 透传 cachedInputTokens。
+5. **稳定性/省 token 核实（无代码改动）**：系统提示按 (mode,teach) 静态组合=稳定前缀 ✓；记忆/env 注入走 user 输入后缀（不破坏前缀缓存）✓；TOOL_REGISTRY 注册表序稳定=工具 schema 前缀稳定 ✓；context_manager="auto"（0.85 阈值 SummarizingConversationManager）已挂=自动压缩 ✓；A2 max_tokens 自动续跑已上。缓存命中增强的关键是"前缀稳定+后缀变更"，现有架构天然满足。
+
+**门禁**：tsc 0 / lint 0（hooks 顺序 3 错修复后）/ vitest 376（1 断言同步 cachedInputTokens）/ pytest adapter 50。**待真机**：门控空态两 CTA、面板点击弹出、跑一轮对话看真实 input tokens 与缓存命中。
+
+**复盘**：字段名错位（snake_case vs camelCase）是"上下文恒 0"的静默根因——跨语言契约字段应在类型定义处注明来源形态；早期 return 与 hooks 顺序冲突是条件渲染重构的常见坑，先写完 hooks 再放 return。
