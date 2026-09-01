@@ -37,13 +37,17 @@ import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 // A1 多服务器隔离 (2026-09-01): 新会话按当前环境绑定 scope。
 // sshStore 无 AI 侧反向依赖，静态导入安全（chatRuntime 已有先例）。
 import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { useSpaces } from "@/modules/spaces";
 import type { SessionScope } from "../lib/sessions";
 
 /**
- * 从当前环境派生新会话的 scope（A1 隔离）：SSH 活跃/连接中会话存在时
- * 绑定该服务器（user+host+port 身份），否则本地。
+ * 从当前环境派生新会话的 scope（A1 隔离 → 工作区绑定升级）：
+ * 优先绑定当前工作区（用户钦定：agent 按工作区隔离，参考主流 AI 开发
+ * 选工作区方式）；无工作区时回退 SSH 会话/本地。
  */
 function deriveSessionScope(): SessionScope {
+  const sp = useSpaces.getState();
+  if (sp.activeId) return { kind: "workspace", spaceId: sp.activeId };
   const sshState = useSshStore.getState();
   const active =
     sshState.sessions.find((s) => s.id === sshState.activeSessionId) ?? null;

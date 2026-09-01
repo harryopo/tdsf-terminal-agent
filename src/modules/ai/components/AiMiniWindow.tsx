@@ -42,6 +42,7 @@ import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
 import { useAgentsStore } from "../store/agentsStore";
 import { getOrCreateChat } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
+import { useSpaces } from "@/modules/spaces";
 import { usePlanStore } from "../store/planStore";
 import { AgentStatusPill } from "./AgentStatusPill";
 import { AiChatView } from "./AiChat";
@@ -501,6 +502,19 @@ function SessionPicker() {
   );
 }
 
+/** 工作区 scope 徽章：显示绑定的工作区名（A1 工作区隔离联动） */
+function WorkspaceBadge({ spaceId }: { spaceId: string }) {
+  const name = useSpaces((s) => s.spaces.find((x) => x.id === spaceId)?.name);
+  return (
+    <span
+      className="shrink-0 rounded bg-violet-500/10 px-1 py-px text-[10px] text-violet-600 dark:text-violet-400"
+      title={`绑定工作区 ${name ?? spaceId}`}
+    >
+      {name ?? "工作区"}
+    </span>
+  );
+}
+
 function SessionRow({
   session,
   active,
@@ -511,8 +525,7 @@ function SessionRow({
   active: boolean;
   onSelect: () => void;
   onDelete: () => void;
-}) {
-  return (
+}) {  return (
     <DropdownMenuItem
       onSelect={(e) => {
         // Don't dismiss if user clicked the trash icon — handle below.
@@ -531,9 +544,11 @@ function SessionRow({
       <span className="min-w-0 flex-1 truncate">
         {session.title || "新会话"}
       </span>
-      {/* A1 多服务器隔离: 会话绑定的环境范围徽章——用户可直观区分
-          "这个对话属于哪台服务器/本地"，防止跨服务器上下文混淆 */}
-      {session.scope?.kind === "ssh" ? (
+      {/* A1 多服务器隔离: 会话绑定的环境范围徽章——工作区名/主机/本地，
+          用户可直观区分"这个对话属于哪个工作空间"防上下文混淆 */}
+      {session.scope?.kind === "workspace" ? (
+        <WorkspaceBadge spaceId={session.scope.spaceId} />
+      ) : session.scope?.kind === "ssh" ? (
         <span
           className="shrink-0 rounded bg-sky-500/10 px-1 py-px text-[10px] text-sky-600 dark:text-sky-400"
           title={`绑定服务器 ${session.scope.user}@${session.scope.host}`}

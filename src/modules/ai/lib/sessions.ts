@@ -14,7 +14,8 @@ import type { AgentMode } from "../agents/registry";
  */
 export type SessionScope =
   | { kind: "local" }
-  | { kind: "ssh"; host: string; user: string; port: number };
+  | { kind: "ssh"; host: string; user: string; port: number }
+  | { kind: "workspace"; spaceId: string };
 
 export type SessionMeta = {
   id: string;
