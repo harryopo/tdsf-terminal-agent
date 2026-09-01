@@ -294,9 +294,9 @@ export function createContextAwareTransport(deps: Deps) {
               deps.onUsage?.({
                 inputTokens: delta.inputTokens,
                 outputTokens: delta.outputTokens,
-                cachedInputTokens: 0,
+                cachedInputTokens: delta.cachedInputTokens ?? 0,
                 lastInputTokens: delta.inputTokens,
-                lastCachedTokens: 0,
+                lastCachedTokens: delta.cachedInputTokens ?? 0,
               })
           : undefined,
       });

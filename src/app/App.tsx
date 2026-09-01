@@ -1888,6 +1888,20 @@ export default function App() {
     setSpaceCreateOpen(true);
   }, []);
 
+  // 工作区门控 CTA (2026-09-01): WorkspaceGate/新建对话按钮经 window 事件
+  // 请求打开 SpaceCreateDialog / SpaceSwitcher 总览（跨模块解耦，与
+  // tdsf:ai-attach-* 事件同模式）
+  useEffect(() => {
+    const onCreate = () => setSpaceCreateOpen(true);
+    const onOverview = () => setSwitcherOpen(true);
+    window.addEventListener("tdsf:spaces-create", onCreate);
+    window.addEventListener("tdsf:spaces-overview", onOverview);
+    return () => {
+      window.removeEventListener("tdsf:spaces-create", onCreate);
+      window.removeEventListener("tdsf:spaces-overview", onOverview);
+    };
+  }, []);
+
   const handleSpaceCreated = useCallback(
     (space: SpaceMeta, sshSessionId?: string) => {
       setActiveSpaceForNewTabs(space.id);

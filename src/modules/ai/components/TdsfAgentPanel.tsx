@@ -38,6 +38,7 @@ import { AGENT_MODE_META } from "../agents/registry";
 import { getOrCreateChat, sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
 import { AiChatView } from "./AiChat";
+import { WorkspaceGate } from "./WorkspaceGate";
 import { AgentModeSwitcher } from "./AgentModeSwitcher";
 // TDSF 魔改 (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
@@ -341,6 +342,12 @@ function Body({
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const helpers = useChat<UIMessage>({ chat });
 
+  // 工作区门控（用户钦定 2026-09-01）: 未绑定工作区的会话 agent 不运行。
+  // 注意: gate 的 early return 必须放在 Body 全部 hooks 之后（rules-of-hooks）。
+  const sessionScope = useChatStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.scope,
+  );
+
   // TDSF 魔改 (2026-08-09): 终端执行模式开关状态
   const autoExec = useChatStore((s) => s.autoExecuteInTerminal);
   const setAutoExec = useChatStore((s) => s.setAutoExecuteInTerminal);
@@ -351,6 +358,11 @@ function Body({
       block: "end",
     });
   }, [helpers.messages]);
+
+  // 工作区门控 early return——必须在 Body 全部 hooks 之后（rules-of-hooks）
+  if (sessionScope?.kind !== "workspace") {
+    return <WorkspaceGate />;
+  }
 
   // === TDSF 阶段3: 提交输入 ===
   // 优先走 sendMessage（chatRuntime.ts → transport.ts → runSidecarStream）

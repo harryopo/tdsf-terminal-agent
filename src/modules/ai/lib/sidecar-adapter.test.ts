@@ -246,7 +246,12 @@ describe("runSidecarStream — 成功路径", () => {
 
     // mood / usage 回调应该被调用
     expect(onMood).toHaveBeenCalledWith("streaming");
-    expect(onUsage).toHaveBeenCalledWith({ inputTokens: 10, outputTokens: 5 });
+    // 2026-09-01: onUsage 透传缓存命中字段（sidecar 未上报时为 0）
+    expect(onUsage).toHaveBeenCalledWith({
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedInputTokens: 0,
+    });
 
     // onStep 应该被多次调用（"调用 Sidecar Agent" → "Thinking" → "Streaming" → null）
     expect(onStep.mock.calls.length).toBeGreaterThanOrEqual(3);
