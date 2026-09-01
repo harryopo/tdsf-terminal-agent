@@ -36,6 +36,7 @@ P0-A1 (2026-08-29, 方案书 v3.1 三模式信任体系)：
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -69,6 +70,28 @@ except ImportError:
 # 消息已写入 agent.messages，再次调用即从中断处继续——长教学/长排障任务
 # 不再整体报错失败。超过上限视为任务失败（防无限续跑烧 token）。
 MAX_TOKEN_CONTINUATIONS = 3
+
+# T9 watchdog (2026-09-01, spec 9.1): invoke 期间连续无回调事件的容忍时长
+# （秒）——模型挂起（无 delta/工具事件）超过阈值即放弃本轮并上报，会话可
+# 继续。轮询间隔为 worker 存活检查粒度。测试可用环境变量覆盖阈值。
+INVOKE_WATCHDOG_IDLE_SECS = 600
+INVOKE_WATCHDOG_POLL_SECS = 5
+
+# T9.2 (spec 9.2): LLM 传输类异常特征——命中则走"只读问答降级"友好文案
+# 而非报错卡（对话不中断）。小写比对。
+_LLM_TRANSPORT_ERROR_MARKERS = (
+    "connection error",
+    "connect error",
+    "timed out",
+    "timeout",
+    "apiconnectionerror",
+    "apitimeouterror",
+    "connection refused",
+    "connection reset",
+    "unreachable",
+    "getaddrinfo failed",
+    "name or service not known",
+)
 
 # 默认 system prompt（构造时未提供则用此）
 # TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具说明，让 LLM 知道可调用 Skill
@@ -166,6 +189,9 @@ _DEFAULT_SYSTEM_PROMPT = (
     # T3 规划-执行回环 (2026-08-31): 规划段从"建议"升格为"必须"——
     # ≥3 步任务先建清单再行动（TodoStrip 可见），完成即更新驱动执行回环；
     # 单步/澄清类明确豁免，防简单问答被清单仪式拖慢。
+    # T9.3 (spec 9.3): 并行工具提示词——独立只读探查并行发起，吃 strands
+    # ConcurrentToolExecutor 红利；有依赖的调用才串行。
+    "- 独立的信息收集类调用（多个只读探查）应并行发起，有依赖的才串行。\n"
     "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单再行动，让用户看到你的规划。\n"
     "- 每完成一项立即 todo_write 更新 completed 再推进。\n"
     # T6 剧本 (2026-08-31): skill_invoke 命中带 steps 剧本的技能时按剧本执行
@@ -883,6 +909,11 @@ class StrandsAgentAdapter:
         # 会话生命周期内最多追加一轮"继续执行或向用户说明原因"。
         self._todo_followup_done: set[tuple[str, str]] = set()
 
+        # T9 watchdog (2026-09-01, spec 9.1): invoke 超时弃管后仍在后台执行的
+        # 会话标记——后续 invoke 对该会话快速降级（不卡 agent_lock）；
+        # worker 线程自然结束时自行解除（见 _locked_invoke.finally）。
+        self._stalled_sessions: set[tuple[str, str]] = set()
+
         # T7 执行后验证回环: 已触发过"写后未验证"追加轮的会话（限一次，
         # 与 _todo_followup_done 独立计数——两种收尾检测互不挤占机会）。
         self._verify_followup_done: set[tuple[str, str]] = set()
@@ -962,6 +993,65 @@ class StrandsAgentAdapter:
                     "直到全部完成。"
                 )
 
+    def _wait_with_watchdog(
+        self,
+        worker: threading.Thread,
+        get_events: Callable[[], int],
+        agent_id: str,
+        session_id: str,
+    ) -> bool:
+        """watchdog 等待（T9, spec 9.1）：轮询 worker 存活 + 回调事件增量
+
+        Args:
+            worker: invoke 工作线程（daemon，锁内执行）
+            get_events: 读取 callback_handler 已收到事件数（任何增量=有输出）
+            agent_id / session_id: stalled 标记 key
+
+        Returns:
+            True = 超时触发（已标记 stalled 并上报，调用方应返回降级响应）；
+            False = worker 正常结束
+        """
+        raw = os.environ.get("TDSF_INVOKE_WATCHDOG_IDLE_SECS", "") or ""
+        try:
+            idle_threshold = max(1.0, float(raw)) if raw else float(
+                INVOKE_WATCHDOG_IDLE_SECS
+            )
+        except ValueError:
+            idle_threshold = float(INVOKE_WATCHDOG_IDLE_SECS)
+        raw_poll = os.environ.get("TDSF_INVOKE_WATCHDOG_POLL_SECS", "") or ""
+        try:
+            poll_secs = max(0.05, float(raw_poll)) if raw_poll else float(
+                INVOKE_WATCHDOG_POLL_SECS
+            )
+        except ValueError:
+            poll_secs = float(INVOKE_WATCHDOG_POLL_SECS)
+
+        last_seen = get_events()
+        last_active = time.time()
+        while True:
+            worker.join(timeout=poll_secs)
+            if not worker.is_alive():
+                return False
+            events_now = get_events()
+            if events_now != last_seen:
+                # 有任何回调事件（delta/工具/循环）= 有输出，刷新活跃时钟
+                last_seen = events_now
+                last_active = time.time()
+                continue
+            if time.time() - last_active > idle_threshold:
+                self._stalled_sessions.add((agent_id, session_id))
+                logger.error(
+                    f"[t9] watchdog: no callback events for {idle_threshold:.0f}s, "
+                    f"abandoning invoke: agent={agent_id}, session={session_id}"
+                )
+                return True
+
+    @staticmethod
+    def _is_llm_transport_error(error: Exception) -> bool:
+        """T9.2 (spec 9.2): 判断异常是否为 LLM 连接/超时类传输错误"""
+        text = f"{type(error).__name__}: {error}".lower()
+        return any(marker in text for marker in _LLM_TRANSPORT_ERROR_MARKERS)
+
     def invoke(
         self,
         agent_id: str,
@@ -1018,6 +1108,27 @@ class StrandsAgentAdapter:
                 reason=degraded_reason,
                 start_time=start_time,
             )
+
+        # T9 watchdog (spec 9.1): 上轮超时弃管的 worker 仍在后台执行时，
+        # 本轮快速降级返回（不卡 agent_lock——worker 结束会自动解除标记）
+        if (agent_id, session_id) in self._stalled_sessions:
+            self._emit_mood("error", agent_id, session_id)
+            logger.warning(
+                f"[t9] invoke skipped (previous call stalled in background): "
+                f"agent={agent_id}, session={session_id}"
+            )
+            return {
+                "observation": (
+                    "上一轮调用超时后仍在后台收尾，请稍等片刻再发消息；"
+                    "会话历史已保留，不影响后续使用。"
+                ),
+                "next_step": "done",
+                "mood": "error",
+                "degraded": True,
+                "degraded_reason": "invoke_stalled",
+                "intermediate_results": [],
+                "tokens": {},
+            }
 
         # 2. 推送 mood=thinking（前端 AgentStatusPill 显示"思考中"）
         self._emit_mood("thinking", agent_id, session_id)
@@ -1077,44 +1188,107 @@ class StrandsAgentAdapter:
 
             # 7. 调用 Strands Agent（同步，agentic loop 内部触发 callback_handler）
             # TDSF 修复 2026-08-09: 用锁保护 agent 调用——防止并发崩溃
-            # TDSF 2026-08-31 (问题5修复): 删除 invoke 前的"开始处理: ..."thinking
-            # 消息——它是内部调度日志，混入前端 reasoning 流（Thinking 区以
-            # "开始处理:hi..." 开头，与模型真实推理混在一行，用户反馈累赘）。
-            # 处理中状态已由 mood=thinking 表达；用户输入已由 agent_log.user_msg
-            # 落盘（排障可查），无需再向 UI 流注入该消息。
+            #
+            # T9 watchdog (2026-09-01, spec 9.1): 锁内工作挪到 daemon worker
+            # 线程，调用方线程做 watchdog 等待——模型挂起（连续 10 分钟无任何
+            # 回调事件）时放弃等待并上报超时报告，会话可继续（不崩进程、不占
+            # RPC 线程池）。stalled 标记让后续 invoke 快速降级；worker 自然
+            # 结束时自动解除标记、恢复常规链路。
+            handler = getattr(strands_agent, "callback_handler", None)
+            handler_stats = getattr(handler, "_stats", None) or {}
 
-            with agent_lock:
-                # T2: 单任务护栏——每次 invoke 开始重置计数（总上限 50 /
-                # 连续失败 3 熔断均按"单次 invoke"口径，不跨对话累计误杀）
-                limit_hook = self._limit_hooks.get((agent_id, ctx.session_id))
-                if limit_hook is not None:
-                    limit_hook.reset()
+            outcome: dict[str, Any] = {}
 
-                # A2 T9 (2026-09-01): max_tokens 截断不再整轮报错——自动续跑
-                # （部分输出已在 agent.messages，再调一次从中断处继续；续跑轮
-                # 与主轮共享 limit_hook 护栏计数，不会绕过 50 上限/熔断）
-                response = self._invoke_with_token_continuation(
-                    strands_agent, prompt, agent_id, session_id
+            def _locked_invoke() -> None:
+                try:
+                    with agent_lock:
+                        # T2: 单任务护栏——每次 invoke 开始重置计数（总上限 50 /
+                        # 连续失败 3 熔断均按"单次 invoke"口径，不跨对话累计误杀）
+                        limit_hook = self._limit_hooks.get(
+                            (agent_id, ctx.session_id)
+                        )
+                        if limit_hook is not None:
+                            limit_hook.reset()
+
+                        # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
+                        response = self._invoke_with_token_continuation(
+                            strands_agent, prompt, agent_id, session_id
+                        )
+
+                        # T3 (2026-08-31): 收尾校验——todo 未完成项追加一轮
+                        # 续做提示（锁内调用，限一次防死循环）
+                        followup_observation = self._maybe_todo_followup(
+                            strands_agent, agent_id, session_id
+                        )
+
+                        # T7 (2026-08-31): 执行后验证回环——写类调用后无只读
+                        # 验证时追加一轮补验证（与 T3 追加轮独立计数）
+                        verify_observation = self._maybe_verify_followup(
+                            strands_agent,
+                            agent_id,
+                            session_id,
+                            limit_hook.tool_log if limit_hook is not None else [],
+                        )
+                    outcome["response"] = response
+                    outcome["followup"] = followup_observation
+                    outcome["verify"] = verify_observation
+                except Exception as e:  # noqa: BLE001 — 交给调用方统一处理
+                    outcome["error"] = e
+                finally:
+                    # worker 自然结束（含异常）→ 解除 stalled 标记，恢复常规链路
+                    self._stalled_sessions.discard((agent_id, session_id))
+
+            worker = threading.Thread(
+                target=_locked_invoke,
+                name=f"tdsf-invoke-{session_id or 'x'}",
+                daemon=True,
+            )
+            worker.start()
+
+            watchdog_fired = self._wait_with_watchdog(
+                worker,
+                lambda: handler_stats.get("events_received", 0),
+                agent_id,
+                session_id,
+            )
+            if watchdog_fired:
+                # 超时：不取 worker 结果（仍在后台跑）——友好降级，对话可继续
+                duration = time.time() - start_time
+                msg = (
+                    "AI 调用超时：模型超过 10 分钟没有任何输出，本轮已中止。"
+                    "请检查网络或模型服务状态后重试；会话历史已保留，可直接继续对话。"
                 )
-
-                # T3 (2026-08-31): 收尾校验——todo 存在未完成项（pending/
-                # in_progress）时以系统身份追加一轮"继续执行或向用户说明
-                # 原因"（锁内调用，限一次防死循环）。追加轮与主轮共享
-                # 护栏计数（同一 invoke 周期），超限同样熔断。
-                followup_observation = self._maybe_todo_followup(
-                    strands_agent, agent_id, session_id
+                logger.error(
+                    f"[t9] invoke watchdog timeout: agent={agent_id}, "
+                    f"session={session_id}, duration={duration:.1f}s"
                 )
+                self._emit_mood("error", agent_id, session_id)
+                try:
+                    from strands_backend.agent_log import log_event as _log_event
 
-                # T7 (2026-08-31, spec add-agent-loop-closure): 执行后验证
-                # 回环——写类工具成功调用后无只读验证类调用时追加一轮
-                # "用只读工具验证改动生效"（锁内调用，限一次，数据源为
-                # hook.tool_log 本轮调用流水；与 T3 追加轮独立计数）。
-                verify_observation = self._maybe_verify_followup(
-                    strands_agent,
-                    agent_id,
-                    session_id,
-                    limit_hook.tool_log if limit_hook is not None else [],
-                )
+                    _log_event(
+                        session_id,
+                        "watchdog_timeout",
+                        msg,
+                        meta={"agent": agent_id, "mode": mode.value},
+                    )
+                except Exception as _e:  # noqa: BLE001
+                    logger.debug(f"agent_log watchdog_timeout failed: {_e}")
+                return {
+                    "observation": msg,
+                    "next_step": "done",
+                    "mood": "error",
+                    "degraded": True,
+                    "degraded_reason": "invoke_watchdog_timeout",
+                    "intermediate_results": [],
+                    "tokens": {},
+                }
+            if "error" in outcome:
+                # worker 已失败——抛给下方 except 统一处理（含 T9.2 降级分类）
+                raise outcome["error"]
+            response = outcome.get("response")
+            followup_observation = outcome.get("followup")
+            verify_observation = outcome.get("verify")
 
             # T1 (2026-08-31): 同步 per-session 消息历史——messages 与实例解耦的
             # 单一真源。放在锁释放后（invoke 已完成，messages 处于稳定态）。
@@ -1196,11 +1370,31 @@ class StrandsAgentAdapter:
                 f"error={e}, duration={duration:.3f}s"
             )
             self._emit_mood("error", agent_id, session_id)
-            self._emit_needs_you_for_error(agent_id, session_id, input, e)
             # T1: 异常轮次 best-effort 同步历史——用户消息/已完成的工具轮
             # 已进 agent.messages，同步后 perm 变化重建实例时仍保留本轮上下文
             # （失败同步只降级为丢本轮，不影响主流程错误上报）。
             self._sync_session_messages(agent_id, session_id, strands_agent)
+
+            # T9.2 (spec 9.2): LLM 传输类错误（连接失败/超时）→ 只读问答降级：
+            # 友好说明替代报错卡，**对话不中断**；服务恢复后自动回到正常链路。
+            # 不推 needs_you 错误卡（那是流程性失败专用）。
+            if self._is_llm_transport_error(e):
+                return {
+                    "observation": (
+                        "AI 服务暂时不可用（网络连接失败或超时），本轮无法调用模型。"
+                        "你可以稍后重试；服务恢复后会自动回到正常工作模式。"
+                        "本轮会话历史已保留，不影响后续对话。"
+                    ),
+                    "next_step": "done",
+                    "mood": "error",
+                    "degraded": True,
+                    "degraded_reason": "llm_transport_error",
+                    "degraded_message": str(e),
+                    "intermediate_results": [],
+                    "tokens": {},
+                }
+
+            self._emit_needs_you_for_error(agent_id, session_id, input, e)
 
             # P0-4 (2026-08-01): 运行时失败返回 degraded 标志，
             # 前端据此显示友好降级提示（而非把错误当正常输出流式显示）

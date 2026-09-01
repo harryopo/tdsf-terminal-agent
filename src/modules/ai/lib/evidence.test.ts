@@ -92,3 +92,78 @@ describe("fetchEvidence — 会话证据拉取", () => {
     expect(await fetchEvidence("s1")).toEqual([]);
   });
 });
+
+// ============================================================================
+// T10.2 (2026-09-01): 证据三段分组——收集→执行→验证
+// ============================================================================
+import {
+  classifyEvidenceStage,
+  groupEvidence,
+  type EvidenceItem,
+} from "./evidence";
+
+const ev = (tool_name: string, ts = 0): EvidenceItem => ({
+  tool_name,
+  status: "completed",
+  detail: "",
+  result: "",
+  agent: "main",
+  timestamp: ts,
+});
+
+describe("classifyEvidenceStage（T10.2 三段分组）", () => {
+  it("写类工具归执行段", () => {
+    expect(classifyEvidenceStage(ev("ssh_command"), false)).toBe("execute");
+    expect(classifyEvidenceStage(ev("python_run"), false)).toBe("execute");
+  });
+
+  it("写操作前的只读调用归收集段", () => {
+    expect(classifyEvidenceStage(ev("knowledge_search"), false)).toBe(
+      "collect",
+    );
+    expect(classifyEvidenceStage(ev("network_diagnose"), false)).toBe(
+      "collect",
+    );
+  });
+
+  it("写操作后的验证类调用归验证段（时序语义）", () => {
+    expect(classifyEvidenceStage(ev("get_terminal_output"), true)).toBe(
+      "verify",
+    );
+    expect(classifyEvidenceStage(ev("config_diff"), true)).toBe("verify");
+  });
+
+  it("写操作后的非验证类只读调用仍归收集段", () => {
+    expect(classifyEvidenceStage(ev("suggest_command"), true)).toBe("collect");
+  });
+
+  it("agent: 前缀委派事件按去前缀后的工具名分类", () => {
+    expect(classifyEvidenceStage(ev("agent:teach"), false)).toBe("collect");
+  });
+});
+
+describe("groupEvidence", () => {
+  it("按时间序分组：收集→执行→验证", () => {
+    const groups = groupEvidence([
+      ev("knowledge_search", 1),
+      ev("network_diagnose", 2),
+      ev("ssh_command", 3),
+      ev("get_terminal_output", 4),
+    ]);
+    expect(groups.collect.map((e) => e.tool_name)).toEqual([
+      "knowledge_search",
+      "network_diagnose",
+    ]);
+    expect(groups.execute.map((e) => e.tool_name)).toEqual(["ssh_command"]);
+    expect(groups.verify.map((e) => e.tool_name)).toEqual([
+      "get_terminal_output",
+    ]);
+  });
+
+  it("纯收集（无写操作）→ 执行/验证组为空", () => {
+    const groups = groupEvidence([ev("knowledge_search")]);
+    expect(groups.collect).toHaveLength(1);
+    expect(groups.execute).toHaveLength(0);
+    expect(groups.verify).toHaveLength(0);
+  });
+});
