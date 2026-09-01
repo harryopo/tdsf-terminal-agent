@@ -2256,3 +2256,16 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：pytest **2053**(+9)/vitest ai+ai-elements **376**/tsc/lint 0/build:web 全绿。**遗留下一批**：C3（打字机+visible 回显链路需连真机排查——inject_terminal 事件链/human_type pump）、C4（教学卡流式过渡区裸 markdown，MessageResponse 已渲染完整 section，需真机复现定位渲染时机）；方案书 v4.0 P2 T8-T10 未做（用户问"方案是否都完成"——P0/P1 已落地，P2 因本批用户实测插队顺延）。
 
 **复盘**：做对——typecheck 当场抓住 uuid/rustSessionId 混用（省一次真机排障）；A1 老会话兼容设计避免迁移。改进——C3/C4 静态读码无法定案，应第一时间连真机复现再修；本批 5 修横跨 9 文件未拆 commit（同批用户反馈聚合）。
+
+### 37.94 工作区-窗口单栏重构 + agent 工作区隔离（2026-09-01 ✅ 第二批·用户钦定）
+
+**用户钦定方向**（先存记忆 workspace-restructure-directive）：每个工作区打开的窗口平铺在顶部窗口栏，选中哪个工作区窗口栏只展示其窗口；去 R 头像；去重复加号；工作区要有删除按钮；WSL/服务器命名撞车要区分；**agent 按工作区隔离**（切工作区需新建对话；同工作区跨对话共享记忆沉淀）。commit 885f8dd（5 文件 +100/-69）。
+
+**实现**：
+1. **SpaceSwitcher 顶栏收敛**：chips 行（每 Space 头像 chip + 独立加号）→ **单触发器**（当前工作区名+chevron，无头像）；切换/重命名/删除全部在总览面板；TabBar 保持当前工作区窗口+唯一加号（"窗口栏只展示一个工作区打开的窗口"）。
+2. **面板行**：SpaceAvatar 移除（用户钦定不要 R 图标）；行操作（重命名/新窗口/删除）由 hover 才现改为**常显**（删除按钮可发现性）；行名后加**环境徽章**（本地/WSL·发行版/user@host）——WSL 与服务器命名撞车凭环境可分。
+3. **agent 联动**：SessionScope 增 `workspace(spaceId)`，新会话优先绑定当前工作区；getLive 归一化（工作区 env=ssh → 绑定服务器解析 rustSessionId；env=local/wsl → 本地口径+space.root 优先）；会话徽章显示工作区名；legacy/无 scope 全兼容。
+
+**门禁**：tsc 0 / vitest spaces+ai 373 / lint 0。**遗留**：①同工作区跨对话共享记忆=当前全局共享是超集，按工作区过滤（recall 加 spaceId 维度）为后续项；②C3 打字机/C4 教学卡流式渲染/observe 模式工具矛盾告知（用户第二批实测反馈）待真机调试；③md 目录树渲染失败（提示词强制 fenced code block 方案）待做。
+
+**复盘**：工作区-窗口模型已在数据层存在（每 Space 独立 tabs+activeTabIndex），重构只动 SpaceSwitcher 展示层——App.tsx/TabBar 零改动，风险面小；scope 三态（workspace/ssh/local+legacy）用归一化中间变量避免分支爆炸。
