@@ -388,12 +388,16 @@ class TestVerifyFollowupOnAdapter:
 
 class TestSystemPromptVerificationSection:
     def test_default_prompt_contains_verification_constraint(self):
-        """系统提示含 T7 行动段：写后必须只读验证，未验证不得声称成功"""
+        """系统提示含 T7 行动段：写后必须只读验证，未验证不得声称成功
+
+        2026-09-01 精简改写（4000 字符预算）：'凡执行写操作…验证结果' →
+        '写操作…用只读工具验证'，断言同步为改写后的稳定短语。
+        """
         from strands_backend.adapter import _DEFAULT_SYSTEM_PROMPT
 
-        assert "凡执行写操作" in _DEFAULT_SYSTEM_PROMPT
+        assert "写操作（写文件/改配置/修改类命令）" in _DEFAULT_SYSTEM_PROMPT
         assert "未验证不得声称成功" in _DEFAULT_SYSTEM_PROMPT
-        assert "只读工具验证结果" in _DEFAULT_SYSTEM_PROMPT
+        assert "只读工具验证" in _DEFAULT_SYSTEM_PROMPT
 
     def test_prompt_mentions_playbook(self):
         """系统提示含 T6 剧本指引（skill_invoke 返回 playbook_text 时按步骤执行）"""

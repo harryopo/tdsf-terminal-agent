@@ -247,7 +247,7 @@ class TestPythonRunVisibility(unittest.TestCase):
         from strands_backend.adapter import _DEFAULT_SYSTEM_PROMPT
 
         self.assertIn("python_run(code)", _DEFAULT_SYSTEM_PROMPT)
-        self.assertIn("写一段 Python 一次完成", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("批量操作一次完成", _DEFAULT_SYSTEM_PROMPT)
 
 
 if __name__ == "__main__":

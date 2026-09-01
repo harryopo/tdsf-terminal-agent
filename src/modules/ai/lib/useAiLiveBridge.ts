@@ -403,8 +403,11 @@ export function useAiLiveBridge(params: Params) {
           // 终端执行模式开启时加换行符自动执行
           const autoExec = useChatStore.getState().autoExecuteInTerminal;
           const text = autoExec ? command + "\n" : command;
-          // 复用 injectIntoActivePty 逻辑（SSH 优先 + 本地回退）
-          injectFn(text);
+          // C3 修复 (2026-09-01, 用户实测"打字机开了没用/命令不回显终端"):
+          // 此前调用捕获的 injectFn 变量——它在 injectIntoActivePty 首次被
+          // 调用前是 no-op 存根，早到的可视执行事件被静默丢弃。改为始终经
+          // live getter 的 injectIntoActivePty（打字机优先→失败回落整段）。
+          useChatStore.getState().live.injectIntoActivePty(text);
         },
       );
     })().catch((e) => {
