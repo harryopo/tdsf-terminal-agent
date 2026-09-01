@@ -354,25 +354,40 @@ export function SpaceCreateDialog({
         }
       }
 
+      // 2026-09-01 修复（用户实测：新建 SSH 工作区弹出俩、名字不一样）：
+      // 旧顺序先 connectSsh 后 createSpace——App 的 connect-success 订阅在
+      // 连接成功时按 host/user 找工作区，此刻对话框的工作区还不存在，订阅
+      // 便自建一个 `user@host` 工作区，随后对话框又建用户命名的那个 →
+      // 双工作区。改为**先建工作区再连接**（连接成功后补写 env.sessionId；
+      // 连接失败回滚删除孤儿工作区）。订阅侧按 host/user 匹配到本工作区，
+      // 不会重复创建。
+      const spaceName = name.trim() || defaultName;
+      const meta = createSpace({
+        name: spaceName,
+        root: `/home/${params.user}`,
+        env: {
+          kind: "ssh",
+          host: params.host,
+          user: params.user,
+          port: params.port,
+          label: spaceName,
+        },
+      });
+
       const sessionId = await connectSsh(resolved);
       if (!sessionId) {
+        useSpaces.getState().remove(meta.id);
         setError("SSH 连接失败, 请检查参数或网络");
         return;
       }
 
-      const spaceName = name.trim() || defaultName;
-      const env: WorkspaceEnv = {
+      useSpaces.getState().setEnv(meta.id, {
         kind: "ssh",
         host: params.host,
         user: params.user,
         port: params.port,
         label: spaceName,
         sessionId,
-      };
-      const meta = createSpace({
-        name: spaceName,
-        root: `/home/${params.user}`,
-        env,
       });
       onCreated(meta, sessionId);
       onOpenChange(false);

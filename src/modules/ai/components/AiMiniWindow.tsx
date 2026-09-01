@@ -26,7 +26,6 @@ import {
   Cancel01Icon,
   Delete02Icon,
   FilterIcon,
-  PlusSignIcon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { useSpaces } from "@/modules/spaces";
@@ -187,11 +186,18 @@ function Body({
   const helpers = useChat<UIMessage>({ chat });
   const isBusy =
     helpers.status === "submitted" || helpers.status === "streaming";
-  // 工作区门控（用户钦定 2026-09-01）: 未绑定工作区的会话 agent 不运行
+  // 工作区门控（用户钦定 2026-09-01）: 未绑定工作区的会话 agent 不运行；
+  // 绑定的工作区已被删除（关掉全部工作区等）同样门控——不可绕过。
+  // useSpaces 钩子无条件调用（rules-of-hooks），门控判断在钩子外做。
   const sessionScope = useChatStore(
     (s) => s.sessions.find((x) => x.id === sessionId)?.scope,
   );
-  const gated = sessionScope?.kind !== "workspace";
+  const wsId =
+    sessionScope?.kind === "workspace" ? sessionScope.spaceId : null;
+  const boundSpaceExists = useSpaces((s) =>
+    wsId ? s.spaces.some((x) => x.id === wsId) : false,
+  );
+  const gated = sessionScope?.kind !== "workspace" || !boundSpaceExists;
 
   return (
     <>
@@ -302,8 +308,7 @@ function Header({
       className="relative flex h-11 shrink-0 cursor-grab items-center justify-between gap-2 border-b border-border/60 px-3 active:cursor-grabbing"
     >
       <div className="flex min-w-0 items-center gap-1.5">
-        {/* 用户钦定 2026-09-01: 最左侧新建对话（须绑定工作区，否则引导创建） */}
-        <NewChatButton />
+        {/* 用户钦定 2026-09-01: 左侧不放加号——新建对话经右侧"新会话"下拉展开添加 */}
         <AgentStatusPill isMiniWindow />
         <WorkspaceChip />
         {messages !== undefined ? (
@@ -334,30 +339,7 @@ function Header({
   );
 }
 
-/** 最左侧新建对话（用户钦定 2026-09-01）——无工作区时引导创建而非直接建会话 */
-function NewChatButton() {
-  const newSession = useChatStore((s) => s.newSession);
-  const hasSpace = useSpaces((s) => s.activeId !== null);
-  return (
-    <Button
-      type="button"
-      size="icon"
-      variant="ghost"
-      className="size-6 shrink-0"
-      aria-label="新建对话"
-      title={hasSpace ? "新建对话" : "请先创建/选择工作区"}
-      data-testid="new-chat-button"
-      onClick={() => {
-        if (hasSpace) newSession();
-        else window.dispatchEvent(new CustomEvent("tdsf:spaces-create"));
-      }}
-    >
-      <HugeiconsIcon icon={PlusSignIcon} size={13} strokeWidth={2} />
-    </Button>
-  );
-}
-
-/** 工作区徽章：显示当前绑定的工作区，点击打开工作区总览 */
+/** 工作区徽章：显示当前绑定的工作区，点击打开工作区总览（保持灰白色调） */
 function WorkspaceChip() {
   const active = useSpaces((s) =>
     s.spaces.find((x) => x.id === s.activeId),
@@ -373,7 +355,7 @@ function WorkspaceChip() {
         "text-[10.5px] transition-colors",
         active
           ? "text-muted-foreground hover:bg-accent hover:text-foreground"
-          : "font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400",
+          : "border border-border/60 text-muted-foreground hover:bg-accent hover:text-foreground",
       )}
       title="切换工作区（agent 按工作区隔离运行）"
       data-testid="workspace-chip"
