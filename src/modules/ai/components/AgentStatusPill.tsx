@@ -28,7 +28,11 @@ import {
   ShieldUserIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AGENT_MODE_META, type AgentMode } from "../agents/registry";
+import {
+  AGENT_MODE_ACCENT,
+  AGENT_MODE_META,
+  type AgentMode,
+} from "../agents/registry";
 import { useChatStore } from "../store/chatStore";
 
 /** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电 / 教学=书，与切换器一致） */
@@ -100,9 +104,14 @@ export function AgentStatusPill({
         icon={ModeIcon}
         size={11}
         strokeWidth={1.75}
-        className="text-muted-foreground"
+        className={AGENT_MODE_ACCENT[agentMode].text}
       />
-      <span className="max-w-[8rem] truncate text-muted-foreground">
+      <span
+        className={cn(
+          "max-w-[8rem] truncate",
+          AGENT_MODE_ACCENT[agentMode].text,
+        )}
+      >
         {meta.badge}
       </span>
       {/* T2 循环护栏: invoke 期间循环进度（第 N 轮 · 已用工具 M） */}

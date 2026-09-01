@@ -1906,13 +1906,26 @@ export default function App() {
     (space: SpaceMeta, sshSessionId?: string) => {
       setActiveSpaceForNewTabs(space.id);
       if (space.env.kind === "ssh" && sshSessionId) {
-        const tabId = newTabInSpace(space.id, space.root ?? undefined);
-        updateTab(tabId, {
-          sshSessionId,
-          // 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（与 bindTabToSshSpace 一致）
-          customTitle: "shell",
-        });
-        setActiveId(tabId);
+        // 2026-09-01 修复（配对 SpaceCreateDialog 先建区后连接的时序）：
+        // connect-success 订阅可能已自动补建 shell tab——已存在同绑定的
+        // tab 时直接激活，不再重复创建（否则一个工作区出两个 shell）。
+        const existing = tabsRef.current.find(
+          (t) =>
+            t.spaceId === space.id &&
+            t.kind === "terminal" &&
+            t.sshSessionId === sshSessionId,
+        );
+        if (existing) {
+          setActiveId(existing.id);
+        } else {
+          const tabId = newTabInSpace(space.id, space.root ?? undefined);
+          updateTab(tabId, {
+            sshSessionId,
+            // 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（与 bindTabToSshSpace 一致）
+            customTitle: "shell",
+          });
+          setActiveId(tabId);
+        }
       } else if (space.env.kind === "wsl") {
         // TDSF 魔改 2026-08-28: WSL Space 首终端不带 cwd（cwd=null 时 Rust 端
         // build_wsl 用 `--cd ~` 落在 WSL home；传 activeCwd 本地路径反而错误）
