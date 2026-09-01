@@ -1,7 +1,7 @@
 ---
 name: systemd-troubleshoot
 description: systemd 服务故障排查 Skill，覆盖 failed 服务定位、journalctl 日志分析、unit 文件修改与开机自启管理
-version: 2.0.0
+version: 2.1.0
 author: TDSF
 tags: [systemd, service, journalctl, systemctl, linux, ops]
 allowed-tools: [ssh_command, get_terminal_output, read_remote_file, log_analyzer, suggest_command, knowledge_search]
@@ -12,6 +12,24 @@ executor:
   command: "systemctl list-units --type=service --state=failed"
   timeout: 5
   description: "列出所有 failed 状态的服务. 无输出行 + '0 loaded units listed' 说明当前没有失败服务."
+# TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 五步排障剧本
+# —— skill_invoke 命中时注入 LLM 驱动工具序列，并同步任务清单跟踪完成度
+steps:
+  - description: "查询服务当前状态与退出原因（systemctl status <svc> -l）"
+    tool_hint: "ssh_command"
+    success_criteria: "拿到 Loaded/Active 状态与退出码（如 status=1/FAILURE），明确 failed 还是 running"
+  - description: "查看服务完整报错日志（journalctl -xeu <svc> --no-pager）"
+    tool_hint: "ssh_command"
+    success_criteria: "读到具体报错信息，可归类为配置语法错/端口占用/依赖未起/权限路径/资源限制之一"
+  - description: "对照常见故障表定位根因（systemd-analyze verify / ss -tlnp / list-dependencies）"
+    tool_hint: "ssh_command"
+    success_criteria: "根因指向单一可验证的具体问题，有对应证据输出支撑"
+  - description: "执行修复（restart / 改 unit 后 daemon-reload / 改应用配置，须先向用户说明影响并确认）"
+    tool_hint: "ssh_command"
+    success_criteria: "修复命令执行成功（exit_code=0）；改过 unit 文件的必须先 daemon-reload 再 restart"
+  - description: "验证服务恢复（systemctl is-active <svc> 返回 active，功能探针通过）"
+    tool_hint: "ssh_command"
+    success_criteria: "服务 active (running) 且无新报错（journalctl 近 5 分钟无 error）；对外服务用 curl/端口检查确认功能正常"
 ---
 
 # systemd 服务故障排查 Skill

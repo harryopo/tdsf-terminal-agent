@@ -33,6 +33,15 @@ analyze_logs / inspect_processes / network_diagnostic），无法调用 Skill。
         {status:"not_found", skill_name, message}
     error:
         {status:"error", skill_name, error}
+
+T6 剧本化 (2026-08-31, spec add-agent-loop-closure):
+- 命中带 steps 剧本（frontmatter steps: YAML 列表）的技能 → 返回体附
+  playbook（结构化列表）+ playbook_text（注入 LLM 的剧本文本：
+  "请按以下步骤执行，每步完成后用工具验证成功判据：1. ... 2. ..."），
+  agent 由此驱动工具序列。
+- 步骤进度同步 TodoStrip：命中带剧本技能时自动调 todo_write 把步骤
+  写入任务清单（每步一项 pending）——复用 T3 收尾校验自动覆盖剧本完成度
+  （已有清单合并追加，不粗暴覆盖用户/LLM 已建任务）。
 """
 from __future__ import annotations
 
@@ -42,6 +51,107 @@ from typing import Any
 from strands_backend.tools import ToolContext, tool
 
 logger = logging.getLogger("sidecar.strands_backend.tools.skill_invoke")
+
+
+# ============================================================================
+# T6 剧本辅助（构建注入文本 + todo 同步）
+# ============================================================================
+
+
+def build_playbook_text(playbook: list[dict[str, str]]) -> str:
+    """把结构化剧本渲染为注入 LLM 的剧本文本
+
+    格式（spec add-agent-loop-closure Task 6 钦定）：
+        请按以下步骤执行，每步完成后用工具验证成功判据：
+        1. <描述>（建议工具：<tool_hint>；成功判据：<success_criteria>）
+        2. ...
+
+    Args:
+        playbook: parser._parse_playbook 产出的结构化剧本
+
+    Returns:
+        多行剧本文本（空剧本返回空串）
+    """
+    if not playbook:
+        return ""
+    lines: list[str] = ["请按以下步骤执行，每步完成后用工具验证成功判据："]
+    for idx, step in enumerate(playbook, 1):
+        line: str = f"{idx}. {step.get('description', '')}"
+        extras: list[str] = []
+        if step.get("tool_hint"):
+            extras.append(f"建议工具：{step['tool_hint']}")
+        if step.get("success_criteria"):
+            extras.append(f"成功判据：{step['success_criteria']}")
+        if extras:
+            line += "（" + "；".join(extras) + "）"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _sync_playbook_to_todos(
+    ctx: ToolContext,
+    skill_name: str,
+    playbook: list[dict[str, str]],
+) -> None:
+    """把剧本步骤同步进任务清单（todo_write，每步一项 pending）
+
+    复用而非重建：写入后 T3 收尾校验（_maybe_todo_followup）自动覆盖
+    剧本完成度——步骤未做完即结束会话时触发追加一轮续做。
+
+    合并策略：todo_write 是全量替换式更新，为不粗暴覆盖会话中已有的
+    任务清单，读取当前镜像（get_session_todos），已有项原样保留、剧本
+    步骤按 title 去重后追加；空清单时直接写入步骤列表。
+
+    Raises:
+        Exception: 透传给调用方（调用方 catch 后 warning 降级，不影响
+        skill 主返回）
+    """
+    from strands_backend.tools.todo_write import (
+        get_session_todos,
+        invoke_todo_write_tool,
+    )
+
+    session_id = ctx.session_id or ""
+    if not session_id:
+        return  # 匿名调用无会话归属，TodoStrip 无处可同步
+
+    existing = get_session_todos(session_id)
+    existing_titles = {t.get("title", "") for t in existing}
+
+    new_items: list[dict[str, Any]] = []
+    for idx, step in enumerate(playbook, 1):
+        title = f"[{skill_name}] {idx}/{len(playbook)} {step.get('description', '')}"
+        if title in existing_titles:
+            continue  # 重复调用同技能：步骤已在清单，不重复追加
+        desc_parts: list[str] = []
+        if step.get("tool_hint"):
+            desc_parts.append(f"建议工具：{step['tool_hint']}")
+        if step.get("success_criteria"):
+            desc_parts.append(f"成功判据：{step['success_criteria']}")
+        new_items.append({
+            "title": title,
+            "description": "；".join(desc_parts),
+            "status": "pending",
+        })
+
+    if not new_items:
+        return  # 全部已存在（重复调用），无需重写
+
+    todos: list[dict[str, Any]] = [
+        {
+            "id": t.get("id"),
+            "title": t.get("title", ""),
+            "description": t.get("description") or "",
+            "status": t.get("status", "pending"),
+        }
+        for t in existing
+    ] + new_items
+    result = invoke_todo_write_tool({"todos": todos}, ctx)
+    if not result.get("ok"):
+        logger.warning(
+            f"sync playbook to todos rejected: skill={skill_name}, "
+            f"error={result.get('error')}"
+        )
 
 
 # ============================================================================
@@ -146,13 +256,30 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     # 整理返回结果，统一加 status / skill_name 字段
     # SkillRegistry.invoke 返回 dict，可能含：
-    #   - 知识卡模式: {name, content, when_to_use, steps, examples, params, source}
-    #   - executor 模式: {name, success, stdout, stderr, exit_code, executor, ...}
+    #   - 知识卡模式: {name, content, when_to_use, steps, examples, playbook, params, source}
+    #   - executor 模式: {name, success, stdout, stderr, exit_code, executor, playbook, ...}
     skill_source = result.get("source", "unknown")
     has_executor = "executor" in result and result.get("executor") is not None
     is_executed = "success" in result and isinstance(
         result.get("success"), bool
     )
+
+    # T6 (2026-08-31, spec add-agent-loop-closure): 命中带 steps 剧本的技能
+    # → 返回体附结构化 playbook + 注入 LLM 的剧本文本，并把步骤同步进
+    # 任务清单（复用 T3 收尾校验覆盖剧本完成度）。同步失败仅 warning
+    # 降级（AI 代码质量红线 4：不静默吞错），不影响 skill 主返回。
+    playbook: list[dict[str, str]] = [
+        {str(k): str(v) for k, v in step.items()}
+        for step in (result.get("playbook") or [])
+        if isinstance(step, dict)
+    ]
+    playbook_text: str = ""
+    if playbook:
+        playbook_text = build_playbook_text(playbook)
+        try:
+            _sync_playbook_to_todos(ctx, skill_name, playbook)
+        except Exception as e:  # noqa: BLE001 — todo 同步失败不阻塞 skill 返回
+            logger.warning(f"sync playbook to todos failed: {e}")
 
     if is_executed:
         # executor 模式：真正执行了 shell/python/http
@@ -186,6 +313,11 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             "triggers": result.get("triggers", []),
             "allowed_tools": result.get("allowed_tools", []),
         }
+
+    # T6: 两模式统一附剧本（结构化数据 + 注入文本，LLM 据此驱动工具序列）
+    if playbook:
+        final_result["playbook"] = playbook
+        final_result["playbook_text"] = playbook_text
 
     # 推送 tool_call 完成事件
     if ctx.event_bus is not None:
@@ -252,6 +384,10 @@ def make_skill_invoke_tool(ctx: ToolContext):
         Skill 行为：
         - 知识卡模式：返回 SKILL.md 内容作为参考（content/steps/examples）
         - executor 模式：真正执行 shell/python/http 脚本，返回 stdout/stderr
+        - 剧本模式（T6）：技能带 steps 剧本时，返回体附 playbook（结构化步骤）
+          与 playbook_text（注入剧本文本）——请按 playbook_text 的步骤顺序执行，
+          每步完成后用工具验证成功判据再推进下一步；步骤已同步进任务清单，
+          完成一步用 todo_write 更新一项状态
 
         何时使用：
         - 用户询问特定领域知识时（如"如何排查 nginx 502"）
@@ -267,6 +403,7 @@ def make_skill_invoke_tool(ctx: ToolContext):
                 status 取值: success | not_found | error
                 知识卡模式额外字段: content / when_to_use / steps / examples / tags / triggers / allowed_tools
                 executor 模式额外字段: stdout / stderr / exit_code / success
+                剧本模式额外字段（两模式均可能）: playbook / playbook_text
         """
 
     def skill_invoke(
@@ -290,4 +427,5 @@ def make_skill_invoke_tool(ctx: ToolContext):
 __all__ = [
     "invoke_skill_tool",
     "make_skill_invoke_tool",
+    "build_playbook_text",
 ]

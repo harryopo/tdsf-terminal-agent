@@ -47,10 +47,10 @@ def _ctx() -> ToolContext:
 class TestRegistryIntegrity(unittest.TestCase):
     """注册表完整性"""
 
-    def test_registry_has_21_tools(self):
+    def test_registry_has_22_tools(self):
         """T2 后注册表 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
-        + 2026-08-31 knowledge_get_doc = 21"""
-        self.assertEqual(len(TOOL_REGISTRY), 21)
+        + 2026-08-31 knowledge_get_doc + T5 python_run = 22"""
+        self.assertEqual(len(TOOL_REGISTRY), 22)
 
     def test_key_matches_spec_name(self):
         """dict key 必须与 spec.name 一致（防复制粘贴错位）"""
@@ -71,7 +71,7 @@ class TestRegistryIntegrity(unittest.TestCase):
 
     def test_expected_tools_registered(self):
         """核心工具名齐全（13 原有 + 6 收编 + T14 save_skill
-        + 2026-08-31 knowledge_get_doc）"""
+        + 2026-08-31 knowledge_get_doc + T5 python_run）"""
         expected = {
             # 原 13
             "ssh_command", "read_remote_file", "analyze_logs",
@@ -86,6 +86,8 @@ class TestRegistryIntegrity(unittest.TestCase):
             "save_skill",
             # 2026-08-31 双库: 知识库完整文档读取
             "knowledge_get_doc",
+            # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具
+            "python_run",
         }
         self.assertEqual(expected, set(TOOL_REGISTRY.keys()))
 
