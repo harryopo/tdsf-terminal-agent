@@ -863,16 +863,17 @@ class TestMakeAllOpsTools(unittest.TestCase):
     def test_returns_all_registered_tools(self):
         """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
         （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
-        + 2026-08-31 knowledge_get_doc + T5 python_run = 22）"""
+        + 2026-08-31 knowledge_get_doc + T5 python_run
+        + P2 #42 ssh_list_sessions = 23）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 22)
+        self.assertEqual(len(tools), 23)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 22 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 22)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 23 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 23)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1570,11 +1571,12 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         return {getattr(t, "__name__", str(t)) for t in tools}
 
     def test_main_gets_all_tools(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 22 工具"""
+        """main（唯一 agent）：TOOL_REGISTRY 全量 23 工具（P2 #42 +1）"""
         tools = make_all_ops_tools(self._ctx())
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 22)
+        self.assertEqual(len(tools), 23)
         self.assertIn("ssh_command", names)
+        self.assertIn("ssh_list_sessions", names)
         self.assertIn("knowledge_search", names)
         self.assertIn("knowledge_get_doc", names)
 
@@ -1766,7 +1768,7 @@ class TestModeDecision(unittest.TestCase):
         self.assertEqual(r["status"], "needs_approval")
 
     def test_host_mismatch_blocked(self):
-        """Task 3.3: 目标会话 != 激活终端会话 → command_blocked"""
+        """Task 3.3 → P2 #42 回退路径: live 列表不可识别 + 目标 != 激活 → command_blocked"""
         from strands_backend.tools import execute_via_ssh
 
         bridge = make_mock_rust_bridge()
@@ -1783,7 +1785,11 @@ class TestModeDecision(unittest.TestCase):
         self.assertEqual(result["status"], "command_blocked")
         self.assertIn("192.168.45.130", result["message"])
         self.assertIn("终端窗口", result["message"])
-        bridge.ipc_invoke.assert_not_called()
+        # P2 #42: 会先查一次 live 列表（mock 返回不可识别 dict → 回退旧校验），
+        # 但绝不能发出 ssh_command 执行请求
+        called_methods = [c.args[0] for c in bridge.ipc_invoke.call_args_list]
+        self.assertIn("ssh_status", called_methods)
+        self.assertNotIn("ssh_command", called_methods)
 
     def test_host_check_skipped_when_host_unknown(self):
         """Task 3.3: 激活终端 host 不可得（ssh_host 空）→ 跳过校验"""
@@ -1853,14 +1859,16 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         # config_diff/assess_confidence/search_history）= 12
         # 2026-08-31：+ knowledge_search（readonly 语义修正）
         # + knowledge_get_doc（新工具）= 14
+        # P2 #42 (2026-09-01)：+ ssh_list_sessions（只读枚举）= 15
         self.assertIn("todo_write", names)
         self.assertIn("get_terminal_output", names)
         self.assertIn("assess_confidence", names)
         self.assertIn("knowledge_search", names)
         self.assertIn("knowledge_get_doc", names)
+        self.assertIn("ssh_list_sessions", names)
         # backup_restore（restore 写操作）L1 下被裁——schema-level safety 补口
         self.assertNotIn("backup_restore", names)
-        self.assertEqual(len(tools), 14)
+        self.assertEqual(len(tools), 15)
 
     def test_l2_keeps_all_tools(self):
         ctx = make_ctx()
@@ -1869,12 +1877,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
-        self.assertEqual(len(tools), 22)
+        self.assertEqual(len(tools), 23)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 22)
+        self.assertEqual(len(tools), 23)
 
 
 # ============================================================================
@@ -2248,3 +2256,239 @@ class TestAutoSinkCase(unittest.TestCase):
         adapter = self._adapter()
         adapter._auto_sink_case("main", "你好呀", "今天天气不错。", "sink-s3")
         self.assertEqual(rag.count(), before)
+
+
+# ============================================================================
+# P2 #42 (2026-09-01, §37.90): ssh_list_sessions 工具 + execute_via_ssh
+# host 校验放宽（live 列表权威 + fail-closed 回退）
+# ============================================================================
+
+# 模拟 Rust ssh_sessions_detail 反向路由响应（serde camelCase）
+_LIVE_SESSIONS = [
+    {"sessionId": 1, "host": "192.168.45.130", "port": 22, "user": "root", "state": "connected"},
+    {"sessionId": 2, "host": "10.0.0.5", "port": 2222, "user": "deploy", "state": "connected"},
+    {"sessionId": 3, "host": "10.0.0.9", "port": 22, "user": "root", "state": "reconnecting"},
+]
+
+
+def make_dispatch_bridge(responses: dict[str, Any]) -> MagicMock:
+    """按 method 分发响应的 mock RustBridge"""
+    bridge = MagicMock()
+    bridge.ipc_invoke = MagicMock(side_effect=lambda m, p: responses[m])
+    return bridge
+
+
+class TestParseLiveSessions(unittest.TestCase):
+    """parse_live_sessions 纯函数：规范化 + 不可识别 fail-closed"""
+
+    def test_valid_list_normalized(self):
+        from strands_backend.tools.ssh_sessions import parse_live_sessions
+
+        out = parse_live_sessions(_LIVE_SESSIONS)
+        self.assertIsNotNone(out)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(out[0], {
+            "session_id": 1, "host": "192.168.45.130", "port": 22,
+            "user": "root", "state": "connected",
+        })
+        self.assertEqual(out[2]["state"], "reconnecting")
+
+    def test_non_list_returns_none(self):
+        from strands_backend.tools.ssh_sessions import parse_live_sessions
+
+        # 旧后端 error dict / unavailable dict / 标量 → 全部不可识别
+        for bad in (
+            {"status": "error", "reason": "route_not_found"},
+            {"status": "unavailable"},
+            "oops", None, 42,
+        ):
+            self.assertIsNone(parse_live_sessions(bad), f"bad={bad!r}")
+
+    def test_bad_entry_returns_none(self):
+        from strands_backend.tools.ssh_sessions import parse_live_sessions
+
+        self.assertIsNone(parse_live_sessions([{"sessionId": "abc"}]))  # id 非数字
+        self.assertIsNone(parse_live_sessions(["not-a-dict"]))  # 条目非 dict
+        self.assertIsNone(parse_live_sessions([{"host": "h"}]))  # 缺 sessionId
+
+
+class TestSshListSessionsTool(unittest.TestCase):
+    """ssh_list_sessions 工具：success / unavailable / error 结构化降级"""
+
+    def test_success_returns_normalized_sessions(self):
+        from strands_backend.tools.ssh_sessions import invoke_ssh_list_sessions_tool
+
+        bridge = make_dispatch_bridge({"ssh_status": _LIVE_SESSIONS})
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        r = invoke_ssh_list_sessions_tool(ctx)
+        self.assertEqual(r["status"], "success")
+        self.assertEqual(r["count"], 3)
+        self.assertEqual(r["connected_count"], 2)
+        self.assertEqual(r["active_session_id"], "1")
+        self.assertEqual(r["sessions"][1], {
+            "session_id": 2, "host": "10.0.0.5", "port": 2222,
+            "user": "deploy", "state": "connected",
+        })
+        bridge.ipc_invoke.assert_called_once_with("ssh_status", {})
+
+    def test_unavailable_when_bridge_none(self):
+        from strands_backend.tools.ssh_sessions import invoke_ssh_list_sessions_tool
+
+        ctx = make_ctx(rust_bridge=None)
+        r = invoke_ssh_list_sessions_tool(ctx)
+        self.assertEqual(r["status"], "unavailable")
+        self.assertEqual(r["reason"], "rust_bridge_not_injected")
+        self.assertEqual(r["sessions"], [])
+
+    def test_unavailable_on_unrecognized_response(self):
+        """旧 Rust 后端（无 ssh_status 路由返回 error dict）→ 结构化降级"""
+        from strands_backend.tools.ssh_sessions import invoke_ssh_list_sessions_tool
+
+        bridge = make_dispatch_bridge({
+            "ssh_status": {"status": "error", "reason": "route_not_found"},
+        })
+        ctx = make_ctx(rust_bridge=bridge)
+        r = invoke_ssh_list_sessions_tool(ctx)
+        self.assertEqual(r["status"], "unavailable")
+        self.assertEqual(r["reason"], "unrecognized_ssh_status_response")
+
+    def test_error_on_ipc_exception(self):
+        from strands_backend.tools.ssh_sessions import invoke_ssh_list_sessions_tool
+
+        bridge = MagicMock()
+        bridge.ipc_invoke = MagicMock(side_effect=RuntimeError("bridge down"))
+        ctx = make_ctx(rust_bridge=bridge)
+        r = invoke_ssh_list_sessions_tool(ctx)
+        self.assertEqual(r["status"], "error")
+        self.assertIn("bridge down", r["error"])
+
+
+class TestExecuteViaSshHostRelaxed(unittest.TestCase):
+    """P2 #42 host 校验放宽：live 列表内 connected 会话放行；否则 fail-closed"""
+
+    def _ctx_with_live(self, ssh_host: str = "192.168.45.130"):
+        bridge = make_dispatch_bridge({
+            "ssh_status": _LIVE_SESSIONS,
+            "ssh_command": {"ok": True, "output": "ok", "exit_code": 0, "duration": 0.1},
+        })
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        ctx.mode = AgentMode.CONFIRM
+        ctx.ssh_host = ssh_host
+        return ctx, bridge
+
+    def test_target_in_live_list_allowed_despite_not_active(self):
+        """多主机核心场景：目标会话 2 != 激活会话 1，但在 live 列表且
+        connected → 放行，结果附 target_endpoint"""
+        from strands_backend.tools import execute_via_ssh
+
+        ctx, bridge = self._ctx_with_live()
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="2",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["target_endpoint"], "deploy@10.0.0.5:2222")
+        called_methods = [c.args[0] for c in bridge.ipc_invoke.call_args_list]
+        self.assertEqual(called_methods, ["ssh_status", "ssh_command"])
+
+    def test_target_not_in_live_list_blocked(self):
+        from strands_backend.tools import execute_via_ssh
+
+        ctx, bridge = self._ctx_with_live()
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="9",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "command_blocked")
+        self.assertIn("state=不存在", result["message"])
+        called_methods = [c.args[0] for c in bridge.ipc_invoke.call_args_list]
+        self.assertNotIn("ssh_command", called_methods)
+
+    def test_reconnecting_target_blocked(self):
+        """仅 connected 放行：reconnecting/failed 等状态一律拦截"""
+        from strands_backend.tools import execute_via_ssh
+
+        ctx, _ = self._ctx_with_live()
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="3",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "command_blocked")
+        self.assertIn("reconnecting", result["message"])
+
+    def test_status_exception_falls_back_to_legacy_block(self):
+        """live 查询抛异常 → 回退旧严格校验（host 已知 + 不匹配 → 拦）"""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = MagicMock()
+        calls: list[str] = []
+
+        def _invoke(method: str, params: dict) -> dict:
+            calls.append(method)
+            if method == "ssh_status":
+                raise RuntimeError("bridge down")
+            return {"ok": True, "output": "ok", "exit_code": 0, "duration": 0.1}
+
+        bridge.ipc_invoke = MagicMock(side_effect=_invoke)
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        ctx.mode = AgentMode.CONFIRM
+        ctx.ssh_host = "192.168.45.130"
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="2",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "command_blocked")
+        self.assertNotIn("ssh_command", calls)
+
+    def test_status_malformed_falls_back_to_legacy_skip(self):
+        """live 查询返回不可识别结构 + 激活 host 不可得 → 旧逻辑跳过校验放行"""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_dispatch_bridge({
+            "ssh_status": {"ok": True, "output": "weird legacy shape"},
+            "ssh_command": {"ok": True, "output": "ok", "exit_code": 0, "duration": 0.1},
+        })
+        ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
+        ctx.mode = AgentMode.CONFIRM
+        ctx.ssh_host = ""  # 激活 host 不可得 → 旧校验跳过
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="2",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "success")
+        # 旧路径放行时无 live 端点信息
+        self.assertEqual(result["target_endpoint"], "")
+
+    def test_active_session_still_allowed(self):
+        """回归保障：默认路径（目标 == 激活会话）不受放宽影响"""
+        from strands_backend.tools import execute_via_ssh
+
+        ctx, _ = self._ctx_with_live()
+        result = execute_via_ssh(
+            ctx=ctx, command="uptime", ssh_session_id="1",
+            timeout=10, tool_name="ssh_command",
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["target_endpoint"], "root@192.168.45.130:22")
+
+
+class TestSshListSessionsFactory(unittest.TestCase):
+    """工厂函数 + registry 装配"""
+
+    def test_factory_returns_callable_named_tool(self):
+        from strands_backend.tools.ssh_sessions import make_ssh_list_sessions_tool
+
+        ctx = make_ctx(rust_bridge=None)
+        tool_fn = make_ssh_list_sessions_tool(ctx)
+        self.assertEqual(getattr(tool_fn, "__name__", ""), "ssh_list_sessions")
+        # passthrough/@tool 装饰均可调用且返回结构化 dict
+        r = tool_fn()
+        self.assertEqual(r["status"], "unavailable")
+
+    def test_registered_in_tool_registry_readonly(self):
+        from strands_backend.tools.registry import TOOL_REGISTRY
+
+        spec = TOOL_REGISTRY.get("ssh_list_sessions")
+        self.assertIsNotNone(spec)
+        self.assertTrue(spec.policy.readonly)
+        self.assertFalse(spec.policy.needs_approval)

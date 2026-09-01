@@ -942,26 +942,53 @@ def execute_via_ssh(
                            "如仍需执行请重新发起并等待用户审批。",
             }
 
-    # 3. host 校验（Task 3.3）：目标会话必须 == 激活终端会话。
-    #    数据源：ctx.ssh_host（前端 live.sshConnection "user@host" 提取）。
-    #    若激活终端 host 不可得（ctx.ssh_host 为空，如旧前端未下发或本地
-    #    模式）→ 跳过校验（fail-open 仅此一处，其余门禁仍生效）。
-    ssh_host = getattr(ctx, "ssh_host", "") or ""
-    if ssh_host and ssh_session_id and ctx.ssh_session_id:
+    # 3. 会话校验（Task 3.3 → P2 #42 放宽，2026-09-01）：
+    #    原规则：目标会话必须 == 激活终端会话（ctx.ssh_session_id）。
+    #    放宽后（多主机运维）：目标会话只要是 Rust SshState 里**真实存在且
+    #    state=connected** 的会话即放行——校验依据是 ipc_invoke("ssh_status")
+    #    返回的 live 列表（权威数据源），不信任 LLM 传入的 session_id。
+    #    威胁模型（勿破坏）：
+    #    - deny 硬底线 / 审批链 / observe 裁剪均在此前的第 1-2 步，不受影响；
+    #    - 仅放行 connected；reconnecting/failed/idle/closed 一律拦截；
+    #    - live 列表查询失败 / 结构不可识别 → 回退下方旧严格校验
+    #      （fail-closed 方向：只可能收紧、不会额外放宽）；
+    #    - 放行时记录 target_endpoint（user@host:port），审计与结果可追溯。
+    target_endpoint = ""
+    live_checked = False
+    target_id_str = str(ssh_session_id or "")
+    if ctx.rust_bridge is not None and target_id_str.isdigit():
         try:
-            if int(ssh_session_id) != int(ctx.ssh_session_id):
+            # 函数级导入防循环依赖（ssh_sessions 不反向依赖本模块的运行时符号）
+            from strands_backend.tools.ssh_sessions import (
+                parse_live_sessions,
+                session_endpoint,
+            )
+
+            resp = ctx.rust_bridge.ipc_invoke("ssh_status", {})
+            live_sessions = parse_live_sessions(resp)
+        except Exception as e:  # noqa: BLE001 — 查询失败走回退，不阻断
+            logger.warning(f"execute_via_ssh live session query failed: {e}")
+            live_sessions = None
+        if live_sessions is not None:
+            live_checked = True
+            target = next(
+                (s for s in live_sessions if s["session_id"] == int(target_id_str)),
+                None,
+            )
+            if target is None or target["state"] != "connected":
+                state_desc = target["state"] if target else "不存在"
                 logger.warning(
-                    f"execute_via_ssh host mismatch: target={ssh_session_id}, "
-                    f"active={ctx.ssh_session_id} ({ssh_host}), tool={tool_name}"
+                    f"execute_via_ssh target session not connected: "
+                    f"target={ssh_session_id} ({state_desc}), tool={tool_name}"
                 )
                 _audit_append(
                     event="command_blocked",
-                    decision="host_mismatch",
+                    decision="target_session_not_connected",
                     tool=tool_name,
                     command=command,
                     session_id=session_id,
                     agent=ctx.agent_name,
-                    reason=f"target session {ssh_session_id} != active {ctx.ssh_session_id}",
+                    reason=f"target session {ssh_session_id} state={state_desc}",
                 )
                 return {
                     "status": "command_blocked",
@@ -970,14 +997,50 @@ def execute_via_ssh(
                     "risk": risk,
                     "impact": impact,
                     "message": (
-                        f"command_blocked! 只读模式或安全规则禁止执行："
-                        f"host 校验失败——目标会话 {ssh_session_id} 不是当前激活"
-                        f"终端的会话。请在 {ssh_host} 对应的终端窗口执行。"
+                        f"command_blocked! 目标会话 {ssh_session_id} 当前不可操作"
+                        f"（state={state_desc}）。请先用 ssh_list_sessions 确认 "
+                        f"state=connected 的会话，再对该会话执行命令。"
                     ),
                 }
-        except (ValueError, TypeError):
-            # 会话 id 非 int-convertible：交给下方 invalid session_id 路径
-            pass
+            target_endpoint = session_endpoint(target)
+        # live_sessions is None（查询失败/不可识别）→ 落入下方旧严格校验
+    if not live_checked:
+        # 旧严格校验（Task 3.3 原逻辑，保留作回退）：目标会话必须 == 激活
+        # 终端会话。数据源：ctx.ssh_host（前端 live.sshConnection "user@host"
+        # 提取）。若激活终端 host 不可得（ctx.ssh_host 为空，如旧前端未下发
+        # 或本地模式）→ 跳过校验（fail-open 仅此一处，其余门禁仍生效）。
+        ssh_host = getattr(ctx, "ssh_host", "") or ""
+        if ssh_host and ssh_session_id and ctx.ssh_session_id:
+            try:
+                if int(ssh_session_id) != int(ctx.ssh_session_id):
+                    logger.warning(
+                        f"execute_via_ssh host mismatch: target={ssh_session_id}, "
+                        f"active={ctx.ssh_session_id} ({ssh_host}), tool={tool_name}"
+                    )
+                    _audit_append(
+                        event="command_blocked",
+                        decision="host_mismatch",
+                        tool=tool_name,
+                        command=command,
+                        session_id=session_id,
+                        agent=ctx.agent_name,
+                        reason=f"target session {ssh_session_id} != active {ctx.ssh_session_id}",
+                    )
+                    return {
+                        "status": "command_blocked",
+                        "command": command,
+                        "ssh_session_id": session_id,
+                        "risk": risk,
+                        "impact": impact,
+                        "message": (
+                            f"command_blocked! 只读模式或安全规则禁止执行："
+                            f"host 校验失败——目标会话 {ssh_session_id} 不是当前激活"
+                            f"终端的会话。请在 {ssh_host} 对应的终端窗口执行。"
+                        ),
+                    }
+            except (ValueError, TypeError):
+                # 会话 id 非 int-convertible：交给下方 invalid session_id 路径
+                pass
 
     # 4. 检查 RustBridge 配置
     if ctx.rust_bridge is None:
@@ -1069,6 +1132,8 @@ def execute_via_ssh(
         session_id=session_id,
         agent=ctx.agent_name,
         exit_code=result.get("exit_code", 0) if isinstance(result, dict) else 0,
+        # P2 #42: 多主机场景记录实际目标端点（live 列表校验放行时有值）
+        target_endpoint=target_endpoint,
     )
     # P1-2: 记录会话证据（前端证据面板展示 AI 依据的真实操作）
     # 注意：证据归属**对话会话**（ctx.session_id），不是 SSH 会话 id
@@ -1085,6 +1150,9 @@ def execute_via_ssh(
         "status": "success",
         "command": command,
         "ssh_session_id": session_id,
+        # P2 #42: 实际目标端点 user@host:port（live 校验放行时有值，
+        # 旧严格校验路径为空串）——执行错主机时 LLM/用户可直接看到
+        "target_endpoint": target_endpoint,
         "output": output_text,
         "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
