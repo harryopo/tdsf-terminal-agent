@@ -34,6 +34,30 @@ import {
 import { pushRecentModel } from "../lib/modelPrefs";
 // TDSF B1 (2026-08-29): 终端 block 流水账类型（<terminal-history> 数据源）
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
+// A1 多服务器隔离 (2026-09-01): 新会话按当前环境绑定 scope。
+// sshStore 无 AI 侧反向依赖，静态导入安全（chatRuntime 已有先例）。
+import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import type { SessionScope } from "../lib/sessions";
+
+/**
+ * 从当前环境派生新会话的 scope（A1 隔离）：SSH 活跃/连接中会话存在时
+ * 绑定该服务器（user+host+port 身份），否则本地。
+ */
+function deriveSessionScope(): SessionScope {
+  const sshState = useSshStore.getState();
+  const active =
+    sshState.sessions.find((s) => s.id === sshState.activeSessionId) ?? null;
+  const session =
+    active && isSessionConnected(active)
+      ? active
+      : sshState.sessions.find((s) => isSessionConnected(s));
+  if (session) {
+    const { user, host } = session.params;
+    // params.port 可选（默认 22），scope 存规范化值供 getLive 匹配
+    return { kind: "ssh", user, host, port: session.params.port ?? 22 };
+  }
+  return { kind: "local" };
+}
 
 export type Live = {
   getCwd: () => string | null;
@@ -553,6 +577,8 @@ export const useChatStore = create<StoreState>((set, get) => ({
         title: "新会话",
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        // A1: 冷启动首会话同样按当前环境绑定 scope
+        scope: deriveSessionScope(),
       };
       nextSessions = [fresh, ...sessions];
       void saveSessionsList(nextSessions);
@@ -580,6 +606,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
       title: "新会话",
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      // A1 多服务器隔离 (2026-09-01): 创建时快照当前环境——SSH 活跃时
+      // 绑定该服务器（按 user+host+port 身份，重连不丢归属），否则本地。
+      // 此后该对话的环境感知只看绑定服务器，不再全局跟随活跃终端。
+      scope: deriveSessionScope(),
     };
     const next = [meta, ...get().sessions];
     set({ sessions: next, activeSessionId: id, agentMeta: IDLE_META });

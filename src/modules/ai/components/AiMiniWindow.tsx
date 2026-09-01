@@ -531,6 +531,23 @@ function SessionRow({
       <span className="min-w-0 flex-1 truncate">
         {session.title || "新会话"}
       </span>
+      {/* A1 多服务器隔离: 会话绑定的环境范围徽章——用户可直观区分
+          "这个对话属于哪台服务器/本地"，防止跨服务器上下文混淆 */}
+      {session.scope?.kind === "ssh" ? (
+        <span
+          className="shrink-0 rounded bg-sky-500/10 px-1 py-px text-[10px] text-sky-600 dark:text-sky-400"
+          title={`绑定服务器 ${session.scope.user}@${session.scope.host}`}
+        >
+          {session.scope.host}
+        </span>
+      ) : session.scope?.kind === "local" ? (
+        <span
+          className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground"
+          title="本地工作区会话"
+        >
+          本地
+        </span>
+      ) : null}
       <button
         type="button"
         data-session-delete

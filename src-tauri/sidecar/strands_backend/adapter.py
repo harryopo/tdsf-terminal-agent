@@ -64,6 +64,12 @@ except ImportError:
     _STRANDS_AGENT_AVAILABLE = False
     _StrandsAgent = None  # type: ignore[assignment]
 
+# A2 T9 (2026-09-01, 用户实测反馈"agent 无法完成长任务"): 模型单轮输出触顶
+# （MaxTokensReachedException）时的自动续跑上限。Strands 语义：触顶时部分
+# 消息已写入 agent.messages，再次调用即从中断处继续——长教学/长排障任务
+# 不再整体报错失败。超过上限视为任务失败（防无限续跑烧 token）。
+MAX_TOKEN_CONTINUATIONS = 3
+
 # 默认 system prompt（构造时未提供则用此）
 # TDSF 修复 2026-07-31 (P4): 新增 skill_invoke 工具说明，让 LLM 知道可调用 Skill
 # TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具说明，让 LLM 生成可执行命令
@@ -910,6 +916,51 @@ class StrandsAgentAdapter:
         except Exception as e:
             logger.debug(f"emit_agent_switch failed: {e}")
 
+    def _invoke_with_token_continuation(
+        self,
+        strands_agent: Any,
+        prompt: str,
+        agent_id: str,
+        session_id: str,
+    ) -> Any:
+        """调用 Strands Agent；max_tokens 触顶自动续跑（A2 T9, 2026-09-01）
+
+        Strands 语义：模型达到 max_tokens 时抛 MaxTokensReachedException，
+        部分输出已写入 agent.messages——再次调用 agent 即从中断处继续。
+        此前该异常直接冒泡到 invoke 的 except 分支整轮报错（用户实测：
+        教学模式写长文到一半整体失败），现在自动续跑最多
+        ``MAX_TOKEN_CONTINUATIONS`` 轮；仍触顶则原样抛出（走既有错误链路）。
+
+        续跑轮与主轮共享调用方重置的 limit_hook 护栏（50 上限/熔断），
+        不会绕过单任务护栏。
+        """
+        from strands.types.exceptions import MaxTokensReachedException
+
+        current_prompt = prompt
+        attempt = 0
+        while True:
+            try:
+                return strands_agent(current_prompt)
+            except MaxTokensReachedException:
+                attempt += 1
+                if attempt > MAX_TOKEN_CONTINUATIONS:
+                    logger.error(
+                        f"[a2] max_tokens continuation exhausted "
+                        f"({MAX_TOKEN_CONTINUATIONS}): agent={agent_id}, "
+                        f"session={session_id}"
+                    )
+                    raise
+                logger.warning(
+                    f"[a2] max_tokens reached, auto-continue "
+                    f"{attempt}/{MAX_TOKEN_CONTINUATIONS}: agent={agent_id}, "
+                    f"session={session_id}"
+                )
+                current_prompt = (
+                    "上一轮输出因达到模型 max_tokens 上限被截断（已完成的部分"
+                    "已保留）。请从中断处继续完成任务，不要重复已输出内容，"
+                    "直到全部完成。"
+                )
+
     def invoke(
         self,
         agent_id: str,
@@ -1038,7 +1089,12 @@ class StrandsAgentAdapter:
                 if limit_hook is not None:
                     limit_hook.reset()
 
-                response = strands_agent(prompt)
+                # A2 T9 (2026-09-01): max_tokens 截断不再整轮报错——自动续跑
+                # （部分输出已在 agent.messages，再调一次从中断处继续；续跑轮
+                # 与主轮共享 limit_hook 护栏计数，不会绕过 50 上限/熔断）
+                response = self._invoke_with_token_continuation(
+                    strands_agent, prompt, agent_id, session_id
+                )
 
                 # T3 (2026-08-31): 收尾校验——todo 存在未完成项（pending/
                 # in_progress）时以系统身份追加一轮"继续执行或向用户说明

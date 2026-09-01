@@ -330,3 +330,75 @@ class TestContract:
 
         r = analyze("echo x; rm -rf /tmp/a")
         json.dumps(r, ensure_ascii=False)  # 不抛异常即可
+
+
+# ============================================================================
+# C2 (2026-09-01, 用户实测反馈): 容器工具子命令细分 + 只读对象提取去噪
+# ============================================================================
+
+class TestContainerToolClassification:
+    """docker/podman/kubectl 只读子命令放行，其余 fail-closed"""
+
+    def test_docker_ps_is_readonly(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("docker ps --format '{{.Names}}'")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["risk_l"] == 0
+
+    def test_docker_run_is_unknown_fail_closed(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("docker run -d nginx")
+        assert r["category"] == "unknown"
+        assert r["risk_l"] >= 3
+
+    def test_docker_version_bare_is_readonly(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("docker --version")
+        assert r["category"] == CATEGORY_READONLY
+
+    def test_kubectl_get_is_readonly(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("kubectl get pods -n default")
+        assert r["category"] == CATEGORY_READONLY
+
+    def test_docker_exec_is_unknown(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("docker exec -it web bash")
+        assert r["category"] == "unknown"
+
+
+class TestReadonlyObjectExtraction:
+    """只读对象提取：无对象命令去噪 / 对象型命令取前 3 个"""
+
+    def test_echo_has_no_objects(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment('echo "---"')
+        assert r["category"] == CATEGORY_READONLY
+        assert r["objects"] == []
+
+    def test_ps_has_no_objects(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("ps aux")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["objects"] == []
+
+    def test_which_takes_up_to_three_objects(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("which nginx docker python3 2>/dev/null")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["objects"] == ["nginx", "docker", "python3"]
+
+    def test_systemctl_status_is_readonly(self):
+        from strands_backend.tools.command_impact import classify_segment
+
+        r = classify_segment("systemctl is-active nginx")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["objects"] == ["nginx"]

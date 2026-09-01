@@ -90,44 +90,114 @@ function makeChat(sessionId: string): Chat<UIMessage> {
     },
     getLive: () => {
       const live = useChatStore.getState().live;
-      // TDSF 魔改 2026-07-30: 注入 sshSessionId 到 LiveSnapshot，
-      // transport.ts formatEnvBlock 会把它写入 <env> 块给 LLM 看，
-      // runSidecarStream 也会把它通过 state.live 传给 Python agent，
-      // Python 侧 Strands 运维工具通过 ctx.ssh_session_id 拿到后调 ssh_command/sftp_*。
-      // Live.getSshRustSessionId() 实时查询 sshStore，SSH 重连后 rustSessionId 会变。
+      // A1 多服务器隔离 (2026-09-01, 用户钦定): 按当前会话绑定的 scope
+      // 解析环境，不再全局跟随"当前活跃终端"——类比 AI 编程 agent 的工作
+      // 目录隔离。本地对话不再看到 SSH 服务器；绑定 A 服务器的对话切到
+      // B 服务器终端后上下文不串。老会话（scope 缺省）保持原全局行为。
+      const { activeSessionId, sessions } = useChatStore.getState();
+      const scope =
+        sessions.find((s) => s.id === activeSessionId)?.scope ?? null;
+
+      // B1 (2026-09-01, 用户实测): 欢迎页（无任何终端会话）不得把
+      // explorerRoot/launchCwd/home 回退链的默认路径当"本地工作区"上报
+      // ——agent 因此误答"当前在本地工作区"而不引导建工作区/连服务器。
+      const activeTerminal = live.getActiveTerminalSession?.() ?? "none";
+
+      // === SSH scope：环境只看绑定的那台服务器 ===
+      if (scope?.kind === "ssh") {
+        const sshState = useSshStore.getState();
+        const bound = sshState.sessions.find(
+          (s) =>
+            s.params.host === scope.host &&
+            s.params.user === scope.user &&
+            (s.params.port ?? 22) === scope.port,
+        );
+        const connected = bound && isSessionConnected(bound) ? bound : null;
+        // 终端上下文只在绑定会话恰为全局活跃 SSH 会话时注入
+        // （隔离：其他服务器的 scrollback 不进入本对话）
+        const activeSshId = live.getSshRustSessionId();
+        const boundRustId = connected ? connected.rustSessionId : null;
+        const terminalOutput =
+          boundRustId !== null && activeSshId !== null && boundRustId === activeSshId
+            ? live.getTerminalContext()
+            : null;
+        return {
+          // 远程 scope 无本地工作区——python_run fail-closed 拒绝（符合预期）
+          cwd: null,
+          terminalPrivate: false,
+          workspaceRoot: null,
+          activeFile: live.getActiveFile(),
+          // Rust u32 session id（SshSessionInfo.id 是前端 uuid，勿混用）
+          sshSessionId: boundRustId,
+          sshConnection: connected
+            ? `${connected.params.user}@${connected.params.host}`
+            : null,
+          // 绑定服务器提示（formatEnvBlock 渲染 conversation_server 行）：
+          // 未连接时 agent 仍知道本对话属于哪台服务器，可引导重连
+          conversationServer: {
+            user: scope.user,
+            host: scope.host,
+            connected: Boolean(connected),
+          },
+          terminalOutput,
+          terminalSession: connected ? "ssh" : "none",
+          autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
+          ...toSidecarMode(useChatStore.getState().agentMode),
+        };
+      }
+
+      const isLocalScope = scope?.kind === "local";
+      const noTerminal = activeTerminal === "none";
+      const localActive = activeTerminal === "local";
       return {
-        cwd: live.getCwd(),
+        // B1: 无终端（欢迎页）→ cwd/workspace 置 null；local scope 只认
+        // 本地终端（SSH 活跃也不算本对话的终端）
+        cwd:
+          localActive || (!isLocalScope && !noTerminal)
+            ? live.getCwd()
+            : null,
         terminalPrivate: live.isActiveTerminalPrivate(),
-        workspaceRoot: live.getWorkspaceRoot(),
+        workspaceRoot:
+          localActive || (!isLocalScope && !noTerminal)
+            ? live.getWorkspaceRoot()
+            : null,
         activeFile: live.getActiveFile(),
-        sshSessionId: live.getSshRustSessionId(),
-        // TDSF 魔改 (2026-08-09): 友好的 SSH 连接标识（user@host），
-        // 替代原先注入到 <env> 的 ssh_session_id 数字（实现细节泄露）。
-        // 从 sshStore 取活跃 connected 会话的 params.host/user 组装。
-        sshConnection: (() => {
-          const sshState = useSshStore.getState();
-          const active = sshState.sessions.find(
-            (s) => s.id === sshState.activeSessionId,
-          );
-          const session =
-            active && isSessionConnected(active)
-              ? active
-              : sshState.sessions.find((s) => isSessionConnected(s));
-          if (!session) return null;
-          const { user, host } = session.params;
-          return `${user}@${host}`;
-        })(),
-        // TDSF 魔改 (2026-08-09): 活跃终端 scrollback 尾部摘要（已脱敏），
-        // transport.ts formatTerminalContextBlock 会注入 <terminal-context> 块，
-        // 让 agent 每轮自动看到用户最近的终端输出，无需额外工具调用。
-        terminalOutput: live.getTerminalContext(),
+        // A1: 本地 scope 的对话绝不操作 SSH（即便全局活跃着 SSH 会话）
+        sshSessionId: isLocalScope ? null : live.getSshRustSessionId(),
+        sshConnection: isLocalScope
+          ? null
+          : (() => {
+              // TDSF 魔改 (2026-08-09): 友好的 SSH 连接标识（user@host），
+              // 从 sshStore 取活跃 connected 会话的 params.host/user 组装。
+              const sshState = useSshStore.getState();
+              const active = sshState.sessions.find(
+                (s) => s.id === sshState.activeSessionId,
+              );
+              const session =
+                active && isSessionConnected(active)
+                  ? active
+                  : sshState.sessions.find((s) => isSessionConnected(s));
+              if (!session) return null;
+              const { user, host } = session.params;
+              return `${user}@${host}`;
+            })(),
+        conversationServer: null,
+        terminalOutput: isLocalScope
+          ? localActive
+            ? live.getTerminalContext()
+            : null
+          : live.getTerminalContext(),
         // TDSF 2026-08-31 (问题1修复): 活动终端会话权威信号（"ssh"|"local"|"none"），
         // transport 据此判定 connection_mode；无终端时标 none（非 local），
         // 防止"注入了默认 workspace cwd"被误判为"本地终端已打开"。
         // 注意：getter 返回 null 必须显式转 "none" 再透传——Python 侧
         // terminalSession 缺省（undefined）才走旧调用方启发式回退，
         // null（明确的"无终端"）若与缺省混同，无终端场景仍会误报 local。
-        terminalSession: live.getActiveTerminalSession?.() ?? "none",
+        terminalSession: isLocalScope
+          ? localActive
+            ? "local"
+            : "none"
+          : activeTerminal,
         // TDSF 魔改 (2026-08-09): 终端执行模式开关传给 Python sidecar
         autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
