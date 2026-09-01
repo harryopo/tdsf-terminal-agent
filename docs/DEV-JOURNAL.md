@@ -2340,3 +2340,23 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：tsc 0 / lint 0 / vitest 373（ai+spaces）。**待真机**：新建 SSH 工作区应只出一个且名字一致；删光工作区后打开 AI 应见门控空态。
 
 **复盘**：时序型 bug（连接回调 vs 创建顺序）画时序图最快定位；条件调用钩子是"在 && 后面顺手写 hook"的惯性——zustand 选择器一律先算参数再无条件调钩子。
+
+### 37.100 方案书 v4.0 P2：T9 稳定性补强 + T10 置信度/证据链深化（2026-09-01 ✅）
+
+**任务**：ROADMAP #40 P2 阶段（实施计划 docs/agent/方案书-v4.0-P2实施计划-稳定性与测试.md，建议顺序 T9→T8→T10）。本批 commit 7e87946（6 文件 +602/-78）。T8 回放测试为 P2 最后一项（下批）。
+
+**T9 实现**：
+1. **model_adapter 显式超时**：此前 LLM 请求裸跑——OpenAIModel client_args 加 `timeout=300.0`（httpx 单请求硬超时）+ `max_retries=2`（strands client_args 直通 OpenAI SDK 构造器，已核实源码）。
+2. **invoke watchdog**：invoke 锁内工作挪到 **daemon worker 线程**，调用方线程做 watchdog 等待——**连续 10 分钟无任何回调事件**（以 handler._stats.events_received 增量为活跃信号，delta/工具/循环事件都算）→ 弃管本轮：agent_log 记 watchdog_timeout + 返回友好降级响应（observation 说明、degraded_reason=invoke_watchdog_timeout、对话可继续不崩进程）；`_stalled_sessions` 标记使后续 invoke 对该会话**快速降级**（不卡 agent_lock），worker 自然结束 finally 自动解除标记恢复常规链路。worker 弹出的异常 re-raise 给既有 except 统一处理。测试可用 TDSF_INVOKE_WATCHDOG_IDLE_SECS/POLL_SECS 覆盖阈值。
+3. **T9.2 降级只读**：LLM 传输类异常（连接失败/超时，11 特征小写匹配 _is_llm_transport_error）→ 友好文案（next_step=done 非 error 卡）替代报错卡，不推 needs_you 错误卡（那是流程性失败专用），对话不中断。
+4. **T9.3 并行提示词**：Task planning 段加"独立的信息收集类调用应并行发起，有依赖的才串行"（吃 strands ConcurrentToolExecutor 红利）。
+
+**T10 实现**：
+- **T10.2 证据三段分组**：lib/evidence 增 WRITE_CLASS/VERIFY_CLASS_TOOL_NAMES 常量（与 Python registry.py 对齐，改两侧需同步）+ `classifyEvidenceStage` 时序语义（**同是只读工具：写操作前=收集、写后验证类=验证**）+ `groupEvidence`；EvidencePanel 按 收集→执行→验证 渲染（空组隐藏、小灰字组标题、条目渲染不变）。
+- **T10.1 三档标准**：前端 ConfidenceMarker 已在 §37.89 问题3修复时实现"低必须附原因、无可解释维度不显示标签"的契约（score≥0.5 无标记/<0.5 较低/<0.3 低），与三档语义对齐；后端置信度引擎（DSPCR5）的分档权重固化涉及核心引擎，列入 T8 批次后评估。
+
+**门禁**：pytest **2063**（+8 watchdog：触发/活动续期/正常结束/stalled 降级/传输错误分类/并行提示词/预算）｜vitest **383**（+7 分组）｜tsc 0｜lint 0。
+
+**踩坑**：①watchdog 首测 False——poll 间隔 5s 盖过 0.5s 测试阈值，worker 在首次轮询前就结束了；poll 间隔一并环境变量化。②`cond && useHook()` 短路条件调用钩子（同 §37.99 教训再现）——钩子无条件调用、判断放外面。
+
+**下一步**：T8 回放测试（replay.py 重放器 + 5 场景 JSONL + pytest mark replay，P2 收官）→ spec tasks.md/checklist.md 核销 → build:web 全量门禁。
