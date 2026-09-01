@@ -2235,3 +2235,24 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：做对——先通读三链路再动工（反向路由模式/契约边界/测试基建全部预判到位，实现一次成型）；威胁模型写进代码注释，fail-closed 回退方向明确。改进——工具计数断言应 grep 全部数字断言再动手（本次漏 5 处）；prompt 是**预算制**资源，加内容前先查 4000 上限余量。
 
 **下一步**：#42 剩 P3-1（断连事件通知 sidecar，先调研 Rust→Python 通知通道，可能并入方案书 v3.0 T5 事件源统一设计）、P3-4（可选暂缓）；agent 线 P2（T8-T10）与 explorer 线 WIP 并行待续。
+
+### 37.93 用户实测问题批次一：五修（A1 隔离/A2 续跑/B1 环境感知/C1 审批卡/C2 影响预测）（2026-09-01 ✅）
+
+**背景**：用户实测暴露一批 agent 问题（截图 4 张），钦定分类排优先级"从底层架构到 UI 逐个解决"，并**授权 AI 自行启动软件自测**（不再依赖用户桌面实测）。本批 commit 3f4c70e。
+
+**问题分类与优先级**（用户钦定框架）：
+- 底层架构：A1 多服务器对话隔离（未开发→本批开发）/ A2 长任务稳定性（max_tokens 截断即失败）
+- 感知层：B1 欢迎页误报"本地工作区"、不引导建工作区/连服务器
+- UI 层：C1 审批卡命令截断 / C2 影响预测分段乱+docker ps 误判 L3 / C3 打字机无效+命令输出不回显（待） / C4 教学卡流式渲染乱码（待）
+- 工程底座：D1 自测环境（✅ tauri:dev 后台跑通，sidecar 日志经 stdout 管道进 dev 日志可实时查；agent-logs JSONL 落盘排障）
+
+**五修实现**：
+1. **A1 会话按服务器隔离**（用户钦定"像 AI 编程 agent 的工作目录隔离，这里是服务器地址"）：`SessionMeta.scope`（local | ssh user+host+port 身份绑定，重连不丢归属）创建时快照；`chatRuntime.getLive()` 按 scope 解析（本地对话绝不碰 SSH；ssh scope 绑定服务器离线时 env 出 `conversation_server: ... (未连接)` 引导重连；终端上下文仅绑定会话恰为活跃会话时注入防串台）；会话列表加主机徽章；老会话无 scope 走全局行为兼容。**Typecheck 抓到真 bug**：SshSessionInfo.id 是前端 uuid，sshSessionId 必须用 rustSessionId。
+2. **A2 max_tokens 自动续跑**（方案书 v4.0 P2/T9 范畴，用户截图"Model stopped generating due to maximum token limit"）：adapter.invoke 包 `_invoke_with_token_continuation`——MaxTokensReachedException 自动续跑 ≤3 轮（Strands 语义 partial 已入 messages，再调即续），续跑共享 limit_hook 护栏；超限原样抛出走错误链路。
+3. **B1 欢迎页环境误报**：根因=formatEnvBlock 只门控了 cwd 没门控 workspace_root（explorerRoot/launchCwd/home 回退链终到 home）→ 欢迎页注入 `workspace_root: C:\Users\Administrator`，agent 自称"本地工作区"。修=getLive 无终端时 cwd/workspaceRoot 双双置 null（env 不出现工作区路径 + connection_mode=none + python_run fail-closed 拒绝），agent 转走"引导建工作区/连服务器"分支。
+4. **C1 审批卡命令截断**：`<pre>` 默认 white-space:pre 长命令右缘截断 → whitespace-pre-wrap break-all 完整换行可见。
+5. **C2 影响预测**：①docker/podman/nerdctl/kubectl 按子命令细分（ps/images/inspect/logs/get 等只读放行；run/exec 等保守 unknown L3——`docker ps` 不再误触审批）；②只读对象去噪（echo/ps/df 等无对象语义返回空；which 等取前 3 参；systemctl 过滤动作词）。
+
+**门禁**：pytest **2053**(+9)/vitest ai+ai-elements **376**/tsc/lint 0/build:web 全绿。**遗留下一批**：C3（打字机+visible 回显链路需连真机排查——inject_terminal 事件链/human_type pump）、C4（教学卡流式过渡区裸 markdown，MessageResponse 已渲染完整 section，需真机复现定位渲染时机）；方案书 v4.0 P2 T8-T10 未做（用户问"方案是否都完成"——P0/P1 已落地，P2 因本批用户实测插队顺延）。
+
+**复盘**：做对——typecheck 当场抓住 uuid/rustSessionId 混用（省一次真机排障）；A1 老会话兼容设计避免迁移。改进——C3/C4 静态读码无法定案，应第一时间连真机复现再修；本批 5 修横跨 9 文件未拆 commit（同批用户反馈聚合）。
