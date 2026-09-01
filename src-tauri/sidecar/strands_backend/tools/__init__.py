@@ -212,6 +212,11 @@ class ToolContext:
     ssh_host: str = ""
     # TDSF 魔改 (2026-08-09): 终端执行模式——True 时 ssh_command 自动设 visible=True
     auto_execute_in_terminal: bool = False
+    # T5 (2026-08-31, spec add-agent-loop-closure): 本地工作区路径
+    # （live.workspaceRoot 优先，cwd 兜底）——python_run 的 subprocess cwd。
+    # 空 = 不可得（python_run fail-closed 拒绝）；SSH 会话下不适用
+    # （python_run 拒绝在远端执行）
+    workspace: str = ""
 
 
 # ============================================================================
@@ -1235,6 +1240,8 @@ from strands_backend.tools.registry import (  # noqa: F401
     OPS_TOOL_ALIASES,
     READONLY_TOOL_NAMES,
     TOOL_REGISTRY,
+    VERIFY_CLASS_TOOL_NAMES,
+    WRITE_CLASS_TOOL_NAMES,
     get_tool_policy,
     tool_catalog_text,
 )
@@ -1332,6 +1339,9 @@ __all__ = [
     "TOOL_REGISTRY",
     "READONLY_TOOL_NAMES",
     "APPROVAL_TOOL_NAMES",
+    # T7 (2026-08-31): 验证回环写类/验证类分类
+    "WRITE_CLASS_TOOL_NAMES",
+    "VERIFY_CLASS_TOOL_NAMES",
     "get_tool_policy",
     "tool_catalog_text",
     "make_all_ops_tools",

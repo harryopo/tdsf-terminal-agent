@@ -863,16 +863,16 @@ class TestMakeAllOpsTools(unittest.TestCase):
     def test_returns_all_registered_tools(self):
         """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
         （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
-        + 2026-08-31 knowledge_get_doc = 21）"""
+        + 2026-08-31 knowledge_get_doc + T5 python_run = 22）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 21)
+        self.assertEqual(len(tools), 22)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 21 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 21)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 22 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 22)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1570,10 +1570,10 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         return {getattr(t, "__name__", str(t)) for t in tools}
 
     def test_main_gets_all_tools(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 21 工具"""
+        """main（唯一 agent）：TOOL_REGISTRY 全量 22 工具"""
         tools = make_all_ops_tools(self._ctx())
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 21)
+        self.assertEqual(len(tools), 22)
         self.assertIn("ssh_command", names)
         self.assertIn("knowledge_search", names)
         self.assertIn("knowledge_get_doc", names)
@@ -1589,7 +1589,7 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         # 2026-08-31 语义修正：knowledge_search/knowledge_get_doc 纯本地只读
         self.assertIn("knowledge_search", names)
         self.assertIn("knowledge_get_doc", names)
-        self.assertLessEqual(len(tools), 21)
+        self.assertLessEqual(len(tools), 22)
 
     def test_filter_tools_readonly_helper(self):
         """P0-A1: filter_tools_readonly 帮助函数（观察模式/L1 共用单一真源）"""
@@ -1869,12 +1869,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
-        self.assertEqual(len(tools), 21)
+        self.assertEqual(len(tools), 22)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 21)
+        self.assertEqual(len(tools), 22)
 
 
 # ============================================================================
