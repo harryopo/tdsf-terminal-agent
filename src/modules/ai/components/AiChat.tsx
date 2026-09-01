@@ -52,6 +52,7 @@ import {
   evidenceLabel,
   evidenceTime,
   fetchEvidence,
+  groupEvidence,
   type EvidenceItem,
 } from "../lib/evidence";
 // Task 6.5: sidecar needs_you 审批闭环（approval 类请求渲染四层审批卡）
@@ -367,49 +368,71 @@ const EvidencePanel = memo(function EvidencePanel() {
         <span className="ml-auto">{open ? "收起" : "展开"}</span>
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-1 space-y-1">
-        {items.map((ev, i) => (
-          <div
-            key={`${ev.timestamp}-${i}`}
-            className="rounded-md border border-border/30 bg-muted/20 px-2.5 py-1.5"
-          >
-            <div className="flex items-center gap-1.5 text-[10.5px]">
-              <span
-                className={cn(
-                  "size-1 rounded-full",
-                  ev.status === "error" || ev.status === "rejected"
-                    ? "bg-destructive"
-                    : ev.status === "started"
-                      ? "bg-amber-500"
-                      : "bg-emerald-500",
-                )}
-              />
-              <span className="font-medium text-foreground">
-                {evidenceLabel(ev.tool_name)}
-              </span>
-              {ev.status !== "completed" && (
-                <span className="text-muted-foreground/70">{ev.status}</span>
-              )}
-              {ev.agent && ev.agent !== "main" && (
-                <span className="rounded bg-muted px-1 py-px text-[9.5px] text-muted-foreground">
-                  {ev.agent}
-                </span>
-              )}
-              <span className="ml-auto tabular-nums text-muted-foreground/60">
-                {evidenceTime(ev.timestamp)}
-              </span>
-            </div>
-            {ev.detail && (
-              <code className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
-                {ev.detail}
-              </code>
-            )}
-            {ev.result && (
-              <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground/80">
-                {ev.result}
+        {/* T10.2 (2026-09-01): 三段分组——收集→执行→验证（空组隐藏，
+            组标题轻量小灰字，条目渲染保持原样） */}
+        {(() => {
+          const groups = groupEvidence(items);
+          const sections: { key: string; label: string; rows: typeof items }[] =
+            [
+              { key: "collect", label: "收集 · 只读探查", rows: groups.collect },
+              { key: "execute", label: "执行 · 写操作", rows: groups.execute },
+              { key: "verify", label: "验证 · 写后确认", rows: groups.verify },
+            ];
+          return sections
+            .filter((sec) => sec.rows.length > 0)
+            .map((sec) => (
+              <div key={sec.key} className="space-y-1">
+                <div className="px-2.5 text-[10px] font-medium tracking-wide text-muted-foreground/60">
+                  {sec.label}
+                </div>
+                {sec.rows.map((ev, i) => (
+                  <div
+                    key={`${ev.timestamp}-${sec.key}-${i}`}
+                    className="rounded-md border border-border/30 bg-muted/20 px-2.5 py-1.5"
+                  >
+                    <div className="flex items-center gap-1.5 text-[10.5px]">
+                      <span
+                        className={cn(
+                          "size-1 rounded-full",
+                          ev.status === "error" || ev.status === "rejected"
+                            ? "bg-destructive"
+                            : ev.status === "started"
+                              ? "bg-amber-500"
+                              : "bg-emerald-500",
+                        )}
+                      />
+                      <span className="font-medium text-foreground">
+                        {evidenceLabel(ev.tool_name)}
+                      </span>
+                      {ev.status !== "completed" && (
+                        <span className="text-muted-foreground/70">
+                          {ev.status}
+                        </span>
+                      )}
+                      {ev.agent && ev.agent !== "main" && (
+                        <span className="rounded bg-muted px-1 py-px text-[9.5px] text-muted-foreground">
+                          {ev.agent}
+                        </span>
+                      )}
+                      <span className="ml-auto tabular-nums text-muted-foreground/60">
+                        {evidenceTime(ev.timestamp)}
+                      </span>
+                    </div>
+                    {ev.detail && (
+                      <code className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                        {ev.detail}
+                      </code>
+                    )}
+                    {ev.result && (
+                      <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground/80">
+                        {ev.result}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            )}
-          </div>
-        ))}
+            ));
+        })()}
       </CollapsibleContent>
     </Collapsible>
   );
