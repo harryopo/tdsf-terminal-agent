@@ -2296,3 +2296,18 @@ P2（中优先级 — 清理 + 文档）：
 **复盘**：链路两端（菜单触发、composer 接收）都是已验证模式（本地 attach 同构），只补中间的 App 分支与远程读取——复用既有协议零新事件设计。改进：一眼能看出 rustSessionId/uuid 混用坑（§37.93 教训已内化）。
 
 **下一批**：①同工作区跨对话记忆按 spaceId 过滤（需记忆写入打标签+recall 过滤，中改动）；②C4 教学卡流式渲染真机确认；③方案书 v4.0 P2 T8-T10；④explorer 线剩余（路径栏/上传）。
+
+### 37.97 同工作区跨对话记忆隔离（A1 收官）（2026-09-01 ✅）
+
+**任务**：遗留清单——同一工作区的不同对话共享历史记忆沉淀（长期工作记忆），跨工作区不可见。commit fe3ae36（6 文件 +94/-9）。
+
+**实现（写入打标签 + 召回过滤，零 schema 迁移）**：
+1. **写入侧**：`session_memory.summarize_session` 增 `scope_id` 参数——条目 tags 追加 `workspace:<spaceId>`（KnowledgeEntry 本就带 tags，rag.add 幂等覆盖）；RPC handler `_summarize` 透传；`adapter._auto_sink_case` 经 `state.live.scopeId` 给自动沉淀案例打同款标签。
+2. **召回侧**：`transport.searchSessionMemoryEntries` 增 scopeId——过滤规则：只保留 tags 含本工作区标签的条目，**无任何 workspace 标签的存量记忆保持可见**（向后兼容超集：老记忆无归属信息，直接隐藏会凭空丢上下文）；带过滤时请求 3× 候选再过滤，防 top-K 被其他工作区条目挤占。
+3. **贯通**：LiveSnapshot.scopeId（chatRuntime 两分支按 workspace scope 下发 spaceId）→ fetchMemoryHints（首轮 <session-memory>）/fetchRecalledMemory（每轮 <recalled-memory>）；chatStore.maybeSummarizeSession 按 session meta scope 传 scope_id。
+
+**语义边界**：search_history 决策库工具保持全局（agent 的能力面不收缩）；legacy/ssh/local scope 会话 recall 不过滤（全局超集）。
+
+**门禁**：pytest **2055**（+2：scope_id 打标签/不传无标签）/ vitest 354 / tsc 0 / lint 0。**真机验证**：工作区 A 对话沉淀记忆（切走会话触发 summarize）→ 工作区 A 新对话首条消息应注入 <session-memory>；工作区 B 对话不应看到 A 的沉淀。
+
+**复盘**：tags 字段本就存在（hybrid_search 结果也带 tags），整条链路零 schema 变更；"存量记忆保持可见"的兼容设计避免了静默丢上下文。改进——TS 模块级函数误用 store 内部 `get()`（两次 typecheck 才修正为 useChatStore.getState()）。
