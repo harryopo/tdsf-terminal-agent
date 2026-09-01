@@ -112,6 +112,9 @@ lint-*.txt
 .tdsf-data/
 .claude/
 
+# AI 助手安全扫描插件产物 (mimosa hook-state, 2026-09-01)
+.mimosa/
+
 # 上游 terax-ai 全量源码克隆 (仅本机调研参考, 体积大不入库)
 opensource-reference/
 
