@@ -2326,3 +2326,17 @@ P2（中优先级 — 清理 + 文档）：
 **门禁**：tsc 0 / lint 0（hooks 顺序 3 错修复后）/ vitest 376（1 断言同步 cachedInputTokens）/ pytest adapter 50。**待真机**：门控空态两 CTA、面板点击弹出、跑一轮对话看真实 input tokens 与缓存命中。
 
 **复盘**：字段名错位（snake_case vs camelCase）是"上下文恒 0"的静默根因——跨语言契约字段应在类型定义处注明来源形态；早期 return 与 hooks 顺序冲突是条件渲染重构的常见坑，先写完 hooks 再放 return。
+
+### 37.99 用户实测四修：SSH 工作区重复创建根因 + 门控加固 + 配色规范（2026-09-01 ✅）
+
+**用户实测反馈**（4 截图）：①新建 SSH 工作区弹出俩、名字不一样；②对话栏左侧不需要加号（新对话走"新会话"下拉展开）；③关掉全部工作区后点 AI 对话可跳过门控直接聊；④工作区 chip 保持灰白、模式配色区分（观察黄/确认绿/自动红/教学紫）；⑤工作区 chip 与"加载 agent"UI 冲突（删加号即解）。commit 98f2703（7 文件 +111/-55）。
+
+**根因与修复**：
+1. **双工作区**：SpaceCreateDialog 旧顺序**先 connectSsh 后 createSpace**——App 的 connect-success 订阅在连接成功时按 host/user 找工作区，此刻对话框的工作区还不存在 → 订阅自建 `user@host` 工作区，对话框随后又建用户命名的那个。修=**先建区后连接**（成功 setEnv 补 sessionId；失败 `remove` 回滚孤儿区）+ handleSpaceCreated 对"订阅已自动补建的 shell tab"加存在性守卫（防同区双 shell）。类型坑：tabs 联合类型须先窄化 kind==="terminal" 再读 sshSessionId。
+2. **门控绕过**：关掉全部工作区后，残留会话仍带 workspace scope（dangling spaceId）→ 门控通过。修=门控增加"绑定的工作区在 useSpaces 中真实存在"校验（AiMiniWindow.Body + TdsfAgentPanel.Body）。**rules-of-hooks 坑**：`cond && useSpaces(...)` 短路使钩子条件调用（lint 拦截）——钩子无条件调用（wsId null 时返回 false），判断放钩子外；TdsfAgentPanel 还漏了 useSpaces import（implicit any 是线索）。
+3. **左侧加号移除**：新对话统一走"新会话"下拉（其中已有新建会话项）；工作区 chip 灰白化（去琥珀，无工作区时 border 提示）。
+4. **模式配色**：registry 新增 `AGENT_MODE_ACCENT` 单一真源（observe=amber / confirm=emerald / auto=red / teach=violet），AgentModeSwitcher 卡片 + AgentStatusPill 徽章统一消费——同模式全 UI 颜色一致，改色只动一处。
+
+**门禁**：tsc 0 / lint 0 / vitest 373（ai+spaces）。**待真机**：新建 SSH 工作区应只出一个且名字一致；删光工作区后打开 AI 应见门控空态。
+
+**复盘**：时序型 bug（连接回调 vs 创建顺序）画时序图最快定位；条件调用钩子是"在 && 后面顺手写 hook"的惯性——zustand 选择器一律先算参数再无条件调钩子。
