@@ -1,5 +1,6 @@
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
+import { sftpRead } from "@/lib/sftp-bridge";
 import {
   createContext,
   useCallback,
@@ -42,6 +43,11 @@ type ComposerCtx = {
   addFiles: (list: FileList | null) => Promise<void>;
   /** Attach a file by absolute path — used by the file explorer's "Attach to Agent". */
   attachFileByPath: (path: string) => Promise<void>;
+  /**
+   * Attach a REMOTE file by path (SSH workspace rows) — sftpRead via the
+   * bound session, text-class only. A1 explorer 联动（§37.88 最小接收端）。
+   */
+  attachRemoteFile: (path: string, sessionId: number) => Promise<void>;
   removeFile: (id: string) => void;
   pickedSnippets: Snippet[];
   addSnippet: (s: Snippet) => void;
@@ -152,6 +158,70 @@ export function AiComposerProvider({ children }: ProviderProps) {
     window.addEventListener("tdsf:ai-attach-file", onAttach);
     return () => window.removeEventListener("tdsf:ai-attach-file", onAttach);
   }, [attachFileByPath]);
+
+  // A1 explorer 联动 (2026-09-01, §37.88 最小接收端): 远程文件 Attach ——
+  // FileExplorer 远程行右键 "Attach to Agent" → App 派发
+  // tdsf:ai-attach-remote-file({path, sessionId}) → sftpRead 读字节 →
+  // 文本类（≤ MAX_TEXT_INLINE、无 NUL 字节）构造 FileAttachment。
+  // @ 选择器的远程文件支持仍留 agent 对话（边界见 dev-state §37.88）。
+  const attachRemoteFile = useCallback(
+    async (path: string, sessionId: number) => {
+      try {
+        const data = await sftpRead(sessionId, path);
+        if (data.byteLength > MAX_TEXT_INLINE) {
+          console.warn(
+            "attachRemoteFile: skipped oversize remote file",
+            path,
+            data.byteLength,
+          );
+          return;
+        }
+        if (data.includes(0)) {
+          console.warn("attachRemoteFile: skipped binary remote file", path);
+          return;
+        }
+        const text = new TextDecoder().decode(data);
+        const name = path.split("/").pop() || path;
+        const id = `remote-${sessionId}-${path}`;
+        setFiles((prev) => {
+          if (prev.some((f) => f.id === id)) return prev;
+          const att: FileAttachment = {
+            id,
+            name,
+            kind: "text",
+            mediaType: "text/plain",
+            text,
+            size: data.byteLength,
+          };
+          return [...prev, att];
+        });
+        useChatStore.getState().focusInput();
+      } catch (e) {
+        console.error("attachRemoteFile failed:", e);
+      }
+    },
+    [],
+  );
+
+  // Listen for explorer's remote "Attach to Agent" event (SSH rows).
+  useEffect(() => {
+    const onAttach = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{ path?: string; sessionId?: number }>
+      ).detail;
+      if (
+        detail &&
+        typeof detail.path === "string" &&
+        detail.path.length > 0 &&
+        typeof detail.sessionId === "number"
+      ) {
+        void attachRemoteFile(detail.path, detail.sessionId);
+      }
+    };
+    window.addEventListener("tdsf:ai-attach-remote-file", onAttach);
+    return () =>
+      window.removeEventListener("tdsf:ai-attach-remote-file", onAttach);
+  }, [attachRemoteFile]);
 
   useEffect(() => {
     if (pendingSelections.length === 0) return;
@@ -351,6 +421,7 @@ export function AiComposerProvider({ children }: ProviderProps) {
       files,
       addFiles,
       attachFileByPath,
+      attachRemoteFile,
       removeFile,
       pickedSnippets,
       addSnippet,
@@ -368,6 +439,7 @@ export function AiComposerProvider({ children }: ProviderProps) {
       files,
       addFiles,
       attachFileByPath,
+      attachRemoteFile,
       removeFile,
       pickedSnippets,
       addSnippet,

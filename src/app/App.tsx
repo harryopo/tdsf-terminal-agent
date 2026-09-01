@@ -1221,6 +1221,39 @@ export default function App() {
     [hasComposer, openPanel, focusInput],
   );
 
+  // A1 explorer 联动 (2026-09-01, §37.88 最小接收端): 远程行 "Attach to Agent"
+  // —— 派发 tdsf:ai-attach-remote-file({path, sessionId})，composer 侧 sftpRead
+  // 构造附件。sessionId 取当前连接中 SSH 会话的 rustSessionId（Rust u32，
+  // sftp_read 反向路由按它寻址；SshSessionInfo.id 是前端 uuid 勿混用）。
+  const handleAttachRemoteFileToAgent = useCallback(
+    (path: string) => {
+      if (!hasComposer) {
+        void openSettingsWindow("models");
+        return;
+      }
+      const sshState = useSshStore.getState();
+      const active = sshState.sessions.find(
+        (s) => s.id === sshState.activeSessionId,
+      );
+      const session =
+        active && active.state === "connected" && active.handle !== null
+          ? active
+          : sshState.sessions.find(
+              (s) => s.state === "connected" && s.handle !== null,
+            );
+      const rustId = session?.rustSessionId ?? null;
+      if (rustId === null) return;
+      window.dispatchEvent(
+        new CustomEvent("tdsf:ai-attach-remote-file", {
+          detail: { path, sessionId: rustId },
+        }),
+      );
+      openPanel();
+      focusInput(null);
+    },
+    [hasComposer, openPanel, focusInput],
+  );
+
   const askFromSelection = useCallback(() => {
     if (!hasComposer) {
       void openSettingsWindow("models");
@@ -2223,7 +2256,7 @@ export default function App() {
                             }
                             onAttachToAgent={
                               explorerSource === "ssh"
-                                ? undefined
+                                ? handleAttachRemoteFileToAgent
                                 : handleAttachFileToAgent
                             }
                             pathDropTarget={
