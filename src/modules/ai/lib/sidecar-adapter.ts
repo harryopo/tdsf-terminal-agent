@@ -282,7 +282,11 @@ export interface SidecarStreamOptions {
    */
   onLoopProgress?: (progress: { round: number; toolCount: number }) => void;
   /** token 使用量增量回调 */
-  onUsage?: (delta: { inputTokens: number; outputTokens: number }) => void;
+  onUsage?: (delta: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens?: number;
+  }) => void;
 }
 
 /**
@@ -350,7 +354,15 @@ interface AgentInvokeResult {
   /** Agent 心情标识（如 "thinking" / "streaming" / "done"） */
   mood?: string;
   /** token 使用量 */
-  tokens?: { input?: number; output?: number };
+  tokens?: {
+    input?: number;
+    output?: number;
+    /** Python _extract_tokens 实际返回的 snake_case 字段（此前字段名错位
+     *  导致 sidecar 路径真实用量从未上报——上下文面板恒显估算 0） */
+    input_tokens?: number;
+    output_tokens?: number;
+    cached_input_tokens?: number;
+  };
 }
 
 /**
@@ -962,9 +974,12 @@ export async function* runSidecarStream(
       onMood?.(invokeResult.mood);
     }
     if (invokeResult.tokens) {
+      const t = invokeResult.tokens;
       onUsage?.({
-        inputTokens: invokeResult.tokens.input ?? 0,
-        outputTokens: invokeResult.tokens.output ?? 0,
+        // Python _extract_tokens 返回 snake_case（input_tokens），兼容旧 camelCase
+        inputTokens: t.input_tokens ?? t.input ?? 0,
+        outputTokens: t.output_tokens ?? t.output ?? 0,
+        cachedInputTokens: t.cached_input_tokens ?? 0,
       });
     }
 

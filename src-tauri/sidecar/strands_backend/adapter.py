@@ -1843,10 +1843,20 @@ class StrandsAgentAdapter:
 
         usage = getattr(response, "usage", None)
         if isinstance(usage, dict):
+            # A1 上下文面板 (2026-09-01): 透出缓存命中——OpenAI 兼容
+            # （DeepSeek: prompt_cache_hit_tokens / OpenAI: prompt_tokens_details.
+            # cached_tokens；Strands 聚合后也可能平铺为 cache_read_input_tokens）
+            cached = (
+                usage.get("cache_read_input_tokens", 0)
+                or usage.get("prompt_cache_hit_tokens", 0)
+                or (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+                or 0
+            )
             return {
                 "input_tokens": usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
                 "output_tokens": usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
+                "cached_input_tokens": int(cached or 0),
             }
 
         return {}

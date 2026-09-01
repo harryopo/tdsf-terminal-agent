@@ -2,10 +2,10 @@
 
 import { Button } from "@/components/ui/button";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import type { LanguageModelUsage } from "ai";
@@ -36,7 +36,7 @@ const useContextValue = () => {
   return context;
 };
 
-export type ContextProps = ComponentProps<typeof HoverCard> & ContextSchema;
+export type ContextProps = ComponentProps<typeof Popover> & ContextSchema;
 
 export const Context = ({
   usedTokens,
@@ -50,8 +50,10 @@ export const Context = ({
   );
 
   return (
+    // 2026-09-01 (用户实测"一闪一闪"): HoverCard 悬停即弹 + 流式 re-render
+    // 导致面板闪烁。改 Popover——**点击才弹出**，流式更新不再干扰。
     <ContextContext.Provider value={contextValue}>
-      <HoverCard closeDelay={0} openDelay={0} {...props} />
+      <Popover {...props} />
     </ContextContext.Provider>
   );
 };
@@ -108,7 +110,7 @@ export const ContextTrigger = ({ children, ...props }: ContextTriggerProps) => {
   }).format(usedPercent);
 
   return (
-    <HoverCardTrigger asChild>
+    <PopoverTrigger asChild>
       {children ?? (
         <Button type="button" variant="ghost" {...props}>
           <span className="font-medium text-muted-foreground">
@@ -117,17 +119,17 @@ export const ContextTrigger = ({ children, ...props }: ContextTriggerProps) => {
           <ContextIcon />
         </Button>
       )}
-    </HoverCardTrigger>
+    </PopoverTrigger>
   );
 };
 
-export type ContextContentProps = ComponentProps<typeof HoverCardContent>;
+export type ContextContentProps = ComponentProps<typeof PopoverContent>;
 
 export const ContextContent = ({
   className,
   ...props
 }: ContextContentProps) => (
-  <HoverCardContent
+  <PopoverContent
     className={cn("min-w-60 divide-y overflow-hidden p-0", className)}
     {...props}
   />
