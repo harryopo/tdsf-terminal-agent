@@ -6,6 +6,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { IS_WINDOWS } from "@/lib/platform";
+import { useSpaces } from "@/modules/spaces";
 import {
   LOCAL_WORKSPACE,
   useWorkspaceEnvStore,
@@ -33,13 +34,23 @@ export function WorkspaceEnvSelector({
   onSelectSsh,
   switching = false,
 }: Props) {
-  const env = useWorkspaceEnvStore((s) => s.env);
+  const globalEnv = useWorkspaceEnvStore((s) => s.env);
+  // TDSF 魔改 2026-09-02: 标签以「活跃 Space 的 env」为持久化真源，回退全局 env。
+  // 修复：初次加载 SSH Space 时全局 env 尚未被 adoptWorkspaceEnv 同步
+  // （App.tsx prevSpaceRef 的 prev===null 早退守卫），导致底部仍显示 "Windows"
+  // 而非服务器地址。活跃 Space 的 env 总是跟随连接状态（含 ssh user@host）。
+  const spaceEnv = useSpaces(
+    (s) => s.spaces.find((x) => x.id === s.activeId)?.env,
+  );
+  const env = spaceEnv ?? globalEnv;
   const distros = useWorkspaceEnvStore((s) => s.distros);
   const loading = useWorkspaceEnvStore((s) => s.loading);
   const error = useWorkspaceEnvStore((s) => s.error);
   const refreshDistros = useWorkspaceEnvStore((s) => s.refreshDistros);
 
-  if (!IS_WINDOWS) return null;
+  // TDSF 魔改 2026-09-02（用户钦定）: SSH 工作区跨平台显示服务器地址（user@host），
+  // 本地/WSL 环境选择仅 Windows 有意义——非 Windows 且非 SSH 时才隐藏整个选择器。
+  if (!IS_WINDOWS && env.kind !== "ssh") return null;
 
   // 每次打开菜单都重新拉取 WSL 发行版列表（取代已删除的手动 Refresh 项，
   // 保证新建/删除发行版后列表始终最新）
@@ -49,7 +60,13 @@ export function WorkspaceEnvSelector({
     }
   };
 
-  const label = env.kind === "wsl" ? `WSL: ${env.distro}` : "Windows";
+  // SSH 时显示服务器地址（如 root@192.168.45.200），而非笼统的 "Windows"
+  const label =
+    env.kind === "ssh"
+      ? `${env.user}@${env.host}`
+      : env.kind === "wsl"
+        ? `WSL: ${env.distro}`
+        : "Windows";
 
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>
@@ -68,35 +85,40 @@ export function WorkspaceEnvSelector({
             strokeWidth={1.75}
             className={switching ? "animate-pulse" : undefined}
           />
-          <span className="max-w-28 truncate">
+          <span className="max-w-44 truncate">
             {switching ? "Switching..." : label}
           </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-48">
         <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
-          Windows Local
+          {IS_WINDOWS ? "Windows Local" : "Local"}
         </DropdownMenuItem>
         {/* TDSF 2026-08-31（用户反馈）：齿轮图标删除——三个条目纯文字、间距统一 */}
         <DropdownMenuItem onSelect={onSelectSsh}>SSH Server...</DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {distros.length === 0 ? (
-          <DropdownMenuItem disabled>
-            {loading
-              ? "Loading WSL distros..."
-              : error
-                ? "WSL unavailable"
-                : "No WSL distros found"}
-          </DropdownMenuItem>
-        ) : (
-          distros.map((distro) => (
-            <DropdownMenuItem
-              key={distro.name}
-              onSelect={() => onSelect({ kind: "wsl", distro: distro.name })}
-            >
-              WSL: {distro.name}
-            </DropdownMenuItem>
-          ))
+        {/* WSL 发行版仅 Windows 平台有意义 */}
+        {IS_WINDOWS && (
+          <>
+            <DropdownMenuSeparator />
+            {distros.length === 0 ? (
+              <DropdownMenuItem disabled>
+                {loading
+                  ? "Loading WSL distros..."
+                  : error
+                    ? "WSL unavailable"
+                    : "No WSL distros found"}
+              </DropdownMenuItem>
+            ) : (
+              distros.map((distro) => (
+                <DropdownMenuItem
+                  key={distro.name}
+                  onSelect={() => onSelect({ kind: "wsl", distro: distro.name })}
+                >
+                  WSL: {distro.name}
+                </DropdownMenuItem>
+              ))
+            )}
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

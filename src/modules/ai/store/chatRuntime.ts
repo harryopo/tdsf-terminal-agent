@@ -178,7 +178,12 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           terminalSession: connected ? "ssh" : "none",
           // 记忆召回过滤维度（同工作区跨对话共享沉淀）
           scopeId: memoryScopeId,
-          autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
+          // TDSF 魔改 2026-09-02: 解耦——不再把前端 autoExecuteInTerminal 作为
+          // sidecar ssh_command visible 的自动触发器（visible 会在交互式 PTY
+          // inject_terminal+\n 与 execute_via_ssh 之间双重执行，红线9 SSH 链路
+          // 问题，需独立可见执行重构）。重构前 visible 保持默认关闭（无回归），
+          // 前端命令卡自动执行另走 chat-code.tsx / tool.tsx 的 PTY 注入路径。
+          autoExecuteInTerminal: false,
           ...toSidecarMode(useChatStore.getState().agentMode),
         };
       }
@@ -237,8 +242,15 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           : activeTerminal,
         // 记忆召回过滤维度（同工作区跨对话共享沉淀）
         scopeId: memoryScopeId,
-        // TDSF 魔改 (2026-08-09): 终端执行模式开关传给 Python sidecar
-        autoExecuteInTerminal: useChatStore.getState().autoExecuteInTerminal,
+        // TDSF 魔改 2026-09-02: 解耦——前端 autoExecuteInTerminal 现专用于
+        // “对话区命令卡自动打字+执行”（CommandCard/SuggestCommandCard，前端
+        // PTY 注入单次执行）；不再作为 sidecar ssh_command visible 的自动触发器：
+        // visible 会在交互式 PTY inject_terminal(+\n 执行) 与 execute_via_ssh(后台
+        // exec) 之间双重执行服务器命令（红线9 SSH 链路问题，需独立的可见执行
+        // 重构=PTY 执行+scrollback 回读、跳过 execute_via_ssh）。重构前 sidecar 侧
+        // visible 保持默认关闭（与历史 autoExec=false 行为一致，无回归）；
+        // AI 仍可显式传 visible=true。
+        autoExecuteInTerminal: false,
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
         // sidecar（adapter.py 读 state.live.agentMode / state.live.teach，
         // 缺省 confirm）。模式即时生效：切换后下一条消息即用新模式。

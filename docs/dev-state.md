@@ -4489,3 +4489,21 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **仍开放（下轮候选，按性价比排序）**：① **T10.1** 后端 DSPCR5 分档权重固化 + 「高档展示依据来源」需产品拍板（现 ≥0.5 什么都不显示，且前端 `confidence.score` 走文本启发式伪造 evidence，不看真实工具链）；② **会话历史冷启动**：`_session_messages` 是纯内存 dict 且 `invoke()` 从不读 `state["messages"]` → sidecar 重启即失忆（前端裁剪的 messages 白传）；③ 证据区只在轮次结束重拉，长任务期间静止；④ 教学卡流式三处易复现缺陷（`useChatStore.getState().teach` 非订阅式 / sections 空即 return null / `teachParser` 100 字门槛）；⑤ LiteLLM 分支无 timeout/max_retries；⑥ 回放层审批拒绝、压缩、Skill 剧本零覆盖；⑦ `TdsfAgentPanel.tsx` 与 `AiMiniWindow` 双写门控逻辑（面板已弃用未渲染）；⑧ 重启 dev 验证 `.taurignore`；⑨ §37.91-37.100 累计**待用户真机实测清单**仍未跑（C4 教学卡 / #42 SSH 回归 / explorer 路径栏与上传 / P0-P2 各一轮桌面验收）。
 
 **新固化事实**：本轮 `pnpm test` 全量口径 = **122 test files**；`AiChat.tsx` / `chat-code.tsx` 此前**零测试**，现已开始补。`degraded_reason` 全集 7 个值及分档归属见 `sidecar-adapter.ts` 的 `FRIENDLY_DEGRADED_REASONS` + `DEGRADED_REASON_HINTS`，两侧改一处必须同步另一处（Python `adapter.py` 的三处 `next_step="done"` 降级 = 可恢复档）。
+
+### 37.107 UI 六项修改（2026-09-02 ✅，本轮交接入口）
+
+> 用户实测提的一批 UI 问题（附 4 截图），全前端 12 文件，详 DEV-JOURNAL §37.107 + ROADMAP #47。
+
+**六项改动**：① 模式选择器下沉底栏（`StatusBar` 右侧 `AgentModeSwitcher` 取代只读 `AgentStatusPill`，紧邻 `BackendPill`(Strands)；从 `AiComposerInput`/`TdsfAgentPanel` 移除保持对话区干净；busy 反馈仍由顶栏 Header 承载）② 删 Ctrl+I UI（`AiStatusBarControls` 的 Ctrl+I kbd 按钮 + 死代码 `AiOpenButton` + 失效 `Kbd` 导入；快捷键本身保留）③ SSH 底部显示 `user@host`（`WorkspaceEnvSelector`）④ `AiMiniWindow` 顶部 `WorkspaceChip` 移到 Body 底部 footer（解决与 SessionPicker 重叠）⑤ 打字机自动执行（`autoExecuteInTerminal` 默认 true + `CommandCard` 自动注入）⑥ 置信度仅 `teach`/`confirm` 显示（`ConfidenceMarker` 加 agentMode 门）。
+
+**⚠️ 两个必须记住的新固化事实**：
+1. **`autoExecuteInTerminal` 已解耦为“仅前端对话命令卡自动执行”**：`chatRuntime.ts` 两处下发 sidecar 的值**硬编码 `false`**（不再跟随前端标志）。原因：该标志经 sidecar 会触发 `ssh_command.py` 的 `visible=True` → `inject_terminal`（PTY +\n 执行）+ `execute_via_ssh`（后台 exec）**双重执行服务器命令**（红线9 SSH 链路问题）。前端 CommandCard/SuggestCommandCard 直接 `injectIntoActivePty` 是单次执行，安全。**遗留（需独立红线9任务）**：ssh_command 工具调用的可见终端执行要无双重执行，须重构为 PTY 执行 + scrollback 回读、跳过 execute_via_ssh。改 autoExecuteInTerminal 相关逻辑前先读本条。
+2. **底部 SSH 地址的真源 = 活跃 Space 的 env**（`useSpaces` 的 `s.spaces.find(x=>x.id===s.activeId)?.env`），**不是**全局 `useWorkspaceEnvStore.env`。因为全局 env 在初次加载 SSH Space 时不会被 `adoptWorkspaceEnv` 同步（`App.tsx:347` 的 `prevSpaceRef` 有 `prev===null||prev===activeSpaceId` 早退守卫，首帧不 adopt）——这是用户截图“Windows / root”的根因。`WorkspaceEnvSelector` 已改读活跃 Space env 回退全局 env。
+
+**门禁（本轮实测量）**：typecheck exit 0 / lint exit 0 / build:web ✓ 25.89s / 全量 vitest **1302 passed + 1 负载抖动**（`sidecar-adapter.test.ts` 超时例，单跑 31/31，同 §37.102/105/106，本轮未碰）；chat-code.test 5→8（+3 自动注入用例）。本轮**未改 Python/Rust 生产码**（仅前端 TS/TSX）。
+
+**待用户实测（`启动.bat` 真实终端，沙箱无法启 GUI）**：① 底部状态栏模式抽屉四档卡片交互 + 紧邻 Strands ② 全应用无 Ctrl+I kbd 标签残留（Ctrl+I 快捷键仍能开小窗）③ 连 SSH 服务器后底部显示 `root@192.168.45.200` 而非 Windows（含初次加载/重启后）④ AI 小窗顶部不再重叠、工作区标签在底部 ⑤ AI 写 shell 命令卡自动逐字打入终端并执行（无需点 Run）⑥ 观察/自动模式不再弹“置信度 低”，教学/确认模式仍显示。
+
+**遗留清单（优先级序，本会话更新）**：① ssh_command 可见执行重构（红线9，PTY 执行+scrollback 回读、跳过 execute_via_ssh，消除双重执行）② T10.1 后端 DSPCR5 分档权重固化 + 高档展示依据来源（需产品拍板）③ 重启 dev 验证 `.taurignore` ④ C4 教学卡流式真机 / #42 SSH 真机回归 / explorer 路径栏与上传 ⑤ §37.91-37.101 累计待用户真机实测清单。
+
+**接手提示**：本轮是纯 UI 修改，未动 agent 链路/SSH 后端。下一手仍走 agent 能力完善线（用户 2026-09-02 指定）。改 autoExecuteInTerminal / 底部环境显示 / 模式 UI 前先读本节两个固化事实。

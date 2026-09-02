@@ -514,7 +514,12 @@ export const useChatStore = create<StoreState>((set, get) => ({
   sessionReadOnlyTrust: false,
   setSessionReadOnlyTrust: (on) => set({ sessionReadOnlyTrust: on }),
 
-  autoExecuteInTerminal: false,
+  // TDSF 魔改 2026-09-02（用户钦定“自动打字+自动执行”）: 默认开启——
+  // AI 在对话区给出的命令卡（CommandCard / suggest_command）自动通过
+  // human_type 打字机逐字注入活动终端并追加 \n 执行，无需手动点 Run。
+  // 注：本前端标志与 sidecar 的 ssh_command visible 注入已解耦（见
+  // chatRuntime.ts），避免交互式 PTY 注入+\n 与 execute_via_ssh 双重执行。
+  autoExecuteInTerminal: true,
   setAutoExecuteInTerminal: (on) => set({ autoExecuteInTerminal: on }),
 
   mini: { open: false },
