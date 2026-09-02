@@ -494,24 +494,81 @@ class ToolCallLimitHook:
                 logger.debug(f"emit breaker explanation failed: {e}")
 
     @staticmethod
-    def _error_summary(event: Any) -> str:
+    def _json_dict(text: Any) -> dict[str, Any] | None:
+        """字符串若是 JSON 对象则解析为 dict，否则 None"""
+        if isinstance(text, dict):
+            return text
+        if not isinstance(text, str):
+            return None
+        stripped = text.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            return None
+        import json as _json
+
+        try:
+            data = _json.loads(stripped)
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    @classmethod
+    def _tool_payload(cls, result: Any) -> dict[str, Any]:
+        """还原工具自身返回的结构化 dict
+
+        strands 会把没有 content 键的返回值 JSON 序列化进内容块
+        （实测形状：{'status': 'success',
+        'content': [{'text': '{"status": "error", ...}'}]}），
+        故工具自报的 status/message 藏在块文本里，必须解析回来。
+        """
+        content = (
+            result.get("content")
+            if isinstance(result, dict)
+            else getattr(result, "content", None)
+        )
+        for block in content if isinstance(content, list) else [content]:
+            text = block.get("text") if isinstance(block, dict) else block
+            data = cls._json_dict(text)
+            if data is not None:
+                return data
+        return {}
+
+    @classmethod
+    def _result_status(cls, result: Any) -> str | None:
+        """工具结果状态（无状态信号返回 None）
+
+        ToolResult 是 TypedDict（运行时 dict），getattr 取不到键，须用下标读；
+        外层被 strands 标成 success 时，还要看工具自报的内层 status。
+        """
+        if result is None:
+            return None
+        outer = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+        if isinstance(outer, str) and outer != "success":
+            return outer
+        inner = cls._tool_payload(result).get("status")
+        return inner if isinstance(inner, str) else (outer if isinstance(outer, str) else None)
+
+    @classmethod
+    def _error_summary(cls, event: Any) -> str:
         """从 AfterToolCallEvent 提取失败摘要（exception 优先，截断 120 字）"""
         exc = getattr(event, "exception", None)
         if exc is not None:
             return str(exc)[:120]
-        result = getattr(event, "result", None)
-        # ToolResult.status == "error"（工具内部返回错误态）
-        if getattr(result, "status", None) == "error":
-            content = getattr(result, "content", None)
-            text = content if isinstance(content, str) else str(content or "")
-            return (text or "tool error")[:120]
-        return "tool error"
+        payload = cls._tool_payload(getattr(event, "result", None))
+        parts = [
+            payload[key]
+            for key in ("message", "error", "reason", "explanation")
+            if isinstance(payload.get(key), str) and payload.get(key)
+        ]
+        return (" ".join(parts) or "tool error")[:120]
 
     def _after_tool_call(self, event: Any) -> None:
         name = self._tool_name(event)
+        # 失败判定：工具抛异常，或结果状态存在且非 success
+        # （error / command_blocked / rejected / needs_approval / unavailable）
+        status = self._result_status(getattr(event, "result", None))
         failed = (
             getattr(event, "exception", None) is not None
-            or getattr(getattr(event, "result", None), "status", "success") == "error"
+            or (status is not None and status != "success")
         )
         if failed:
             self.failures_by_tool[name] = self.failures_by_tool.get(name, 0) + 1
