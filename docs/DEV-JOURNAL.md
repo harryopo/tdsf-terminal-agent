@@ -2392,3 +2392,38 @@ s2b 场景（4 次连续失败的 `ssh_command`）预期触发"同一工具连�
 **复盘**：① 回放测试的难点不在"跑起来"，在**断言该看哪里**——先花两轮勘察 + 一次探针把"事件从哪来、测试环境下存不存在"问清楚，比写完再返工便宜得多。② mock 会藏 bug：单测用 MagicMock 造的 `.status` 与生产 TypedDict 的 `.status` 不是一回事，**凡靠属性读取的契约，至少要有一条用真实类型构造的用例**。③ 遇到"测试通过但行为不对"时，`xfail(strict=True)` 是把发现锁进仓库的正确姿势——比"记在脑子里"和"顺手改掉生产语义"都稳。
 
 **下一步**：方案书 v4.0 P0/P1/P2 三阶段**全部收官**。主线转 agent 能力完善与开发（用户 2026-09-02 指定方向）；挂账遗留：T2 失败计数护栏失效（本轮 xfail 锁定）、§37.101 待真机清单、spec tasks.md 的 Task 9/10 勾选待复核。
+
+### 37.103 #44 修复：T2 连续失败熔断复活 + 揪出 tauri dev 重启环（2026-09-02 ✅）
+
+**任务**：用户授权"不用一步一步、自己边测边开发、启动软件看日志"后的第一手——把 §37.102 挂账的 **#44（T2 失败计数护栏失效）** 修掉，同时把桌面 app 启起来观察运行日志。
+
+**修复过程（两轮才对，值得写下来）**：
+1. **第一轮按 §37.102 的"根因两处"改**：`_after_tool_call` 从 `getattr(result,"status")` 改成 dict 下标读 + 读嵌套 dict 的 `status`。**跑回放仍 1 xfailed（没 XPASS）**——探针打印 `failures: {'ssh_command': 0}, cancelled: False`，说明完全没数到失败。假设错了。
+2. **第二轮打印真实事件再改**（不再猜）：strands 1.53.0 实际交给 hook 的是
+   `{'status':'success', 'content':[{'text':'{"status": "error", "message": "…"}'}]}`
+   ——工具自报的 dict 被 **JSON 序列化成字符串塞进内容块的 `text`**，外层 status 一律 success。所以"读嵌套 dict"永远匹配不上，必须**把块文本 JSON 解析回来**。
+
+**最终实现**（`adapter.py` 的 `ToolCallLimitHook`，+75/-12）：
+- `_json_dict`：字符串若是 JSON 对象则解析成 dict，否则 None（非 JSON 纯文本一律不当状态信号，防误判）。
+- `_tool_payload`：遍历 `result["content"]` 的内容块，从 `text` 里还原工具自己返回的结构化 dict。
+- `_result_status`：外层 status 存在且非 success → 用它；否则看内层自报 status；两处都没有 → 返回 None（= 无状态信号，不判失败）。
+- `_error_summary`：exception 优先；否则取内层 `message/error/reason/explanation` 拼接（熔断解释卡片因此能给出真实原因，不再恒 "tool error"）。
+- `_after_tool_call`：失败判定= 抛异常 **或** 状态存在且非 success，覆盖全库状态词 `error` / `command_blocked` / `rejected` / `needs_approval` / `unavailable`（口径来自 `ssh_command.py:34-47` 与 18+ 处 `"status": "error"`）。
+
+**两条刻意的设计决策**：
+1. **不把非零 `exit_code` 算失败**。`ls 不存在的目录` 返回 exit_code=2 是**正常答案**而非工具失败；若算失败，AI 一次探测性命令就会被计入"连续失败"，而 T7"写成功→必须只读验证"的语义会被悄悄削弱。宁可少判，不可误判。
+2. **needs_approval / rejected 也计失败**：审批被拒后模型若原样重试，本来就该被护栏切断——这正是熔断要保护的场景。
+
+**验证信号来自 xfail 本身**：修好后 `test_consecutive_failure_breaker_is_known_gap` **XPASS → strict 模式下报 1 failed**（`1 failed, 219 passed`），这就是 §37.102 埋那颗标记的全部意义：第一轮那个错误改动被它当场拦下，没让我以为"改完了"。随后摘标记转常规断言 `test_consecutive_failure_breaker_trips`。
+
+**防同类盲区复发**：给 `test_tool_limit_hook.py` 追加 `TestRealStrandsResultShape` 4 例，用 **SimpleNamespace + 真实事件形状**（`result={"status":"success","content":[{"text": json.dumps(…)}]}`）构造，而不是 MagicMock——覆盖 ①内层 error 计入失败 ②连续 3 次失败后第 4 次熔断 ③command_blocked/rejected/needs_approval/unavailable 全计入 ④纯文本 content 不误判。
+
+**门禁（本轮实测量）**：`test_tool_limit_hook.py + tests/replay` **25 passed（5.93s）**（原 19 + 回放 6，含摘标记后的 s2b）；**全量 sidecar pytest 2073 passed / 0 xfailed / 5 warnings（596.73s，exit 0）**——与上轮基线自洽：2068 passed + 1 xfailed = 2069 条，本轮 +4 条 `TestRealStrandsResultShape` = 2073，**既有用例零被动过、xfail 清零**。5 warnings 明细本轮未截留（命令只 tail 了结尾），下轮全量复跑时留意是否新增类别。前端本轮零改动（未跑 vitest/build:web；桌面 app 已由 AI 启动，见下）。
+
+**顺带从日志里揪出的真问题：`pnpm tauri:dev` 重启环**。dev-run.log 显示 7 分钟内 sidecar 完整启动 7 次（`[sidecar:restart_loop] started` ×7、`Strands backend activated` ×6），根因在日志第 308 行：`Info File src-tauri\sidecar\Temp\probe2 changed. Rebuilding application...` —— **Tauri dev 监听整个 src-tauri/**，而 sidecar 在 `TDSF_DATA_DIR` 未设时把数据兜底写到 `src-tauri/sidecar/Temp/`（`rag_slim.db`、agent_log 探针产物都在里面）。于是**跑一次 Python 测试/探针就把用户正在看的桌面 app 整个重启一轮**。`Temp/` 早在 .gitignore:119 里（不污染仓库），但 gitignore 管不着 tauri 的 watcher。
+**修**：新增 `src-tauri/.taurignore`（gitignore 语法、相对 src-tauri、Tauri v2 无需环境变量），列 `sidecar/Temp/` + `sidecar/pycache/`；**故意不忽略 `sidecar/**/*.py`**——Python 源码变更必须让 app 重启，sidecar 才加载得到新代码，那是有意为之的热重载链路。⚠ 生效需重启一次 dev（watcher 在启动时读取忽略表），故本轮**未实测验证**，留作下次重启确认。
+**另一条日志观察（判为正常）**：DEBUG `load_tdsf: no TDSF.md found` 每 2s 一条，读代码确认是 `TDSFWatcher._run()` 按 `interval` 轮询 mtime 做热重载（`tdsf_loader.py:318-327`），不是重复加载 bug。
+
+**复盘**：① 修 bug 前把"我以为的形状"打印出来，比在假设上再叠一层假设便宜——第一轮就是吃了 §37.102 结论只到"TypedDict getattr"这一层的亏，没看到 JSON-in-content-block。② 护栏类改动要**保守判定**：把"看起来失败"的东西算进失败计数，会连带污染另一个依赖成功/失败语义的机制（这里是 T7）。③ 桌面项目的测试数据目录**不能放在 src-tauri 下**，否则测试=重启 app，用户端的观感就是"软件自己在闪"。
+
+**下一步**：spec tasks.md 的 Task 9/10 复核（代码已在 7e87946，勾选待对代码/测试逐项核销）；重启 dev 验证 `.taurignore`；C4 教学卡 / #42 SSH 真机回归 / explorer 线仍在挂账。

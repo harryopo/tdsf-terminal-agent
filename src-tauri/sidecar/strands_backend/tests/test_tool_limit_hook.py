@@ -273,3 +273,82 @@ if __name__ == "__main__":
     import unittest
 
     unittest.main()
+
+
+# ===========================================================================
+# #44 回归（2026-09-02）：用真实 strands 结果形状判定失败
+# ===========================================================================
+#
+# 本文件其余用例喂的是 MagicMock 事件——`.status` 在 mock 上是属性、取得到值，
+# 于是"hook 看不见工具失败"这个缺陷（#44）在单测里长期不可见。以下用例改用
+# 实测到的真实形状（ToolResult 是 TypedDict dict；ops 工具的返回 dict 被
+# strands JSON 序列化进 content 块文本），锁死这条契约。
+
+
+def _real_event(payload: dict, name: str = "ssh_command"):
+    """按 strands 真实形状造 AfterToolCallEvent 替身（dict，不是 MagicMock）"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        tool_use={"name": name, "input": {"command": "systemctl restart nginx"}},
+        result={
+            "toolUseId": "1-0",
+            "status": "success",  # strands 外层恒 success（工具返回无 content 键）
+            "content": [{"text": json.dumps(payload, ensure_ascii=False)}],
+        },
+        exception=None,
+    )
+
+
+class TestRealStrandsResultShape:
+    def test_error_status_in_content_text_counts_as_failure(self):
+        """工具自报 status=error 藏在 content 块文本里 → 计入失败并给出摘要"""
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook()
+        hook._after_tool_call(_real_event({"status": "error", "error": "boom"}))
+        assert hook.failures_by_tool["ssh_command"] == 1
+        assert hook.tool_log[0]["success"] is False
+        assert "boom" in hook._last_failure[1]
+
+    def test_three_consecutive_failures_trip_breaker(self):
+        """连续 3 次失败后，第 4 次调用前熔断（护栏真正生效的路径）"""
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook(max_tool_calls=50, max_failures=3, session_id="")
+        for _ in range(3):
+            hook._before_tool_call(_real_event({"status": "error"}))
+            hook._after_tool_call(_real_event({"status": "error"}))
+        assert hook.cancelled is False
+        fourth = _real_event({"status": "error"})
+        hook._before_tool_call(fourth)
+        assert hook.cancelled is True
+        assert fourth.cancel_tool
+
+    def test_blocked_and_rejected_count_as_failure(self):
+        """ssh_command 的非 error 失败态同样算失败；success 不涨计数"""
+        from strands_backend.adapter import ToolCallLimitHook
+
+        for status in ("command_blocked", "rejected", "needs_approval", "unavailable"):
+            hook = ToolCallLimitHook()
+            hook._after_tool_call(_real_event({"status": status}))
+            assert hook.failures_by_tool["ssh_command"] == 1, status
+
+        ok = ToolCallLimitHook()
+        ok._after_tool_call(_real_event({"status": "success", "exit_code": 0}))
+        assert ok.failures_by_tool.get("ssh_command", 0) == 0
+        assert ok.tool_log[0]["success"] is True
+
+    def test_plain_text_result_is_not_failure(self):
+        """纯文本结果（非 JSON 对象）无状态信号 → 不误判为失败"""
+        from types import SimpleNamespace
+
+        from strands_backend.adapter import ToolCallLimitHook
+
+        hook = ToolCallLimitHook()
+        hook._after_tool_call(SimpleNamespace(
+            tool_use={"name": "read_remote_file", "input": {}},
+            result={"toolUseId": "1-0", "status": "success", "content": [{"text": "file body"}]},
+            exception=None,
+        ))
+        assert hook.failures_by_tool.get("read_remote_file", 0) == 0
