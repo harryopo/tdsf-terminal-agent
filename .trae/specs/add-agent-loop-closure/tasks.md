@@ -57,7 +57,7 @@
     - 落地：`replay/conftest.py` 注册 `replay` marker + 环境隔离 fixture（`TDSF_DATA_DIR`→tmp_path、`reset_for_test`/`reset_session_todos`、审批门 `request_approval_and_wait` 打桩为 APPROVED，否则真实 human-in-the-loop 会挂住 CI）。
     - 实测：`python -m pytest strands_backend/tests/replay -m replay` → 首轮 5 passed / 1 xfailed（s2b 锁缺陷）→ #44 修复后 **6 passed**（5.9s）；无网络、无真实 SSH。
 - [ ] Task 9: T9 稳定性补强
-  > 注：T9/T10 代码已在 commit 7e87946（§37.100）落地，但本 spec 勾选由后续复核轮处理，T8 这轮不代为核销。
+  > 注（2026-09-02 复核轮已完成）：T9/T10 代码在 commit 7e87946（§37.100）。逐行复核结果——**9.3 与 10.2 已在 checklist.md 核销**；**9.1 / 9.2 / 10.1 保持未勾**：9.1 的 timeout 只覆盖 OpenAI 分支且 `invoke()` 超时链零断言、9.2 唯一那条 invoke 用例是假绿（只测分类函数）、10.1 后端 DSPCR5 分档未固化且"高档展示依据"未满足。缺陷清单见 ROADMAP **#45** + DEV-JOURNAL §37.104。
   - [ ] 9.1 model_adapter 显式超时 + invoke watchdog（10 分钟无输出超时报告）
   - [ ] 9.2 LLM 不可用降级：只读问答提示（不中断对话报错卡）
   - [ ] 9.3 提示词鼓励独立信息收集并行多工具（吃 SDK ConcurrentToolExecutor 红利）
