@@ -325,6 +325,10 @@ def _create_anthropic_model(config: Any) -> Any:
     client_args: dict[str, Any] = {
         "api_key": config.api_key,
     }
+    # T9 稳定性 (2026-09-02, spec 9.1 / ROADMAP #45): 与 OpenAI 兼容分支同源——
+    # 此前只给 OpenAI 分支加了超时，Anthropic 路径仍会因服务挂起而永久阻塞。
+    client_args["timeout"] = 300.0
+    client_args["max_retries"] = 2
 
     # TDSF 魔改 (2026-08-09): Anthropic max_tokens 是必填参数（必须正整数）
     # max_tokens <= 0（无上限语义）时兜底为 8192

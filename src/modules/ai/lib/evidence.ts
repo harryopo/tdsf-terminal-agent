@@ -80,7 +80,15 @@ export const WRITE_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
   "save_skill",
 ]);
 
-/** 验证类工具（只读，写操作后出现即为"验证"；与 VERIFY_CLASS_TOOL_NAMES 对齐） */
+/** 验证类工具（只读，写操作后出现即为"验证"；与 VERIFY_CLASS_TOOL_NAMES 对齐）
+ *
+ * 单一真源 = `strands_backend/tools/registry.py` 的 VERIFY_CLASS_TOOL_NAMES，
+ * 此处是前端镜像，**改一侧必须同步另一侧**（2026-09-02 曾因漏同步少一个
+ * suggest_command）。
+ * 已知不对称（有意保留）：ssh_command 在 Python 侧按命令内容细分只读/写
+ * （`adapter.py` 的命令级判定），前端只看 tool_name 故一律归"执行"——
+ * 证据分组是展示层语义，不在这里复刻命令解析逻辑。
+ */
 export const VERIFY_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_remote_file",
   "config_diff",
@@ -90,6 +98,7 @@ export const VERIFY_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
   "get_terminal_output",
   "knowledge_search",
   "knowledge_get_doc",
+  "suggest_command",
 ]);
 
 export type EvidenceStage = "collect" | "execute" | "verify";
