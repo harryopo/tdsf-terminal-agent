@@ -1,0 +1,3 @@
+{"type":"meta","content":"S2 循环护栏熔断（T2）：单任务工具调用超 50 上限 → 停止后续调用 + 用户可见解释","meta":{"id":"s2","title":"工具调用上限熔断","tasks":["T2"],"agent":"main"}}
+{"type":"turn","content":"把 /etc/nginx 下的配置文件逐个读一遍再总结","meta":{"mode":"observe","rounds":[{"repeat":{"tools":[{"name":"read_remote_file","input":{"path":"/etc/nginx/nginx.conf","max_size":1024}}]},"times":51},{"text":"已按上限停止读取，先就看到的配置做总结。"}],"bridge":{"sftp_read":"user nginx;\n"}}}
+{"type":"expect","content":"","meta":{"checks":[{"check":"tool_calls_capped","turn":0,"max":50},{"check":"breaker_tripped","turn":0},{"check":"bridge_calls","method":"sftp_read","equals":50},{"check":"log_event","type":"loop_progress","contains":"[循环护栏]"},{"check":"observation_contains","turn":0,"text":"已按上限停止读取"}]}}
