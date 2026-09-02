@@ -34,10 +34,15 @@
 - [x] T8: 5 个回放场景集沉淀并接入 pytest
   - 2026-09-02 实测：s1 模式连续性 / s2 总上限熔断 / s3 todo 长任务 / s4 验证回环 / s5 记忆召回（+ s2b 连续失败熔断）。`pytest strands_backend/tests/replay -m replay` → **6 passed**，无网络无真实 SSH。（s2b 首版以 `xfail(strict=True)` 锁定 #44 缺陷，同日修复后转常规断言。）
 - [ ] T9: LLM 调用显式超时 + invoke watchdog（10 分钟）生效
+  - ⚠ 2026-09-02 逐行复核**不核销**：`model_adapter.py:270-271` 的 `timeout=300/max_retries=2` 只加在 OpenAI 兼容分支，Anthropic 分支（325-340）未加，32 例 model_adapter 测试对二者零断言；watchdog 实现齐全（`adapter.py:1053-1104`/1259-1342），但 8 例仅 3 属 T9.1 且都直接调 `_wait_with_watchdog`，`invoke()` 整条超时链（worker 起停 / agent_log 落盘 / 降级响应 / 解除 stalled）零断言。详 ROADMAP #45。
 - [ ] T9: LLM 不可用时降级为只读问答提示（非报错卡）
-- [ ] T9: 提示词含并行工具指引（独立信息收集一次多工具）
+  - ⚠ 2026-09-02 逐行复核**不核销**：实现到位（`adapter.py:82-94` 11 特征 / `1107-1110` 分类 / `1435-1452` 友好文案且早于 needs_you emit），但唯一那条"invoke 降级"用例 `test_watchdog.py:129-138` **只断言分类函数返回 True，从未进 invoke = 假绿**；11 个特征仅 7 个被测。补真链路与全特征用例后再核销。
+- [x] T9: 提示词含并行工具指引（独立信息收集一次多工具）
+  - 2026-09-02 复核确认：`adapter.py:194`（Task planning 段内）+ 断言 `test_watchdog.py:144-155`。
 - [ ] T10: 置信度三档标准落地（高档展示依据来源）
-- [ ] T10: 证据区按收集→执行→验证分组
+  - ⚠ 2026-09-02 逐行复核**不核销**：前端阈值在 `AiChat.tsx:534-540`（`<0.5` / `<0.3` / 无 reason 不显示），但 `ConfidenceMarker` 未导出、无组件测试；后端 `core/confidence.py:457` DSPCR5 **分档权重未固化**（全仓 grep `分档|tier` 零命中）；且"高档展示依据来源"实质未满足——≥0.5 时什么都不显示。
+- [x] T10: 证据区按收集→执行→验证分组
+  - 2026-09-02 复核确认：`src/modules/ai/lib/evidence.ts:73-129` + `AiChat.tsx:371-390` 渲染 + `evidence.test.ts` 16 例（含新增 7）。**遗留（不阻塞本项）**：TS 的 VERIFY 工具清单缺 `suggest_command`（Python `registry.py:305-315` 有），且 `evidence.test.ts:136-138` 把这一差异固化为期望；Python 对 `ssh_command` 按命令内容细分（`adapter.py:258-287`）而 TS 只看 tool_name → 同一工具两侧归组可能不一致。详 ROADMAP #45。
 - [x] P2 门禁：全量 pytest/vitest/tsc/lint/build 全绿
   - 2026-09-02 实测：pytest（sidecar 全量）**2068 passed / 1 xfailed**（679.6s）/ tsc 0 / lint 0 / vitest 1274 passed + 1 负载抖动（`sidecar-adapter.test.ts` 单跑 16/16，本轮不碰 TS，判非回归）/ `pnpm build:web` ✓。注：本轮未跑 `pnpm tauri:dev` 桌面实测（P2 无 UI 改动），该项仍挂在"用户桌面实测验收"。
   - 2026-09-02 #44 修复轮复测：pytest（sidecar 全量）**2073 passed / 0 xfailed**（596.7s，exit 0）= 上轮 2069 条 + 新增 4 条真实事件形状用例，**xfail 清零、既有用例零被动过**；本轮无前端改动。

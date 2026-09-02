@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-02 · **§37.103 ROADMAP #44 修复：T2「同一工具连续失败 3 次熔断」复活**（adapter 新增 `_json_dict`/`_tool_payload`/`_result_status` 还原工具自报状态；xfail 摘除转常规断言 + 4 条真实事件形状用例；**全量 sidecar pytest 2073 passed / 0 xfailed**）+ **修掉 tauri dev 重启环**（新增 `src-tauri/.taurignore` 忽略 `sidecar/Temp/`，此前跑一次 Python 测试就把桌面 app 整个重启一轮）。**方案书 v4.0 至此无遗留**；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.103 本会话交接章** → §37.102（回放套件工程事实）→ §37.101（§37.91-37.100 汇总 + 待真机清单）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
+> **最后更新**：2026-09-02 · **§37.103 ROADMAP #44 修复：T2「同一工具连续失败 3 次熔断」复活**（adapter 新增 `_json_dict`/`_tool_payload`/`_result_status` 还原工具自报状态；xfail 摘除转常规断言 + 4 条真实事件形状用例；**全量 sidecar pytest 2073 passed / 0 xfailed**）+ **修掉 tauri dev 重启环**（新增 `src-tauri/.taurignore` 忽略 `sidecar/Temp/`，此前跑一次 Python 测试就把桌面 app 整个重启一轮）。**方案书 v4.0 收官后同会话又做了 Task 9/10 逐行复核（§37.104）：T9.3/T10.2 可核销，T9.1/T9.2/T10.1 不可核销 → 新遗留 #45（含一条假绿用例）**；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.104 → §37.103 → §37.102 → §37.101**（越靠前越新）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
 
 ---
 
@@ -4442,4 +4442,14 @@ CDP 全新状态实测通过。commit 见上。
 6. 后端置信度引擎（DSPCR5）分档权重固化评估（T10.1 前端契约已齐）。
 7. §37.101 待用户实测汇总（UI 侧累计清单）仍未跑。
 
-**接手提示**：#44 已闭环，**方案书 v4.0 无遗留**。下一手仍走 agent 能力完善线。改 adapter / 工具 / 提示词前后都跑一次护栏：`cd src-tauri/sidecar && CUDA_VISIBLE_DEVICES=-1 PYTHONPYCACHEPREFIX=/tmp/pyc .venv/Scripts/python.exe -m pytest strands_backend/tests/test_tool_limit_hook.py strands_backend/tests/replay -q`（应 25 passed）。
+**接手提示**：#44 已闭环。**但同会话随后的 spec Task 9/10 逐行复核（§37.104）推翻了"方案书 v4.0 无遗留"——T9.1/T9.2/T10.1 三项不能核销，已挂 ROADMAP #45**。下一手仍走 agent 能力完善线。改 adapter / 工具 / 提示词前后都跑一次护栏：`cd src-tauri/sidecar && CUDA_VISIBLE_DEVICES=-1 PYTHONPYCACHEPREFIX=/tmp/pyc .venv/Scripts/python.exe -m pytest strands_backend/tests/test_tool_limit_hook.py strands_backend/tests/replay -q`（应 25 passed）。
+
+### 37.104 本会话追加：spec Task 9/10 逐行复核 → 新遗留 #45（2026-09-02 ⚠️）
+
+派子代理只读逐行勘察（48 次调用，回带行号的判定表），结论：**可核销 2 项**（T9.3 并行提示词 / T10.2 证据三段分组），**不可核销 3 项**：
+- **T9.1**：`timeout/max_retries` 仅 OpenAI 分支有，**Anthropic 分支漏**；watchdog 8 例中 3 例全直接调 `_wait_with_watchdog`，**`invoke()` 真链路零断言**。
+- **T9.2**：`test_watchdog.py:129-138` 名为 invoke 降级、**实际只断言分类函数=假绿**；11 特征仅 7 测到。
+- **T10.1**：后端 DSPCR5 分档未固化，且「高档展示依据来源」实质未满足（≥0.5 时不显示任何东西）。
+
+另查出 6 处工程隐患（阈值被 `max(1.0,…)` 钳制导致用例侥幸通过 / 超时文案硬编码 / tearDown 泄漏 POLL_SECS / 弃管 worker 仍持 `agent_lock` / `_stats` 结构一变即误判超时 / **TS VERIFY 工具清单缺 `suggest_command` 且测试把差异固化为期望**）。全部登记 **ROADMAP #45**，建议顺序：先补假绿用例与 invoke 链断言 → 再修 TS/Python 清单不一致 → 最后评估后端分档。
+**订正**：§37.100 "＋8 watchdog" 说法夸大（实为 3+3+2）。
