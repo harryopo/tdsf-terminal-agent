@@ -2442,3 +2442,26 @@ s2b 场景（4 次连续失败的 `ssh_command`）预期触发"同一工具连�
 **订正**：§37.100 门禁行写的"＋8 watchdog"**是夸大**——8 例实为 3×T9.1 + 3×T9.2 + 2×T9.3，并非 8 条 watchdog 用例。仓库里的数字必须能对上测试名，以后写门禁计数一律附测试文件与用例名。
 
 **复盘**：① "代码在 + 测试在"离"行为被验证"还差一层——**看测试到底调了谁**（T9.2 那条就是典型：测了分类器却叫 invoke 测试）。② 环境变量的下限钳制会**悄悄改写测试语义**，测试里设阈值必须确认它真生效（`max(1.0,…)` 那种默认值一吃就把 0.5s 变成 1s）。③ 派子代理做逐行复核很划算：48 次工具调用换回一份带行号的判定表，比我自己读 6 个文件省得多——但**结论仍要我自己判断能不能核销**，我没让它改任何文件是对的。
+
+### 37.105 #45 清零：watchdog / 传输降级改成真走 invoke 的链路测试（2026-09-02 ✅）
+
+**范围**（用户授权自行推进 + goal 登记）：把 §37.104 挂账的 ROADMAP #45 全部缺口一次清掉——测试要真验证行为，生产语义不为测试放宽。
+
+**T9.1 传输层超时补齐**：`model_adapter.py` Anthropic 分支同样带上 `timeout=300.0 / max_retries=2`（此前只有 OpenAI 兼容分支有，Anthropic 挂起会一直占住 RPC 线程）。断言补在两条现成用例里（`test_strands_model_adapter.py` OpenAI + Anthropic 各一处）——那个 Mock Model 本来就记录 `client_args`，加断言零成本，**32 例以前对这两个参数是零覆盖**。
+
+**T9.1 watchdog 阈值治理 + 文案随阈值走**：
+- 新增 `_watchdog_thresholds()`：下限从旧的 `max(1.0, …)` 钳制降到 `max(0.05, …)`，非法/空值回退生产默认 600s/5s。**这条钳制是 §37.104 抓到的根因**——旧实现下测试设 0.5s 实际跑在 1.0s，"活动续期"从未被真正验证，用例只是靠 worker 睡 2.0s 侥幸触发。
+- 新增 `_format_idle_secs()`：超时文案与 watchdog 触发日志都由实际阈值推导（旧文案硬编码"10 分钟"，env 改小后就是说谎）。顺手修掉触发日志 `:.0f` 在亚秒阈值下打成 `for 0s` 的观察（实测抓到的，见下）。
+- 活跃信号防护：`handler._stats["events_received"]` 非 int 时记 WARNING（结构漂移→超时会在"健康但静默"时误触发），仍保留有界兜底。
+- `invoke()` 全链路测试落地：`TestWatchdogInvokeChain` 只替换 `_get_or_create_agent` 返回的 Agent 实例，**worker 起停 / 有界等待 / 异常传播 / 降级分类 / agent_log 落盘 / stalled 解除全走生产代码**。断言 6 条：① 调用方线程等待时长 < worker 挂起时长（证明确实提前返回）② `degraded_reason=invoke_watchdog_timeout` + `next_step=done` + `intermediate_results=[]` ③ 文案含 "0.3 秒" 且**不含** "10 分钟"（回归护栏）④ 会话进入 `_stalled_sessions` ⑤ `agent_log` 收到 `watchdog_timeout` 事件（session + 正文含"超时"）⑥ worker 自然结束后 stalled 标记自动解除（轮询等待，不靠固定 sleep）。
+- `test_invoke_watchdog_warns_when_activity_signal_missing`：handler 无 `_stats` → 既断言 WARNING 落日志，又断言超时降级照旧返回。
+
+**T9.2 假绿修成真链路**：删掉"只断言分类函数"的伪 invoke 用例，换成 `TestTransportErrorInvokeChain` 两例——① 模型抛 `Connection error.` → `degraded_reason=llm_transport_error` + `next_step=done` + 文案含"AI 服务暂时不可用/稍后重试" + **`_emit_needs_you_for_error` 断言零调用**（传输错误不该推报错卡）；② 抛 `ValueError` → `degraded_reason=invoke_error` + `next_step=error` + needs_you 恰好一次（真实故障不被误吞）。特征覆盖改为**驱动自 `_LLM_TRANSPORT_ERROR_MARKERS` 本身**（11/11 + 数量断言 + 大写变形验证大小写不敏感），另留 7 条 SDK 真实文案。
+
+**T10.2 前端清单与 Python 同源**：`evidence.ts` 的 `VERIFY_CLASS_TOOL_NAMES` 补 `suggest_command`（9 项，与 `registry.py:305-315` 一致），并新增"清单钉死"测试。同时纠正一条**被测试固化的错误期望**——原 `写操作后的非验证类只读调用仍归收集段` 用 `suggest_command` 举例，换成 `skill_invoke`（Python 侧它确实不在验证清单）。注释写明两侧刻意保留的非对称：Python 对 `ssh_command` 按**命令内容**细分只读/写（`adapter.py:258-287`），前端只有 `tool_name`，所以同一工具两侧归组可以不同——这是设计而非漂移。
+
+**其他**：`test_watchdog.py` tearDown 现在 pop 两个环境变量（旧代码只 pop IDLE，`POLL_SECS=0.1` 会泄漏给同进程后续用例）；`invoke()` 的 stalled 短路处补注释说明弃管 worker 仍持 `agent_lock`，但标记解除发生在 `with agent_lock` 之后的 `finally`，因此不存在"标记已清、锁仍被持有"的窗口。
+
+**门禁（本轮实测量）**：sidecar 子集 `test_watchdog.py + tests/test_strands_model_adapter.py` **46 passed（7.31s，exit 0）**（watchdog 文件从 8 例扩到 14 例）；**改动波及面复测** `test_watchdog + test_tool_limit_hook + test_todo_followup + test_verify_followup + replay` **80 passed（23.75s）**——证明新阈值与状态判定不回归 T2 护栏 / T3 收尾 / T7 验证回环 / T8 回放。前端 `vitest src/modules/ai/lib/evidence.test.ts` **17 passed（+1 清单钉死例）**；`pnpm typecheck` exit 0 / `pnpm lint --max-warnings 0` exit 0 / `pnpm build:web` **exit 0（✓ built in 39.21s，本轮改了 `evidence.ts` 故必须跑）**。全量 `pnpm test` **1275 passed / 1 failed**——失败项是 §37.102 已记录的负载抖动用例 `sidecar-adapter.test.ts`（5000ms 超时），**单跑该文件 16 passed / 4.53s** 复证与本轮改动无关。**全量 sidecar pytest（终轮）2079 passed / 5 warnings（672.82s，exit 0）**——与 §37.103 基线自洽：2073 + 本轮 watchdog 文件净增 6 例（8→14）= **2079**，既有用例零被动过、xfail 保持 0；5 warnings 仍是 pytest 的 fixture 旧写法告警（`fixturefunc = resolve_fixture_function…`），无新增类别。耗时 672s > 上轮 596s 系与前端 vitest/build 并发争抢 CPU 所致，非测试变慢。
+
+**复盘**：① 第一次跑就靠"日志真被打出来了"暴露 logger 名带 `sidecar.` 前缀——`assertLogs("strands_backend.adapter")` 抓不到，改按 root 捕获才对；**断言失败时先去看 captured log，别急着改生产代码**。② 亚秒阈值不该只是为了跑得快：它把"有事件就续期"变成可验证行为，顺带揪出 `for 0s` 这种文案与真实语义脱节的小坑。③ 测试要测**契约**（响应体字段、事件是否落盘、报错卡是否被推），只测分类函数等于没测——这条本轮又被验证一次。

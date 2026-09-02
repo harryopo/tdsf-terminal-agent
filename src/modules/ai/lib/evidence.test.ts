@@ -99,6 +99,7 @@ describe("fetchEvidence — 会话证据拉取", () => {
 import {
   classifyEvidenceStage,
   groupEvidence,
+  VERIFY_CLASS_TOOL_NAMES,
   type EvidenceItem,
 } from "./evidence";
 
@@ -134,7 +135,26 @@ describe("classifyEvidenceStage（T10.2 三段分组）", () => {
   });
 
   it("写操作后的非验证类只读调用仍归收集段", () => {
-    expect(classifyEvidenceStage(ev("suggest_command"), true)).toBe("collect");
+    // 注意：不要用 suggest_command 举这个例子——它在 Python 侧的
+    // VERIFY_CLASS_TOOL_NAMES 里（2026-09-02 曾漏同步到 TS，被误固化成期望）
+    expect(classifyEvidenceStage(ev("skill_invoke"), true)).toBe("collect");
+  });
+
+  it("验证类清单与 Python registry 同源（含 suggest_command）", () => {
+    expect([...VERIFY_CLASS_TOOL_NAMES].sort()).toEqual(
+      [
+        "analyze_logs",
+        "config_diff",
+        "get_terminal_output",
+        "inspect_processes",
+        "knowledge_get_doc",
+        "knowledge_search",
+        "network_diagnose",
+        "read_remote_file",
+        "suggest_command",
+      ].sort(),
+    );
+    expect(classifyEvidenceStage(ev("suggest_command"), true)).toBe("verify");
   });
 
   it("agent: 前缀委派事件按去前缀后的工具名分类", () => {

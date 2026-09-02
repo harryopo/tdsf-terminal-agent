@@ -77,6 +77,34 @@ MAX_TOKEN_CONTINUATIONS = 3
 INVOKE_WATCHDOG_IDLE_SECS = 600
 INVOKE_WATCHDOG_POLL_SECS = 5
 
+
+def _watchdog_thresholds() -> tuple[float, float]:
+    """watchdog 阈值 ``(空闲容忍秒, 轮询秒)``，支持环境变量覆盖。
+
+    下限只到 0.05s——生产默认 600s/5s 不受影响，但自动化测试能把阈值调到
+    亚秒级，真正验证"有事件就续期、没事件才超时"（旧实现把下限钳在 1.0s，
+    测试设 0.5s 实际跑在 1.0s 上，用例只能靠 worker 睡 2s 侥幸触发）。
+    """
+    raw_idle = os.environ.get("TDSF_INVOKE_WATCHDOG_IDLE_SECS", "") or ""
+    raw_poll = os.environ.get("TDSF_INVOKE_WATCHDOG_POLL_SECS", "") or ""
+    try:
+        idle = float(raw_idle) if raw_idle else float(INVOKE_WATCHDOG_IDLE_SECS)
+    except ValueError:
+        idle = float(INVOKE_WATCHDOG_IDLE_SECS)
+    try:
+        poll = float(raw_poll) if raw_poll else float(INVOKE_WATCHDOG_POLL_SECS)
+    except ValueError:
+        poll = float(INVOKE_WATCHDOG_POLL_SECS)
+    return max(0.05, idle), max(0.05, poll)
+
+
+def _format_idle_secs(idle: float) -> str:
+    """秒数 → 人读时长（≥60s 显示分钟），让超时文案跟着实际阈值走"""
+    if idle >= 60:
+        return f"{idle / 60:.0f} 分钟"
+    return f"{idle:g} 秒"
+
+
 # T9.2 (spec 9.2): LLM 传输类异常特征——命中则走"只读问答降级"友好文案
 # 而非报错卡（对话不中断）。小写比对。
 _LLM_TRANSPORT_ERROR_MARKERS = (
@@ -1068,20 +1096,7 @@ class StrandsAgentAdapter:
             True = 超时触发（已标记 stalled 并上报，调用方应返回降级响应）；
             False = worker 正常结束
         """
-        raw = os.environ.get("TDSF_INVOKE_WATCHDOG_IDLE_SECS", "") or ""
-        try:
-            idle_threshold = max(1.0, float(raw)) if raw else float(
-                INVOKE_WATCHDOG_IDLE_SECS
-            )
-        except ValueError:
-            idle_threshold = float(INVOKE_WATCHDOG_IDLE_SECS)
-        raw_poll = os.environ.get("TDSF_INVOKE_WATCHDOG_POLL_SECS", "") or ""
-        try:
-            poll_secs = max(0.05, float(raw_poll)) if raw_poll else float(
-                INVOKE_WATCHDOG_POLL_SECS
-            )
-        except ValueError:
-            poll_secs = float(INVOKE_WATCHDOG_POLL_SECS)
+        idle_threshold, poll_secs = _watchdog_thresholds()
 
         last_seen = get_events()
         last_active = time.time()
@@ -1098,7 +1113,8 @@ class StrandsAgentAdapter:
             if time.time() - last_active > idle_threshold:
                 self._stalled_sessions.add((agent_id, session_id))
                 logger.error(
-                    f"[t9] watchdog: no callback events for {idle_threshold:.0f}s, "
+                    f"[t9] watchdog: no callback events for "
+                    f"{_format_idle_secs(idle_threshold)}, "
                     f"abandoning invoke: agent={agent_id}, session={session_id}"
                 )
                 return True
@@ -1167,7 +1183,10 @@ class StrandsAgentAdapter:
             )
 
         # T9 watchdog (spec 9.1): 上轮超时弃管的 worker 仍在后台执行时，
-        # 本轮快速降级返回（不卡 agent_lock——worker 结束会自动解除标记）
+        # 本轮快速降级返回（不卡 agent_lock——worker 结束会自动解除标记）。
+        # 弃管 worker 直到跑完才释放 per-(agent, session, perm) 锁，但标记解除
+        # 发生在 with agent_lock 块之后的 finally，因此不存在"标记已清、锁仍被
+        # 弃管 worker 持有"的窗口；其他会话/agent 用不同的锁，不受弃管影响。
         if (agent_id, session_id) in self._stalled_sessions:
             self._emit_mood("error", agent_id, session_id)
             logger.warning(
@@ -1253,6 +1272,15 @@ class StrandsAgentAdapter:
             # 结束时自动解除标记、恢复常规链路。
             handler = getattr(strands_agent, "callback_handler", None)
             handler_stats = getattr(handler, "_stats", None) or {}
+            if not isinstance(handler_stats.get("events_received"), int):
+                # 活跃信号读不到（handler 结构变更 / 未挂 callback）→ watchdog
+                # 会把"健康但无事件"误判为挂起。仍保留有界超时兜底（优于无限
+                # 阻塞），但留一条 WARNING：将来重构掉 _stats 时能被看见。
+                logger.warning(
+                    f"[t9] watchdog activity signal unavailable "
+                    f"(handler={type(handler).__name__}), timeout will fire on "
+                    f"silence: agent={agent_id}, session={session_id}"
+                )
 
             outcome: dict[str, Any] = {}
 
@@ -1311,8 +1339,10 @@ class StrandsAgentAdapter:
             if watchdog_fired:
                 # 超时：不取 worker 结果（仍在后台跑）——友好降级，对话可继续
                 duration = time.time() - start_time
+                idle_secs, _ = _watchdog_thresholds()
                 msg = (
-                    "AI 调用超时：模型超过 10 分钟没有任何输出，本轮已中止。"
+                    f"AI 调用超时：模型超过 {_format_idle_secs(idle_secs)}"
+                    "没有任何输出，本轮已中止。"
                     "请检查网络或模型服务状态后重试；会话历史已保留，可直接继续对话。"
                 )
                 logger.error(

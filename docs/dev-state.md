@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-02 · **§37.103 ROADMAP #44 修复：T2「同一工具连续失败 3 次熔断」复活**（adapter 新增 `_json_dict`/`_tool_payload`/`_result_status` 还原工具自报状态；xfail 摘除转常规断言 + 4 条真实事件形状用例；**全量 sidecar pytest 2073 passed / 0 xfailed**）+ **修掉 tauri dev 重启环**（新增 `src-tauri/.taurignore` 忽略 `sidecar/Temp/`，此前跑一次 Python 测试就把桌面 app 整个重启一轮）。**方案书 v4.0 收官后同会话又做了 Task 9/10 逐行复核（§37.104）：T9.3/T10.2 可核销，T9.1/T9.2/T10.1 不可核销 → 新遗留 #45（含一条假绿用例）**；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.104 → §37.103 → §37.102 → §37.101**（越靠前越新）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
+> **最后更新**：2026-09-02 · **§37.105 ROADMAP #45 清零（同轮）**：spec T9.1 / T9.2 **已核销**——watchdog 阈值下限 1.0→0.05 使"有事件续期/无事件超时"真可验证、超时文案与日志改由阈值推导、Anthropic 分支补齐 `timeout/max_retries` 且两分支均有 `client_args` 断言、`invoke()` 的超时链与传输降级链各补真链路断言（含 `agent_log watchdog_timeout` 落盘 / stalled 标记解除 / needs_you 零调用）、6 处工程隐患全修、TS VERIFY 清单与 Python `registry.py` 同源并钉死。#45 仅剩 T10.1 后端分档固化 + 「高档展示依据」产品决策。**此前同日**：§37.104 逐行复核挂号 #45 → §37.103 #44 T2 熔断修复（全量 sidecar pytest 2073 passed / 0 xfailed）+ `src-tauri/.taurignore` 修掉 tauri dev 重启环；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.105 → §37.104 → §37.103 → §37.102**（越靠前越新）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
 
 ---
 
@@ -4453,3 +4453,19 @@ CDP 全新状态实测通过。commit 见上。
 
 另查出 6 处工程隐患（阈值被 `max(1.0,…)` 钳制导致用例侥幸通过 / 超时文案硬编码 / tearDown 泄漏 POLL_SECS / 弃管 worker 仍持 `agent_lock` / `_stats` 结构一变即误判超时 / **TS VERIFY 工具清单缺 `suggest_command` 且测试把差异固化为期望**）。全部登记 **ROADMAP #45**，建议顺序：先补假绿用例与 invoke 链断言 → 再修 TS/Python 清单不一致 → 最后评估后端分档。
 **订正**：§37.100 "＋8 watchdog" 说法夸大（实为 3+3+2）。
+
+### 37.105 本会话追加：#45 清零——watchdog / 传输降级改成真走 invoke 的链路测试（2026-09-02 ✅）
+
+**改了什么（生产 2 处 + 测试 4 处）**：
+- `strands_backend/model_adapter.py`：Anthropic 分支补 `timeout=300.0 / max_retries=2`（与 OpenAI 兼容分支对齐——此前只有后者有，Anthropic 挂起会一直占住 RPC 线程）。
+- `strands_backend/adapter.py`：① `_watchdog_thresholds()`——阈值下限从 `max(1.0,…)` 改为 `max(0.05,…)`，非法/空值回退 600s/5s；② `_format_idle_secs()`——**超时文案与触发日志都由实际阈值推导**（旧文案硬编码"10 分钟"，且 `:.0f` 在亚秒阈值下打成 `for 0s`）；③ 活跃信号 `handler._stats["events_received"]` 非 int 时记 WARNING（结构漂移防护，仍保留有界兜底）；④ stalled 短路处注释成文：弃管 worker 直到跑完才释放 `agent_lock`，而标记解除发生在 `with agent_lock` 之后的 `finally`，故不存在"标记已清、锁仍被持有"的窗口。
+- `strands_backend/tests/test_watchdog.py`（8 → 14 例）：新增 `TestWatchdogInvokeChain`（挂起 → 超时降级全链路 + 活跃信号漂移告警）与 `TestTransportErrorInvokeChain`（传输错误友好降级且**不推 needs_you** / 非传输错误仍推一次）；**删除那条假绿用例**（名为 invoke 降级、实际只断言分类函数）；11 个传输特征改为驱动 `_LLM_TRANSPORT_ERROR_MARKERS` 本身逐个验证 + 数量断言；tearDown 两个 env 都 pop；新增阈值生效与非法值回退两例。**只替换 `_get_or_create_agent` 返回的 Agent 实例**，worker 起停 / 有界等待 / 异常传播 / 降级分类 / agent_log 落盘全部走生产代码。
+- `tests/test_strands_model_adapter.py`：OpenAI + Anthropic 两条用例真断言 `client_args["timeout"]==300.0` / `["max_retries"]==2`。
+- `src/modules/ai/lib/evidence.ts` + `evidence.test.ts`：`VERIFY_CLASS_TOOL_NAMES` 补 `suggest_command`（9 项，与 `registry.py:305-315` 同源）+ 新增清单钉死测试；纠正被固化的错误期望（改用 `skill_invoke` 举例）；注释写明 `ssh_command` 两侧刻意非对称（Python 按命令内容细分 / TS 只看 tool_name）。
+- spec checklist：T9.1、T9.2、T10.2 三项按实测证据核销（T10.1 保持不核销）；ROADMAP #45 → 🔶 仅剩 T10.1。
+
+**新固化事实（下轮别再猜）**：适配层 logger 注册名带 `sidecar.` 前缀（`sidecar.strands_backend.adapter`），`assertLogs("strands_backend.adapter")` 抓不到——测日志用 `self.assertLogs(level=…)`（root）或带前缀全名。
+
+**门禁（本轮实测量）**：**全量 sidecar pytest 2079 passed / 5 warnings（672.82s，exit 0）** = §37.103 基线 2073 + watchdog 文件净增 6 例（8→14），既有用例零被动过、**xfail 保持 0**；改动波及面子集（watchdog+tool_limit_hook+todo+verify+replay）**80 passed**；`evidence.test.ts` **17 passed**；`pnpm typecheck` / `pnpm lint --max-warnings 0` / `pnpm build:web` 均 exit 0；全量 vitest 1275 passed + 1 条已知负载抖动（单跑该文件 16 passed）。明细见 DEV-JOURNAL §37.105。
+
+**仍开放**：① T10.1 后端 DSPCR5 分档权重固化 + 「高档展示依据来源」需产品拍板（现 ≥0.5 什么都不显示）；② 重启 dev 验证 `.taurignore`；③ C4 教学卡真机 / #42 SSH 真机回归 / explorer 路径栏与上传；④ 用户桌面实测验收（P0/P1/P2 各一轮）。

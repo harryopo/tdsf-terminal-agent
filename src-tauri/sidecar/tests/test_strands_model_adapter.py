@@ -234,6 +234,10 @@ class TestCreateStrandsModelOpenAI:
         # 验证 params
         assert result.params["temperature"] == 0.5
         assert result.params["max_tokens"] == 1024
+        # T9.1 (spec 9.1 / ROADMAP #45): 传输层超时 + 有限重试必须真的带上
+        # ——否则模型端挂起会无限阻塞 RPC 线程（watchdog 只能兜底不能防）
+        assert result.client_args["timeout"] == 300.0
+        assert result.client_args["max_retries"] == 2
 
     def test_openai_model_without_base_url(
         self, injected_model_adapter
@@ -294,10 +298,14 @@ class TestCreateStrandsModelAnthropic:
         assert result is not None
         assert isinstance(result, _MockAnthropicModel)
         assert result.model_id == "claude-3-5-sonnet-20241022"
-        # Anthropic 不支持 base_url，client_args 只应有 api_key
+        # Anthropic 不支持 base_url：client_args = api_key + 传输层超时/重试
         assert result.client_args["api_key"] == "sk-ant-test"
         assert "base_url" not in result.client_args
         assert "api_base" not in result.client_args
+        # T9.1 (spec 9.1 / ROADMAP #45): Anthropic 分支与 OpenAI 分支同等对待——
+        # 此前只 OpenAI 带 timeout，Anthropic 挂起会一直占住 RPC 线程
+        assert result.client_args["timeout"] == 300.0
+        assert result.client_args["max_retries"] == 2
         # 验证 params
         assert result.params["temperature"] == 0.3
         assert result.params["max_tokens"] == 4096
