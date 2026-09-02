@@ -2360,3 +2360,35 @@ P2（中优先级 — 清理 + 文档）：
 **踩坑**：①watchdog 首测 False——poll 间隔 5s 盖过 0.5s 测试阈值，worker 在首次轮询前就结束了；poll 间隔一并环境变量化。②`cond && useHook()` 短路条件调用钩子（同 §37.99 教训再现）——钩子无条件调用、判断放外面。
 
 **下一步**：T8 回放测试（replay.py 重放器 + 5 场景 JSONL + pytest mark replay，P2 收官）→ spec tasks.md/checklist.md 核销 → build:web 全量门禁。
+
+### 37.102 方案书 v4.0 P2 收官：T8 会话回放测试 + 实测揪出 T2 熔断失效（2026-09-02 ✅ 全量门禁绿）
+
+**任务**：spec `add-agent-loop-closure` Task 8（8.1 replay 工具 / 8.2 五场景集 / 8.3 pytest mark replay）。新增 `src-tauri/sidecar/strands_backend/tests/replay/`：`replay.py`（重放器）、`conftest.py`（marker + 环境隔离）、`test_replay_scenarios.py`（参数化跑场景）、`scenarios/*.jsonl`（6 个场景）。**零生产代码改动**——本轮只加测试与文档。
+
+**架构（先勘察后动手，两轮 Explore + 一次实测探针）**：
+场景 JSONL 沿用 agent_log 行协议（`meta`/`turn`/`expect`），但重放的是**脚本化的模型轮次**：自写 `ReplayModel`（实现 strands `Model` 协议，`stream()` 按场景轮次吐 `toolUse` 事件序列或纯文本，并顺手记录"模型这一轮真正收到了什么 messages / 什么 tool schema"）+ `RecordingBridge`（`ipc_invoke` 查表返回录制值，`{"__raise__": msg}` 抛异常），喂给**真实** `StrandsAgentAdapter.invoke()` 跑完整 agentic loop。`check` 是声明式字典表（14 类：`tool_sequence`/`tool_sequence_contains`/`tool_absent`/`schema_has`/`schema_lacks`/`history_contains`/`user_msg_absent`/`observation_contains`/`breaker_tripped`/`breaker_not_tripped`/`tool_calls_capped`/`verify_followup_not_needed`/`bridge_calls`/`log_event`），`run_checks()` 返回失败原因列表——空列表即全通过，一条断言失败能在 pytest 输出里直接看到是哪个 check、哪一轮。
+
+**关键工程事实（勘察换来的，写给下一位）**：
+1. **断言源不能选 `tool_call`/`tool_result` 日志行**——那两类由全局 EventBus 订阅写入，测试里 `event_bus` 是 MagicMock 时根本不产生。可用的是 `hook.tool_log`、`loop_progress`、`user_msg`、`env_inject`、`todo_followup`、`verify_followup` + `ReplayModel.received/schemas`。
+2. **审批门必须打桩**：confirm 模式下高危命令走 `request_approval_and_wait` 真等人类点击，自动回放会**无限挂住**（我第一次跑探针就卡死，只能后台化再 kill）。仓库自家测试的写法就是 `patch("strands_backend.tools.request_approval_and_wait", return_value=MagicMock(status=NeedsYouStatus.APPROVED))`，本轮收进 `conftest.py` 的 autouse fixture。
+3. **`extra_tools` 塞不了假工具**：未加 `@tool` 装饰器的普通函数会被 registry 静默丢弃；同名装饰函数则覆盖真工具。所以错误注入走"**真实 ops 工具 + mock bridge 返回 error dict**"这条路，不造假工具。
+4. **50 上限的判定口径**：`max_tool_calls=50` 在第 51 次 BeforeToolCall 触发——工具真执行 50 次，第 51 次执行前被 cancel（`_executor.py:178-200`，status="error"、exception=None）。场景 s2 因此显式写 51 轮重复 + 1 轮收尾文本。
+5. **T3/T7 追加轮在锁内跑，其 observation 覆盖主轮**（T7 优先级最高）——所以 s3/s4 的 `observation_contains` 断言的是**追加轮**产出的收尾文本，场景必须把追加轮需要的模型轮次也脚本出来，否则会撞上"回放脚本已耗尽"兜底文本（s3 第一版就因此只有 2 轮，重写成 4 轮才真走完 todo 续做）。
+
+**实测揪出的真实缺陷（T2 失败计数护栏失效）**：
+s2b 场景（4 次连续失败的 `ssh_command`）预期触发"同一工具连续失败 3 次熔断"，实际**不触发**。逐层读到 strands 1.53.0 源码定死根因：
+- ops 工具返回的 dict 没有 `content` 键 → `strands/tools/decorator.py:693-700` 一律把它包成 `status:"success"`；
+- `ToolResult` 是 TypedDict（运行时就是 dict，`types/tools.py:101-112`），而 adapter 用 `getattr(event.result, "status", "success")` 取值 → dict 上 getattr 恒拿默认 "success"。
+- 结论：只有 `AfterToolCallEvent.exception`（工具真抛异常时才有值，`decorator.py:668`）会被算成失败；**"连续失败 3 次熔断"这条护栏在生产里是死的，只有"总调用数超上限 50"有效**。
+- 为什么既有单测没发现：`test_tool_limit_hook.py` 喂的是 MagicMock 事件，`.status` 在 mock 上是**属性**，取得到值——mock 与真实 TypedDict 语义不一致造成的盲区。这正是 T8 存在的价值：换成 strands 真实的事件流，一秒露形。
+- **处置（用户决定：先记录不修）**：不动生产代码；用 `@pytest.mark.xfail(strict=True)` 把这个行为锁成回归标记（reason 里写全源码定位），并在 ROADMAP 遗留清单挂号。strict=True 的意义=修复后它会 XPASS 报错，逼下一位摘标记转常规断言，不会悄悄烂成"没人管的期望"。
+
+**门禁**（本轮实测量，非沿用基线）：**全量 sidecar pytest 2068 passed / 1 xfailed / 2 warnings（679.6s，exit 0）**——与 §37.101 基线 2063 的差正好是本轮新增 5 条场景用例（+1 xfailed 另计），无既有用例被动过｜pytest replay 子集 **5 passed / 1 xfailed（5.4s）**｜pytest `strands_backend` 子树 **358 passed / 1 xfailed（92.3s）**｜tsc 0｜lint 0（`--max-warnings 0`）｜vitest **1274 passed / 1 failed**｜build:web ✓ 47.80s（仅既有 >500kB chunk 警告）。
+
+**vitest 那条失败没放过**：`src/modules/ai/lib/sidecar-adapter.test.ts > dev 模式 + invoke 失败 → yield error`（5356ms）。单跑该文件 **16/16 全过** → 全量并发下的超时抖动；且本轮改动是 Python/JSONL + 一个 md，**不碰任何 TS**。判为负载抖动、非回归，记录在案。
+
+**待真机**：本轮无 UI 改动，不需要桌面实测（回放全在 sidecar 内跑）。
+
+**复盘**：① 回放测试的难点不在"跑起来"，在**断言该看哪里**——先花两轮勘察 + 一次探针把"事件从哪来、测试环境下存不存在"问清楚，比写完再返工便宜得多。② mock 会藏 bug：单测用 MagicMock 造的 `.status` 与生产 TypedDict 的 `.status` 不是一回事，**凡靠属性读取的契约，至少要有一条用真实类型构造的用例**。③ 遇到"测试通过但行为不对"时，`xfail(strict=True)` 是把发现锁进仓库的正确姿势——比"记在脑子里"和"顺手改掉生产语义"都稳。
+
+**下一步**：方案书 v4.0 P0/P1/P2 三阶段**全部收官**。主线转 agent 能力完善与开发（用户 2026-09-02 指定方向）；挂账遗留：T2 失败计数护栏失效（本轮 xfail 锁定）、§37.101 待真机清单、spec tasks.md 的 Task 9/10 勾选待复核。

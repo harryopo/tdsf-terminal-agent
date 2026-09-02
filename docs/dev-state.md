@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-08-31 · **工作区逻辑系统修复（§37.89）**：SSH 连接不再污染本地/WSL Space（连接只绑专属 SSH Space；自动连接无匹配 Space 则跳过并断孤儿会话；删 Space 即断其 SSH 连接；断线/启动降级 env+root 成对清理；本地 Space root/env 强制本地）+ 顶栏横向工作区标签 + + 菜单精简（只留 Terminal/Editor）。门禁 tsc/lint/vitest 1268/build 四绿，**待 tauri:dev 桌面实测**。交接说明：`docs/工作区逻辑修复-交接说明-2026-08-31.md`（含 Agent 感知工作区字段语义表）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致。**下一步主攻 Agent 模块**（方案书 v3.1 三模式已落地，P1 事件源日志/回放/token 计量待启动）。接手先读 DEV-JOURNAL「开发铁律」+「§37.89 工作区修复」
+> **最后更新**：2026-09-02 · **§37.102 T8 会话回放测试落地 → 方案书 v4.0 P0/P1/P2 三阶段全线收官**（新增 `strands_backend/tests/replay/`：replay.py 重放器 + 6 个 JSONL 场景 + pytest `replay` marker，零生产代码改动）。**回放实测揪出 T2 失败计数护栏在生产下失效 → 记为 ROADMAP #44（用户拍板先记录不修，已 xfail(strict) 锁定）**。**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定），建议第一手即 #44 修复。交接必读：**§37.102 本会话交接章**（回放套件工程事实 + 最新遗留清单）→ §37.101（§37.91-37.100 汇总 + 待真机清单）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
 
 ---
 
@@ -36,8 +36,11 @@
 
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
-**最新里程碑（2026-09-01）**：
-- §37.95-37.100 **用户实测批次二/三 + 方案书 v4.0 P2（T9/T10）**（ba25f3a / 885f8dd / 3f4c70e 之前批 / c20a3e1 之前批 / d44a772 / fe3ae36 / 4f8d704 / 98f2703 / 7e87946）：①C3 打字机/可视执行静默丢弃根因（injectFn 存根）修复 + SSH/WSL=Shell 命名分流 + observe 工具矛盾告知 + 树图围栏强制；②工作区-窗口单栏重构（SpaceSwitcher 单触发器/无头像/删除常显/env 徽章）+ agent 按工作区隔离（SessionScope=workspace）+ 记忆按工作区沉淀/过滤（workspace 标签）+ @远程文件引用 + 工作区门控（未绑工作区 agent 不运行，WorkspaceGate 空态）+ 对话栏重排（新建对话/模式/工作区/上下文圈）+ 上下文面板（点击弹出+模块占比+缓存命中率）+ **真实 usage 修复**（snake/camel 字段错位致 sidecar 路径用量从未上报）+ **四修**（SSH 工作区重复创建=对话框先连接后建区，改先建区后连接+失败回滚；门控校验工作区真实存在防绕过；左侧加号移除；模式配色单一真源 AGENT_MODE_ACCENT 观察黄/确认绿/自动红/教学紫）；③**T9 稳定性**（model_adapter 显式超时 300s+invoke watchdog 10min 无输出弃管+stalled 快速降级+LLM 传输错误只读降级+并行工具提示词）+ **T10 证据三段分组**（收集→执行→验证时序语义）。**P2 仅剩 T8 回放测试**（replay.py+5 场景集，详 DEV-JOURNAL §37.95-37.100）；**待真机实测清单**见 §37.101 交接章
+**最新里程碑（2026-09-02）**：
+- §37.102 **T8 会话回放测试（方案书 v4.0 P2 收官 → 全案 P0/P1/P2 三阶段完成）**：新增 `src-tauri/sidecar/strands_backend/tests/replay/`——`replay.py` 重放器（agent_log 风格 JSONL 场景 → 脚本化 fake `ReplayModel` + `RecordingBridge` 喂**真实** `StrandsAgentAdapter.invoke()` 跑完整 agentic loop；14 类声明式 check）+ `scenarios/` 6 场景（模式连续性/总上限熔断/todo 长任务/验证回环/记忆召回 + 1 已知缺陷锁定）+ `conftest.py`（`replay` marker、TDSF_DATA_DIR 隔离、**审批门打桩 APPROVED**）。**零生产代码改动**；核销 spec tasks.md 8.1-8.3 + checklist.md T8。**回放实测揪出真实缺陷**：「同一工具连续失败 3 次熔断」失效（ops 工具 dict 无 `content` → strands 包成 success；`ToolResult` 是 TypedDict 而 adapter 用 `getattr` 取 status 恒为默认值），仅总上限 50 有效——用户拍板先记录不修，`xfail(strict=True)` 锁定 → **ROADMAP #44**。门禁：全量 pytest 2068 passed/1 xfailed、pytest replay 5 passed/1 xfailed、`strands_backend` 子树 358/1 xfailed、tsc 0、lint 0、vitest 1274(+1 负载抖动已单跑证无关)、build:web ✓。详 DEV-JOURNAL §37.102 + 本文件 §37.102 交接章
+
+**此前里程碑（2026-09-01）**：
+- §37.95-37.100 **用户实测批次二/三 + 方案书 v4.0 P2（T9/T10）**（ba25f3a / 885f8dd / 3f4c70e 之前批 / c20a3e1 之前批 / d44a772 / fe3ae36 / 4f8d704 / 98f2703 / 7e87946）：①C3 打字机/可视执行静默丢弃根因（injectFn 存根）修复 + SSH/WSL=Shell 命名分流 + observe 工具矛盾告知 + 树图围栏强制；②工作区-窗口单栏重构（SpaceSwitcher 单触发器/无头像/删除常显/env 徽章）+ agent 按工作区隔离（SessionScope=workspace）+ 记忆按工作区沉淀/过滤（workspace 标签）+ @远程文件引用 + 工作区门控（未绑工作区 agent 不运行，WorkspaceGate 空态）+ 对话栏重排（新建对话/模式/工作区/上下文圈）+ 上下文面板（点击弹出+模块占比+缓存命中率）+ **真实 usage 修复**（snake/camel 字段错位致 sidecar 路径用量从未上报）+ **四修**（SSH 工作区重复创建=对话框先连接后建区，改先建区后连接+失败回滚；门控校验工作区真实存在防绕过；左侧加号移除；模式配色单一真源 AGENT_MODE_ACCENT 观察黄/确认绿/自动红/教学紫）；③**T9 稳定性**（model_adapter 显式超时 300s+invoke watchdog 10min 无输出弃管+stalled 快速降级+LLM 传输错误只读降级+并行工具提示词）+ **T10 证据三段分组**（收集→执行→验证时序语义）。**P2 仅剩 T8 回放测试**（→ 已于次日 §37.102 收官）；**待真机实测清单**见 §37.101 交接章
 - §37.94 **工作区-窗口单栏重构 + agent 工作区隔离**（commit 885f8dd）：SpaceSwitcher 收敛为单触发器（无 R 头像/无重复加号，用户钦定），切换/重命名/删除收敛总览面板且行操作常显，行内环境徽章解 WSL/服务器命名撞车；TabBar 只展示当前工作区窗口+唯一加号。agent 联动：SessionScope 增 workspace(spaceId)，新会话绑定当前工作区，getLive 按 env 归一化（ssh→绑定服务器 / local·wsl→本地+space.root），徽章显工作区名，legacy 兼容。门禁 tsc 0/vitest 373/lint 0。遗留：同工作区跨对话记忆过滤（当前全局超集）、C3 打字机/C4 教学卡流式渲染/observe 工具矛盾告知、md 树图 fenced 强制。详 DEV-JOURNAL §37.94
 - §37.93 **用户实测问题批次一：五修落地**（commit 3f4c70e，9 文件 +351/-33）：**A1 会话按服务器隔离**（用户钦定"像 AI 编程 agent 的工作目录隔离"）——`SessionMeta.scope`（local | ssh user+host+port）创建时快照绑定，`getLive` 按 scope 解析（本地对话不碰 SSH / 绑定服务器离线出 conversation_server 提示 / 终端上下文防串台 / 老会话无 scope 全局兼容），会话列表主机徽章；**A2 max_tokens 自动续跑 ≤3 轮**（MaxTokensReachedException 不再整轮失败，长任务可完成；共享 limit_hook 护栏）；**B1 欢迎页环境误报**（根因=formatEnvBlock 只门控 cwd 未门控 workspace_root，home 回退被当本地工作区上报→无终端时双双置 null，agent 转走引导分支）；**C1 审批卡命令 whitespace-pre-wrap 完整可见**；**C2 影响预测**（docker/podman/kubectl 只读子命令放行修 `docker ps` L3 误判 + 只读对象去噪 echo/ps 空、which 前 3、systemctl 滤动作词）。**D1 自测底座建立**：tauri:dev 后台自跑（用户授权），sidecar 日志进 dev 日志实时可查，agent-logs JSONL 落盘。门禁：pytest **2053**(+9)/vitest 376/tsc/lint 0/build:web。**遗留下一批（C3/C4 需真机调试）**：C3 打字机无效+命令输出不回显终端（inject_terminal 链路/human_type pump 连真机排查）；C4 教学卡流式过渡区裸 markdown（MessageResponse 已渲染完整 section，需真机复现定位）；方案书 v4.0 P2 T8-T10 顺延。详 DEV-JOURNAL §37.93
 - §37.92 **SSH 稳定性 #42 P2 落地：agent 会话枚举 + host 校验放宽**（commit c20a3e1，12 文件 +700/-52）：**多主机运维打通**——①Rust `ssh_sessions_detail` 命令（SshSessionDetail camelCase，`sessions_detail` 纯函数离线可测）+ sidecar 反向路由 `"ssh_status"`；②Python 新工具 `ssh_list_sessions`（TOOL_REGISTRY 22→**23**，readonly，observe/L1 schema 可见）；③`execute_via_ssh` 会话校验放宽：live 列表（Rust SshState 权威源）内 **state=connected** 会话即放行，附 target_endpoint（user@host:port）进结果与审计；查询失败/不可识别**回退旧严格校验**（fail-closed 只紧不松）；威胁模型=deny 硬底线/审批链/observe 裁剪在前不受影响、不信任 LLM 传值；④系统提示 +1 工具行（精简 3 处冗余保 4000 预算，3983）+ env 行多主机提示。门禁：pytest **2044**（+15）/ cargo test **361**（+1）/ clippy **0**；**待用户实测**：双会话 → agent 列会话 → 指定非激活主机执行命令 → 断开后指定应拦。详 DEV-JOURNAL §37.92
@@ -4351,7 +4354,7 @@ CDP 全新状态实测通过。commit 见上。
 - 收尾钩子两个：`_maybe_todo_followup`（T3）+ `_maybe_verify_followup`（T7），均会话级 flag 限一次防死循环，勿改成每轮触发
 - python_run 在 SSH 会话中拒绝执行（"仅支持本地工作区"）——远程操作走 ssh_command
 - ToolCallLimitHook 的 tool_log 是单次 invoke 口径的内存真源（T7 验证检测用它），event_bus/agent_log 均不适合
-- spec 文件：`.trae/specs/add-agent-loop-closure/tasks.md` Task 1-7 已勾，Task 8-10 待做；checklist.md P0/P1 段对应项需在 T8-T10 后统一核销
+- spec 文件：`.trae/specs/add-agent-loop-closure/tasks.md` Task 1-8 已勾（Task 9/10 代码已在 7e87946 落地但勾选留待复核轮）；checklist.md T8 两项已核销，T2"连续失败熔断"项已加注记标明实测失效待修（详 §37.102）
 
 **接手提示**：本线与 explorer 线（§37.88）并行中；写 dev-state 前先 tail 读最新防覆盖。P2 全部在 sidecar 侧 + 少量 ai 前端（置信度分组 UI），与 explorer 线领地无交集。
 
@@ -4379,3 +4382,37 @@ CDP 全新状态实测通过。commit 见上。
 - 新建 SSH 工作区 = 先 createSpace 后 connectSsh（成功 setEnv sessionId，失败 remove 回滚）——倒置会被 connect-success 订阅抢建第二个工作区。
 
 **待用户实测汇总**：§37.91-37.100 各节"待真机"清单（打字机逐字效果/上下文面板真实用量与缓存命中/工作区门控全流程/新建 SSH 工作区单区单 tab/证据三段分组/@远程引用/observe 工具矛盾告知/树图渲染）。
+
+### 37.102 本会话交接章（2026-09-02，T8 回放测试 → 方案书 v4.0 P0/P1/P2 全线收官，接手必读）
+
+> 本会话完成 **§37.102 T8 会话回放测试**（方案书 v4.0 最后一项），详 DEV-JOURNAL §37.102。**零生产代码改动**——只新增测试目录 + 文档核销。
+
+**已完成**：新增 `src-tauri/sidecar/strands_backend/tests/replay/`（`__init__.py` / `replay.py` 重放器 / `conftest.py` marker+环境隔离 / `test_replay_scenarios.py` / `scenarios/` 6 个 JSONL）。核销 spec `.trae/specs/add-agent-loop-closure/`：tasks.md Task 8（含 8.1/8.2/8.3）已勾、checklist.md T8 两项已勾并补实测注记。ROADMAP #40 → ✅ 方案书 v4.0 三阶段收官，新增 **#44 遗留项**。
+
+**⚠ 本会话最重要的发现（T2 失败计数护栏失效 = ROADMAP #44）**：
+「同一工具连续失败 3 次熔断」在生产事件流下**不触发**，只有「总调用数超上限 50」有效。根因两处（已逐层读到 strands 1.53.0 源码定死）：
+1. ops 工具返回的 dict 无 `content` 键 → `strands/tools/decorator.py:693-700` 一律包成 `status:"success"`；
+2. `ToolResult` 是 TypedDict（运行时就是 dict，`types/tools.py:101-112`），adapter `_after_tool_call` 用 `getattr(event.result, "status", "success")` 取值 → dict 上 getattr 恒拿默认值。
+只有 `AfterToolCallEvent.exception`（工具真抛异常，`decorator.py:668`）会被算失败。既有单测 `test_tool_limit_hook.py` 用 MagicMock 事件（`.status` 是属性，取得到）→ 盲区。**用户拍板本轮只记录不修**，已用 `xfail(strict=True)` 锁定（修好会 XPASS 报错提醒摘标记）。安全含义：AI 反复重试同一失败命令时不会被切断。
+
+**回放套件工程事实（写新场景前必读）**：
+- 场景 = agent_log 风格 JSONL（`meta`/`turn`/`expect`）；`turn.rounds` 三形态：`{"tools":[{name,input}]}` / `{"repeat":{...},"times":N}` / `{"text":"..."}`；`bridge` = `{RustBridge 方法名: 录制返回值}`；`{"__raise__": msg}` = 工具抛异常。
+- **断言源**：`hook.tool_log` / `agent_log.tail()` 的 `user_msg`·`env_inject`·`loop_progress`·`todo_followup`·`verify_followup` / `ReplayModel.received`（模型实收 messages）/ `.schemas`（模型实收 tool schema）。**不可断言 `tool_call`/`tool_result` 日志行**（来自全局 EventBus 订阅，MagicMock event_bus 下不产生）。
+- **审批门已在 conftest autouse 打桩为 APPROVED**——否则 confirm 模式高危命令会真等人类点击，自动回放无限挂住（本会话踩过一次，探针只能后台 kill）。
+- `extra_tools` **塞不进假工具**：未加 `@tool` 的普通函数被 registry 静默丢弃（`registry.py:150`），同名装饰函数覆盖真工具（`registry.py:272`）。错误注入请用「真实 ops 工具 + mock bridge 返回 error dict」。
+- `max_tool_calls=50` 在第 51 次 BeforeToolCall 触发：工具真执行 50 次，第 51 次执行前 cancel（status="error"、exception=None）。
+- T3/T7 追加轮在 invoke 锁内跑且其 observation **覆盖主轮**（T7 优先级最高）——场景必须把追加轮所需模型轮次一并脚本出来，否则撞"回放脚本已耗尽"兜底文本。
+- 运行：`cd src-tauri/sidecar && CUDA_VISIBLE_DEVICES=-1 PYTHONPYCACHEPREFIX=/tmp/pyc .venv/Scripts/python.exe -m pytest strands_backend/tests/replay -m replay -q`。
+
+**门禁基线（本会话实测量，三种口径勿混用）**：**全量 sidecar pytest 2068 passed / 1 xfailed（679.6s）**（= §37.101 基线 2063 + 本轮新增 5 条场景，无既有用例被动过）/ pytest `strands_backend` **子树** 358 passed / 1 xfailed（92.3s）/ tsc 0 / lint 0 / vitest **1274 passed + 1 负载抖动**（`sidecar-adapter.test.ts` 单跑 16/16 全过，本轮不碰 TS，判非回归）/ build:web ✓ 47.8s。
+
+**遗留清单（优先级序，本会话更新）**：
+1. **🔴 #44 T2 失败计数护栏修复**（安全相关，建议下一手）：改 adapter `_after_tool_call` 用 dict 下标读 status + 兼看工具自身 `status`/`exit_code`；修好摘掉 xfail 转常规断言，并给 `test_tool_limit_hook.py` 补一条用真实 `ToolResult` dict（非 MagicMock）构造的用例，防同类盲区复发。
+2. **spec Task 9/10 勾选复核**：代码已在 7e87946 落地（本会话已在 tasks.md 加注说明），需逐项对代码/测试复核后才核销 checklist.md 的 T9/T10 与"用户桌面实测验收"项。
+3. C4 教学卡流式渲染真机确认（§37.95 围栏修复已上）。
+4. explorer 线剩余（§37.88；远程树真数据源=useFileTree 的 fsb_* 分支，useRemoteFileTree 是死代码）。
+5. #42 SSH 真机回归（重连后 SFTP / 双会话枚举跨主机 / tmp 清理）。
+6. 后端置信度引擎（DSPCR5）分档权重固化评估（T10.1 前端契约已齐）。
+7. §37.101 待用户实测汇总全部仍未跑（本轮无 UI 改动，未新增待实测项）。
+
+**接手提示**：方案书 v4.0 已收官，用户 2026-09-02 指定**下一主线 = agent 能力完善与开发**。回放套件是 agent 行为的回归护栏——后续改 adapter/工具/提示词，先跑 `-m replay` 看五场景断言是否漂移。§37.91-37.100 累计的待真机清单仍未由用户实测。
