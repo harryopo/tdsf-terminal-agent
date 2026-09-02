@@ -281,3 +281,77 @@ describe("Tool — knowledge_get_doc 文档卡片（TDSF 2026-08-31 双库）", 
     expect(screen.getByText(/不存在该文档/)).toBeTruthy();
   });
 });
+
+// ============================================================================
+// 工具失败态渲染（2026-09-02 UI P0-3 / P1）
+// ============================================================================
+// 此前失败结果（command_blocked / rejected / 内层 ok:false）一路落到
+// JSON.stringify 分支 → 用户看到裸 JSON；且后端仍发 completed 事件时
+// 行状态停在 output-available，状态点谎报 done。
+
+describe("Tool — 失败输出不再吐裸 JSON", () => {
+  it("内层 ok:false → 状态徽标 + 中文说明，不出现 JSON 花括号", () => {
+    render(
+      <Tool
+        toolName="edit"
+        state="output-available"
+        input={{ path: "/etc/nginx/nginx.conf" }}
+        output={{ ok: false, error: "未找到匹配的字符串" }}
+        defaultOpen
+      />,
+    );
+    // 行头 failed 徽标 + 内容区状态标签（status 缺省时回退为 failed）
+    expect(screen.getAllByText("failed").length).toBe(2);
+    expect(screen.getByText(/未找到匹配的字符串/)).toBeTruthy();
+    expect(screen.queryByText(/"ok"/)).toBeNull();
+  });
+
+  it("command_blocked → 状态标签独立成行 + 剥掉 LLM 契约前缀后的说明", () => {
+    render(
+      <Tool
+        toolName="ssh_command"
+        state="output-available"
+        input={{ command: "rm -rf /" }}
+        output={{
+          status: "command_blocked",
+          message: "command_blocked! 只读模式或安全规则禁止执行：命中硬底线黑名单。",
+          risk: "L4",
+        }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("command_blocked")).toBeTruthy();
+    expect(
+      screen.getByText("只读模式或安全规则禁止执行：命中硬底线黑名单。"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/command_blocked!/)).toBeNull();
+  });
+
+  it("内层失败把状态点降级为 failed（不再显示 done）", () => {
+    const { container } = render(
+      <Tool
+        toolName="analyze_logs"
+        state="output-available"
+        input={{ log_path: "/var/log/x" }}
+        output={{ success: false, reason: "日志路径不在白名单" }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByLabelText("failed")).toBeTruthy();
+    expect(container.querySelector('[aria-label="done"]')).toBeNull();
+  });
+
+  it("成功输出不受失败兜底影响（仍显示 done，无 failed 徽标）", () => {
+    render(
+      <Tool
+        toolName="analyze_logs"
+        state="output-available"
+        input={{ log_path: "/var/log/x" }}
+        output={{ status: "success", total_lines: 12 }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByLabelText("done")).toBeTruthy();
+    expect(screen.queryByText("failed")).toBeNull();
+  });
+});

@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-02 · **§37.105 ROADMAP #45 清零（同轮）**：spec T9.1 / T9.2 **已核销**——watchdog 阈值下限 1.0→0.05 使"有事件续期/无事件超时"真可验证、超时文案与日志改由阈值推导、Anthropic 分支补齐 `timeout/max_retries` 且两分支均有 `client_args` 断言、`invoke()` 的超时链与传输降级链各补真链路断言（含 `agent_log watchdog_timeout` 落盘 / stalled 标记解除 / needs_you 零调用）、6 处工程隐患全修、TS VERIFY 清单与 Python `registry.py` 同源并钉死。#45 仅剩 T10.1 后端分档固化 + 「高档展示依据」产品决策。**此前同日**：§37.104 逐行复核挂号 #45 → §37.103 #44 T2 熔断修复（全量 sidecar pytest 2073 passed / 0 xfailed）+ `src-tauri/.taurignore` 修掉 tauri dev 重启环；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.105 → §37.104 → §37.103 → §37.102**（越靠前越新）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
+> **最后更新**：2026-09-02 · **§37.106 agent 架构链路勘察 + UI 显示四处 P0 修复**：方案书 v4.0 **T9.2 的前端一半此前根本没落地**（后端三条可恢复降级写好的中文 `observation` 被 `sidecar-adapter.ts` 丢弃并套上误导红卡，watchdog/停滞两条还显示「详情：（空）」）——现按 `degraded_reason` 分档：可恢复降级走 assistant 正文、真实故障才报错卡且给专属行动建议；另修错误详情多行被压成一行、工具失败输出吐裸 JSON、流式期间代码全隐藏，并顺带揪出 heavy 工具失败时看不到原因的缺陷。**稳定性证据**：tsc 0 / lint 0 / vitest 122 文件（新增 24 例）/ build:web ✓ / sidecar 护栏子集 80 passed（本轮未改 Python 生产码）。**同日前一轮**：§37.105 ROADMAP #45 清零——spec T9.1/T9.2 已核销（watchdog 阈值下限 1.0→0.05、Anthropic 分支补 timeout/max_retries、`invoke()` 超时链与传输降级链补真链路断言、6 处工程隐患全修、TS VERIFY 清单与 Python 同源）。**#45 仅剩 T10.1** 后端 DSPCR5 分档固化 + 「高档展示依据来源」产品决策（≥0.5 目前什么都不显示）。**此前**：§37.104 逐行复核挂号 #45 → §37.103 #44 T2 熔断修复（全量 sidecar pytest 2073 passed / 0 xfailed）+ `src-tauri/.taurignore` 修掉 tauri dev 重启环；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.106 → §37.105 → §37.104 → §37.103**（越靠前越新；**现役 agent 链路实况见 §37.106，`docs/architecture/ai-subsystem.md` 写的是上游 terax 旧路径，别照着它改**）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
 
 ---
 
@@ -4469,3 +4469,23 @@ CDP 全新状态实测通过。commit 见上。
 **门禁（本轮实测量）**：**全量 sidecar pytest 2079 passed / 5 warnings（672.82s，exit 0）** = §37.103 基线 2073 + watchdog 文件净增 6 例（8→14），既有用例零被动过、**xfail 保持 0**；改动波及面子集（watchdog+tool_limit_hook+todo+verify+replay）**80 passed**；`evidence.test.ts` **17 passed**；`pnpm typecheck` / `pnpm lint --max-warnings 0` / `pnpm build:web` 均 exit 0；全量 vitest 1275 passed + 1 条已知负载抖动（单跑该文件 16 passed）。明细见 DEV-JOURNAL §37.105。
 
 **仍开放**：① T10.1 后端 DSPCR5 分档权重固化 + 「高档展示依据来源」需产品拍板（现 ≥0.5 什么都不显示）；② 重启 dev 验证 `.taurignore`；③ C4 教学卡真机 / #42 SSH 真机回归 / explorer 路径栏与上传；④ 用户桌面实测验收（P0/P1/P2 各一轮）。
+
+### 37.106 agent 架构链路实况 + UI 显示四处 P0（2026-09-02，本轮交接入口）
+
+**现役 agent 链路（改任何一环前照这份走，别信 `docs/architecture/ai-subsystem.md`——那是上游 terax 旧路径）**：
+`AiMiniWindow` → `AiChat.tsx` → `lib/transport.ts`（ChatTransport）→ `lib/sidecar-adapter.ts:runSidecarStream` → Tauri `invoke("ipc_invoke", {method:"agent.invoke", params:{name:"main", state:{input, messages, live}}})` → Rust `modules/ipc.rs` → Python JSON-RPC → `strands_backend/adapter.py:StrandsAgentAdapter.invoke()`。
+invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_lock` → `_build_tool_context`（`state.live.ssh_session_id` / `agentMode` / `teach`）→ `_get_or_create_agent`（hooks：`ToolCallLimitHook` + context 压缩；tools 见 `registry.py`）→ **`_locked_invoke` worker 线程 + `_wait_with_watchdog` 轮询 `handler._stats["events_received"]`** → T3 todo 跟进 / T7 写后必验证 → 组装 `observation`。
+回流两通道：`TdsfStrandsCallbackHandler` → `sidecar:agent_message`（正文与思考真流式）；工具内部 `emit_tool_call(started/completed)` + `ToolCallLimitHook._report_progress` → `sidecar:loop_progress`。落盘：`agent_log.log_event` + `evidence.py` → 前端证据三段分组。
+
+**本轮修完（前端四处 P0 + 一处 P1，全部带测试）**：
+1. 降级分档：`FRIENDLY_DEGRADED_REASONS`（`invoke_watchdog_timeout` / `invoke_stalled` / `llm_transport_error`）→ 后端中文 `observation` 走 assistant 正文并正常 `finish`（方案书 T9.2 的"不弹报错卡"至此才真正成立）；其余降级保留红卡，`buildSidecarErrorHint` 按 `degraded_reason` 给专属建议，详情回退 `degraded_message || observation`（修掉「详情：（空）」），两条路径都补 `onMood` 透传。
+2. 错误详情换行：`errors.ts` 不再吃掉 `\n`；错误卡片 `whitespace-pre-wrap` + 中文化。
+3. 工具失败输出：`toolFailureText()` 取代 `JSON.stringify`（后端 `command_blocked!` 前缀只剥给 UI，**不动后端**——LLM 契约依赖它）；`tool.tsx` 通用失败兜底分支；`exit_code != 0` 仍**不算**失败（§37.103）。
+4. 流式代码不再隐藏：`chat-code.tsx` 流式期间渲染纯文本、跳过 Lezer 高亮。
+5. 顺带（测试逼出的真缺陷）：heavy 工具（`edit`/`write_file`…）失败时现在会显示失败原因；工具行状态点按输出内容降级为 `failed`，不再谎报 `done`。
+
+**门禁实测**：tsc 0 / lint 0 / `build:web` ✓ 40.52s / 全量 vitest **122 文件 121 passed + 1 负载抖动**（`sidecar-adapter.test.ts` 超时例，单跑该文件 1 file passed / 31 tests，同 §37.102 记录）/ sidecar 护栏子集 **80 passed**（未改 Python 生产码）。新增用例 24：`sidecar-adapter.test.ts` 16→31、`tool.test.tsx` +4、新建 `chat-code.test.tsx` 5。
+
+**仍开放（下轮候选，按性价比排序）**：① **T10.1** 后端 DSPCR5 分档权重固化 + 「高档展示依据来源」需产品拍板（现 ≥0.5 什么都不显示，且前端 `confidence.score` 走文本启发式伪造 evidence，不看真实工具链）；② **会话历史冷启动**：`_session_messages` 是纯内存 dict 且 `invoke()` 从不读 `state["messages"]` → sidecar 重启即失忆（前端裁剪的 messages 白传）；③ 证据区只在轮次结束重拉，长任务期间静止；④ 教学卡流式三处易复现缺陷（`useChatStore.getState().teach` 非订阅式 / sections 空即 return null / `teachParser` 100 字门槛）；⑤ LiteLLM 分支无 timeout/max_retries；⑥ 回放层审批拒绝、压缩、Skill 剧本零覆盖；⑦ `TdsfAgentPanel.tsx` 与 `AiMiniWindow` 双写门控逻辑（面板已弃用未渲染）；⑧ 重启 dev 验证 `.taurignore`；⑨ §37.91-37.100 累计**待用户真机实测清单**仍未跑（C4 教学卡 / #42 SSH 回归 / explorer 路径栏与上传 / P0-P2 各一轮桌面验收）。
+
+**新固化事实**：本轮 `pnpm test` 全量口径 = **122 test files**；`AiChat.tsx` / `chat-code.tsx` 此前**零测试**，现已开始补。`degraded_reason` 全集 7 个值及分档归属见 `sidecar-adapter.ts` 的 `FRIENDLY_DEGRADED_REASONS` + `DEGRADED_REASON_HINTS`，两侧改一处必须同步另一处（Python `adapter.py` 的三处 `next_step="done"` 降级 = 可恢复档）。

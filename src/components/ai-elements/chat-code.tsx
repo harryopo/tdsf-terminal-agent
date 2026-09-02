@@ -15,9 +15,9 @@ import { createContext, memo, useContext, useEffect, useRef, useState } from "re
 import { Shimmer } from "./shimmer";
 import { highlight, isHighlightable, type HighlightedNode } from "./chat-code-lezer";
 
-// True while the parent message is still streaming from the model. We hide
-// fenced-code contents during this phase: parsing partial code is wasted
-// work and a flashing skeleton is calmer UI than text that grows char-by-char.
+// True while the parent message is still streaming from the model. During this
+// phase code is rendered as plain text: highlighting partial code is wasted
+// work, and hiding it would leave command-heavy answers looking empty.
 const StreamingCtx = createContext(false);
 export const ChatStreamingProvider = StreamingCtx.Provider;
 
@@ -63,7 +63,11 @@ export function ChatCodeBlock({ code, lang }: ChatCodeBlockProps) {
   const label = normalizeLangLabel(lang ?? "");
 
   if (streaming) {
-    return <GeneratingPlaceholder label={label} />;
+    return code ? (
+      <StreamingCodeBlock code={code} lang={label} />
+    ) : (
+      <GeneratingPlaceholder label={label} />
+    );
   }
 
   if (SHELL_LANGS.has(label)) {
@@ -71,6 +75,26 @@ export function ChatCodeBlock({ code, lang }: ChatCodeBlockProps) {
   }
 
   return <FinalizedCodeBlock code={code} lang={label} />;
+}
+
+/**
+ * 流式中的代码块：内容照常逐字渲染，但跳过语法高亮——
+ * 对半截代码反复跑 Lezer 是白费，而藏起内容会让以命令为主的答案看起来一片空白。
+ */
+function StreamingCodeBlock({ code, lang }: { code: string; lang: string }) {
+  return (
+    <div className="not-prose my-2 overflow-hidden rounded-lg border border-border/50 bg-muted/30">
+      <div className="flex items-center gap-2 border-b border-border/40 bg-muted/20 px-3 py-1">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+          {lang}
+        </span>
+        <span className="inline-block size-1.5 animate-pulse rounded-full bg-muted-foreground/60" />
+      </div>
+      <pre className="m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-foreground">
+        {code}
+      </pre>
+    </div>
+  );
 }
 
 function GeneratingPlaceholder({ label }: { label: string }) {

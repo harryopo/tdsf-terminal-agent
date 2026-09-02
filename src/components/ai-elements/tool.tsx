@@ -505,12 +505,18 @@ const ToolImpl = ({
   const label = meta.label;
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
+  // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
+  // part 状态停在 output-available → 状态点会谎报 done。内容判失败时同步降级徽标。
+  const innerFailure = state === "output-available" && isFailedOutput(output);
   const open = defaultOpen ?? isError;
   const isHeavy = HEAVY_CONTENT_TOOLS.has(toolName);
   // For heavy tools, only show details on error — never the streamed input
   // body, which is huge and re-renders per token.
   const showInputBody = !isHeavy && Boolean(input);
-  const showOutputBody = !isHeavy && output !== undefined;
+  // 重量级工具只在失败时展示输出体：成功路径的结果很小且重复，
+  // 但内层 ok/success=false 的失败说明是用户唯一能看到「为什么失败」的地方。
+  const showOutputBody =
+    output !== undefined && (!isHeavy || innerFailure || isError);
   const hasDetails =
     showInputBody || showOutputBody || Boolean(errorText);
 
@@ -530,8 +536,11 @@ const ToolImpl = ({
         )}
       >
         <span
-          className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[state])}
-          aria-label={STATUS_LABEL[state]}
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            innerFailure ? "bg-orange-500" : STATUS_DOT[state],
+          )}
+          aria-label={innerFailure ? "failed" : STATUS_LABEL[state]}
         />
         <HugeiconsIcon
           icon={Icon}
@@ -547,7 +556,7 @@ const ToolImpl = ({
         ) : (
           <span className="flex-1" />
         )}
-        {isError && (
+        {(isError || innerFailure) && (
           <span className="shrink-0 text-[10px] font-medium text-destructive">
             failed
           </span>
@@ -979,7 +988,65 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     );
   }
 
+  // 通用失败兜底（放在所有专用分支之后，避免抢掉定制渲染）：后端工具失败态
+  // 或显式 ok/success=false → 状态徽标 + 中文说明，替代落到 JSON.stringify 的裸 JSON
+  const failure = pickToolFailure(o);
+  if (failure) {
+    return (
+      <div className="space-y-1">
+        <div className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+          {failure.status}
+        </div>
+        {failure.text ? (
+          <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+            {failure.text}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return null;
+}
+
+/**
+ * 后端工具失败态词汇（与 Python `ToolCallLimitHook._result_status` 对齐）。
+ *
+ * 注：`exit_code != 0` **不在**此列——命令非零退出是正常输出信息，把它算失败会
+ * 污染熔断计数并削弱 T7「写操作后必须验证」的判定（决策记录见 dev-state §37.103）。
+ */
+const TOOL_FAILURE_STATUSES = new Set([
+  "command_blocked",
+  "rejected",
+  "needs_approval",
+  "unavailable",
+  "error",
+]);
+
+/** 失败说明文本候选字段（按信息量优先级） */
+const TOOL_FAILURE_TEXT_KEYS = ["message", "error", "stderr", "reason"];
+
+function pickToolFailure(
+  o: Record<string, unknown>,
+): { status: string; text: string } | null {
+  const status = typeof o.status === "string" ? o.status : "";
+  const explicitFailure = o.ok === false || o.success === false;
+  if (!explicitFailure && !TOOL_FAILURE_STATUSES.has(status)) return null;
+  const raw = TOOL_FAILURE_TEXT_KEYS.map((key) =>
+    typeof o[key] === "string" ? (o[key] as string).trim() : "",
+  ).find(Boolean);
+  // 剥掉 `command_blocked!` / `rejected!` 前缀——那是给 LLM 的双轨反馈关键字
+  const text = raw ? raw.replace(/^[a-z_]+!\s*/, "") : "";
+  return { status: status || "failed", text };
+}
+
+/** 工具输出内容本身是否表示失败（与 pickToolFailure 同一口径） */
+function isFailedOutput(output: unknown): boolean {
+  return (
+    typeof output === "object" &&
+    output !== null &&
+    pickToolFailure(output as Record<string, unknown>) !== null
+  );
 }
 
 // ============================================================================
