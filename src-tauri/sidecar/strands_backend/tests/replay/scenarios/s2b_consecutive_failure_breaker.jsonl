@@ -1,0 +1,3 @@
+{"type":"meta","content":"S2b 同一工具连续失败熔断（T2 spec 钦定语义）——已知失效路径，见 tests/replay/test_replay_scenarios.py 的 xfail 说明","meta":{"id":"s2b","title":"连续失败熔断（已知缺陷）","tasks":["T2"],"agent":"main"}}
+{"type":"turn","content":"重启 nginx 服务","meta":{"mode":"confirm","rounds":[{"repeat":{"tools":[{"name":"ssh_command","input":{"command":"systemctl restart nginx"}}]},"times":4},{"text":"重启失败了，我先说明情况。"}],"bridge":{"ssh_command":{"status":"error","output":"nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)","exit_code":1}}}}
+{"type":"expect","content":"","meta":{"checks":[{"check":"breaker_tripped","turn":0},{"check":"log_event","type":"loop_progress","contains":"[循环护栏]"}]}}
