@@ -1,0 +1,12 @@
+# Tauri dev watcher 忽略清单（gitignore 语法，路径相对 src-tauri/）
+#
+# 为什么需要：tauri dev 监听整个 src-tauri/，任何变更都会重启桌面 app。
+# sidecar 的 Python 测试与探针默认把数据写到 src-tauri/sidecar/Temp/
+# （TDSF_DATA_DIR 未设时的兜底路径），跑一次 pytest 就会把正在看的桌面 app
+# 反复重启（实测 2026-09-02：Temp/probe2/agent-logs/*.jsonl 变更 → 7 次重启）。
+#
+# 注意：sidecar/**/*.py 不在此列——Python 源码变更需要 app 重启才能让
+# sidecar 加载新代码，那是有意为之的热重载链路，别顺手加进来。
+
+sidecar/Temp/
+sidecar/pycache/

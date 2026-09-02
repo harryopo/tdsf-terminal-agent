@@ -14,6 +14,7 @@
   - [x] 2.2 每轮进度（轮次/工具计数）写 agent_log（新事件类型 loop_progress）
   - [x] 2.3 前端状态条显示循环进度（AgentStatusPill 扩展）
   - [x] 2.4 单测：连续失败熔断触发；50 上限不误杀长任务
+    - 注：2.1 的"连续失败 ≥3 熔断"在 T8 回放实测中一度被证实在真实 strands 事件流下失效（ROADMAP #44），2026-09-02 已修复并补 `TestRealStrandsResultShape`（用真实事件 dict 而非 MagicMock 构造）+ 回放场景 `s2b` 双保险。详 DEV-JOURNAL §37.103。
 - [x] Task 3: T3 规划-执行回环——todo 驱动执行
   - [x] 3.1 系统提示规划段：≥3 步任务必须先 todo_write 建清单、完成即更新
   - [x] 3.2 invoke 收尾校验：存在未完成 todo → 追加一轮续做提示（限一次，防死循环）
@@ -50,11 +51,11 @@
     - 落地：`strands_backend/tests/replay/replay.py`。场景文件沿用 agent_log 的 JSONL 行协议（`meta`/`turn`/`expect`），但重放的是**脚本化的模型轮次**（fake `ReplayModel` + `RecordingBridge` 喂录制返回值）驱动真实 `StrandsAgentAdapter.invoke()`，而非回放历史 `tool_result` 日志行。
     - 断言源为 `hook.tool_log`、`agent_log.tail()`、模型实际收到的 messages 与 tool schema（`ReplayModel.received/schemas`）。**不能**断言 `tool_call`/`tool_result` 日志行——那两类事件由全局 EventBus 订阅写入，测试里 event_bus 是 MagicMock 时不产生。
   - [x] 8.2 沉淀 5 个场景回放集：模式切换连续性/熔断/todo 长任务/验证回环/记忆召回
-    - 落地：`scenarios/s1_mode_continuity` / `s2_tool_cap_breaker` / `s3_todo_longtask` / `s4_verify_followup` / `s5_memory_recall`，另加 `s2b_consecutive_failure_breaker`（已知缺陷锁定用，见下）。
-    - **已知遗留（T2 相关，非本轮修复）**：「同一工具连续失败 3 次熔断」在真实 strands 事件流下失效——ops 工具返回的 dict 无 `content` 键被 strands 一律包成 `status=success`，且 `ToolResult` 是 TypedDict（运行时 dict）而 adapter 用 `getattr(result, "status")` 取值恒为 success。仅「总调用数超上限 50」有效。该行为以 `xfail(strict=True)` 锁定在 `test_consecutive_failure_breaker_is_known_gap`，修复后 XPASS 会报错提醒摘标记。
+    - 落地：`scenarios/s1_mode_continuity` / `s2_tool_cap_breaker` / `s3_todo_longtask` / `s4_verify_followup` / `s5_memory_recall`，另加 `s2b_consecutive_failure_breaker`（连续失败熔断，见下）。
+    - **曾发现的缺陷（T2 相关，已于 2026-09-02 同晚修复，ROADMAP #44 已核销）**：「同一工具连续失败 3 次熔断」在真实 strands 事件流下失效——ops 工具返回的 dict 被 strands JSON 序列化进 `content[].text`，外层 `status` 恒为 `success`；且 `ToolResult` 是 TypedDict（运行时 dict）而 adapter 用 `getattr(result, "status")` 取值恒为默认值。当时仅「总调用数超上限 50」有效，该行为以 `xfail(strict=True)` 锁定。修复=adapter 新增 `_tool_payload`/`_result_status` 还原工具自报状态（error/command_blocked/rejected/needs_approval/unavailable 均计失败），xfail 摘除转常规断言 `test_consecutive_failure_breaker_trips`，另补 `TestRealStrandsResultShape` 4 条真实事件形状用例。详 DEV-JOURNAL §37.103。
   - [x] 8.3 接入 pytest（mark replay，CI 可跑）
     - 落地：`replay/conftest.py` 注册 `replay` marker + 环境隔离 fixture（`TDSF_DATA_DIR`→tmp_path、`reset_for_test`/`reset_session_todos`、审批门 `request_approval_and_wait` 打桩为 APPROVED，否则真实 human-in-the-loop 会挂住 CI）。
-    - 实测：`python -m pytest strands_backend/tests/replay -m replay` → 5 passed / 1 xfailed（5.4s）；无网络、无真实 SSH。
+    - 实测：`python -m pytest strands_backend/tests/replay -m replay` → 首轮 5 passed / 1 xfailed（s2b 锁缺陷）→ #44 修复后 **6 passed**（5.9s）；无网络、无真实 SSH。
 - [ ] Task 9: T9 稳定性补强
   > 注：T9/T10 代码已在 commit 7e87946（§37.100）落地，但本 spec 勾选由后续复核轮处理，T8 这轮不代为核销。
   - [ ] 9.1 model_adapter 显式超时 + invoke watchdog（10 分钟无输出超时报告）

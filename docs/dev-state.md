@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-02 · **§37.102 T8 会话回放测试落地 → 方案书 v4.0 P0/P1/P2 三阶段全线收官**（新增 `strands_backend/tests/replay/`：replay.py 重放器 + 6 个 JSONL 场景 + pytest `replay` marker，零生产代码改动）。**回放实测揪出 T2 失败计数护栏在生产下失效 → 记为 ROADMAP #44（用户拍板先记录不修，已 xfail(strict) 锁定）**。**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定），建议第一手即 #44 修复。交接必读：**§37.102 本会话交接章**（回放套件工程事实 + 最新遗留清单）→ §37.101（§37.91-37.100 汇总 + 待真机清单）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
+> **最后更新**：2026-09-02 · **§37.103 ROADMAP #44 修复：T2「同一工具连续失败 3 次熔断」复活**（adapter 新增 `_json_dict`/`_tool_payload`/`_result_status` 还原工具自报状态；xfail 摘除转常规断言 + 4 条真实事件形状用例；**全量 sidecar pytest 2073 passed / 0 xfailed**）+ **修掉 tauri dev 重启环**（新增 `src-tauri/.taurignore` 忽略 `sidecar/Temp/`，此前跑一次 Python 测试就把桌面 app 整个重启一轮）。**方案书 v4.0 至此无遗留**；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.103 本会话交接章** → §37.102（回放套件工程事实）→ §37.101（§37.91-37.100 汇总 + 待真机清单）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
 
 ---
 
@@ -4393,7 +4393,7 @@ CDP 全新状态实测通过。commit 见上。
 「同一工具连续失败 3 次熔断」在生产事件流下**不触发**，只有「总调用数超上限 50」有效。根因两处（已逐层读到 strands 1.53.0 源码定死）：
 1. ops 工具返回的 dict 无 `content` 键 → `strands/tools/decorator.py:693-700` 一律包成 `status:"success"`；
 2. `ToolResult` 是 TypedDict（运行时就是 dict，`types/tools.py:101-112`），adapter `_after_tool_call` 用 `getattr(event.result, "status", "success")` 取值 → dict 上 getattr 恒拿默认值。
-只有 `AfterToolCallEvent.exception`（工具真抛异常，`decorator.py:668`）会被算失败。既有单测 `test_tool_limit_hook.py` 用 MagicMock 事件（`.status` 是属性，取得到）→ 盲区。**用户拍板本轮只记录不修**，已用 `xfail(strict=True)` 锁定（修好会 XPASS 报错提醒摘标记）。安全含义：AI 反复重试同一失败命令时不会被切断。
+只有 `AfterToolCallEvent.exception`（工具真抛异常，`decorator.py:668`）会被算失败。既有单测 `test_tool_limit_hook.py` 用 MagicMock 事件（`.status` 是属性，取得到）→ 盲区。当时**用户拍板本轮只记录不修**，用 `xfail(strict=True)` 锁定并挂 **#44**；**同日下一手已修复并核销（详 §37.103）**——真根因比这一段写的更深一层：工具 dict 被 strands JSON 序列化进了 `content[].text`。安全含义（修复前）：AI 反复重试同一失败命令时不会被切断。
 
 **回放套件工程事实（写新场景前必读）**：
 - 场景 = agent_log 风格 JSONL（`meta`/`turn`/`expect`）；`turn.rounds` 三形态：`{"tools":[{name,input}]}` / `{"repeat":{...},"times":N}` / `{"text":"..."}`；`bridge` = `{RustBridge 方法名: 录制返回值}`；`{"__raise__": msg}` = 工具抛异常。
@@ -4407,7 +4407,7 @@ CDP 全新状态实测通过。commit 见上。
 **门禁基线（本会话实测量，三种口径勿混用）**：**全量 sidecar pytest 2068 passed / 1 xfailed（679.6s）**（= §37.101 基线 2063 + 本轮新增 5 条场景，无既有用例被动过）/ pytest `strands_backend` **子树** 358 passed / 1 xfailed（92.3s）/ tsc 0 / lint 0 / vitest **1274 passed + 1 负载抖动**（`sidecar-adapter.test.ts` 单跑 16/16 全过，本轮不碰 TS，判非回归）/ build:web ✓ 47.8s。
 
 **遗留清单（优先级序，本会话更新）**：
-1. **🔴 #44 T2 失败计数护栏修复**（安全相关，建议下一手）：改 adapter `_after_tool_call` 用 dict 下标读 status + 兼看工具自身 `status`/`exit_code`；修好摘掉 xfail 转常规断言，并给 `test_tool_limit_hook.py` 补一条用真实 `ToolResult` dict（非 MagicMock）构造的用例，防同类盲区复发。
+1. ~~**🔴 #44 T2 失败计数护栏修复**~~ ✅ **本会话同晚已完成（§37.103）**：当初的修复要点全部落地——`_result_status` 用 dict 下标读 + 解析 `content[].text` 内 JSON 还原工具自报 status（清单：error/command_blocked/rejected/needs_approval/unavailable）；xfail 摘除转常规断言；补 `TestRealStrandsResultShape` 真实事件形状用例。**exit_code 未纳入失败判定**（有意为之，见 §37.103 设计决策）。
 2. **spec Task 9/10 勾选复核**：代码已在 7e87946 落地（本会话已在 tasks.md 加注说明），需逐项对代码/测试复核后才核销 checklist.md 的 T9/T10 与"用户桌面实测验收"项。
 3. C4 教学卡流式渲染真机确认（§37.95 围栏修复已上）。
 4. explorer 线剩余（§37.88；远程树真数据源=useFileTree 的 fsb_* 分支，useRemoteFileTree 是死代码）。
@@ -4416,3 +4416,30 @@ CDP 全新状态实测通过。commit 见上。
 7. §37.101 待用户实测汇总全部仍未跑（本轮无 UI 改动，未新增待实测项）。
 
 **接手提示**：方案书 v4.0 已收官，用户 2026-09-02 指定**下一主线 = agent 能力完善与开发**。回放套件是 agent 行为的回归护栏——后续改 adapter/工具/提示词，先跑 `-m replay` 看五场景断言是否漂移。§37.91-37.100 累计的待真机清单仍未由用户实测。
+
+### 37.103 本会话交接章（2026-09-02，#44 T2 熔断修复 + tauri dev 重启环，接手必读）
+
+> 本节是 §37.102 之后的同会话续作：把 #44 修掉，并顺手解决"跑测试会把桌面 app 重启一轮"。详 DEV-JOURNAL §37.103。
+
+**已完成**：① **#44 修复**（commit 待见，`adapter.py` ToolCallLimitHook +75/-12：新增 `_json_dict`/`_tool_payload`/`_result_status`，重写 `_error_summary` 与 `_after_tool_call` 失败判定）；② 回放场景 s2b 由 `xfail(strict=True)` 转常规断言 `test_consecutive_failure_breaker_trips`；③ `test_tool_limit_hook.py` 追加 `TestRealStrandsResultShape` 4 条真实事件形状用例；④ 新增 `src-tauri/.taurignore`；⑤ spec 核销（checklist.md T2 项打勾 + tasks.md 2.4/8.2/8.3 注记更新）、ROADMAP #44 → ✅、#40 尾注刷新。
+
+**必须记住的 strands 结果形状（本轮实测，别再猜）**：
+- `AfterToolCallEvent.result` 运行时是 **dict**（`ToolResult` 为 TypedDict）→ 一律用 `result["status"]`/`.get("content")` 下标读，`getattr` 取不到键只会拿到默认值。
+- 工具返回的 dict 若**没有 `content` 键**，strands（`tools/decorator.py:693-700`）会把它 **JSON 序列化成一个字符串塞进内容块 `text`**，外层 `status` 恒为 `success`。→ 判失败必须先 `_tool_payload()` 把块文本 JSON 解析回来，再看内层 `status`。真实形状：`{'status':'success','content':[{'text':'{"status": "error", "message": "…"}'}]}`。
+- 项目工具状态词：成功只有 `"success"`；失败 = `error` / `command_blocked` / `rejected` / `needs_approval` / `unavailable`（`tools/ssh_command.py:34-47` + 18 处 `"status": "error"`）。
+- **`exit_code` 非零不算工具失败**（有意的设计决策，勿"顺手补上"）：否则 `ls 不存在的目录` 这类正常答案会被计入连续失败，并削弱 T7「写成功→必须只读验证」判定。
+
+**tauri dev 重启环（新事实，会影响所有人跑测试）**：`pnpm tauri:dev` 监听整个 `src-tauri/`；sidecar 在 `TDSF_DATA_DIR` 未设时兜底把数据写到 `src-tauri/sidecar/Temp/`（内含 `rag.db`/`rag_slim.db`/agent_log），任何写入即触发 `Rebuilding application...` → 桌面 app 整轮重启（实测 7 分钟 7 次）。已用 `src-tauri/.taurignore` 忽略 `sidecar/Temp/` 与 `sidecar/pycache/`。**注意**：`.taurignore` 在 dev 启动时读取，**需重启一次 dev 才生效，本轮未实测验证**；`sidecar/**/*.py` 刻意保留监听（Python 改动要靠这次重启加载）。另：`Temp/` 里是**真实 RAG 库，勿删**。
+
+**门禁基线（本会话实测量）**：**全量 sidecar pytest 2073 passed / 0 xfailed / 5 warnings（596.73s，exit 0）**——2073 = §37.102 的 2069 条（2068 passed + 1 xfailed）+ 本轮新增 4 条，既有用例零被动过；`test_tool_limit_hook.py + tests/replay` 子集 **25 passed（5.93s）**。前端本轮零改动（tsc/lint/vitest/build:web 未重跑，沿用 §37.102 基线）。桌面 app 由 AI 启动实测：Vite 9300 正常、sidecar ready、日志无 ERROR/Traceback；DEBUG `load_tdsf: no TDSF.md found` 每 2s 一条 = `TDSFWatcher` 按 interval 轮询 mtime（`tdsf_loader.py:318-327`），设计如此非 bug。
+
+**遗留清单（优先级序，本会话更新）**：
+1. **spec Task 9/10 勾选复核**（代码在 7e87946，需逐项对代码/测试后才核销 checklist.md 的 T9/T10 与"用户桌面实测验收"）。
+2. **重启 dev 验证 `.taurignore` 生效**（跑一次 sidecar 测试看 dev-run.log 是否还有 `Rebuilding application`）。
+3. C4 教学卡流式渲染真机确认（§37.95 围栏修复已上）。
+4. explorer 线剩余（§37.88；远程树真数据源=useFileTree 的 fsb_* 分支，useRemoteFileTree 是死代码）。
+5. #42 SSH 真机回归（重连后 SFTP / 双会话枚举跨主机 / tmp 清理）。
+6. 后端置信度引擎（DSPCR5）分档权重固化评估（T10.1 前端契约已齐）。
+7. §37.101 待用户实测汇总（UI 侧累计清单）仍未跑。
+
+**接手提示**：#44 已闭环，**方案书 v4.0 无遗留**。下一手仍走 agent 能力完善线。改 adapter / 工具 / 提示词前后都跑一次护栏：`cd src-tauri/sidecar && CUDA_VISIBLE_DEVICES=-1 PYTHONPYCACHEPREFIX=/tmp/pyc .venv/Scripts/python.exe -m pytest strands_backend/tests/test_tool_limit_hook.py strands_backend/tests/replay -q`（应 25 passed）。
