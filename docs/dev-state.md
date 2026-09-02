@@ -37,6 +37,7 @@
 自动登录：开机自动连 `root@192.168.45.200`（保存的凭据），左侧 Files 走**远程分支**（`explorerSource==="ssh"` → useRemoteFileTree + SshFileEditor）。
 
 **最新里程碑（2026-09-01）**：
+- §37.95-37.100 **用户实测批次二/三 + 方案书 v4.0 P2（T9/T10）**（ba25f3a / 885f8dd / 3f4c70e 之前批 / c20a3e1 之前批 / d44a772 / fe3ae36 / 4f8d704 / 98f2703 / 7e87946）：①C3 打字机/可视执行静默丢弃根因（injectFn 存根）修复 + SSH/WSL=Shell 命名分流 + observe 工具矛盾告知 + 树图围栏强制；②工作区-窗口单栏重构（SpaceSwitcher 单触发器/无头像/删除常显/env 徽章）+ agent 按工作区隔离（SessionScope=workspace）+ 记忆按工作区沉淀/过滤（workspace 标签）+ @远程文件引用 + 工作区门控（未绑工作区 agent 不运行，WorkspaceGate 空态）+ 对话栏重排（新建对话/模式/工作区/上下文圈）+ 上下文面板（点击弹出+模块占比+缓存命中率）+ **真实 usage 修复**（snake/camel 字段错位致 sidecar 路径用量从未上报）+ **四修**（SSH 工作区重复创建=对话框先连接后建区，改先建区后连接+失败回滚；门控校验工作区真实存在防绕过；左侧加号移除；模式配色单一真源 AGENT_MODE_ACCENT 观察黄/确认绿/自动红/教学紫）；③**T9 稳定性**（model_adapter 显式超时 300s+invoke watchdog 10min 无输出弃管+stalled 快速降级+LLM 传输错误只读降级+并行工具提示词）+ **T10 证据三段分组**（收集→执行→验证时序语义）。**P2 仅剩 T8 回放测试**（replay.py+5 场景集，详 DEV-JOURNAL §37.95-37.100）；**待真机实测清单**见 §37.101 交接章
 - §37.94 **工作区-窗口单栏重构 + agent 工作区隔离**（commit 885f8dd）：SpaceSwitcher 收敛为单触发器（无 R 头像/无重复加号，用户钦定），切换/重命名/删除收敛总览面板且行操作常显，行内环境徽章解 WSL/服务器命名撞车；TabBar 只展示当前工作区窗口+唯一加号。agent 联动：SessionScope 增 workspace(spaceId)，新会话绑定当前工作区，getLive 按 env 归一化（ssh→绑定服务器 / local·wsl→本地+space.root），徽章显工作区名，legacy 兼容。门禁 tsc 0/vitest 373/lint 0。遗留：同工作区跨对话记忆过滤（当前全局超集）、C3 打字机/C4 教学卡流式渲染/observe 工具矛盾告知、md 树图 fenced 强制。详 DEV-JOURNAL §37.94
 - §37.93 **用户实测问题批次一：五修落地**（commit 3f4c70e，9 文件 +351/-33）：**A1 会话按服务器隔离**（用户钦定"像 AI 编程 agent 的工作目录隔离"）——`SessionMeta.scope`（local | ssh user+host+port）创建时快照绑定，`getLive` 按 scope 解析（本地对话不碰 SSH / 绑定服务器离线出 conversation_server 提示 / 终端上下文防串台 / 老会话无 scope 全局兼容），会话列表主机徽章；**A2 max_tokens 自动续跑 ≤3 轮**（MaxTokensReachedException 不再整轮失败，长任务可完成；共享 limit_hook 护栏）；**B1 欢迎页环境误报**（根因=formatEnvBlock 只门控 cwd 未门控 workspace_root，home 回退被当本地工作区上报→无终端时双双置 null，agent 转走引导分支）；**C1 审批卡命令 whitespace-pre-wrap 完整可见**；**C2 影响预测**（docker/podman/kubectl 只读子命令放行修 `docker ps` L3 误判 + 只读对象去噪 echo/ps 空、which 前 3、systemctl 滤动作词）。**D1 自测底座建立**：tauri:dev 后台自跑（用户授权），sidecar 日志进 dev 日志实时可查，agent-logs JSONL 落盘。门禁：pytest **2053**(+9)/vitest 376/tsc/lint 0/build:web。**遗留下一批（C3/C4 需真机调试）**：C3 打字机无效+命令输出不回显终端（inject_terminal 链路/human_type pump 连真机排查）；C4 教学卡流式过渡区裸 markdown（MessageResponse 已渲染完整 section，需真机复现定位）；方案书 v4.0 P2 T8-T10 顺延。详 DEV-JOURNAL §37.93
 - §37.92 **SSH 稳定性 #42 P2 落地：agent 会话枚举 + host 校验放宽**（commit c20a3e1，12 文件 +700/-52）：**多主机运维打通**——①Rust `ssh_sessions_detail` 命令（SshSessionDetail camelCase，`sessions_detail` 纯函数离线可测）+ sidecar 反向路由 `"ssh_status"`；②Python 新工具 `ssh_list_sessions`（TOOL_REGISTRY 22→**23**，readonly，observe/L1 schema 可见）；③`execute_via_ssh` 会话校验放宽：live 列表（Rust SshState 权威源）内 **state=connected** 会话即放行，附 target_endpoint（user@host:port）进结果与审计；查询失败/不可识别**回退旧严格校验**（fail-closed 只紧不松）；威胁模型=deny 硬底线/审批链/observe 裁剪在前不受影响、不信任 LLM 传值；④系统提示 +1 工具行（精简 3 处冗余保 4000 预算，3983）+ env 行多主机提示。门禁：pytest **2044**（+15）/ cargo test **361**（+1）/ clippy **0**；**待用户实测**：双会话 → agent 列会话 → 指定非激活主机执行命令 → 断开后指定应拦。详 DEV-JOURNAL §37.92
@@ -4353,3 +4354,28 @@ CDP 全新状态实测通过。commit 见上。
 - spec 文件：`.trae/specs/add-agent-loop-closure/tasks.md` Task 1-7 已勾，Task 8-10 待做；checklist.md P0/P1 段对应项需在 T8-T10 后统一核销
 
 **接手提示**：本线与 explorer 线（§37.88）并行中；写 dev-state 前先 tail 读最新防覆盖。P2 全部在 sidecar 侧 + 少量 ai 前端（置信度分组 UI），与 explorer 线领地无交集。
+
+### 37.101 本会话交接章（2026-09-01，AI 会话 37.91-37.100 汇总，接手必读）
+
+> 本会话（用户授权 AI 自行启动软件自测）完成 **§37.91-37.100 十个批次**，逐批复盘全在 DEV-JOURNAL §37.91-§37.100（每节含方案/报错/复盘）。本节为接手汇总。
+
+**已完成（commit 序）**：27b822a（§37.90 检查报告归档）→ 775d82f/e96b329（§37.91 #42 P1+P3）→ c20a3e1/17ac1c6（§37.92 #42 P2 会话枚举+host 校验放宽）→ 3f4c70e/7fa30ba（§37.93 用户批次一五修）→ 885f8dd/316880e/c7be34f（§37.94 工作区-窗口单栏重构+agent 工作区隔离）→ ba25f3a/d083074（§37.95 C3 打字机根因+命名分流+observe 告知+树图围栏）→ d44a772/5860303（§37.96 @远程文件引用）→ fe3ae36/4601f77（§37.97 工作区记忆隔离）→ 4f8d704/d84fd6c（§37.98 门控+对话栏+上下文面板+真实 usage）→ 98f2703/33a0a7b（§37.99 四修：重复建区/门控绕过/加号/模式配色）→ 7e87946/8b58a0c（§37.100 方案书 P2 T9+T10）。**以上均未 push**。
+
+**门禁基线**：pytest **2063** / vitest（ai+spaces+tabs+ai-elements）**383** / cargo test lib **361** / clippy 0 / tsc 0 / lint 0。Vite dev 端口 9300、CDP 9222 可驱动已运行实例；watchdog 阈值/轮询经 TDSF_INVOKE_WATCHDOG_IDLE_SECS/POLL_SECS 覆盖（测试用）。
+
+**遗留清单（优先级序）**：
+1. **T8 回放测试（方案书 v4.0 P2 收官）**：`strands_backend/tests/replay/`（replay.py 重放器 + scenarios/ 五场景 JSONL：模式切换连续性/熔断/todo 长任务/验证回环/记忆召回）+ pytest mark replay → spec `.trae/specs/add-agent-loop-closure/tasks.md` Task 8-10 勾选 + checklist.md 核销 + `pnpm build:web` 全量门禁。实施细节见 `docs/agent/方案书-v4.0-P2实施计划-稳定性与测试.md` §1。
+2. **C4 教学卡流式渲染真机确认**：围栏成对闭合提示词已上（§37.95），需真机 teach 模式长文复现确认裸 `**` 乱码消失；若复现，查 Streamdown 流式过渡区渲染。
+3. **explorer 线剩余**（§37.88 计划）：FileExplorer 可编辑路径栏+子目录建议下拉、上传（工具栏按钮 input[type=file]+sftpWrite / 拖拽 useRemoteFileDrop 复用 sftp_upload_file）；**远程树真数据源 = useFileTree 的 fsb_* 分支，useRemoteFileTree 是死代码勿加功能**。
+4. **#42 SSH 真机回归**：重连后 SFTP 立即可用（P1）、双会话枚举+跨主机执行（P2）、/tmp 清理（P3-3）。
+5. 后端置信度引擎（DSPCR5）分档权重固化评估（T10.1 前端契约已齐）。
+
+**关键工程事实（本会话新增，勿踩）**：
+- 工作区模型：SessionScope = workspace(spaceId)/ssh/local（老会话无 scope→全局兼容）；agent 门控 = 会话 scope.workspace 且 spaceId 在 useSpaces 中真实存在（防删区绕过）；记忆沉淀打 `workspace:<spaceId>` 标签、recall 按标签过滤（无标签存量记忆保持可见=向后兼容超集）。
+- **SshSessionInfo.id 是前端 uuid，rustSessionId 才是 Rust u32**（两次踩中）；跨语言契约字段名 snake/camel 易错位（§37.98 真实 usage 恒 0 的根因）。
+- Rust human_type 打字机 C3 根因 = inject_terminal 监听器调用捕获变量 injectFn（首调前为 no-op 存根）——已改走 live.injectIntoActivePty。
+- 条件渲染重构：early return 放全部 hooks 后；zustand 选择器先算参数再无条件调钩子（§37.98/37.99 两次 lint 拦截）。
+- 系统提示 4000 字符预算（test_prompt_length_controlled，当前 3937）——加内容前先量余量；工具计数断言散落 test_registry/test_tools/test_e2e 三文件。
+- 新建 SSH 工作区 = 先 createSpace 后 connectSsh（成功 setEnv sessionId，失败 remove 回滚）——倒置会被 connect-success 订阅抢建第二个工作区。
+
+**待用户实测汇总**：§37.91-37.100 各节"待真机"清单（打字机逐字效果/上下文面板真实用量与缓存命中/工作区门控全流程/新建 SSH 工作区单区单 tab/证据三段分组/@远程引用/observe 工具矛盾告知/树图渲染）。
