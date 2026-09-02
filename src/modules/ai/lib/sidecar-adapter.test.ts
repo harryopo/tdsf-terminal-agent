@@ -28,9 +28,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   _setDevModeCheck,
+  buildSidecarErrorHint,
   runSidecarStream,
   type SidecarStreamPart,
   sidecarStreamToUIMessageStream,
+  toolFailureText,
 } from "./sidecar-adapter";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
@@ -678,5 +680,267 @@ describe("runSidecarStream — agent 委派工具事件（P0-6）", () => {
     expect(toolOutput).toBeTruthy();
     expect(toolOutput!.toolName).toBe("agent:teach");
     expect(toolOutput!.output).toContain("nginx 是反向代理服务器");
+  });
+});
+
+// ============================================================================
+// v4.0 T9.2 前端契约：降级分档呈现（此前一律弹报错卡并丢弃后端中文说明）
+// ============================================================================
+
+describe("runSidecarStream — 可恢复降级走 assistant 正文", () => {
+  // 后端三条可恢复降级：next_step=done + 中文 observation（对齐 adapter.py）
+  const FRIENDLY_CASES: Array<[string, string]> = [
+    ["invoke_watchdog_timeout", "AI 调用超时：模型超过 10 分钟没有输出，本轮已中止。"],
+    ["invoke_stalled", "上一轮调用超时后仍在后台收尾，请稍等片刻再发消息。"],
+    ["llm_transport_error", "模型服务连接异常，本轮已停止；你可以稍后重试。"],
+  ];
+
+  it.each(FRIENDLY_CASES)(
+    "%s → observation 作为 text-delta 流出、无 error part、正常 finish",
+    async (reason, observation) => {
+      _setDevModeCheck(() => false);
+      mockInvoke.mockResolvedValue({
+        degraded: true,
+        degraded_reason: reason,
+        observation,
+        mood: "error",
+        next_step: "done",
+      });
+
+      const onMood = vi.fn();
+      const parts = await collect(
+        runSidecarStream({
+          agentId: "main",
+          messages: makeMessages("hi"),
+          input: "hi",
+          live: makeLive(),
+          onMood,
+        }),
+      );
+
+      const types = parts.map((p) => p.type);
+      expect(types).not.toContain("error");
+      expect(types).toContain("finish");
+      const text = parts
+        .filter((p) => p.type === "text-delta")
+        .map((p) => (p as { delta: string }).delta)
+        .join("");
+      expect(text).toBe(observation);
+      // 后端 mood 仍要透传（此前早退直接跳过 → pill 卡在思考中）
+      expect(onMood).toHaveBeenCalledWith("error");
+    },
+  );
+
+  it("llm_transport_error 优先展示 observation，不把原始异常文本给用户", async () => {
+    _setDevModeCheck(() => false);
+    mockInvoke.mockResolvedValue({
+      degraded: true,
+      degraded_reason: "llm_transport_error",
+      degraded_message: "ConnectionError: [Errno 11001] getaddrinfo failed",
+      observation: "模型服务连接异常，本轮已停止；你可以稍后重试。",
+      mood: "error",
+    });
+
+    const parts = await collect(
+      runSidecarStream({
+        agentId: "main",
+        messages: makeMessages("hi"),
+        input: "hi",
+        live: makeLive(),
+      }),
+    );
+
+    const text = parts
+      .filter((p) => p.type === "text-delta")
+      .map((p) => (p as { delta: string }).delta)
+      .join("");
+    expect(text).toContain("模型服务连接异常");
+    expect(text).not.toContain("getaddrinfo");
+  });
+
+  it("本轮已流出正文时，降级说明接在正文末尾且复用同一 text 段", async () => {
+    _setDevModeCheck(() => false);
+    const listeners = new Map<string, (e: unknown) => void>();
+    vi.mocked(listen).mockImplementation(
+      ((event: string, cb: (e: unknown) => void) => {
+        listeners.set(event, cb);
+        return Promise.resolve(() => {
+          listeners.delete(event);
+        });
+      }) as never,
+    );
+    let resolveInvoke!: (v: unknown) => void;
+    mockInvoke.mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolveInvoke = r;
+        }),
+    );
+
+    const iterator = runSidecarStream({
+      agentId: "main",
+      messages: makeMessages("hi"),
+      input: "hi",
+      live: makeLive(),
+    })[Symbol.asyncIterator]();
+    const first = iterator.next();
+
+    await vi.waitFor(() =>
+      expect(listeners.has("sidecar:agent_message")).toBe(true),
+    );
+    await vi.waitFor(() => expect(typeof resolveInvoke).toBe("function"));
+    listeners.get("sidecar:agent_message")!({
+      payload: {
+        event_type: "agent_message",
+        payload: { type: "output", content: "已完成的半截回答" },
+      },
+    });
+    resolveInvoke({
+      degraded: true,
+      degraded_reason: "invoke_watchdog_timeout",
+      observation: "本轮已中止。",
+      mood: "error",
+    });
+
+    const parts: SidecarStreamPart[] = [];
+    parts.push((await first).value as SidecarStreamPart);
+    for (;;) {
+      const r = await iterator.next();
+      if (r.done) break;
+      parts.push(r.value);
+    }
+
+    const textParts = parts.filter(
+      (p) => p.type === "text-delta",
+    ) as Array<{ type: "text-delta"; id: string; delta: string }>;
+    // 同一段（id 一致）→ 不会在 UI 上裂成两个气泡
+    expect(new Set(textParts.map((p) => p.id)).size).toBe(1);
+    const joined = textParts.map((p) => p.delta).join("");
+    expect(joined).toBe("已完成的半截回答\n\n本轮已中止。");
+    expect(parts.map((p) => p.type)).not.toContain("error");
+  });
+});
+
+describe("runSidecarStream — 真实故障降级仍弹报错卡（分档建议）", () => {
+  const ERROR_CASES: Array<[string, string]> = [
+    ["strands_not_installed", "pip install strands-agents"],
+    ["feature_flag_disabled", "TDSF_AGENT_BACKEND=strands"],
+    ["strands_model_not_injected", "API Key"],
+  ];
+
+  it.each(ERROR_CASES)(
+    "%s → 单个 error part + 原因专属行动建议",
+    async (reason, expectedHint) => {
+      _setDevModeCheck(() => false);
+      mockInvoke.mockResolvedValue({
+        degraded: true,
+        degraded_reason: reason,
+        degraded_message: `后端故障：${reason}`,
+        mood: "done",
+      });
+
+      const parts = await collect(
+        runSidecarStream({
+          agentId: "main",
+          messages: makeMessages("hi"),
+          input: "hi",
+          live: makeLive(),
+        }),
+      );
+
+      expect(parts.length).toBe(1);
+      expect(parts[0].type).toBe("error");
+      const err = parts[0] as { type: "error"; error: string };
+      expect(err.error).toContain(expectedHint);
+      expect(err.error).toContain(`后端故障：${reason}`);
+    },
+  );
+
+  it("只有 observation 无 degraded_message → 详情回退原文（不再显示空详情）", async () => {
+    _setDevModeCheck(() => false);
+    mockInvoke.mockResolvedValue({
+      degraded: true,
+      degraded_reason: "invoke_error",
+      observation: "Strands Agent 执行出错: boom",
+      mood: "error",
+    });
+
+    const parts = await collect(
+      runSidecarStream({
+        agentId: "main",
+        messages: makeMessages("hi"),
+        input: "hi",
+        live: makeLive(),
+      }),
+    );
+
+    const err = parts[0] as { type: "error"; error: string };
+    expect(err.type).toBe("error");
+    expect(err.error).toContain("Strands Agent 执行出错: boom");
+    expect(err.error).toContain("详情：Strands Agent 执行出错: boom");
+    expect(err.error).toContain("查看 sidecar 日志");
+  });
+
+  it("未知 degraded_reason → 回退通用建议（不静默丢信息）", async () => {
+    _setDevModeCheck(() => false);
+    mockInvoke.mockResolvedValue({
+      degraded: true,
+      degraded_reason: "brand_new_reason",
+      degraded_message: "没见过的降级",
+    });
+
+    const parts = await collect(
+      runSidecarStream({
+        agentId: "main",
+        messages: makeMessages("hi"),
+        input: "hi",
+        live: makeLive(),
+      }),
+    );
+
+    const err = parts[0] as { type: "error"; error: string };
+    expect(err.error).toContain("没见过的降级");
+    expect(err.error).toContain("检查 Strands 依赖安装");
+  });
+});
+
+describe("toolFailureText — 工具失败输出不再吐裸 JSON", () => {
+  it("command_blocked 结果 → 状态标签 + 中文说明，剥掉 LLM 契约前缀", () => {
+    const text = toolFailureText({
+      status: "command_blocked",
+      message: "command_blocked! 只读模式或安全规则禁止执行：命中硬底线黑名单。",
+      risk: "L4",
+      impact: { summary: "全盘删除" },
+    });
+    expect(text).toBe(
+      "[command_blocked] 只读模式或安全规则禁止执行：命中硬底线黑名单。",
+    );
+    expect(text).not.toContain("impact");
+  });
+
+  it("error 状态不加 [error] 前缀（渲染处已是错误样式）", () => {
+    expect(toolFailureText({ status: "error", error: "connection reset" })).toBe(
+      "connection reset",
+    );
+  });
+
+  it("字符串输出原样返回；无可用文本字段才回退 JSON", () => {
+    expect(toolFailureText("boom")).toBe("boom");
+    expect(toolFailureText(null)).toBe("");
+    expect(toolFailureText({ exit_code: 1 })).toContain('"exit_code": 1');
+  });
+});
+
+describe("buildSidecarErrorHint — degraded_reason 分档", () => {
+  it("非降级路径不受 reason 影响（保持原特征分类）", () => {
+    expect(buildSidecarErrorHint("Sidecar 调用超时（60s）", "main")).toContain(
+      "AI 任务超时未完成",
+    );
+  });
+
+  it("降级但 reason 未知 → 通用建议", () => {
+    expect(buildSidecarErrorHint("x", "main", true, "weird")).toContain(
+      "检查 Strands 依赖安装",
+    );
   });
 });

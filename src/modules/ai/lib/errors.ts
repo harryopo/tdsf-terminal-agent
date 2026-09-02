@@ -62,7 +62,9 @@ function sanitizeErrorMessage(message: string): string {
       "[redacted]",
     )
     .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/g, "[redacted]")
-    .replace(/\s+/g, " ")
+    // 只压缩行内空白：换行是后端多行报错与降级说明的结构，压掉会变成一行不可读
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
   return redacted.length <= MAX_ERROR_LENGTH
     ? redacted

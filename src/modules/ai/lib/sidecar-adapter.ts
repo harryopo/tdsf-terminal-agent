@@ -75,6 +75,33 @@ export function getSidecarTimeoutMs(): number {
 }
 
 /**
+ * 后端 degraded_reason 分档（方案书 v4.0 T9.2 契约：可恢复降级不弹报错卡）。
+ *
+ * friendly：后端 `observation` 已是给用户看的中文说明（会话历史保留、稍后可继续），
+ *   前端把它当 assistant 正文输出，对话不中断。
+ * error：真实故障（依赖缺失 / 执行异常），保留报错卡并按原因给行动建议。
+ *
+ * 与 Python 侧对齐：`adapter.py` 中 `invoke_stalled` / `invoke_watchdog_timeout` /
+ * `llm_transport_error` 三处返回 `next_step="done"` + 中文 observation。
+ */
+const FRIENDLY_DEGRADED_REASONS = new Set([
+  "invoke_stalled",
+  "invoke_watchdog_timeout",
+  "llm_transport_error",
+]);
+
+const DEGRADED_REASON_HINTS: Record<string, string> = {
+  invoke_error:
+    "建议：1) 重试一次 2) 反复出现时查看 sidecar 日志定位异常堆栈",
+  feature_flag_disabled:
+    "建议：到设置 → AI 模型确认后端选择为 strands（sidecar 环境变量 TDSF_AGENT_BACKEND=strands）",
+  strands_not_installed:
+    "建议：在 sidecar 环境执行 pip install strands-agents 后重启应用",
+  strands_model_not_injected:
+    "建议：到设置 → AI 模型填写 API Key 与模型名后重启应用",
+};
+
+/**
  * 构建结构化 Sidecar 错误提示（P0-4）。
  *
  * 按错误特征区分文案与行动建议：超时 / Sidecar 未运行 / Strands 降级 /
@@ -83,18 +110,21 @@ export function getSidecarTimeoutMs(): number {
  * @param rawError 原始错误文本（invokeError 或 degraded_message）
  * @param pythonName 调用的后端 agent 名
  * @param isDegraded 是否来自后端 degraded 标志
+ * @param degradedReason 后端 degraded_reason（分档行动建议的数据源）
  */
 export function buildSidecarErrorHint(
   rawError: string,
   pythonName: string,
   isDegraded = false,
+  degradedReason = "",
 ): string {
   if (isDegraded) {
     return [
       "AI 后端降级运行（当前无法完成本次调用）。",
       rawError ? `详情：${rawError}` : "",
       "",
-      "建议：1) 检查 AI 模型配置（设置 → AI 模型）2) 检查 Strands 依赖安装",
+      DEGRADED_REASON_HINTS[degradedReason] ??
+        "建议：1) 检查 AI 模型配置（设置 → AI 模型）2) 检查 Strands 依赖安装",
     ]
       .filter(Boolean)
       .join("\n");
@@ -131,6 +161,45 @@ export function buildSidecarErrorHint(
     "",
     `当前调用: ${pythonName}；建议检查 sidecar 日志定位原因`,
   ].join("\n");
+}
+
+/** 后端失败结果里可展示的文本字段（按信息量优先级） */
+const TOOL_FAILURE_TEXT_KEYS = [
+  "message",
+  "error",
+  "stderr",
+  "output",
+  "reason",
+] as const;
+
+/**
+ * 工具失败输出 → 可读文本（替代整体 JSON.stringify 把原始 JSON 甩给用户）。
+ *
+ * 后端失败结果自带中文说明（`execute_via_ssh` 的 command_blocked / rejected 分支），
+ * 前缀 `command_blocked!` / `rejected!` 是给 LLM 的双轨反馈关键字（系统提示词契约，
+ * 不可改动后端），展示时剥掉，状态改由 `[status]` 前缀承载。
+ */
+export function toolFailureText(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (output == null) return "";
+  if (typeof output !== "object") return String(output);
+
+  const o = output as Record<string, unknown>;
+  const text = (key: string): string | null => {
+    const v = o[key];
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  };
+
+  let body: string | null = null;
+  for (const key of TOOL_FAILURE_TEXT_KEYS) {
+    body = text(key);
+    if (body) break;
+  }
+  if (!body) return JSON.stringify(output, null, 2);
+
+  const status = text("status");
+  const label = status && status !== "error" ? `[${status}] ` : "";
+  return `${label}${body.replace(/^[a-z_]+!\s*/, "")}`;
 }
 
 /**
@@ -960,11 +1029,37 @@ export async function* runSidecarStream(
       return;
     }
 
-    // 8.5 P0-4: 后端返回 degraded 标志（Strands 运行时降级）→ 友好提示
+    // 8.5 P0-4 + v4.0 T9.2: 后端降级 → 按 degraded_reason 分档呈现
+    //     可恢复降级（超时 / 停滞 / 传输抖动）：后端 observation 已是面向用户的
+    //     中文说明，作为 assistant 正文输出，对话不中断、不弹报错卡。
+    //     真实故障（依赖缺失 / 执行异常）：保留报错卡 + 分档行动建议。
     if (invokeResult.degraded) {
+      if (invokeResult.mood) {
+        onMood?.(invokeResult.mood);
+      }
+      const reason = invokeResult.degraded_reason ?? "";
+      if (FRIENDLY_DEGRADED_REASONS.has(reason)) {
+        const note = (invokeResult.observation ?? "").trim();
+        if (note) {
+          if (streamedOutput) {
+            // 本轮已有正文流出 → 降级说明接在正文末尾，不另起文本段
+            yield { type: "text-delta", id: outputId, delta: `\n\n${note}` };
+          } else {
+            yield* streamText(note, outputId);
+          }
+        }
+        onStep?.(null);
+        yield { type: "finish", id: streamId };
+        return;
+      }
       yield {
         type: "error",
-        error: buildSidecarErrorHint(invokeResult.degraded_message ?? "", pythonName, true),
+        error: buildSidecarErrorHint(
+          invokeResult.degraded_message || invokeResult.observation || "",
+          pythonName,
+          true,
+          reason,
+        ),
       };
       return;
     }
@@ -1126,10 +1221,7 @@ export function sidecarStreamToUIMessageStream(
               controller.enqueue({
                 type: "tool-output-error",
                 toolCallId: part.toolCallId,
-                errorText:
-                  typeof part.output === "string"
-                    ? part.output
-                    : JSON.stringify(part.output),
+                errorText: toolFailureText(part.output),
                 dynamic: true,
               });
             } else {

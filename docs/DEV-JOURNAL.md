@@ -2465,3 +2465,27 @@ s2b 场景（4 次连续失败的 `ssh_command`）预期触发"同一工具连�
 **门禁（本轮实测量）**：sidecar 子集 `test_watchdog.py + tests/test_strands_model_adapter.py` **46 passed（7.31s，exit 0）**（watchdog 文件从 8 例扩到 14 例）；**改动波及面复测** `test_watchdog + test_tool_limit_hook + test_todo_followup + test_verify_followup + replay` **80 passed（23.75s）**——证明新阈值与状态判定不回归 T2 护栏 / T3 收尾 / T7 验证回环 / T8 回放。前端 `vitest src/modules/ai/lib/evidence.test.ts` **17 passed（+1 清单钉死例）**；`pnpm typecheck` exit 0 / `pnpm lint --max-warnings 0` exit 0 / `pnpm build:web` **exit 0（✓ built in 39.21s，本轮改了 `evidence.ts` 故必须跑）**。全量 `pnpm test` **1275 passed / 1 failed**——失败项是 §37.102 已记录的负载抖动用例 `sidecar-adapter.test.ts`（5000ms 超时），**单跑该文件 16 passed / 4.53s** 复证与本轮改动无关。**全量 sidecar pytest（终轮）2079 passed / 5 warnings（672.82s，exit 0）**——与 §37.103 基线自洽：2073 + 本轮 watchdog 文件净增 6 例（8→14）= **2079**，既有用例零被动过、xfail 保持 0；5 warnings 仍是 pytest 的 fixture 旧写法告警（`fixturefunc = resolve_fixture_function…`），无新增类别。耗时 672s > 上轮 596s 系与前端 vitest/build 并发争抢 CPU 所致，非测试变慢。
 
 **复盘**：① 第一次跑就靠"日志真被打出来了"暴露 logger 名带 `sidecar.` 前缀——`assertLogs("strands_backend.adapter")` 抓不到，改按 root 捕获才对；**断言失败时先去看 captured log，别急着改生产代码**。② 亚秒阈值不该只是为了跑得快：它把"有事件就续期"变成可验证行为，顺带揪出 `for 0s` 这种文案与真实语义脱节的小坑。③ 测试要测**契约**（响应体字段、事件是否落盘、报错卡是否被推），只测分类函数等于没测——这条本轮又被验证一次。
+
+### 37.106 agent 架构勘察 + UI 显示四处 P0 修复（2026-09-02 ✅）
+
+**缘起**：用户指定下一主线 = agent 能力完善，并问"当前 agent 架构是怎样的？稳定性要保证，UI 显示要修复完善"。先做只读勘察（两路并行子代理 + 主代理代码核对），再按实测证据改 UI。
+
+**架构实况（代码级链路，供后续接手直接用）**：
+前端 `AiMiniWindow` → `AiChat.tsx:199` → `lib/transport.ts`（ChatTransport）→ `lib/sidecar-adapter.ts:runSidecarStream` → Tauri `invoke("ipc_invoke", {method:"agent.invoke", params:{name:"main", state:{input,messages,live}}})` → Rust `modules/ipc.rs` → Python sidecar JSON-RPC → `strands_backend/adapter.py:StrandsAgentAdapter.invoke()`。
+invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / model 注入）→ **stalled 短路**（上一轮超时未收尾直接降级）→ per-session `agent_lock` → `_build_tool_context`（含 `state.live.ssh_session_id` 与三模式 `agentMode`/`teach`）→ `_get_or_create_agent`（hooks = `ToolCallLimitHook` + context 压缩；tools = `registry.py`）→ **`_locked_invoke` worker 线程 + `_wait_with_watchdog` 轮询 `handler._stats["events_received"]`** → T3 todo 跟进 / T7 写后必验证回环 → 组装 `observation`。
+事件回流两条独立通道：`TdsfStrandsCallbackHandler` 把 strands `data`/`reasoningText` 转 `sidecar:agent_message`（真流式正文与思考段）；工具实现内部自行 `emit_tool_call(started/completed)`，`ToolCallLimitHook._report_progress` 另发 `sidecar:loop_progress`。落盘面：`agent_log.log_event`（含 `watchdog_timeout` / `loop_progress`）+ `evidence.py` 证据流水 → 前端 `EvidencePanel` 按收集/执行/验证三段分组。
+**易踩的坑**：`docs/architecture/ai-subsystem.md` 写的是上游 terax 的 `streamText`/`buildTools`/子 agent registry，**不是现役路径**；自研 LangGraph `src/tdsf/graph/` 已被 strands_backend 取代（置信度/grounding 思路移植到 `strands_backend/tools/confidence_tool.py` + `evidence.py`）。
+
+**发现的最要紧问题（两路勘察独立收敛到同一条）**：方案书 v4.0 **T9.2 承诺"传输错误不中断对话、不弹报错卡"实质未落地**——后端三条可恢复降级（`invoke_watchdog_timeout` `adapter.py:1364-1372`、`invoke_stalled` `:1195-1207`、`llm_transport_error` `:1470-1482`）都写好了面向用户的中文 `observation` 且 `next_step="done"`，但前端 `sidecar-adapter.ts:963-970` 见 `degraded` 就一律 `yield {type:"error"}` 并丢弃 observation；watchdog/停滞两条连 `degraded_message` 都没给，卡片于是显示「详情：（空）」，还配一句误导的"检查 Strands 依赖安装"。
+
+**四处 P0 修复**：
+1. **降级分档呈现**（`sidecar-adapter.ts`）：新增 `FRIENDLY_DEGRADED_REASONS`（三条可恢复降级）→ 走 assistant 正文（已有流出正文时把说明追加到同一 text 段，不裂两个气泡）+ 正常 `finish`；其余（`invoke_error` / `feature_flag_disabled` / `strands_not_installed` / `strands_model_not_injected`）保留报错卡，`buildSidecarErrorHint` 加 `degradedReason` 参数按原因给专属行动建议，详情回退链 `degraded_message || observation`。两条路径都先透传 `onMood`（此前早退直接跳过 → 状态 pill 卡在"思考中"）。
+2. **错误详情多行丢失**：`errors.ts:65` 的 `\s+→" "` 会连带吃掉换行，改成只压缩行内空白 + 3 行以上空行压到 2 行；`AiChat.tsx` 错误卡片补 `whitespace-pre-wrap break-words`，并把中英混排的 "Request failed./Dismiss" 改中文。
+3. **工具失败输出吐裸 JSON**：根因在 `sidecar-adapter.ts:1129` ——`isError` 时把结果字典整体 `JSON.stringify` 当 errorText。新增 `toolFailureText()`：按 `message/error/stderr/output/reason` 取后端自带中文说明、剥掉 `command_blocked!` 前缀（**那是给 LLM 的双轨反馈关键字，系统提示词与 `test_tools.py` 都依赖它，不能改后端**）、状态另用 `[status]` 承载；`tool.tsx` 的 `renderToolOutput` 末尾补 `pickToolFailure` 通用兜底（专用分支之后），并显式注明 `exit_code != 0` **不算失败**（§37.103 决策）。
+4. **流式期间代码全隐藏**（`chat-code.tsx:61-67`）：本项目答案主体常是 shell 命令，藏起来长回答看着一片空白。改为流式期间照常逐字渲染纯文本（跳过 Lezer 高亮，保留上游"别对半截代码反复高亮"的性能意图），仅零字符时才显示占位。
+
+**顺带揪出的 P1（测试逼出来的真缺陷）**：`edit/write_file` 等 heavy 工具此前 `showOutputBody` 恒 false，内层 `ok:false` 的失败只剩一个 failed 徽标、**用户永远看不到失败原因**；改为 heavy 工具在判定失败时也渲染输出体。同时工具行状态点按输出内容降级为橙色 `failed`（后端仍发 completed 事件时不再谎报 done）。
+
+**门禁（本轮实测量）**：`tsc --noEmit` **exit 0** / `pnpm lint --max-warnings 0` **exit 0** / `pnpm build:web` **✓ built in 40.52s**；全量 vitest **122 文件 121 passed + 1 负载抖动**（`sidecar-adapter.test.ts` 超时例，**单跑该文件 1 file passed / 31 tests**，与 §37.102 记录一致）；sidecar 护栏子集（`test_tool_limit_hook + test_todo_followup + test_verify_followup + test_watchdog + replay`）**80 passed / 21.00s**——本轮未改 Python 生产码，用子集证零回归。用例增量：`sidecar-adapter.test.ts` 16→**31**（+15：三条可恢复降级分档 / 原始异常不外泄 / 追加同段 / 四类故障分档 / observation 回退 / 未知 reason / `toolFailureText` 三例 / hint 两例）、`tool.test.tsx` +4、新建 `chat-code.test.tsx` 5。
+
+**复盘**：① 两路独立勘察收敛到同一条缺陷，基本可判定不是臆测——但**仍要自己读代码确认行号与语义**（`degraded_reason` 在前端零消费、`:967` 只读 `degraded_message` 都是我逐行核过的）。② 写测试比写实现更能暴露缺陷：两条断言失败一次是我把渲染结构想错了（状态与文本是两个元素），一次**抓到 heavy 工具隐藏失败原因的真 bug**——假绿比没测更糟，反过来"测试失败"也别急着改断言，先问是不是代码的问题。③ 改测试文件时别用"替换 describe 头"的写法追加内容，会连带删掉 `it()` 行；末尾追加要么用精确锚点要么先读后写。④ UI 分档的原则：**能自愈的降级不该用红色报错卡吓用户，真正故障才该给分档行动建议**——后端已经把话说清楚了，前端没有权利把它丢掉。
