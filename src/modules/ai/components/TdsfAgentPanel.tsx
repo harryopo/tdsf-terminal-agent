@@ -40,7 +40,6 @@ import { useChatStore } from "../store/chatStore";
 import { useSpaces } from "@/modules/spaces";
 import { AiChatView } from "./AiChat";
 import { WorkspaceGate } from "./WorkspaceGate";
-import { AgentModeSwitcher } from "./AgentModeSwitcher";
 // TDSF 魔改 (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
   parseSkillCommand,
@@ -493,11 +492,11 @@ function Body({
         </Button>
       </div>
 
-      {/* ===== 信任模式指示 + 切换器（v3.1 改造）
+      {/* ===== 信任模式指示（v3.1 改造，只读）
           - 旧版是只读 pill：显示 main_agent 当前路由到的子 Agent
-          - v3.1：显示当前信任模式（观察/确认/自动）+ 教学皮肤标记，
-            右侧挂 AgentModeSwitcher（三档 segmented control + Teach 开关），
-            切换 per-session 持久化并随下一条消息即时生效 === */}
+          - v3.1：显示当前信任模式（观察/确认/自动）+ 教学皮肤标记。
+          TDSF 魔改 2026-09-02（用户钦定）: 交互式 AgentModeSwitcher 已统一
+          移到底部状态栏（StatusBar），本面板（已弃用）仅保留只读模式指示。 === */}
       <div
         className="flex shrink-0 items-center gap-1.5 border-b border-border/60 bg-muted/30 px-2 py-1"
         data-tdsf-agent-tabs
@@ -526,7 +525,6 @@ function Body({
           {teach ? " + 教学" : ""}
         </span>
         <div className="flex-1" />
-        <AgentModeSwitcher />
       </div>
 
       {/* ===== ② Messages ====================================================== */}

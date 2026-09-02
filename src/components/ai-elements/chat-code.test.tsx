@@ -5,9 +5,10 @@
  * 而本项目回答的主体常是 shell 命令 → 长答案看起来一片空白。
  * 现在流式期间照常渲染纯文本代码，只跳过语法高亮。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
+import { useChatStore } from "@/modules/ai/store/chatStore";
 import { ChatCodeBlock, ChatStreamingProvider } from "./chat-code";
 
 function renderBlock(
@@ -57,5 +58,56 @@ describe("ChatCodeBlock — 流式结束后", () => {
     const { container } = renderBlock("location / { proxy_pass 127.0.0.1; }", "nginx", false);
     expect(container.textContent).toContain("nginx");
     expect(container.textContent).toContain("proxy_pass");
+  });
+});
+
+// ============================================================================
+// 命令卡自动注入（打字机“自动打字+自动执行”，2026-09-02 用户钦定）
+// ============================================================================
+describe("ChatCodeBlock — 命令卡自动注入终端", () => {
+  const originalLive = useChatStore.getState().live;
+  const originalAutoExec = useChatStore.getState().autoExecuteInTerminal;
+
+  afterEach(() => {
+    useChatStore.setState({
+      live: originalLive,
+      autoExecuteInTerminal: originalAutoExec,
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("autoExecuteInTerminal 开启 → shell 命令卡渲染后自动注入 code+\\n（自动执行）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", false);
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith("uptime\n");
+  });
+
+  it("autoExecuteInTerminal 关闭 → 不自动注入（保留手动 Run）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: false });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", false);
+    expect(inject).not.toHaveBeenCalled();
+    // 手动 Run 按钮仍在
+    expect(
+      screen.getByRole("button", { name: "Run in active terminal" }),
+    ).toBeTruthy();
+  });
+
+  it("流式期间 → 不渲染命令卡也不自动注入", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", true);
+    expect(inject).not.toHaveBeenCalled();
   });
 });

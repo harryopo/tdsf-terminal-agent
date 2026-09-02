@@ -495,6 +495,8 @@ const ContinueRow = memo(function ContinueRow({
 // 保留 scoreConfidenceRpc 调用和数据收集, 只改呈现方式。
 // TDSF 2026-08-31 (问题3修复): 用户实测反馈"置信度 低"没有标准——
 // 低置信度必须附原因（如"未引用权威来源"），无原因可生成时不显示标签。
+// TDSF 魔改 2026-09-02（用户钦定）: 置信度仅在「教学 / 确认」两档模式下
+// 评分并显示——观察/自动模式下普通命令回复不再逐条弹"置信度 低"（鸡肋）。
 const ConfidenceMarker = memo(function ConfidenceMarker({
   message,
   streaming,
@@ -505,6 +507,8 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
   children: React.ReactNode;
 }) {
   const [result, setResult] = useState<ConfidenceRpcResult | null>(null);
+  // 仅在需要分析可信度的模式下评分（教学=跟学需溯源，确认=审批需依据）
+  const agentMode = useChatStore((s) => s.agentMode);
 
   useEffect(() => {
     if (streaming) {
@@ -512,6 +516,11 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
       return;
     }
     if (message.role !== "assistant") return;
+    // 观察/自动模式：不评分、不显示置信度标签（避免每条回复都弹"置信度 低"）
+    if (agentMode !== "teach" && agentMode !== "confirm") {
+      setResult(null);
+      return;
+    }
     const text = message.parts
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
@@ -524,7 +533,7 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
     return () => {
       cancelled = true;
     };
-  }, [streaming, message.role, message.parts]);
+  }, [streaming, message.role, message.parts, agentMode]);
 
   // 只在低置信度且可给出原因时显示标记（a+b 组合约定）：
   //   - score >= 0.5：无标记，保持气泡整洁

@@ -5,7 +5,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Kbd } from "@/components/ui/kbd";
 import { fmtShortcut, MOD_KEY } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
@@ -83,30 +82,11 @@ const PROVIDER_ICON = {
   ollama: ServerStack01Icon,
 } as const satisfies Record<ProviderId, typeof ChatGptIcon>;
 
-export function AiOpenButton({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={cn(
-        "flex h-6 items-center gap-1.5 rounded-md border border-border/60 bg-card px-2 text-xs",
-        "text-muted-foreground transition-colors hover:border-border hover:bg-accent hover:text-foreground",
-        "animate-in slide-in-from-top-2 duration-200 ease-out",
-      )}
-      title="Open AI agent"
-    >
-      <span>Open AI agent</span>
-      <Kbd className="h-4 min-w-4 px-1">{fmtShortcut(MOD_KEY, "I")}</Kbd>
-    </button>
-  );
-}
-
 export function AiStatusBarControls() {
   const c = useComposer();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toggleMini = useChatStore((s) => s.toggleMini);
   const miniOpen = useChatStore((s) => s.mini.open);
-  const closePanel = useChatStore((s) => s.closePanel);
 
   return (
     <div className="flex items-center gap-0.5">
@@ -133,18 +113,8 @@ export function AiStatusBarControls() {
       <ModelDropdown />
 
       <span className="mx-1 h-8 w-px bg-border" aria-hidden />
-      <Button
-        onClick={closePanel}
-        title="Close AI panel"
-        size="xs"
-        variant="ghost"
-        aria-label="Close AI panel"
-        className="text-[11px] text-foreground/85 px-1"
-      >
-        <Kbd className="h-4 gap-px px-2 font-mono text-[11px]">
-          {fmtShortcut(MOD_KEY, "I")}
-        </Kbd>
-      </Button>
+      {/* TDSF 魔改 2026-09-02（用户钦定）: 删除显示 "Ctrl+I" 的关闭面板按钮——
+          模式选择器已移到底部状态栏，Ctrl+I kbd 标签不再在此展示（快捷键本身保留）。 */}
       <IconBtn
         title={`${miniOpen ? "Close" : "Open"} AI chat window (${fmtShortcut("⇧", MOD_KEY, "I")})`}
         onClick={toggleMini}

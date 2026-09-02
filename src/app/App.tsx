@@ -415,7 +415,6 @@ export default function App() {
   );
   const miniOpen = useChatStore((s) => s.mini.open);
   const miniPresence = usePresence(miniOpen, 200);
-  const openMini = useChatStore((s) => s.openMini);
   const toggleMini = useChatStore((s) => s.toggleMini);
   const focusInput = useChatStore((s) => s.focusInput);
   const openPanel = useChatStore((s) => s.openPanel);
@@ -2425,7 +2424,6 @@ export default function App() {
               onWorkspaceChange={handleWorkspaceChange}
               onWorkspaceSshClick={handleWorkspaceSshClick}
               workspaceSwitching={workspaceSwitching}
-              onOpenMini={openMini}
               hasComposer={hasComposer}
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true

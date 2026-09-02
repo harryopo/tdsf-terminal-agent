@@ -4,7 +4,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useChatStore } from "@/modules/ai";
-import { AgentStatusPill } from "@/modules/ai/components/AgentStatusPill";
+import { AgentModeSwitcher } from "@/modules/ai/components/AgentModeSwitcher";
 import { BackendPill } from "@/modules/ai/components/BackendPill";
 import { AiStatusBarControls } from "@/modules/ai/components/AiStatusBarControls";
 import { MockLLMWarning } from "@/modules/ai/components/MockLLMWarning";
@@ -26,7 +26,6 @@ type Props = {
   onWorkspaceSshClick?: () => void;
   /** TDSF 魔改 2026-08-28: 环境切换进行中（pending 态） */
   workspaceSwitching?: boolean;
-  onOpenMini: () => void;
   /** Only rendered when the AI panel is open and a key is loaded. */
   hasComposer: boolean;
   privateActive: boolean;
@@ -40,7 +39,6 @@ export function StatusBar({
   onWorkspaceChange,
   onWorkspaceSshClick,
   workspaceSwitching,
-  onOpenMini,
   hasComposer,
   privateActive,
 }: Props) {
@@ -78,12 +76,14 @@ export function StatusBar({
           </Tooltip>
         ) : null}
       </div>
-      {/* TDSF 魔改 2026-07-31: 统一 AI 入口为 Ctrl+I, 右下角只保留 AgentStatusPill。
-          点击 pill 打开 AI 面板, Ctrl+I 切换面板。移除重复的 "Open AI agent" 按钮。 */}
+      {/* TDSF 魔改 2026-09-02（用户钦定）: 模式选择器移到底部状态栏——
+          AgentModeSwitcher（交互式四档抽屉）取代原只读 AgentStatusPill，
+          紧邻 BackendPill(Strands)，对话区不再挂切换器保持干净。
+          busy/循环进度反馈仍由顶栏 Header 的 AgentStatusPill 承载。
+          打开 AI 小窗改由 Ctrl+I 快捷键 + AiStatusBarControls 聊天按钮承载。 */}
       <div className="flex shrink-0 items-center gap-1.5">
         <MockLLMWarning />
-        {/* 2026-08-31 用户钦定调换：Agent 模式在前、Strands 后端在后（显示更全面） */}
-        <AgentStatusPill data-testid="statusbar-agent-status-pill" onClick={onOpenMini} />
+        <AgentModeSwitcher />
         <BackendPill />
         {panelOpen && hasComposer ? <AiStatusBarControls /> : null}
       </div>

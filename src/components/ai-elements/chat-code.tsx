@@ -10,7 +10,7 @@ import {
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { Shimmer } from "./shimmer";
 import { highlight, isHighlightable, type HighlightedNode } from "./chat-code-lezer";
@@ -201,6 +201,34 @@ const HighlightedPre = memo(function HighlightedPre({
 function CommandCard({ code, lang }: { code: string; lang: string }) {
   const isMultiline = code.includes("\n");
   const prompt = shellPrompt(lang);
+  const [sent, setSent] = useState(false);
+  const tRef = useRef<number>(0);
+  useEffect(() => () => window.clearTimeout(tRef.current), []);
+
+  // 注入命令到活动终端：autoExecuteInTerminal 开启时追加 \n 自动执行
+  // （与 tool.tsx SuggestCommandCard 同源逻辑，human_type 打字机逐字写入）。
+  const inject = useCallback(() => {
+    const store = useChatStore.getState();
+    const text = store.autoExecuteInTerminal ? code + "\n" : code;
+    const ok = store.live.injectIntoActivePty(text);
+    if (!ok) return;
+    setSent(true);
+    window.clearTimeout(tRef.current);
+    tRef.current = window.setTimeout(() => setSent(false), 1500);
+  }, [code]);
+
+  // TDSF 魔改 2026-09-02（用户钦定“自动打字+自动执行”）: 命令卡渲染后
+  // 自动注入活动终端，无需手动点 Run。仅 autoExecuteInTerminal 开启时触发；
+  // NOOP_LIVE 下 injectIntoActivePty 返回 false（测试/无终端环境安全无副作用）。
+  // autoFiredRef 保证每个命令卡只自动注入一次（防重渲染/多视图重复执行）。
+  const autoFiredRef = useRef(false);
+  useEffect(() => {
+    if (autoFiredRef.current) return;
+    if (!useChatStore.getState().autoExecuteInTerminal) return;
+    autoFiredRef.current = true;
+    inject();
+  }, [inject]);
+
   return (
     <div className="not-prose my-2 overflow-hidden rounded-lg border border-border/50 bg-muted/40">
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
@@ -208,7 +236,7 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
           {normalizeLangLabel(lang)}
         </span>
         <div className="flex items-center gap-1">
-          <RunInTerminalButton command={code} />
+          <RunInTerminalButton sent={sent} onRun={inject} />
           <CopyButton text={code} />
         </div>
       </div>
@@ -233,16 +261,13 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   );
 }
 
-function RunInTerminalButton({ command }: { command: string }) {
-  const [sent, setSent] = useState(false);
-  const tRef = useRef<number>(0);
-  useEffect(() => () => window.clearTimeout(tRef.current), []);
-  const onRun = () => {
-    const ok = useChatStore.getState().live.injectIntoActivePty(command);
-    if (!ok) return;
-    setSent(true);
-    tRef.current = window.setTimeout(() => setSent(false), 1500);
-  };
+function RunInTerminalButton({
+  sent,
+  onRun,
+}: {
+  sent: boolean;
+  onRun: () => void;
+}) {
   return (
     <Button
       type="button"
