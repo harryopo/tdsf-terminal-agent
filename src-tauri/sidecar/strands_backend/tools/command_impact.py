@@ -297,9 +297,19 @@ _READONLY_CMDS = {
     "dpkg-query", "tar", "gzip", "gunzip",
     "zcat", "xz", "bzip2", "sha1sum", "cksum", "seq", "expr", "test", "true",
     "false", "sleep", "wait", "groups",
+    # C3 (2026-09-03, 用户实测：环境探测命令 `nproc` 等被 unknown 抬到 L3):
+    # 补充纯只读的系统信息 / 文本处理 / 文件查看命令
+    "nproc", "arch", "getconf", "lsb_release", "tty", "numfmt", "tac", "nl",
+    "rev", "column", "expand", "unexpand", "fold", "fmt", "join", "paste",
+    "strings", "od", "xxd", "hexdump", "readelf", "nm", "size", "ldd",
 }
-# 注：semanage / firewall-cmd / hostnamectl / timedatectl / localectl 等混合
-# 命令（status 只读但 set-* 写）不进白名单——走 unknown L3 保守（fail-closed）。
+
+# C3 (2026-09-03): hostnamectl/timedatectl/localectl 等“混合命令”——无参数/
+# status 是纯只读，set-* 子命令才写。此前一刀切走 unknown L3（fail-closed），
+# 导致 agent 环境探测（`hostnamectl` 查系统信息）被误判高风险触发审批。
+# 现按子命令细分：含 set-* → config L2；否则 → readonly L0（见 classify_segment）。
+# 注：semanage / firewall-cmd 仍不进白名单（写风险高，保守 unknown L3 合理）。
+_MIXED_READONLY_CMDS = {"hostnamectl", "timedatectl", "localectl"}
 
 # systemctl/service 的只读子命令（其余 action 视为写操作 → service L3）
 _SERVICE_READONLY_ACTIONS = {
@@ -450,6 +460,11 @@ def classify_segment(seg: str) -> dict:
             if (not sub or sub in _CONTAINER_READONLY)
             else CATEGORY_UNKNOWN
         )
+    # --- hostnamectl/timedatectl/localectl 混合命令按子命令细分（C3 2026-09-03）：
+    #     set-* 是写操作 → config L2；无参数/status/show 纯查询 → readonly L0 ---
+    elif base in _MIXED_READONLY_CMDS:
+        has_write = any(t.lower().startswith("set-") for t in toks[1:])
+        category = CATEGORY_CONFIG if has_write else CATEGORY_READONLY
     # --- 只读白名单 ---
     elif base in _READONLY_CMDS:
         category = CATEGORY_READONLY

@@ -38,8 +38,8 @@ use super::sidecar::{SidecarError, SidecarManager, SidecarStateSnapshot};
 // 常量
 // ============================================================================
 
-/// 默认请求超时（60s，与 sidecar.rs REQUEST_TIMEOUT 对齐）
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// 默认请求超时（300s，与 sidecar.rs REQUEST_TIMEOUT 对齐）
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ============================================================================
 // IPC 错误类型（类型化，前端可精确处理）
