@@ -4507,3 +4507,20 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **遗留清单（优先级序，本会话更新）**：① ssh_command 可见执行重构（红线9，PTY 执行+scrollback 回读、跳过 execute_via_ssh，消除双重执行）② T10.1 后端 DSPCR5 分档权重固化 + 高档展示依据来源（需产品拍板）③ 重启 dev 验证 `.taurignore` ④ C4 教学卡流式真机 / #42 SSH 真机回归 / explorer 路径栏与上传 ⑤ §37.91-37.101 累计待用户真机实测清单。
 
 **接手提示**：本轮是纯 UI 修改，未动 agent 链路/SSH 后端。下一手仍走 agent 能力完善线（用户 2026-09-02 指定）。改 autoExecuteInTerminal / 底部环境显示 / 模式 UI 前先读本节两个固化事实。
+
+### 37.108 决赛准备第一批（2026-09-03 ✅，本轮交接入口）
+
+> 用户报告"打不开 agent 对话框"（§37.107 回归）+ 要求下载 diagram-design skill 画决赛架构图 + 小白讲述文稿。拍板"分两批（决赛优先）"，本批=第一批。详 DEV-JOURNAL §37.108。
+
+**本批交付**：① **P0 回归修复**——StatusBar 右侧加常驻 `Message01Icon` 按钮（`onClick=hasComposer?toggleMini():openSettingsWindow("models")`），修复 §37.107 把 AgentStatusPill 换 AgentModeSwitcher 后面板关闭时无打开对话框入口的回归；typecheck/lint ✓。② **diagram-design skill 核心版部署到全局**（`C:\Users\Administrator\.qoder-cn\skills\diagram-design\`，9 文件，已入系统 skill 列表）。③ **3 张架构图**（docs/决赛/图/ 的 01-总体架构 / 02-Agent闭环 / 03-信任模式，各 .html+.png）。④ **讲述文稿**（docs/决赛/讲述文稿.md，170行，含演示脚本/术语中英对照/3记忆点/打字机vs工具UI不冲突解答）。
+
+**⚠️ 三个必须记住的新固化事实**：
+1. **本环境系统命令行无法直连 GitHub**：`git clone`（沙箱禁 fork：cannot create standard input pipe for ssh）、`Invoke-WebRequest`（codeload SSL 失败）、`WebFetch`（github.com 超时）全不通；**仅 IDE 的 github MCP（api.github.com）可用**。需下载 GitHub 资源时走 `CallMcpTool github get_file_contents`（支持 stdin/逐文件，大文件写临时文件）。
+2. **diagram-design skill 已装全局（核心版 9 文件）**：画图机制=**AI 遵循 references 手写自包含 HTML（内联SVG+CSS）**，非 JSON 脚本渲染（区别于 bilingual-diagram）。硬预算：≤9节点/≤12箭头/coral≤2/4px网格/6条正交连接线规则。默认 skin（paper#f5f5f5/ink#2d3142/accent#eb6c36）。缺的 31 type-*.md/scripts/assets 按需 MCP 补（见其 README）。
+3. **Windows 无 cairosvg（缺 libcairo DLL），PNG 导出用 Edge headless**：`msedge --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 --screenshot=<绝对路径>.png --window-size=W,H --virtual-time-budget=10000 file:///<绝对路径>.html`。**必须绝对路径**（相对路径 screenshot 静默失败）+ virtual-time-budget 等 Google Fonts 加载。
+
+**待用户实测**：① 底部状态栏聊天图标按钮能打开/关闭 AI 对话框（面板关闭时也可开）② 3 张架构图效果（浏览器开 HTML 看矢量 / 看 PNG）③ 讲述文稿是否够小白看懂。
+
+**遗留（第二批，用户验收第一批后启动）**：B1 工具 UI 分类增强（tool.tsx TOOL_META 补 skill_invoke/ssh_command 等 + 按类配色）/ B2 历史对话可视化面板（复用 debug.agent_log_tail RPC）/ B3 运行日志面板（log.tail+sidecar_logs+修 sidecar:sidecar:log 双前缀 bug）/ B4 安全可见执行重构（红线9）/ B5 自动化测试。调研结论：B2/B3 后端数据与 RPC 已就绪，核心缺口=前端界面。
+
+**接手提示**：第一批已交付待验收。第二批从 B1（工具 UI）或 B2/B3（历史/日志面板，后端已铺路）入手均可；改 tool.tsx 前读 §37.106（工具渲染现状）+ §37.107（chat-code 自动注入）。

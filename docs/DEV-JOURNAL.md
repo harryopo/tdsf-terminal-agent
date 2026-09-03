@@ -2509,3 +2509,19 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **门禁（本轮实测量）**：`pnpm typecheck` **exit 0** / `pnpm lint --max-warnings 0` **exit 0** / `pnpm build:web` **✓ built in 25.89s**；全量 vitest **122 文件 1302 passed + 1 负载抖动**（`sidecar-adapter.test.ts` 超时例，**单跑 31/31 passed / 超时例单跑 2151ms**，与 §37.102/§37.105/§37.106 记录一致，本轮未碰该文件）；用例增量：`chat-code.test.tsx` 5→**8**（+3：autoExec 开→注入 code+\n / autoExec 关→不注入且 Run 按钮仍在 / 流式期间不注入）。`tauri:dev` 沙箱无法启动 GUI（§37.65），须用户真实终端 `启动.bat` 实测。
 
 **复盘**：① **用户口径要核对底层语义**——用户说"Ctrl+I 切换模式"，实测 Ctrl+I 是开 AI 小窗（`ai.toggle`→`toggleMini`），根本没有模式切换快捷键；按真实语义删 UI 标签而非乱删快捷键。② **一个标志驱动多路径时，改默认值前必须 grep 全部消费点**：`autoExecuteInTerminal` 牵出 sidecar ssh_command visible 的双重执行，差点把一个 UI 诉求变成服务器命令双跑的隐患——"自动执行"这种诉求尤其要追到后端执行链。③ **红线9 的边界把握**：SSH 后端 visible 链路不在 UI 任务里硬改，改用前端 payload 解耦（chatRuntime 下发 false）达成安全默认 + 无回归，把真正的可见执行重构留档为独立任务。④ **显示值的真源要选对**：底部 SSH 地址读全局 env 会栽在初次加载同步 gap 上，活跃 Space 的 env 才是持久化真源——UI 取值优先贴近持久化源头而非派生镜像。⑤ 删死代码（AiOpenButton）前 grep 全仓确认零引用（含测试/字符串），合红线5。
+
+### 37.108 决赛准备第一批：P0 回归修复 + diagram-design skill 部署 + 3 架构图 + 讲述文稿（2026-09-03 ✅）
+
+**缘起**：用户报告"打不开 agent 对话框了"（§37.107 UI 六项的回归），并要求下载 cathrynlavery/diagram-design skill 画图部署到全局、产出火山杯决赛架构图 + 小白讲述文稿。用户拍板"分两批（决赛优先）"，本批=第一批。
+
+**P0 回归修复**：根因 = §37.107 把 StatusBar 的 `AgentStatusPill`（带 onClick 打开 mini）换成 `AgentModeSwitcher`（只弹模式菜单）+ 删 `onOpenMini` prop，面板关闭时底部无"点击打开对话框"入口（AiStatusBarControls 的聊天按钮仅 panelOpen&&hasComposer 时渲染）。修复：StatusBar 右侧加常驻 `Message01Icon` 图标按钮，`onClick = hasComposer ? toggleMini() : openSettingsWindow("models")`，订阅 mini.open 切 title，与 AgentModeSwitcher 职责分离（按钮=开关对话框，模式器=切信任档）。typecheck/lint ✓。
+
+**diagram-design skill 部署（网络受限下的可行路径）**：环境探测——`git clone` 被沙箱禁（cannot create standard input pipe for ssh / unable to fork）、`Invoke-WebRequest` codeload SSL 失败、`WebFetch` github.com 超时，**系统命令行全部无法直连 GitHub，仅 IDE 的 github MCP（api.github.com）通**。skill 规模 206 文件（SKILL 40KB + 48 references 含 106KB primitive-icons + 3 scripts + ~155 assets 示例），逐文件全拉不现实。用户拍板"核心版自动部署"：MCP get_file_contents 逐个拉 + 本地 Write 落盘 9 文件（SKILL.md + style-guide/type-architecture/type-loop/type-layers/semantic-patterns/output-spec/primitive-annotation + README）到 `C:\Users\Administrator\.qoder-cn\skills\diagram-design\`，已验证出现在系统 skill 列表。省略 assets 示例/其余31 type/scripts（README 记录按需补）。output-spec 追加简体中文字体栈本地化。
+
+**3 张架构图（diagram-design 手写 HTML/SVG）**：关键认知——diagram-design 与 bilingual-diagram 机制不同：**前者 AI 遵循 references 规范手写自包含 HTML（内联SVG+CSS），后者 JSON→脚本渲染**。diagram-design 有硬复杂度预算（≤9节点/≤12箭头/coral≤2/4px网格/6条强制连接线规则），逼着精简。3图：①总体架构（Architecture，7节点8箭头3zone，coral焦点=Agent引擎）②Agent闭环（Loop，5 stations+1 hub，参数化环形几何 R=260/C=(640,380)，感知-思考-行动-验证-记忆）③信任模式（Layer Stack，4层权限递增，确认档coral焦点）。PNG 导出：cairosvg 装不上（Windows 缺 libcairo DLL），改 **Edge headless**（`--headless=new --screenshot --force-device-scale-factor=2 --virtual-time-budget=10000` 等 Google Fonts）；坑：相对路径 screenshot 失败必须绝对路径。产物 docs/决赛/图/。
+
+**讲述文稿**（docs/决赛/讲述文稿.md，170行）：一句话定位+痛点表+三层"前台-后厨-服务员"类比+四档信任+五步闭环+打字机杀手锏（含**打字机vs工具UI不冲突**解答：终端区inject_terminal / 对话区tool_call，不同事件互补）+知识库RAG/技能Skill+安全护栏+5分钟演示脚本+14条术语中英对照+3记忆点。
+
+**门禁**：本批 P0 只改 StatusBar.tsx（typecheck/lint ✓）；3图+文稿是文档产物无门禁；docs/决赛/图/*.png 二进制入库（决赛素材）。
+
+**复盘**：① **回归要追到"删了什么入口"**：§37.107 删 AgentStatusPill 时只想着"模式显示去重"，没意识到它的 onClick 是面板关闭时唯一的对话框打开入口——删组件前要 grep 它承载的所有交互（不止显示）。② **网络受限时 MCP 是唯一通道**：系统 git/curl/WebFetch 全被墙/沙箱挡，github MCP 走 IDE 代理能通；大 skill 部署先评估文件数，核心版（入口+关键references）比全量务实。③ **工具机制先摸清再选**：bilingual-diagram（JSON脚本渲染，之前路由反复失败）vs diagram-design（AI手写SVG，复杂度预算强制精简）——后者对"≤9节点概览图"更可控。④ **Edge headless 是 Windows 无 cairosvg 时的 PNG 兜底**：绝对路径 + virtual-time-budget 等字体是两个关键坑。
