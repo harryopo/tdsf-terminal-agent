@@ -9,8 +9,9 @@ import { BackendPill } from "@/modules/ai/components/BackendPill";
 import { AiStatusBarControls } from "@/modules/ai/components/AiStatusBarControls";
 import { MockLLMWarning } from "@/modules/ai/components/MockLLMWarning";
 import { LspStatusPill } from "@/modules/lsp";
+import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import type { WorkspaceEnv } from "@/modules/workspace";
-import { IncognitoIcon } from "@hugeicons/core-free-icons";
+import { IncognitoIcon, Message01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
 import { DiagnosticsBadge } from "./DiagnosticsBadge";
@@ -43,6 +44,17 @@ export function StatusBar({
   privateActive,
 }: Props) {
   const panelOpen = useChatStore((s) => s.panelOpen);
+  // TDSF 修复 2026-09-03: 恢复“打开 AI 对话框”常驻入口——上一轮 AgentStatusPill
+  // 被 AgentModeSwitcher 取代后，面板关闭时底部无点击打开入口（用户打不开对话框）。
+  const miniOpen = useChatStore((s) => s.mini.open);
+  const toggleMini = useChatStore((s) => s.toggleMini);
+  const openAiDialog = () => {
+    if (!hasComposer) {
+      void openSettingsWindow("models");
+      return;
+    }
+    toggleMini();
+  };
 
   return (
     <footer
@@ -80,9 +92,20 @@ export function StatusBar({
           AgentModeSwitcher（交互式四档抽屉）取代原只读 AgentStatusPill，
           紧邻 BackendPill(Strands)，对话区不再挂切换器保持干净。
           busy/循环进度反馈仍由顶栏 Header 的 AgentStatusPill 承载。
-          打开 AI 小窗改由 Ctrl+I 快捷键 + AiStatusBarControls 聊天按钮承载。 */}
+          TDSF 修复 2026-09-03: 补回常驻“打开 AI 对话框”图标按钮（上一轮删
+          AgentStatusPill 的 onClick 后，面板关闭时底部无点击入口 → 打不开对话框）。 */}
       <div className="flex shrink-0 items-center gap-1.5">
         <MockLLMWarning />
+        <button
+          type="button"
+          onClick={openAiDialog}
+          title={`${miniOpen ? "关闭" : "打开"} AI 对话框 (Ctrl+I)`}
+          aria-label="打开 AI 对话框"
+          data-testid="statusbar-open-ai"
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <HugeiconsIcon icon={Message01Icon} size={14} strokeWidth={1.75} />
+        </button>
         <AgentModeSwitcher />
         <BackendPill />
         {panelOpen && hasComposer ? <AiStatusBarControls /> : null}
