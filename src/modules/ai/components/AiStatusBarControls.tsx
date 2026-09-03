@@ -118,23 +118,23 @@ export function AiStatusBarControls() {
 
       <span className="mx-1 h-8 w-px bg-border" aria-hidden />
 
-      {/* 气泡：开关 agent 面板（TdsfAgentPanel, panelOpen）*/}
+      {/* 气泡：开关 agent 面板——用户实测 toggleMini(AiMiniWindow) 呈现为 agent 面板 */}
       <IconBtn
-        title={`${panelOpen ? "关闭" : "打开"} Agent 面板`}
-        onClick={togglePanel}
-        className={panelOpen ? "text-foreground" : undefined}
+        title={`${miniOpen ? "关闭" : "打开"} Agent 面板`}
+        onClick={toggleMini}
+        className={miniOpen ? "text-foreground" : undefined}
       >
         <HugeiconsIcon icon={Message01Icon} size={13} strokeWidth={1.75} />
       </IconBtn>
 
-      {/* 箭头：开关对话框（AiMiniWindow, miniOpen），朝上=弹出/朝下=收起 */}
+      {/* 箭头：开关对话框——用户实测 togglePanel(TdsfAgentPanel) 呈现为对话框；朝上=弹出/朝下=收起 */}
       <IconBtn
-        title={`${miniOpen ? "收起" : "弹出"}对话框 (${fmtShortcut("⇧", MOD_KEY, "I")})`}
-        onClick={toggleMini}
-        className={miniOpen ? "text-foreground" : undefined}
+        title={`${panelOpen ? "收起" : "弹出"}对话框 (${fmtShortcut("⇧", MOD_KEY, "I")})`}
+        onClick={togglePanel}
+        className={panelOpen ? "text-foreground" : undefined}
       >
         <HugeiconsIcon
-          icon={miniOpen ? ArrowDown01Icon : ArrowUpIcon}
+          icon={panelOpen ? ArrowDown01Icon : ArrowUpIcon}
           size={13}
           strokeWidth={1.75}
         />
