@@ -1,5 +1,7 @@
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { ArrowUpIcon, StopCircleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useState } from "react";
 import { useWorkspaceFiles } from "../hooks/useWorkspaceFiles";
 import { useComposer } from "../lib/composer";
@@ -254,8 +256,34 @@ export function AiComposerInput() {
                 "placeholder:text-muted-foreground/60",
               )}
             />
-            {/* TDSF 魔改 2026-09-02（用户钦定）: 模式切换器已移到底部状态栏
-                （StatusBar），对话输入区不再挂 AgentModeSwitcher 以保持干净。 */}
+            {/* 方案A（2026-09-03 用户钦定）：发送按钮从状态栏箭头移入输入框旁，
+                成为唯一可视发送入口（Enter 键亦可）；生成中显示停止按钮。 */}
+            {c.isBusy ? (
+              <button
+                type="button"
+                onClick={c.stop}
+                title="停止生成"
+                aria-label="停止生成"
+                className="flex size-7 shrink-0 items-center justify-center self-end rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <HugeiconsIcon
+                  icon={StopCircleIcon}
+                  size={15}
+                  strokeWidth={1.75}
+                />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={c.submit}
+                disabled={!c.canSend}
+                title="发送 (Enter)"
+                aria-label="发送"
+                className="flex size-7 shrink-0 items-center justify-center self-end rounded-md bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+              >
+                <HugeiconsIcon icon={ArrowUpIcon} size={15} strokeWidth={2} />
+              </button>
+            )}
           </div>
         </PopoverAnchor>
         {fileTrigger ? (
