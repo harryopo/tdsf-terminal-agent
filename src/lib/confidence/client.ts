@@ -30,6 +30,8 @@ export interface ConfidenceRpcPayload {
   conflict?: number;
   evidence_count?: number;
   grounded_count?: number;
+  /** 按场景评分（2026-09-03）：false=纯命令解读/闲聊等无需溯源场景，不显示置信度 */
+  applicable?: boolean;
 }
 
 /** RPC 返回的扩展结果（带 source 标识 + 低置信度原因） */
@@ -45,6 +47,12 @@ export interface ConfidenceRpcResult {
    * null = 无原因可生成（UI 约定：此时不显示置信度标签）。
    */
   reason?: string | null;
+  /**
+   * 按场景评分（2026-09-03 用户钦定）：是否“需溯源”场景。
+   * true = 知识库/诊断等需来源支撑的回答，评分有意义；
+   * false = 纯命令输出解读/闲聊等，不适用置信度（UI 不显示，避免误报“低”）。
+   */
+  applicable: boolean;
 }
 
 /** 类型守卫 */
@@ -87,6 +95,23 @@ export function rpcConfidenceReason(p: ConfidenceRpcPayload): string | null {
   return parts.length ? parts.slice(0, 2).join("；") : null;
 }
 
+/**
+ * 按场景判断（2026-09-03）：回答是否含“可溯源信号”（引用 man/文档 或
+ * 含系统术语的知识性论断）。与后端 rpc_methods._confidence_score 的 applicable
+ * 判断同源：无任何信号 = 纯命令输出解读/闲聊 → 不适用置信度评分。
+ */
+function hasCitableSignal(text: string): boolean {
+  const lower = text.toLowerCase();
+  const hasMan = lower.includes("man") || lower.includes("manual");
+  const hasDoc =
+    text.includes("http") || lower.includes("doc") || lower.includes("wiki");
+  const hasTerm = [
+    "Linux", "kernel", "system", "module",
+    "service", "process", "file", "directory",
+  ].some((kw) => text.includes(kw));
+  return hasMan || hasDoc || hasTerm;
+}
+
 /** 本地 TS fallback */
 function localFallback(message: string): ConfidenceRpcResult {
   const local = scoreConfidenceLocal(message);
@@ -95,6 +120,7 @@ function localFallback(message: string): ConfidenceRpcResult {
     source: "local",
     breakdown: local.breakdown,
     reason: localConfidenceReason(local.breakdown),
+    applicable: hasCitableSignal(message),
   };
 }
 
@@ -127,7 +153,12 @@ export async function scoreConfidenceRpc(
     }
     // 钳位到 [0, 1]
     const score = Math.max(0, Math.min(1, payload.score));
-    return { score, source: "rpc", reason: rpcConfidenceReason(payload) };
+    return {
+      score,
+      source: "rpc",
+      reason: rpcConfidenceReason(payload),
+      applicable: payload.applicable !== false,
+    };
   } catch {
     // Sidecar 不可用 / 方法未注册 → fail-open 回退
     return localFallback(message);

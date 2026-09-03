@@ -540,11 +540,14 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
   //   - score < 0.5 且有 reason：显示 "置信度 较低/低：<原因>"
   //   - score < 0.5 但 reason=null（无可解释维度）：不显示，避免无标准空标签
   const score = result?.score ?? null;
+  // 按场景评分（2026-09-03 用户钦定）：applicable=false（纯命令输出解读/闲聊等
+  // 无需溯源场景）→ 不显示置信度，避免“解读 uptime 输出却报置信度低”的错配。
+  const applicable = result?.applicable !== false;
   const isLow = score !== null && score < 0.5;
   const isVeryLow = score !== null && score < 0.3;
   const reason = result?.reason ?? null;
   const labelText =
-    isLow && reason
+    applicable && isLow && reason
       ? `置信度 ${isVeryLow ? "低" : "较低"}：${reason}`
       : null;
 

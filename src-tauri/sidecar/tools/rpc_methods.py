@@ -98,6 +98,20 @@ def register_methods(dispatcher: Any) -> None:
                 "service", "process", "file", "directory",
             ))
 
+            # 按场景评分（2026-09-03 用户钦定）：只有“需溯源”的回答（引用了
+            # man/文档 或 含系统术语的知识性论断/诊断）才评置信度。纯命令
+            # 输出解读（如 uptime/df 的数字复述，无来源无术语）→ applicable=False，
+            # 前端不显示置信度——修复“解读命令输出却报置信度低”的错配。
+            applicable = has_man or has_doc or has_term
+            if not applicable:
+                return {
+                    "score": 0.5,
+                    "method": method,
+                    "applicable": False,
+                    "evidence_count": 0,
+                    "grounded_count": 0,
+                }
+
             from core.schemas import Evidence, EvidenceSource
             ev = [
                 Evidence(
@@ -119,7 +133,11 @@ def register_methods(dispatcher: Any) -> None:
                     grounded=has_term,
                 ),
             ]
-            return invoke_confidence_tool({"evidences": ev, "method": method})
+            result = invoke_confidence_tool({"evidences": ev, "method": method})
+            # 有来源/术语信号 = 需溯源场景，置信度评分适用
+            if isinstance(result, dict):
+                result["applicable"] = True
+            return result
         except Exception as e:
             return {"score": 0.5, "method": method, "error": f"confidence error: {e}"}
 
