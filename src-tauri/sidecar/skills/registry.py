@@ -424,7 +424,9 @@ class SkillRegistry:
         """
         ed: Path = Path(external_dir)
         if not ed.exists():
-            logger.warning(f"load_external_dir: dir not found: {ed}")
+            # 外部技能目录可选（用户未配置 ~/.tdsf/skills 属正常情况），用 DEBUG
+            # 而非 WARNING，避免每次启动误报问题（2026-09-03 实测日志完善）
+            logger.debug(f"load_external_dir: dir not found (optional, skipped): {ed}")
             return 0
 
         count: int = 0
