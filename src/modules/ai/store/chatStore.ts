@@ -294,6 +294,13 @@ type StoreState = {
   renameSession: (id: string, title: string) => void;
   /** Persist messages of a session and bump its updatedAt + auto-title. */
   persistMessages: (id: string, messages: UIMessage[]) => void;
+  /**
+   * 方案1（2026-09-03 用户钦定）：把当前活跃对话对齐到活跃工作区。
+   * 空会话直接重绑 scope（无缝、无污染）；有历史的会话切到该工作区自己的
+   * 对话（最近一条，无则新建），实现“切换工作区→独立对话列表”防跨区污染。
+   * 无活跃工作区时不动（由门控 spaces.length===0 引导新建）。
+   */
+  syncSessionToWorkspace: () => void;
 };
 
 const NOOP_LIVE: Live = {
@@ -327,6 +334,20 @@ export function touchChat(id: string, c: Chat<UIMessage>) {
 // Initial messages for a session, populated at hydration time and consumed
 // when the matching Chat is constructed.
 export const seedMessages = new Map<string, UIMessage[]>();
+
+/**
+ * 会话是否为空（无消息历史 + 未命名）——方案1 自动绑定判据：
+ * 空会话可安全重绑工作区 scope（无历史故无污染）；有历史则切换而非重绑。
+ * 双重信号：内存消息缓存（seedMessages/chats）+ title 仍为“新会话”
+ * （发首条消息后 persistMessages 会 deriveTitle 自动改名）。
+ */
+function isSessionEmpty(id: string, meta?: SessionMeta): boolean {
+  const seeded = seedMessages.get(id);
+  const cached = chats.get(id);
+  const msgCount = seeded?.length ?? cached?.messages?.length ?? 0;
+  if (msgCount > 0) return false;
+  return !meta?.title || meta.title === "新会话";
+}
 
 // Trailing debounce for per-token message persistence. Streaming fires
 // `persistMessages` on every token; without this we'd JSON-serialize the
@@ -734,6 +755,48 @@ export const useChatStore = create<StoreState>((set, get) => ({
     );
     set({ sessions: next });
     void saveSessionsList(next);
+  },
+
+  syncSessionToWorkspace: () => {
+    const sp = useSpaces.getState();
+    const activeSpaceId = sp.activeId;
+    // 无任何工作区 → 不处理（门控 spaces.length===0 引导新建）
+    if (!activeSpaceId) return;
+    const { sessions, activeSessionId } = get();
+    if (!activeSessionId) return;
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
+    if (!activeSession) return;
+    const scope = activeSession.scope;
+    // 已绑定当前工作区 → 无需处理（幂等）
+    if (scope?.kind === "workspace" && scope.spaceId === activeSpaceId) return;
+
+    // 空会话 → 直接重绑 scope（无缝进入，无历史故无污染）
+    if (isSessionEmpty(activeSessionId, activeSession)) {
+      const next = sessions.map((s) =>
+        s.id === activeSessionId
+          ? {
+              ...s,
+              scope: { kind: "workspace" as const, spaceId: activeSpaceId },
+            }
+          : s,
+      );
+      set({ sessions: next });
+      void saveSessionsList(next);
+      return;
+    }
+
+    // 有历史 → 切到当前工作区自己的会话（最近一条，无则新建），防跨区污染
+    const wsSessions = sessions
+      .filter(
+        (s) =>
+          s.scope?.kind === "workspace" && s.scope.spaceId === activeSpaceId,
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    if (wsSessions.length > 0) {
+      get().switchSession(wsSessions[0].id);
+    } else {
+      get().newSession();
+    }
   },
 }));
 
