@@ -38,16 +38,17 @@ use std::time::Duration;
 
 use tauri::Emitter;
 
-/// expect 经典参数：平均字符间隔 0.1s
-pub const DEFAULT_ALPHA: f64 = 0.1;
-/// expect 经典参数：词尾转换平均间隔 0.3s（模拟词尾迟疑）
-pub const DEFAULT_ALPHA_EOW: f64 = 0.3;
-/// expect 经典参数：Weibull 形状参数（1.0 = 指数分布，纯随机到达）
+/// 平均字符间隔（2026-09-03 用户钦定提速：0.1s→0.04s，命令注入更快）
+pub const DEFAULT_ALPHA: f64 = 0.04;
+/// 词尾转换平均间隔（2026-09-03 提速：0.3s→0.12s，保留词尾迟疑人味）
+pub const DEFAULT_ALPHA_EOW: f64 = 0.12;
+/// Weibull 形状参数（1.0 = 指数分布，纯随机到达）
 pub const DEFAULT_SHAPE: f64 = 1.0;
-/// expect 经典参数：单次延迟下限 0.05s
-pub const DEFAULT_MIN: f64 = 0.05;
-/// expect 经典参数：单次延迟上限 2.0s
-pub const DEFAULT_MAX: f64 = 2.0;
+/// 单次延迟下限（2026-09-03 提速：0.05s→0.02s）
+pub const DEFAULT_MIN: f64 = 0.02;
+/// 单次延迟上限（2026-09-03 提速：2.0s→0.4s，消除指数分布长尾导致的
+/// 单字符 2s 卡顿——这是用户实测“打字太慢、时间间隔太长”的主因）
+pub const DEFAULT_MAX: f64 = 0.4;
 
 /// 速度倍率范围（设置页滑杆 0.2×~5×，与 spec 一致）
 pub const SPEED_MIN: f64 = 0.2;
