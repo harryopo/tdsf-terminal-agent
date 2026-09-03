@@ -112,6 +112,9 @@ lint-*.txt
 .tdsf-data/
 .claude/
 
+# chrome-devtools MCP 临时用户数据目录 (2026-09-04)
+cdp-dir/
+
 # AI 助手安全扫描插件产物 (mimosa hook-state, 2026-09-01)
 .mimosa/
 
