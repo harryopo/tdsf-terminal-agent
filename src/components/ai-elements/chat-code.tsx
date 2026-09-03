@@ -221,10 +221,15 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   // 自动注入活动终端，无需手动点 Run。仅 autoExecuteInTerminal 开启时触发；
   // NOOP_LIVE 下 injectIntoActivePty 返回 false（测试/无终端环境安全无副作用）。
   // autoFiredRef 保证每个命令卡只自动注入一次（防重渲染/多视图重复执行）。
+  // 问题2修复（2026-09-03 用户实测：确认模式没点确认就自动打字机）：
+  // 仅 auto（自动）模式才自动注入执行；confirm/observe/teach 模式下命令卡
+  // 不自动执行——确认模式须用户点 Run 或走 HITL 审批，否则自动注入=绕过审批安全 bug。
   const autoFiredRef = useRef(false);
   useEffect(() => {
     if (autoFiredRef.current) return;
-    if (!useChatStore.getState().autoExecuteInTerminal) return;
+    const store = useChatStore.getState();
+    if (!store.autoExecuteInTerminal) return;
+    if (store.agentMode !== "auto") return;
     autoFiredRef.current = true;
     inject();
   }, [inject]);

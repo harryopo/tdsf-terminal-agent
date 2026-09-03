@@ -14,7 +14,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Spinner } from "@/components/ui/spinner";
 import type { PresenceState } from "@/lib/usePresence";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -180,12 +179,9 @@ function Body({
   onHeaderPointerDown: (e: React.PointerEvent) => void;
 }) {
   const focusInput = useChatStore((s) => s.focusInput);
-  const step = useChatStore((s) => s.agentMeta.step);
 
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const helpers = useChat<UIMessage>({ chat });
-  const isBusy =
-    helpers.status === "submitted" || helpers.status === "streaming";
   // 方案1（2026-09-03 用户钦定）：门控放宽——仅在完全没有任何工作区时才门控
   // 引导新建。有活跃工作区时由 syncSessionToWorkspace 自动把当前对话对齐到该
   // 工作区（空会话重绑 / 有历史切到该区独立对话），不再卡死、输入框始终可用。
@@ -200,8 +196,6 @@ function Body({
   return (
     <>
       <Header
-        step={step}
-        isBusy={isBusy}
         onClose={onClose}
         onExpand={onExpand}
         messages={helpers.messages}
@@ -277,8 +271,6 @@ function EmptyShell({
   return (
     <>
       <Header
-        step={null}
-        isBusy={false}
         onClose={onClose}
         onExpand={onExpand}
         onHeaderPointerDown={onHeaderPointerDown}
@@ -291,14 +283,10 @@ function EmptyShell({
 }
 
 function Header({
-  step,
-  isBusy,
   onClose,
   messages,
   onHeaderPointerDown,
 }: {
-  step: string | null;
-  isBusy: boolean;
   onClose: () => void;
   onExpand: () => void;
   messages?: UIMessage[];
@@ -323,12 +311,8 @@ function Header({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {isBusy ? (
-          <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
-            <Spinner className="size-2.5" />
-            <span className="max-w-32 truncate">{step ?? "思考中…"}</span>
-          </span>
-        ) : null}
+        {/* 2026-09-03（用户钦定）: 移除 Header 的“思考中…”step 显示——agent 对话
+            本身已有 thinking 卡片，顶部再显示 step 冗余且与 SessionPicker 拥挤。 */}
         <SessionPicker />
         <Button
           type="button"

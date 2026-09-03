@@ -67,24 +67,41 @@ describe("ChatCodeBlock — 流式结束后", () => {
 describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   const originalLive = useChatStore.getState().live;
   const originalAutoExec = useChatStore.getState().autoExecuteInTerminal;
+  const originalAgentMode = useChatStore.getState().agentMode;
 
   afterEach(() => {
     useChatStore.setState({
       live: originalLive,
       autoExecuteInTerminal: originalAutoExec,
+      agentMode: originalAgentMode,
     });
     vi.restoreAllMocks();
   });
 
-  it("autoExecuteInTerminal 开启 → shell 命令卡渲染后自动注入 code+\\n（自动执行）", () => {
+  it("autoExecuteInTerminal 开启 + auto 模式 → shell 命令卡渲染后自动注入 code+\\n（自动执行）", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true });
+    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "auto" });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
     renderBlock("uptime", "bash", false);
     expect(inject).toHaveBeenCalledTimes(1);
     expect(inject).toHaveBeenCalledWith("uptime\n");
+  });
+
+  it("问题2：autoExecuteInTerminal 开启但确认模式 → 不自动注入（须用户点 Run/审批）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "confirm" });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", false);
+    // 确认模式不自动执行（绕过 HITL 审批是安全 bug）
+    expect(inject).not.toHaveBeenCalled();
+    // 手动 Run 按钮仍在
+    expect(
+      screen.getByRole("button", { name: "Run in active terminal" }),
+    ).toBeTruthy();
   });
 
   it("autoExecuteInTerminal 关闭 → 不自动注入（保留手动 Run）", () => {
