@@ -8,7 +8,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  ArrowRight01Icon,
   BookOpen01Icon,
   Cancel01Icon,
   CheckListIcon,
@@ -1384,7 +1383,9 @@ function SuggestCommandCard({
   predictedOutput: string | null;
 }) {
   const [inserted, setInserted] = useState(false);
-  const [showPredicted, setShowPredicted] = useState(false);
+  // 确认模式步步确认（2026-09-04 用户钦定）：预测回显默认展开，
+  // 让用户点“执行”前先看到命令预期输出（“预测命令的回显是什么”）。
+  const [showPredicted, setShowPredicted] = useState(true);
   // 2026-09-03 修复 Maximum update depth：autoFiredRef 保证自动注入只触发一次。
   // 旧版仅靠 inserted state + deps[command]，流式期间 command 逐字变化会反复
   // 触发 useEffect，叠加 injectIntoActivePty 回流重渲染可能高频循环直至 React
@@ -1429,14 +1430,15 @@ function SuggestCommandCard({
             "disabled:opacity-60 disabled:cursor-default disabled:hover:bg-transparent",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           )}
-          aria-label="Insert into active terminal"
+          aria-label="执行命令（打字机注入终端）"
+          title="确认模式：点击后命令以打字机方式注入终端执行"
         >
           <HugeiconsIcon
-            icon={inserted ? TerminalIcon : ArrowRight01Icon}
+            icon={inserted ? Tick02Icon : TerminalIcon}
             size={12}
             strokeWidth={1.75}
           />
-          <span>{inserted ? "Inserted" : "Insert"}</span>
+          <span>{inserted ? "已执行" : "执行"}</span>
         </button>
       </div>
       {/* TDSF 魔改 (2026-08-09): 预测回显——让用户提前知道命令执行后应看到什么 */}
