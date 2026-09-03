@@ -39,7 +39,6 @@ import {
   Settings01Icon,
   SparklesIcon,
   StarIcon,
-  StopCircleIcon,
   Tick01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -85,6 +84,11 @@ const PROVIDER_ICON = {
 export function AiStatusBarControls() {
   const c = useComposer();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 方案A（2026-09-03 用户钦定）：气泡=开关 agent 面板(panelOpen)；箭头=开关
+  // 对话框(miniOpen)，朝上=弹出/朝下=收起。发送按钮已移入输入框旁
+  // （AiComposerInput），此处箭头不再是 Send。
+  const togglePanel = useChatStore((s) => s.togglePanel);
+  const panelOpen = useChatStore((s) => s.panelOpen);
   const toggleMini = useChatStore((s) => s.toggleMini);
   const miniOpen = useChatStore((s) => s.mini.open);
 
@@ -113,40 +117,28 @@ export function AiStatusBarControls() {
       <ModelDropdown />
 
       <span className="mx-1 h-8 w-px bg-border" aria-hidden />
-      {/* TDSF 魔改 2026-09-02（用户钦定）: 删除显示 "Ctrl+I" 的关闭面板按钮——
-          模式选择器已移到底部状态栏，Ctrl+I kbd 标签不再在此展示（快捷键本身保留）。 */}
+
+      {/* 气泡：开关 agent 面板（TdsfAgentPanel, panelOpen）*/}
       <IconBtn
-        title={`${miniOpen ? "Close" : "Open"} AI chat window (${fmtShortcut("⇧", MOD_KEY, "I")})`}
-        onClick={toggleMini}
+        title={`${panelOpen ? "关闭" : "打开"} Agent 面板`}
+        onClick={togglePanel}
+        className={panelOpen ? "text-foreground" : undefined}
       >
         <HugeiconsIcon icon={Message01Icon} size={13} strokeWidth={1.75} />
       </IconBtn>
 
-      {c.isBusy ? (
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={c.stop}
-          className="size-6"
-          aria-label="Stop"
-          title="Stop"
-        >
-          <HugeiconsIcon icon={StopCircleIcon} size={13} strokeWidth={1.75} />
-        </Button>
-      ) : (
-        <Button
-          type="button"
-          size="icon"
-          onClick={c.submit}
-          disabled={!c.canSend}
-          className="h-5.5 w-7.5 ml-1"
-          aria-label="Send"
-          title="Send (Enter)"
-        >
-          <HugeiconsIcon icon={ArrowUpIcon} size={13} strokeWidth={1.75} />
-        </Button>
-      )}
+      {/* 箭头：开关对话框（AiMiniWindow, miniOpen），朝上=弹出/朝下=收起 */}
+      <IconBtn
+        title={`${miniOpen ? "收起" : "弹出"}对话框 (${fmtShortcut("⇧", MOD_KEY, "I")})`}
+        onClick={toggleMini}
+        className={miniOpen ? "text-foreground" : undefined}
+      >
+        <HugeiconsIcon
+          icon={miniOpen ? ArrowDown01Icon : ArrowUpIcon}
+          size={13}
+          strokeWidth={1.75}
+        />
+      </IconBtn>
     </div>
   );
 }
