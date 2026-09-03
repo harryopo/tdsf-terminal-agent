@@ -2543,3 +2543,20 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **门禁**：B1/B2/B3 各自 typecheck/lint 0 + build:web ✓ + 全量 vitest（B1后1307/B2后1311/B3后1316 passed，均 +1 已知 sidecar-adapter 抖动单跑31/31）；新增测试 tool+5/history+4/logs+5=14例。
 
 **复盘**：① **后端已就绪时前端补界面是高性价比**：B2/B3 的 RPC（debug.agent_log_tail/log.tail）后端早已实现只缺前端——复用 B2 模式（设置页tab+invokeRpc+isTauri门控+时间线/日志渲染+测试）快速产出 B3。② **调研报告的文件名/字段要现场核实**：B3 调研说 rpc_log_tail.py+source，实际 core/log_capture.py+logger/level——动手前读真实代码纠正。③ **红线9 高风险任务的正确处置是"方案留档+实测门禁"而非盲目改**：B4 当前已安全（第一批解耦），完整重构需真实SSH实测，沙箱盲改会引入无法验证的风险——写方案+分步计划+待实测比强行改代码更负责。④ **设置页 tab 扩展四处同步**：SettingsTab类型+TABS数组+VALID_TABS+section组件，icon 复用 hugeicons 已有（HistoryIcon/TerminalIcon）。
+
+### 37.110 真实启动软件边看日志边开发（用户实测驱动的一大轮，2026-09-03~04 ✅）
+
+**缘起**：用户"你启动软件真实去测，边看日志边开发完善"。**关键突破：本环境能真实启动软件**（此前 §37.65 记沙箱 tauri:dev 被禁）——`pnpm tauri:dev` 成功（cargo 增量17s/重编1m06s，sidecar python watcher 改py自动热重载，前端vite HMR）；启动脚本 启动-日志版.bat（TDSF_SIDECAR_PYTHON指venv + 日志重定向 .tdsf-data/dev-run.log）。软件健康（sidecar 120方法/vite 9300/进程存活），边看日志边修 + 用户实测截图反馈驱动多轮修复。
+
+**修复清单（9 commit + 1 方案文档）**：
+1. **sidecar日志噪音3处**（6fa5b0d）：deepseek误报unknown WARNING→_OPENAI_COMPATIBLE_PROVIDERS白名单+12provider；load_tdsf "no TDSF.md found"每2s刷屏257条→quiet参数(watcher轮询传quiet=True)；load_external_dir可选目录WARNING→DEBUG。真实日志验证生效(重启后零WARNING)。
+2. **工作区门控方案1**（7049ca1）：用户实测卡"请先选择工作区"(SSH已连却门控+发消息看不见)。根因：门控只认workspace scope但冷启动竞态scope回退ssh/local不重绑 + 门控 return<WorkspaceGate/>藏输入框。改：chatStore syncSessionToWorkspace(空会话重绑/有历史切该区独立对话)+门控放宽spaces.length===0+SessionPicker按工作区过滤+isSessionEmpty。6测试。
+3. **底部AI按钮重构**（48123af+9eca08e）：两种模式(AiStatusBarControls仅panelOpen时渲染)+俩重复气泡(statusbar-open-ai与AiStatusBarControls都toggleMini)+箭头是Send被当toggle。改：AiStatusBarControls常驻(hasComposer=hasAnyKey‖hasLocalModel仅依赖key不依赖panelOpen)+删气泡1+Send移输入框旁(AiComposerInput)。**用户对调反馈**：AiMiniWindow(mini)实为"agent面板"、TdsfAgentPanel(panel)实为"对话框"(命名反直觉)，对调气泡=toggleMini/箭头=togglePanel。
+4. **agent三问题**（a80204b+e7a34bb）：①影响预测只读误判L3(hostnamectl/nproc不在白名单走unknown L3)→混合命令set-*细分+补24只读白名单,验证环境探测max_risk_l=0,63测试 ②超时60s→300s(前端SIDECAR_TIMEOUT_MS+Rust REQUEST_TIMEOUT/DEFAULT)③P0活动感知超时(runSidecarStream收事件重置计时器,治本,借鉴Cloudflare keepAlive/LangGraph分层超时;调研结论"单纯调大超时是反模式")。开源调研→docs/agent架构优化建议-开源借鉴。
+5. **置信度**（fa3e905+004a468）：仅教学模式显示(agentMode!==teach不评)+按场景评分(后端rpc_methods applicable=has_man‖has_doc‖has_term,命令解读/闲聊不评分,修"解读uptime报置信度低"错配;前端client.ts hasCitableSignal同源)。
+6. **教学模式三问题**（fa3e905+7e99fdb）：删AiMiniWindow Header"思考中"step(agent对话已有thinking);确认模式不自动执行(CommandCard/SuggestCommandCard自动注入加agentMode!==auto门控,修安全bug:确认模式绕过审批自动打字机);SuggestCommandCard按钮Insert→执行+预测回显默认展开(步步确认)。修Maximum update depth(SuggestCommandCard加autoFiredRef,防流式command变化反复触发useEffect)。
+7. **方案文档**（docs/教学模式工具终端化方案-2026-09-04，交接用）：用户要教学模式所有工具调用终端打字机+步步确认(其他三模式不变)。**诚实澄清影响预测真算非假前端**(command_impact.analyze真拆命令/分类/分级,ToolApprovalCard只渲染真数据;"假"是呈现术语堆砌问题)。分4阶段(影响预测优化/工具→命令映射/教学终端执行链路红线9/prompt调整)。
+
+**关键调研发现**：教学模式现状与用户诉求**相反**——adapter.py L862-867 教学严禁suggest_command(教学卡片承载),只读工具后端execute_via_ssh静默执行+JSON卡片,observe免审批→不确认不终端打字机。用户要教学模式=终端可见全过程。
+
+**复盘**：① **真实运行是终极验证**：边看日志发现3个静态难察的日志噪音+验证修复生效(重启后零WARNING),比纯静态强。② **用户实测驱动精准**：每个修复都来自用户真实截图反馈(卡门控/两种模式/气泡箭头反/确认模式自动执行/置信度奇怪),比猜测准。③ **组件命名可能与实际呈现反直觉**：AiMiniWindow(mini)是"agent面板"、TdsfAgentPanel(panel)是"对话框",按用户实测对调而非命名假设。④ **诚实回答用户质疑**：用户疑影响预测"假前端",调研确认后端真算(非假),是呈现问题——诚实澄清而非附和。⑤ **活动感知超时>调大超时**：开源调研证实单纯调大超时是反模式(静默错误+重试重复执行),治本=收事件重置计时器。⑥ **教学模式深层诉求**：教学=终端可见全过程(打字机+确认),现状相反,是重大架构调整(方案留档交接)。

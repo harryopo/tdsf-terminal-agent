@@ -4546,3 +4546,24 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **遗留**：① B4 完整重构（方案已留档，待用户 SSH 实测配合分5步实施）② sidecar-adapter.test.ts 全量负载抖动根治（§37.102，当前单跑31/31过、全量偶发超时）③ #42 SSH 重构 / explorer 路径上传 / §37.91-37.101 累计待实测。
 
 **接手提示**：第二批 B1-B3 已交付（代码+测试全绿）待实测，B4/B5 方案文档已留。下一手若做 B4 重构，先读 docs/B4-B5 方案 + ssh_command.py L195-215 + Rust inject_terminal/osc133/scrollback，且必须用户真实 SSH 服务器实测门禁（沙箱无法验证，勿盲改）。
+
+### 37.110 真实启动边看日志边开发（2026-09-03~04 ✅，本轮交接入口）
+
+> 用户"启动软件真实去测，边看日志边开发完善"+多轮实测截图反馈驱动。详 DEV-JOURNAL §37.110。
+
+**本批交付（9 commit + 1 方案文档）**：6fa5b0d(sidecar日志噪音3处) / 7049ca1(工作区门控方案1自动绑定+独立对话) / 48123af+9eca08e(底部AI按钮重构常驻+去重+语义+对调) / a80204b+e7a34bb(影响预测只读误判L3+超时300s+P0活动感知+开源调研) / fa3e905+004a468(置信度仅教学+按场景评分+删思考中step+确认模式不自动执行) / 7e99fdb(SuggestCommandCard执行按钮+预测回显展开) / docs/教学模式工具终端化方案-2026-09-04.md(交接方案)。
+
+**⚠️ 必须记住的新固化事实**：
+1. **本环境能真实启动软件**（推翻 §37.65 “tauri:dev 被禁”）：`pnpm tauri:dev` 成功；启动-日志版.bat（TDSF_SIDECAR_PYTHON=venv + 日志→.tdsf-data/dev-run.log）；改py→sidecar watcher自动热重载，改前端→vite HMR，改Rust→cargo重编重启(~1m)。**边看 dev-run.log 边开发是有效方式**。
+2. **组件命名与实际呈现反直觉**：AiMiniWindow(mini/toggleMini/miniOpen)=用户口中"agent面板"；TdsfAgentPanel(panel/togglePanel/panelOpen)=用户口中"对话框"。底部气泡=toggleMini(agent面板)、箭头=togglePanel(对话框,朝上弹出/朝下收起)。改这些按用户实测语义,勿按命名假设。
+3. **AiStatusBarControls常驻条件=hasComposer**（=hasAnyKey‖hasLocalModel,仅依赖key不依赖panelOpen,useAiBootstrap派生）；Send按钮在AiComposerInput输入框旁(非底部);底部箭头/气泡是toggle非Send。
+4. **超时体系**：前端SIDECAR_TIMEOUT_MS=300s(活动感知,收事件重置)+Rust REQUEST_TIMEOUT=300s+invoke传Rust 600s硬上限+Python watchdog 600s无活动。
+5. **影响预测真算非假前端**：command_impact.py analyze真拆命令/分类/分级；ToolApprovalCard(tool.tsx L200-252)只渲染后端真segments。
+6. **教学模式现状(与用户诉求相反)**：adapter.py L862-867禁suggest_command；只读工具后端execute_via_ssh静默执行+JSON卡片；observe免审批→不确认不终端打字机。
+7. **自动注入门控**：CommandCard(chat-code.tsx)/SuggestCommandCard(tool.tsx)自动注入useEffect有agentMode!=='auto'门控(仅自动模式自动打字机,确认/教学须点执行)+autoFiredRef(防流式重复/Maximum update depth)。
+
+**待用户实测**（启动.bat+真实SSH）：工作区门控(有工作区不卡+发消息可见)/底部按钮(气泡=agent面板,箭头=对话框方向)/确认模式(命令卡不自动执行,点执行打字机)/置信度(仅教学+命令解读不报低)/打字机提速。
+
+**遗留（下一手 = 交接给其他AI）**：**教学模式工具终端化方案**（docs/教学模式工具终端化方案-2026-09-04.md）——用户要教学模式所有终端可执行工具走"命令卡+预测回显+确认+打字机终端执行+scrollback回读"(其他三模式不变)。4阶段:①影响预测优化(低风险可先做)②工具→等价命令映射③教学终端执行链路(红线9高风险,需服务器实测)④教学模式prompt调整。
+
+**接手提示**：先读 docs/教学模式工具终端化方案-2026-09-04.md（用户思考整理+现状调研+4阶段+代码位置+风险）。改教学模式前读 adapter.py L810-870；改影响预测前读 command_impact.py + tool.tsx ToolApprovalCard；改终端执行前读 B4-B5方案(红线9)。真实启动软件边看 dev-run.log 边测是有效方式。
