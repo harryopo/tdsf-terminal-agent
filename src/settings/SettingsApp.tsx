@@ -6,6 +6,7 @@ import type { SettingsTab } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   AiScanIcon,
+  HistoryIcon,
   InformationCircleIcon,
   KeyboardIcon,
   PaintBoardIcon,
@@ -17,6 +18,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type JSX, useEffect, useState } from "react";
 import { AboutSection } from "./sections/AboutSection";
+import { AgentHistorySection } from "./sections/AgentHistorySection";
 import { AgentsSection } from "./sections/AgentsSection";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -67,6 +69,12 @@ const TABS: {
     component: AgentsSection,
   },
   {
+    id: "history",
+    label: "对话历史",
+    icon: HistoryIcon,
+    component: AgentHistorySection,
+  },
+  {
     id: "about",
     label: "关于",
     icon: InformationCircleIcon,
@@ -81,6 +89,7 @@ const VALID_TABS: SettingsTab[] = [
   "shortcuts",
   "models",
   "agents",
+  "history",
   "about",
 ];
 
