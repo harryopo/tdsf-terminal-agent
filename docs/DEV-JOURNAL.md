@@ -2525,3 +2525,21 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **门禁**：本批 P0 只改 StatusBar.tsx（typecheck/lint ✓）；3图+文稿是文档产物无门禁；docs/决赛/图/*.png 二进制入库（决赛素材）。
 
 **复盘**：① **回归要追到"删了什么入口"**：§37.107 删 AgentStatusPill 时只想着"模式显示去重"，没意识到它的 onClick 是面板关闭时唯一的对话框打开入口——删组件前要 grep 它承载的所有交互（不止显示）。② **网络受限时 MCP 是唯一通道**：系统 git/curl/WebFetch 全被墙/沙箱挡，github MCP 走 IDE 代理能通；大 skill 部署先评估文件数，核心版（入口+关键references）比全量务实。③ **工具机制先摸清再选**：bilingual-diagram（JSON脚本渲染，之前路由反复失败）vs diagram-design（AI手写SVG，复杂度预算强制精简）——后者对"≤9节点概览图"更可控。④ **Edge headless 是 Windows 无 cairosvg 时的 PNG 兜底**：绝对路径 + virtual-time-budget 等字体是两个关键坑。
+
+### 37.109 决赛准备第二批：工具UI分类配色 + 历史对话面板 + 运行日志面板 + B4方案/B5实测清单（2026-09-03 ✅）
+
+**缘起**：第一批验收通过（用户"好的我接受，进行下一步吧"），启动第二批 B1-B5（功能完善）。每个子任务独立 commit 固化。
+
+**B1 工具UI分类增强（commit 93ec548）**：用户诉求"要看到调用skill/知识库/编辑文件的UI显示更清晰"。调研：tool.tsx 的 TOOL_META 缺 16 工具（skill_invoke/ssh_command/python_run/backup_restore/read_remote_file/sftp/analyze_logs/inspect_processes/network_diagnose/config_diff/get_terminal_output/search_history/assess_confidence/ssh_list_sessions/save_skill）全 fallback 到裸名+灰色 ToolsIcon，且所有图标统一 text-muted-foreground 无类别区分。改：①TOOL_META 补全16工具 ②新增 ToolCategory（file/exec/knowledge/skill/diagnose/plan 6类）+CATEGORY_META（类别→颜色+中文名单一真源）③getToolMeta 返回 category（fallback=diagnose）④ToolImpl 图标 className 改 cn("shrink-0",catColor) 按类着色 ⑤deriveSummary 补 skill_invoke(技能名)/python_run(code)/远程文件(path)。tool.test 21→26(+5)。
+
+**B2 历史对话面板（commit de63b0d）**：用户诉求"后端历史对话查看便于追溯"。后端已就绪（agent_log.py debug.agent_log_tail RPC + agent-logs/*.jsonl 10类事件），缺口=前端界面。新建 AgentHistorySection.tsx（设置页"对话历史"tab）：会话选择下拉(files[])+事件类型过滤(8种)+时间线(ts+EVENT_TYPE_META徽标+content+meta.tool_name按type配色)+刷新；非桌面 isTauri 门控降级。SettingsTab 加 history + SettingsApp 注册(HistoryIcon)。测试4例。**坑**：isTauri 在 @/lib/tauri（非 tauri-env）、RefreshIcon（非 RefreshLineIcon）——typecheck 抓出即修。
+
+**B3 运行日志面板（commit 7002314）**：用户诉求"后端运行日志方便检查检测和开发"。**调研纠正**：log.tail 在 core/log_capture.py（调研报告误记 rpc_log_tail.py），返回 {ts,level,logger,msg}（非 source），level_filter 支持 ALL/DEBUG/INFO/WARNING+/ERROR/CRITICAL。新建 RuntimeLogsSection.tsx（设置页"运行日志"tab）：level过滤+日志行(ts+level徽标配色+logger+msg按ts升序)+刷新/清空(log.clear)/自动刷新(2s轮询)/滚到底；非桌面降级。SettingsTab 加 logs + SettingsApp 注册(TerminalIcon)。测试5例。
+
+**B4 安全可见执行重构（红线9，方案留档待实测）**：调研 ssh_command.py L195-215 visible 链路 = inject_terminal（前端加\n→PTY执行）+ execute_via_ssh（后台exec）双重执行隐患。**第一批解耦（chatRuntime 下发 autoExec=false→visible=false）后当前已安全**（ssh_command 不走 inject_terminal，只 execute_via_ssh 单次），代价是 AI 工具 SSH 命令终端不可见（但对话命令卡走 CommandCard 自动注入已满足"命令终端可见"核心诉求）。完整重构（inject+scrollback回读替代execute_via_ssh）是架构级高风险，涉 sidecar+Rust(inject_terminal回读+OSC133+scrollback)+需真实SSH实测。**决策：不盲目改**（红线9"须独立规划"+沙箱无法测SSH+当前已安全），写方案留档 docs/B4-B5-安全可见执行与服务器实测清单.md，分5步待用户实测配合实施。
+
+**B5 服务器实测清单**：同文档，覆盖第一批(UI六项+P0)+B1/B2/B3+B4重构后逐项实测点（用户 启动.bat + 真实SSH服务器）。
+
+**门禁**：B1/B2/B3 各自 typecheck/lint 0 + build:web ✓ + 全量 vitest（B1后1307/B2后1311/B3后1316 passed，均 +1 已知 sidecar-adapter 抖动单跑31/31）；新增测试 tool+5/history+4/logs+5=14例。
+
+**复盘**：① **后端已就绪时前端补界面是高性价比**：B2/B3 的 RPC（debug.agent_log_tail/log.tail）后端早已实现只缺前端——复用 B2 模式（设置页tab+invokeRpc+isTauri门控+时间线/日志渲染+测试）快速产出 B3。② **调研报告的文件名/字段要现场核实**：B3 调研说 rpc_log_tail.py+source，实际 core/log_capture.py+logger/level——动手前读真实代码纠正。③ **红线9 高风险任务的正确处置是"方案留档+实测门禁"而非盲目改**：B4 当前已安全（第一批解耦），完整重构需真实SSH实测，沙箱盲改会引入无法验证的风险——写方案+分步计划+待实测比强行改代码更负责。④ **设置页 tab 扩展四处同步**：SettingsTab类型+TABS数组+VALID_TABS+section组件，icon 复用 hugeicons 已有（HistoryIcon/TerminalIcon）。

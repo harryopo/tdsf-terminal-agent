@@ -4524,3 +4524,25 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **遗留（第二批，用户验收第一批后启动）**：B1 工具 UI 分类增强（tool.tsx TOOL_META 补 skill_invoke/ssh_command 等 + 按类配色）/ B2 历史对话可视化面板（复用 debug.agent_log_tail RPC）/ B3 运行日志面板（log.tail+sidecar_logs+修 sidecar:sidecar:log 双前缀 bug）/ B4 安全可见执行重构（红线9）/ B5 自动化测试。调研结论：B2/B3 后端数据与 RPC 已就绪，核心缺口=前端界面。
 
 **接手提示**：第一批已交付待验收。第二批从 B1（工具 UI）或 B2/B3（历史/日志面板，后端已铺路）入手均可；改 tool.tsx 前读 §37.106（工具渲染现状）+ §37.107（chat-code 自动注入）。
+
+### 37.109 决赛准备第二批（2026-09-03 ✅，本轮交接入口）
+
+> 第一批验收通过，用户"进行下一步"启动第二批 B1-B5（功能完善）。详 DEV-JOURNAL §37.109。
+
+**本批交付**（每子任务独立 commit）：
+- **B1 工具UI分类配色**（commit 93ec548）：tool.tsx TOOL_META 补全 16 工具 + 新增 ToolCategory(6类)/CATEGORY_META(类别→颜色单一真源) + ToolImpl 图标按类着色（file琥珀/exec红/knowledge绿/skill紫/diagnose蓝/plan青）+ deriveSummary 补 skill/python/远程文件 case。tool.test 21→26。
+- **B2 历史对话面板**（commit de63b0d）：新建 AgentHistorySection.tsx（设置页"对话历史"tab），调 debug.agent_log_tail RPC（会话选择+事件过滤+时间线+类型徽标配色）。
+- **B3 运行日志面板**（commit 7002314）：新建 RuntimeLogsSection.tsx（设置页"运行日志"tab），调 log.tail RPC（level过滤+日志行+刷新/清空/自动刷新2s/滚到底）。
+- **B4 安全可见执行重构**（红线9）：方案留档 docs/B4-B5-安全可见执行与服务器实测清单.md，本轮不改代码（见下）。
+- **B5 服务器实测清单**：同文档，覆盖第一批+B1-B4 逐项实测点。
+
+**⚠️ 必须记住的新固化事实**：
+1. **设置页 tab 扩展四处同步**：`openSettingsWindow.ts` 的 SettingsTab 类型 + `SettingsApp.tsx` 的 TABS 数组/VALID_TABS + 新 section 组件（现共 9 tab：general/editor/themes/shortcuts/models/agents/history/logs/about）。section 用 SectionHeader + invokeRpc + isTauri 门控模式。
+2. **日志/历史 RPC 真实位置**：历史=`agent_log.py` 的 `debug.agent_log_tail(session_id?,lines,type?)` 返回 {files[],lines[{ts,type,content,meta}]}；日志=`core/log_capture.py`（**非** rpc_log_tail.py）的 `log.tail(lines,level_filter)` 返回 {lines[{ts,level,logger,msg}],total}，另有 log.clear/log.levels。isTauri 在 `@/lib/tauri`（非 tauri-env）。
+3. **B4 当前已安全（第一批解耦）**：ssh_command.py L195-215 visible 链路有 inject_terminal+execute_via_ssh 双重执行隐患，但 chatRuntime 下发 autoExec=false→visible=false 后 **ssh_command 不走 inject_terminal，只 execute_via_ssh 单次执行，无双重执行**。对话命令卡另走 CommandCard 自动注入（PTY 可见执行）。B4 完整重构（让 AI 工具 SSH 命令也终端可见单次执行）需 inject+scrollback回读替代 execute_via_ssh，红线9 高风险+需真实SSH实测，**本轮未改**。
+
+**待用户实测**（docs/B4-B5-安全可见执行与服务器实测清单.md）：第一批 UI六项+P0 / B1 工具配色 / B2 历史面板 / B3 日志面板 逐项；均需 `启动.bat` 起 dev + 真实 SSH 服务器（沙箱 tauri:dev 被禁 §37.65）。
+
+**遗留**：① B4 完整重构（方案已留档，待用户 SSH 实测配合分5步实施）② sidecar-adapter.test.ts 全量负载抖动根治（§37.102，当前单跑31/31过、全量偶发超时）③ #42 SSH 重构 / explorer 路径上传 / §37.91-37.101 累计待实测。
+
+**接手提示**：第二批 B1-B3 已交付（代码+测试全绿）待实测，B4/B5 方案文档已留。下一手若做 B4 重构，先读 docs/B4-B5 方案 + ssh_command.py L195-215 + Rust inject_terminal/osc133/scrollback，且必须用户真实 SSH 服务器实测门禁（沙箱无法验证，勿盲改）。
