@@ -135,6 +135,7 @@ def _read_file_safe(path: Path) -> tuple[str, float | None]:
 def load_tdsf(
     project_path: Path | str | None = None,
     global_path: Path | str | None = None,
+    quiet: bool = False,
 ) -> TDSFContent:
     """加载 TDSF.md 指令文件（一次性加载，无 watcher）
 
@@ -146,6 +147,8 @@ def load_tdsf(
                       - None 时使用 ``./TDSF.md``（当前工作目录）
         global_path:  全局 TDSF.md 路径
                       - None 时使用 ``~/TDSF.md``（用户主目录）
+        quiet:        True 时静默内部日志（供 watcher 高频轮询调用，
+                      避免 "no TDSF.md found" 每 interval 秒刷屏）
 
     Returns:
         TDSFContent 加载结果（即使文件不存在也返回空 content，不抛异常）
@@ -174,14 +177,15 @@ def load_tdsf(
         parts.append(p_content.strip())
     combined = _COMBINED_SEPARATOR.join(parts) if parts else ""
 
-    if g_content.strip() or p_content.strip():
-        logger.info(
-            f"load_tdsf: global={'yes' if g_content.strip() else 'no'} "
-            f"(mtime={g_mtime}), project={'yes' if p_content.strip() else 'no'} "
-            f"(mtime={p_mtime}), combined_len={len(combined)}"
-        )
-    else:
-        logger.debug("load_tdsf: no TDSF.md found (global and project both empty)")
+    if not quiet:
+        if g_content.strip() or p_content.strip():
+            logger.info(
+                f"load_tdsf: global={'yes' if g_content.strip() else 'no'} "
+                f"(mtime={g_mtime}), project={'yes' if p_content.strip() else 'no'} "
+                f"(mtime={p_mtime}), combined_len={len(combined)}"
+            )
+        else:
+            logger.debug("load_tdsf: no TDSF.md found (global and project both empty)")
 
     return TDSFContent(
         global_content=g_content,
@@ -333,7 +337,9 @@ class TDSFWatcher:
             force: True 时强制触发 callback（用于首次加载）
         """
         try:
-            current = load_tdsf(self.project_path, self.global_path)
+            # quiet=True：watcher 高频轮询（每 interval 秒）时静默 load_tdsf 内部日志，
+            # 避免 "no TDSF.md found" 刷屏 dev-run.log；文件变化由下方 INFO 日志记录
+            current = load_tdsf(self.project_path, self.global_path, quiet=True)
             if force or self._has_changed(current):
                 self._last_tdsf = current
                 logger.info(

@@ -116,6 +116,25 @@ _OPENAI_COMPATIBLE_PROVIDERS: frozenset[str] = frozenset(
         "dashscope",
         # 月之暗面 Kimi（Moonshot）
         "moonshot",
+        # DeepSeek（2026-09-03 实测日志暴露：provider='deepseek' 误报
+        # unknown，实为一等 OpenAI 兼容端点，补入白名单消除噪音）
+        "deepseek",
+        # 常见别名：Kimi=moonshot、Qwen=dashscope
+        "kimi",
+        "qwen",
+        # 本地推理引擎
+        "ollama",
+        "vllm",
+        # 聚合网关
+        "oneapi",
+        "newapi",
+        # 硅基流动
+        "siliconflow",
+        # 国产大模型（均提供 OpenAI 兼容端点）
+        "hunyuan",
+        "stepfun",
+        "minimax",
+        "ernie",
     }
 )
 
@@ -198,8 +217,8 @@ def create_strands_model(config: Any | None = None) -> Any:
     )
 
     # 4. 按 provider 分发到具体工厂
-    # OpenAI 兼容集合含国产三家（zhipu/dashscope/moonshot），它们与 openai
-    # 同走 OpenAIModel 分支；仅真正未知的 provider 才落 else 兜底并告警
+    # OpenAI 兼容集合含 deepseek/zhipu/dashscope/moonshot/ollama/vllm 等常见
+    # provider，它们与 openai 同走 OpenAIModel 分支；仅真正未知的 provider 才落 else 兜底并告警
     try:
         if provider in _OPENAI_COMPATIBLE_PROVIDERS:
             return _create_openai_model(config)
