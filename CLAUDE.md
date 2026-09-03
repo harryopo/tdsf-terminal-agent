@@ -2,7 +2,7 @@
 
 > **位置**：`d:\ai\linux教学一体\tdsf-terminal-agent-clone\CLAUDE.md`
 > **作用**：本文件是任何 AI（或人）接手本项目的**唯一入口规范**。定义项目身份、架构地图、防污染红线、五绿门禁、诊断方法论。
-> **版本**：v2.2（2026-08-09 · 终端改动教训固化：新增 §3 红线 9 —— SSH 终端静默注入方案 A，取代前端 cd 拦截 hack）
+> **版本**：v2.3（2026-09-04 · 补：本环境可真实启动 tauri:dev 边看日志调试（推翻旧“沙箱禁用”记录）；活动感知超时；组件命名反直觉按实测。详 docs/dev-state.md §37.110）
 
 ---
 
@@ -121,7 +121,7 @@ src/main.tsx  ← 入口。按上游 terax 重写：
 ```bash
 pnpm typecheck        # tsc -p tsconfig.app.json && tsc -p tsconfig.node.json，0 错误
 pnpm lint             # eslint . --max-warnings 0，0 错误 0 警告
-pnpm test             # vitest run，当前 982 全过
+pnpm test             # vitest run 全过（数量随开发增长，2026-09 约 1327；已知 sidecar-adapter 1 项负载抖动单跑通过）
 pnpm build:web        # tsc -p app + vite build，成功出 dist
 pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功能真的工作
 ```
@@ -143,6 +143,8 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 7. 运行时受阻时，**派 general-purpose agent 静态通读顶层组件**（带上"passive effect 无限/全树/仅 Tauri 复现/无 max-depth 错误"这些证据），交叉验证锁定。
 
 **验证修复**：patch 一个 `PerformanceObserver` 数 1 秒内 measure 次数，从 50 万降到 **0** 即为治愈。
+
+**真实运行调试（2026-09-04 固化，推翻早期“沙箱 tauri:dev 被禁”记录）**：本环境**能真实启动软件**（`pnpm tauri:dev` 或 `启动-日志版.bat`，日志→`.tdsf-data/dev-run.log`）。改 py→sidecar watcher 自动热重载，改前端→vite HMR，改 Rust→cargo 重编重启(~1m)。**边看 dev-run.log 边开发**能发现静态难察的问题（日志噪音/运行时错误/超时），比纯静态分析强。
 
 ---
 
@@ -202,4 +204,4 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 
 ---
 
-> **最后更新**：2026-08-09 · v2.2 · 终端改动教训固化（新增 §3 红线 9：SSH 终端静默注入方案 A，禁止前端命令改写）。上游参考：https://github.com/crynta/terax-ai
+> **最后更新**：2026-09-04 · v2.3 · 补真实运行调试（本环境可 tauri:dev 边看日志）+ 活动感知超时 + 组件命名反直觉按实测（详 dev-state §37.110）。上游参考：https://github.com/crynta/terax-ai

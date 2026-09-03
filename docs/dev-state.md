@@ -4567,3 +4567,13 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **遗留（下一手 = 交接给其他AI）**：**教学模式工具终端化方案**（docs/教学模式工具终端化方案-2026-09-04.md）——用户要教学模式所有终端可执行工具走"命令卡+预测回显+确认+打字机终端执行+scrollback回读"(其他三模式不变)。4阶段:①影响预测优化(低风险可先做)②工具→等价命令映射③教学终端执行链路(红线9高风险,需服务器实测)④教学模式prompt调整。
 
 **接手提示**：先读 docs/教学模式工具终端化方案-2026-09-04.md（用户思考整理+现状调研+4阶段+代码位置+风险）。改教学模式前读 adapter.py L810-870；改影响预测前读 command_impact.py + tool.tsx ToolApprovalCard；改终端执行前读 B4-B5方案(红线9)。真实启动软件边看 dev-run.log 边测是有效方式。
+
+### 37.111 仓库整理 + 核心文件更新（2026-09-04 ✅）
+
+> 用户"整理目录分类+安全删冗余+更新readme/claude+修改不合理约束"。详 DEV-JOURNAL §37.111。
+
+**整理成果**：①删根目录12个临时log(~14MB,untracked) ②**创建根README.md**(之前无根README;项目门面:简介/特性/技术栈/快速开始/四档信任/架构/文档索引) ③docs/README.md去上游terax TERAX.md失效引用→改中文docs索引指向CLAUDE.md ④CLAUDE.md v2.2→v2.3(门禁vitest 982→动态约1327 + §5补真实运行调试方法论) ⑤.gitignore加cdp-dir。
+
+**docs保守归类**：方案书v1.0/v1.1被 DEV-JOURNAL/P3-SSH/Agent架构说明书 精确路径引用→不移动(避免断引用),用docs/README索引清晰化。核心记忆文档(DEV-JOURNAL/dev-state/ROADMAP/方案书v2.0/MULTI-AGENT)保持顶层。
+
+**待用户手动**：临时目录 cdp-dir/output/knowledge-preview/dist 已gitignore(仓库整洁)，但DeleteFile不支删目录+规则禁shell删→如需清磁盘手动删文件夹(无害保留)。
