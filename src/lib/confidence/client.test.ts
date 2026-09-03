@@ -179,3 +179,40 @@ describe("scoreConfidenceRpc — fail-open 回退路径", () => {
     expect(r2.source).toBe("local");
   });
 });
+
+describe("scoreConfidenceRpc — 按场景评分 applicable（2026-09-03）", () => {
+  it("RPC 返回 applicable=false（纯命令解读）→ 透传 false（UI 不显示置信度）", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      score: 0.5,
+      applicable: false,
+      evidence_count: 0,
+      grounded_count: 0,
+    });
+    const r = await scoreConfidenceRpc("系统运行 4:31，负载 0.74");
+    expect(r.applicable).toBe(false);
+  });
+
+  it("RPC 返回无 applicable 字段 → 缺省 true（向后兼容）", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      score: 0.8,
+      evidence_count: 2,
+      grounded_count: 2,
+    });
+    const r = await scoreConfidenceRpc("回答文本");
+    expect(r.applicable).toBe(true);
+  });
+
+  it("fail-open 本地：闲聊/命令解读（无 man/doc/术语）→ applicable=false", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("sidecar down"));
+    const r = await scoreConfidenceRpc("你好呀！我很乐意帮忙");
+    expect(r.source).toBe("local");
+    expect(r.applicable).toBe(false);
+  });
+
+  it("fail-open 本地：含系统术语/来源的知识回答 → applicable=true", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("sidecar down"));
+    const r = await scoreConfidenceRpc("systemctl 管理 service 进程，参见 man 手册");
+    expect(r.source).toBe("local");
+    expect(r.applicable).toBe(true);
+  });
+});
