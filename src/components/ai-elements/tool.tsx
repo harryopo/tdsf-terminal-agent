@@ -1400,8 +1400,11 @@ function SuggestCommandCard({
   // TDSF 魔改 (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
   useEffect(() => {
     if (autoFiredRef.current) return;
-    const { autoExecuteInTerminal, live } = useChatStore.getState();
+    const { autoExecuteInTerminal, agentMode, live } = useChatStore.getState();
     if (!autoExecuteInTerminal) return;
+    // 问题2修复(2026-09-03 用户实测)：仅 auto 模式自动注入；确认模式须用户点
+    // Insert/审批，否则绕过 HITL 审批（确认模式没点确认就自动打字机执行）。
+    if (agentMode !== "auto") return;
     autoFiredRef.current = true;
     const ok = live.injectIntoActivePty(command + "\n");
     if (ok) setInserted(true);
