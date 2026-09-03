@@ -355,3 +355,70 @@ describe("Tool — 失败输出不再吐裸 JSON", () => {
     expect(screen.queryByText("failed")).toBeNull();
   });
 });
+
+// ============================================================================
+// B1 工具类别配色与标签补全（2026-09-03 用户钦定：工具调用 UI 更清晰）
+// ============================================================================
+// 此前 skill_invoke/ssh_command/python_run 等 16 个工具不在 TOOL_META，
+// fallback 到裸工具名 + 灰色 ToolsIcon；现按 6 类（file/exec/knowledge/
+// skill/diagnose/plan）配色，图标一眼可辨。
+describe("Tool — B1 工具类别配色与标签补全", () => {
+  it("skill_invoke → 'Skill' 标签 + 技能名 summary + 紫色（skill 类）", () => {
+    const { container } = render(
+      <Tool
+        toolName="skill_invoke"
+        state="input-available"
+        input={{ skill: "ssh-diagnose" }}
+      />,
+    );
+    expect(screen.getByText("Skill")).toBeTruthy();
+    expect(screen.getByText("ssh-diagnose")).toBeTruthy();
+    expect(container.innerHTML).toContain("text-violet-600");
+  });
+
+  it("ssh_command → 'SSH' 标签 + 红色（exec 类）", () => {
+    const { container } = render(
+      <Tool
+        toolName="ssh_command"
+        state="input-available"
+        input={{ command: "df -h" }}
+      />,
+    );
+    expect(screen.getByText("SSH")).toBeTruthy();
+    expect(container.innerHTML).toContain("text-red-600");
+  });
+
+  it("knowledge_search 图标绿色（knowledge 类）", () => {
+    const { container } = render(
+      <Tool
+        toolName="knowledge_search"
+        state="input-available"
+        input={{ query: "x" }}
+      />,
+    );
+    expect(container.innerHTML).toContain("text-emerald-600");
+  });
+
+  it("edit → 琥珀色（file 类）", () => {
+    const { container } = render(
+      <Tool
+        toolName="edit"
+        state="input-available"
+        input={{ path: "/etc/hosts" }}
+      />,
+    );
+    expect(container.innerHTML).toContain("text-amber-600");
+  });
+
+  it("补全工具不再 fallback 裸名：python_run → 'Python'", () => {
+    render(
+      <Tool
+        toolName="python_run"
+        state="input-available"
+        input={{ code: "print(1)" }}
+      />,
+    );
+    expect(screen.getByText("Python")).toBeTruthy();
+    expect(screen.queryByText("python_run")).toBeNull();
+  });
+});

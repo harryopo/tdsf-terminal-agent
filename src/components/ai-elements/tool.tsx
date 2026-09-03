@@ -331,34 +331,69 @@ export function ToolApprovalCard({
   );
 }
 
-const TOOL_META: Record<string, { label: string; icon: typeof File01Icon }> = {
-  read_file: { label: "Read", icon: File01Icon },
-  list_directory: { label: "List", icon: FolderOpenIcon },
-  write_file: { label: "Write", icon: FilePlusIcon },
-  create_directory: { label: "Create dir", icon: FolderAddIcon },
-  edit: { label: "Edit", icon: FileEditIcon },
-  multi_edit: { label: "Edit", icon: Edit02Icon },
-  bash_run: { label: "Run", icon: TerminalIcon },
-  bash_background: { label: "Spawn", icon: TerminalIcon },
-  bash_logs: { label: "Logs", icon: TerminalIcon },
-  bash_list: { label: "Jobs", icon: TerminalIcon },
-  bash_kill: { label: "Kill", icon: TerminalIcon },
-  grep: { label: "Search", icon: GlobalSearchIcon },
-  glob: { label: "Glob", icon: Folder01Icon },
-  suggest_command: { label: "Suggest", icon: SparklesIcon },
-  open_preview: { label: "Preview", icon: EyeIcon },
-  run_subagent: { label: "Subagent", icon: RobotIcon },
-  todo_write: { label: "Todos", icon: CheckListIcon },
-  // P2-4: 知识库检索（RAG 混合检索工具）
-  knowledge_search: { label: "知识库", icon: BookOpen01Icon },
-  // TDSF 2026-08-31 双库: 知识库完整文档读取（knowledge_get_doc）
-  knowledge_get_doc: { label: "文档", icon: BookOpen01Icon },
-  // P2-3: 扩展运维工具
-  service_manage: { label: "服务", icon: TerminalIcon },
-  package_manage: { label: "包管理", icon: TerminalIcon },
-  firewall_manage: { label: "防火墙", icon: ShieldUserIcon },
-  security_audit: { label: "安全审计", icon: ShieldUserIcon },
-  performance_analyze: { label: "性能", icon: TerminalIcon },
+/** 工具类别（B1 2026-09-03 用户钦定：按类配色让工具调用一眼可辨） */
+type ToolCategory = "file" | "exec" | "knowledge" | "skill" | "diagnose" | "plan";
+
+/** 类别 → 颜色 + 中文名（单一真源：图标着色统一消费） */
+const CATEGORY_META: Record<ToolCategory, { label: string; color: string }> = {
+  file: { label: "文件", color: "text-amber-600 dark:text-amber-400" },
+  exec: { label: "执行", color: "text-red-600 dark:text-red-400" },
+  knowledge: { label: "知识库", color: "text-emerald-600 dark:text-emerald-400" },
+  skill: { label: "技能", color: "text-violet-600 dark:text-violet-400" },
+  diagnose: { label: "诊断", color: "text-sky-600 dark:text-sky-400" },
+  plan: { label: "规划", color: "text-cyan-600 dark:text-cyan-400" },
+};
+
+const TOOL_META: Record<
+  string,
+  { label: string; icon: typeof File01Icon; category: ToolCategory }
+> = {
+  // 文件读写编辑（琥珀）
+  read_file: { label: "Read", icon: File01Icon, category: "file" },
+  list_directory: { label: "List", icon: FolderOpenIcon, category: "file" },
+  write_file: { label: "Write", icon: FilePlusIcon, category: "file" },
+  create_directory: { label: "Create dir", icon: FolderAddIcon, category: "file" },
+  edit: { label: "Edit", icon: FileEditIcon, category: "file" },
+  multi_edit: { label: "Edit", icon: Edit02Icon, category: "file" },
+  grep: { label: "Search", icon: GlobalSearchIcon, category: "file" },
+  glob: { label: "Glob", icon: Folder01Icon, category: "file" },
+  open_preview: { label: "Preview", icon: EyeIcon, category: "file" },
+  read_remote_file: { label: "读远程", icon: File01Icon, category: "file" },
+  sftp_read: { label: "SFTP 读", icon: File01Icon, category: "file" },
+  sftp_write: { label: "SFTP 写", icon: FilePlusIcon, category: "file" },
+  // 命令执行（红）
+  bash_run: { label: "Run", icon: TerminalIcon, category: "exec" },
+  bash_background: { label: "Spawn", icon: TerminalIcon, category: "exec" },
+  bash_logs: { label: "Logs", icon: TerminalIcon, category: "exec" },
+  bash_list: { label: "Jobs", icon: TerminalIcon, category: "exec" },
+  bash_kill: { label: "Kill", icon: TerminalIcon, category: "exec" },
+  ssh_command: { label: "SSH", icon: TerminalIcon, category: "exec" },
+  python_run: { label: "Python", icon: FlashIcon, category: "exec" },
+  service_manage: { label: "服务", icon: TerminalIcon, category: "exec" },
+  package_manage: { label: "包管理", icon: TerminalIcon, category: "exec" },
+  firewall_manage: { label: "防火墙", icon: ShieldUserIcon, category: "exec" },
+  backup_restore: { label: "备份恢复", icon: ToolsIcon, category: "exec" },
+  // 知识库（绿）
+  knowledge_search: { label: "知识库", icon: BookOpen01Icon, category: "knowledge" },
+  knowledge_get_doc: { label: "文档", icon: BookOpen01Icon, category: "knowledge" },
+  // 技能（紫）
+  skill_invoke: { label: "Skill", icon: SparklesIcon, category: "skill" },
+  save_skill: { label: "存技能", icon: BookOpen01Icon, category: "skill" },
+  // 诊断分析（蓝）
+  analyze_logs: { label: "日志分析", icon: File01Icon, category: "diagnose" },
+  inspect_processes: { label: "进程", icon: ToolsIcon, category: "diagnose" },
+  network_diagnose: { label: "网络", icon: GlobalSearchIcon, category: "diagnose" },
+  security_audit: { label: "安全审计", icon: ShieldUserIcon, category: "diagnose" },
+  performance_analyze: { label: "性能", icon: TerminalIcon, category: "diagnose" },
+  config_diff: { label: "配置对比", icon: FileEditIcon, category: "diagnose" },
+  get_terminal_output: { label: "终端输出", icon: TerminalIcon, category: "diagnose" },
+  search_history: { label: "历史案例", icon: GlobalSearchIcon, category: "diagnose" },
+  ssh_list_sessions: { label: "SSH 会话", icon: TerminalIcon, category: "diagnose" },
+  // 规划建议（青）
+  suggest_command: { label: "Suggest", icon: SparklesIcon, category: "plan" },
+  todo_write: { label: "Todos", icon: CheckListIcon, category: "plan" },
+  run_subagent: { label: "Subagent", icon: RobotIcon, category: "plan" },
+  assess_confidence: { label: "置信度", icon: ShieldUserIcon, category: "plan" },
 };
 
 const STATUS_DOT: Record<ToolPart["state"], string> = {
@@ -381,7 +416,11 @@ const STATUS_LABEL: Record<ToolPart["state"], string> = {
   "output-error": "error",
 };
 
-function getToolMeta(toolName: string): { label: string; icon: typeof File01Icon } {
+function getToolMeta(toolName: string): {
+  label: string;
+  icon: typeof File01Icon;
+  category: ToolCategory;
+} {
   // P0-6: agent:<name> 前缀 → 子 agent 委派卡片（main 统一入口委派专家）
   if (toolName.startsWith("agent:")) {
     const agentName = toolName.slice("agent:".length);
@@ -395,9 +434,15 @@ function getToolMeta(toolName: string): { label: string; icon: typeof File01Icon
             : agentName === "history"
               ? "History Agent"
               : `${agentName} Agent`;
-    return { label, icon: RobotIcon };
+    return { label, icon: RobotIcon, category: "plan" };
   }
-  return TOOL_META[toolName] ?? { label: toolName, icon: ToolsIcon };
+  return (
+    TOOL_META[toolName] ?? {
+      label: toolName,
+      icon: ToolsIcon,
+      category: "diagnose" as ToolCategory,
+    }
+  );
 }
 
 function deriveSummary(toolName: string, input: unknown): string | null {
@@ -420,6 +465,10 @@ function deriveSummary(toolName: string, input: unknown): string | null {
     case "multi_edit":
     case "create_directory":
     case "list_directory":
+    case "read_remote_file":
+    case "sftp_read":
+    case "sftp_write":
+    case "config_diff":
       return str("path");
     case "bash_run":
     case "bash_background":
@@ -442,6 +491,12 @@ function deriveSummary(toolName: string, input: unknown): string | null {
       return str("path") ?? str("url");
     case "run_subagent":
       return str("agent") ?? str("task");
+    case "skill_invoke":
+      return str("skill") ?? str("name") ?? str("skill_name");
+    case "save_skill":
+      return str("name") ?? str("skill_name");
+    case "python_run":
+      return str("code");
     case "todo_write": {
       const items = Array.isArray(i.todos) ? i.todos : null;
       return items
@@ -503,6 +558,7 @@ const ToolImpl = ({
   const meta = getToolMeta(toolName);
   const Icon = meta.icon;
   const label = meta.label;
+  const catColor = CATEGORY_META[meta.category].color;
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
   // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
@@ -546,7 +602,7 @@ const ToolImpl = ({
           icon={Icon}
           size={13}
           strokeWidth={1.75}
-          className="shrink-0 text-muted-foreground"
+          className={cn("shrink-0", catColor)}
         />
         <span className="shrink-0 font-medium text-foreground">{label}</span>
         {summary ? (
