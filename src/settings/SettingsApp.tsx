@@ -12,6 +12,7 @@ import {
   PaintBoardIcon,
   Settings01Icon,
   SourceCodeIcon,
+  TerminalIcon,
   UserMultiple02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -23,6 +24,7 @@ import { AgentsSection } from "./sections/AgentsSection";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
 import { ModelsSection } from "./sections/ModelsSection";
+import { RuntimeLogsSection } from "./sections/RuntimeLogsSection";
 import { ShortcutsSection } from "./sections/ShortcutsSection";
 import { ThemesSection } from "./sections/ThemesSection";
 
@@ -75,6 +77,12 @@ const TABS: {
     component: AgentHistorySection,
   },
   {
+    id: "logs",
+    label: "运行日志",
+    icon: TerminalIcon,
+    component: RuntimeLogsSection,
+  },
+  {
     id: "about",
     label: "关于",
     icon: InformationCircleIcon,
@@ -90,6 +98,7 @@ const VALID_TABS: SettingsTab[] = [
   "models",
   "agents",
   "history",
+  "logs",
   "about",
 ];
 
