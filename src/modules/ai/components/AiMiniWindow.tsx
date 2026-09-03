@@ -186,18 +186,16 @@ function Body({
   const helpers = useChat<UIMessage>({ chat });
   const isBusy =
     helpers.status === "submitted" || helpers.status === "streaming";
-  // 工作区门控（用户钦定 2026-09-01）: 未绑定工作区的会话 agent 不运行；
-  // 绑定的工作区已被删除（关掉全部工作区等）同样门控——不可绕过。
-  // useSpaces 钩子无条件调用（rules-of-hooks），门控判断在钩子外做。
-  const sessionScope = useChatStore(
-    (s) => s.sessions.find((x) => x.id === sessionId)?.scope,
-  );
-  const wsId =
-    sessionScope?.kind === "workspace" ? sessionScope.spaceId : null;
-  const boundSpaceExists = useSpaces((s) =>
-    wsId ? s.spaces.some((x) => x.id === wsId) : false,
-  );
-  const gated = sessionScope?.kind !== "workspace" || !boundSpaceExists;
+  // 方案1（2026-09-03 用户钦定）：门控放宽——仅在完全没有任何工作区时才门控
+  // 引导新建。有活跃工作区时由 syncSessionToWorkspace 自动把当前对话对齐到该
+  // 工作区（空会话重绑 / 有历史切到该区独立对话），不再卡死、输入框始终可用。
+  const hasAnySpace = useSpaces((s) => s.spaces.length > 0);
+  const activeSpaceId = useSpaces((s) => s.activeId);
+  const syncSessionToWorkspace = useChatStore((s) => s.syncSessionToWorkspace);
+  useEffect(() => {
+    if (activeSpaceId) syncSessionToWorkspace();
+  }, [activeSpaceId, syncSessionToWorkspace]);
+  const gated = !hasAnySpace;
 
   return (
     <>
@@ -555,11 +553,22 @@ function SessionPicker() {
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
+  // 方案1：独立对话列表——只显示绑定当前工作区的会话（防跨区污染）
+  const activeSpaceId = useSpaces((s) => s.activeId);
 
-  const active = sessions.find((s) => s.id === activeId) ?? null;
+  const wsSessions = activeSpaceId
+    ? sessions.filter(
+        (s) =>
+          s.scope?.kind === "workspace" && s.scope.spaceId === activeSpaceId,
+      )
+    : sessions;
+  const active =
+    wsSessions.find((s) => s.id === activeId) ??
+    sessions.find((s) => s.id === activeId) ??
+    null;
   if (!active) return null;
 
-  const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+  const sorted = [...wsSessions].sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
     <DropdownMenu>

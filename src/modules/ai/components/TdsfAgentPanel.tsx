@@ -342,17 +342,15 @@ function Body({
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const helpers = useChat<UIMessage>({ chat });
 
-  // 工作区门控（用户钦定 2026-09-01）: 未绑定工作区的会话 agent 不运行；
-  // 绑定的工作区已被删除同样门控——不可绕过。early return 在全部 hooks 后。
-  const sessionScope = useChatStore(
-    (s) => s.sessions.find((x) => x.id === sessionId)?.scope,
-  );
-  const wsId =
-    sessionScope?.kind === "workspace" ? sessionScope.spaceId : null;
-  // useSpaces 钩子必须无条件调用（rules-of-hooks）——门控判断在钩子外做
-  const boundSpaceExists = useSpaces((s) =>
-    wsId ? s.spaces.some((x) => x.id === wsId) : false,
-  );
+  // 方案1（2026-09-03 用户钦定）：门控放宽——仅在完全没有任何工作区时才门控。
+  // 有活跃工作区时由 syncSessionToWorkspace 自动把当前对话对齐到该工作区
+  // （空会话重绑 / 有历史切到该区独立对话），不再卡死、输入框始终可用。
+  const hasAnySpace = useSpaces((s) => s.spaces.length > 0);
+  const activeSpaceId = useSpaces((s) => s.activeId);
+  const syncSessionToWorkspace = useChatStore((s) => s.syncSessionToWorkspace);
+  useEffect(() => {
+    if (activeSpaceId) syncSessionToWorkspace();
+  }, [activeSpaceId, syncSessionToWorkspace]);
 
   // TDSF 魔改 (2026-08-09): 终端执行模式开关状态
   const autoExec = useChatStore((s) => s.autoExecuteInTerminal);
@@ -366,7 +364,7 @@ function Body({
   }, [helpers.messages]);
 
   // 工作区门控 early return——必须在 Body 全部 hooks 之后（rules-of-hooks）
-  if (sessionScope?.kind !== "workspace" || !boundSpaceExists) {
+  if (!hasAnySpace) {
     return <WorkspaceGate />;
   }
 
