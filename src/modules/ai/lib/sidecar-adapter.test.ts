@@ -255,7 +255,7 @@ describe("runSidecarStream — 成功路径", () => {
       cachedInputTokens: 0,
     });
 
-    // onStep 应该被多次调用（"调用 Sidecar Agent" → "Thinking" → "Streaming" → null）
+    // onStep 应该被多次调用（"Thinking" → "Streaming" → null；2026-09-03 移除 "调用 Sidecar Agent"）
     expect(onStep.mock.calls.length).toBeGreaterThanOrEqual(3);
     const stepArgs = onStep.mock.calls.map((c) => c[0]);
     expect(stepArgs).toContain("Thinking");

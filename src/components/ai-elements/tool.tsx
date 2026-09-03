@@ -38,7 +38,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import type { ComponentProps, ReactNode } from "react";
-import { isValidElement, memo, useEffect, useState } from "react";
+import { isValidElement, memo, useEffect, useRef, useState } from "react";
 
 
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
@@ -1385,6 +1385,11 @@ function SuggestCommandCard({
 }) {
   const [inserted, setInserted] = useState(false);
   const [showPredicted, setShowPredicted] = useState(false);
+  // 2026-09-03 修复 Maximum update depth：autoFiredRef 保证自动注入只触发一次。
+  // 旧版仅靠 inserted state + deps[command]，流式期间 command 逐字变化会反复
+  // 触发 useEffect，叠加 injectIntoActivePty 回流重渲染可能高频循环直至 React
+  // 抛 "Maximum update depth exceeded"。与 chat-code.tsx CommandCard 同款守卫。
+  const autoFiredRef = useRef(false);
   const onInsert = () => {
     const store = useChatStore.getState();
     // TDSF 魔改 (2026-08-09): 终端执行模式——加换行符自动执行命令
@@ -1394,12 +1399,12 @@ function SuggestCommandCard({
   };
   // TDSF 魔改 (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
   useEffect(() => {
-    if (inserted) return;
+    if (autoFiredRef.current) return;
     const { autoExecuteInTerminal, live } = useChatStore.getState();
     if (!autoExecuteInTerminal) return;
+    autoFiredRef.current = true;
     const ok = live.injectIntoActivePty(command + "\n");
     if (ok) setInserted(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在 command 变化时触发
   }, [command]);
   return (
     <div className="space-y-1.5">

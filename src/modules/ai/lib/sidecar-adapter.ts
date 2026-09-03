@@ -900,7 +900,8 @@ export async function* runSidecarStream(
   );
 
   try {
-    onStep?.("调用 Sidecar Agent");
+    // 2026-09-03（用户钦定）: 移除 "调用 Sidecar Agent" step——它是内部实现细节，
+    // 显示在 Header 与输入区重叠；step 从后续 Thinking / 工具调用开始即可。
 
     // 2. 启动 invoke（不 await，用 Promise 在 race 中竞争）
     let invokeError: string | null = null;
