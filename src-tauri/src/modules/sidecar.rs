@@ -57,11 +57,11 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// 心跳丢失判定阈值（30s 无响应判定死锁）
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 请求超时（默认 60s）
-/// TDSF 修复 2026-08-01 (P0-3): 30s → 60s，与前端 SIDECAR_TIMEOUT_MS 默认值对齐。
-/// 30s 对 Strands agentic loop（多轮工具调用 + LLM 推理）太紧，
-/// 复杂任务频繁超时；前端可传 timeoutMs 覆盖（见 send_request_with_timeout）。
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// 请求超时（默认 300s = 5 分钟）
+/// 2026-09-03 稳定性调优: 60s → 300s，与前端 SIDECAR_TIMEOUT_MS 默认值对齐。
+/// 60s 对 Strands agentic loop（多轮工具调用 + LLM 推理，如环境探测/诊断）
+/// 太紧，复杂任务频繁超时；前端可传 timeoutMs 覆盖（见 send_request_with_timeout）。
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 优雅退出等待时间（3s，超时后 SIGKILL）
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);

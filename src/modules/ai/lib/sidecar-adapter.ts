@@ -41,14 +41,16 @@ import {
 // === 常量 ====================================================================
 
 /**
- * Sidecar 调用超时（60s）。
+ * Sidecar 调用超时（默认 300s = 5 分钟）。
  *
- * TDSF 修复 2026-07-31 (P2): 从 30s 提升到 60s。
- * 30s 超时对 Strands 后端 agentic loop（多轮工具调用 + LLM 推理）太紧，
- * 导致长对话/复杂任务频繁超时。60s 给 Strands Agent 足够时间完成
- * 3-5 轮工具调用的 agentic loop。
+ * 演进：30s（原始）→ 60s（2026-07-31 P2）→ 300s（2026-09-03 稳定性调优）。
+ * 用户实测：agent 环境探测/诊断任务（多轮 SSH 命令 + 多次 LLM 推理）常
+ * 超 60s，触发“Sidecar 调用超时（60s）”请求失败。虽然 token 走事件真流式，
+ * 但 agent.invoke 的最终返回仍受这个总时长超时限制。300s 覆盖绝大多数复杂
+ * agentic loop，与 needs_you approval_timeout(300s) 对齐、< Python watchdog(600s)。
+ * 仍可用 localStorage `tdsf.sidecarTimeoutMs` 覆盖（10s-600s），但默认已足够稳定，无需手动配置。
  */
-const SIDECAR_TIMEOUT_MS = 60_000;
+const SIDECAR_TIMEOUT_MS = 300_000;
 
 /**
  * 读取 Sidecar 调用超时（ms）。
