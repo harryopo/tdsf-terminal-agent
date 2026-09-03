@@ -178,7 +178,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
     );
 
     // TDSF 魔改 2026-07-30 (Bug 5): state 现在含 live 字段
-    // P0-3: invoke 额外携带 timeoutMs（可配置超时，默认 300000=5min，2026-09-03 稳定性调优）
+    // P0 活动感知(2026-09-03): invoke 传 Rust timeoutMs=SIDECAR_TIMEOUT_MAX_MS(600000) 总时长硬上限；前端活动感知超时(默认300s无活动)另 race
     // v3.1 收敛: 旧 coder/explore/history/teach → coding/explore/history/teach
     // 的映射已随子 agent 委派机制删除，TDSF_AGENTS 仅 main 一项。
     expect(mockInvoke).toHaveBeenCalledWith("ipc_invoke", {
@@ -187,7 +187,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
         name: "main",
         state: { input: "test", messages: makeMessages("test"), live },
       },
-      timeoutMs: 300000,
+      timeoutMs: 600000,
     });
   });
 

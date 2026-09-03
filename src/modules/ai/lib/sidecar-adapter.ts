@@ -910,13 +910,31 @@ export async function* runSidecarStream(
     });
 
     // 超时 + abort 保护
-    // P0-3 (2026-08-01): 超时可配置（getSidecarTimeoutMs，默认 60s）
-    const timeoutMs = getSidecarTimeoutMs();
+    // P0 活动感知超时 (2026-09-03 用户钦定“稳定性最优” + 开源调研借鉴 Cloudflare
+    //   keepAlive / LangGraph 分层超时): 超时改为“无活动超时”——每收到一个流式
+    //   事件（token/tool_call）就重置计时器，只有连续 activityTimeoutMs 无任何事件
+    //   （真卡死）才超时。避免“总时长超时”误杀有进展的长任务（调研结论：单纯
+    //   调大超时是反模式，把清晰错误变静默错误）。与 Python watchdog(600s 无活动) 对齐。
+    const activityTimeoutMs = getSidecarTimeoutMs();
+    let resetTimeout: () => void = () => {};
     const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`Sidecar 调用超时（${timeoutMs / 1000}s）`)),
-        timeoutMs,
-      );
+      let timer: ReturnType<typeof setTimeout>;
+      const arm = () => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Sidecar 调用超时（${activityTimeoutMs / 1000}s 无活动）`,
+              ),
+            ),
+          activityTimeoutMs,
+        );
+      };
+      arm();
+      resetTimeout = () => {
+        clearTimeout(timer);
+        arm();
+      };
       abortSignal?.addEventListener(
         "abort",
         () => {
@@ -940,9 +958,10 @@ export async function* runSidecarStream(
               name: pythonName,
               state: { input, messages, live },
             },
-            // P0-3: 把可配置超时传给 Rust 侧（Rust 默认 60s 硬超时，
-            // 不传则长任务仍可能在 Rust 层被掐断）
-            timeoutMs,
+            // P0 活动感知(2026-09-03): Rust 侧用总时长硬上限 600s（对齐 Python
+            // watchdog），前端活动感知（默认 300s 无活动）先触发——避免 Rust 总时长
+            // 先于前端活动感知掐断有进展的长任务。
+            timeoutMs: SIDECAR_TIMEOUT_MAX_MS,
           }),
           timeout,
         ]);
@@ -990,6 +1009,8 @@ export async function* runSidecarStream(
           // queue 被 close（不应发生在 invoke 完成前，防御性 break）
           break;
         }
+        // P0 活动感知超时：收到流式事件 = agent 有进展 → 重置无活动计时器
+        resetTimeout();
         yield result.value.value;
       } else {
         // invoke 完成 → 标记 done，继续 drain queue 剩余 items
