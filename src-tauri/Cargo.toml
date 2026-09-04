@@ -119,7 +119,7 @@ bollard = { version = "0.17", features = ["ssl"] }
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+keyring = { version = "4.1", default-features = false, features = ["apple-native"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] }
 
