@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # 与本地开发环境对齐（实测 python 3.13.7），保证 CI 可复现本地行为
           python-version: "3.13"
