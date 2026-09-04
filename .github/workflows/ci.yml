@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [terax-clone-v0]
   push:
-    branches: [main]
+    branches: [terax-clone-v0]
 
 concurrency:
   group: ci-${{ github.ref }}
