@@ -57,89 +57,31 @@ def register_methods(dispatcher: Any) -> None:
         evidences: list[dict] | None = None,
         message: str | None = None,
         history: list | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
-        """计算 AI 文本的置信度
+        """Return a session evidence state or fuse explicit caller evidence.
 
-        TDSF 魔改: 支持两种调用方式
-        1. 简单模式: 直接传 text（或前端别名 message），用启发式规则构造 evidence
-        2. 完整模式: 传 evidences 列表（与 invoke_confidence_tool 一致）
-
-        Args:
-            text: 待评估的 AI 文本（简单模式）
-            method: 融合方法 baseline/D-S/D-S+PCR5
-            evidences: 完整证据列表（完整模式）
-            message: 前端 scoreConfidenceRpc 传的字段名（text 的别名，取其一）
-            history: 前端传入的历史消息（当前仅兼容接受，不参与评分）
-
-        Returns:
-            置信度评分结果
+        ``text`` / ``message`` / ``history`` remain accepted only for wire
+        compatibility.  They are intentionally never used as evidence.
         """
-        if text is None:
-            text = message
-        # 完整模式: 透传 evidences
-        if evidences is not None:
-            try:
-                return invoke_confidence_tool(
-                    {"evidences": evidences, "method": method},
-                )
-            except Exception as e:
-                return {"error": f"confidence error: {e}", "score": 0.5}
+        if evidences is None:
+            if session_id:
+                from strands_backend.evidence import assess_session_evidence
 
-        # 简单模式: text → 启发式 evidence 构造
-        if not text:
-            return {"score": 0.5, "method": method, "error": "text is required"}
+                return assess_session_evidence(session_id)
+            return {
+                "tier": "unverified",
+                "reason": "需要会话工具证据；不会根据模型文本推断置信度。",
+                "evidence_count": 0,
+                "sources": [],
+                "scope": "session",
+            }
         try:
-            # 构造 5 维启发式 evidence
-            has_quote = '"' in text or '"' in text or '"' in text
-            has_man = "man" in text.lower() or "manual" in text.lower()
-            has_doc = "http" in text or "doc" in text.lower() or "wiki" in text.lower()
-            has_term = any(kw in text for kw in (
-                "Linux", "kernel", "system", "kernel", "module",
-                "service", "process", "file", "directory",
-            ))
-
-            # 按场景评分（2026-09-03 用户钦定）：只有“需溯源”的回答（引用了
-            # man/文档 或 含系统术语的知识性论断/诊断）才评置信度。纯命令
-            # 输出解读（如 uptime/df 的数字复述，无来源无术语）→ applicable=False，
-            # 前端不显示置信度——修复“解读命令输出却报置信度低”的错配。
-            applicable = has_man or has_doc or has_term
-            if not applicable:
-                return {
-                    "score": 0.5,
-                    "method": method,
-                    "applicable": False,
-                    "evidence_count": 0,
-                    "grounded_count": 0,
-                }
-
-            from core.schemas import Evidence, EvidenceSource
-            ev = [
-                Evidence(
-                    source=EvidenceSource.SYSLOG if has_man else EvidenceSource.UNKNOWN,
-                    raw_text=text[:200],
-                    source_prior=0.95 if has_man else 0.65,
-                    grounded=has_man or has_doc,
-                ),
-                Evidence(
-                    source=EvidenceSource.APP_LOG if has_doc else EvidenceSource.UNKNOWN,
-                    raw_text=text[:200],
-                    source_prior=0.85 if has_doc else 0.55,
-                    grounded=has_doc,
-                ),
-                Evidence(
-                    source=EvidenceSource.UNKNOWN,
-                    raw_text=text,
-                    source_prior=0.60,
-                    grounded=has_term,
-                ),
-            ]
-            result = invoke_confidence_tool({"evidences": ev, "method": method})
-            # 有来源/术语信号 = 需溯源场景，置信度评分适用
-            if isinstance(result, dict):
-                result["applicable"] = True
-            return result
+            return invoke_confidence_tool(
+                {"evidences": evidences, "method": method},
+            )
         except Exception as e:
-            return {"score": 0.5, "method": method, "error": f"confidence error: {e}"}
+            return {"error": f"confidence error: {e}"}
 
     def _decision_list(
         session_id: str | None = None,

@@ -657,6 +657,56 @@ class ToolCallLimitHook:
         ]
         return (" ".join(parts) or "tool error")[:120]
 
+    @staticmethod
+    def _evidence_detail(name: str, tool_input: dict[str, Any]) -> str:
+        """Keep only a redacted, source-relevant input summary for evidence."""
+        value = (
+            tool_input.get("command")
+            or tool_input.get("query")
+            or tool_input.get("url")
+            or tool_input.get("path")
+            or ""
+        )
+        if not isinstance(value, str):
+            value = str(value)
+        try:
+            from strands_backend.tools import redact_sensitive
+
+            return redact_sensitive(value)[:500]
+        except Exception:
+            return value[:500]
+
+    def _record_evidence(
+        self,
+        name: str,
+        tool_input: dict[str, Any],
+        result: Any,
+        failed: bool,
+    ) -> None:
+        """Record actual Strands completions for all tools except SSH.
+
+        ``execute_via_ssh`` already records its own result so direct tool tests
+        and real hook calls share one event instead of creating duplicates.
+        Every other tool, including knowledge retrieval, reaches this hook.
+        """
+        if not self.session_id or name == "ssh_command":
+            return
+        try:
+            from strands_backend.evidence import get_global_tracker
+
+            payload = self._tool_payload(result)
+            get_global_tracker().record(
+                session_id=self.session_id,
+                tool_name=name,
+                status="error" if failed else "completed",
+                detail=self._evidence_detail(name, tool_input),
+                result=payload or result,
+                agent=self.agent_name,
+                source=f"{self.agent_name}_agent.strands.hook",
+            )
+        except Exception as exc:  # evidence must never interrupt the agent loop
+            logger.debug("evidence record from tool hook failed: %s", exc)
+
     def _after_tool_call(self, event: Any) -> None:
         name = self._tool_name(event)
         # C1 工具级 tracing：计算 duration_ms
@@ -677,14 +727,16 @@ class ToolCallLimitHook:
         else:
             self.failures_by_tool[name] = 0
         # T7: 工具调用流水（name + input + 成功与否 + duration_ms）——收尾验证判定数据源
+        tool_input = self._tool_input(event)
         tool_entry = {
             "name": name,
-            "input": self._tool_input(event),
+            "input": tool_input,
             "success": not failed,
         }
         if duration_ms is not None:
             tool_entry["duration_ms"] = duration_ms
         self.tool_log.append(tool_entry)
+        self._record_evidence(name, tool_input, getattr(event, "result", None), failed)
         self._report_progress(name, "failed" if failed else "success", duration_ms)
 
     def _report_progress(self, tool_name: str, status: str, duration_ms: float | None = None) -> None:

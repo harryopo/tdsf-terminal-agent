@@ -6,6 +6,16 @@
 
 ---
 
+### 37.117 T10.1：以真实会话证据取代模型文本置信度（2026-09-05 ✅）
+
+**问题与调研**：用户要求“不要假的东西”。逐条追踪发现旧 `ConfidenceMarker` 只把助手文本传给 `confidence.score`；`rpc_methods.py` 与 TS fallback 用关键词推断 man/文档/术语并构造 evidence，完全没有证明工具或知识库曾被实际调用。`EvidenceTracker` 又主要从 SSH 直连路径记账，知识工具虽然发出了 UI 生命周期事件，却不能进入证据统计。没有回答主张与出处片段的绑定时，任何“0.x 置信度”都只是外观，不是事实判断。
+
+**最小修复**：保留既有 `EvidenceTracker`，不另建评分系统。`ToolCallLimitHook` 在真实工具完成后记录非 SSH 工具事件（SSH 保留原直连记录，避免重复）；`evidence.assess` 只从成功完成的来源工具产生 `unverified / grounded / verified` 会话状态。`confidence.score` 不再从 `text/message/history` 造 evidence；前端改调 `evidence.assess`，删除本地文本评分模块，并仅给教学模式的最新助手消息显示“待核验 / 已有依据 / 操作已验证”和真实工具名。无 session、RPC 异常或格式异常一律为“证据服务不可用，未对回答文本作任何推断”。
+
+**验证**：先让新增前端接口和 Python assessment 测试按预期失败，再实现；随后 `client.test.ts` 3/3、证据状态 pytest 4/4、相关 hook 定向用例通过；完整前端 **130 files / 1339 tests**、typecheck、lint 与 `cargo check` 均通过。合并 Python 定向套件 32/33，失败项是既有 `TestEvidenceIntegration.test_execute_via_ssh_produces_evidence`：当前 Python 环境缺 `langgraph`，确认模式正确 fail-closed，故未修改安全策略来掩盖环境问题。
+
+**复盘与下一步**：会话证据状态是诚实的低层事实，不能替代“此回答的每项主张已获证实”。若要恢复回答级置信度，必须先做 response-claim/citation 数据契约并展示对应片段；在此之前优先做原生 Tauri 教学知识库验收。durable execution（checkpoint、写入 intent id、SSH 完成事件）另立专项，不能借审批 UI 或分数绕过执行生命周期缺口。
+
 ### 37.116 Agent 架构事实校准与开源方案审计（2026-09-05）
 
 **任务**：用户要求用自动化页面测试核验当前 Agent 架构，并区分“开源调研是否集成”“方案书是否已完成”。结论必须建立在生产入口、测试、运行日志和方案任务清单上，而不是复述历史说明书。

@@ -28,6 +28,41 @@ logger = logging.getLogger("sidecar.strands_backend.evidence")
 _MAX_RESULT_LEN = 500
 _MAX_EVIDENCE_PER_SESSION = 200
 
+# 只有能返回外部事实的成功工具结果才可作为会话依据。计划、待办和命令
+# 生成仅是模型输出的另一种形式，不能因为走过工具接口就被当作来源。
+_SOURCE_TOOL_NAMES = frozenset({
+    "knowledge_search",
+    "knowledge_get_doc",
+    "read_remote_file",
+    "analyze_logs",
+    "inspect_processes",
+    "network_diagnose",
+    "get_terminal_output",
+    "config_diff",
+    "ssh_command",
+})
+
+_WRITE_TOOL_NAMES = frozenset({
+    "ssh_command",
+    "python_run",
+    "service_manage",
+    "package_manage",
+    "firewall_manage",
+    "backup_restore",
+    "save_skill",
+})
+
+_VERIFY_TOOL_NAMES = frozenset({
+    "read_remote_file",
+    "config_diff",
+    "analyze_logs",
+    "inspect_processes",
+    "network_diagnose",
+    "get_terminal_output",
+    "knowledge_search",
+    "knowledge_get_doc",
+})
+
 
 class EvidenceTracker:
     """会话级证据追踪器（内存，按 session 隔离）"""
@@ -149,11 +184,97 @@ def reset_global_tracker() -> EvidenceTracker:
         return _global_tracker
 
 
+def _is_write_evidence(item: dict[str, Any]) -> bool:
+    """Return whether a completed evidence item changed state.
+
+    ``ssh_command`` is command-sensitive: a successful ``cat`` is evidence,
+    not an operation.  If the classifier is unavailable, fail closed for the
+    highest tier rather than falsely calling a read an operation.
+    """
+    tool_name = str(item.get("tool_name") or "")
+    if tool_name not in _WRITE_TOOL_NAMES:
+        return False
+    if tool_name != "ssh_command":
+        return True
+    try:
+        from strands_backend.tools import RiskChecker
+
+        return bool(RiskChecker.check(str(item.get("detail") or "")).get("write"))
+    except Exception:
+        return False
+
+
+def _is_verify_evidence(item: dict[str, Any]) -> bool:
+    """Return whether a completed item is a read-only verification result."""
+    tool_name = str(item.get("tool_name") or "")
+    if tool_name in _VERIFY_TOOL_NAMES:
+        return True
+    if tool_name != "ssh_command":
+        return False
+    try:
+        from strands_backend.tools import RiskChecker
+
+        return not bool(RiskChecker.check(str(item.get("detail") or "")).get("write"))
+    except Exception:
+        return False
+
+
+def assess_session_evidence(session_id: str) -> dict[str, Any]:
+    """Summarize recorded tool evidence without scoring model prose.
+
+    This is deliberately a *session evidence state*, not a probability that an
+    arbitrary assistant sentence is true.  There is no response-to-citation
+    binding in the current protocol, so reporting a textual confidence score
+    would overclaim what the system knows.
+    """
+    completed = [
+        item
+        for item in get_global_tracker().list(session_id)
+        if item.get("status") == "completed"
+    ]
+    sources = [
+        {
+            "tool_name": str(item.get("tool_name") or ""),
+            "source": str(item.get("source") or ""),
+            "timestamp": item.get("timestamp"),
+        }
+        for item in completed
+        if str(item.get("tool_name") or "") in _SOURCE_TOOL_NAMES
+    ]
+
+    last_write_index = -1
+    for index, item in enumerate(completed):
+        if _is_write_evidence(item):
+            last_write_index = index
+    has_post_write_verification = last_write_index >= 0 and any(
+        _is_verify_evidence(item) for item in completed[last_write_index + 1 :]
+    )
+
+    if has_post_write_verification:
+        tier = "verified"
+        reason = "成功操作后已记录只读验证结果。"
+    elif sources:
+        tier = "grounded"
+        reason = f"已记录 {len(sources)} 项真实工具结果。"
+    else:
+        tier = "unverified"
+        reason = "本会话未记录已完成的检索、读取或验证结果。"
+
+    return {
+        "tier": tier,
+        "reason": reason,
+        "evidence_count": len(sources),
+        "sources": sources[:3],
+        "scope": "session",
+    }
+
+
 def register_methods(dispatcher: Any) -> None:
     """注册 JSON-RPC 方法：
     - evidence.list(session_id): 会话证据列表
     - evidence.clear(session_id): 清空会话证据
     - evidence.stats(): 统计
+    - evidence.assess(session_id): 基于真实完成事件的会话证据状态
     """
     tracker = get_global_tracker()
 
@@ -166,9 +287,19 @@ def register_methods(dispatcher: Any) -> None:
     def _stats() -> dict[str, Any]:
         return tracker.stats()
 
+    def _assess(session_id: str) -> dict[str, Any]:
+        return assess_session_evidence(session_id)
+
     dispatcher.register("evidence.list", _list)
     dispatcher.register("evidence.clear", _clear)
     dispatcher.register("evidence.stats", _stats)
+    dispatcher.register("evidence.assess", _assess)
 
 
-__all__ = ["EvidenceTracker", "get_global_tracker", "reset_global_tracker", "register_methods"]
+__all__ = [
+    "EvidenceTracker",
+    "assess_session_evidence",
+    "get_global_tracker",
+    "reset_global_tracker",
+    "register_methods",
+]

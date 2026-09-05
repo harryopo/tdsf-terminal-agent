@@ -21,11 +21,10 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
-// TDSF 魔改: 接入 Confidence 评分 (2026-07-30 重构: 只保留 score, 移除 border/label)
-// 2026-08-31 (问题3): 低置信度标签附原因（ConfidenceRpcResult.reason）
+// 教学模式的会话证据状态（不是按模型文本猜测的置信度分数）。
 import {
-  scoreConfidenceRpc,
-  type ConfidenceRpcResult,
+  assessSessionEvidence,
+  type EvidenceAssessment,
 } from "@/lib/confidence/client";
 import { cn } from "@/lib/utils";
 import {
@@ -210,6 +209,9 @@ export function AiChatView({
     status === "streaming" && lastMessage?.role === "assistant"
       ? lastMessage.id
       : null;
+  const lastAssistantMessageId = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant")?.id;
   const step = useChatStore((s) => s.agentMeta.step);
   const hitStepCap = useChatStore((s) => s.agentMeta.hitStepCap);
   const compactionNotice = useChatStore((s) => s.agentMeta.compactionNotice);
@@ -247,6 +249,7 @@ export function AiChatView({
             message={m}
             onApproval={onApproval}
             streaming={m.id === streamingMessageId}
+            showEvidence={m.id === lastAssistantMessageId}
           />
         ))}
         {/* Task 6.5: sidecar needs_you 审批闭环——approval 类 HITL 请求渲染
@@ -484,87 +487,72 @@ const ContinueRow = memo(function ContinueRow({
   );
 });
 
-// TDSF 魔改 2026-07-30: ConfidenceMarker 视觉重构 — 对齐上游 terax 气泡风格
-// -----------------------------------------------------------------
-// 原实现: 3px 彩色左边框 + emoji 标签 ("⚠ 不确定"/"🤔 较低置信")
-//   → 破坏上游 terax 消息气泡的视觉统一, 显得突兀。
-// 新实现: 只在消息末尾追加一个低调的小灰字徽章 + hover tooltip,
-//   - score >= 0.5: 不显示任何标记 (大多数正常消息无视觉干扰)
-//   - score < 0.5: 显示小灰字 "置信度 较低" + tooltip 显示具体分数
-//   - score < 0.3: 显示小灰字 "置信度 低" + amber 色调
-// 保留 scoreConfidenceRpc 调用和数据收集, 只改呈现方式。
-// TDSF 2026-08-31 (问题3修复): 用户实测反馈"置信度 低"没有标准——
-// 低置信度必须附原因（如"未引用权威来源"），无原因可生成时不显示标签。
-// TDSF 魔改 2026-09-03（用户钦定）: 置信度仅在「教学」模式下评分并显示——
-// 确认/观察/自动模式都不显示（用户觉得非教学模式逐条弹“置信度 低”鸡肋）。
+// 教学模式仅展示最新助手消息的会话证据状态；它不把历史工具结果伪装成
+// 当前段落逐句引用，也不再按模型文本关键词推断“置信度”。
 const ConfidenceMarker = memo(function ConfidenceMarker({
   message,
   streaming,
+  showEvidence,
   children,
 }: {
   message: UIMessage;
   streaming: boolean;
+  showEvidence: boolean;
   children: React.ReactNode;
 }) {
-  const [result, setResult] = useState<ConfidenceRpcResult | null>(null);
-  // 仅教学模式评分（跟学需溯源依据）；其他模式不显示置信度
+  const [result, setResult] = useState<EvidenceAssessment | null>(null);
+  // 仅教学模式显示；其他模式不增加证据状态噪声。
   const agentMode = useChatStore((s) => s.agentMode);
+  const sessionId = useChatStore((s) => s.activeSessionId);
 
   useEffect(() => {
     if (streaming) {
       setResult(null);
       return;
     }
-    if (message.role !== "assistant") return;
-    // 非教学模式：不评分、不显示置信度标签（用户钦定仅教学模式体现置信度）
-    if (agentMode !== "teach") {
+    if (message.role !== "assistant" || agentMode !== "teach" || !showEvidence) {
       setResult(null);
       return;
     }
-    const text = message.parts
-      .filter((p): p is { type: "text"; text: string } => p.type === "text")
-      .map((p) => p.text)
-      .join("\n");
-    if (!text.trim()) return;
     let cancelled = false;
-    void scoreConfidenceRpc(text).then((r) => {
+    void assessSessionEvidence(sessionId).then((r) => {
       if (!cancelled) setResult(r);
     });
     return () => {
       cancelled = true;
     };
-  }, [streaming, message.role, message.parts, agentMode]);
+  }, [streaming, message.role, agentMode, sessionId, showEvidence]);
 
-  // 只在低置信度且可给出原因时显示标记（a+b 组合约定）：
-  //   - score >= 0.5：无标记，保持气泡整洁
-  //   - score < 0.5 且有 reason：显示 "置信度 较低/低：<原因>"
-  //   - score < 0.5 但 reason=null（无可解释维度）：不显示，避免无标准空标签
-  const score = result?.score ?? null;
-  // 按场景评分（2026-09-03 用户钦定）：applicable=false（纯命令输出解读/闲聊等
-  // 无需溯源场景）→ 不显示置信度，避免“解读 uptime 输出却报置信度低”的错配。
-  const applicable = result?.applicable !== false;
-  const isLow = score !== null && score < 0.5;
-  const isVeryLow = score !== null && score < 0.3;
-  const reason = result?.reason ?? null;
-  const labelText =
-    applicable && isLow && reason
-      ? `置信度 ${isVeryLow ? "低" : "较低"}：${reason}`
-      : null;
+  const evidenceSourceNames = result
+    ? [...new Set(result.sources.map((source) => evidenceLabel(source.toolName)))].join("、")
+    : "";
+  const evidenceLabelText =
+    result?.tier === "verified"
+      ? `操作已验证${evidenceSourceNames ? ` · 来源：${evidenceSourceNames}` : ""}`
+      : result?.tier === "grounded"
+        ? `已有依据${evidenceSourceNames ? ` · 来源：${evidenceSourceNames}` : ""}`
+        : result
+          ? `待核验 · ${result.reason}`
+          : null;
+  const evidenceTone = result?.tier === "verified"
+    ? "text-emerald-700 dark:text-emerald-400"
+    : result?.tier === "grounded"
+      ? "text-muted-foreground"
+      : "text-amber-700 dark:text-amber-400";
+  const evidenceTitle = `会话证据状态：${result?.reason ?? ""}；不代表这段回答逐句已被证明。`;
 
   return (
     <div>
       {children}
-      {labelText ? (
+      {evidenceLabelText ? (
         <div
           className={cn(
             "mt-1.5 text-[10px] font-medium",
-            isVeryLow
-              ? "text-amber-600 dark:text-amber-400"
-              : "text-muted-foreground/70",
+            evidenceTone,
           )}
-          title={`AI 回复置信度评分: ${score?.toFixed(2)}（0-1 区间，越低越需要人工核对）${reason ? `；原因: ${reason}` : ""}`}
+          title={evidenceTitle}
         >
-          {labelText}
+          {evidenceLabelText}
         </div>
       ) : null}
     </div>
@@ -575,10 +563,12 @@ const RenderedMessage = memo(function RenderedMessage({
   message,
   onApproval,
   streaming,
+  showEvidence,
 }: {
   message: UIMessage;
   onApproval: (id: string, approved: boolean, reason?: string) => void;
   streaming: boolean;
+  showEvidence: boolean;
 }) {
   // Index of the trailing text part — only that one is "live" mid-stream.
   // Earlier text parts (separated by tool calls) are already finalized.
@@ -625,7 +615,11 @@ const RenderedMessage = memo(function RenderedMessage({
     <Message from={message.role}>
       <MessageContent>
         {/* TDSF 魔改: ConfidenceMarker 包裹 assistant 消息，流式结束后显示置信度标记 (T2.3) */}
-        <ConfidenceMarker message={message} streaming={streaming}>
+        <ConfidenceMarker
+          message={message}
+          streaming={streaming}
+          showEvidence={showEvidence}
+        >
           <div className="flex flex-col gap-3">
             {groups.map((g) => {
               if (g.kind === "reads") {
