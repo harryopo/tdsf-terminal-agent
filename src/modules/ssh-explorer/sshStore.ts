@@ -41,6 +41,7 @@ import {
   fetchRemoteCommands,
   fetchRemoteOsInfo,
   remoteCarapaceInstalled,
+  type RemoteOsInfo,
 } from '@/lib/param-complete-client';
 
 // TDSF 2026-08-28: SSH 会话的远端 carapace 检测状态（无弹窗设计，仅驱动小图标显隐）
@@ -132,6 +133,8 @@ export interface SshSessionInfo {
   connectedAt: number;
   /** SshSession 句柄 (含 write/resize/close) */
   handle: SshSession | null;
+  /** Authoritative sidecar probe result for this specific connected Rust session. */
+  remoteOsInfo?: RemoteOsInfo;
   /**
    * TDSF 修复 2026-08-31: 标记该会话是否来自"开机自动连接"（connectWithSaved）。
    * 自动连接只恢复既有 SSH Space、绝不凭空新建工作区（否则本地用户开机被导向
@@ -646,7 +649,18 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         ?.rustSessionId;
       if (rustSessionId) {
         void fetchRemoteCommands(rustSessionId);
-        void fetchRemoteOsInfo(rustSessionId);
+        void fetchRemoteOsInfo(rustSessionId).then((remoteOsInfo) => {
+          if (!remoteOsInfo) return;
+          const current = get().sessions.find((sess) => sess.id === sessionId);
+          if (current?.rustSessionId !== rustSessionId) return;
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === sessionId && sess.rustSessionId === rustSessionId
+                ? { ...sess, remoteOsInfo }
+                : sess,
+            ),
+          }));
+        });
       }
 
       return sessionId;

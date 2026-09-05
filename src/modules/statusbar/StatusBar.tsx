@@ -13,6 +13,7 @@ import { IncognitoIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
 import { DiagnosticsBadge } from "./DiagnosticsBadge";
+import { RemoteOsBadge, type RemoteOsBadgeInfo } from "./RemoteOsBadge";
 import { WorkspaceEnvSelector } from "./WorkspaceEnvSelector";
 
 type Props = {
@@ -29,6 +30,8 @@ type Props = {
    *  与 panelOpen 无关。true 时底部常驻完整 AI 控件（AiStatusBarControls）；false 时引导去设置配 key。 */
   hasComposer: boolean;
   privateActive: boolean;
+  /** Only a known, currently connected SSH session may supply this badge. */
+  remoteOsInfo?: RemoteOsBadgeInfo | null;
 };
 
 export function StatusBar({
@@ -41,6 +44,7 @@ export function StatusBar({
   workspaceSwitching,
   hasComposer,
   privateActive,
+  remoteOsInfo = null,
 }: Props) {
   return (
     <footer
@@ -53,6 +57,7 @@ export function StatusBar({
           onSelectSsh={onWorkspaceSshClick}
           switching={workspaceSwitching}
         />
+        <RemoteOsBadge info={remoteOsInfo} />
         <CwdBreadcrumb cwd={cwd} filePath={filePath} home={home} onCd={onCd} />
         <LspStatusPill filePath={filePath ?? null} />
         <DiagnosticsBadge filePath={filePath ?? null} />
