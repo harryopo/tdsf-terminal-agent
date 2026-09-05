@@ -12,6 +12,8 @@
 - [ ] 原生 Tauri + 已保存 SSH profile 验收：连接/历史恢复、审批 FIFO、知识库 Markdown/TeachCard 分类、教学命令结果闭环。
 - [x] T10.1 用户可见证据状态：移除模型文本关键词评分；只消费本会话真实工具完成事件，并展示 `待核验 / 已有依据 / 操作已验证` 与来源工具名。
 - [ ] T10.1 的原始“回答置信度”定义仍不成立：缺少“回答主张→引用片段”的绑定，不能把会话依据伪装为逐句事实证明；需要单独设计引用协议后再讨论 DSPCR5 分档。
+- [x] M1-1 Agent 发行版事实输入：`system.probe_env` 从既有单次 `os-release` 读取返回 `ID / ID_LIKE / family`；未知系统保持 `unknown`，不按显示名称猜包管理器。
+- [ ] M1-2 终端发行版感知：命令候选 family 过滤与状态栏发行版展示尚未接入，需在真实 SSH 发行版上验收。
 - [ ] Agent 架构下一代码项：先进行原生 Tauri 教学知识库与证据状态验收，再单独设计 checkpoint + 写入 intent id + SSH 完成事件的 durable execution 专项。
 
 ### 2026-09-05 Agent 修复收口与原生验收计划
@@ -20,7 +22,7 @@
 - [x] 命令影响解析：包查询和命令定位降为只读 L0；未知/副作用保持确认，wrapper 不可洗白危险子命令。
 - [x] 历史会话：稳定 SSH endpoint scope、成功重连后再打开、同一 host/user/port 历史可见、遗失配置 fail-closed。
 - [x] 教学边界：显式 marker 才为 TeachCard；知识检索/工具状态为普通 Markdown；紧凑教学 prompt 含概念与原理、易错点与考点、练习。
-- [x] 门禁与运行态：Vitest 1339、typecheck、lint、cargo check 通过；本轮新增的证据状态 pytest 4/4、工具钩子定向用例通过。全量 Python pytest 当前被环境缺少 `langgraph` 的既有 SSH 集成用例阻断（确认模式按 fail-closed 策略拒绝命令），未以放宽安全策略换绿。
+- [x] 门禁与运行态：Vitest 1340、typecheck、lint、cargo check 通过；本轮新增的证据状态 pytest 4/4、工具钩子定向用例通过。全量 Python pytest 当前被环境缺少 `langgraph` 的既有 SSH 集成用例阻断（确认模式按 fail-closed 策略拒绝命令），未以放宽安全策略换绿。
 - [ ] 原生 Tauri 手工验收：保存 SSH profile 的成功、缺失、端口不匹配；同服务器历史筛选；`firewall-cmd --list-all`、`dnf search`、写操作的单卡 FIFO；教学模式下知识检索与明确教学的渲染分流。
 
 ### 2026-09-04 教学模式知识检索与教学输出边界（本轮）

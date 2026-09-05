@@ -6,6 +6,14 @@
 
 ---
 
+### 37.118 M1-1 发行版事实输入（2026-09-05 ✅，M1-2 仍开放）
+
+**根因**：Agent 已有一次性 `os-release` 探测，却只保留 `PRETTY_NAME`。它是展示文字，不是稳定的系统接口；由“Ubuntu/CentOS”等名字猜 apt/yum 会在派生版、改名发行版或旧 sidecar 协商时产生错误命令。
+
+**实现**：`env_probe.py` 只从 `ID / ID_LIKE` 推导 `rhel / debian / arch / suse / alpine / unknown`，在既有 RPC 与会话缓存中一并回传。`<environment>` 仅在 family 非 unknown 时追加该字段；热更新前端短暂遇到旧 sidecar 缺字段也降级为 unknown，不中断 Agent 请求，更不从 `PRETTY_NAME` 伪推断。RHEL-like、Debian 派生和未知发行版均有纯解析测试。
+
+**验证与下一步**：环境探测 pytest **20 passed**、Agent transport vitest **45 passed**、全量 Vitest **1340 passed**、typecheck/lint 通过。M1-1 只给 Agent 提供可靠事实输入；M1-2 的命令候选 family 过滤与状态栏展示尚未接线，须在真实 SSH 发行版验收。M0 重启围栏经源码复核已具备 5 次上限、指数退避、60 秒冷却与 stop 取消，不能重复造轮子；后续优先原生 Tauri 证据或 durable execution 专项，而非重写已有机制。
+
 ### 37.117 T10.1 去除文本置信度伪造（2026-09-05 ✅ 会话证据状态交付，回答级引用仍开放）
 
 **根因与决策**：旧前端把模型回复文本送入 `confidence.score`，后端与 TS 降级再用 man/doc/Linux 等关键词拼出“证据”和分数；这既不证明模型调用过来源，也在 sidecar 不可用时制造结论。现有协议没有“回答主张 → 引用片段”绑定，故不能诚实地给任意回答标注事实概率。本轮删除该评分路径，改为明确的**会话证据状态**。

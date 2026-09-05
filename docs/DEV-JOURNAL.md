@@ -6,6 +6,16 @@
 
 ---
 
+### 37.118 M1-1：发行版事实输入进入 Agent 上下文（2026-09-05 ✅）
+
+**调研与边界**：方案书 M1 要解决 RHEL/Debian 命令混用。现有 `system.probe_env` 已通过一次 SSH `os-release` 往返取得环境，却只传了 `PRETTY_NAME`；该字段用于显示，不能作为包管理器决策来源。M0 的 sidecar 重启风暴防护也同时复核：源码已有 5 次上限、指数退避、60 秒稳定运行冷却重置与 stop 取消，因此不重复改已存在的机制。
+
+**实现**：新增最小纯函数链 `os-release → ID / ID_LIKE → os_family`。支持 rhel、debian、arch、suse、alpine；未知保持 `unknown`。现有 RPC、缓存、前端 `EnvironmentProbe` 与 `<environment>` 同步承载该事实；只有非 unknown family 才给 Agent，且老 sidecar 暂缺新字段时安全降级，不根据 `PRETTY_NAME` 补猜。
+
+**验证**：先新增三项 parser 红测（RHEL `ID_LIKE`、Debian 派生、未知系统），确认实现前均因接口不存在失败；实现后 Python **20 passed**。`transport.test.ts` 增加 family 与旧 sidecar 缺字段回归，**45 passed**；`pnpm typecheck`、`pnpm lint` 与完整 Vitest **130 files / 1340 tests** 均通过。
+
+**复盘**：产品路线中的“发行版感知”不能被一条漂亮的 `PRETTY_NAME` 冒充。M1-1 是 Agent 选择命令的事实基础，不等于 M1 全量完成；命令补全 family 过滤、状态栏展示与真实 SSH 发行版验收仍需单独完成。先完成可验证的数据契约，比把未接线的 UI 和猜测逻辑一并塞入更安全。
+
 ### 37.117 T10.1：以真实会话证据取代模型文本置信度（2026-09-05 ✅）
 
 **问题与调研**：用户要求“不要假的东西”。逐条追踪发现旧 `ConfidenceMarker` 只把助手文本传给 `confidence.score`；`rpc_methods.py` 与 TS fallback 用关键词推断 man/文档/术语并构造 evidence，完全没有证明工具或知识库曾被实际调用。`EvidenceTracker` 又主要从 SSH 直连路径记账，知识工具虽然发出了 UI 生命周期事件，却不能进入证据统计。没有回答主张与出处片段的绑定时，任何“0.x 置信度”都只是外观，不是事实判断。
