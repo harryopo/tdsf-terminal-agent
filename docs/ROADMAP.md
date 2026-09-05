@@ -10,9 +10,10 @@
 - [x] 删除旧的 OSC 7 自动教学触发器；教学命令卡只在用户点击且精确匹配真实终端结果后继续讲解。
 - [x] 实际启动 Tauri 开发端：桌面进程和 Python sidecar ready，sidecar 注册 121 个 RPC、知识库保有 3969 条官方条目；这只是启动取证，不是 SSH/xterm/UI 原生回归。
 - [x] SSH Agent 工具只在明确 `exit_code == 0` 时报告成功；非零、缺失或非法退出码进入 error/audit/evidence，`test_tools.py` 185 项通过。
+- [x] W3 SQLite operation 账本底座：命令原文不落盘，状态机拒绝非法跳转，sidecar 重启将 in-flight 操作转为 `indeterminate`；`test_project_service.py` 40 项通过。
 - [ ] W0：以保存的 SSH profile 完成连接、历史重开、确认 FIFO、知识库工具事件、教学成功/失败/超时及 leaf 隔离的原生取证。
 - [ ] W2 后续：将内存 terminal block 演进为附加式 `CommandCompletion`，覆盖重复 OSC、乱序、重连和跨 leaf。
-- [ ] W3：在任何远端写操作前实现 SQLite `operation_id/intent_id` 状态机、崩溃恢复为 `indeterminate` 与幂等测试。
+- [ ] W3：将 SQLite `operation_id/intent_id` 状态机接入审批和 Rust SSH 派发，覆盖派发异常、非零退出码、重启后只读验证及幂等测试。
 
 ### 2026-09-05 Agent 架构事实校准
 

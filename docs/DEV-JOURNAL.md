@@ -6,6 +6,12 @@
 
 ---
 
+### 37.125 W3 durable operation SQLite 底座（2026-09-06 ✅，派发接入仍开放）
+
+**实现**：`project_service` 从 5 表扩展为 6 表，新增不保存原始命令的 `operations` 账本：只存 intent、目标身份、命令 hash、状态、时间、退出码、错误码与元数据。状态转换只允许 `created → awaiting_approval/approved → dispatching → dispatched → succeeded/failed`；终态和 `indeterminate` 不允许自动复活。服务启动把 `dispatching/dispatched` 原子转为 `indeterminate + sidecar_restarted`。
+
+**验证与边界**：先写非法跳转、命令不落盘、重启恢复的红灯测试；实现后 `test_project_service.py` **40 passed**，`py_compile` 通过。本提交尚未把审批或 Rust SSH 派发调用接入该账本，因此不会伪称已实现跨重启幂等执行。
+
 ### 37.124 SSH 非零/未知退出码不再伪装成功（2026-09-06 ✅）
 
 **发现**：`execute_via_ssh` 只要 Rust bridge 返回普通字典，就统一返回 `success` 并记录 `completed` 证据；真实的非零 `exit_code` 与缺失退出码因此会污染 Agent 的失败计数、工具进度和证据面板。

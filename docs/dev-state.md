@@ -6,6 +6,12 @@
 
 ---
 
+### 37.125 W3 durable operation 持久账本底座（2026-09-06 ✅，尚未接入派发）
+
+**已实现**：同一 WAL SQLite 服务新增 `operations` 表，记录不含原文命令的 intent/目标/命令 hash 与状态机。合法状态转换受代码白名单约束；sidecar 初始化会将遗留 `dispatching/dispatched` 转为 `indeterminate`，不自动重发。
+
+**验证与边界**：数据库测试覆盖身份不泄漏、非法跳转和重启恢复，`test_project_service.py` **40 passed**、`py_compile` 通过。当前还没有在 `execute_via_ssh` 的创建、批准、派发和结果分支中调用账本；下一步必须先补该链路的失败/异常测试，再接入，不能把已建表说成 durable execution 完成。
+
 ### 37.124 SSH 退出码成为 Agent 结果的硬边界（2026-09-06 ✅）
 
 **问题**：Python `execute_via_ssh` 过去把桥接层返回的所有普通结果包装成 `success`，即使真实命令的 `exit_code != 0` 或根本没有退出码。这会让 ToolCallLimitHook、工具进度、会话证据和后续模型回答基于错误的“已完成”事实。
