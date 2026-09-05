@@ -964,6 +964,35 @@ class TestApprovalFIFO:
         assert self._created_ids(mock_event_bus) == [first.id, second.id]
         assert second.deadline is not None
 
+    def test_execution_gate_releases_next_only_after_execution_finished(
+        self,
+        mock_event_bus,
+    ):
+        """命令获批不等于已完成：下一审批必须等执行 finally 释放队首。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+        first = service.request_approval(
+            title="first command",
+            description="d",
+            session_id="sess-exec",
+            execution_gate=True,
+        )
+        second = service.request_approval(
+            title="second command",
+            description="d",
+            session_id="sess-exec",
+            execution_gate=True,
+        )
+
+        assert service.approve(first.id) is first
+        assert service._active_approvals["sess-exec"] == first.id
+        assert second.deadline is None
+        assert self._created_ids(mock_event_bus) == [first.id]
+
+        assert service.complete_execution(first.id) is first
+        assert service._active_approvals["sess-exec"] == second.id
+        assert second.deadline is not None
+        assert self._created_ids(mock_event_bus) == [first.id, second.id]
+
     def test_queued_approval_timeout_starts_only_when_activated(self, mock_event_bus):
         """排队时间不消耗审批超时，队头超时后下一条才开始计时。"""
         service = NeedsYouService(

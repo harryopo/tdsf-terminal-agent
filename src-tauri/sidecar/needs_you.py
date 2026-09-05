@@ -178,6 +178,9 @@ class NeedsYouRequest:
     _activated_event: threading.Event = field(
         default_factory=threading.Event, init=False, repr=False
     )
+    # execution_gate=True 的命令审批在用户批准后仍占用本 session 队首，
+    # 直到调用方的执行 finally 显式释放，避免下一条命令在前一条运行时获批。
+    _execution_pending: bool = field(default=False, init=False, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         """转为 dict（用于 JSON 序列化 / event_bus payload）"""
@@ -205,8 +208,8 @@ class NeedsYouRequest:
 
     @property
     def is_resolved(self) -> bool:
-        """是否已解决（包含 approved / rejected / resolved / timeout / cancelled）"""
-        return self.status != NeedsYouStatus.PENDING
+        """是否已解决（execution_gate 的 approved 要等待执行结束）。"""
+        return self.status != NeedsYouStatus.PENDING and not self._execution_pending
 
 
 # ============================================================================
@@ -644,7 +647,17 @@ class NeedsYouService:
                 self._stats["total_responded"] += 1
                 self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
                 self._stats["by_status"][new_status.value] += 1
-                promoted = self._finish_approval_locked(req)
+                # 命令型审批只代表“允许开始执行”；保持 session 队首直到工具
+                # 在 finally 中报告执行结束。普通 approval 保持原来的即时完成语义。
+                if (
+                    req.type == NeedsYouType.APPROVAL
+                    and new_status == NeedsYouStatus.APPROVED
+                    and bool(req.extra.get("execution_gate"))
+                ):
+                    req._execution_pending = True
+                    promoted = None
+                else:
+                    promoted = self._finish_approval_locked(req)
 
             logger.info(
                 f"needs_you responded: id={req_id}, status={new_status.value}, "
@@ -678,6 +691,45 @@ class NeedsYouService:
             response={"approved": False, "reason": reason},
             responded_by=responded_by,
         )
+
+    def complete_execution(self, req_id: str) -> NeedsYouRequest | None:
+        """释放 execution_gate 审批的队首，并按 FIFO 激活下一条。
+
+        调用方必须在 Rust SSH 调用的 ``finally`` 中调用：无论命令成功、失败、
+        会话校验失败还是 IPC 抛异常，队列都不能永久卡住。
+        """
+        with self._transition_lock:
+            with self._lock:
+                req = self._requests.get(req_id)
+                if req is None:
+                    logger.warning(
+                        f"needs_you.complete_execution: id={req_id} not found"
+                    )
+                    return None
+                if (
+                    req.type != NeedsYouType.APPROVAL
+                    or req.status != NeedsYouStatus.APPROVED
+                    or not req._execution_pending
+                    or self._active_approvals.get(req.session_id) != req.id
+                ):
+                    logger.warning(
+                        f"needs_you.complete_execution: id={req_id} is not an active "
+                        "approved execution gate"
+                    )
+                    return None
+
+                req._execution_pending = False
+                promoted = self._finish_approval_locked(req)
+
+            logger.info(f"needs_you execution finished: id={req_id}")
+            self._emit_event(event_name="execution_finished", req=req)
+            if promoted is not None:
+                self._emit_event(
+                    event_name="created",
+                    req=promoted,
+                    extra_payload={"timeout": promoted._approval_timeout},
+                )
+        return req
 
     def wait_for_response(
         self,
@@ -1045,7 +1097,7 @@ class NeedsYouService:
 
         事件 payload 结构：
         {
-            "event": "created" | "responded" | "cancelled" | "timeout",
+            "event": "created" | "responded" | "execution_finished" | "cancelled" | "timeout",
             "request": <NeedsYouRequest.to_dict()>,
             **extra_payload,
         }

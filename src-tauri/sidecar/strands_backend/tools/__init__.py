@@ -720,7 +720,7 @@ def request_approval_and_wait(
     """发起审批请求并阻塞等待用户响应（P1-1，真实 HITL 闭环）
 
     Task 3.1: 载荷扩展四层卡面字段（semantic / explanation / impact / risk_l），
-    经 request.extra 与 emit_needs_you 事件双通道透传前端。
+    由 needs_you 服务在请求成为队首时通过 request.extra 透传前端。
     Task 3.3: 超时由 needs_you 服务统一管理（默认 300s，超时 TIMEOUT 状态）。
 
     之前的实现只 emit_needs_you 事件 + 返回 needs_approval，前端"批准"
@@ -780,42 +780,31 @@ def request_approval_and_wait(
             risk=risk_result,
             tool_name=tool_name,
             agent=ctx.agent_name,
+            execution_gate=True,
         )
     except Exception as e:
         logger.exception(f"request_approval failed: {e}")
         return None
 
-    # 前端审批卡片事件（字段对齐 AgentPanel 解析：type/detail/id；Task 3.1
-    # 四层字段随事件同步透传，前端可走事件或 request.extra 任一通道）
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_needs_you(
-                needs_type="approval",
-                title=req.title,
-                description=req.description,
-                session_id=ctx.session_id or None,
-                source=req.source,
-                priority="high",
-                id=req.id,
-                type="approval",
-                detail=req.description,
-                command=command,
-                semantic=semantic or None,
-                explanation=explanation or None,
-                impact=impact,
-                risk_level=f"L{risk_l}",
-                risk_l=risk_l,
-                agent=ctx.agent_name,
-                tool_name=tool_name,
-            )
-        except Exception as e:
-            logger.debug(f"emit_needs_you failed: {e}")
-
+    # 只有 needs_you 服务能在队首激活时发 created；工具层不得为排队项补发事件。
     logger.info(
         f"approval requested: id={req.id}, session={ctx.session_id}, "
         f"tool={tool_name}, risk_l={risk_l}, command={command[:80]}"
     )
     return service.wait_for_response(req.id)
+
+
+def complete_approval_execution(req: Any | None) -> None:
+    """Release an approved command gate after its real execution path exits."""
+    req_id = getattr(req, "id", None)
+    if not isinstance(req_id, str) or not req_id:
+        return
+    try:
+        from needs_you import get_global_service
+
+        get_global_service().complete_execution(req_id)
+    except Exception as e:  # noqa: BLE001 - completion must not mask tool result
+        logger.exception(f"approval execution completion failed: id={req_id}, error={e}")
 
 
 def execute_via_ssh(
@@ -931,6 +920,7 @@ def execute_via_ssh(
 
     # 2. confirm → needs_you 审批（真实 HITL 闭环；skip_approval 时跳过——
     #    多行命令已整条审批通过）
+    approved_req: Any | None = None
     if decision == "confirm" and not skip_approval:
         req = request_approval_and_wait(
             ctx, command, risk, tool_name,
@@ -954,6 +944,7 @@ def execute_via_ssh(
                 f"execute_via_ssh approved by user: tool={tool_name}, "
                 f"command={command[:80]}"
             )
+            approved_req = req
             # 用户批准 → 继续执行（不再重复检测）
         elif req.status == NeedsYouStatus.REJECTED:
             # Task 3.2 双轨反馈之「用户拒绝」轨：agent 收到规范文案 + 用户附言，
@@ -1008,6 +999,10 @@ def execute_via_ssh(
                            "如仍需执行请重新发起并等待用户审批。",
             }
 
+    def _complete_after_execution(result: dict[str, Any]) -> dict[str, Any]:
+        complete_approval_execution(approved_req)
+        return result
+
     # 3. 会话校验（Task 3.3 → P2 #42 放宽，2026-09-01）：
     #    原规则：目标会话必须 == 激活终端会话（ctx.ssh_session_id）。
     #    放宽后（多主机运维）：目标会话只要是 Rust SshState 里**真实存在且
@@ -1056,7 +1051,7 @@ def execute_via_ssh(
                     agent=ctx.agent_name,
                     reason=f"target session {ssh_session_id} state={state_desc}",
                 )
-                return {
+                return _complete_after_execution({
                     "status": "command_blocked",
                     "command": command,
                     "ssh_session_id": session_id,
@@ -1067,7 +1062,7 @@ def execute_via_ssh(
                         f"（state={state_desc}）。请先用 ssh_list_sessions 确认 "
                         f"state=connected 的会话，再对该会话执行命令。"
                     ),
-                }
+                })
             target_endpoint = session_endpoint(target)
         # live_sessions is None（查询失败/不可识别）→ 落入下方旧严格校验
     if not live_checked:
@@ -1092,7 +1087,7 @@ def execute_via_ssh(
                         agent=ctx.agent_name,
                         reason=f"target session {ssh_session_id} != active {ctx.ssh_session_id}",
                     )
-                    return {
+                    return _complete_after_execution({
                         "status": "command_blocked",
                         "command": command,
                         "ssh_session_id": session_id,
@@ -1103,7 +1098,7 @@ def execute_via_ssh(
                             f"host 校验失败——目标会话 {ssh_session_id} 不是当前激活"
                             f"终端的会话。请在 {ssh_host} 对应的终端窗口执行。"
                         ),
-                    }
+                    })
             except (ValueError, TypeError):
                 # 会话 id 非 int-convertible：交给下方 invalid session_id 路径
                 pass
@@ -1114,13 +1109,13 @@ def execute_via_ssh(
             f"execute_via_ssh unavailable (no rust_bridge): tool={tool_name}, "
             f"command={command[:80]}"
         )
-        return {
+        return _complete_after_execution({
             "status": "unavailable",
             "command": command,
             "ssh_session_id": session_id,
             "reason": "rust_bridge_not_injected",
             "message": "RustBridge 未注入，工具无法调用 Rust 后端",
-        }
+        })
 
     # 5. 通过 RustBridge 调 Rust 后端
     # TDSF 魔改 2026-07-30 P0-C4: 对齐 Rust 命令名约定（ssh_command），
@@ -1136,25 +1131,25 @@ def execute_via_ssh(
         logger.error(
             f"execute_via_ssh invalid session_id: id={session_id!r}, error={e}"
         )
-        return {
+        return _complete_after_execution({
             "status": "error",
             "command": command,
             "ssh_session_id": session_id,
             "error": f"invalid session_id (expect int-convertible): {session_id!r}",
-        }
+        })
 
     if session_id_int <= 0:
         logger.warning(
             f"execute_via_ssh no active ssh session: tool={tool_name}, "
             f"command={command[:80]}"
         )
-        return {
+        return _complete_after_execution({
             "status": "unavailable",
             "command": command,
             "ssh_session_id": session_id,
             "reason": "no_ssh_session",
             "message": "无活跃 SSH 会话，请先连接 SSH 再调用运维工具",
-        }
+        })
 
     try:
         result = ctx.rust_bridge.ipc_invoke("ssh_command", {
@@ -1167,22 +1162,22 @@ def execute_via_ssh(
             f"execute_via_ssh ipc_invoke exception: tool={tool_name}, "
             f"command={command[:80]}, error={e}"
         )
-        return {
+        return _complete_after_execution({
             "status": "error",
             "command": command,
             "ssh_session_id": session_id,
             "error": f"ipc_invoke 异常: {e}",
-        }
+        })
 
     # 4. 整理返回结果
     if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
-        return {
+        return _complete_after_execution({
             "status": result.get("status", "error"),
             "command": command,
             "ssh_session_id": session_id,
             "reason": result.get("reason", ""),
             "error": result.get("error", result.get("message", "")),
-        }
+        })
 
     # Rust 后端返回的成功结果（假设结构：{ok, output, exit_code, duration}）
     # TDSF 修复 2026-08-01 (P1-v5-5): 返回前统一脱敏，防止密码/密钥/token
@@ -1212,7 +1207,7 @@ def execute_via_ssh(
         agent=ctx.agent_name,
         source="strands_tool",
     )
-    return {
+    return _complete_after_execution({
         "status": "success",
         "command": command,
         "ssh_session_id": session_id,
@@ -1222,7 +1217,7 @@ def execute_via_ssh(
         "output": output_text,
         "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
-    }
+    })
 
 
 def _audit_append(**entry: Any) -> None:

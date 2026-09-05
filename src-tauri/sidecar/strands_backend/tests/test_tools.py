@@ -492,6 +492,105 @@ class TestSshCommandTool(unittest.TestCase):
         finally:
             stop_global_service()
 
+    @patch(
+        "strands_backend.tools.assess_command",
+        return_value={
+            "decision": "confirm",
+            "risk": {"level": "L4", "high_risk": True},
+            "impact": {"segments": [], "max_risk_l": 4},
+            "risk_l": 4,
+        },
+    )
+    def test_second_approval_waits_for_first_command_to_finish(self, _assess):
+        """同一 Agent 会话内，第二条命令不能在第一条 SSH 运行中获得审批。"""
+        import threading
+        import time
+
+        from needs_you import (
+            get_global_service,
+            reset_for_test,
+            set_event_bus,
+            start_global_service,
+            stop_global_service,
+        )
+        from strands_backend.tools import execute_via_ssh
+
+        reset_for_test()
+        bus = make_mock_event_bus()
+        set_event_bus(bus)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        bridge = make_mock_rust_bridge()
+
+        def invoke(method, payload):
+            assert method == "ssh_command"
+            if payload["command"] == "rm -rf /tmp/first":
+                first_started.set()
+                assert release_first.wait(3.0)
+            return {"ok": True, "output": "done", "exit_code": 0, "duration": 0.1}
+
+        bridge.ipc_invoke.side_effect = invoke
+        ctx = make_ctx(
+            event_bus=bus,
+            rust_bridge=bridge,
+            session_id="approval-fifo-session",
+        )
+        results: dict[str, dict[str, Any]] = {}
+
+        def run(name: str, command: str):
+            results[name] = execute_via_ssh(ctx, command)
+
+        start_global_service()
+        try:
+            first_thread = threading.Thread(
+                target=run,
+                args=("first", "rm -rf /tmp/first"),
+            )
+            first_thread.start()
+            for _ in range(100):
+                requests = get_global_service().list_all()
+                if len(requests) == 1:
+                    break
+                time.sleep(0.01)
+            assert len(requests) == 1
+            first_id = requests[0]["id"]
+
+            second_thread = threading.Thread(
+                target=run,
+                args=("second", "rm -rf /tmp/second"),
+            )
+            second_thread.start()
+            for _ in range(100):
+                requests = get_global_service().list_all()
+                if len(requests) == 2:
+                    break
+                time.sleep(0.01)
+            assert len(requests) == 2
+            second_id = next(req["id"] for req in requests if req["id"] != first_id)
+
+            # 服务是唯一的 created 来源；排队项没有工具层的额外伪 created 事件。
+            assert bus.emit_needs_you.call_count == 1
+            assert get_global_service().approve(first_id) is not None
+            assert first_started.wait(3.0)
+            assert get_global_service()._active_approvals["approval-fifo-session"] == first_id
+            assert get_global_service().get(second_id)["deadline"] is None
+
+            release_first.set()
+            first_thread.join(timeout=5.0)
+            assert not first_thread.is_alive()
+            assert results["first"]["status"] == "success"
+
+            assert get_global_service()._active_approvals["approval-fifo-session"] == second_id
+            assert get_global_service().get(second_id)["deadline"] is not None
+            assert get_global_service().approve(second_id) is not None
+            second_thread.join(timeout=5.0)
+            assert not second_thread.is_alive()
+            assert results["second"]["status"] == "success"
+        finally:
+            release_first.set()
+            stop_global_service()
+            reset_for_test()
+
 
 # ============================================================================
 # remote_file 工具测试
