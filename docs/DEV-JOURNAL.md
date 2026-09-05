@@ -6,6 +6,14 @@
 
 ---
 
+### 37.120 真实稳定性实施总方案重建（2026-09-05 ✅）
+
+**结论**：不再把历史方案、调研功能表、单测与原生端到端混为一类。新增 `docs/agent/Agent真实稳定性实施总方案-2026-09-05.md`，以“可追溯输入、单一执行权、可观测结果、分层验证、诚实降级”为完成条件；`方案书-v2.0.md` 保留产品方向，不覆盖用户尚未提交的方案修订。
+
+**路线**：W0 先保留 Tauri/SSH 原生验收证据；W1 完成发行版 family 候选过滤；W2 收敛 OSC/终端块到成功执行历史和教学结果协议；W3 用 operation/intent 状态机做 durable execution，派发后中断一律 `indeterminate` 而不自动重试写操作；W4 再做回答主张→来源绑定与确定性输出安全。
+
+**取舍**：当前生产入口仍是一个 Strands main Agent，故不重接已废弃的 LangGraph 或堆叠假多 Agent。借鉴 Strands 生命周期钩子/trace、LangGraph 的持久恢复边界、OpenAI Agents 的 guardrail 原则，但落到现有 event log 与最小 SQLite operation 账本。CUA 当前只暴露浏览器标签，不能操控 Tauri 原生窗口、钥匙串、SSH/xterm，因此浏览器检查不再冒充 W0 原生验收。
+
 ### 37.119 审批决议不能抢在 SSH 执行完成前推进（2026-09-05 ✅）
 
 **问题**：已有 approval FIFO 只串行“等待用户点击”。`respond(approved)` 会立即释放队首并发送下一条 created；工具层还对排队请求额外直发 created。前端即便只取列表第一项，也会在第一条 SSH 运行时让第二条进入可批准状态，违背用户“逐条确认，不要混淆先后”的要求。
