@@ -26,11 +26,13 @@ import {
   getLeafRemoteCwd,
   getLeafSshSession,
   getCachedRemoteCommands,
+  getCachedRemoteOsInfo,
   mergeCandidates,
   remoteCarapaceInstalled,
   remoteParamComplete,
   type CarapaceCandidate,
 } from '@/lib/param-complete-client';
+import { commandSupportsFamily, type OsFamily } from '@/lib/os-family';
 import {
   COMMAND_ABBREVS,
   findAbbrevSuggestions,
@@ -232,10 +234,13 @@ export function filterCommandItems(
   items: readonly SuggestionResult[],
   cmds: Set<string> | null,
   limit = 5,
+  family: OsFamily = 'unknown',
 ): SuggestionResult[] {
-  if (!cmds) return items.slice(0, limit);
   return items
-    .filter((it) => it.source === 'history' || cmds.has(it.command))
+    .filter((it) =>
+      it.source === 'history' ||
+      (commandSupportsFamily(it.command, family) && (cmds === null || cmds.has(it.command))),
+    )
     .slice(0, limit);
 }
 
@@ -253,9 +258,12 @@ export function shouldTriggerTailParams(
   hasDataSrc: boolean,
   remoteCmds: Set<string> | null,
   engineHit: boolean,
+  family: OsFamily = 'unknown',
 ): boolean {
   if (!hasDataSrc) return false;
-  if (env === 'linux') return remoteCmds !== null && remoteCmds.has(token);
+  if (env === 'linux') {
+    return remoteCmds !== null && remoteCmds.has(token) && commandSupportsFamily(token, family);
+  }
   return engineHit;
 }
 
@@ -356,6 +364,8 @@ async function loadParamPredictions(
   // 的命令返回空），tldr/Fig 全跳过 → 不弹假参数。
   // 命令集未拉到（null，连接初期/失败）→ 不过滤，避免 ls/git 等正常场景失效。
   const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+  const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
+  if (!commandSupportsFamily(cmd, family)) return [];
   const remoteGate = cmds === null || cmds.has(cmd);
   const merged: SuggestionResult[] = [];
   const seen = new Set<string>();
@@ -442,7 +452,8 @@ async function updatePredictions(leafId: number): Promise<void> {
   if (isLinux) {
     const sessionId = getLeafSshSession(leafId);
     const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
-    items = filterCommandItems(items, cmds);
+    const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
+    items = filterCommandItems(items, cmds, 5, family);
   }
 
   // P2 #13 的弹窗展示统一入口（光标像素坐标在按键后 xterm 已刷新）
@@ -479,6 +490,10 @@ async function updatePredictions(leafId: number): Promise<void> {
     env === 'linux' && sessionId !== null
       ? getCachedRemoteCommands(sessionId)
       : null;
+  const family =
+    env === 'linux' && sessionId !== null
+      ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown'
+      : 'unknown';
   const hasParamSource = shouldTriggerTailParams(
     env,
     token,
@@ -486,6 +501,7 @@ async function updatePredictions(leafId: number): Promise<void> {
       Object.prototype.hasOwnProperty.call(COMMAND_ABBREVS, token),
     remoteCmds,
     engineHit,
+    family,
   );
   if (hasParamSource) {
     // 加尾空格使 buildParamRequest 的 current=''（全量参数候选）；

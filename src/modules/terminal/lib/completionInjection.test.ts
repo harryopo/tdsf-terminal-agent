@@ -346,6 +346,31 @@ describe("filterCommandItems（远端命令全集过滤）", () => {
     expect(out.map((it) => it.command)).toEqual(["c0", "c1", "c2", "c3", "c4"]);
   });
 
+  it("known family hides only a static command exclusive to another family", () => {
+    const items = [
+      cmdItem("apt", "dictionary"),
+      cmdItem("dnf", "dictionary"),
+      cmdItem("ssh", "dictionary"),
+      cmdItem("apt", "history"),
+    ];
+    const cmds = new Set(["apt", "dnf", "ssh"]);
+
+    const out = filterCommandItems(items, cmds, 5, "rhel");
+    expect(out.map((it) => `${it.source}:${it.command}`)).toEqual([
+      "dictionary:dnf",
+      "dictionary:ssh",
+      "history:apt",
+    ]);
+  });
+
+  it("unknown family fails open even before the remote command cache is ready", () => {
+    const items = [cmdItem("apt", "dictionary"), cmdItem("dnf", "dictionary")];
+    expect(filterCommandItems(items, null, 5, "unknown").map((it) => it.command)).toEqual([
+      "apt",
+      "dnf",
+    ]);
+  });
+
   it("过滤后超过 5 → 截 5", () => {
     const items = Array.from({ length: 10 }, (_, i) => cmdItem(`c${i}`, "fuzzy"));
     const cmds = new Set(items.map((it) => it.command));
@@ -358,6 +383,10 @@ describe("shouldTriggerTailParams（尾部触发的存在性门禁）", () => {
 
   it("linux + 远端有该命令 + 有数据源 → 触发（ls 场景）", () => {
     expect(shouldTriggerTailParams("linux", "ls", true, remoteCmds, true)).toBe(true);
+  });
+
+  it("linux + known incompatible family → does not trigger parameter prediction", () => {
+    expect(shouldTriggerTailParams("linux", "apt", true, new Set(["apt"]), true, "rhel")).toBe(false);
   });
 
   it("linux + 远端没有该命令 → 不触发（ag 场景：tldr 有参数数据但远端没装）", () => {

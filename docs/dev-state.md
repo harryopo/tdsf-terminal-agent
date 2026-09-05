@@ -6,6 +6,18 @@
 
 ---
 
+### 37.121 M1-2a 终端补全复用真实发行版事实（2026-09-05 ✅，状态栏与原生验收待完成）
+
+**问题与约束**：M1-1 已能从远端 `os-release` 得到 machine-readable `os_family`，但终端预测仍只按“是否是 Linux”处理，静态词典、tldr/Fig 参数会推荐明显不适用于当前发行版的命令。不能从 `PRETTY_NAME`、命令显示名或包管理器输出猜测；也不能把浏览器本地页当作 SSH 验收。
+
+**实现**：新增 `src/lib/os-family.ts`，只列出 `apt/dpkg/ufw/netplan`、`dnf/yum/firewall-cmd/subscription-manager`、`apk/pacman/zypper` 等明确互斥的命令。SSH 成功连接后并行预取既有 `system.probe_env` 与命令全集；`completionInjection` 在命令候选、尾部参数门禁和参数源加载三处读取同一 session 的 family。历史候选、未标注的跨发行版命令和 `unknown` 一律保留；探测失败、旧 sidecar 或 malformed 返回均回退 `unknown`，不猜测也不静默删候选。
+
+**验证**：先新增失败用例，再实现。定向 Vitest **94 passed**（家族契约、probe 缓存、RHEL/Debian/unknown 过滤及参数门禁）；`pnpm typecheck`、`pnpm lint`、`git diff --check` 通过；全量 Vitest **131 files / 1349 tests passed**；`pnpm run build:web` 通过。测试中既有的异常路径日志与 React `act` warning 不改变退出码。未做原生 Tauri/SSH，CUA 仍无原生窗口 surface；M1-2b 状态栏必须有真正的 reactive 数据流后再做，禁止先放“已识别”占位。
+
+**下一步**：先审计状态栏/连接状态的现有订阅边界，设计 session 切换时不会陈旧的最小 reactive probe 状态；随后做 W2 的 `CommandCompletion` 事件和只收录 `exit_code=0` 的历史契约。
+
+---
+
 ### 37.120 Agent 真实稳定性实施总方案（2026-09-05 ✅）
 
 **新真源**：`docs/agent/Agent真实稳定性实施总方案-2026-09-05.md`。它不替代 v2.0 产品方向，而把源码/测试、原生验收、历史方案和调研分层：没有 Tauri + SSH 证据的能力不得写成端到端完成。
