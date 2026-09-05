@@ -181,6 +181,9 @@ describe("CONTEXT_BLOCK_RE — 正则匹配", () => {
 const makeProbe = (over: Partial<EnvironmentProbe> = {}): EnvironmentProbe => ({
   ok: true,
   os_pretty_name: "CentOS Linux 7 (Core)",
+  os_id: "centos",
+  os_id_like: ["rhel", "fedora"],
+  os_family: "rhel",
   kernel: "3.10.0-1160.el7.x86_64",
   shell: "/bin/bash",
   source: "ssh",
@@ -211,6 +214,7 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
     expect(block).toContain("connection_mode: ssh");
     expect(block).toContain("ssh_target: root@192.168.45.130");
     expect(block).toContain("os_pretty_name: CentOS Linux 7 (Core)");
+    expect(block).toContain("os_family: rhel");
     expect(block).toContain("kernel: 3.10.0-1160.el7.x86_64");
     expect(block).toContain("cwd: /etc/nginx");
     expect(block).toContain("shell: /bin/bash");
@@ -239,6 +243,18 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
     expect(
       formatEnvironmentBlock(makeProbe({ ok: false }), makeLive()),
     ).toBeNull();
+  });
+
+  it("旧 sidecar 缺少 family 字段时不猜测发行版", () => {
+    const legacyProbe = {
+      ...makeProbe(),
+      os_id_like: undefined,
+      os_family: undefined,
+    } as unknown as EnvironmentProbe;
+    const block = formatEnvironmentBlock(legacyProbe, makeLive());
+    expect(block).toContain("os_id: centos");
+    expect(block).not.toContain("os_id_like:");
+    expect(block).not.toContain("os_family:");
   });
 
   it("字段全空的 probe 仍输出 connection_mode（环境口径兜底）", () => {

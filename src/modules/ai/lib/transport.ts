@@ -790,6 +790,13 @@ export function formatEnvironmentBlock(
     );
   }
   if (probe.os_pretty_name) lines.push(`os_pretty_name: ${probe.os_pretty_name}`);
+  if (probe.os_id) lines.push(`os_id: ${probe.os_id}`);
+  // A hot-reloaded frontend can briefly meet an older sidecar. Treat missing
+  // identity fields as unknown rather than throwing or inferring from display text.
+  const osIdLike = Array.isArray(probe.os_id_like) ? probe.os_id_like : [];
+  const osFamily = probe.os_family ?? "unknown";
+  if (osIdLike.length) lines.push(`os_id_like: ${osIdLike.join(" ")}`);
+  if (osFamily !== "unknown") lines.push(`os_family: ${osFamily}`);
   if (probe.kernel) lines.push(`kernel: ${probe.kernel}`);
   // none 态下 cwd 实为默认工作区路径（非终端 cwd），改用 workspace_path 标注
   if (live.cwd) {

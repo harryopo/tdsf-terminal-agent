@@ -202,6 +202,12 @@ export type Live = {
 export type EnvironmentProbe = {
   ok: boolean;
   os_pretty_name: string;
+  /** /etc/os-release ID；空值表示本地非 Linux 或探测降级。 */
+  os_id: string;
+  /** /etc/os-release ID_LIKE 按空格拆分，保留上游声明顺序。 */
+  os_id_like: string[];
+  /** 仅由 os-release ID/ID_LIKE 推导，未知时绝不猜包管理器。 */
+  os_family: "rhel" | "debian" | "arch" | "suse" | "alpine" | "unknown";
   kernel: string;
   shell: string;
   /** local = 本地探测 / ssh = 远端探测 / cache = 会话级缓存命中 */

@@ -51,6 +51,28 @@ class TestParseOsRelease:
         assert env_probe.parse_os_release_pretty_name('NAME="X"\nID=x\n') == ""
         assert env_probe.parse_os_release_pretty_name("") == ""
 
+    def test_classifies_rhel_from_id_like_when_id_is_generic(self):
+        info = env_probe.parse_os_release_info(
+            'PRETTY_NAME="Enterprise Linux"\nID=linux\nID_LIKE="rhel fedora"\n'
+        )
+        assert info == {
+            "os_pretty_name": "Enterprise Linux",
+            "os_id": "linux",
+            "os_id_like": ["rhel", "fedora"],
+            "os_family": "rhel",
+        }
+
+    def test_classifies_debian_derivative_from_id(self):
+        info = env_probe.parse_os_release_info(
+            'PRETTY_NAME="Linux Mint 22"\nID=linuxmint\nID_LIKE="ubuntu debian"\n'
+        )
+        assert info["os_id"] == "linuxmint"
+        assert info["os_family"] == "debian"
+
+    def test_keeps_unrecognised_distribution_unknown(self):
+        info = env_probe.parse_os_release_info('PRETTY_NAME="Void Linux"\nID=void\n')
+        assert info["os_family"] == "unknown"
+
 
 # ============================================================================
 # 合并命令输出解析
@@ -81,6 +103,9 @@ class TestParseProbeOutput:
     def test_empty_output(self):
         assert env_probe.parse_probe_output("") == {
             "os_pretty_name": "",
+            "os_id": "",
+            "os_id_like": [],
+            "os_family": "unknown",
             "kernel": "",
             "shell": "",
         }
@@ -135,6 +160,9 @@ class TestProbeRemote:
             data = env_probe.probe_remote(15)
         assert data == {
             "os_pretty_name": "Ubuntu 22.04.4 LTS",
+            "os_id": "",
+            "os_id_like": [],
+            "os_family": "unknown",
             "kernel": "5.15.0-100-generic",
             "shell": "/bin/bash",
         }

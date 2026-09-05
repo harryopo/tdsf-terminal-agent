@@ -8,7 +8,7 @@ env_probe.py — 系统环境探测（方案书 v3.1 §4.7 B1 终端感知，202
 
 JSON-RPC 方法（register_methods 注册，前端经 ipc_invoke 调用）：
 - system.probe_env: {session_id?, ssh_session_id?} →
-    {ok, os_pretty_name, kernel, shell, source}
+    {ok, os_pretty_name, os_id, os_id_like, os_family, kernel, shell, source}
   - ssh_session_id 非 None/0：经 RustBridge ``ssh_command`` 反向 RPC 在
     目标机执行**一次往返合并命令**（cat /etc/os-release + uname -r +
     echo $SHELL），复用现有 russh exec 通道（不引入新依赖）
@@ -48,40 +48,94 @@ _SHELL_MARK = "__TDSF_SHELL__"
 # 探测超时（秒）——经 RustBridge ssh_command 的 timeout 参数下发
 _PROBE_TIMEOUT_S = 10
 
+_OS_FAMILY_IDS: dict[str, set[str]] = {
+    "rhel": {"rhel", "centos", "rocky", "almalinux", "fedora", "ol", "amzn"},
+    "debian": {"debian", "ubuntu", "linuxmint", "mint", "kali", "pop", "deepin", "uos"},
+    "arch": {"arch", "manjaro", "endeavouros"},
+    "suse": {"sles"},
+    "alpine": {"alpine"},
+}
+
 
 # ============================================================================
 # os-release / 探测输出解析
 # ============================================================================
 
-def parse_os_release_pretty_name(os_release_text: str) -> str:
-    """从 /etc/os-release 文本解析 PRETTY_NAME（缺失返回 ""）
-
-    兼容引号形式：PRETTY_NAME="CentOS Linux 7 (Core)"
-    """
+def _os_release_values(os_release_text: str) -> dict[str, str]:
+    """Extract only the os-release keys this probe consumes."""
+    values: dict[str, str] = {}
     for line in os_release_text.splitlines():
         line = line.strip()
-        if line.startswith("PRETTY_NAME="):
-            value = line.split("=", 1)[1].strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            return value
-    return ""
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key not in {"PRETTY_NAME", "ID", "ID_LIKE"}:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        values[key] = value
+    return values
 
 
-def parse_probe_output(output: str) -> dict[str, str]:
-    """解析合并命令输出 → {os_pretty_name, kernel, shell}
+def classify_os_family(os_id: str, os_id_like: list[str]) -> str:
+    """Map stable os-release identifiers to the product's supported families.
+
+    Unknown remains unknown. The caller must not infer a package manager from
+    PRETTY_NAME because it is presentation text, not an operating-system API.
+    """
+    identifiers = [os_id, *os_id_like]
+    for family, known_ids in _OS_FAMILY_IDS.items():
+        if any(identifier in known_ids for identifier in identifiers):
+            return family
+    if any(identifier.startswith("opensuse") for identifier in identifiers):
+        return "suse"
+    return "unknown"
+
+
+def parse_os_release_info(os_release_text: str) -> dict[str, Any]:
+    """Parse display data and machine-readable distribution family."""
+    values = _os_release_values(os_release_text)
+    os_id = values.get("ID", "").strip().lower()
+    os_id_like = [
+        identifier.lower()
+        for identifier in values.get("ID_LIKE", "").split()
+        if identifier
+    ]
+    return {
+        "os_pretty_name": values.get("PRETTY_NAME", ""),
+        "os_id": os_id,
+        "os_id_like": os_id_like,
+        "os_family": classify_os_family(os_id, os_id_like),
+    }
+
+
+def parse_os_release_pretty_name(os_release_text: str) -> str:
+    """Compatibility helper for callers that only need presentation text."""
+    return str(parse_os_release_info(os_release_text)["os_pretty_name"])
+
+
+def parse_probe_output(output: str) -> dict[str, Any]:
+    """解析合并命令输出 → os-release identity, kernel, and shell.
 
     结构：os-release 全文 → _KERNEL_MARK → 内核版本 → _SHELL_MARK → $SHELL
     任一段缺失返回空字符串（调用方决定降级文案）。
     """
-    result = {"os_pretty_name": "", "kernel": "", "shell": ""}
+    result: dict[str, Any] = {
+        "os_pretty_name": "",
+        "os_id": "",
+        "os_id_like": [],
+        "os_family": "unknown",
+        "kernel": "",
+        "shell": "",
+    }
     if not output:
         return result
     # cat 失败时 os-release 段为空（stderr 已 2>/dev/null 吞掉）
     kernel_idx = output.find(_KERNEL_MARK)
     shell_idx = output.find(_SHELL_MARK)
     os_release_text = output[:kernel_idx] if kernel_idx >= 0 else ""
-    result["os_pretty_name"] = parse_os_release_pretty_name(os_release_text)
+    result.update(parse_os_release_info(os_release_text))
     if kernel_idx >= 0:
         after_kernel = output[kernel_idx + len(_KERNEL_MARK):]
         kernel_end = after_kernel.find(_SHELL_MARK)
@@ -96,7 +150,7 @@ def parse_probe_output(output: str) -> dict[str, str]:
 # 本地 / 远端探测
 # ============================================================================
 
-def probe_local() -> dict[str, str]:
+def probe_local() -> dict[str, Any]:
     """本地环境探测（前端无 SSH 会话活跃时）
 
     Linux：读 /etc/os-release（PRETTY_NAME）+ platform.release()
@@ -104,16 +158,21 @@ def probe_local() -> dict[str, str]:
     """
     import os
 
-    os_pretty_name = ""
+    os_info: dict[str, Any] = {
+        "os_pretty_name": "",
+        "os_id": "",
+        "os_id_like": [],
+        "os_family": "unknown",
+    }
     try:
         if platform.system() == "Linux":
             os_release = Path("/etc/os-release")
             if os_release.is_file():
-                os_pretty_name = parse_os_release_pretty_name(
+                os_info = parse_os_release_info(
                     os_release.read_text(encoding="utf-8", errors="replace")
                 )
-        if not os_pretty_name:
-            os_pretty_name = platform.platform()
+        if not os_info["os_pretty_name"]:
+            os_info["os_pretty_name"] = platform.platform()
     except Exception as e:  # noqa: BLE001 — 探测失败降级空值，不中断
         logger.warning(f"probe_env local os-release read failed (fallback: {e})")
     try:
@@ -121,7 +180,7 @@ def probe_local() -> dict[str, str]:
     except Exception:  # noqa: BLE001
         shell = ""
     return {
-        "os_pretty_name": os_pretty_name,
+        **os_info,
         "kernel": platform.release() or "",
         "shell": shell or "",
     }
@@ -178,7 +237,7 @@ def probe_env(
         ssh_session_id: SSH Rust session_id；None/0 = 本地模式
 
     Returns:
-        {ok, os_pretty_name, kernel, shell, source}
+        {ok, os_pretty_name, os_id, os_id_like, os_family, kernel, shell, source}
         - source: "ssh" / "local" / "cache"
         - 探测失败时 ok=False + 字段全空（前端静默省略 <environment> 分区）
     """
@@ -202,6 +261,9 @@ def probe_env(
         return {
             "ok": False,
             "os_pretty_name": "",
+            "os_id": "",
+            "os_id_like": [],
+            "os_family": "unknown",
             "kernel": "",
             "shell": "",
             "source": source,
