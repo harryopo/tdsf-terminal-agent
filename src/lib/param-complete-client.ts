@@ -20,6 +20,7 @@
  * 输入流——参数预测是锦上添花，宁可无预测也不给错误预测或报错弹窗。
  */
 import { invoke } from '@tauri-apps/api/core';
+import { isOsFamily, type OsFamily } from './os-family';
 import { sshCommand } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
 
@@ -385,6 +386,51 @@ export async function fetchRemoteCommands(sessionId: number): Promise<Set<string
     return cmds;
   } catch (e) {
     console.warn('[param-complete] fetchRemoteCommands failed:', e);
+    return null;
+  }
+}
+
+export interface RemoteOsInfo {
+  family: OsFamily;
+  prettyName: string;
+}
+
+const remoteOsInfoCache = new Map<number, RemoteOsInfo>();
+
+/** Read a successfully probed remote OS family. Missing data means fail-open. */
+export function getCachedRemoteOsInfo(sessionId: number): RemoteOsInfo | null {
+  return remoteOsInfoCache.get(sessionId) ?? null;
+}
+
+export function invalidateRemoteOsInfo(sessionId: number): void {
+  remoteOsInfoCache.delete(sessionId);
+}
+
+/**
+ * Reuse the sidecar's authoritative os-release parser for terminal completion.
+ * A missing or old sidecar is deliberately not inferred from display text.
+ */
+export async function fetchRemoteOsInfo(sessionId: number): Promise<RemoteOsInfo | null> {
+  const cached = remoteOsInfoCache.get(sessionId);
+  if (cached) return cached;
+  try {
+    const result = await invoke<{
+      ok?: unknown;
+      os_family?: unknown;
+      os_pretty_name?: unknown;
+    }>('ipc_invoke', {
+      method: 'system.probe_env',
+      params: { sessionId: '', sshSessionId: sessionId },
+    });
+    if (result?.ok !== true || !isOsFamily(result.os_family)) return null;
+    const info: RemoteOsInfo = {
+      family: result.os_family,
+      prettyName: typeof result.os_pretty_name === 'string' ? result.os_pretty_name : '',
+    };
+    remoteOsInfoCache.set(sessionId, info);
+    return info;
+  } catch (e) {
+    console.warn('[param-complete] fetchRemoteOsInfo failed:', e);
     return null;
   }
 }

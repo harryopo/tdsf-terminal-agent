@@ -27,13 +27,16 @@ import {
   CARAPACE_YES_MARK,
   escapeShSingleQuote,
   fetchRemoteCommands,
+  fetchRemoteOsInfo,
   getCachedRemoteCommands,
+  getCachedRemoteOsInfo,
   getLeafCwd,
   getLeafRemoteCwd,
   getLeafSshSession,
   installRemoteCarapace,
   invalidateRemoteCarapaceCache,
   invalidateRemoteCommands,
+  invalidateRemoteOsInfo,
   mergeCandidates,
   parseCarapaceJson,
   REMOTE_COMMANDS_CMD,
@@ -386,6 +389,57 @@ describe('fetchRemoteCommands', () => {
     invalidateRemoteCommands(42);
     await fetchRemoteCommands(42);
     expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('fetchRemoteOsInfo', () => {
+  beforeEach(() => {
+    invalidateRemoteOsInfo(42);
+  });
+
+  it('uses the sidecar probe and caches a valid family result', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      ok: true,
+      os_family: 'debian',
+      os_pretty_name: 'Debian GNU/Linux 12',
+    });
+
+    await expect(fetchRemoteOsInfo(42)).resolves.toEqual({
+      family: 'debian',
+      prettyName: 'Debian GNU/Linux 12',
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('ipc_invoke', {
+      method: 'system.probe_env',
+      params: { sessionId: '', sshSessionId: 42 },
+    });
+    await fetchRemoteOsInfo(42);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not infer from a legacy or malformed sidecar result', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      ok: true,
+      os_family: 'ubuntu',
+      os_pretty_name: 'Ubuntu',
+    });
+
+    await expect(fetchRemoteOsInfo(42)).resolves.toBeNull();
+    expect(getCachedRemoteOsInfo(42)).toBeNull();
+  });
+
+  it('caches an explicit unknown family but retries transport failures', async () => {
+    mockInvoke.mockResolvedValueOnce({ ok: true, os_family: 'unknown' });
+    await expect(fetchRemoteOsInfo(42)).resolves.toEqual({
+      family: 'unknown',
+      prettyName: '',
+    });
+    expect(getCachedRemoteOsInfo(42)).toEqual({ family: 'unknown', prettyName: '' });
+
+    invalidateRemoteOsInfo(42);
+    mockInvoke.mockRejectedValueOnce(new Error('sidecar unavailable'));
+    await expect(fetchRemoteOsInfo(42)).resolves.toBeNull();
+    await fetchRemoteOsInfo(42);
+    expect(mockInvoke).toHaveBeenCalledTimes(3);
   });
 });
 

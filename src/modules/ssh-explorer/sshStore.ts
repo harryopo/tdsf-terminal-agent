@@ -37,7 +37,11 @@ import {
   type SftpEntry,
   joinRemotePath,
 } from '@/lib/sftp-bridge';
-import { fetchRemoteCommands, remoteCarapaceInstalled } from '@/lib/param-complete-client';
+import {
+  fetchRemoteCommands,
+  fetchRemoteOsInfo,
+  remoteCarapaceInstalled,
+} from '@/lib/param-complete-client';
 
 // TDSF 2026-08-28: SSH 会话的远端 carapace 检测状态（无弹窗设计，仅驱动小图标显隐）
 /** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装（键不存在 = 未检测） */
@@ -640,7 +644,10 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       // 而命令全集过滤是预测核心功能，与 badge 提示开关无关。
       const rustSessionId = get().sessions.find((s) => s.id === sessionId)
         ?.rustSessionId;
-      if (rustSessionId) void fetchRemoteCommands(rustSessionId);
+      if (rustSessionId) {
+        void fetchRemoteCommands(rustSessionId);
+        void fetchRemoteOsInfo(rustSessionId);
+      }
 
       return sessionId;
     } catch (e) {
