@@ -18,7 +18,6 @@ import {
 import {
   historyCommands,
   historyList,
-  historyRecord,
   historySuggest,
 } from "./lib/history";
 import type { BlockMode } from "./lib/modeMachine";
@@ -102,12 +101,8 @@ export default function ShellInput({
           setPendingRisk({ command: text, assessment });
           return;
         }
-        // L0/L1/L2 正常通过（低风险仅记录审计日志，可后续接 Python Sidecar）
-        historyRecord(text);
-        const first = text.trim().split(/\s+/)[0];
-        if (first && !commandsRef.current.includes(first)) {
-          commandsRef.current = [first, ...commandsRef.current];
-        }
+        // Prediction history is written only after TerminalBlock observes
+        // exitCode=0, never merely because the user submitted this input.
         cbRef.current.onSubmit(text);
       },
       onInterrupt: () => cbRef.current.onInterrupt(),
@@ -196,12 +191,8 @@ export default function ShellInput({
           assessment={pendingRisk.assessment}
           command={pendingRisk.command}
           onConfirm={() => {
-            // 用户确认 → 记录历史 + 写入 PTY
-            historyRecord(pendingRisk.command);
-            const first = pendingRisk.command.trim().split(/\s+/)[0];
-            if (first && !commandsRef.current.includes(first)) {
-              commandsRef.current = [first, ...commandsRef.current];
-            }
+            // Approval writes to PTY only; success history still waits for
+            // the terminal block to settle.
             cbRef.current.onSubmit(pendingRisk.command);
             setPendingRisk(null);
           }}

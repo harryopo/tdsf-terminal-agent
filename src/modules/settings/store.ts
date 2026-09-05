@@ -166,11 +166,9 @@ export type Preferences = {
   editorCustomFormatCommand: string;
   lspActivation: Record<string, LspActivation>;
   lspCustomServers: LspCustomServer[];
-  // TDSF 魔改 (P4-T4.3): Teach Agent OSC7 教学触发偏好
-  /** 是否启用 Teach Agent（OSC 7 命令教学，默认 true） */
+  // Teach Agent manual explanation preference
+  /** 是否显示失败命令的手动 AI 解释入口 */
   teachAgentEnabled: boolean;
-  /** Teach 触发降频阈值：每 N 条命令触发一次（合法值 1/2/3/5，默认 3） */
-  teachThreshold: number;
   // TDSF 魔改 2026-08-09: 服务器实时监控偏好
   /** 监控采集间隔（毫秒，合法值 2000/3000/5000/10000，默认 3000） */
   serverMonitorInterval: number;
@@ -269,9 +267,8 @@ const KEY_EDITOR_FORMATTER_BY_LANG = "editorFormatterByLang";
 const KEY_EDITOR_CUSTOM_FORMAT_COMMAND = "editorCustomFormatCommand";
 const KEY_LSP_ACTIVATION = "lspActivation";
 const KEY_LSP_CUSTOM_SERVERS = "lspCustomServers";
-// TDSF 魔改 (P4-T4.3): Teach Agent 偏好 key
+// Teach Agent manual-explanation preference key
 const KEY_TEACH_AGENT_ENABLED = "teachAgentEnabled";
-const KEY_TEACH_THRESHOLD = "teachThreshold";
 // TDSF 魔改 2026-08-09: 服务器监控 key
 const KEY_SERVER_MONITOR_INTERVAL = "serverMonitorInterval";
 // TDSF 2026-08-28: SSH 远端动态补全 key
@@ -301,10 +298,6 @@ export const TERMINAL_SCROLLBACK_MAX = 50_000;
 export const TERMINAL_SCROLLBACK_PRESETS = [
   500, 1000, 2000, 5000, 10_000, 25_000,
 ] as const;
-
-// TDSF 魔改 (P4-T4.3): Teach Agent 降频阈值预设
-export const TEACH_THRESHOLD_DEFAULT = 3;
-export const TEACH_THRESHOLD_PRESETS = [1, 2, 3, 5] as const;
 
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: "system",
@@ -361,9 +354,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorCustomFormatCommand: "",
   lspActivation: {},
   lspCustomServers: [],
-  // TDSF 魔改 (P4-T4.3): Teach Agent 默认偏好
+  // Manual error explanation is enabled by default.
   teachAgentEnabled: true,
-  teachThreshold: TEACH_THRESHOLD_DEFAULT,
   // TDSF 魔改 2026-08-09: 服务器监控默认偏好
   serverMonitorInterval: 3000,
   // TDSF 2026-08-28: SSH 远端动态补全默认开启提示（无弹窗设计，仅小图标）
@@ -561,13 +553,10 @@ export async function loadPreferences(): Promise<Preferences> {
     lspCustomServers:
       get<LspCustomServer[]>(KEY_LSP_CUSTOM_SERVERS) ??
       DEFAULT_PREFERENCES.lspCustomServers,
-    // TDSF 魔改 (P4-T4.3): Teach Agent 偏好读取
+    // Teach Agent manual-explanation preference
     teachAgentEnabled:
       get<boolean>(KEY_TEACH_AGENT_ENABLED) ??
       DEFAULT_PREFERENCES.teachAgentEnabled,
-    teachThreshold: coerceTeachThreshold(
-      get<number>(KEY_TEACH_THRESHOLD) ?? DEFAULT_PREFERENCES.teachThreshold,
-    ),
     // TDSF 魔改 2026-08-09: 服务器监控偏好读取
     serverMonitorInterval: coerceServerMonitorInterval(
       get<number>(KEY_SERVER_MONITOR_INTERVAL) ??
@@ -882,25 +871,8 @@ export async function setAgentNotifications(value: boolean): Promise<void> {
   await writePref(KEY_AGENT_NOTIFICATIONS, value);
 }
 
-// TDSF 魔改 (P4-T4.3): Teach Agent 偏好 setter + 校验函数
-
-/**
- * 校验 teachThreshold 值：只接受 1/2/3/5，其他值回退到默认 3。
- *
- * 与 coerceFontWeight 同模式：loadPreferences + setter 共用，确保
- * 旧版本 store 中的非法值（如 0、4、NaN）不会污染运行时。
- */
-export function coerceTeachThreshold(value: number): number {
-  if (![1, 2, 3, 5].includes(value)) return TEACH_THRESHOLD_DEFAULT;
-  return value;
-}
-
 export async function setTeachAgentEnabled(value: boolean): Promise<void> {
   await writePref(KEY_TEACH_AGENT_ENABLED, value);
-}
-
-export async function setTeachThreshold(value: number): Promise<void> {
-  await writePref(KEY_TEACH_THRESHOLD, coerceTeachThreshold(value));
 }
 
 // TDSF 魔改 2026-08-09: 服务器监控 setter
@@ -909,7 +881,7 @@ export const SERVER_MONITOR_INTERVAL_PRESETS = [2000, 3000, 5000, 10000] as cons
 /**
  * 校验 serverMonitorInterval 值：只接受预设白名单中的值，其他回退到默认。
  *
- * 与 coerceTeachThreshold 同模式：loadPreferences + setter 共用，确保
+ * 与其他偏好校验函数同模式：loadPreferences + setter 共用，确保
  * 旧版本 store 中的非法值（如 0、1500、NaN）不会污染运行时。
  */
 export function coerceServerMonitorInterval(value: number): number {
@@ -1035,9 +1007,8 @@ export async function onPreferencesChange(
     [KEY_EDITOR_CUSTOM_FORMAT_COMMAND]: "editorCustomFormatCommand",
     [KEY_LSP_ACTIVATION]: "lspActivation",
     [KEY_LSP_CUSTOM_SERVERS]: "lspCustomServers",
-    // TDSF 魔改 (P4-T4.3): Teach Agent 偏好映射
+    // Teach Agent manual-explanation preference mapping
     [KEY_TEACH_AGENT_ENABLED]: "teachAgentEnabled",
-    [KEY_TEACH_THRESHOLD]: "teachThreshold",
     // TDSF 魔改 2026-08-09: 服务器监控偏好映射
     [KEY_SERVER_MONITOR_INTERVAL]: "serverMonitorInterval",
     // TDSF 2026-08-28: SSH 远端动态补全偏好映射

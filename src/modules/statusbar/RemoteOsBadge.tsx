@@ -1,26 +1,10 @@
 import type { OsFamily } from "@/lib/os-family";
+import { remoteOsFamilyLabel } from "./remoteOsFamilyLabel";
 
 export type RemoteOsBadgeInfo = {
   family: OsFamily;
   prettyName: string;
 };
-
-export function remoteOsFamilyLabel(family: OsFamily): string | null {
-  switch (family) {
-    case "rhel":
-      return "RHEL";
-    case "debian":
-      return "Debian";
-    case "arch":
-      return "Arch";
-    case "suse":
-      return "SUSE";
-    case "alpine":
-      return "Alpine";
-    case "unknown":
-      return null;
-  }
-}
 
 export function RemoteOsBadge({ info }: { info: RemoteOsBadgeInfo | null }) {
   const label = info ? remoteOsFamilyLabel(info.family) : null;

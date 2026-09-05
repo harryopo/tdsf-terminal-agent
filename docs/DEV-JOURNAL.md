@@ -6,6 +6,18 @@
 
 ---
 
+### 37.123 W2：真实终端结果与教学触发边界（2026-09-06 ✅）
+
+**触发**：用户要求重新确立真实、稳定的 Agent 方案，并指出“提交命令”不等于“命令执行成功”、自动教学会混淆普通知识与真正教学。历史代码也显示旧教学触发器依赖全局最后命令，无法正确归属连续终端操作。
+
+**调查**：`TerminalBlockCollector` 已有同 leaf 的 command、exit code、输出和时间；但 `ShellInput` 在提交瞬间写历史，建议引擎无法区分取消、失败、未知结果。旧 `teach-trigger` 通过 OSC 7 自动调用 Agent，并把最后提交命令当作教学对象。两者均不是可靠事实源。
+
+**修改**：新增 `executionHistory`，在 `terminalBlocksStore` 收到真实 block 后，只有非空 command 且 `exitCode === 0` 才同步写入 Rust history 和建议 history；删除提交时写历史、删除旧 OSC 7 自动教学模块及阈值设置。保留命令卡的精确匹配/用户点击路径，失败结果仅供手动教学解释。清理遗留注释，避免描述已不存在的自动触发机制。
+
+**方案与证据**：新增 `docs/agent/Agent真实稳定性执行基线-2026-09-06.md`，将 W0 原生取证、W2 completion 账本、W3 durable operation、W4 来源绑定分开。定向 Vitest 6 文件 85 项、全量 Vitest **132 files / 1336 tests**、typecheck、lint、Web build 均通过。实际 `pnpm tauri:dev` 启动桌面进程和 sidecar，收到 ready、121 RPC 与 3969 条官方知识库条目；未对尚未操作的 SSH/xterm/UI 用例作任何完成声明。
+
+**复盘**：输入事件、终端开始事件和终端完成事件是三种不同事实，不能合并为“已执行”。教学是用户意图加真实结果的二元关系，不是命令完成或知识检索后的自动副作用。下一阶段先做原生只读取证；在 durable `operation_id` 状态机和崩溃/幂等测试完成前，不把远端写操作标记为稳定。
+
 ### 37.122 M1-2b 状态栏只显示当前 SSH 会话的真实发行版（2026-09-05 ✅）
 
 **实现**：没有建立第二套 probe cache。异步结果写入现有 `SshSessionInfo`，写前校验 frontend session 与 Rust session id；`App` 继续按当前 Space 选择 session。断开会删除会话对象，延迟结果无法写入新会话。StatusBar 只在当前已连接 SSH session 的 family 已知时显示中性标签；`unknown`、本地/WSL 和断开状态不显示，`PRETTY_NAME` 只作 title，不参与推断。

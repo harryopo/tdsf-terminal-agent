@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { remoteOsFamilyLabel } from "./RemoteOsBadge";
+import { remoteOsFamilyLabel } from "./remoteOsFamilyLabel";
 
 describe("remoteOsFamilyLabel", () => {
   it("renders concise labels for machine-readable known families", () => {

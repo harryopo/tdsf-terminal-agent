@@ -6,6 +6,16 @@
 
 ---
 
+### 37.123 W2 真实终端结果进入历史，取消自动教学触发（2026-09-06 ✅，W0/W3 仍开放）
+
+**问题与第一性原理**：此前输入框在用户提交时立即写入历史，不能证明命令已由 PTY 执行或成功；旧 OSC 7 教学触发器还把全局“最后提交命令”当作结果归属，连续命令会错配并自动生成教学内容。这两条链路都违背“命令结果必须来自同 leaf 的真实终端生命周期、教学必须由用户明确触发”的约束。
+
+**最小实现**：新增 `executionHistory`，仅接受 `TerminalBlock` 的非空 command 和 `exitCode === 0`，再同步写入 Rust 交互历史与对应系统族的建议历史。非零退出码、空退出码和空命令全部被拒绝写入预测。移除 `teach-trigger` 及其 OSC 7 注册；教学命令卡仍可用真实失败结果讲解，但失败永不成为“成功历史”。设置页删去自动教学阈值，只留下手动错误讲解入口并明确其不执行命令。
+
+**验证与取证**：先新增失败/未知 terminal block 不得进入历史的回归测试；定向 Vitest 6 文件 85 项通过，全量 Vitest **132 files / 1336 tests**、`pnpm typecheck`、`pnpm lint`、`pnpm build:web` 通过。实际运行 `pnpm tauri:dev`，Rust 桌面进程与 Python sidecar ready，sidecar 注册 121 个 RPC，知识库检测到 3969 条官方条目。未将此启动日志冒充为 SSH/xterm/UI 的原生交互验收。
+
+**真实稳定性基线**：新增 `docs/agent/Agent真实稳定性执行基线-2026-09-06.md`，把“事实来源、禁止伪造、W0-W5 验收门槛、W3 durable operation 状态机”固定为后续开发准绳，不改写用户尚在编辑的 `docs/方案书-v2.0.md`。下一步是先完成保存 SSH profile 的只读原生取证，再以 SQLite `operation_id/intent_id` 状态机解决可能写入远端操作的崩溃恢复与幂等边界。
+
 ### 37.122 M1-2b 状态栏只显示当前 SSH 会话的真实发行版（2026-09-05 ✅，原生验收待完成）
 
 **事实流**：不新建全局状态或重跑探测。`sshStore` 在连接成功后收到既有 `fetchRemoteOsInfo` 的结果时，将其写到匹配的 `SshSessionInfo`；写入前再核对 frontend session id 与 Rust session id。`App` 本已按当前 Space 订阅该 session，故切换 Space 自动切换来源；断开时 session 会移除，延迟返回不会复活旧标签。

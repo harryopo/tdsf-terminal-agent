@@ -38,7 +38,6 @@ import { redactSensitive } from "@/modules/ai/lib/redact";
 import {
   createShellIntegrationState,
   registerCwdHandler,
-  registerOsc7TeachTrigger,
   registerOsc52ClipboardHandler,
   registerPromptTracker,
 } from "./osc-handlers";
@@ -71,11 +70,6 @@ import {
   releaseSlot,
   setSlotFocused,
 } from "./rendererPool";
-import {
-  getLastSubmittedCommand,
-  notifyCommandExecuted,
-  recordSubmittedCommand,
-} from "./teach-trigger";
 import { useTerminalFont } from "./useTerminalFont";
 
 // TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
@@ -283,8 +277,6 @@ export function submitToLeaf(leafId: number, text: string): void {
 
   // safe/low/medium → 静默放行，正常执行
   s.everSubmitted = true;
-  // TDSF 魔改 (P4-T4.3): 记录命令文本供 OSC 7 teach 触发使用
-  recordSubmittedCommand(text);
   // Bracketed paste keeps a multiline command atomic; trailing CR runs it.
   const data = text.includes("\n")
     ? `\x1b[200~${text}\x1b[201~\r`
@@ -329,8 +321,6 @@ export function confirmPendingRiskCommand(leafId: number): void {
   notifyPendingRiskListeners(leafId);
   // 执行命令
   s.everSubmitted = true;
-  // TDSF 魔改 (P4-T4.3): 记录命令文本供 OSC 7 teach 触发使用
-  recordSubmittedCommand(text);
   const data = text.includes("\n")
     ? `\x1b[200~${text}\x1b[201~\r`
     : `${text}\r`;
@@ -934,19 +924,6 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           shellState,
         );
         disposers.push(cwd);
-        // TDSF 魔改 (P4-T4.3): 注册第二个 OSC 7 处理器，专用于 teach 触发。
-        // 与上面的 registerCwdHandler 并存：cwd handler 仅在 cwd 变化时回调，
-        // teach trigger 对每次合法 OSC 7 都回调（shell 在每条命令结束后都发 OSC 7），
-        // 由 notifyCommandExecuted 内部做降频（默认每 3 条触发一次）。
-        const teachTrigger = registerOsc7TeachTrigger(
-          term,
-          (oscCwd) => {
-            const cmd = getLastSubmittedCommand();
-            void notifyCommandExecuted(cmd, oscCwd);
-          },
-          shellState,
-        );
-        disposers.push(teachTrigger);
       } else {
         const cwd = registerCwdHandler(
           term,
