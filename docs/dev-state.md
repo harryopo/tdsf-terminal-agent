@@ -6,6 +6,14 @@
 
 ---
 
+### 37.116 Agent 架构事实校准（2026-09-05）
+
+**本轮结论**：当前生产路径是 React/Tauri → Rust SidecarManager → Python sidecar → Strands `main` Agent → `TOOL_REGISTRY`/RustBridge/本地知识库；`main` 是唯一现役 Agent，旧 `BaseAgent` 名称和旧“4 子 Agent 委派”说明均不是运行期编排。教学是模式上的 prompt/命令卡契约，知识库检索是本地只读工具，二者不应混淆。
+
+**状态判定**：开源调研没有“全量集成”。Strands、Todo/验证回环、watchdog、工具 tracing、审批边界与证据分组已落地；LangGraph checkpoint、写入 intent 幂等、输出 Guardrails、竞品路线的 ghost text/交互检测/known-hosts/ssh_config/广播未完成。v2 M0-M4 未全部完成；v4 T10.1 的真实置信度来源和原生桌面验收未完成。
+
+**交接入口**：先读 `docs/agent/当前架构与实施状态矩阵-2026-09-05.md`，它明确实现/待验收/未实现的证据边界。下一步先做原生 Tauri + 已保存 SSH profile 验收；代码开发先收紧 T10.1，随后为 checkpoint、intent id 和 SSH 完成事件单立 durable execution 专项。当前自动化只能验证浏览器本地页面，不能替代 Tauri IPC/SSH/xterm 验收。
+
 ### 37.115 Agent 审批、会话恢复与教学边界收口（2026-09-05）
 
 **本轮完成**：确认模式以“已识别且完整元数据的只读查询可直接运行；写入、网络、副作用或未知命令逐条确认”为准。`needs_you.py` 对同一 `session_id`（无 session 也视为同一全局桶）只激活一张审批，后续按 FIFO 排队；前端也只展示队头，拒绝或超时后才提升下一张。当前保证的是**审批决议顺序**，不假称已做到“上一条远程命令完成后才出现下一条”；后者还需要 SSH 执行完成事件回流到审批生命周期。

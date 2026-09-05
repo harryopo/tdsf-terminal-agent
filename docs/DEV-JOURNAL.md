@@ -6,6 +6,18 @@
 
 ---
 
+### 37.116 Agent 架构事实校准与开源方案审计（2026-09-05）
+
+**任务**：用户要求用自动化页面测试核验当前 Agent 架构，并区分“开源调研是否集成”“方案书是否已完成”。结论必须建立在生产入口、测试、运行日志和方案任务清单上，而不是复述历史说明书。
+
+**审计结论**：当前生产路径为 React/Tauri → Rust `SidecarManager` → Python sidecar → `StrandsAgentAdapter` 的**唯一 main Agent** → `TOOL_REGISTRY`/RustBridge/知识库。`adapter.py` 已明确删除 `_SUB_AGENT_SPECS`、`Agent.as_tool` 与子 Agent 委派；教学是叠加 prompt/命令卡契约，不是独立 Agent，知识库是本地只读工具。旧 `docs/Agent架构说明书.md` 曾写“main 委派 4 个子 Agent”，本轮已把它标为历史附录并补充现役入口。
+
+**开源与方案判定**：Strands runtime、Todo 回环、工具 tracing、活动感知 watchdog、证据分组和审批安全边界已有源码/测试证据；DeepSeek Harness 仅借鉴“Model + Harness”原则。LangGraph checkpoint、写操作 intent 幂等、输出 Guardrails、竞品列表中的 ghost text/交互检测/known-hosts/ssh_config/教学广播都尚未完整落地。v2 M0-M4 未全部完成；v4 闭环的 T1-T9 大体完成，T10.1 真实置信度来源和原生桌面验收仍开放。
+
+**自动化边界**：浏览器自动化成功加载 `127.0.0.1:9300` 的欢迎页、确认模式说明和工作区入口；普通浏览器没有 Tauri IPC，因此不能冒充保存 SSH profile、SSH/xterm、OSC 或审批卡的端到端验收。
+
+**产物与下一步**：新增 `docs/agent/当前架构与实施状态矩阵-2026-09-05.md`，将实现、待验收、未实现及文档漂移分开。后续先按原生验收清单取证，再修 T10.1 的真实证据置信度；checkpoint/intent id/SSH 完成事件必须另立 durable execution 专项，不能用 UI 延迟或文本概率伪装。
+
 ### 37.115 Agent 审批、会话恢复与教学边界收口（2026-09-05）
 
 **问题与根因**：历史 thinking 与事件记录表明，Agent 能在同一轮并发发出多个 `needs_you` 请求，而 `session_id=None` 没有稳定队列归属，导致多张确认卡同时出现；审批组件又把不完整的 impact metadata 渲染为冗余、高风险的猜测。历史会话以易变 workspace id 过滤，点击外部 SSH 历史没有把“连接成功”作为打开前置条件。教学皮肤以前靠标题猜测，知识检索也被误识别成课程。

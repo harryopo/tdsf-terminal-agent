@@ -1,12 +1,34 @@
 # TDSF Terminal Agent · Agent 架构说明书
 
-> **版本**：v1.1（2026-08-01，P0-6 全链路打通后）
+> **版本**：v1.2（2026-09-05，源码事实校准）
 > **基线**：以当前代码事实为准（`src-tauri/sidecar/strands_backend/adapter.py`、`src/modules/ai/`）
 > **配套**：产品与技术方案书 `docs/方案书-v1.0.md`（总纲）、开发状态 `docs/dev-state.md` §37.17/37.18
 
 ---
 
-## 1. 架构总览
+> **重要校正**：2026-08-29 起，生产 `StrandsAgentAdapter` 已删除 `Agent.as_tool` 与 teach/coding/explore/history 子 Agent 委派。下方旧的多 Agent 图、委派时序及文件说明仅保留作演进记录，**不能用于修改现役链路**；完整审计见 `docs/agent/当前架构与实施状态矩阵-2026-09-05.md`。
+
+## 1. 现役生产架构
+
+```text
+React UI / Zustand stores
+  -> Tauri IPC 与事件订阅
+    -> Rust SidecarManager（JSON 行协议、SSH/终端桥接）
+      -> Python sidecar（RPC、事件总线、needs_you 生命周期）
+        -> StrandsAgentAdapter：唯一 main Agent
+          -> TOOL_REGISTRY（模式裁剪、风险、知识库、Skill、SSH 等）
+            -> RustBridge / 本地知识库 / 受控本地工具
+```
+
+| 关注点 | 现役语义 |
+|---|---|
+| 编排 | `main` 是唯一生产 Agent。`agent_id` 仅为兼容/缓存键，未知值回退同一 main 工具集。 |
+| 模式 | observe 按 Schema 裁剪只读工具；confirm 对未知/网络/副作用或写入逐条审批；auto 仍保留 L3-L4 审批。 |
+| 教学 | 是 prompt 与教学命令卡契约，不是独立 Agent；仅明确教学请求可产生 TeachCard。 |
+| 知识库 | `knowledge_search`、`knowledge_get_doc` 为本地只读工具，结果使用普通 Markdown 和工具生命周期卡。 |
+| 护栏 | `TOOL_REGISTRY` 单一真源、RiskChecker/needs_you、单次 50 次调用上限、连续失败 3 次熔断、脱敏与 agent log。 |
+
+## 历史 1. 架构总览
 
 三层进程分离架构，AI 编排采用 **Strands Agents 单框架**：
 
@@ -37,7 +59,7 @@
 
 ---
 
-## 2. Agent 体系
+## 历史 2. Agent 体系（已废弃，非现役）
 
 ### 2.1 主 Agent（main）— 统一对话入口
 
@@ -70,7 +92,7 @@
 
 ---
 
-## 3. 委派流程图
+## 历史 3. 委派流程图（已废弃，非现役）
 
 ```mermaid
 flowchart TB
@@ -91,7 +113,7 @@ flowchart TB
 
 ---
 
-## 4. 委派时序（可视化链路）
+## 历史 4. 委派时序（已废弃，非现役）
 
 一次"帮我讲一下 nginx"的完整事件流：
 
@@ -132,12 +154,12 @@ main 整合教学结果 ──▶ 最终回答
 
 | 层           | 机制                   | 说明                                                                     |
 | ------------ | ---------------------- | ------------------------------------------------------------------------ |
-| 1. Schema 层 | 工具白名单             | 子 agent 注册表按角色裁剪；L1 权限再叠加只读过滤                         |
+| 1. Schema 层 | 工具白名单             | `TOOL_REGISTRY` 按模式裁剪；observe 仅保留只读工具                       |
 | 2. 工具层    | RiskChecker + 4 级权限 | 高危命令（rm -rf/reboot/mkfs/fork bomb 等）逐行检测，L1-L4 分级审批      |
-| 3. 循环层    | ToolCallLimitHook      | 单次 invoke 工具调用上限 12 次；单工具连续失败 3 次熔断（fix-loop 保护） |
+| 3. 循环层    | ToolCallLimitHook      | 单次 invoke 工具调用上限 50 次；单工具连续失败 3 次熔断（fix-loop 保护） |
 | 4. 输出层    | redact_sensitive       | 私钥/密码/AKIA/URL 凭据/Bearer 等 7 类模式脱敏                           |
 
-**防递归**：子 agent 工具集不嵌套 agent 工具（main 是唯一委派入口）。
+**现役约束**：不再存在 Agent-to-Agent 委派；模式 Schema、RiskChecker 与 needs_you 是唯一工具执行边界。
 
 ---
 
@@ -146,9 +168,9 @@ main 整合教学结果 ──▶ 最终回答
 | 维度            | 历史（LangGraph 时代）                         | 当前（P0-6 后）                                   |
 | --------------- | ---------------------------------------------- | ------------------------------------------------- |
 | 编排框架        | LangGraph 7 节点 PAOR 图（遗产，主路径不执行） | Strands Agents 单框架                             |
-| 意图识别        | 关键词正则路由（plan_task）                    | LLM 自主决策（agent-as-tool）                     |
-| 子 agent        | 9 个 BaseAgent 类，被 override 绕过            | 4 个真实 Strands 实例，main 委派                  |
-| 子 agent 可视化 | agent_switch 事件（Pill 仅显示）               | 工具卡片（输入/状态/全文）+ Pill 联动             |
+| 意图识别        | 关键词正则路由（plan_task）                    | main 直接使用完整工具集，不再 agent-as-tool 委派  |
+| 子 agent        | 9 个 BaseAgent 类，被 override 绕过            | 无现役 Strands 子 Agent；兼容 agent_id 回退 main |
+| 可视化          | agent_switch Pill                               | 工具/审批/知识库/教学命令卡与流式状态             |
 | 流式            | 24 字符/8ms 伪流式切片                         | Strands 事件真流式（agent_message → text-delta） |
 
 ---
@@ -157,18 +179,18 @@ main 整合教学结果 ──▶ 最终回答
 
 | 文件                                                    | 职责                                                         |
 | ------------------------------------------------------- | ------------------------------------------------------------ |
-| `src-tauri/sidecar/strands_backend/adapter.py`        | 适配层核心：`_SUB_AGENT_SPECS` 注册表、main 委派、事件转发 |
-| `src-tauri/sidecar/strands_backend/tools/__init__.py` | 7 运维工具工厂 + 工具白名单 + 脱敏 + 4 级权限                |
-| `src-tauri/sidecar/strands_backend/tools/*.py`        | 各工具实现（ssh_command/remote_file/log_analyzer 等）        |
-| `src/modules/ai/agents/registry.ts`                   | 前端 5 个 agent 入口注册表（与后端一一对应）                 |
-| `src/modules/ai/lib/sidecar-adapter.ts`               | 事件→流式 part 转换、工具行管道、错误提示                   |
-| `src/components/ai-elements/tool.tsx`                 | 工具行/子 agent 卡片渲染（`agent:` 前缀识别）              |
-| `src/modules/ai/components/AgentStatusPill.tsx`       | 当前活跃 agent 指示器                                        |
+| `src-tauri/sidecar/strands_backend/adapter.py`        | 唯一 main Agent、模式/教学 prompt、循环护栏、事件转发         |
+| `src-tauri/sidecar/strands_backend/tools/registry.py` | 工具实现/Schema/policy 的单一真源                             |
+| `src-tauri/sidecar/strands_backend/tools/__init__.py` | 工具工厂、模式过滤、教学包装、RustBridge 与审批入口            |
+| `src-tauri/sidecar/needs_you.py`                      | 同会话审批 FIFO 生命周期                                      |
+| `src/modules/ai/lib/sidecar-adapter.ts`               | 事件→流式 part 转换、活动感知超时、工具行管道                |
+| `src/components/ai-elements/tool.tsx`                 | 工具、审批和教学命令卡渲染                                    |
 
 ---
 
 ## 8. 已知边界
 
-- 真实 LLM 的委派行为依赖模型对委派 prompt 的理解（机制已通，e2e 用 FakeModel 脚本验证；真实效果待实测）
-- 子 agent 增量流式展示（tool-input-delta）为增强项，当前 completed 一次性展示全文
-- 长期记忆（决策库）与证据链可视化在方案书 P1/P2 规划中
+- 原生 Tauri + SSH/xterm 的端到端验收仍需真实桌面控制面；浏览器 localhost 不具备 Tauri IPC。
+- agent 会话内 `_session_messages` 仍是内存态，sidecar 重启不能 checkpoint 恢复中间执行。
+- 写操作尚无 durable intent id；严格“命令完成后才展示下一审批”需 SSH 完成事件进入审批生命周期。
+- 置信度证据分组已实现，但高置信来源展示尚未完成，不能把文本启发式当作工具证据。
