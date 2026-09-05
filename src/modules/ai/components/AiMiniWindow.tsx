@@ -41,7 +41,10 @@ import type { SessionMeta } from "../lib/sessions";
 import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
 import { useAgentsStore } from "../store/agentsStore";
 import { getOrCreateChat } from "../store/chatRuntime";
-import { useChatStore } from "../store/chatStore";
+import {
+  sessionsVisibleInWorkspace,
+  useChatStore,
+} from "../store/chatStore";
 import { usePlanStore } from "../store/planStore";
 import { AgentStatusPill } from "./AgentStatusPill";
 import { WorkspaceGate } from "./WorkspaceGate";
@@ -534,18 +537,18 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
 function SessionPicker() {
   const sessions = useChatStore((s) => s.sessions);
   const activeId = useChatStore((s) => s.activeSessionId);
-  const switchSession = useChatStore((s) => s.switchSession);
+  const openSession = useChatStore((s) => s.openSession);
   const newSession = useChatStore((s) => s.newSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
   // 方案1：独立对话列表——只显示绑定当前工作区的会话（防跨区污染）
   const activeSpaceId = useSpaces((s) => s.activeId);
+  const spaces = useSpaces((s) => s.spaces);
 
-  const wsSessions = activeSpaceId
-    ? sessions.filter(
-        (s) =>
-          s.scope?.kind === "workspace" && s.scope.spaceId === activeSpaceId,
-      )
-    : sessions;
+  const wsSessions = sessionsVisibleInWorkspace(
+    sessions,
+    spaces,
+    activeSpaceId,
+  );
   const active =
     wsSessions.find((s) => s.id === activeId) ??
     sessions.find((s) => s.id === activeId) ??
@@ -589,7 +592,7 @@ function SessionPicker() {
             key={s.id}
             session={s}
             active={s.id === activeId}
-            onSelect={() => switchSession(s.id)}
+            onSelect={() => void openSession(s.id)}
             onDelete={() => deleteSession(s.id)}
           />
         ))}

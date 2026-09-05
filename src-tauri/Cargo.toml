@@ -34,6 +34,10 @@ tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-process = "2"
+# SHOULD-FIX-2 (2026-09-04): dialog 仅用于 debug 预检弹窗，release 构建无需加载
+# 移到 dev-dependencies 或保持可选——此处保持依赖但代码侧 cfg 守卫
+# 注: Cargo 无原生 debug-only 依赖机制，保留在 [dependencies] 但代码侧已 cfg 守卫
+tauri-plugin-dialog = "2"
 
 # PTY (伪终端) — 从 terax-ai 搬运的 portable-pty 0.9
 portable-pty = "0.9"

@@ -226,7 +226,7 @@ export function encodeUtf8(text: string): Uint8Array {
 /**
  * 拼接远程 POSIX 路径 (处理根目录 "/" 与末尾斜杠)
  *
- * TDSF 魔改: 供 sshStore / useRemoteFileTree 构造子路径使用。
+ * TDSF 魔改: 供 sshStore 构造子路径使用。
  */
 export function joinRemotePath(parent: string, name: string): string {
   const base = parent.endsWith('/') ? parent.slice(0, -1) : parent;

@@ -254,8 +254,8 @@ interface SshExplorerState {
    * 仅更新当前目录路径，不触发网络请求。
    *
    * TDSF 修复 2026-07-31: 用于 SSH 终端 OSC 7 cwd 同步——终端里 cd
-   * 时先写路径，再由 useRemoteFileTree 的 rootPath effect 触发 listDir
-   * 刷新左侧资源管理器，避免与 navigateTo 重复请求后端。
+   * 时先写路径，再触发 listDir 刷新左侧资源管理器，避免与 navigateTo
+   * 重复请求后端。
    */
   setCurrentPath: (sessionId: string, path: string) => void;
   navigateTo: (sessionId: string, path: string) => Promise<void>;
@@ -274,13 +274,6 @@ interface SshExplorerState {
   loadChildren: (sessionId: string, path: string) => Promise<void>;
   selectPath: (path: string | null) => void;
   refreshCurrent: (sessionId: string) => Promise<void>;
-  /**
-   * 创建远程文件。
-   *
-   * TDSF 魔改 2026-07-29: 为统一文件资源管理器补齐 CRUD, 行为与本地
-   * FileExplorer 一致。成功后会刷新父目录缓存。
-   */
-  createFile: (sessionId: string, parentPath: string, name: string) => Promise<void>;
   /**
    * 创建远程目录。
    */
@@ -872,29 +865,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   refreshCurrent: async (sessionId) => {
     const path = get().currentPathBySession[sessionId];
     if (path) await get().listDir(sessionId, path);
-  },
-
-  /**
-   * 创建远程文件 (空文件)。
-   *
-   * TDSF 魔改 2026-07-29: 用 sftp_write 写入空内容来创建文件, 成功后
-   * 刷新父目录缓存, 让 FileExplorer 等 UI 立即看到新文件。
-   */
-  createFile: async (sessionId, parentPath, name) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) {
-      throw new Error('SSH 会话未连接, 无法创建文件');
-    }
-    const path = joinRemotePath(parentPath, name);
-    try {
-      await sftpWrite(session.rustSessionId, path, encodeUtf8(''));
-      await invalidateChildrenCache(get, set, sessionId, parentPath);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] createFile failed:', path, msg);
-      toast.error('创建文件失败', { description: msg });
-      throw e;
-    }
   },
 
   /**

@@ -431,6 +431,7 @@ class EventBus:
         params: dict | None = None,
         result: Any | None = None,
         status: str = "started",
+        tool_call_id: str | None = None,
         session_id: str | None = None,
         source: str | None = None,
     ) -> int:
@@ -451,6 +452,8 @@ class EventBus:
         }
         if result is not None:
             payload["result"] = result
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
         return self.publish(
             Event(
                 event_type=EventType.TOOL_CALL.value,

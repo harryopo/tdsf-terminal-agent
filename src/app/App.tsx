@@ -646,7 +646,7 @@ export default function App() {
       // 已按 lastUsed 倒序, 取第一个 = 最近使用的
       if (list.length > 0 && list[0]) {
         const profile = list[0];
-        // TDSF 修复 2026-08-31: 仅当存在 host/user 匹配的既有 SSH Space 时才
+        // TDSF 修复 2026-08-31: 仅当存在 host/user/port 匹配的既有 SSH Space 时才
         // 自动连接。用户删除了服务器工作区后，开机不该再把它连回来（残留会话
         // 正是"关闭工作区却没关连接 → 新建本地工作区被导向服务器"的来源）。
         const hasMatchingSpace = useSpaces
@@ -655,7 +655,8 @@ export default function App() {
             (s) =>
               s.env.kind === "ssh" &&
               s.env.host === profile.host &&
-              s.env.user === profile.user,
+              s.env.user === profile.user &&
+              (s.env.port ?? 22) === profile.port,
           );
         if (!hasMatchingSpace) return;
         try {
@@ -797,7 +798,8 @@ export default function App() {
             (s) =>
               s.env.kind === "ssh" &&
               s.env.host === session.params.host &&
-              s.env.user === session.params.user,
+              s.env.user === session.params.user &&
+              (s.env.port ?? 22) === (session.params.port ?? 22),
           ) ?? null;
         if (!targetSpace) {
           if (isAutoConnect) {
@@ -834,6 +836,15 @@ export default function App() {
             sessionId: session.id,
             label: `${session.params.user}@${session.params.host}`,
           });
+        }
+        // A manual reconnect (including opening bound AI history) must also
+        // restore an already-existing target Space before the chat switches.
+        if (
+          !isAutoConnect &&
+          useSpaces.getState().activeId !== targetSpace.id
+        ) {
+          setActiveSpaceForNewTabs(targetSpace.id);
+          useSpaces.getState().setActive(targetSpace.id);
         }
 
         // TDSF 修复 2026-08-01: 新连接成功时同步 activeSessionId。

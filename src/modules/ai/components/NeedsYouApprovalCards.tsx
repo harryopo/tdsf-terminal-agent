@@ -181,16 +181,19 @@ export function NeedsYouApprovalCards() {
   );
 
   if (visible.length === 0) return null;
+  const active = visible[0];
   return (
-    <div className="space-y-2" data-needs-you-cards="">
-      {visible.map((item) => (
-        <ToolApprovalCard
-          key={item.reqId}
-          toolName={item.toolName}
-          input={item.input}
-          onRespond={(resp) => handleRespond(item.reqId, resp)}
-        />
-      ))}
+    <div
+      className="space-y-2"
+      data-needs-you-cards=""
+      data-queued-approvals={Math.max(0, visible.length - 1)}
+    >
+      <ToolApprovalCard
+        key={active.reqId}
+        toolName={active.toolName}
+        input={active.input}
+        onRespond={(resp) => handleRespond(active.reqId, resp)}
+      />
     </div>
   );
 }

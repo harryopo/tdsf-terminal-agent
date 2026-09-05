@@ -46,6 +46,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -172,6 +173,11 @@ class NeedsYouRequest:
     _event: threading.Event = field(
         default_factory=threading.Event, init=False, repr=False
     )
+    # approval 排队时不启动超时；晋升为当前 session 的活动项后才设置 deadline。
+    _approval_timeout: float | None = field(default=None, repr=False)
+    _activated_event: threading.Event = field(
+        default_factory=threading.Event, init=False, repr=False
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """转为 dict（用于 JSON 序列化 / event_bus payload）"""
@@ -247,6 +253,11 @@ class NeedsYouService:
         """
         self._requests: dict[str, NeedsYouRequest] = {}
         self._lock = threading.RLock()
+        # 状态锁只保护内存状态；事件发布在状态锁外完成。transition lock 保证
+        # “前一项终结事件 → 下一项 created”不会被并发响应/超时重排。
+        self._transition_lock = threading.RLock()
+        self._active_approvals: dict[str | None, str] = {}
+        self._approval_queues: dict[str | None, deque[str]] = {}
         self._approval_timeout = approval_timeout
         self._timeout_check_interval = timeout_check_interval
         self._event_bus = event_bus  # 延迟绑定，启动时由 main.py 注入
@@ -488,42 +499,94 @@ class NeedsYouService:
         extra: dict[str, Any],
     ) -> NeedsYouRequest:
         """内部统一创建请求"""
-        req_id = f"ny-{uuid.uuid4().hex[:12]}"
-        priority = _TYPE_TO_PRIORITY[needs_type]
-        deadline = (time.time() + timeout) if timeout is not None else None
+        with self._transition_lock:
+            req_id = f"ny-{uuid.uuid4().hex[:12]}"
+            priority = _TYPE_TO_PRIORITY[needs_type]
+            req = NeedsYouRequest(
+                id=req_id,
+                type=needs_type,
+                title=title,
+                description=description,
+                priority=priority,
+                session_id=session_id,
+                source=source,
+                deadline=None,
+                extra=extra,
+                _approval_timeout=timeout,
+            )
 
-        req = NeedsYouRequest(
-            id=req_id,
-            type=needs_type,
-            title=title,
-            description=description,
-            priority=priority,
-            session_id=session_id,
-            source=source,
-            deadline=deadline,
-            extra=extra,
-        )
+            with self._lock:
+                # 获得状态锁时确定并发创建的线性化顺序。
+                req.created_at = time.time()
+                self._requests[req_id] = req
+                self._stats["total_created"] += 1
+                self._stats["by_type"][needs_type.value] += 1
+                self._stats["by_status"][NeedsYouStatus.PENDING.value] += 1
 
-        with self._lock:
-            self._requests[req_id] = req
-            self._stats["total_created"] += 1
-            self._stats["by_type"][needs_type.value] += 1
-            self._stats["by_status"][NeedsYouStatus.PENDING.value] += 1
+                should_emit = True
+                if needs_type == NeedsYouType.APPROVAL:
+                    if self._active_approvals.get(session_id) is None:
+                        self._activate_approval_locked(req)
+                    else:
+                        self._approval_queues.setdefault(session_id, deque()).append(req_id)
+                        should_emit = False
 
-        logger.info(
-            f"needs_you created: id={req_id}, type={needs_type.value}, "
-            f"priority={priority.value}, session={session_id}, "
-            f"deadline={deadline}"
-        )
+            logger.info(
+                f"needs_you created: id={req_id}, type={needs_type.value}, "
+                f"priority={priority.value}, session={session_id}, "
+                f"state={'active' if should_emit else 'queued'}, deadline={req.deadline}"
+            )
 
-        # 发布事件（不持有 lock，避免回调死锁）
-        self._emit_event(
-            event_name="created",
-            req=req,
-            extra_payload={"timeout": timeout},
-        )
+            # 排队 approval 只有晋升为活动项后才发布 created。
+            if should_emit:
+                self._emit_event(
+                    event_name="created",
+                    req=req,
+                    extra_payload={"timeout": timeout},
+                )
 
         return req
+
+    def _activate_approval_locked(self, req: NeedsYouRequest) -> None:
+        """把 approval 设为其 session 的唯一活动项；调用方必须持有 _lock。"""
+        self._active_approvals[req.session_id] = req.id
+        timeout = req._approval_timeout
+        req.deadline = (time.time() + timeout) if timeout is not None else None
+        req._activated_event.set()
+
+    def _finish_approval_locked(
+        self,
+        req: NeedsYouRequest,
+    ) -> NeedsYouRequest | None:
+        """移除已终结 approval，并按 FIFO 晋升同 session 下一项。"""
+        if req.type != NeedsYouType.APPROVAL:
+            return None
+
+        session_id = req.session_id
+        if self._active_approvals.get(session_id) == req.id:
+            self._active_approvals.pop(session_id, None)
+            queue = self._approval_queues.get(session_id)
+            while queue:
+                next_id = queue.popleft()
+                next_req = self._requests.get(next_id)
+                if next_req is not None and next_req.is_pending:
+                    self._activate_approval_locked(next_req)
+                    if not queue:
+                        self._approval_queues.pop(session_id, None)
+                    return next_req
+            self._approval_queues.pop(session_id, None)
+            return None
+
+        # 队列中的请求只允许显式 cancel；移除后保持当前活动项不变。
+        queue = self._approval_queues.get(session_id)
+        if queue is not None:
+            try:
+                queue.remove(req.id)
+            except ValueError:
+                pass
+            if not queue:
+                self._approval_queues.pop(session_id, None)
+        return None
 
     # ========================================================================
     # 用户响应 API
@@ -550,43 +613,53 @@ class NeedsYouService:
         Returns:
             更新后的 NeedsYouRequest，如果 req_id 不存在或已处理则返回 None
         """
-        with self._lock:
-            req = self._requests.get(req_id)
-            if req is None:
-                logger.warning(f"needs_you.respond: id={req_id} not found")
-                return None
-            if req.status != NeedsYouStatus.PENDING:
-                logger.warning(
-                    f"needs_you.respond: id={req_id} already {req.status.value}, "
-                    f"skip respond"
-                )
-                return None
+        with self._transition_lock:
+            with self._lock:
+                req = self._requests.get(req_id)
+                if req is None:
+                    logger.warning(f"needs_you.respond: id={req_id} not found")
+                    return None
+                if req.status != NeedsYouStatus.PENDING:
+                    logger.warning(
+                        f"needs_you.respond: id={req_id} already {req.status.value}, "
+                        f"skip respond"
+                    )
+                    return None
+                if (
+                    req.type == NeedsYouType.APPROVAL
+                    and self._active_approvals.get(req.session_id) != req.id
+                ):
+                    logger.warning(
+                        f"needs_you.respond: id={req_id} is queued behind active "
+                        f"approval for session={req.session_id}, skip out-of-order respond"
+                    )
+                    return None
 
-            # 推断新状态
-            new_status = self._infer_status_from_response(req.type, response)
-            req.response = response
-            req.responded_at = time.time()
-            req.responded_by = responded_by
-            req.status = new_status
+                new_status = self._infer_status_from_response(req.type, response)
+                req.response = response
+                req.responded_at = time.time()
+                req.responded_by = responded_by
+                req.status = new_status
 
-            # 更新统计
-            self._stats["total_responded"] += 1
-            self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
-            self._stats["by_status"][new_status.value] += 1
+                self._stats["total_responded"] += 1
+                self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
+                self._stats["by_status"][new_status.value] += 1
+                promoted = self._finish_approval_locked(req)
 
-        logger.info(
-            f"needs_you responded: id={req_id}, status={new_status.value}, "
-            f"by={responded_by}"
-        )
+            logger.info(
+                f"needs_you responded: id={req_id}, status={new_status.value}, "
+                f"by={responded_by}"
+            )
 
-        # P1-1: 唤醒等待该请求的工具线程（真实 HITL 闭环）
-        try:
+            # 唤醒工具线程，并按“旧项终结 → 新项 created”的顺序发事件。
             req._event.set()
-        except Exception as e:
-            logger.debug(f"needs_you wake event set failed: {e}")
-
-        # 发布事件
-        self._emit_event(event_name="responded", req=req)
+            self._emit_event(event_name="responded", req=req)
+            if promoted is not None:
+                self._emit_event(
+                    event_name="created",
+                    req=promoted,
+                    extra_payload={"timeout": promoted._approval_timeout},
+                )
 
         return req
 
@@ -620,7 +693,9 @@ class NeedsYouService:
 
         Args:
             req_id: 请求 ID
-            timeout: 最大等待秒数（None 用默认审批超时 30s）
+            timeout: 调用方最大等待秒数。None 时 approval 由活动 deadline
+                     终结，不让排队时间消耗审批窗口；其他类型保留
+                     service 默认等待上限。
 
         Returns:
             最终状态的 NeedsYouRequest；请求不存在返回 None
@@ -632,12 +707,61 @@ class NeedsYouService:
                 return None
             if not req.is_pending:
                 return req
-            event = req._event
-        wait_seconds = timeout if timeout is not None else self._approval_timeout
-        event.wait(wait_seconds)
-        with self._lock:
-            req = self._requests.get(req_id)
-            return req
+            queued = (
+                req.type == NeedsYouType.APPROVAL
+                and self._active_approvals.get(req.session_id) != req.id
+            )
+            activated_event = req._activated_event
+            response_event = req._event
+
+        if queued:
+            # 排队阶段不消耗 approval 的等待窗口。cancel/reset 也会唤醒此事件。
+            activated_event.wait()
+            with self._lock:
+                req = self._requests.get(req_id)
+                if req is None or not req.is_pending:
+                    return req
+
+        # 调用方 timeout 也从激活时开始；approval 自身 deadline 仍是最终超时依据。
+        # 非 approval 保留旧行为：None 仍以 service 默认值作为调用方等待上限。
+        effective_timeout = (
+            self._approval_timeout
+            if timeout is None and req.type != NeedsYouType.APPROVAL
+            else timeout
+        )
+        wait_deadline = (
+            time.monotonic() + effective_timeout
+            if effective_timeout is not None
+            else None
+        )
+        while True:
+            with self._lock:
+                req = self._requests.get(req_id)
+                if req is None or not req.is_pending:
+                    return req
+                approval_deadline = (
+                    req.deadline if req.type == NeedsYouType.APPROVAL else None
+                )
+
+            remaining: float | None = None
+            if approval_deadline is not None:
+                remaining = max(0.0, approval_deadline - time.time())
+            if wait_deadline is not None:
+                caller_remaining = max(0.0, wait_deadline - time.monotonic())
+                remaining = (
+                    caller_remaining
+                    if remaining is None
+                    else min(remaining, caller_remaining)
+                )
+
+            if response_event.wait(remaining):
+                continue
+            if approval_deadline is not None and time.time() >= approval_deadline:
+                # 不依赖扫描线程恰好先运行；竞态由 transition lock 线性化。
+                self._scan_timeouts()
+                continue
+            with self._lock:
+                return self._requests.get(req_id)
 
     def _infer_status_from_response(
         self,
@@ -689,29 +813,40 @@ class NeedsYouService:
         Returns:
             更新后的 NeedsYouRequest，如果不存在或已处理则返回 None
         """
-        with self._lock:
-            req = self._requests.get(req_id)
-            if req is None:
-                logger.warning(f"needs_you.cancel: id={req_id} not found")
-                return None
-            if req.status != NeedsYouStatus.PENDING:
-                logger.warning(
-                    f"needs_you.cancel: id={req_id} already {req.status.value}, "
-                    f"skip cancel"
+        with self._transition_lock:
+            with self._lock:
+                req = self._requests.get(req_id)
+                if req is None:
+                    logger.warning(f"needs_you.cancel: id={req_id} not found")
+                    return None
+                if req.status != NeedsYouStatus.PENDING:
+                    logger.warning(
+                        f"needs_you.cancel: id={req_id} already {req.status.value}, "
+                        f"skip cancel"
+                    )
+                    return None
+
+                req.status = NeedsYouStatus.CANCELLED
+                req.responded_at = time.time()
+                req.responded_by = "agent_cancel"
+                req.response = {"cancelled_reason": reason}
+
+                self._stats["total_cancelled"] += 1
+                self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
+                self._stats["by_status"][NeedsYouStatus.CANCELLED.value] += 1
+                promoted = self._finish_approval_locked(req)
+
+            # 队列项 waiter 可能仍在等 activation，因此两个事件都要唤醒。
+            req._activated_event.set()
+            req._event.set()
+            logger.info(f"needs_you cancelled: id={req_id}, reason={reason}")
+            self._emit_event(event_name="cancelled", req=req)
+            if promoted is not None:
+                self._emit_event(
+                    event_name="created",
+                    req=promoted,
+                    extra_payload={"timeout": promoted._approval_timeout},
                 )
-                return None
-
-            req.status = NeedsYouStatus.CANCELLED
-            req.responded_at = time.time()
-            req.responded_by = "agent_cancel"
-            req.response = {"cancelled_reason": reason}
-
-            self._stats["total_cancelled"] += 1
-            self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
-            self._stats["by_status"][NeedsYouStatus.CANCELLED.value] += 1
-
-        logger.info(f"needs_you cancelled: id={req_id}, reason={reason}")
-        self._emit_event(event_name="cancelled", req=req)
         return req
 
     def clear_resolved(self) -> int:
@@ -731,16 +866,23 @@ class NeedsYouService:
 
     def reset(self) -> None:
         """重置所有状态（测试用）"""
-        with self._lock:
-            self._requests.clear()
-            self._stats = {
-                "total_created": 0,
-                "total_responded": 0,
-                "total_timeout": 0,
-                "total_cancelled": 0,
-                "by_type": {t.value: 0 for t in NeedsYouType},
-                "by_status": {s.value: 0 for s in NeedsYouStatus},
-            }
+        with self._transition_lock:
+            with self._lock:
+                requests = list(self._requests.values())
+                self._requests.clear()
+                self._active_approvals.clear()
+                self._approval_queues.clear()
+                self._stats = {
+                    "total_created": 0,
+                    "total_responded": 0,
+                    "total_timeout": 0,
+                    "total_cancelled": 0,
+                    "by_type": {t.value: 0 for t in NeedsYouType},
+                    "by_status": {s.value: 0 for s in NeedsYouStatus},
+                }
+            for req in requests:
+                req._activated_event.set()
+                req._event.set()
         logger.info("needs_you service reset")
 
     # ========================================================================
@@ -836,54 +978,63 @@ class NeedsYouService:
         Returns:
             本次扫描触发超时的请求数
         """
-        now = time.time()
-        timeout_ids: list[str] = []
+        with self._transition_lock:
+            now = time.time()
+            timeout_ids: list[str] = []
 
-        with self._lock:
-            for req in self._requests.values():
-                if not req.is_pending:
-                    continue
-                if req.deadline is None:
-                    continue
-                if now >= req.deadline:
-                    timeout_ids.append(req.id)
+            with self._lock:
+                for req in self._requests.values():
+                    if not req.is_pending:
+                        continue
+                    if req.deadline is None:
+                        continue
+                    if now >= req.deadline:
+                        timeout_ids.append(req.id)
 
-            if not timeout_ids:
-                return 0
+                if not timeout_ids:
+                    return 0
 
-            # 更新超时请求
-            timed_out: list[NeedsYouRequest] = []
-            for rid in timeout_ids:
-                req = self._requests.get(rid)
-                if req is None or not req.is_pending:
-                    continue
-                req.status = NeedsYouStatus.TIMEOUT
-                req.responded_at = now
-                req.responded_by = "system_timeout"
-                # Task 3.3: 超时文案对齐「审批超时，按拒绝处理」（fail-closed）
-                req.response = {
-                    "timeout": True,
-                    "reason": f"审批超时（{int(self._approval_timeout)}s 无响应），按拒绝处理",
-                }
-                self._stats["total_timeout"] += 1
-                self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
-                self._stats["by_status"][NeedsYouStatus.TIMEOUT.value] += 1
-                timed_out.append(req)
+                timed_out: list[tuple[NeedsYouRequest, NeedsYouRequest | None]] = []
+                for rid in timeout_ids:
+                    req = self._requests.get(rid)
+                    if req is None or not req.is_pending:
+                        continue
+                    req.status = NeedsYouStatus.TIMEOUT
+                    req.responded_at = now
+                    req.responded_by = "system_timeout"
+                    timeout_seconds = (
+                        req._approval_timeout
+                        if req._approval_timeout is not None
+                        else self._approval_timeout
+                    )
+                    req.response = {
+                        "timeout": True,
+                        "reason": (
+                            f"审批超时（{int(timeout_seconds)}s "
+                            "无响应），按拒绝处理"
+                        ),
+                    }
+                    self._stats["total_timeout"] += 1
+                    self._stats["by_status"][NeedsYouStatus.PENDING.value] -= 1
+                    self._stats["by_status"][NeedsYouStatus.TIMEOUT.value] += 1
+                    timed_out.append((req, self._finish_approval_locked(req)))
 
-        # 发布超时事件（不持有 lock）
-        for req in timed_out:
-            logger.warning(
-                f"needs_you timeout: id={req.id}, type={req.type.value}, "
-                f"deadline={req.deadline}"
-            )
-            # P1-1: 唤醒等待该请求的工具线程（超时视为拒绝）
-            try:
+            # 事件和等待唤醒均在状态锁外完成。
+            for req, promoted in timed_out:
+                logger.warning(
+                    f"needs_you timeout: id={req.id}, type={req.type.value}, "
+                    f"deadline={req.deadline}"
+                )
                 req._event.set()
-            except Exception as e:
-                logger.debug(f"needs_you timeout wake failed: {e}")
-            self._emit_event(event_name="timeout", req=req)
+                self._emit_event(event_name="timeout", req=req)
+                if promoted is not None:
+                    self._emit_event(
+                        event_name="created",
+                        req=promoted,
+                        extra_payload={"timeout": promoted._approval_timeout},
+                    )
 
-        return len(timed_out)
+            return len(timed_out)
 
     # ========================================================================
     # 事件发布

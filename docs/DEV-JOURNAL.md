@@ -6,6 +6,36 @@
 
 ---
 
+### 37.115 Agent 审批、会话恢复与教学边界收口（2026-09-05）
+
+**问题与根因**：历史 thinking 与事件记录表明，Agent 能在同一轮并发发出多个 `needs_you` 请求，而 `session_id=None` 没有稳定队列归属，导致多张确认卡同时出现；审批组件又把不完整的 impact metadata 渲染为冗余、高风险的猜测。历史会话以易变 workspace id 过滤，点击外部 SSH 历史没有把“连接成功”作为打开前置条件。教学皮肤以前靠标题猜测，知识检索也被误识别成课程。
+
+**改动**：
+
+1. `needs_you.py` 以 session/global 桶维护一个 active approval 与 FIFO queue，解决、拒绝、取消、超时或 reset 时才原子提升下一项；前端 `NeedsYouApprovalCards` 只可见队头，RPC 失败不会错误推进。
+2. `tool.tsx` 将审批卡收敛为命令、用途、短影响和风险标签；无完整分段 metadata 时 fail-closed。命令影响解析补充包查询/命令定位只读规则，wrapper 不覆盖真正危险子命令。
+3. `chatStore` 用 SSH endpoint scope 归属会话；`openSession` 仅在 `loadSavedConnections` 精确匹配且 `connectWithSaved` 成功后切换，旧空间无法解析时保守失败。SessionPicker 同时展示同一 host/user/port 的会话。
+4. 紧凑教学 prompt 继续禁止知识检索被课程化；仅明确教学带 `tdsf:teach` 标记，同时要求概念与原理、易错点与考点、练习，修复 `test_teach_skin_appended_when_on` 的真实回归。
+
+**验证**：Vitest 130 files / **1354 passed**；pytest **2163 passed**（2 warnings）；typecheck、lint、cargo check 全通过。使用项目日志启动器启动后，Vite `127.0.0.1:9300` HTTP 200；sidecar 启动 120 RPC、模型可用、知识库 3969 官方条目，启动段无高严重度日志。
+
+**边界与复盘**：本轮没有读取 SSH keyring、没有发起远程命令，也不把浏览器的 localhost 页面冒充为 Tauri/SSH 端到端验收。FIFO 解决的是确认的显示与决议顺序；若要严格等待远程命令退出再给下一审批，必须新增执行完成事件，不能用 UI 延时伪装。
+
+### 37.114 教学模式知识检索与教学输出边界（2026-09-04）
+
+**用户问题与证据**：历史 `agent-logs/default.jsonl` 中“查看知识库”回合出现了教学板块标题，但之前没有对应的知识工具事件；“调用 SELinux 知识库”还把不可用的 `analyze_logs` 和空 bash 围栏写进了教学卡。`dev-run.log` 反而证明 RAG 检索本身可用（sidecar 启动后 3969 条官方条目、120 个 RPC 方法），所以根因不是“知识库没有数据”，而是输出分类和事件/UI 断链。
+
+**第一性原理修复**：
+
+1. TeachCard 是有语义前提的输出协议，不是由 `## 概念与原理` 等标题猜测的视觉样式。`teachParser.isTeachMessage()` 现在只接受首行 `<!-- tdsf:teach -->`；普通知识报告、工具状态、失败说明一律走普通 Markdown。
+2. sidecar 按当前用户回合计算保守的显式教学意图（教我/讲解/解释/教程/原理/why/how 等）；仅“查看、检索、读取知识库”时在本回合覆盖历史提示，禁止标记、教学板块和教学命令卡。结构化 `<teaching-command-result>` 是唯一允许继续教学的事实边界。
+3. callback handler 增加分片级首行门控，并在最终 `observation` 再做一次 fail-closed 清理，避免标记跨两个 LLM delta 时短暂闪成 TeachCard，也避免旧会话历史污染新回合。教学命令卡只表示等待学生检查并点击终端执行，不能伪造输出或调用 `get_terminal_output` 读取滚屏。
+4. `knowledge_search` / `knowledge_get_doc` 发布带稳定 ID 的 started/completed 生命周期事件；前端按工具名渲染检索结果/文档状态卡，检索卡默认展开，全文正文仍折叠，空正文显示“无可显示正文”事实而不是空白或占位内容。
+
+**验证**：前端定向 vitest 69 passed、`pnpm run typecheck:web` passed、`pnpm run lint` passed；后端教学意图/流式门控/知识工具定向 pytest 26 passed，`py_compile` passed；sidecar 真实启动日志无 ERROR/Traceback/Exception，保持 `backend_enabled/strands_available/model_available=true`。未进行原生 Tauri/SSH 点击验收，因为当前 Computer Use 只暴露浏览器 surface，不能读取桌面 keyring 或假设远端执行成功。
+
+**后续**：原生桌面控制可用后，按 §37.112 逐项验证真实模型的知识检索事件、普通 Markdown/TeachCard 分类、命令卡学生点击和结果续讲；不要为了验收绕过确认链或恢复后台 SSH 直写。
+
 ##  开发铁律（2026-08-31 用户钦定 · 每次开工必读 · 已同步全局记忆）
 
 知识库改造约 6 轮返工换来的教训（用户原话："不要蛮干，多思考；爬虫可以用开源方案，不要重复造轮子；不知道的问我，不要擅自主张；有经验和好的工具拿来就用"）：
@@ -16,6 +46,23 @@
 4. **不在脏数据上做下游处理**：昂贵操作（LLM 翻译/聚合）前必须让用户预览确认数据质量——623 篇翻译在脏数据上开跑全部作废
 5. **在运行的应用里验证**：脚本全绿 ≠ 效果对；数据/UI 改动要导出预览或重启目验后再进下一步
 6. **优先高质量方向**：慢一点一步到位（根因→成熟方案→确认→执行），胜过快速修补式迭代
+
+---
+
+## 2026-09-04 · Agent 架构渐进优化（Task #6：C1 工具级 tracing / C2 死代码清理 / C3 SSH 路径确认）
+
+**任务**：三个低优先级但有益的改进——工具级 tracing、死代码清理、SSH Space 路径修复。
+
+**方案与修改**：
+1. **C1 工具级 tracing**（`adapter.py`）：`ToolCallLimitHook` 增加 `_tool_start_times` 字典记录每个工具调用的开始时间戳（`time.monotonic()`），在 `_after_tool_call` 计算 `duration_ms` 并包含在 `tool_log` 和 `loop_progress` 事件中。前端运行日志面板可自动显示新字段。
+2. **C2 K6 死代码清理**：删除 `useRemoteFileTree.ts`（定义但从未导入使用）+ `sshStore.createFile`（唯一调用点在 useRemoteFileTree 中）。更新相关注释移除对已删代码的引用。
+3. **C3 K3 SSH Space 路径修复**：调研发现 `launchAgentGroup` 已在 §37.81 作为死代码删除；当前 SSH cwd 处理在 `useAiLiveBridge.ts` 的 `findCwd` 函数中已正确实现（优先从 sshStore 读 SSH 远端 cwd，避免 agent 收到错误的本地路径）。
+
+**验证**：typecheck ✅ / test ✅ / lint ✅ / pytest (相关测试) ✅
+
+**经验**：
+- 死代码清理前必须 grep 确认无引用（本次确认 useRemoteFileTree 无导入点）
+- 有些“已知问题”可能已在其他改动中间接修复（K3 的 launchAgentGroup 已删）
 
 ---
 
@@ -2574,3 +2621,38 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **工具限制**：临时目录cdp-dir/output/knowledge-preview/dist已gitignore(仓库整洁git status不显示)，但DeleteFile不支持删目录(报file not exist)+规则禁shell删文件→物理清磁盘需用户手动(无害保留,不入库)。
 
 **复盘**：① **整理要先勘察git跟踪状态**(untracked临时vs tracked文档)决定删除方式；② **保守归类避免断引用**(被引用文档不移动,用索引清晰化)；③ **核心文件过时点要随开发更新**(门禁数字/版本/上游遗留引用)；④ DeleteFile只删文件不删目录,gitignore目录不影响仓库整洁。
+
+### 37.112 教学模式工具终端化 + 结果确认闭环（2026-09-04 ✅ 代码完成，待真实 SSH 验收）
+
+**任务**：按 `docs/教学模式工具终端化方案-2026-09-04.md` 将教学模式的终端类工具调用从「后端静默执行 + JSON 结果」收敛为「命令卡 → 学生显式点击 → 终端可见执行 → 精确、脱敏的命令块结果 → 学生显式继续讲解」。其他三种模式不改变。
+
+**先调研得到的底层结论**：系统已有 `TerminalBlockCollector`，它由 OSC 133/633 生命周期界定命令块、通过 xterm marker 截取输出并在入库前脱敏；这比 `get_terminal_output` 的整段滚屏更适合作为教学证据源。Strands 的一次工具调用结束后没有可安全续接的原调用上下文，因此不能在命令完成后自动恢复 Agent——应由学生明确选择是否把结果作为新的消息交回。
+
+**交付链路**：
+1. 新增 `teachingExecutionStore.ts`：一次等待态绑定 terminal leaf、规范化命令、点击时间与 90 秒期限；只有同 leaf、同命令、开始时间不早于点击的 `TerminalBlock` 能完成关联；每 leaf 同时只允许一张等待卡，超时/取消必释放占用。
+2. `useAiLiveBridge.startTeachingCommand()` 先登记、再以原有打字机优先/PTY 回退方式注入；不存在已绑定可见终端时 fail-closed，绝不静默写入后台会话。
+3. `terminalBlocksStore` 仅把已收集且已脱敏的 scoped block 交给教学 store。`TeachCommandCard` 显示退出码、时长与输出，需学生点击「基于结果继续讲解」才调用 `sendMessage()`；消息以 `<teaching-command-result>` 明确数据边界，终端字段会转义 `&`、`<`、`>` 以防伪造闭合标签，并提醒模型将它视为不可信数据而非指令。
+4. 修 SSH Bash/Zsh 集成脚本：OSC 633 `E` 事件对反斜杠与分号编码，防含 `;` 的命令被解析器误截断；实现方式与 VS Code shell integration 的协议兼容。
+5. 教学 prompt 写死「本轮工具调用不会得到执行结果」，禁止 `get_terminal_output` 读取整段滚屏，只有结构化结果才可当作已执行事实。
+
+**门禁**：定向前端 vitest **24 passed**（含伪造 `</teaching-command-result>` 输出的边界回归）；`pnpm typecheck`、`pnpm lint` 通过；教学相关 Python 测试 `test_strands_adapter_context.py + test_shell_mapping.py + test_command_impact.py` **133 passed（10.69s）**；Rust `cargo check` 与完整 `cargo test` 已通过（3 个既有 Docker ignored）；`git diff --check` 无空白错误；`pnpm build:web` **通过（23.05s）**。完整 `pnpm test` 仍只有既有 `sidecar-adapter.test.ts` 单例超时抖动，单文件重跑 31/31 通过。构建仍报告既有的 Rollup 循环 chunk、动态/静态 import 混用及大包告警，均非本轮阻断错误。
+
+**尚待真实验收，不以自动化冒充完成**：在本地与真实 SSH 各验证成功、失败、90 秒超时、两张卡竞争同一 leaf、带分号的命令；确认 SSH shell 真的发出 OSC 633、前端只回收关联命令块；检查真实模型不会在没有 `<teaching-command-result>` 时猜测结果。没有对既有脏工作树做总提交，避免把本会话前已存在的 WIP 混入不相关 commit。
+
+**复盘**：① 终端「可见」与「可取证」是两个约束：只做打字机注入还不足以让 Agent安全理解结果，必须把输入、终端、命令生命周期和输出关联写成可验证的不变量。② 模型继续执行是权限边界，宁可多一个学生点击，也不能自动续跑导致重复执行或把滚屏中的提示当命令。③ OSC 协议字段不是普通字符串：分隔符必须编码，端到端测试要包含组合命令。④ 共享脏工作树时，门禁可以覆盖本次改动，但提交必须等待用户确认已有 WIP 的归属与拆分方式。
+
+### 37.113 真实启动、后端监测与保存 SSH 连接巡检（2026-09-04 ✅ 启动健康，原生验收受自动化能力边界阻塞）
+
+**任务**：用户授权自行启动桌面软件、持续观察后端、分析本地 AI 对话历史，并验证已保存的 SSH 连接；约束是出现异常先取证、再决定是否开发，绝不把环境限制伪装成产品缺陷。
+
+**真实启动与后端证据**：通过 `启动-日志版.bat` 启动开发进程，Vite 服务正常就绪，Rust 编译后桌面进程已运行；`.tdsf-data/dev-run.log` 显示真实模型配置已载入、`StrandsAgentAdapter` 的 `backend_enabled / strands_available / model_available` 均为 true、sidecar 注册 **120** 个方法并完成 ready 通知。知识库检测到既有官方条目后正确跳过重建。对启动日志及 sidecar 日志以 `error/panic/traceback/fatal/exception` 模式复核，未发现启动期异常；本轮不应凭空增加“修复”。开发进程保留运行，方便继续观察。
+
+**界面与教学模式**：本地浏览器回退页可正常渲染四档 Agent 模式，并能切换到教学模式；但它没有 Tauri bridge 与持久化的 Space/SSH 上下文，故只证明前端控件可渲染，**不作为**终端注入、OSC 回收或真实模型对话的验收依据。
+
+**保存 SSH 连接的安全核验**：只读取了应用保存的非敏感 profile 元数据，确认存在最近使用的密码认证连接；代码也确认 metadata JSON 与 OS keyring 中的 secret 分离存放。系统 `ssh` 的无交互只读探针被密码认证拒绝，这是预期结果——命令行不会自动取得 Tauri 写入系统钥匙串的密码。没有读取、导出、猜测密码或私钥，也没有在服务器执行任何新命令、修改任何远端文件或计划任务。因此该结果既不能证明应用连接失效，也不构成修改认证代码的依据。
+
+**本地 AI 历史的风险发现**：历史 agent log 显示较早会话曾走过直接 SSH 工具路径，并有一次创建远端健康检查脚本和计划任务的陈述；本轮未沿用该路径。它反证教学模式必须坚持 §37.112 的“命令卡 + 学生点击 + 可见终端 + 精确结果”闭环，不能为了自动化验收绕过学生确认或恢复后端静默执行。
+
+**当前阻塞与下一步**：当前 Computer Use 接口只暴露浏览器 surface，没有原生 Tauri app 控制能力，因而无法在真实桌面中点击已保存的密码 profile、建立原生 SSH session、观察 xterm OSC 633 和教学卡回传。此为测试设施边界，不是产品错误。可继续自动完成的工作是保留后端日志监测与静态/定向门禁；完整验收仍需原生控制能力可用，或由用户在已启动的桌面程序中建立一次保存连接后再提供界面状态。届时按 §37.112 的本地成功/非零/超时/同 leaf 竞争、SSH Bash/Zsh 含分号命令、脱敏结果和真实模型等待行为逐项取证。
+
+**复盘**：① “进程启动成功”与“原生交互链路验收成功”必须分开记录；浏览器本地页不能冒充桌面 IPC。② 凭据验证应验证 profile 存在与凭据边界，不能为让 CLI 探针通过而绕过 keyring 或读取秘密。③ 发现既往远程写入历史时，优先收紧本轮执行边界并保留审计线索，而非复制旧路径。④ 运行日志无异常时，正确动作是维持监测并完成验收设计，而不是为了“继续开发”凭空改代码。

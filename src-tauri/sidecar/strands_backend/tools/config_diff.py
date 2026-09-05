@@ -98,3 +98,24 @@ def make_config_diff_tool(ctx: ToolContext):
 
     config_diff.__name__ = "config_diff"
     return config_diff
+
+
+def to_shell_command(params: dict[str, Any]) -> str | None:
+    """工具参数 → 等价 shell 命令映射（纯函数，fail-closed）
+
+    config_diff(file_a, file_b) → diff -u file_a file_b
+
+    Args:
+        params: 工具参数 dict（file_a / file_b）
+
+    Returns:
+        shell 命令字符串；映射失败返回 None（不抛异常）
+    """
+    try:
+        file_a = (params.get("file_a") or "").strip()
+        file_b = (params.get("file_b") or "").strip()
+        if not file_a or not file_b:
+            return None
+        return f"diff -u {shlex.quote(file_a)} {shlex.quote(file_b)}"
+    except (ValueError, TypeError, KeyError):
+        return None

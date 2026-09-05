@@ -217,6 +217,10 @@ class ToolContext:
     # 空 = 不可得（python_run fail-closed 拒绝）；SSH 会话下不适用
     # （python_run 拒绝在远端执行）
     workspace: str = ""
+    # A3 (2026-09-04): 教学模式终端执行链路——teach=True 时，有 shell 映射的
+    # 工具不走后端执行，改由 wrap_tool_for_teach_mode 拦截返回 teach_command
+    # 事件，前端渲染 TeachCommandCard，学生手动点击注入终端（打字机）。
+    teach: bool = False
 
 
 # ============================================================================
@@ -639,8 +643,69 @@ def _semantic_from_impact(impact: dict[str, Any] | None) -> str:
             return f"想{label}：{objs}" if objs else f"想{label}"
     segs = impact.get("segments", [])
     if segs:
-        return f"想只读查询：{segs[0].get('command', '')[:60]}"
+        return f"想只读查看：{segs[0].get('command', '')[:60]}"
     return ""
+
+
+def _factual_approval_explanation(
+    command: str,
+    impact: dict[str, Any] | None,
+) -> str:
+    """基于影响预测生成审批卡的确定性命令说明。
+
+    LLM 传入的 explanation 是「为什么本轮要做」的补充，但审批卡不能因模型
+    漏填而只显示“无解释”。本函数只陈述分类器能够证明的事实；识别失败时明确
+    说明不确定性，而不是杜撰安全结论。
+    """
+    if not impact:
+        return "系统未取得可靠的影响预测；确认前不会执行该命令。"
+
+    segments = impact.get("segments", [])
+    if not isinstance(segments, list) or not segments:
+        return "系统未解析到可说明的命令段；确认前不会执行该命令。"
+
+    categories = {
+        str(seg.get("category", "unknown"))
+        for seg in segments
+        if isinstance(seg, dict)
+    }
+    normalized = command.lower()
+    if categories == {"readonly"}:
+        if "firewall-cmd" in normalized and "--list-all" in normalized:
+            return "读取当前防火墙区域的服务、端口与 rich rule；不会修改规则、重载防火墙或改变网络连通性。"
+        if "firewall-cmd" in normalized and "--state" in normalized:
+            return "读取 firewalld 当前运行状态；不会修改规则或改变网络连通性。"
+        return "仅查询当前系统状态或配置，不会写入文件、修改服务或改变权限。"
+    if "unknown" in categories:
+        return "系统无法可靠判定该命令是否会改变状态，因此保守地要求逐条确认；确认前不会执行。"
+    if "delete" in categories:
+        return "该命令会删除目标数据，删除后可能无法恢复。"
+    if "service" in categories:
+        return "该命令会改变服务的运行或启动状态，可能影响正在使用该服务的连接。"
+    if "config" in categories:
+        return "该命令会修改系统配置或防火墙规则，确认后才会生效。"
+    if "perm" in categories:
+        return "该命令会修改用户、文件或访问权限，可能改变后续访问范围。"
+    if "install" in categories:
+        return "该命令会改变已安装的软件包或其版本。"
+    if "file_write" in categories:
+        return "该命令会创建、移动或改写文件内容。"
+    if "network" in categories:
+        return "该命令会访问外部网络或远端服务。"
+    return "该命令可能改变系统状态，确认后才会执行。"
+
+
+def _approval_explanation(
+    command: str,
+    impact: dict[str, Any] | None,
+    supplied: str,
+) -> str:
+    """合并系统事实说明与模型提供的本轮目的，前者永远优先。"""
+    factual = _factual_approval_explanation(command, impact)
+    purpose = supplied.strip()
+    if not purpose or purpose == factual:
+        return factual
+    return f"{factual}\n本次目的：{purpose}"
 
 
 def request_approval_and_wait(
@@ -686,6 +751,7 @@ def request_approval_and_wait(
         except (ValueError, TypeError, IndexError):
             risk_l = 4
     semantic = _semantic_from_impact(impact)
+    explanation = _approval_explanation(command, impact, explanation)
     desc_lines = [
         f"Agent {ctx.agent_name} 试图通过工具 {tool_name} 执行命令:",
     ]
@@ -1339,6 +1405,79 @@ def filter_tools_readonly(tools: list) -> list:
     ]
 
 
+def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
+    """教学模式工具调用拦截包装器（A3，2026-09-04）
+
+    当 ctx.teach=True 且工具有 shell 映射（has_shell_mapping）时，
+    拦截工具调用：不执行后端逻辑，改为返回 teach_command 结构化结果。
+    前端据此渲染 TeachCommandCard，学生手动点击后通过打字机注入终端。
+
+    安全不变量：
+    - 无 shell 映射的工具（knowledge_search / suggest_command 等）不拦截，
+      走原有后端路径（只读工具在教学模式下本就可正常执行）。
+    - 映射失败（resolve_shell_command 返回 None）→ 不拦截，走原路径。
+    - 非 teach 模式下此函数不会被调用（守卫隔离）。
+
+    Args:
+        tool_fn: @tool 装饰后的工具函数（带 __name__/__doc__ 等属性）
+        ctx: ToolContext 运行时上下文（由调用侧直接传入，不从工具参数提取）
+
+    Returns:
+        包装后的函数；teach 拦截时返回 teach_command dict，否则调原函数
+    """
+    import functools
+
+    tool_name = getattr(tool_fn, "__name__", "")
+
+    # 快速路径：未注册 shell 映射的工具不包装（零开销）
+    from strands_backend.tools.shell_mapping import has_shell_mapping
+    if not has_shell_mapping(tool_name):
+        return tool_fn
+
+    @functools.wraps(tool_fn)
+    def _teach_wrapper(*args: Any, **kwargs: Any) -> Any:
+        if getattr(ctx, "teach", False):
+            # 解析工具参数：工厂函数签名是 fn(params: dict) 或 fn(**params)
+            params: dict[str, Any] = {}
+            if args and isinstance(args[0], dict):
+                params = args[0]
+            elif "params" in kwargs and isinstance(kwargs["params"], dict):
+                params = kwargs["params"]
+            else:
+                # 收集全部 kwargs 作为参数（工具签名是具名参数如 command=...）
+                params = dict(kwargs)
+
+            from strands_backend.tools.shell_mapping import resolve_shell_command
+            command = resolve_shell_command(tool_name, params)
+            if command is not None:
+                # 影响预测（复用 A1 已有的 command_impact）
+                impact: dict[str, Any] | None = None
+                try:
+                    from strands_backend.tools.command_impact import analyze as _analyze
+                    impact = _analyze(command)
+                except Exception:  # noqa: BLE001 — 预测失败不阻塞
+                    pass
+
+                logger.info(
+                    f"teach_mode intercept: tool={tool_name}, "
+                    f"command={command[:80]}"
+                )
+                return {
+                    "status": "teach_command",
+                    "command": command,
+                    "impact": impact,
+                    "tool_name": tool_name,
+                    "explanation": (
+                        f"教学模式下，此工具将以终端可见方式执行: {command}"
+                    ),
+                }
+
+        # 非 teach 或无映射 → 正常执行
+        return tool_fn(*args, **kwargs)
+
+    return _teach_wrapper
+
+
 def make_all_ops_tools(
     ctx: ToolContext,
     tool_names: set[str] | list[str] | None = None,
@@ -1402,6 +1541,7 @@ __all__ = [
     "assess_command",
     "execute_via_ssh",
     "filter_tools_readonly",
+    "wrap_tool_for_teach_mode",
     # 工具注册（T2: TOOL_REGISTRY 单一真源 + 派生集合）
     "OPS_TOOL_NAMES",
     "TOOL_REGISTRY",

@@ -348,4 +348,25 @@ __all__ = [
     "make_firewall_manage_tool",
     "make_security_audit_tool",
     "make_performance_analyze_tool",
+    "performance_analyze_to_shell_command",
 ]
+
+
+def performance_analyze_to_shell_command(params: dict[str, Any]) -> str | None:
+    """performance_analyze 工具参数 → 等价 shell 命令映射（纯函数，fail-closed）
+
+    performance_analyze(metric) → 对应只读命令
+
+    Args:
+        params: 工具参数 dict（metric）
+
+    Returns:
+        shell 命令字符串；映射失败返回 None（不抛异常）
+    """
+    try:
+        metric = (params.get("metric") or "").strip().lower() or "load"
+        if metric not in _PERF_CHECKS:
+            return None
+        return _PERF_CHECKS[metric]
+    except (ValueError, TypeError, KeyError):
+        return None

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
 from strands_backend.tools import tool
 
@@ -24,6 +25,34 @@ logger = logging.getLogger("sidecar.strands_backend.tools.knowledge_get_doc")
 
 # 单篇返回给 LLM 的正文上限（字符）——超过截断并提示可用检索定位章节
 _MAX_CONTENT_CHARS = 30000
+
+
+def _emit_tool_call(
+    ctx: Any,
+    *,
+    call_id: str,
+    status: str,
+    params: dict[str, Any],
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Publish the started/completed lifecycle used by the tool UI."""
+    event_bus = getattr(ctx, "event_bus", None)
+    if event_bus is None:
+        return
+    try:
+        kwargs: dict[str, Any] = {
+            "tool_name": "knowledge_get_doc",
+            "tool_call_id": call_id,
+            "params": params,
+            "status": status,
+            "session_id": getattr(ctx, "session_id", "") or None,
+            "source": f"{getattr(ctx, 'agent_name', 'main')}_agent.strands_tool.knowledge_get_doc",
+        }
+        if result is not None:
+            kwargs["result"] = result
+        event_bus.emit_tool_call(**kwargs)
+    except Exception as exc:  # event delivery must not break retrieval
+        logger.debug("knowledge_get_doc emit_tool_call failed: %s", exc)
 
 
 def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
@@ -40,8 +69,20 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
         }
     """
     url = str(params.get("url") or "").strip()
+    call_id = uuid4().hex
+    event_params = {"url": url}
+    _emit_tool_call(ctx, call_id=call_id, status="started", params=event_params)
+
     if not url:
-        return {"status": "error", "url": "", "message": "url 参数缺失"}
+        result = {"status": "error", "url": "", "message": "url 参数缺失"}
+        _emit_tool_call(
+            ctx,
+            call_id=call_id,
+            status="completed",
+            params=event_params,
+            result=result,
+        )
+        return result
 
     try:
         from knowledge.rag import get_slim_rag
@@ -50,20 +91,36 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
         doc = get_slim_rag().get_doc(url)
     except Exception as e:
         logger.exception(f"knowledge_get_doc failed: url={url[:80]}, error={e}")
-        return {"status": "error", "url": url, "message": f"知识库读取异常: {e}"}
+        result = {"status": "error", "url": url, "message": f"知识库读取异常: {e}"}
+        _emit_tool_call(
+            ctx,
+            call_id=call_id,
+            status="completed",
+            params=event_params,
+            result=result,
+        )
+        return result
 
     if doc is None:
-        return {
+        result = {
             "status": "not_found",
             "url": url,
             "message": "知识库中不存在该文档（url 需与检索结果返回的 url 完全一致）",
         }
+        _emit_tool_call(
+            ctx,
+            call_id=call_id,
+            status="completed",
+            params=event_params,
+            result=result,
+        )
+        return result
 
     content = str(doc.get("content") or "")
     truncated = len(content) > _MAX_CONTENT_CHARS
     if truncated:
         content = content[:_MAX_CONTENT_CHARS] + "\n\n…（已截断，可用 knowledge_search 检索定位具体章节）"
-    return {
+    result = {
         "status": "success",
         "url": url,
         "title": str(doc.get("title_zh") or doc.get("title") or ""),
@@ -72,6 +129,14 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
         "chunks": int(doc.get("chunks") or 0),
         "truncated": truncated,
     }
+    _emit_tool_call(
+        ctx,
+        call_id=call_id,
+        status="completed",
+        params=event_params,
+        result=result,
+    )
+    return result
 
 
 def make_knowledge_get_doc_tool(ctx: Any):

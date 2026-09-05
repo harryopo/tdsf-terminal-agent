@@ -42,17 +42,17 @@ CATEGORY_PERM = "perm"              # 用户权限
 CATEGORY_FILE_WRITE = "file_write"  # 文件写入/移动
 CATEGORY_UNKNOWN = "unknown"        # 未知
 
-# 类别 → 中文标签（审批卡类别徽标）
+# 类别 → 中文标签（审批卡类别徽标，学生友好表述）
 CATEGORY_LABELS: dict[str, str] = {
-    CATEGORY_READONLY: "只读查询",
-    CATEGORY_INSTALL: "安装软件包",
-    CATEGORY_CONFIG: "修改配置",
+    CATEGORY_READONLY: "只读查看",
+    CATEGORY_INSTALL: "装包",
+    CATEGORY_CONFIG: "改配置",
     CATEGORY_SERVICE: "操作服务",
-    CATEGORY_DELETE: "删除文件",
-    CATEGORY_NETWORK: "网络外联",
-    CATEGORY_PERM: "变更用户/权限",
-    CATEGORY_FILE_WRITE: "写入/移动文件",
-    CATEGORY_UNKNOWN: "未知操作",
+    CATEGORY_DELETE: "删除",
+    CATEGORY_NETWORK: "联网访问",
+    CATEGORY_PERM: "改权限",
+    CATEGORY_FILE_WRITE: "写文件",
+    CATEGORY_UNKNOWN: "未识别命令（保守待确认）",
 }
 
 # 类别 → 风险级（任务 spec 映射；未知给偏高值 fail-closed）
@@ -69,7 +69,7 @@ CATEGORY_RISK: dict[str, int] = {
 }
 
 # 未知类别卡面文案（fail-closed 提示语，前端也用同文案兜底）
-UNKNOWN_IMPACT_TEXT = "影响未知——请人工审查"
+UNKNOWN_IMPACT_TEXT = "暂无法判断影响，请人工确认"
 
 
 # ============================================================================
@@ -273,6 +273,9 @@ _INSTALL_CMDS = {"yum", "dnf", "apt", "apt-get", "aptitude", "pip", "pip3",
 _INSTALL_ACTIONS = {"install", "remove", "erase", "uninstall", "search",
                     "update", "upgrade", "autoremove", "list", "info",
                     "add", "reinstall", "downgrade", "mark"}
+_PACKAGE_READONLY_ACTIONS = {
+    "search", "list", "info", "repolist", "repoquery", "check-update",
+}
 _DELETE_CMDS = {"rm", "rmdir", "shred", "unlink"}
 _NETWORK_CMDS = {"curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat",
                  "netcat", "telnet", "ftp", "lftp", "git", "ping6"}
@@ -308,8 +311,25 @@ _READONLY_CMDS = {
 # status 是纯只读，set-* 子命令才写。此前一刀切走 unknown L3（fail-closed），
 # 导致 agent 环境探测（`hostnamectl` 查系统信息）被误判高风险触发审批。
 # 现按子命令细分：含 set-* → config L2；否则 → readonly L0（见 classify_segment）。
-# 注：semanage / firewall-cmd 仍不进白名单（写风险高，保守 unknown L3 合理）。
 _MIXED_READONLY_CMDS = {"hostnamectl", "timedatectl", "localectl"}
+
+# firewall-cmd 同时承载查询与规则变更，不能像普通命令一样按 basename 一刀切。
+# 只精确放行下列明确无副作用的动作；所有未列出的 flag 仍保持 fail-closed，
+# 尤其不能把 --add-* / --remove-* / --reload 等写操作误判为只读。
+_FIREWALL_READONLY_ACTIONS = {
+    "--state", "--list-all", "--list-all-zones", "--list-ports",
+    "--list-services", "--list-rich-rules", "--list-interfaces",
+    "--get-active-zones", "--get-default-zone", "--get-zones",
+    "--get-services", "--get-icmptypes", "--get-helpers",
+    "--get-log-denied", "--get-target", "--query-port", "--query-service",
+    "--query-rich-rule", "--query-masquerade", "--query-forward-port",
+    "--check-config", "--version",
+}
+_FIREWALL_WRITE_PREFIXES = (
+    "--add-", "--remove-", "--change-", "--set-", "--new-", "--delete-",
+    "--rename-", "--enable-", "--disable-", "--reload", "--complete-reload",
+    "--panic-", "--runtime-to-permanent", "--load-", "--lockdown-",
+)
 
 # systemctl/service 的只读子命令（其余 action 视为写操作 → service L3）
 _SERVICE_READONLY_ACTIONS = {
@@ -336,6 +356,9 @@ _NO_OBJECT_READONLY = {
     "hostname", "ps", "top", "free", "df", "du", "vmstat", "iostat", "sar",
     "lsmod", "lscpu", "lspci", "lsusb", "lsblk", "env", "printenv",
     "history", "alias", "true", "false", "sleep", "wait", "wc", "seq",
+    # firewall-cmd 的查询对象已由 flag 表达（例如 --list-all），无须把 flag
+    # 伪装为操作对象；zone selector 同样只影响查询范围。
+    "firewall-cmd",
 }
 
 
@@ -414,11 +437,18 @@ def classify_segment(seg: str) -> dict:
         （denied / dangerous_construct / deny_reason 由 analyze 叠加）
     """
     raw_toks = [_strip_quotes(t) for t in seg.split()]
+    command_query = (
+        len(raw_toks) > 1
+        and _base_name(raw_toks[0]).lower() == "command"
+        and raw_toks[1] in {"-v", "-V"}
+    )
     toks = _normalize_tokens(raw_toks)
     base = _base_name(toks[0]).lower() if toks else ""
 
     # --- systemctl / service 按子命令细分（status 只读，restart 写）---
-    if base in ("systemctl", "service", "chkconfig"):
+    if command_query:
+        category = CATEGORY_READONLY
+    elif base in ("systemctl", "service", "chkconfig"):
         actions = {t.lower() for t in toks[1:]}
         if base == "chkconfig":
             category = CATEGORY_READONLY if (not actions or "list" in actions) else CATEGORY_SERVICE
@@ -428,6 +458,15 @@ def classify_segment(seg: str) -> dict:
             # 未知 action 也按写操作处理（fail-closed）
             category = CATEGORY_SERVICE
     # --- 装包 ---
+    elif base in {"yum", "dnf"} and any(
+        token.lower() in _PACKAGE_READONLY_ACTIONS for token in toks[1:]
+    ):
+        category = CATEGORY_READONLY
+    elif base == "rpm" and any(
+        token == "--query" or (token.startswith("-q") and not token.startswith("--"))
+        for token in toks[1:]
+    ):
+        category = CATEGORY_READONLY
     elif base in _INSTALL_CMDS:
         category = CATEGORY_INSTALL
     # --- 删除 ---
@@ -460,6 +499,16 @@ def classify_segment(seg: str) -> dict:
             if (not sub or sub in _CONTAINER_READONLY)
             else CATEGORY_UNKNOWN
         )
+    # --- firewall-cmd 混合命令按 flag 细分（2026-09-04）：
+    #     明确查询动作 L0；明确改规则/重载 L2；其余维持 unknown L3 ---
+    elif base == "firewall-cmd":
+        flags = {t.lower().split("=", 1)[0] for t in toks[1:] if t.startswith("--")}
+        if any(flag.startswith(_FIREWALL_WRITE_PREFIXES) for flag in flags):
+            category = CATEGORY_CONFIG
+        elif flags & _FIREWALL_READONLY_ACTIONS:
+            category = CATEGORY_READONLY
+        else:
+            category = CATEGORY_UNKNOWN
     # --- hostnamectl/timedatectl/localectl 混合命令按子命令细分（C3 2026-09-03）：
     #     set-* 是写操作 → config L2；无参数/status/show 纯查询 → readonly L0 ---
     elif base in _MIXED_READONLY_CMDS:
@@ -582,7 +631,7 @@ def _build_summary(segments: list[dict], max_risk: int, denied: bool) -> str:
     if not segments:
         return UNKNOWN_IMPACT_TEXT
     if max_risk == 0 and all(s["category"] == CATEGORY_READONLY for s in segments):
-        return "只读查询，无副作用"
+        return "只读查看，无副作用"
     parts = []
     for s in segments[:6]:
         objs = "、".join(s["objects"][:3]) if s["objects"] else "—"

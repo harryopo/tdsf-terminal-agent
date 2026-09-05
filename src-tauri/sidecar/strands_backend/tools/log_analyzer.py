@@ -281,4 +281,26 @@ def make_log_analyzer_tool(ctx: ToolContext):
 __all__ = [
     "invoke_log_analyzer_tool",
     "make_log_analyzer_tool",
+    "to_shell_command",
 ]
+
+
+def to_shell_command(params: dict[str, Any]) -> str | None:
+    """工具参数 → 等价 shell 命令映射（纯函数，fail-closed）
+
+    Args:
+        params: 工具参数 dict（log_path / mode / lines / pattern）
+
+    Returns:
+        shell 命令字符串；映射失败返回 None（不抛异常）
+    """
+    try:
+        log_path = (params.get("log_path") or "").strip()
+        if not log_path:
+            return None
+        mode = params.get("mode", "tail") or "tail"
+        lines = int(params.get("lines", 100))
+        pattern = params.get("pattern", "") or ""
+        return _build_command(log_path, mode, lines, pattern)
+    except (ValueError, TypeError, KeyError):
+        return None

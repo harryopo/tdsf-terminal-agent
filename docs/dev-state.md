@@ -6,6 +6,34 @@
 
 ---
 
+### 37.115 Agent 审批、会话恢复与教学边界收口（2026-09-05）
+
+**本轮完成**：确认模式以“已识别且完整元数据的只读查询可直接运行；写入、网络、副作用或未知命令逐条确认”为准。`needs_you.py` 对同一 `session_id`（无 session 也视为同一全局桶）只激活一张审批，后续按 FIFO 排队；前端也只展示队头，拒绝或超时后才提升下一张。当前保证的是**审批决议顺序**，不假称已做到“上一条远程命令完成后才出现下一条”；后者还需要 SSH 执行完成事件回流到审批生命周期。
+
+**审批信息与风险**：审批卡仅保留真实命令、一个中文用途和基于结构化 metadata 的简短影响，不再伪造输出预测、重复“安全/待人工确认”分组或使用大片红色侧栏。`dnf/yum search|list|info|repolist|repoquery|check-update`、`rpm -q/-qa/--query` 与 `command -v/-V` 归为 L0 只读；`command rm -rf` 仍按底层危险命令判定，不能借 wrapper 降级。
+
+**会话与教学**：SSH 会话 scope 按 `host/user/port` 稳定归属；点击历史会先精确匹配保存的连接配置，连接成功后才迁移/打开同服务器历史，失败或遗失配置保持当前会话不动。教学皮肤保持显式 `<!-- tdsf:teach -->` 标记和“真正教学才渲染课程卡”的 gate；知识检索、文档读取和工具状态仍为普通 Markdown。教学提示词恢复“概念与原理、易错点与考点、练习”，但不恢复旧的固定六段模板。
+
+**验证与运行态**：Vitest **1354 passed**；Python **2163 passed**（2 条既有 pytest warning）；`pnpm typecheck`、`pnpm lint`、`cargo check` 通过。已通过项目 `启动-日志版.bat` 启动本地服务：Vite 监听 `127.0.0.1:9300` 且 HTTP 200，sidecar 已注册 120 methods、真实模型可用、知识库保有 3969 条官方条目；本次启动段未见 ERROR/panic/Traceback/fatal。
+
+**下一步（必须在原生 Tauri 与真实 SSH 配置中验收）**：验证保存 profile 的连接成功/缺失/端口不匹配三分支，确认同服务器历史可见性；依次触发 `firewall-cmd --list-all`、`dnf search` 与写操作，观察单卡 FIFO；在教学开关下分别执行“查看知识库”和明确教学请求，确认普通 Markdown 与 TeachCard 的分类。
+
+### 37.114 教学模式知识检索与教学输出边界（2026-09-04）
+
+> 本节是当前 Agent 修复的交接摘要，详细复盘见 `docs/DEV-JOURNAL.md` §37.114。
+
+**根因已确认**：历史对话中“查看知识库”会被旧版标题/emoji 启发式误判为 TeachCard；同时 `knowledge_search` / `knowledge_get_doc` 虽能从 RAG 返回数据，却没有经过 sidecar `tool_call` 生命周期事件，因此前端看不到知识库调用。不可用的 `analyze_logs` 还会被模型写成空 bash 教学卡，造成虚假执行感。
+
+**当前实现**：
+
+- `teachParser.isTeachMessage()` 仅接受首行 `<!-- tdsf:teach -->`；无标记的知识检索、文档读取、工具状态和失败说明都按普通 Markdown 渲染。普通 Markdown 与教学 Markdown 共用紧凑的 heading/list/table 样式，h1 已降到 15px，避免“主机概览”占据整屏。
+- `adapter.py` 以当前用户回合计算保守的显式教学意图。仅“查看/检索/读取知识库”时追加 per-turn 普通报告约束；callback handler 对可能跨 delta 的首行标记做缓冲剥离，最终 observation 再做一次 fail-closed 清理。`<teaching-command-result>` 是命令卡结果续讲的唯一事实边界。
+- 知识工具现在以同一调用 ID 发出 started/completed 事件；`sidecar-adapter.ts` 按显式 ID 或同名 FIFO 关联并发调用，前端的 `Tool` 对知识检索/全文读取显示专用卡片，检索摘要默认展开，全文和空正文状态不伪造。
+- 教学命令卡继续保持“学生查看并点击终端执行”的边界，不调用后端执行，不读取滚屏猜结果；空 shell 围栏和 unavailable 工具不会生成空 `$` 卡。
+
+**验证与阻塞**：前端定向 vitest 69 passed、typecheck/lint passed；后端教学意图/流式门控/知识工具 26 passed、`py_compile` passed；真实 sidecar 已启动，`backend_enabled/strands_available/model_available=true`、120 methods、3969 official entries，最近 300 行无 ERROR/Traceback/Exception。当前自动化环境没有原生 Tauri 控制面，也无法读取 OS keyring，所以真实桌面点击、SSH Bash/Zsh OSC 633 和模型行为仍待用户侧/原生控制面验收；不要因此放宽确认链或绕过 SSH 凭据边界。
+
+
 ## 知识库阶段总结（2026-08-31 收官，细节见 DEV-JOURNAL §37.86-87）
 
 | 项 | 终态 |
@@ -4577,3 +4605,33 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **docs保守归类**：方案书v1.0/v1.1被 DEV-JOURNAL/P3-SSH/Agent架构说明书 精确路径引用→不移动(避免断引用),用docs/README索引清晰化。核心记忆文档(DEV-JOURNAL/dev-state/ROADMAP/方案书v2.0/MULTI-AGENT)保持顶层。
 
 **待用户手动**：临时目录 cdp-dir/output/knowledge-preview/dist 已gitignore(仓库整洁)，但DeleteFile不支删目录+规则禁shell删→如需清磁盘手动删文件夹(无害保留)。
+
+### 37.112 教学模式工具终端化 + 学生确认结果闭环（2026-09-04 ✅ 代码完成，待真实 SSH 验收）
+
+> 用户钦定的 `docs/教学模式工具终端化方案-2026-09-04.md` 已从四阶段方案变为可运行代码。详尽复盘见 DEV-JOURNAL §37.112；本节是下一手必须先读的交接摘要。
+
+**已实现的系统链路**：教学 observe 中，存在 shell 映射的工具仍可被模型调用，但 `wrap_tool_for_teach_mode()` 只返回 `status="teach_command"`，后端不执行。`tool.tsx:TeachCommandCard` 仅在学生点击时调用 `live.startTeachingCommand()`；后者必须找到实际渲染的本地或 SSH terminal leaf，先以 `(leafId, normalized command, requestedAt)` 登记 `teachingExecutionStore`，再进行打字机/PTY 注入。`TerminalBlockCollector` 完成的 block 已由 marker 限定输出并脱敏，`terminalBlocksStore` 才按同 leaf、精确命令、点击后开始的条件回填；90 秒超时或取消都释放 leaf。学生必须再点击「基于结果继续讲解」，才把 `<teaching-command-result>` 新消息交回 Agent。
+
+**不可破坏的不变量**：① 不自动执行、也不自动恢复原 Strands 调用；② 无可见 xterm terminal 即 fail-closed；③ 一 leaf 仅一张等待卡；④ 不读完整 scrollback，不按 author/短 TTL 猜关联；⑤ 未关联/超时的输出永不发送给 Agent；⑥ 终端输出是数据，进入结构化消息前转义 `&`、`<`、`>`，并明确要求模型不把它当指令；⑦ 普通 observe/confirm/auto 路径不走教学包装。
+
+**协议修复**：SSH Bash/Zsh 的 OSC 633 `E` command 字段现转义反斜杠与分号，`TerminalBlockCollector` 能将 `\x3b` 还原为命令中的 `;`，避免复合命令在第一个分号处被截断。协议思路对齐 VS Code shell integration。
+
+**本轮验证**：前端教学定向 vitest **24 passed**（含伪造闭合标签的输出边界回归）；`pnpm typecheck`、`pnpm lint` 通过；Python `test_strands_adapter_context.py + test_shell_mapping.py + test_command_impact.py` 133 passed（10.69s）；Rust `cargo check`、完整 `cargo test` 通过（3 个既有 Docker ignored）；`git diff --check` 无错误；`pnpm build:web` **通过（23.05s）**。全量 `pnpm test` 的唯一失败仍是已知 `sidecar-adapter.test.ts` 超时抖动，单文件重跑 31/31 通过。构建仍有既有 Rollup 循环 chunk、动态/静态 import 混用和大包告警，均不阻断产物输出。
+
+**下一步（按风险顺序）**：
+1. 用 `启动.bat` 打开真实桌面，验证本地终端成功/非零退出/超时/并发卡片，观察不会重复注入。
+2. 在真实 SSH Bash/Zsh 上验证 OSC 633、含分号命令、输出脱敏与完整结构化回传；若 fish/csh 只有降级协议，不允许猜测结果。
+3. 用真实模型检查无结果时会等待、有 `<teaching-command-result>` 时只解释结果并按需提出下一张卡。
+4. 上述验收完成后，再按文件归属拆分当前已有 WIP 并提交；不要将本轮改动与此前脏工作树一次性混提交。
+
+### 37.113 真实运行巡检补充（2026-09-04 ✅ 启动健康，原生 SSH 验收待具备控制面）
+
+**已实测**：用户授权后已用 `启动-日志版.bat` 真正拉起 dev。Vite、Rust 桌面进程和 sidecar 均已就绪；真实模型配置载入，`StrandsAgentAdapter` 三项可用性为 true，sidecar 注册 120 个方法、发送 ready，知识库命中既有官方条目后正确跳过初始化。`.tdsf-data/dev-run.log` 及 sidecar 日志未检出 `error/panic/traceback/fatal/exception` 启动信号；进程保持运行以供继续监测。
+
+**SSH 保存连接核验结论**：应用非敏感 profile metadata 存在且近期使用；Rust 实现确认 profile JSON 与 OS keyring secret 分离。系统 SSH 的 BatchMode 只读探针被密码认证拒绝，原因是 CLI 没有也不应取得 Tauri 写入 keyring 的密码，故不能据此判断保存连接失效。没有读取密码/私钥，没有做任何新远端操作。
+
+**不能冒充的验收**：当前自动化接口没有原生 Tauri app surface，只能打开浏览器版本地页面；它能证明教学模式 UI 控件渲染，不能获得 Tauri IPC、保存 Space 或 SSH terminal。因此暂时无法自动完成“点保存连接 → 原生 SSH → xterm OSC 633 → TeachCommandCard 结果回传”的真机验收。此为测试设施限制，不是代码故障；不要为绕过它恢复 `ssh_command` 静默执行或读取凭据。
+
+**历史风险线索**：本地 agent history 表明早期对话曾经由直接 SSH 工具创建远端健康检查脚本/计划任务。本轮未调用该路径；后续教学验收继续以 §37.112 的学生显式点击、可见 PTY 和精确结果关联为唯一执行链，确保不重复旧的后台直写行为。
+
+**交接动作**：原生控制面可用（或用户已在启动程序中建好连接并提供当前界面）后，按本节上方四项按序实测；每项先保存对应 `.tdsf-data/dev-run.log` / agent log 证据，失败后再做根因调研，禁止凭猜测修改 SSH、OSC 或 Agent 逻辑。

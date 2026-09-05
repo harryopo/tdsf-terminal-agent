@@ -308,4 +308,30 @@ def make_remote_file_tool(ctx: ToolContext):
 __all__ = [
     "invoke_remote_file_tool",
     "make_remote_file_tool",
+    "to_shell_command",
 ]
+
+
+def _shell_escape(s: str) -> str:
+    """shell 单引号转义（防注入）"""
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def to_shell_command(params: dict[str, Any]) -> str | None:
+    """工具参数 → 等价 shell 命令映射（纯函数，fail-closed）
+
+    read_remote_file(path) → cat path
+
+    Args:
+        params: 工具参数 dict（path）
+
+    Returns:
+        shell 命令字符串；映射失败返回 None（不抛异常）
+    """
+    try:
+        path = (params.get("path") or "").strip()
+        if not path:
+            return None
+        return f"cat {_shell_escape(path)}"
+    except (ValueError, TypeError, KeyError):
+        return None

@@ -290,7 +290,23 @@ def make_ssh_command_tool(ctx: ToolContext):
     return ssh_command
 
 
+def to_shell_command(params: dict[str, Any]) -> str | None:
+    """ssh_command 工具→Shell 命令映射（A2，教学模式终端执行链路）
+
+    ssh_command 的参数本身就是命令字符串，直接透传 params["command"]。
+
+    Args:
+        params: 工具参数 dict（含 command 字段）
+
+    Returns:
+        等价 shell 命令字符串；参数缺失返回 None
+    """
+    command = params.get("command", "").strip()
+    return command if command else None
+
+
 __all__ = [
     "invoke_ssh_command_tool",
     "make_ssh_command_tool",
+    "to_shell_command",
 ]

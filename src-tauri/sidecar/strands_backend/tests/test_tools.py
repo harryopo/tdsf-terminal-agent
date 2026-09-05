@@ -59,6 +59,7 @@ from strands_backend.adapter import (
     StrandsAgentAdapter,
     TdsfStrandsCallbackHandler,
     _DEFAULT_SYSTEM_PROMPT,
+    _has_explicit_teaching_intent,
     _skill_names_line,
 )
 
@@ -513,6 +514,7 @@ class TestRemoteFileTool(unittest.TestCase):
         self.assertEqual(result["path"], "/etc/hosts")
         self.assertEqual(result["content"], "line1\nline2\nline3\n")
         self.assertFalse(result["truncated"])
+
         bridge.ipc_invoke.assert_called_once_with(
             "sftp_read",
             {"sessionId": 1, "path": "/etc/hosts", "max_size": 1048576},
@@ -1281,6 +1283,35 @@ class TestInvokeNoProcessingBanner(unittest.TestCase):
 # TdsfStrandsCallbackHandler 测试
 # ============================================================================
 
+class TestTeachingIntentGate(unittest.TestCase):
+    """Teaching output is selected by the user intent, not by headings."""
+
+    def test_lookup_only_is_not_a_teaching_turn(self):
+        self.assertFalse(_has_explicit_teaching_intent("\u67e5\u770b\u77e5\u8bc6\u5e93"))
+        self.assertFalse(_has_explicit_teaching_intent("\u68c0\u7d22 SELinux \u6587\u6863"))
+        self.assertFalse(_has_explicit_teaching_intent("read the knowledge base"))
+        # Merely mentioning the product's teaching mode must not turn a
+        # lookup/report into a lesson.  Likewise, a lookup for "principle"
+        # documents is still retrieval unless the user asks to explain it.
+        self.assertFalse(
+            _has_explicit_teaching_intent(
+                "\u6211\u53ea\u662f\u8ba9\u6559\u5b66\u6a21\u5f0f\u7684 agent \u67e5\u770b\u77e5\u8bc6\u5e93"
+            )
+        )
+        self.assertFalse(_has_explicit_teaching_intent("\u68c0\u7d22\u7cfb\u7edf\u5de5\u4f5c\u539f\u7406\u6587\u6863"))
+
+    def test_instruction_words_enable_teaching_turn(self):
+        self.assertTrue(_has_explicit_teaching_intent("\u8bf7\u8bb2\u89e3 SELinux \u539f\u7406"))
+        self.assertTrue(_has_explicit_teaching_intent("teach me how to inspect a service"))
+
+    def test_structured_command_result_continues_a_lesson(self):
+        self.assertTrue(
+            _has_explicit_teaching_intent(
+                "<teaching-command-result>\nexit_code=0\n</teaching-command-result>"
+            )
+        )
+
+
 class TestTdsfStrandsCallbackHandler(unittest.TestCase):
     """Strands 事件 → event_bus 转发测试"""
 
@@ -1292,6 +1323,29 @@ class TestTdsfStrandsCallbackHandler(unittest.TestCase):
         bus.emit_agent_message.assert_called_once()
         kwargs = bus.emit_agent_message.call_args.kwargs
         self.assertEqual(kwargs["content"], "hello world")
+
+    def test_non_teaching_turn_strips_split_marker_before_streaming(self):
+        """A lookup turn never exposes a split marker to the UI."""
+        bus = make_mock_event_bus()
+        handler = TdsfStrandsCallbackHandler(bus, agent_name="main")
+        handler.begin_turn(teach=True, allow_teach_output=False)
+        handler(data="<!-- tdsf:te")
+        handler(data="ach -->\n\n# Knowledge results")
+
+        contents = [
+            call.kwargs["content"] for call in bus.emit_agent_message.call_args_list
+        ]
+        self.assertEqual(contents, ["\n\n# Knowledge results"])
+
+    def test_teaching_turn_preserves_marker(self):
+        bus = make_mock_event_bus()
+        handler = TdsfStrandsCallbackHandler(bus, agent_name="main")
+        handler.begin_turn(teach=True, allow_teach_output=True)
+        handler(data="<!-- tdsf:teach -->\n# Lesson")
+        self.assertEqual(
+            bus.emit_agent_message.call_args.kwargs["content"],
+            "<!-- tdsf:teach -->\n# Lesson",
+        )
 
     def test_start_event_emits_mood_thinking(self):
         """start 事件应触发 mood=thinking"""
@@ -1733,6 +1787,23 @@ class TestModeDecision(unittest.TestCase):
         r = self._run("uptime", AgentMode.CONFIRM)
         self.assertEqual(r["status"], "success")
 
+    def test_confirm_firewall_list_all_allows(self):
+        """确认模式允许已可靠识别的防火墙只读查询，不弹伪高危审批。"""
+        r = self._run("firewall-cmd --list-all", AgentMode.CONFIRM)
+        self.assertEqual(r["status"], "success")
+
+    def test_firewall_query_has_factual_approval_explanation(self):
+        """模型漏填 explanation 时，审批载荷仍有分类器生成的事实说明。"""
+        from strands_backend.tools import _factual_approval_explanation
+        from strands_backend.tools.command_impact import analyze
+
+        explanation = _factual_approval_explanation(
+            "firewall-cmd --list-all",
+            analyze("firewall-cmd --list-all"),
+        )
+        self.assertIn("读取当前防火墙区域", explanation)
+        self.assertIn("不会修改规则", explanation)
+
     def test_confirm_write_requires_approval(self):
         r = self._run("mv /a /b", AgentMode.CONFIRM)
         self.assertEqual(r["status"], "needs_approval")
@@ -1926,6 +1997,25 @@ class TestKnowledgeSearchTool(unittest.TestCase):
         self.assertGreaterEqual(result["count"], 1)
         self.assertTrue(any("systemctl" in r["title"] for r in result["results"]))
 
+    def test_search_emits_started_and_completed_events(self):
+        from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+        bus = make_mock_event_bus()
+        ctx = make_ctx(event_bus=bus)
+        self._populate()
+        result = invoke_knowledge_search_tool(
+            {"query": "systemctl", "limit": 3},
+            ctx=ctx,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(bus.emit_tool_call.call_count, 2)
+        started, completed = [call.kwargs for call in bus.emit_tool_call.call_args_list]
+        self.assertEqual(started["tool_name"], "knowledge_search")
+        self.assertEqual(started["status"], "started")
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["result"]["status"], "success")
+        self.assertEqual(started["tool_call_id"], completed["tool_call_id"])
+
     def test_search_reads_slim_not_full(self):
         """TDSF 2026-08-31: 检索读精简库——全量库独有条目不出现在结果"""
         from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
@@ -2027,6 +2117,21 @@ class TestKnowledgeGetDocTool(unittest.TestCase):
             content.index("第一节内容"), content.index("第二节内容")
         )
         self.assertFalse(result["truncated"])
+
+    def test_get_doc_emits_started_and_completed_events(self):
+        from strands_backend.tools.knowledge_get_doc import invoke_knowledge_get_doc_tool
+
+        bus = make_mock_event_bus()
+        ctx = make_ctx(event_bus=bus)
+        result = invoke_knowledge_get_doc_tool({"url": "no-such-doc.md"}, ctx=ctx)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(bus.emit_tool_call.call_count, 2)
+        started, completed = [call.kwargs for call in bus.emit_tool_call.call_args_list]
+        self.assertEqual(started["tool_name"], "knowledge_get_doc")
+        self.assertEqual(started["status"], "started")
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["result"]["status"], "not_found")
+        self.assertEqual(started["tool_call_id"], completed["tool_call_id"])
 
     def test_long_content_truncated(self):
         """超 30000 字符正文截断（truncated=True）"""

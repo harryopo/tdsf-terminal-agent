@@ -1,5 +1,6 @@
 import type { Chat, UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { create } from "zustand";
 import {
   DEFAULT_MODEL_ID,
@@ -38,7 +39,73 @@ import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 // sshStore 无 AI 侧反向依赖，静态导入安全（chatRuntime 已有先例）。
 import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { useSpaces } from "@/modules/spaces";
+import {
+  loadAll as loadPersistedSpaces,
+  type SpaceMeta,
+} from "@/modules/spaces/lib/store";
 import type { SessionScope } from "../lib/sessions";
+
+type SshSessionScope = Extract<SessionScope, { kind: "ssh" }>;
+
+function sshScopeFromSpace(space: SpaceMeta | undefined): SshSessionScope | null {
+  if (space?.env?.kind !== "ssh") return null;
+  return {
+    kind: "ssh",
+    host: space.env.host,
+    user: space.env.user,
+    port: space.env.port,
+  };
+}
+
+function sameSshServer(
+  left: SshSessionScope,
+  right: SshSessionScope,
+): boolean {
+  return (
+    left.host === right.host &&
+    left.user === right.user &&
+    left.port === right.port
+  );
+}
+
+function sessionSshScope(
+  session: SessionMeta,
+  spaces: SpaceMeta[],
+): SshSessionScope | null {
+  if (session.scope?.kind === "ssh") return session.scope;
+  if (session.scope?.kind !== "workspace") return null;
+  const spaceId = session.scope.spaceId;
+  return sshScopeFromSpace(
+    spaces.find((space) => space.id === spaceId),
+  );
+}
+
+/**
+ * Keep local/WSL history isolated by workspace id, while an SSH workspace
+ * shows every conversation bound to the same exact server identity.  This
+ * also includes older workspace-scoped sessions while their Space metadata is
+ * still available.
+ */
+export function sessionsVisibleInWorkspace(
+  sessions: SessionMeta[],
+  spaces: SpaceMeta[],
+  activeSpaceId: string | null,
+): SessionMeta[] {
+  if (!activeSpaceId) return sessions;
+  const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+  const activeServer = sshScopeFromSpace(activeSpace);
+  if (activeServer) {
+    return sessions.filter((session) => {
+      const server = sessionSshScope(session, spaces);
+      return server ? sameSshServer(server, activeServer) : false;
+    });
+  }
+  return sessions.filter(
+    (session) =>
+      session.scope?.kind === "workspace" &&
+      session.scope.spaceId === activeSpaceId,
+  );
+}
 
 /**
  * 从当前环境派生新会话的 scope（A1 隔离 → 工作区绑定升级）：
@@ -47,7 +114,15 @@ import type { SessionScope } from "../lib/sessions";
  */
 function deriveSessionScope(): SessionScope {
   const sp = useSpaces.getState();
-  if (sp.activeId) return { kind: "workspace", spaceId: sp.activeId };
+  if (sp.activeId) {
+    const activeSpace = sp.spaces.find((space) => space.id === sp.activeId);
+    return (
+      sshScopeFromSpace(activeSpace) ?? {
+        kind: "workspace",
+        spaceId: sp.activeId,
+      }
+    );
+  }
   const sshState = useSshStore.getState();
   const active =
     sshState.sessions.find((s) => s.id === sshState.activeSessionId) ?? null;
@@ -68,6 +143,18 @@ export type Live = {
   getTerminalContext: () => string | null;
   isActiveTerminalPrivate: () => boolean;
   injectIntoActivePty: (text: string) => boolean;
+  /**
+   * 教学卡专用的确认执行入口。它先在终端 leaf 上登记等待中的教学执行，
+   * 再注入命令；结果只能由同一 leaf 的 TerminalBlockCollector 回填。
+   */
+  startTeachingCommand: (
+    command: string,
+  ) =>
+    | { ok: true; executionId: string }
+    | {
+        ok: false;
+        reason: "no-active-terminal" | "terminal-busy" | "terminal-unavailable";
+      };
   getWorkspaceRoot: () => string | null;
   getActiveFile: () => string | null;
   openPreview: (url: string) => boolean;
@@ -290,6 +377,12 @@ type StoreState = {
   hydrateSessions: () => Promise<void>;
   newSession: () => string;
   switchSession: (id: string) => void;
+  /**
+   * Open history without switching context prematurely. When there is no
+   * active workspace, an SSH-bound session first reconnects through its exact
+   * saved credential profile; only a successful connection activates it.
+   */
+  openSession: (id: string) => Promise<boolean>;
   deleteSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   /** Persist messages of a session and bump its updatedAt + auto-title. */
@@ -308,6 +401,7 @@ const NOOP_LIVE: Live = {
   getTerminalContext: () => null,
   isActiveTerminalPrivate: () => false,
   injectIntoActivePty: () => false,
+  startTeachingCommand: () => ({ ok: false, reason: "no-active-terminal" }),
   getWorkspaceRoot: () => null,
   getActiveFile: () => null,
   openPreview: () => false,
@@ -678,6 +772,100 @@ export const useChatStore = create<StoreState>((set, get) => ({
     });
   },
 
+  openSession: async (id) => {
+    const session = get().sessions.find((item) => item.id === id);
+    if (!session) return false;
+
+    const spacesState = useSpaces.getState();
+    let knownSpaces = spacesState.spaces;
+    const currentSpaceIds = new Set(knownSpaces.map((space) => space.id));
+    const needsPersistedSpaces = get().sessions.some(
+      (item) =>
+        item.scope?.kind === "workspace" &&
+        !currentSpaceIds.has(item.scope.spaceId),
+    );
+    if (needsPersistedSpaces) {
+      try {
+        const persisted = await loadPersistedSpaces();
+        knownSpaces = [
+          ...knownSpaces,
+          ...persisted.spaces.filter((space) => !currentSpaceIds.has(space.id)),
+        ];
+      } catch (error) {
+        console.warn("[chatStore] failed to resolve persisted workspace", error);
+      }
+    }
+    const server = sessionSshScope(session, knownSpaces);
+    const stabilizeSessionsForServer = (targetServer: SshSessionScope) => {
+      let changed = false;
+      const next = get().sessions.map((item) => {
+        const itemServer = sessionSshScope(item, knownSpaces);
+        if (!itemServer || !sameSshServer(itemServer, targetServer)) return item;
+        if (
+          item.scope?.kind === "ssh" &&
+          sameSshServer(item.scope, targetServer)
+        ) {
+          return item;
+        }
+        changed = true;
+        return { ...item, scope: targetServer };
+      });
+      if (!changed) return;
+      set({ sessions: next });
+      void saveSessionsList(next);
+    };
+
+    const activeSpace = spacesState.spaces.find(
+      (space) => space.id === spacesState.activeId,
+    );
+    const activeServer = sshScopeFromSpace(activeSpace);
+    if (spacesState.activeId && server && activeServer) {
+      if (sameSshServer(server, activeServer)) {
+        stabilizeSessionsForServer(server);
+        get().switchSession(id);
+        return true;
+      }
+    } else if (spacesState.activeId && !server) {
+      const targetSpaceId =
+        session.scope?.kind === "workspace" ? session.scope.spaceId : null;
+      if (targetSpaceId !== spacesState.activeId) return false;
+      get().switchSession(id);
+      return true;
+    } else if (!spacesState.activeId && !server) {
+      // Local and legacy unscoped conversations keep their existing behavior
+      // only when no other workspace context is active.
+      get().switchSession(id);
+      return true;
+    }
+    if (!server) return false;
+
+    const sshState = useSshStore.getState();
+    await sshState.loadSavedConnections();
+    const profile = useSshStore.getState().savedConnections.find(
+      (item) =>
+        item.host === server.host &&
+        item.user === server.user &&
+        item.port === server.port,
+    );
+    if (!profile) {
+      toast.error("无法恢复服务器会话", {
+        description: `未找到 ${server.user}@${server.host}:${server.port} 的已保存连接`,
+      });
+      return false;
+    }
+
+    const sshSessionId = await useSshStore
+      .getState()
+      .connectWithSaved(profile);
+    if (!sshSessionId) return false;
+
+    // Convert every resolvable conversation for this server to the stable SSH
+    // scope, so future cold starts no longer depend on an ephemeral workspace.
+    stabilizeSessionsForServer(server);
+    get().switchSession(id);
+    return true;
+  },
+
   deleteSession: (id) => {
     // T14: 删除前对被删会话触发记忆沉淀（在清理 chats 之前取消息）
     void maybeSummarizeSession(id);
@@ -766,9 +954,19 @@ export const useChatStore = create<StoreState>((set, get) => ({
     if (!activeSessionId) return;
     const activeSession = sessions.find((s) => s.id === activeSessionId);
     if (!activeSession) return;
-    const scope = activeSession.scope;
-    // 已绑定当前工作区 → 无需处理（幂等）
-    if (scope?.kind === "workspace" && scope.spaceId === activeSpaceId) return;
+    const activeSpace = sp.spaces.find((space) => space.id === activeSpaceId);
+    const targetScope =
+      sshScopeFromSpace(activeSpace) ??
+      ({ kind: "workspace", spaceId: activeSpaceId } as const);
+    const visibleSessions = sessionsVisibleInWorkspace(
+      sessions,
+      sp.spaces,
+      activeSpaceId,
+    );
+    // 已绑定当前工作区/服务器 → 无需处理（幂等）
+    if (visibleSessions.some((session) => session.id === activeSessionId)) {
+      return;
+    }
 
     // 空会话 → 直接重绑 scope（无缝进入，无历史故无污染）
     if (isSessionEmpty(activeSessionId, activeSession)) {
@@ -776,7 +974,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
         s.id === activeSessionId
           ? {
               ...s,
-              scope: { kind: "workspace" as const, spaceId: activeSpaceId },
+              scope: targetScope,
             }
           : s,
       );
@@ -786,12 +984,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
     }
 
     // 有历史 → 切到当前工作区自己的会话（最近一条，无则新建），防跨区污染
-    const wsSessions = sessions
-      .filter(
-        (s) =>
-          s.scope?.kind === "workspace" && s.scope.spaceId === activeSpaceId,
-      )
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const wsSessions = visibleSessions.sort((a, b) => b.updatedAt - a.updatedAt);
     if (wsSessions.length > 0) {
       get().switchSession(wsSessions[0].id);
     } else {

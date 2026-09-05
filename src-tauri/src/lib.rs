@@ -3,6 +3,10 @@ pub mod modules;
 use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, param_complete, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
 use std::path::PathBuf;
 use std::sync::Mutex;
+#[cfg(debug_assertions)]
+use std::net::TcpStream;
+#[cfg(debug_assertions)]
+use tauri_plugin_dialog::DialogExt;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::{PhysicalPosition, WindowEvent};
@@ -256,9 +260,15 @@ pub fn run() {
         "--disable-gpu",
     );
 
-    let builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default();
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    // SHOULD-FIX-2 (2026-09-04): dialog 插件仅在 debug 构建加载
+    // （功能仅用于 dev 预检弹窗，release 构建无需加载）
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_dialog::init());
+    }
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
@@ -305,6 +315,27 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
+            // ================================================================
+            // B1 (M0-2): dev 启动预检 — 探测 Vite dev server (端口 9300)
+            // ================================================================
+            // debug 构建内嵌 devUrl 指向 127.0.0.1:9300，Vite 未启动则 WebView
+            // 加载失败 → 黑屏无提示。此处提前探测端口，失败时弹窗告知后退出。
+            // release 构建跳过此检查（内嵌 dist 产物，不依赖 Vite）。
+            #[cfg(debug_assertions)]
+            {
+                use tauri_plugin_dialog::MessageDialogKind;
+                if TcpStream::connect("127.0.0.1:9300").is_err() {
+                    // SHOULD-FIX-3 (2026-09-04): 直接在 setup 主线程阻塞调用 dialog，
+                    // 不在后台线程调用 blocking_show()（macOS 上可能死锁）
+                    let _ = _app.handle().dialog()
+                        .message("Vite dev server 未启动 (端口 9300 无响应)\n\n请先运行 pnpm dev 或 启动-日志版.bat，再启动本程序。")
+                        .title("TDSF Terminal Agent — Dev Server 未就绪")
+                        .kind(MessageDialogKind::Error)
+                        .blocking_show();
+                    std::process::exit(1);
+                }
+            }
+
             // TDSF 永久修复 (2026-08-09): 后端兜底确保窗口可见。
             // 即使前端 JS 崩溃/HMR 重载导致 setFocus 失败，窗口也一定显示。
             if let Some(main) = _app.get_webview_window("main") {

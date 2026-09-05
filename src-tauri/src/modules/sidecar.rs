@@ -74,7 +74,7 @@ const MAX_RETRY: u32 = 5;
 const RESTART_BACKOFF_BASE: u64 = 1;
 
 /// 重启退避上限（秒）
-const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
+const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// 运行冷却阈值：Python 运行超过此时长后崩溃，视为偶发，重置 retry_count
 const RUNTIME_COOLDOWN: Duration = Duration::from_secs(60);
@@ -459,9 +459,9 @@ impl SidecarManager {
                 }
 
                 // 2. TDSF P0 修复：指数退避（基于 retry_count，已被 exit_watcher fetch_add 自增）
-                //    backoff = 2^(retry-1) 秒，上限 60s
+                //    backoff = 2^(retry-1) 秒，上限 30s
                 let retry = manager.retry_count.load(Ordering::SeqCst);
-                // shift 限制在 0-6（retry=1→1s, retry=7→64s 但被 min(60) 截断）
+                // shift 限制在 0-6（retry=1→1s, retry=7→64s 但被 min(30) 截断）
                 let shift = retry.saturating_sub(1).min(6);
                 let backoff_secs = RESTART_BACKOFF_BASE
                     .saturating_mul(1u64 << shift);
@@ -2026,8 +2026,8 @@ mod tests {
         assert_eq!(compute_backoff(3), Duration::from_secs(4));
         assert_eq!(compute_backoff(4), Duration::from_secs(8));
         assert_eq!(compute_backoff(5), Duration::from_secs(16));
-        // retry=7 → 1<<6=64s 但被 min(60) 截断
-        assert_eq!(compute_backoff(7), Duration::from_secs(60));
+        // retry=7 → 1<<6=64s 但被 min(30) 截断
+        assert_eq!(compute_backoff(7), Duration::from_secs(30));
         // 防御性：retry=0 → saturating_sub(1)=0 → 1<<0=1 → 1s
         assert_eq!(compute_backoff(0), Duration::from_secs(1));
     }

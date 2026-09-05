@@ -19,10 +19,39 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
 from strands_backend.tools import tool
 
 logger = logging.getLogger("sidecar.strands_backend.tools.knowledge_search")
+
+
+def _emit_tool_call(
+    ctx: Any,
+    *,
+    call_id: str,
+    status: str,
+    params: dict[str, Any],
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Publish the started/completed lifecycle used by the tool UI."""
+    event_bus = getattr(ctx, "event_bus", None)
+    if event_bus is None:
+        return
+    try:
+        kwargs: dict[str, Any] = {
+            "tool_name": "knowledge_search",
+            "tool_call_id": call_id,
+            "params": params,
+            "status": status,
+            "session_id": getattr(ctx, "session_id", "") or None,
+            "source": f"{getattr(ctx, 'agent_name', 'main')}_agent.strands_tool.knowledge_search",
+        }
+        if result is not None:
+            kwargs["result"] = result
+        event_bus.emit_tool_call(**kwargs)
+    except Exception as exc:  # event delivery must not break retrieval
+        logger.debug("knowledge_search emit_tool_call failed: %s", exc)
 
 
 def invoke_knowledge_search_tool(params: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
@@ -39,12 +68,25 @@ def invoke_knowledge_search_tool(params: dict[str, Any], ctx: Any = None) -> dic
         }
     """
     query = (params.get("query") or "").strip()
-    if not query:
-        return {"status": "error", "query": "", "message": "query 参数缺失"}
     try:
         limit = max(1, min(int(params.get("limit", 5)), 10))
     except (TypeError, ValueError):
         limit = 5
+
+    call_id = uuid4().hex
+    event_params = {"query": query, "limit": limit}
+    _emit_tool_call(ctx, call_id=call_id, status="started", params=event_params)
+
+    if not query:
+        result = {"status": "error", "query": "", "message": "query 参数缺失"}
+        _emit_tool_call(
+            ctx,
+            call_id=call_id,
+            status="completed",
+            params=event_params,
+            result=result,
+        )
+        return result
 
     try:
         from knowledge.rag import get_slim_rag
@@ -54,31 +96,55 @@ def invoke_knowledge_search_tool(params: dict[str, Any], ctx: Any = None) -> dic
         results = get_slim_rag().hybrid_search(query, top_k=limit)
     except Exception as e:
         logger.exception(f"knowledge_search failed: query={query[:50]}, error={e}")
-        return {
+        result = {
             "status": "error",
             "query": query,
             "message": f"知识库检索异常: {e}",
         }
+        _emit_tool_call(
+            ctx,
+            call_id=call_id,
+            status="completed",
+            params=event_params,
+            result=result,
+        )
+        return result
 
     if not results:
-        return {
+        result = {
             "status": "empty",
             "query": query,
             "count": 0,
             "results": [],
             "message": "知识库暂无相关内容（可建议用户导入文档或沉淀案例）",
         }
+        _emit_tool_call(
+            ctx,
+            call_id=call_id,
+            status="completed",
+            params=event_params,
+            result=result,
+        )
+        return result
 
     # 压缩内容（工具结果给 LLM 用，每条保留前 400 字）
     for r in results:
         if len(r["content"]) > 400:
             r["content"] = r["content"][:400] + "…"
-    return {
+    result = {
         "status": "success",
         "query": query,
         "count": len(results),
         "results": results,
     }
+    _emit_tool_call(
+        ctx,
+        call_id=call_id,
+        status="completed",
+        params=event_params,
+        result=result,
+    )
+    return result
 
 
 def make_knowledge_search_tool(ctx: Any):

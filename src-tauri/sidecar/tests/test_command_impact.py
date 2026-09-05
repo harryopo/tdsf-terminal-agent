@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strands_backend.tools.command_impact import (  # noqa: E402
+    CATEGORY_CONFIG,
     CATEGORY_DELETE,
     CATEGORY_INSTALL,
     CATEGORY_NETWORK,
@@ -163,6 +164,42 @@ class TestClassifySegment:
         assert r["category"] == "file_write"
         assert r["risk_l"] == 2
 
+    def test_firewall_list_all_is_readonly(self):
+        """用户实测：查看规则是查询，不能被错误抬成 unknown L3。"""
+        r = classify_segment("firewall-cmd --list-all")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["risk_l"] == 0
+        assert r["objects"] == []
+
+    def test_firewall_list_all_with_zone_selector_is_readonly(self):
+        r = classify_segment("firewall-cmd --zone=public --list-all")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["risk_l"] == 0
+
+    def test_firewall_write_flag_wins_over_read_flag(self):
+        """混合命令中任何改规则 flag 都不能因 list flag 被放行。"""
+        r = classify_segment("firewall-cmd --list-all --add-service=http")
+        assert r["category"] == CATEGORY_CONFIG
+        assert r["risk_l"] == 2
+
+    def test_dnf_search_is_readonly(self):
+        r = classify_segment("dnf search fastfetch")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["risk_l"] == 0
+
+    def test_rpm_query_is_readonly(self):
+        r = classify_segment("rpm -q fastfetch neofetch 2>&1")
+        assert r["category"] == CATEGORY_READONLY
+        assert r["risk_l"] == 0
+
+    def test_command_v_is_readonly_but_command_execution_is_not(self):
+        query = classify_segment("command -v dnf yum rpm")
+        execute = classify_segment("command rm -rf /tmp/example")
+        assert query["category"] == CATEGORY_READONLY
+        assert query["risk_l"] == 0
+        assert execute["category"] == CATEGORY_DELETE
+        assert execute["risk_l"] == 4
+
 
 # ============================================================================
 # analyze — 全命令分析（spec 场景）
@@ -179,7 +216,7 @@ class TestAnalyze:
         assert r["segments"][1]["risk_l"] == 4
         assert r["max_risk_l"] == 4
         assert r["denied"] is False  # /tmp/a 非根/家目录，走审批不直接拦
-        assert "删除文件" in r["summary"]
+        assert "删除" in r["summary"]
 
     def test_max_risk_takes_highest(self):
         r = analyze("ls /tmp && yum install -y nginx")
@@ -188,7 +225,7 @@ class TestAnalyze:
     def test_readonly_pipeline_low_risk(self):
         r = analyze("ps aux | grep nginx")
         assert r["max_risk_l"] == 0
-        assert r["summary"] == "只读查询，无副作用"
+        assert r["summary"] == "只读查看，无副作用"
 
     def test_unknown_command_flagged(self):
         """spec 场景：未知脚本标注 fail-closed"""
@@ -322,7 +359,7 @@ class TestContract:
             assert key in seg
 
     def test_unknown_impact_text(self):
-        assert UNKNOWN_IMPACT_TEXT == "影响未知——请人工审查"
+        assert UNKNOWN_IMPACT_TEXT == "暂无法判断影响，请人工确认"
 
     def test_segment_json_serializable(self):
         """审批载荷要走 JSON-RPC → 段结构必须可 JSON 序列化"""

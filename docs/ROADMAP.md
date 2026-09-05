@@ -3,6 +3,23 @@
 > **用途**：确保开发按方案书执行——长期规划对齐 `docs/方案书-v2.0.md`（最终版唯一准绳，M0-M4 里程碑）；短期规划 = 当前任务 + 下一步清单。
 > **更新时机**：每次任务收尾（任务完成 / 方向变化 / 新决策）时更新本节，并在 `docs/DEV-JOURNAL.md` 追加复盘。
 
+### 2026-09-05 Agent 修复收口与原生验收计划
+
+- [x] 确认模式审批队列：同一会话单张 active + FIFO，前端只显示队头；风险卡改为真实命令、用途、短影响。严格“命令完成后再发下一审批”尚未实现，需先设计 SSH 完成事件。
+- [x] 命令影响解析：包查询和命令定位降为只读 L0；未知/副作用保持确认，wrapper 不可洗白危险子命令。
+- [x] 历史会话：稳定 SSH endpoint scope、成功重连后再打开、同一 host/user/port 历史可见、遗失配置 fail-closed。
+- [x] 教学边界：显式 marker 才为 TeachCard；知识检索/工具状态为普通 Markdown；紧凑教学 prompt 含概念与原理、易错点与考点、练习。
+- [x] 门禁与运行态：Vitest 1354、pytest 2163、typecheck、lint、cargo check 全绿；本地 Vite 9300 HTTP 200，sidecar 120 methods / KB 3969 entries。
+- [ ] 原生 Tauri 手工验收：保存 SSH profile 的成功、缺失、端口不匹配；同服务器历史筛选；`firewall-cmd --list-all`、`dnf search`、写操作的单卡 FIFO；教学模式下知识检索与明确教学的渲染分流。
+
+### 2026-09-04 教学模式知识检索与教学输出边界（本轮）
+
+- 已将 TeachCard 触发收敛为显式 `<!-- tdsf:teach -->` 首行标记；知识库检索、文档读取、工具状态和失败说明默认保持普通 Markdown。
+- sidecar 按当前用户回合计算教学意图，并在流式 callback 与最终 observation 两层剥离非教学回合误发的标记；历史对话中的旧教学格式不再污染本回合。
+- `knowledge_search` / `knowledge_get_doc` 现在发布带稳定调用 ID 的 started/completed 事件，前端显示可见调用卡；全文正文仍折叠，空正文显示真实状态，不生成占位内容。
+- 教学命令卡只表示“待学生查看并点击执行”，没有终端结果就不能继续推断；空 shell 围栏和不可用工具不会生成假的 `$` 执行卡。
+- 定向门禁：前端 vitest 69 passed、typecheck/lint passed；后端教学意图/流式门控/知识工具 26 passed，sidecar 启动日志健康（120 methods、3969 official entries）。
+
 ---
 
 ## 一、长期规划（方案书路线图跟踪）
@@ -104,6 +121,12 @@
 | 42 | **SSH 稳定性检查收尾（§37.90 检查报告 4 缺陷修复）**：P1 重连后 SFTP 缓存+隧道资源失效修复（perform_reconnect 加 on_reconnected 回调 → SshState.invalidate_session_resources：remove_sftp+stop_tunnels_for_session）✅ **已落地（775d82f，AppHandle::state 注入最小侵入，cargo test 360+6/clippy 0）**；P2 agent 会话枚举 ✅ **已落地（c20a3e1：ssh_sessions_detail 命令+反向路由 ssh_status / ssh_list_sessions 工具（TOOL_REGISTRY 23，readonly）/ execute_via_ssh 校验放宽到 live 列表内 connected 会话 + target_endpoint 审计 / fail-closed 回退旧校验）**；P3 顺手修 ✅ **已落地**（ssh_command.py 过时注释 / /tmp 注入脚本 trap 清理 + 4 静态断言 / human_type.rs clippy 8 警告清零）；P3 调研后做（断连事件通知 sidecar，先查 Rust→Python 通道，可能并入方案书 v3.0 T5 事件源设计）；P3 可选暂缓（Failed 后手动恢复入口） | 🔶 P1+P2+P3 已完成，仅剩 P3-1 调研项 + P3-4 可选项 | 方案+排期+接手指南：`docs/SSH连接稳定性检查报告与下一步规划-2026-08-31.md`（§37.90）；**待用户 tauri:dev 实测 P1/P2/P3-3**（重连后 SFTP 立即可用 + 双会话 agent 枚举并跨主机执行 + /tmp 无累积，详 DEV-JOURNAL §37.91/§37.92） |
 
 | 43 | **用户实测问题批次一/二（agent 体验专项，用户钦定"底层→UI 逐个解决"）**：批次一五修（A1 会话隔离/A2 max_tokens 续跑/B1 欢迎页环境/C1 审批卡/C2 影响预测）✅；**批次二/三**（§37.94-37.99）：工作区-窗口单栏重构+agent 工作区隔离+记忆按工作区沉淀过滤+@远程引用+工作区门控+上下文面板+真实 usage+C3 打字机根因+SSH 重复建区根因+门控绕过加固+模式配色单一真源 ✅；**遗留**：C4 教学卡流式真机确认（围栏修复已上）、explorer 路径栏/上传、#42 SSH 真机回归 | 🔶 批次基本收官，遗留见 dev-state §37.101 交接章 | 2026-09-01；**AI 已获授权自行启动软件自测**（用户钦定）；接手必读 dev-state §37.101 |
+
+### 2026-09-04 最新推进：教学模式工具终端化
+
+**状态：代码与定向门禁完成；真实启动与后端健康已验证，原生桌面/SSH 交互验收待做。** 已完成方案书 P1-P4：工具 shell 映射、教学 observe 的 `teach_command` 包装、命令卡显式点击、可见 terminal leaf 等待态、OSC 命令块精确脱敏回收、学生显式「基于结果继续讲解」、教学 prompt 禁止整段滚屏回读，并修复 SSH OSC 633 中分号导致命令截断的问题。2026-09-04 已实际启动开发程序：Vite、桌面进程、真实模型配置与 120-method sidecar 均健康，启动日志未见异常；保存 SSH profile 的非敏感 metadata 也存在。当前自动化环境没有原生 Tauri 控制面，浏览器本地页不能替代应用 IPC/SSH 验收；详情见 DEV-JOURNAL / dev-state §37.113。
+
+**下一步优先级**：① 原生 Tauri 控制面可用后，用真实桌面验证本地成功/非零/超时/同 leaf 并发；② 用真实 SSH Bash/Zsh 验证 OSC、分号命令、脱敏输出和结构化回传；③ 用真实模型验证没有 `<teaching-command-result>` 时会等待；④ 每一失败先保存日志并调研根因，再决定最小修复；⑤ 确认当前 WIP 归属后分批提交，不把既有脏工作树混入一个 commit。门禁与实现细节：DEV-JOURNAL / dev-state §37.112–§37.113、`docs/教学模式工具终端化方案-2026-09-04.md` §六。
 
 ### 待用户决策/确认
 
