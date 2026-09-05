@@ -6,6 +6,16 @@
 
 ---
 
+### 37.119 审批与实际 SSH 执行严格串行（2026-09-05 ✅，原生桌面待验收）
+
+**根因**：服务端虽已有同会话 approval FIFO，却在“用户批准”时立即提升下一项；`request_approval_and_wait` 又额外发送一次工具直发的 created 副本。于是排队命令在上一条 SSH 尚执行时已经可见、可批准，命令与结果容易串位。
+
+**实现**：只允许 `needs_you` 服务在队首激活时发布 created。工具发起的命令审批标为 `execution_gate`：批准后仍保留该 session 队首，直到实际 SSH 路径通过统一 completion 调用释放；目标会话失效、RustBridge 不可用、参数错误、IPC 异常、后端错误和成功返回都走释放出口。多行 `ssh_command` 在外层 finally 释放其整条命令的审批。普通非执行型 approval 未改变，避免把通用交互卡误锁。
+
+**验证与边界**：服务层新增红测证明“批准不是完成”，`test_needs_you.py` **103 passed**；工具级并发回归阻塞第一条模拟 SSH，确认第二条没有 created/deadline，第一条返回后才提升，**1 passed**。当前全量 `test_tools.py` 仍因环境缺少 `langgraph` 触发既有 fail-closed 分支而失败，未放宽安全策略伪造全绿。还需在原生 Tauri + 保存 SSH profile 上确认：第一条实际输出出现后才展示下一张审批卡。
+
+**回归隔离**：全量 Vitest 曾使 `sidecar-adapter.test.ts` 的执行器用例与首次配置同步耦合而超时；配置同步已有独立用例，现 setup 只标记其已完成，使该用例只覆盖 `agent.invoke`。单文件 **31 passed**，全量 **130 files / 1340 tests passed**；预期异常日志及 React `act` 警告未造成失败。
+
 ### 37.118 M1-1 发行版事实输入（2026-09-05 ✅，M1-2 仍开放）
 
 **根因**：Agent 已有一次性 `os-release` 探测，却只保留 `PRETTY_NAME`。它是展示文字，不是稳定的系统接口；由“Ubuntu/CentOS”等名字猜 apt/yum 会在派生版、改名发行版或旧 sidecar 协商时产生错误命令。

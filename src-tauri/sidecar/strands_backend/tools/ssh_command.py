@@ -54,6 +54,7 @@ from typing import Any
 from strands_backend.tools import (
     ToolContext,
     assess_command,
+    complete_approval_execution,
     execute_via_ssh,
     request_approval_and_wait,
     tool,
@@ -100,6 +101,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     # P1-1 (2026-08-01): 命中确认 → 真实等待用户响应，批准后整条执行
     # （execute_via_ssh 传 skip_approval=True 防止二次审批卡）
     multiline_approved = False
+    multiline_approval_req: Any | None = None
     if "\n" in command.strip():
         confirm_lines: list[tuple[str, dict[str, Any]]] = []
         blocked: dict[str, Any] | None = None
@@ -175,6 +177,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 f"command={command[:80]}"
             )
             multiline_approved = True
+            multiline_approval_req = req
 
     # 推送 tool_call 事件（前端 AgentStatusPill + 工具调用面板展示）
     if ctx.event_bus is not None:
@@ -204,15 +207,18 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
 
     # 执行（Task 3/4 接入后内部含影响预测 + 三模式决策 + denylist 拦截 +
     # host 校验 + 审批链；多行命令已在上方整条审批通过时传 skip_approval）
-    result = execute_via_ssh(
-        ctx=ctx,
-        command=command,
-        ssh_session_id=ssh_session_id,
-        timeout=timeout,
-        tool_name="ssh_command",
-        explanation=explanation,
-        skip_approval=bool(multiline_approved),
-    )
+    try:
+        result = execute_via_ssh(
+            ctx=ctx,
+            command=command,
+            ssh_session_id=ssh_session_id,
+            timeout=timeout,
+            tool_name="ssh_command",
+            explanation=explanation,
+            skip_approval=bool(multiline_approved),
+        )
+    finally:
+        complete_approval_execution(multiline_approval_req)
 
     # 补充 explanation 字段
     result["explanation"] = explanation

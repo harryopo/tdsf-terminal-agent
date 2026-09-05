@@ -34,11 +34,15 @@ import {
   sidecarStreamToUIMessageStream,
   toolFailureText,
 } from "./sidecar-adapter";
+import { markSidecarConfigSynced } from "./sidecar-config-sync";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   mockInvoke.mockReset();
+  // 配置同步由 sidecar-config-sync.test.ts 覆盖；本文件仅验证 agent.invoke
+  // 流程，避免首个用例在并发全量运行时被 keyring/配置读取拖慢。
+  markSidecarConfigSynced();
   // vitest 中 import.meta.env.DEV 恒为 true，默认 dev 模式
   _setDevModeCheck(() => true);
 });

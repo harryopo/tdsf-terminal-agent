@@ -6,6 +6,18 @@
 
 ---
 
+### 37.119 审批决议不能抢在 SSH 执行完成前推进（2026-09-05 ✅）
+
+**问题**：已有 approval FIFO 只串行“等待用户点击”。`respond(approved)` 会立即释放队首并发送下一条 created；工具层还对排队请求额外直发 created。前端即便只取列表第一项，也会在第一条 SSH 运行时让第二条进入可批准状态，违背用户“逐条确认，不要混淆先后”的要求。
+
+**实现**：命令工具请求带内部 `execution_gate` 标记；服务在批准后保留已批准请求为活跃队首，不提升下一项。`complete_execution(req_id)` 才原子地释放队首并发出 `execution_finished → 下一条 created`。`execute_via_ssh` 的每个实际执行出口（会话校验、RustBridge、参数、IPC、后端结果、成功）统一完成 gate；多行 `ssh_command` 在外层 finally 处理其预先审批的整条命令。删除工具层直发的审批副本，服务成为 created 的唯一来源；普通 approval 保留旧的即时结束行为。
+
+**验证**：先写服务红测，现状会在 approve 后把队首切到第二条；实现后 `test_needs_you.py` **103 passed**。再写跨线程工具回归：阻塞第一条模拟 SSH，检查第二条无 created、无 deadline 且不能越序；释放第一条后才激活第二条，**1 passed**。完整 `test_tools.py` 在当前解释器缺 `langgraph` 时会按既有 fail-closed 策略阻断大量无关路径，故只运行隔离后的新增回归，不以修改决策策略换绿。
+
+**复盘**：审批 FIFO 的边界必须是“执行结束”，不能只是“用户已经点过”。但这不等同于通用 durable execution：本轮的完成信号仍在 Python 同步 SSH 调用内；进程重启后恢复、写入 intent id 与跨重启去重仍是 M2/durable execution 的独立工作，不能在文档中提前核销。
+
+**回归隔离**：全量 Vitest 首次暴露 `sidecar-adapter.test.ts` 的执行器测试被首次配置同步拖慢；配置同步已有独立测试，因此执行器测试的 setup 只标记同步已完成，保持它只验证 `agent.invoke` 事件流。单文件 **31 passed**，全量 **130 files / 1340 tests passed**；`param-complete` 的预期异常日志与若干 React `act` 警告仍存在，但没有失败。
+
 ### 37.118 M1-1：发行版事实输入进入 Agent 上下文（2026-09-05 ✅）
 
 **调研与边界**：方案书 M1 要解决 RHEL/Debian 命令混用。现有 `system.probe_env` 已通过一次 SSH `os-release` 往返取得环境，却只传了 `PRETTY_NAME`；该字段用于显示，不能作为包管理器决策来源。M0 的 sidecar 重启风暴防护也同时复核：源码已有 5 次上限、指数退避、60 秒稳定运行冷却重置与 stop 取消，因此不重复改已存在的机制。

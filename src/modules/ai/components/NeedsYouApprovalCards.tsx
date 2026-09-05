@@ -3,11 +3,9 @@
  * -----------------------------------------------------------------------------
  * 数据流（Python HITL 审批 → 前端四层审批卡 → RPC 回传）：
  *   1. Python strands 工具命中高危命令 → needs_you 服务 request_approval
- *      （拿 req_id `ny-*`）→ event_bus.emit_needs_you 双通道推送：
- *        a. 服务事件（needs_you.py _emit_event：含 event=created/responded/
- *           timeout/cancelled + request=to_dict()）
- *        b. 工具直发副本（strands_backend/tools request_approval_and_wait：
- *           扁平携带 id/command/semantic/explanation/impact/risk_l/tool_name）
+ *      （拿 req_id `ny-*`）→ needs_you 服务按队首状态推送：
+ *        event=created/responded/execution_finished/timeout/cancelled，
+ *        详细字段位于 request=to_dict().extra。
  *   2. Rust ipc 转发 Tauri event `sidecar:needs_you`（外层 Event dict，
  *      业务数据在 .payload → unwrapEventPayload 解包）
  *   3. 本组件订阅 → 只接管 approval 类型的 created 事件 → 渲染
@@ -33,7 +31,7 @@ import { useChatStore } from "../store/chatStore";
 type NeedsYouEventPayload = {
   /** 请求类型（approval / error / question / handoff） */
   needs_type?: string;
-  /** 子事件名（created / responded / timeout / cancelled；工具直发副本缺省视为 created） */
+  /** 子事件名；兼容旧 sidecar 缺省 event 时按 created 处理。 */
   event?: string;
   /** 请求 id（工具直发副本扁平携带；服务事件在 request.id） */
   id?: string;
@@ -112,7 +110,7 @@ export function NeedsYouApprovalCards() {
         setItems((cur) => {
           const idx = cur.findIndex((i) => i.reqId === reqId);
           if (idx < 0) return [...cur, item];
-          // 双通道（服务事件 + 工具直发）同一请求会到两次，按 reqId 幂等覆盖
+          // 服务重放或热更新期间的同一请求按 reqId 幂等覆盖。
           const next = cur.slice();
           next[idx] = item;
           return next;
