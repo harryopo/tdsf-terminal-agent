@@ -1,190 +1,103 @@
-// TDSF 魔改: Confidence RPC 客户端 (T2.3)
-// -----------------------------------------------------------------------------
-// 通过 Tauri ipc_invoke 调用 Python Sidecar 的 confidence.score JSON-RPC 方法，
-// 获取 AI 消息的置信度评分（0-1）。失败时 fail-open 回退到本地 TS 评分
-//（./index.ts 的 scoreConfidence），保证 Sidecar 不可用时 AI 聊天仍可正常使用。
+// 会话证据状态客户端。
 //
-// 协议对齐：
-//   - 任务约定的 RPC 接口：params = { message: string, history: string[] }
-//   - 返回：{ score: number, ... }
-//   - Python sidecar 的 confidence.score 方法（tools/rpc_methods.py）在简单
-//     模式下按启发式构造 evidence 再走 D-S+PCR5 融合，返回
-//     { score, method, conflict, evidence_count, grounded_count }。
-//   - RPC 失败时回退到本地 TS 评分（5 维信号词匹配，含 breakdown 明细）。
-//
-// TDSF 2026-08-31 (问题3修复): 低置信度必须附原因——此前 UI 只显示"置信度 低"
-// 无任何解释（用户实测反馈）。现在评分结果附带 reason 字段（人话原因）：
-//   - local 来源：从 5 维 breakdown 提取低分维度（未引用权威来源等）
-//   - rpc 来源：从 grounded_count/evidence_count/conflict 生成
-// 无原因可生成时 reason=null，UI 按约定不显示标签（简洁优先）。
+// 旧实现按模型回答里的关键词推断“来源/置信度”。那既不能证明模型真的
+// 使用了该来源，也会在 sidecar 不可用时伪造结论。现在只消费后端记录的
+// 实际工具完成事件，并明确把它表述为会话证据状态，不给模型文本打分。
 import { invoke } from "@tauri-apps/api/core";
-import {
-  scoreConfidence as scoreConfidenceLocal,
-  type ConfidenceBreakdown,
-} from "./index";
 
-/** Python sidecar confidence.score 返回的原始 payload */
-export interface ConfidenceRpcPayload {
-  score?: number;
-  method?: string;
-  conflict?: number;
-  evidence_count?: number;
-  grounded_count?: number;
-  /** 按场景评分（2026-09-03）：false=纯命令解读/闲聊等无需溯源场景，不显示置信度 */
-  applicable?: boolean;
+export type EvidenceTier = "unverified" | "grounded" | "verified";
+
+export interface EvidenceSource {
+  toolName: string;
+  source?: string;
+  timestamp?: number;
 }
 
-/** RPC 返回的扩展结果（带 source 标识 + 低置信度原因） */
-export interface ConfidenceRpcResult {
-  /** 综合置信度 [0, 1] */
-  score: number;
-  /** 评分来源：rpc（Python sidecar） / local（TS fallback） */
-  source: "rpc" | "local";
-  /** 5 维明细（仅 local 来源时有值） */
-  breakdown?: ReturnType<typeof scoreConfidenceLocal>["breakdown"];
-  /**
-   * 低置信度原因（人话，供 UI 直接展示，如"未引用权威来源"）。
-   * null = 无原因可生成（UI 约定：此时不显示置信度标签）。
-   */
-  reason?: string | null;
-  /**
-   * 按场景评分（2026-09-03 用户钦定）：是否“需溯源”场景。
-   * true = 知识库/诊断等需来源支撑的回答，评分有意义；
-   * false = 纯命令输出解读/闲聊等，不适用置信度（UI 不显示，避免误报“低”）。
-   */
-  applicable: boolean;
+export interface EvidenceAssessment {
+  /** 会话证据状态，不代表某段模型文本为真的概率。 */
+  tier: EvidenceTier;
+  source: "rpc" | "unavailable";
+  reason: string;
+  evidenceCount: number;
+  sources: EvidenceSource[];
+  scope: "session";
 }
 
-/** 类型守卫 */
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
+type EvidenceAssessmentPayload = {
+  tier?: unknown;
+  reason?: unknown;
+  evidence_count?: unknown;
+  sources?: unknown;
+  scope?: unknown;
+};
 
-/**
- * TDSF 2026-08-31 (问题3修复): 从本地 5 维 breakdown 提取低置信度原因。
- * 只取最关键的至多 2 条，避免 UI 堆砌；全部达标时返回 null。
- */
-export function localConfidenceReason(b: ConfidenceBreakdown): string | null {
-  const parts: string[] = [];
-  if (b.source < 0.5) parts.push("未引用权威来源");
-  if (b.verifiability < 0.5) parts.push("缺少可验证细节（命令/路径/数字）");
-  if (b.specificity < 0.5) parts.push("缺少具体版本号/错误码");
-  if (b.consistency < 0.9) parts.push("表述存在自相矛盾");
-  if (b.terminology < 0.5) parts.push("术语不够精确");
-  return parts.length ? parts.slice(0, 2).join("、") : null;
-}
-
-/** TDSF 2026-08-31 (问题3修复): 从 RPC payload 提取低置信度原因 */
-export function rpcConfidenceReason(p: ConfidenceRpcPayload): string | null {
-  const parts: string[] = [];
-  if (
-    typeof p.evidence_count === "number" &&
-    typeof p.grounded_count === "number"
-  ) {
-    if (p.evidence_count > 0 && p.grounded_count === 0) {
-      parts.push("未检索到可靠来源佐证");
-    } else if (p.grounded_count < p.evidence_count) {
-      parts.push(
-        `仅 ${p.grounded_count}/${p.evidence_count} 条证据落地`,
-      );
-    }
-  }
-  if (typeof p.conflict === "number" && p.conflict >= 0.3) {
-    parts.push("证据间存在冲突");
-  }
-  return parts.length ? parts.slice(0, 2).join("；") : null;
-}
-
-/**
- * 按场景判断（2026-09-03）：回答是否含“可溯源信号”（引用 man/文档 或
- * 含系统术语的知识性论断）。与后端 rpc_methods._confidence_score 的 applicable
- * 判断同源：无任何信号 = 纯命令输出解读/闲聊 → 不适用置信度评分。
- */
-function hasCitableSignal(text: string): boolean {
-  const lower = text.toLowerCase();
-  const hasMan = lower.includes("man") || lower.includes("manual");
-  const hasDoc =
-    text.includes("http") || lower.includes("doc") || lower.includes("wiki");
-  const hasTerm = [
-    "Linux", "kernel", "system", "module",
-    "service", "process", "file", "directory",
-  ].some((kw) => text.includes(kw));
-  return hasMan || hasDoc || hasTerm;
-}
-
-/** 本地 TS fallback */
-function localFallback(message: string): ConfidenceRpcResult {
-  const local = scoreConfidenceLocal(message);
+function unavailableAssessment(): EvidenceAssessment {
   return {
-    score: local.score,
-    source: "local",
-    breakdown: local.breakdown,
-    reason: localConfidenceReason(local.breakdown),
-    applicable: hasCitableSignal(message),
+    tier: "unverified",
+    source: "unavailable",
+    reason: "证据服务不可用，未对回答文本作任何推断。",
+    evidenceCount: 0,
+    sources: [],
+    scope: "session",
+  };
+}
+
+function isTier(value: unknown): value is EvidenceTier {
+  return value === "unverified" || value === "grounded" || value === "verified";
+}
+
+function parseSources(value: unknown): EvidenceSource[] | null {
+  if (!Array.isArray(value)) return null;
+  const sources: EvidenceSource[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.tool_name !== "string" || !raw.tool_name) return null;
+    sources.push({
+      toolName: raw.tool_name,
+      ...(typeof raw.source === "string" ? { source: raw.source } : {}),
+      ...(typeof raw.timestamp === "number" ? { timestamp: raw.timestamp } : {}),
+    });
+  }
+  return sources;
+}
+
+function parseAssessment(value: unknown): EvidenceAssessment | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as EvidenceAssessmentPayload;
+  if (!isTier(payload.tier) || typeof payload.reason !== "string") return null;
+  if (typeof payload.evidence_count !== "number" || payload.evidence_count < 0) {
+    return null;
+  }
+  const sources = parseSources(payload.sources);
+  if (!sources || payload.scope !== "session") return null;
+  return {
+    tier: payload.tier,
+    source: "rpc",
+    reason: payload.reason,
+    evidenceCount: payload.evidence_count,
+    sources,
+    scope: "session",
   };
 }
 
 /**
- * 调用 Python sidecar 评分 AI 消息置信度。
+ * Query evidence that the sidecar actually recorded for the active chat.
  *
- * fail-open 策略：
- *   - Sidecar 未运行 / 方法未注册 / 超时 / 返回格式异常 → 回退到本地 TS 评分
- *   - 本地评分基于 5 维信号词匹配，覆盖 80% 实战场景
- *
- * @param message AI 回复消息文本
- * @param history 历史消息列表（可选，用于上下文一致性评分）
- * @returns ConfidenceRpcResult（含 score + source + reason）
+ * A bad or unavailable response intentionally degrades to ``unverified``;
+ * callers must never supply model prose as a fallback input.
  */
-export async function scoreConfidenceRpc(
-  message: string,
-  history: string[] = [],
-): Promise<ConfidenceRpcResult> {
+export async function assessSessionEvidence(
+  sessionId: string | null,
+): Promise<EvidenceAssessment> {
+  if (!sessionId) return unavailableAssessment();
   try {
     const raw = await invoke<unknown>("ipc_invoke", {
-      method: "confidence.score",
-      params: { message, history },
+      method: "evidence.assess",
+      params: { session_id: sessionId },
     });
-    if (!isObject(raw)) {
-      return localFallback(message);
-    }
-    const payload = raw as ConfidenceRpcPayload;
-    if (typeof payload.score !== "number") {
-      return localFallback(message);
-    }
-    // 钳位到 [0, 1]
-    const score = Math.max(0, Math.min(1, payload.score));
-    return {
-      score,
-      source: "rpc",
-      reason: rpcConfidenceReason(payload),
-      applicable: payload.applicable !== false,
-    };
+    return parseAssessment(raw) ?? unavailableAssessment();
   } catch {
-    // Sidecar 不可用 / 方法未注册 → fail-open 回退
-    return localFallback(message);
+    return unavailableAssessment();
   }
-}
-
-/**
- * 同步快速评分（不调 RPC，用于流式过程中的实时标记）。
- *
- * 流式过程中消息不断变化，不能每次都调 RPC。
- * 用本地 TS 评分做实时标记，流式结束后再调 RPC 获取精确评分。
- */
-export function scoreConfidenceSync(message: string): ConfidenceRpcResult {
-  return localFallback(message);
-}
-
-/** 置信度 → CSS 边框颜色（用于消息容器视觉标记） */
-export function confidenceBorderColor(score: number): string {
-  if (score < 0.3) return "#ef4444"; // red-500
-  if (score < 0.5) return "#f59e0b"; // amber-500
-  return "transparent"; // 正常样式
-}
-
-/** 置信度 → 标签文本（用于顶部标记） */
-export function confidenceLabel(score: number): string | null {
-  if (score < 0.3) return "⚠ 不确定";
-  if (score < 0.5) return "🤔 较低置信";
-  return null; // 正常样式不显示标签
 }

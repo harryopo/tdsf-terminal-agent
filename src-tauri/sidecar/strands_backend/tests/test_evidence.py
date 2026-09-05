@@ -14,6 +14,7 @@ import unittest
 
 from strands_backend.evidence import (
     EvidenceTracker,
+    assess_session_evidence,
     get_global_tracker,
     reset_global_tracker,
 )
@@ -147,6 +148,106 @@ class TestEvidenceIntegration(unittest.TestCase):
         bus.emit_tool_call.assert_not_called()
         tracker = get_global_tracker()
         self.assertEqual(tracker.list("ev-s2"), [])
+
+
+class TestEvidenceAssessment(unittest.TestCase):
+    """用户可见证据状态只能由已完成的工具事件推导。"""
+
+    def setUp(self):
+        reset_global_tracker()
+
+    def test_no_completed_source_is_unverified(self):
+        tracker = get_global_tracker()
+        tracker.record(
+            session_id="confidence-s1",
+            tool_name="knowledge_search",
+            status="started",
+            detail="SELinux",
+        )
+        tracker.record(
+            session_id="confidence-s1",
+            tool_name="knowledge_search",
+            status="error",
+            detail="SELinux",
+        )
+
+        assessment = assess_session_evidence("confidence-s1")
+
+        self.assertEqual(assessment["tier"], "unverified")
+        self.assertEqual(assessment["evidence_count"], 0)
+        self.assertEqual(assessment["sources"], [])
+
+    def test_completed_knowledge_lookup_is_grounded_with_real_source(self):
+        tracker = get_global_tracker()
+        tracker.record(
+            session_id="confidence-s2",
+            tool_name="knowledge_search",
+            status="completed",
+            detail="SELinux",
+            result={"status": "success", "count": 3},
+            source="main_agent.strands.hook",
+        )
+
+        assessment = assess_session_evidence("confidence-s2")
+
+        self.assertEqual(assessment["tier"], "grounded")
+        self.assertEqual(assessment["evidence_count"], 1)
+        self.assertEqual(assessment["sources"][0]["tool_name"], "knowledge_search")
+
+    def test_assess_rpc_exposes_the_same_session_evidence(self):
+        from strands_backend.evidence import register_methods
+
+        class Dispatcher:
+            def __init__(self):
+                self.methods = {}
+
+            def register(self, name, method):
+                self.methods[name] = method
+
+        tracker = get_global_tracker()
+        tracker.record(
+            session_id="confidence-rpc",
+            tool_name="knowledge_get_doc",
+            status="completed",
+            detail="services/SELinux.md",
+        )
+        dispatcher = Dispatcher()
+        register_methods(dispatcher)
+
+        assessment = dispatcher.methods["evidence.assess"]("confidence-rpc")
+
+        self.assertEqual(assessment["tier"], "grounded")
+        self.assertEqual(assessment["sources"][0]["tool_name"], "knowledge_get_doc")
+
+    def test_only_post_write_read_verification_is_verified(self):
+        tracker = get_global_tracker()
+        tracker.record(
+            session_id="confidence-s3",
+            tool_name="read_remote_file",
+            status="completed",
+            detail="/etc/nginx/nginx.conf",
+        )
+        tracker.record(
+            session_id="confidence-s3",
+            tool_name="service_manage",
+            status="completed",
+            detail="restart nginx",
+        )
+        tracker.record(
+            session_id="confidence-s3",
+            tool_name="read_remote_file",
+            status="completed",
+            detail="/etc/nginx/nginx.conf",
+        )
+
+        assessment = assess_session_evidence("confidence-s3")
+
+        self.assertEqual(assessment["tier"], "verified")
+        self.assertEqual(assessment["evidence_count"], 2)
+        self.assertEqual(
+            [source["tool_name"] for source in assessment["sources"]],
+            ["read_remote_file", "read_remote_file"],
+        )
 
 
 if __name__ == "__main__":

@@ -66,6 +66,40 @@ def _run_calls(hook, count, name="ssh_command", fail=False):
         hook._after_tool_call(after)
 
 
+class TestEvidenceRecording:
+    def test_completed_knowledge_tool_is_recorded_for_the_session(self):
+        from strands_backend.evidence import get_global_tracker, reset_global_tracker
+
+        reset_global_tracker()
+        event = _make_event("knowledge_search")
+        event.tool_use = {"name": "knowledge_search", "input": {"query": "SELinux"}}
+        event.result = {
+            "status": "success",
+            "content": [{"text": '{"status":"success","count":1}'}],
+        }
+        hook = _make_hook(session_id="evidence-hook")
+
+        hook._after_tool_call(event)
+
+        evidence = get_global_tracker().list("evidence-hook")
+        assert len(evidence) == 1
+        assert evidence[0]["tool_name"] == "knowledge_search"
+        assert evidence[0]["status"] == "completed"
+        assert evidence[0]["detail"] == "SELinux"
+
+    def test_hook_does_not_duplicate_ssh_evidence(self):
+        from strands_backend.evidence import get_global_tracker, reset_global_tracker
+
+        reset_global_tracker()
+        event = _make_event("ssh_command")
+        event.tool_use = {"name": "ssh_command", "input": {"command": "uname -a"}}
+        event.result = {"status": "success"}
+
+        _make_hook(session_id="evidence-hook")._after_tool_call(event)
+
+        assert get_global_tracker().list("evidence-hook") == []
+
+
 # ============================================================================
 # 1. 连续失败 ≥3 熔断（含用户可见解释）
 # ============================================================================
