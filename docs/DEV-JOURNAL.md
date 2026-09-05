@@ -6,6 +6,16 @@
 
 ---
 
+### 37.122 M1-2b 状态栏只显示当前 SSH 会话的真实发行版（2026-09-05 ✅）
+
+**实现**：没有建立第二套 probe cache。异步结果写入现有 `SshSessionInfo`，写前校验 frontend session 与 Rust session id；`App` 继续按当前 Space 选择 session。断开会删除会话对象，延迟结果无法写入新会话。StatusBar 只在当前已连接 SSH session 的 family 已知时显示中性标签；`unknown`、本地/WSL 和断开状态不显示，`PRETTY_NAME` 只作 title，不参与推断。
+
+**验证与边界**：先有“缺失组件”红测，新增 family 标签 2 个单测；定向链路 93 passed、全量 Vitest **132 files / 1351 tests**、typecheck、lint、Web build、diff check 均通过。UI 数据流经 Zustand 已受静态和单测覆盖，但原生 Tauri/SSH 操作面仍不能被当前自动化控制，故真实 SSH 回归仍待执行。
+
+**复盘**：显示状态必须从当前会话对象自然派生，不能从全局 Map 或上一次连通结果读取；否则切 Space 和断连后的陈旧标签会直接损害“真实”承诺。
+
+---
+
 ### 37.121 M1-2a 终端补全复用真实发行版事实（2026-09-05 ✅）
 
 **问题**：M1-1 的 `system.probe_env` 已真实读取 SSH `os-release`，但补全并未消费 `os_family`；因此“Linux”词典层仍会把另一发行版独占的包管理、防火墙命令及其静态参数推给用户。显示名、包管理器输出或模型推断都不能成为第二事实源。

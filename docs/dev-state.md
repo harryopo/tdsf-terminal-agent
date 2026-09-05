@@ -6,6 +6,18 @@
 
 ---
 
+### 37.122 M1-2b 状态栏只显示当前 SSH 会话的真实发行版（2026-09-05 ✅，原生验收待完成）
+
+**事实流**：不新建全局状态或重跑探测。`sshStore` 在连接成功后收到既有 `fetchRemoteOsInfo` 的结果时，将其写到匹配的 `SshSessionInfo`；写入前再核对 frontend session id 与 Rust session id。`App` 本已按当前 Space 订阅该 session，故切换 Space 自动切换来源；断开时 session 会移除，延迟返回不会复活旧标签。
+
+**UI 边界**：StatusBar 在环境选择器后显示一个中性、紧凑的 `RHEL`/`Debian`/`Arch`/`SUSE`/`Alpine` 标签，并将 `PRETTY_NAME` 仅置于原生 title。仅当前 SSH Space 已连接且 family 已知时传入；`unknown`、本地、WSL、断开或失败均不显示，避免把“不知道”冒充已识别。
+
+**验证**：先有缺失模块红测，再实现。徽标单测 **2 passed**；发行版探测与补全定向测试 **93 passed**，typecheck、lint、diff check 通过；全量 Vitest **132 files / 1351 tests passed**，`pnpm run build:web` 通过。原生 Tauri/SSH surface 仍未暴露给自动化，因此未把该 UI 视为实际 SSH 验收。
+
+**下一步**：保留 W1 的真实 SSH yum/dnf/apt/ufw 回归项；开发主线转向 W2，先审计 OSC/终端块已能证明的 command completion 字段，再定义只接收 `exit_code=0` 的历史与教学结果协议。
+
+---
+
 ### 37.121 M1-2a 终端补全复用真实发行版事实（2026-09-05 ✅，状态栏与原生验收待完成）
 
 **问题与约束**：M1-1 已能从远端 `os-release` 得到 machine-readable `os_family`，但终端预测仍只按“是否是 Linux”处理，静态词典、tldr/Fig 参数会推荐明显不适用于当前发行版的命令。不能从 `PRETTY_NAME`、命令显示名或包管理器输出猜测；也不能把浏览器本地页当作 SSH 验收。

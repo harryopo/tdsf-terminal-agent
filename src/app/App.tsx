@@ -2436,6 +2436,11 @@ export default function App() {
               onWorkspaceSshClick={handleWorkspaceSshClick}
               workspaceSwitching={workspaceSwitching}
               hasComposer={hasComposer}
+              remoteOsInfo={
+                isSpaceSshConnected
+                  ? (spaceSshSession?.remoteOsInfo ?? null)
+                  : null
+              }
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
