@@ -257,6 +257,34 @@ class TestSshCommandTool(unittest.TestCase):
             {"sessionId": 1, "command": "ls -la /tmp", "timeout": 30},
         )
 
+    def test_nonzero_exit_is_error_not_completed_evidence(self):
+        """真实非零退出码不能被包装成 success 或 completed 证据。"""
+        bridge = make_mock_rust_bridge({
+            "ok": True,
+            "output": "cat: /missing: No such file or directory",
+            "exit_code": 1,
+            "duration": 0.05,
+        })
+        ctx = make_ctx(rust_bridge=bridge)
+        with patch("strands_backend.tools._track_evidence") as evidence:
+            result = invoke_ssh_command_tool({"command": "cat /missing"}, ctx)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("No such file", result["output"])
+        self.assertEqual(evidence.call_args.kwargs["status"], "error")
+
+    def test_missing_exit_code_is_error_not_completed_evidence(self):
+        """没有退出码只能表示未知结果，不能伪装为成功。"""
+        bridge = make_mock_rust_bridge({"ok": True, "output": "partial output"})
+        ctx = make_ctx(rust_bridge=bridge)
+        with patch("strands_backend.tools._track_evidence") as evidence:
+            result = invoke_ssh_command_tool({"command": "echo partial"}, ctx)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "missing_or_invalid_exit_code")
+        self.assertEqual(evidence.call_args.kwargs["status"], "error")
+
     def test_high_risk_command_approved_executes(self):
         """P1-1: 高危命令用户批准 → 真实执行
 
