@@ -13,6 +13,7 @@
  */
 import { create } from "zustand";
 import type { TerminalBlock, TerminalBlockAuthor } from "./terminalBlocks";
+import { recordSuccessfulTerminalBlock } from "./executionHistory";
 import { useTeachingExecutionStore } from "./teachingExecutionStore";
 
 /** 每个 leaf 保留的 block 上限（上下文只用最近 10 条，50 条余量足够） */
@@ -46,6 +47,7 @@ export const useTerminalBlocksStore = create<TerminalBlocksState>(
           blocksByLeaf: { ...s.blocksByLeaf, [block.sessionId]: next },
         };
       });
+      recordSuccessfulTerminalBlock(block);
       // 教学模式不读全量滚屏：只把刚完成的、已脱敏的生命周期块交给
       // teaching store 做 leaf + 精确命令关联。未登记的普通命令在该处零影响。
       useTeachingExecutionStore.getState().resolveTerminalBlock(block);

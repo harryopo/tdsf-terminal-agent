@@ -7,9 +7,8 @@ const MAX_OSC52_CLIPBOARD_BYTES = 1024 * 1024;
  * Cross-handler state shared between the OSC 7 cwd handler and the OSC 133
  * prompt-marker handler. Tracks whether we are currently inside a running
  * command (between OSC 133 B and the next OSC 133 D / A), so the cwd handler
- * can ignore OSC 7 updates emitted by *command output* (e.g. a remote SSH
- * server, a `cat` of an attacker-controlled file). Only OSC 7 issued by the
- * local shell — which fires between commands — should be honored.
+ * can ignore OSC 7 updates emitted by command output. Only OSC 7 issued by
+ * the local shell between commands should be honored.
  */
 export type ShellIntegrationState = {
   inCommand: boolean;
@@ -25,47 +24,11 @@ export function registerCwdHandler(
   state?: ShellIntegrationState,
 ): () => void {
   const d = term.parser.registerOscHandler(7, (data) => {
-    // Reject OSC 7 emitted while a command is running: command stdout/stderr
-    // is untrusted (it can come from a remote shell, an SSH session, a `cat`
-    // of attacker-controlled bytes). The local shell only emits OSC 7
-    // between commands via its precmd/PROMPT_COMMAND hook.
+    // Command stdout/stderr can contain attacker-controlled OSC 7 bytes.
     if (state?.inCommand) return true;
     const cwd = parseOsc7(data);
     if (cwd) onCwd(cwd);
     return true;
-  });
-  return () => d.dispose();
-}
-
-// TDSF 魔改 (P4-T4.3): Teach Agent OSC 7 教学触发
-// -----------------------------------------------------------------------------
-// 与 registerCwdHandler 并存的第二个 OSC 7 处理器，专用于 teach 触发。
-//
-// 区别于 registerCwdHandler 的"仅 cwd 变化时回调"：
-//   - 本处理器对**每次合法的 OSC 7**（between commands）都触发回调，
-//     无论 cwd 是否变化 —— 因为 shell 在每条命令结束后都会发 OSC 7。
-//   - teach-trigger 的降频逻辑（默认 1/3）由 notifyCommandExecuted 内部处理，
-//     这里只负责把 cwd 传过去。
-//
-// 安全策略与 registerCwdHandler 一致：
-//   - 拒绝命令运行期间发出的 OSC 7（untrusted command output）
-//   - 复用同一个 ShellIntegrationState（inCommand 标志）
-//
-// 关键约束（TDSF 2026-07-31 修复）：本 handler 必须返回 **false**。
-// xterm OscParser.end() 从后往前遍历 handler，遇到第一个返回 true 的就 break，
-// 因此先注册的 registerCwdHandler 会被后注册且返回 true 的 handler 短路，
-// 导致 onCwd 永不触发（Phase 3 本地 cwd 同步失效的根因）。teach trigger
-// 只是"观察者"，不应消费 OSC 7 事件，返回 false 让 cwdHandler 继续执行。
-export function registerOsc7TeachTrigger(
-  term: Terminal,
-  onTrigger: (cwd: string) => void,
-  state?: ShellIntegrationState,
-): () => void {
-  const d = term.parser.registerOscHandler(7, (data) => {
-    if (state?.inCommand) return false;
-    const cwd = parseOsc7(data);
-    if (cwd) onTrigger(cwd);
-    return false;
   });
   return () => d.dispose();
 }
@@ -84,22 +47,21 @@ export function registerPromptTracker(
 ): PromptTracker {
   let marker: IMarker | null = null;
   const d = term.parser.registerOscHandler(133, (data) => {
-    // OSC 133 A — start of new prompt (between commands).
+    // OSC 133 A: start of a new prompt (between commands).
     if (data.startsWith("A")) {
       if (state) state.inCommand = false;
       onCommandState?.(false);
       marker?.dispose();
       marker = term.registerMarker(0);
     } else if (data.startsWith("B")) {
-      // OSC 133 B — command begins. From here on, treat all output as
-      // untrusted until we see D (command exit) or the next A (new prompt).
+      // Command begins. Output is untrusted until D or the next A.
       if (state) state.inCommand = true;
     } else if (data.startsWith("C")) {
-      // OSC 133 C — command pre-execution marker; still inside command.
+      // Command pre-execution marker; still inside the command.
       if (state) state.inCommand = true;
       onCommandState?.(true);
     } else if (data.startsWith("D")) {
-      // OSC 133 D — command ends.
+      // Command ends.
       if (state) state.inCommand = false;
       onCommandState?.(false);
     }
@@ -141,14 +103,11 @@ function parseOsc7(data: string): string | null {
   try {
     path = decodeURIComponent(path);
   } catch {}
-  // /C:/Users/foo -> C:/Users/foo so it's a valid Windows path.
+  // /C:/Users/foo -> C:/Users/foo so it is a valid Windows path.
   if (/^\/[A-Za-z]:/.test(path)) {
     path = path.slice(1);
   }
   if (IS_WINDOWS) {
-    // Windows 路径大小写不敏感：统一盘符大写。否则 shell 报小写盘符
-    // （如 `cd c:\users` 后的 `c:/Users`）会让 rootPath 与 Explorer 缓存的
-    // `C:/Users` 比较不等，触发整树重建、丢失展开状态（Phase 4 容错）。
     if (/^[a-z]:/.test(path)) {
       path = path[0].toUpperCase() + path.slice(1);
     }

@@ -45,6 +45,11 @@ import {
 } from '@/lib/spec-data/tldr-params';
 import { getCommandSpec } from '@/lib/spec-data/loader';
 import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
+import {
+  getLeafEnvironment,
+} from './executionHistory';
+
+export { clearLeafEnvironment, setLeafEnvironment } from './executionHistory';
 
 // ============================================================================
 // 类型
@@ -97,21 +102,6 @@ const inputBuffers = new Map<number, string>();
  * TDSF 2026-08-28：命令预测必须区分环境——本地终端预测 Windows 命令，
  * SSH 终端预测 Linux 命令，否则本地弹出的 Linux 命令输入了无效。
  * 由 useTerminalSession 在会话创建时按 s.remote 注册。 */
-const leafEnvironments = new Map<number, TerminalEnv>();
-
-export function setLeafEnvironment(leafId: number, env: TerminalEnv): void {
-  leafEnvironments.set(leafId, env);
-}
-
-export function clearLeafEnvironment(leafId: number): void {
-  leafEnvironments.delete(leafId);
-}
-
-function getLeafEnvironment(leafId: number): TerminalEnv {
-  // 未注册的 leaf 按本地环境处理（保守：本地终端占比高，且 Linux 命令集更大）
-  return leafEnvironments.get(leafId) ?? 'windows';
-}
-
 function getInputBuffer(leafId: number): string {
   return inputBuffers.get(leafId) ?? '';
 }

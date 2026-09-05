@@ -84,8 +84,7 @@ export const useErrorExplainStore = create<ExplainState>((set, get) => ({
           agentId: "main",
           input,
           messages: [],
-          // 与 teach-trigger 相同的最小 live（错误解释无需终端上下文，
-          // Python 侧收到 sshSessionId=null 不会调运维工具）
+          // Error explanation has no terminal context and cannot run operations.
           live: {
             cwd: null,
             terminalPrivate: false,
