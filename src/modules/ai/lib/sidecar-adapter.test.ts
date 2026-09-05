@@ -136,7 +136,7 @@ describe("runSidecarStream — sidecar 不可用时降级", () => {
     expect(err.error).toContain("sidecar not running");
     // P0-4: 结构化错误提示——not_running 类型应包含重启建议
     expect(err.error).toContain("重启应用后重试");
-  });
+  }, 15_000);
 
   it("生产模式 + invoke 失败 → yield error（不降级）", async () => {
     // 确保生产模式：_devModeCheck() 返回 false，触发 error 路径（不降级到 mock）

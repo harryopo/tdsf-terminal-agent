@@ -101,10 +101,10 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
     await mount();
     emitNeedsYou(toolDirectCreated());
 
-    expect(await screen.findByText("需要你的确认")).toBeTruthy();
-    expect(screen.getByText("想操作服务：nginx")).toBeTruthy();
+    expect(await screen.findByText("等待你的确认")).toBeTruthy();
     expect(screen.getByText("systemctl restart nginx")).toBeTruthy();
     expect(screen.getByText("重启 nginx 使新配置生效")).toBeTruthy();
+    expect(screen.getByText("操作服务：nginx")).toBeTruthy();
     expect(screen.getByText("L3 高风险")).toBeTruthy();
   });
 
@@ -119,7 +119,7 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
       }),
     );
 
-    expect(await screen.findByText("需要你的确认")).toBeTruthy();
+    expect(await screen.findByText("等待你的确认")).toBeTruthy();
     expect(screen.getByText("想删除文件：/tmp/old")).toBeTruthy();
     expect(screen.getByText("rm -rf /tmp/old")).toBeTruthy();
     expect(screen.getByText("L4 危险")).toBeTruthy();
@@ -131,8 +131,8 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
     emitNeedsYou(serviceCreated({ risk_l: 3 }));
     emitNeedsYou(toolDirectCreated());
 
-    await screen.findByText("想操作服务：nginx");
-    expect(screen.getAllByText("需要你的确认")).toHaveLength(1);
+    await screen.findByText("重启 nginx 使新配置生效");
+    expect(screen.getAllByText("等待你的确认")).toHaveLength(1);
   });
 
   it("非 approval 类型（question）不渲染", async () => {
@@ -143,7 +143,7 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
     await act(async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    expect(screen.queryByText("需要你的确认")).toBeNull();
+    expect(screen.queryByText("等待你的确认")).toBeNull();
   });
 
   it("session_id 与当前会话不符 → 不渲染（其他会话的卡仍正常）", async () => {
@@ -168,7 +168,7 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
     await act(async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    expect(screen.getByText("需要你的确认")).toBeTruthy();
+    expect(screen.getByText("等待你的确认")).toBeTruthy();
     expect(screen.queryByText("shutdown -h now")).toBeNull();
     expect(screen.getByText("uptime")).toBeTruthy();
   });
@@ -178,7 +178,16 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
   it("执行按钮 → needs_you.respond(approved:true) → 成功后卡移除", async () => {
     vi.mocked(invokeRpc).mockResolvedValue({});
     await mount();
-    emitNeedsYou(toolDirectCreated({ risk_l: 1 }));
+    emitNeedsYou(
+      toolDirectCreated({
+        risk_l: 1,
+        impact: {
+          summary: "只读查看服务状态",
+          max_risk_l: 1,
+          segments: [{ category: "readonly", risk_l: 1 }],
+        },
+      }),
+    );
 
     fireEvent.click(await screen.findByText("执行"));
 
@@ -189,14 +198,23 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByText("需要你的确认")).toBeNull();
+      expect(screen.queryByText("等待你的确认")).toBeNull();
     });
   });
 
   it("⚡批准且本会话只读免审 → response 带 decision/sessionTrust + 前端标志置位", async () => {
     vi.mocked(invokeRpc).mockResolvedValue({});
     await mount();
-    emitNeedsYou(toolDirectCreated({ risk_l: 1 }));
+    emitNeedsYou(
+      toolDirectCreated({
+        risk_l: 1,
+        impact: {
+          summary: "只读查看服务状态",
+          max_risk_l: 1,
+          segments: [{ category: "readonly", risk_l: 1 }],
+        },
+      }),
+    );
 
     fireEvent.click(await screen.findByText("批准且本会话只读免审"));
 
@@ -241,7 +259,7 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
   it("responded/timeout 事件到达 → 卡自动移除（无需用户操作）", async () => {
     await mount();
     emitNeedsYou(toolDirectCreated());
-    await screen.findByText("需要你的确认");
+    await screen.findByText("等待你的确认");
 
     emitNeedsYou({
       event_type: "needs_you",
@@ -253,7 +271,7 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("需要你的确认")).toBeNull();
+      expect(screen.queryByText("等待你的确认")).toBeNull();
     });
     expect(invokeRpc).not.toHaveBeenCalled();
   });
@@ -273,11 +291,49 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
       );
     });
     // 卡保留（请求仍 pending），可再次点击重试
-    expect(screen.getByText("需要你的确认")).toBeTruthy();
+    expect(screen.getByText("等待你的确认")).toBeTruthy();
     vi.mocked(invokeRpc).mockResolvedValue({});
     fireEvent.click(screen.getByText("执行"));
     await waitFor(() => {
       expect(vi.mocked(invokeRpc)).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe("NeedsYouApprovalCards FIFO", () => {
+  it("shows only the queue head and reveals the next approval after a successful response", async () => {
+    let resolveResponse: ((value: unknown) => void) | undefined;
+    vi.mocked(invokeRpc).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveResponse = resolve;
+        }),
+    );
+    await mount();
+    emitNeedsYou(
+      toolDirectCreated({ id: "ny-first", command: "echo FIRST_APPROVAL" }),
+    );
+    emitNeedsYou(
+      toolDirectCreated({ id: "ny-second", command: "echo SECOND_APPROVAL" }),
+    );
+
+    expect(await screen.findByText("echo FIRST_APPROVAL")).toBeTruthy();
+    expect(screen.queryByText("echo SECOND_APPROVAL")).toBeNull();
+    expect(
+      document.querySelector("[data-needs-you-cards]")?.getAttribute(
+        "data-queued-approvals",
+      ),
+    ).toBe("1");
+
+    fireEvent.click(screen.getByText("执行"));
+    expect(screen.getByText("echo FIRST_APPROVAL")).toBeTruthy();
+    expect(screen.queryByText("echo SECOND_APPROVAL")).toBeNull();
+
+    await act(async () => {
+      resolveResponse?.({});
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("echo SECOND_APPROVAL")).toBeTruthy();
+    expect(screen.queryByText("echo FIRST_APPROVAL")).toBeNull();
   });
 });

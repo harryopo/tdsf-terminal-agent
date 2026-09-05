@@ -288,5 +288,19 @@ class TestMessagesContinuityAcrossInvoke(unittest.TestCase):
         self.assertEqual(len(adapter._session_messages), 0)
 
 
+class TestTeachingPromptExecutionBoundary(unittest.TestCase):
+    """教学命令卡必须等待学生显式提交受限执行结果。"""
+
+    def test_prompt_forbids_scrollback_read_and_requires_structured_result(self):
+        from strands_backend.adapter import _compose_system_prompt
+
+        prompt = _compose_system_prompt(AgentMode.OBSERVE, teach=True)
+
+        self.assertIn("本轮工具调用不会得到执行结果", prompt)
+        self.assertIn("不要调用 get_terminal_output", prompt)
+        self.assertIn("<teaching-command-result>", prompt)
+        self.assertIn("基于结果继续讲解", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

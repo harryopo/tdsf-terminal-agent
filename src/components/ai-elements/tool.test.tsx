@@ -1,9 +1,9 @@
 /**
- * tool.test.tsx — 四层审批卡测试（Task 3.1，方案书 v3.1 §4.4）
+ * tool.test.tsx — 紧凑审批卡测试
  * -----------------------------------------------------------------------------
  * 覆盖：
- *   1. 四层卡面自上而下：①语义描述 ②命令原文 ③解释 ④影响预测（类别+对象+L 色带）
- *   2. 解释缺失显示「（无解释）」；影响缺失显示「影响未知——请人工审查」
+ *   1. 卡面只突出：①真实命令原文 ②一句中文用途 ③一句 metadata 影响摘要
+ *   2. 不重复 semantic / explanation / segment objects，不伪造精确输出
  *   3. 三按钮：拒绝（可展开附言）/ ⚡批准且本会话只读免审（仅 L0-L1）/ ▶执行
  *   4. L3/L4 无会话免审选项；denied / dangerous_construct 时 ⚡ 隐藏
  *   5. Tool 组件 approval-requested + onApprovalRespond → 渲染审批卡
@@ -39,8 +39,8 @@ const FULL_IMPACT = {
   ],
 };
 
-describe("ToolApprovalCard — 四层卡面", () => {
-  it("渲染四层：语义/命令原文/解释/影响预测", () => {
+describe("ToolApprovalCard — 紧凑卡面", () => {
+  it("只渲染真实命令、一句用途和一句影响，不重复对象面板", () => {
     renderCard({
       semantic: "想操作服务：nginx",
       command: "systemctl restart nginx",
@@ -48,32 +48,76 @@ describe("ToolApprovalCard — 四层卡面", () => {
       impact: FULL_IMPACT,
       risk_l: 3,
     });
-    // ① 语义
-    expect(screen.getByText("想操作服务：nginx")).toBeTruthy();
-    // ② 命令原文（永不改写）
+    // ① 命令原文（永不改写）
     expect(screen.getByText("systemctl restart nginx")).toBeTruthy();
-    // ③ 解释
+    // ② 有 explanation 时只展示它，不再重复 semantic
     expect(screen.getByText("重启 nginx 使新配置生效")).toBeTruthy();
-    // ④ 影响预测：摘要 + 类别标签 + 对象 + 风险色带
-    expect(screen.getByText("影响预测")).toBeTruthy();
+    expect(screen.queryByText("想操作服务：nginx")).toBeNull();
+    // ③ 影响只保留 summary + 风险等级，不渲染 segment 对象/分组
     expect(screen.getByText("操作服务：nginx")).toBeTruthy();
     expect(screen.getByText("L3 高风险")).toBeTruthy();
-    expect(screen.getByText("nginx")).toBeTruthy();
+    expect(screen.queryByText("nginx")).toBeNull();
+    expect(screen.queryByText("高影响变更")).toBeNull();
+    expect(screen.queryByText("需注意")).toBeNull();
+    expect(screen.queryByText(/安全操作/)).toBeNull();
   });
 
-  it("解释缺失显示（无解释）", () => {
-    renderCard({ semantic: "想删除文件：/tmp/a", command: "rm -rf /tmp/a", risk_l: 4 });
-    expect(screen.getByText("（无解释）")).toBeTruthy();
+  it("命令原文保留空格和换行，仅通过样式换行", () => {
+    const command = "printf 'a  b'\n  && echo done";
+    renderCard({
+      command,
+      explanation: "打印两段文本",
+      impact: { summary: "只向当前终端写入文本", max_risk_l: 0 },
+      risk_l: 0,
+    });
+
+    expect(screen.getByTestId("approval-command").textContent).toBe(command);
   });
 
-  it("影响缺失显示「影响未知——请人工审查」", () => {
+  it("用途解释缺失时回退到 semantic，不用影响摘要伪装说明", () => {
+    renderCard({
+      semantic: "想删除文件：/tmp/a",
+      command: "rm -rf /tmp/a",
+      risk_l: 4,
+      impact: { summary: "删除：/tmp/a" },
+    });
+    expect(screen.getByText("想删除文件：/tmp/a")).toBeTruthy();
+    expect(screen.getByText("删除：/tmp/a")).toBeTruthy();
+    expect(screen.queryByText(/系统预测/)).toBeNull();
+    expect(screen.queryByText("（无解释）")).toBeNull();
+  });
+
+  it("影响缺失显示简短的 fail-closed 文案", () => {
     renderCard({ command: "./mystery.sh", risk_l: 3 });
-    expect(screen.getByText("影响未知——请人工审查")).toBeTruthy();
+    expect(screen.getByText("影响信息不完整，需要逐条确认。")).toBeTruthy();
   });
 
-  it("semantic 缺失回退通用文案", () => {
+  it("用途字段都缺失时如实显示未提供，不编造命令结果", () => {
     renderCard({ command: "ls" });
-    expect(screen.getByText("Agent 请求执行操作")).toBeTruthy();
+    expect(screen.getByText("未提供用途说明。")).toBeTruthy();
+    expect(screen.queryByText(/将会输出|输出结果/)).toBeNull();
+  });
+
+  it("未知命令只显示一条保守影响，不生成风险分段", () => {
+    renderCard({
+      command: "./mystery.sh",
+      risk_l: 3,
+      impact: {
+        summary: "暂无法判断影响，请人工确认",
+        max_risk_l: 3,
+        segments: [
+          {
+            category: "unknown",
+            category_label: "未识别命令（保守待确认）",
+            risk_l: 3,
+          },
+        ],
+      },
+    });
+    expect(screen.getByText("暂无法判断影响，请人工确认")).toBeTruthy();
+    expect(screen.queryByText("未识别命令（保守待确认）")).toBeNull();
+    expect(screen.queryByText("待人工确认")).toBeNull();
+    expect(screen.queryByText("高影响变更")).toBeNull();
   });
 });
 
@@ -87,7 +131,20 @@ describe("ToolApprovalCard — 三按钮", () => {
 
   it("L0/L1 显示 ⚡会话免审按钮 → onRespond({approved:true, sessionTrust:true})", () => {
     const onRespond = vi.fn();
-    renderCard({ command: "uptime", risk_l: 1 }, onRespond);
+    renderCard(
+      {
+        command: "uptime",
+        risk_l: 1,
+        impact: {
+          summary: "只读取系统运行时间",
+          max_risk_l: 1,
+          denied: false,
+          dangerous_construct: false,
+          segments: [{ category: "read_only", risk_l: 1, denied: false }],
+        },
+      },
+      onRespond,
+    );
     fireEvent.click(screen.getByText("批准且本会话只读免审"));
     expect(onRespond).toHaveBeenCalledWith({ approved: true, sessionTrust: true });
   });
@@ -106,12 +163,18 @@ describe("ToolApprovalCard — 三按钮", () => {
       impact: { ...FULL_IMPACT, denied: true },
     });
     expect(screen.queryByText("批准且本会话只读免审")).toBeNull();
+    expect(
+      screen.getByText("影响元数据标记此操作已被安全规则拦截。"),
+    ).toBeTruthy();
     renderCard({
       command: "echo $(x)",
       risk_l: 0,
       impact: { ...FULL_IMPACT, dangerous_construct: true },
     });
     expect(screen.queryByText("批准且本会话只读免审")).toBeNull();
+    expect(
+      screen.getByText("影响元数据检测到危险命令构造，需要逐条确认。"),
+    ).toBeTruthy();
   });
 
   it("拒绝 → 展开附言输入 → 确认拒绝携带附言", () => {
@@ -142,11 +205,11 @@ describe("Tool — approval-requested 分支", () => {
       <Tool
         toolName="ssh_command"
         state="approval-requested"
-        input={{ command: "uptime", semantic: "想只读查询", risk_l: 0 }}
+        input={{ command: "uptime", semantic: "想只读查看", risk_l: 0 }}
         onApprovalRespond={onRespond}
       />,
     );
-    expect(screen.getByText("需要你的确认")).toBeTruthy();
+    expect(screen.getByText("等待你的确认")).toBeTruthy();
     expect(screen.getByText("uptime")).toBeTruthy();
     fireEvent.click(screen.getByText("执行"));
     expect(onRespond).toHaveBeenCalledWith({ approved: true });
@@ -280,6 +343,19 @@ describe("Tool — knowledge_get_doc 文档卡片（TDSF 2026-08-31 双库）", 
     );
     expect(screen.getByText(/不存在该文档/)).toBeTruthy();
   });
+
+  it("success 但正文为空时仍显示事实状态，而不是空白卡片", () => {
+    render(
+      <Tool
+        toolName="knowledge_get_doc"
+        state="output-available"
+        input={{ url: "empty.md" }}
+        output={{ status: "success", title: "empty.md", content: "" }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText(/没有可显示的正文/)).toBeTruthy();
+  });
 });
 
 // ============================================================================
@@ -353,6 +429,32 @@ describe("Tool — 失败输出不再吐裸 JSON", () => {
     );
     expect(screen.getByLabelText("done")).toBeTruthy();
     expect(screen.queryByText("failed")).toBeNull();
+  });
+});
+
+describe("Tool — SSH 结果卡", () => {
+  it("将 SSH 结构化结果渲染为状态、说明与终端输出，而非裸 JSON", () => {
+    render(
+      <Tool
+        toolName="ssh_command"
+        state="output-available"
+        input={{ command: "hostnamectl" }}
+        output={{
+          status: "success",
+          command: "hostnamectl",
+          explanation: "查看主机名与系统信息（只读）",
+          output: "Static hostname: demo-host",
+          exit_code: 0,
+          duration: 0.382,
+        }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("命令已返回")).toBeTruthy();
+    expect(screen.getByText("退出码 0")).toBeTruthy();
+    expect(screen.getByText("查看主机名与系统信息（只读）")).toBeTruthy();
+    expect(screen.getByText("Static hostname: demo-host")).toBeTruthy();
+    expect(screen.queryByText(/"duration"/)).toBeNull();
   });
 });
 

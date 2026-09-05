@@ -328,7 +328,28 @@ def make_process_inspector_tool(ctx: ToolContext):
     return inspect_processes
 
 
+def to_shell_command(params: dict[str, Any]) -> str | None:
+    """工具参数 → 等价 shell 命令映射（纯函数，fail-closed）
+
+    Args:
+        params: 工具参数 dict（mode / filter_user / filter_name / pid / top_n）
+
+    Returns:
+        shell 命令字符串；映射失败返回 None（不抛异常）
+    """
+    try:
+        mode = params.get("mode", "list") or "list"
+        filter_user = params.get("filter_user", "") or ""
+        filter_name = params.get("filter_name", "") or ""
+        pid = int(params.get("pid", 0) or 0)
+        top_n = int(params.get("top_n", _DEFAULT_TOP_N))
+        return _build_command(mode, filter_user, filter_name, pid, top_n)
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 __all__ = [
     "invoke_process_inspector_tool",
     "make_process_inspector_tool",
+    "to_shell_command",
 ]

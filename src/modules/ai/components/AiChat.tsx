@@ -865,7 +865,12 @@ const RenderedPart = memo(function RenderedPart({
       return <TeachCard content={text} />;
     }
     return (
-      <MessageResponse streaming={streaming}>{text}</MessageResponse>
+      <MessageResponse
+        streaming={streaming}
+        className="max-w-none text-[12.5px] leading-[1.72] text-foreground [&>*:not(:first-child)]:mt-2 [&_[data-streamdown=heading-1]]:mt-3 [&_[data-streamdown=heading-1]]:text-[15px] [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-1]]:tracking-tight [&_[data-streamdown=heading-2]]:mt-3 [&_[data-streamdown=heading-2]]:text-[14px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-2.5 [&_[data-streamdown=heading-3]]:text-[13px] [&_[data-streamdown=heading-3]]:font-semibold [&_ul]:my-2 [&_ul]:pl-4 [&_ol]:my-2 [&_ol]:pl-4 [&_li]:my-0.5 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/35 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
+      >
+        {text}
+      </MessageResponse>
     );
   }
 
@@ -957,7 +962,15 @@ const RenderedTool = memo(function RenderedTool({
       input={part.input}
       output={"output" in part ? part.output : undefined}
       errorText={"errorText" in part ? part.errorText : undefined}
-      defaultOpen={toolName === "list_directory"}
+      // Knowledge calls are first-class evidence in teaching mode.  Keep their
+      // compact result visible by default so a retrieval is distinguishable
+      // from the lesson prose that may follow it; the full document body is
+      // still collapsible inside KnowledgeDocCard.
+      defaultOpen={
+        toolName === "list_directory" ||
+        toolName === "knowledge_search" ||
+        toolName === "knowledge_get_doc"
+      }
     />
   );
 });

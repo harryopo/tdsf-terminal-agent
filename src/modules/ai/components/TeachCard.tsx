@@ -34,6 +34,12 @@ import {
   type TeachSectionType,
 } from "./teachParser";
 
+// Keep lesson prose compact and consistent with normal assistant Markdown.
+// Without this class Streamdown's default heading margins make each section
+// look like a separate page and make accidental long text hard to scan.
+const TEACH_MARKDOWN_CLASS =
+  "max-w-none text-[12px] leading-[1.65] text-foreground [&>*:not(:first-child)]:mt-2 [&_[data-streamdown=heading-1]]:mt-2.5 [&_[data-streamdown=heading-1]]:text-[15px] [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-1]]:tracking-tight [&_[data-streamdown=heading-2]]:mt-2.5 [&_[data-streamdown=heading-2]]:text-[14px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-2 [&_[data-streamdown=heading-3]]:text-[13px] [&_[data-streamdown=heading-3]]:font-semibold [&_ul]:my-1.5 [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:pl-4 [&_li]:my-0.5 [&_blockquote]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/35 [&_blockquote]:pl-2.5 [&_blockquote]:text-muted-foreground [&_table]:my-1.5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto";
+
 // ============================================================================
 // TeachCard 组件
 // ============================================================================
@@ -144,7 +150,9 @@ function TeachSectionBlock({ section }: { section: TeachSection }) {
       {/* markdown 正文（复用项目 Streamdown 渲染） */}
       {section.content.trim() && (
         <div className="text-[11.5px] leading-relaxed text-muted-foreground">
-          <MessageResponse>{section.content}</MessageResponse>
+          <MessageResponse className={TEACH_MARKDOWN_CLASS}>
+            {section.content}
+          </MessageResponse>
         </div>
       )}
     </div>

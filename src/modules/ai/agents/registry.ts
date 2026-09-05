@@ -56,8 +56,8 @@ export const AGENT_MODE_META: Record<
   confirm: {
     label: "确认",
     badge: "确认 · 审批",
-    desc: "写操作逐条审批后执行",
-    brief: "操作前确认",
+    desc: "已识别的只读查询直接运行；可能改变系统的操作逐条确认",
+    brief: "读即查询，改前确认",
   },
   auto: {
     label: "自动",

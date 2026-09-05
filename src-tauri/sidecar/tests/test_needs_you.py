@@ -873,7 +873,223 @@ class TestEventBusIntegration:
 
 
 # ============================================================================
-# 13. 线程安全测试
+# 13. 同会话 approval 严格 FIFO
+# ============================================================================
+
+
+class TestApprovalFIFO:
+    """同一 session 只激活一个 approval，其余保持创建顺序排队。"""
+
+    @staticmethod
+    def _created_ids(mock_event_bus):
+        return [
+            call.kwargs["request"]["id"]
+            for call in mock_event_bus.emit_needs_you.call_args_list
+            if call.kwargs.get("event") == "created"
+        ]
+
+    def test_concurrent_same_session_emits_one_created_and_promotes_fifo(
+        self,
+        mock_event_bus,
+    ):
+        """并发请求同一会话时只展示队头，完成后严格按创建顺序晋升。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+        barrier = threading.Barrier(9)
+        requests = []
+        requests_lock = threading.Lock()
+
+        def create_one(index):
+            barrier.wait()
+            req = service.request_approval(
+                title=f"approval-{index}",
+                description="d",
+                session_id="sess-fifo",
+            )
+            with requests_lock:
+                requests.append(req)
+
+        threads = [threading.Thread(target=create_one, args=(i,)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5.0)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert len(requests) == 8
+        ordered = sorted(requests, key=lambda req: req.created_at)
+        assert self._created_ids(mock_event_bus) == [ordered[0].id]
+
+        for index, req in enumerate(ordered):
+            active = [
+                candidate
+                for candidate in requests
+                if candidate.is_pending and candidate.deadline is not None
+            ]
+            assert [candidate.id for candidate in active] == [req.id]
+            assert service.approve(req.id) is req
+            expected_created = [candidate.id for candidate in ordered[: index + 2]]
+            assert self._created_ids(mock_event_bus) == expected_created
+
+    def test_different_sessions_activate_independently(self, mock_event_bus):
+        """不同 session 各有自己的活动队头，可并行等待审批。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+
+        first = service.request_approval(
+            title="s1",
+            description="d",
+            session_id="session-1",
+        )
+        second = service.request_approval(
+            title="s2",
+            description="d",
+            session_id="session-2",
+        )
+
+        assert self._created_ids(mock_event_bus) == [first.id, second.id]
+        assert first.deadline is not None
+        assert second.deadline is not None
+
+    def test_none_session_uses_one_stable_fifo_bucket(self, mock_event_bus):
+        """缺失 session_id 的真实调用也必须归入同一个稳定串行桶。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+        first = service.request_approval(title="first", description="d")
+        second = service.request_approval(title="second", description="d")
+
+        assert self._created_ids(mock_event_bus) == [first.id]
+        assert first.deadline is not None
+        assert second.deadline is None
+
+        service.reject(first.id, reason="no")
+        assert self._created_ids(mock_event_bus) == [first.id, second.id]
+        assert second.deadline is not None
+
+    def test_queued_approval_timeout_starts_only_when_activated(self, mock_event_bus):
+        """排队时间不消耗审批超时，队头超时后下一条才开始计时。"""
+        service = NeedsYouService(
+            approval_timeout=0.3,
+            timeout_check_interval=0.01,
+            event_bus=mock_event_bus,
+        )
+        service.start()
+        try:
+            first = service.request_approval(title="first", description="d")
+            second = service.request_approval(title="second", description="d")
+            assert second.deadline is None
+
+            assert first._event.wait(1.0)
+            assert first.status == NeedsYouStatus.TIMEOUT
+            assert second.status == NeedsYouStatus.PENDING
+            assert second.deadline is not None
+            assert second.deadline >= first.responded_at + 0.25
+            assert self._created_ids(mock_event_bus) == [first.id, second.id]
+        finally:
+            service.stop()
+
+    def test_queued_waiter_finishes_on_its_activated_deadline(self, mock_event_bus):
+        """wait_for_response 先等激活，再按该请求 deadline 终结。"""
+        service = NeedsYouService(
+            approval_timeout=0.15,
+            timeout_check_interval=0.01,
+            event_bus=mock_event_bus,
+        )
+        service.start()
+        try:
+            first = service.request_approval(title="first", description="d")
+            second = service.request_approval(title="second", description="d")
+
+            result = service.wait_for_response(second.id)
+
+            assert first.status == NeedsYouStatus.TIMEOUT
+            assert result is second
+            assert second.status == NeedsYouStatus.TIMEOUT
+            assert second.responded_at >= first.responded_at + 0.10
+        finally:
+            service.stop()
+
+    def test_queued_response_cannot_bypass_active_head(self, mock_event_bus):
+        """知道队列项 id 也不能越过当前活动审批提前放行。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+        first = service.request_approval(title="first", description="d")
+        second = service.request_approval(title="second", description="d")
+
+        assert service.approve(second.id) is None
+        assert second.status == NeedsYouStatus.PENDING
+        assert self._created_ids(mock_event_bus) == [first.id]
+
+        service.approve(first.id)
+        assert self._created_ids(mock_event_bus) == [first.id, second.id]
+        assert service.approve(second.id) is second
+
+    def test_cancel_queued_request_does_not_skip_fifo_or_block_waiter(
+        self,
+        mock_event_bus,
+    ):
+        """显式取消队列项会唤醒其 waiter，但不会提前激活后续请求。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+        first = service.request_approval(title="first", description="d")
+        middle = service.request_approval(title="middle", description="d")
+        last = service.request_approval(title="last", description="d")
+
+        waiter_result = []
+        waiter = threading.Thread(
+            target=lambda: waiter_result.append(service.wait_for_response(middle.id))
+        )
+        waiter.start()
+
+        service.cancel(middle.id, reason="no longer needed")
+        waiter.join(timeout=1.0)
+        assert not waiter.is_alive()
+        assert waiter_result == [middle]
+        assert self._created_ids(mock_event_bus) == [first.id]
+
+        service.approve(first.id)
+        assert self._created_ids(mock_event_bus) == [first.id, last.id]
+
+    def test_respond_timeout_race_promotes_next_exactly_once(self, mock_event_bus):
+        """响应与超时竞争时，队头只能终结一次，下一条也只能晋升一次。"""
+        service = NeedsYouService(event_bus=mock_event_bus)
+        first = service.request_approval(title="first", description="d")
+        second = service.request_approval(title="second", description="d")
+        first.deadline = time.time() - 1.0
+        mock_event_bus.emit_needs_you.reset_mock()
+        barrier = threading.Barrier(3)
+
+        def approve_head():
+            barrier.wait()
+            service.approve(first.id)
+
+        def timeout_head():
+            barrier.wait()
+            service._scan_timeouts()
+
+        threads = [
+            threading.Thread(target=approve_head),
+            threading.Thread(target=timeout_head),
+        ]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5.0)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert first.status in {NeedsYouStatus.APPROVED, NeedsYouStatus.TIMEOUT}
+        events = [
+            (call.kwargs["event"], call.kwargs["request"]["id"])
+            for call in mock_event_bus.emit_needs_you.call_args_list
+        ]
+        assert events == [
+            (
+                "responded" if first.status == NeedsYouStatus.APPROVED else "timeout",
+                first.id,
+            ),
+            ("created", second.id),
+        ]
+
+
+# ============================================================================
+# 14. 线程安全测试
 # ============================================================================
 
 
@@ -922,15 +1138,19 @@ class TestThreadSafety:
         assert successful[0].status == NeedsYouStatus.APPROVED
 
     def test_concurrent_create_and_timeout(self, fast_service):
-        """并发创建 + 超时扫描：无竞争条件"""
+        """不同 session 并发创建 + 超时扫描：无竞争条件"""
         fast_service.start()
         try:
-            def create_many():
-                for _ in range(10):
-                    fast_service.request_approval(title="t", description="d")
+            def create_many(prefix):
+                for index in range(10):
+                    fast_service.request_approval(
+                        title="t",
+                        description="d",
+                        session_id=f"{prefix}-{index}",
+                    )
 
-            t1 = threading.Thread(target=create_many)
-            t2 = threading.Thread(target=create_many)
+            t1 = threading.Thread(target=create_many, args=("a",))
+            t2 = threading.Thread(target=create_many, args=("b",))
             t1.start()
             t2.start()
             t1.join()

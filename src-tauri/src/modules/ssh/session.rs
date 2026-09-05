@@ -1379,6 +1379,14 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   # bash-preexec 同款: extdebug 开启时 DEBUG trap 被占用, 拒装 (仅失去 633;E)
   __TDSF_NO_TRAP=0
   shopt -q extdebug 2>/dev/null && __TDSF_NO_TRAP=1
+  # OSC 633;E 的命令字段随后跟 nonce，分号必须转义；反斜杠也必须双写。
+  # 前端 decodeOscText 与 VS Code shell integration 使用同一 \xHH/\\ 协议。
+  _tdsf_escape_osc_value() {
+    local v="$1"
+    v="${v//\\/\\\\}"
+    v="${v//;/\\x3b}"
+    printf '%s' "$v"
+  }
   # preexec: DEBUG trap (bash-preexec 思路) — 捕获命令行原文 → 633;E + 133;C
   _tdsf_preexec() {
     trap '_tdsf_preexec' DEBUG
@@ -1387,7 +1395,7 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
     [ "${__TDSF_CMD_REPORTED:-}" = "1" ] && return
     __TDSF_CMD_REPORTED=1
     c="${c//$'\a'/}"; c="${c//$'\e'/}"; c="${c//$'\r'/ }"; c="${c//$'\n'/ }"
-    printf '\033]633;E;%s;%s\007' "$c" "$RANDOM"
+    printf '\033]633;E;%s;%s\007' "$( _tdsf_escape_osc_value "$c" )" "$RANDOM"
     printf '\033]133;C\007'
   }
   # precmd: 发 133;D;<exit>(孤儿 D 自愈) + OSC7 + 633;P;Cwd + 133;A/B,
@@ -1429,6 +1437,13 @@ if [[ -z "${__TDSF_OSC133_GUARD:-}" ]]; then
   [[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
   # 健壮性③: dumb 终端不注入 (zshrc 仅交互 shell 加载, 无需 $- 检查)
   if [[ "${TERM:-}" = "dumb" ]]; then return 0; fi
+  # 与 bash 路径相同：633;E 的分号字段须转义，避免与 nonce 分隔符混淆。
+  _tdsf_escape_osc_value() {
+    local v="$1"
+    v="${v//\\/\\\\}"
+    v="${v//;/\\x3b}"
+    printf '%s' "$v"
+  }
   # precmd: 133;D;<exit> (孤儿 D 自愈) + OSC7 + 633;P;Cwd + 133;A/B
   _tdsf_precmd() {
     local ec=$?
@@ -1443,7 +1458,7 @@ if [[ -z "${__TDSF_OSC133_GUARD:-}" ]]; then
     local c="$1"
     [[ "$c" == _tdsf_* || "$c" == __TDSF_* ]] && return
     c="${c//$'\a'/}"; c="${c//$'\e'/}"; c="${c//$'\r'/ }"; c="${c//$'\n'/ }"
-    printf '\033]633;E;%s;%s\007' "$c" "$RANDOM"
+    printf '\033]633;E;%s;%s\007' "$( _tdsf_escape_osc_value "$c" )" "$RANDOM"
     printf '\033]133;C\007'
   }
   precmd_functions=(_tdsf_precmd ${precmd_functions[@]})
@@ -2000,6 +2015,9 @@ pub(crate) mod tests {
         assert!(s.contains("source \"$HOME/.bashrc\""), "bash 未恢复用户 rc");
         // 633;E 发送前清洗控制字符 (BEL/ESC 会截断 OSC 序列)
         assert!(s.contains("${c//$'\\a'/}"), "bash 633;E 控制字符清洗缺失");
+        // 与 VS Code 633 协议一致：命令字段里的分号/反斜杠不可与 nonce 分隔符混淆。
+        assert!(s.contains("_tdsf_escape_osc_value"), "bash 633;E 转义函数缺失");
+        assert!(s.contains(r#"${v//;/\\x3b}"#), "bash 633;E 分号转义缺失");
     }
 
     #[test]
@@ -2026,6 +2044,8 @@ pub(crate) mod tests {
         assert!(s.contains("source \"$HOME/.zshrc\""), "zsh 未恢复用户 rc");
         // 不碰 PS1 (红线 9: OSC 序列对终端不可见, 不改写 prompt 样式)
         assert!(!s.contains("PS1"), "zsh 脚本不得改写 PS1");
+        assert!(s.contains("_tdsf_escape_osc_value"), "zsh 633;E 转义函数缺失");
+        assert!(s.contains(r#"${v//;/\\x3b}"#), "zsh 633;E 分号转义缺失");
     }
 
     #[test]

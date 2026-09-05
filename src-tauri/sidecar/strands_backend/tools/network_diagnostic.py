@@ -381,7 +381,27 @@ def make_network_diagnostic_tool(ctx: ToolContext):
     return network_diagnose
 
 
+def to_shell_command(params: dict[str, Any]) -> str | None:
+    """工具参数 → 等价 shell 命令映射（纯函数，fail-closed）
+
+    Args:
+        params: 工具参数 dict（mode / target / count / port）
+
+    Returns:
+        shell 命令字符串；映射失败返回 None（不抛异常）
+    """
+    try:
+        mode = params.get("mode", "ping") or "ping"
+        target = params.get("target", "") or ""
+        count = int(params.get("count", _DEFAULT_COUNT))
+        port = int(params.get("port", 0) or 0)
+        return _build_command(mode, target, count, port)
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 __all__ = [
     "invoke_network_diagnostic_tool",
     "make_network_diagnostic_tool",
+    "to_shell_command",
 ]

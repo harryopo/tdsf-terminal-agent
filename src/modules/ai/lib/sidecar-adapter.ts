@@ -446,6 +446,8 @@ interface AgentInvokeResult {
  */
 interface ToolCallPayload {
   tool_name?: string;
+  /** Optional backend id; knowledge tools provide this for concurrent calls. */
+  tool_call_id?: string;
   params?: unknown;
   status?: string;
   result?: unknown;
@@ -818,7 +820,11 @@ export async function* runSidecarStream(
 
   // 工具调用配对：toolIdByName 把同一工具的 started/completed 两个事件
   // 配对到同一 toolCallId（sidecar PAOR 串行执行，按 tool_name 配对即可）。
-  const toolIdByName = new Map<string, string>();
+  // A tool name is not a unique call id: parallel knowledge searches are
+  // allowed. Keep a FIFO fallback for legacy events and prefer the explicit
+  // backend id when a tool supplies one.
+  const toolIdsByName = new Map<string, string[]>();
+  const toolIdsByEventId = new Map<string, string>();
   let toolSeq = 0;
 
   // onToolCall 回调：把工具事件转成 tool-input/tool-output part，push 到 queue
@@ -827,9 +833,17 @@ export async function* runSidecarStream(
     console.info("[sidecar-adapter] tool_call", p.tool_name, p.status);
     const name = p.tool_name;
     if (!name) return;
+    const eventCallId =
+      typeof p.tool_call_id === "string" && p.tool_call_id
+        ? p.tool_call_id
+        : null;
+    const eventKey = eventCallId ? `${name}:${eventCallId}` : null;
     if (p.status === "started") {
       const toolCallId = `${streamId}-tool-${++toolSeq}`;
-      toolIdByName.set(name, toolCallId);
+      const ids = toolIdsByName.get(name) ?? [];
+      ids.push(toolCallId);
+      toolIdsByName.set(name, ids);
+      if (eventKey) toolIdsByEventId.set(eventKey, toolCallId);
       queue.push({
         type: "tool-input",
         toolCallId,
@@ -837,7 +851,23 @@ export async function* runSidecarStream(
         input: p.params ?? {},
       });
     } else if (p.status === "completed" || p.status === "error") {
-      const toolCallId = toolIdByName.get(name);
+      let toolCallId: string | undefined;
+      if (eventKey) {
+        // Explicit backend ids must match a start; never attach an out-of-order
+        // result to another concurrent call.
+        toolCallId = toolIdsByEventId.get(eventKey);
+        if (toolCallId) {
+          toolIdsByEventId.delete(eventKey);
+          const ids = toolIdsByName.get(name);
+          const index = ids?.indexOf(toolCallId) ?? -1;
+          if (ids && index >= 0) ids.splice(index, 1);
+          if (ids && ids.length === 0) toolIdsByName.delete(name);
+        }
+      } else {
+        const ids = toolIdsByName.get(name);
+        toolCallId = ids?.shift();
+        if (ids && ids.length === 0) toolIdsByName.delete(name);
+      }
       // 孤儿 completed 事件（无对应 started）：通常是上一次 invoke 的尾部
       // tool_call 事件迟到，被新 invoke 的全局监听器捕获。若 fallback 生成
       // 新 ID 会产出无 tool-input 配对的 tool-output，AI SDK 找不到对应
@@ -850,7 +880,6 @@ export async function* runSidecarStream(
         );
         return;
       }
-      toolIdByName.delete(name);
       queue.push({
         type: "tool-output",
         toolCallId,

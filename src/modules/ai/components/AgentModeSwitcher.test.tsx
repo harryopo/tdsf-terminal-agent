@@ -74,7 +74,7 @@ describe("AgentModeSwitcher — 渲染", () => {
     openMenu();
     const menu = screen.getByTestId("agent-mode-menu");
     expect(menu.textContent).toContain("只读分析");
-    expect(menu.textContent).toContain("操作前确认");
+    expect(menu.textContent).toContain("读即查询，改前确认");
     expect(menu.textContent).toContain("自由执行");
     expect(menu.textContent).toContain("讲解跟学");
     // 长描述（desc）不进卡片——避免换行撑爆卡片

@@ -1,11 +1,10 @@
 /**
- * teachParser.ts — teach 教学输出解析（P2-1）
- * -----------------------------------------------------------------------------
- * teach 子 agent 输出结构化 markdown（6 大板块教学法）：
- *   概念与原理 / 路径拆解 / Linux 设计哲学 /
- *   操作示例 / 易错点与考点 / 练习
- * 本模块负责：教学格式检测 + markdown 分节解析（纯函数，与 UI 分离）。
- * 注：EMOJI_TYPES 仅用于兼容旧版带 emoji 标记的教学输出，新输出为纯文字标题。
+ * Teach output parser.
+ *
+ * Teaching is an output contract, not a visual guess.  In particular, a
+ * knowledge-base report may contain headings such as “概念与原理” and must
+ * remain an ordinary Markdown response.  The sidecar therefore adds the
+ * invisible marker below only when the user actually requested instruction.
  */
 
 export type TeachSectionType =
@@ -24,62 +23,58 @@ export interface TeachSection {
   commands: string[];
 }
 
-// 板块 emoji（逐字 startsWith 匹配，避免代理对正则问题）
+/** First-line marker emitted by the teaching output contract. */
+export const TEACH_OUTPUT_MARKER = "<!-- tdsf:teach -->";
+const TEACH_OUTPUT_MARKER_RE = /^\s*<!--\s*tdsf:teach\s*-->\s*/i;
+
+// Emoji markers are kept for parsing old, explicitly marked teaching output.
 const EMOJI_TYPES: Array<[string, TeachSectionType]> = [
-  ["💡", "concept"],
-  ["📂", "path"],
-  ["🏛️", "philosophy"],
-  ["📝", "example"],
+  ["🏛️", "concept"],
+  ["🧭", "path"],
+  ["⚖️", "philosophy"],
+  ["🧪", "example"],
   ["⚠️", "pitfall"],
-  ["✏️", "exercise"],
+  ["📝", "exercise"],
 ];
 
-// 标题关键词 → 板块（detectSectionType 收到的是剥离 # 后的标题）
 const KEYWORD_TYPES: Array<[RegExp, TeachSectionType]> = [
   [/概念|原理/i, "concept"],
-  [/路径拆解/i, "path"],
-  [/设计哲学|哲学/i, "philosophy"],
-  [/示例/i, "example"],
+  [/路径解析/i, "path"],
+  [/命令哲学|教学/i, "philosophy"],
+  [/操作示例/i, "example"],
   [/易错/i, "pitfall"],
   [/练习/i, "exercise"],
 ];
 
-/** 判断消息是否为教学输出（teach 格式标记检测） */
+/**
+ * Return true only for an explicitly marked teaching response.
+ *
+ * The previous implementation inferred the mode from headings and emoji.
+ * That made ordinary knowledge-search summaries turn into TeachCards.  A
+ * missing marker is intentionally fail-closed: it is safer to show Markdown
+ * than to claim that a tool report is a lesson.
+ */
 export function isTeachMessage(text: string): boolean {
-  if (!text) return false;
-  // 教学标题结构（## N. 概念/示例/易错/练习…）——短标题也识别
-  if (/##\s*\d+\.\s*(概念|原理|路径|哲学|示例|易错|练习)/.test(text)) {
-    return true;
-  }
-  // 兜底：模型偶发输出无编号纯文字标题（## 概念与原理）——prompt 已要求
-  // `## N.` 格式，此处放宽识别防止 TeachCard 静默降级；内容量下限防误判。
-  if (text.length >= 100 && /##\s*(概念|原理|路径|哲学|示例|易错|练习)/.test(text)) {
-    return true;
-  }
-  // 6 大板块 emoji 标记（需有一定内容量，避免误判）
-  if (text.length < 20) return false;
-  return EMOJI_TYPES.some(([emoji]) => text.includes(emoji));
+  return Boolean(text && TEACH_OUTPUT_MARKER_RE.test(text));
 }
 
-/** 解析教学 markdown → 分区列表 */
+/** Parse a marked teaching response into the small set of UI sections. */
 export function parseTeachSections(markdown: string): TeachSection[] {
-  const lines = markdown.split("\n");
+  const lines = markdown.replace(TEACH_OUTPUT_MARKER_RE, "").split("\n");
   const sections: TeachSection[] = [];
   let current: TeachSection | null = null;
 
   const flush = () => {
-    if (current && (current.content.trim() || current.commands.length)) {
-      sections.push(current);
-    }
+    if (current) sections.push(current);
     current = null;
   };
 
   for (const line of lines) {
-    // 检测分节标题：## N. xxx 或 emoji 开头
     const headerMatch = line.match(/^\s*#{1,4}\s*(.*)$/);
     let isHeader = false;
     let title = "";
     let forcedType: TeachSectionType | null = null;
+
     if (headerMatch) {
       title = headerMatch[1].trim();
       isHeader = title.length > 0;
@@ -94,6 +89,7 @@ export function parseTeachSections(markdown: string): TeachSection[] {
         }
       }
     }
+
     if (isHeader) {
       flush();
       current = {
@@ -104,13 +100,12 @@ export function parseTeachSections(markdown: string): TeachSection[] {
       };
       continue;
     }
+
     if (!current) {
-      // 标题前的导语（自我介绍/开场白等）→ 归入「讲解」段。
-      // TDSF 2026-08-31 (问题4修复): 原硬编码 concept/"概念与原理" 导致导语
-      // 内容与「概念与原理」徽标不符（用户截图：徽标"概念与原理"但内容是
-      // 自我介绍）——导语不属于任何教学板块，回退为通用「讲解」徽标。
+      // A preface is useful only when the response is already explicitly
+      // marked as teaching; it is not a signal by itself.
       if (line.trim()) {
-        current = { type: "other", title: "讲解", content: "", commands: [] };
+        current = { type: "other", title: "说明", content: "", commands: [] };
       } else {
         continue;
       }
@@ -119,16 +114,45 @@ export function parseTeachSections(markdown: string): TeachSection[] {
   }
   flush();
 
-  // 提取代码块为 commands（供插入终端），并保留原 markdown
-  for (const s of sections) {
-    const re = /```(?:bash|sh|shell)?\s*\n([\s\S]*?)```/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(s.content)) !== null) {
-      const cmd = m[1].trim();
-      if (cmd && !cmd.includes("\n")) s.commands.push(cmd);
-    }
-  }
-  return sections;
+  return sections
+    .map((section) => normalizeSection(section))
+    .filter(
+      (section) =>
+        section.content.trim().length > 0 || section.commands.length > 0,
+    );
+}
+
+// A one-line shell fence is an executable teaching command.  A multi-line
+// fence remains explanatory Markdown (no Run/Insert affordance), and an empty
+// fence is removed altogether so the UI never invents an empty “$” command.
+const SHELL_FENCE_RE =
+  /```([\t ]*(?:bash|sh|shell|zsh)[\t ]*)\n([\s\S]*?)```/gi;
+
+function normalizeSection(section: TeachSection): TeachSection {
+  const commands = [...section.commands];
+  const content = section.content.replace(
+    SHELL_FENCE_RE,
+    (_whole, _language: string, body: string) => {
+      const lines = body
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (lines.length === 0) return "";
+      if (lines.length === 1) {
+        const command = lines[0].replace(/^\$\s+/, "");
+        if (command) commands.push(command);
+        return "";
+      }
+      return _whole;
+    },
+  );
+
+  return {
+    ...section,
+    content: content.replace(/\n{3,}/g, "\n\n").trim(),
+    commands: [...new Set(commands)],
+  };
 }
 
 function detectSectionType(title: string): TeachSectionType {

@@ -9,6 +9,7 @@ import {
   writeToSession,
 } from "@/modules/terminal";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
+import { useTeachingExecutionStore } from "@/modules/terminal/lib/teachingExecutionStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -189,6 +190,21 @@ export function useAiLiveBridge(params: Params) {
       return explorerRoot ?? launchCwd ?? home ?? null;
     };
 
+    /**
+     * 教学执行必须有可见且已绑定 xterm 的终端 leaf；仅有 SSH 连接而没有
+     * 可见终端时 fail-closed，不能把命令悄悄写入后台会话后又无法取证。
+     */
+    const getTeachingTerminalLeafId = (): number | null => {
+      const sshLeafId = ref.current.getSshLeafId?.();
+      if (sshLeafId !== null && sshLeafId !== undefined) {
+        return terminalRefs.current.has(sshLeafId) ? sshLeafId : null;
+      }
+      const { activeId, tabs } = ref.current;
+      const tab = tabs.find((x) => x.id === activeId);
+      if (tab?.kind !== "terminal") return null;
+      return terminalRefs.current.has(tab.activeLeafId) ? tab.activeLeafId : null;
+    };
+
     // TDSF 魔改 (2026-08-09): 整段注入核心逻辑（inject_terminal 事件与
     // injectIntoActivePty 共用；B2 起也作为打字机失败时的回落路径）。
     const injectFnCore = (t: string): boolean => {
@@ -262,6 +278,27 @@ export function useAiLiveBridge(params: Params) {
         // 调用失败时回落整段注入（injectFnCore，原路径零改动）。
         injectFn = (t: string) => (tryHumanTyping(t) ? true : injectFnCore(t));
         return injectFn(text);
+      },
+      startTeachingCommand: (command) => {
+        const leafId = getTeachingTerminalLeafId();
+        if (leafId === null) {
+          return { ok: false as const, reason: "no-active-terminal" as const };
+        }
+        // 先登记再写入：即使极快命令在同一事件循环内完成，也不会错过 block。
+        const executionId = useTeachingExecutionStore.getState().begin({
+          leafId,
+          command,
+        });
+        if (!executionId) {
+          return { ok: false as const, reason: "terminal-busy" as const };
+        }
+        const text = command.endsWith("\n") ? command : `${command}\n`;
+        const injected = tryHumanTyping(text) || injectFnCore(text);
+        if (!injected) {
+          useTeachingExecutionStore.getState().cancel(executionId);
+          return { ok: false as const, reason: "terminal-unavailable" as const };
+        }
+        return { ok: true as const, executionId };
       },
       getWorkspaceRoot: () => {
         const { explorerRoot, launchCwd, home } = ref.current;

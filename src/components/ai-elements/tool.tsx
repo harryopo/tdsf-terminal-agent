@@ -8,6 +8,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  formatTeachingResultForAgent,
+  TEACHING_EXECUTION_TIMEOUT_MS,
+  useTeachingExecutionStore,
+} from "@/modules/terminal/lib/teachingExecutionStore";
+import {
   BookOpen01Icon,
   Cancel01Icon,
   CheckListIcon,
@@ -29,6 +34,7 @@ import {
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
 import { useChatStore } from "@/modules/ai/store/chatStore";
+import { sendMessage } from "@/modules/ai/store/chatRuntime";
 import {
   categoryGroupLabel,
   plainSummary,
@@ -76,15 +82,6 @@ export type ToolApprovalRespond = (response: {
   sessionTrust?: boolean;
 }) => void;
 
-/** L 级色带（跟随现有 badge 色板：L0-L1 绿 / L2 黄 / L3 橙 / L4 红） */
-const RISK_BADGE: Record<number, string> = {
-  0: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-  1: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-  2: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
-  3: "bg-orange-500/15 text-orange-700 dark:text-orange-400",
-  4: "bg-destructive/15 text-destructive",
-};
-
 const RISK_LABEL: Record<number, string> = {
   0: "L0 无风险",
   1: "L1 低风险",
@@ -92,6 +89,13 @@ const RISK_LABEL: Record<number, string> = {
   3: "L3 高风险",
   4: "L4 危险",
 };
+
+function compactApprovalSentence(value: string, maxLength = 96): string {
+  const sentence = value.replace(/\s+/g, " ").trim();
+  return sentence.length > maxLength
+    ? `${sentence.slice(0, maxLength - 1).trimEnd()}…`
+    : sentence;
+}
 
 type ToolApprovalCardProps = {
   toolName: string;
@@ -102,14 +106,9 @@ type ToolApprovalCardProps = {
 };
 
 /**
- * 四层审批卡（自上而下）：
- * ① 语义描述（semantic，如「想重启服务：nginx」）
- * ② 命令原文（代码块，永不改写）
- * ③ 解释（LLM 用途解释，缺失显示「（无解释）」）
- * ④ 影响预测（类别标签 + 对象列表 + L0-L4 风险色带）
- *
- * 三按钮：【拒绝】（可展开附言）【⚡批准且本会话只读免审】（仅 L0-L1）【▶执行】
- * L3/L4 无「本会话/永久」类选项（⚡按钮仅 risk_l ≤ 1 渲染）。
+ * 紧凑审批卡：真实命令原文 + 一句用途 + 一句 impact 摘要。
+ * 风险 metadata 只用于简短等级提示和 fail-closed 的会话免审判断，不再展开
+ * segments/objects，避免把同一对象重复渲染成多块风险面板。
  */
 export function ToolApprovalCard({
   toolName,
@@ -127,17 +126,57 @@ export function ToolApprovalCard({
     i.impact && typeof i.impact === "object"
       ? (i.impact as ToolImpact)
       : null;
-  const riskL =
-    typeof i.risk_l === "number"
-      ? i.risk_l
-      : typeof impact?.max_risk_l === "number"
-        ? impact.max_risk_l
-        : null;
-  const denied = impact?.denied === true;
-  const dangerous = impact?.dangerous_construct === true;
-  // ⚡会话免审仅低风险且无黑名单/危险构造时提供（L3/L4 永远逐条确认）
+  const segments = impact?.segments ?? [];
+  const riskCandidates = [
+    typeof i.risk_l === "number" ? i.risk_l : null,
+    typeof impact?.max_risk_l === "number" ? impact.max_risk_l : null,
+    ...segments.map((segment) =>
+      typeof segment.risk_l === "number" ? segment.risk_l : null,
+    ),
+  ].filter((value): value is number => value != null && Number.isFinite(value));
+  const riskL = riskCandidates.length ? Math.max(...riskCandidates) : null;
+  const denied =
+    impact?.denied === true || segments.some((segment) => segment.denied === true);
+  const dangerous =
+    impact?.dangerous_construct === true ||
+    segments.some((segment) => segment.dangerous_construct === true);
+  const impactMetadataComplete =
+    segments.length > 0 &&
+    segments.every(
+      (segment) =>
+        typeof segment.category === "string" &&
+        segment.category.trim() !== "" &&
+        segment.category !== "unknown" &&
+        typeof segment.risk_l === "number" &&
+        Number.isFinite(segment.risk_l),
+    );
+  const purposeSource = explanation.trim() || semantic.trim();
+  const purpose = purposeSource
+    ? compactApprovalSentence(purposeSource)
+    : "未提供用途说明。";
+  const denyReason = segments.find(
+    (segment) => segment.denied && segment.deny_reason?.trim(),
+  )?.deny_reason;
+  const impactSummary = impact?.summary?.trim();
+  const impactText = denied
+    ? compactApprovalSentence(
+        denyReason?.trim()
+          ? `安全规则已拦截：${denyReason}`
+          : "影响元数据标记此操作已被安全规则拦截。",
+      )
+    : dangerous
+      ? "影响元数据检测到危险命令构造，需要逐条确认。"
+      : impactSummary
+        ? compactApprovalSentence(impactSummary)
+        : "影响信息不完整，需要逐条确认。";
+  // ⚡会话免审仅用于 metadata 完整的低风险操作；未知/冲突数据保守逐条确认。
   const canSessionTrust =
-    riskL != null && riskL <= 1 && !denied && !dangerous;
+    impactMetadataComplete &&
+    riskL != null &&
+    riskL >= 0 &&
+    riskL <= 1 &&
+    !denied &&
+    !dangerous;
 
   const rejectWithNote = () => {
     onRespond({ approved: false, note: note.trim() || undefined });
@@ -146,14 +185,14 @@ export function ToolApprovalCard({
   return (
     <div
       className={cn(
-        "rounded-lg border border-amber-500/40 bg-card shadow-sm",
+        "overflow-hidden rounded-lg border border-border bg-card shadow-sm",
         className,
       )}
       data-approval-card={toolName}
     >
       {/* 卡头 */}
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" />
+      <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-1.5">
+        <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/70" />
         <HugeiconsIcon
           icon={ShieldUserIcon}
           size={13}
@@ -161,95 +200,40 @@ export function ToolApprovalCard({
           className="shrink-0 text-muted-foreground"
         />
         <span className="text-[12px] font-medium text-foreground">
-          需要你的确认
+          等待你的确认
         </span>
         <span className="ml-auto text-[10px] text-muted-foreground">
-          needs approval
+          确认后才会执行
         </span>
       </div>
 
-      <div className="space-y-2.5 px-3 py-2.5">
-        {/* ① 语义描述 */}
-        <div className="text-[12px] text-foreground">
-          {semantic || "Agent 请求执行操作"}
-        </div>
-
-        {/* ② 命令原文（永不改写）——C1 (2026-09-01) whitespace-pre-wrap：
+      <div className="space-y-2 px-3 py-2">
+        {/* ① 命令原文（永不改写）——C1 (2026-09-01) whitespace-pre-wrap：
             长命令自动换行完整可见，不再右侧截断（overflow-auto 保留横向兜底） */}
         {command ? (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/60 p-2 font-mono text-[11px] leading-relaxed text-foreground">
-            {command}
-          </pre>
+          <pre
+            className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/35 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground"
+            data-testid="approval-command"
+          >{command}</pre>
         ) : null}
 
-        {/* ③ 解释 */}
-        {explanation ? (
-          <div className="text-[11px] text-muted-foreground">{explanation}</div>
-        ) : (
-          <div className="text-[11px] italic text-muted-foreground/60">
-            （无解释）
-          </div>
-        )}
+        <div className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px] leading-relaxed">
+          {/* ② 中文用途：explanation 与 semantic 二选一，避免同义重复。 */}
+          <span className="text-muted-foreground">用途</span>
+          <span className="min-w-0 text-foreground">{purpose}</span>
 
-        {/* ④ 影响预测 */}
-        <div className="space-y-1.5 rounded border border-border/50 bg-muted/20 p-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] font-medium text-muted-foreground">
-              影响预测
-            </span>
-            {riskL != null && (
+          {/* ③ 影响：只消费已有 metadata 的 summary/flags，不预测 stdout。 */}
+          <span className="text-muted-foreground">影响</span>
+          <span className="flex min-w-0 flex-wrap items-baseline gap-1.5 text-foreground">
+            {riskL != null ? (
               <span
-                className={cn(
-                  "rounded px-1.5 py-0.5 font-mono text-[10px] font-medium",
-                  RISK_BADGE[riskL] ?? RISK_BADGE[3],
-                )}
+                className="shrink-0 rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground"
               >
                 {RISK_LABEL[riskL] ?? `L${riskL}`}
               </span>
-            )}
-            {denied && (
-              <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                命中硬底线黑名单
-              </span>
-            )}
-            {dangerous && (
-              <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                含危险构造
-              </span>
-            )}
-          </div>
-          {impact?.summary ? (
-            <div className="text-[11px] text-foreground">{impact.summary}</div>
-          ) : null}
-          {impact?.segments?.length ? (
-            <div className="space-y-0.5">
-              {impact.segments.slice(0, 6).map((seg, idx) => (
-                <div
-                  key={idx}
-                  className="flex flex-wrap items-center gap-1.5 text-[10.5px]"
-                >
-                  {seg.category_label && (
-                    <span className="rounded bg-foreground/8 px-1 py-0.5 text-muted-foreground">
-                      {seg.category_label}
-                    </span>
-                  )}
-                  {seg.objects?.length ? (
-                    <span className="min-w-0 truncate font-mono text-muted-foreground">
-                      {seg.objects.join("、")}
-                    </span>
-                  ) : null}
-                  {seg.denied && seg.deny_reason && (
-                    <span className="text-destructive">{seg.deny_reason}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {!impact?.summary && !impact?.segments?.length && (
-            <div className="text-[11px] text-orange-700 dark:text-orange-400">
-              影响未知——请人工审查
-            </div>
-          )}
+            ) : null}
+            <span className="min-w-0">{impactText}</span>
+          </span>
         </div>
 
         {/* 拒绝附言（展开式） */}
@@ -267,7 +251,7 @@ export function ToolApprovalCard({
       </div>
 
       {/* 三按钮 */}
-      <div className="flex items-center justify-end gap-1.5 border-t border-border/60 px-3 py-2">
+      <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border/60 px-3 py-1.5">
         {showNote ? (
           <>
             <Button
@@ -309,7 +293,7 @@ export function ToolApprovalCard({
               useChatStore.getState().setSessionReadOnlyTrust(true);
               onRespond({ approved: true, sessionTrust: true });
             }}
-            className="h-7 gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400"
+            className="h-7 gap-1.5 text-[11px] text-muted-foreground"
             title="批准本次操作，且本会话内同类只读操作不再询问"
           >
             <HugeiconsIcon icon={FlashIcon} size={12} strokeWidth={2} />
@@ -809,6 +793,24 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
   if (!output || typeof output !== "object") return null;
   const o = output as Record<string, unknown>;
 
+  // A3 (2026-09-04): 教学模式终端执行链路——teach_command 事件分发。
+  // 任何工具返回 status="teach_command" 时渲染 TeachCommandCard（学生手动执行）。
+  if (o.status === "teach_command") {
+    const cmd = typeof o.command === "string" ? o.command : null;
+    if (!cmd) return null;
+    const explanation =
+      typeof o.explanation === "string" ? o.explanation : null;
+    const impact = (o.impact as Record<string, unknown> | null) ?? null;
+    return (
+      <TeachCommandCard
+        command={cmd}
+        explanation={explanation}
+        impact={impact}
+        toolName={toolName}
+      />
+    );
+  }
+
   if (toolName === "read_file") {
     const path = typeof o.path === "string" ? o.path : "";
     const size = typeof o.size === "number" ? o.size : null;
@@ -880,6 +882,18 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
 
   if (toolName === "bash_run") {
     return <BashRunOutput data={o} />;
+  }
+
+  // SSH 工具返回的是 { command, output, exit_code, duration, explanation }。
+  // 没有专用卡片时会退化成整段 JSON，既重复命令又掩盖终端输出；此处采用和
+  // bash_run 一致的“状态 → 说明 → 原始输出”层次。非零 exit_code 仍不是
+  // Tool failure（上方 failure 逻辑保持原有语义）。
+  if (
+    toolName === "ssh_command" &&
+    !TOOL_FAILURE_STATUSES.has(typeof o.status === "string" ? o.status : "") &&
+    (typeof o.output === "string" || typeof o.exit_code === "number")
+  ) {
+    return <SshCommandOutput data={o} />;
   }
 
   // TDSF 2026-08-31 双库: 知识检索结果 → 知识卡片列表（title + source 中文
@@ -1210,7 +1224,15 @@ function KnowledgeDocCard({ data }: { data: Record<string, unknown> }) {
       </div>
     );
   }
-  if (!content) return null;
+  if (!content) {
+    return (
+      <div className="text-[11px] text-muted-foreground">
+        {status === "success"
+          ? "知识库文档已找到，但没有可显示的正文"
+          : "知识库文档没有可显示的正文"}
+      </div>
+    );
+  }
 
   return (
     <Collapsible className="rounded border border-border/40 bg-muted/20">
@@ -1464,6 +1486,243 @@ function SuggestCommandCard({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ============================================================================
+// A3 (2026-09-04): 教学模式命令卡——学生手动点击注入终端（打字机）
+// ============================================================================
+// 与 SuggestCommandCard 的关键差异：
+// 1. 永不自动执行（即使 autoExecuteInTerminal=true + auto 模式），必须学生手动点击
+// 2. 显示影响预测（复用 A1 术语友好化）
+// 3. 教学模式专属紫色调（与 teach 模式强调色一致）
+// 4. 只以 TerminalBlockCollector 已划定的命令块回填结果；不读取全量滚屏
+
+function impactSummary(impact: Record<string, unknown> | null): string {
+  if (!impact) return "";
+  const summary = typeof impact.summary === "string" ? impact.summary : "";
+  if (summary) return summary;
+  const segments = Array.isArray(impact.segments)
+    ? (impact.segments as Array<Record<string, unknown>>)
+    : [];
+  if (segments.length === 0) return "";
+  const seg = segments[0];
+  const label = typeof seg.category_label === "string" ? seg.category_label : "";
+  const objs = Array.isArray(seg.objects)
+    ? (seg.objects as string[]).slice(0, 3).join("、")
+    : "";
+  if (label && objs) return `想${label}：${objs}`;
+  if (label) return `想${label}`;
+  const cmd = typeof seg.command === "string" ? seg.command : "";
+  return cmd ? `只读查看：${cmd.slice(0, 60)}` : "";
+}
+
+function TeachCommandCard({
+  command,
+  explanation,
+  impact,
+  toolName,
+}: {
+  command: string;
+  explanation: string | null;
+  impact: Record<string, unknown> | null;
+  toolName: string;
+}) {
+  const [executionId, setExecutionId] = useState<string | null>(null);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [continued, setContinued] = useState(false);
+  const impactText = impactSummary(impact);
+  const execution = useTeachingExecutionStore((state) =>
+    executionId ? state.executions[executionId] ?? null : null,
+  );
+  const agentBusy = useChatStore((state) => state.agentMeta.status !== "idle");
+
+  useEffect(() => {
+    if (!executionId || execution?.status !== "waiting") return;
+    const remaining = Math.max(0, execution.expiresAt - Date.now());
+    const timer = window.setTimeout(() => {
+      useTeachingExecutionStore.getState().expire(executionId);
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [execution?.expiresAt, execution?.status, executionId]);
+
+  // 教学模式专属：永不自动执行，必须学生手动点击确认
+  // （与 SuggestCommandCard 的 auto 模式自动注入不同）
+  const onExecute = () => {
+    if (executionId) return;
+    const store = useChatStore.getState();
+    // 该入口会先登记 terminal leaf 的等待态，再以当前打字机设置可见注入。
+    const started = store.live.startTeachingCommand(command);
+    if (started.ok) {
+      setExecutionId(started.executionId);
+      setCardError(null);
+      return;
+    }
+    const message =
+      started.reason === "terminal-busy"
+        ? "该终端已有一条教学命令正在等待结果；请先完成或等待其超时。"
+        : "未找到已就绪的可见终端，命令没有执行。请先打开或连接终端后重试。";
+    setCardError(message);
+  };
+
+  const onContinue = async () => {
+    if (!execution || execution.status !== "completed" || !execution.block) return;
+    if (agentBusy) {
+      setCardError("当前 Agent 仍在回应；请等待本轮结束后再基于结果继续讲解。");
+      return;
+    }
+    setCardError(null);
+    const ok = await sendMessage(formatTeachingResultForAgent(execution));
+    if (ok) setContinued(true);
+    else setCardError("当前没有可继续的对话会话，结果未发送给 Agent。");
+  };
+
+  const duration = execution?.block
+    ? execution.block.durationMs >= 1000
+      ? `${(execution.block.durationMs / 1000).toFixed(1)} 秒`
+      : `${execution.block.durationMs} 毫秒`
+    : null;
+
+  return (
+    <div className="space-y-1.5">
+      {/* 教学模式标识 */}
+      <div className="flex items-center gap-1.5 text-[10px]">
+        <span className="rounded bg-violet-500/10 px-1.5 py-0.5 font-medium text-violet-600 dark:text-violet-400">
+          教学
+        </span>
+        <span className="text-muted-foreground">
+          {toolName}
+        </span>
+      </div>
+      {/* 解释文字 */}
+      {explanation ? (
+        <div className="text-[11px] text-muted-foreground">{explanation}</div>
+      ) : null}
+      {/* 命令 + 执行按钮 */}
+      <div className="flex items-stretch gap-1.5 overflow-hidden rounded border border-violet-500/20 bg-violet-500/5">
+        <pre className="flex-1 overflow-auto p-2 font-mono text-[11px] leading-relaxed">
+          {command}
+        </pre>
+        <button
+          type="button"
+          onClick={onExecute}
+          disabled={executionId !== null}
+          className={cn(
+            "shrink-0 flex items-center gap-1 px-2.5 text-[11px] font-medium",
+            "border-l border-violet-500/20",
+            "text-violet-600 dark:text-violet-400",
+            "hover:bg-violet-500/10 active:bg-violet-500/20",
+            "disabled:opacity-60 disabled:cursor-default disabled:hover:bg-transparent",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500",
+          )}
+          aria-label="教学命令：点击注入终端执行"
+          title="教学模式：点击后命令以打字机方式注入终端执行，请观察终端输出"
+        >
+          <HugeiconsIcon
+            icon={executionId ? Tick02Icon : TerminalIcon}
+            size={12}
+            strokeWidth={1.75}
+          />
+          <span>{executionId ? "已提交终端" : "执行"}</span>
+        </button>
+      </div>
+      {/* 影响预测（复用 A1 术语） */}
+      {impactText ? (
+        <div className="text-[10px] text-muted-foreground/80">
+          影响：{impactText}
+        </div>
+      ) : null}
+      {execution?.status === "waiting" ? (
+        <div className="text-[10px] text-violet-500/70 dark:text-violet-400/70">
+          命令已可见地输入终端，正在等待 shell 返回完成标记…
+        </div>
+      ) : null}
+      {execution?.status === "completed" && execution.block ? (
+        <div className="space-y-1 rounded border border-violet-500/20 bg-background/50 p-2">
+          <div className="text-[10px] font-medium text-violet-600 dark:text-violet-400">
+            执行结果 · exit {execution.block.exitCode ?? "?"}
+            {duration ? ` · ${duration}` : ""}
+          </div>
+          <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-muted-foreground">
+            {execution.block.outputTail || "（命令已完成，没有可显示的输出）"}
+          </pre>
+          <button
+            type="button"
+            onClick={() => void onContinue()}
+            disabled={continued || agentBusy}
+            className={cn(
+              "rounded border border-violet-500/30 px-2 py-1 text-[10px] font-medium",
+              "text-violet-600 hover:bg-violet-500/10 dark:text-violet-400",
+              "disabled:cursor-default disabled:opacity-60",
+            )}
+            title={agentBusy ? "等待当前 Agent 回应结束后再继续" : "将已关联结果交给 Agent 继续讲解"}
+          >
+            {continued ? "已交给 Agent 继续讲解" : "基于结果继续讲解"}
+          </button>
+        </div>
+      ) : null}
+      {execution?.status === "timed-out" ? (
+        <div className="text-[10px] text-amber-600 dark:text-amber-400">
+          {Math.round(TEACHING_EXECUTION_TIMEOUT_MS / 1000)} 秒内未检测到该命令的完成标记。请检查终端；为避免重复执行，本卡不会再次注入，也不会把不确定的滚屏结果交给 Agent。
+        </div>
+      ) : null}
+      {cardError ? <div className="text-[10px] text-destructive">{cardError}</div> : null}
+    </div>
+  );
+}
+
+function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
+  const output = typeof data.output === "string" ? data.output : "";
+  const stderr = typeof data.stderr === "string" ? data.stderr : "";
+  const explanation =
+    typeof data.explanation === "string" && data.explanation.trim()
+      ? data.explanation.trim()
+      : null;
+  const exit = typeof data.exit_code === "number" ? data.exit_code : null;
+  const duration = typeof data.duration === "number" ? data.duration : null;
+  const body = output || stderr || "（命令没有产生可展示的输出）";
+  const durationLabel =
+    duration == null
+      ? null
+      : duration < 1
+        ? `${Math.max(1, Math.round(duration * 1000))} ms`
+        : `${duration.toFixed(duration < 10 ? 2 : 1)} s`;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+          命令已返回
+        </span>
+        {exit != null ? (
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 font-mono text-[10px]",
+              exit === 0
+                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                : "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+            )}
+          >
+            退出码 {exit}
+          </span>
+        ) : null}
+        {durationLabel ? (
+          <span className="font-mono text-[10px] text-muted-foreground">
+            耗时 {durationLabel}
+          </span>
+        ) : null}
+      </div>
+      {explanation ? (
+        <div className="text-[11px] leading-relaxed text-muted-foreground">
+          <span className="mr-1 font-medium text-foreground/80">命令说明</span>
+          {explanation}
+        </div>
+      ) : null}
+      <div className="text-[10px] font-medium text-muted-foreground">终端输出</div>
+      <pre className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
+        {body}
+      </pre>
     </div>
   );
 }

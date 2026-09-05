@@ -72,12 +72,16 @@ class ToolSpec:
         factory: 工厂函数点路径（"module:attr"，延迟导入防循环依赖）
         description: LLM 可见一句话描述（Schema 角色）
         policy: 审批/安全策略（Policy 角色）
+        to_shell_command: 工具参数 → 等价 shell 命令映射函数的点路径
+            （"module:attr"，延迟导入）。非终端可执行工具留 None。
+            A2 阶段新增，用于教学模式终端执行链路。
     """
 
     name: str
     factory: str
     description: str
     policy: ToolPolicy
+    to_shell_command: str | None = None
 
 
 def resolve_factory(spec: ToolSpec) -> Callable[..., Any]:
@@ -108,6 +112,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         factory="strands_backend.tools.ssh_command:make_ssh_command_tool",
         description="在远程 SSH 会话执行命令，返回 stdout/stderr/exit_code（高危命令触发审批）",
         policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
+        to_shell_command="strands_backend.tools.ssh_command:to_shell_command",
     ),
     "ssh_list_sessions": ToolSpec(
         name="ssh_list_sessions",
@@ -122,24 +127,28 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         factory="strands_backend.tools.remote_file:make_remote_file_tool",
         description="读取远程文件内容（只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
+        to_shell_command="strands_backend.tools.remote_file:to_shell_command",
     ),
     "analyze_logs": ToolSpec(
         name="analyze_logs",
         factory="strands_backend.tools.log_analyzer:make_log_analyzer_tool",
         description="分析远程日志文件，提取错误/告警模式（只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
+        to_shell_command="strands_backend.tools.log_analyzer:to_shell_command",
     ),
     "inspect_processes": ToolSpec(
         name="inspect_processes",
         factory="strands_backend.tools.process_inspector:make_process_inspector_tool",
         description="检查远程进程/资源占用（只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        to_shell_command="strands_backend.tools.process_inspector:to_shell_command",
     ),
     "network_diagnose": ToolSpec(
         name="network_diagnose",
         factory="strands_backend.tools.network_diagnostic:make_network_diagnostic_tool",
         description="诊断远程网络连通性（ping/端口/DNS，只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        to_shell_command="strands_backend.tools.network_diagnostic:to_shell_command",
     ),
     "skill_invoke": ToolSpec(
         name="skill_invoke",
@@ -200,6 +209,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         factory="strands_backend.tools.ops_extended:make_performance_analyze_tool",
         description="性能分析（CPU/内存/磁盘 IO 采样，只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        to_shell_command="strands_backend.tools.ops_extended:performance_analyze_to_shell_command",
     ),
     # --- 魔改增强 6（2026-08-09 集成度补齐；原在 adapter 逐个 try 挂载，
     #     T2 收编入注册表统一治理。注意：backup_restore 原 L1 下也挂载，
@@ -224,6 +234,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         description="对比两个远程配置文件的差异（diff -u，只读）",
         # 配置文件差异可能含密码 → sanitize_output=True
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
+        to_shell_command="strands_backend.tools.config_diff:to_shell_command",
     ),
     "backup_restore": ToolSpec(
         name="backup_restore",

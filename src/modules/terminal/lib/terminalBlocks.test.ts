@@ -142,6 +142,16 @@ describe("TerminalBlockCollector — 健壮性（孤儿/自愈）", () => {
 });
 
 describe("TerminalBlockCollector — 633 协议细节", () => {
+  it("633;E 中经 \x3b 转义的分号不会被误当作 nonce 分隔符", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;printf a\\x3bb;42");
+    collector.handle633("C");
+    collector.handle133("D;0");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].command).toBe("printf a;b");
+  });
+
   it("633;P;Cwd 更新 cwd（下条 block 继承）", () => {
     const { collector, blocks } = makeCollector();
     collector.handle133("A");
