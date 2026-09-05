@@ -469,3 +469,71 @@ class TestTransaction:
             service.get_project("atomic-1")
         with pytest.raises(NotFoundError):
             service.get_project("atomic-2")
+
+
+# ============================================================================
+# Durable operation 账本测试
+# ============================================================================
+
+class TestDurableOperations:
+    def test_operation_records_only_non_secret_execution_identity(
+        self, service: ProjectService
+    ) -> None:
+        op = service.create_operation(
+            intent_id="intent-1",
+            conversation_session_id="chat-1",
+            ssh_session_id="42",
+            target_endpoint="root@example.test:22",
+            command_hash="sha256:command",
+            metadata={"tool_name": "ssh_command"},
+        )
+        assert op["state"] == "created"
+        assert op["intent_id"] == "intent-1"
+        assert op["command_hash"] == "sha256:command"
+        assert "command" not in op
+
+    def test_operation_allows_only_declared_state_transitions(
+        self, service: ProjectService
+    ) -> None:
+        op = service.create_operation(
+            intent_id="intent-2",
+            conversation_session_id="chat-2",
+            ssh_session_id="43",
+            target_endpoint="root@example.test:22",
+            command_hash="sha256:command",
+        )
+        with pytest.raises(ProjectServiceError, match="illegal operation transition"):
+            service.transition_operation(op["id"], "succeeded")
+
+        for state in (
+            "awaiting_approval",
+            "approved",
+            "dispatching",
+            "dispatched",
+            "succeeded",
+        ):
+            op = service.transition_operation(op["id"], state)
+        assert op["state"] == "succeeded"
+
+    def test_restart_marks_inflight_operations_indeterminate(
+        self, tmp_db: Path
+    ) -> None:
+        first = ProjectService(db_path=tmp_db)
+        first.init_db()
+        op = first.create_operation(
+            intent_id="intent-3",
+            conversation_session_id="chat-3",
+            ssh_session_id="44",
+            target_endpoint="root@example.test:22",
+            command_hash="sha256:command",
+        )
+        first.transition_operation(op["id"], "approved")
+        first.transition_operation(op["id"], "dispatching")
+        first.close()
+
+        restarted = ProjectService(db_path=tmp_db)
+        restarted.init_db()
+        recovered = restarted.get_operation(op["id"])
+        assert recovered["state"] == "indeterminate"
+        assert recovered["error_code"] == "sidecar_restarted"
+        restarted.close()

@@ -58,6 +58,30 @@ WRITE_LEASE_TIMEOUT = 5.0
 # JSON-RPC 错误码：写租约超时（与 main.py 对齐）
 ERR_WRITE_LEASE = -32002
 
+OPERATION_STATES = frozenset({
+    "created",
+    "awaiting_approval",
+    "approved",
+    "dispatching",
+    "dispatched",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "indeterminate",
+})
+
+OPERATION_TRANSITIONS: dict[str, frozenset[str]] = {
+    "created": frozenset({"awaiting_approval", "approved", "cancelled"}),
+    "awaiting_approval": frozenset({"approved", "cancelled"}),
+    "approved": frozenset({"dispatching", "cancelled"}),
+    "dispatching": frozenset({"dispatched", "indeterminate"}),
+    "dispatched": frozenset({"succeeded", "failed", "indeterminate"}),
+    "succeeded": frozenset(),
+    "failed": frozenset(),
+    "cancelled": frozenset(),
+    "indeterminate": frozenset(),
+}
+
 
 # ============================================================================
 # 异常类型
@@ -239,8 +263,9 @@ class ProjectService:
 
         # 4. 创建表
         self._create_tables()
+        self.recover_incomplete_operations()
 
-        logger.info("project service initialized (WAL mode, 5 tables)")
+        logger.info("project service initialized (WAL mode, 6 tables)")
 
     def _create_tables(self) -> None:
         """创建 5 张表（IF NOT EXISTS，幂等）"""
@@ -321,6 +346,34 @@ class ProjectService:
                 """
             )
 
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS operations (
+                    id TEXT PRIMARY KEY,
+                    intent_id TEXT NOT NULL,
+                    conversation_session_id TEXT,
+                    ssh_session_id TEXT,
+                    target_endpoint TEXT,
+                    command_hash TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK (
+                        state IN (
+                            'created', 'awaiting_approval', 'approved',
+                            'dispatching', 'dispatched', 'succeeded', 'failed',
+                            'cancelled', 'indeterminate'
+                        )
+                    ),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    dispatched_at TEXT,
+                    completed_at TEXT,
+                    exit_code INTEGER,
+                    error_code TEXT,
+                    metadata TEXT DEFAULT '{}'
+                )
+                """
+            )
+
             # 索引（加速查询）
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)"
@@ -333,6 +386,9 @@ class ProjectService:
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id, created_at)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_operations_state ON operations(state, updated_at)"
             )
 
     def close(self) -> None:
@@ -807,6 +863,115 @@ class ProjectService:
                 (new_approved, new_risk, decision_id),
             )
         return self.get_decision(decision_id)
+
+    # ========================================================================
+    # operations durable execution 账本
+    # ========================================================================
+
+    def create_operation(
+        self,
+        intent_id: str,
+        conversation_session_id: str | None,
+        ssh_session_id: str | None,
+        target_endpoint: str | None,
+        command_hash: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        """创建远端操作账本项；原始命令绝不写入 SQLite。"""
+        if not intent_id.strip():
+            raise ProjectServiceError("intent_id is required")
+        if not command_hash.strip():
+            raise ProjectServiceError("command_hash is required")
+
+        operation_id = str(uuid.uuid4())
+        now = self._now_iso()
+        with self._write_lease:
+            cur = self.conn.cursor()
+            cur.execute(
+                "INSERT INTO operations "
+                "(id, intent_id, conversation_session_id, ssh_session_id, "
+                "target_endpoint, command_hash, state, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)",
+                (
+                    operation_id,
+                    intent_id,
+                    conversation_session_id or None,
+                    ssh_session_id or None,
+                    target_endpoint or None,
+                    command_hash,
+                    now,
+                    now,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                ),
+            )
+        return self.get_operation(operation_id)
+
+    def get_operation(self, operation_id: str) -> dict:
+        """读取单个 durable operation。"""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM operations WHERE id = ?", (operation_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise NotFoundError("operation", operation_id)
+        return self._row_to_dict(row)
+
+    def transition_operation(
+        self,
+        operation_id: str,
+        state: str,
+        *,
+        exit_code: int | None = None,
+        error_code: str | None = None,
+    ) -> dict:
+        """原子迁移 operation；终态和 indeterminate 不允许自动复活。"""
+        if state not in OPERATION_STATES:
+            raise ProjectServiceError(f"invalid operation state: {state}")
+        existing = self.get_operation(operation_id)
+        current = str(existing["state"])
+        if state not in OPERATION_TRANSITIONS[current]:
+            raise ProjectServiceError(
+                f"illegal operation transition: {current} -> {state}"
+            )
+
+        now = self._now_iso()
+        approved_at = now if state == "approved" else existing.get("approved_at")
+        dispatched_at = now if state == "dispatched" else existing.get("dispatched_at")
+        completed_at = (
+            now
+            if state in {"succeeded", "failed", "cancelled"}
+            else existing.get("completed_at")
+        )
+        with self._write_lease:
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE operations SET state = ?, updated_at = ?, approved_at = ?, "
+                "dispatched_at = ?, completed_at = ?, exit_code = ?, error_code = ? "
+                "WHERE id = ?",
+                (
+                    state,
+                    now,
+                    approved_at,
+                    dispatched_at,
+                    completed_at,
+                    exit_code if exit_code is not None else existing.get("exit_code"),
+                    error_code if error_code is not None else existing.get("error_code"),
+                    operation_id,
+                ),
+            )
+        return self.get_operation(operation_id)
+
+    def recover_incomplete_operations(self) -> int:
+        """启动恢复：已派发但未得结果的操作只能变为 indeterminate。"""
+        now = self._now_iso()
+        with self._write_lease:
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE operations SET state = 'indeterminate', updated_at = ?, "
+                "error_code = 'sidecar_restarted' "
+                "WHERE state IN ('dispatching', 'dispatched')",
+                (now,),
+            )
+            return cur.rowcount
 
     # ========================================================================
     # 辅助函数
