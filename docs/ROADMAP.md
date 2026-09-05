@@ -9,6 +9,7 @@
 - [x] 成功执行历史只接受同 leaf 的真实 terminal block（非空命令且 `exitCode === 0`）；失败、超时/未知和空命令不再进入预测。
 - [x] 删除旧的 OSC 7 自动教学触发器；教学命令卡只在用户点击且精确匹配真实终端结果后继续讲解。
 - [x] 实际启动 Tauri 开发端：桌面进程和 Python sidecar ready，sidecar 注册 121 个 RPC、知识库保有 3969 条官方条目；这只是启动取证，不是 SSH/xterm/UI 原生回归。
+- [x] SSH Agent 工具只在明确 `exit_code == 0` 时报告成功；非零、缺失或非法退出码进入 error/audit/evidence，`test_tools.py` 185 项通过。
 - [ ] W0：以保存的 SSH profile 完成连接、历史重开、确认 FIFO、知识库工具事件、教学成功/失败/超时及 leaf 隔离的原生取证。
 - [ ] W2 后续：将内存 terminal block 演进为附加式 `CommandCompletion`，覆盖重复 OSC、乱序、重连和跨 leaf。
 - [ ] W3：在任何远端写操作前实现 SQLite `operation_id/intent_id` 状态机、崩溃恢复为 `indeterminate` 与幂等测试。

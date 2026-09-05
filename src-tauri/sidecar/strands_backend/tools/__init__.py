@@ -1179,12 +1179,72 @@ def execute_via_ssh(
             "error": result.get("error", result.get("message", "")),
         })
 
-    # Rust 后端返回的成功结果（假设结构：{ok, output, exit_code, duration}）
-    # TDSF 修复 2026-08-01 (P1-v5-5): 返回前统一脱敏，防止密码/密钥/token
-    # 泄漏到前端工具行、LLM 上下文与日志。
+    # A transport response alone does not prove command success. Require a
+    # concrete integer exit code before creating completed evidence.
+    exit_code = result.get("exit_code") if isinstance(result, dict) else None
     output_text = redact_sensitive(
         result.get("output", "") if isinstance(result, dict) else str(result)
     )
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        _audit_append(
+            event="command_failed",
+            tool=tool_name,
+            command=command,
+            session_id=session_id,
+            agent=ctx.agent_name,
+            reason="missing_or_invalid_exit_code",
+            target_endpoint=target_endpoint,
+        )
+        _track_evidence(
+            session_id=ctx.session_id,
+            tool_name=tool_name,
+            status="error",
+            detail=command,
+            result=result,
+            agent=ctx.agent_name,
+            source="strands_tool",
+        )
+        return _complete_after_execution({
+            "status": "error",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "output": output_text,
+            "reason": "missing_or_invalid_exit_code",
+            "error": "SSH 返回缺少可验证的退出码，执行结果未知。",
+        })
+    if exit_code != 0:
+        _audit_append(
+            event="command_failed",
+            tool=tool_name,
+            command=command,
+            session_id=session_id,
+            agent=ctx.agent_name,
+            exit_code=exit_code,
+            target_endpoint=target_endpoint,
+        )
+        _track_evidence(
+            session_id=ctx.session_id,
+            tool_name=tool_name,
+            status="error",
+            detail=command,
+            result=result,
+            agent=ctx.agent_name,
+            source="strands_tool",
+        )
+        return _complete_after_execution({
+            "status": "error",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "output": output_text,
+            "exit_code": exit_code,
+            "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
+            "error": f"SSH 命令以退出码 {exit_code} 结束。",
+        })
+
+    # TDSF 修复 2026-08-01 (P1-v5-5): 返回前统一脱敏，防止密码/密钥/token
+    # 泄漏到前端工具行、LLM 上下文与日志。
     # P1-3: 命令执行成功入审计链（命令已脱敏）
     _audit_append(
         event="command_executed",
@@ -1192,7 +1252,7 @@ def execute_via_ssh(
         command=command,
         session_id=session_id,
         agent=ctx.agent_name,
-        exit_code=result.get("exit_code", 0) if isinstance(result, dict) else 0,
+        exit_code=exit_code,
         # P2 #42: 多主机场景记录实际目标端点（live 列表校验放行时有值）
         target_endpoint=target_endpoint,
     )
@@ -1215,7 +1275,7 @@ def execute_via_ssh(
         # 旧严格校验路径为空串）——执行错主机时 LLM/用户可直接看到
         "target_endpoint": target_endpoint,
         "output": output_text,
-        "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
+        "exit_code": exit_code,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
     })
 

@@ -6,6 +6,14 @@
 
 ---
 
+### 37.124 SSH 非零/未知退出码不再伪装成功（2026-09-06 ✅）
+
+**发现**：`execute_via_ssh` 只要 Rust bridge 返回普通字典，就统一返回 `success` 并记录 `completed` 证据；真实的非零 `exit_code` 与缺失退出码因此会污染 Agent 的失败计数、工具进度和证据面板。
+
+**修复**：要求 SSH 结果拥有明确、非布尔的整数退出码。非零退出码返回 `error`、记录 `command_failed` 与 error evidence；缺失或非法退出码同样返回 `error`，原因是 `missing_or_invalid_exit_code`。成功路径只接受 `exit_code == 0`。
+
+**验证**：先新增非零与缺失退出码两个失败回归，再实现；`strands_backend/tests/test_tools.py` **185 passed**，`py_compile` 通过。此修复是 W2 事实链的一部分，不替代 W3 的持久 operation/intent 账本。
+
 ### 37.123 W2：真实终端结果与教学触发边界（2026-09-06 ✅）
 
 **触发**：用户要求重新确立真实、稳定的 Agent 方案，并指出“提交命令”不等于“命令执行成功”、自动教学会混淆普通知识与真正教学。历史代码也显示旧教学触发器依赖全局最后命令，无法正确归属连续终端操作。
