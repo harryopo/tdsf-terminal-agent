@@ -28,8 +28,10 @@ strands_backend/tools/__init__.py — Strands 运维工具公共基础设施
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -221,6 +223,10 @@ class ToolContext:
     # 工具不走后端执行，改由 wrap_tool_for_teach_mode 拦截返回 teach_command
     # 事件，前端渲染 TeachCommandCard，学生手动点击注入终端（打字机）。
     teach: bool = False
+    # W3: configure_strands injects the runtime operation ledger. Direct tool
+    # unit tests deliberately leave it unset so they do not create app data.
+    operation_service: Any = None
+    require_operation_ledger: bool = False
 
 
 # ============================================================================
@@ -920,6 +926,90 @@ def execute_via_ssh(
 
     # 2. confirm → needs_you 审批（真实 HITL 闭环；skip_approval 时跳过——
     #    多行命令已整条审批通过）
+    operation_service = getattr(ctx, "operation_service", None)
+    operation_id = ""
+
+    def _with_operation(result: dict[str, Any]) -> dict[str, Any]:
+        if operation_id:
+            result["operation_id"] = operation_id
+        return result
+
+    def _transition_operation(
+        state: str,
+        *,
+        exit_code: int | None = None,
+        error_code: str | None = None,
+        target_endpoint: str | None = None,
+    ) -> bool:
+        if operation_service is None or not operation_id:
+            return True
+        try:
+            operation_service.transition_operation(
+                operation_id,
+                state,
+                exit_code=exit_code,
+                error_code=error_code,
+                target_endpoint=target_endpoint,
+            )
+            return True
+        except Exception as e:  # noqa: BLE001 - fail closed before remote dispatch
+            logger.exception(
+                "operation ledger transition failed: id=%s state=%s error=%s",
+                operation_id,
+                state,
+                e,
+            )
+            return False
+
+    def _cancel_operation(error_code: str) -> None:
+        _transition_operation("cancelled", error_code=error_code)
+
+    needs_approval = decision == "confirm" and not skip_approval
+    if operation_service is None:
+        if getattr(ctx, "require_operation_ledger", False):
+            return {
+                "status": "unavailable",
+                "command": command,
+                "ssh_session_id": session_id,
+                "reason": "operation_ledger_unavailable",
+                "message": "操作账本不可用；未尝试派发 SSH 命令。",
+            }
+    else:
+        try:
+            operation = operation_service.create_operation(
+                intent_id=str(uuid.uuid4()),
+                conversation_session_id=ctx.session_id,
+                ssh_session_id=str(session_id or ""),
+                target_endpoint=None,
+                command_hash=(
+                    "sha256:" + hashlib.sha256(command.encode("utf-8")).hexdigest()
+                ),
+                metadata={
+                    "tool_name": tool_name,
+                    "risk_l": risk_l,
+                    "readonly": readonly,
+                },
+            )
+            operation_id = str(operation["id"])
+            initial_state = "awaiting_approval" if needs_approval else "approved"
+            if not _transition_operation(initial_state):
+                return _with_operation({
+                    "status": "error",
+                    "command": command,
+                    "ssh_session_id": session_id,
+                    "reason": "operation_ledger_transition_failed",
+                    "message": "操作账本无法记录派发前状态；未尝试派发 SSH 命令。",
+                })
+        except Exception as e:  # noqa: BLE001 - remote dispatch must fail closed
+            logger.exception("operation ledger creation failed: error=%s", e)
+            return {
+                "status": "unavailable",
+                "command": command,
+                "ssh_session_id": session_id,
+                "reason": "operation_ledger_unavailable",
+                "message": "操作账本无法创建记录；未尝试派发 SSH 命令。",
+            }
+
     approved_req: Any | None = None
     if decision == "confirm" and not skip_approval:
         req = request_approval_and_wait(
@@ -929,7 +1019,9 @@ def execute_via_ssh(
             risk_l=risk_l,
         )
         if req is None:
+            _cancel_operation("approval_request_failed")
             return {
+                "operation_id": operation_id,
                 "status": "needs_approval",
                 "command": command,
                 "ssh_session_id": session_id,
@@ -945,6 +1037,14 @@ def execute_via_ssh(
                 f"command={command[:80]}"
             )
             approved_req = req
+            if not _transition_operation("approved"):
+                return _with_operation({
+                    "status": "error",
+                    "command": command,
+                    "ssh_session_id": session_id,
+                    "reason": "operation_ledger_transition_failed",
+                    "message": "操作账本无法记录批准状态；未尝试派发 SSH 命令。",
+                })
             # 用户批准 → 继续执行（不再重复检测）
         elif req.status == NeedsYouStatus.REJECTED:
             # Task 3.2 双轨反馈之「用户拒绝」轨：agent 收到规范文案 + 用户附言，
@@ -965,7 +1065,9 @@ def execute_via_ssh(
                 agent=ctx.agent_name,
                 reason=reason,
             )
+            _cancel_operation("approval_rejected")
             return {
+                "operation_id": operation_id,
                 "status": "rejected",
                 "command": command,
                 "ssh_session_id": session_id,
@@ -989,7 +1091,9 @@ def execute_via_ssh(
                 session_id=session_id,
                 agent=ctx.agent_name,
             )
+            _cancel_operation("approval_not_granted")
             return {
+                "operation_id": operation_id,
                 "status": "needs_approval",
                 "command": command,
                 "ssh_session_id": session_id,
@@ -1001,7 +1105,7 @@ def execute_via_ssh(
 
     def _complete_after_execution(result: dict[str, Any]) -> dict[str, Any]:
         complete_approval_execution(approved_req)
-        return result
+        return _with_operation(result)
 
     # 3. 会话校验（Task 3.3 → P2 #42 放宽，2026-09-01）：
     #    原规则：目标会话必须 == 激活终端会话（ctx.ssh_session_id）。
@@ -1051,6 +1155,7 @@ def execute_via_ssh(
                     agent=ctx.agent_name,
                     reason=f"target session {ssh_session_id} state={state_desc}",
                 )
+                _cancel_operation("target_session_not_connected")
                 return _complete_after_execution({
                     "status": "command_blocked",
                     "command": command,
@@ -1087,6 +1192,7 @@ def execute_via_ssh(
                         agent=ctx.agent_name,
                         reason=f"target session {ssh_session_id} != active {ctx.ssh_session_id}",
                     )
+                    _cancel_operation("host_mismatch")
                     return _complete_after_execution({
                         "status": "command_blocked",
                         "command": command,
@@ -1109,6 +1215,7 @@ def execute_via_ssh(
             f"execute_via_ssh unavailable (no rust_bridge): tool={tool_name}, "
             f"command={command[:80]}"
         )
+        _cancel_operation("rust_bridge_not_injected")
         return _complete_after_execution({
             "status": "unavailable",
             "command": command,
@@ -1131,6 +1238,7 @@ def execute_via_ssh(
         logger.error(
             f"execute_via_ssh invalid session_id: id={session_id!r}, error={e}"
         )
+        _cancel_operation("invalid_ssh_session_id")
         return _complete_after_execution({
             "status": "error",
             "command": command,
@@ -1143,12 +1251,24 @@ def execute_via_ssh(
             f"execute_via_ssh no active ssh session: tool={tool_name}, "
             f"command={command[:80]}"
         )
+        _cancel_operation("no_ssh_session")
         return _complete_after_execution({
             "status": "unavailable",
             "command": command,
             "ssh_session_id": session_id,
             "reason": "no_ssh_session",
             "message": "无活跃 SSH 会话，请先连接 SSH 再调用运维工具",
+        })
+
+    if not _transition_operation(
+        "dispatching", target_endpoint=target_endpoint or None
+    ):
+        return _complete_after_execution({
+            "status": "error",
+            "command": command,
+            "ssh_session_id": session_id,
+            "reason": "operation_ledger_transition_failed",
+            "message": "操作账本无法记录派发状态；未尝试派发 SSH 命令。",
         })
 
     try:
@@ -1162,6 +1282,7 @@ def execute_via_ssh(
             f"execute_via_ssh ipc_invoke exception: tool={tool_name}, "
             f"command={command[:80]}, error={e}"
         )
+        _transition_operation("indeterminate", error_code="ipc_invoke_exception")
         return _complete_after_execution({
             "status": "error",
             "command": command,
@@ -1170,7 +1291,18 @@ def execute_via_ssh(
         })
 
     # 4. 整理返回结果
+    if not _transition_operation("dispatched"):
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "reason": "operation_ledger_transition_failed",
+            "message": "SSH 已返回响应，但派发状态未持久化；执行状态不确定。",
+        })
+
     if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
+        _transition_operation("failed", error_code="rust_response_error")
         return _complete_after_execution({
             "status": result.get("status", "error"),
             "command": command,
@@ -1186,6 +1318,7 @@ def execute_via_ssh(
         result.get("output", "") if isinstance(result, dict) else str(result)
     )
     if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        _transition_operation("failed", error_code="missing_or_invalid_exit_code")
         _audit_append(
             event="command_failed",
             tool=tool_name,
@@ -1214,6 +1347,7 @@ def execute_via_ssh(
             "error": "SSH 返回缺少可验证的退出码，执行结果未知。",
         })
     if exit_code != 0:
+        _transition_operation("failed", exit_code=exit_code, error_code="command_failed")
         _audit_append(
             event="command_failed",
             tool=tool_name,
@@ -1246,6 +1380,19 @@ def execute_via_ssh(
     # TDSF 修复 2026-08-01 (P1-v5-5): 返回前统一脱敏，防止密码/密钥/token
     # 泄漏到前端工具行、LLM 上下文与日志。
     # P1-3: 命令执行成功入审计链（命令已脱敏）
+    if not _transition_operation("succeeded", exit_code=exit_code):
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "output": output_text,
+            "exit_code": exit_code,
+            "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
+            "reason": "operation_ledger_transition_failed",
+            "message": "SSH 返回退出码 0，但操作账本未完成持久化；执行状态不确定。",
+        })
+
     _audit_append(
         event="command_executed",
         tool=tool_name,

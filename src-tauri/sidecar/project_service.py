@@ -922,6 +922,7 @@ class ProjectService:
         *,
         exit_code: int | None = None,
         error_code: str | None = None,
+        target_endpoint: str | None = None,
     ) -> dict:
         """原子迁移 operation；终态和 indeterminate 不允许自动复活。"""
         if state not in OPERATION_STATES:
@@ -945,8 +946,8 @@ class ProjectService:
             cur = self.conn.cursor()
             cur.execute(
                 "UPDATE operations SET state = ?, updated_at = ?, approved_at = ?, "
-                "dispatched_at = ?, completed_at = ?, exit_code = ?, error_code = ? "
-                "WHERE id = ?",
+                "dispatched_at = ?, completed_at = ?, exit_code = ?, error_code = ?, "
+                "target_endpoint = ? WHERE id = ?",
                 (
                     state,
                     now,
@@ -955,6 +956,9 @@ class ProjectService:
                     completed_at,
                     exit_code if exit_code is not None else existing.get("exit_code"),
                     error_code if error_code is not None else existing.get("error_code"),
+                    target_endpoint
+                    if target_endpoint is not None
+                    else existing.get("target_endpoint"),
                     operation_id,
                 ),
             )
