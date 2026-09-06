@@ -198,7 +198,7 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     try:
         from skills.registry import get_global_registry
         registry = get_global_registry()
-        result = registry.invoke(skill_name, invoke_params)
+        result = registry.get_reference(skill_name, invoke_params)
     except KeyError as e:
         # skill 不存在 → 附带当前可用技能名列表，方便 LLM 自纠正重试
         try:
@@ -312,7 +312,10 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             "tags": result.get("tags", []),
             "triggers": result.get("triggers", []),
             "allowed_tools": result.get("allowed_tools", []),
+            "execution": "not_run",
         }
+        if result.get("executor"):
+            final_result["executor"] = result["executor"]
 
     # T6: 两模式统一附剧本（结构化数据 + 注入文本，LLM 据此驱动工具序列）
     if playbook:
@@ -382,8 +385,8 @@ def make_skill_invoke_tool(ctx: ToolContext):
         {catalog}
 
         Skill 行为：
-        - 知识卡模式：返回 SKILL.md 内容作为参考（content/steps/examples）
-        - executor 模式：真正执行 shell/python/http 脚本，返回 stdout/stderr
+        - 返回 SKILL.md 内容作为参考（content/steps/examples）和可选剧本
+        - executor 元数据仅描述目标环境中的步骤；本工具绝不执行 shell/python/http
         - 剧本模式（T6）：技能带 steps 剧本时，返回体附 playbook（结构化步骤）
           与 playbook_text（注入剧本文本）——请按 playbook_text 的步骤顺序执行，
           每步完成后用工具验证成功判据再推进下一步；步骤已同步进任务清单，
@@ -396,13 +399,13 @@ def make_skill_invoke_tool(ctx: ToolContext):
 
         Args:
             skill_name (str): Skill 名称（大小写不敏感，如 "linux-ops" / "docker-management"）。
-            input (str): 调用参数，透传给 skill executor（部分 type 支持 ${{input}} 替换，可选）。
+            input (str): 给 Skill 的问题或上下文（可选）。
 
         Returns:
             dict: 结构化结果，含 status / skill_name / skill_source / content 等字段。
                 status 取值: success | not_found | error
                 知识卡模式额外字段: content / when_to_use / steps / examples / tags / triggers / allowed_tools
-                executor 模式额外字段: stdout / stderr / exit_code / success
+                execution 固定为 not_run；若有 executor 字段，只是声明元数据
                 剧本模式额外字段（两模式均可能）: playbook / playbook_text
         """
 

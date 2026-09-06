@@ -186,6 +186,15 @@ class TestRegisterGetUnregister:
 class TestInvokeSkill:
     """invoke 调用测试"""
 
+    def test_get_reference_never_runs_executor(self, builtin_registry: SkillRegistry):
+        """Agent/UI 读取 executor 型 Skill 时只得到资料，不在 sidecar 本机执行。"""
+        result = builtin_registry.get_reference("linux-ops", {"task": "nginx"})
+        assert result["name"] == "linux-ops"
+        assert result["execution"] == "not_run"
+        assert "content" in result
+        assert "stdout" not in result
+        assert "executor" in result
+
     def test_invoke_builtin_skill(self, builtin_registry: SkillRegistry):
         """调用内置 Skill 返回完整内容
 

@@ -55,24 +55,31 @@ export function TodoStrip({ sessionId }: Props) {
   if (!sessionId || todos.length === 0) return null;
 
   const completed = todos.filter((t) => t.status === "completed").length;
+  const current = todos.find((t) => t.status === "in_progress");
   const pct = Math.round((completed / todos.length) * 100);
 
   return (
     <section
       aria-label="任务清单"
-      className="flex flex-col min-h-0 shrink-0 border-b border-border/40 bg-muted/55 px-3 py-1.5 max-h-[35%]"
+      className="mx-2 mt-2 flex min-h-0 shrink-0 flex-col rounded-lg border border-border/60 bg-muted/45 px-3 py-2 shadow-sm max-h-[35%]"
     >
-      <div className="my-1.5 flex items-center gap-2 shrink-0">
-        <span className="text-[11px] font-medium text-foreground">
-          任务清单
-        </span>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="text-[11px] font-semibold text-foreground">任务清单</span>
         <Progress value={pct} className="h-1 flex-1" />
         <span className="text-[11px] tabular-nums font-mono text-muted-foreground">
           {completed}/{todos.length}
         </span>
       </div>
+      {current ? (
+        <p
+          data-testid="todo-current"
+          className="mt-1.5 truncate text-[10.5px] text-muted-foreground"
+        >
+          正在处理 · {current.title}
+        </p>
+      ) : null}
       <ScrollArea className="flex-1 min-h-0">
-        <ul className="flex flex-col gap-0.5">
+        <ul className="mt-1.5 flex flex-col gap-0.5">
           {todos.map((t) => (
             <TodoRow key={t.id} todo={t} />
           ))}
@@ -91,8 +98,8 @@ function TodoRow({ todo }: { todo: Todo }) {
   const row = (
     <li
       className={cn(
-        "flex items-start gap-2 rounded px-1.5 py-1 text-[11px] leading-snug",
-        isInProgress && "border-l-2 border-foreground/50 bg-muted/40",
+        "flex items-start gap-2 rounded-md px-1.5 py-1.5 text-[11px] leading-snug",
+        isInProgress && "border-l-2 border-primary bg-primary/5",
       )}
     >
       <span className="mt-[2px] inline-flex size-3.5 shrink-0 items-center justify-center">
@@ -118,6 +125,11 @@ function TodoRow({ todo }: { todo: Todo }) {
         )}
       >
         {todo.title}
+        {isInProgress && todo.description ? (
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">
+            {todo.description}
+          </span>
+        ) : null}
       </span>
       {completedAtLabel && (
         <span

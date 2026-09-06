@@ -147,8 +147,6 @@ export function WorkspaceInputBar({
               const re = new RegExp(`(^|\\s)#${snip.handle}\\b ?`);
               c.setValue((v) => v.replace(re, (_m, lead: string) => lead));
             }}
-            commands={c.pickedCommands}
-            onRemoveCommand={(name) => c.removeCommand(name)}
           />
 
           <div className="flex items-end gap-2.5">

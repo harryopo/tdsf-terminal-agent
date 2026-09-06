@@ -58,6 +58,19 @@ export function isTeachMessage(text: string): boolean {
   return Boolean(text && TEACH_OUTPUT_MARKER_RE.test(text));
 }
 
+/**
+ * A TeachCard parses section boundaries and fenced commands.  It must only
+ * receive a completed response: a max-token continuation can otherwise leave
+ * an unclosed fence or a half section in the live stream.
+ */
+export function shouldRenderTeachCard(
+  text: string,
+  teachEnabled: boolean,
+  streaming: boolean,
+): boolean {
+  return teachEnabled && !streaming && isTeachMessage(text);
+}
+
 /** Parse a marked teaching response into the small set of UI sections. */
 export function parseTeachSections(markdown: string): TeachSection[] {
   const lines = markdown.replace(TEACH_OUTPUT_MARKER_RE, "").split("\n");

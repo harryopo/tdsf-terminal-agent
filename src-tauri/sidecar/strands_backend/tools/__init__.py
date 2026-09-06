@@ -1716,6 +1716,7 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
 def make_all_ops_tools(
     ctx: ToolContext,
     tool_names: set[str] | list[str] | None = None,
+    include_teach_shell_tools: bool = False,
 ) -> list:
     """构建全部已注册工具（TOOL_REGISTRY 单一真源，带 ctx 闭包）
 
@@ -1752,7 +1753,14 @@ def make_all_ops_tools(
             logger.warning(f"tool '{spec.name}' build failed, skipped: {e}")
 
     if getattr(ctx, "permission_level", 2) <= 1:
-        tools = filter_tools_readonly(tools)
+        allowed = set(READONLY_TOOL_NAMES)
+        if include_teach_shell_tools:
+            allowed.update(
+                spec.name
+                for spec in TOOL_REGISTRY.values()
+                if spec.to_shell_command is not None
+            )
+        tools = [t for t in tools if getattr(t, "__name__", "") in allowed]
     if tool_names is not None:
         allowed = set(tool_names)
         tools = [

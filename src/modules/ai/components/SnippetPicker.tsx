@@ -1,12 +1,11 @@
 import { PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { HugeiconsIcon } from "@hugeicons/react";
-import type { SlashCommandMeta } from "../lib/slashCommands";
 import type { Snippet } from "../lib/snippets";
+import type { SkillMetadata } from "@/modules/skills/types";
 
 export type PickerItem =
   | { kind: "snippet"; snippet: Snippet }
-  | { kind: "command"; command: SlashCommandMeta };
+  | { kind: "skill"; skill: SkillMetadata };
 
 type Props = {
   items: readonly PickerItem[];
@@ -21,7 +20,7 @@ export function SnippetPickerContent({
   onPick,
   onHover,
 }: Props) {
-  const commands = items.filter((it) => it.kind === "command");
+  const skills = items.filter((it) => it.kind === "skill");
   const snippets = items.filter((it) => it.kind === "snippet");
   let cursor = -1;
 
@@ -37,21 +36,21 @@ export function SnippetPickerContent({
     >
       {items.length === 0 ? (
         <div className="px-3 py-2.5 text-[11px] text-muted-foreground">
-          No matches. Add snippets in Settings → Agents.
+          没有匹配的技能或片段。
         </div>
       ) : (
         <div className="max-h-64 overflow-y-auto py-1">
-          {commands.length > 0 && (
+          {skills.length > 0 && (
             <>
-              <SectionHeader label="Pre-built snippets" />
+              <SectionHeader label="技能" />
               <ul>
-                {commands.map((it) => {
+                {skills.map((it) => {
                   cursor += 1;
                   const i = cursor;
-                  if (it.kind !== "command") return null;
-                  const c = it.command;
+                  if (it.kind !== "skill") return null;
+                  const skill = it.skill;
                   return (
-                    <li key={`cmd-${c.name}`}>
+                    <li key={`skill-${skill.name}`}>
                       <button
                         type="button"
                         onMouseEnter={() => onHover(i)}
@@ -63,18 +62,12 @@ export function SnippetPickerContent({
                             : "hover:bg-accent/60",
                         )}
                       >
-                        <HugeiconsIcon
-                          icon={c.icon}
-                          size={13}
-                          strokeWidth={1.75}
-                          className="text-muted-foreground"
-                        />
-                        <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="flex items-center gap-1.5">
-                            <span className="font-mono text-muted-foreground">
-                              #{c.name}
-                            </span>
-                            <span className="font-medium">{c.label}</span>
+                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                          <span className="font-mono text-muted-foreground">
+                            /skill:{skill.name}
+                          </span>
+                          <span className="line-clamp-1 text-[10.5px] text-muted-foreground">
+                            {skill.description}
                           </span>
                         </span>
                       </button>

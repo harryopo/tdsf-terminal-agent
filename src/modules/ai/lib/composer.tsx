@@ -13,7 +13,6 @@ import {
 import { expandSnippetTokens, type Snippet } from "../lib/snippets";
 import { getChat, useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
-import { type SlashCommandMeta, tryRunSlashCommand } from "./slashCommands";
 
 export type FileAttachment = {
   id: string;
@@ -52,9 +51,6 @@ type ComposerCtx = {
   pickedSnippets: Snippet[];
   addSnippet: (s: Snippet) => void;
   removeSnippet: (id: string) => void;
-  pickedCommands: SlashCommandMeta[];
-  addCommand: (c: SlashCommandMeta) => void;
-  removeCommand: (name: string) => void;
   isBusy: boolean;
   submit: () => void;
   stop: () => void;
@@ -82,7 +78,6 @@ export function AiComposerProvider({ children }: ProviderProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<FileAttachment[]>([]);
   const [pickedSnippets, setPickedSnippets] = useState<Snippet[]>([]);
-  const [pickedCommands, setPickedCommands] = useState<SlashCommandMeta[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const focusSignal = useChatStore((s) => s.focusSignal);
@@ -275,57 +270,20 @@ export function AiComposerProvider({ children }: ProviderProps) {
     [],
   );
 
-  const addCommand = useCallback(
-    (cmd: SlashCommandMeta) =>
-      setPickedCommands((prev) =>
-        prev.some((p) => p.name === cmd.name) ? prev : [...prev, cmd],
-      ),
-    [],
-  );
-  const removeCommand = useCallback(
-    (name: string) =>
-      setPickedCommands((prev) => prev.filter((c) => c.name !== name)),
-    [],
-  );
-
   const submit = useCallback(() => {
     if (isBusy) return;
     const trimmed = value.trim();
     if (
       !trimmed &&
       files.length === 0 &&
-      pickedSnippets.length === 0 &&
-      pickedCommands.length === 0
+      pickedSnippets.length === 0
     )
       return;
 
-    // Slash-command interception. `/plan` toggles plan mode; `/init` rewrites
-    // the prompt to the TDSF.md scan template before sending.
-    let effectiveText = trimmed;
-    let commandMarker: string | null = null;
-    let commandSource = trimmed;
-    if (
-      pickedCommands.length > 0 &&
-      !trimmed.startsWith("/") &&
-      !trimmed.startsWith("#")
-    ) {
-      commandSource = `#${pickedCommands[0].name} ${trimmed}`.trim();
-    }
-    if (commandSource.startsWith("/") || commandSource.startsWith("#")) {
-      const outcome = tryRunSlashCommand(commandSource);
-      if (outcome.kind === "handled") {
-        setValue("");
-        if (outcome.toast) console.info(outcome.toast);
-        return;
-      }
-      if (outcome.kind === "send-prompt") {
-        effectiveText = outcome.prompt;
-        if (outcome.commandName) {
-          // TDSF 魔改: terax-command → tdsf-command(与 TDSF_CMD_RE 对齐)
-          commandMarker = `<tdsf-command name="${outcome.commandName}" />`;
-        }
-      }
-    }
+    // `/skill:<name> <input>` remains in the user message.  The runtime
+    // prompt turns this explicit syntax into a context-aware skill_invoke;
+    // it never runs a legacy local slash command.
+    const effectiveText = trimmed;
 
     const parts: MessagePart[] = [];
     const fileBlocks = files
@@ -358,7 +316,6 @@ export function AiComposerProvider({ children }: ProviderProps) {
       allSnippetBlocks.push(block);
     }
     const composed = [
-      commandMarker ?? "",
       allSnippetBlocks.join("\n\n"),
       selectionBlocks.join("\n\n"),
       fileBlocks.join("\n\n"),
@@ -393,10 +350,9 @@ export function AiComposerProvider({ children }: ProviderProps) {
     setValue("");
     setFiles([]);
     setPickedSnippets([]);
-    setPickedCommands([]);
     // Re-focus immediately after submit so the user can type a follow-up
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [isBusy, value, files, pickedSnippets, pickedCommands, sessionId]);
+  }, [isBusy, value, files, pickedSnippets, sessionId]);
 
   const stop = useCallback(() => {
     if (!sessionId) return;
@@ -407,8 +363,7 @@ export function AiComposerProvider({ children }: ProviderProps) {
     !isBusy &&
     (value.trim().length > 0 ||
       files.length > 0 ||
-      pickedSnippets.length > 0 ||
-      pickedCommands.length > 0);
+      pickedSnippets.length > 0);
 
   // Context value 必须 useMemo（CLAUDE.md 红线 5）：本 Provider 是全树最外层，
   // 裸对象会在每次渲染时都是新引用，强制 3 个消费者全量重渲染。
@@ -426,9 +381,6 @@ export function AiComposerProvider({ children }: ProviderProps) {
       pickedSnippets,
       addSnippet,
       removeSnippet,
-      pickedCommands,
-      addCommand,
-      removeCommand,
       isBusy,
       submit,
       stop,
@@ -444,9 +396,6 @@ export function AiComposerProvider({ children }: ProviderProps) {
       pickedSnippets,
       addSnippet,
       removeSnippet,
-      pickedCommands,
-      addCommand,
-      removeCommand,
       isBusy,
       submit,
       stop,

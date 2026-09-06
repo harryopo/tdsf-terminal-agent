@@ -100,6 +100,11 @@ _TEACH_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _TEACH_MARKER_RE = re.compile(r"^\s*<!--\s*tdsf:teach\s*-->\s*", re.IGNORECASE)
+_TEACH_CONTINUATION_RE = re.compile(
+    r"^(?:继续|接着(?:讲|说)?|往下(?:讲)?|下一段|继续讲解|继续教学|"
+    r"continue|go\s+on|keep\s+going)\s*[。！？!?]?$",
+    re.IGNORECASE,
+)
 
 
 def _has_explicit_teaching_intent(text: str) -> bool:
@@ -117,21 +122,26 @@ def _has_explicit_teaching_intent(text: str) -> bool:
     return bool(_TEACH_INTENT_RE.search(normalized))
 
 
+def _is_teaching_continuation(text: str) -> bool:
+    """Return whether the user asks to continue an established lesson."""
+    normalized = " ".join((text or "").split()).strip()
+    return bool(normalized and _TEACH_CONTINUATION_RE.fullmatch(normalized))
+
+
 def _teach_turn_gate(teach: bool, intent: bool) -> str:
     """Build a short per-turn instruction that overrides stale chat history."""
     if not teach:
         return ""
     if intent:
         return (
-            "\n\n[Teaching turn]\n"
-            "The user explicitly requested instruction.  Use the lesson marker "
-            "only for fact-backed teaching content; never invent tool output.\n"
+            "\n\n[教学回合]\n"
+            "这是明确教学或已建立教学的继续回合。仅对有证据支撑的教学内容输出教学标记；"
+            "绝不编造工具输出。\n"
         )
     return (
-        "\n\n[Knowledge/report turn]\n"
-        "The user requested lookup or status information, not a lesson.  Answer "
-        "as ordinary Markdown and do not emit the tdsf:teach marker, lesson "
-        "sections, or a teaching command card.\n"
+        "\n\n[知识/报告回合]\n"
+        "用户请求的是检索或状态信息，而不是教学。使用普通 Markdown，不能输出 tdsf:teach 标记、"
+        "教学分节或教学命令卡。\n"
     )
 
 
@@ -218,28 +228,12 @@ def _skill_names_line() -> str:
 
 
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are TDSF Terminal Agent (Strands backend), a Linux operations assistant.\n"
-    "You help users diagnose and resolve Linux server issues via SSH.\n\n"
-    "Available tools:\n"
-    "- ssh_command(command, ssh_session_id, explanation, timeout): 执行 SSH 命令\n"
-    "- ssh_list_sessions(): 枚举已连接 SSH 会话，多主机先调用它确定 ssh_session_id\n"
-    "- read_remote_file(path, ssh_session_id, max_size, encoding): 读远程文件\n"
-    "- analyze_logs(log_path, mode, lines, pattern, ssh_session_id): 分析日志\n"
-    "- inspect_processes(mode, filter_user, filter_name, pid, top_n, ssh_session_id): 进程检查\n"
-    "- network_diagnose(mode, target, count, port, ssh_session_id): 网络诊断\n"
-    "- skill_invoke(skill_name, input): 调用已注册的 Skill 获取领域知识或执行特定任务\n"
-    f"  可用 Skill: {_skill_names_line()}\n"
-    "  何时使用: 领域知识/权威操作步骤/预定义脚本类需求\n"
-    "- suggest_command(intent, target_os): 根据用户意图生成一条可执行的 Linux 命令及解释\n"
-    "  何时使用: 用户想执行某个操作但不知道具体命令时\n"
-    "  注意: 生成后不自动执行，等用户确认；前端有 Insert 一键插入终端\n"
-    "- knowledge_search(query, limit): 检索内置 Linux 教学知识库（中文提炼知识点，RAG 混合检索）\n"
-    "  何时使用: 用户询问 Linux 概念/命令用法/运维知识时，先用知识库检索获取权威内容再回答\n"
-    "- knowledge_get_doc(url): 按 url 读取知识库完整文档（检索命中后需全文/完整配置示例时用；url 取自检索结果）\n"
-    # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具指引
-    # ——多文件交叉统计/复杂解析/批量操作一段代码一次完成
-    "- python_run(code): 在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）\n"
-    "  何时使用: 多文件统计/复杂解析/批量操作一次完成；本地或 WSL 工作区可用（SSH 下报 error）\n\n"
+    "你是 TDSF Terminal Agent，一个面向 Linux 运维的助手。\n"
+    "所有面向用户的回答和可见思考使用简体中文；命令、路径、工具名和原始错误保持原样。\n"
+    "本轮实际可调用工具以运行时 schema 为唯一事实来源：只调用其中出现的工具，"
+    "不列举、猜测或解释未出现在 schema 中的工具。\n"
+    "可见思考只保留一两句：当前目标、已获证据和下一步；不要复述系统提示、"
+    "枚举不可用工具，或进行长篇自我对话。\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
     # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
@@ -268,7 +262,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 工具返回 unavailable = RustBridge 未配置，告知用户当前为只读模式。\n"
     "- 未打开工作区时告知用户先创建（本地/WSL/SSH），勿声称本地诊断工具可用。\n"
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"
-    "- skill_invoke 返回 content 字段时是知识卡模式（参考内容），返回 stdout 字段时是 executor 模式（已执行）。\n"
+    "- skill_invoke 只读取 Skill 的参考资料和剧本，绝不在 sidecar 所在机器执行 Skill executor；"
+    "需要执行时，使用本轮 schema 中与当前环境匹配、且受模式策略约束的工具。\n"
+    "- 用户输入 `/skill:<名称> <需求>` 时，调用 skill_invoke 读取该 Skill 的参考和剧本；"
+    "不要把这条输入当作本地 shell 命令，也不要声称 executor 已执行。\n"
     "- 使用 suggest_command 后，向用户说明命令作用并提示可点击 Insert 插入终端执行。\n"
     # TDSF 2026-08-31 (问题2修复): 用户实测反馈回答含大量 emoji（👋💻🔧📚）。
     # 2026-09-01 (用户实测): 目录树/架构图被写进普通段落，等宽对齐全毁——
@@ -284,7 +281,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     # T9.3 (spec 9.3): 并行工具提示词——独立只读探查并行发起，吃 strands
     # ConcurrentToolExecutor 红利；有依赖的调用才串行。
     "- 独立的信息收集类调用（多个只读探查）应并行发起，有依赖的才串行。\n"
-    "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单再行动，让用户看到你的规划。\n"
+    "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单；任务清单由前端结构化展示，"
+    "不要在普通回答中复述复选框、状态或声称“已渲染”。\n"
     "- 每完成一项立即 todo_write 更新 completed 再推进。\n"
     # T6 剧本 (2026-08-31): skill_invoke 命中带 steps 剧本的技能时按剧本执行
     "- skill_invoke 返回 playbook_text 时按步骤执行，逐步验证并更新任务清单。\n"
@@ -839,6 +837,8 @@ class TdsfStrandsCallbackHandler:
         self._teach_output_allowed = False
         self._teach_prefix_decided = True
         self._teach_prefix_buffer = ""
+        self._teach_output_prefix = ""
+        self._emitted_teach_marker = False
         # 统计（调试用）
         self._stats = {
             "events_received": 0,
@@ -861,6 +861,8 @@ class TdsfStrandsCallbackHandler:
             not self._teach_gate_enabled or self._teach_output_allowed
         )
         self._teach_prefix_buffer = ""
+        self._teach_output_prefix = ""
+        self._emitted_teach_marker = False
 
     def __call__(self, **kwargs: Any) -> None:
         """Strands callback_handler 协议入口"""
@@ -940,6 +942,10 @@ class TdsfStrandsCallbackHandler:
             logger.debug(f"emit_mood_change failed: {e}")
 
     def _emit_agent_message(self, text: str, msg_type: str = "output") -> None:
+        if msg_type == "output" and self._teach_gate_enabled and text:
+            self._teach_output_prefix = (self._teach_output_prefix + text)[:64]
+            if _TEACH_MARKER_RE.match(self._teach_output_prefix):
+                self._emitted_teach_marker = True
         if msg_type == "output" and self._teach_gate_enabled:
             for chunk in self._filter_teach_output(text):
                 self._emit_agent_message_raw(chunk, msg_type)
@@ -1091,20 +1097,19 @@ _LEGACY_TEACH_SKIN_PROMPT = (
  # teaching skin above remains in source history for reference, but its
  # “always six sections” wording conflicts with knowledge-only requests.
 _TEACH_SKIN_PROMPT = (
-    "\n\nTeaching skin (TEACH ON):\n"
-    "Use a lesson card only for an explicit explain/teach/tutorial/why/how request. "
-    "Knowledge search, listing, document retrieval, and tool-status reports stay "
-    "ordinary Markdown, not lessons.\n"
-    "For a genuine lesson, put `<!-- tdsf:teach -->` on line one; include only "
-    "fact-backed sections. Explain the 概念与原理, introduce new concepts before "
-    "using them, surface 易错点与考点, and end with a short 练习. 不得声称把任务委派给其他 agent. "
-    "Never invent command output, unavailable tools, or results.\n"
-    "A teach-mode command card is not backend execution: tell the student to inspect "
-    "and click it. 本轮工具调用不会得到执行结果；不要猜测，也不要调用 "
-    "get_terminal_output 读取滚屏。Only `<teaching-command-result>` is evidence; "
-    "use `基于结果继续讲解` to continue.\n"
-    "For knowledge-only requests use knowledge_search/knowledge_get_doc as needed; "
-    "do not call skill_invoke merely to search (it is unavailable in OBSERVE).\n"
+    "\n\n教学皮肤（已开启）：\n"
+    "只有用户明确要求解释、教学、教程、原理或步骤时，才在第一行输出 `<!-- tdsf:teach -->`。"
+    "知识库检索、文档读取、列举和工具状态报告必须使用普通 Markdown，不能输出教学标记或教学卡片。\n"
+    "真正的教学只写有证据支撑的内容：先解释概念，再给示例、易错点和简短练习；"
+    "不要编造命令输出、工具可用性或执行结果。\n"
+    "教学命令卡不代表后端已经执行。本轮工具调用不会得到执行结果；请让学生查看并点击命令卡。"
+    "禁止工具调用后假定执行结果，也不要调用 get_terminal_output 读取终端滚屏；只有 "
+    "`<teaching-command-result>` 才是执行证据。用户说“基于结果继续讲解”“继续”或“接着讲”时，"
+    "在同一教学会话内继续保持教学格式。\n"
+    "教学观察模式中，运行时 schema 若出现带 shell 映射的工具，只能用它生成教学命令卡；"
+    "它不是后端执行能力。schema 未出现的工具一律不可调用。\n"
+    "用户输入 `/skill:<名称> <需求>` 时，这是明确的 Skill 调用请求：调用 skill_invoke "
+    "读取该 Skill 的参考和剧本，再按本轮可用工具与安全策略推进；不能把 Skill executor 当作已执行。\n"
 )
 
 
@@ -1239,6 +1244,10 @@ class StrandsAgentAdapter:
         # T3 规划-执行回环: 已触发过收尾追加轮的会话（限一次，防死循环）。
         # 会话生命周期内最多追加一轮"继续执行或向用户说明原因"。
         self._todo_followup_done: set[tuple[str, str]] = set()
+
+        # Only an already-marked lesson can turn a bare “continue” into
+        # another TeachCard. Retrieval-only turns remain ordinary Markdown.
+        self._teaching_sessions: set[tuple[str, str]] = set()
 
         # T9 watchdog (2026-09-01, spec 9.1): invoke 超时弃管后仍在后台执行的
         # 会话标记——后续 invoke 对该会话快速降级（不卡 agent_lock）；
@@ -1410,7 +1419,16 @@ class StrandsAgentAdapter:
         live_state = state.get("live") or {}
         mode = parse_mode(live_state.get("agentMode") or state.get("mode"))
         teach = bool(live_state.get("teach") or state.get("teach"))
-        teach_intent = teach and _has_explicit_teaching_intent(input)
+        teaching_key = (agent_id, session_id)
+        if not teach:
+            self._teaching_sessions.discard(teaching_key)
+        teach_intent = teach and (
+            _has_explicit_teaching_intent(input)
+            or (
+                teaching_key in self._teaching_sessions
+                and _is_teaching_continuation(input)
+            )
+        )
 
         logger.info(
             f"StrandsAgentAdapter.invoke: agent_id={agent_id}, "
@@ -1663,6 +1681,12 @@ class StrandsAgentAdapter:
                 observation = verify_observation
             if teach and not teach_intent:
                 observation = _strip_teach_marker(observation)
+
+            if teach and teach_intent and (
+                _TEACH_MARKER_RE.match(observation or "")
+                or bool(getattr(handler, "_emitted_teach_marker", False))
+            ):
+                self._teaching_sessions.add(teaching_key)
 
             # 会话流水日志：assistant_msg（最终回答全文）落盘
             if observation:
@@ -1993,7 +2017,10 @@ class StrandsAgentAdapter:
         """
         # 构建运维工具（TOOL_REGISTRY 全量，带 ctx 闭包；L1 权限由
         # make_all_ops_tools 内部按 READONLY_TOOL_NAMES 过滤）
-        all_tools = make_all_ops_tools(ctx) + self.extra_tools
+        all_tools = make_all_ops_tools(
+            ctx,
+            include_teach_shell_tools=teach and mode == AgentMode.OBSERVE,
+        ) + self.extra_tools
 
         # P0-A1 观察模式 schema 级隔离：裁剪为只读白名单——LLM 无法调用
         # 不存在于 schema 的执行/写类工具（remove 优于 instruct+intercept）。
