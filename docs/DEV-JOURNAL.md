@@ -6,6 +6,14 @@
 
 ---
 
+### 37.127 W3 operation ID 跨 Python/Rust SSH 边界闭环（2026-09-06 ✅，原生取证仍开放）
+
+**实现**：Python 在持久账本启用时把同一 `operationId` 放进 `ssh_command` 反向 RPC；Rust sidecar 路由仅接受非空字符串并透传给 SSH 命令，`SshCommandResult` 原样 camelCase 回显，普通前端调用不传该字段则兼容不输出。Python 收到正常回包前验证回显 ID：缺失或不匹配直接将 `dispatching` 变为 `indeterminate`，不写 completed evidence；桥接层返回 unavailable/error 也保持不确定，不伪造 `dispatched → failed`。这只是本地跨进程归因，不能证明远端命令幂等，也不自动重试。
+
+**修正与验证**：实现中发现状态机不允许 `dispatching → failed`，已改为保守的 `indeterminate` 并新增回归。Python 账本/回包/审批/桥接不可用定向测试 **47 passed**；Rust SSH 结果序列化 **4 passed**。一次 `cargo fmt` 暴露该工作树已有全仓格式差异，产生的无关格式化改动已逐一恢复，最终 diff 仅保留本任务四个实现/测试文件。
+
+**下一步**：不扩大状态机或加入猜测性重试；以保存的 SSH profile 在原生桌面环境验证确认 FIFO、真实执行、历史重开与 operation ID 日志对应，再把证据结果写入 W0 验收。
+
 ### 37.126 W3 durable operation 接入 SSH 主链（2026-09-06 ✅，Rust 关联仍开放）
 
 **实现**：生产 `configure_strands` 取得全局 `ProjectService`，经 `StrandsAgentAdapter → ToolContext` 注入 `execute_via_ssh`。风险拒绝仍在建账前；其余调用创建不含命令原文的 UUID `intent_id/operation_id` 与 SHA-256 命令摘要，按真实路径记录 `created → awaiting_approval/approved → dispatching → dispatched → succeeded/failed`。拒绝、超时、目标或 bridge 不可用会取消；IPC 异常、派发状态未落盘、或成功结果未能落盘一律 `indeterminate`，绝不声称远端已完成；仅明确 `exit_code == 0` 且 `succeeded` 已持久化后才写 completed evidence/audit。运行时账本不可用会在 SSH 派发前失败关闭，解析出的 endpoint 在派发时一并持久化。

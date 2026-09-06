@@ -298,6 +298,21 @@ class TestSshCommandTool(unittest.TestCase):
             try:
                 ctx = make_ctx()
                 ctx.operation_service = service
+                seen_params: dict[str, Any] = {}
+
+                def invoke(method: str, params: dict) -> dict:
+                    if method == "ssh_command":
+                        seen_params.update(params)
+                        return {
+                            "ok": True,
+                            "output": "mock output",
+                            "exit_code": 0,
+                            "duration": 0.1,
+                            "operationId": params["operationId"],
+                        }
+                    return {"ok": True}
+
+                ctx.rust_bridge.ipc_invoke.side_effect = invoke
                 with patch(
                     "strands_backend.tools.assess_command",
                     return_value={
@@ -314,6 +329,7 @@ class TestSshCommandTool(unittest.TestCase):
                 self.assertEqual(operation["state"], "succeeded")
                 self.assertEqual(operation["exit_code"], 0)
                 self.assertNotIn("command", operation)
+                self.assertEqual(seen_params["operationId"], result["operation_id"])
             finally:
                 service.close()
 
@@ -366,6 +382,17 @@ class TestSshCommandTool(unittest.TestCase):
             try:
                 ctx = make_ctx()
                 ctx.operation_service = service
+                ctx.rust_bridge.ipc_invoke.side_effect = lambda method, params: (
+                    {
+                        "ok": True,
+                        "output": "mock output",
+                        "exit_code": 0,
+                        "duration": 0.1,
+                        "operationId": params["operationId"],
+                    }
+                    if method == "ssh_command"
+                    else {"ok": True}
+                )
                 with patch(
                     "strands_backend.tools.assess_command",
                     return_value={
@@ -385,6 +412,78 @@ class TestSshCommandTool(unittest.TestCase):
                 operation = service.get_operation(result["operation_id"])
                 self.assertEqual(operation["state"], "succeeded")
                 self.assertIsNotNone(operation["approved_at"])
+            finally:
+                service.close()
+
+    def test_durable_operation_is_indeterminate_when_echoed_id_mismatches(self):
+        """W3: an uncorrelated SSH reply must not finalize an operation."""
+        from project_service import ProjectService
+        from strands_backend.tools import execute_via_ssh
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx()
+                ctx.operation_service = service
+                ctx.rust_bridge.ipc_invoke.side_effect = lambda method, _params: (
+                    {
+                        "ok": True,
+                        "output": "mock output",
+                        "exit_code": 0,
+                        "duration": 0.1,
+                        "operationId": "different-operation",
+                    }
+                    if method == "ssh_command"
+                    else {"ok": True}
+                )
+                with patch(
+                    "strands_backend.tools.assess_command",
+                    return_value={
+                        "decision": "allow",
+                        "risk": {"level": "L0", "high_risk": False},
+                        "impact": {"segments": [], "max_risk_l": 0},
+                        "risk_l": 0,
+                    },
+                ):
+                    result = execute_via_ssh(ctx, "uname -a")
+
+                self.assertEqual(result["status"], "indeterminate")
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "indeterminate")
+                self.assertEqual(operation["error_code"], "operation_id_mismatch")
+            finally:
+                service.close()
+
+    def test_durable_operation_is_indeterminate_when_bridge_is_unavailable(self):
+        """W3: a local bridge error cannot prove that remote dispatch failed."""
+        from project_service import ProjectService
+        from strands_backend.tools import execute_via_ssh
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx(rust_bridge=make_mock_rust_bridge({
+                    "status": "unavailable",
+                    "reason": "rust_bridge_not_configured",
+                }))
+                ctx.operation_service = service
+                with patch(
+                    "strands_backend.tools.assess_command",
+                    return_value={
+                        "decision": "allow",
+                        "risk": {"level": "L0", "high_risk": False},
+                        "impact": {"segments": [], "max_risk_l": 0},
+                        "risk_l": 0,
+                    },
+                ):
+                    result = execute_via_ssh(ctx, "uname -a")
+
+                self.assertEqual(result["status"], "unavailable")
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "indeterminate")
+                self.assertEqual(operation["error_code"], "rust_response_error")
             finally:
                 service.close()
 

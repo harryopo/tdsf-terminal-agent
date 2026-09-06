@@ -6,6 +6,14 @@
 
 ---
 
+### 37.127 operation ID 已在 Python/Rust SSH 之间可核对（2026-09-06 ✅）
+
+**已实现**：持久 operation 创建后，Python 将它作为 `operationId` 发送到 Rust 反向 RPC；Rust 验证非空字符串并在 `SshCommandResult` 回显，直接前端调用保持字段可选。Python 仅接受相同 ID 的正常回包继续 `dispatched → succeeded/failed`；ID 缺失/错配、桥接 unavailable/error 都从 `dispatching` 进入 `indeterminate`，不生成 completed evidence。这里的“可核对”仅指本地跨进程消息关联，不是对远端执行的猜测、幂等或自动重试。
+
+**验证与边界**：Python 账本、审批、回包错配、桥接不可用和 endpoint 定向回归 **47 passed**；Rust SSH 结果 camelCase/可选 ID 序列化 **4 passed**。`cargo fmt --check` 暴露仓库已有的全局格式差异；误触发的无关格式改动已恢复，不混入本任务。尚未用保存 SSH profile 做桌面原生执行与日志取证，也尚未解决项目 `.venv` 启动器和全局 Python `langgraph` 缺失造成的全量侧车回归限制。
+
+**下一步**：先做 W0 原生保存 profile 的连接、历史重开、每会话确认 FIFO、真实执行与 operation ID 日志对应；知识库普通 Markdown/显式 TeachCard 分流与教学命令终端化仍按方案书验收，不用模拟数据替代。
+
 ### 37.126 W3 durable operation 已接入 Python SSH 主链（2026-09-06 ✅，Rust 关联待做）
 
 **已实现**：运行时 `ProjectService` 被显式注入 Strands 工具上下文。除风险拒绝外，每次 SSH 工具调用都创建不含命令原文的 `operation_id/intent_id/hash`，把审批、派发和结束分别落到状态机；账本缺失时派发前失败关闭。拒绝/超时/本地前置失败会取消，IPC 抛异常与“回包或成功结果未能持久化”都为 `indeterminate`，只有明确零退出码且最终状态已落盘才是 `succeeded`。解析出的远端 endpoint 也在派发前记录，返回结果带有 operation 身份供上层关联。

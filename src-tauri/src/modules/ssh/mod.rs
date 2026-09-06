@@ -882,6 +882,8 @@ pub struct SshCommandResult {
     pub exit_code: i32,
     /// 执行耗时 (秒, f64)
     pub duration: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 /// ssh_command 命令: 执行单条 SSH 命令并返回结构化结果 (exec 模式, 非 PTY)
@@ -920,11 +922,13 @@ pub async fn ssh_command(
     session_id: u32,
     command: String,
     timeout: Option<u64>,
+    operation_id: Option<String>,
 ) -> Result<SshCommandResult, String> {
     let start = std::time::Instant::now();
     log::info!(
-        "[ssh] exec command: id={} cmd={:?} timeout={:?}s",
+        "[ssh] exec command: id={} operation_id={:?} cmd={:?} timeout={:?}s",
         session_id,
+        operation_id,
         command,
         timeout.unwrap_or(30)
     );
@@ -959,6 +963,7 @@ pub async fn ssh_command(
                 stderr: stderr_str,
                 exit_code: out.exit_code,
                 duration,
+                operation_id,
             })
         }
         Err(e) => {
@@ -978,6 +983,7 @@ pub async fn ssh_command(
                 stderr: err_msg,
                 exit_code: -1,
                 duration,
+                operation_id,
             })
         }
     }
@@ -1147,6 +1153,7 @@ mod tests {
             stderr: "warn line".to_string(),
             exit_code: 0,
             duration: 0.123,
+            operation_id: Some("operation-1".to_string()),
         };
         let json = serde_json::to_string(&result).unwrap();
         // camelCase 字段名验证
@@ -1156,6 +1163,7 @@ mod tests {
         assert!(json.contains("\"output\":\"uptime output\""));
         assert!(json.contains("\"stderr\":\"warn line\""));
         assert!(json.contains("\"duration\":0.123"));
+        assert!(json.contains("\"operationId\":\"operation-1\""));
     }
 
     #[test]
@@ -1168,11 +1176,13 @@ mod tests {
             stderr: String::new(),
             exit_code: 0,
             duration: 0.1,
+            operation_id: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"stderr\":\"\""));
         assert!(json.contains("\"output\":\"x\""));
         assert!(json.contains("\"ok\":true"));
+        assert!(!json.contains("operationId"));
     }
 
     #[test]
@@ -1184,6 +1194,7 @@ mod tests {
             stderr: "SSH session not found: id=999".to_string(),
             exit_code: -1,
             duration: 0.001,
+            operation_id: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"ok\":false"));
@@ -1202,6 +1213,7 @@ mod tests {
             stderr: String::new(),
             exit_code: 42,
             duration: 1.5,
+            operation_id: None,
         };
         let cloned = result.clone();
         assert_eq!(cloned.ok, result.ok);

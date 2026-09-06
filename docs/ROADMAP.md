@@ -10,10 +10,10 @@
 - [x] 删除旧的 OSC 7 自动教学触发器；教学命令卡只在用户点击且精确匹配真实终端结果后继续讲解。
 - [x] 实际启动 Tauri 开发端：桌面进程和 Python sidecar ready，sidecar 注册 121 个 RPC、知识库保有 3969 条官方条目；这只是启动取证，不是 SSH/xterm/UI 原生回归。
 - [x] SSH Agent 工具只在明确 `exit_code == 0` 时报告成功；非零、缺失或非法退出码进入 error/audit/evidence，`test_tools.py` 185 项通过。
-- [x] W3 durable operation 已接入 Python SSH 主链：命令原文不落盘；审批、派发、退出码与持久化失败按状态机记录；账本不可用不派发，未知派发结果为 `indeterminate`；定向 Python 回归 45 项通过。
+- [x] W3 durable operation 已跨 Python/Rust SSH 主链关联：命令原文不落盘；审批、派发、退出码与持久化失败按状态机记录；`operationId` 必须原样回显，账本不可用或回包无法归因时为 `indeterminate`；Python 定向回归 47 项、Rust 序列化 4 项通过。
 - [ ] W0：以保存的 SSH profile 完成连接、历史重开、确认 FIFO、知识库工具事件、教学成功/失败/超时及 leaf 隔离的原生取证。
 - [ ] W2 后续：将内存 terminal block 演进为附加式 `CommandCompletion`，覆盖重复 OSC、乱序、重连和跨 leaf。
-- [ ] W3：将 `operation_id/intent_id` 透传 Rust SSH RPC 与回包，覆盖跨进程关联、派发异常、非零退出码、重启后只展示证据等待人工确认、重复派发防护及真实 SSH 取证。
+- [ ] W3/W0：以保存 profile 进行原生 SSH 取证，覆盖 operation ID 日志关联、确认 FIFO、非零退出码、派发中断/重启后只展示证据等待人工确认；不做自动重试或重复派发。
 
 ### 2026-09-05 Agent 架构事实校准
 
