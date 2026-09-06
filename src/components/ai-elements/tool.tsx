@@ -13,6 +13,7 @@ import {
   useTeachingExecutionStore,
 } from "@/modules/terminal/lib/teachingExecutionStore";
 import {
+  ArrowDown01Icon,
   BookOpen01Icon,
   Cancel01Icon,
   CheckListIcon,
@@ -1156,53 +1157,74 @@ function KnowledgeSearchOutput({ data }: { data: Record<string, unknown> }) {
     );
   }
 
+  const query = typeof data.query === "string" ? data.query : "";
+
   return (
-    <div className="space-y-1">
-      <div className="space-y-1">
-        {hits.map((hit, idx) => {
-          const title = hit.title || "（无标题）";
-          // plainSummary 剥残留 markdown 符号（###/---/表格竖线），TDSF 2026-08-31
-          const snippet = plainSummary(hit.content, KNOWLEDGE_SNIPPET_CHARS);
-          const truncatedSnippet =
-            snippet.length > KNOWLEDGE_SNIPPET_CHARS
-              ? `${snippet.slice(0, KNOWLEDGE_SNIPPET_CHARS)}…`
-              : snippet;
-          return (
-            <div
-              key={hit.url ? `${hit.url}-${idx}` : idx}
-              className="rounded border border-border/40 bg-muted/20 px-2 py-1.5"
-            >
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground">
-                  {title}
-                </span>
-                {hit.category ? (
-                  <span className="shrink-0 rounded bg-foreground/8 px-1 py-0.5 text-[9px] text-muted-foreground">
-                    {categoryGroupLabel(hit.category)}
+    <Collapsible className="rounded border border-border/40 bg-muted/20">
+      <CollapsibleTrigger
+        className="group flex w-full items-center gap-1.5 px-2 py-1.5 text-left hover:bg-muted/30"
+        aria-label={`展开知识库检索结果（${hits.length} 条）`}
+      >
+        <HugeiconsIcon
+          icon={BookOpen01Icon}
+          size={12}
+          strokeWidth={1.75}
+          className="shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground">
+          知识库命中{query ? ` · ${query}` : ""}
+        </span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          {hits.length} 条
+        </span>
+        <HugeiconsIcon
+          icon={ArrowDown01Icon}
+          size={12}
+          strokeWidth={1.75}
+          className="shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="terax-collapsible-content border-t border-border/40">
+        <div className="space-y-1 px-2 py-1.5">
+          {hits.map((hit, idx) => {
+            const title = hit.title || "（无标题）";
+            // plainSummary 剥残留 markdown 符号（###/---/表格竖线），TDSF 2026-08-31
+            const snippet = plainSummary(hit.content, KNOWLEDGE_SNIPPET_CHARS);
+            const truncatedSnippet =
+              snippet.length > KNOWLEDGE_SNIPPET_CHARS
+                ? `${snippet.slice(0, KNOWLEDGE_SNIPPET_CHARS)}…`
+                : snippet;
+            return (
+              <div
+                key={hit.url ? `${hit.url}-${idx}` : idx}
+                className="rounded border border-border/40 bg-muted/20 px-2 py-1.5"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground">
+                    {title}
                   </span>
+                  {hit.category ? (
+                    <span className="shrink-0 rounded bg-foreground/8 px-1 py-0.5 text-[9px] text-muted-foreground">
+                      {categoryGroupLabel(hit.category)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                    {sourceGroupLabel(hit.source || "")}
+                  </span>
+                </div>
+                {truncatedSnippet ? (
+                  <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                    {truncatedSnippet}
+                  </p>
                 ) : null}
               </div>
-              <div className="mt-0.5 flex items-center gap-1.5">
-                <span className="shrink-0 text-[10px] text-muted-foreground/70">
-                  {sourceGroupLabel(hit.source || "")}
-                </span>
-              </div>
-              {truncatedSnippet ? (
-                <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
-                  {truncatedSnippet}
-                </p>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-      <div className="text-[10px] text-muted-foreground">
-        {hits.length} 条结果
-        {typeof data.query === "string" && data.query
-          ? ` · 「${data.query}」`
-          : ""}
-      </div>
-    </div>
+            );
+          })}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

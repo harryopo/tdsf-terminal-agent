@@ -4741,3 +4741,12 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **历史风险线索**：本地 agent history 表明早期对话曾经由直接 SSH 工具创建远端健康检查脚本/计划任务。本轮未调用该路径；后续教学验收继续以 §37.112 的学生显式点击、可见 PTY 和精确结果关联为唯一执行链，确保不重复旧的后台直写行为。
 
 **交接动作**：原生控制面可用（或用户已在启动程序中建好连接并提供当前界面）后，按本节上方四项按序实测；每项先保存对应 `.tdsf-data/dev-run.log` / agent log 证据，失败后再做根因调研，禁止凭猜测修改 SSH、OSC 或 Agent 逻辑。
+
+
+### 37.114 当前交接：确认模式边界、SSH 成功回包与知识库命中呈现（2026-09-06 ✅）
+
+- **确认模式语义不变**：已识别且无状态变更的环境感知命令可自动执行；写入、包管理、服务/防火墙规则、网络副作用和未知命令逐条进入同会话 FIFO 审批。
+- **协议错配已修复**：Rust SSH 成功回包为 `exitCode`，Python 账本工具读取 `exit_code`。现在只在唯一 IPC 边界归一化，真实 `exitCode: 0` 会完成 durable operation；缺失/非法退出码仍 fail-closed 记 error。
+- **知识库工具 UI**：成功命中默认显示“知识库命中 · 查询 · N 条”，点击书本/箭头才显示真实 title/source/category/snippet；空态和失败态仍直接可见。知识检索不再伪装为教学，TeachCard 仍仅由显式 `tdsf:teach` 触发。
+- **实际取证与限制**：已启动 Vite/Tauri/sidecar，保存 SSH profile 测试连接成功并创建工作区。Computer Use 能操作连接，但悬浮 Agent 输入没有可写 UIA 焦点；本轮原生确认连接与模式文案，SSH 回包和折叠行为由定向回归覆盖。
+- **定向门禁**：Python 6/6（SSH 回包 3 项、确认模式只读/写入/FIFO 3 项）、Vitest 30/30、typecheck、lint、build:web、diff check 均通过。不得混入用户现有 WIP（`CLAUDE.md`、两份方案文档、`useRemoteFileTree.ts` 删除、`agent-logs/`）。

@@ -2772,3 +2772,16 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **当前阻塞与下一步**：当前 Computer Use 接口只暴露浏览器 surface，没有原生 Tauri app 控制能力，因而无法在真实桌面中点击已保存的密码 profile、建立原生 SSH session、观察 xterm OSC 633 和教学卡回传。此为测试设施边界，不是产品错误。可继续自动完成的工作是保留后端日志监测与静态/定向门禁；完整验收仍需原生控制能力可用，或由用户在已启动的桌面程序中建立一次保存连接后再提供界面状态。届时按 §37.112 的本地成功/非零/超时/同 leaf 竞争、SSH Bash/Zsh 含分号命令、脱敏结果和真实模型等待行为逐项取证。
 
 **复盘**：① “进程启动成功”与“原生交互链路验收成功”必须分开记录；浏览器本地页不能冒充桌面 IPC。② 凭据验证应验证 profile 存在与凭据边界，不能为让 CLI 探针通过而绕过 keyring 或读取秘密。③ 发现既往远程写入历史时，优先收紧本轮执行边界并保留审计线索，而非复制旧路径。④ 运行日志无异常时，正确动作是维持监测并完成验收设计，而不是为了“继续开发”凭空改代码。
+
+
+### 37.114 确认模式读写边界回归 + SSH 退出码协议修复 + 知识库命中折叠（2026-09-06 ✅）
+
+**问题与根因**：原生 Tauri/保存 SSH profile 实测中，`uname -s` 等只读命令已拿到真实输出，却在 Agent 工具卡上报 `missing_or_invalid_exit_code`。Rust `SshCommandResult` 使用 camelCase 序列化，实际 IPC 返回 `exitCode`；Python `execute_via_ssh` 只读取 `exit_code`，使成功执行被错误归为失败。知识库命中则会把全部条目直接铺开，占据工具输出空间。
+
+**最小修复**：只在 Rust→Python 协议边界把 `exitCode` 归一为内部 `exit_code`，保留已有 snake_case 测试替身及 `operationId` 原样传递。成功命中改为带书本图标、查询、命中数和折叠箭头的二级折叠；只有用户展开时才渲染真实 title/source/category/snippet。确认策略不变：已识别的环境读取可直接执行，写入或状态变更仍进入逐条审批 FIFO。
+
+**原生取证与限制**：本轮实际载入保存 profile，测试连接成功并创建 SSH 工作区；状态栏和 Agent 弹窗均显示只读直行/变更确认说明。Windows 自动化桥对悬浮对话输入未暴露可写 UIA 焦点，`set_value` 返回 UIA 缓存只读错误；未绕过限制伪造模型交互。此前同一原生调用已复现“真实输出 + 错误状态”，本次以协议回归验证修复。
+
+**门禁**：Python 目标回归 6/6（SSH 回包 3 项、确认模式只读/写入/FIFO 3 项）；`tool.test.tsx` 30/30；`pnpm typecheck`、`pnpm lint`、`pnpm build:web`、`git diff --check` 均通过。用户既有 `CLAUDE.md`、方案文档、资源管理器删除及 `agent-logs/` WIP 未纳入本次改动。
+
+**下一步**：待自动化桥恢复可写焦点或用户手工发送测试问题后，补录原生 `uname -s` 成功卡和知识库二级展开；再验证写操作只展示审批队首的 FIFO 行为，不以测试虚拟机可破坏为由放宽确认模式。

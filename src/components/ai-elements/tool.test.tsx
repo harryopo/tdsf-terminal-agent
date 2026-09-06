@@ -253,7 +253,7 @@ describe("Tool — knowledge_search 知识卡片（TDSF 2026-08-31 双库）", (
     ],
   };
 
-  it("渲染知识卡片列表：title + source 中文标签 + 摘要 + category 徽标", () => {
+  it("默认折叠命中内容，展开后渲染知识卡片列表", () => {
     render(
       <Tool
         toolName="knowledge_search"
@@ -263,6 +263,11 @@ describe("Tool — knowledge_search 知识卡片（TDSF 2026-08-31 双库）", (
         defaultOpen
       />,
     );
+    expect(
+      screen.getByLabelText("展开知识库检索结果（2 条）"),
+    ).toBeTruthy();
+    expect(screen.queryByText("systemctl 服务管理")).toBeNull();
+    fireEvent.click(screen.getByLabelText("展开知识库检索结果（2 条）"));
     expect(screen.getByText("systemctl 服务管理")).toBeTruthy();
     expect(screen.getByText("systemd 手册")).toBeTruthy();
     expect(screen.getByText("系统管理")).toBeTruthy();
@@ -270,11 +275,6 @@ describe("Tool — knowledge_search 知识卡片（TDSF 2026-08-31 双库）", (
     // 摘要（content 前 150 字内原文）
     expect(
       screen.getByText(/restart 停止再启动/),
-    ).toBeTruthy();
-    // 裸 JSON 不再出现（title 不以 JSON 形式整体渲染）
-    // 注：JSX 插值把 "2 条结果" 拆为多文本节点，用 textContent 正则匹配
-    expect(
-      screen.getByText((_, el) => el?.textContent === "2 条结果 · 「systemctl 服务」"),
     ).toBeTruthy();
   });
 
