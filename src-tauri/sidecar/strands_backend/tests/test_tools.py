@@ -287,8 +287,8 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertEqual(result["reason"], "missing_or_invalid_exit_code")
         self.assertEqual(evidence.call_args.kwargs["status"], "error")
 
-    def test_durable_operation_reaches_succeeded_only_after_exit_zero(self):
-        """W3: an SSH exit code of zero finalizes its durable operation."""
+    def test_durable_operation_accepts_rust_camel_case_exit_code(self):
+        """W3: Rust's `exitCode` response finalizes the durable operation."""
         from project_service import ProjectService
         from strands_backend.tools import execute_via_ssh
 
@@ -306,7 +306,7 @@ class TestSshCommandTool(unittest.TestCase):
                         return {
                             "ok": True,
                             "output": "mock output",
-                            "exit_code": 0,
+                            "exitCode": 0,
                             "duration": 0.1,
                             "operationId": params["operationId"],
                         }

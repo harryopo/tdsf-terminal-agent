@@ -1293,6 +1293,12 @@ def execute_via_ssh(
             "error": f"ipc_invoke 异常: {e}",
         })
 
+    # Rust 的 Tauri 回包采用 camelCase（`exitCode` / `operationId`），
+    # Python 工具与账本内部使用 snake_case。只在这个协议边界归一化，
+    # 避免有效退出码被误判为缺失。
+    if isinstance(result, dict) and "exit_code" not in result and "exitCode" in result:
+        result = {**result, "exit_code": result["exitCode"]}
+
     # 4. 整理返回结果
     if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
         _transition_operation("indeterminate", error_code="rust_response_error")
