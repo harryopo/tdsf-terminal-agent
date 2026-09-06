@@ -1210,10 +1210,28 @@ async fn handle_reverse_request(
                 .ok_or("ssh_command: missing or invalid command")?
                 .to_string();
             let timeout = params.get("timeout").and_then(|v| v.as_u64());
+            let operation_id = match params.get("operationId") {
+                Some(value) => {
+                    let value = value
+                        .as_str()
+                        .ok_or("ssh_command: operationId must be a string")?;
+                    if value.is_empty() {
+                        return Err("ssh_command: operationId must not be empty".into());
+                    }
+                    Some(value.to_string())
+                }
+                None => None,
+            };
 
             let ssh_state = app.state::<crate::ssh::SshState>();
-            let result =
-                crate::ssh::ssh_command(ssh_state, session_id, command, timeout).await?;
+            let result = crate::ssh::ssh_command(
+                ssh_state,
+                session_id,
+                command,
+                timeout,
+                operation_id,
+            )
+            .await?;
 
             serde_json::to_value(&result)
                 .map_err(|e| format!("ssh_command serialize failed: {}", e))

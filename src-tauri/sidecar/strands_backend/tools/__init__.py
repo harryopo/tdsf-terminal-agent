@@ -1272,11 +1272,14 @@ def execute_via_ssh(
         })
 
     try:
-        result = ctx.rust_bridge.ipc_invoke("ssh_command", {
+        ssh_params = {
             "sessionId": session_id_int,
             "command": command,
             "timeout": int(timeout),
-        })
+        }
+        if operation_id:
+            ssh_params["operationId"] = operation_id
+        result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
     except Exception as e:
         logger.exception(
             f"execute_via_ssh ipc_invoke exception: tool={tool_name}, "
@@ -1291,6 +1294,29 @@ def execute_via_ssh(
         })
 
     # 4. 整理返回结果
+    if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
+        _transition_operation("indeterminate", error_code="rust_response_error")
+        return _complete_after_execution({
+            "status": result.get("status", "error"),
+            "command": command,
+            "ssh_session_id": session_id,
+            "reason": result.get("reason", ""),
+            "error": result.get("error", result.get("message", "")),
+        })
+
+    if operation_id and (
+        not isinstance(result, dict) or result.get("operationId") != operation_id
+    ):
+        _transition_operation("indeterminate", error_code="operation_id_mismatch")
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "reason": "operation_id_mismatch",
+            "message": "SSH 回包缺少或不匹配操作标识；执行状态不确定。",
+        })
+
     if not _transition_operation("dispatched"):
         return _complete_after_execution({
             "status": "indeterminate",
@@ -1299,16 +1325,6 @@ def execute_via_ssh(
             "target_endpoint": target_endpoint,
             "reason": "operation_ledger_transition_failed",
             "message": "SSH 已返回响应，但派发状态未持久化；执行状态不确定。",
-        })
-
-    if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
-        _transition_operation("failed", error_code="rust_response_error")
-        return _complete_after_execution({
-            "status": result.get("status", "error"),
-            "command": command,
-            "ssh_session_id": session_id,
-            "reason": result.get("reason", ""),
-            "error": result.get("error", result.get("message", "")),
         })
 
     # A transport response alone does not prove command success. Require a
