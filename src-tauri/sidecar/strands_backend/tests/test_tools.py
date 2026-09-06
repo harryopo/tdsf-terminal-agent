@@ -159,6 +159,10 @@ class TestRiskChecker(unittest.TestCase):
         self.assertTrue(result["high_risk"])
         self.assertIn("reboot", result["matched_rules"])
 
+    def test_last_reboot_is_not_high_risk(self):
+        result = RiskChecker.check("last reboot | head -n 2")
+        self.assertFalse(result["high_risk"])
+
     def test_shutdown_now_high_risk(self):
         """shutdown -h now 应命中 reboot 规则"""
         result = RiskChecker.check("shutdown -h now")

@@ -42,18 +42,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSshStore } from "../../ssh-explorer/sshStore";
 import type { SpaceMeta } from "../lib/store";
 import { useSpaces } from "../lib/useSpaces";
-import {
-  useWorkspaceEnvStore,
-  type WorkspaceEnv,
-} from "@/modules/workspace";
+import { useWorkspaceEnvStore, LOCAL_WORKSPACE } from "@/modules/workspace";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** TDSF 2026-08-01: 初始模式（欢迎界面可预设 local/wsl/ssh） */
   initialMode?: Mode;
-  /** 本地 Space 默认使用的环境 (local 或当前 WSL) */
-  defaultEnv: WorkspaceEnv;
   /** 本地 Space 默认根目录 */
   defaultRoot: string | null;
   /** Space 创建成功后的回调, 由 App.tsx 负责创建第一个 Tab 并切换 */
@@ -71,7 +66,6 @@ function makeProfileId(host: string, port: number, user: string): string {
 export function SpaceCreateDialog({
   open,
   onOpenChange,
-  defaultEnv,
   defaultRoot,
   onCreated,
   initialMode = "local",
@@ -113,7 +107,8 @@ export function SpaceCreateDialog({
   const [testMessage, setTestMessage] = useState("");
 
   const defaultName = useMemo(() => {
-    if (mode === "ssh") return host.trim() ? `${user.trim()}@${host.trim()}` : "";
+    if (mode === "ssh")
+      return host.trim() ? `${user.trim()}@${host.trim()}` : "";
     if (mode === "wsl") return wslDistro ? `WSL ${wslDistro}` : "";
     return `Space ${spaces.length + 1}`;
   }, [mode, host, user, wslDistro, spaces.length]);
@@ -246,7 +241,8 @@ export function SpaceCreateDialog({
     setName(`${p.user}@${p.host}`);
   };
 
-  const validateSsh = (): (Omit<SshConnectParams, "port"> & { port: number }) | null => {
+  const validateSsh = ():
+    (Omit<SshConnectParams, "port"> & { port: number }) | null => {
     if (!host.trim() || !user.trim()) {
       setError("主机和用户名为必填项");
       return null;
@@ -289,7 +285,7 @@ export function SpaceCreateDialog({
     const meta = createSpace({
       name: spaceName,
       root: defaultRoot,
-      env: defaultEnv,
+      env: LOCAL_WORKSPACE,
     });
     onCreated(meta);
     onOpenChange(false);
@@ -415,8 +411,8 @@ export function SpaceCreateDialog({
         <DialogHeader>
           <DialogTitle>新建工作区 (New Space)</DialogTitle>
           <DialogDescription>
-            选择本地、WSL 或 SSH 服务器工作区, 每个 Space 可包含多个
-            Terminal Tab。
+            选择本地、WSL 或 SSH 服务器工作区, 每个 Space 可包含多个 Terminal
+            Tab。
           </DialogDescription>
         </DialogHeader>
 
@@ -458,7 +454,11 @@ export function SpaceCreateDialog({
                 : "border-border bg-background text-muted-foreground hover:bg-muted",
             )}
           >
-            <HugeiconsIcon icon={CloudServerIcon} size={14} strokeWidth={1.75} />
+            <HugeiconsIcon
+              icon={CloudServerIcon}
+              size={14}
+              strokeWidth={1.75}
+            />
             SSH 服务器
           </button>
         </div>
@@ -694,7 +694,9 @@ export function SpaceCreateDialog({
                   variant="outline"
                   size="sm"
                   onClick={() => void handleTestConnection()}
-                  disabled={submitting || testing || !host.trim() || !user.trim()}
+                  disabled={
+                    submitting || testing || !host.trim() || !user.trim()
+                  }
                 >
                   {testing && (
                     <HugeiconsIcon
@@ -708,7 +710,9 @@ export function SpaceCreateDialog({
                 </Button>
                 {testResult && (
                   <span
-                    title={testResult === "ok" ? undefined : (testMessage || undefined)}
+                    title={
+                      testResult === "ok" ? undefined : testMessage || undefined
+                    }
                     className={cn(
                       "min-w-0 flex-1 truncate text-[11px]",
                       testResult === "ok"

@@ -1,5 +1,9 @@
 import { useManagedAgentsStore } from "@/modules/agents/store/managedAgentsStore";
-import { isSessionConnected, selectSessionCurrentPath, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import {
+  isSessionConnected,
+  selectSessionCurrentPath,
+  useSshStore,
+} from "@/modules/ssh-explorer/sshStore";
 import type { Tab } from "@/modules/tabs";
 import {
   findLeafCwd,
@@ -53,6 +57,7 @@ type Params = {
   explorerRoot: string | null;
   launchCwd: string | null;
   home: string | null;
+  wslDistro: string | null;
   openPreviewTab: (url: string) => void;
   newAgentTab: (
     cwd: string | undefined,
@@ -91,9 +96,7 @@ export function useAiLiveBridge(params: Params) {
     // 取值逻辑与原 inline 实现一致（实时查 sshStore，SSH 重连后 rustSessionId 会变）。
     const sshRustSessionId = (): number | null => {
       const state = useSshStore.getState();
-      const active = state.sessions.find(
-        (s) => s.id === state.activeSessionId,
-      );
+      const active = state.sessions.find((s) => s.id === state.activeSessionId);
       if (active && isSessionConnected(active)) return active.rustSessionId;
       const fallback = state.sessions.find((s) => isSessionConnected(s));
       return fallback ? fallback.rustSessionId : null;
@@ -162,7 +165,10 @@ export function useAiLiveBridge(params: Params) {
       if (sshLeafId !== null && sshLeafId !== undefined) {
         // 优先从 sshStore 读当前 SSH 会话的远端 cwd
         const sshState = useSshStore.getState();
-        const cwd = selectSessionCurrentPath(sshState, sshState.activeSessionId);
+        const cwd = selectSessionCurrentPath(
+          sshState,
+          sshState.activeSessionId,
+        );
         if (cwd) return cwd;
         // currentPath 未就绪时回退到 home 或 root
         const active = sshState.sessions.find(
@@ -202,7 +208,9 @@ export function useAiLiveBridge(params: Params) {
       const { activeId, tabs } = ref.current;
       const tab = tabs.find((x) => x.id === activeId);
       if (tab?.kind !== "terminal") return null;
-      return terminalRefs.current.has(tab.activeLeafId) ? tab.activeLeafId : null;
+      return terminalRefs.current.has(tab.activeLeafId)
+        ? tab.activeLeafId
+        : null;
     };
 
     // TDSF 魔改 (2026-08-09): 整段注入核心逻辑（inject_terminal 事件与
@@ -212,7 +220,8 @@ export function useAiLiveBridge(params: Params) {
       if (sshLeafId !== null && sshLeafId !== undefined) {
         const term = terminalRefs.current.get(sshLeafId);
         if (term) {
-          term.write(t); term.focus();
+          term.write(t);
+          term.focus();
           // TDSF B1 (2026-08-29): agent 注入的命令 → 下一条 block 标 author=agent
           useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
           return true;
@@ -224,7 +233,8 @@ export function useAiLiveBridge(params: Params) {
       if (tab?.kind !== "terminal") return false;
       const term = terminalRefs.current.get(tab.activeLeafId);
       if (!term) return false;
-      term.write(t); term.focus();
+      term.write(t);
+      term.focus();
       // TDSF B1 (2026-08-29): 同上（本地终端注入路径）
       useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
       return true;
@@ -296,7 +306,10 @@ export function useAiLiveBridge(params: Params) {
         const injected = tryHumanTyping(text) || injectFnCore(text);
         if (!injected) {
           useTeachingExecutionStore.getState().cancel(executionId);
-          return { ok: false as const, reason: "terminal-unavailable" as const };
+          return {
+            ok: false as const,
+            reason: "terminal-unavailable" as const,
+          };
         }
         return { ok: true as const, executionId };
       },
@@ -408,7 +421,9 @@ export function useAiLiveBridge(params: Params) {
         const t = tabs.find((x) => x.id === activeId);
         if (t?.kind === "terminal") {
           if (t.private) return [];
-          return useTerminalBlocksStore.getState().getRecent(t.activeLeafId, 10);
+          return useTerminalBlocksStore
+            .getState()
+            .getRecent(t.activeLeafId, 10);
         }
         return [];
       },
@@ -417,13 +432,18 @@ export function useAiLiveBridge(params: Params) {
       // workspace cwd（explorerRoot/launchCwd/home 回退）存在 ≠ 终端已打开——
       // 无终端时 transport 据此把 connection_mode 标为 none（而非误报 local）。
       // 判定逻辑与 getTerminalContext 的活跃终端判定保持一致（SSH 优先）。
-      getActiveTerminalSession: (): "ssh" | "local" | null => {
+      getActiveTerminalSession: (): "ssh" | "local" | "wsl" | null => {
         const sshLeafId = ref.current.getSshLeafId?.();
         if (sshLeafId !== null && sshLeafId !== undefined) return "ssh";
         const { activeId, tabs } = ref.current;
         const t = tabs.find((x) => x.id === activeId);
-        return t?.kind === "terminal" ? "local" : null;
+        return t?.kind === "terminal"
+          ? ref.current.wslDistro
+            ? "wsl"
+            : "local"
+          : null;
       },
+      getWslDistro: () => ref.current.wslDistro,
     });
 
     // TDSF 魔改 (2026-08-09): 监听 sidecar inject_terminal notification

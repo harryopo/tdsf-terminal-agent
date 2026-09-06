@@ -98,6 +98,7 @@ describe("TodoStrip — completedAt 完成时间戳（T3）", () => {
       { id: "b", title: "步骤二", status: "pending" },
     ]);
     render(<TodoStrip sessionId={SESSION} />);
+    expect(screen.getByText("任务清单")).toBeTruthy();
     expect(screen.getByText("1/2")).toBeTruthy();
   });
 

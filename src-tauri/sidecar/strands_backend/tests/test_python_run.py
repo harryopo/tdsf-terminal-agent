@@ -23,6 +23,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # 确保能 import strands_backend（对齐 test_tools.py 的 sys.path 处理）
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -48,6 +49,7 @@ def make_ctx(
     workspace: str = "",
     ssh_session_id: str = "",
     permission_level: int = 2,
+    wsl_distro: str = "",
 ) -> ToolContext:
     """构建测试用 ToolContext（event_bus=None 跳过事件推送）"""
     return ToolContext(
@@ -58,6 +60,7 @@ def make_ctx(
         ssh_session_id=ssh_session_id,
         permission_level=permission_level,
         workspace=workspace,
+        wsl_distro=wsl_distro,
     )
 
 
@@ -158,6 +161,22 @@ class TestPythonRunExecution(unittest.TestCase):
                 os.path.normcase(result2["stdout"].strip()),
                 os.path.normcase(str(tmp)),
             )
+
+    def test_wsl_runs_in_distro_without_windows_cwd(self):
+        ctx = make_ctx(workspace="/home/test", wsl_distro="Ubuntu-24.04")
+        with patch("strands_backend.tools.python_run.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "wsl-ok"
+            run.return_value.stderr = ""
+            result = invoke_python_run_tool({"code": "print('ok')"}, ctx)
+
+        self.assertEqual(result["status"], "success")
+        args, kwargs = run.call_args
+        self.assertEqual(
+            args[0][:6],
+            ["wsl.exe", "-d", "Ubuntu-24.04", "--cd", "/home/test", "--exec"],
+        )
+        self.assertIsNone(kwargs["cwd"])
 
 
 class TestPythonRunFailClosed(unittest.TestCase):

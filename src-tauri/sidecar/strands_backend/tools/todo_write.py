@@ -146,6 +146,9 @@ def invoke_todo_write_tool(
             "status": status,
         })
 
+    if not normalized:
+        return {"ok": False, "error": "todo list must contain at least one titled item"}
+
     # T3: completed 项填 completedAt（合并旧值——全量替换不重置完成时间）
     _merge_completed_at(normalized, previous)
 

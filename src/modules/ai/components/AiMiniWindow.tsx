@@ -41,10 +41,7 @@ import type { SessionMeta } from "../lib/sessions";
 import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
 import { useAgentsStore } from "../store/agentsStore";
 import { getOrCreateChat } from "../store/chatRuntime";
-import {
-  sessionsVisibleInWorkspace,
-  useChatStore,
-} from "../store/chatStore";
+import { sessionsVisibleInWorkspace, useChatStore } from "../store/chatStore";
 import { usePlanStore } from "../store/planStore";
 import { AgentStatusPill } from "./AgentStatusPill";
 import { WorkspaceGate } from "./WorkspaceGate";
@@ -206,6 +203,7 @@ function Body({
       />
 
       <PlanModeStrip />
+      <TodoStrip sessionId={sessionId} />
 
       <div className="flex min-h-0 flex-1 flex-col">
         {gated ? (
@@ -232,8 +230,6 @@ function Body({
       <div className="flex shrink-0 items-center gap-1.5 border-t border-border/40 px-3 py-1">
         <WorkspaceChip />
       </div>
-
-      <TodoStrip sessionId={sessionId} />
     </>
   );
 }
@@ -335,9 +331,7 @@ function Header({
 
 /** 工作区徽章：显示当前绑定的工作区，点击打开工作区总览（保持灰白色调） */
 function WorkspaceChip() {
-  const active = useSpaces((s) =>
-    s.spaces.find((x) => x.id === s.activeId),
-  );
+  const active = useSpaces((s) => s.spaces.find((x) => x.id === s.activeId));
   return (
     <button
       type="button"
@@ -359,7 +353,8 @@ function WorkspaceChip() {
   );
 }
 
-function estimateTokens(messages: UIMessage[]): number {  let chars = 0;
+function estimateTokens(messages: UIMessage[]): number {
+  let chars = 0;
   for (const m of messages) {
     for (const p of m.parts) {
       if (p.type === "text") {
@@ -396,7 +391,13 @@ function contextBreakdownRows(
   used: number,
 ): { label: string; tokens: number }[] {
   const msgTokens = estimateTokens(messages);
-  const total = used > 0 ? used : msgTokens + CONTEXT_TOOL_DEF_TOKENS + CONTEXT_SYS_PROMPT_TOKENS + CONTEXT_SKILL_TOKENS;
+  const total =
+    used > 0
+      ? used
+      : msgTokens +
+        CONTEXT_TOOL_DEF_TOKENS +
+        CONTEXT_SYS_PROMPT_TOKENS +
+        CONTEXT_SKILL_TOKENS;
   let remaining = Math.max(0, total);
   const rows = [
     { label: "消息", tokens: msgTokens },
@@ -438,7 +439,7 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
       : 0;
 
   return (
-      <Context usedTokens={used} maxTokens={max}>
+    <Context usedTokens={used} maxTokens={max}>
       <ContextTrigger className="h-6 gap-1 px-0 text-[10.5px]" />
       <ContextContent className="w-64 text-[11px]">
         <ContextContentHeader />
@@ -624,7 +625,8 @@ function SessionRow({
   active: boolean;
   onSelect: () => void;
   onDelete: () => void;
-}) {  return (
+}) {
+  return (
     <DropdownMenuItem
       onSelect={(e) => {
         // Don't dismiss if user clicked the trash icon — handle below.
@@ -687,9 +689,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
         className="size-14 rounded-lg opacity-90"
       />
       <div className="space-y-1.5">
-        <p className="text-[14px] font-semibold tracking-tight">
-          向 TDSF 提问
-        </p>
+        <p className="text-[14px] font-semibold tracking-tight">向 TDSF 提问</p>
         <p className="max-w-[18rem] text-[11.5px] leading-relaxed text-muted-foreground">
           TDSF 能感知当前终端 —— 工作目录、最近命令与输出。
         </p>

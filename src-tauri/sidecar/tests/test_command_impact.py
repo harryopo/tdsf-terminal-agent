@@ -272,6 +272,14 @@ class TestDenylist:
     def test_reboot_denied(self):
         assert analyze("reboot")["denied"] is True
 
+    def test_last_reboot_is_readonly_not_a_power_action(self):
+        result = analyze("who -b 2>/dev/null || last reboot | head -n 2")
+        assert result["denied"] is False
+        assert result["max_risk_l"] == 0
+
+    def test_reboot_in_compound_command_stays_denied(self):
+        assert analyze("echo start; sudo reboot")["denied"] is True
+
     def test_halt_denied(self):
         assert analyze("halt")["denied"] is True
 

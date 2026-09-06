@@ -45,7 +45,8 @@ type LiveSnapshot = {
   sshSessionId: number | null;
   sshConnection: string | null;
   terminalOutput: string | null;
-  terminalSession?: "ssh" | "local" | "none" | null;
+  terminalSession?: "ssh" | "local" | "wsl" | "none" | null;
+  wslDistro?: string | null;
 };
 
 const makeLive = (over: Partial<LiveSnapshot> = {}): LiveSnapshot => ({
@@ -158,14 +159,16 @@ describe("stripContextBlock — terminal-context 块剥离", () => {
 
 describe("CONTEXT_BLOCK_RE — 正则匹配", () => {
   it("匹配标准 terminal-context 块", () => {
-    expect(CONTEXT_BLOCK_RE.test("<terminal-context>abc</terminal-context>")).toBe(
-      true,
-    );
+    expect(
+      CONTEXT_BLOCK_RE.test("<terminal-context>abc</terminal-context>"),
+    ).toBe(true);
   });
 
   it("匹配带属性的 terminal-context 块", () => {
     expect(
-      CONTEXT_BLOCK_RE.test('<terminal-context kind="ssh">abc</terminal-context>'),
+      CONTEXT_BLOCK_RE.test(
+        '<terminal-context kind="ssh">abc</terminal-context>',
+      ),
     ).toBe(true);
   });
 
@@ -228,11 +231,32 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
   it("无 SSH 连接但本地终端已打开 → connection_mode: local，无 ssh_target", () => {
     const block = formatEnvironmentBlock(
       makeProbe(),
-      makeLive({ cwd: "C:\\proj", sshConnection: null, terminalSession: "local" }),
+      makeLive({
+        cwd: "C:\\proj",
+        sshConnection: null,
+        terminalSession: "local",
+      }),
     );
     expect(block).toContain("connection_mode: local");
     expect(block).toContain("cwd: C:\\proj");
     expect(block).not.toContain("ssh_target");
+  });
+
+  it("WSL 终端注入发行版并保持独立连接模式", () => {
+    const block = formatEnvironmentBlock(
+      makeProbe(),
+      makeLive({
+        cwd: "/home/harryopo",
+        terminalSession: "wsl",
+        wslDistro: "Ubuntu-24.04",
+      }),
+    );
+    expect(resolveConnectionMode(makeLive({ terminalSession: "wsl" }))).toBe(
+      "wsl",
+    );
+    expect(block).toContain("connection_mode: wsl");
+    expect(block).toContain("wsl_distro: Ubuntu-24.04");
+    expect(block).toContain("cwd: /home/harryopo");
   });
 
   it("probe=null（探测失败降级）返回 null", () => {
@@ -286,9 +310,7 @@ describe("formatEnvironmentBlock — <environment> 分区", () => {
       "note: 当前未打开任何终端会话（workspace 仅为默认工作区路径，不代表终端已打开）",
     );
     // 默认工作区路径不再伪装成终端 cwd
-    expect(block).toContain(
-      "workspace_path: C:/Users/Administrator",
-    );
+    expect(block).toContain("workspace_path: C:/Users/Administrator");
     expect(block).not.toContain("cwd: C:/Users/Administrator");
     expect(block).not.toContain("ssh_target");
   });
@@ -313,9 +335,9 @@ describe("resolveConnectionMode — 连接模式三态判定（问题1）", () =
   });
 
   it("terminalSession=ssh（sshConnection 未取到）→ ssh", () => {
-    expect(
-      resolveConnectionMode(makeLive({ terminalSession: "ssh" })),
-    ).toBe("ssh");
+    expect(resolveConnectionMode(makeLive({ terminalSession: "ssh" }))).toBe(
+      "ssh",
+    );
   });
 
   it("terminalSession=local → local", () => {
@@ -416,7 +438,10 @@ describe("formatTerminalHistoryBlock — <terminal-history> 分区", () => {
       }),
     );
     const block = formatTerminalHistoryBlock(blocks)!;
-    const body = block.slice("<terminal-history>\n".length, -"\n</terminal-history>".length);
+    const body = block.slice(
+      "<terminal-history>\n".length,
+      -"\n</terminal-history>".length,
+    );
     expect(body.length).toBeLessThanOrEqual(6000);
     expect(block).toContain("run-11-");
     // 最旧的被丢掉
@@ -425,7 +450,9 @@ describe("formatTerminalHistoryBlock — <terminal-history> 分区", () => {
 
   it("单行超长输出截断到 160 字符", () => {
     const longTail = "y".repeat(400);
-    const block = formatTerminalHistoryBlock([makeBlock({ outputTail: longTail })]);
+    const block = formatTerminalHistoryBlock([
+      makeBlock({ outputTail: longTail }),
+    ]);
     expect(block).toContain(`${"y".repeat(160)}…`);
     expect(block).not.toContain("y".repeat(200));
   });
@@ -473,9 +500,7 @@ describe("formatMemoryHintBlock — T4 召回块格式化", () => {
   });
 
   it("空结果不注入 → null（分区整体省略）", () => {
-    expect(
-      formatMemoryHintBlock([], { kind: "recalled", topK: 3 }),
-    ).toBeNull();
+    expect(formatMemoryHintBlock([], { kind: "recalled", topK: 3 })).toBeNull();
   });
 
   it("与首轮去重：excludeIds 命中即跳过；全命中 → null", () => {
@@ -503,10 +528,10 @@ describe("formatMemoryHintBlock — T4 召回块格式化", () => {
   });
 
   it("单条内容超 220 字符截断加省略号", () => {
-    const r = formatMemoryHintBlock(
-      [makeEntry({ content: "x".repeat(300) })],
-      { kind: "recalled", topK: 3 },
-    );
+    const r = formatMemoryHintBlock([makeEntry({ content: "x".repeat(300) })], {
+      kind: "recalled",
+      topK: 3,
+    });
     expect(r!.block).toContain(`${"x".repeat(220)}…`);
     expect(r!.block).not.toContain(`${"x".repeat(221)}`);
   });
@@ -543,9 +568,7 @@ describe("fetchRecalledMemory — 检索/超时/去重（mock invoke）", () => 
   it("3s 超时静默跳过 → null（不阻塞对话）", async () => {
     vi.useFakeTimers();
     // invoke 永不 resolve（模拟 sidecar 检索卡死）
-    vi.mocked(invoke).mockImplementation(
-      () => new Promise(() => {}) as never,
-    );
+    vi.mocked(invoke).mockImplementation(() => new Promise(() => {}) as never);
     const pending = fetchRecalledMemory("查询", new Set());
     // 推进 3s 触发 Promise.race 超时分支
     await vi.advanceTimersByTimeAsync(3000);

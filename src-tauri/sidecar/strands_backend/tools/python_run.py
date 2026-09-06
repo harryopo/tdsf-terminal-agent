@@ -43,6 +43,7 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -61,6 +62,7 @@ DEFAULT_TIMEOUT_SECONDS = 30
 # 也只能夹取到 [1, 30]，安全上限不可调大
 MAX_TIMEOUT_SECONDS = 30
 MAX_OUTPUT_CHARS = 10 * 1024  # 10KB（text 模式按字符近似）
+_WSL_DISTRO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,254}$")
 
 
 def _as_text(data: Any) -> str:
@@ -162,17 +164,43 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
         _emit_tool_call_completed(ctx, params, result)
         return result
 
+    wsl_distro = str(getattr(ctx, "wsl_distro", "") or "")
+    if wsl_distro and (
+        not _WSL_DISTRO_RE.fullmatch(wsl_distro)
+        or ".." in wsl_distro
+        or not workspace.startswith("/")
+    ):
+        result = {
+            "status": "error",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 0,
+            "truncated": False,
+            "message": "WSL 发行版或工作目录无效，未执行任何代码。",
+        }
+        _emit_tool_call_completed(ctx, params, result)
+        return result
+
     timeout_s = _timeout_params(params.get("timeout", DEFAULT_TIMEOUT_SECONDS))
 
     # ---- 受控执行（cwd 锁定本地工作区；超时由 subprocess.run 内部 kill）----
     start = time.perf_counter()
     try:
-        completed = subprocess.run(  # noqa: S603 — 解释器路径来自 sys.executable
-            [sys.executable, "-c", code],
+        command = [sys.executable, "-c", code]
+        cwd = workspace
+        if wsl_distro:
+            command = [
+                "wsl.exe", "-d", wsl_distro, "--cd", workspace,
+                "--exec", "python3", "-c", code,
+            ]
+            cwd = None
+        completed = subprocess.run(  # noqa: S603 — executable is fixed
+            command,
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            cwd=workspace,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired as exc:
         # subprocess.run 内部已 kill 子进程并回填部分输出（Windows 分支

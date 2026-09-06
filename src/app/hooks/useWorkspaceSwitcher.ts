@@ -36,6 +36,7 @@ export function useWorkspaceSwitcher({
   clearWorkspaceState,
 }: Params) {
   const [home, setHome] = useState<string | null>(null);
+  const [localHome, setLocalHome] = useState<string | null>(null);
   const [launchCwd, setLaunchCwd] = useState<string | null>(null);
   const [launchCwdResolved, setLaunchCwdResolved] = useState(false);
 
@@ -44,6 +45,7 @@ export function useWorkspaceSwitcher({
       .then(async (p) => {
         const normalized = p.replace(/\\/g, "/");
         setHome(normalized);
+        setLocalHome(normalized);
         try {
           await native.workspaceAuthorize(normalized);
         } catch {
@@ -136,6 +138,7 @@ export function useWorkspaceSwitcher({
 
   return {
     home,
+    localHome,
     launchCwd,
     launchCwdResolved,
     switchWorkspace,
