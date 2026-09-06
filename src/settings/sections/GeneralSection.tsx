@@ -40,6 +40,7 @@ import {
   setExplorerGitDecorations,
   setRestoreWindowState,
   setServerMonitorInterval,
+  setSshRemoteCarapacePrompt,
   SERVER_MONITOR_INTERVAL_PRESETS,
   setShowHidden,
   setTerminalCursorBlink,
@@ -144,6 +145,9 @@ export function GeneralSection() {
   const autostart = usePreferencesStore((s) => s.autostart);
   const restoreWindowState = usePreferencesStore((s) => s.restoreWindowState);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
+  const sshRemoteCarapacePrompt = usePreferencesStore(
+    (s) => s.sshRemoteCarapacePrompt,
+  );
   const serverMonitorInterval = usePreferencesStore(
     (s) => s.serverMonitorInterval,
   );
@@ -520,6 +524,15 @@ export function GeneralSection() {
               ))}
             </SelectContent>
           </Select>
+        </SettingRow>
+        <SettingRow
+          title="SSH 远程参数补全提示"
+          description="远程未安装补全组件时，在 SSH 终端右下角显示安装入口；该组件用于补全 Git 分支、目录和进程等动态参数。"
+        >
+          <Switch
+            checked={sshRemoteCarapacePrompt}
+            onCheckedChange={(v) => void setSshRemoteCarapacePrompt(v)}
+          />
         </SettingRow>
       </div>
 

@@ -21,6 +21,29 @@ function renderCard(
   );
 }
 
+describe("Tool command suggestion semantics", () => {
+  it("shows the requested intent instead of raw input JSON", () => {
+    render(
+      <Tool
+        toolName="suggest_command"
+        state="output-available"
+        input={{ intent: "查看当前网络连接", target_os: "linux" }}
+        output={{
+          command: "nmcli connection show",
+          explanation: "列出 NetworkManager 当前连接，不修改配置。",
+        }}
+        defaultOpen
+      />,
+    );
+
+    expect(screen.getByText("命令建议")).toBeTruthy();
+    expect(screen.getByText("需求（不会执行）")).toBeTruthy();
+    expect(screen.getAllByText("查看当前网络连接")).toHaveLength(2);
+    expect(screen.getByText("目标环境：linux")).toBeTruthy();
+    expect(screen.queryByText(/"target_os"/)).toBeNull();
+  });
+});
+
 const FULL_IMPACT = {
   summary: "操作服务：nginx",
   max_risk_l: 3,

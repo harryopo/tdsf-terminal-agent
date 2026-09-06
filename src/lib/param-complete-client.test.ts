@@ -550,7 +550,9 @@ describe('installRemoteCarapace', () => {
 
   it('mkdir 失败 → false 且不触发上传', async () => {
     const calls = mockInstallFlow({ mkdirFail: true });
-    await expect(installRemoteCarapace(42)).resolves.toBe(false);
+    const onError = vi.fn();
+    await expect(installRemoteCarapace(42, undefined, onError)).resolves.toBe(false);
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('创建远端目录失败'));
     expect(calls.map((c) => c.cmd)).not.toContain('sftp_upload_file');
   });
 

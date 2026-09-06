@@ -48,6 +48,8 @@ export interface MergeOptions {
 /** installRemoteCarapace 的安装阶段（UI 进度文案映射见 SshCarapaceBadge） */
 export type CarapaceInstallStage = 'preparing' | 'uploading' | 'configuring' | 'done';
 
+export type CarapaceInstallError = (message: string) => void;
+
 // ============================================================================
 // 常量（远端路径/命令模板——与 spec「安全红线」固定路径约定一致）
 // ============================================================================
@@ -464,12 +466,16 @@ async function carapaceLinuxPath(): Promise<string> {
 export async function installRemoteCarapace(
   sessionId: number,
   onProgress?: (stage: CarapaceInstallStage) => void,
+  onError?: CarapaceInstallError,
 ): Promise<boolean> {
   try {
     // 步骤 1：远端建目录 + 拿 $HOME（SFTP 需要绝对路径，~ 不会被 sftp 协议展开）
     onProgress?.('preparing');
     const mkdir = await sshCommand(sessionId, CARAPACE_MKDIR_CMD, 10);
-    if (!mkdir.ok || mkdir.exitCode !== 0) return false;
+    if (!mkdir.ok || mkdir.exitCode !== 0) {
+      onError?.(sshInstallError('创建远端目录', mkdir));
+      return false;
+    }
     const home = mkdir.output.trim();
     // home 取不到时退回 ~ 路径（Rust 侧 sftp_upload_file 可能支持展开，T7 对齐点）
     const remotePath = home
@@ -484,7 +490,10 @@ export async function installRemoteCarapace(
     // 步骤 3：chmod + 验证（--version 成功退出才算装好）
     onProgress?.('configuring');
     const verify = await sshCommand(sessionId, CARAPACE_CONFIGURE_CMD, 15);
-    if (!verify.ok || verify.exitCode !== 0) return false;
+    if (!verify.ok || verify.exitCode !== 0) {
+      onError?.(sshInstallError('设置可执行权限或验证', verify));
+      return false;
+    }
 
     // 步骤 4：失效缓存 + 完成
     invalidateRemoteCarapaceCache(sessionId);
@@ -492,7 +501,24 @@ export async function installRemoteCarapace(
     return true;
   } catch (e) {
     // 后端命令未就绪 / 会话已断开 / 上传失败——静默降级，调用方按 false 渲染
+    onError?.(installExceptionMessage(e));
     console.warn('[param-complete] installRemoteCarapace failed:', e);
     return false;
   }
+}
+
+function sshInstallError(
+  stage: string,
+  result: { exitCode?: number; stderr?: string; output?: string },
+): string {
+  const detail = (result.stderr || result.output || '').trim();
+  const code = result.exitCode == null ? '未知' : String(result.exitCode);
+  return detail
+    ? `${stage}失败（退出码 ${code}）：${detail}`
+    : `${stage}失败（退出码 ${code}）`;
+}
+
+function installExceptionMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return detail ? `上传安装包失败：${detail}` : '上传安装包失败';
 }
