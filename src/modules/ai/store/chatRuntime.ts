@@ -1,5 +1,8 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import {
+  isSessionConnected,
+  useSshStore,
+} from "@/modules/ssh-explorer/sshStore";
 import { useSpaces } from "@/modules/spaces";
 import { Chat, type UIMessage } from "@ai-sdk/react";
 import {
@@ -99,14 +102,14 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       const scope =
         sessions.find((s) => s.id === activeSessionId)?.scope ?? null;
       // 记忆隔离维度：workspace scope → spaceId（写入打标签 + recall 过滤）
-      const memoryScopeId =
-        scope?.kind === "workspace" ? scope.spaceId : null;
+      const memoryScopeId = scope?.kind === "workspace" ? scope.spaceId : null;
 
       // 工作区 scope 归一化：workspace → ssh 绑定 或 local（含 WSL）。
       // 工作区被删除 → 回退全局行为（scopeKind=null）。
       let sshBinding: { host: string; user: string; port: number } | null =
         null;
       let spaceRoot: string | null = null;
+      let scopedWslDistro: string | null = null;
       let scopeKind: "ssh" | "local" | null = null;
       if (scope?.kind === "ssh") {
         sshBinding = scope;
@@ -127,6 +130,7 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           } else {
             // local / wsl 都按本地口径（WSL 终端是本地 tab，命令集 linux）
             scopeKind = "local";
+            if (space.env.kind === "wsl") scopedWslDistro = space.env.distro;
           }
         }
       } else if (scope?.kind === "local") {
@@ -153,7 +157,9 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         const activeSshId = live.getSshRustSessionId();
         const boundRustId = connected ? connected.rustSessionId : null;
         const terminalOutput =
-          boundRustId !== null && activeSshId !== null && boundRustId === activeSshId
+          boundRustId !== null &&
+          activeSshId !== null &&
+          boundRustId === activeSshId
             ? live.getTerminalContext()
             : null;
         return {
@@ -190,7 +196,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
 
       const isLocalScope = scopeKind === "local";
       const noTerminal = activeTerminal === "none";
-      const localActive = activeTerminal === "local";
+      const localActive =
+        activeTerminal === "local" || activeTerminal === "wsl";
       return {
         // B1: 无终端（欢迎页）→ cwd/workspace 置 null；local scope 只认
         // 本地终端（SSH 活跃也不算本对话的终端）；工作区有显式 root 时优先
@@ -237,9 +244,16 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         // null（明确的"无终端"）若与缺省混同，无终端场景仍会误报 local。
         terminalSession: isLocalScope
           ? localActive
-            ? "local"
+            ? scopedWslDistro
+              ? "wsl"
+              : "local"
             : "none"
           : activeTerminal,
+        wslDistro: isLocalScope
+          ? scopedWslDistro
+          : activeTerminal === "wsl"
+            ? (live.getWslDistro?.() ?? null)
+            : null,
         // 记忆召回过滤维度（同工作区跨对话共享沉淀）
         scopeId: memoryScopeId,
         // TDSF 魔改 2026-09-02: 解耦——前端 autoExecuteInTerminal 现专用于

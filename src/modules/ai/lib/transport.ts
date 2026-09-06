@@ -80,7 +80,11 @@ type LiveSnapshot = {
    * 仍知道本对话属于哪台服务器，可引导用户重连，而不是茫然报"未连接"。
    * null = legacy/local scope 无此概念。
    */
-  conversationServer?: { user: string; host: string; connected: boolean } | null;
+  conversationServer?: {
+    user: string;
+    host: string;
+    connected: boolean;
+  } | null;
   /**
    * A1 工作区隔离: 会话绑定的工作区 id（仅 workspace scope 有值）。
    * 记忆召回按 workspace:<scopeId> 标签过滤（同工作区跨对话共享沉淀）；
@@ -107,7 +111,8 @@ type LiveSnapshot = {
    * findCwd 会回退到 explorerRoot/launchCwd/home（默认主目录），不能作为
    * "本地终端已打开"的证据（用户实测反馈 agent 误称"本地终端"的根因）。
    */
-  terminalSession?: "ssh" | "local" | "none" | null;
+  terminalSession?: "ssh" | "local" | "wsl" | "none" | null;
+  wslDistro?: string | null;
   /**
    * TDSF B1 (2026-08-29, 方案书 §4.7): 环境探测（os-release/内核/shell，
    * sidecar system.probe_env 会话级缓存；useAiLiveBridge 注册实现）。
@@ -449,9 +454,7 @@ async function searchSessionMemoryEntries(
       if (e.source !== "session-memory" && e.source !== "session-case")
         return false;
       if (!workspaceTag) return true;
-      const wsTags = (e.tags ?? []).filter((t) =>
-        t.startsWith("workspace:"),
-      );
+      const wsTags = (e.tags ?? []).filter((t) => t.startsWith("workspace:"));
       return wsTags.length === 0 || wsTags.includes(workspaceTag);
     });
   } catch {
@@ -588,8 +591,8 @@ function trimMessagesForSidecar(
 ): UIMessage[] {
   // 阶段 1: tool-result elide（压缩大 tool 输出）
   const ELIDE_THRESHOLD = 1024; // 超过此字符数的 tool-result 被压缩
-  const ELIDE_KEEP = 512;       // 压缩后保留的字符数（首尾各半）
-  const PROTECT_RECENT = 3;     // 最近 N 条消息的 tool-result 不压缩
+  const ELIDE_KEEP = 512; // 压缩后保留的字符数（首尾各半）
+  const PROTECT_RECENT = 3; // 最近 N 条消息的 tool-result 不压缩
 
   let elided = messages;
   if (messages.length > PROTECT_RECENT) {
@@ -671,9 +674,13 @@ function injectEnvIntoLastUser(
  *      否则 none（保守——不再把默认 workspace cwd 当"本地终端已打开"）。
  */
 export function resolveConnectionMode(
-  live: Pick<LiveSnapshot, "sshConnection" | "terminalOutput" | "terminalSession">,
-): "ssh" | "local" | "none" {
+  live: Pick<
+    LiveSnapshot,
+    "sshConnection" | "terminalOutput" | "terminalSession"
+  >,
+): "ssh" | "local" | "wsl" | "none" {
   if (live.sshConnection || live.terminalSession === "ssh") return "ssh";
+  if (live.terminalSession === "wsl") return "wsl";
   if (live.terminalSession === "local") return "local";
   if (live.terminalSession === "none") return "none";
   // 旧调用方回退（terminalSession 未注入）：终端有输出 → 本地终端在跑
@@ -784,12 +791,15 @@ export function formatEnvironmentBlock(
   lines.push(`connection_mode: ${mode}`);
   if (mode === "ssh") {
     if (live.sshConnection) lines.push(`ssh_target: ${live.sshConnection}`);
+  } else if (mode === "wsl") {
+    if (live.wslDistro) lines.push(`wsl_distro: ${live.wslDistro}`);
   } else if (mode === "none") {
     lines.push(
       "note: 当前未打开任何终端会话（workspace 仅为默认工作区路径，不代表终端已打开）",
     );
   }
-  if (probe.os_pretty_name) lines.push(`os_pretty_name: ${probe.os_pretty_name}`);
+  if (probe.os_pretty_name)
+    lines.push(`os_pretty_name: ${probe.os_pretty_name}`);
   if (probe.os_id) lines.push(`os_id: ${probe.os_id}`);
   // A hot-reloaded frontend can briefly meet an older sidecar. Treat missing
   // identity fields as unknown rather than throwing or inferring from display text.
@@ -817,11 +827,10 @@ function historyOutputTail(outputTail: string): string {
     .map((l) => l.trim())
     .filter((l) => l.length > 0)
     .slice(-HISTORY_OUTPUT_TAIL_LINES)
-    .map(
-      (l) =>
-        l.length > HISTORY_OUTPUT_TAIL_LINE_CHARS
-          ? `${l.slice(0, HISTORY_OUTPUT_TAIL_LINE_CHARS)}…`
-          : l,
+    .map((l) =>
+      l.length > HISTORY_OUTPUT_TAIL_LINE_CHARS
+        ? `${l.slice(0, HISTORY_OUTPUT_TAIL_LINE_CHARS)}…`
+        : l,
     );
   return lines.join(" / ");
 }
@@ -838,7 +847,11 @@ export function formatTerminalHistoryBlock(
   const items: string[] = [];
   let total = 0;
   // 从最新往回收集，超预算即停（等价于"超限从最旧开始丢"）
-  for (let i = blocks.length - 1; i >= 0 && items.length < TERMINAL_HISTORY_MAX_BLOCKS; i--) {
+  for (
+    let i = blocks.length - 1;
+    i >= 0 && items.length < TERMINAL_HISTORY_MAX_BLOCKS;
+    i--
+  ) {
     const b = blocks[i];
     const exit = b.exitCode === null ? "exit ?" : `exit ${b.exitCode}`;
     const secs =

@@ -219,6 +219,9 @@ class ToolContext:
     # 空 = 不可得（python_run fail-closed 拒绝）；SSH 会话下不适用
     # （python_run 拒绝在远端执行）
     workspace: str = ""
+    # Non-empty only for an active WSL terminal. python_run uses wsl.exe then,
+    # never the Windows Python process with a Linux cwd.
+    wsl_distro: str = ""
     # A3 (2026-09-04): 教学模式终端执行链路——teach=True 时，有 shell 映射的
     # 工具不走后端执行，改由 wrap_tool_for_teach_mode 拦截返回 teach_command
     # 事件，前端渲染 TeachCommandCard，学生手动点击注入终端（打字机）。
@@ -337,6 +340,13 @@ class RiskChecker:
         reasons: list[str] = []
         for name, pattern, reason in _HIGH_RISK_PATTERNS:
             try:
+                if name == "reboot":
+                    from strands_backend.tools.command_impact import (
+                        contains_non_history_power_mention,
+                    )
+
+                    if not contains_non_history_power_mention(command):
+                        continue
                 if re.search(pattern, command, re.IGNORECASE):
                     matched.append(name)
                     reasons.append(f"[{name}] {reason}")

@@ -78,6 +78,16 @@
 
 **取舍**：当前生产入口仍是一个 Strands main Agent，故不重接已废弃的 LangGraph 或堆叠假多 Agent。借鉴 Strands 生命周期钩子/trace、LangGraph 的持久恢复边界、OpenAI Agents 的 guardrail 原则，但落到现有 event log 与最小 SQLite operation 账本。CUA 当前只暴露浏览器标签，不能操控 Tauri 原生窗口、钥匙串、SSH/xterm，因此浏览器检查不再冒充 W0 原生验收。
 
+### 37.120 Agent 执行环境与任务清单回归（2026-09-06 ✅）
+
+**问题与根因**：自动模式将只读的 `last reboot` 误判为重启；WSL 工作区把 Linux 路径交给 Windows 子进程，且新建本地工作区继承了当前 WSL 环境；`todo_write([])` 可以伪造成功，实时任务事件还可能被旧缓存覆盖。
+
+**实现**：仅识别 `last reboot` 的确定历史查询，复合命令中的真实 `reboot` / `shutdown` 仍保持高危拦截；WSL 的 `python_run` 使用 `wsl.exe -d <distro> --cd <cwd>` 实际执行，并将 WSL 发行版贯穿前端运行时和 sidecar；本地工作区创建强制采用 Windows 本地环境。任务清单拒绝空条目写入、以实时事件优先于水合缓存，并在对话顶部显示真实任务状态。
+
+**验证**：Python 定向回归 105 通过；前端定向回归 53 通过；`pnpm typecheck` 通过。完整工具测试在当前环境缺少 `langgraph` 时按 fail-closed 失败，教学跟进测试在未安装 Strands 时有既有收集缺陷，均未将其伪装为本轮通过。
+
+**下一步**：原生桌面验收自动模式只读复合命令、WSL 实际 `python_run`、本地/WSL 工作区切换和任务清单实时更新。
+
 ### 37.119 审批决议不能抢在 SSH 执行完成前推进（2026-09-05 ✅）
 
 **问题**：已有 approval FIFO 只串行“等待用户点击”。`respond(approved)` 会立即释放队首并发送下一条 created；工具层还对排队请求额外直发 created。前端即便只取列表第一项，也会在第一条 SSH 运行时让第二条进入可批准状态，违背用户“逐条确认，不要混淆先后”的要求。

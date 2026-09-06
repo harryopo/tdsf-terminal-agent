@@ -24,6 +24,8 @@ export const useTodosStore = create<TodosState>((set, get) => ({
     if (get().hydrated.has(sessionId)) return;
     const todos = await persistLoad(sessionId);
     set((s) => {
+      // A live update received while storage loads is newer than disk.
+      if (s.hydrated.has(sessionId)) return s;
       const nextHydrated = new Set(s.hydrated);
       nextHydrated.add(sessionId);
       return {
@@ -34,9 +36,14 @@ export const useTodosStore = create<TodosState>((set, get) => ({
   },
 
   setTodos(sessionId, todos) {
-    set((s) => ({
-      bySession: { ...s.bySession, [sessionId]: todos },
-    }));
+    set((s) => {
+      const nextHydrated = new Set(s.hydrated);
+      nextHydrated.add(sessionId);
+      return {
+        bySession: { ...s.bySession, [sessionId]: todos },
+        hydrated: nextHydrated,
+      };
+    });
     void persistSave(sessionId, todos);
   },
 

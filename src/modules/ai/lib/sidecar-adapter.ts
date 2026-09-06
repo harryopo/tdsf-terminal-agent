@@ -30,7 +30,11 @@ import type { UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { UIMessageChunk } from "ai";
-import { TDSF_AGENTS, type AgentMode, type TdsfAgentId } from "../agents/registry";
+import {
+  TDSF_AGENTS,
+  type AgentMode,
+  type TdsfAgentId,
+} from "../agents/registry";
 // TDSF 魔改 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
 import {
   isSidecarConfigSynced,
@@ -70,7 +74,10 @@ export function getSidecarTimeoutMs(): number {
     if (!raw) return SIDECAR_TIMEOUT_MS;
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) return SIDECAR_TIMEOUT_MS;
-    return Math.min(SIDECAR_TIMEOUT_MAX_MS, Math.max(SIDECAR_TIMEOUT_MIN_MS, parsed));
+    return Math.min(
+      SIDECAR_TIMEOUT_MAX_MS,
+      Math.max(SIDECAR_TIMEOUT_MIN_MS, parsed),
+    );
   } catch {
     return SIDECAR_TIMEOUT_MS;
   }
@@ -93,8 +100,7 @@ const FRIENDLY_DEGRADED_REASONS = new Set([
 ]);
 
 const DEGRADED_REASON_HINTS: Record<string, string> = {
-  invoke_error:
-    "建议：1) 重试一次 2) 反复出现时查看 sidecar 日志定位异常堆栈",
+  invoke_error: "建议：1) 重试一次 2) 反复出现时查看 sidecar 日志定位异常堆栈",
   feature_flag_disabled:
     "建议：到设置 → AI 模型确认后端选择为 strands（sidecar 环境变量 TDSF_AGENT_BACKEND=strands）",
   strands_not_installed:
@@ -151,7 +157,11 @@ export function buildSidecarErrorHint(
       "建议：重启应用后重试；若反复出现，查看 sidecar 日志",
     ].join("\n");
   }
-  if (lower.includes("llm") || lower.includes("api key") || lower.includes("model")) {
+  if (
+    lower.includes("llm") ||
+    lower.includes("api key") ||
+    lower.includes("model")
+  ) {
     return [
       `AI 模型调用失败：${rawError}`,
       "",
@@ -330,6 +340,7 @@ export interface SidecarStreamOptions {
     workspaceRoot: string | null;
     activeFile: string | null;
     sshSessionId: number | null;
+    wslDistro?: string | null;
     /**
      * TDSF 2026-08-31 (问题1修复): 活动终端会话权威信号（"ssh"|"local"|"none"）。
      * 随 state.live 透传到 Python adapter._build_prompt，供 <live_context>
@@ -337,7 +348,7 @@ export interface SidecarStreamOptions {
      * 防止 agent 在用户未开终端时自称"本地终端模式"。缺省（旧调用方未注入）
      * 时 Python 侧回退 workspace/cwd 启发式。
      */
-    terminalSession?: "ssh" | "local" | "none" | null;
+    terminalSession?: "ssh" | "local" | "wsl" | "none" | null;
     agentMode?: AgentMode;
     teach?: boolean;
   };
@@ -676,8 +687,7 @@ async function registerSidecarListeners(
             tool_count?: number;
           }>(e.payload);
           if (!p || typeof p.round !== "number") return;
-          const toolCount =
-            typeof p.tool_count === "number" ? p.tool_count : 0;
+          const toolCount = typeof p.tool_count === "number" ? p.tool_count : 0;
           onLoopProgress({ round: p.round, toolCount });
         }),
       );
@@ -787,7 +797,16 @@ async function registerSidecarListeners(
 export async function* runSidecarStream(
   opts: SidecarStreamOptions,
 ): AsyncIterable<SidecarStreamPart> {
-  const { agentId, messages, input, live, abortSignal, onMood, onStep, onUsage } = opts;
+  const {
+    agentId,
+    messages,
+    input,
+    live,
+    abortSignal,
+    onMood,
+    onStep,
+    onUsage,
+  } = opts;
 
   // TDSF 魔改 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
   // （agent.configure 一次 configure 永久生效）。失败不阻塞对话——sidecar
@@ -1072,7 +1091,10 @@ export async function* runSidecarStream(
     if (!invokeResult && invokeError) {
       // TDSF 魔改 P0-3: 移除 mock 降级，直接报错让用户看到真实问题
       // P0-4 (2026-08-01): 结构化错误提示——按错误类型区分文案与行动建议
-      yield { type: "error", error: buildSidecarErrorHint(invokeError, pythonName) };
+      yield {
+        type: "error",
+        error: buildSidecarErrorHint(invokeError, pythonName),
+      };
       return;
     }
 

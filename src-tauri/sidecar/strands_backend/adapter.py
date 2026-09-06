@@ -239,12 +239,12 @@ _DEFAULT_SYSTEM_PROMPT = (
     # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具指引
     # ——多文件交叉统计/复杂解析/批量操作一段代码一次完成
     "- python_run(code): 在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）\n"
-    "  何时使用: 多文件统计/复杂解析/批量操作一次完成；仅本地工作区可用（SSH 下报 error）\n\n"
+    "  何时使用: 多文件统计/复杂解析/批量操作一次完成；本地或 WSL 工作区可用（SSH 下报 error）\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
     # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
     # "注入了 workspace cwd（默认主目录）"被当成"本地终端已打开"。现以
-    # <environment> 的 connection_mode 字段（ssh/local/none）为唯一环境口径：
+    # <environment> 的 connection_mode 字段（ssh/wsl/local/none）为唯一环境口径：
     # none = 无任何终端会话，必须如实告知用户，不臆测"本地终端"。
     "Environment awareness (环境感知前置——每次回答/操作前必须先执行):\n"
     "- 先读 <environment> 注入区的 connection_mode 字段确认当前环境，再决定回答内容与命令风格：\n"
@@ -252,7 +252,9 @@ _DEFAULT_SYSTEM_PROMPT = (
     "    （Debian 系 apt / RHEL 系 yum/dnf），远程操作用 ssh_command 工具执行。\n"
     "  ② connection_mode: local（本地终端已打开）→ Windows 本地环境：按 PowerShell/cmd 语法给出命令，\n"
     "    不要给 Linux 命令或声称可在远程服务器上执行。\n"
-    "  ③ connection_mode: none（未打开任何终端会话）→ 明确告知用户：当前未打开终端，\n"
+    "  ③ connection_mode: wsl → 目标是 wsl_distro 指定的 Linux 发行版；使用 python_run 执行诊断，\n"
+    "    它会在该 WSL 发行版及 cwd 中运行。不要使用 SSH 专用工具，也不要声称未连接 WSL。\n"
+    "  ④ connection_mode: none（未打开任何终端会话）→ 明确告知用户：当前未打开终端，\n"
     "    请先新建本地终端或建立 SSH 连接，我不会假设环境；严禁自称处于\"本地终端模式\"\n"
     "    或\"本地环境\"，严禁臆测环境、严禁编造命令执行结果（<environment> 里只有默认\n"
     "    工作区路径，不代表终端已打开）。\n\n"
@@ -2275,6 +2277,7 @@ class StrandsAgentAdapter:
         # （workspaceRoot 优先，cwd 兜底）——python_run 的 subprocess cwd；
         # 空 = 不可得（python_run fail-closed 拒绝）
         workspace = str(live.get("workspaceRoot") or live.get("cwd") or "")
+        wsl_distro = str(live.get("wslDistro", "") or "")
 
         return ToolContext(
             event_bus=self.event_bus,
@@ -2289,6 +2292,7 @@ class StrandsAgentAdapter:
             # TDSF 魔改 (2026-08-09): 终端执行模式开关
             auto_execute_in_terminal=bool(live.get("autoExecuteInTerminal", False)),
             workspace=workspace,
+            wsl_distro=wsl_distro,
             # A3 (2026-09-04): 教学模式终端执行链路
             teach=teach,
             operation_service=self.operation_service,

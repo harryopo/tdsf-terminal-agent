@@ -133,11 +133,7 @@ import {
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
-import {
-  LOCAL_WORKSPACE,
-  useWorkspaceEnvStore,
-  type WorkspaceEnv,
-} from "@/modules/workspace";
+import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -264,6 +260,7 @@ export default function App() {
   const setWorkspaceEnv = useWorkspaceEnvStore((s) => s.setEnv);
   const {
     home,
+    localHome,
     launchCwd,
     launchCwdResolved,
     switchWorkspace,
@@ -338,9 +335,7 @@ export default function App() {
       meta && meta.env.kind === "ssh" ? meta.env.sessionId : null;
     if (
       metaSshSessionId &&
-      useSshStore
-        .getState()
-        .sessions.some((s) => s.id === metaSshSessionId)
+      useSshStore.getState().sessions.some((s) => s.id === metaSshSessionId)
     ) {
       useSshStore.getState().setActiveSession(metaSshSessionId);
     }
@@ -449,7 +444,9 @@ export default function App() {
     s.spaces.find((sp) => sp.id === activeSpaceId),
   );
   const spaceSshSessionId =
-    activeSpace?.env.kind === "ssh" ? activeSpace.env.sessionId ?? null : null;
+    activeSpace?.env.kind === "ssh"
+      ? (activeSpace.env.sessionId ?? null)
+      : null;
   const spaceSshSession = useSshStore((s) =>
     selectSessionById(s, spaceSshSessionId),
   );
@@ -604,9 +601,7 @@ export default function App() {
         if (sshSessionId !== null) {
           lines.push(`ssh_session_id: ${sshSessionId}`);
         }
-        return lines.length === 0
-          ? null
-          : `<env>\n${lines.join("\n")}\n</env>`;
+        return lines.length === 0 ? null : `<env>\n${lines.join("\n")}\n</env>`;
       },
     };
   }
@@ -671,9 +666,7 @@ export default function App() {
             // 显示异常（左侧文件树/终端行为按 SSH 判定但无可用会话）。
             const spaceId = useSpaces.getState().activeId;
             const space = spaceId
-              ? useSpaces
-                  .getState()
-                  .spaces.find((s) => s.id === spaceId)
+              ? useSpaces.getState().spaces.find((s) => s.id === spaceId)
               : undefined;
             const ghostSshSessionId =
               space && space.env.kind === "ssh" ? space.env.sessionId : null;
@@ -880,10 +873,7 @@ export default function App() {
         // `!t.sshSessionId || t.sshSessionId === session.id`, 断线重连后旧 tab
         // 绑着失效 id 永远匹配不上 → 终端显示本地。
         const sessionExists = (id: string | null | undefined) =>
-          !!id &&
-          useSshStore
-            .getState()
-            .sessions.some((s) => s.id === id);
+          !!id && useSshStore.getState().sessions.some((s) => s.id === id);
         const canRebind = (id: string | null | undefined) =>
           !id || !sessionExists(id) || id === session.id;
         // 在 subscribe 回调里用 getState() 读取最新远程路径, 避免 stale closure
@@ -1018,7 +1008,9 @@ export default function App() {
   // SSH 连通时左侧 Files 面板根路径使用当前 Space 的远程当前目录
   const effectiveExplorerRoot =
     explorerSource === "ssh" && activeSpace?.env.kind === "ssh"
-      ? (spaceSshCurrentPath ?? activeSpace.root ?? `/home/${activeSpace.env.user}`)
+      ? (spaceSshCurrentPath ??
+        activeSpace.root ??
+        `/home/${activeSpace.env.user}`)
       : explorerRoot;
 
   // TDSF 修复 2026-07-29: SSH 连接后, 窗口标题/状态栏路径显示 SSH 远程位置。
@@ -1317,7 +1309,10 @@ export default function App() {
         void openSettingsWindow("models");
         return;
       }
-      attachSelection(text, activeTab?.kind === "editor" ? "editor" : "terminal");
+      attachSelection(
+        text,
+        activeTab?.kind === "editor" ? "editor" : "terminal",
+      );
       openPanel();
       focusInput(null);
     },
@@ -1950,13 +1945,7 @@ export default function App() {
       }
       useSpaces.getState().setActive(space.id);
     },
-    [
-      newTab,
-      newTabInSpace,
-      setActiveId,
-      setActiveSpaceForNewTabs,
-      updateTab,
-    ],
+    [newTab, newTabInSpace, setActiveId, setActiveSpaceForNewTabs, updateTab],
   );
 
   const handleDeleteSpace = useCallback(
@@ -2151,6 +2140,7 @@ export default function App() {
     explorerRoot,
     launchCwd,
     home,
+    wslDistro: workspaceEnv.kind === "wsl" ? workspaceEnv.distro : null,
     openPreviewTab,
     newAgentTab,
     terminalRefs,
@@ -2242,71 +2232,74 @@ export default function App() {
                             </button>
                           </div>
                         ) : (
-                        <div className="flex h-full min-h-0 flex-col">
-                          <div className="min-h-0 flex-1">
-                          <FileExplorer
-                            ref={explorerRef}
-                            rootPath={effectiveExplorerRoot}
-                            fsSource={
-                              // TDSF 魔改 2026-08-28: SSH 判定与 effectiveExplorerRoot 同源
-                              // （都要求 env.kind === "ssh"），消除断开瞬间
-                              // "rootPath 已回退本地 Windows 路径 × fsSource 仍是 sftp"
-                              // 的抖动窗口（validate_sftp_path 报 invalid_path）。
-                              explorerSource === "ssh" &&
-                              activeSpace?.env.kind === "ssh" &&
-                              spaceSshSession?.rustSessionId != null
-                                ? {
-                                    kind: "sftp",
-                                    sessionId: spaceSshSession.rustSessionId,
-                                    root: spaceSshCurrentPath ?? "/",
-                                  }
-                                : { kind: "local" }
-                            }
-                            gitStatus={
-                              explorerSource === "local" &&
-                              explorerGitDecorations
-                                ? sourceControl.status
-                                : null
-                            }
-                            activeFilePath={
-                              explorerSource === "local"
-                                ? explorerActiveFilePath
-                                : null
-                            }
-                            onOpenFile={
-                              explorerSource === "ssh"
-                                ? handleOpenRemoteFile
-                                : handleOpenFile
-                            }
-                            onPathRenamed={
-                              explorerSource === "ssh"
-                                ? undefined
-                                : handlePathRenamed
-                            }
-                            onPathDeleted={
-                              explorerSource === "ssh"
-                                ? undefined
-                                : handlePathDeleted
-                            }
-                            onRevealInTerminal={
-                              explorerSource === "ssh" ? undefined : cdInNewTab
-                            }
-                            onAttachToAgent={
-                              explorerSource === "ssh"
-                                ? handleAttachRemoteFileToAgent
-                                : handleAttachFileToAgent
-                            }
-                            pathDropTarget={
-                              explorerSource === "ssh"
-                                ? undefined
-                                : terminalPathDropTarget
-                            }
-                          />
-                          </div>
-                          {/* TDSF 魔改 2026-07-30: 远程文件编辑器已废弃，
+                          <div className="flex h-full min-h-0 flex-col">
+                            <div className="min-h-0 flex-1">
+                              <FileExplorer
+                                ref={explorerRef}
+                                rootPath={effectiveExplorerRoot}
+                                fsSource={
+                                  // TDSF 魔改 2026-08-28: SSH 判定与 effectiveExplorerRoot 同源
+                                  // （都要求 env.kind === "ssh"），消除断开瞬间
+                                  // "rootPath 已回退本地 Windows 路径 × fsSource 仍是 sftp"
+                                  // 的抖动窗口（validate_sftp_path 报 invalid_path）。
+                                  explorerSource === "ssh" &&
+                                  activeSpace?.env.kind === "ssh" &&
+                                  spaceSshSession?.rustSessionId != null
+                                    ? {
+                                        kind: "sftp",
+                                        sessionId:
+                                          spaceSshSession.rustSessionId,
+                                        root: spaceSshCurrentPath ?? "/",
+                                      }
+                                    : { kind: "local" }
+                                }
+                                gitStatus={
+                                  explorerSource === "local" &&
+                                  explorerGitDecorations
+                                    ? sourceControl.status
+                                    : null
+                                }
+                                activeFilePath={
+                                  explorerSource === "local"
+                                    ? explorerActiveFilePath
+                                    : null
+                                }
+                                onOpenFile={
+                                  explorerSource === "ssh"
+                                    ? handleOpenRemoteFile
+                                    : handleOpenFile
+                                }
+                                onPathRenamed={
+                                  explorerSource === "ssh"
+                                    ? undefined
+                                    : handlePathRenamed
+                                }
+                                onPathDeleted={
+                                  explorerSource === "ssh"
+                                    ? undefined
+                                    : handlePathDeleted
+                                }
+                                onRevealInTerminal={
+                                  explorerSource === "ssh"
+                                    ? undefined
+                                    : cdInNewTab
+                                }
+                                onAttachToAgent={
+                                  explorerSource === "ssh"
+                                    ? handleAttachRemoteFileToAgent
+                                    : handleAttachFileToAgent
+                                }
+                                pathDropTarget={
+                                  explorerSource === "ssh"
+                                    ? undefined
+                                    : terminalPathDropTarget
+                                }
+                              />
+                            </div>
+                            {/* TDSF 魔改 2026-07-30: 远程文件编辑器已废弃，
                              远程文件点击改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程），
                              侧栏只保留 FileExplorer（文件树），不再内嵌 SshFileEditor。 */}
-                        </div>
+                          </div>
                         )
                       ) : sidebarView === "source-control" ? (
                         <SourceControlPanel
@@ -2365,40 +2358,40 @@ export default function App() {
                         }}
                       />
                     ) : (
-                    <WorkspaceSurface
-                      tabs={tabs}
-                      activeId={activeId}
-                      activeTab={activeTab}
-                      registerTerminalHandle={registerTerminalHandle}
-                      onSearchReady={handleSearchReady}
-                      onCwd={handleTerminalCwd}
-                      onExit={handleLeafExit}
-                      onFocusLeaf={handleFocusLeaf}
-                      registerEditorHandle={registerEditorHandle}
-                      onEditorDirtyChange={handleEditorDirty}
-                      onEditorCloseTab={disposeTab}
-                      registerPreviewHandle={registerPreviewHandle}
-                      onPreviewUrlChange={handlePreviewUrl}
-                      onAiDiffAccept={(id) => respondToApproval(id, true)}
-                      onAiDiffReject={(id) => respondToApproval(id, false)}
-                      onOpenCommitFile={openCommitFileDiffTab}
-                      onGitHistorySearchHandle={setGitHistoryHandle}
-                      onSetMarkdownView={setMarkdownView}
-                      // TDSF 魔改 2026-07-28 (P1-A): 空状态页
-                      showNoTerminalEmptyState={showNoTerminalEmptyState}
-                      onWarmUpColdTab={warmUpTab}
-                      onOpenAgentFromEmptyState={togglePanelAndFocus}
-                      onSwitchToSshFromEmptyState={() => {
-                        // TDSF 修复 2026-08-01: SSH 登录统一走新建工作区流程
-                        setSpaceCreateMode("ssh");
-                        setSpaceCreateOpen(true);
-                      }}
-                      // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView
-                      // leaf 级（TerminalStack 透传 tab.sshSessionId），不再需要
-                      // workspace 级 SshTerminalHost 覆盖与 sshSessionId/allocId/
-                      // onSshLeafId 透传。sshActiveLeafIdRef 改由 App 层派生 effect 维护。
-                      sshConnectingInfo={sshConnectingInfo}
-                    />
+                      <WorkspaceSurface
+                        tabs={tabs}
+                        activeId={activeId}
+                        activeTab={activeTab}
+                        registerTerminalHandle={registerTerminalHandle}
+                        onSearchReady={handleSearchReady}
+                        onCwd={handleTerminalCwd}
+                        onExit={handleLeafExit}
+                        onFocusLeaf={handleFocusLeaf}
+                        registerEditorHandle={registerEditorHandle}
+                        onEditorDirtyChange={handleEditorDirty}
+                        onEditorCloseTab={disposeTab}
+                        registerPreviewHandle={registerPreviewHandle}
+                        onPreviewUrlChange={handlePreviewUrl}
+                        onAiDiffAccept={(id) => respondToApproval(id, true)}
+                        onAiDiffReject={(id) => respondToApproval(id, false)}
+                        onOpenCommitFile={openCommitFileDiffTab}
+                        onGitHistorySearchHandle={setGitHistoryHandle}
+                        onSetMarkdownView={setMarkdownView}
+                        // TDSF 魔改 2026-07-28 (P1-A): 空状态页
+                        showNoTerminalEmptyState={showNoTerminalEmptyState}
+                        onWarmUpColdTab={warmUpTab}
+                        onOpenAgentFromEmptyState={togglePanelAndFocus}
+                        onSwitchToSshFromEmptyState={() => {
+                          // TDSF 修复 2026-08-01: SSH 登录统一走新建工作区流程
+                          setSpaceCreateMode("ssh");
+                          setSpaceCreateOpen(true);
+                        }}
+                        // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView
+                        // leaf 级（TerminalStack 透传 tab.sshSessionId），不再需要
+                        // workspace 级 SshTerminalHost 覆盖与 sshSessionId/allocId/
+                        // onSshLeafId 透传。sshActiveLeafIdRef 改由 App 层派生 effect 维护。
+                        sshConnectingInfo={sshConnectingInfo}
+                      />
                     )}
                   </div>
 
@@ -2506,20 +2499,11 @@ export default function App() {
           <SpaceCreateDialog
             open={spaceCreateOpen}
             onOpenChange={setSpaceCreateOpen}
-            // TDSF 修复 2026-08-31: 当前 Space 是 SSH 时 workspaceEnv 为 ssh——
-            // 直接透传会让"新建本地工作区"创建出 env.kind=ssh 的幽灵 Space
-            // （无会话可用 → 左侧资源管理器/终端行为按 SSH 判定但连不上）。
-            // 本地模式只允许继承 local/WSL 环境。
-            defaultEnv={
-              workspaceEnv.kind === "ssh" ? LOCAL_WORKSPACE : workspaceEnv
-            }
-            // TDSF 修复 2026-08-31: 本地 Space 的默认根目录必须是本地路径——
-            // activeCwd 在 SSH/WSL 终端下是远程 Linux 路径（/root 等），直接
-            // 塞给新建本地工作区会让资源管理器打开无效路径（InvalidPath）。
-            // 仅当前 Space 是本地时才继承 cwd，否则回退本地 home。
+            // Local spaces do not inherit a WSL/SSH env or its Linux home.
+            // Only the active local cwd is reusable; otherwise use Windows home.
             defaultRoot={
               (activeSpace?.env.kind === "local" ? activeCwd : null) ??
-              home ??
+              localHome ??
               null
             }
             initialMode={spaceCreateMode}

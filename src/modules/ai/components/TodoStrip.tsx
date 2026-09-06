@@ -58,9 +58,14 @@ export function TodoStrip({ sessionId }: Props) {
   const pct = Math.round((completed / todos.length) * 100);
 
   return (
-    <div className="flex flex-col min-h-0 shrink-0 border-t-2 border-border/40 bg-muted/80 px-3 py-1.5 max-h-[35%] shadow-[0_-4px_12px_-8px_rgba(0,0,0,0.2)]">
+    <section
+      aria-label="任务清单"
+      className="flex flex-col min-h-0 shrink-0 border-b border-border/40 bg-muted/55 px-3 py-1.5 max-h-[35%]"
+    >
       <div className="my-1.5 flex items-center gap-2 shrink-0">
-        <span className="text-[11px] font-medium text-foreground">Todos</span>
+        <span className="text-[11px] font-medium text-foreground">
+          任务清单
+        </span>
         <Progress value={pct} className="h-1 flex-1" />
         <span className="text-[11px] tabular-nums font-mono text-muted-foreground">
           {completed}/{todos.length}
@@ -73,7 +78,7 @@ export function TodoStrip({ sessionId }: Props) {
           ))}
         </ul>
       </ScrollArea>
-    </div>
+    </section>
   );
 }
 

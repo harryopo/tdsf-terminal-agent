@@ -78,6 +78,14 @@
 
 **已校准**：当前唯一生产 Agent 是 Strands main；`872dad4` 已令同会话下一张命令审批在前一条 SSH 返回后才创建，但它不等于 durable execution。当前 CUA 仅有浏览器标签，原生窗口/钥匙串/SSH/xterm 仍需桌面环境验收，不能用 localhost UI 替代。
 
+### 37.120 Agent 环境隔离与任务可视化（2026-09-06 ✅，原生桌面待验收）
+
+- 自动模式的命令安全判定改为区分执行程序：`last reboot` 是历史查询，不再被重启规则误杀；真实 `reboot`、`shutdown` 以及复合命令中的危险段仍拒绝执行。
+- WSL 环境新增发行版端到端传递；`python_run` 在 WSL 中通过 `wsl.exe -d <distro> --cd <cwd> --exec python3` 执行，杜绝 Windows 子进程接收 `/home/...` 而触发 WinError 267。
+- 新建“本地工作区”不再继承当前 WSL 的环境或路径；本地根路径来自首次检测到的 Windows home。
+- `todo_write` 不接受空任务数组，实时任务事件优先于磁盘水合；AI 窗口顶部显示仅来自真实 `todo_write` 的任务清单。
+- 回归：Python 105、前端 53、TypeScript typecheck 均通过；完整后端工具集受当前环境缺少 `langgraph` 限制，保留 fail-closed 行为。
+
 ### 37.119 审批与实际 SSH 执行严格串行（2026-09-05 ✅，原生桌面待验收）
 
 **根因**：服务端虽已有同会话 approval FIFO，却在“用户批准”时立即提升下一项；`request_approval_and_wait` 又额外发送一次工具直发的 created 副本。于是排队命令在上一条 SSH 尚执行时已经可见、可批准，命令与结果容易串位。

@@ -13,7 +13,11 @@ import {
 } from "../config";
 import { useTodosStore } from "./todoStore";
 import type { AgentUsage } from "../lib/agent";
-import { EMPTY_PROVIDER_KEYS, type ProviderKeys, type CustomEndpointKeys } from "../lib/keyring";
+import {
+  EMPTY_PROVIDER_KEYS,
+  type ProviderKeys,
+  type CustomEndpointKeys,
+} from "../lib/keyring";
 import {
   DEFAULT_AGENT_MODE,
   DEFAULT_TDSF_AGENT,
@@ -37,7 +41,10 @@ import { pushRecentModel } from "../lib/modelPrefs";
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 // A1 多服务器隔离 (2026-09-01): 新会话按当前环境绑定 scope。
 // sshStore 无 AI 侧反向依赖，静态导入安全（chatRuntime 已有先例）。
-import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import {
+  isSessionConnected,
+  useSshStore,
+} from "@/modules/ssh-explorer/sshStore";
 import { useSpaces } from "@/modules/spaces";
 import {
   loadAll as loadPersistedSpaces,
@@ -47,7 +54,9 @@ import type { SessionScope } from "../lib/sessions";
 
 type SshSessionScope = Extract<SessionScope, { kind: "ssh" }>;
 
-function sshScopeFromSpace(space: SpaceMeta | undefined): SshSessionScope | null {
+function sshScopeFromSpace(
+  space: SpaceMeta | undefined,
+): SshSessionScope | null {
   if (space?.env?.kind !== "ssh") return null;
   return {
     kind: "ssh",
@@ -57,10 +66,7 @@ function sshScopeFromSpace(space: SpaceMeta | undefined): SshSessionScope | null
   };
 }
 
-function sameSshServer(
-  left: SshSessionScope,
-  right: SshSessionScope,
-): boolean {
+function sameSshServer(left: SshSessionScope, right: SshSessionScope): boolean {
   return (
     left.host === right.host &&
     left.user === right.user &&
@@ -75,9 +81,7 @@ function sessionSshScope(
   if (session.scope?.kind === "ssh") return session.scope;
   if (session.scope?.kind !== "workspace") return null;
   const spaceId = session.scope.spaceId;
-  return sshScopeFromSpace(
-    spaces.find((space) => space.id === spaceId),
-  );
+  return sshScopeFromSpace(spaces.find((space) => space.id === spaceId));
 }
 
 /**
@@ -147,9 +151,7 @@ export type Live = {
    * 教学卡专用的确认执行入口。它先在终端 leaf 上登记等待中的教学执行，
    * 再注入命令；结果只能由同一 leaf 的 TerminalBlockCollector 回填。
    */
-  startTeachingCommand: (
-    command: string,
-  ) =>
+  startTeachingCommand: (command: string) =>
     | { ok: true; executionId: string }
     | {
         ok: false;
@@ -195,7 +197,8 @@ export type Live = {
    * connection_mode（无终端时标 none，而非误报 local）。旧调用方未注入
    * 时 transport 回退用 sshConnection/terminalOutput 推断。
    */
-  getActiveTerminalSession?: () => "ssh" | "local" | null;
+  getActiveTerminalSession?: () => "ssh" | "local" | "wsl" | null;
+  getWslDistro?: () => string | null;
 };
 
 /** 环境探测结果（sidecar system.probe_env 返回，snake_case 对齐协议） */
@@ -215,11 +218,7 @@ export type EnvironmentProbe = {
 };
 
 export type AgentRunStatus =
-  | "idle"
-  | "thinking"
-  | "streaming"
-  | "awaiting-approval"
-  | "error";
+  "idle" | "thinking" | "streaming" | "awaiting-approval" | "error";
 
 export type AgentMeta = {
   status: AgentRunStatus;
@@ -270,10 +269,7 @@ export type PendingSelection = {
   source: "terminal" | "editor";
 };
 
-export type ApprovalResponder = (
-  approvalId: string,
-  approved: boolean,
-) => void;
+export type ApprovalResponder = (approvalId: string, approved: boolean) => void;
 
 type StoreState = {
   live: Live;
@@ -494,7 +490,9 @@ function extractTranscript(messages: UIMessage[]): {
       role: m.role,
       content:
         m.parts
-          ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
+          ?.filter(
+            (p): p is { type: "text"; text: string } => p.type === "text",
+          )
           .map((p) => p.text)
           .join("\n") ?? "",
     }))
@@ -556,7 +554,9 @@ function persistModeToActiveSession(
   ) {
     return;
   }
-  const next = state.sessions.map((s) => (s.id === id ? { ...s, ...patch } : s));
+  const next = state.sessions.map((s) =>
+    s.id === id ? { ...s, ...patch } : s,
+  );
   useChatStore.setState({ sessions: next });
   void saveSessionsList(next);
 }
@@ -675,7 +675,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
     set((s) => ({
       panelOpen: true,
       focusSignal: s.focusSignal + 1,
-      pendingSelections: [...s.pendingSelections, { id, text: trimmed, source }],
+      pendingSelections: [
+        ...s.pendingSelections,
+        { id, text: trimmed, source },
+      ],
     }));
   },
   consumeSelections: () => {
@@ -798,7 +801,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
           ...persisted.spaces.filter((space) => !currentSpaceIds.has(space.id)),
         ];
       } catch (error) {
-        console.warn("[chatStore] failed to resolve persisted workspace", error);
+        console.warn(
+          "[chatStore] failed to resolve persisted workspace",
+          error,
+        );
       }
     }
     const server = sessionSshScope(session, knownSpaces);
@@ -806,7 +812,8 @@ export const useChatStore = create<StoreState>((set, get) => ({
       let changed = false;
       const next = get().sessions.map((item) => {
         const itemServer = sessionSshScope(item, knownSpaces);
-        if (!itemServer || !sameSshServer(itemServer, targetServer)) return item;
+        if (!itemServer || !sameSshServer(itemServer, targetServer))
+          return item;
         if (
           item.scope?.kind === "ssh" &&
           sameSshServer(item.scope, targetServer)
@@ -847,12 +854,14 @@ export const useChatStore = create<StoreState>((set, get) => ({
 
     const sshState = useSshStore.getState();
     await sshState.loadSavedConnections();
-    const profile = useSshStore.getState().savedConnections.find(
-      (item) =>
-        item.host === server.host &&
-        item.user === server.user &&
-        item.port === server.port,
-    );
+    const profile = useSshStore
+      .getState()
+      .savedConnections.find(
+        (item) =>
+          item.host === server.host &&
+          item.user === server.user &&
+          item.port === server.port,
+      );
     if (!profile) {
       toast.error("无法恢复服务器会话", {
         description: `未找到 ${server.user}@${server.host}:${server.port} 的已保存连接`,
@@ -860,9 +869,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
       return false;
     }
 
-    const sshSessionId = await useSshStore
-      .getState()
-      .connectWithSaved(profile);
+    const sshSessionId = await useSshStore.getState().connectWithSaved(profile);
     if (!sshSessionId) return false;
 
     // Convert every resolvable conversation for this server to the stable SSH
@@ -990,7 +997,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
     }
 
     // 有历史 → 切到当前工作区自己的会话（最近一条，无则新建），防跨区污染
-    const wsSessions = visibleSessions.sort((a, b) => b.updatedAt - a.updatedAt);
+    const wsSessions = visibleSessions.sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
     if (wsSessions.length > 0) {
       get().switchSession(wsSessions[0].id);
     } else {
@@ -1004,7 +1013,8 @@ export function getAgentMeta(): AgentMeta {
 }
 
 export function getActiveProviderKey(): string | null {
-  const { selectedModelId, apiKeys, customEndpointKeys } = useChatStore.getState();
+  const { selectedModelId, apiKeys, customEndpointKeys } =
+    useChatStore.getState();
   if (isCompatModelId(selectedModelId)) {
     const eid = endpointIdFromCompatModel(selectedModelId);
     return customEndpointKeys[eid] ?? null;

@@ -254,6 +254,28 @@ def _normalize_tokens(toks: list[str]) -> list[str]:
     return toks
 
 
+def _is_last_reboot_history_segment(seg: str) -> bool:
+    """Recognize the readonly ``last reboot`` query without weakening denylist."""
+    toks = _normalize_tokens([_strip_quotes(t) for t in seg.split()])
+    return bool(toks and _base_name(toks[0]).lower() == "last" and "reboot" in toks[1:])
+
+
+def is_last_reboot_history_query(command: str) -> bool:
+    """Allow a compound query only when every reboot mention is ``last reboot``."""
+    segments = split_compound(command)
+    mentioned = [seg for seg in segments if re.search(r"\breboot\b", seg)]
+    return bool(mentioned) and all(_is_last_reboot_history_segment(seg) for seg in mentioned)
+
+
+def contains_non_history_power_mention(command: str) -> bool:
+    """Keep all power-control mentions risky except the explicit history query."""
+    power_word = re.compile(r"\b(?:reboot|shutdown|poweroff|halt)\b|\binit\s+[06]\b")
+    return any(
+        power_word.search(seg) and not is_last_reboot_history_query(seg)
+        for seg in split_compound(command)
+    )
+
+
 def _arg_tokens(toks: list[str]) -> list[str]:
     """提取参数级 token（去掉命令名与选项；--opt=val 视为带值选项整体跳过）"""
     args: list[str] = []
@@ -542,6 +564,8 @@ def match_denylist(seg: str) -> tuple[str, str] | None:
         (规则名, 拒绝原因)；未命中返回 None
     """
     for name, pattern, reason in _DENYLIST:
+        if name == "reboot" and is_last_reboot_history_query(seg):
+            continue
         if pattern.search(seg):
             return name, reason
     return None
