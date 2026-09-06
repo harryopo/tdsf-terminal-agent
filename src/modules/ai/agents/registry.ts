@@ -23,7 +23,7 @@ export type TdsfAgentId = "main";
  *
  * - observe：观察——只读分析，任何写/执行类操作 fail-closed 拒绝并如实报告
  * - confirm：确认——只读/L0-L1 放行，L2-L4 逐条审批卡（最安全中间态）
- * - auto：自动——L0-L2 自动放行，L3/L4 仍升级确认（L4 任何模式/白名单不可绕）
+ * - auto：自动——L0-L4 直接执行；命令硬底线 denylist 仍不可绕过
  *
  * 模式为会话级状态（chatStore.agentMode，per-session 持久化），随
  * agent.invoke 的 state.live.agentMode 下发 sidecar；缺省缺字段时
@@ -62,7 +62,7 @@ export const AGENT_MODE_META: Record<
   auto: {
     label: "自动",
     badge: "自动 · 执行",
-    desc: "低危自动放行，高危仍需确认",
+    desc: "所有命令直接执行；命令硬底线仍会阻断",
     brief: "自由执行",
   },
   teach: {
