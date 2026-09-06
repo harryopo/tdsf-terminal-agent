@@ -6,6 +6,14 @@
 
 ---
 
+### 37.126 W3 durable operation 已接入 Python SSH 主链（2026-09-06 ✅，Rust 关联待做）
+
+**已实现**：运行时 `ProjectService` 被显式注入 Strands 工具上下文。除风险拒绝外，每次 SSH 工具调用都创建不含命令原文的 `operation_id/intent_id/hash`，把审批、派发和结束分别落到状态机；账本缺失时派发前失败关闭。拒绝/超时/本地前置失败会取消，IPC 抛异常与“回包或成功结果未能持久化”都为 `indeterminate`，只有明确零退出码且最终状态已落盘才是 `succeeded`。解析出的远端 endpoint 也在派发前记录，返回结果带有 operation 身份供上层关联。
+
+**验证与边界**：新增成功、派发响应丢失、审批顺序、账本不可用和 endpoint 回归；定向 Python **45 passed**，并通过 `py_compile`、`git diff --check`、typecheck、lint、Vitest **132 files / 1336 tests**、Web build、`cargo check`。项目虚拟环境启动器失效、全局 Miniconda 又缺 `langgraph`，故无法诚实声明未隔离的侧车 Python 全套通过。Rust RPC 尚不知道 operation ID，跨进程日志和重启核对仍不能以此身份闭环；未完成原生 SSH 取证。
+
+**下一步**：最小化扩展 Rust SSH 请求/响应中的 `operation_id`，在不记录命令明文的前提下建立端到端关联；随后做保存 profile 的真实 SSH 确认 FIFO、历史重开、知识库普通 Markdown 与显式 TeachCard 分流验收。
+
 ### 37.125 W3 durable operation 持久账本底座（2026-09-06 ✅，尚未接入派发）
 
 **已实现**：同一 WAL SQLite 服务新增 `operations` 表，记录不含原文命令的 intent/目标/命令 hash 与状态机。合法状态转换受代码白名单约束；sidecar 初始化会将遗留 `dispatching/dispatched` 转为 `indeterminate`，不自动重发。

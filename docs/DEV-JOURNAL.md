@@ -6,6 +6,14 @@
 
 ---
 
+### 37.126 W3 durable operation 接入 SSH 主链（2026-09-06 ✅，Rust 关联仍开放）
+
+**实现**：生产 `configure_strands` 取得全局 `ProjectService`，经 `StrandsAgentAdapter → ToolContext` 注入 `execute_via_ssh`。风险拒绝仍在建账前；其余调用创建不含命令原文的 UUID `intent_id/operation_id` 与 SHA-256 命令摘要，按真实路径记录 `created → awaiting_approval/approved → dispatching → dispatched → succeeded/failed`。拒绝、超时、目标或 bridge 不可用会取消；IPC 异常、派发状态未落盘、或成功结果未能落盘一律 `indeterminate`，绝不声称远端已完成；仅明确 `exit_code == 0` 且 `succeeded` 已持久化后才写 completed evidence/audit。运行时账本不可用会在 SSH 派发前失败关闭，解析出的 endpoint 在派发时一并持久化。
+
+**验证与边界**：新增成功、派发响应丢失、审批先于派发、账本缺失失败关闭和 endpoint 记录回归；针对改动的 Python 测试 **45 passed**，`py_compile`、`git diff --check`、`pnpm typecheck`、`pnpm lint`、Vitest **132 files / 1336 tests**、`pnpm build:web`、`cargo check` 均通过。项目 `.venv` 启动器失效，而可用 Miniconda 环境缺少 `langgraph`，因此未将其导致的既有全量 `test_tools.py` fail-closed 结果伪报为全绿。
+
+**下一步**：把 `operation_id` 放入 Rust SSH RPC 请求和回包，令跨进程日志、重启后的人工核对与重复派发防护使用同一身份；然后以已保存 SSH profile 做 W0 原生 FIFO/历史/知识库取证。
+
 ### 37.125 W3 durable operation SQLite 底座（2026-09-06 ✅，派发接入仍开放）
 
 **实现**：`project_service` 从 5 表扩展为 6 表，新增不保存原始命令的 `operations` 账本：只存 intent、目标身份、命令 hash、状态、时间、退出码、错误码与元数据。状态转换只允许 `created → awaiting_approval/approved → dispatching → dispatched → succeeded/failed`；终态和 `indeterminate` 不允许自动复活。服务启动把 `dispatching/dispatched` 原子转为 `indeterminate + sidecar_restarted`。

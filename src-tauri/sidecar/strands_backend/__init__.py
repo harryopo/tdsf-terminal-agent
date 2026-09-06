@@ -116,6 +116,18 @@ def configure_strands(
             )
             strands_model = None
 
+    operation_service = None
+    try:
+        from project_service import get_global_service
+
+        operation_service = get_global_service()
+    except Exception as e:
+        logger.exception(
+            "configure_strands: durable operation ledger unavailable; "
+            "SSH dispatch will fail closed: %s",
+            e,
+        )
+
     adapter = StrandsAgentAdapter(
         event_bus=event_bus,
         rust_bridge=rust_bridge or DefaultRustBridge(),
@@ -123,6 +135,8 @@ def configure_strands(
         system_prompt=system_prompt,
         strands_model=strands_model,
         max_iterations=max_iterations,
+        operation_service=operation_service,
+        require_operation_ledger=True,
     )
     logger.info(
         f"Strands backend configured: strands_available={is_strands_available}, "

@@ -25,7 +25,9 @@ strands_backend/tests/test_tools.py — Strands 后端工具 + 适配层单元�
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -284,6 +286,129 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["reason"], "missing_or_invalid_exit_code")
         self.assertEqual(evidence.call_args.kwargs["status"], "error")
+
+    def test_durable_operation_reaches_succeeded_only_after_exit_zero(self):
+        """W3: an SSH exit code of zero finalizes its durable operation."""
+        from project_service import ProjectService
+        from strands_backend.tools import execute_via_ssh
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx()
+                ctx.operation_service = service
+                with patch(
+                    "strands_backend.tools.assess_command",
+                    return_value={
+                        "decision": "allow",
+                        "risk": {"level": "L0", "high_risk": False},
+                        "impact": {"segments": [], "max_risk_l": 0},
+                        "risk_l": 0,
+                    },
+                ):
+                    result = execute_via_ssh(ctx, "uname -a")
+
+                self.assertEqual(result["status"], "success")
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "succeeded")
+                self.assertEqual(operation["exit_code"], 0)
+                self.assertNotIn("command", operation)
+            finally:
+                service.close()
+
+    def test_durable_operation_is_indeterminate_when_dispatch_reply_is_lost(self):
+        """W3: a bridge exception after dispatch never claims a terminal result."""
+        from project_service import ProjectService
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+
+        def invoke(method: str, _params: dict) -> dict:
+            if method == "ssh_status":
+                return {"ok": True}
+            raise RuntimeError("bridge disconnected after dispatch")
+
+        bridge.ipc_invoke.side_effect = invoke
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx(rust_bridge=bridge)
+                ctx.operation_service = service
+                with patch(
+                    "strands_backend.tools.assess_command",
+                    return_value={
+                        "decision": "allow",
+                        "risk": {"level": "L0", "high_risk": False},
+                        "impact": {"segments": [], "max_risk_l": 0},
+                        "risk_l": 0,
+                    },
+                ):
+                    result = execute_via_ssh(ctx, "uname -a")
+
+                self.assertEqual(result["status"], "error")
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "indeterminate")
+                self.assertEqual(operation["error_code"], "ipc_invoke_exception")
+            finally:
+                service.close()
+
+    def test_durable_operation_records_approval_before_dispatch(self):
+        """W3: a confirmed command traverses awaiting_approval before dispatch."""
+        from needs_you import NeedsYouStatus
+        from project_service import ProjectService
+        from strands_backend.tools import execute_via_ssh
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx()
+                ctx.operation_service = service
+                with patch(
+                    "strands_backend.tools.assess_command",
+                    return_value={
+                        "decision": "confirm",
+                        "risk": {"level": "L3", "high_risk": True},
+                        "impact": {"segments": [], "max_risk_l": 3},
+                        "risk_l": 3,
+                    },
+                ), patch(
+                    "strands_backend.tools.request_approval_and_wait",
+                    return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+                ) as approval:
+                    result = execute_via_ssh(ctx, "touch /tmp/verified")
+
+                approval.assert_called_once()
+                self.assertTrue(result["operation_id"])
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "succeeded")
+                self.assertIsNotNone(operation["approved_at"])
+            finally:
+                service.close()
+
+    def test_required_operation_ledger_fails_closed_before_ssh_dispatch(self):
+        """W3: the production context cannot bypass a missing durable ledger."""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+        ctx = make_ctx(rust_bridge=bridge)
+        ctx.require_operation_ledger = True
+        with patch(
+            "strands_backend.tools.assess_command",
+            return_value={
+                "decision": "allow",
+                "risk": {"level": "L0", "high_risk": False},
+                "impact": {"segments": [], "max_risk_l": 0},
+                "risk_l": 0,
+            },
+        ):
+            result = execute_via_ssh(ctx, "uname -a")
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "operation_ledger_unavailable")
+        bridge.ipc_invoke.assert_not_called()
 
     def test_high_risk_command_approved_executes(self):
         """P1-1: 高危命令用户批准 → 真实执行

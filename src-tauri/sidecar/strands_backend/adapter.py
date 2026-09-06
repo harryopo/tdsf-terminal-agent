@@ -1193,6 +1193,8 @@ class StrandsAgentAdapter:
         strands_model: Any = None,
         max_iterations: int = 10,
         extra_tools: list | None = None,
+        operation_service: Any = None,
+        require_operation_ledger: bool = False,
     ) -> None:
         self.event_bus = event_bus
         self.rust_bridge = rust_bridge or DefaultRustBridge()
@@ -1201,6 +1203,8 @@ class StrandsAgentAdapter:
         self.strands_model = strands_model
         self.max_iterations = max_iterations
         self.extra_tools = list(extra_tools) if extra_tools else []
+        self.operation_service = operation_service
+        self.require_operation_ledger = require_operation_ledger
 
         # Strands 可用性快照
         self._strands_available = _STRANDS_AGENT_AVAILABLE and TOOL_DECORATOR_AVAILABLE
@@ -2287,6 +2291,8 @@ class StrandsAgentAdapter:
             workspace=workspace,
             # A3 (2026-09-04): 教学模式终端执行链路
             teach=teach,
+            operation_service=self.operation_service,
+            require_operation_ledger=self.require_operation_ledger,
         )
 
     # ========================================================================

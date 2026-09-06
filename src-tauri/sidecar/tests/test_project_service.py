@@ -537,3 +537,22 @@ class TestDurableOperations:
         assert recovered["state"] == "indeterminate"
         assert recovered["error_code"] == "sidecar_restarted"
         restarted.close()
+
+    def test_operation_records_resolved_endpoint_before_dispatch(
+        self, service: ProjectService
+    ) -> None:
+        op = service.create_operation(
+            intent_id="intent-4",
+            conversation_session_id="chat-4",
+            ssh_session_id="45",
+            target_endpoint=None,
+            command_hash="sha256:command",
+        )
+        service.transition_operation(op["id"], "approved")
+        updated = service.transition_operation(
+            op["id"],
+            "dispatching",
+            target_endpoint="root@example.test:22",
+        )
+
+        assert updated["target_endpoint"] == "root@example.test:22"
