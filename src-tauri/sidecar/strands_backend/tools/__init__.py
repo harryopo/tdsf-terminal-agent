@@ -609,9 +609,10 @@ def assess_command(
         logger.warning(f"decide unavailable, fail-closed to deny: {e}")
         decision = "deny"
 
-    # 4.5 白名单 ask 命中 → 强制逐条审批（spec：ask = 每次询问，
-    #     覆盖 decide 的 allow；deny/blocked 结果维持原样）
-    if force_confirm and decision == "allow":
+    # 4.5 白名单 ask 命中 → 确认模式强制逐条审批。自动模式的定义是
+    #     无交互直接执行，故不把 allow 改写为 confirm；deny/blocked 不受影响。
+    mode_value = getattr(ctx.mode, "value", str(ctx.mode))
+    if force_confirm and mode_value != "auto" and decision == "allow":
         decision = "confirm"
 
     # 5. observe 只读短路（方案书 §3.2：只读类由调用方按 ToolPolicy.readonly

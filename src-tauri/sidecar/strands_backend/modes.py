@@ -26,7 +26,7 @@ class AgentMode(str, Enum):
         OBSERVE: 只读观察——一切写/执行类操作 fail-closed 拒绝（工具集
             schema 级裁剪为只读白名单）
         CONFIRM: 确认——L0-L1 放行，L2-L4 逐条审批（缺省模式）
-        AUTO: 自动——L0-L2 放行，L3/L4 永远确认（升级确认卡）
+        AUTO: 自动——L0-L4 直接执行（命令硬底线 denylist 仍阻断）
     """
 
     OBSERVE = "observe"
