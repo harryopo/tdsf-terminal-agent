@@ -9,7 +9,9 @@ type Props = {
   activeIndex: number;
   indexing: boolean;
   truncated: boolean;
+  error?: string | null;
   hasWorkspace: boolean;
+  sourceLabel?: string;
   onPick: (file: string) => void;
   onHover: (index: number) => void;
 };
@@ -19,7 +21,9 @@ export function FilePickerContent({
   activeIndex,
   indexing,
   truncated,
+  error,
   hasWorkspace,
+  sourceLabel = "工作区文件",
   onPick,
   onHover,
 }: Props) {
@@ -43,11 +47,15 @@ export function FilePickerContent({
       className="w-80 overflow-hidden rounded-lg border border-border/60 bg-popover/95 p-0 shadow-xl backdrop-blur-xl"
     >
       <div className="border-b border-border/60 px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-        Workspace files
+        {sourceLabel}
       </div>
       {!hasWorkspace ? (
         <div className="px-3 py-3 text-[11px] text-muted-foreground">
           No workspace open
+        </div>
+      ) : error ? (
+        <div className="px-3 py-3 text-[11px] text-destructive">
+          无法读取文件列表：{error}
         </div>
       ) : indexing && files.length === 0 ? (
         <div className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground">

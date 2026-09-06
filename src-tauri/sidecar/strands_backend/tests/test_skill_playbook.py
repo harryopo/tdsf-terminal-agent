@@ -64,6 +64,7 @@ def _make_fake_registry(monkeypatch, skills):
     """把全局 registry 替换为受控 fake（invoke 直调 invoke() 返回预置 dict）"""
     fake = MagicMock()
     fake.invoke = lambda name, params=None: skills[name.lower()]
+    fake.get_reference = lambda name, params=None: skills[name.lower()]
     fake.list = lambda: []
     monkeypatch.setattr("skills.registry.get_global_registry", lambda: fake)
     return fake

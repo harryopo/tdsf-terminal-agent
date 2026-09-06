@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { TeachCard } from "./TeachCard";
-import { isTeachMessage, parseTeachSections } from "./teachParser";
+import {
+  isTeachMessage,
+  parseTeachSections,
+  shouldRenderTeachCard,
+} from "./teachParser";
 
 const TEACH_MD = [
   "<!-- tdsf:teach -->",
@@ -99,6 +103,14 @@ describe("isTeachMessage — 教学输出契约", () => {
   it("普通短文本不误判", () => {
     expect(isTeachMessage("你好，这是普通回答")).toBe(false);
     expect(isTeachMessage("🏛️ Linux 设计哲学\n一切皆文件")).toBe(false);
+  });
+});
+
+describe("shouldRenderTeachCard — 流式边界", () => {
+  it("在流式或 token 续跑期间保持 Markdown，完成后再解析卡片", () => {
+    expect(shouldRenderTeachCard(TEACH_MD, true, true)).toBe(false);
+    expect(shouldRenderTeachCard(TEACH_MD, true, false)).toBe(true);
+    expect(shouldRenderTeachCard(TEACH_MD, false, false)).toBe(false);
   });
 });
 

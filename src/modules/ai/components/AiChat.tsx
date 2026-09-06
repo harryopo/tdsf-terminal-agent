@@ -43,7 +43,6 @@ import type {
   UIMessagePart,
 } from "ai";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SLASH_COMMANDS, TDSF_CMD_RE } from "../lib/slashCommands";
 import { sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
 // P1-2: 会话证据面板
@@ -57,35 +56,8 @@ import {
 // Task 6.5: sidecar needs_you 审批闭环（approval 类请求渲染四层审批卡）
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
-import { isTeachMessage } from "./teachParser";
+import { shouldRenderTeachCard } from "./teachParser";
 import { TeachCard } from "./TeachCard";
-
-function CommandSnippet({ name }: { name: string }) {
-  const meta = SLASH_COMMANDS[name];
-  if (!meta) {
-    return (
-      <div className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/40 px-2 py-1 font-mono text-[11px]">
-        /{name}
-      </div>
-    );
-  }
-  return (
-    <div className="inline-flex max-w-full items-center gap-2 rounded-md border border-border/50 bg-muted/40 px-2 py-1">
-      <HugeiconsIcon
-        icon={meta.icon}
-        size={12}
-        strokeWidth={1.75}
-        className="shrink-0 text-foreground"
-      />
-      <span className="font-mono text-[11px] text-foreground">
-        {meta.invocation}
-      </span>
-      <span className="truncate text-[11px] text-muted-foreground">
-        {meta.label}
-      </span>
-    </div>
-  );
-}
 
 type AnyToolPart = ToolUIPart | DynamicToolUIPart;
 
@@ -589,15 +561,11 @@ const RenderedMessage = memo(function RenderedMessage({
       .map((p) => p.text)
       .join("\n");
 
-    const cmdMatch = rawText.match(TDSF_CMD_RE);
-    const commandName = cmdMatch?.[1] ?? null;
-    const withoutCmd = cmdMatch ? rawText.slice(cmdMatch[0].length) : rawText;
-    const stripped = stripUserContextBlocks(withoutCmd);
+    const stripped = stripUserContextBlocks(rawText);
 
     return (
       <Message from="user">
         <MessageContent>
-          {commandName ? <CommandSnippet name={commandName} /> : null}
           {stripped.chips.length > 0 ? (
             <ContextChips chips={stripped.chips} />
           ) : null}
@@ -847,15 +815,10 @@ const RenderedPart = memo(function RenderedPart({
 }) {
   if (part.type === "text") {
     const text = (part as unknown as { text: string }).text;
-    // TDSF 魔改 (2026-08-09): 教学卡片基于 agent id 切换，不等输出完毕。
-    //   原实现 `!streaming && isTeachMessage(text)` 导致流式过程中显示纯文本，
-    //   流完后才整体替换为 TeachCard——用户反馈"输出内容后才开始排版"。
-    //   现改为：当前活跃 agent 是 teach 时，流式过程中就用 TeachCard 渲染
-    //   （parseTeachSections 支持不完整 markdown，sections 会随流式增长）。
-    // v3.1 收敛 (2026-08-29): teach 子 agent 已删除，改为教学皮肤开关
-    //   （chatStore.teach）驱动——开关 ON 时按 TeachCard 契约渲染教学输出。
+    // TeachCard 只能解析完整、带 tdsf:teach 标记的回答。流式或知识检索
+    // 保持普通 Markdown，避免 max-token 续写留下半截 fenced code/section。
     const teach = useChatStore.getState().teach;
-    if (teach && isTeachMessage(text)) {
+    if (shouldRenderTeachCard(text, teach, streaming)) {
       return <TeachCard content={text} />;
     }
     return (

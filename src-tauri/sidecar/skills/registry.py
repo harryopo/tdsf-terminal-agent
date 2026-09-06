@@ -281,6 +281,49 @@ class SkillRegistry:
     # 调用
     # ========================================================================
 
+    def get_reference(
+        self,
+        name: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a Skill's reference material without executing its executor.
+
+        Skills describe Linux-side procedures, while this registry lives in the
+        desktop sidecar.  Running an executor here can target Windows instead
+        of the selected SSH/WSL environment and bypass the agent's command
+        policy.  Agent and UI calls therefore use this method; a caller that
+        explicitly owns a correctly targeted runtime may still use ``invoke``.
+        """
+        skill = self.get(name)
+        if skill is None:
+            raise KeyError(f"skill not found: {name}")
+
+        params = params or {}
+        result: dict[str, Any] = {
+            "name": skill.name,
+            "description": skill.description,
+            "when_to_use": skill.when_to_use,
+            "steps": skill.steps,
+            "examples": skill.examples,
+            "tags": skill.tags,
+            "triggers": skill.triggers,
+            "allowed_tools": skill.allowed_tools,
+            "playbook": list(skill.playbook),
+            "params": params,
+            "source": "builtin" if skill.file_path else "mock",
+            "execution": "not_run",
+        }
+        if skill.file_path:
+            result["content"] = skill.body
+        else:
+            result["content"] = f"mock skill: {skill.name}"
+            result["note"] = "this is a mock external skill, install from marketplace to use"
+        if skill.executor:
+            # Metadata only.  It tells the agent which environment-aware tool
+            # should implement a playbook step; it is not an execution result.
+            result["executor"] = skill.executor
+        return result
+
     def invoke(self, name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """调用 Skill
 
@@ -914,9 +957,9 @@ def register_methods(dispatcher: Any) -> None:
         return {"ok": True, "skill": skill.to_dict()}
 
     def _skill_invoke(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """调用指定 Skill"""
+        """读取指定 Skill 的参考资料；不在本机执行 executor。"""
         try:
-            result: dict[str, Any] = registry.invoke(name, params)
+            result: dict[str, Any] = registry.get_reference(name, params)
             return {"ok": True, "result": result}
         except KeyError as e:
             return {"ok": False, "error": str(e)}

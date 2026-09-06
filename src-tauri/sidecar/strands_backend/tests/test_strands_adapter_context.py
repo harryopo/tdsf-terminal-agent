@@ -34,6 +34,37 @@ if _SIDECAR_DIR not in sys.path:
 
 from strands_backend.modes import AgentMode  # noqa: E402 — sys.path 先行注入
 
+class TestTeachContinuationIntent(unittest.TestCase):
+    """A bare continuation inherits teaching only after an explicit lesson."""
+
+    def test_recognizes_only_short_continuation_requests(self):
+        from strands_backend.adapter import _is_teaching_continuation
+
+        self.assertTrue(_is_teaching_continuation("继续"))
+        self.assertTrue(_is_teaching_continuation("接着讲"))
+        self.assertTrue(_is_teaching_continuation("continue"))
+        self.assertFalse(_is_teaching_continuation("继续查看知识库"))
+
+    def test_teach_observe_keeps_shell_mapped_commands_as_cards(self):
+        from strands_backend.tools import ToolContext, make_all_ops_tools
+
+        ctx = ToolContext(permission_level=1, mode=AgentMode.OBSERVE, teach=True)
+        tools = make_all_ops_tools(ctx, include_teach_shell_tools=True)
+        names = {getattr(tool, "__name__", "") for tool in tools}
+        self.assertIn("ssh_command", names)
+        self.assertIn("read_remote_file", names)
+        self.assertNotIn("service_manage", names)
+
+    def test_callback_remembers_marker_across_stream_chunks(self):
+        from strands_backend.adapter import TdsfStrandsCallbackHandler
+
+        handler = TdsfStrandsCallbackHandler(event_bus=None)
+        handler.begin_turn(teach=True, allow_teach_output=True)
+        handler._emit_agent_message("<!-- tdsf:")
+        handler._emit_agent_message("teach -->\n第一节")
+        self.assertTrue(handler._emitted_teach_marker)
+
+
 try:
     from strands.models.model import Model  # type: ignore[import]
     _STRANDS_AVAILABLE = True
@@ -130,13 +161,13 @@ class TestCacheKeyExcludesModeTeach(unittest.TestCase):
         # observe：只读白名单 + OBSERVE prompt
         self.assertNotIn("ssh_command", set(a.tool_names))
         self.assertIn("Current mode: OBSERVE", a.system_prompt)
-        self.assertNotIn("Teaching skin", a.system_prompt)
+        self.assertNotIn("教学皮肤（已开启）", a.system_prompt)
         # 切 confirm + teach：同实例，全量工具 + CONFIRM/TEACH prompt
         a2 = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM, teach=True)
         self.assertIs(a, a2)
         self.assertIn("ssh_command", set(a2.tool_names))
         self.assertIn("Current mode: CONFIRM", a2.system_prompt)
-        self.assertIn("Teaching skin", a2.system_prompt)
+        self.assertIn("教学皮肤（已开启）", a2.system_prompt)
 
     def test_perm_change_creates_new_instance(self):
         """perm 变化仍重建实例（权限影响工具集合法性）"""

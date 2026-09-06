@@ -1,11 +1,13 @@
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
+import { joinRemotePath } from "@/lib/sftp-bridge";
 import { cn } from "@/lib/utils";
+import { useSkillsStore } from "@/modules/skills/skillsStore";
 import { ArrowUpIcon, StopCircleIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useState } from "react";
 import { useWorkspaceFiles } from "../hooks/useWorkspaceFiles";
+import { useRemoteWorkspaceFiles } from "../hooks/useRemoteWorkspaceFiles";
 import { useComposer } from "../lib/composer";
-import { SLASH_COMMANDS } from "../lib/slashCommands";
 import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
 import { FilePickerContent } from "./FilePicker";
@@ -61,11 +63,29 @@ export function AiComposerInput() {
   const c = useComposer();
   const snippets = useSnippetsStore((s) => s.snippets);
   const workspaceRoot = useChatStore((s) => s.live.getWorkspaceRoot());
+  const sshSessionId = useChatStore((s) => s.live.getSshRustSessionId());
+  const skills = useSkillsStore((s) => s.skills);
+  const skillsLoaded = useSkillsStore((s) => s.loaded);
+  const loadSkills = useSkillsStore((s) => s.loadAll);
 
   const [trigger, setTrigger] = useState<SnippetTrigger | null>(null);
   const [fileTrigger, setFileTrigger] = useState<FileTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const workspaceFiles = useWorkspaceFiles(workspaceRoot, fileTrigger !== null);
+  const isRemoteWorkspace = sshSessionId !== null && workspaceRoot?.startsWith("/");
+  const workspaceFiles = useWorkspaceFiles(
+    isRemoteWorkspace ? null : workspaceRoot,
+    fileTrigger !== null,
+  );
+  const remoteWorkspaceFiles = useRemoteWorkspaceFiles(
+    isRemoteWorkspace ? workspaceRoot : null,
+    isRemoteWorkspace ? sshSessionId : null,
+    fileTrigger !== null,
+  );
+  const fileSource = isRemoteWorkspace ? remoteWorkspaceFiles : workspaceFiles;
+
+  useEffect(() => {
+    if (trigger?.char === "/" && !skillsLoaded) void loadSkills();
+  }, [loadSkills, skillsLoaded, trigger?.char]);
 
   const [fileQuery, setFileQuery] = useState("");
   useEffect(() => {
@@ -100,12 +120,17 @@ export function AiComposerInput() {
   const filteredItems = useMemo<PickerItem[]>(() => {
     if (!trigger) return [];
     const q = trigger.query;
-    const cmdItems: PickerItem[] = Object.values(SLASH_COMMANDS)
+    const skillItems: PickerItem[] = skills
       .filter(
-        (c) => !q || c.name.includes(q) || c.label.toLowerCase().includes(q),
+        (skill) =>
+          skill.enabled &&
+          (!q ||
+            skill.name.toLowerCase().includes(q) ||
+            skill.description.toLowerCase().includes(q) ||
+            skill.tags?.some((tag) => tag.toLowerCase().includes(q))),
       )
-      .map((command) => ({ kind: "command", command }));
-    if (trigger.char === "/") return cmdItems;
+      .map((skill) => ({ kind: "skill", skill }));
+    if (trigger.char === "/") return skillItems;
     const snipItems: PickerItem[] = snippets
       .filter(
         (s) =>
@@ -115,23 +140,23 @@ export function AiComposerInput() {
           s.description.toLowerCase().includes(q),
       )
       .map((snippet) => ({ kind: "snippet", snippet }));
-    return [...cmdItems, ...snipItems];
-  }, [trigger, snippets]);
+    return snipItems;
+  }, [trigger, snippets, skills]);
 
   const FILE_PICKER_CAP = 30;
   const filteredFiles = useMemo<string[]>(() => {
     if (!fileTrigger) return [];
     const q = fileQuery.toLowerCase();
-    if (!q) return workspaceFiles.files.slice(0, FILE_PICKER_CAP);
+    if (!q) return fileSource.files.slice(0, FILE_PICKER_CAP);
     const out: string[] = [];
-    for (const f of workspaceFiles.files) {
+    for (const f of fileSource.files) {
       if (f.toLowerCase().includes(q)) {
         out.push(f);
         if (out.length >= FILE_PICKER_CAP) break;
       }
     }
     return out;
-  }, [fileTrigger, fileQuery, workspaceFiles.files]);
+  }, [fileTrigger, fileQuery, fileSource.files]);
 
   const fileTriggerOpen = fileTrigger !== null;
   const snippetTriggerOpen = trigger !== null;
@@ -152,11 +177,10 @@ export function AiComposerInput() {
       insert = `#${item.snippet.handle}${needsSpace ? " " : ""}`;
       c.addSnippet(item.snippet);
     } else {
-      c.addCommand(item.command);
+      const needsSpace = afterRaw.length === 0 || !/^\s/.test(afterRaw);
+      insert = `/skill:${item.skill.name}${needsSpace ? " " : ""}`;
     }
-    const after =
-      item.kind === "command" ? afterRaw.replace(/^\s+/, "") : afterRaw;
-    c.setValue(`${before}${insert}${after}`);
+    c.setValue(`${before}${insert}${afterRaw}`);
     setTrigger(null);
     setActiveIndex(0);
     requestAnimationFrame(() => {
@@ -175,10 +199,16 @@ export function AiComposerInput() {
     c.setValue(`${before}${after}`);
     setFileTrigger(null);
     setActiveIndex(0);
-    const fullPath = workspaceRoot.endsWith("/")
-      ? `${workspaceRoot}${filePath}`
-      : `${workspaceRoot}/${filePath}`;
-    await c.attachFileByPath(fullPath);
+    const fullPath = isRemoteWorkspace
+      ? joinRemotePath(workspaceRoot, filePath)
+      : workspaceRoot.endsWith("/")
+        ? `${workspaceRoot}${filePath}`
+        : `${workspaceRoot}/${filePath}`;
+    if (isRemoteWorkspace && sshSessionId !== null) {
+      await c.attachRemoteFile(fullPath, sshSessionId);
+    } else {
+      await c.attachFileByPath(fullPath);
+    }
     requestAnimationFrame(() => {
       const el = c.textareaRef.current;
       if (!el) return;
@@ -249,7 +279,7 @@ export function AiComposerInput() {
                   c.submit();
                 }
               }}
-              placeholder="Ask TDSF anything   -   # for snippets and commands, @ for files"
+              placeholder="向 TDSF 提问   ·   / 调用 Skill，# 调用片段，@ 引用当前工作区文件"
               rows={1}
               className={cn(
                 "max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none",
@@ -290,9 +320,11 @@ export function AiComposerInput() {
           <FilePickerContent
             files={filteredFiles}
             activeIndex={activeIndex}
-            indexing={workspaceFiles.indexing}
-            truncated={workspaceFiles.truncated}
+            indexing={fileSource.indexing}
+            truncated={fileSource.truncated}
+            error={isRemoteWorkspace ? remoteWorkspaceFiles.error : null}
             hasWorkspace={workspaceRoot !== null}
+            sourceLabel={isRemoteWorkspace ? "服务器文件" : "本地工作区文件"}
             onPick={(f) => void onPickFile(f)}
             onHover={setActiveIndex}
           />
