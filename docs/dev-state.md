@@ -6,6 +6,14 @@
 
 ---
 
+### 37.128 命令建议与远程补全安装入口（2026-09-06 ✅，服务器重试待用户触发）
+
+- `suggest_command` 改为“命令建议”：展示需求和目标环境，不再展示原始 JSON；确认/观察模式下按钮是“插入终端”，不会误称为执行。
+- SSH 右下角入口安装的是可选 `carapace` 补全组件，不是 Git；它只用于动态参数补全（例如 Git 分支、目录、PID）。
+- 安装失败不再吞掉细节：创建远端目录、上传二进制、chmod/版本验证各自回显真实错误。
+- “不再提示”已可在设置 → 智能体与代码补全 → SSH 远程参数补全提示中恢复；本机开关已恢复 true，应用与 sidecar 已重启。
+- 未自动重试远端上传，避免在没有用户明确触发时改变服务器。
+
 ### 37.127 operation ID 已在 Python/Rust SSH 之间可核对（2026-09-06 ✅）
 
 **已实现**：持久 operation 创建后，Python 将它作为 `operationId` 发送到 Rust 反向 RPC；Rust 验证非空字符串并在 `SshCommandResult` 回显，直接前端调用保持字段可选。Python 仅接受相同 ID 的正常回包继续 `dispatched → succeeded/failed`；ID 缺失/错配、桥接 unavailable/error 都从 `dispatching` 进入 `indeterminate`，不生成 completed evidence。这里的“可核对”仅指本地跨进程消息关联，不是对远端执行的猜测、幂等或自动重试。

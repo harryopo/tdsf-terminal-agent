@@ -56,6 +56,7 @@ export function SshCarapaceBadge({ sessionId }: Props) {
 
   const [open, setOpen] = useState(false);
   const [stage, setStage] = useState<CarapaceInstallStage | 'error' | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
 
   // 未连接 / 已安装 / 检测未完成 / 用户已永久关闭 → 不渲染（无任何占位）
@@ -67,7 +68,8 @@ export function SshCarapaceBadge({ sessionId }: Props) {
     if (installing || rustSessionId === null) return;
     setInstalling(true);
     setStage('preparing');
-    void installRemoteCarapace(rustSessionId, setStage).then((ok) => {
+    setErrorMessage(null);
+    void installRemoteCarapace(rustSessionId, setStage, setErrorMessage).then((ok) => {
       setInstalling(false);
       if (ok) {
         // 安装成功 → 更新 store 状态，badge 随显隐条件消失
@@ -108,7 +110,9 @@ export function SshCarapaceBadge({ sessionId }: Props) {
           远端动态补全
         </div>
         {stage === 'error' ? (
-          <p className="mb-2 text-destructive">安装失败，请检查网络或稍后重试。</p>
+          <p className="mb-2 whitespace-pre-wrap break-words text-destructive">
+            {errorMessage ?? '安装失败，未收到可用的错误详情。'}
+          </p>
         ) : stage !== null ? (
           <p className="mb-2 text-muted-foreground">{STAGE_LABEL[stage]}</p>
         ) : (
@@ -132,7 +136,7 @@ export function SshCarapaceBadge({ sessionId }: Props) {
             className="rounded-md px-1.5 py-1 text-[11px] text-muted-foreground/70 hover:text-foreground"
             onClick={handleDismiss}
           >
-            不再提示
+            不再提示（可在设置中恢复）
           </button>
         </div>
       </PopoverContent>

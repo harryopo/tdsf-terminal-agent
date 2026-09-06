@@ -6,6 +6,16 @@
 
 ---
 
+### 37.128 命令建议语义与 SSH 补全安装可诊断（2026-09-06 ✅）
+
+**问题**：`suggest_command` 沿用英文 `Suggest` 和原始 `Input` JSON，无法说明它只生成命令、不执行；SSH 终端右下角提示安装的不是 Git，而是用于 Git 分支、目录和 PID 等动态补全的 `carapace`。安装链把所有失败压成同一句话，且“不再提示”没有设置恢复入口。
+
+**修复**：命令建议显示中文名称、用户需求与目标环境；非自动模式按钮明确为“插入终端”，只有自动模式才显示“执行”。远程补全安装会显示目录创建、上传或验证阶段的真实错误；设置新增“SSH 远程参数补全提示”开关。
+
+**本机操作**：已将 `sshRemoteCarapacePrompt` 从 false 恢复 true，并重启 Tauri；未向服务器自动上传组件。
+
+**验证**：定向 Vitest 84 通过、`pnpm typecheck` 与 `pnpm lint` 通过；Tauri 与 sidecar 重新启动并就绪。
+
 ### 37.127 W3 operation ID 跨 Python/Rust SSH 边界闭环（2026-09-06 ✅，原生取证仍开放）
 
 **实现**：Python 在持久账本启用时把同一 `operationId` 放进 `ssh_command` 反向 RPC；Rust sidecar 路由仅接受非空字符串并透传给 SSH 命令，`SshCommandResult` 原样 camelCase 回显，普通前端调用不传该字段则兼容不输出。Python 收到正常回包前验证回显 ID：缺失或不匹配直接将 `dispatching` 变为 `indeterminate`，不写 completed evidence；桥接层返回 unavailable/error 也保持不确定，不伪造 `dispatched → failed`。这只是本地跨进程归因，不能证明远端命令幂等，也不自动重试。

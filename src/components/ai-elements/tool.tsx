@@ -374,7 +374,7 @@ const TOOL_META: Record<
   search_history: { label: "历史案例", icon: GlobalSearchIcon, category: "diagnose" },
   ssh_list_sessions: { label: "SSH 会话", icon: TerminalIcon, category: "diagnose" },
   // 规划建议（青）
-  suggest_command: { label: "Suggest", icon: SparklesIcon, category: "plan" },
+  suggest_command: { label: "命令建议", icon: SparklesIcon, category: "plan" },
   todo_write: { label: "Todos", icon: CheckListIcon, category: "plan" },
   run_subagent: { label: "Subagent", icon: RobotIcon, category: "plan" },
   assess_confidence: { label: "置信度", icon: ShieldUserIcon, category: "plan" },
@@ -643,12 +643,13 @@ export const Tool = memo(ToolImpl, (a, b) => {
 
 function ToolInput({ toolName, input }: { toolName: string; input: unknown }) {
   if (input == null) return null;
+  const title = toolName === "suggest_command" ? "需求（不会执行）" : "Input";
   const preview = renderInputPreview(toolName, input);
   if (preview) {
     return (
       <div className="space-y-1">
         <div className="text-[10px] font-medium text-muted-foreground">
-          Input
+          {title}
         </div>
         {preview}
       </div>
@@ -656,7 +657,7 @@ function ToolInput({ toolName, input }: { toolName: string; input: unknown }) {
   }
   return (
     <div className="space-y-1">
-      <div className="text-[10px] font-medium text-muted-foreground">Input</div>
+      <div className="text-[10px] font-medium text-muted-foreground">{title}</div>
       <CodeBlockMini
         code={
           typeof input === "string" ? input : JSON.stringify(input, null, 2)
@@ -739,6 +740,23 @@ function renderInputPreview(
       <div className="space-y-0.5 font-mono text-[11px]">
         <div className="text-foreground">{pat}</div>
         {path ? <div className="text-muted-foreground">{path}</div> : null}
+      </div>
+    );
+  }
+  if (toolName === "suggest_command") {
+    const intent = str("intent") ?? str("description");
+    const targetOs = str("target_os");
+    if (!intent) return null;
+    return (
+      <div className="space-y-1">
+        <div className="rounded bg-muted/40 px-2 py-1.5 text-[11px] text-foreground">
+          {intent}
+        </div>
+        {targetOs ? (
+          <div className="text-[10px] text-muted-foreground">
+            目标环境：{targetOs}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1426,7 +1444,10 @@ function SuggestCommandCard({
   explanation: string | null;
   predictedOutput: string | null;
 }) {
-  const [inserted, setInserted] = useState(false);
+  const [action, setAction] = useState<"inserted" | "executed" | null>(null);
+  const autoExecuteInTerminal = useChatStore((s) => s.autoExecuteInTerminal);
+  const agentMode = useChatStore((s) => s.agentMode);
+  const executeOnClick = autoExecuteInTerminal && agentMode === "auto";
   // 确认模式步步确认（2026-09-04 用户钦定）：预测回显默认展开，
   // 让用户点“执行”前先看到命令预期输出（“预测命令的回显是什么”）。
   const [showPredicted, setShowPredicted] = useState(true);
@@ -1438,9 +1459,11 @@ function SuggestCommandCard({
   const onInsert = () => {
     const store = useChatStore.getState();
     // TDSF 魔改 (2026-08-09): 终端执行模式——加换行符自动执行命令
-    const text = store.autoExecuteInTerminal ? command + "\n" : command;
+    const execute =
+      store.autoExecuteInTerminal && store.agentMode === "auto";
+    const text = execute ? command + "\n" : command;
     const ok = store.live.injectIntoActivePty(text);
-    if (ok) setInserted(true);
+    if (ok) setAction(execute ? "executed" : "inserted");
   };
   // TDSF 魔改 (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
   useEffect(() => {
@@ -1452,7 +1475,7 @@ function SuggestCommandCard({
     if (agentMode !== "auto") return;
     autoFiredRef.current = true;
     const ok = live.injectIntoActivePty(command + "\n");
-    if (ok) setInserted(true);
+    if (ok) setAction("executed");
   }, [command]);
   return (
     <div className="space-y-1.5">
@@ -1466,7 +1489,7 @@ function SuggestCommandCard({
         <button
           type="button"
           onClick={onInsert}
-          disabled={inserted}
+          disabled={action !== null}
           className={cn(
             "shrink-0 flex items-center gap-1 px-2.5 text-[11px] font-medium",
             "border-l border-border/60",
@@ -1475,14 +1498,26 @@ function SuggestCommandCard({
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           )}
           aria-label="执行命令（打字机注入终端）"
-          title="确认模式：点击后命令以打字机方式注入终端执行"
+          title={
+            executeOnClick
+              ? "自动模式下会立即执行"
+              : "仅插入终端；由你自行确认执行"
+          }
         >
           <HugeiconsIcon
-            icon={inserted ? Tick02Icon : TerminalIcon}
+            icon={action ? Tick02Icon : TerminalIcon}
             size={12}
             strokeWidth={1.75}
           />
-          <span>{inserted ? "已执行" : "执行"}</span>
+          <span>
+            {action === "executed"
+              ? "已执行"
+              : action === "inserted"
+                ? "已插入"
+                : executeOnClick
+                  ? "执行"
+                  : "插入终端"}
+          </span>
         </button>
       </div>
       {/* TDSF 魔改 (2026-08-09): 预测回显——让用户提前知道命令执行后应看到什么 */}
