@@ -180,10 +180,15 @@ export type Preferences = {
   agentTypingMode: AgentTypingMode;
   /** 打字速度倍率 0.2×~5×（expect send_human 参数等比缩放，默认 1.0） */
   agentTypingSpeed: number;
+  /** Agent tool commands use one real execution channel; this does not alter approval policy. */
+  agentExecutionChannel: AgentExecutionChannel;
 };
 
 /** Agent 命令注入节奏模式 */
 export type AgentTypingMode = "human" | "instant";
+
+/** "visible-terminal" must fail closed when no matching foreground terminal exists. */
+export type AgentExecutionChannel = "background" | "visible-terminal";
 
 export type EditorFormatter =
   | "lsp"
@@ -276,6 +281,7 @@ const KEY_SSH_REMOTE_CARAPACE_PROMPT = "sshRemoteCarapacePrompt";
 // TDSF B2 (2026-08-29): 可视教学打字机 key
 const KEY_AGENT_TYPING_MODE = "agentTypingMode";
 const KEY_AGENT_TYPING_SPEED = "agentTypingSpeed";
+const KEY_AGENT_EXECUTION_CHANNEL = "agentExecutionChannel";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = 8;
@@ -364,6 +370,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   // 教学演示逐字模式由用户显式开启）
   agentTypingMode: "instant",
   agentTypingSpeed: 1.0,
+  agentExecutionChannel: "background",
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -572,6 +579,10 @@ export async function loadPreferences(): Promise<Preferences> {
     ),
     agentTypingSpeed: coerceAgentTypingSpeed(
       get<number>(KEY_AGENT_TYPING_SPEED) ?? DEFAULT_PREFERENCES.agentTypingSpeed,
+    ),
+    agentExecutionChannel: coerceAgentExecutionChannel(
+      get<string>(KEY_AGENT_EXECUTION_CHANNEL) ??
+        DEFAULT_PREFERENCES.agentExecutionChannel,
     ),
   };
 }
@@ -932,6 +943,21 @@ export async function setAgentTypingSpeed(value: number): Promise<void> {
   await writePref(KEY_AGENT_TYPING_SPEED, coerceAgentTypingSpeed(value));
 }
 
+export function coerceAgentExecutionChannel(
+  value: string,
+): AgentExecutionChannel {
+  return value === "visible-terminal" ? "visible-terminal" : "background";
+}
+
+export async function setAgentExecutionChannel(
+  value: AgentExecutionChannel,
+): Promise<void> {
+  await writePref(
+    KEY_AGENT_EXECUTION_CHANNEL,
+    coerceAgentExecutionChannel(value),
+  );
+}
+
 export async function setDefaultWorkspaceEnv(value: string): Promise<void> {
   await writePref(KEY_DEFAULT_WORKSPACE_ENV, value);
 }
@@ -1016,6 +1042,7 @@ export async function onPreferencesChange(
     // TDSF B2 (2026-08-29): 可视教学打字机偏好映射
     [KEY_AGENT_TYPING_MODE]: "agentTypingMode",
     [KEY_AGENT_TYPING_SPEED]: "agentTypingSpeed",
+    [KEY_AGENT_EXECUTION_CHANNEL]: "agentExecutionChannel",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

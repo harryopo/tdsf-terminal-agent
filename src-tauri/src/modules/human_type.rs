@@ -34,7 +34,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::Emitter;
 
@@ -57,6 +57,11 @@ pub const SPEED_MAX: f64 = 5.0;
 /// 延迟 sleep 的切片粒度：长停顿切成 50ms 小片轮询 should_stop，
 /// 保证用户中途按键后 ≤50ms 内停止 pump（接管体验的关键）。
 const STOP_POLL_SLICE: Duration = Duration::from_millis(50);
+
+/// Keep a long command visibly typed without making the execution wait for a
+/// proportional amount of animation. Short commands retain the natural pace.
+const LONG_COMMAND_THRESHOLD_CHARS: usize = 80;
+const LONG_COMMAND_TYPING_CAP: Duration = Duration::from_millis(900);
 
 /// pump 前写 \x03 清行后等新 prompt 的时长（8 项之 1）。
 /// Rust 侧无 OSC 133 block 状态（block 流水账在前端 xterm 解析层），
@@ -214,6 +219,8 @@ where
     let min = DEFAULT_MIN / speed;
     let max = DEFAULT_MAX / speed;
 
+    let total_chars = clean.chars().count();
+    let typing_started = Instant::now();
     let mut typed: usize = 0;
     let mut prev: Option<char> = None;
     let mut bytes_buf = [0u8; 4];
@@ -223,6 +230,23 @@ where
         }
         // 首字符零延迟；延迟按 (prev, ch) 转换判定（对齐 expect：先迟疑再落键）
         let delay = weibull_delay(alpha, alpha_eow, DEFAULT_SHAPE, min, max, prev, ch);
+        // Adaptive pacing: long commands keep their human-looking beginning,
+        // then spend only the remaining visual-time budget per remaining char.
+        // The submitted bytes are unchanged; only inter-character waiting moves.
+        let delay = if total_chars > LONG_COMMAND_THRESHOLD_CHARS {
+            let remaining_chars = total_chars.saturating_sub(typed);
+            let remaining = LONG_COMMAND_TYPING_CAP.saturating_sub(typing_started.elapsed());
+            if remaining_chars == 0 || remaining.is_zero() {
+                Duration::ZERO
+            } else {
+                let cap = Duration::from_secs_f64(
+                    remaining.as_secs_f64() / remaining_chars as f64,
+                );
+                delay.min(cap)
+            }
+        } else {
+            delay
+        };
         if !delay.is_zero() {
             let mut left = delay;
             while !left.is_zero() {
@@ -469,6 +493,34 @@ mod tests {
             sum += weibull_delay(0.1, 0.3, 1.0, 0.001, 10.0, prev, ch).as_secs_f64();
         }
         sum / n as f64
+    }
+
+    #[tokio::test]
+    async fn long_command_typing_is_time_capped() {
+        let typed = Arc::new(AtomicUsize::new(0));
+        let written = typed.clone();
+        let command = "x".repeat(LONG_COMMAND_THRESHOLD_CHARS + 120);
+        let started = Instant::now();
+        let outcome = human_type_write(
+            move |bytes| {
+                let written = written.clone();
+                async move {
+                    written.fetch_add(bytes.len(), Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+            &command,
+            0.2,
+            || false,
+        )
+        .await;
+
+        assert!(!outcome.stopped);
+        assert_eq!(typed.load(Ordering::SeqCst), command.len());
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "long command should not wait for per-character human pacing"
+        );
     }
 
     #[test]

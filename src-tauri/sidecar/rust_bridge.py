@@ -161,7 +161,12 @@ class RustBridge:
     # 公共 API
     # ----------------------------------------------------------------------
 
-    def send_request(self, method: str, params: dict[str, Any]) -> Any:
+    def send_request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout: float | None = None,
+    ) -> Any:
         """发起反向 JSON-RPC 请求，阻塞等待 Rust 响应
 
         Args:
@@ -209,15 +214,16 @@ class RustBridge:
         logger.debug(f"rust_bridge sent: method={method} id={req_id}")
 
         # 4. 阻塞等待响应（最长 timeout 秒）
-        if not entry.event.wait(timeout=self._timeout):
+        wait_timeout = self._timeout if timeout is None else max(0.1, timeout)
+        if not entry.event.wait(timeout=wait_timeout):
             # 超时：清理 pending 项
             with self._lock:
                 self._pending.pop(req_id, None)
             logger.warning(
                 f"rust_bridge timeout: method={method} id={req_id} "
-                f"timeout={self._timeout}s"
+                f"timeout={wait_timeout}s"
             )
-            raise RustBridgeTimeout(method, self._timeout)
+            raise RustBridgeTimeout(method, wait_timeout)
 
         # 5. shutdown 期间被强制唤醒
         if self._shutdown:
