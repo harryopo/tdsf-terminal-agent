@@ -963,6 +963,31 @@ class TestRemoteFileTool(unittest.TestCase):
             {"sessionId": 1, "path": "/etc/hosts", "max_size": 1048576},
         )
 
+    def test_read_rust_data_envelope_decodes_bytes(self):
+        """A JSON envelope around Rust's number[] must not become empty text."""
+        bridge = make_mock_rust_bridge({
+            "data": list(b"line1\nline2\n"),
+            "size": 12,
+            "truncated": False,
+        })
+        ctx = make_ctx(rust_bridge=bridge)
+
+        result = invoke_remote_file_tool({"path": "/etc/hosts"}, ctx)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["content"], "line1\nline2\n")
+        self.assertEqual(result["size"], 12)
+
+    def test_read_nonempty_metadata_without_content_fails_closed(self):
+        """Never report success when SFTP only supplied a size summary."""
+        bridge = make_mock_rust_bridge({"size": 1020, "truncated": False})
+        ctx = make_ctx(rust_bridge=bridge)
+
+        result = invoke_remote_file_tool({"path": "/root/anaconda-ks.cfg"}, ctx)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["reason"], "remote_file_content_missing")
+
     def test_read_binary_file_detected(self):
         """含 NUL 字节应返回 binary 状态"""
         bridge = make_mock_rust_bridge({

@@ -4,6 +4,7 @@ import { useTerminalBlocksStore } from "./terminalBlocksStore";
 import {
   formatTeachingResultForAgent,
   matchesTerminalCommand,
+  matchesVisibleTerminalCommand,
   matchesTeachingExecution,
   normalizeTeachingCommand,
   useTeachingExecutionStore,
@@ -89,6 +90,36 @@ describe("teaching execution ↔ terminal block", () => {
     ).toBe(false);
     expect(
       matchesTerminalCommand(request, block({ startedAt: 9_999 })),
+    ).toBe(false);
+  });
+
+  it("accepts only agent-marked first segments for visible compound commands", () => {
+    const request = {
+      leafId: 17,
+      command: "ip -4 addr show; ip route",
+      requestedAt: 10_000,
+    };
+    expect(
+      matchesVisibleTerminalCommand(
+        request,
+        block({
+          command: "ip -4 addr show",
+          author: "agent",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      matchesVisibleTerminalCommand(
+        request,
+        block({ command: "ip -4 addr show", startedAt: 10_001 }),
+      ),
+    ).toBe(false);
+    expect(
+      matchesVisibleTerminalCommand(
+        request,
+        block({ command: "ip -4 addr", author: "agent", startedAt: 10_001 }),
+      ),
     ).toBe(false);
   });
 

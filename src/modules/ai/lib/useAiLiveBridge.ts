@@ -15,7 +15,7 @@ import {
 } from "@/modules/terminal";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
 import {
-  matchesTerminalCommand,
+  matchesVisibleTerminalCommand,
   useTeachingExecutionStore,
 } from "@/modules/terminal/lib/teachingExecutionStore";
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
@@ -530,7 +530,7 @@ export function useAiLiveBridge(params: Params) {
     ): boolean => {
       if (
         pending.phase !== "running" ||
-        !matchesTerminalCommand(pending, block)
+        !matchesVisibleTerminalCommand(pending, block)
       ) {
         return false;
       }

@@ -63,6 +63,32 @@ export function matchesTerminalCommand(
   );
 }
 
+/**
+ * Visible Agent execution has one additional, narrow correlation case. Bash's
+ * DEBUG hook reports the first simple command in a compound input (`a; b`),
+ * while its prompt hook reports the exit status for the complete input. Only
+ * accept that prefix when the terminal itself marked it as Agent input.
+ * Teaching execution intentionally stays exact-match only.
+ */
+export function matchesVisibleTerminalCommand(
+  request: Pick<TeachingExecution, "leafId" | "command" | "requestedAt">,
+  block: TerminalBlock,
+): boolean {
+  if (matchesTerminalCommand(request, block)) return true;
+  if (
+    request.leafId !== block.sessionId ||
+    block.startedAt < request.requestedAt ||
+    block.author !== "agent"
+  ) {
+    return false;
+  }
+  const requested = normalizeTeachingCommand(request.command);
+  const reported = normalizeTeachingCommand(block.command);
+  if (!reported || !requested.startsWith(reported)) return false;
+  const boundary = requested.charAt(reported.length);
+  return boundary === ";" || boundary === "&" || boundary === "|";
+}
+
 /** 关联条件故意不依赖 author：长时间人类打字可能超过 author 的 10 秒 TTL。 */
 export function matchesTeachingExecution(
   execution: TeachingExecution,
