@@ -56,12 +56,8 @@ else:
 # 默认缓存根目录（python-sidecar/data/skills-cache/）
 _DEFAULT_CACHE_ROOT: Path = _DATA_ROOT / "skills-cache"
 
-# 默认安装目录（dev: python-sidecar/skills/installed/; frozen: 数据目录下）
-_DEFAULT_INSTALL_DIR: Path = (
-    _DATA_ROOT / "skills-installed"
-    if getattr(sys, "frozen", False)
-    else Path(__file__).parent / "installed"
-)
+# One writable root for marketplace, generated, and session Skills.
+_DEFAULT_INSTALL_DIR: Path = Path.home() / ".tdsf" / "skills"
 
 # skills.sh 协议 base URL（mock，实际不存在）
 _SKILLS_SH_BASE_URL: str = "https://skills.sh/api/v1/skills"

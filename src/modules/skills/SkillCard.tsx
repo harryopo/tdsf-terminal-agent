@@ -227,7 +227,7 @@ export function SkillCard({
             目录
           </Button>
         )}
-        {(hasExamples || skill.whenToUse) && (
+        {false && (hasExamples || skill.whenToUse) && (
           <Button
             type="button"
             size="sm"

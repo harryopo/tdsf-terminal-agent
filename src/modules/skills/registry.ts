@@ -161,7 +161,7 @@ export function inferCategory(tags: string[]): SkillCategory {
  *
  * - 字段命名：snake_case → camelCase
  * - category：由 tags 推断
- * - source：file_path 非空 → builtin，否则视为 installed
+ * - source：file_path 非空 → user，否则视为 installed
  * - enabled：从 localStorage 读取（默认 true）
  * - examples：按行拆分（去掉空行）
  *
@@ -182,7 +182,7 @@ export function dictToMetadata(dict: SkillDict): SkillMetadata {
     category: inferCategory(dict.tags),
     whenToUse: dict.when_to_use,
     examples,
-    source: dict.file_path ? "builtin" : "installed",
+    source: dict.file_path ? "user" : "installed",
     enabled: readEnabledState(dict.name),
     version: dict.version,
     author: dict.author,

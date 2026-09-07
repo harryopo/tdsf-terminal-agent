@@ -76,10 +76,10 @@ class TestMarketplaceCreation:
         assert mp.install_dir.exists()
 
     def test_marketplace_default_paths(self):
-        """默认路径指向 python-sidecar/data/skills-cache 和 skills/installed"""
+        """默认安装路径使用统一的用户 Skill 根目录"""
         m = Marketplace()
         assert "data" in str(m.cache_root) and "skills-cache" in str(m.cache_root)
-        assert "skills" in str(m.install_dir) and "installed" in str(m.install_dir)
+        assert m.install_dir == Path.home() / ".tdsf" / "skills"
 
     def test_get_global_marketplace_singleton(self):
         """get_global_marketplace 返回单例"""
