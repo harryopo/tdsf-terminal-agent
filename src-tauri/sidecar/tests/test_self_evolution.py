@@ -360,6 +360,10 @@ class TestSaveSkill:
         assert path.exists()
         assert out_dir.exists()
 
+    def test_default_output_dir_is_canonical_user_skill_root(self):
+        gen = SkillAutoGenerator(enabled=True)
+        assert gen.output_dir == Path.home() / ".tdsf" / "skills"
+
 
 # ============================================================================
 # 6. SkillAutoGenerator.list_auto_skills 测试

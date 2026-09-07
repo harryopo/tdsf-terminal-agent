@@ -133,8 +133,8 @@ describe("dictToMetadata", () => {
     );
   });
 
-  it("file_path 非空 → source = builtin", () => {
-    expect(dictToMetadata(baseDict).source).toBe("builtin");
+  it("file_path 非空 → source = user", () => {
+    expect(dictToMetadata(baseDict).source).toBe("user");
   });
 
   it("file_path 为 null → source = installed", () => {

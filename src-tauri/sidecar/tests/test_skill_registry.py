@@ -33,6 +33,7 @@ from skills.registry import (
     SkillRegistry,
     get_global_registry,
     reset_global_registry,
+    seed_builtin_skills,
 )
 
 
@@ -508,6 +509,28 @@ class TestLoadExternalDir:
         """目录不存在时返回 0"""
         count: int = empty_registry.load_external_dir("/nonexistent/path")
         assert count == 0
+
+
+class TestBuiltinSkillSeeding:
+    """Packaged Skills are seeded once into the canonical user root."""
+
+    def test_seed_copies_missing_packages_without_overwriting(self, tmp_path: Path):
+        builtin_root = tmp_path / "builtin"
+        user_root = tmp_path / "user-skills"
+        first = builtin_root / "first"
+        first.mkdir(parents=True)
+        (first / "SKILL.md").write_text("first", encoding="utf-8")
+        second = builtin_root / "second"
+        second.mkdir()
+        (second / "SKILL.md").write_text("second", encoding="utf-8")
+
+        existing = user_root / "first"
+        existing.mkdir(parents=True)
+        (existing / "SKILL.md").write_text("user edit", encoding="utf-8")
+
+        assert seed_builtin_skills(builtin_root, user_root) == 1
+        assert (user_root / "second" / "SKILL.md").read_text(encoding="utf-8") == "second"
+        assert (existing / "SKILL.md").read_text(encoding="utf-8") == "user edit"
 
 
 # ============================================================================

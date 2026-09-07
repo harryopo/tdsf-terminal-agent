@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -52,6 +53,40 @@ _BUILTIN_DIR: Path = Path(__file__).parent / "builtin"
 # 启动时若存在则自动加载（<dir>/<skill_name>/SKILL.md 或 <dir>/*.md），
 # 与 tdsf_loader 的 ~/TDSF.md 惯例对齐——用户无需改代码即可沉淀自己的技能包
 _USER_SKILLS_DIR: Path = Path.home() / ".tdsf" / "skills"
+
+
+def seed_builtin_skills(
+    builtin_dir: Path | str | None = None,
+    user_skills_dir: Path | str | None = None,
+) -> int:
+    """Seed packaged Skills into the canonical user Skill directory once."""
+    source: Path = Path(builtin_dir) if builtin_dir else _BUILTIN_DIR
+    destination_root: Path = (
+        Path(user_skills_dir) if user_skills_dir else _USER_SKILLS_DIR
+    )
+    if not source.is_dir():
+        logger.warning("builtin Skill seed directory not found: %s", source)
+        return 0
+
+    try:
+        destination_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("cannot create user Skill directory %s: %s", destination_root, exc)
+        return 0
+
+    seeded: int = 0
+    for source_dir in source.iterdir():
+        if not source_dir.is_dir() or not (source_dir / "SKILL.md").is_file():
+            continue
+        destination: Path = destination_root / source_dir.name
+        if destination.exists():
+            continue
+        try:
+            shutil.copytree(source_dir, destination)
+            seeded += 1
+        except OSError as exc:
+            logger.warning("cannot seed builtin Skill %s: %s", source_dir.name, exc)
+    return seeded
 
 # 65 mock 外部 Skill 名称（模拟 claude-skills 库的常见 Skill）
 _MOCK_SKILL_NAMES: list[str] = [
@@ -855,10 +890,14 @@ def get_global_registry() -> SkillRegistry:
         if _global_registry is not None:
             return _global_registry
         registry: SkillRegistry = SkillRegistry()
-        registry.load_builtin()
-        # TDSF 魔改 (T1 2026-08-28): 加载用户自定义 Skill 目录
-        # ~/.tdsf/skills/ 不存在时静默跳过（load_external_dir 内部处理）
+        seed_builtin_skills()
+        # The user directory is the single runtime root for builtin seeds,
+        # marketplace installs, and generated Skills.
         user_loaded: int = registry.load_external_dir(_USER_SKILLS_DIR)
+        if user_loaded == 0:
+            # A read-only packaged fallback keeps the app usable if seeding
+            # failed because the user directory cannot be created.
+            registry.load_builtin()
         # TDSF 魔改：不再自动加载 65 个 mock 外部 skill
         # 原逻辑会注册 "argocd-gitops" / "rust-debug" 等用户不需要的占位 skill,
         # 前端打开后内容是 "mock skill body", 没有实际价值, 干扰用户判断.
@@ -868,7 +907,7 @@ def get_global_registry() -> SkillRegistry:
         logger.info(
             f"global SkillRegistry initialized: "
             f"{registry.count()} skills loaded "
-            f"(builtin + user={user_loaded}, mock disabled)"
+            f"(user_root={_USER_SKILLS_DIR}, loaded={user_loaded}, mock disabled)"
         )
     return _global_registry
 
@@ -886,13 +925,15 @@ def reload_global_registry() -> SkillRegistry:
     global _global_registry
     with _global_registry_lock:
         registry: SkillRegistry = SkillRegistry()
-        registry.load_builtin()
+        seed_builtin_skills()
         user_loaded: int = registry.load_external_dir(_USER_SKILLS_DIR)
+        if user_loaded == 0:
+            registry.load_builtin()
         _global_registry = registry
         logger.info(
             f"global SkillRegistry reloaded: "
             f"{registry.count()} skills loaded "
-            f"(builtin + user={user_loaded}, mock disabled)"
+            f"(user_root={_USER_SKILLS_DIR}, loaded={user_loaded}, mock disabled)"
         )
     return _global_registry
 

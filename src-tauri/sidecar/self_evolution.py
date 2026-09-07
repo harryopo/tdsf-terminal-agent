@@ -29,9 +29,7 @@ JSON-RPC 方法（main.py 注册）：
 from __future__ import annotations
 
 import logging
-import os
 import re
-import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,15 +46,7 @@ logger = logging.getLogger("sidecar.self_evolution")
 
 # 自动生成的 Skill 存放目录（可写；frozen 打包后 __file__ 指向只读 _MEIPASS,
 # 必须落到 TDSF_DATA_DIR 下, 否则进程退出即丢/写失败）
-if getattr(sys, "frozen", False):
-    _DEFAULT_AUTO_SKILLS_DIR: Path = (
-        Path(os.environ.get("TDSF_DATA_DIR", str(Path(sys.executable).resolve().parent / ".tdsf-data")))
-        / "skills-auto-generated"
-    )
-else:
-    _DEFAULT_AUTO_SKILLS_DIR: Path = (
-        Path(__file__).parent / "skills" / "auto-generated"
-    )
+_DEFAULT_AUTO_SKILLS_DIR: Path = Path.home() / ".tdsf" / "skills"
 
 # 默认配置文件路径
 _DEFAULT_CONFIG_PATH: Path = Path(__file__).parent / "config" / "feature_flags.yaml"
