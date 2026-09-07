@@ -51,6 +51,18 @@ export function normalizeTeachingCommand(command: string): string {
   return command.replace(/\r?\n/g, " ").replace(/\r/g, " ").trim();
 }
 
+export function matchesTerminalCommand(
+  request: Pick<TeachingExecution, "leafId" | "command" | "requestedAt">,
+  block: TerminalBlock,
+): boolean {
+  return (
+    request.leafId === block.sessionId &&
+    block.startedAt >= request.requestedAt &&
+    normalizeTeachingCommand(request.command) ===
+      normalizeTeachingCommand(block.command)
+  );
+}
+
 /** 关联条件故意不依赖 author：长时间人类打字可能超过 author 的 10 秒 TTL。 */
 export function matchesTeachingExecution(
   execution: TeachingExecution,
@@ -58,11 +70,7 @@ export function matchesTeachingExecution(
 ): boolean {
   return (
     execution.status === "waiting" &&
-    execution.leafId === block.sessionId &&
-    // block 只会在完成时推入；严格起点可排除点击前已在运行的同名命令。
-    block.startedAt >= execution.requestedAt &&
-    normalizeTeachingCommand(execution.command) ===
-      normalizeTeachingCommand(block.command)
+    matchesTerminalCommand(execution, block)
   );
 }
 

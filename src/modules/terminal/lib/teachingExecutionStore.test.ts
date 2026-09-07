@@ -3,6 +3,7 @@ import type { TerminalBlock } from "./terminalBlocks";
 import { useTerminalBlocksStore } from "./terminalBlocksStore";
 import {
   formatTeachingResultForAgent,
+  matchesTerminalCommand,
   matchesTeachingExecution,
   normalizeTeachingCommand,
   useTeachingExecutionStore,
@@ -72,6 +73,23 @@ describe("teaching execution ↔ terminal block", () => {
         .getState()
         .begin({ leafId: 17, command: "free -h", requestedAt: 10_002 }),
     ).toBeTruthy();
+  });
+
+  it("shares strict command correlation with visible terminal execution", () => {
+    const request = {
+      leafId: 17,
+      command: "printf a;b",
+      requestedAt: 10_000,
+    };
+    expect(
+      matchesTerminalCommand(request, block({ startedAt: 10_001 })),
+    ).toBe(true);
+    expect(
+      matchesTerminalCommand(request, block({ command: "printf a; b" })),
+    ).toBe(false);
+    expect(
+      matchesTerminalCommand(request, block({ startedAt: 9_999 })),
+    ).toBe(false);
   });
 
   it("命令行尾与多行差异规范化，但不折叠普通空格", () => {

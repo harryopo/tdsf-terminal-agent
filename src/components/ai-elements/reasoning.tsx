@@ -151,14 +151,11 @@ export type ReasoningTriggerProps = ComponentProps<
 
 const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
   if (isStreaming || duration === 0) {
-    return <Shimmer duration={1}>思考中</Shimmer>;
+    return <Shimmer duration={1}>Thinking</Shimmer>;
   }
   // TDSF 2026-08-31: 折叠头文案统一 "Thinking"（原 "Reasoned"/"Reasoned for Xs"
   // 为上游 streamdown 默认英文推理措辞，用户反馈统一为 Thinking）
-  if (duration === undefined) {
-    return <span>思考</span>;
-  }
-  return <span>思考了 {duration} 秒</span>;
+  return <span>Thinking</span>;
 };
 
 export const ReasoningTrigger = memo(

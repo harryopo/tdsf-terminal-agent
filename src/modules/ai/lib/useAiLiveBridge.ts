@@ -15,7 +15,7 @@ import {
 } from "@/modules/terminal";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
 import {
-  normalizeTeachingCommand,
+  matchesTerminalCommand,
   useTeachingExecutionStore,
 } from "@/modules/terminal/lib/teachingExecutionStore";
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
@@ -509,6 +509,12 @@ export function useAiLiveBridge(params: Params) {
     ) => {
       if (pending.phase !== "typing") return;
       pending.phase = "running";
+    };
+
+    const armVisibleExecutionTimeout = (
+      pending: PendingVisibleTerminalExecution,
+    ) => {
+      if (pending.timeoutHandle !== null) return;
       const timeoutMs = Math.min(Math.max(pending.timeoutMs, 1_000), 300_000);
       pending.timeoutHandle = window.setTimeout(() => {
         settleVisibleExecution(pending, {
@@ -518,33 +524,50 @@ export function useAiLiveBridge(params: Params) {
       }, timeoutMs);
     };
 
-    const settleVisibleTerminalBlock = (block: TerminalBlock) => {
-      for (const pending of pendingVisibleExecutions.values()) {
-        if (
-          pending.phase !== "running" ||
-          pending.leafId !== block.sessionId ||
-          block.startedAt < pending.requestedAt ||
-          normalizeTeachingCommand(block.command) !==
-            normalizeTeachingCommand(pending.command)
-        ) {
-          continue;
-        }
-        if (block.exitCode === null) {
-          settleVisibleExecution(pending, {
-            status: "indeterminate",
-            reason: "visible_terminal_missing_exit_code",
-          });
-        } else {
-          settleVisibleExecution(pending, {
-            status: "success",
-            exitCode: block.exitCode,
-            output: redactSensitive(block.outputTail),
-            duration: block.durationMs / 1_000,
-            cwd: block.cwd,
-          });
-        }
-        return;
+    const settleVisibleTerminalBlock = (
+      pending: PendingVisibleTerminalExecution,
+      block: TerminalBlock,
+    ): boolean => {
+      if (
+        pending.phase !== "running" ||
+        !matchesTerminalCommand(pending, block)
+      ) {
+        return false;
       }
+      if (block.exitCode === null) {
+        settleVisibleExecution(pending, {
+          status: "indeterminate",
+          reason: "visible_terminal_missing_exit_code",
+        });
+      } else {
+        settleVisibleExecution(pending, {
+          status: "success",
+          exitCode: block.exitCode,
+          output: redactSensitive(block.outputTail),
+          duration: block.durationMs / 1_000,
+          cwd: block.cwd,
+        });
+      }
+      return true;
+    };
+
+    const reconcileVisibleExecution = (
+      pending: PendingVisibleTerminalExecution,
+    ) => {
+      // A command can complete between foreground input and the next store
+      // notification. Check every completed block, not merely the latest one.
+      const blocks =
+        useTerminalBlocksStore.getState().blocksByLeaf[pending.leafId] ?? [];
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        if (settleVisibleTerminalBlock(pending, blocks[index])) return;
+      }
+    };
+
+    const startVisibleExecutionTimer = (
+      pending: PendingVisibleTerminalExecution,
+    ) => {
+      armVisibleExecutionTimeout(pending);
+      reconcileVisibleExecution(pending);
     };
 
     const startVisibleTerminalExecution = (
@@ -617,10 +640,14 @@ export function useAiLiveBridge(params: Params) {
         : `${request.command}\n`;
       const prefs = usePreferencesStore.getState();
       if (prefs.agentTypingMode !== "human") {
+        // `terminal.write` immediately hands bytes to the SSH PTY. Enable
+        // correlation first so a fast command cannot finish in that gap.
+        markVisibleExecutionRunning(pending);
         terminal.write(text);
         terminal.focus();
         useTerminalBlocksStore.getState().markAgentPending(leafId);
-        markVisibleExecutionRunning(pending);
+        // The timer starts only after the final Enter has been submitted.
+        startVisibleExecutionTimer(pending);
         return;
       }
 
@@ -633,6 +660,7 @@ export function useAiLiveBridge(params: Params) {
           useTerminalBlocksStore.getState().markAgentPending(leafId);
           if (report.mode === "fallback") {
             markVisibleExecutionRunning(pending);
+            startVisibleExecutionTimer(pending);
           }
         })
         .catch((e) => {
@@ -648,8 +676,9 @@ export function useAiLiveBridge(params: Params) {
     const unlistenVisibleBlocks = useTerminalBlocksStore.subscribe((state) => {
       for (const pending of pendingVisibleExecutions.values()) {
         const blocks = state.blocksByLeaf[pending.leafId] ?? [];
-        const latest = blocks[blocks.length - 1];
-        if (latest) settleVisibleTerminalBlock(latest);
+        for (let index = blocks.length - 1; index >= 0; index -= 1) {
+          if (settleVisibleTerminalBlock(pending, blocks[index])) break;
+        }
       }
     });
 
@@ -657,12 +686,12 @@ export function useAiLiveBridge(params: Params) {
     let unlistenHumanTyping: (() => void) | null = null;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
-      const [stopVisibleExecution, stopHumanTyping] = await Promise.all([
-        listen<VisibleTerminalRequest>(
-          "sidecar:visible-terminal-execute",
-          (event) => startVisibleTerminalExecution(event.payload),
-        ),
-        listen<HumanTypingEventPayload>("terminal:human_typing", (event) => {
+      // The typing-complete listener must exist before accepting a visible
+      // request. Registering both in parallel can lose the end event for a
+      // short typewriter command and leave its SSH result waiting forever.
+      unlistenHumanTyping = await listen<HumanTypingEventPayload>(
+        "terminal:human_typing",
+        (event) => {
           const typing = event.payload;
           if (typing.phase !== "end" || typing.target !== "ssh") return;
           for (const pending of pendingVisibleExecutions.values()) {
@@ -679,12 +708,15 @@ export function useAiLiveBridge(params: Params) {
               });
             } else {
               markVisibleExecutionRunning(pending);
+              startVisibleExecutionTimer(pending);
             }
           }
-        }),
-      ]);
-      unlistenVisibleExecution = stopVisibleExecution;
-      unlistenHumanTyping = stopHumanTyping;
+        },
+      );
+      unlistenVisibleExecution = await listen<VisibleTerminalRequest>(
+        "sidecar:visible-terminal-execute",
+        (event) => startVisibleTerminalExecution(event.payload),
+      );
     })().catch((e) => {
       console.warn("[tdsf] visible terminal listeners failed:", e);
     });
