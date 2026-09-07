@@ -27,6 +27,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -46,7 +47,12 @@ from strands_backend.tools import (
     OPS_TOOL_NAMES,
 )
 from strands_backend.tools.ssh_command import invoke_ssh_command_tool, make_ssh_command_tool
-from strands_backend.tools.remote_file import invoke_remote_file_tool, make_remote_file_tool
+from strands_backend.tools.remote_file import (
+    invoke_remote_file_tool,
+    invoke_write_remote_file_tool,
+    make_remote_file_tool,
+    make_write_remote_file_tool,
+)
 from strands_backend.tools.log_analyzer import invoke_log_analyzer_tool, make_log_analyzer_tool
 from strands_backend.tools.process_inspector import (
     invoke_process_inspector_tool,
@@ -57,6 +63,7 @@ from strands_backend.tools.network_diagnostic import (
     make_network_diagnostic_tool,
 )
 from strands_backend.modes import AgentMode
+from needs_you import NeedsYouStatus
 from strands_backend.adapter import (
     StrandsAgentAdapter,
     TdsfStrandsCallbackHandler,
@@ -957,6 +964,10 @@ class TestRemoteFileTool(unittest.TestCase):
         self.assertEqual(result["path"], "/etc/hosts")
         self.assertEqual(result["content"], "line1\nline2\nline3\n")
         self.assertFalse(result["truncated"])
+        self.assertEqual(
+            result["sha256"],
+            hashlib.sha256(b"line1\nline2\nline3\n").hexdigest(),
+        )
 
         bridge.ipc_invoke.assert_called_once_with(
             "sftp_read",
@@ -1035,6 +1046,111 @@ class TestRemoteFileTool(unittest.TestCase):
         self.assertTrue(callable(tool_fn))
         result = tool_fn(path="/etc/hosts")
         self.assertIn("status", result)
+
+    def test_write_auto_backs_up_and_reads_back(self):
+        """自动模式应只在备份与回读都成功后报告成功。"""
+        before = b"old=value\n"
+        after = b"new=value\n"
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.side_effect = [list(before), None, None, list(after)]
+        ctx = make_ctx(rust_bridge=bridge)
+        ctx.mode = AgentMode.AUTO
+
+        result = invoke_write_remote_file_tool(
+            {
+                "path": "/etc/example.conf",
+                "content": after.decode(),
+                "expected_sha256": hashlib.sha256(before).hexdigest(),
+            },
+            ctx,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["backup_path"].startswith("/etc/example.conf.tdsf-backup-"))
+        self.assertEqual(bridge.ipc_invoke.call_count, 4)
+        backup_call = bridge.ipc_invoke.call_args_list[1].args
+        target_call = bridge.ipc_invoke.call_args_list[2].args
+        self.assertEqual(backup_call[0], "sftp_write")
+        self.assertEqual(backup_call[1]["content"], list(before))
+        self.assertEqual(target_call[1]["path"], "/etc/example.conf")
+        self.assertEqual(target_call[1]["content"], list(after))
+
+    def test_write_rejects_stale_source_without_writing(self):
+        """文件在读取后变化时，绝不能覆盖新的远端版本。"""
+        bridge = make_mock_rust_bridge(list(b"newer=value\n"))
+        ctx = make_ctx(rust_bridge=bridge)
+        ctx.mode = AgentMode.AUTO
+
+        result = invoke_write_remote_file_tool(
+            {
+                "path": "/etc/example.conf",
+                "content": "new=value\n",
+                "expected_sha256": hashlib.sha256(b"older=value\n").hexdigest(),
+            },
+            ctx,
+        )
+
+        self.assertEqual(result["status"], "stale_source")
+        bridge.ipc_invoke.assert_called_once_with(
+            "sftp_read", {"sessionId": 1, "path": "/etc/example.conf"}
+        )
+
+    def test_write_confirm_mode_waits_for_approval(self):
+        """确认模式的远程覆盖写入必须经过真实审批门。"""
+        before = b"old=value\n"
+        after = b"new=value\n"
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.side_effect = [list(before), None, None, list(after)]
+        ctx = make_ctx(rust_bridge=bridge)
+        with patch(
+            "strands_backend.tools.remote_file.request_approval_and_wait",
+            return_value=MagicMock(status=NeedsYouStatus.APPROVED),
+        ) as approval:
+            result = invoke_write_remote_file_tool(
+                {
+                    "path": "/etc/example.conf",
+                    "content": after.decode(),
+                    "expected_sha256": hashlib.sha256(before).hexdigest(),
+                },
+                ctx,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(approval.call_args.kwargs["tool_name"], "write_remote_file")
+
+    def test_write_records_a_durable_successful_operation(self):
+        """运行时账本开启后，安全写入必须走完整状态机。"""
+        from project_service import ProjectService
+
+        before = b"old=value\n"
+        after = b"new=value\n"
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.side_effect = [list(before), None, None, list(after)]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx(rust_bridge=bridge)
+                ctx.mode = AgentMode.AUTO
+                ctx.operation_service = service
+                ctx.require_operation_ledger = True
+                result = invoke_write_remote_file_tool(
+                    {
+                        "path": "/etc/example.conf",
+                        "content": after.decode(),
+                        "expected_sha256": hashlib.sha256(before).hexdigest(),
+                    },
+                    ctx,
+                )
+                self.assertEqual(result["status"], "success")
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "succeeded")
+                self.assertEqual(operation["metadata"]["tool_name"], "write_remote_file")
+            finally:
+                service.close()
+
+    def test_write_factory_returns_callable(self):
+        self.assertTrue(callable(make_write_remote_file_tool(make_ctx())))
 
 
 # ============================================================================
@@ -1334,16 +1450,16 @@ class TestMakeAllOpsTools(unittest.TestCase):
         """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
         （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
         + 2026-08-31 knowledge_get_doc + T5 python_run
-        + P2 #42 ssh_list_sessions = 23）"""
+        + P2 #42 ssh_list_sessions + 远程安全写入 = 24）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 23)
+        self.assertEqual(len(tools), 24)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 23 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 23)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 24 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 24)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1351,6 +1467,7 @@ class TestMakeAllOpsTools(unittest.TestCase):
         self.assertIn("network_diagnostic", OPS_TOOL_NAMES)
         self.assertIn("skill_invoke", OPS_TOOL_NAMES)
         self.assertIn("suggest_command", OPS_TOOL_NAMES)
+        self.assertIn("write_remote_file", OPS_TOOL_NAMES)
         # T2 收编的 6 个增强工具
         self.assertIn("todo_write", OPS_TOOL_NAMES)
         self.assertIn("get_terminal_output", OPS_TOOL_NAMES)
@@ -1634,22 +1751,11 @@ class TestBuildPromptWorkspaceStates(unittest.TestCase):
 # ============================================================================
 
 class TestSystemPromptSkillListSync(unittest.TestCase):
-    """system prompt 的 skill 清单应与 skills registry 同步（7 个内置技能全出现）"""
+    """Skill 名称只从运行时 registry 和工具 schema 取得，不能静态漂移。"""
 
-    _ALL_BUILTIN = (
-        "linux-ops",
-        "docker-management",
-        "selinux-baseline",
-        "ssh-troubleshoot",
-        "python-debug",
-        "systemd-troubleshoot",
-        "samba-setup",
-    )
-
-    def test_default_system_prompt_contains_all_builtin_skills(self):
-        """_DEFAULT_SYSTEM_PROMPT 应含全部 7 个内置 skill 名"""
-        for name in self._ALL_BUILTIN:
-            self.assertIn(name, _DEFAULT_SYSTEM_PROMPT)
+    def test_default_prompt_uses_runtime_schema_as_tool_source(self):
+        """提示词不得硬编码可能已不存在的内置 skill 清单。"""
+        self.assertIn("运行时 schema 为唯一事实来源", _DEFAULT_SYSTEM_PROMPT)
 
     def test_skill_names_line_matches_registry(self):
         """_skill_names_line 应返回 registry 实际注册的技能清单"""
@@ -2093,20 +2199,22 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         return {getattr(t, "__name__", str(t)) for t in tools}
 
     def test_main_gets_all_tools(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 23 工具（P2 #42 +1）"""
+        """main（唯一 agent）：TOOL_REGISTRY 全量 24 工具（含远程安全写入）。"""
         tools = make_all_ops_tools(self._ctx())
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 23)
+        self.assertEqual(len(tools), 24)
         self.assertIn("ssh_command", names)
         self.assertIn("ssh_list_sessions", names)
         self.assertIn("knowledge_search", names)
         self.assertIn("knowledge_get_doc", names)
+        self.assertIn("write_remote_file", names)
 
     def test_l1_readonly_filter(self):
         """L1（免确认）权限：仅保留 readonly=True 工具（schema-level safety）"""
         tools = make_all_ops_tools(self._ctx(level=1))
         names = self._tool_names(tools)
         self.assertNotIn("ssh_command", names)
+        self.assertNotIn("write_remote_file", names)
         self.assertNotIn("skill_invoke", names)
         self.assertIn("read_remote_file", names)
         self.assertIn("suggest_command", names)
@@ -2416,12 +2524,13 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         names = {getattr(t, "__name__", "") for t in tools}
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
-        self.assertEqual(len(tools), 23)
+        self.assertIn("write_remote_file", names)
+        self.assertEqual(len(tools), 24)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 23)
+        self.assertEqual(len(tools), 24)
 
 
 # ============================================================================

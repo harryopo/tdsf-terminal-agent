@@ -34,6 +34,7 @@ describe("evidenceLabel — 工具名 → 展示标签", () => {
   it("运维工具映射为中文标签", () => {
     expect(evidenceLabel("ssh_command")).toBe("SSH 命令");
     expect(evidenceLabel("read_remote_file")).toBe("读远程文件");
+    expect(evidenceLabel("write_remote_file")).toBe("写远程文件");
     expect(evidenceLabel("analyze_logs")).toBe("日志分析");
     expect(evidenceLabel("suggest_command")).toBe("命令建议");
   });
@@ -116,6 +117,7 @@ describe("classifyEvidenceStage（T10.2 三段分组）", () => {
   it("写类工具归执行段", () => {
     expect(classifyEvidenceStage(ev("ssh_command"), false)).toBe("execute");
     expect(classifyEvidenceStage(ev("python_run"), false)).toBe("execute");
+    expect(classifyEvidenceStage(ev("write_remote_file"), false)).toBe("execute");
   });
 
   it("写操作前的只读调用归收集段", () => {

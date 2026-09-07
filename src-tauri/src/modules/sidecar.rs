@@ -1290,9 +1290,14 @@ async fn handle_reverse_request(
             for (i, n) in content_arr.iter().enumerate() {
                 let byte_val = n
                     .as_u64()
-                    .ok_or_else(|| format!("sftp_write: content[{}] not a number", i))?
-                    as u8;
-                content.push(byte_val);
+                    .ok_or_else(|| format!("sftp_write: content[{}] not a number", i))?;
+                if byte_val > u8::MAX as u64 {
+                    return Err(format!(
+                        "sftp_write: content[{}] is outside the byte range",
+                        i
+                    ));
+                }
+                content.push(byte_val as u8);
             }
 
             let ssh_state = app.state::<crate::ssh::SshState>();

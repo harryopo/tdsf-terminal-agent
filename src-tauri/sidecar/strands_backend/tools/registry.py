@@ -129,6 +129,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
         to_shell_command="strands_backend.tools.remote_file:to_shell_command",
     ),
+    "write_remote_file": ToolSpec(
+        name="write_remote_file",
+        factory="strands_backend.tools.remote_file:make_write_remote_file_tool",
+        description="安全覆盖已有远程 UTF-8 文本文件（写前备份、确认后写入、写后回读校验）",
+        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
+    ),
     "analyze_logs": ToolSpec(
         name="analyze_logs",
         factory="strands_backend.tools.log_analyzer:make_log_analyzer_tool",
@@ -310,6 +316,7 @@ WRITE_CLASS_TOOL_NAMES: frozenset[str] = frozenset({
     "package_manage",   # 软件包管理（install/remove）
     "firewall_manage",  # 防火墙规则管理
     "backup_restore",   # 备份/恢复（restore 为远端写）
+    "write_remote_file",  # 远程文本覆盖写入（先备份、后回读）
     "save_skill",       # 写用户技能目录（~/.tdsf/skills/）
 })
 

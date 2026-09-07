@@ -455,6 +455,29 @@ describe("Tool — 失败输出不再吐裸 JSON", () => {
   });
 });
 
+describe("Tool — 远程安全写入", () => {
+  it("成功时只展示路径、备份与回读结果，不回显文件正文", () => {
+    render(
+      <Tool
+        toolName="write_remote_file"
+        state="output-available"
+        input={{ path: "/etc/nginx/nginx.conf", content: "secret=never-render" }}
+        output={{
+          status: "success",
+          path: "/etc/nginx/nginx.conf",
+          backup_path: "/etc/nginx/nginx.conf.tdsf-backup-abc123",
+          size: 18,
+        }}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("写远程")).toBeTruthy();
+    expect(screen.getByText("已备份、写入并回读验证")).toBeTruthy();
+    expect(screen.getByText(/tdsf-backup-abc123/)).toBeTruthy();
+    expect(screen.queryByText("secret=never-render")).toBeNull();
+  });
+});
+
 describe("Tool — SSH 结果卡", () => {
   it("将 SSH 结构化结果渲染为状态、说明与终端输出，而非裸 JSON", () => {
     render(

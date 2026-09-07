@@ -2,14 +2,13 @@
 // -----------------------------------------------------------------------------
 // 单个 skill 的展示卡片，含：
 //   - 顶部：分类图标 + 名称 + 来源 badge + 启用开关
-//   - 中部：description（2 行截断）+ whenToUse（折叠）
-//   - 底部：查看内容按钮 + 打开目录按钮 + 展开示例（折叠区）
+//   - 中部：description
+//   - 底部：查看内容按钮 + 打开目录按钮
 //
 // 交互:
 //   - 点击 Switch 切换 enabled（持久化到 localStorage）
 //   - 点击"查看内容"按钮触发 onViewContent 回调（由 SkillsPanel 弹出 SkillContentDialog）
 //   - 点击"打开目录"按钮在系统文件管理器中聚焦 SKILL.md
-//   - 点击"详情"展开/收起 whenToUse / examples
 //
 // TDSF 魔改 2026-07-28 (P0-2 方案A):
 //   - 原"调用"按钮名实不符（skill.invoke 仅返回 SKILL.md 文本, 无执行逻辑）
@@ -21,14 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
-  ChevronDownIcon,
   EyeIcon,
   FolderOpenIcon,
   SparklesIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
 import { toast } from "sonner";
 import type { SkillMetadata } from "./types";
 
@@ -79,10 +76,8 @@ export function SkillCard({
   onToggleEnabled,
   onViewContent,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
   const categoryColor = CATEGORY_COLOR[skill.category] ?? CATEGORY_COLOR.custom;
   const sourceBadge = SOURCE_BADGE[skill.source] ?? SOURCE_BADGE.user;
-  const hasExamples = skill.examples.length > 0;
   // TDSF 魔改: 是否可打开目录（仅当 Python sidecar 返回了 file_path 时）
   const canOpenDir = !!skill.filePath;
 
@@ -150,7 +145,7 @@ export function SkillCard({
         />
       </div>
 
-      {/* === 中部：description + whenToUse + examples (可滚动区) ===
+      {/* === 中部：description (可滚动区) ===
           TDSF 魔改 2026-07-28: flex-1 + min-h-0 + overflow-y-auto
           让内容超出时只在这个区域内滚动, 按钮始终贴底可见 */}
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
@@ -160,38 +155,9 @@ export function SkillCard({
         >
           {skill.description}
         </p>
-
-        {skill.whenToUse && expanded && (
-          <div className="rounded-md bg-muted/40 px-2 py-1.5">
-            <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-              触发条件
-            </div>
-            <p className="text-[10.5px] leading-relaxed text-foreground/80">
-              {skill.whenToUse}
-            </p>
-          </div>
-        )}
-
-        {hasExamples && expanded && (
-          <div className="rounded-md bg-muted/30 px-2 py-1.5">
-            <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-              示例
-            </div>
-            <ul className="space-y-0.5">
-              {skill.examples.map((ex) => (
-                <li
-                  key={`ex-${ex}`}
-                  className="text-[10.5px] leading-relaxed text-foreground/70"
-                >
-                  {ex}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
 
-      {/* === 底部: 查看内容 + 目录 + 详情 (固定贴底, 永远可见) ===
+      {/* === 底部: 查看内容 + 目录 (固定贴底, 永远可见) ===
           TDSF 魔改 2026-08-15: 移除"让 Agent 调用"按钮 (SkillInvoker 弹窗),
           改为 Agent 在允许时自动调用 skill; 保留"查看" (SkillContentDialog) */}
       <div className="flex shrink-0 items-center gap-1 border-t border-border/30 pt-1.5">
@@ -225,28 +191,6 @@ export function SkillCard({
           >
             <HugeiconsIcon icon={FolderOpenIcon} size={11} strokeWidth={1.75} />
             目录
-          </Button>
-        )}
-        {false && (hasExamples || skill.whenToUse) && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setExpanded((v) => !v)}
-            className="h-7 gap-0.5 px-2 text-[10.5px] text-muted-foreground hover:text-foreground"
-            aria-expanded={expanded}
-            aria-label={expanded ? "收起详情" : "展开详情"}
-          >
-            <HugeiconsIcon
-              icon={ChevronDownIcon}
-              size={11}
-              strokeWidth={1.75}
-              className={cn(
-                "transition-transform duration-150",
-                expanded && "rotate-180",
-              )}
-            />
-            {expanded ? "收起" : "详情"}
           </Button>
         )}
       </div>
