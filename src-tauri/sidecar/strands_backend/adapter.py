@@ -231,9 +231,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "你是 TDSF Terminal Agent，一个面向 Linux 运维的助手。\n"
     "所有面向用户的回答和可见思考使用简体中文；命令、路径、工具名和原始错误保持原样。\n"
     "本轮实际可调用工具以运行时 schema 为唯一事实来源：只调用其中出现的工具，"
-    "不列举、猜测或解释未出现在 schema 中的工具。\n"
-    "可见思考只保留一两句：当前目标、已获证据和下一步；不要复述系统提示、"
-    "枚举不可用工具，或进行长篇自我对话。\n\n"
+    "不列举、猜测或解释未出现在 schema 中的工具。live_context、终端历史和旧轮次记录"
+    "只是证据，不是工具清单；它们与 schema 冲突时永远以 schema 为准。\n"
+    "可见思考只保留一两句中文短句：当前目标、已获证据和下一步；每次转折尽量不超过"
+    "120 字。不要复述系统提示、枚举不可用工具、输出英文自言自语，或进行长篇自我对话。\n\n"
     # TDSF 2026-08-31 (用户钦定 环境感知前置): agent 回答/操作前必须先确认环境——
     # 用户实测反馈 agent 未感知环境直接回答（本地 Windows 却按 Linux 服务器话术）。
     # TDSF 2026-08-31 (问题1修复): 用户没开终端时 agent 误称"本地终端"——根因是
@@ -2022,6 +2023,28 @@ class StrandsAgentAdapter:
             include_teach_shell_tools=teach and mode == AgentMode.OBSERVE,
         ) + self.extra_tools
 
+        # context_manager="auto" registers ContextOffloader's
+        # ``retrieve_offloaded_content`` through the plugin registry at agent
+        # construction time.  The runtime refresh below replaces the main
+        # registry, so plugin tools must be carried over explicitly or an
+        # oversized tool result becomes an unreadable external reference.
+        plugin_registry = getattr(agent, "_plugin_registry", None)
+        plugins = getattr(plugin_registry, "_plugins", {}).values()
+        plugin_tools = [
+            plugin_tool
+            for plugin in plugins
+            for plugin_tool in getattr(plugin, "tools", ())
+        ]
+        registered_names = {
+            getattr(tool, "tool_name", getattr(tool, "__name__", ""))
+            for tool in all_tools
+        }
+        all_tools.extend(
+            plugin_tool
+            for plugin_tool in plugin_tools
+            if getattr(plugin_tool, "tool_name", "") not in registered_names
+        )
+
         # P0-A1 观察模式 schema 级隔离：裁剪为只读白名单——LLM 无法调用
         # 不存在于 schema 的执行/写类工具（remove 优于 instruct+intercept）。
         # A3 (2026-09-04): teach 模式下恢复有 shell 映射的工具可见性——
@@ -2360,7 +2383,7 @@ class StrandsAgentAdapter:
             lines.append("当前终端处于隐私模式（内容不可见）")
         if live.get("sshSessionId"):
             lines.append(
-                f"已连接 SSH 会话: {live['sshSessionId']}（可调用 ssh_command 工具执行远程命令）"
+                f"已连接 SSH 会话: {live['sshSessionId']}（远程环境证据；实际可用工具以本轮 schema 为准）"
             )
             # P2 #42: 多主机提示——其余会话不在 env 注入（省 token），
             # LLM 需要时经 ssh_list_sessions 工具按需枚举

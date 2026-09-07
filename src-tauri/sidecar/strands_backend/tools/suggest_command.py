@@ -16,6 +16,7 @@ strands_backend/tools/suggest_command.py — 命令建议工具
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
@@ -117,19 +118,36 @@ _SUGGESTION_RULES: list[tuple[list[str], str, str]] = [
 
 def _match_suggestion(intent: str) -> tuple[str, str] | None:
     """根据意图关键词匹配最佳命令建议"""
-    intent_lower = intent.lower()
-    for keywords, command, explanation in _SUGGESTION_RULES:
-        if any(kw in intent_lower for kw in keywords):
-            return command, explanation
-    return None
+    text = " ".join(intent.lower().split())
+    best: tuple[int, int, str, str] | None = None
 
+    def match_score(keyword: str) -> int:
+        keyword = keyword.lower().strip()
+        if not keyword:
+            return 0
+        if keyword.isascii():
+            # ASCII keywords are matched as shell-like words so “topology”
+            # cannot accidentally select the “top” rule.
+            found = re.search(
+                rf"(?<![a-z0-9_]){re.escape(keyword)}(?![a-z0-9_])", text,
+            )
+        else:
+            found = re.search(re.escape(keyword), text)
+        if not found:
+            return 0
+        # Prefer an explicit phrase over a short generic keyword. The rule
+        # index remains the deterministic tie-breaker for equally specific
+        # matches.
+        return 20 + len(keyword) * 2
 
-def _build_fallback(intent: str) -> tuple[str, str]:
-    """无规则命中时返回通用解释命令"""
-    return (
-        f'echo "未找到与 \"{intent}\" 直接匹配的内置命令，请补充更多关键词（如 cpu/内存/磁盘/端口/日志）"',
-        "未匹配到内置规则，这是一条提示命令，请用户补充具体场景。",
-    )
+    for index, (keywords, command, explanation) in enumerate(_SUGGESTION_RULES):
+        score = sum(match_score(keyword) for keyword in keywords)
+        if score <= 0:
+            continue
+        candidate = (score, -index, command, explanation)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    return (best[2], best[3]) if best else None
 
 
 # ============================================================================
@@ -228,17 +246,26 @@ def invoke_suggest_command_tool(
     matched = _match_suggestion(intent)
     if matched:
         command, explanation = matched
+        result: dict[str, Any] = {
+            "status": "success",
+            "command": command,
+            "explanation": explanation,
+            "predicted_output": _predict_output(command),
+            "target_os": target_os,
+            "intent": intent,
+        }
     else:
-        command, explanation = _build_fallback(intent)
-
-    result: dict[str, Any] = {
-        "status": "success",
-        "command": command,
-        "explanation": explanation,
-        "predicted_output": _predict_output(command),
-        "target_os": target_os,
-        "intent": intent,
-    }
+        # An unmatched intent is not an executable command. Returning an echo
+        # fallback previously painted this state green and encouraged the UI
+        # to treat a clarification prompt as a real shell command.
+        result = {
+            "status": "unmatched",
+            "command": None,
+            "explanation": "未匹配到内置命令规则，请补充对象或目标，例如“查看 nginx 状态”或“检查磁盘空间”。",
+            "target_os": target_os,
+            "intent": intent,
+            "suggestions": ["cpu/内存", "磁盘空间", "端口监听", "服务状态", "网络连通性"],
+        }
 
     # 推送 tool_call 完成事件（started 在 make_suggest_command_tool 中已推，
     # 这里为了核心实现可被单独调用，再补一次 completed）

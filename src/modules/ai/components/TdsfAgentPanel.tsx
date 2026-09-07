@@ -39,6 +39,7 @@ import { getOrCreateChat, sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
 import { useSpaces } from "@/modules/spaces";
 import { AiChatView } from "./AiChat";
+import { TodoStrip } from "./TodoStrip";
 import { WorkspaceGate } from "./WorkspaceGate";
 // TDSF 魔改 (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
@@ -524,6 +525,8 @@ function Body({
         </span>
         <div className="flex-1" />
       </div>
+
+      <TodoStrip sessionId={sessionId} />
 
       {/* ===== ② Messages ====================================================== */}
       <div

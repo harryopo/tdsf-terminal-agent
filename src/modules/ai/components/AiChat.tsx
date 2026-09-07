@@ -78,6 +78,14 @@ function countLines(s: string): number {
   return trimmed.split("\n").length;
 }
 
+function compactReasoningText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function stripUserContextBlocks(text: string): {
   text: string;
   chips: ContextChip[];
@@ -214,7 +222,7 @@ export function AiChatView({
 
   return (
     <Conversation>
-      <ConversationContent className="gap-5 p-3">
+      <ConversationContent className="gap-3 p-3">
         {messages.map((m) => (
           <RenderedMessage
             key={m.id}
@@ -588,7 +596,7 @@ const RenderedMessage = memo(function RenderedMessage({
           streaming={streaming}
           showEvidence={showEvidence}
         >
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
             {groups.map((g) => {
               if (g.kind === "reads") {
                 return (
@@ -824,7 +832,7 @@ const RenderedPart = memo(function RenderedPart({
     return (
       <MessageResponse
         streaming={streaming}
-        className="max-w-none text-[12.5px] leading-[1.72] text-foreground [&>*:not(:first-child)]:mt-2 [&_[data-streamdown=heading-1]]:mt-3 [&_[data-streamdown=heading-1]]:text-[15px] [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-1]]:tracking-tight [&_[data-streamdown=heading-2]]:mt-3 [&_[data-streamdown=heading-2]]:text-[14px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-2.5 [&_[data-streamdown=heading-3]]:text-[13px] [&_[data-streamdown=heading-3]]:font-semibold [&_ul]:my-2 [&_ul]:pl-4 [&_ol]:my-2 [&_ol]:pl-4 [&_li]:my-0.5 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/35 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
+        className="max-w-none text-[12.5px] leading-[1.65] text-foreground [&>*:not(:first-child)]:mt-1.5 [&_p]:my-1 [&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.94em] [&_pre]:my-1.5 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted/50 [&_pre]:p-2 [&_pre]:leading-relaxed [&_[data-streamdown=heading-1]]:mt-2.5 [&_[data-streamdown=heading-1]]:text-[15px] [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-1]]:tracking-tight [&_[data-streamdown=heading-2]]:mt-2.5 [&_[data-streamdown=heading-2]]:text-[14px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-2 [&_[data-streamdown=heading-3]]:text-[13px] [&_[data-streamdown=heading-3]]:font-semibold [&_ul]:my-1.5 [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:pl-4 [&_li]:my-0.5 [&_blockquote]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/35 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_table]:my-1.5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
       >
         {text}
       </MessageResponse>
@@ -832,12 +840,14 @@ const RenderedPart = memo(function RenderedPart({
   }
 
   if (part.type === "reasoning") {
+    const text = compactReasoningText(
+      (part as unknown as { text: string }).text,
+    );
+    if (!text) return null;
     return (
       <Reasoning>
         <ReasoningTrigger />
-        <ReasoningContent>
-          {(part as unknown as { text: string }).text}
-        </ReasoningContent>
+        <ReasoningContent>{text}</ReasoningContent>
       </Reasoning>
     );
   }

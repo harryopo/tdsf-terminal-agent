@@ -209,7 +209,10 @@ class TestStrandsRealE2E(unittest.TestCase):
             policy = get_tool_policy(name)
             self.assertIsNotNone(policy, f"{name} 未注册（白名单外泄）")
             self.assertTrue(policy.readonly, f"observe schema 出现 readonly=False 工具: {name}")
-        self.assertEqual(tool_names, set(READONLY_TOOL_NAMES))
+        self.assertEqual(
+            tool_names,
+            set(READONLY_TOOL_NAMES) | {"retrieve_offloaded_content"},
+        )
         self.assertNotIn("ssh_command", tool_names)
         self.assertIn("read_remote_file", tool_names)
         self.assertIn("suggest_command", tool_names)
@@ -221,10 +224,10 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         self.assertIs(observe_agent, confirm_agent)
         self.assertIn("ssh_command", set(confirm_agent.tool_names))
-        self.assertEqual(len(set(confirm_agent.tool_names)), 23)
+        self.assertEqual(len(set(confirm_agent.tool_names)), 25)
 
     def test_main_agent_has_full_toolset(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 23 工具
+        """main（唯一 agent）：业务工具 + 1 个上下文回读工具
 
         P0-A1 BREAKING：原 24 = 20 registry + 4 子 agent（agent-as-tool）
         ——委派删除后收敛为 20；2026-08-31 + knowledge_get_doc = 21；
@@ -236,7 +239,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
         agent = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM)
         tool_names = set(agent.tool_names)
-        self.assertEqual(len(tool_names), 23)
+        self.assertEqual(len(tool_names), 25)
         # 核心工具齐全
         for name in (
             "ssh_command", "ssh_list_sessions", "skill_invoke", "knowledge_search",
@@ -260,7 +263,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         tool_names = set(agent.tool_names)
         self.assertIn("ssh_command", tool_names)
-        self.assertEqual(len(tool_names), 23)
+        self.assertEqual(len(tool_names), 25)
 
 
 if __name__ == "__main__":

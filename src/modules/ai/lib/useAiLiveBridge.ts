@@ -272,7 +272,8 @@ export function useAiLiveBridge(params: Params) {
 
     setLive({
       getCwd: findCwd,
-      getTerminalContext: () => {
+      getTerminalContext: (maxLines = 300) => {
+        const requestedLines = Math.max(1, Math.min(Math.trunc(maxLines), 2000));
         // TDSF 魔改 (2026-08-09): SSH 终端优先——
         // 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，active tab 的 activeLeafId
         // 就是当前 pane；getSshLeafId 返回其 leafId（会话 connected 时）。
@@ -287,7 +288,7 @@ export function useAiLiveBridge(params: Params) {
         };
         const sshLeafId = ref.current.getSshLeafId?.();
         if (sshLeafId !== null && sshLeafId !== undefined) {
-          const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(300);
+          const buf = terminalRefs.current.get(sshLeafId)?.getBuffer(requestedLines);
           if (buf) return appendBlockedHint(redactSensitive(buf));
           // SSH leaf 存在但 buffer 还没准备好（刚连接），不回退本地；
           // 仍注入拦截提示（若存在）——命令被拦截时终端无新输出，AI 也能感知
@@ -301,7 +302,7 @@ export function useAiLiveBridge(params: Params) {
         const t = tabs.find((x) => x.id === activeId);
         if (t?.kind === "terminal") {
           if (t.private) return null;
-          const buf = terminalRefs.current.get(t.activeLeafId)?.getBuffer(300);
+          const buf = terminalRefs.current.get(t.activeLeafId)?.getBuffer(requestedLines);
           return buf ? appendBlockedHint(redactSensitive(buf)) : null;
         }
         return null;
@@ -780,13 +781,15 @@ export function useAiLiveBridge(params: Params) {
         requestId: string;
         lines: number;
       }>("sidecar:get-terminal-scrollback", (event) => {
-        const { requestId } = event.payload;
+        const { requestId, lines } = event.payload;
         if (!requestId) return;
         const live = useChatStore.getState().live;
-        const output = live?.getTerminalContext?.() ?? "";
+        const output = live?.getTerminalContext?.(lines) ?? "";
+        const available = live?.getActiveTerminalSession?.() != null;
         void invoke("sidecar_scrollback_response", {
           requestId,
           output: output ?? "",
+          available,
         }).catch((e) => {
           console.warn("[tdsf] scrollback response failed:", e);
         });

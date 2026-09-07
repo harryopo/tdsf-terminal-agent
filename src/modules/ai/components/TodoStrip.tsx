@@ -61,12 +61,14 @@ export function TodoStrip({ sessionId }: Props) {
   return (
     <section
       aria-label="任务清单"
-      className="mx-2 mt-2 flex min-h-0 shrink-0 flex-col rounded-lg border border-border/60 bg-muted/45 px-3 py-2 shadow-sm max-h-[35%]"
+      className="mx-2 mt-2 flex max-h-[38%] min-h-0 shrink-0 flex-col rounded-lg border border-border/60 bg-muted/45 px-3 py-2 shadow-sm"
     >
       <div className="flex shrink-0 items-center gap-2">
-        <span className="text-[11px] font-semibold text-foreground">任务清单</span>
-        <Progress value={pct} className="h-1 flex-1" />
-        <span className="text-[11px] tabular-nums font-mono text-muted-foreground">
+        <span className="text-[11px] font-semibold tracking-wide text-foreground">
+          任务清单
+        </span>
+        <Progress value={pct} className="h-1 flex-1" aria-label="任务进度" />
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {completed}/{todos.length}
         </span>
       </div>
@@ -75,13 +77,16 @@ export function TodoStrip({ sessionId }: Props) {
           data-testid="todo-current"
           className="mt-1.5 truncate text-[10.5px] text-muted-foreground"
         >
-          正在处理 · {current.title}
+          <span className="mr-1 rounded bg-primary/10 px-1 py-0.5 font-medium text-primary">
+            进行中
+          </span>
+          {current.title}
         </p>
       ) : null}
       <ScrollArea className="flex-1 min-h-0">
-        <ul className="mt-1.5 flex flex-col gap-0.5">
-          {todos.map((t) => (
-            <TodoRow key={t.id} todo={t} />
+        <ul className="relative mt-2 flex flex-col gap-0.5 before:absolute before:bottom-3 before:left-[11px] before:top-3 before:w-px before:bg-border/70">
+          {todos.map((t, index) => (
+            <TodoRow key={t.id} todo={t} index={index} />
           ))}
         </ul>
       </ScrollArea>
@@ -89,8 +94,14 @@ export function TodoStrip({ sessionId }: Props) {
   );
 }
 
-function TodoRow({ todo }: { todo: Todo }) {
+function TodoRow({ todo, index }: { todo: Todo; index: number }) {
   const isInProgress = todo.status === "in_progress";
+  const statusLabel =
+    todo.status === "completed"
+      ? "已完成"
+      : isInProgress
+        ? "进行中"
+        : "待处理";
   // T3 规划-执行回环: 完成项显示完成时间小字（Python todo_write 自动维护
   // completedAt，ISO 8601；旧数据/未完成项无此字段不显示）
   const completedAtLabel =
@@ -98,19 +109,31 @@ function TodoRow({ todo }: { todo: Todo }) {
   const row = (
     <li
       className={cn(
-        "flex items-start gap-2 rounded-md px-1.5 py-1.5 text-[11px] leading-snug",
-        isInProgress && "border-l-2 border-primary bg-primary/5",
+        "relative flex items-start gap-2 rounded-md py-1.5 pl-8 pr-1.5 text-[11px] leading-snug transition-colors",
+        isInProgress && "bg-primary/5",
+        todo.status === "completed" && "opacity-75",
       )}
     >
-      <span className="mt-[2px] inline-flex size-3.5 shrink-0 items-center justify-center">
+      <span
+        className={cn(
+          "absolute left-1 top-1.5 z-10 inline-flex size-4 items-center justify-center rounded-full border bg-background",
+          todo.status === "completed"
+            ? "border-emerald-500/60 text-emerald-600 dark:text-emerald-400"
+            : isInProgress
+              ? "border-primary text-primary"
+              : "border-border text-muted-foreground",
+        )}
+        aria-label={statusLabel}
+      >
         {isInProgress ? (
-          <Spinner className="size-3" />
+          <Spinner className="size-2.5" />
         ) : (
           <HugeiconsIcon
             icon={
               todo.status === "completed" ? CheckmarkSquare02Icon : SquareIcon
             }
-            strokeWidth={1.75}
+            size={10}
+            strokeWidth={2}
           />
         )}
       </span>
@@ -118,12 +141,15 @@ function TodoRow({ todo }: { todo: Todo }) {
         className={cn(
           "min-w-0 flex-1",
           todo.status === "completed"
-            ? "text-muted-foreground/60 line-through"
+            ? "text-muted-foreground/70 line-through"
             : isInProgress
               ? "text-foreground"
               : "text-muted-foreground",
         )}
       >
+        <span className="mr-1 font-mono text-[10px] text-muted-foreground/60">
+          {String(index + 1).padStart(2, "0")}
+        </span>
         {todo.title}
         {isInProgress && todo.description ? (
           <span className="mt-0.5 block text-[10px] text-muted-foreground">
@@ -140,6 +166,9 @@ function TodoRow({ todo }: { todo: Todo }) {
           {completedAtLabel}
         </span>
       )}
+      <span className="shrink-0 self-center text-[9px] text-muted-foreground/60">
+        {statusLabel}
+      </span>
     </li>
   );
 

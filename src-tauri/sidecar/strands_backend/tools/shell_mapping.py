@@ -13,8 +13,9 @@ strands_backend/tools/shell_mapping.py — 工具→Shell 命令映射统一入�
 - 所有映射函数签名统一为 ``to_shell_command(params: dict) -> str | None``。
 
 A2 阶段（2026-09-04）：
-- 支持 7 个终端可执行工具：ssh_command / network_diagnose / inspect_processes /
-  analyze_logs / read_remote_file / config_diff / performance_analyze。
+- 支持终端可执行工具：ssh_command / network_diagnose / inspect_processes /
+  analyze_logs / read_remote_file / config_diff / performance_analyze /
+  security_audit。
 - 非终端工具（knowledge_search / suggest_command / todo_write 等）
   未注册 to_shell_command，resolve_shell_command 返回 None。
 """
