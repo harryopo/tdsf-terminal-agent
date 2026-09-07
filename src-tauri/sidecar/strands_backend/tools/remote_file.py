@@ -48,6 +48,74 @@ logger = logging.getLogger("sidecar.strands_backend.tools.remote_file")
 _DEFAULT_MAX_SIZE = 1024 * 1024
 
 
+def _emit_tool_call(
+    ctx: ToolContext,
+    tool_name: str,
+    params: dict[str, Any],
+    status: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Emit one terminal state transition; event failures never change I/O."""
+    if ctx.event_bus is None:
+        return
+    try:
+        ctx.event_bus.emit_tool_call(
+            tool_name=tool_name,
+            params=params,
+            result=result,
+            status=status,
+            session_id=ctx.session_id or None,
+            source=f"{ctx.agent_name}_agent.strands_tool.remote_file",
+        )
+    except Exception as e:  # noqa: BLE001 - UI telemetry must not block SFTP
+        logger.debug("emit_tool_call failed: %s", e)
+
+
+def _coerce_content(value: Any) -> bytes | str | None:
+    """Accept the Rust protocol plus its JSON envelope variants, fail closed."""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        if all(
+            isinstance(item, int)
+            and not isinstance(item, bool)
+            and 0 <= item <= 255
+            for item in value
+        ):
+            return bytes(value)
+    return None
+
+
+def _extract_content(result: Any) -> tuple[bytes | str | None, int | None, bool]:
+    """Decode ``sftp_read`` replies without turning an unknown reply into text."""
+    content = _coerce_content(result)
+    if content is not None:
+        return content, None, False
+    if not isinstance(result, dict):
+        return None, None, False
+
+    declared_size = result.get("size")
+    try:
+        size = int(declared_size) if declared_size is not None else None
+    except (TypeError, ValueError):
+        size = None
+    truncated = bool(result.get("truncated", False))
+    for key in ("content", "data", "bytes", "result"):
+        candidate = result.get(key)
+        content = _coerce_content(candidate)
+        if content is not None:
+            return content, size, truncated
+        if isinstance(candidate, dict):
+            nested, nested_size, nested_truncated = _extract_content(candidate)
+            if nested is not None:
+                return nested, size if size is not None else nested_size, (
+                    truncated or nested_truncated
+                )
+    return None, size, truncated
+
+
 # ============================================================================
 # 核心实现（无 Strands 依赖，便于单测）
 # ============================================================================
@@ -171,6 +239,58 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     #   1. list[int] / bytes / bytearray：直接当二进制内容
     #   2. dict 含 content 字段：旧路径（假设 Rust 未来扩展返回 dict）
     #   3. 其他：str(result) 兜底
+    if isinstance(result, list) and _coerce_content(result) is None:
+        response = {
+            "status": "error",
+            "path": path,
+            "ssh_session_id": session_id,
+            "reason": "remote_file_content_missing",
+            "error": "sftp_read returned an invalid byte array",
+        }
+        _emit_tool_call(
+            ctx,
+            "read_remote_file",
+            {"path": path, "ssh_session_id": session_id, "max_size": max_size},
+            "error",
+            response,
+        )
+        return response
+    if not isinstance(result, (list, bytes, bytearray, str, dict)):
+        response = {
+            "status": "error",
+            "path": path,
+            "ssh_session_id": session_id,
+            "reason": "remote_file_content_missing",
+            "error": "sftp_read returned an unsupported response type",
+        }
+        _emit_tool_call(
+            ctx,
+            "read_remote_file",
+            {"path": path, "ssh_session_id": session_id, "max_size": max_size},
+            "error",
+            response,
+        )
+        return response
+    if isinstance(result, dict) and "content" not in result:
+        extracted, _, _ = _extract_content(result)
+        if extracted is None:
+            response = {
+                "status": "error",
+                "path": path,
+                "ssh_session_id": session_id,
+                "reason": "remote_file_content_missing",
+                "error": "sftp_read returned no decodable file content",
+            }
+            _emit_tool_call(
+                ctx,
+                "read_remote_file",
+                {"path": path, "ssh_session_id": session_id, "max_size": max_size},
+                "error",
+                response,
+            )
+            return response
+        result = {**result, "content": extracted}
+
     truncated = False
     if isinstance(result, list) and all(isinstance(b, int) for b in result if result):
         # Rust sftp_read 实际返回路径：list[int] → bytes
@@ -181,9 +301,41 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         size = len(content_raw)
     elif isinstance(result, dict):
         # 旧路径：假设 dict 含 content / size / truncated 字段
-        content_raw = result.get("content", "")
+        content_raw = _coerce_content(result.get("content", ""))
+        if content_raw is None:
+            response = {
+                "status": "error",
+                "path": path,
+                "ssh_session_id": session_id,
+                "reason": "remote_file_content_missing",
+                "error": "sftp_read returned invalid file content",
+            }
+            _emit_tool_call(
+                ctx,
+                "read_remote_file",
+                {"path": path, "ssh_session_id": session_id, "max_size": max_size},
+                "error",
+                response,
+            )
+            return response
         size = int(result.get("size", 0))
         truncated = bool(result.get("truncated", False))
+        if size > 0 and len(content_raw) == 0:
+            response = {
+                "status": "error",
+                "path": path,
+                "ssh_session_id": session_id,
+                "reason": "remote_file_content_missing",
+                "error": "sftp_read reported a non-empty file but returned no content",
+            }
+            _emit_tool_call(
+                ctx,
+                "read_remote_file",
+                {"path": path, "ssh_session_id": session_id, "max_size": max_size},
+                "error",
+                response,
+            )
+            return response
     else:
         # 兜底：转字符串
         content_raw = str(result)

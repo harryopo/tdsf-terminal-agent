@@ -384,8 +384,8 @@ const STATUS_DOT: Record<ToolPart["state"], string> = {
   "approval-requested": "bg-amber-500",
   "approval-responded": "bg-sky-500",
   "input-streaming": "bg-muted-foreground/40",
-  "input-available": "bg-amber-500",
-  "output-available": "bg-transparent border border-muted-foreground/40",
+  "input-available": "bg-red-500",
+  "output-available": "bg-emerald-500",
   "output-denied": "bg-orange-500",
   "output-error": "bg-destructive",
 };
@@ -714,7 +714,7 @@ function renderInputPreview(
           <div className="text-[10px] text-muted-foreground">
             {session ? `session ${session}` : null}
             {session && timeout ? " · " : null}
-            {timeout ? `${timeout}s` : null}
+            {timeout ? `最长等待 ${timeout}s` : null}
           </div>
         ) : null}
       </div>
