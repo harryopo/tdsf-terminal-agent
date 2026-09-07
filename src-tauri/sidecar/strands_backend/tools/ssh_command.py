@@ -92,10 +92,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     ssh_session_id = params.get("ssh_session_id", "") or ""
     explanation = params.get("explanation", "") or ""
     timeout = int(params.get("timeout", 30))
-    visible = bool(params.get("visible", False))
     # TDSF 魔改 (2026-08-09): 前端开关 auto_execute_in_terminal 开启时自动设 visible
-    if ctx.auto_execute_in_terminal:
-        visible = True
 
     # 多行命令拆分检测（Task 3 / Task 4 接入：每行走 assess_command 综合决策）
     # P1-1 (2026-08-01): 命中确认 → 真实等待用户响应，批准后整条执行
@@ -195,7 +192,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     # TDSF 魔改 (2026-08-09): visible 模式——通知前端把命令注入终端（用户可见）
     # 在后台 exec 执行前，先通知前端把命令写到终端屏幕上让用户看到。
     # 后台 exec 仍然执行以拿到结构化结果返回给 LLM。
-    if visible and ctx.rust_bridge is not None:
+    if False:  # Legacy notification path removed: it duplicated real execution.
         try:
             ctx.rust_bridge.send_notification("inject_terminal", {
                 "command": command,

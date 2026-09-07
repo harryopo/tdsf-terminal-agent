@@ -645,7 +645,9 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 # RustBridge 协议 ipc_invoke(method, params) → send_request(method, params)
                 if _rust_bridge is not None:
                     _rust_bridge_impl = DefaultRustBridge(
-                        send_request=lambda m, p: _rust_bridge.send_request(m, p),
+                        send_request=lambda m, p, timeout=None: _rust_bridge.send_request(
+                            m, p, timeout=timeout
+                        ),
                         # 2026-08-28 审查修复: 注入通知回调, 否则工具里的
                         # send_notification 调用 AttributeError 静默失效
                         # (update_todos / inject_terminal 两条链路断)

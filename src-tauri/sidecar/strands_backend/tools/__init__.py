@@ -99,7 +99,9 @@ class RustBridge(Protocol):
     工具据此降级（返回"未配置"结构化结果，而非抛错阻塞 agent loop）。
     """
 
-    def ipc_invoke(self, method: str, params: dict[str, Any]) -> Any: ...
+    def ipc_invoke(
+        self, method: str, params: dict[str, Any], *, timeout: float | None = None
+    ) -> Any: ...
 
 
 class DefaultRustBridge:
@@ -131,7 +133,13 @@ class DefaultRustBridge:
         self._send_request = send_request
         self._send_notification = send_notification
 
-    def ipc_invoke(self, method: str, params: dict[str, Any]) -> Any:
+    def ipc_invoke(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> Any:
         if self._send_request is None:
             logger.debug(
                 f"rust_bridge unavailable: method={method} "
@@ -147,7 +155,9 @@ class DefaultRustBridge:
                 ),
             }
         try:
-            return self._send_request(method, params)
+            if timeout is None:
+                return self._send_request(method, params)
+            return self._send_request(method, params, timeout)
         except Exception as e:
             logger.exception(f"rust_bridge ipc_invoke failed: method={method}, error={e}")
             return {
@@ -214,6 +224,9 @@ class ToolContext:
     ssh_host: str = ""
     # TDSF 魔改 (2026-08-09): 终端执行模式——True 时 ssh_command 自动设 visible=True
     auto_execute_in_terminal: bool = False
+    # "visible-terminal" executes through the foreground SSH PTY and waits for
+    # its OSC command block. It must never fall back to ssh_command in secret.
+    execution_channel: str = "background"
     # T5 (2026-08-31, spec add-agent-loop-closure): 本地工作区路径
     # （live.workspaceRoot 优先，cwd 兜底）——python_run 的 subprocess cwd。
     # 空 = 不可得（python_run fail-closed 拒绝）；SSH 会话下不适用
@@ -1290,7 +1303,17 @@ def execute_via_ssh(
         }
         if operation_id:
             ssh_params["operationId"] = operation_id
-        result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
+        visible_terminal = (
+            getattr(ctx, "execution_channel", "background") == "visible-terminal"
+        )
+        if visible_terminal:
+            result = ctx.rust_bridge.ipc_invoke(
+                "visible_terminal_execute",
+                ssh_params,
+                timeout=max(5.0, float(timeout) + 5.0),
+            )
+        else:
+            result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
     except Exception as e:
         logger.exception(
             f"execute_via_ssh ipc_invoke exception: tool={tool_name}, "
@@ -1307,6 +1330,80 @@ def execute_via_ssh(
     # Rust 的 Tauri 回包采用 camelCase（`exitCode` / `operationId`），
     # Python 工具与账本内部使用 snake_case。只在这个协议边界归一化，
     # 避免有效退出码被误判为缺失。
+    if (
+        visible_terminal
+        and isinstance(result, dict)
+        and result.get("status") == "indeterminate"
+    ):
+        _transition_operation(
+            "indeterminate",
+            error_code=str(result.get("reason") or "visible_terminal_indeterminate"),
+        )
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "reason": result.get("reason", "visible_terminal_indeterminate"),
+            "message": "可见终端未提供可验证的退出码，未对命令结果作出结论。",
+        })
+
+    if (
+        visible_terminal
+        and isinstance(result, dict)
+        and result.get("status") == "timed_out"
+    ):
+        _transition_operation("indeterminate", error_code="visible_terminal_timeout")
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "reason": "visible_terminal_timeout",
+            "message": (
+                "可见终端在命令提交后等待超时。未发送中断信号，"
+                "该命令可能仍在终端中运行；请查看终端输出后再决定下一步。"
+            ),
+        })
+
+    if (
+        visible_terminal
+        and isinstance(result, dict)
+        and result.get("status") == "interrupted"
+    ):
+        _transition_operation("indeterminate", error_code="visible_terminal_interrupted")
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "reason": "visible_terminal_interrupted",
+            "message": "用户接管了可见终端输入，Agent 未获得可验证的执行结果。",
+        })
+
+    if (
+        visible_terminal
+        and isinstance(result, dict)
+        and result.get("status") == "unavailable"
+    ):
+        # `dispatching -> cancelled` is not a valid durable-ledger transition.
+        # The frontend attests that it did not write the command, but the
+        # ledger cannot prove that assertion independently, so preserve the
+        # conservative terminal state while returning the precise UI result.
+        _transition_operation(
+            "indeterminate",
+            error_code=str(result.get("reason") or "visible_terminal_unavailable"),
+        )
+        return _complete_after_execution({
+            "status": "unavailable",
+            "command": command,
+            "ssh_session_id": session_id,
+            "reason": result.get("reason", "visible_terminal_unavailable"),
+            "message": result.get(
+                "message", "可见终端不可用，命令未写入后台 SSH 通道。"
+            ),
+        })
+
     if isinstance(result, dict) and "exit_code" not in result and "exitCode" in result:
         result = {**result, "exit_code": result["exitCode"]}
 

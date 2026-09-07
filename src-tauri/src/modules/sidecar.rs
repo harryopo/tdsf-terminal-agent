@@ -1410,6 +1410,77 @@ async fn handle_reverse_request(
         // 再 invoke("sidecar_scrollback_response") 回传，oneshot 关联 request_id。
         // 前端无响应（未挂载/JS 阻塞）时 2s 超时 → 返回 unavailable（fail-closed，
         // 与修复前行为一致，无回归风险）。
+        "visible_terminal_execute" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_u64())
+                .ok_or("visible_terminal_execute: missing or invalid sessionId")?
+                as u32;
+            let command = params
+                .get("command")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                .ok_or("visible_terminal_execute: missing command")?
+                .to_string();
+            let timeout_secs = params
+                .get("timeout")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(30)
+                .clamp(1, 300);
+            let operation_id = params
+                .get("operationId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+
+            let request_id = {
+                let mut counter = VISIBLE_TERMINAL_REQ_COUNTER.lock().await;
+                *counter += 1;
+                format!("vt-{}", *counter)
+            };
+            let (tx, rx) = oneshot::channel::<Value>();
+            VISIBLE_TERMINAL_PENDING.lock().await.insert(request_id.clone(), tx);
+
+            let emitted = {
+                let guard = app_handle.lock().await;
+                if let Some(handle) = guard.as_ref() {
+                    handle.emit(
+                        "sidecar:visible-terminal-execute",
+                        json!({
+                            "requestId": request_id,
+                            "sessionId": session_id,
+                            "command": command,
+                            "timeoutMs": timeout_secs * 1_000,
+                            "operationId": operation_id,
+                        }),
+                    ).is_ok()
+                } else {
+                    false
+                }
+            };
+            if !emitted {
+                VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id);
+                return Ok(json!({
+                    "status": "unavailable",
+                    "reason": "visible_terminal_unavailable",
+                    "message": "No foreground terminal is available for visible execution.",
+                    "operationId": operation_id,
+                }));
+            }
+
+            match timeout(Duration::from_secs(timeout_secs + 5), rx).await {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(_)) | Err(_) => {
+                    VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id);
+                    Ok(json!({
+                        "status": "timed_out",
+                        "reason": "visible_terminal_timeout",
+                        "operationId": operation_id,
+                    }))
+                }
+            }
+        }
+
         "get_terminal_scrollback" => {
             let lines = params.get("lines").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
 
@@ -1446,7 +1517,7 @@ async fn handle_reverse_request(
         }
 
         _ => Err(format!(
-            "reverse route not found: {} (supported: ssh_command, ssh_status, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename, get_terminal_scrollback)",
+            "reverse route not found: {} (supported: ssh_command, ssh_status, sftp_read, sftp_write, sftp_stat, sftp_list, sftp_mkdir, sftp_remove, sftp_rename, visible_terminal_execute, get_terminal_scrollback)",
             method
         )),
     }
@@ -1461,6 +1532,12 @@ static SCROLLBACK_PENDING: std::sync::LazyLock<
 static SCROLLBACK_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(0));
 
+static VISIBLE_TERMINAL_PENDING: std::sync::LazyLock<
+    tokio::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>,
+> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+static VISIBLE_TERMINAL_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(0));
+
 /// 前端回传终端 scrollback（配合 get_terminal_scrollback 反向 RPC）
 ///
 /// 调用链：Python ipc_invoke("get_terminal_scrollback") → Rust emit 事件到前端
@@ -1473,6 +1550,20 @@ pub async fn sidecar_scrollback_response(
 ) -> Result<(), String> {
     if let Some(tx) = SCROLLBACK_PENDING.lock().await.remove(&request_id) {
         let _ = tx.send(output);
+    }
+    Ok(())
+}
+
+/// Resolve one foreground terminal execution request. The frontend only calls
+/// this after it has either observed the terminal command block or established
+/// that it could not safely submit the command.
+#[tauri::command]
+pub async fn sidecar_visible_terminal_response(
+    request_id: String,
+    result: Value,
+) -> Result<(), String> {
+    if let Some(tx) = VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id) {
+        let _ = tx.send(result);
     }
     Ok(())
 }

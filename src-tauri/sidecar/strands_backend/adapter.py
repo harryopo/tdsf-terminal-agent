@@ -2318,6 +2318,11 @@ class StrandsAgentAdapter:
             ssh_host=ssh_host,
             # TDSF 魔改 (2026-08-09): 终端执行模式开关
             auto_execute_in_terminal=bool(live.get("autoExecuteInTerminal", False)),
+            execution_channel=(
+                "visible-terminal"
+                if live.get("executionChannel") == "visible-terminal"
+                else "background"
+            ),
             workspace=workspace,
             wsl_distro=wsl_distro,
             # A3 (2026-09-04): 教学模式终端执行链路

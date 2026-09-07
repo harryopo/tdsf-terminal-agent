@@ -19,8 +19,10 @@ import {
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   coerceAgentTypingSpeed,
+  setAgentExecutionChannel,
   setAgentTypingMode,
   setAgentTypingSpeed,
+  type AgentExecutionChannel,
   type AgentTypingMode,
 } from "@/modules/settings/store";
 import { SettingRow } from "../components/SettingRow";
@@ -42,6 +44,14 @@ const MODE_OPTIONS: Array<{
   },
 ];
 
+const CHANNEL_OPTIONS: Array<{
+  value: AgentExecutionChannel;
+  label: string;
+}> = [
+  { value: "background", label: "后台 SSH 通道（默认）" },
+  { value: "visible-terminal", label: "可见终端 Shell" },
+];
+
 /** 速度倍率 → 演示文案（80 字符命令的典型耗时，expect 经典参数估算） */
 function speedHint(speed: number): string {
   // 平均字符间隔 ≈ (0.1~0.3)s / speed，80 字符 ≈ 80×0.15/speed + 词尾停顿
@@ -54,9 +64,34 @@ function speedHint(speed: number): string {
 export function AgentTypingCard() {
   const agentTypingMode = usePreferencesStore((s) => s.agentTypingMode);
   const agentTypingSpeed = usePreferencesStore((s) => s.agentTypingSpeed);
+  const agentExecutionChannel = usePreferencesStore(
+    (s) => s.agentExecutionChannel,
+  );
 
   return (
     <div className="flex flex-col gap-2">
+      <SettingRow
+        title="命令执行通道"
+        description="仅决定已通过权限检查的命令在哪里真实执行。可见终端要求当前绑定服务器的终端已打开；否则会拒绝执行，不会静默回退到后台。"
+      >
+        <Select
+          value={agentExecutionChannel}
+          onValueChange={(v) =>
+            void setAgentExecutionChannel(v as AgentExecutionChannel)
+          }
+        >
+          <SelectTrigger className="h-7 w-56 text-[11.5px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CHANNEL_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
       <SettingRow
         title="打字模式"
         description="Agent 批准执行命令时，如何写入当前终端。"
@@ -87,7 +122,10 @@ export function AgentTypingCard() {
             min={0.2}
             max={5}
             step={0.1}
-            disabled={agentTypingMode !== "human"}
+            disabled={
+              agentTypingMode !== "human" ||
+              agentExecutionChannel !== "visible-terminal"
+            }
             onValueChange={(v) => {
               const next = coerceAgentTypingSpeed(v[0] ?? 1);
               void setAgentTypingSpeed(next);
@@ -98,6 +136,9 @@ export function AgentTypingCard() {
           </span>
         </div>
       </SettingRow>
+      <p className="text-[11px] leading-5 text-muted-foreground">
+        注：打字机只影响可见终端的输入节奏。长命令会自动加速，展示输入最多约 1 秒；命令的超时从回车提交后开始计算。
+      </p>
     </div>
   );
 }

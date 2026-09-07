@@ -7,13 +7,18 @@ import {
 import type { Tab } from "@/modules/tabs";
 import {
   findLeafCwd,
+  getLeafBlockMode,
   ptyIdForLeaf,
   type TerminalPaneHandle,
   whenSessionReady,
   writeToSession,
 } from "@/modules/terminal";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
-import { useTeachingExecutionStore } from "@/modules/terminal/lib/teachingExecutionStore";
+import {
+  normalizeTeachingCommand,
+  useTeachingExecutionStore,
+} from "@/modules/terminal/lib/teachingExecutionStore";
+import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -32,7 +37,32 @@ type HumanTypeReport = {
 };
 
 /** TDSF B2 (2026-08-29): 8 项之 8 —— 超过此长度的命令自动整段注入（前端判断） */
-const HUMAN_TYPING_MAX_LEN = 200;
+type HumanTypingEventPayload = {
+  phase: "start" | "end";
+  target: "pty" | "ssh";
+  id: number;
+  mode: "human" | "fallback";
+  stopped: boolean;
+};
+
+type VisibleTerminalRequest = {
+  requestId: string;
+  sessionId: number;
+  command: string;
+  timeoutMs: number;
+  operationId?: string;
+};
+
+type PendingVisibleTerminalExecution = VisibleTerminalRequest & {
+  leafId: number;
+  requestedAt: number;
+  phase: "typing" | "running";
+  timeoutHandle: number | null;
+};
+
+// Rust caps long-command visual typing by duration; never replace a long
+// command with an instant injection merely because of its character count.
+const HUMAN_TYPING_MAX_LEN = Number.POSITIVE_INFINITY;
 
 type TuiWaitResult = "ready" | "gone" | "timeout";
 
@@ -449,6 +479,216 @@ export function useAiLiveBridge(params: Params) {
     // TDSF 魔改 (2026-08-09): 监听 sidecar inject_terminal notification
     // 当 ssh_command(visible=True) 时，Python sidecar 发 notification → Rust 转发为
     // sidecar:inject_terminal 事件 → 这里监听并注入到前端终端（用户可见）
+    const pendingVisibleExecutions = new Map<
+      string,
+      PendingVisibleTerminalExecution
+    >();
+
+    const settleVisibleExecution = (
+      pending: PendingVisibleTerminalExecution,
+      result: Record<string, unknown>,
+    ) => {
+      if (!pendingVisibleExecutions.delete(pending.requestId)) return;
+      if (pending.timeoutHandle !== null) {
+        window.clearTimeout(pending.timeoutHandle);
+      }
+      void invoke("sidecar_visible_terminal_response", {
+        requestId: pending.requestId,
+        result: {
+          operationId: pending.operationId ?? "",
+          command: pending.command,
+          ...result,
+        },
+      }).catch((e) => {
+        console.warn("[tdsf] visible terminal response failed:", e);
+      });
+    };
+
+    const markVisibleExecutionRunning = (
+      pending: PendingVisibleTerminalExecution,
+    ) => {
+      if (pending.phase !== "typing") return;
+      pending.phase = "running";
+      const timeoutMs = Math.min(Math.max(pending.timeoutMs, 1_000), 300_000);
+      pending.timeoutHandle = window.setTimeout(() => {
+        settleVisibleExecution(pending, {
+          status: "timed_out",
+          reason: "visible_terminal_timeout",
+        });
+      }, timeoutMs);
+    };
+
+    const settleVisibleTerminalBlock = (block: TerminalBlock) => {
+      for (const pending of pendingVisibleExecutions.values()) {
+        if (
+          pending.phase !== "running" ||
+          pending.leafId !== block.sessionId ||
+          block.startedAt < pending.requestedAt ||
+          normalizeTeachingCommand(block.command) !==
+            normalizeTeachingCommand(pending.command)
+        ) {
+          continue;
+        }
+        if (block.exitCode === null) {
+          settleVisibleExecution(pending, {
+            status: "indeterminate",
+            reason: "visible_terminal_missing_exit_code",
+          });
+        } else {
+          settleVisibleExecution(pending, {
+            status: "success",
+            exitCode: block.exitCode,
+            output: redactSensitive(block.outputTail),
+            duration: block.durationMs / 1_000,
+            cwd: block.cwd,
+          });
+        }
+        return;
+      }
+    };
+
+    const startVisibleTerminalExecution = (
+      request: VisibleTerminalRequest,
+    ) => {
+      const currentSessionId = sshRustSessionId();
+      const leafId = ref.current.getSshLeafId?.();
+      const terminal =
+        leafId === null || leafId === undefined
+          ? undefined
+          : terminalRefs.current.get(leafId);
+      const reject = (reason: string, message: string) => {
+        void invoke("sidecar_visible_terminal_response", {
+          requestId: request.requestId,
+          result: {
+            status: "unavailable",
+            reason,
+            message,
+            command: request.command,
+            operationId: request.operationId ?? "",
+          },
+        }).catch((e) => {
+          console.warn("[tdsf] visible terminal rejection failed:", e);
+        });
+      };
+      if (
+        !request.requestId ||
+        !request.command ||
+        currentSessionId === null ||
+        currentSessionId !== request.sessionId ||
+        leafId === null ||
+        leafId === undefined ||
+        !terminal
+      ) {
+        reject(
+          "visible_terminal_unavailable",
+          "当前没有与该 SSH 会话匹配的可见终端，命令未执行。",
+        );
+        return;
+      }
+      if (getLeafBlockMode(leafId) !== "prompt") {
+        reject(
+          "visible_terminal_busy",
+          "可见终端当前不在提示符，命令未写入，以免打断正在运行的任务。",
+        );
+        return;
+      }
+      if (
+        [...pendingVisibleExecutions.values()].some(
+          (pending) => pending.leafId === leafId,
+        )
+      ) {
+        reject(
+          "visible_terminal_busy",
+          "可见终端正在等待另一条命令的真实结果；为避免乱序，本命令未执行。",
+        );
+        return;
+      }
+
+      const pending: PendingVisibleTerminalExecution = {
+        ...request,
+        leafId,
+        requestedAt: Date.now(),
+        phase: "typing",
+        timeoutHandle: null,
+      };
+      pendingVisibleExecutions.set(request.requestId, pending);
+      const text = request.command.endsWith("\n")
+        ? request.command
+        : `${request.command}\n`;
+      const prefs = usePreferencesStore.getState();
+      if (prefs.agentTypingMode !== "human") {
+        terminal.write(text);
+        terminal.focus();
+        useTerminalBlocksStore.getState().markAgentPending(leafId);
+        markVisibleExecutionRunning(pending);
+        return;
+      }
+
+      void invoke<HumanTypeReport>("ssh_write_human", {
+        sessionId: request.sessionId,
+        text,
+        speed: prefs.agentTypingSpeed,
+      })
+        .then((report) => {
+          useTerminalBlocksStore.getState().markAgentPending(leafId);
+          if (report.mode === "fallback") {
+            markVisibleExecutionRunning(pending);
+          }
+        })
+        .catch((e) => {
+          console.warn("[tdsf] visible terminal typing failed:", e);
+          settleVisibleExecution(pending, {
+            status: "unavailable",
+            reason: "visible_terminal_injection_failed",
+            message: "可见终端输入未能启动，命令未改走后台执行。",
+          });
+        });
+    };
+
+    const unlistenVisibleBlocks = useTerminalBlocksStore.subscribe((state) => {
+      for (const pending of pendingVisibleExecutions.values()) {
+        const blocks = state.blocksByLeaf[pending.leafId] ?? [];
+        const latest = blocks[blocks.length - 1];
+        if (latest) settleVisibleTerminalBlock(latest);
+      }
+    });
+
+    let unlistenVisibleExecution: (() => void) | null = null;
+    let unlistenHumanTyping: (() => void) | null = null;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const [stopVisibleExecution, stopHumanTyping] = await Promise.all([
+        listen<VisibleTerminalRequest>(
+          "sidecar:visible-terminal-execute",
+          (event) => startVisibleTerminalExecution(event.payload),
+        ),
+        listen<HumanTypingEventPayload>("terminal:human_typing", (event) => {
+          const typing = event.payload;
+          if (typing.phase !== "end" || typing.target !== "ssh") return;
+          for (const pending of pendingVisibleExecutions.values()) {
+            if (
+              pending.phase !== "typing" ||
+              pending.sessionId !== typing.id
+            ) {
+              continue;
+            }
+            if (typing.stopped) {
+              settleVisibleExecution(pending, {
+                status: "interrupted",
+                reason: "visible_terminal_typing_interrupted",
+              });
+            } else {
+              markVisibleExecutionRunning(pending);
+            }
+          }
+        }),
+      ]);
+      unlistenVisibleExecution = stopVisibleExecution;
+      unlistenHumanTyping = stopHumanTyping;
+    })().catch((e) => {
+      console.warn("[tdsf] visible terminal listeners failed:", e);
+    });
+
     let unlistenInject: (() => void) | null = null;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -524,6 +764,15 @@ export function useAiLiveBridge(params: Params) {
     });
 
     return () => {
+      unlistenVisibleBlocks();
+      unlistenVisibleExecution?.();
+      unlistenHumanTyping?.();
+      for (const pending of pendingVisibleExecutions.values()) {
+        if (pending.timeoutHandle !== null) {
+          window.clearTimeout(pending.timeoutHandle);
+        }
+      }
+      pendingVisibleExecutions.clear();
       if (unlistenInject) unlistenInject();
       if (unlistenTodos) unlistenTodos();
       if (unlistenScrollback) unlistenScrollback();

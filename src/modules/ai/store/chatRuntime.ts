@@ -189,6 +189,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           // inject_terminal+\n 与 execute_via_ssh 之间双重执行，红线9 SSH 链路
           // 问题，需独立可见执行重构）。重构前 visible 保持默认关闭（无回归），
           // 前端命令卡自动执行另走 chat-code.tsx / tool.tsx 的 PTY 注入路径。
+          executionChannel:
+            usePreferencesStore.getState().agentExecutionChannel,
           autoExecuteInTerminal: false,
           ...toSidecarMode(useChatStore.getState().agentMode),
         };
@@ -264,6 +266,7 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         // 重构=PTY 执行+scrollback 回读、跳过 execute_via_ssh）。重构前 sidecar 侧
         // visible 保持默认关闭（与历史 autoExec=false 行为一致，无回归）；
         // AI 仍可显式传 visible=true。
+        executionChannel: usePreferencesStore.getState().agentExecutionChannel,
         autoExecuteInTerminal: false,
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
         // sidecar（adapter.py 读 state.live.agentMode / state.live.teach，

@@ -19,6 +19,7 @@ export {
 } from "./lib/useTerminalFileDrop";
 export {
   clearFocusedTerminal,
+  getLeafBlockMode,
   disposeSession,
   leafGridSelection,
   leafHasForegroundProcess,

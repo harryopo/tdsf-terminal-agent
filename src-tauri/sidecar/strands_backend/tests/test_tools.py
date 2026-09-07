@@ -291,6 +291,94 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertEqual(result["reason"], "missing_or_invalid_exit_code")
         self.assertEqual(evidence.call_args.kwargs["status"], "error")
 
+    def test_visible_terminal_uses_foreground_route_without_ssh_exec(self):
+        """The selected visible channel has one execution path, not a preview plus exec."""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge({
+            "status": "success",
+            "output": "Linux test",
+            "exitCode": 0,
+            "duration": 0.2,
+        })
+        ctx = make_ctx(rust_bridge=bridge)
+        ctx.execution_channel = "visible-terminal"
+        with patch(
+            "strands_backend.tools.assess_command",
+            return_value={
+                "decision": "allow",
+                "risk": {"level": "L0", "high_risk": False},
+                "impact": {"segments": [], "max_risk_l": 0},
+                "risk_l": 0,
+            },
+        ):
+            result = execute_via_ssh(ctx, "uname -a", timeout=30)
+
+        self.assertEqual(result["status"], "success")
+        bridge.ipc_invoke.assert_any_call(
+            "visible_terminal_execute",
+            {"sessionId": 1, "command": "uname -a", "timeout": 30},
+            timeout=35.0,
+        )
+        self.assertNotIn(
+            "ssh_command",
+            [call.args[0] for call in bridge.ipc_invoke.call_args_list],
+        )
+
+    def test_visible_terminal_timeout_is_indeterminate_not_failed(self):
+        """A display timeout never claims the interactive process was stopped."""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge({"status": "timed_out"})
+        ctx = make_ctx(rust_bridge=bridge)
+        ctx.execution_channel = "visible-terminal"
+        with patch(
+            "strands_backend.tools.assess_command",
+            return_value={
+                "decision": "allow",
+                "risk": {"level": "L0", "high_risk": False},
+                "impact": {"segments": [], "max_risk_l": 0},
+                "risk_l": 0,
+            },
+        ):
+            result = execute_via_ssh(ctx, "sleep 60", timeout=30)
+
+        self.assertEqual(result["status"], "indeterminate")
+        self.assertEqual(result["reason"], "visible_terminal_timeout")
+
+    def test_visible_terminal_unavailable_keeps_durable_ledger_conservative(self):
+        """A frontend refusal returns unavailable without an illegal ledger transition."""
+        from project_service import ProjectService
+        from strands_backend.tools import execute_via_ssh
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ProjectService(db_path=Path(tmpdir) / "tdsf.db")
+            service.init_db()
+            try:
+                ctx = make_ctx(rust_bridge=make_mock_rust_bridge({
+                    "status": "unavailable",
+                    "reason": "visible_terminal_busy",
+                }))
+                ctx.execution_channel = "visible-terminal"
+                ctx.operation_service = service
+                with patch(
+                    "strands_backend.tools.assess_command",
+                    return_value={
+                        "decision": "allow",
+                        "risk": {"level": "L0", "high_risk": False},
+                        "impact": {"segments": [], "max_risk_l": 0},
+                        "risk_l": 0,
+                    },
+                ):
+                    result = execute_via_ssh(ctx, "uname -a")
+
+                self.assertEqual(result["status"], "unavailable")
+                operation = service.get_operation(result["operation_id"])
+                self.assertEqual(operation["state"], "indeterminate")
+                self.assertEqual(operation["error_code"], "visible_terminal_busy")
+            finally:
+                service.close()
+
     def test_durable_operation_accepts_rust_camel_case_exit_code(self):
         """W3: Rust's `exitCode` response finalizes the durable operation."""
         from project_service import ProjectService
