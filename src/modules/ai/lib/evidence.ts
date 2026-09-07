@@ -41,6 +41,7 @@ export function evidenceLabel(toolName: string): string {
   const map: Record<string, string> = {
     ssh_command: "SSH 命令",
     read_remote_file: "读远程文件",
+    write_remote_file: "写远程文件",
     analyze_logs: "日志分析",
     inspect_processes: "进程检查",
     network_diagnose: "网络诊断",
@@ -77,6 +78,7 @@ export const WRITE_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
   "package_manage",
   "firewall_manage",
   "backup_restore",
+  "write_remote_file",
   "save_skill",
 ]);
 

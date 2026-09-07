@@ -343,6 +343,7 @@ const TOOL_META: Record<
   glob: { label: "Glob", icon: Folder01Icon, category: "file" },
   open_preview: { label: "Preview", icon: EyeIcon, category: "file" },
   read_remote_file: { label: "读远程", icon: File01Icon, category: "file" },
+  write_remote_file: { label: "写远程", icon: FileEditIcon, category: "file" },
   sftp_read: { label: "SFTP 读", icon: File01Icon, category: "file" },
   sftp_write: { label: "SFTP 写", icon: FilePlusIcon, category: "file" },
   // 命令执行（红）
@@ -450,6 +451,7 @@ function deriveSummary(toolName: string, input: unknown): string | null {
     case "create_directory":
     case "list_directory":
     case "read_remote_file":
+    case "write_remote_file":
     case "sftp_read":
     case "sftp_write":
     case "config_diff":
@@ -509,6 +511,7 @@ export type ToolProps = ComponentProps<typeof Collapsible> & {
 // and duplicates information.
 const HEAVY_CONTENT_TOOLS = new Set([
   "write_file",
+  "write_remote_file",
   "edit",
   "multi_edit",
   "run_subagent",
@@ -556,7 +559,8 @@ const ToolImpl = ({
   // 重量级工具只在失败时展示输出体：成功路径的结果很小且重复，
   // 但内层 ok/success=false 的失败说明是用户唯一能看到「为什么失败」的地方。
   const showOutputBody =
-    output !== undefined && (!isHeavy || innerFailure || isError);
+    output !== undefined &&
+    (!isHeavy || innerFailure || isError || toolName === "write_remote_file");
   const hasDetails =
     showInputBody || showOutputBody || Boolean(errorText);
 
@@ -698,6 +702,7 @@ function renderInputPreview(
   // 替代裸 JSON——ssh_command 等工具的 input 主要价值在命令本身）
   if (
     toolName === "ssh_command" ||
+    toolName === "write_remote_file" ||
     toolName === "sftp_read" ||
     toolName === "sftp_write"
   ) {
@@ -1059,6 +1064,27 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     );
   }
 
+  if (toolName === "write_remote_file" && o.status === "success") {
+    const path = typeof o.path === "string" ? o.path : "";
+    const backupPath = typeof o.backup_path === "string" ? o.backup_path : "";
+    const size = typeof o.size === "number" ? o.size : null;
+    return (
+      <div className="space-y-0.5 font-mono text-[11px]">
+        <div className="flex items-center gap-1.5">
+          <span className="text-emerald-600 dark:text-emerald-400">✓</span>
+          <span className="text-foreground">已备份、写入并回读验证</span>
+          {size != null ? (
+            <span className="text-muted-foreground">({formatBytes(size)})</span>
+          ) : null}
+        </div>
+        {path ? <div className="text-muted-foreground">目标 · {path}</div> : null}
+        {backupPath ? (
+          <div className="text-muted-foreground">备份 · {backupPath}</div>
+        ) : null}
+      </div>
+    );
+  }
+
   if (toolName === "bash_background") {
     const handle = typeof o.handle === "string" ? o.handle : null;
     const cmd = typeof o.command === "string" ? o.command : "";
@@ -1108,6 +1134,8 @@ const TOOL_FAILURE_STATUSES = new Set([
   "rejected",
   "needs_approval",
   "unavailable",
+  "stale_source",
+  "indeterminate",
   "error",
 ]);
 

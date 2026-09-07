@@ -105,7 +105,7 @@ class TestToolClassification:
         assert not (WRITE_CLASS_TOOL_NAMES & VERIFY_CLASS_TOOL_NAMES)
 
     def test_spec_mandated_tools_covered(self):
-        """spec 钦定清单对齐：ssh_command/python_run 写类；
+        """spec 钦定清单对齐：ssh_command/python_run/远程写入 写类；
         read_remote_file/get_terminal_output/knowledge_search 验证类"""
         from strands_backend.tools import (
             VERIFY_CLASS_TOOL_NAMES,
@@ -114,6 +114,7 @@ class TestToolClassification:
 
         assert "ssh_command" in WRITE_CLASS_TOOL_NAMES
         assert "python_run" in WRITE_CLASS_TOOL_NAMES
+        assert "write_remote_file" in WRITE_CLASS_TOOL_NAMES
         assert "read_remote_file" in VERIFY_CLASS_TOOL_NAMES
         assert "get_terminal_output" in VERIFY_CLASS_TOOL_NAMES
         assert "knowledge_search" in VERIFY_CLASS_TOOL_NAMES
