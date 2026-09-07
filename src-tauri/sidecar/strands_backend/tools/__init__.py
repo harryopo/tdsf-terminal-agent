@@ -1703,6 +1703,7 @@ def _import_tool_functions() -> None:
 # 这里自动跟随。显示名映射见 registry.OPS_TOOL_ALIASES。
 from strands_backend.tools.registry import (  # noqa: F401
     APPROVAL_TOOL_NAMES,
+    CONTEXT_READONLY_TOOL_NAMES,
     OPS_TOOL_ALIASES,
     READONLY_TOOL_NAMES,
     TOOL_REGISTRY,
@@ -1734,6 +1735,7 @@ def filter_tools_readonly(tools: list) -> list:
     return [
         t for t in tools
         if getattr(t, "__name__", "") in READONLY_TOOL_NAMES
+        or getattr(t, "__name__", "") in CONTEXT_READONLY_TOOL_NAMES
     ]
 
 
@@ -1886,6 +1888,7 @@ __all__ = [
     "OPS_TOOL_NAMES",
     "TOOL_REGISTRY",
     "READONLY_TOOL_NAMES",
+    "CONTEXT_READONLY_TOOL_NAMES",
     "APPROVAL_TOOL_NAMES",
     # T7 (2026-08-31): 验证回环写类/验证类分类
     "WRITE_CLASS_TOOL_NAMES",

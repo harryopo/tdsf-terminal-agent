@@ -279,6 +279,16 @@ def make_security_audit_tool(ctx: ToolContext):
     return security_audit
 
 
+def security_audit_to_shell_command(params: dict[str, Any]) -> str | None:
+    """Return the exact read-only command used by a security audit.
+
+    Teaching mode uses this mapping to render a command card instead of
+    dispatching the audit through the background SSH executor.
+    """
+    scope = (params.get("scope") or "").strip().lower() or "quick"
+    return _SECURITY_CHECKS.get(scope)
+
+
 # ============================================================================
 # 5. performance_analyze — 只读性能分析
 # ============================================================================

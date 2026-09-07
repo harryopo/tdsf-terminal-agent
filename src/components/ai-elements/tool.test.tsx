@@ -42,6 +42,28 @@ describe("Tool command suggestion semantics", () => {
     expect(screen.getByText("目标环境：linux")).toBeTruthy();
     expect(screen.queryByText(/"target_os"/)).toBeNull();
   });
+
+  it("shows an explicit unmatched state instead of an executable fallback", () => {
+    render(
+      <Tool
+        toolName="suggest_command"
+        state="output-available"
+        input={{ intent: "解释 topology 拓扑", target_os: "linux" }}
+        output={{
+          status: "unmatched",
+          command: null,
+          explanation: "未匹配到内置命令规则，请补充对象或目标。",
+          suggestions: ["查看 nginx 状态"],
+        }}
+        defaultOpen
+      />,
+    );
+
+    expect(screen.getByText("未匹配命令")).toBeTruthy();
+    expect(screen.getByText("查看 nginx 状态")).toBeTruthy();
+    expect(screen.getByLabelText("unmatched")).toBeTruthy();
+    expect(screen.queryByText("echo 解释 topology 拓扑 > 执行")).toBeNull();
+  });
 });
 
 const FULL_IMPACT = {
@@ -501,6 +523,31 @@ describe("Tool — SSH 结果卡", () => {
     expect(screen.getByText("查看主机名与系统信息（只读）")).toBeTruthy();
     expect(screen.getByText("Static hostname: demo-host")).toBeTruthy();
     expect(screen.queryByText(/"duration"/)).toBeNull();
+  });
+});
+
+describe("Tool — 终端回读结果卡", () => {
+  it("保留请求/返回行数和尾部语义，不提示不存在的外部存储", () => {
+    render(
+      <Tool
+        toolName="get_terminal_output"
+        state="output-available"
+        input={{ lines: 10 }}
+        output={{
+          output: "",
+          available: true,
+          lines_requested: 10,
+          lines_returned: 0,
+          truncated: false,
+          has_more: false,
+        }}
+        defaultOpen
+      />,
+    );
+
+    expect(screen.getByText("终端已连接（暂无回显）")).toBeTruthy();
+    expect(screen.getByText("0/10 行")).toBeTruthy();
+    expect(screen.queryByText(/外部存储/)).toBeNull();
   });
 });
 

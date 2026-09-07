@@ -57,9 +57,9 @@ export function buildTerminalTools(ctx: ToolContext): Record<string, Tool> {
               "active terminal is in Privacy mode; its buffer is withheld. Ask the user to switch to a regular tab if they want you to see it.",
           };
         }
-        const buffer = ctx.getTerminalContext();
-        if (!buffer) return { output: "", note: "no active terminal" };
         const n = lines ?? 80;
+        const buffer = ctx.getTerminalContext(n);
+        if (!buffer) return { output: "", note: "no active terminal" };
         const parts = buffer.split("\n");
         const sliced =
           parts.length <= n ? buffer : parts.slice(parts.length - n).join("\n");
@@ -68,7 +68,20 @@ export function buildTerminalTools(ctx: ToolContext): Record<string, Tool> {
           sliced.length > MAX
             ? `…[truncated]…\n${sliced.slice(sliced.length - MAX)}`
             : sliced;
-        return { output: capped, lines_returned: Math.min(parts.length, n) };
+        const truncated = sliced.length > MAX;
+        const hasMore = parts.length >= n;
+        return {
+          output: capped,
+          lines_requested: n,
+          lines_returned: Math.min(parts.length, n),
+          truncated,
+          has_more: hasMore,
+          ...(truncated
+            ? { note: "输出已按字符上限截断；可用更小范围或更聚焦的命令再次读取。" }
+            : hasMore
+              ? { note: "仅返回当前终端尾部；可用更大的 lines 再次读取更早输出。" }
+            : {}),
+        };
       },
     }),
 

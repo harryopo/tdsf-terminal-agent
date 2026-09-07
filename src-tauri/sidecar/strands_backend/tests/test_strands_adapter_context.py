@@ -211,6 +211,9 @@ class TestContextManagerAuto(unittest.TestCase):
         #   strands/agent/conversation_manager/conversation_manager.py:94）
         self.assertEqual(agent.conversation_manager.summary_ratio, 0.3)
         self.assertEqual(agent.conversation_manager._compression_threshold, 0.85)
+        # Runtime tool refresh must preserve the ContextOffloader retrieval
+        # tool; otherwise oversized tool results become unreadable references.
+        self.assertIn("retrieve_offloaded_content", set(agent.tool_names))
 
 
 @unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")

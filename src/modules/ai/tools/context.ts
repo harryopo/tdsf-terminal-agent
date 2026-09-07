@@ -3,8 +3,8 @@ export type ToolContext = {
   getCwd: () => string | null;
   /** Workspace root (explorer root). Used by tools that operate over the project. */
   getWorkspaceRoot: () => string | null;
-  /** Last N lines of the active terminal buffer (or null if not a terminal tab). */
-  getTerminalContext: () => string | null;
+  /** Read the tail of the active terminal buffer (or null if not a terminal tab). */
+  getTerminalContext: (maxLines?: number) => string | null;
   isActiveTerminalPrivate: () => boolean;
   /**
    * Type a string into the active terminal at the prompt — without executing.

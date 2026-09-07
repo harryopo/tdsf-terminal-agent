@@ -551,6 +551,14 @@ const ToolImpl = ({
   // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
   // part 状态停在 output-available → 状态点会谎报 done。内容判失败时同步降级徽标。
   const innerFailure = state === "output-available" && isFailedOutput(output);
+  const innerFailureStatus =
+    innerFailure && typeof output === "object" && output !== null
+      ? typeof (output as Record<string, unknown>).status === "string"
+        ? (output as Record<string, unknown>).status
+        : ""
+      : "";
+  const innerFailureLabel =
+    innerFailureStatus === "unmatched" ? "未匹配" : "failed";
   const open = defaultOpen ?? isError;
   const isHeavy = HEAVY_CONTENT_TOOLS.has(toolName);
   // For heavy tools, only show details on error — never the streamed input
@@ -584,7 +592,13 @@ const ToolImpl = ({
             "size-1.5 shrink-0 rounded-full",
             innerFailure ? "bg-orange-500" : STATUS_DOT[state],
           )}
-          aria-label={innerFailure ? "failed" : STATUS_LABEL[state]}
+          aria-label={
+            innerFailure
+              ? innerFailureStatus === "unmatched"
+                ? "unmatched"
+                : "failed"
+              : STATUS_LABEL[state]
+          }
         />
         <HugeiconsIcon
           icon={Icon}
@@ -602,7 +616,7 @@ const ToolImpl = ({
         )}
         {(isError || innerFailure) && (
           <span className="shrink-0 text-[10px] font-medium text-destructive">
-            failed
+            {isError ? "failed" : innerFailureLabel}
           </span>
         )}
       </CollapsibleTrigger>
@@ -908,6 +922,10 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     return <BashRunOutput data={o} />;
   }
 
+  if (toolName === "get_terminal_output") {
+    return <TerminalOutputCard data={o} />;
+  }
+
   // SSH 工具返回的是 { command, output, exit_code, duration, explanation }。
   // 没有专用卡片时会退化成整段 JSON，既重复命令又掩盖终端输出；此处采用和
   // bash_run 一致的“状态 → 说明 → 原始输出”层次。非零 exit_code 仍不是
@@ -937,6 +955,35 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
       typeof o.explanation === "string" ? o.explanation : null;
     const predictedOutput =
       typeof o.predicted_output === "string" ? o.predicted_output : null;
+    if (!cmd && o.status === "unmatched") {
+      const message =
+        typeof o.explanation === "string"
+          ? o.explanation
+          : "未匹配到内置命令规则，请补充目标对象。";
+      const suggestions = Array.isArray(o.suggestions)
+        ? o.suggestions.filter((item): item is string => typeof item === "string")
+        : [];
+      return (
+        <div className="space-y-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px]">
+          <div className="font-medium text-amber-700 dark:text-amber-400">
+            未匹配命令
+          </div>
+          <div className="text-muted-foreground">{message}</div>
+          {suggestions.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {suggestions.map((item) => (
+                <span
+                  key={item}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                >
+                  {item}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
     if (!cmd) return null;
     return (
       <SuggestCommandCard
@@ -1136,6 +1183,7 @@ const TOOL_FAILURE_STATUSES = new Set([
   "unavailable",
   "stale_source",
   "indeterminate",
+  "unmatched",
   "error",
 ]);
 
@@ -1753,6 +1801,64 @@ function TeachCommandCard({
         </div>
       ) : null}
       {cardError ? <div className="text-[10px] text-destructive">{cardError}</div> : null}
+    </div>
+  );
+}
+
+function TerminalOutputCard({ data }: { data: Record<string, unknown> }) {
+  const output = typeof data.output === "string" ? data.output : "";
+  const requested =
+    typeof data.lines_requested === "number" ? data.lines_requested : null;
+  const returned =
+    typeof data.lines_returned === "number" ? data.lines_returned : null;
+  const available = data.available !== false;
+  const truncated = data.truncated === true;
+  const hasMore = data.has_more === true;
+  const note = typeof data.note === "string" ? data.note : "";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <span
+          className={cn(
+            "size-1.5 rounded-full",
+            available ? "bg-emerald-500" : "bg-muted-foreground/50",
+          )}
+        />
+        <span>
+          {available
+            ? output
+              ? "已读取终端回显"
+              : "终端已连接（暂无回显）"
+            : "终端回读不可用"}
+        </span>
+        {returned != null ? (
+          <span className="font-mono tabular-nums">
+            {returned}
+            {requested != null ? `/${requested}` : ""} 行
+          </span>
+        ) : null}
+        {truncated ? (
+          <span className="rounded bg-amber-500/15 px-1 text-amber-700 dark:text-amber-400">
+            已截断
+          </span>
+        ) : null}
+        {hasMore && !truncated ? (
+          <span className="rounded bg-muted px-1">尾部</span>
+        ) : null}
+      </div>
+      {output ? (
+        <pre className="max-h-72 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+          {output}
+        </pre>
+      ) : (
+        <div className="rounded bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
+          {note || "当前终端没有可读取的输出。"}
+        </div>
+      )}
+      {output && note ? (
+        <div className="text-[10px] text-muted-foreground">{note}</div>
+      ) : null}
     </div>
   );
 }

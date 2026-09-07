@@ -209,6 +209,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         factory="strands_backend.tools.ops_extended:make_security_audit_tool",
         description="安全基线审计（SELinux/登录/口令策略检查，只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        to_shell_command="strands_backend.tools.ops_extended:security_audit_to_shell_command",
     ),
     "performance_analyze": ToolSpec(
         name="performance_analyze",
@@ -285,7 +286,15 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
 }
 
-# 派生只读集合（替代原 _L1_READONLY_TOOL_NAMES 硬编码）
+# Strands context_manager="auto" 注入的上下文回读工具不属于本地
+# TOOL_REGISTRY，但它本身是只读能力；动态刷新工具集时也必须保留，
+# 否则 ContextOffloader 外置长结果后模型会拿到引用却无法回读。
+CONTEXT_READONLY_TOOL_NAMES: frozenset[str] = frozenset({
+    "retrieve_offloaded_content",
+})
+
+# 派生只读集合（替代原 _L1_READONLY_TOOL_NAMES 硬编码）。上下文插件工具
+# 单独维护，避免业务工具枚举在未创建 Strands Agent 时出现虚假条目。
 READONLY_TOOL_NAMES: frozenset[str] = frozenset(
     spec.name for spec in TOOL_REGISTRY.values() if spec.policy.readonly
 )
@@ -343,7 +352,11 @@ def get_tool_policy(name: str) -> ToolPolicy | None:
         ToolPolicy；未注册工具返回 None
     """
     spec = TOOL_REGISTRY.get(name)
-    return spec.policy if spec else None
+    if spec:
+        return spec.policy
+    if name in CONTEXT_READONLY_TOOL_NAMES:
+        return ToolPolicy(readonly=True, needs_approval=False)
+    return None
 
 
 # ============================================================================
@@ -373,6 +386,7 @@ __all__ = [
     "ToolSpec",
     "TOOL_REGISTRY",
     "READONLY_TOOL_NAMES",
+    "CONTEXT_READONLY_TOOL_NAMES",
     "APPROVAL_TOOL_NAMES",
     "WRITE_CLASS_TOOL_NAMES",
     "VERIFY_CLASS_TOOL_NAMES",

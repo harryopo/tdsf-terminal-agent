@@ -144,7 +144,7 @@ function deriveSessionScope(): SessionScope {
 
 export type Live = {
   getCwd: () => string | null;
-  getTerminalContext: () => string | null;
+  getTerminalContext: (maxLines?: number) => string | null;
   isActiveTerminalPrivate: () => boolean;
   injectIntoActivePty: (text: string) => boolean;
   /**

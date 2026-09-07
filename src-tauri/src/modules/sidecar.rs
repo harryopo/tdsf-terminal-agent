@@ -1494,7 +1494,7 @@ async fn handle_reverse_request(
                 *counter += 1;
                 format!("sb-{}", *counter)
             };
-            let (tx, rx) = oneshot::channel::<String>();
+            let (tx, rx) = oneshot::channel::<Value>();
             SCROLLBACK_PENDING.lock().await.insert(request_id.clone(), tx);
 
             // 请求前端（emit 不等待；超时由下方 timeout 控制）
@@ -1512,7 +1512,7 @@ async fn handle_reverse_request(
 
             // 等待前端回传（2s 超时 fail-closed）
             match timeout(Duration::from_secs(2), rx).await {
-                Ok(Ok(output)) => Ok(json!({ "output": output, "available": !output.is_empty() })),
+                Ok(Ok(result)) => Ok(result),
                 Ok(Err(_)) | Err(_) => {
                     // 清理残留 entry（响应迟到时防泄漏）
                     SCROLLBACK_PENDING.lock().await.remove(&request_id);
@@ -1532,7 +1532,7 @@ async fn handle_reverse_request(
 // pending 表：request_id → oneshot sender（handle_reverse_request 发起，命令 resolve）
 // 用 std LazyLock（Rust 1.70+）包 tokio Mutex——HashMap::new 非 const fn
 static SCROLLBACK_PENDING: std::sync::LazyLock<
-    tokio::sync::Mutex<HashMap<String, oneshot::Sender<String>>>,
+    tokio::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>,
 > = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 static SCROLLBACK_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(0));
@@ -1552,9 +1552,13 @@ static VISIBLE_TERMINAL_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>
 pub async fn sidecar_scrollback_response(
     request_id: String,
     output: String,
+    available: Option<bool>,
 ) -> Result<(), String> {
     if let Some(tx) = SCROLLBACK_PENDING.lock().await.remove(&request_id) {
-        let _ = tx.send(output);
+        let _ = tx.send(json!({
+            "output": output,
+            "available": available.unwrap_or(true),
+        }));
     }
     Ok(())
 }
