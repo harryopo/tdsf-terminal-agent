@@ -72,7 +72,44 @@ def parse_mode(value: Any, default: str = "confirm") -> AgentMode:
         return AgentMode.CONFIRM
 
 
+def decide(risk_l: Any, mode: AgentMode | str) -> str:
+    """Map an L0-L4 risk to the execution policy without graph dependencies."""
+    if isinstance(risk_l, bool):
+        raise ValueError(f"invalid risk level: {risk_l!r}")
+    if isinstance(risk_l, int) and 0 <= risk_l <= 4:
+        level = risk_l
+    else:
+        raw = getattr(risk_l, "value", risk_l)
+        token = str(raw).strip().lower()
+        aliases = {
+            "l0": 0,
+            "l1": 1,
+            "l2": 2,
+            "l3": 3,
+            "l4": 4,
+            "low": 1,
+            "medium": 2,
+            "high": 3,
+            "deny": 4,
+        }
+        if token not in aliases:
+            raise ValueError(f"invalid risk level: {risk_l!r}")
+        level = aliases[token]
+
+    mode_value = getattr(mode, "value", mode)
+    try:
+        parsed_mode = AgentMode(str(mode_value).strip().lower())
+    except ValueError:
+        raise ValueError(f"invalid agent mode: {mode!r}") from None
+    if parsed_mode == AgentMode.OBSERVE:
+        return "deny"
+    if parsed_mode == AgentMode.CONFIRM and level >= 2:
+        return "confirm"
+    return "allow"
+
+
 __all__ = [
     "AgentMode",
+    "decide",
     "parse_mode",
 ]

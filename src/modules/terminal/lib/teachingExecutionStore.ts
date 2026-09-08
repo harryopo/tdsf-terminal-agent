@@ -85,8 +85,8 @@ export function matchesVisibleTerminalCommand(
   const requested = normalizeTeachingCommand(request.command);
   const reported = normalizeTeachingCommand(block.command);
   if (!reported || !requested.startsWith(reported)) return false;
-  const boundary = requested.charAt(reported.length);
-  return boundary === ";" || boundary === "&" || boundary === "|";
+  const suffix = requested.slice(reported.length).trimStart();
+  return /^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix);
 }
 
 /** 关联条件故意不依赖 author：长时间人类打字可能超过 author 的 10 秒 TTL。 */

@@ -301,8 +301,9 @@ export function createContextAwareTransport(deps: Deps) {
                 inputTokens: delta.inputTokens,
                 outputTokens: delta.outputTokens,
                 cachedInputTokens: delta.cachedInputTokens ?? 0,
-                lastInputTokens: delta.inputTokens,
-                lastCachedTokens: delta.cachedInputTokens ?? 0,
+                lastInputTokens: delta.lastInputTokens ?? delta.inputTokens,
+                lastCachedTokens:
+                  delta.lastCachedTokens ?? delta.cachedInputTokens ?? 0,
               })
           : undefined,
       });

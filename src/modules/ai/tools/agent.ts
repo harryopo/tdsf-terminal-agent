@@ -1,5 +1,5 @@
 import { useManagedAgentsStore } from "@/modules/agents/store/managedAgentsStore";
-import { writeToSession } from "@/modules/terminal";
+import { writeToSession } from "@/modules/terminal/lib/useTerminalSession";
 import { tool } from "ai";
 import { z } from "zod";
 import type { ToolContext } from "./context";

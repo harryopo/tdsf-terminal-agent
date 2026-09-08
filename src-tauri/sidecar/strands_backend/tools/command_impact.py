@@ -335,6 +335,11 @@ _READONLY_CMDS = {
 # 现按子命令细分：含 set-* → config L2；否则 → readonly L0（见 classify_segment）。
 _MIXED_READONLY_CMDS = {"hostnamectl", "timedatectl", "localectl"}
 
+_IP_WRITE_ACTIONS = {
+    "add", "append", "change", "delete", "del", "flush", "replace",
+    "set", "restore", "up", "down",
+}
+
 # firewall-cmd 同时承载查询与规则变更，不能像普通命令一样按 basename 一刀切。
 # 只精确放行下列明确无副作用的动作；所有未列出的 flag 仍保持 fail-closed，
 # 尤其不能把 --add-* / --remove-* / --reload 等写操作误判为只读。
@@ -536,6 +541,15 @@ def classify_segment(seg: str) -> dict:
     elif base in _MIXED_READONLY_CMDS:
         has_write = any(t.lower().startswith("set-") for t in toks[1:])
         category = CATEGORY_CONFIG if has_write else CATEGORY_READONLY
+    elif base in {"ip", "route", "ifconfig"}:
+        actions = {t.lower() for t in toks[1:]}
+        if base == "ifconfig" and len(toks) > 2:
+            actions.add("set")
+        category = (
+            CATEGORY_CONFIG
+            if actions & _IP_WRITE_ACTIONS
+            else CATEGORY_READONLY
+        )
     # --- 只读白名单 ---
     elif base in _READONLY_CMDS:
         category = CATEGORY_READONLY

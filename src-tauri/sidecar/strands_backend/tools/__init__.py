@@ -624,7 +624,7 @@ def assess_command(
 
     # 4. 三模式决策（Task 3）——ValueError fail-closed 按 deny
     try:
-        from core.decision_engine import decide as mode_decide
+        from strands_backend.modes import decide as mode_decide
 
         decision = mode_decide(risk_l, ctx.mode)
     except ValueError as e:
@@ -1308,12 +1308,21 @@ def execute_via_ssh(
         visible_terminal = (
             getattr(ctx, "execution_channel", "background") == "visible-terminal"
         )
+        execution_channel = "visible-terminal" if visible_terminal else "background"
         if visible_terminal:
             result = ctx.rust_bridge.ipc_invoke(
                 "visible_terminal_execute",
                 ssh_params,
-                timeout=max(5.0, float(timeout) + 5.0),
+                timeout=max(5.0, float(timeout) + 170.0),
             )
+            if (
+                isinstance(result, dict)
+                and result.get("status") == "reroute"
+                and result.get("channel") == "background"
+            ):
+                visible_terminal = False
+                execution_channel = "background"
+                result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
         else:
             result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
     except Exception as e:
@@ -1346,6 +1355,7 @@ def execute_via_ssh(
             "command": command,
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
+            "execution_channel": execution_channel,
             "reason": result.get("reason", "visible_terminal_indeterminate"),
             "message": "可见终端未提供可验证的退出码，未对命令结果作出结论。",
         })
@@ -1361,6 +1371,7 @@ def execute_via_ssh(
             "command": command,
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
+            "execution_channel": execution_channel,
             "reason": "visible_terminal_timeout",
             "message": (
                 "可见终端在命令提交后等待超时。未发送中断信号，"
@@ -1379,6 +1390,7 @@ def execute_via_ssh(
             "command": command,
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
+            "execution_channel": execution_channel,
             "reason": "visible_terminal_interrupted",
             "message": "用户接管了可见终端输入，Agent 未获得可验证的执行结果。",
         })
@@ -1400,6 +1412,7 @@ def execute_via_ssh(
             "status": "unavailable",
             "command": command,
             "ssh_session_id": session_id,
+            "execution_channel": execution_channel,
             "reason": result.get("reason", "visible_terminal_unavailable"),
             "message": result.get(
                 "message", "可见终端不可用，命令未写入后台 SSH 通道。"
@@ -1474,7 +1487,9 @@ def execute_via_ssh(
             "command": command,
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
+            "execution_channel": execution_channel,
             "output": output_text,
+            "truncated": bool(result.get("truncated", False)),
             "reason": "missing_or_invalid_exit_code",
             "error": "SSH 返回缺少可验证的退出码，执行结果未知。",
         })
@@ -1503,7 +1518,9 @@ def execute_via_ssh(
             "command": command,
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
+            "execution_channel": execution_channel,
             "output": output_text,
+            "truncated": bool(result.get("truncated", False)),
             "exit_code": exit_code,
             "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
             "error": f"SSH 命令以退出码 {exit_code} 结束。",
@@ -1519,6 +1536,7 @@ def execute_via_ssh(
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
             "output": output_text,
+            "truncated": bool(result.get("truncated", False)),
             "exit_code": exit_code,
             "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
             "reason": "operation_ledger_transition_failed",
@@ -1553,7 +1571,9 @@ def execute_via_ssh(
         # P2 #42: 实际目标端点 user@host:port（live 校验放行时有值，
         # 旧严格校验路径为空串）——执行错主机时 LLM/用户可直接看到
         "target_endpoint": target_endpoint,
+        "execution_channel": execution_channel,
         "output": output_text,
+        "truncated": bool(result.get("truncated", False)),
         "exit_code": exit_code,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
     })

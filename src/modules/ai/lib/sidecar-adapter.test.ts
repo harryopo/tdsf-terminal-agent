@@ -231,7 +231,12 @@ describe("runSidecarStream — 成功路径", () => {
       thinking: "analyzing",
       output: "Hello world",
       mood: "streaming",
-      tokens: { input: 10, output: 5 },
+      tokens: {
+        input: 10,
+        output: 5,
+        last_input_tokens: 8,
+        last_cached_input_tokens: 3,
+      },
     });
 
     const onMood = vi.fn();
@@ -263,6 +268,8 @@ describe("runSidecarStream — 成功路径", () => {
       inputTokens: 10,
       outputTokens: 5,
       cachedInputTokens: 0,
+      lastInputTokens: 8,
+      lastCachedTokens: 3,
     });
 
     // onStep 应该被多次调用（"Thinking" → "Streaming" → null；2026-09-03 移除 "调用 Sidecar Agent"）

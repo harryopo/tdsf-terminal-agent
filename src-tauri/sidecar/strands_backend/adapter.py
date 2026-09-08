@@ -2497,13 +2497,41 @@ class StrandsAgentAdapter:
         if response is None:
             return {}
 
+        def normalize_usage(usage: Any) -> dict[str, int]:
+            if not isinstance(usage, dict):
+                return {}
+            input_tokens = usage.get("input_tokens", usage.get("inputTokens", 0))
+            output_tokens = usage.get("output_tokens", usage.get("outputTokens", 0))
+            total_tokens = usage.get("total_tokens", usage.get("totalTokens", 0))
+            cached = usage.get(
+                "cache_read_input_tokens",
+                usage.get("cacheReadInputTokens", 0),
+            )
+            return {
+                "input_tokens": int(input_tokens or 0),
+                "output_tokens": int(output_tokens or 0),
+                "total_tokens": int(total_tokens or 0),
+                "cached_input_tokens": int(cached or 0),
+            }
+
         metrics = getattr(response, "metrics", None)
         if isinstance(metrics, dict):
-            return {
-                "input_tokens": metrics.get("input_tokens", 0),
-                "output_tokens": metrics.get("output_tokens", 0),
-                "total_tokens": metrics.get("total_tokens", 0),
-            }
+            return normalize_usage(metrics)
+        if metrics is not None:
+            invocation = getattr(metrics, "latest_agent_invocation", None)
+            aggregate = normalize_usage(getattr(invocation, "usage", None))
+            if aggregate:
+                cycles = getattr(invocation, "cycles", None) or []
+                latest = normalize_usage(
+                    getattr(cycles[-1], "usage", None) if cycles else None
+                )
+                aggregate["last_input_tokens"] = latest.get(
+                    "input_tokens", aggregate["input_tokens"]
+                )
+                aggregate["last_cached_input_tokens"] = latest.get(
+                    "cached_input_tokens", aggregate["cached_input_tokens"]
+                )
+                return aggregate
 
         usage = getattr(response, "usage", None)
         if isinstance(usage, dict):
@@ -2521,6 +2549,10 @@ class StrandsAgentAdapter:
                 "output_tokens": usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
                 "cached_input_tokens": int(cached or 0),
+                "last_input_tokens": int(
+                    usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
+                ),
+                "last_cached_input_tokens": int(cached or 0),
             }
 
         return {}

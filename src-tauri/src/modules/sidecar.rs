@@ -63,6 +63,12 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 太紧，复杂任务频繁超时；前端可传 timeoutMs 覆盖（见 send_request_with_timeout）。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
+// Reverse visible execution starts before the optional human-typing pump.
+// A short command at the slowest 0.2x setting can spend about 158 seconds
+// typing before the frontend starts its command timeout. This is a transport
+// guard only; terminal OSC completion remains the semantic success signal.
+const VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS: u64 = 170;
+
 /// 优雅退出等待时间（3s，超时后 SIGKILL）
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
@@ -1473,7 +1479,12 @@ async fn handle_reverse_request(
                 }));
             }
 
-            match timeout(Duration::from_secs(timeout_secs + 5), rx).await {
+            match timeout(
+                Duration::from_secs(timeout_secs + VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS),
+                rx,
+            )
+            .await
+            {
                 Ok(Ok(result)) => Ok(result),
                 Ok(Err(_)) | Err(_) => {
                     VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id);

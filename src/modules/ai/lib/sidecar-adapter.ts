@@ -373,6 +373,8 @@ export interface SidecarStreamOptions {
     inputTokens: number;
     outputTokens: number;
     cachedInputTokens?: number;
+    lastInputTokens?: number;
+    lastCachedTokens?: number;
   }) => void;
 }
 
@@ -449,6 +451,8 @@ interface AgentInvokeResult {
     input_tokens?: number;
     output_tokens?: number;
     cached_input_tokens?: number;
+    last_input_tokens?: number;
+    last_cached_input_tokens?: number;
   };
 }
 
@@ -1171,6 +1175,10 @@ export async function* runSidecarStream(
         inputTokens: t.input_tokens ?? t.input ?? 0,
         outputTokens: t.output_tokens ?? t.output ?? 0,
         cachedInputTokens: t.cached_input_tokens ?? 0,
+        lastInputTokens:
+          t.last_input_tokens ?? t.input_tokens ?? t.input ?? 0,
+        lastCachedTokens:
+          t.last_cached_input_tokens ?? t.cached_input_tokens ?? 0,
       });
     }
 

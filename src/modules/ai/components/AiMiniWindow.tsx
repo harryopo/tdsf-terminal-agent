@@ -36,6 +36,13 @@ import {
   getModelContextLimit,
   type ModelId,
 } from "../config";
+import {
+  CONTEXT_SKILL_TOKENS,
+  CONTEXT_SYS_PROMPT_TOKENS,
+  CONTEXT_TOOL_DEF_TOKENS,
+  contextBreakdownRows,
+  estimateTokens,
+} from "../lib/contextUsage";
 import type { ResizeDir } from "../lib/miniWindowGeometry";
 import type { SessionMeta } from "../lib/sessions";
 import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
@@ -353,64 +360,10 @@ function WorkspaceChip() {
   );
 }
 
-function estimateTokens(messages: UIMessage[]): number {
-  let chars = 0;
-  for (const m of messages) {
-    for (const p of m.parts) {
-      if (p.type === "text") {
-        chars += (p as { text?: string }).text?.length ?? 0;
-      } else if (p.type === "reasoning") {
-        chars += (p as { text?: string }).text?.length ?? 0;
-      } else if (typeof p.type === "string" && p.type.startsWith("tool-")) {
-        const tp = p as unknown as { input?: unknown; output?: unknown };
-        if (tp.input) chars += JSON.stringify(tp.input).length;
-        if (tp.output) chars += JSON.stringify(tp.output).length;
-      }
-    }
-  }
-  return Math.ceil(chars / 4);
-}
-
 function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
-}
-
-/**
- * 上下文模块占比分解（参照主流 AI IDE，2026-09-01）。
- * 固定件为保守估算（工具 schema/组合系统提示/技能描述），消息为真实
- * chars/4 估算；真实 lastInput 可用时其他行按剩余量封顶。
- */
-const CONTEXT_TOOL_DEF_TOKENS = 3600; // 23 工具 schema 估算
-const CONTEXT_SYS_PROMPT_TOKENS = 1000; // 组合系统提示 ~3.9k chars / 4
-const CONTEXT_SKILL_TOKENS = 600; // 7 技能包描述估算
-
-function contextBreakdownRows(
-  messages: UIMessage[],
-  used: number,
-): { label: string; tokens: number }[] {
-  const msgTokens = estimateTokens(messages);
-  const total =
-    used > 0
-      ? used
-      : msgTokens +
-        CONTEXT_TOOL_DEF_TOKENS +
-        CONTEXT_SYS_PROMPT_TOKENS +
-        CONTEXT_SKILL_TOKENS;
-  let remaining = Math.max(0, total);
-  const rows = [
-    { label: "消息", tokens: msgTokens },
-    { label: "工具定义", tokens: CONTEXT_TOOL_DEF_TOKENS },
-    { label: "系统提示词", tokens: CONTEXT_SYS_PROMPT_TOKENS },
-    { label: "技能", tokens: CONTEXT_SKILL_TOKENS },
-  ].map((p) => {
-    const v = Math.min(p.tokens, remaining);
-    remaining -= v;
-    return { label: p.label, tokens: v };
-  });
-  rows.push({ label: "其他", tokens: Math.max(0, remaining) });
-  return rows;
 }
 
 function ContextIndicator({ messages }: { messages: UIMessage[] }) {
@@ -419,7 +372,13 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
   const lastInput = useChatStore((s) => s.agentMeta.lastInputTokens);
   const lastCached = useChatStore((s) => s.agentMeta.lastCachedTokens);
   const estimated = useMemo(() => estimateTokens(messages), [messages]);
-  const used = lastInput > 0 ? lastInput : estimated;
+  const used =
+    lastInput > 0
+      ? lastInput
+      : estimated +
+        CONTEXT_TOOL_DEF_TOKENS +
+        CONTEXT_SYS_PROMPT_TOKENS +
+        CONTEXT_SKILL_TOKENS;
   const reported = tokens.inputTokens + tokens.outputTokens;
   const openaiCompatibleContextLimit = usePreferencesStore(
     (s) => s.openaiCompatibleContextLimit,
@@ -454,7 +413,7 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
                 <span className="text-muted-foreground">{row.label}</span>
                 <span className="font-mono text-foreground">
                   {used > 0
-                    ? `${Math.round((row.tokens / Math.max(used, 1)) * 100)}%`
+                    ? `${Math.round((row.tokens / Math.max(used, 1)) * 100)}% · ${formatTokens(row.tokens)}`
                     : "—"}
                 </span>
               </div>

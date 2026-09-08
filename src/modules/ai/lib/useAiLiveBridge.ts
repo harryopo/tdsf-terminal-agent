@@ -152,6 +152,7 @@ export function useAiLiveBridge(params: Params) {
       if (sshLeafId !== null && sshLeafId !== undefined) {
         const sessionId = sshRustSessionId();
         if (sessionId === null) return false;
+        useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
         void invoke<HumanTypeReport>("ssh_write_human", {
           sessionId,
           text: t,
@@ -159,10 +160,10 @@ export function useAiLiveBridge(params: Params) {
         })
           .then((r) => {
             // 逐字 pump 启动 / sudo 降级整段，都标记 author=agent
-            useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
             if (r?.mode === "fallback" && r.warning) toast.warning(r.warning);
           })
           .catch((e) => {
+            useTerminalBlocksStore.getState().clearAgentPending(sshLeafId);
             console.warn("[tdsf] ssh_write_human failed, fallback:", e);
             if (!injectFnCore(t)) toast.error("命令注入失败：SSH 终端不可用");
           });
@@ -173,12 +174,15 @@ export function useAiLiveBridge(params: Params) {
       if (tab?.kind !== "terminal") return false;
       const id = ptyIdForLeaf(tab.activeLeafId);
       if (id === null) return false;
+      useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
       void invoke<HumanTypeReport>("pty_write_human", { id, text: t, speed })
         .then((r) => {
-          useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
           if (r?.mode === "fallback" && r.warning) toast.warning(r.warning);
         })
         .catch((e) => {
+          useTerminalBlocksStore
+            .getState()
+            .clearAgentPending(tab.activeLeafId);
           console.warn("[tdsf] pty_write_human failed, fallback:", e);
           if (!injectFnCore(t)) toast.error("命令注入失败：终端会话不可用");
         });
@@ -250,10 +254,9 @@ export function useAiLiveBridge(params: Params) {
       if (sshLeafId !== null && sshLeafId !== undefined) {
         const term = terminalRefs.current.get(sshLeafId);
         if (term) {
+          useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
           term.write(t);
           term.focus();
-          // TDSF B1 (2026-08-29): agent 注入的命令 → 下一条 block 标 author=agent
-          useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
           return true;
         }
         return false;
@@ -263,10 +266,9 @@ export function useAiLiveBridge(params: Params) {
       if (tab?.kind !== "terminal") return false;
       const term = terminalRefs.current.get(tab.activeLeafId);
       if (!term) return false;
+      useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
       term.write(t);
       term.focus();
-      // TDSF B1 (2026-08-29): 同上（本地终端注入路径）
-      useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
       return true;
     };
 
@@ -490,6 +492,7 @@ export function useAiLiveBridge(params: Params) {
       result: Record<string, unknown>,
     ) => {
       if (!pendingVisibleExecutions.delete(pending.requestId)) return;
+      useTerminalBlocksStore.getState().clearAgentPending(pending.leafId);
       if (pending.timeoutHandle !== null) {
         window.clearTimeout(pending.timeoutHandle);
       }
@@ -545,6 +548,7 @@ export function useAiLiveBridge(params: Params) {
           status: "success",
           exitCode: block.exitCode,
           output: redactSensitive(block.outputTail),
+          truncated: Boolean(block.outputTruncated),
           duration: block.durationMs / 1_000,
           cwd: block.cwd,
         });
@@ -595,6 +599,27 @@ export function useAiLiveBridge(params: Params) {
         });
       };
       if (
+        request.requestId &&
+        request.command &&
+        usePreferencesStore.getState().agentExecutionChannel !==
+          "visible-terminal"
+      ) {
+        void invoke("sidecar_visible_terminal_response", {
+          requestId: request.requestId,
+          result: {
+            status: "reroute",
+            reason: "execution_channel_changed",
+            channel: "background",
+            message: "执行通道已切换为后台 SSH，命令未写入可见终端。",
+            command: request.command,
+            operationId: request.operationId ?? "",
+          },
+        }).catch((e) => {
+          console.warn("[tdsf] visible terminal reroute failed:", e);
+        });
+        return;
+      }
+      if (
         !request.requestId ||
         !request.command ||
         currentSessionId === null ||
@@ -644,9 +669,9 @@ export function useAiLiveBridge(params: Params) {
         // `terminal.write` immediately hands bytes to the SSH PTY. Enable
         // correlation first so a fast command cannot finish in that gap.
         markVisibleExecutionRunning(pending);
+        useTerminalBlocksStore.getState().markAgentPending(leafId);
         terminal.write(text);
         terminal.focus();
-        useTerminalBlocksStore.getState().markAgentPending(leafId);
         // The timer starts only after the final Enter has been submitted.
         startVisibleExecutionTimer(pending);
         return;
@@ -658,7 +683,6 @@ export function useAiLiveBridge(params: Params) {
         speed: prefs.agentTypingSpeed,
       })
         .then((report) => {
-          useTerminalBlocksStore.getState().markAgentPending(leafId);
           if (report.mode === "fallback") {
             markVisibleExecutionRunning(pending);
             startVisibleExecutionTimer(pending);
@@ -672,6 +696,7 @@ export function useAiLiveBridge(params: Params) {
             message: "可见终端输入未能启动，命令未改走后台执行。",
           });
         });
+      useTerminalBlocksStore.getState().markAgentPending(leafId);
     };
 
     const unlistenVisibleBlocks = useTerminalBlocksStore.subscribe((state) => {
@@ -806,6 +831,7 @@ export function useAiLiveBridge(params: Params) {
         if (pending.timeoutHandle !== null) {
           window.clearTimeout(pending.timeoutHandle);
         }
+        useTerminalBlocksStore.getState().clearAgentPending(pending.leafId);
       }
       pendingVisibleExecutions.clear();
       if (unlistenInject) unlistenInject();
