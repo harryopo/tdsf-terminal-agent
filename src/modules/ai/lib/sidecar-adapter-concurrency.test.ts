@@ -123,4 +123,77 @@ describe("runSidecarStream — concurrent same-name tool calls", () => {
     ]);
     expect(new Set(outputs.map((part) => part.toolCallId)).size).toBe(2);
   });
+
+  it("ignores stream events from another conversation", async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    vi.mocked(listen).mockImplementation(
+      ((event: string, callback: (event: unknown) => void) => {
+        listeners.set(event, callback);
+        return Promise.resolve(() => listeners.delete(event));
+      }) as never,
+    );
+
+    let resolveInvoke!: (value: unknown) => void;
+    mockInvoke.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+
+    const iterator = runSidecarStream({
+      agentId: "main",
+      sessionId: "conversation-a",
+      messages: makeMessages("检查服务"),
+      input: "检查服务",
+      live: makeLive(),
+    })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    await vi.waitFor(() => expect(listeners.has("sidecar:tool_call")).toBe(true));
+    await vi.waitFor(() => expect(typeof resolveInvoke).toBe("function"));
+
+    const emit = listeners.get("sidecar:tool_call")!;
+    const event = (sessionId: string, payload: Record<string, unknown>) =>
+      emit({
+        payload: { event_type: "tool_call", session_id: sessionId, payload },
+      });
+    event("conversation-b", {
+      tool_name: "ssh_command",
+      status: "started",
+      params: { command: "hostname" },
+    });
+    event("conversation-b", {
+      tool_name: "ssh_command",
+      status: "completed",
+      result: { status: "success", output: "wrong-host" },
+    });
+    event("conversation-a", {
+      tool_name: "ssh_command",
+      status: "started",
+      params: { command: "uptime" },
+    });
+    event("conversation-a", {
+      tool_name: "ssh_command",
+      status: "completed",
+      result: { status: "success", output: "right-host" },
+    });
+    resolveInvoke({ observation: "done", mood: "done" });
+
+    const parts: SidecarStreamPart[] = [];
+    parts.push((await first).value as SidecarStreamPart);
+    parts.push(...(await collect(iterator)));
+    expect(parts.filter((part) => part.type === "tool-input")).toHaveLength(1);
+    const outputs = parts.filter(
+      (part): part is Extract<SidecarStreamPart, { type: "tool-output" }> =>
+        part.type === "tool-output",
+    );
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0].output).toEqual({
+      status: "success",
+      output: "right-host",
+    });
+    expect(mockInvoke.mock.calls[0][1].params.state.session_id).toBe(
+      "conversation-a",
+    );
+  });
 });

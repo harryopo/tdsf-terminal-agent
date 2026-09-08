@@ -371,17 +371,18 @@ class TestTransportErrorInvokeChain(unittest.TestCase):
         mock_needs_you.assert_called_once()
 
 
-class TestParallelToolPrompt(unittest.TestCase):
-    """T9.3: 并行工具提示词存在（吃 ConcurrentToolExecutor 红利）"""
+class TestSequentialToolPrompt(unittest.TestCase):
+    """工具事件缺少全量 ID 时，系统提示必须锁定串行事实链。"""
 
-    def test_parallel_hint_in_default_prompt(self):
+    def test_sequential_hint_in_default_prompt(self):
         from strands_backend.adapter import _DEFAULT_SYSTEM_PROMPT
 
-        self.assertIn("并行发起", _DEFAULT_SYSTEM_PROMPT)
-        self.assertIn("有依赖的才串行", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("工具逐个调用", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("等待结构化结果", _DEFAULT_SYSTEM_PROMPT)
+        self.assertNotIn("独立的信息收集类调用（多个只读探查）应并行发起", _DEFAULT_SYSTEM_PROMPT)
 
     def test_prompt_budget_unbroken(self):
-        """并行提示词加入后系统提示仍在 4000 字符预算内"""
+        """串行约束加入后系统提示仍在 4000 字符预算内"""
         from strands_backend.adapter import _compose_system_prompt
 
         prompt = _compose_system_prompt(AgentMode.OBSERVE, teach=True)

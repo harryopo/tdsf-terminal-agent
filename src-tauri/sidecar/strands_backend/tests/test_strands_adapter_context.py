@@ -215,6 +215,22 @@ class TestContextManagerAuto(unittest.TestCase):
         # tool; otherwise oversized tool results become unreadable references.
         self.assertIn("retrieve_offloaded_content", set(agent.tool_names))
 
+    def test_tool_executor_is_sequential_until_all_events_have_ids(self):
+        from strands.tools.executors import SequentialToolExecutor
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        adapter = StrandsAgentAdapter(
+            event_bus=MagicMock(),
+            rust_bridge=MagicMock(),
+            backend_enabled=True,
+            strands_model=FakeContextModel(),
+        )
+        adapter._strands_available = True
+        adapter._model_available = True
+        ctx = adapter._build_tool_context("main", "t1-executor", {})
+        agent = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM)
+        self.assertIsInstance(agent.tool_executor, SequentialToolExecutor)
+
 
 @unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
 class TestMessagesContinuityAcrossInvoke(unittest.TestCase):

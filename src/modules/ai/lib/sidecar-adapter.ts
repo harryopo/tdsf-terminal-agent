@@ -309,6 +309,11 @@ const EVENT_LOOP_PROGRESS = "sidecar:loop_progress";
 export interface SidecarStreamOptions {
   /** TDSF agent id（前端业务 id，会被映射到 Python AGENT_REGISTRY key） */
   agentId: TdsfAgentId;
+  /**
+   * 当前对话会话 ID。生产路径必须传入，用于隔离后端 Agent 缓存、审批、
+   * Todo、证据和流式事件；省略仅保留给旧调用方与单元测试兼容。
+   */
+  sessionId?: string;
   /** 完整对话历史（含 parts，传给 Python 端做上下文） */
   messages: UIMessage[];
   /** 最后一条 user 消息文本（由 transport 提取，避免 Python 端再解析） */
@@ -654,6 +659,7 @@ async function* streamText(
  * @returns unlisten 函数（调用后取消所有监听）
  */
 async function registerSidecarListeners(
+  sessionId: string | undefined,
   onMood?: (mood: string) => void,
   onStep?: (step: string | null) => void,
   onToolCall?: (payload: ToolCallPayload) => void,
@@ -662,11 +668,19 @@ async function registerSidecarListeners(
 ): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [];
 
+  const belongsToSession = (payload: unknown): boolean => {
+    if (!sessionId) return true;
+    if (payload == null || typeof payload !== "object") return false;
+    const outer = payload as Record<string, unknown>;
+    return outer.session_id === sessionId;
+  };
+
   // mood 变化事件
   if (onMood) {
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_MOOD_CHANGE, (e) => {
+          if (!belongsToSession(e.payload)) return;
           const p = unwrapEventPayload<{ mood?: string }>(e.payload);
           const mood = p?.mood;
           if (mood) onMood(mood);
@@ -682,6 +696,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_LOOP_PROGRESS, (e) => {
+          if (!belongsToSession(e.payload)) return;
           const p = unwrapEventPayload<{
             round?: number;
             tool_count?: number;
@@ -703,6 +718,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_TOOL_CALL, (e) => {
+          if (!belongsToSession(e.payload)) return;
           const p = unwrapEventPayload<ToolCallPayload>(e.payload);
           if (!p) return;
           const name = p.tool_name;
@@ -724,6 +740,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_AGENT_MESSAGE, (e) => {
+          if (!belongsToSession(e.payload)) return;
           const p = unwrapEventPayload<AgentMessagePayload>(e.payload);
           if (!p) return;
           onAgentMessage(p);
@@ -799,6 +816,7 @@ export async function* runSidecarStream(
 ): AsyncIterable<SidecarStreamPart> {
   const {
     agentId,
+    sessionId,
     messages,
     input,
     live,
@@ -940,6 +958,7 @@ export async function* runSidecarStream(
   // 1. 注册事件监听器（传入 onAgentMessage 订阅 sidecar:agent_message；
   //    onLoopProgress 订阅 sidecar:loop_progress——T2 循环进度推流）
   const unlisten = await registerSidecarListeners(
+    sessionId,
     onMood,
     onStep,
     onToolCall,
@@ -947,6 +966,7 @@ export async function* runSidecarStream(
     opts.onLoopProgress,
   );
 
+  let disposeActivityTimeout = () => {};
   try {
     // 2026-09-03（用户钦定）: 移除 "调用 Sidecar Agent" step——它是内部实现细节，
     // 显示在 Header 与输入区重叠；step 从后续 Thinking / 工具调用开始即可。
@@ -984,14 +1004,15 @@ export async function* runSidecarStream(
         clearTimeout(timer);
         arm();
       };
-      abortSignal?.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          reject(new Error("用户取消"));
-        },
-        { once: true },
-      );
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new Error("用户取消"));
+      };
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+      disposeActivityTimeout = () => {
+        clearTimeout(timer);
+        abortSignal?.removeEventListener("abort", onAbort);
+      };
     });
 
     // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
@@ -1005,7 +1026,7 @@ export async function* runSidecarStream(
             method: "agent.invoke",
             params: {
               name: pythonName,
-              state: { input, messages, live },
+              state: { input, messages, live, session_id: sessionId ?? "" },
             },
             // P0 活动感知(2026-09-03): Rust 侧用总时长硬上限 600s（对齐 Python
             // watchdog），前端活动感知（默认 300s 无活动）先触发——避免 Rust 总时长
@@ -1180,6 +1201,7 @@ export async function* runSidecarStream(
     yield { type: "finish", id: streamId };
   } finally {
     // 无论成功失败，都取消事件监听 + close queue，避免内存泄漏
+    disposeActivityTimeout();
     queue.close();
     unlisten();
   }

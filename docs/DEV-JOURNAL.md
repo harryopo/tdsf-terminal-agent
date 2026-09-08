@@ -2805,3 +2805,46 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **门禁**：Python 目标回归 6/6（SSH 回包 3 项、确认模式只读/写入/FIFO 3 项）；`tool.test.tsx` 30/30；`pnpm typecheck`、`pnpm lint`、`pnpm build:web`、`git diff --check` 均通过。用户既有 `CLAUDE.md`、方案文档、资源管理器删除及 `agent-logs/` WIP 未纳入本次改动。
 
 **下一步**：待自动化桥恢复可写焦点或用户手工发送测试问题后，补录原生 `uname -s` 成功卡和知识库二级展开；再验证写操作只展示审批队首的 FIFO 行为，不以测试虚拟机可破坏为由放宽确认模式。
+## 37.129 Agent 对抗性审查：会话隔离、工具事实链与真实桌面门禁（2026-09-08）
+
+### 任务
+
+用户要求跳出既有方案和自证循环，对前后端、交互、Agent 运行稳定性与回答质量做系统性对抗审查；产出检查报告和修复报告。用户明确浏览器验收无效，要求启动真实桌面端，并允许将自动化测试委派给 Luna；最终原生验收由用户本人完成。
+
+### 关键发现
+
+1. **P0 会话隔离缺口**：`createContextAwareTransport` 调用 `runSidecarStream` 时没有传 Chat session，`agent.invoke.state.session_id` 长期为空；同时 mood/loop/tool/message 都是 Tauri 全局事件且前端没有按外层 `session_id` 过滤。Python 侧 Agent cache、历史、Todo、审批、证据和日志虽都设计了 session 维度，却没有获得真实键，多对话时存在串流/串状态风险。
+2. **工具关联与提示词矛盾**：11 个工具事件模块中只有 knowledge_search、knowledge_get_doc 具备显式调用 ID；todo_write 只有 completed；其余同名并发依赖顺序猜测。但提示词又要求并行探查，放大错配概率。
+3. **意图引擎误匹配**：通用子串“服务、空间、网络”分别会命中“服务器”“网络命名空间”等无关请求。
+4. **审计日志边界**：Agent JSONL 在落盘前没有复用终端脱敏器，且事件中的 tool_call_id 没有进入 meta。
+5. **上下文语义漂移**：提示词把所有 unavailable 都解释为只读；确认模式未写清只读感知直行；WSL terminalSession 没有明确 distro/执行环境，模型容易降级成 Windows 或无终端解释。
+6. **工程真实性缺口**：CI 仅监听 main 而实际开发分支为 terax-clone-v0；生产依赖 audit 为 advisory；DOMPurify 3.4.8 有高危审计项。48 条 Playwright 仍面向已停用 AgentPanel、旧知识卡 Hook 和九 Agent UI，端口也与 Vite 不同，不能作为当前桌面证据。
+7. **开发期桌面抖动**：pytest/旧模块默认路径写 `src-tauri/sidecar/data`，该目录虽被 Git 忽略但未被 Tauri watcher 忽略，真实运行中观察到数据库变化触发重复重编译/重启。
+
+### 最小修复
+
+- 前端把 `ToolContext.getSessionId()` 贯穿到 Python RPC；四类 sidecar 事件先校验 envelope `session_id` 再解包；活动超时 timer/abort listener 在 finally 释放。新增跨会话工具事件不得污染当前流的测试。
+- Strands 暂用 `SequentialToolExecutor`，系统提示同步要求逐项等待结构化结果。todo_write 为每次调用生成 UUID 并成对发送 started + completed/error。
+- 收窄 suggest_command 的磁盘/服务/网络关键词并补两个中文误匹配回归。
+- Agent JSONL `_clip` 先调用统一脱敏器，异常时 fail-safe 丢弃内容；开始/结果日志保留同一 tool_call_id。
+- live context 明确 local/ssh/wsl/none，WSL 写入 distro 与 cwd 事实；修正确认模式和 unavailable 解释。
+- CI 增加 terax-clone-v0 触发，生产 audit 改阻断并指定官方 registry；pnpm override 将 DOMPurify 固定到 3.4.13。
+- `.taurignore` 增加 `sidecar/data/`，不影响 Python 源码热重载，只阻断本地数据库/模型缓存触发桌面重启。
+
+### 验证
+
+- `pnpm typecheck`、`pnpm lint`、`pnpm build:web`：通过。
+- Vitest：133 files / 1346 passed。
+- sidecar pytest（正确工作目录）：2222 passed / 0 failed / 2 warnings，347.40s。
+- `tests/test_agents.py` 单文件：130 passed；Luna 首次从仓库根运行导致相对 config 路径失败，按 CI 工作目录重跑后证实不是产品回归，没有为错误启动方式改代码。
+- Cargo check：通过；为避免运行中桌面 exe 文件锁，Cargo test 使用独立 target，四组 362 / 25 / 27 / 1 通过，7 ignored。
+- `pnpm audit --prod --audit-level high --registry=https://registry.npmjs.org/`：无已知漏洞。
+- 真实 `pnpm tauri:dev`：Python 3.14.7、Strands 激活、121 RPC ready、3969 官方知识条目、8 个用户目录 Skill；测试结束且 `.taurignore` 更新后桌面进程保持运行。
+
+### 边界与复盘
+
+- 浏览器 mock 即使全绿，也不证明 Tauri IPC、SSH、WSL、PTY 或系统钥匙串；本轮不运行它冒充验收。真实双会话、确认/自动、SSH/WSL、文件写入和终端回显由用户在已启动桌面中验收。
+- 全自动模式仍仅保留硬 denylist，`python_run` 仍是无沙箱进程执行。这是现有产品决策而不是低风险能力，报告中保持显著标注。
+- 串行是协议迁移期的稳定策略。只有全部工具具备显式调用 ID，且乱序/取消/超时测试覆盖后，才恢复并行。
+- 现役生产链是单 main Strands Agent；九 Agent 注册表/LangGraph 降级元数据属于遗产债，不在本轮做大范围删除。
+- 两份交付报告：`docs/agent/Agent系统对抗性审查报告-2026-09-08.md`、`docs/agent/Agent系统修复报告-2026-09-08.md`。

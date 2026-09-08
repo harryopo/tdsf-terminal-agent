@@ -3,6 +3,18 @@
 > **用途**：确保开发按方案书执行——长期规划对齐 `docs/方案书-v2.0.md`（最终版唯一准绳，M0-M4 里程碑）；短期规划 = 当前任务 + 下一步清单。
 > **更新时机**：每次任务收尾（任务完成 / 方向变化 / 新决策）时更新本节，并在 `docs/DEV-JOURNAL.md` 追加复盘。
 
+### 2026-09-08 Agent 对抗性审查与真实性修复
+
+- [x] 完成前端、Rust bridge、Python Strands、工具事件、提示词、日志、CI 与测试真实性的系统审查；审查/修复报告见 `docs/agent/Agent系统对抗性审查报告-2026-09-08.md` 与 `docs/agent/Agent系统修复报告-2026-09-08.md`。
+- [x] P0 会话隔离：对话 `session_id` 贯穿 `agent.invoke`，四类全局 sidecar 流式事件按外层会话 ID 过滤，并补跨会话回归。
+- [x] 工具真实性：全工具 ID 迁移前改为串行执行；`todo_write` 补齐 started/completed/error 同 ID 生命周期；命令建议泛词误匹配收敛。
+- [x] 日志与上下文：Agent JSONL 写前脱敏并保留调用 ID；修正 `unavailable`、确认模式与 WSL distro 的提示词事实。
+- [x] 工程门禁：CI 覆盖 `terax-clone-v0`，依赖审计阻断高危，DOMPurify 升至 3.4.13；开发监听忽略 sidecar 运行数据，避免 pytest 触发桌面重启。
+- [x] 自动化基线：Vitest 1346、sidecar pytest 2222、Rust 四组测试、typecheck/lint/build/cargo check、生产依赖审计均通过；真实 Tauri 已启动且 Strands/121 RPC/3969 知识条目/8 Skill 就绪。
+- [ ] 用户原生验收：双对话隔离、确认/自动模式、WSL、本地工作区、SSH 输出、远程文件写入与 Todo 链；浏览器 Playwright 不作为验收。
+- [ ] 下一轮：统一剩余工具的 `tool_call_id + started + completed/error` 协议并做乱序/取消/超时测试，再评估恢复并行。
+- [ ] 后续工程化：清理九 Agent/LangGraph 遗产元数据，重建与当前 AiMiniWindow/Tauri IPC 对齐的桌面级测试，落实 Python coverage 门禁。
+
 ### 2026-09-06 命令建议与远程补全可用性
 
 - [x] 命令建议 UI：以中文“命令建议”展示用户意图和目标环境，区分“插入终端”与自动模式下的“执行”。

@@ -10,3 +10,6 @@
 
 sidecar/Temp/
 sidecar/pycache/
+# pytest 与旧模块回退路径会写入的本地数据库/模型缓存；这些文件已被
+# src-tauri/.gitignore 排除，也不应触发 tauri dev 反复重编译和重启窗口。
+sidecar/data/

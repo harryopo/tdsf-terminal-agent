@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-02 · **§37.106 agent 架构链路勘察 + UI 显示四处 P0 修复**：方案书 v4.0 **T9.2 的前端一半此前根本没落地**（后端三条可恢复降级写好的中文 `observation` 被 `sidecar-adapter.ts` 丢弃并套上误导红卡，watchdog/停滞两条还显示「详情：（空）」）——现按 `degraded_reason` 分档：可恢复降级走 assistant 正文、真实故障才报错卡且给专属行动建议；另修错误详情多行被压成一行、工具失败输出吐裸 JSON、流式期间代码全隐藏，并顺带揪出 heavy 工具失败时看不到原因的缺陷。**稳定性证据**：tsc 0 / lint 0 / vitest 122 文件（新增 24 例）/ build:web ✓ / sidecar 护栏子集 80 passed（本轮未改 Python 生产码）。**同日前一轮**：§37.105 ROADMAP #45 清零——spec T9.1/T9.2 已核销（watchdog 阈值下限 1.0→0.05、Anthropic 分支补 timeout/max_retries、`invoke()` 超时链与传输降级链补真链路断言、6 处工程隐患全修、TS VERIFY 清单与 Python 同源）。**#45 仅剩 T10.1** 后端 DSPCR5 分档固化 + 「高档展示依据来源」产品决策（≥0.5 目前什么都不显示）。**此前**：§37.104 逐行复核挂号 #45 → §37.103 #44 T2 熔断修复（全量 sidecar pytest 2073 passed / 0 xfailed）+ `src-tauri/.taurignore` 修掉 tauri dev 重启环；**下一主线 = agent 能力完善与开发**（用户 2026-09-02 指定）。交接必读：**§37.106 → §37.105 → §37.104 → §37.103**（越靠前越新；**现役 agent 链路实况见 §37.106，`docs/architecture/ai-subsystem.md` 写的是上游 terax 旧路径，别照着它改**）。此前：知识库项目全部收官（§37.86-88，至 commit 9dae6be）——双库架构（全量 rag.db 4077 块英文源头 + 精简 rag_slim.db 660 块中文提炼），RAG 引擎 sqlite-vec+BM25+RRF 与主流一致；交接说明 `docs/工作区逻辑修复-交接说明-2026-08-31.md`（Agent 感知工作区字段语义表）、`docs/知识库中文翻译-交接说明.md`（该翻译路线已作废）。接手先读 DEV-JOURNAL「开发铁律」
+> **最后更新**：2026-09-08 · **§37.129 Agent 对抗性审查与真实性收敛**：生产 Strands 单 main Agent 主链无需重写；已修复 P0 对话 session 未贯穿及全局事件未隔离，并完成工具串行事实链、Todo 生命周期、建议意图、日志脱敏、WSL/权限提示、CI/依赖审计与 Tauri watcher 数据目录忽略。门禁为 Vitest 1346、sidecar pytest 2222、Rust 四组测试、typecheck/lint/build/cargo check/audit 全绿；真实桌面已启动，最终 SSH/WSL/模式/文件验收由用户执行。交接先读 §37.129 及两份 2026-09-08 Agent 审查/修复报告；下一主线是全工具调用 ID 协议与遗产路径收敛。
 
 ---
 
@@ -4766,3 +4766,16 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 - **知识库工具 UI**：成功命中默认显示“知识库命中 · 查询 · N 条”，点击书本/箭头才显示真实 title/source/category/snippet；空态和失败态仍直接可见。知识检索不再伪装为教学，TeachCard 仍仅由显式 `tdsf:teach` 触发。
 - **实际取证与限制**：已启动 Vite/Tauri/sidecar，保存 SSH profile 测试连接成功并创建工作区。Computer Use 能操作连接，但悬浮 Agent 输入没有可写 UIA 焦点；本轮原生确认连接与模式文案，SSH 回包和折叠行为由定向回归覆盖。
 - **定向门禁**：Python 6/6（SSH 回包 3 项、确认模式只读/写入/FIFO 3 项）、Vitest 30/30、typecheck、lint、build:web、diff check 均通过。不得混入用户现有 WIP（`CLAUDE.md`、两份方案文档、`useRemoteFileTree.ts` 删除、`agent-logs/`）。
+### 37.129 Agent 对抗性审查与真实性收敛（2026-09-08 ✅ 代码/门禁完成，待用户原生验收）
+
+**结论**：现役生产链仍是 `AiMiniWindow → AiChat → transport → sidecar-adapter → Tauri IPC → Rust SidecarManager → Python Strands main Agent → mode-filtered tools → EventBus → UI`。主体已达到可继续收敛的工程状态，无需重写；本轮找到并修复了一个 P0 会话隔离缺口及八组 P1/P2 真实性问题。完整审查与修复证据分别见 `docs/agent/Agent系统对抗性审查报告-2026-09-08.md`、`docs/agent/Agent系统修复报告-2026-09-08.md`。
+
+**P0 修复**：此前前端未把 Chat session ID 传给 `agent.invoke`，四类全局 sidecar 事件也未按 session 过滤，导致后端按 session 设计的 Agent cache/历史/Todo/审批/证据/日志实际拿到空键，并有跨对话串流风险。现已从 `ToolContext.getSessionId()` 贯穿 RPC，并在 mood/loop/tool/message 解包前按 envelope `session_id` fail-closed 过滤；新增双会话交错工具事件回归。活动感知 timer 与 abort listener 同时补齐 finally 清理。
+
+**工具与回答质量**：仅 3/11 工具事件模块已有显式 tool_call_id，故协议统一前改用 Strands `SequentialToolExecutor`，提示词同步禁止并发；todo_write 补唯一 ID 和 started→completed/error 生命周期；suggest_command 删除“服务/空间/网络”泛词误匹配；unavailable 改为按 reason/message 解释，确认模式写清只读直行/写入审批，WSL context 明确 distro 与 Linux cwd。
+
+**安全/可观测/工程**：Agent JSONL 写前统一脱敏且 fail-safe，日志 meta 保留 tool_call_id；CI 覆盖 active `terax-clone-v0`，生产 audit 改阻断，DOMPurify 3.4.13 override 后无已知漏洞；`.taurignore` 忽略已被 Git 排除的 `sidecar/data/`，修复 pytest 数据写入触发真实桌面反复重编译/重启。
+
+**全绿门禁**：typecheck/lint/build-web/cargo check 通过；Vitest 133 files / 1346 passed；sidecar pytest 2222 passed / 0 failed；Cargo 独立 target 四组 362/25/27/1 通过（7 ignored）；production audit clean。真实 Tauri 已启动：Python 3.14.7、Strands 激活、121 RPC ready、3969 官方知识条目、`C:\Users\Administrator\.tdsf\skills` 加载 8 个 Skill。Luna 首次从仓库根运行 test_agents 的相对 config 失败已在正确 CI 工作目录重跑证伪（130 passed），未污染生产代码。
+
+**诚实边界**：旧 48 条 Playwright 面向停用 UI/Hook 且端口漂移，未作为验收。全自动模式+无沙箱 python_run 仍是明确风险。真实双对话隔离、确认/自动、SSH、WSL、远程文件、Todo 和可见终端由用户在当前已启动桌面端验收。下一手先统一全部工具调用 ID 与生命周期，再做乱序/取消/超时回归；随后才评估恢复并行，并单独规划九 Agent/LangGraph 遗产清理与当前桌面级自动化。

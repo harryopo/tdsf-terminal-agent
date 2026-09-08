@@ -1733,6 +1733,26 @@ class TestBuildPromptWorkspaceStates(unittest.TestCase):
         )
         self.assertIn("本地终端模式", prompt)
 
+    def test_terminal_session_wsl_names_selected_distro(self):
+        """WSL 是独立 Linux 执行上下文，不能降级成 Windows 或无终端。"""
+        adapter = self._make_adapter()
+        prompt = adapter._build_prompt(
+            "pwd",
+            {
+                "session_id": "s1",
+                "live": {
+                    "terminalSession": "wsl",
+                    "wslDistro": "Ubuntu-24.04",
+                    "cwd": "/home/harryopo",
+                },
+            },
+        )
+        self.assertIn("connection_mode: wsl", prompt)
+        self.assertIn("Ubuntu-24.04", prompt)
+        self.assertIn("WSL Linux 终端", prompt)
+        self.assertNotIn("Windows 本地 Shell", prompt.split("<live_context>", 1)[0])
+        self.assertNotIn("当前未打开任何终端会话", prompt)
+
     def test_terminal_session_none_overrides_workspace_heuristic(self):
         """terminalSession="none" 优先于旧启发式（workspace/cwd 存在）"""
         adapter = self._make_adapter()
