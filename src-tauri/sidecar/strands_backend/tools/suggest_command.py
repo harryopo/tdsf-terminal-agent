@@ -48,7 +48,7 @@ _SUGGESTION_RULES: list[tuple[list[str], str, str]] = [
     ),
     # 磁盘
     (
-        ["磁盘", "disk", "df", "空间", "容量"],
+        ["磁盘", "disk", "df", "磁盘空间", "存储空间", "磁盘容量"],
         "df -h",
         "以人类可读格式显示所有挂载点的磁盘使用情况。",
     ),
@@ -81,13 +81,20 @@ _SUGGESTION_RULES: list[tuple[list[str], str, str]] = [
         "查看 nginx 服务运行状态、最近日志和进程信息。",
     ),
     (
-        ["服务状态", "systemctl status", "服务"],
+        ["服务状态", "失败服务", "异常服务", "systemctl status"],
         "systemctl --failed --no-pager",
         "列出当前处于 failed 状态的服务单元。",
     ),
     # 网络
     (
-        ["网络", "network", "ping", "连通性"],
+        [
+            "网络连通性",
+            "外网连通",
+            "公网连通",
+            "network connectivity",
+            "ping",
+            "连通性",
+        ],
         "ping -c 4 8.8.8.8",
         "向 Google DNS 发送 4 个 ICMP 包，测试外网连通性。",
     ),

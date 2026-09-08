@@ -175,6 +175,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
     await collect(
       runSidecarStream({
         agentId: "main",
+        sessionId: "session-1",
         messages: makeMessages("test"),
         input: "test",
         live,
@@ -189,7 +190,12 @@ describe("runSidecarStream — Python agent name 映射", () => {
       method: "agent.invoke",
       params: {
         name: "main",
-        state: { input: "test", messages: makeMessages("test"), live },
+        state: {
+          input: "test",
+          messages: makeMessages("test"),
+          live,
+          session_id: "session-1",
+        },
       },
       timeoutMs: 600000,
     });

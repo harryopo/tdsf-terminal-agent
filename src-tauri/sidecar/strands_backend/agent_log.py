@@ -132,7 +132,7 @@ def log_event(
 
 
 def _clip(content: Any) -> str:
-    """内容 → 摘要字符串（≤2000 字符）"""
+    """内容 → 脱敏摘要字符串（≤2000 字符）"""
     if content is None:
         return ""
     if not isinstance(content, str):
@@ -141,6 +141,17 @@ def _clip(content: Any) -> str:
         except Exception:  # noqa: BLE001
             content = str(content)
     text = str(content)
+    # 日志默认落盘且包含用户输入、环境片段和工具参数；与送入 LLM 的终端
+    # 回读使用同一套脱敏规则，避免命令里的 token/密码永久写进 JSONL。
+    try:
+        from strands_backend.tools._redact import redact_sensitive_text
+
+        text = redact_sensitive_text(text)
+    except Exception as e:  # noqa: BLE001 — 脱敏通路异常时不影响 agent 主链路
+        logger.warning(
+            "agent_log redaction unavailable; dropping sensitive log entry: %s", e
+        )
+        return "<REDACTION_UNAVAILABLE>"
     return text if len(text) <= _MAX_CONTENT_LEN else text[:_MAX_CONTENT_LEN] + "…"
 
 
@@ -275,21 +286,26 @@ def _handle_bus_event(event: Any) -> None:
         tool_name = str(payload.get("tool_name", "?"))
         status = str(payload.get("status", ""))
         session_id = str(getattr(event, "session_id", "") or "")
+        meta = {
+            "tool_name": tool_name,
+            "status": status,
+            "source": getattr(event, "source", "") or "",
+        }
+        if payload.get("tool_call_id"):
+            meta["tool_call_id"] = str(payload["tool_call_id"])
         if status == "started":
             log_event(
                 session_id,
                 "tool_call",
                 json.dumps(payload.get("params") or {}, ensure_ascii=False),
-                meta={"tool_name": tool_name, "status": status,
-                      "source": getattr(event, "source", "") or ""},
+                meta=meta,
             )
         else:
             log_event(
                 session_id,
                 "tool_result",
                 payload.get("result"),
-                meta={"tool_name": tool_name, "status": status,
-                      "source": getattr(event, "source", "") or ""},
+                meta=meta,
             )
     except Exception as e:  # noqa: BLE001 — 桥接失败静默（不影响事件总线）
         logger.debug(f"agent_log bus event handle failed: {e}")

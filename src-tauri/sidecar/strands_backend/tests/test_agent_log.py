@@ -86,6 +86,15 @@ class TestContentClip:
         assert len(line["content"]) == _MAX_CONTENT_LEN + 1  # 含省略号
         assert line["content"].endswith("…")
 
+    def test_sensitive_values_are_redacted_before_persisting(self):
+        from strands_backend.agent_log import log_event, tail
+
+        secret = "sk-" + "a" * 24
+        log_event("s1", "tool_call", f"curl -H 'Authorization: Bearer {secret}' x")
+        content = tail(session_id="s1", lines=1)["lines"][0]["content"]
+        assert secret not in content
+        assert "REDACTED" in content
+
 
 # ============================================================================
 # 3. 轮转
@@ -216,12 +225,19 @@ class TestRpcAgentLogTail:
 
 
 class TestBusBridge:
-    def _make_event(self, status: str, tool: str = "ssh_command"):
+    def _make_event(
+        self,
+        status: str,
+        tool: str = "ssh_command",
+        tool_call_id: str | None = None,
+    ):
         from event_bus import Event
 
         payload = {"tool_name": tool, "params": {"command": "ls -la"}, "status": status}
         if status != "started":
             payload["result"] = {"output": "file1\nfile2", "exit_code": 0}
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
         return Event(
             event_type="tool_call",
             payload=payload,
@@ -241,6 +257,18 @@ class TestBusBridge:
         assert result["lines"][0]["meta"]["tool_name"] == "ssh_command"
         assert "ls -la" in result["lines"][0]["content"]
         assert "file1" in result["lines"][1]["content"]
+
+    def test_tool_call_id_is_preserved_for_started_and_result(self):
+        from strands_backend.agent_log import _handle_bus_event, tail
+
+        _handle_bus_event(self._make_event("started", tool_call_id="call-7"))
+        _handle_bus_event(self._make_event("completed", tool_call_id="call-7"))
+
+        lines = tail(session_id="s1", lines=10)["lines"]
+        assert [line["meta"]["tool_call_id"] for line in lines] == [
+            "call-7",
+            "call-7",
+        ]
 
     def test_non_tool_event_ignored(self):
         from strands_backend.agent_log import _handle_bus_event, tail

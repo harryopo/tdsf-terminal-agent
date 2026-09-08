@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, terax-clone-v0]
   push:
-    branches: [main]
+    branches: [main, terax-clone-v0]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,9 +25,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Audit (advisory)
-        run: pnpm audit --prod --audit-level high
-        continue-on-error: true
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high --registry=https://registry.npmjs.org/
 
       - name: Lint
         run: pnpm lint

@@ -64,10 +64,14 @@ logger = logging.getLogger("sidecar.strands_backend.adapter")
 # Strands 条件导入
 try:
     from strands import Agent as _StrandsAgent  # type: ignore[import]
+    from strands.tools.executors import (  # type: ignore[import]
+        SequentialToolExecutor as _SequentialToolExecutor,
+    )
     _STRANDS_AGENT_AVAILABLE = True
 except ImportError:
     _STRANDS_AGENT_AVAILABLE = False
     _StrandsAgent = None  # type: ignore[assignment]
+    _SequentialToolExecutor = None  # type: ignore[assignment, misc]
 
 # A2 T9 (2026-09-01, 用户实测反馈"agent 无法完成长任务"): 模型单轮输出触顶
 # （MaxTokensReachedException）时的自动续跑上限。Strands 语义：触顶时部分
@@ -260,7 +264,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 安全拦截诚实条款：若命令被 RiskGuard 拦截、needs_you 审批被拒、或工具上下文出现"
     "\"[TDSF] 最近被安全拦截的命令（未执行）\"提示，必须如实告知用户该命令未执行；"
     "严禁编造执行结果或假装命令已运行；应主动给出替代方案（更安全的拆分步骤或让用户手动执行）。\n"
-    "- 工具返回 unavailable = RustBridge 未配置，告知用户当前为只读模式。\n"
+    "- 工具返回 unavailable 表示当前执行通道或前置条件不可用；必须读取 reason/message "
+    "说明具体原因，不得据此臆断当前是只读模式。权限状态只以本轮 mode 与 schema 为准。\n"
     "- 未打开工作区时告知用户先创建（本地/WSL/SSH），勿声称本地诊断工具可用。\n"
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"
     "- skill_invoke 只读取 Skill 的参考资料和剧本，绝不在 sidecar 所在机器执行 Skill executor；"
@@ -279,9 +284,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     # T3 规划-执行回环 (2026-08-31): 规划段从"建议"升格为"必须"——
     # ≥3 步任务先建清单再行动（TodoStrip 可见），完成即更新驱动执行回环；
     # 单步/澄清类明确豁免，防简单问答被清单仪式拖慢。
-    # T9.3 (spec 9.3): 并行工具提示词——独立只读探查并行发起，吃 strands
-    # ConcurrentToolExecutor 红利；有依赖的调用才串行。
-    "- 独立的信息收集类调用（多个只读探查）应并行发起，有依赖的才串行。\n"
+    # 稳定性审查 2026-09-08：多数历史工具事件尚未携带 tool_call_id，
+    # 同名并发完成顺序变化会把前端输入/输出错配。全工具完成显式 ID 迁移前，
+    # 与下方 SequentialToolExecutor 保持同一串行事实口径。
+    "- 工具逐个调用并等待结构化结果后再继续；不要并行发起同名或多项工具调用。\n"
     "- 多步任务（≥3 步）必须先用 todo_write 工具建立任务清单；任务清单由前端结构化展示，"
     "不要在普通回答中复述复选框、状态或声称“已渲染”。\n"
     "- 每完成一项立即 todo_write 更新 completed 再推进。\n"
@@ -1036,7 +1042,7 @@ _MODE_PROMPTS: dict[AgentMode, str] = {
     ),
     AgentMode.CONFIRM: (
         "\n\nCurrent mode: CONFIRM.\n"
-        "- 先说明再动手：每个写操作/命令执行会请求用户批准（审批卡），"
+        "- 先说明再动手：只读感知命令可直接执行；写操作和中高风险命令会请求用户批准（审批卡），"
         "调用前用一两句解释你要做什么、为什么。\n"
         "- 审批被拒时如实报告（不得编造执行结果），并按用户附言给出替代方案。"
     ),
@@ -1975,6 +1981,10 @@ class StrandsAgentAdapter:
                 # ContextOffloader(max_result_tokens=1500, preview_tokens=750)，
                 # 长对话在上下文窗口 85% 时主动压缩摘要（方案书 v4.0 T1）。
                 context_manager="auto",
+                # 工具事件协议仍有历史工具未携带唯一 tool_call_id；串行执行可
+                # 保证 started/completed 与审计证据一一对应。待全工具完成 ID
+                # 迁移并具备乱序回归测试后再评估恢复并行。
+                tool_executor=_SequentialToolExecutor(),
                 # T2: 循环护栏（50 上限 / 连续失败 3 熔断 / 进度上报）
                 hooks=[limit_hook],
                 name=agent_id,
@@ -2382,6 +2392,7 @@ class StrandsAgentAdapter:
         if live.get("terminalPrivate"):
             lines.append("当前终端处于隐私模式（内容不可见）")
         if live.get("sshSessionId"):
+            lines.append("connection_mode: ssh")
             lines.append(
                 f"已连接 SSH 会话: {live['sshSessionId']}（远程环境证据；实际可用工具以本轮 schema 为准）"
             )
@@ -2397,7 +2408,17 @@ class StrandsAgentAdapter:
         # （"ssh"|"local"|"none"）作为"有无活动终端会话"的权威信号——
         # workspace cwd（默认主目录）存在不代表终端已打开。terminalSession
         # 显式给出时优先生效；缺省（旧调用方）回退原 workspace/cwd 启发式。
+        elif live.get("terminalSession") == "wsl":
+            lines.append("connection_mode: wsl")
+            distro = str(live.get("wslDistro") or "").strip()
+            if distro:
+                lines.append(f"当前 WSL 发行版: {distro}")
+            lines.append(
+                "当前是 WSL Linux 终端，不是 Windows 本地 Shell，也不是 SSH；"
+                "本地执行工具必须进入上述 WSL 发行版和当前 Linux cwd。"
+            )
         elif live.get("terminalSession") == "none":
+            lines.append("connection_mode: none")
             lines.append(
                 "当前未打开任何终端会话——workspace 仅为默认工作区路径（不代表终端已打开）。"
                 "请告知用户：当前未打开终端，请先新建本地终端或建立 SSH 连接，我不会假设环境；"
@@ -2407,8 +2428,10 @@ class StrandsAgentAdapter:
             live.get("terminalSession") is None
             and (live.get("workspaceRoot") or live.get("cwd") or live.get("activeFile"))
         ):
+            lines.append("connection_mode: local")
             lines.append("未连接 SSH 会话（本地终端模式，ssh_command 工具将返回 unavailable）")
         else:
+            lines.append("connection_mode: none")
             lines.append(
                 "当前未打开任何工作区或终端——请先新建本地、WSL 或 SSH 工作区，"
                 "之后才能执行命令或运行诊断工具；当前不要声称任何工具可以直接使用。"

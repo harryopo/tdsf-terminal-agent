@@ -475,8 +475,9 @@ def assess_command(
     6. observe 只读短路（readonly=True 时 L0-L1 放行）
 
     安全不变量：危险构造（$()/eval/管道到 shell → dangerous_construct=True）
-    与 L4 命令永不自动放行（无任何模式/白名单可绕）；observe 模式跳过
-    白名单 allow 与会话级免审（只读观察语义不被记忆体系扩大）。
+    与 L4 命令不能被白名单/会话记忆降级；但 AUTO 模式按产品契约仍放行
+    非 denylist 命令。observe 模式跳过白名单 allow 与会话级免审（只读观察
+    语义不被记忆体系扩大）。
 
     Args:
         ctx: 工具上下文（读 mode / session_id）
@@ -544,8 +545,9 @@ def assess_command(
     #     ② 白名单 allow 命中（无危险构造、risk_l<=3、非 observe）→ allow
     #     ③ 会话级免审命中（⚡只读免审 risk_l<=1 / 前缀免批 risk_l<=3）→ allow
     #     ④ 白名单 ask 命中 → 强制逐条审批（覆盖 decide 的 allow）
-    #     安全不变量：危险构造（dangerous_construct）与 L4 永不自动放行；
-    #     observe 模式跳过一切自动放行（fail-closed）；impact 解析失败
+    #     安全不变量：危险构造与 L4 不得靠白名单/会话记忆降级；AUTO
+    #     模式自身仍按产品契约放行非 denylist 命令。observe 模式跳过一切
+    #     自动放行（fail-closed）；impact 解析失败
     #     （dangerous 不可判）时同样不放行。
     force_confirm = False
     try:

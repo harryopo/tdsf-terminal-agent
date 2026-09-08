@@ -46,6 +46,24 @@ def test_suggest_does_not_match_ascii_substrings() -> None:
     assert result["suggestions"]
 
 
+def test_suggest_does_not_treat_server_connection_as_service_status() -> None:
+    result = invoke_suggest_command_tool(
+        {"intent": "连接远程服务器 192.168.45.200"},
+        _ctx(MagicMock()),
+    )
+    assert result["status"] == "unmatched"
+    assert result["command"] is None
+
+
+def test_suggest_does_not_treat_network_namespace_as_disk_space() -> None:
+    result = invoke_suggest_command_tool(
+        {"intent": "查看当前网络命名空间"},
+        _ctx(MagicMock()),
+    )
+    assert result["status"] == "unmatched"
+    assert result["command"] is None
+
+
 def test_terminal_output_passes_requested_lines_and_metadata() -> None:
     bridge = MagicMock()
     bridge.ipc_invoke.return_value = {

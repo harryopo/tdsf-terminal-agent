@@ -268,16 +268,16 @@ class TestModeAwarePrompt:
 
     def test_teach_skin_appended_when_on(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=True)
-        # 教学契约（原 teach agent 结构化输出迁移）
-        assert "概念与原理" in prompt
-        assert "易错点与考点" in prompt
+        # 教学契约：显式意图才启用 TeachCard，普通检索保持 Markdown。
+        assert "用户明确要求解释、教学、教程、原理或步骤" in prompt
+        assert "先解释概念" in prompt
+        assert "易错点" in prompt
         assert "练习" in prompt
-        # 禁委派话术
-        assert "不得声称把任务委派给其他 agent" in prompt
+        assert "不能输出教学标记或教学卡片" in prompt
 
     def test_teach_skin_absent_when_off(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=False)
-        assert "概念与原理" not in prompt
+        assert "教学皮肤（已开启）" not in prompt
 
     # TDSF 2026-08-31 (任务C 环境感知前置): 任何模式/开关下系统提示都必须含
     # 前置感知流程约束（用户钦定方向——agent 回答前先确认环境再行动）

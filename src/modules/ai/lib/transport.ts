@@ -287,6 +287,7 @@ export function createContextAwareTransport(deps: Deps) {
       // 从 state.live 取 sshSessionId / cwd / activeFile 等
       const sidecarStream = runSidecarStream({
         agentId: tdsfAgent,
+        sessionId: deps.toolContext.getSessionId() ?? undefined,
         messages: trimmedMessages,
         input,
         live,
