@@ -19,7 +19,7 @@ import { useTeachingExecutionStore } from "./teachingExecutionStore";
 /** 每个 leaf 保留的 block 上限（上下文只用最近 10 条，50 条余量足够） */
 const MAX_BLOCKS_PER_LEAF = 50;
 /** agent 待命标记有效期（注入 → 远端 shell 回显 633;E 的往返延迟） */
-const AGENT_PENDING_TTL_MS = 10_000;
+const AGENT_PENDING_TTL_MS = 180_000;
 
 type TerminalBlocksState = {
   blocksByLeaf: Record<number, TerminalBlock[]>;
@@ -27,6 +27,7 @@ type TerminalBlocksState = {
   agentPending: Record<number, number | undefined>;
   pushBlock: (block: TerminalBlock) => void;
   markAgentPending: (leafId: number) => void;
+  clearAgentPending: (leafId: number) => void;
   /** block 结算时调用：命中待命标记 → "agent" 并清除；否则 "user" */
   resolveAuthor: (leafId: number, command: string) => TerminalBlockAuthor;
   getRecent: (leafId: number, n: number) => TerminalBlock[];
@@ -57,6 +58,14 @@ export const useTerminalBlocksStore = create<TerminalBlocksState>(
       set((s) => ({
         agentPending: { ...s.agentPending, [leafId]: Date.now() },
       }));
+    },
+
+    clearAgentPending(leafId) {
+      set((s) => {
+        const next = { ...s.agentPending };
+        delete next[leafId];
+        return { agentPending: next };
+      });
     },
 
     resolveAuthor(leafId, _command) {

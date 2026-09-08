@@ -325,7 +325,7 @@ class TestSshCommandTool(unittest.TestCase):
         bridge.ipc_invoke.assert_any_call(
             "visible_terminal_execute",
             {"sessionId": 1, "command": "uname -a", "timeout": 30},
-            timeout=35.0,
+            timeout=200.0,
         )
         self.assertNotIn(
             "ssh_command",
@@ -352,6 +352,39 @@ class TestSshCommandTool(unittest.TestCase):
 
         self.assertEqual(result["status"], "indeterminate")
         self.assertEqual(result["reason"], "visible_terminal_timeout")
+
+    def test_visible_channel_change_reroutes_before_terminal_injection(self):
+        """A verified frontend refusal may reroute the same command to background."""
+        from strands_backend.tools import execute_via_ssh
+
+        bridge = make_mock_rust_bridge()
+        bridge.ipc_invoke.side_effect = [
+            {
+                "status": "reroute",
+                "reason": "execution_channel_changed",
+                "channel": "background",
+            },
+            {"output": "Linux test", "exit_code": 0, "duration": 0.1},
+        ]
+        ctx = make_ctx(rust_bridge=bridge)
+        ctx.execution_channel = "visible-terminal"
+        with patch(
+            "strands_backend.tools.assess_command",
+            return_value={
+                "decision": "allow",
+                "risk": {"level": "L0", "high_risk": False},
+                "impact": {"segments": [], "max_risk_l": 0},
+                "risk_l": 0,
+            },
+        ):
+            result = execute_via_ssh(ctx, "uname -a", timeout=30)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["execution_channel"], "background")
+        self.assertEqual(
+            [call.args[0] for call in bridge.ipc_invoke.call_args_list],
+            ["visible_terminal_execute", "ssh_command"],
+        )
 
     def test_visible_terminal_unavailable_keeps_durable_ledger_conservative(self):
         """A frontend refusal returns unavailable without an illegal ledger transition."""
@@ -1595,6 +1628,28 @@ class TestStrandsAgentAdapterInvokeSuccess(unittest.TestCase):
         self.assertIn("tokens", result)
         mock_agent.assert_called_once()
 
+    def test_extract_tokens_supports_strands_metrics_objects(self):
+        """Current Strands exposes EventLoopMetrics objects, not dictionaries."""
+        adapter = StrandsAgentAdapter(event_bus=None, backend_enabled=False)
+        response = MagicMock()
+        response.usage = None
+        response.metrics.latest_agent_invocation.usage = {
+            "inputTokens": 120,
+            "outputTokens": 20,
+            "totalTokens": 140,
+            "cacheReadInputTokens": 30,
+        }
+        cycle = MagicMock()
+        cycle.usage = {"inputTokens": 80, "cacheReadInputTokens": 12}
+        response.metrics.latest_agent_invocation.cycles = [cycle]
+
+        tokens = adapter._extract_tokens(response)
+
+        self.assertEqual(tokens["input_tokens"], 120)
+        self.assertEqual(tokens["cached_input_tokens"], 30)
+        self.assertEqual(tokens["last_input_tokens"], 80)
+        self.assertEqual(tokens["last_cached_input_tokens"], 12)
+
     def test_invoke_with_live_context_in_prompt(self):
         """invoke 应把 live 上下文注入 prompt"""
         bus = make_mock_event_bus()
@@ -2387,6 +2442,16 @@ class TestModeDecision(unittest.TestCase):
         """确认模式允许已可靠识别的防火墙只读查询，不弹伪高危审批。"""
         r = self._run("firewall-cmd --list-all", AgentMode.CONFIRM)
         self.assertEqual(r["status"], "success")
+
+    def test_confirm_ip_query_allows_but_route_change_requires_approval(self):
+        self.assertEqual(self._run("ip route", AgentMode.CONFIRM)["status"], "success")
+        self.assertEqual(
+            self._run(
+                "ip route add default via 192.168.45.1",
+                AgentMode.CONFIRM,
+            )["status"],
+            "needs_approval",
+        )
 
     def test_firewall_query_has_factual_approval_explanation(self):
         """模型漏填 explanation 时，审批载荷仍有分类器生成的事实说明。"""

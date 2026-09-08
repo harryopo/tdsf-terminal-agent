@@ -11,6 +11,10 @@
 - [x] 日志与上下文：Agent JSONL 写前脱敏并保留调用 ID；修正 `unavailable`、确认模式与 WSL distro 的提示词事实。
 - [x] 工程门禁：CI 覆盖 `terax-clone-v0`，依赖审计阻断高危，DOMPurify 升至 3.4.13；开发监听忽略 sidecar 运行数据，避免 pytest 触发桌面重启。
 - [x] 自动化基线：Vitest 1346、sidecar pytest 2222、Rust 四组测试、typecheck/lint/build/cargo check、生产依赖审计均通过；真实 Tauri 已启动且 Strands/121 RPC/3969 知识条目/8 Skill 就绪。
+- [x] Fastfetch 长任务稳定性：修复管道/重定向 terminal block 关联、慢速打字 author 过期、终端输出截断元数据和 Strands token metrics；上下文面板展示各组成项的比例与 token 数；消除 Agent 终端写入的跨分块循环依赖。
+- [x] 执行通道热切换：可见命令尚未注入时按当前偏好以同一 operation ID 转到后台 SSH；已注入或超时的命令不自动重发，避免重复执行。
+- [x] 权限决策去图依赖并修正网络写操作分类：确认模式不再因 `langgraph` 导入失败整体降级；`ip route` 查询直行，`ip route add` 进入审批。
+- [x] 本轮回归：Vitest 1351、sidecar pytest 2222、typecheck、lint、Web production build、cargo check 全绿；Luna 负责重复回归，主线程在可写环境复核。
 - [ ] 用户原生验收：双对话隔离、确认/自动模式、WSL、本地工作区、SSH 输出、远程文件写入与 Todo 链；浏览器 Playwright 不作为验收。
 - [ ] 下一轮：统一剩余工具的 `tool_call_id + started + completed/error` 协议并做乱序/取消/超时测试，再评估恢复并行。
 - [ ] 后续工程化：清理九 Agent/LangGraph 遗产元数据，重建与当前 AiMiniWindow/Tauri IPC 对齐的桌面级测试，落实 Python coverage 门禁。

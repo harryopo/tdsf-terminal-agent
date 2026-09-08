@@ -38,6 +38,8 @@ export type TerminalBlock = {
   author: TerminalBlockAuthor;
   /** 命令输出尾部（已脱敏），空 = 无输出或未捕获 */
   outputTail: string;
+  /** true when the bounded capture omitted earlier lines or long line tails. */
+  outputTruncated?: boolean;
   /** 命令开始执行时刻（E/C 到达时刻） */
   startedAt: number;
 };
@@ -50,7 +52,7 @@ export type TerminalBlockCollectorOptions = {
   /** 首次收到 E/C（命令开始执行）——桥接层打 startMarker 用于抓输出区间 */
   onExecStart?: () => void;
   /** D 结算时抓输出尾部（桥接层提供，返回文本需已脱敏） */
-  onOutputCapture?: () => string;
+  onOutputCapture?: () => string | { text: string; truncated: boolean };
   /** block 结算回调 */
   onBlock?: (block: TerminalBlock) => void;
 };
@@ -71,7 +73,9 @@ export class TerminalBlockCollector {
   private readonly now: () => number;
   private readonly resolveAuthor: (command: string) => TerminalBlockAuthor;
   private readonly onExecStart?: () => void;
-  private readonly onOutputCapture?: () => string;
+  private readonly onOutputCapture?: () =>
+    | string
+    | { text: string; truncated: boolean };
   private readonly onBlock?: (block: TerminalBlock) => void;
 
   constructor(opts: TerminalBlockCollectorOptions) {
@@ -189,7 +193,10 @@ export class TerminalBlockCollector {
     if (!p) return; // 孤儿 D：忽略
     this.pending = null;
     if (!p.execStarted) return; // 空命令周期（只有 A/B 回车空跑）：丢弃
-    const outputTail = this.onOutputCapture?.() ?? "";
+    const captured = this.onOutputCapture?.() ?? "";
+    const outputTail = typeof captured === "string" ? captured : captured.text;
+    const outputTruncated =
+      typeof captured === "string" ? false : captured.truncated;
     const block: TerminalBlock = {
       id: `tb-${this.sessionId}-${++this.idSeq}`,
       sessionId: this.sessionId,
@@ -199,6 +206,7 @@ export class TerminalBlockCollector {
       durationMs: Math.max(0, this.now() - p.startedAt),
       author: this.resolveAuthor(p.command),
       outputTail,
+      outputTruncated,
       startedAt: p.startedAt,
     };
     this.onBlock?.(block);
@@ -233,8 +241,8 @@ export function captureBlockOutput(
   term: Terminal,
   startMarker: IMarker | null,
   endMarker: IMarker | null,
-  maxLines = 8,
-  maxCharsPerLine = 200,
+  maxLines = 200,
+  maxCharsPerLine = 2_000,
 ): string {
   const buf = term.buffer.active;
   const cursorLine = buf.baseY + buf.cursorY;
@@ -253,6 +261,41 @@ export function captureBlockOutput(
     lines.push(text.length > maxCharsPerLine ? `${text.slice(0, maxCharsPerLine)}…` : text);
   }
   return lines.join("\n").trim();
+}
+
+export function captureBlockOutputWithMeta(
+  term: Terminal,
+  startMarker: IMarker | null,
+  endMarker: IMarker | null,
+  maxLines = 200,
+  maxCharsPerLine = 2_000,
+): { text: string; truncated: boolean } {
+  const buf = term.buffer.active;
+  const cursorLine = buf.baseY + buf.cursorY;
+  const start =
+    startMarker && !startMarker.isDisposed && startMarker.line >= 0
+      ? startMarker.line
+      : Math.max(0, cursorLine - maxLines);
+  const end = Math.min(
+    endMarker && !endMarker.isDisposed ? endMarker.line : cursorLine,
+    buf.length - 1,
+  );
+  const first = Math.max(start, end - maxLines + 1);
+  let truncated = first > start;
+  for (let line = first; line <= end && !truncated; line += 1) {
+    const text = buf.getLine(line)?.translateToString(true) ?? "";
+    truncated = text.length > maxCharsPerLine;
+  }
+  return {
+    text: captureBlockOutput(
+      term,
+      startMarker,
+      endMarker,
+      maxLines,
+      maxCharsPerLine,
+    ),
+    truncated,
+  };
 }
 
 function parseExitCode(s: string): number | null {

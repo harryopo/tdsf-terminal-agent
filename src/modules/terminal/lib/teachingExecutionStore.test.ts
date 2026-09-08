@@ -123,6 +123,29 @@ describe("teaching execution ↔ terminal block", () => {
     ).toBe(false);
   });
 
+  it("accepts shell whitespace and redirection omitted by the DEBUG hook", () => {
+    const request = {
+      leafId: 17,
+      command: "ss -tlnp | awk 'NR>1 {print $4, $6}'",
+      requestedAt: 10_000,
+    };
+    expect(
+      matchesVisibleTerminalCommand(
+        request,
+        block({ command: "ss -tlnp", author: "agent", startedAt: 10_001 }),
+      ),
+    ).toBe(true);
+    expect(
+      matchesVisibleTerminalCommand(
+        {
+          ...request,
+          command: "ls -la /tmp 2>&1; echo done",
+        },
+        block({ command: "ls -la /tmp", author: "agent", startedAt: 10_001 }),
+      ),
+    ).toBe(true);
+  });
+
   it("命令行尾与多行差异规范化，但不折叠普通空格", () => {
     expect(normalizeTeachingCommand("  printf a\r\nb  ")).toBe("printf a b");
     expect(normalizeTeachingCommand("printf  a")).not.toBe(

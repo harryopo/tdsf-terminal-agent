@@ -28,7 +28,7 @@ import { DormantRing } from "./dormantRing";
 // TDSF B1 (2026-08-29, 方案书 §4.7): 终端 block 流水账——OSC 133/633 状态机
 import {
   TerminalBlockCollector,
-  captureBlockOutput,
+  captureBlockOutputWithMeta,
   registerBlockOscHandlers,
 } from "./terminalBlocks";
 import { useTerminalBlocksStore } from "./terminalBlocksStore";
@@ -849,9 +849,15 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         onOutputCapture: () => {
           const endMarker = term.registerMarker(0);
           try {
-            return redactSensitive(
-              captureBlockOutput(term, execStartMarker, endMarker),
+            const captured = captureBlockOutputWithMeta(
+              term,
+              execStartMarker,
+              endMarker,
             );
+            return {
+              text: redactSensitive(captured.text),
+              truncated: captured.truncated,
+            };
           } finally {
             execStartMarker = null;
             endMarker?.dispose();

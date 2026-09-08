@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-08 · **§37.129 Agent 对抗性审查与真实性收敛**：生产 Strands 单 main Agent 主链无需重写；已修复 P0 对话 session 未贯穿及全局事件未隔离，并完成工具串行事实链、Todo 生命周期、建议意图、日志脱敏、WSL/权限提示、CI/依赖审计与 Tauri watcher 数据目录忽略。门禁为 Vitest 1346、sidecar pytest 2222、Rust 四组测试、typecheck/lint/build/cargo check/audit 全绿；真实桌面已启动，最终 SSH/WSL/模式/文件验收由用户执行。交接先读 §37.129 及两份 2026-09-08 Agent 审查/修复报告；下一主线是全工具调用 ID 协议与遗产路径收敛。
+> **最后更新**：2026-09-08 · **§37.130 Fastfetch 长任务稳定性收口**：修复可见终端管道/重定向结果关联、慢速打字等待、同轮执行通道切换、输出截断标识、权限决策图依赖、网络写操作分类和上下文占用统计，并消除 Agent 终端写入的跨分块循环依赖。门禁为 Vitest 1351、sidecar pytest 2222、typecheck/lint/build-web/cargo check 全绿；最终 fastfetch/打字机/通道切换由用户在桌面端验收。交接先读 §37.129、§37.130 及两份 2026-09-08 Agent 审查/修复报告。
 
 ---
 
@@ -4779,3 +4779,13 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **全绿门禁**：typecheck/lint/build-web/cargo check 通过；Vitest 133 files / 1346 passed；sidecar pytest 2222 passed / 0 failed；Cargo 独立 target 四组 362/25/27/1 通过（7 ignored）；production audit clean。真实 Tauri 已启动：Python 3.14.7、Strands 激活、121 RPC ready、3969 官方知识条目、`C:\Users\Administrator\.tdsf\skills` 加载 8 个 Skill。Luna 首次从仓库根运行 test_agents 的相对 config 失败已在正确 CI 工作目录重跑证伪（130 passed），未污染生产代码。
 
 **诚实边界**：旧 48 条 Playwright 面向停用 UI/Hook 且端口漂移，未作为验收。全自动模式+无沙箱 python_run 仍是明确风险。真实双对话隔离、确认/自动、SSH、WSL、远程文件、Todo 和可见终端由用户在当前已启动桌面端验收。下一手先统一全部工具调用 ID 与生命周期，再做乱序/取消/超时回归；随后才评估恢复并行，并单独规划九 Agent/LangGraph 遗产清理与当前桌面级自动化。
+
+### 37.130 Fastfetch 长任务稳定性收口（2026-09-08 ✅ 代码/门禁完成，待用户原生复测）
+
+**日志结论**：长任务中的 fastfetch 已真实安装并成功执行；SSH 没有持续断线。主要等待来自可见终端结果无法关联、审批等待和执行通道按旧快照路由，而不是软件安装本身。管道、重定向和复合命令常被 Shell integration 只上报首段，导致终端有结果但 Agent 等到 `indeterminate`；慢速打字又会超过原 10 秒 author 标记。
+
+**当前实现**：命令关联接受合法 Shell 运算符/重定向边界；pending author 保持 180 秒并在结算时释放；语义超时从最终回车后开始。用户在同一长任务中切换到后台后，下一次尚未写入终端的可见请求会返回明确 reroute，由 Python 使用同一 operation ID 调用后台 SSH。已经注入或已经进入不确定状态的命令不自动重发。终端输出改为最多 200 行、每行 2000 字符并返回 `truncated`，不再让模型虚构“外部存储不可读”。Agent 工具直接导入终端写入实现，生产分块不再形成该循环依赖。
+
+**Agent 与上下文**：确认模式权限映射已从 LangGraph 运行时依赖中解耦，缺少图框架不再使所有命令 fail-closed；`ip route add` 等网络写操作恢复审批，查询仍直接执行。Strands 的对象形态 usage 现可透传累计/最近输入与缓存 token；上下文浮层展示消息、工具定义、系统提示词、技能、其他五项的比例和 token 数。
+
+**验证与清理**：专项 Vitest 61 项、全量 Vitest 1351 项、sidecar pytest 2222 项、typecheck、lint、Web production build、cargo check 全部通过。`cargo fmt --check` 仅暴露仓库既有全局格式差异，未做全仓格式化。已删除旧测试日志、`.workbuddy/tmp` 中间截图和与正式用户目录哈希相同的仓库技能副本；保留记忆、路演图及用户已有未提交修改。当前正在打字的半条命令不会强切后台；新通道从下一次未注入调用生效，这是避免重复执行的安全边界。

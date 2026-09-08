@@ -6,6 +6,16 @@
 
 ---
 
+### 37.130 Fastfetch 长任务暴露的可见终端关联与上下文统计修复（2026-09-08 ✅，待用户原生复测）
+
+**问题与根因**：真实长任务“安装并打开 fastfetch”最终安装成功，但暴露出同一组执行链问题：Shell integration 对管道和重定向命令可能只上报首段，前端因此无法把已经完成的 terminal block 关联回等待中的工具；慢速打字超过 10 秒后 Agent author 标记失效；可见通道在本轮开始时冻结，用户切换后台后后续工具仍走旧路径；输出只取 8 行/每行 200 字符，模型会把真实截断误判为命令没执行。确认模式还会因运行时权限决策导入 `langgraph` 而在开发环境缺依赖时整体 fail-closed，`ip route add` 则被错误归为只读。
+
+**修复**：可见命令关联兼容空白、管道和重定向后缀；Agent pending 延长到 180 秒并在成功、失败和清理时显式释放；打字机的命令执行计时从最终回车后开始，Python/Rust 外层仅保留输入动画的 transport grace。每次可见请求抵达前端时重新读取当前执行通道：若用户已切为后台且命令尚未注入，则以同一 operation ID 明确 reroute 到后台 SSH；已注入或超时的命令绝不自动重发。终端输出采集提高到 200 行、每行 2000 字符并显式透出 `truncated`。权限模式决策移到无图依赖的纯函数，补 `ip/route/ifconfig` 写操作分类。Strands 对象形态 token metrics 现可贯穿到前端，上下文面板同时显示消息、工具定义、系统提示词、技能和其他项的百分比与 token 数。`agent.ts` 改为直接导入终端写入实现，消除生产构建发现的跨分块循环依赖。
+
+**验证**：专项 Vitest 61 项通过；全量 Vitest **135 files / 1351 passed**；sidecar pytest **2222 passed / 0 failed**；`pnpm run typecheck`、`pnpm run lint`、`pnpm build:web`、`cargo check` 全部通过。`cargo fmt --check` 仍会报告仓库既有的大范围格式差异，本轮修改的 `sidecar.rs` 新代码不在 rustfmt 差异中，未格式化污染全仓。
+
+**清理与边界**：删除旧根目录测试日志、`.workbuddy/tmp` 中间截图，以及与 `C:\Users\Administrator\.tdsf\skills\system-health-inspection\SKILL.md` 哈希完全一致的仓库重复技能；保留 `.workbuddy/memory`、`diagrams` 路演资产和用户原有未提交改动。当前命令若已经开始打字不会在半行状态强切后台；通道切换从同一长任务的下一次尚未注入的工具调用生效，避免重复执行。最终由用户在桌面端复测 fastfetch、打字机、通道中途切换和上下文面板。
+
 ### 37.128 命令建议语义与 SSH 补全安装可诊断（2026-09-06 ✅）
 
 **问题**：`suggest_command` 沿用英文 `Suggest` 和原始 `Input` JSON，无法说明它只生成命令、不执行；SSH 终端右下角提示安装的不是 Git，而是用于 Git 分支、目录和 PID 等动态补全的 `carapace`。安装链把所有失败压成同一句话，且“不再提示”没有设置恢复入口。

@@ -22,7 +22,7 @@ type CollectorHarness = {
 function makeCollector(over: {
   now?: () => number;
   resolveAuthor?: (command: string) => "user" | "agent";
-  outputTail?: string;
+  outputTail?: string | { text: string; truncated: boolean };
 } = {}): CollectorHarness {
   const blocks: TerminalBlock[] = [];
   const collector = new TerminalBlockCollector({
@@ -203,6 +203,18 @@ describe("TerminalBlockCollector — author 标记", () => {
     collector.handle133("C;ls");
     collector.handle133("D;0");
     expect(blocks[0].author).toBe("user");
+  });
+});
+
+describe("TerminalBlockCollector output metadata", () => {
+  it("preserves explicit output truncation metadata", () => {
+    const { collector, blocks } = makeCollector({
+      outputTail: { text: "last lines", truncated: true },
+    });
+    collector.handle133("C;ss -tlnp");
+    collector.handle133("D;0");
+    expect(blocks[0].outputTail).toBe("last lines");
+    expect(blocks[0].outputTruncated).toBe(true);
   });
 });
 
