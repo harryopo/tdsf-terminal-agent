@@ -92,6 +92,16 @@ export type FileTreeSource =
   | { kind: "local" }
   | { kind: "sftp"; sessionId: number; root: string };
 
+/**
+ * 根目录相同并不代表数据源相同：两个 SSH 会话都位于 /root 时，仍必须
+ * 重新读取对应会话的目录树，不能复用前一个会话的节点或展开状态。
+ */
+export function fileTreeSourceKey(source: FileTreeSource | undefined): string {
+  return source?.kind === "sftp"
+    ? `sftp:${source.sessionId}:${source.root}`
+    : "local";
+}
+
 /** sftp 分支的 fsb_* 公共参数 */
 function sftpArgs(source: FileTreeSource | undefined) {
   return source?.kind === "sftp"
@@ -118,6 +128,7 @@ function toDirEntries(entries: Array<{
 
 export function useFileTree(rootPath: string | null, options?: Options) {
   const source = options?.source;
+  const sourceKey = fileTreeSourceKey(source);
   const sourceRef = useRef(source);
   const showHidden = usePreferencesStore((s) => s.showHidden);
   const showHiddenRef = useRef(showHidden);
@@ -155,6 +166,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   }, [nodes]);
 
   const addWatch = useCallback((path: string) => {
+    if (sourceRef.current?.kind === "sftp") return;
     if (watchedRef.current.has(path)) return;
     watchedRef.current.add(path);
     watchAdd([path]);
@@ -257,7 +269,8 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     setPendingCreate(null);
     setRenaming(null);
 
-    const restored = recallExpansion(rootPath);
+    const expansionKey = `${sourceKey}:${rootPath}`;
+    const restored = recallExpansion(expansionKey);
     setExpanded(new Set(restored));
     setNodes({});
     // Sync the ref synchronously: nodesRef only updates after the next render,
@@ -267,23 +280,26 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     // changes rapidly (e.g. switching folders in quick succession).
     nodesRef.current = {};
 
-    const toWatch = [rootPath, ...restored];
     void fetchChildren(rootPath);
     for (const d of restored) void fetchChildren(d);
-    for (const p of toWatch) watchedRef.current.add(p);
-    watchAdd(toWatch);
+    if (source?.kind !== "sftp") {
+      const toWatch = [rootPath, ...restored];
+      for (const p of toWatch) watchedRef.current.add(p);
+      watchAdd(toWatch);
+    }
 
     return () => {
-      rememberExpansion(rootPath, expandedRef.current);
+      rememberExpansion(expansionKey, expandedRef.current);
       if (watchedRef.current.size > 0) {
         watchRemove([...watchedRef.current]);
         // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
         watchedRef.current.clear();
       }
     };
-  }, [rootPath, fetchChildren]);
+  }, [rootPath, sourceKey, source?.kind, fetchChildren]);
 
   useEffect(() => {
+    if (source?.kind === "sftp") return;
     let alive = true;
     let unlisten: (() => void) | undefined;
     void listenFsChanged((paths) => {
@@ -303,17 +319,17 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       alive = false;
       unlisten?.();
     };
-  }, [fetchChildren]);
+  }, [fetchChildren, sourceKey, source?.kind]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodes is intentionally omitted so ordinary tree edits don't refetch every expanded directory; showHidden/gitDecorations are the triggers that force a refresh when prefs change.
   useEffect(() => {
-    if (!rootPath) return;
+    if (!rootPath || source?.kind === "sftp") return;
     const loadedPaths = Object.entries(nodes)
       .filter(([, state]) => state.status === "loaded")
       .map(([path]) => path);
     for (const path of loadedPaths) void fetchChildren(path);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
-  }, [showHidden, gitDecorations, rootPath, fetchChildren]);
+  }, [showHidden, gitDecorations, rootPath, sourceKey, fetchChildren]);
 
   const toggle = useCallback(
     (path: string) => {
