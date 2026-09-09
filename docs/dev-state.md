@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-08 · **§37.130 Fastfetch 长任务稳定性收口**：修复可见终端管道/重定向结果关联、慢速打字等待、同轮执行通道切换、输出截断标识、权限决策图依赖、网络写操作分类和上下文占用统计，并消除 Agent 终端写入的跨分块循环依赖。门禁为 Vitest 1351、sidecar pytest 2222、typecheck/lint/build-web/cargo check 全绿；最终 fastfetch/打字机/通道切换由用户在桌面端验收。交接先读 §37.129、§37.130 及两份 2026-09-08 Agent 审查/修复报告。
+> **最后更新**：2026-09-09 · **§37.131 SSH 首次连接 TOFU 交互修复**：未知主机弹窗两个按钮此前只返回处理函数而未执行，现已直接绑定批准/拒绝异步回调，并补点击回归。SSH 指纹、审批 ID、known_hosts 与 Rust 后端协议未改。交接先读 §37.129—§37.131 及两份 2026-09-08 Agent 审查/修复报告。
 
 ---
 
@@ -4789,3 +4789,9 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **Agent 与上下文**：确认模式权限映射已从 LangGraph 运行时依赖中解耦，缺少图框架不再使所有命令 fail-closed；`ip route add` 等网络写操作恢复审批，查询仍直接执行。Strands 的对象形态 usage 现可透传累计/最近输入与缓存 token；上下文浮层展示消息、工具定义、系统提示词、技能、其他五项的比例和 token 数。
 
 **验证与清理**：专项 Vitest 61 项、全量 Vitest 1351 项、sidecar pytest 2222 项、typecheck、lint、Web production build、cargo check 全部通过。`cargo fmt --check` 仅暴露仓库既有全局格式差异，未做全仓格式化。已删除旧测试日志、`.workbuddy/tmp` 中间截图和与正式用户目录哈希相同的仓库技能副本；保留记忆、路演图及用户已有未提交修改。当前正在打字的半条命令不会强切后台；新通道从下一次未注入调用生效，这是避免重复执行的安全边界。
+
+### 37.131 SSH 首次连接 TOFU 交互恢复（2026-09-09 ✅ 代码完成，待用户原生复测）
+
+**根因**：`HostApprovalDialog` 的批准和拒绝按钮使用 `onClick={() => void handle(callback)}`。`handle(callback)` 的返回值才是真正的异步点击处理器，外层箭头却只返回它而没有调用，所以弹窗可见、按钮也非 disabled，但点击不会调用 store，更不会向 Rust 发送 `ssh_approve_host`。
+
+**修复与边界**：改为 `onClick={handle(callback)}`，复用原有 handling 禁用状态。定向测试先得到批准/拒绝 **2 failed（调用 0 次）**，修复后 **2 passed**。事件 payload 的 snake_case→camelCase 转换、Tauri 参数、Rust approval registry 和 TOFU/known_hosts 策略均核对正确且未改动；最终由用户用新主机确认一次真实连接。
