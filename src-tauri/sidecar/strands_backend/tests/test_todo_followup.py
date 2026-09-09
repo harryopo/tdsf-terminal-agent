@@ -272,6 +272,24 @@ class TestTodoFollowupOnInvoke(unittest.TestCase):
         self.assertEqual(model.round, 1)
         self.assertEqual(result["next_step"], "done")
 
+    def test_user_cancelled_tool_suppresses_automatic_followup(self):
+        """用户取消后，未完成 todo 不能强制触发继续执行。"""
+        _write_todos("t3-cancel", [
+            {"id": "a", "title": "安装软件", "status": "in_progress"},
+        ])
+        adapter, _ = self._make_adapter()
+        agent = MagicMock()
+
+        result = adapter._maybe_todo_followup(
+            agent,
+            "main",
+            "t3-cancel",
+            [{"status": "cancelled", "error": "tool cancelled by user"}],
+        )
+
+        self.assertEqual(result, "")
+        agent.assert_not_called()
+
     def test_followup_prompt_logged_to_agent_log(self):
         """追加轮注入内容落盘 todo_followup 事件（含未完成清单）"""
         from strands_backend.agent_log import tail

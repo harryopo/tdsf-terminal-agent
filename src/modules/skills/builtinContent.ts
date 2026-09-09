@@ -531,6 +531,41 @@ Agent:
 \`\`\`
 `;
 
+/** network-troubleshoot skill 的 SKILL.md 原文（sidecar 不可用时的 UI 降级预览） */
+export const NETWORK_TROUBLESHOOT_CONTENT = `---
+name: network-troubleshoot
+description: Linux 网络配置与故障定位 Skill，分层诊断网卡、地址、路由、网关、DNS、HTTP 和虚拟机网络模式
+version: 1.0.0
+author: TDSF
+tags: [linux, network, dns, routing, networkmanager, virtualization]
+---
+
+# Linux 网络配置与故障定位
+
+## When to use
+
+- dnf / yum / apt / curl / wget 下载失败、卡住或域名解析失败
+- 网卡没有地址、默认路由缺失、网关不可达、DNS 异常
+- 用户需要配置静态 IP、DHCP、NetworkManager 连接
+- Linux 运行在虚拟机中，疑似 NAT、桥接或 Host-only 配置错误
+
+## Workflow
+
+1. 识别虚拟化环境、网卡、地址和活动 NetworkManager 连接，不先改配置。
+2. 按链路、路由、网关邻居、DNS、TCP/HTTP 的顺序分层诊断。
+3. 区分虚拟机内配置与宿主机虚拟交换机、NAT、桥接或 Host-only 问题。
+4. 需要宿主机设置时，用 ask_user 提问卡确认虚拟化平台和网络模式后再引导用户。
+5. 修改前记录活动连接、地址、路由和 DNS，修改后从链路到原始业务命令逐层复验。
+
+## Safety rules
+
+- 不以单次 ping 作为唯一证据。
+- 不盲目覆盖 /etc/resolv.conf。
+- 不直接停用承载当前 SSH 会话的连接。
+- 包管理器失败后先诊断网络，不连续重试相同安装命令。
+- 动态安装命令保持前台执行，并依赖 SSH 原生实时输出观察进度。
+`;
+
 /**
  * builtin skill name → SKILL.md 原文映射
  *
@@ -543,4 +578,5 @@ export const BUILTIN_CONTENT_MAP: Record<string, string> = {
   "python-debug": PYTHON_DEBUG_CONTENT,
   "selinux-baseline": SELINUX_BASELINE_CONTENT,
   "ssh-troubleshoot": SSH_TROUBLESHOOT_CONTENT,
+  "network-troubleshoot": NETWORK_TROUBLESHOOT_CONTENT,
 };

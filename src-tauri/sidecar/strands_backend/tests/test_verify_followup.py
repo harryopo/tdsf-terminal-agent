@@ -339,6 +339,22 @@ class TestVerifyFollowupOnAdapter:
         assert result == ""
         assert agent.calls == []
 
+    def test_user_cancelled_tool_suppresses_verify_followup(self):
+        """用户取消工具后，验证回环也必须停下等待用户。"""
+        adapter = _make_adapter()
+        agent = _FakeAgent()
+        log = [
+            {
+                **_entry("ssh_command", command="systemctl restart nginx"),
+                "status": "cancelled",
+                "error": "tool cancelled by user",
+            },
+        ]
+
+        result = adapter._maybe_verify_followup(agent, "main", "t7-cancel", log)
+        assert result == ""
+        assert agent.calls == []
+
     def test_followup_failure_returns_empty(self):
         """追加轮异常 → 降级返回空串（调用方沿用主轮结果），不抛错"""
         adapter = _make_adapter()

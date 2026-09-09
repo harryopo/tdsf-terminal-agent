@@ -55,6 +55,7 @@ import {
 } from "../lib/evidence";
 // Task 6.5: sidecar needs_you 审批闭环（approval 类请求渲染四层审批卡）
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
+import { SshCommandOutputPanel } from "./SshCommandOutputPanel";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
 import { shouldRenderTeachCard } from "./teachParser";
 import { TeachCard } from "./TeachCard";
@@ -236,6 +237,7 @@ export function AiChatView({
             四层审批卡（semantic/command/explanation/impact），三按钮经
             needs_you.respond RPC 回传 Python 唤醒阻塞的工具线程 */}
         <NeedsYouApprovalCards />
+        <SshCommandOutputPanel />
         {compactionNotice && (
           <CompactionNotice
             droppedCount={compactionNotice.droppedCount}

@@ -5,7 +5,7 @@
  *   1. 工具直发副本（扁平字段）created → 渲染四层审批卡
  *   2. 服务事件形态（Event 包装 + request.extra）→ 同样渲染
  *   3. 双通道幂等：同一 req_id 两次 created 只渲染一张卡
- *   4. 非 approval 类型（question/error/handoff）不渲染
+ *   4. question 类型渲染提问卡并在确认后回传 answer
  *   5. 执行 → needs_you.respond RPC（approved:true）→ 卡移除
  *   6. ⚡批准且本会话只读免审 → response 带 decision/sessionTrust + 前端标志置位
  *   7. 拒绝附言 → response 带 reason/note
@@ -14,7 +14,13 @@
  *  10. session_id 与当前会话不符 → 不渲染
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { invokeRpc, onNeedsYou } from "@/lib/sidecar-bridge";
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
 import { useChatStore } from "../store/chatStore";
@@ -75,6 +81,27 @@ const serviceCreated = (extra: Record<string, unknown> = {}) => ({
   session_id: "sess-1",
 });
 
+const questionCreated = () => ({
+  event_type: "needs_you",
+  payload: {
+    needs_type: "question",
+    event: "created",
+    title: "Agent 需要你的回答",
+    description: "请选择虚拟机网络模式",
+    request: {
+      id: "ny-q1",
+      type: "question",
+      session_id: "sess-1",
+      extra: {
+        question: "请选择虚拟机网络模式",
+        options: ["NAT", "桥接"],
+        confirm_label: "确认并继续",
+      },
+    },
+  },
+  session_id: "sess-1",
+});
+
 async function mount() {
   render(<NeedsYouApprovalCards />);
   // flush useEffect 内 onNeedsYou 订阅 promise，确保回调已注册
@@ -89,7 +116,10 @@ beforeEach(() => {
   vi.mocked(invokeRpc).mockReset();
   vi.mocked(onNeedsYou).mockClear();
   needsYouCb = null;
-  useChatStore.setState({ activeSessionId: "sess-1", sessionReadOnlyTrust: false });
+  useChatStore.setState({
+    activeSessionId: "sess-1",
+    sessionReadOnlyTrust: false,
+  });
 });
 
 afterEach(() => {
@@ -135,15 +165,13 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
     expect(screen.getAllByText("等待你的确认")).toHaveLength(1);
   });
 
-  it("非 approval 类型（question）不渲染", async () => {
+  it("question 类型渲染提问卡", async () => {
     await mount();
-    emitNeedsYou(
-      toolDirectCreated({ needs_type: "question", id: "ny-q1" }),
-    );
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
-    expect(screen.queryByText("等待你的确认")).toBeNull();
+    emitNeedsYou(questionCreated());
+    expect(await screen.findByText("Agent 需要你的回答")).toBeTruthy();
+    expect(screen.getByText("请选择虚拟机网络模式")).toBeTruthy();
+    expect(screen.getByText("NAT")).toBeTruthy();
+    expect(screen.getByText("桥接")).toBeTruthy();
   });
 
   it("session_id 与当前会话不符 → 不渲染（其他会话的卡仍正常）", async () => {
@@ -175,6 +203,25 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
 });
 
 describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
+  it("提问卡选择后确认 → 回传 answer 并移除", async () => {
+    vi.mocked(invokeRpc).mockResolvedValue({});
+    await mount();
+    emitNeedsYou(questionCreated());
+
+    fireEvent.click(await screen.findByText("桥接"));
+    fireEvent.click(screen.getByText("确认并继续"));
+
+    await waitFor(() => {
+      expect(invokeRpc).toHaveBeenCalledWith("needs_you.respond", {
+        req_id: "ny-q1",
+        response: { answer: "桥接" },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("请选择虚拟机网络模式")).toBeNull(),
+    );
+  });
+
   it("执行按钮 → needs_you.respond(approved:true) → 成功后卡移除", async () => {
     vi.mocked(invokeRpc).mockResolvedValue({});
     await mount();
@@ -238,10 +285,9 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     emitNeedsYou(toolDirectCreated({ risk_l: 3 }));
 
     fireEvent.click(await screen.findByText("拒绝"));
-    fireEvent.change(
-      screen.getByPlaceholderText(/附言（可选）/) ,
-      { target: { value: "nginx 不能现在重启，先灰度" } },
-    );
+    fireEvent.change(screen.getByPlaceholderText(/附言（可选）/), {
+      target: { value: "nginx 不能现在重启，先灰度" },
+    });
     fireEvent.click(screen.getByText("确认拒绝"));
 
     await waitFor(() => {
@@ -320,9 +366,9 @@ describe("NeedsYouApprovalCards FIFO", () => {
     expect(await screen.findByText("echo FIRST_APPROVAL")).toBeTruthy();
     expect(screen.queryByText("echo SECOND_APPROVAL")).toBeNull();
     expect(
-      document.querySelector("[data-needs-you-cards]")?.getAttribute(
-        "data-queued-approvals",
-      ),
+      document
+        .querySelector("[data-needs-you-cards]")
+        ?.getAttribute("data-queued-approvals"),
     ).toBe("1");
 
     fireEvent.click(screen.getByText("执行"));

@@ -267,7 +267,13 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertIn("output", result)
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
-            {"sessionId": 1, "command": "ls -la /tmp", "timeout": 30},
+            {
+                "sessionId": 1,
+                "command": "ls -la /tmp",
+                "timeout": 30,
+                "conversationSessionId": "test-session",
+                "toolName": "ssh_command",
+            },
         )
 
     def test_nonzero_exit_is_error_not_completed_evidence(self):
@@ -324,7 +330,13 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         bridge.ipc_invoke.assert_any_call(
             "visible_terminal_execute",
-            {"sessionId": 1, "command": "uname -a", "timeout": 30},
+            {
+                "sessionId": 1,
+                "command": "uname -a",
+                "timeout": 30,
+                "conversationSessionId": "test-session",
+                "toolName": "ssh_command",
+            },
             timeout=200.0,
         )
         self.assertNotIn(
@@ -1483,16 +1495,17 @@ class TestMakeAllOpsTools(unittest.TestCase):
         """make_all_ops_tools 应返回 TOOL_REGISTRY 全量工具
         （T2 后 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
         + 2026-08-31 knowledge_get_doc + T5 python_run
-        + P2 #42 ssh_list_sessions + 远程安全写入 = 24）"""
+        + P2 #42 ssh_list_sessions + 远程安全写入 + ask_user = 25）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 24)
+        self.assertEqual(len(tools), 25)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
-        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 24 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 24)
+        """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 25 个工具名"""
+        self.assertEqual(len(OPS_TOOL_NAMES), 25)
+        self.assertIn("ask_user", OPS_TOOL_NAMES)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
         self.assertIn("log_analyzer", OPS_TOOL_NAMES)
@@ -1531,6 +1544,22 @@ class TestDefaultRustBridge(unittest.TestCase):
         result = bridge.ipc_invoke("ssh_command", {"session_id": "x"})
         self.assertEqual(result, {"ok": True, "output": "data"})
         callback.assert_called_once_with("ssh_command", {"session_id": "x"})
+
+    def test_ssh_command_bridge_wait_outlives_remote_timeout(self):
+        """JSON-RPC 桥不能在 Rust 远端命令超时前提前断开。"""
+        callback = MagicMock(return_value={"ok": True, "exitCode": 0})
+        bridge = DefaultRustBridge(send_request=callback)
+
+        bridge.ipc_invoke(
+            "ssh_command",
+            {"sessionId": 1, "command": "sleep 25", "timeout": 35},
+        )
+
+        callback.assert_called_once_with(
+            "ssh_command",
+            {"sessionId": 1, "command": "sleep 25", "timeout": 35},
+            45.0,
+        )
 
     def test_with_send_request_exception_returns_error(self):
         """send_request 抛异常时应捕获并返回 error 状态"""
@@ -1831,6 +1860,13 @@ class TestSystemPromptSkillListSync(unittest.TestCase):
     def test_default_prompt_uses_runtime_schema_as_tool_source(self):
         """提示词不得硬编码可能已不存在的内置 skill 清单。"""
         self.assertIn("运行时 schema 为唯一事实来源", _DEFAULT_SYSTEM_PROMPT)
+
+    def test_prompt_pauses_for_questions_and_routes_network_first(self):
+        self.assertIn("调用 ask_user 弹出提问卡", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("工具返回回答前立即暂停", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("网络优先", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("systemd-detect-virt", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("不要 nohup", _DEFAULT_SYSTEM_PROMPT)
 
     def test_skill_names_line_matches_registry(self):
         """_skill_names_line 应返回 registry 实际注册的技能清单"""
@@ -2274,10 +2310,10 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         return {getattr(t, "__name__", str(t)) for t in tools}
 
     def test_main_gets_all_tools(self):
-        """main（唯一 agent）：TOOL_REGISTRY 全量 24 工具（含远程安全写入）。"""
+        """main（唯一 agent）：TOOL_REGISTRY 全量 25 工具（含 ask_user）。"""
         tools = make_all_ops_tools(self._ctx())
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 24)
+        self.assertEqual(len(tools), 25)
         self.assertIn("ssh_command", names)
         self.assertIn("ssh_list_sessions", names)
         self.assertIn("knowledge_search", names)
@@ -2592,6 +2628,7 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         # 2026-08-31：+ knowledge_search（readonly 语义修正）
         # + knowledge_get_doc（新工具）= 14
         # P2 #42 (2026-09-01)：+ ssh_list_sessions（只读枚举）= 15
+        # 2026-09-09：+ ask_user（结构化提问、无远端副作用）= 16
         self.assertIn("todo_write", names)
         self.assertIn("get_terminal_output", names)
         self.assertIn("assess_confidence", names)
@@ -2600,7 +2637,7 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertIn("ssh_list_sessions", names)
         # backup_restore（restore 写操作）L1 下被裁——schema-level safety 补口
         self.assertNotIn("backup_restore", names)
-        self.assertEqual(len(tools), 15)
+        self.assertEqual(len(tools), 16)
 
     def test_l2_keeps_all_tools(self):
         ctx = make_ctx()
@@ -2610,12 +2647,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
         self.assertIn("write_remote_file", names)
-        self.assertEqual(len(tools), 24)
+        self.assertEqual(len(tools), 25)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 24)
+        self.assertEqual(len(tools), 25)
 
 
 # ============================================================================
@@ -2850,7 +2887,13 @@ class TestExtendedOpsTools(unittest.TestCase):
         self.assertEqual(r["status"], "success")
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
-            {"sessionId": 1, "command": "systemctl status nginx --no-pager -l", "timeout": 30},
+            {
+                "sessionId": 1,
+                "command": "systemctl status nginx --no-pager -l",
+                "timeout": 30,
+                "conversationSessionId": "test-session",
+                "toolName": "service_manage",
+            },
         )
 
     def test_service_manage_invalid_action(self):
@@ -2875,7 +2918,13 @@ class TestExtendedOpsTools(unittest.TestCase):
         self.assertEqual(r["status"], "success")
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
-            {"sessionId": 1, "command": "dnf install -y nginx", "timeout": 120},
+            {
+                "sessionId": 1,
+                "command": "dnf install -y nginx",
+                "timeout": 120,
+                "conversationSessionId": "test-session",
+                "toolName": "package_manage",
+            },
         )
 
     def test_package_manage_apt(self):
@@ -2896,7 +2945,13 @@ class TestExtendedOpsTools(unittest.TestCase):
         self.assertEqual(r["status"], "success")
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
-            {"sessionId": 1, "command": "apt install -y nginx", "timeout": 120},
+            {
+                "sessionId": 1,
+                "command": "apt install -y nginx",
+                "timeout": 120,
+                "conversationSessionId": "test-session",
+                "toolName": "package_manage",
+            },
         )
 
     def test_firewall_manage_add_port(self):

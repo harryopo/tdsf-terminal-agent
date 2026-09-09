@@ -224,7 +224,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         self.assertIs(observe_agent, confirm_agent)
         self.assertIn("ssh_command", set(confirm_agent.tool_names))
-        self.assertEqual(len(set(confirm_agent.tool_names)), 25)
+        self.assertEqual(len(set(confirm_agent.tool_names)), 26)
 
     def test_main_agent_has_full_toolset(self):
         """main（唯一 agent）：业务工具 + 1 个上下文回读工具
@@ -232,17 +232,18 @@ class TestStrandsRealE2E(unittest.TestCase):
         P0-A1 BREAKING：原 24 = 20 registry + 4 子 agent（agent-as-tool）
         ——委派删除后收敛为 20；2026-08-31 + knowledge_get_doc = 21；
         T5 (2026-08-31) + python_run = 22；
-        P2 #42 (2026-09-01) + ssh_list_sessions = 23。
+        P2 #42 (2026-09-01) + ssh_list_sessions = 23；其后注册表扩展至
+        25 项，加 1 个 retrieve_offloaded_content 上下文回读工具 = 26。
         """
         model = FakeStrandsModel(file_content=b"", final_text="ok")
         adapter, _ = self._make_adapter(model)
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
         agent = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM)
         tool_names = set(agent.tool_names)
-        self.assertEqual(len(tool_names), 25)
+        self.assertEqual(len(tool_names), 26)
         # 核心工具齐全
         for name in (
-            "ssh_command", "ssh_list_sessions", "skill_invoke", "knowledge_search",
+            "ssh_command", "ssh_list_sessions", "ask_user", "skill_invoke", "knowledge_search",
             "knowledge_get_doc",
             "service_manage", "package_manage", "firewall_manage",
             "security_audit", "performance_analyze", "save_skill",
@@ -263,7 +264,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         tool_names = set(agent.tool_names)
         self.assertIn("ssh_command", tool_names)
-        self.assertEqual(len(tool_names), 25)
+        self.assertEqual(len(tool_names), 26)
 
 
 if __name__ == "__main__":

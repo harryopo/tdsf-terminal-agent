@@ -775,12 +775,9 @@ class NeedsYouService:
                     return req
 
         # 调用方 timeout 也从激活时开始；approval 自身 deadline 仍是最终超时依据。
-        # 非 approval 保留旧行为：None 仍以 service 默认值作为调用方等待上限。
-        effective_timeout = (
-            self._approval_timeout
-            if timeout is None and req.type != NeedsYouType.APPROVAL
-            else timeout
-        )
+        # question/error/handoff 自身没有 deadline；调用方不指定 timeout 时
+        # 就持续等待真实用户响应，不能 5 分钟后仍以 pending 返回并让 Agent 续跑。
+        effective_timeout = timeout
         wait_deadline = (
             time.monotonic() + effective_timeout
             if effective_timeout is not None

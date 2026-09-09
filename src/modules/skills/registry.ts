@@ -1,13 +1,13 @@
 // TDSF 魔改 (P4-T4.4): 前端 Skill 注册中心
 // -----------------------------------------------------------------------------
 // 职责:
-//   1. 维护 5 个 builtin skill 的硬编码元数据（IPC 降级时使用）
+//   1. 维护 builtin skill 的硬编码元数据（IPC 降级时使用）
 //   2. 提供 SkillDict → SkillMetadata 转换（snake_case → camelCase + category 推断）
 //   3. 维护本地启用状态（localStorage 持久化，与 Python 端 enabled 解耦）
 //
 // 降级策略:
 //   当 Python sidecar 未运行或 skill.list 方法不存在时，loader.ts 调用
-//   `getBuiltinSkills()` 返回硬编码的 5 个 builtin skill 元数据，不阻塞 UI。
+//   `getBuiltinSkills()` 返回硬编码的 builtin skill 元数据，不阻塞 UI。
 //
 // 分类推断规则（按 tags 优先级）:
 //   - tags 含 "docker" → docker
@@ -24,7 +24,7 @@ import type { SkillCategory, SkillDict, SkillMetadata } from "./types";
 const ENABLED_STATE_STORAGE_KEY = "tdsf.skills.enabled";
 
 /**
- * 5 个 builtin skill 的硬编码元数据（IPC 降级用）
+ * builtin skill 的硬编码元数据（IPC 降级用）
  *
  * 与 src-tauri/sidecar/skills/builtin 下的 SKILL.md frontmatter 对齐。
  * 当 Python sidecar 不可用时，loader 返回此列表，让 UI 仍可展示。
@@ -119,6 +119,24 @@ const BUILTIN_SKILLS: SkillMetadata[] = [
     author: "TDSF",
     tags: ["ssh", "network", "auth", "troubleshooting"],
   },
+  {
+    name: "network-troubleshoot",
+    description:
+      "Linux 网络配置与故障定位 Skill，分层诊断网卡、路由、DNS 和虚拟机网络模式",
+    category: "linux",
+    whenToUse:
+      "dnf/apt/curl 下载失败，网卡、地址、默认路由、网关或 DNS 异常，或疑似虚拟机 NAT/桥接/Host-only 配置问题",
+    examples: [
+      "示例：软件源域名解析失败",
+      "示例：默认网关不可达",
+      "示例：虚拟机 NAT/桥接诊断",
+    ],
+    source: "builtin",
+    enabled: true,
+    version: "1.0.0",
+    author: "TDSF",
+    tags: ["linux", "network", "dns", "routing", "virtualization"],
+  },
 ];
 
 /**
@@ -201,7 +219,7 @@ export function dictToMetadata(dict: SkillDict): SkillMetadata {
  * TDSF 魔改: 同时从 BUILTIN_CONTENT_MAP 填充 rawContent 字段，让
  * SkillContentDialog 在 Python sidecar 不可用时也能预览 SKILL.md 完整内容。
  *
- * @returns 5 个 builtin skill 的元数据列表
+ * @returns builtin skill 的元数据列表
  */
 export function getBuiltinSkills(): SkillMetadata[] {
   return BUILTIN_SKILLS.map((s) => ({

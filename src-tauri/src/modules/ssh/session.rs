@@ -1148,6 +1148,18 @@ impl<R: tauri::Runtime> SshSession<R> {
         command: &str,
         timeout_secs: Option<u64>,
     ) -> Result<SshCommandOutput, SshSessionError> {
+        self.exec_command_streaming(command, timeout_secs, None)
+            .await
+    }
+
+    /// 与 [`exec_command`] 相同，但每收到一段 stdout/stderr 就立即回调。
+    /// 回调只负责展示进度，最终事实仍以退出码和完整结构化结果为准。
+    pub async fn exec_command_streaming(
+        &self,
+        command: &str,
+        timeout_secs: Option<u64>,
+        on_output: Option<Arc<dyn Fn(Vec<u8>, bool) + Send + Sync>>,
+    ) -> Result<SshCommandOutput, SshSessionError> {
         // 1. 连接检查（与 open_sftp_channel 一致，PTY 死亡不影响 exec）
         if self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
@@ -1174,45 +1186,25 @@ impl<R: tauri::Runtime> SshSession<R> {
         //    russh 0.61 签名：exec(&self, want_reply: bool, command: &str) -> Result<()>
         channel.exec(true, command).await?;
 
-        // 5. 收集输出（带超时保护）
-        let timeout_dur =
-            std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
-        let collect_fut = Self::collect_exec_output(&mut channel, command);
-
-        let (stdout, stderr, exit_code) = match tokio::time::timeout(
-            timeout_dur,
-            collect_fut,
-        )
-        .await
-        {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                log::error!(
-                    "[ssh] exec_command channel error: cmd={:?} err={}",
-                    command,
-                    e
-                );
-                return Err(SshSessionError::Russh(e));
-            }
-            Err(_elapsed) => {
-                // 超时：返回部分输出 + exit_code=-1（与 JSch/AgentSSH 约定一致）
-                log::warn!(
-                    "[ssh] exec_command timeout after {}s: cmd={:?}",
-                    timeout_secs.unwrap_or(30),
-                    command
-                );
-                let stderr_msg = format!(
+        // 5. 超时判断放进收集循环，超时时保留已收到的原生输出。旧实现
+        // 丢弃整个 future，因此命令虽有回显，上层却只能得到空 output。
+        let timeout_secs = timeout_secs.unwrap_or(30);
+        let (stdout, mut stderr, exit_code, timed_out) =
+            Self::collect_exec_output(&mut channel, command, timeout_secs, on_output).await?;
+        if timed_out {
+            log::warn!(
+                "[ssh] exec_command timeout after {}s: cmd={:?}",
+                timeout_secs,
+                command
+            );
+            stderr.extend_from_slice(
+                format!(
                     "\n[tdsf-exec-timeout] command timed out after {}s\n",
-                    timeout_secs.unwrap_or(30)
-                );
-                // channel drop 会触发底层关闭
-                return Ok(SshCommandOutput {
-                    stdout: Vec::new(),
-                    stderr: stderr_msg.into_bytes(),
-                    exit_code: -1,
-                });
-            }
-        };
+                    timeout_secs
+                )
+                .as_bytes(),
+            );
+        }
 
         log::info!(
             "[ssh] exec_command done: cmd={:?} exit={} stdout={}B stderr={}B",
@@ -1238,20 +1230,38 @@ impl<R: tauri::Runtime> SshSession<R> {
     async fn collect_exec_output(
         channel: &mut russh::Channel<russh::client::Msg>,
         command: &str,
-    ) -> Result<(Vec<u8>, Vec<u8>, i32), russh::Error> {
+        timeout_secs: u64,
+        on_output: Option<Arc<dyn Fn(Vec<u8>, bool) + Send + Sync>>,
+    ) -> Result<(Vec<u8>, Vec<u8>, i32, bool), russh::Error> {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code: i32 = -1; // 默认 -1，收到 ExitStatus 才更新
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(timeout_secs);
+        let mut timed_out = false;
 
         loop {
-            match channel.wait().await {
+            let message = tokio::select! {
+                message = channel.wait() => message,
+                _ = tokio::time::sleep_until(deadline) => {
+                    timed_out = true;
+                    break;
+                }
+            };
+            match message {
                 Some(ChannelMsg::Data { data }) => {
+                    if let Some(callback) = &on_output {
+                        callback(data.to_vec(), false);
+                    }
                     append_exec_output_limited(&mut stdout, &data, MAX_EXEC_OUTPUT_BYTES);
                 }
                 Some(ChannelMsg::ExtendedData { ext, data }) => {
                     // ext=1 是 stderr（RFC 4254 5.2）
                     // ext=2 是 "ExitStatus 之外的扩展数据"（罕见，合并到 stderr）
                     if ext == 1 || ext == 2 {
+                        if let Some(callback) = &on_output {
+                            callback(data.to_vec(), true);
+                        }
                         append_exec_output_limited(&mut stderr, &data, MAX_EXEC_OUTPUT_BYTES);
                     } else {
                         log::debug!(
@@ -1259,6 +1269,9 @@ impl<R: tauri::Runtime> SshSession<R> {
                             ext,
                             data.len()
                         );
+                        if let Some(callback) = &on_output {
+                            callback(data.to_vec(), true);
+                        }
                         append_exec_output_limited(&mut stderr, &data, MAX_EXEC_OUTPUT_BYTES);
                     }
                 }
@@ -1308,7 +1321,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             }
         }
 
-        Ok((stdout, stderr, exit_code))
+        Ok((stdout, stderr, exit_code, timed_out))
     }
 }
 

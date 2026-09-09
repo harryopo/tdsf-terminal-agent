@@ -49,7 +49,7 @@ use std::sync::Arc;
 
 use tauri::ipc::Channel;
 // P1 §37.90: ssh_connect 的重连回调经 AppHandle::state 取回 SshState
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 // TDSF B2 (2026-08-29): 可视教学打字机（human_type pump 编排）
@@ -886,6 +886,22 @@ pub struct SshCommandResult {
     pub operation_id: Option<String>,
 }
 
+/// 后台 exec 的原生输出增量。前端按 operationId 聚合；最终事实仍以
+/// SshCommandResult.exit_code 为准。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshCommandOutputEvent {
+    pub operation_id: Option<String>,
+    pub conversation_session_id: Option<String>,
+    pub ssh_session_id: u32,
+    pub tool_name: String,
+    pub command: String,
+    pub stream: String,
+    pub chunk: String,
+    pub status: String,
+    pub exit_code: Option<i32>,
+}
+
 /// ssh_command 命令: 执行单条 SSH 命令并返回结构化结果 (exec 模式, 非 PTY)
 ///
 /// TDSF 魔改 P0-D (2026-07-30): 为运维 Agent 提供"执行命令并拿回输出"能力。
@@ -918,11 +934,14 @@ pub struct SshCommandResult {
 /// ```
 #[tauri::command]
 pub async fn ssh_command(
+    app: tauri::AppHandle,
     state: tauri::State<'_, SshState>,
     session_id: u32,
     command: String,
     timeout: Option<u64>,
     operation_id: Option<String>,
+    conversation_session_id: Option<String>,
+    tool_name: Option<String>,
 ) -> Result<SshCommandResult, String> {
     let start = std::time::Instant::now();
     log::info!(
@@ -939,8 +958,49 @@ pub async fn ssh_command(
         .await
         .ok_or_else(|| format!("SSH session not found: id={session_id}"))?;
 
-    // 2. 调用 exec_command (复用 Handle + channel.exec + wait 循环)
-    let result = session.exec_command(&command, timeout).await;
+    // 2. 每个原生 stdout/stderr chunk 立即推送到前端。开始事件让无首屏输出的
+    // 命令也能立刻显示“执行中”，并刷新 Agent 活动计时。
+    let event_operation_id = operation_id.clone();
+    let event_conversation_session_id = conversation_session_id.clone();
+    let event_command = command.clone();
+    let event_tool_name = tool_name.unwrap_or_else(|| "ssh_command".to_string());
+    let _ = app.emit(
+        "sidecar:ssh_command_output",
+        SshCommandOutputEvent {
+            operation_id: operation_id.clone(),
+            conversation_session_id: conversation_session_id.clone(),
+            ssh_session_id: session_id,
+            tool_name: event_tool_name.clone(),
+            command: command.clone(),
+            stream: "status".to_string(),
+            chunk: String::new(),
+            status: "running".to_string(),
+            exit_code: None,
+        },
+    );
+    let callback_tool_name = event_tool_name.clone();
+    let event_app = app.clone();
+    let output_callback: Arc<dyn Fn(Vec<u8>, bool) + Send + Sync> = Arc::new(
+        move |bytes, is_stderr| {
+            let event = SshCommandOutputEvent {
+                operation_id: event_operation_id.clone(),
+                conversation_session_id: event_conversation_session_id.clone(),
+                ssh_session_id: session_id,
+                tool_name: callback_tool_name.clone(),
+                command: event_command.clone(),
+                stream: if is_stderr { "stderr" } else { "stdout" }.to_string(),
+                chunk: String::from_utf8_lossy(&bytes).into_owned(),
+                status: "running".to_string(),
+                exit_code: None,
+            };
+            if let Err(error) = event_app.emit("sidecar:ssh_command_output", event) {
+                log::warn!("[ssh] failed to emit command output: {}", error);
+            }
+        },
+    );
+    let result = session
+        .exec_command_streaming(&command, timeout, Some(output_callback))
+        .await;
 
     let duration = start.elapsed().as_secs_f64();
 
@@ -956,6 +1016,20 @@ pub async fn ssh_command(
                 out.stdout.len(),
                 out.stderr.len(),
                 duration
+            );
+            let _ = app.emit(
+                "sidecar:ssh_command_output",
+                SshCommandOutputEvent {
+                    operation_id: operation_id.clone(),
+                    conversation_session_id: conversation_session_id.clone(),
+                    ssh_session_id: session_id,
+                    tool_name: event_tool_name.clone(),
+                    command: command.clone(),
+                    stream: "status".to_string(),
+                    chunk: String::new(),
+                    status: if out.exit_code == 0 { "completed" } else { "failed" }.to_string(),
+                    exit_code: Some(out.exit_code),
+                },
             );
             Ok(SshCommandResult {
                 ok: true,
@@ -976,6 +1050,20 @@ pub async fn ssh_command(
                 command,
                 err_msg,
                 duration
+            );
+            let _ = app.emit(
+                "sidecar:ssh_command_output",
+                SshCommandOutputEvent {
+                    operation_id: operation_id.clone(),
+                    conversation_session_id,
+                    ssh_session_id: session_id,
+                    tool_name: event_tool_name,
+                    command: command.clone(),
+                    stream: "stderr".to_string(),
+                    chunk: err_msg.clone(),
+                    status: "failed".to_string(),
+                    exit_code: Some(-1),
+                },
             );
             Ok(SshCommandResult {
                 ok: false,
@@ -1223,6 +1311,27 @@ mod tests {
         let debug_str = format!("{:?}", result);
         assert!(debug_str.contains("SshCommandResult"));
         assert!(debug_str.contains("42"));
+    }
+
+    #[test]
+    fn test_ssh_command_output_event_serialization() {
+        let event = SshCommandOutputEvent {
+            operation_id: Some("operation-1".to_string()),
+            conversation_session_id: Some("chat-1".to_string()),
+            ssh_session_id: 7,
+            tool_name: "package_manage".to_string(),
+            command: "dnf install -y fastfetch".to_string(),
+            stream: "stdout".to_string(),
+            chunk: "Downloading 10%\n".to_string(),
+            status: "running".to_string(),
+            exit_code: None,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"conversationSessionId\":\"chat-1\""));
+        assert!(json.contains("\"sshSessionId\":7"));
+        assert!(json.contains("\"toolName\":\"package_manage\""));
+        assert!(json.contains("\"chunk\":\"Downloading 10%\\n\""));
     }
 
     #[tokio::test]
