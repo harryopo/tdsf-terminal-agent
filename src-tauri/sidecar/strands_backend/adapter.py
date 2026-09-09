@@ -202,12 +202,13 @@ _LLM_TRANSPORT_ERROR_MARKERS = (
 # TDSF 修复 2026-07-31 (P4-b): 新增 suggest_command 工具说明，让 LLM 生成可执行命令
 # TDSF 修复 2026-08-29: skill 清单改为从 skills registry 动态生成（防新增技能包后 prompt 漂移）
 
-# registry 不可用时的静态兜底清单（与 skills/builtin/ 的 7 个技能包保持一致）
+# registry 不可用时的静态兜底清单（与 skills/builtin/ 的 8 个技能包保持一致）
 _FALLBACK_SKILL_NAMES: tuple[str, ...] = (
     "linux-ops",
     "docker-management",
     "selinux-baseline",
     "ssh-troubleshoot",
+    "network-troubleshoot",
     "python-debug",
     "systemd-troubleshoot",
     "samba-setup",
@@ -268,6 +269,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     "说明具体原因，不得据此臆断当前是只读模式。权限状态只以本轮 mode 与 schema 为准。\n"
     "- 未打开工作区时告知用户先创建（本地/WSL/SSH），勿声称本地诊断工具可用。\n"
     "- 工具返回 status=needs_approval 时，命令已发起审批，等待用户响应，不要重复调用同一命令。\n"
+    "- 需要用户在多个实质不同的方案间选择时，必须调用 ask_user 弹出提问卡；工具返回回答前立即暂停，"
+    "不得先输出问题再继续思考或执行。低成本且可逆的选择不要提问。\n"
     "- skill_invoke 只读取 Skill 的参考资料和剧本，绝不在 sidecar 所在机器执行 Skill executor；"
     "需要执行时，使用本轮 schema 中与当前环境匹配、且受模式策略约束的工具。\n"
     "- 用户输入 `/skill:<名称> <需求>` 时，调用 skill_invoke 读取该 Skill 的参考和剧本；"
@@ -279,6 +282,12 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 格式约束：回答避免使用 emoji（用户明确要求时除外）；用纯文本或 markdown 结构化表达；"
     "目录树/架构图/流程图一律放 ``` 围栏代码块保持等宽对齐，禁止写进普通段落。\n"
     "- 回答用中文，简洁明了，给出可执行建议。\n"
+    "- 网络优先：dnf/yum/apt/curl 等下载或仓库访问失败时，先用 network_diagnose 分层检查接口、"
+    "地址、默认路由、网关、DNS、TCP/HTTP，再重试安装；包管理命令直接前台执行并给足 timeout，"
+    "不要 nohup 后反复 sleep/ps/tail 轮询，后台 SSH 的原生 output 会实时展示。\n"
+    "- 虚拟机网络：用 systemd-detect-virt、DMI/网卡驱动等只读证据识别虚拟化；区分来宾机配置与"
+    "宿主机 NAT/桥接/仅主机网卡故障。证据指向宿主层时说明虚拟化产品和应检查的网卡模式，"
+    "不要在来宾机内盲改 DNS/路由，也不要中断承载当前 SSH 的接口。\n"
     "\n"
     "Task planning:\n"
     # T3 规划-执行回环 (2026-08-31): 规划段从"建议"升格为"必须"——
@@ -410,6 +419,20 @@ def _needs_verify_followup(tool_log: list[dict[str, Any]]) -> bool:
         ):
             return False  # 最后一次写类成功之后已有验证 → 不触发
     return True
+
+
+def _turn_stopped_by_user(tool_log: list[dict[str, Any]]) -> bool:
+    """用户取消或拒绝工具后，不允许自动追加轮覆盖该决定。"""
+    for entry in tool_log:
+        status = str(entry.get("status") or "").lower()
+        error = str(entry.get("error") or "").lower()
+        if status in {"cancelled", "canceled", "rejected"}:
+            return True
+        if "cancelled by user" in error or "canceled by user" in error:
+            return True
+        if "用户取消" in error or "用户拒绝" in error:
+            return True
+    return False
 
 
 # ============================================================================
@@ -739,7 +762,10 @@ class ToolCallLimitHook:
             "name": name,
             "input": tool_input,
             "success": not failed,
+            "status": status,
         }
+        if failed:
+            tool_entry["error"] = self._error_summary(event)
         if duration_ms is not None:
             tool_entry["duration_ms"] = duration_ms
         self.tool_log.append(tool_entry)
@@ -1593,7 +1619,10 @@ class StrandsAgentAdapter:
                         # T3 (2026-08-31): 收尾校验——todo 未完成项追加一轮
                         # 续做提示（锁内调用，限一次防死循环）
                         followup_observation = self._maybe_todo_followup(
-                            strands_agent, agent_id, session_id
+                            strands_agent,
+                            agent_id,
+                            session_id,
+                            limit_hook.tool_log if limit_hook is not None else [],
                         )
 
                         # T7 (2026-08-31): 执行后验证回环——写类调用后无只读
@@ -2140,6 +2169,7 @@ class StrandsAgentAdapter:
         strands_agent: Any,
         agent_id: str,
         session_id: str,
+        tool_log: list[dict[str, Any]] | None = None,
     ) -> str:
         """T3.2: invoke 后收尾校验——todo 有未完成项则追加一轮续做提示
 
@@ -2160,6 +2190,8 @@ class StrandsAgentAdapter:
             追加轮的最终文本（未触发 / 触发但无输出时为空串，调用方沿用主轮结果）
         """
         if not session_id:
+            return ""
+        if _turn_stopped_by_user(tool_log or []):
             return ""
         if (agent_id, session_id) in self._todo_followup_done:
             return ""
@@ -2238,6 +2270,8 @@ class StrandsAgentAdapter:
             追加轮的最终文本（未触发 / 触发但无输出时为空串，调用方沿用主轮结果）
         """
         if not session_id:
+            return ""
+        if _turn_stopped_by_user(tool_log):
             return ""
         if (agent_id, session_id) in self._verify_followup_done:
             return ""

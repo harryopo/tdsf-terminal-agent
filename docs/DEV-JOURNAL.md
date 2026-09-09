@@ -6,6 +6,18 @@
 
 ---
 
+### 37.132 SSH 实时回显、Agent 提问暂停与网络排障能力收口（2026-09-09 ✅，待用户原生复测）
+
+**日志取证与根因**：最新长任务日志中的 `ssh_command timeout=35s` 实际被 Python→Rust JSON-RPC 桥按默认 **30s** 提前终止；Rust 又把超时包在整个输出收集 future 外层，超时时会丢掉已收到的 stdout/stderr，所以出现“终端已有回显、Agent 仍拿不到 output”。后台 exec 也只在进程结束时回包，没有供前端消费的逐块原生输出事件。另一个独立问题是：`needs_you` 已定义 question 类型，但模型没有可调用的提问工具，前端审批组件还主动忽略 question；用户取消工具后，todo/验证收尾追加轮仍会覆盖取消决定继续执行。
+
+**底层修复**：桥接等待现在对 `ssh_command` 自动采用“远端命令 timeout + 10 秒 transport grace”，不再由固定 30 秒抢先判死。Rust 将 deadline 放进 channel 收集循环，逐块保留 stdout/stderr，超时也返回已获得的部分输出；同时按 conversation session 和 operation ID 推送 `sidecar:ssh_command_output` 的 running/chunk/completed/failed 事件。前端实时输出面板直接显示这些原生块，运行中输出持续刷新 Agent 无活动计时；非 Tauri 环境监听失败安全降级。最终成功事实仍只由结构化退出码决定，实时文本不冒充完成状态。
+
+**人机协作修复**：新增只用于实质方案分歧的 `ask_user` Strands 工具。它登记 question 请求后阻塞，前端以选项或自由输入卡展示，用户确认后才唤醒原工具调用；模型提示明确禁止先文本提问再继续执行。ToolCallLimitHook 记录失败状态与错误摘要，若检测到用户取消/拒绝，本轮 todo 和写后验证追加轮都停止，不再自动续做。
+
+**网络能力**：结合日志中默认网关邻居不可达、同网段地址可达、DHCP 后恢复的证据，新增 `network-troubleshoot` 内置 Skill，并在系统提示中固化“链路→地址→路由→网关邻居→DNS→TCP/HTTP”的分层诊断。Skill 会识别 VMware/VirtualBox/Hyper-V/KVM 等虚拟化证据，区分来宾机 NetworkManager 配置和宿主机 NAT/桥接/Host-only 问题；需要宿主层信息时通过提问卡暂停，不盲改 `/etc/resolv.conf`，也不关闭承载当前 SSH 的网卡。包管理命令保持前台执行，依赖原生流式输出观察进度。
+
+**验证与复盘**：Vitest **137 files / 1356 passed**，typecheck、lint、Web production build、cargo check 全绿；Rust 库/集成测试 **363 + 25 + 27 + 1 passed**（3 + 4 ignored），doc-test **1 passed / 4 ignored**。sidecar 全量首次为 **2228 passed / 3 failed**，3 项均是旧 E2E 固定断言仍写 25 个工具；更新为 26 并显式断言 `ask_user` 后单文件 4/4 通过，最终全量 **2231 passed / 2 warnings**（退出码 0）。Skill Creator 的通用校验器只接受官方最小 frontmatter，而本项目解析器和技能管理依赖 `version/author/tags` 扩展字段，因此保留项目既有格式，以项目 parser/registry 回归为准；第一次校验还暴露 Windows GBK 读取 UTF-8 的工具环境限制。Luna 测试子任务因模型额度上限未执行，本轮门禁由主进程完成。原生 SSH 的动态 `dnf`、30 秒以上命令、用户提问卡和虚拟机网络引导仍由用户桌面端验收，不用浏览器 mock 冒充。
+
 ### 37.131 SSH 首次连接 TOFU 按钮失效修复（2026-09-09 ✅，待用户原生复测）
 
 **问题与根因**：新建 SSH 连接时未知主机弹窗正常显示，但“信任并连接”和“拒绝”都没有反应。组件把 `onClick` 写成了只返回异步处理函数的包装箭头，点击后从未真正调用批准或拒绝回调；SSH 指纹事件、审批 ID 和 Rust `ssh_approve_host` 参数链本身正确。

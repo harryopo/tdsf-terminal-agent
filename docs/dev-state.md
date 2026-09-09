@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-09 · **§37.131 SSH 首次连接 TOFU 交互修复**：未知主机弹窗两个按钮此前只返回处理函数而未执行，现已直接绑定批准/拒绝异步回调，并补点击回归。SSH 指纹、审批 ID、known_hosts 与 Rust 后端协议未改。交接先读 §37.129—§37.131 及两份 2026-09-08 Agent 审查/修复报告。
+> **最后更新**：2026-09-09 · **§37.132 SSH 实时回显、提问暂停与网络排障收口**：修复 Python→Rust 固定 30 秒早退和 Rust 超时丢部分输出，增加会话隔离的 SSH 原生流式回显；Agent 可用 `ask_user` 提问卡真正暂停，用户取消后不再被收尾追加轮强制续做；新增虚拟机边界明确的网络排障 Skill。交接先读 §37.129—§37.132。
 
 ---
 
@@ -4795,3 +4795,13 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **根因**：`HostApprovalDialog` 的批准和拒绝按钮使用 `onClick={() => void handle(callback)}`。`handle(callback)` 的返回值才是真正的异步点击处理器，外层箭头却只返回它而没有调用，所以弹窗可见、按钮也非 disabled，但点击不会调用 store，更不会向 Rust 发送 `ssh_approve_host`。
 
 **修复与边界**：改为 `onClick={handle(callback)}`，复用原有 handling 禁用状态。定向测试先得到批准/拒绝 **2 failed（调用 0 次）**，修复后 **2 passed**。事件 payload 的 snake_case→camelCase 转换、Tauri 参数、Rust approval registry 和 TOFU/known_hosts 策略均核对正确且未改动；最终由用户用新主机确认一次真实连接。
+
+### 37.132 SSH 实时回显、Agent 提问暂停与网络排障收口（2026-09-09 ✅ 代码完成，待用户原生复测）
+
+**根因与执行链修复**：最新日志证明远端命令声明 35 秒，但 DefaultRustBridge 仍以 30 秒 JSON-RPC 默认等待提前退出；Rust 的外层 timeout 又会丢弃收集 future 中已获得的 stdout/stderr。现在桥接层等待为远端 timeout + 10 秒，Rust 在 channel 收集循环内判断 deadline、保留部分输出，并将每个 stdout/stderr 块按 conversation session、operation ID 推送到前端。Agent 面板新增实时 SSH output 区，running/failed/completed 状态分别可见；输出事件同时刷新前端无活动计时，最终事实仍以结构化退出码为准。非 Tauri 环境监听安全降级，不破坏测试/浏览器回退。
+
+**提问与停止语义**：新增 `ask_user` 工具，复用 needs_you question 请求与同会话 FIFO。前端支持选项/自由输入卡并通过 `needs_you.respond` 回答；工具在回答前阻塞，提示词禁止文本提问后继续执行。工具流水记录 status/error；任一工具被用户取消或拒绝时，todo 未完成和写后验证都不再自动追加一轮，修复取消后仍继续网络探测的问题。
+
+**网络能力**：新增第 8 个内置 `network-troubleshoot` Skill（启动时沿既有 seed 机制同步到 `C:\Users\Administrator\.tdsf\skills`）。诊断顺序固定为链路、地址、路由、网关邻居、DNS、TCP/HTTP，再回到原始包管理命令；虚拟化检测区分来宾机 NetworkManager 与宿主机 NAT/桥接/Host-only，宿主层需要信息时用提问卡暂停。安全边界是不覆盖受管的 resolv.conf、不关闭当前 SSH 接口、不对失败安装做无脑重复重试。
+
+**门禁与边界**：Vitest **137 files / 1356 passed**，typecheck、lint、build:web、cargo check 通过；Rust 库/集成 **363 + 25 + 27 + 1 passed**（3 + 4 ignored），doc-test 通过。sidecar 首轮 **2228 passed / 3 failed** 仅因 E2E 仍固定断言旧工具数 25；更新到 26 并加入 `ask_user` 集合断言后单文件 4/4 通过，最终全量 **2231 passed / 2 warnings**（退出码 0）。Luna 因额度上限未完成重复测试，主进程接管。通用 Skill Creator 校验器不接受本项目既有 `version/author/tags` 扩展 frontmatter，故保留项目格式并由 parser/registry 测试验证。尚未冒充真实 SSH 验收：用户需在桌面端复测动态 dnf、35 秒以上后台命令、提问暂停以及虚拟机网卡引导。

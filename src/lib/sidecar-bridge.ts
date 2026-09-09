@@ -78,6 +78,19 @@ export interface IPCError {
   } | null;
 }
 
+/** SSH 后台命令的原生增量输出（Rust exec channel 直接推送）。 */
+export interface SshCommandOutputEvent {
+  operationId?: string | null;
+  conversationSessionId?: string | null;
+  sshSessionId: number;
+  toolName?: string | null;
+  command: string;
+  stream: 'stdout' | 'stderr' | 'status';
+  chunk: string;
+  status: 'running' | 'completed' | 'failed';
+  exitCode?: number | null;
+}
+
 /** 通知事件 payload（任意 JSON 值） */
 export type NotificationPayload = unknown;
 
@@ -265,6 +278,15 @@ export async function onNeedsYou(
   cb: NotificationCallback
 ): Promise<UnlistenFn> {
   return subscribe('needs_you', cb);
+}
+
+/** 订阅 SSH 后台命令的逐块原生输出。 */
+export async function onSshCommandOutput(
+  cb: (payload: SshCommandOutputEvent) => void
+): Promise<UnlistenFn> {
+  return subscribe('ssh_command_output', (payload) =>
+    cb(payload as SshCommandOutputEvent)
+  );
 }
 
 /**

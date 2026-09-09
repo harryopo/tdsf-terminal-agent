@@ -3,7 +3,7 @@
 // 覆盖:
 //   1. registry.inferCategory — tags → category 推断（5 个分支）
 //   2. registry.dictToMetadata — SkillDict → SkillMetadata 转换（snake→camel）
-//   3. registry.getBuiltinSkills — 5 个 builtin skill 完整性
+//   3. registry.getBuiltinSkills — builtin skill 完整性
 //   4. registry.readEnabledState / writeEnabledState — localStorage 持久化
 //   5. skillsStore.filterSkills — 按 tab + 搜索关键词筛选
 //   6. skillCommand.parseSkillCommand — /skill:<name> <args> 解析
@@ -163,16 +163,16 @@ describe("dictToMetadata", () => {
 });
 
 // ============================================================================
-// getBuiltinSkills — 5 个 builtin skill 完整性
+// getBuiltinSkills — builtin skill 完整性
 // ============================================================================
 
 describe("getBuiltinSkills", () => {
-  it("返回 5 个 builtin skill", () => {
+  it("返回 6 个 builtin skill", () => {
     const skills = getBuiltinSkills();
-    expect(skills).toHaveLength(5);
+    expect(skills).toHaveLength(6);
   });
 
-  it("包含 5 个预期的 skill 名称", () => {
+  it("包含 6 个预期的 skill 名称", () => {
     const names = getBuiltinSkills()
       .map((s) => s.name)
       .sort();
@@ -180,6 +180,7 @@ describe("getBuiltinSkills", () => {
       [
         "docker-management",
         "linux-ops",
+        "network-troubleshoot",
         "python-debug",
         "selinux-baseline",
         "ssh-troubleshoot",

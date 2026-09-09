@@ -1228,14 +1228,25 @@ async fn handle_reverse_request(
                 }
                 None => None,
             };
+            let conversation_session_id = params
+                .get("conversationSessionId")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let tool_name = params
+                .get("toolName")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             let result = crate::ssh::ssh_command(
+                app.clone(),
                 ssh_state,
                 session_id,
                 command,
                 timeout,
                 operation_id,
+                conversation_session_id,
+                tool_name,
             )
             .await?;
 

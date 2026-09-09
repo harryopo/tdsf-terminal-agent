@@ -99,7 +99,7 @@ def resolve_factory(spec: ToolSpec) -> Callable[..., Any]:
 
 
 # ============================================================================
-# 23 工具注册表（13 运维/知识 + 6 魔改增强 + knowledge_get_doc + T5 python_run
+# 25 工具注册表（含结构化 ask_user 暂停工具）
 # + P2 #42 ssh_list_sessions；tools/__init__.py + ops_extended.py
 # + 2026-08-09 集成度补齐 6 工具收编）
 # ============================================================================
@@ -113,6 +113,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         description="在远程 SSH 会话执行命令，返回 stdout/stderr/exit_code（高危命令触发审批）",
         policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
         to_shell_command="strands_backend.tools.ssh_command:to_shell_command",
+    ),
+    "ask_user": ToolSpec(
+        name="ask_user",
+        factory="strands_backend.tools.ask_user:make_ask_user_tool",
+        description="缺少关键用户决定时弹出提问卡并暂停，收到回答后继续",
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
     "ssh_list_sessions": ToolSpec(
         name="ssh_list_sessions",

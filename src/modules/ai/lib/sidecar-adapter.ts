@@ -386,6 +386,7 @@ export interface SidecarStreamOptions {
  * 后才喂给 useChat。
  */
 export type SidecarStreamPart =
+  | { type: "activity" }
   | { type: "text-delta"; id: string; delta: string }
   | { type: "reasoning-delta"; id: string; delta: string }
   | {
@@ -498,6 +499,10 @@ interface AgentMessagePayload {
   message_type?: string; // 兼容旧字段名（event_bus 早期使用 message_type）
   agent?: string;
   [k: string]: unknown;
+}
+
+interface SshCommandOutputPayload {
+  conversationSessionId?: string | null;
 }
 
 // === 内部工具函数 ============================================================
@@ -969,6 +974,19 @@ export async function* runSidecarStream(
     onAgentMessage,
     opts.onLoopProgress,
   );
+  let unlistenSshOutput: UnlistenFn = () => {};
+  try {
+    unlistenSshOutput = await listen<SshCommandOutputPayload>(
+      "sidecar:ssh_command_output",
+      (event) => {
+        const eventSessionId = event.payload?.conversationSessionId;
+        if (eventSessionId && eventSessionId !== sessionId) return;
+        queue.push({ type: "activity" });
+      },
+    );
+  } catch {
+    // 浏览器/Vitest 没有 Tauri event runtime；保持原有非桌面降级行为。
+  }
 
   let disposeActivityTimeout = () => {};
   try {
@@ -1175,8 +1193,7 @@ export async function* runSidecarStream(
         inputTokens: t.input_tokens ?? t.input ?? 0,
         outputTokens: t.output_tokens ?? t.output ?? 0,
         cachedInputTokens: t.cached_input_tokens ?? 0,
-        lastInputTokens:
-          t.last_input_tokens ?? t.input_tokens ?? t.input ?? 0,
+        lastInputTokens: t.last_input_tokens ?? t.input_tokens ?? t.input ?? 0,
         lastCachedTokens:
           t.last_cached_input_tokens ?? t.cached_input_tokens ?? 0,
       });
@@ -1212,6 +1229,7 @@ export async function* runSidecarStream(
     disposeActivityTimeout();
     queue.close();
     unlisten();
+    unlistenSshOutput();
   }
 }
 
@@ -1281,7 +1299,10 @@ export function sidecarStreamToUIMessageStream(
         controller.enqueue({ type: "start-step" });
 
         for await (const part of source) {
-          if (part.type === "text-delta") {
+          if (part.type === "activity") {
+            // SSH 原生输出只用于保持长任务活跃；显示由实时终端输出面板负责。
+            continue;
+          } else if (part.type === "text-delta") {
             // 文本段开始前先关闭 reasoning 段
             closeReasoning();
             if (currentTextId !== part.id) {

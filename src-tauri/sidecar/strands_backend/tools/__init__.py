@@ -127,7 +127,7 @@ class DefaultRustBridge:
 
     def __init__(
         self,
-        send_request: Callable[[str, dict[str, Any]], Any] | None = None,
+        send_request: Callable[..., Any] | None = None,
         send_notification: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._send_request = send_request
@@ -155,9 +155,18 @@ class DefaultRustBridge:
                 ),
             }
         try:
-            if timeout is None:
+            effective_timeout = timeout
+            if effective_timeout is None and method == "ssh_command":
+                command_timeout = params.get("timeout")
+                if isinstance(command_timeout, (int, float)) and not isinstance(
+                    command_timeout, bool
+                ):
+                    # 远端命令超时由 Rust exec 通道负责；桥接层必须稍晚于它，
+                    # 否则 35s 命令会被默认 30s JSON-RPC 等待提前误杀。
+                    effective_timeout = max(5.0, float(command_timeout) + 10.0)
+            if effective_timeout is None:
                 return self._send_request(method, params)
-            return self._send_request(method, params, timeout)
+            return self._send_request(method, params, effective_timeout)
         except Exception as e:
             logger.exception(f"rust_bridge ipc_invoke failed: method={method}, error={e}")
             return {
@@ -1302,6 +1311,8 @@ def execute_via_ssh(
             "sessionId": session_id_int,
             "command": command,
             "timeout": int(timeout),
+            "conversationSessionId": ctx.session_id or None,
+            "toolName": tool_name,
         }
         if operation_id:
             ssh_params["operationId"] = operation_id

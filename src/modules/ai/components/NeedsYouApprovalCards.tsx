@@ -8,17 +8,18 @@
  *        详细字段位于 request=to_dict().extra。
  *   2. Rust ipc 转发 Tauri event `sidecar:needs_you`（外层 Event dict，
  *      业务数据在 .payload → unwrapEventPayload 解包）
- *   3. 本组件订阅 → 只接管 approval 类型的 created 事件 → 渲染
- *      ToolApprovalCard（四层卡面）
+ *   3. 本组件订阅 → approval 渲染 ToolApprovalCard；question 渲染提问卡，
+ *      两者都通过 needs_you.respond 唤醒后端等待线程。
  *   4. 用户点击三按钮 → invokeRpc("needs_you.respond", { req_id, response })
  *      → Python 唤醒 wait_for_response 阻塞的工具线程（真实 HITL 闭环）；
  *      ⚡响应经 _record_trust_maybe 钩子记 SessionTrustStore（本会话免审）
  *
- * 边界：question / error / handoff 类型不在此渲染（保持既有行为不破坏）；
- * responded / timeout / cancelled 事件到达时自动移卡（300s 超时 fail-closed
- * 由 Python 侧负责）。
+ * error / handoff 类型仍由既有状态提示处理；responded / timeout / cancelled
+ * 事件到达时自动移卡。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   ToolApprovalCard,
   type ToolApprovalRespond,
@@ -41,6 +42,8 @@ type NeedsYouEventPayload = {
     type?: string;
     session_id?: string | null;
     extra?: Record<string, unknown> | null;
+    title?: string;
+    description?: string;
   };
   // 工具直发副本的扁平四层字段（strands_backend/tools/__init__.py 透传）
   command?: unknown;
@@ -49,15 +52,30 @@ type NeedsYouEventPayload = {
   impact?: unknown;
   risk_l?: unknown;
   tool_name?: unknown;
+  title?: string;
+  description?: string;
 };
 
 type ApprovalItem = {
+  kind: "approval";
   reqId: string;
   sessionId: string | null;
   toolName: string;
   /** ToolApprovalCard 四层卡面 input（semantic/command/explanation/impact/risk_l） */
   input: Record<string, unknown>;
 };
+
+type QuestionItem = {
+  kind: "question";
+  reqId: string;
+  sessionId: string | null;
+  title: string;
+  question: string;
+  options: string[];
+  confirmLabel: string;
+};
+
+type NeedsYouItem = ApprovalItem | QuestionItem;
 
 const asStr = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
@@ -70,6 +88,7 @@ function buildApprovalItem(
   const req = payload.request ?? {};
   const extra = (req.extra ?? {}) as Record<string, unknown>;
   return {
+    kind: "approval",
     reqId,
     sessionId: req.session_id ?? null,
     toolName: asStr(payload.tool_name) ?? asStr(extra.tool_name) ?? "approval",
@@ -83,12 +102,93 @@ function buildApprovalItem(
   };
 }
 
+function buildQuestionItem(
+  payload: NeedsYouEventPayload,
+  reqId: string,
+): QuestionItem {
+  const req = payload.request ?? {};
+  const extra = (req.extra ?? {}) as Record<string, unknown>;
+  const rawOptions = Array.isArray(extra.options) ? extra.options : [];
+  return {
+    kind: "question",
+    reqId,
+    sessionId: req.session_id ?? null,
+    title: payload.title ?? req.title ?? "Agent 需要你的回答",
+    question:
+      asStr(extra.question) ??
+      payload.description ??
+      req.description ??
+      "请确认后继续。",
+    options: rawOptions.filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim() !== "",
+    ),
+    confirmLabel: asStr(extra.confirm_label) ?? "确认并继续",
+  };
+}
+
+function NeedsYouQuestionCard({
+  item,
+  onAnswer,
+}: {
+  item: QuestionItem;
+  onAnswer: (answer: string) => void;
+}) {
+  const [answer, setAnswer] = useState("");
+  return (
+    <div
+      className="rounded-lg border border-border bg-card p-3 shadow-sm"
+      data-question-card=""
+    >
+      <div className="text-xs font-medium text-foreground">{item.title}</div>
+      <div className="mt-1 text-sm leading-relaxed text-foreground">
+        {item.question}
+      </div>
+      {item.options.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {item.options.map((option) => (
+            <Button
+              key={option}
+              type="button"
+              size="sm"
+              variant={answer === option ? "default" : "outline"}
+              onClick={() => setAnswer(option)}
+            >
+              {option}
+            </Button>
+          ))}
+        </div>
+      ) : (
+        <Input
+          className="mt-2"
+          aria-label="回答"
+          value={answer}
+          onChange={(event) => setAnswer(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && answer.trim()) onAnswer(answer.trim());
+          }}
+        />
+      )}
+      <div className="mt-2 flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          disabled={!answer.trim()}
+          onClick={() => onAnswer(answer.trim())}
+        >
+          {item.confirmLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * 当前会话的 pending needs_you approval 请求渲染（四层审批卡 × N）。
  * 无 pending 请求时渲染 null。
  */
 export function NeedsYouApprovalCards() {
-  const [items, setItems] = useState<ApprovalItem[]>([]);
+  const [items, setItems] = useState<NeedsYouItem[]>([]);
   // 已响应/已终结请求集合（防双击重复 respond；responded/timeout 事件同样入集）
   const resolvedRef = useRef<Set<string>>(new Set());
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -99,14 +199,20 @@ export function NeedsYouApprovalCards() {
     void onNeedsYou((raw) => {
       const payload = unwrapEventPayload<NeedsYouEventPayload>(raw);
       if (!payload || typeof payload !== "object") return;
-      // 只接管 approval；question / error / handoff 不新增 UI（不破坏现状）
-      if (payload.needs_type !== "approval") return;
+      if (
+        payload.needs_type !== "approval" &&
+        payload.needs_type !== "question"
+      )
+        return;
       const reqId = payload.request?.id ?? payload.id;
       if (!reqId) return;
       const eventName = asStr(payload.event) ?? "created";
       if (eventName === "created") {
         if (resolvedRef.current.has(reqId)) return;
-        const item = buildApprovalItem(payload, reqId);
+        const item =
+          payload.needs_type === "question"
+            ? buildQuestionItem(payload, reqId)
+            : buildApprovalItem(payload, reqId);
         setItems((cur) => {
           const idx = cur.findIndex((i) => i.reqId === reqId);
           if (idx < 0) return [...cur, item];
@@ -168,6 +274,17 @@ export function NeedsYouApprovalCards() {
       });
   };
 
+  const handleQuestionAnswer = (reqId: string, answer: string) => {
+    if (resolvedRef.current.has(reqId)) return;
+    resolvedRef.current.add(reqId);
+    void invokeRpc("needs_you.respond", { req_id: reqId, response: { answer } })
+      .then(() => setItems((cur) => cur.filter((item) => item.reqId !== reqId)))
+      .catch((error: unknown) => {
+        console.error(`needs_you.respond failed (req_id=${reqId}):`, error);
+        resolvedRef.current.delete(reqId);
+      });
+  };
+
   // 跨会话隔离：带 session_id 且与当前会话不符的请求不渲染（留给 Python 超时兜底）
   const visible = useMemo(
     () =>
@@ -186,12 +303,20 @@ export function NeedsYouApprovalCards() {
       data-needs-you-cards=""
       data-queued-approvals={Math.max(0, visible.length - 1)}
     >
-      <ToolApprovalCard
-        key={active.reqId}
-        toolName={active.toolName}
-        input={active.input}
-        onRespond={(resp) => handleRespond(active.reqId, resp)}
-      />
+      {active.kind === "approval" ? (
+        <ToolApprovalCard
+          key={active.reqId}
+          toolName={active.toolName}
+          input={active.input}
+          onRespond={(resp) => handleRespond(active.reqId, resp)}
+        />
+      ) : (
+        <NeedsYouQuestionCard
+          key={active.reqId}
+          item={active}
+          onAnswer={(answer) => handleQuestionAnswer(active.reqId, answer)}
+        />
+      )}
     </div>
   );
 }
