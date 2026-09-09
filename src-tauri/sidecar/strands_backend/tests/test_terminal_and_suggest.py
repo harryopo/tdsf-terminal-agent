@@ -119,3 +119,26 @@ def test_security_audit_has_teaching_shell_mapping() -> None:
     assert security_audit_to_shell_command({"scope": "open_ports"}) == (
         "ss -tlnp | awk 'NR>1 {print $4, $6}'"
     )
+
+
+def test_teaching_wrapper_emits_one_visible_command_then_waits() -> None:
+    from strands_backend.tools import wrap_tool_for_teach_mode
+
+    called = False
+
+    def _ssh_tool(_params: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"status": "should_not_run"}
+
+    _ssh_tool.__name__ = "ssh_command"
+    wrapped = wrap_tool_for_teach_mode(_ssh_tool, ToolContext(teach=True))
+
+    first = wrapped({"command": "uptime"})
+    second = wrapped({"command": "df -h"})
+
+    assert first["status"] == "teach_command"
+    assert first["command"] == "uptime"
+    assert first["predicted_output"]
+    assert second["status"] == "teach_step_pending"
+    assert called is False

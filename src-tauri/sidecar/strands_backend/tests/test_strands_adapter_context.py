@@ -46,14 +46,21 @@ class TestTeachContinuationIntent(unittest.TestCase):
         self.assertFalse(_is_teaching_continuation("继续查看知识库"))
 
     def test_teach_observe_keeps_shell_mapped_commands_as_cards(self):
+        from strands_backend.adapter import _filter_teach_tools
         from strands_backend.tools import ToolContext, make_all_ops_tools
 
         ctx = ToolContext(permission_level=1, mode=AgentMode.OBSERVE, teach=True)
-        tools = make_all_ops_tools(ctx, include_teach_shell_tools=True)
+        tools = _filter_teach_tools(
+            make_all_ops_tools(ctx, include_teach_shell_tools=True)
+        )
         names = {getattr(tool, "__name__", "") for tool in tools}
         self.assertIn("ssh_command", names)
         self.assertIn("read_remote_file", names)
+        self.assertIn("knowledge_search", names)
         self.assertNotIn("service_manage", names)
+        self.assertNotIn("suggest_command", names)
+        self.assertNotIn("todo_write", names)
+        self.assertNotIn("get_terminal_output", names)
 
     def test_callback_remembers_marker_across_stream_chunks(self):
         from strands_backend.adapter import TdsfStrandsCallbackHandler
@@ -347,7 +354,7 @@ class TestTeachingPromptExecutionBoundary(unittest.TestCase):
         prompt = _compose_system_prompt(AgentMode.OBSERVE, teach=True)
 
         self.assertIn("本轮工具调用不会得到执行结果", prompt)
-        self.assertIn("不要调用 get_terminal_output", prompt)
+        self.assertIn("禁止调用 suggest_command、todo_write 或 get_terminal_output", prompt)
         self.assertIn("<teaching-command-result>", prompt)
         self.assertIn("基于结果继续讲解", prompt)
 

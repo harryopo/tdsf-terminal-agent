@@ -831,6 +831,18 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
   if (!output || typeof output !== "object") return null;
   const o = output as Record<string, unknown>;
 
+  // 教学链路的第二次工具调用只是后端阻止“并列多步骤”的回执；上一张
+  // 命令卡已经明确提示等待终端回显，不再重复渲染一条原始 JSON 工具输出。
+  if (o.status === "teach_step_pending") return null;
+
+  if (o.status === "teach_command_unavailable") {
+    const message =
+      typeof o.message === "string"
+        ? o.message
+        : "这一步无法安全转换为教学终端命令。";
+    return <div className="text-[11px] text-muted-foreground">{message}</div>;
+  }
+
   // A3 (2026-09-04): 教学模式终端执行链路——teach_command 事件分发。
   // 任何工具返回 status="teach_command" 时渲染 TeachCommandCard（学生手动执行）。
   if (o.status === "teach_command") {
@@ -839,11 +851,14 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     const explanation =
       typeof o.explanation === "string" ? o.explanation : null;
     const impact = (o.impact as Record<string, unknown> | null) ?? null;
+    const predictedOutput =
+      typeof o.predicted_output === "string" ? o.predicted_output : null;
     return (
       <TeachCommandCard
         command={cmd}
         explanation={explanation}
         impact={impact}
+        predictedOutput={predictedOutput}
         toolName={toolName}
       />
     );
@@ -1655,11 +1670,13 @@ function TeachCommandCard({
   command,
   explanation,
   impact,
+  predictedOutput,
   toolName,
 }: {
   command: string;
   explanation: string | null;
   impact: Record<string, unknown> | null;
+  predictedOutput: string | null;
   toolName: string;
 }) {
   const [executionId, setExecutionId] = useState<string | null>(null);
@@ -1764,6 +1781,14 @@ function TeachCommandCard({
       {impactText ? (
         <div className="text-[10px] text-muted-foreground/80">
           影响：{impactText}
+        </div>
+      ) : null}
+      {predictedOutput ? (
+        <div className="rounded border border-dashed border-violet-500/20 bg-violet-500/5 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-violet-600 dark:text-violet-400">
+            预期回显
+          </span>
+          <span> · {predictedOutput}</span>
         </div>
       ) : null}
       {execution?.status === "waiting" ? (

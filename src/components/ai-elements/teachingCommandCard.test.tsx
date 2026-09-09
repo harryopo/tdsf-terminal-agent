@@ -53,12 +53,14 @@ describe("TeachCommandCard", () => {
           status: "teach_command",
           command: "ps -ef",
           explanation: "查看当前进程。",
+          predicted_output: "将显示进程列表；具体内容取决于当前主机。",
         }}
         defaultOpen
       />,
     );
 
     expect(startTeachingCommand).not.toHaveBeenCalled();
+    expect(screen.getByText("预期回显")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "教学命令：点击注入终端执行" }),
     );

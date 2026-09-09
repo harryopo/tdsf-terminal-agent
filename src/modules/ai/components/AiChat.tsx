@@ -57,7 +57,7 @@ import {
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
 import { SshCommandOutputPanel } from "./SshCommandOutputPanel";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
-import { shouldRenderTeachCard } from "./teachParser";
+import { shouldRenderTeachCard, stripTeachOutputMarker } from "./teachParser";
 import { TeachCard } from "./TeachCard";
 
 type AnyToolPart = ToolUIPart | DynamicToolUIPart;
@@ -831,12 +831,16 @@ const RenderedPart = memo(function RenderedPart({
     if (shouldRenderTeachCard(text, teach, streaming)) {
       return <TeachCard content={text} />;
     }
+    // A marker can arrive alone before a tool boundary. It has no visible
+    // content, but MessageResponse still reserves vertical space for it.
+    const visibleText = stripTeachOutputMarker(text);
+    if (!visibleText.trim()) return null;
     return (
       <MessageResponse
         streaming={streaming}
         className="max-w-none text-[12.5px] leading-[1.65] text-foreground [&>*:not(:first-child)]:mt-1.5 [&_p]:my-1 [&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.94em] [&_pre]:my-1.5 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted/50 [&_pre]:p-2 [&_pre]:leading-relaxed [&_[data-streamdown=heading-1]]:mt-2.5 [&_[data-streamdown=heading-1]]:text-[15px] [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-1]]:tracking-tight [&_[data-streamdown=heading-2]]:mt-2.5 [&_[data-streamdown=heading-2]]:text-[14px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-2 [&_[data-streamdown=heading-3]]:text-[13px] [&_[data-streamdown=heading-3]]:font-semibold [&_ul]:my-1.5 [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:pl-4 [&_li]:my-0.5 [&_blockquote]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/35 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_table]:my-1.5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
       >
-        {text}
+        {visibleText}
       </MessageResponse>
     );
   }
