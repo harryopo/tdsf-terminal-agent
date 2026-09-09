@@ -58,6 +58,11 @@ export function isTeachMessage(text: string): boolean {
   return Boolean(text && TEACH_OUTPUT_MARKER_RE.test(text));
 }
 
+/** Remove the transport marker before ordinary Markdown rendering. */
+export function stripTeachOutputMarker(text: string): string {
+  return text.replace(TEACH_OUTPUT_MARKER_RE, "");
+}
+
 /**
  * A TeachCard parses section boundaries and fenced commands.  It must only
  * receive a completed response: a max-token continuation can otherwise leave

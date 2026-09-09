@@ -268,12 +268,13 @@ class TestModeAwarePrompt:
 
     def test_teach_skin_appended_when_on(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=True)
-        # 教学契约：显式意图才启用 TeachCard，普通检索保持 Markdown。
-        assert "用户明确要求解释、教学、教程、原理或步骤" in prompt
-        assert "先解释概念" in prompt
-        assert "易错点" in prompt
-        assert "练习" in prompt
-        assert "不能输出教学标记或教学卡片" in prompt
+        # 教学契约：系统负责标记；模型每回合只给一张可见终端步骤卡，
+        # 必须等学生提交精确结果后才可继续下一步。
+        assert "系统会添加教学卡标记" in prompt
+        assert "每轮只推进一步" in prompt
+        assert "禁止一次给多条命令" in prompt
+        assert "<teaching-command-result>" in prompt
+        assert "基于结果继续讲解" in prompt
 
     def test_teach_skin_absent_when_off(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=False)

@@ -4813,3 +4813,11 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **修复**：新增稳定 tree source key（`local` 或 `sftp:sessionId:root`），用它触发目录重载、隔离展开缓存；SFTP source 不再注册或监听本地文件事件。Explorer 的 OS 拖放根据当前 source 分流：本地保持 `fs_copy`，远程将每个本地路径提交给当前 session 的 `sftp_upload_file`，目标为所放入的远程目录，至少一个文件成功后刷新目录。shell probe 优先 `$SHELL`，无该变量时先用 `getent`，不可用则读 `/etc/passwd`，不改变不受支持 shell 的保守降级策略。
 
 **验证**：Luna 的两项新前端定向文件 **4/4 passed**；全量 Vitest 最终 **139 files / 1360 passed**。第一次全量运行只有未改动的 `SnippetsPanel` 异步 Dialog 用例一次波动，Luna 单文件复跑 9/9 通过，随后全量也全绿。`pnpm typecheck`、`pnpm lint`、`pnpm build:web`、`cargo check --lib` 通过；`cargo test --lib` **364 passed / 3 ignored**。直接 `cargo test` 初次因运行中的桌面端锁住 exe 而未链接成功，改用 lib target 完成验证，没有关闭用户桌面端。用户原生验收：在新服务器连接中执行 `cd /tmp` 和 `cd /root` 检查资源树；拖放一个本地文件至远程目录，确认仅当前服务器产生该文件。
+
+### 37.134 教学单步命令链与 TeachCard 渲染契约收口（2026-09-09 ✅，待用户原生复测）
+
+**日志定性**：红色“命令建议 error”不是教学步骤卡。教学 observe 错误保留 `suggest_command`，通用 observe prompt 又引导模型调用它，于是未匹配 JSON 直接泄露到日志与界面；模型偶尔遗漏 `tdsf:teach` 标记时，正常教学文字被普通 Markdown 渲染，标记独立分片还造成可见留白。
+
+**收口实现**：教学 observe 改为独立 schema，只保留 shell 映射工具与知识/提问等无终端副作用辅助工具，明确排除 `suggest_command`、`todo_write`、`get_terminal_output`。专用系统提示覆盖通用 observe 规则，要求“每轮至多一张命令卡 → 学生在当前可见终端执行 → 精确结果回传 → 才能下一步”；工具包装器按回合门闩拒绝第二张卡或无法映射工具，绝不回退后台执行。回调首分片强制注入一个教学标记，前端消除标记专用空分片；`TeachCommandCard` 显示不伪造真实值的预期回显。
+
+**自动化**：完整 sidecar pytest 首跑 **2231 passed / 1 failed**，失败仅为仍断言旧教学提示词的测试；同步契约后受影响 **276 passed**。Python 定向教学回归 **24 passed**；前端 TeachCard/教学命令卡 **11 passed**；`pnpm typecheck`、`pnpm lint`、`cargo check`、`git diff --check` 通过。普通 observe/confirm/auto 路径保持不变。原生验收由用户在教学模式中验证：首轮仅一张紫色命令卡、没有“命令建议 error”；点击后命令只进入当前可见终端，取得回显并点击“基于结果继续讲解”后才出现下一步。

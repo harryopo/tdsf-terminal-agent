@@ -139,7 +139,7 @@ def _teach_turn_gate(teach: bool, intent: bool) -> str:
     if intent:
         return (
             "\n\n[教学回合]\n"
-            "这是明确教学或已建立教学的继续回合。仅对有证据支撑的教学内容输出教学标记；"
+            "这是明确教学或已建立教学的继续回合。系统会自动添加教学标记；"
             "绝不编造工具输出。\n"
         )
     return (
@@ -152,6 +152,24 @@ def _teach_turn_gate(teach: bool, intent: bool) -> str:
 def _strip_teach_marker(text: str) -> str:
     """Fail closed if a model emits a lesson marker on a non-teaching turn."""
     return _TEACH_MARKER_RE.sub("", text or "", count=1)
+
+
+_TEACH_AUX_TOOL_NAMES = frozenset({
+    "ask_user",
+    "knowledge_search",
+    "knowledge_get_doc",
+    "ssh_list_sessions",
+})
+
+
+def _filter_teach_tools(tools: list[Any]) -> list[Any]:
+    """Keep only the dedicated teaching terminal chain and read-only references."""
+    return [
+        tool
+        for tool in tools
+        if has_shell_mapping(getattr(tool, "__name__", ""))
+        or getattr(tool, "__name__", "") in _TEACH_AUX_TOOL_NAMES
+    ]
 
 
 def _watchdog_thresholds() -> tuple[float, float]:
@@ -872,6 +890,7 @@ class TdsfStrandsCallbackHandler:
         self._teach_prefix_buffer = ""
         self._teach_output_prefix = ""
         self._emitted_teach_marker = False
+        self._teach_marker_forced = False
         # 统计（调试用）
         self._stats = {
             "events_received": 0,
@@ -896,6 +915,7 @@ class TdsfStrandsCallbackHandler:
         self._teach_prefix_buffer = ""
         self._teach_output_prefix = ""
         self._emitted_teach_marker = False
+        self._teach_marker_forced = False
 
     def __call__(self, **kwargs: Any) -> None:
         """Strands callback_handler 协议入口"""
@@ -975,6 +995,18 @@ class TdsfStrandsCallbackHandler:
             logger.debug(f"emit_mood_change failed: {e}")
 
     def _emit_agent_message(self, text: str, msg_type: str = "output") -> None:
+        if (
+            msg_type == "output"
+            and self._teach_gate_enabled
+            and self._teach_output_allowed
+            and text
+            and not self._teach_marker_forced
+        ):
+            # The UI must not depend on model obedience for the TeachCard
+            # contract.  Strip a stale model marker first, then emit exactly
+            # one marker as the first delta of this output part.
+            text = f"<!-- tdsf:teach -->\n{_strip_teach_marker(text)}"
+            self._teach_marker_forced = True
         if msg_type == "output" and self._teach_gate_enabled and text:
             self._teach_output_prefix = (self._teach_output_prefix + text)[:64]
             if _TEACH_MARKER_RE.match(self._teach_output_prefix):
@@ -1080,6 +1112,15 @@ _MODE_PROMPTS: dict[AgentMode, str] = {
     ),
 }
 
+_TEACH_MODE_PROMPT = (
+    "\n\nCurrent mode: TEACH (read-only, terminal-visible learning).\n"
+    "- 带 shell 映射的工具只生成一张可见终端教学命令卡，不会在后端执行；"
+    "学生点击卡片后，命令才会输入当前终端。\n"
+    "- 教学模式覆盖前述 OBSERVE 命令建议和 Task planning 规则：不调用 suggest_command、"
+    "todo_write 或 get_terminal_output，不并行，也不在未收到教学结果前规划后续步骤。\n"
+    "- 只有 `<teaching-command-result>` 是命令完成证据；没有它时如实等待，绝不猜测回显。"
+)
+
 # 教学皮肤（P0-A1：原 teach agent 的结构化教学契约迁入。Teach 开关 ON 时
 # 拼接，叠加在任意模式上且不改变权限矩阵；main 是唯一 agent，禁委派话术）
 # A4 (2026-09-04) → CRITICAL-3 修复: 恢复 suggest_command 禁令——
@@ -1131,18 +1172,15 @@ _LEGACY_TEACH_SKIN_PROMPT = (
  # “always six sections” wording conflicts with knowledge-only requests.
 _TEACH_SKIN_PROMPT = (
     "\n\n教学皮肤（已开启）：\n"
-    "只有用户明确要求解释、教学、教程、原理或步骤时，才在第一行输出 `<!-- tdsf:teach -->`。"
-    "知识库检索、文档读取、列举和工具状态报告必须使用普通 Markdown，不能输出教学标记或教学卡片。\n"
-    "真正的教学只写有证据支撑的内容：先解释概念，再给示例、易错点和简短练习；"
-    "不要编造命令输出、工具可用性或执行结果。\n"
-    "教学命令卡不代表后端已经执行。本轮工具调用不会得到执行结果；请让学生查看并点击命令卡。"
-    "禁止工具调用后假定执行结果，也不要调用 get_terminal_output 读取终端滚屏；只有 "
-    "`<teaching-command-result>` 才是执行证据。用户说“基于结果继续讲解”“继续”或“接着讲”时，"
-    "在同一教学会话内继续保持教学格式。\n"
-    "教学观察模式中，运行时 schema 若出现带 shell 映射的工具，只能用它生成教学命令卡；"
-    "它不是后端执行能力。schema 未出现的工具一律不可调用。\n"
-    "用户输入 `/skill:<名称> <需求>` 时，这是明确的 Skill 调用请求：调用 skill_invoke "
-    "读取该 Skill 的参考和剧本，再按本轮可用工具与安全策略推进；不能把 Skill executor 当作已执行。\n"
+    "系统会添加教学卡标记，你绝不能自行输出该标记。真正的教学每轮只推进一步："
+    "先用至多一个带 shell 映射的工具生成一张教学命令卡，然后只用一两句说明学生要观察什么，立刻停止。"
+    "禁止一次给多条命令、命令清单、Markdown shell 围栏，禁止调用 suggest_command、todo_write 或 get_terminal_output。\n"
+    "教学命令卡不代表后端已经执行。本轮工具调用不会得到执行结果；学生点击后会在当前可见终端输入并执行。"
+    "禁止工具调用后假定执行结果；只有 `<teaching-command-result>` 才是执行证据。收到该结果后，"
+    "先解释本步回显，再按同样规则给下一张且仅一张命令卡。\n"
+    "知识库检索和文档读取只能辅助解释，不能替代教学命令卡；不能调用 schema 未出现的工具。"
+    "学生点击「基于结果继续讲解」后才会提交该证据。"
+    "教学会话不加载技能执行器；用户想执行 Skill 时，应先切换到相应的非教学模式。\n"
 )
 
 
@@ -1160,7 +1198,12 @@ def _compose_system_prompt(mode: AgentMode, teach: bool, base: str | None = None
     Returns:
         拼接后的完整 system prompt
     """
-    prompt = (base if base is not None else _DEFAULT_SYSTEM_PROMPT) + _MODE_PROMPTS[mode]
+    mode_prompt = (
+        _TEACH_MODE_PROMPT
+        if teach and mode == AgentMode.OBSERVE
+        else _MODE_PROMPTS[mode]
+    )
+    prompt = (base if base is not None else _DEFAULT_SYSTEM_PROMPT) + mode_prompt
     if teach:
         # The concise runtime skin contains the intent gate and marker contract.
         # Do not append the retired “always six sections” prompt: it caused
@@ -1717,6 +1760,11 @@ class StrandsAgentAdapter:
                 observation = verify_observation
             if teach and not teach_intent:
                 observation = _strip_teach_marker(observation)
+            elif teach and teach_intent and observation:
+                # 模型偶尔会遗漏 marker。最终回退输出与真流式都必须以同一
+                # 显式契约进入 TeachCard，不能因格式失误退回普通 Markdown。
+                if not _TEACH_MARKER_RE.match(observation):
+                    observation = f"<!-- tdsf:teach -->\n{observation}"
 
             if teach and teach_intent and (
                 _TEACH_MARKER_RE.match(observation or "")
@@ -2091,12 +2139,10 @@ class StrandsAgentAdapter:
         # 事件（前端渲染命令卡，学生手动执行），而非后端直接执行。
         if mode == AgentMode.OBSERVE:
             if teach:
-                # teach + observe：保留只读工具 + 有 shell 映射的工具
-                all_tools = [
-                    t for t in all_tools
-                    if getattr(t, "__name__", "") in READONLY_TOOL_NAMES
-                    or has_shell_mapping(getattr(t, "__name__", ""))
-                ]
+                # 教学独立工具集：只有 shell 映射工具可产生可见终端命令卡；
+                # 其余仅保留不触碰终端的参考/提问工具。特别排除 suggest_command，
+                # 否则未匹配 JSON 会泄漏进教学步骤且绕过链式回显契约。
+                all_tools = _filter_teach_tools(all_tools)
             else:
                 all_tools = filter_tools_readonly(all_tools)
 

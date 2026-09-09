@@ -5,6 +5,7 @@ import {
   isTeachMessage,
   parseTeachSections,
   shouldRenderTeachCard,
+  stripTeachOutputMarker,
 } from "./teachParser";
 
 const TEACH_MD = [
@@ -103,6 +104,10 @@ describe("isTeachMessage — 教学输出契约", () => {
   it("普通短文本不误判", () => {
     expect(isTeachMessage("你好，这是普通回答")).toBe(false);
     expect(isTeachMessage("🏛️ Linux 设计哲学\n一切皆文件")).toBe(false);
+  });
+
+  it("普通 Markdown 路径会移除仅供传输的教学标记", () => {
+    expect(stripTeachOutputMarker("<!-- tdsf:teach -->\n说明")).toBe("说明");
   });
 });
 

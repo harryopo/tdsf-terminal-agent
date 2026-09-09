@@ -2026,7 +2026,7 @@ class TestTdsfStrandsCallbackHandler(unittest.TestCase):
         bus = make_mock_event_bus()
         handler = TdsfStrandsCallbackHandler(bus, agent_name="main")
         handler.begin_turn(teach=True, allow_teach_output=True)
-        handler(data="<!-- tdsf:teach -->\n# Lesson")
+        handler(data="# Lesson")
         self.assertEqual(
             bus.emit_agent_message.call_args.kwargs["content"],
             "<!-- tdsf:teach -->\n# Lesson",

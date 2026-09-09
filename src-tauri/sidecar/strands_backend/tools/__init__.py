@@ -248,6 +248,9 @@ class ToolContext:
     # 工具不走后端执行，改由 wrap_tool_for_teach_mode 拦截返回 teach_command
     # 事件，前端渲染 TeachCommandCard，学生手动点击注入终端（打字机）。
     teach: bool = False
+    # 每个教学回合只允许产生一张命令卡。该状态由同一轮工具闭包共享，避免
+    # 模型一次并列出多条命令而跳过“执行结果 → 继续讲解”的学习链。
+    teach_step_emitted: bool = False
     # W3: configure_strands injects the runtime operation ledger. Direct tool
     # unit tests deliberately leave it unset so they do not create app data.
     operation_service: Any = None
@@ -1780,9 +1783,10 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
     前端据此渲染 TeachCommandCard，学生手动点击后通过打字机注入终端。
 
     安全不变量：
-    - 无 shell 映射的工具（knowledge_search / suggest_command 等）不拦截，
-      走原有后端路径（只读工具在教学模式下本就可正常执行）。
-    - 映射失败（resolve_shell_command 返回 None）→ 不拦截，走原路径。
+    - 只有有 shell 映射的工具才会进入本包装器；其他教学辅助工具没有
+      终端执行面，仍走其原有只读路径。
+    - 映射失败不能回退到原工具执行，否则教学模式会绕过可见终端链路。
+    - 一轮最多返回一张 teach_command 卡；后续调用明确要求等待该卡回显。
     - 非 teach 模式下此函数不会被调用（守卫隔离）。
 
     Args:
@@ -1816,33 +1820,61 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
 
             from strands_backend.tools.shell_mapping import resolve_shell_command
             command = resolve_shell_command(tool_name, params)
-            if command is not None:
-                # 影响预测（复用 A1 已有的 command_impact）
-                impact: dict[str, Any] | None = None
-                try:
-                    from strands_backend.tools.command_impact import analyze as _analyze
-                    impact = _analyze(command)
-                except Exception:  # noqa: BLE001 — 预测失败不阻塞
-                    pass
-
-                logger.info(
-                    f"teach_mode intercept: tool={tool_name}, "
-                    f"command={command[:80]}"
-                )
+            if command is None:
                 return {
-                    "status": "teach_command",
-                    "command": command,
-                    "impact": impact,
-                    "tool_name": tool_name,
-                    "explanation": (
-                        f"教学模式下，此工具将以终端可见方式执行: {command}"
-                    ),
+                    "status": "teach_command_unavailable",
+                    "message": "这一步不能安全地转换为终端命令，请换一种单步检查方式。",
                 }
+            if ctx.teach_step_emitted:
+                return {
+                    "status": "teach_step_pending",
+                    "message": "上一张教学命令卡仍在等待终端回显；请先完成后再继续。",
+                }
+
+            # 影响预测（复用 A1 已有的 command_impact）
+            impact: dict[str, Any] | None = None
+            try:
+                from strands_backend.tools.command_impact import analyze as _analyze
+                impact = _analyze(command)
+            except Exception:  # noqa: BLE001 — 预测失败不阻塞
+                pass
+
+            ctx.teach_step_emitted = True
+            logger.info(
+                f"teach_mode intercept: tool={tool_name}, "
+                f"command={command[:80]}"
+            )
+            return {
+                "status": "teach_command",
+                "command": command,
+                "impact": impact,
+                "tool_name": tool_name,
+                "predicted_output": _teaching_predicted_output(tool_name),
+                "explanation": (
+                    f"教学模式下，此工具将以终端可见方式执行: {command}"
+                ),
+            }
 
         # 非 teach 或无映射 → 正常执行
         return tool_fn(*args, **kwargs)
 
     return _teach_wrapper
+
+
+def _teaching_predicted_output(tool_name: str) -> str:
+    """Return an evidence-safe expectation, never fabricated host output."""
+    expectations = {
+        "inspect_processes": "将显示进程或资源概览；名称和数值取决于当前主机。",
+        "network_diagnose": "将显示连通性、DNS 或端口检查结果；超时或丢包表示该项失败。",
+        "read_remote_file": "将显示指定文件内容；敏感字段会按现有规则脱敏。",
+        "analyze_logs": "将显示匹配到的日志片段或未发现结果；具体行由当前日志决定。",
+        "security_audit": "将显示安全基线检查结果；实际状态以当前服务器配置为准。",
+        "performance_analyze": "将显示 CPU、内存或磁盘性能采样；数值随当前负载变化。",
+    }
+    return expectations.get(
+        tool_name,
+        "将显示该命令的原生终端输出和退出状态；具体内容以当前主机为准。",
+    )
 
 
 def make_all_ops_tools(
