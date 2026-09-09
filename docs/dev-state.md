@@ -2,7 +2,7 @@
 
 > **接手第一件事读本文件 + `CLAUDE.md`**。本文件是唯一进度/问题记忆源（位置：`docs/dev-state.md`）。
 > **项目 = crynta/terax-ai v0.8.6 魔改版**（唯一基线，自研 v4.0.0 已废弃删除）。
-> **最后更新**：2026-09-09 · **§37.132 SSH 实时回显、提问暂停与网络排障收口**：修复 Python→Rust 固定 30 秒早退和 Rust 超时丢部分输出，增加会话隔离的 SSH 原生流式回显；Agent 可用 `ask_user` 提问卡真正暂停，用户取消后不再被收尾追加轮强制续做；新增虚拟机边界明确的网络排障 Skill。交接先读 §37.129—§37.132。
+> **最后更新**：2026-09-09 · **§37.133 SSH 资源管理器跨服务器一致性**：无主机 IP 特化；修复同 cwd 切换会话时资源树未重载、远程 watcher 串扰，并启用当前 SSH 会话的 SFTP 拖放上传；最小 Linux shell 探测有 `/etc/passwd` 兜底。交接先读 §37.129—§37.133。
 
 ---
 
@@ -4805,3 +4805,11 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **网络能力**：新增第 8 个内置 `network-troubleshoot` Skill（启动时沿既有 seed 机制同步到 `C:\Users\Administrator\.tdsf\skills`）。诊断顺序固定为链路、地址、路由、网关邻居、DNS、TCP/HTTP，再回到原始包管理命令；虚拟化检测区分来宾机 NetworkManager 与宿主机 NAT/桥接/Host-only，宿主层需要信息时用提问卡暂停。安全边界是不覆盖受管的 resolv.conf、不关闭当前 SSH 接口、不对失败安装做无脑重复重试。
 
 **门禁与边界**：Vitest **137 files / 1356 passed**，typecheck、lint、build:web、cargo check 通过；Rust 库/集成 **363 + 25 + 27 + 1 passed**（3 + 4 ignored），doc-test 通过。sidecar 首轮 **2228 passed / 3 failed** 仅因 E2E 仍固定断言旧工具数 25；更新到 26 并加入 `ask_user` 集合断言后单文件 4/4 通过，最终全量 **2231 passed / 2 warnings**（退出码 0）。Luna 因额度上限未完成重复测试，主进程接管。通用 Skill Creator 校验器不接受本项目既有 `version/author/tags` 扩展 frontmatter，故保留项目格式并由 parser/registry 测试验证。尚未冒充真实 SSH 验收：用户需在桌面端复测动态 dnf、35 秒以上后台命令、提问暂停以及虚拟机网卡引导。
+
+### 37.133 SSH 资源管理器跨服务器一致性与拖放上传恢复（2026-09-09 ✅，待用户原生复测）
+
+**结论**：未发现 `192.168.45.200` 的产品逻辑特化；该地址仅出现于状态栏示例与测试 fixture。当前 Space 已按自身 SSH `sessionId` 和 `currentPath` 向资源管理器传入 SFTP 数据源。根因是文件树的重置 effect 只依赖路径：当 `.200` 与 `.128` 都在 `/root`，session 改变但 root 未变，前一会话节点、展开状态和本地 watcher 生命周期会被错误复用。系统文件拖入远程树也被旧的 `disabled: isRemote` 总开关拒绝。另一个兼容性缺口是极简系统没有 `getent` 时 shell 探测为空，导致 bash/zsh/fish 的 OSC cwd 集成降级，资源树自然无法随 `cd` 更新。
+
+**修复**：新增稳定 tree source key（`local` 或 `sftp:sessionId:root`），用它触发目录重载、隔离展开缓存；SFTP source 不再注册或监听本地文件事件。Explorer 的 OS 拖放根据当前 source 分流：本地保持 `fs_copy`，远程将每个本地路径提交给当前 session 的 `sftp_upload_file`，目标为所放入的远程目录，至少一个文件成功后刷新目录。shell probe 优先 `$SHELL`，无该变量时先用 `getent`，不可用则读 `/etc/passwd`，不改变不受支持 shell 的保守降级策略。
+
+**验证**：Luna 的两项新前端定向文件 **4/4 passed**；全量 Vitest 最终 **139 files / 1360 passed**。第一次全量运行只有未改动的 `SnippetsPanel` 异步 Dialog 用例一次波动，Luna 单文件复跑 9/9 通过，随后全量也全绿。`pnpm typecheck`、`pnpm lint`、`pnpm build:web`、`cargo check --lib` 通过；`cargo test --lib` **364 passed / 3 ignored**。直接 `cargo test` 初次因运行中的桌面端锁住 exe 而未链接成功，改用 lib target 完成验证，没有关闭用户桌面端。用户原生验收：在新服务器连接中执行 `cd /tmp` 和 `cd /root` 检查资源树；拖放一个本地文件至远程目录，确认仅当前服务器产生该文件。

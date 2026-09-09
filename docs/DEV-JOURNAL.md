@@ -6,6 +6,14 @@
 
 ---
 
+### 37.133 SSH 资源管理器跨服务器一致性与拖放上传恢复（2026-09-09 ✅，待用户原生复测）
+
+**排查结论**：源码中不存在按 `192.168.45.200`、`.128` 或其他主机地址分支资源管理器的逻辑；文件树绑定的是当前 Space 的 `rustSessionId` 与该会话的远程 cwd。实际缺陷是两个服务器恰好都在 `/root` 时，文件树只以 root path 判断是否重载，错误沿用前一会话的节点与展开缓存；SFTP 分支还保留了本地 watcher 注册。另有一个明确的功能开关把远程资源管理器的系统拖放整体禁用了。最小化 Linux 若缺少 `getent`，默认 shell 探测会误判为不支持的 shell，导致 OSC cwd 集成被跳过，也会表现为目录不跟随。
+
+**修复**：文件树 identity 改为 `source kind + SSH sessionId + remote root`，会话切换即使 cwd 同为 `/root` 也清空并重新从对应 SFTP 会话读取，展开缓存也按会话隔离；远程源不再注册/消费本地文件 watcher。资源管理器接收操作系统拖入的本地文件时，改为逐个调用当前会话的 `sftp_upload_file`，成功后刷新目标远程目录，保留远程内部拖拽禁用以避免跨端路径误移动。shell 探测优先 `$SHELL`，否则 `getent` 不可用时从 `/etc/passwd` 读取登录 shell，保持现有 bash/zsh/fish 集成与降级边界。
+
+**验证与边界**：新增“相同目录的不同 SSH session 必须产生不同 tree key”和 Windows/POSIX 本地路径映射到远端目标目录的回归。Luna 定向 Vitest **4/4 passed**；全量 Vitest 复跑 **139 files / 1360 passed**（首次一个未改动 Snippets 异步 Dialog 用例波动，Luna 单文件复跑通过）；`typecheck`、`lint`、Web production build、`cargo check --lib` 通过；Rust 库测试 **364 passed / 3 ignored**。未把浏览器 mock 视为原生验收：用户需在新 SSH 连接中 `cd /tmp` 验证左侧目录跟随，并将本地文件拖进远程树，确认只写入当前服务器。
+
 ### 37.132 SSH 实时回显、Agent 提问暂停与网络排障能力收口（2026-09-09 ✅，待用户原生复测）
 
 **日志取证与根因**：最新长任务日志中的 `ssh_command timeout=35s` 实际被 Python→Rust JSON-RPC 桥按默认 **30s** 提前终止；Rust 又把超时包在整个输出收集 future 外层，超时时会丢掉已收到的 stdout/stderr，所以出现“终端已有回显、Agent 仍拿不到 output”。后台 exec 也只在进程结束时回包，没有供前端消费的逐块原生输出事件。另一个独立问题是：`needs_you` 已定义 question 类型，但模型没有可调用的提问工具，前端审批组件还主动忽略 question；用户取消工具后，todo/验证收尾追加轮仍会覆盖取消决定继续执行。

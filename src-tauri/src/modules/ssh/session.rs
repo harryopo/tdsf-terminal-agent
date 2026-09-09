@@ -1522,6 +1522,10 @@ end
 /// 命令绰绰有余; 超限后静默截断 (不中断命令, 只丢尾部数据)。
 const MAX_EXEC_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
+// 某些最小化 Linux 镜像没有 getent；不能因此把 bash 会话误判为 Other，
+// 否则会跳过 OSC 集成，前端无法获知终端 cwd 来同步远程资源管理器。
+const REMOTE_SHELL_PROBE: &str = r#"if [ -n "${SHELL:-}" ]; then printf '%s\n' "$SHELL"; else uid="$(id -u 2>/dev/null)" || exit 0; if command -v getent >/dev/null 2>&1; then getent passwd "$uid" 2>/dev/null | awk -F: 'NR == 1 { print $7; exit }'; else awk -F: -v uid="$uid" '$3 == uid { print $7; exit }' /etc/passwd 2>/dev/null; fi; fi"#;
+
 /// 受上限追加：buf 达 cap 后丢弃后续数据（防 exec 输出无界）
 fn append_exec_output_limited(buf: &mut Vec<u8>, data: &[u8], cap: usize) {
     if buf.len() >= cap {
@@ -1564,10 +1568,9 @@ async fn exec_simple<R: tauri::Runtime>(
 async fn probe_remote_shell<R: tauri::Runtime>(
     handle: &Handle<SshClientHandler<R>>,
 ) -> Result<RemoteShellKind, SshSessionError> {
-    // exec 模式的命令由用户默认 shell 的 -c 执行。优先 $SHELL 环境变量,
-    // 兜底 getent passwd (id -u) 第 7 字段 (getent 缺失时输出为空)。
-    let probe = "echo \"${SHELL:-$(getent passwd $(id -u) 2>/dev/null | cut -d: -f7)}\"";
-    let path = exec_simple(handle, probe).await?;
+    // exec 模式的命令由用户默认 shell 的 -c 执行。优先 $SHELL；否则读取
+    // passwd 的第 7 字段，getent 不存在时退回 /etc/passwd，兼容最小镜像。
+    let path = exec_simple(handle, REMOTE_SHELL_PROBE).await?;
     let kind = RemoteShellKind::from_path(&path);
     log::info!("[ssh] remote shell probe: path={path:?} kind={kind:?}");
     Ok(kind)
@@ -2146,5 +2149,12 @@ pub(crate) mod tests {
     fn test_integration_commands_unsupported_shell_errors() {
         // 其他 shell (csh/tcsh/ash 等) 维持降级语义: Err → request_shell
         assert!(build_integration_commands(RemoteShellKind::Other, "/tmp/x").is_err());
+    }
+
+    #[test]
+    fn test_shell_probe_falls_back_without_getent() {
+        assert!(REMOTE_SHELL_PROBE.contains("command -v getent"));
+        assert!(REMOTE_SHELL_PROBE.contains("/etc/passwd"));
+        assert!(REMOTE_SHELL_PROBE.contains("awk -F:"));
     }
 }

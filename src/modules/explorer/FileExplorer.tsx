@@ -295,7 +295,7 @@ export const FileExplorer = memo(
       rootPath,
       isDir: isDirAt,
       onCopied: tree.refresh,
-      disabled: isRemote,
+      remoteSessionId: fsSource?.kind === "sftp" ? fsSource.sessionId : null,
     });
 
     const dropTargetDir = dnd.dropTargetDir ?? fileDrop.externalTargetDir;
