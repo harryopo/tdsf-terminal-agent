@@ -506,13 +506,13 @@ export function HostApprovalDialog({
         <AlertDialogFooter>
           <AlertDialogCancel
             disabled={handling}
-            onClick={() => void handle(onReject)}
+            onClick={handle(onReject)}
           >
             拒绝
           </AlertDialogCancel>
           <AlertDialogAction
             disabled={handling}
-            onClick={() => void handle(onApprove)}
+            onClick={handle(onApprove)}
             className={cn(
               request?.isMismatch
                 ? "bg-destructive text-destructive-foreground hover:bg-destructive/80"
