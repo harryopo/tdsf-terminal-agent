@@ -4863,3 +4863,7 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 ### 37.142 全局打字机响应与速度调校（2026-09-10 ✅，待用户原生复测）
 
 点击命令卡 Run 后的首字符等待从 300ms 降为 100ms；human_type 全局 1× 的字符/词尾节奏调整为 0.08/0.20 秒，下限 0.04、上限 0.6，长命令展示预算为 1.2 秒。教学、确认、自动模式不再区分速度，均读取同一 `agentTypingSpeed` 设置；设置页耗时提示已同步。Rust `cargo test human_type --lib` 独立 target **11 passed**，前端 typecheck 与本次文件定向 lint 通过。全仓 lint 仍有宣传视频目录的既有问题，未混入本次修复。
+
+### 37.143 Run 首字符延迟与全局节奏二次修正（2026-09-10 ✅，待用户原生复测）
+
+移除 `Ctrl-C` 清行后的固定等待：仍清理旧输入，但清理写入完成后立即进入 human_type 首字符，不再人为制造点击 Run 到终端显示的空档。全局 1× 恢复为此前验证过的正常节奏 `0.04/0.12`，单字符范围 `0.02~0.4`；长命令 1.2 秒预算、所有模式共用 `agentTypingSpeed` 保持不变。Rust `cargo test human_type --lib` 独立 target **11 passed**。重启桌面端后分别点击普通命令卡和教学命令卡的 Run，验证首字符即时出现与统一逐字节奏。

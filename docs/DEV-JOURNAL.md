@@ -2958,3 +2958,11 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **修复**：将 human_type 的全局 1× 字符/词尾节奏调慢（0.08/0.20、下限 0.04、上限 0.6），长命令可见节奏预算改为 1.2 秒；打字机清理当前输入行后的固定等待由 300ms 降到 100ms，首字符更快可见。未增加教学专用速度，教学、确认和自动模式均读取同一 `agentTypingSpeed` 偏好；设置页同步更新耗时提示。
 
 **验证**：Rust `cargo test human_type --lib` 独立 target **11 passed**；`pnpm typecheck`、本次文件定向 lint、`git diff --check` 通过。全仓 lint 仍被未改动的 `promo-video/src/TDSFPromo.tsx` 与 `promo-video/src/lib/helpers/camera.tsx` 既有问题阻断。用户需重启桌面端/sidecar 后在普通命令卡和教学命令卡各点一次 Run，确认首字符更快出现、整体逐字节奏更慢。
+
+### 37.143 Run 首字符延迟与全局节奏二次修正（2026-09-10 ✅）
+
+**用户复测**：上轮虽然把固定等待从 300ms 缩到 100ms，点击 Run 后仍会先出现空档；同时全局 1× 逐字节奏仍慢于此前的正常体验。
+
+**修复**：保留 `Ctrl-C` 清理用户可能已输入的旧行，但移除清行后的固定 sleep，让首字符在清行写入完成后立即进入 PTY/SSH。全局节奏恢复到此前验证过的 `DEFAULT_ALPHA=0.04`、`DEFAULT_ALPHA_EOW=0.12`、`DEFAULT_MIN=0.02`、`DEFAULT_MAX=0.4`；长命令 1.2 秒总预算和同一 `agentTypingSpeed` 跨模式规则保持不变。设置页估算同步回到正常节奏口径。
+
+**验证**：Rust `cargo test human_type --lib` 独立 target **11 passed**；未改动的桌面开发进程保持运行。用户需重启桌面端/sidecar 后先在可见终端空行点击普通 Run，再在教学卡点击 Run，确认两者均立即出现首字符、随后按同一速度逐字输入。
