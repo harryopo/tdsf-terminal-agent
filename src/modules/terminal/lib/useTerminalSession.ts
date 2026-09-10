@@ -35,6 +35,7 @@ import { useTerminalBlocksStore } from "./terminalBlocksStore";
 import type { IMarker } from "@xterm/xterm";
 // outputTail 复用 AI 模块的脱敏函数（redact.ts 零依赖，无循环导入）
 import { redactSensitive } from "@/modules/ai/lib/redact";
+import { AgentCommandEcho } from "./agentCommandEcho";
 import {
   createShellIntegrationState,
   registerCwdHandler,
@@ -150,6 +151,8 @@ type Session = {
   spawnFailed: boolean;
   // TDSF 魔改: 待风险确认的命令（L3+ 拦截后暂存，UI 弹窗确认后执行）
   pendingRiskCommand: { text: string; assessment: RiskRpcAssessment } | null;
+  /** One-shot display-only marker for a command injected by the Agent. */
+  agentCommandEcho: AgentCommandEcho | null;
 };
 
 const sessions = new Map<number, Session>();
@@ -252,6 +255,18 @@ export function writeToSession(leafId: number, data: string): boolean {
   }
   queuePendingInput(s, data);
   return true;
+}
+
+/** Mark the next matching terminal echo as an Agent command, display-only. */
+export function armAgentCommandEcho(leafId: number, command: string): void {
+  const s = sessions.get(leafId);
+  if (s) s.agentCommandEcho = new AgentCommandEcho(command);
+}
+
+/** Clear a pending marker when human typing was interrupted before echoing. */
+export function clearAgentCommandEcho(leafId: number): void {
+  const s = sessions.get(leafId);
+  if (s) s.agentCommandEcho = null;
 }
 
 export function submitToLeaf(leafId: number, text: string): void {
@@ -674,6 +689,7 @@ function ensureSession(
     hiddenReleaseTimer: null,
     spawnFailed: false,
     pendingRiskCommand: null,
+    agentCommandEcho: null,
   };
   sessions.set(leafId, session);
 
@@ -688,11 +704,13 @@ function ensureSession(
 function deliverPtyBytes(leafId: number, bytes: Uint8Array): void {
   const s = sessions.get(leafId);
   if (!s) return;
+  const displayBytes = s.agentCommandEcho?.transform(bytes) ?? bytes;
+  if (s.agentCommandEcho?.isComplete()) s.agentCommandEcho = null;
   // Retained slots keep parsing live (render paused); the ring is only for
   // leaves whose buffer was stolen or never bound.
   const slot = getLiveSlotForLeaf(leafId);
-  if (slot) slot.term.write(bytes);
-  else s.dormantRing.push(bytes);
+  if (slot) slot.term.write(displayBytes);
+  else s.dormantRing.push(displayBytes);
 }
 
 const SPAWN_RETRY_DELAY_MS = 250;

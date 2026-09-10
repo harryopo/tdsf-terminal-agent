@@ -259,3 +259,9 @@
 2. 任务收尾三件事（强制）：① git commit（全绿门禁）→ ② `docs/DEV-JOURNAL.md` 追加复盘（任务/方案/报错/修改/经验）→ ③ 更新本文件 + `docs/dev-state.md`
 3. 报错与修改必须沉淀到 journal（根因 + 解法），防止重复踩坑
 4. 门禁：后端 pytest / 前端 vitest / tsc / eslint / cargo check 全绿才算完成
+
+---
+
+## 四、最近完成
+
+- [x] **可见终端 Agent 蓝色命令回显**（2026-09-10，DEV-JOURNAL §37.136）：在 xterm 输出端按真实命令回显字节做一次性蓝色标记；不向 SSH/PTY 注入控制序列，不改原生命令、输出或用户输入。待用户原生桌面复测。

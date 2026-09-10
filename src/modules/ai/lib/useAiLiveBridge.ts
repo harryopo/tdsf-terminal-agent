@@ -27,7 +27,11 @@ import type { Live, EnvironmentProbe } from "../store/chatStore";
 import { useChatStore } from "../store/chatStore";
 import { redactSensitive } from "./redact";
 // TDSF 魔改 2026-08-28 (B1-G2 防伪造): 拦截命令注入 AI 上下文
-import { getRecentBlockedCommandText } from "@/modules/terminal/lib/useTerminalSession";
+import {
+  armAgentCommandEcho,
+  clearAgentCommandEcho,
+  getRecentBlockedCommandText,
+} from "@/modules/terminal/lib/useTerminalSession";
 
 // TDSF B2 (2026-08-29): Rust human_type 命令返回值（pty_write_human / ssh_write_human）
 type HumanTypeReport = {
@@ -153,6 +157,7 @@ export function useAiLiveBridge(params: Params) {
         const sessionId = sshRustSessionId();
         if (sessionId === null) return false;
         useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
+        armAgentCommandEcho(sshLeafId, t);
         void invoke<HumanTypeReport>("ssh_write_human", {
           sessionId,
           text: t,
@@ -164,6 +169,7 @@ export function useAiLiveBridge(params: Params) {
           })
           .catch((e) => {
             useTerminalBlocksStore.getState().clearAgentPending(sshLeafId);
+            clearAgentCommandEcho(sshLeafId);
             console.warn("[tdsf] ssh_write_human failed, fallback:", e);
             if (!injectFnCore(t)) toast.error("命令注入失败：SSH 终端不可用");
           });
@@ -175,6 +181,7 @@ export function useAiLiveBridge(params: Params) {
       const id = ptyIdForLeaf(tab.activeLeafId);
       if (id === null) return false;
       useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
+      armAgentCommandEcho(tab.activeLeafId, t);
       void invoke<HumanTypeReport>("pty_write_human", { id, text: t, speed })
         .then((r) => {
           if (r?.mode === "fallback" && r.warning) toast.warning(r.warning);
@@ -183,6 +190,7 @@ export function useAiLiveBridge(params: Params) {
           useTerminalBlocksStore
             .getState()
             .clearAgentPending(tab.activeLeafId);
+          clearAgentCommandEcho(tab.activeLeafId);
           console.warn("[tdsf] pty_write_human failed, fallback:", e);
           if (!injectFnCore(t)) toast.error("命令注入失败：终端会话不可用");
         });
@@ -255,6 +263,7 @@ export function useAiLiveBridge(params: Params) {
         const term = terminalRefs.current.get(sshLeafId);
         if (term) {
           useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
+          armAgentCommandEcho(sshLeafId, t);
           term.write(t);
           term.focus();
           return true;
@@ -267,6 +276,7 @@ export function useAiLiveBridge(params: Params) {
       const term = terminalRefs.current.get(tab.activeLeafId);
       if (!term) return false;
       useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
+      armAgentCommandEcho(tab.activeLeafId, t);
       term.write(t);
       term.focus();
       return true;
@@ -670,6 +680,7 @@ export function useAiLiveBridge(params: Params) {
         // correlation first so a fast command cannot finish in that gap.
         markVisibleExecutionRunning(pending);
         useTerminalBlocksStore.getState().markAgentPending(leafId);
+        armAgentCommandEcho(leafId, text);
         terminal.write(text);
         terminal.focus();
         // The timer starts only after the final Enter has been submitted.
@@ -677,6 +688,8 @@ export function useAiLiveBridge(params: Params) {
         return;
       }
 
+      useTerminalBlocksStore.getState().markAgentPending(leafId);
+      armAgentCommandEcho(leafId, text);
       void invoke<HumanTypeReport>("ssh_write_human", {
         sessionId: request.sessionId,
         text,
@@ -689,6 +702,7 @@ export function useAiLiveBridge(params: Params) {
           }
         })
         .catch((e) => {
+          clearAgentCommandEcho(leafId);
           console.warn("[tdsf] visible terminal typing failed:", e);
           settleVisibleExecution(pending, {
             status: "unavailable",
@@ -696,7 +710,6 @@ export function useAiLiveBridge(params: Params) {
             message: "可见终端输入未能启动，命令未改走后台执行。",
           });
         });
-      useTerminalBlocksStore.getState().markAgentPending(leafId);
     };
 
     const unlistenVisibleBlocks = useTerminalBlocksStore.subscribe((state) => {
@@ -728,6 +741,7 @@ export function useAiLiveBridge(params: Params) {
               continue;
             }
             if (typing.stopped) {
+              clearAgentCommandEcho(pending.leafId);
               settleVisibleExecution(pending, {
                 status: "interrupted",
                 reason: "visible_terminal_typing_interrupted",

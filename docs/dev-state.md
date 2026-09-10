@@ -4829,3 +4829,9 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **实现**：移除 `SshCommandOutputPanel` 及其独立测试和 `AiChat` 挂载点；不移除 sidecar 的输出监听，它仍是长命令活动感知的必要输入。`Tool` 在 `ssh_command` 处于 `input-streaming` 时按当前 conversation session 与命令原文订阅流事件、自动展开卡片、逐块追加 stdout/stderr/status；完成后的结构化 `SshCommandOutput` 仍在同一卡片渲染。卡内保留 64 KiB 截尾保护，避免无限输出导致前端失稳。
 
 **验证与下一步**：新增工具卡回归覆盖块追加、完成状态及跨会话/跨命令隔离，**2/2 passed**；`pnpm typecheck`、`pnpm lint`、`git diff --check` 全绿。尚未把浏览器 mock 视为桌面端验收：用户应执行动态 `dnf` 或长输出命令，确认不再出现独立“SSH Output”，且实时回显仅在对应 SSH 工具折叠卡内更新。
+
+### 37.136 可见终端 Agent 蓝色命令回显（2026-09-10 ✅，待用户原生复测）
+
+**现状与修复**：此前可见终端只把 Agent 命令真实写入 SSH/PTY，颜色完全由远端回显决定，因此没有蓝色区分。现已在 xterm 的接收边界新增一次性、字节级匹配：仅将与本轮 Agent 注入命令完全匹配的回显段包裹为蓝色，随后立即复位。命令发送路径未加入 ANSI 控制符，远端 shell 接收到的命令、命令输出、提示符和用户输入都不变；逐字输入被打断或写入失败会清理标记。
+
+**验证**：新增 2 项 Vitest（跨 chunk 的命令回显着色、非匹配输出原样保留）均通过，`pnpm typecheck` 通过。用户在设置中选择“可见终端 Shell”后运行一条 Agent 命令即可原生复测：只有命令文本为蓝色，执行回显维持终端原色。
