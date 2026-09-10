@@ -123,6 +123,26 @@ describe("teaching execution ↔ terminal block", () => {
     ).toBe(false);
   });
 
+  it("accepts the agent-marked first segment of a teaching compound command", () => {
+    const id = useTeachingExecutionStore.getState().begin({
+      leafId: 17,
+      command: "rpm -qa | grep -Ei 'nginx|httpd'; systemctl status nginx",
+      requestedAt: 10_000,
+    });
+
+    useTerminalBlocksStore.getState().pushBlock(
+      block({
+        command: "rpm -qa",
+        author: "agent",
+        startedAt: 10_001,
+      }),
+    );
+
+    expect(useTeachingExecutionStore.getState().executions[id!].status).toBe(
+      "completed",
+    );
+  });
+
   it("accepts shell whitespace and redirection omitted by the DEBUG hook", () => {
     const request = {
       leafId: 17,

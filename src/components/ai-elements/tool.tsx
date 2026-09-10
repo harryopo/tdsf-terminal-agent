@@ -658,9 +658,16 @@ const ToolImpl = ({
     innerFailureStatus === "unmatched" ? "未匹配" : "failed";
   const open = defaultOpen ?? (isError || showLiveSshOutput);
   const isHeavy = HEAVY_CONTENT_TOOLS.has(toolName);
+  const isTeachingCard =
+    output !== null &&
+    typeof output === "object" &&
+    (output as Record<string, unknown>).status === "teach_command";
   // For heavy tools, only show details on error — never the streamed input
   // body, which is huge and re-renders per token.
-  const showInputBody = !isHeavy && Boolean(input);
+  // 教学命令的 JSON 参数会和下方的命令卡重复；无论来自专用工具还是映射工具，
+  // 教学界面只保留可执行卡。
+  const showInputBody =
+    !isTeachingCard && !isHeavy && Boolean(input);
   // 重量级工具只在失败时展示输出体：成功路径的结果很小且重复，
   // 但内层 ok/success=false 的失败说明是用户唯一能看到「为什么失败」的地方。
   const showOutputBody =
