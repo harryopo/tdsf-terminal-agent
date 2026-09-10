@@ -5,14 +5,25 @@ const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 const encode = (text: string) => new TextEncoder().encode(text);
 
 describe("AgentCommandEcho", () => {
-  it("colors only a command echo split across terminal chunks", () => {
+  it("forwards split command echo immediately while coloring it", () => {
     const echo = new AgentCommandEcho("dnf install fastfetch\n");
 
-    expect(decode(echo.transform(encode("[root]# dnf ins")))).toBe("[root]# ");
+    expect(decode(echo.transform(encode("[root]# dnf ins")))).toBe(
+      "[root]# \x1b[38;2;91;140;255mdnf ins",
+    );
     expect(decode(echo.transform(encode("tall fastfetch\r\ninstalled\r\n")))).toBe(
-      "\x1b[38;2;91;140;255mdnf install fastfetch\x1b[0m\r\ninstalled\r\n",
+      "tall fastfetch\x1b[0m\r\ninstalled\r\n",
     );
     expect(echo.isComplete()).toBe(true);
+  });
+
+  it("does not leave a temporary color span open after a mismatch", () => {
+    const echo = new AgentCommandEcho("dnf install\n");
+
+    expect(decode(echo.transform(encode("dX")))).toBe(
+      "\x1b[38;2;91;140;255md\x1b[0mX",
+    );
+    expect(echo.isComplete()).toBe(false);
   });
 
   it("leaves non-matching output byte-for-byte unchanged", () => {
