@@ -4855,3 +4855,7 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 ### 37.140 教学命令卡工具事件配对（2026-09-10 ✅）
 
 `teach_command` 与教学 shell 映射包装器此前只返回结果，漏发了前端配对工具卡所需的 `started` 事件；前端会安全丢弃孤儿 completed，故工具证据存在但命令卡不显示。现在两条路径均按同一协议发出 `started → completed`，并携带原参数、会话和来源；失败或等待结果同样闭合事件。教学卡不再渲染 impact 摘要，提示词也禁止正文复述“只读探测，无副作用”一类标签。Python 定向 **18 passed / 10 skipped**，前端命令卡定向 **10 passed**，typecheck/lint/diff-check 通过；需重启 sidecar 后在真实桌面复测。
+
+### 37.141 教学卡简化与复合命令回显关联（2026-09-10 ✅）
+
+教学命令不再展示重复 JSON Input，统一只保留教学说明、命令卡和预测回显。Bash 对复合输入可能只上报首段，导致先前教学卡全文匹配超时并占住 terminal lock；现在仅当首段来自本次 Agent 注入、同 leaf 且在点击后，才允许作为教学结果，普通用户命令仍不能误匹配。提示词强制一张卡一条命令，禁止 `;`、`&&`、`||`，且禁止正文 bash 代码块绕过卡片。定向 Vitest **11 passed**、Python **18 passed / 10 skipped**、typecheck/lint/diff-check 通过；重启后从新教学回合复测。

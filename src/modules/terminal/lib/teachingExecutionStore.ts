@@ -89,14 +89,17 @@ export function matchesVisibleTerminalCommand(
   return /^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix);
 }
 
-/** 关联条件故意不依赖 author：长时间人类打字可能超过 author 的 10 秒 TTL。 */
+/**
+ * 教学命令通常精确匹配；Bash 对 `a; b`、管道等复合命令只会上报首段时，
+ * 仅接受本次教学卡已注入且被 terminal 标记为 agent 的首段，避免卡片卡死。
+ */
 export function matchesTeachingExecution(
   execution: TeachingExecution,
   block: TerminalBlock,
 ): boolean {
   return (
     execution.status === "waiting" &&
-    matchesTerminalCommand(execution, block)
+    matchesVisibleTerminalCommand(execution, block)
   );
 }
 

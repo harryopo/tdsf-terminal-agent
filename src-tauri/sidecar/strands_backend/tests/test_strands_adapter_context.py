@@ -73,6 +73,7 @@ class TestTeachContinuationIntent(unittest.TestCase):
         self.assertIn("teach_command", prompt)
         self.assertIn("反引号命令", prompt)
         self.assertIn("任何可执行命令都必须进入教学命令卡", prompt)
+        self.assertIn("不用 ;、&&、|| 串联多个步骤", prompt)
 
     def test_runtime_always_registers_dedicated_teaching_card_tool(self):
         from strands_backend.adapter import StrandsAgentAdapter

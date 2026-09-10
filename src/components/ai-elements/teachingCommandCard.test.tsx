@@ -63,6 +63,7 @@ describe("TeachCommandCard", () => {
     expect(startTeachingCommand).not.toHaveBeenCalled();
     expect(screen.getByText("BASH")).toBeTruthy();
     expect(screen.getByText("预期回显")).toBeTruthy();
+    expect(screen.queryByText("Input")).toBeNull();
     expect(screen.queryByText("只读探测，无副作用")).toBeNull();
     expect(screen.getByRole("button", { name: "复制命令" })).toBeTruthy();
     fireEvent.click(
