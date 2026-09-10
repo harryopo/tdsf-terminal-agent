@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 _SIDECAR_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -48,12 +49,15 @@ class TestTeachContinuationIntent(unittest.TestCase):
     def test_teach_observe_keeps_shell_mapped_commands_as_cards(self):
         from strands_backend.adapter import _filter_teach_tools
         from strands_backend.tools import ToolContext, make_all_ops_tools
+        from strands_backend.tools.teach_command import make_teach_command_tool
 
         ctx = ToolContext(permission_level=1, mode=AgentMode.OBSERVE, teach=True)
         tools = _filter_teach_tools(
             make_all_ops_tools(ctx, include_teach_shell_tools=True)
+            + [make_teach_command_tool(ctx)]
         )
         names = {getattr(tool, "__name__", "") for tool in tools}
+        self.assertIn("teach_command", names)
         self.assertIn("ssh_command", names)
         self.assertIn("read_remote_file", names)
         self.assertIn("knowledge_search", names)
@@ -61,6 +65,35 @@ class TestTeachContinuationIntent(unittest.TestCase):
         self.assertNotIn("suggest_command", names)
         self.assertNotIn("todo_write", names)
         self.assertNotIn("get_terminal_output", names)
+
+    def test_runtime_always_registers_dedicated_teaching_card_tool(self):
+        from strands_backend.adapter import StrandsAgentAdapter
+        from strands_backend.tools import ToolContext
+
+        class Registry:
+            registry: dict = {}
+            dynamic_tools: dict = {}
+
+            def process_tools(self, tools):
+                self.tools = tools
+
+        registry = Registry()
+        agent = SimpleNamespace(tool_registry=registry, _plugin_registry=None)
+        adapter = object.__new__(StrandsAgentAdapter)
+        adapter.extra_tools = []
+        adapter.system_prompt = "base"
+
+        StrandsAgentAdapter._refresh_agent_runtime(
+            adapter,
+            agent,
+            ToolContext(permission_level=1, mode=AgentMode.OBSERVE, teach=True),
+            mode=AgentMode.OBSERVE,
+            teach=True,
+        )
+
+        names = {getattr(tool, "__name__", "") for tool in registry.tools}
+        self.assertIn("teach_command", names)
+        self.assertIn("ssh_command", names)
 
     def test_callback_remembers_marker_across_stream_chunks(self):
         from strands_backend.adapter import TdsfStrandsCallbackHandler
@@ -77,6 +110,7 @@ try:
     _STRANDS_AVAILABLE = True
 except ImportError:
     _STRANDS_AVAILABLE = False
+    Model = object  # type: ignore[assignment,misc]  # skipped test class still needs a base
 
 
 @unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")

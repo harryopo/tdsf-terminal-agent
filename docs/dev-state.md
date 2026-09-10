@@ -4841,3 +4841,9 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **交接状态**：用户决定宣传片改由其他 AI 完成。`promo-video/docs/production-spec.md` 已冻结最终字幕、约 100–112 秒分镜与“只交付带 BGM”规则；`promo-video/HANDOFF.md` 记录真实截图、缺失动态录屏、UI 不得伪造及产品事实。由于当前桌面自动化通道没有枚举到 TDSF 原生窗口，本轮不能录制真实操作，未以伪造界面代替。
 
 **当前主线**：视频不再占用开发优先级。下一手应先按真实桌面会话复测 §37.132–§37.136 的 SSH/可见终端/提问/教学/资源树链路；随后统一工具 `tool_call_id` 与完整生命周期事件并保持串行，最后建设小范围的 Tauri+SSH 原生回归。浏览器 mock 仅保留单元回归价值，不能作为产品验收。
+
+### 37.138 教学命令卡 Schema 兜底（2026-09-10 ✅）
+
+教学模式不再只依赖已有工具的 shell 映射。sidecar 在 `teach + observe` 的每轮运行时显式注册 `teach_command`：它仅生成一张 `TeachCommandCard`，不走 SSH/后台执行，学生点击才向当前可见终端打字机注入；同轮第二张卡会被锁住，硬 denylist 命令拒绝生成。原 `ssh_command`、网络、日志、文件等 shell 映射工具仍会保留，因而诊断场景继续走结构化映射、部署等无专用参数模型的教学步骤有稳定的卡片出口。
+
+定向 Python 门禁为 **16 passed / 10 skipped**（本机未安装 `strands` 的真实集成组按设计跳过）；覆盖运行时 schema、单步锁及 denylist。桌面端待用户验证“教我部署一个 Web 网页”：第一步必须出现命令卡，不能再出现“schema 没有 shell 映射工具”的降级话术。
