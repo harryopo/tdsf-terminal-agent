@@ -56,6 +56,7 @@ from strands_backend.tools import (
     make_all_ops_tools,
     wrap_tool_for_teach_mode,
 )
+from strands_backend.tools.teach_command import make_teach_command_tool
 # A3 (2026-09-04): 教学模式终端执行链路——shell 映射检查
 from strands_backend.tools.shell_mapping import has_shell_mapping
 
@@ -159,6 +160,7 @@ _TEACH_AUX_TOOL_NAMES = frozenset({
     "knowledge_search",
     "knowledge_get_doc",
     "ssh_list_sessions",
+    "teach_command",
 })
 
 
@@ -2109,6 +2111,13 @@ class StrandsAgentAdapter:
             ctx,
             include_teach_shell_tools=teach and mode == AgentMode.OBSERVE,
         ) + self.extra_tools
+
+        # A teaching card is a schema-level primitive, not a best-effort
+        # fallback from an operations tool.  It never executes remotely and
+        # gives lessons a safe one-step path for commands such as deployment
+        # examples that have no matching operations-tool parameter schema.
+        if teach and mode == AgentMode.OBSERVE:
+            all_tools.append(make_teach_command_tool(ctx))
 
         # context_manager="auto" registers ContextOffloader's
         # ``retrieve_offloaded_content`` through the plugin registry at agent

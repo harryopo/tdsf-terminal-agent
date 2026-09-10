@@ -16,6 +16,7 @@ if str(_SIDECAR_DIR) not in sys.path:
 from strands_backend.tools import ToolContext
 from strands_backend.tools.get_terminal_output import invoke_get_terminal_output
 from strands_backend.tools.suggest_command import invoke_suggest_command_tool
+from strands_backend.tools.teach_command import invoke_teach_command_tool
 
 
 def _ctx(bridge: object | None = None) -> ToolContext:
@@ -142,3 +143,24 @@ def test_teaching_wrapper_emits_one_visible_command_then_waits() -> None:
     assert first["predicted_output"]
     assert second["status"] == "teach_step_pending"
     assert called is False
+
+
+def test_dedicated_teaching_card_never_executes_and_blocks_hard_denies() -> None:
+    ctx = ToolContext(teach=True)
+
+    result = invoke_teach_command_tool(
+        {
+            "command": "dnf install -y nginx",
+            "explanation": "安装 Web 服务软件包。",
+        },
+        ctx,
+    )
+    assert result["status"] == "teach_command"
+    assert result["command"] == "dnf install -y nginx"
+    assert ctx.teach_step_emitted is True
+
+    denied = invoke_teach_command_tool(
+        {"command": "rm -rf /"},
+        ToolContext(teach=True),
+    )
+    assert denied["status"] == "teach_command_unavailable"

@@ -380,6 +380,7 @@ const TOOL_META: Record<
   ssh_list_sessions: { label: "SSH 会话", icon: TerminalIcon, category: "diagnose" },
   // 规划建议（青）
   suggest_command: { label: "命令建议", icon: SparklesIcon, category: "plan" },
+  teach_command: { label: "教学命令", icon: BookOpen01Icon, category: "plan" },
   todo_write: { label: "Todos", icon: CheckListIcon, category: "plan" },
   run_subagent: { label: "Subagent", icon: RobotIcon, category: "plan" },
   assess_confidence: { label: "置信度", icon: ShieldUserIcon, category: "plan" },
@@ -463,6 +464,7 @@ function deriveSummary(toolName: string, input: unknown): string | null {
     case "bash_run":
     case "bash_background":
     case "ssh_command":
+    case "teach_command":
       return str("command");
     case "bash_logs":
     case "bash_kill":
