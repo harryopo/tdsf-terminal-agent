@@ -295,7 +295,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     "需要执行时，使用本轮 schema 中与当前环境匹配、且受模式策略约束的工具。\n"
     "- 用户输入 `/skill:<名称> <需求>` 时，调用 skill_invoke 读取该 Skill 的参考和剧本；"
     "不要把这条输入当作本地 shell 命令，也不要声称 executor 已执行。\n"
-    "- 使用 suggest_command 后，向用户说明命令作用并提示可点击 Insert 插入终端执行。\n"
+    "- 当用户需要自行在终端运行一条命令且本轮 schema 有 suggest_command 时，必须调用它生成命令卡；"
+    "不要把可执行命令写在正文、反引号或普通代码围栏中。命令卡会提供 BASH、Run、复制和预测回显。\n"
     # TDSF 2026-08-31 (问题2修复): 用户实测反馈回答含大量 emoji（👋💻🔧📚）。
     # 2026-09-01 (用户实测): 目录树/架构图被写进普通段落，等宽对齐全毁——
     # 强制 fenced code block。
@@ -1175,8 +1176,9 @@ _LEGACY_TEACH_SKIN_PROMPT = (
 _TEACH_SKIN_PROMPT = (
     "\n\n教学皮肤（已开启）：\n"
     "系统会添加教学卡标记，你绝不能自行输出该标记。真正的教学每轮只推进一步："
-    "先用至多一个带 shell 映射的工具生成一张教学命令卡，然后只用一两句说明学生要观察什么，立刻停止。"
-    "禁止一次给多条命令、命令清单、Markdown shell 围栏，禁止调用 suggest_command、todo_write 或 get_terminal_output。\n"
+    "先用至多一个带 shell 映射的工具或 teach_command 生成一张教学命令卡，然后只用一两句说明学生要观察什么，立刻停止。"
+    "禁止一次给多条命令、命令清单、Markdown shell 围栏、反引号命令或在正文嵌入命令；任何可执行命令都必须进入教学命令卡。"
+    "禁止调用 suggest_command、todo_write 或 get_terminal_output。\n"
     "教学命令卡不代表后端已经执行。本轮工具调用不会得到执行结果；学生点击后会在当前可见终端输入并执行。"
     "禁止工具调用后假定执行结果；只有 `<teaching-command-result>` 才是执行证据。收到该结果后，"
     "先解释本步回显，再按同样规则给下一张且仅一张命令卡。\n"

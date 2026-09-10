@@ -60,7 +60,9 @@ describe("TeachCommandCard", () => {
     );
 
     expect(startTeachingCommand).not.toHaveBeenCalled();
+    expect(screen.getByText("BASH")).toBeTruthy();
     expect(screen.getByText("预期回显")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制命令" })).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "教学命令：点击注入终端执行" }),
     );

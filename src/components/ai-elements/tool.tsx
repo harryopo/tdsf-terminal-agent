@@ -21,6 +21,7 @@ import {
   BookOpen01Icon,
   Cancel01Icon,
   CheckListIcon,
+  CopyIcon,
   Edit02Icon,
   EyeIcon,
   File01Icon,
@@ -1625,6 +1626,99 @@ function CodeBlockMini({ code }: { code: string; language: string }) {
   );
 }
 
+function TerminalCommandCard({
+  command,
+  onRun,
+  runLabel,
+  runTitle,
+  runAriaLabel,
+  disabled = false,
+  tone = "default",
+}: {
+  command: string;
+  onRun: () => void;
+  runLabel: string;
+  runTitle: string;
+  runAriaLabel: string;
+  disabled?: boolean;
+  tone?: "default" | "teach";
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number>(0);
+  const teach = tone === "teach";
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
+  const onCopy = async () => {
+    if (!navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access is host-controlled; keep the command visible if denied.
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        "overflow-hidden rounded border",
+        teach
+          ? "border-violet-500/20 bg-violet-500/5"
+          : "border-border/60 bg-muted/40",
+      )}
+    >
+      <div
+        className={cn(
+          "flex items-center justify-between gap-2 border-b px-2.5 py-1",
+          teach ? "border-violet-500/20" : "border-border/50",
+        )}
+      >
+        <span
+          className={cn(
+            "font-mono text-[10px] font-medium tracking-wide",
+            teach
+              ? "text-violet-600 dark:text-violet-400"
+              : "text-muted-foreground",
+          )}
+        >
+          BASH
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onRun}
+            disabled={disabled}
+            className={cn(
+              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
+              "hover:bg-muted/80 disabled:cursor-default disabled:opacity-60",
+              teach && "text-violet-600 hover:bg-violet-500/10 dark:text-violet-400",
+            )}
+            aria-label={runAriaLabel}
+            title={runTitle}
+          >
+            <HugeiconsIcon icon={disabled ? Tick02Icon : TerminalIcon} size={11} strokeWidth={1.75} />
+            <span>{runLabel}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void onCopy()}
+            className="rounded p-1 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            aria-label="复制命令"
+            title="复制命令"
+          >
+            <HugeiconsIcon icon={copied ? Tick02Icon : CopyIcon} size={11} strokeWidth={1.75} />
+          </button>
+        </div>
+      </div>
+      <pre className="overflow-auto p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap">
+        {command}
+      </pre>
+    </div>
+  );
+}
+
 function SuggestCommandCard({
   command,
   explanation,
@@ -1672,44 +1766,20 @@ function SuggestCommandCard({
       {explanation ? (
         <div className="text-[11px] text-muted-foreground">{explanation}</div>
       ) : null}
-      <div className="flex items-stretch gap-1.5 rounded bg-muted/40 overflow-hidden">
-        <pre className="flex-1 overflow-auto p-2 font-mono text-[11px] leading-relaxed">
-          {command}
-        </pre>
-        <button
-          type="button"
-          onClick={onInsert}
-          disabled={action !== null}
-          className={cn(
-            "shrink-0 flex items-center gap-1 px-2.5 text-[11px] font-medium",
-            "border-l border-border/60",
-            "hover:bg-muted/80 active:bg-muted",
-            "disabled:opacity-60 disabled:cursor-default disabled:hover:bg-transparent",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          )}
-          aria-label="执行命令（打字机注入终端）"
-          title={
-            executeOnClick
-              ? "自动模式下会立即执行"
-              : "仅插入终端；由你自行确认执行"
-          }
-        >
-          <HugeiconsIcon
-            icon={action ? Tick02Icon : TerminalIcon}
-            size={12}
-            strokeWidth={1.75}
-          />
-          <span>
-            {action === "executed"
-              ? "已执行"
-              : action === "inserted"
-                ? "已插入"
-                : executeOnClick
-                  ? "执行"
-                  : "插入终端"}
-          </span>
-        </button>
-      </div>
+      <TerminalCommandCard
+        command={command}
+        onRun={onInsert}
+        disabled={action !== null}
+        runLabel={
+          action === "executed" ? "已执行" : action === "inserted" ? "已粘贴" : "Run"
+        }
+        runAriaLabel="运行命令：粘贴到活动终端"
+        runTitle={
+          executeOnClick
+            ? "自动模式下会立即执行"
+            : "粘贴到活动终端；由你自行确认执行"
+        }
+      />
       {/* TDSF 魔改 (2026-08-09): 预测回显——让用户提前知道命令执行后应看到什么 */}
       {predictedOutput ? (
         <div className="rounded border border-dashed border-border/50 bg-muted/20">
@@ -1848,34 +1918,15 @@ function TeachCommandCard({
       {explanation ? (
         <div className="text-[11px] text-muted-foreground">{explanation}</div>
       ) : null}
-      {/* 命令 + 执行按钮 */}
-      <div className="flex items-stretch gap-1.5 overflow-hidden rounded border border-violet-500/20 bg-violet-500/5">
-        <pre className="flex-1 overflow-auto p-2 font-mono text-[11px] leading-relaxed">
-          {command}
-        </pre>
-        <button
-          type="button"
-          onClick={onExecute}
-          disabled={executionId !== null}
-          className={cn(
-            "shrink-0 flex items-center gap-1 px-2.5 text-[11px] font-medium",
-            "border-l border-violet-500/20",
-            "text-violet-600 dark:text-violet-400",
-            "hover:bg-violet-500/10 active:bg-violet-500/20",
-            "disabled:opacity-60 disabled:cursor-default disabled:hover:bg-transparent",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500",
-          )}
-          aria-label="教学命令：点击注入终端执行"
-          title="教学模式：点击后命令以打字机方式注入终端执行，请观察终端输出"
-        >
-          <HugeiconsIcon
-            icon={executionId ? Tick02Icon : TerminalIcon}
-            size={12}
-            strokeWidth={1.75}
-          />
-          <span>{executionId ? "已提交终端" : "执行"}</span>
-        </button>
-      </div>
+      <TerminalCommandCard
+        command={command}
+        onRun={onExecute}
+        disabled={executionId !== null}
+        runLabel={executionId ? "已提交" : "Run"}
+        runAriaLabel="教学命令：点击注入终端执行"
+        runTitle="教学模式：点击后命令以打字机方式注入终端执行，请观察终端输出"
+        tone="teach"
+      />
       {/* 影响预测（复用 A1 术语） */}
       {impactText ? (
         <div className="text-[10px] text-muted-foreground/80">

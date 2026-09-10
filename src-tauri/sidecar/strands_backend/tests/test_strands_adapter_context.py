@@ -66,6 +66,14 @@ class TestTeachContinuationIntent(unittest.TestCase):
         self.assertNotIn("todo_write", names)
         self.assertNotIn("get_terminal_output", names)
 
+    def test_teach_prompt_requires_command_cards_instead_of_prose_commands(self):
+        from strands_backend.adapter import _compose_system_prompt
+
+        prompt = _compose_system_prompt(AgentMode.OBSERVE, teach=True)
+        self.assertIn("teach_command", prompt)
+        self.assertIn("反引号命令", prompt)
+        self.assertIn("任何可执行命令都必须进入教学命令卡", prompt)
+
     def test_runtime_always_registers_dedicated_teaching_card_tool(self):
         from strands_backend.adapter import StrandsAgentAdapter
         from strands_backend.tools import ToolContext
