@@ -17,7 +17,7 @@
 //! ## 8 项注意事项的分工（§4.8.2）
 //!
 //! 1. 清行等 prompt      → 调用方命令（`pty_write_human` / `ssh_write_human`）：
-//!    pump 前写 `\x03` 清理旧输入，随后立即开始写入（不人为等待 prompt）
+//!    pump 前写 `\x03\r` 清理旧输入并换行，随后立即开始写入（不人为等待 prompt）
 //! 2. 控制字符禁令       → `sanitize_typing_text`：剥 `\t` 与转义序列，
 //!    只允许可打印字符 + `\r`；多字节整块写
 //! 3. 随机延迟           → `weibull_delay`（本模块内置，禁止匀速）
@@ -408,10 +408,10 @@ where
     // bang_warning 同时被 pump 任务与返回值消费，clone 一份进任务
     let task_bang_warning = bang_warning.clone();
     tauri::async_runtime::spawn(async move {
-        // 8 项之 1：清掉用户可能已经输入的旧行；不要固定等待，
+        // 8 项之 1：清掉用户可能已经输入的旧行并提交空行；不要固定等待，
         // 否则点击 Run 后首字符会出现可感知的空档。PTY/SSH 会按字节顺序
-        // 处理 Ctrl-C 后续输入，首字符由 human_type_write 立即写出。
-        if let Err(e) = write(b"\x03".to_vec()).await {
+        // 处理 Ctrl-C + Enter 后续输入，首字符由 human_type_write 立即写出。
+        if let Err(e) = write(b"\x03\r".to_vec()).await {
             log::warn!("[human_type] {target} id={id} clear-line failed: {e}");
         }
 
