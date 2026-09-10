@@ -146,7 +146,7 @@ pub fn pty_write(
 /// 打字结束/打断通过 `terminal:human_typing` end 事件通知前端。
 ///
 /// 8 项注意事项落地（详见 human_type.rs 模块注释）：
-/// - 之 1：pump 前写 `\x03` 清行后立即开始输入，不增加固定等待
+/// - 之 1：pump 前写 `\x03\r` 清行并换行后立即开始输入，不增加固定等待
 /// - 之 4：`sudo`（非 `-n`）→ 整段注入降级 + 警告（密码场景 echo 关闭，视觉无效）
 /// - 之 5：pty_write 每次用户键盘写入 bump user_input_seq，pump 轮询即停
 /// - 之 6：多次注入由调用方串行保证（Agent 审批逐条天然串行）

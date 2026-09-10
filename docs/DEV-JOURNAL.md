@@ -2966,3 +2966,11 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **修复**：保留 `Ctrl-C` 清理用户可能已输入的旧行，但移除清行后的固定 sleep，让首字符在清行写入完成后立即进入 PTY/SSH。全局节奏恢复到此前验证过的 `DEFAULT_ALPHA=0.04`、`DEFAULT_ALPHA_EOW=0.12`、`DEFAULT_MIN=0.02`、`DEFAULT_MAX=0.4`；长命令 1.2 秒总预算和同一 `agentTypingSpeed` 跨模式规则保持不变。设置页估算同步回到正常节奏口径。
 
 **验证**：Rust `cargo test human_type --lib` 独立 target **11 passed**；未改动的桌面开发进程保持运行。用户需重启桌面端/sidecar 后先在可见终端空行点击普通 Run，再在教学卡点击 Run，确认两者均立即出现首字符、随后按同一速度逐字输入。
+
+### 37.144 打字机清行补回车（2026-09-10 ✅）
+
+**用户复测**：打字机清理当前终端输入时只发送了 `Ctrl-C`，下一条命令紧接在 shell 回显的 `^C` 后面，形成 `^Cfirewall-cmd`，导致命令名错误。
+
+**修复**：清行序列改为 `Ctrl-C + 回车`（`\x03\r`），先结束并换行当前输入，再立即进入逐字符写入；没有恢复固定等待，也没有改变普通/教学模式的全局速度规则。
+
+**验证**：Rust `human_type` 定向回归由 Luna 子 agent 执行；用户重启桌面端/sidecar 后，在可见终端已有残留输入和空提示符两种状态分别点击 Run，确认命令从新提示符开始显示。
