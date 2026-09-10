@@ -2950,3 +2950,11 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **修复**：凡工具输出为 `teach_command`，前端都隐藏原始 Input，只显示教学步骤说明、`BASH / Run / 复制` 与预测回显，不区分专用工具或映射工具。教学结果关联保留同 terminal leaf、点击后的时间边界；对复合命令额外接受本次注入且 terminal 标记为 agent 的首段，和可见终端执行使用同一受限规则，不会把普通用户命令误交给教学卡。提示词改为一张卡一条 shell 命令，禁止 `;`、`&&`、`||` 串联步骤，且没有映射时必须使用 `teach_command`，不再允许正文 bash 代码块绕过卡片。
 
 **验证**：TeachCard/教学执行定向 Vitest **11 passed**；Python 教学契约 **18 passed / 10 skipped**；`pnpm typecheck`、`pnpm lint`、`git diff --check` 通过。用户重启桌面端后，之前产生的卡不会恢复；请新开教学回合验证单条命令卡的回显与“基于结果继续讲解”。
+
+### 37.142 全局打字机响应与速度调校（2026-09-10 ✅）
+
+**用户反馈**：点击命令卡 Run 后，命令较久才在终端出现；希望逐字演示节奏更慢，且教学模式与其他模式共用同一全局速度。
+
+**修复**：将 human_type 的全局 1× 字符/词尾节奏调慢（0.08/0.20、下限 0.04、上限 0.6），长命令可见节奏预算改为 1.2 秒；打字机清理当前输入行后的固定等待由 300ms 降到 100ms，首字符更快可见。未增加教学专用速度，教学、确认和自动模式均读取同一 `agentTypingSpeed` 偏好；设置页同步更新耗时提示。
+
+**验证**：Rust `cargo test human_type --lib` 独立 target **11 passed**；`pnpm typecheck`、本次文件定向 lint、`git diff --check` 通过。全仓 lint 仍被未改动的 `promo-video/src/TDSFPromo.tsx` 与 `promo-video/src/lib/helpers/camera.tsx` 既有问题阻断。用户需重启桌面端/sidecar 后在普通命令卡和教学命令卡各点一次 Run，确认首字符更快出现、整体逐字节奏更慢。

@@ -4859,3 +4859,7 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 ### 37.141 教学卡简化与复合命令回显关联（2026-09-10 ✅）
 
 教学命令不再展示重复 JSON Input，统一只保留教学说明、命令卡和预测回显。Bash 对复合输入可能只上报首段，导致先前教学卡全文匹配超时并占住 terminal lock；现在仅当首段来自本次 Agent 注入、同 leaf 且在点击后，才允许作为教学结果，普通用户命令仍不能误匹配。提示词强制一张卡一条命令，禁止 `;`、`&&`、`||`，且禁止正文 bash 代码块绕过卡片。定向 Vitest **11 passed**、Python **18 passed / 10 skipped**、typecheck/lint/diff-check 通过；重启后从新教学回合复测。
+
+### 37.142 全局打字机响应与速度调校（2026-09-10 ✅，待用户原生复测）
+
+点击命令卡 Run 后的首字符等待从 300ms 降为 100ms；human_type 全局 1× 的字符/词尾节奏调整为 0.08/0.20 秒，下限 0.04、上限 0.6，长命令展示预算为 1.2 秒。教学、确认、自动模式不再区分速度，均读取同一 `agentTypingSpeed` 设置；设置页耗时提示已同步。Rust `cargo test human_type --lib` 独立 target **11 passed**，前端 typecheck 与本次文件定向 lint 通过。全仓 lint 仍有宣传视频目录的既有问题，未混入本次修复。

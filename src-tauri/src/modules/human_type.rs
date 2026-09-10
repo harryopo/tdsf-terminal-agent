@@ -38,17 +38,16 @@ use std::time::{Duration, Instant};
 
 use tauri::Emitter;
 
-/// 平均字符间隔（2026-09-03 用户钦定提速：0.1s→0.04s，命令注入更快）
-pub const DEFAULT_ALPHA: f64 = 0.04;
-/// 词尾转换平均间隔（2026-09-03 提速：0.3s→0.12s，保留词尾迟疑人味）
-pub const DEFAULT_ALPHA_EOW: f64 = 0.12;
+/// 平均字符间隔（全局 1×：保留清晰可见的逐字演示节奏）
+pub const DEFAULT_ALPHA: f64 = 0.08;
+/// 词尾转换平均间隔（全局 1×：词间稍作停顿，便于教学观看）
+pub const DEFAULT_ALPHA_EOW: f64 = 0.20;
 /// Weibull 形状参数（1.0 = 指数分布，纯随机到达）
 pub const DEFAULT_SHAPE: f64 = 1.0;
-/// 单次延迟下限（2026-09-03 提速：0.05s→0.02s）
-pub const DEFAULT_MIN: f64 = 0.02;
-/// 单次延迟上限（2026-09-03 提速：2.0s→0.4s，消除指数分布长尾导致的
-/// 单字符 2s 卡顿——这是用户实测“打字太慢、时间间隔太长”的主因）
-pub const DEFAULT_MAX: f64 = 0.4;
+/// 单次延迟下限（避免字符挤在一起，仍可通过速度倍率调节）
+pub const DEFAULT_MIN: f64 = 0.04;
+/// 单次延迟上限（限制随机长尾，避免偶发的单字符停顿）
+pub const DEFAULT_MAX: f64 = 0.6;
 
 /// 速度倍率范围（设置页滑杆 0.2×~5×，与 spec 一致）
 pub const SPEED_MIN: f64 = 0.2;
@@ -61,13 +60,13 @@ const STOP_POLL_SLICE: Duration = Duration::from_millis(50);
 /// Keep a long command visibly typed without making the execution wait for a
 /// proportional amount of animation. Short commands retain the natural pace.
 const LONG_COMMAND_THRESHOLD_CHARS: usize = 80;
-const LONG_COMMAND_TYPING_CAP: Duration = Duration::from_millis(900);
+const LONG_COMMAND_TYPING_CAP: Duration = Duration::from_millis(1_200);
 
 /// pump 前写 \x03 清行后等新 prompt 的时长（8 项之 1）。
 /// Rust 侧无 OSC 133 block 状态（block 流水账在前端 xterm 解析层），
 /// 无法精确等待 133;A —— 采用任务书允许的最小实现：固定超时等待，
 /// 覆盖 shell 处理 Ctrl-C 并重绘 prompt 的典型耗时。
-const PROMPT_SETTLE_DELAY: Duration = Duration::from_millis(300);
+const PROMPT_SETTLE_DELAY: Duration = Duration::from_millis(100);
 
 /// 打字机事件（跟随 session.rs AGENT_EVENT 的 emit 惯例）
 pub const HUMAN_TYPING_EVENT: &str = "terminal:human_typing";

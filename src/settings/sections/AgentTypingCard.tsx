@@ -52,12 +52,12 @@ const CHANNEL_OPTIONS: Array<{
   { value: "visible-terminal", label: "可见终端 Shell" },
 ];
 
-/** 速度倍率 → 演示文案（80 字符命令的典型耗时，expect 经典参数估算） */
+/** 速度倍率 → 演示文案（80 字符命令的典型耗时） */
 function speedHint(speed: number): string {
-  // 平均字符间隔 ≈ (0.1~0.3)s / speed，80 字符 ≈ 80×0.15/speed + 词尾停顿
-  const sec = Math.round((80 * 0.18) / speed);
+  // 全局 1× 采用清晰可见的节奏；更高倍率仍用于快速演示。
+  const sec = Math.round((80 * 0.24) / speed);
   if (speed >= 3) return "快速（约数秒 / 80 字符）";
-  if (speed <= 0.5) return "慢速教学（约 1 分钟 / 80 字符）";
+  if (speed <= 0.5) return "慢速教学（约 30 秒 / 80 字符）";
   return `约 ${sec}~${sec + 8} 秒 / 80 字符`;
 }
 
@@ -137,7 +137,7 @@ export function AgentTypingCard() {
         </div>
       </SettingRow>
       <p className="text-[11px] leading-5 text-muted-foreground">
-        注：打字机只影响可见终端的输入节奏。长命令会自动加速，展示输入最多约 1 秒；命令的超时从回车提交后开始计算。
+        注：打字机只影响可见终端的输入节奏。长命令会自动加速以避免等待过久；命令的超时从回车提交后开始计算。
       </p>
     </div>
   );
