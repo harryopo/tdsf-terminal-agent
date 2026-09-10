@@ -17,8 +17,7 @@
 //! ## 8 项注意事项的分工（§4.8.2）
 //!
 //! 1. 清行等 prompt      → 调用方命令（`pty_write_human` / `ssh_write_human`）：
-//!    pump 前写 `\x03` + 固定 300ms 等待（Rust 侧无
-//!    OSC 133 block 状态，采用简单超时等待的最小实现）
+//!    pump 前写 `\x03` 清理旧输入，随后立即开始写入（不人为等待 prompt）
 //! 2. 控制字符禁令       → `sanitize_typing_text`：剥 `\t` 与转义序列，
 //!    只允许可打印字符 + `\r`；多字节整块写
 //! 3. 随机延迟           → `weibull_delay`（本模块内置，禁止匀速）
@@ -38,16 +37,16 @@ use std::time::{Duration, Instant};
 
 use tauri::Emitter;
 
-/// 平均字符间隔（全局 1×：保留清晰可见的逐字演示节奏）
-pub const DEFAULT_ALPHA: f64 = 0.08;
-/// 词尾转换平均间隔（全局 1×：词间稍作停顿，便于教学观看）
-pub const DEFAULT_ALPHA_EOW: f64 = 0.20;
+/// 平均字符间隔（全局 1×：正常可见打字节奏）
+pub const DEFAULT_ALPHA: f64 = 0.04;
+/// 词尾转换平均间隔（全局 1×：保留轻微词间停顿）
+pub const DEFAULT_ALPHA_EOW: f64 = 0.12;
 /// Weibull 形状参数（1.0 = 指数分布，纯随机到达）
 pub const DEFAULT_SHAPE: f64 = 1.0;
 /// 单次延迟下限（避免字符挤在一起，仍可通过速度倍率调节）
-pub const DEFAULT_MIN: f64 = 0.04;
+pub const DEFAULT_MIN: f64 = 0.02;
 /// 单次延迟上限（限制随机长尾，避免偶发的单字符停顿）
-pub const DEFAULT_MAX: f64 = 0.6;
+pub const DEFAULT_MAX: f64 = 0.4;
 
 /// 速度倍率范围（设置页滑杆 0.2×~5×，与 spec 一致）
 pub const SPEED_MIN: f64 = 0.2;
@@ -61,12 +60,6 @@ const STOP_POLL_SLICE: Duration = Duration::from_millis(50);
 /// proportional amount of animation. Short commands retain the natural pace.
 const LONG_COMMAND_THRESHOLD_CHARS: usize = 80;
 const LONG_COMMAND_TYPING_CAP: Duration = Duration::from_millis(1_200);
-
-/// pump 前写 \x03 清行后等新 prompt 的时长（8 项之 1）。
-/// Rust 侧无 OSC 133 block 状态（block 流水账在前端 xterm 解析层），
-/// 无法精确等待 133;A —— 采用任务书允许的最小实现：固定超时等待，
-/// 覆盖 shell 处理 Ctrl-C 并重绘 prompt 的典型耗时。
-const PROMPT_SETTLE_DELAY: Duration = Duration::from_millis(100);
 
 /// 打字机事件（跟随 session.rs AGENT_EVENT 的 emit 惯例）
 pub const HUMAN_TYPING_EVENT: &str = "terminal:human_typing";
@@ -318,7 +311,7 @@ pub struct HumanTypingGuard {
 }
 
 /// 两端共用的人味注入编排：sudo 降级判定 → 重入闸门 → start 事件 →
-/// 清行等 prompt → spawn 后台 pump → end 事件。
+/// 清行 → 立即 spawn 后台 pump → end 事件。
 ///
 /// `write` 为该端的具体写入实现（pty writer / russh data_bytes）；
 /// pump 在 tauri async runtime 后台运行，本函数立即返回。
@@ -415,11 +408,12 @@ where
     // bang_warning 同时被 pump 任务与返回值消费，clone 一份进任务
     let task_bang_warning = bang_warning.clone();
     tauri::async_runtime::spawn(async move {
-        // 8 项之 1：清行并等 prompt（PROMPT_SETTLE_DELAY，见常量注释）。
+        // 8 项之 1：清掉用户可能已经输入的旧行；不要固定等待，
+        // 否则点击 Run 后首字符会出现可感知的空档。PTY/SSH 会按字节顺序
+        // 处理 Ctrl-C 后续输入，首字符由 human_type_write 立即写出。
         if let Err(e) = write(b"\x03".to_vec()).await {
             log::warn!("[human_type] {target} id={id} clear-line failed: {e}");
         }
-        tokio::time::sleep(PROMPT_SETTLE_DELAY).await;
 
         let outcome = human_type_write(write, &clean, speed, should_stop).await;
         if outcome.stopped {

@@ -54,8 +54,8 @@ const CHANNEL_OPTIONS: Array<{
 
 /** 速度倍率 → 演示文案（80 字符命令的典型耗时） */
 function speedHint(speed: number): string {
-  // 全局 1× 采用清晰可见的节奏；更高倍率仍用于快速演示。
-  const sec = Math.round((80 * 0.24) / speed);
+  // 全局 1× 采用正常可见的节奏；更高倍率仍用于快速演示。
+  const sec = Math.round((80 * 0.18) / speed);
   if (speed >= 3) return "快速（约数秒 / 80 字符）";
   if (speed <= 0.5) return "慢速教学（约 30 秒 / 80 字符）";
   return `约 ${sec}~${sec + 8} 秒 / 80 字符`;
