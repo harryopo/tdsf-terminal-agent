@@ -6,6 +6,10 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import {
+  onSshCommandOutput,
+  type SshCommandOutputEvent,
+} from "@/lib/sidecar-bridge";
 import { cn } from "@/lib/utils";
 import {
   formatTeachingResultForAgent,
@@ -518,6 +522,88 @@ const HEAVY_CONTENT_TOOLS = new Set([
   "todo_write",
 ]);
 
+const MAX_LIVE_SSH_OUTPUT = 65_536;
+
+function appendLiveSshOutput(current: string, chunk: string): string {
+  const combined = current + chunk;
+  return combined.length <= MAX_LIVE_SSH_OUTPUT
+    ? combined
+    : combined.slice(-MAX_LIVE_SSH_OUTPUT);
+}
+
+function SshCommandLiveOutput({ command }: { command: string }) {
+  const sessionId = useChatStore((state) => state.activeSessionId);
+  const [live, setLive] = useState<SshCommandOutputEvent | null>(null);
+  const [output, setOutput] = useState("");
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten = () => {};
+
+    void onSshCommandOutput((event) => {
+      if (disposed) return;
+      if (
+        event.conversationSessionId &&
+        event.conversationSessionId !== sessionId
+      ) {
+        return;
+      }
+      if (event.command.trim() !== command.trim()) return;
+
+      setLive(event);
+      setOutput((current) =>
+        event.status === "running" && event.stream === "status"
+          ? event.chunk
+          : appendLiveSshOutput(current, event.chunk),
+      );
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten();
+    };
+  }, [command, sessionId]);
+
+  const completed = live?.status === "completed";
+  const failed = live?.status === "failed";
+  const label = completed ? "已完成" : failed ? "执行失败" : "实时回显";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            completed && "bg-emerald-500",
+            failed && "bg-destructive",
+            !completed && !failed && "animate-pulse bg-sky-500",
+          )}
+        />
+        <span
+          className={cn(
+            "font-medium",
+            completed && "text-emerald-700 dark:text-emerald-400",
+            failed && "text-destructive",
+            !completed && !failed && "text-sky-700 dark:text-sky-400",
+          )}
+        >
+          {label}
+        </span>
+      </div>
+      <pre
+        aria-live="polite"
+        className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words"
+      >
+        {output || (live?.status === "running" ? "等待远端输出…" : "等待命令开始…")}
+      </pre>
+    </div>
+  );
+}
+
 const ToolImpl = ({
   className,
   toolName,
@@ -548,6 +634,14 @@ const ToolImpl = ({
   const catColor = CATEGORY_META[meta.category].color;
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
+  const sshCommand =
+    toolName === "ssh_command" &&
+    input &&
+    typeof input === "object" &&
+    typeof (input as Record<string, unknown>).command === "string"
+      ? ((input as Record<string, unknown>).command as string)
+      : null;
+  const showLiveSshOutput = state === "input-streaming" && Boolean(sshCommand);
   // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
   // part 状态停在 output-available → 状态点会谎报 done。内容判失败时同步降级徽标。
   const innerFailure = state === "output-available" && isFailedOutput(output);
@@ -559,7 +653,7 @@ const ToolImpl = ({
       : "";
   const innerFailureLabel =
     innerFailureStatus === "unmatched" ? "未匹配" : "failed";
-  const open = defaultOpen ?? isError;
+  const open = defaultOpen ?? (isError || showLiveSshOutput);
   const isHeavy = HEAVY_CONTENT_TOOLS.has(toolName);
   // For heavy tools, only show details on error — never the streamed input
   // body, which is huge and re-renders per token.
@@ -570,7 +664,7 @@ const ToolImpl = ({
     output !== undefined &&
     (!isHeavy || innerFailure || isError || toolName === "write_remote_file");
   const hasDetails =
-    showInputBody || showOutputBody || Boolean(errorText);
+    showInputBody || showOutputBody || Boolean(errorText) || showLiveSshOutput;
 
   return (
     <Collapsible
@@ -628,6 +722,9 @@ const ToolImpl = ({
           <div className="ml-3 mt-1 space-y-2 border-l border-border/60 pl-3 pb-1">
             {showInputBody ? (
               <ToolInput toolName={toolName} input={input} />
+            ) : null}
+            {showLiveSshOutput && sshCommand ? (
+              <SshCommandLiveOutput command={sshCommand} />
             ) : null}
             {showOutputBody || errorText ? (
               <ToolOutput

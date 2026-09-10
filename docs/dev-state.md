@@ -4821,3 +4821,11 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 **收口实现**：教学 observe 改为独立 schema，只保留 shell 映射工具与知识/提问等无终端副作用辅助工具，明确排除 `suggest_command`、`todo_write`、`get_terminal_output`。专用系统提示覆盖通用 observe 规则，要求“每轮至多一张命令卡 → 学生在当前可见终端执行 → 精确结果回传 → 才能下一步”；工具包装器按回合门闩拒绝第二张卡或无法映射工具，绝不回退后台执行。回调首分片强制注入一个教学标记，前端消除标记专用空分片；`TeachCommandCard` 显示不伪造真实值的预期回显。
 
 **自动化**：完整 sidecar pytest 首跑 **2231 passed / 1 failed**，失败仅为仍断言旧教学提示词的测试；同步契约后受影响 **276 passed**。Python 定向教学回归 **24 passed**；前端 TeachCard/教学命令卡 **11 passed**；`pnpm typecheck`、`pnpm lint`、`cargo check`、`git diff --check` 通过。普通 observe/confirm/auto 路径保持不变。原生验收由用户在教学模式中验证：首轮仅一张紫色命令卡、没有“命令建议 error”；点击后命令只进入当前可见终端，取得回显并点击“基于结果继续讲解”后才出现下一步。
+
+### 37.135 SSH 实时回显归位至工具卡（2026-09-10 ✅，待用户原生复测）
+
+**用户决策**：原生 SSH output 不应脱离触发它的工具调用，独立对话面板既重复又破坏信息归属；只保留 SSH 工具卡内可折叠、实时更新的回显。
+
+**实现**：移除 `SshCommandOutputPanel` 及其独立测试和 `AiChat` 挂载点；不移除 sidecar 的输出监听，它仍是长命令活动感知的必要输入。`Tool` 在 `ssh_command` 处于 `input-streaming` 时按当前 conversation session 与命令原文订阅流事件、自动展开卡片、逐块追加 stdout/stderr/status；完成后的结构化 `SshCommandOutput` 仍在同一卡片渲染。卡内保留 64 KiB 截尾保护，避免无限输出导致前端失稳。
+
+**验证与下一步**：新增工具卡回归覆盖块追加、完成状态及跨会话/跨命令隔离，**2/2 passed**；`pnpm typecheck`、`pnpm lint`、`git diff --check` 全绿。尚未把浏览器 mock 视为桌面端验收：用户应执行动态 `dnf` 或长输出命令，确认不再出现独立“SSH Output”，且实时回显仅在对应 SSH 工具折叠卡内更新。

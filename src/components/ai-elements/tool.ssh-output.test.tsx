@@ -4,8 +4,8 @@ import {
   onSshCommandOutput,
   type SshCommandOutputEvent,
 } from "@/lib/sidecar-bridge";
-import { useChatStore } from "../store/chatStore";
-import { SshCommandOutputPanel } from "./SshCommandOutputPanel";
+import { useChatStore } from "@/modules/ai/store/chatStore";
+import { Tool } from "./tool";
 
 let outputCallback: ((event: SshCommandOutputEvent) => void) | null = null;
 
@@ -18,20 +18,13 @@ vi.mock("@/lib/sidecar-bridge", () => ({
   ),
 }));
 
-async function mount() {
-  render(<SshCommandOutputPanel />);
-  await act(async () => {
-    await Promise.resolve();
-  });
-}
-
 function emit(event: Partial<SshCommandOutputEvent>) {
   act(() => {
     outputCallback?.({
       operationId: "op-1",
       conversationSessionId: "sess-1",
       sshSessionId: 1,
-      toolName: "package_manage",
+      toolName: "ssh_command",
       command: "dnf install -y fastfetch",
       stream: "stdout",
       chunk: "",
@@ -41,17 +34,33 @@ function emit(event: Partial<SshCommandOutputEvent>) {
   });
 }
 
+async function mount() {
+  render(
+    <Tool
+      toolName="ssh_command"
+      state="input-streaming"
+      input={{ command: "dnf install -y fastfetch" }}
+    />,
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   outputCallback = null;
   vi.mocked(onSshCommandOutput).mockClear();
   useChatStore.setState({ activeSessionId: "sess-1" });
 });
 
-it("逐块显示 SSH 原生输出并在完成后变更状态", async () => {
+it("在同一 SSH 工具卡内逐块展示实时回显", async () => {
   await mount();
 
+  expect(screen.getByText("等待命令开始…")).toBeTruthy();
+  expect(screen.queryByText("SSH Output")).toBeNull();
+
   emit({ stream: "status" });
-  expect(screen.getByText("实时执行中")).toBeTruthy();
+  expect(screen.getByText("实时回显")).toBeTruthy();
   expect(screen.getByText("等待远端输出…")).toBeTruthy();
 
   emit({ chunk: "Downloading packages…\n" });
@@ -63,8 +72,12 @@ it("逐块显示 SSH 原生输出并在完成后变更状态", async () => {
   expect(screen.getByText("已完成")).toBeTruthy();
 });
 
-it("忽略其他对话的后台输出", async () => {
+it("忽略其他会话或其他命令的流式回显", async () => {
   await mount();
-  emit({ conversationSessionId: "sess-2", chunk: "secret output" });
-  expect(screen.queryByText("secret output")).toBeNull();
+
+  emit({ conversationSessionId: "sess-2", chunk: "other session" });
+  emit({ command: "uname -a", chunk: "other command" });
+
+  expect(screen.queryByText("other session")).toBeNull();
+  expect(screen.queryByText("other command")).toBeNull();
 });
