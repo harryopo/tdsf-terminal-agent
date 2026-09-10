@@ -4851,3 +4851,7 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 ### 37.139 命令卡面与正文命令约束（2026-09-10 ✅）
 
 `suggest_command` 与 `teach_command` 已视觉统一为 `BASH + Run + 复制 + 预测回显`。普通建议的 Run 在非自动模式仅粘贴，教学模式的 Run 始终通过可见打字机执行并进入回显等待；两者不再因同名“命令卡”混淆安全语义。prompt 同时禁止在正文、反引号或普通 shell 围栏散落可执行命令，要求普通场景调用 `suggest_command`、教学场景调用映射工具或 `teach_command`。
+
+### 37.140 教学命令卡工具事件配对（2026-09-10 ✅）
+
+`teach_command` 与教学 shell 映射包装器此前只返回结果，漏发了前端配对工具卡所需的 `started` 事件；前端会安全丢弃孤儿 completed，故工具证据存在但命令卡不显示。现在两条路径均按同一协议发出 `started → completed`，并携带原参数、会话和来源；失败或等待结果同样闭合事件。教学卡不再渲染 impact 摘要，提示词也禁止正文复述“只读探测，无副作用”一类标签。Python 定向 **18 passed / 10 skipped**，前端命令卡定向 **10 passed**，typecheck/lint/diff-check 通过；需重启 sidecar 后在真实桌面复测。

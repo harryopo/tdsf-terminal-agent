@@ -54,6 +54,7 @@ describe("TeachCommandCard", () => {
           command: "ps -ef",
           explanation: "查看当前进程。",
           predicted_output: "将显示进程列表；具体内容取决于当前主机。",
+          impact: { summary: "只读探测，无副作用" },
         }}
         defaultOpen
       />,
@@ -62,6 +63,7 @@ describe("TeachCommandCard", () => {
     expect(startTeachingCommand).not.toHaveBeenCalled();
     expect(screen.getByText("BASH")).toBeTruthy();
     expect(screen.getByText("预期回显")).toBeTruthy();
+    expect(screen.queryByText("只读探测，无副作用")).toBeNull();
     expect(screen.getByRole("button", { name: "复制命令" })).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "教学命令：点击注入终端执行" }),

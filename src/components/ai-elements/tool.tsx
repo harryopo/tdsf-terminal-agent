@@ -950,14 +950,12 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     if (!cmd) return null;
     const explanation =
       typeof o.explanation === "string" ? o.explanation : null;
-    const impact = (o.impact as Record<string, unknown> | null) ?? null;
     const predictedOutput =
       typeof o.predicted_output === "string" ? o.predicted_output : null;
     return (
       <TeachCommandCard
         command={cmd}
         explanation={explanation}
-        impact={impact}
         predictedOutput={predictedOutput}
         toolName={toolName}
       />
@@ -1812,46 +1810,24 @@ function SuggestCommandCard({
 // ============================================================================
 // 与 SuggestCommandCard 的关键差异：
 // 1. 永不自动执行（即使 autoExecuteInTerminal=true + auto 模式），必须学生手动点击
-// 2. 显示影响预测（复用 A1 术语友好化）
+// 2. 显示命令预测回显，帮助学生判断下一步
 // 3. 教学模式专属紫色调（与 teach 模式强调色一致）
 // 4. 只以 TerminalBlockCollector 已划定的命令块回填结果；不读取全量滚屏
-
-function impactSummary(impact: Record<string, unknown> | null): string {
-  if (!impact) return "";
-  const summary = typeof impact.summary === "string" ? impact.summary : "";
-  if (summary) return summary;
-  const segments = Array.isArray(impact.segments)
-    ? (impact.segments as Array<Record<string, unknown>>)
-    : [];
-  if (segments.length === 0) return "";
-  const seg = segments[0];
-  const label = typeof seg.category_label === "string" ? seg.category_label : "";
-  const objs = Array.isArray(seg.objects)
-    ? (seg.objects as string[]).slice(0, 3).join("、")
-    : "";
-  if (label && objs) return `想${label}：${objs}`;
-  if (label) return `想${label}`;
-  const cmd = typeof seg.command === "string" ? seg.command : "";
-  return cmd ? `只读查看：${cmd.slice(0, 60)}` : "";
-}
 
 function TeachCommandCard({
   command,
   explanation,
-  impact,
   predictedOutput,
   toolName,
 }: {
   command: string;
   explanation: string | null;
-  impact: Record<string, unknown> | null;
   predictedOutput: string | null;
   toolName: string;
 }) {
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
   const [continued, setContinued] = useState(false);
-  const impactText = impactSummary(impact);
   const execution = useTeachingExecutionStore((state) =>
     executionId ? state.executions[executionId] ?? null : null,
   );
@@ -1927,12 +1903,6 @@ function TeachCommandCard({
         runTitle="教学模式：点击后命令以打字机方式注入终端执行，请观察终端输出"
         tone="teach"
       />
-      {/* 影响预测（复用 A1 术语） */}
-      {impactText ? (
-        <div className="text-[10px] text-muted-foreground/80">
-          影响：{impactText}
-        </div>
-      ) : null}
       {predictedOutput ? (
         <div className="rounded border border-dashed border-violet-500/20 bg-violet-500/5 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
           <span className="font-medium text-violet-600 dark:text-violet-400">

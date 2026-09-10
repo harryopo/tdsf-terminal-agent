@@ -2934,3 +2934,11 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **修复**：两类卡共用同一套命令面板：`BASH` 表头、`Run`、复制和命令原文；两者均保留预测回显。语义仍严格区分：普通建议在非自动模式只粘贴到终端，自动模式可按既有设置执行；教学卡始终由学生点击、可见打字机执行，并等待精确关联的回显后才能继续讲解。后端提示词要求普通命令用 `suggest_command`，教学命令只用 shell 映射工具或 `teach_command`，禁止把可执行命令嵌入正文、反引号或 Markdown 围栏。
 
 **验证**：教学卡与 Markdown 命令卡前端定向 Vitest **10 passed**；Python 教学契约 **16 passed / 10 skipped**；`pnpm typecheck` 通过。
+
+### 37.140 教学命令卡工具事件配对（2026-09-10 ✅）
+
+**问题**：`teach_command` 与被教学包装的 shell 映射工具都直接返回了 `teach_command` 结果，却没有发送正常工具调用所需的 `started → completed` 事件。前端为防止跨轮迟到结果错误挂载，明确丢弃没有匹配 started 的 completed；因此“证据”可统计到一次调用，紫色教学命令卡却无法构建。
+
+**修复**：两条教学路径均通过同一事件助手发送成对事件，参数、会话和来源与普通工具调用保持一致；映射失败及单步等待结果也会闭合其事件。前端移除教学卡的影响摘要行，提示词要求正文不再复述“只读探测，无副作用”等标签，只保留步骤说明与预测回显。
+
+**验证**：Python 教学契约 **18 passed / 10 skipped**，新增独立卡和映射卡均发出成对事件的断言；教学卡与 Markdown 命令卡 Vitest **10 passed**，另断言即使后端携带 impact 字段，卡面不显示该标签；`pnpm typecheck`、`pnpm lint`、`git diff --check` 通过。桌面端需重启 sidecar 后复测“教我部署一个 Web 网页”：第一步应有 `BASH / Run / 复制 / 预期回显` 卡面，而非仅一条证据。
