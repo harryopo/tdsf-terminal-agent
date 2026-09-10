@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_backend.tools import ToolContext, tool
+from strands_backend.tools import ToolContext, emit_teach_tool_call, tool
 from strands_backend.tools.command_impact import analyze
 
 
@@ -68,14 +68,15 @@ def make_teach_command_tool(ctx: ToolContext):
             explanation: 让学生观察什么的简短说明。
             predicted_output: 预期能看到的现象，不能编造具体主机数据。
         """
-        return invoke_teach_command_tool(
-            {
-                "command": command,
-                "explanation": explanation,
-                "predicted_output": predicted_output,
-            },
-            ctx,
-        )
+        params = {
+            "command": command,
+            "explanation": explanation,
+            "predicted_output": predicted_output,
+        }
+        emit_teach_tool_call(ctx, "teach_command", params, "started")
+        result = invoke_teach_command_tool(params, ctx)
+        emit_teach_tool_call(ctx, "teach_command", params, "completed", result)
+        return result
 
     teach_command.__name__ = "teach_command"
     return teach_command

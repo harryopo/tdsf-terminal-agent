@@ -133,7 +133,10 @@ def test_teaching_wrapper_emits_one_visible_command_then_waits() -> None:
         return {"status": "should_not_run"}
 
     _ssh_tool.__name__ = "ssh_command"
-    wrapped = wrap_tool_for_teach_mode(_ssh_tool, ToolContext(teach=True))
+    event_bus = MagicMock()
+    wrapped = wrap_tool_for_teach_mode(
+        _ssh_tool, ToolContext(teach=True, event_bus=event_bus)
+    )
 
     first = wrapped({"command": "uptime"})
     second = wrapped({"command": "df -h"})
@@ -143,6 +146,9 @@ def test_teaching_wrapper_emits_one_visible_command_then_waits() -> None:
     assert first["predicted_output"]
     assert second["status"] == "teach_step_pending"
     assert called is False
+    assert [
+        call.kwargs["status"] for call in event_bus.emit_tool_call.call_args_list
+    ] == ["started", "completed", "started", "completed"]
 
 
 def test_dedicated_teaching_card_never_executes_and_blocks_hard_denies() -> None:
@@ -164,3 +170,16 @@ def test_dedicated_teaching_card_never_executes_and_blocks_hard_denies() -> None
         ToolContext(teach=True),
     )
     assert denied["status"] == "teach_command_unavailable"
+
+
+def test_dedicated_teaching_card_emits_paired_ui_events() -> None:
+    from strands_backend.tools.teach_command import make_teach_command_tool
+
+    event_bus = MagicMock()
+    card = make_teach_command_tool(ToolContext(teach=True, event_bus=event_bus))
+    result = card(command="uname -a")
+
+    assert result["status"] == "teach_command"
+    assert [
+        call.kwargs["status"] for call in event_bus.emit_tool_call.call_args_list
+    ] == ["started", "completed"]

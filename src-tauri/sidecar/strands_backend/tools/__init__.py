@@ -1775,6 +1775,29 @@ def filter_tools_readonly(tools: list) -> list:
     ]
 
 
+def emit_teach_tool_call(
+    ctx: ToolContext,
+    tool_name: str,
+    params: dict[str, Any],
+    status: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Emit the paired event that lets the UI construct a teaching tool card."""
+    if ctx.event_bus is None:
+        return
+    try:
+        ctx.event_bus.emit_tool_call(
+            tool_name=tool_name,
+            params=params,
+            result=result,
+            status=status,
+            session_id=ctx.session_id or None,
+            source=f"{ctx.agent_name}_agent.strands_tool.{tool_name}",
+        )
+    except Exception as exc:  # noqa: BLE001 — UI telemetry must not block a lesson
+        logger.debug("emit teaching tool event failed: %s", exc)
+
+
 def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
     """教学模式工具调用拦截包装器（A3，2026-09-04）
 
@@ -1818,18 +1841,24 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 # 收集全部 kwargs 作为参数（工具签名是具名参数如 command=...）
                 params = dict(kwargs)
 
+            emit_teach_tool_call(ctx, tool_name, params, "started")
+
+            def complete(result: dict[str, Any]) -> dict[str, Any]:
+                emit_teach_tool_call(ctx, tool_name, params, "completed", result)
+                return result
+
             from strands_backend.tools.shell_mapping import resolve_shell_command
             command = resolve_shell_command(tool_name, params)
             if command is None:
-                return {
+                return complete({
                     "status": "teach_command_unavailable",
                     "message": "这一步不能安全地转换为终端命令，请换一种单步检查方式。",
-                }
+                })
             if ctx.teach_step_emitted:
-                return {
+                return complete({
                     "status": "teach_step_pending",
                     "message": "上一张教学命令卡仍在等待终端回显；请先完成后再继续。",
-                }
+                })
 
             # 影响预测（复用 A1 已有的 command_impact）
             impact: dict[str, Any] | None = None
@@ -1844,7 +1873,7 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 f"teach_mode intercept: tool={tool_name}, "
                 f"command={command[:80]}"
             )
-            return {
+            return complete({
                 "status": "teach_command",
                 "command": command,
                 "impact": impact,
@@ -1853,7 +1882,7 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 "explanation": (
                     f"教学模式下，此工具将以终端可见方式执行: {command}"
                 ),
-            }
+            })
 
         # 非 teach 或无映射 → 正常执行
         return tool_fn(*args, **kwargs)
@@ -1948,6 +1977,7 @@ __all__ = [
     "assess_command",
     "execute_via_ssh",
     "filter_tools_readonly",
+    "emit_teach_tool_call",
     "wrap_tool_for_teach_mode",
     # 工具注册（T2: TOOL_REGISTRY 单一真源 + 派生集合）
     "OPS_TOOL_NAMES",
