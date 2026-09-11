@@ -4879,3 +4879,9 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 ### 37.146 Run 注入不污染 OSC 7（2026-09-11 ✅，待用户原生复测）
 
 即时着色器此前会在 OSC 7 的 `file://localhost/<cwd>` payload 中插入 ANSI，导致控制序列失效并把 `le://localhost/root` 等 URL 片段显示在 shell 提示符前。现新增 ESC/CSI/OSC/DCS 等控制状态跟踪：控制序列完整原样转发，仅对可打印命令回显做蓝色标记。分块 OSC 7 回归与非匹配输出测试均通过，`agentCommandEcho` 共 **4 passed**；重启桌面端/sidecar 后验证 Run 不再产生 URL 前缀，cwd 跟随保持正常。
+
+### 37.147 教学卡兼容渲染与提示符着色边界（2026-09-11 ✅，待用户原生复测）
+
+TeachCard 现在在显式 `tdsf:teach` 标记流式到达时即可渲染；对缺少标记的旧教学回答，仅在 Teach 模式且响应完成后识别概念、路径、操作示例、易错提示、练习等编号/加粗/纯文本标题，避免普通 Markdown 和知识检索误触发。卡面增加紫色教学头部、板块索引、编号与分色背景，命令复制/插入终端语义不变。
+
+人类打字及教学 Run 的 AgentCommandEcho 使用 `waitForPrompt`：先透传并等待 `# `、`$ `、`% `、`> ` 提示符边界，再匹配命令；因此 `rpm`、`ss` 等不再从 `[root@server ~]#` 或 `server` 中抢先命中，提示符保持原色。OSC/CSI 控制序列仍原样透传。定向 Vitest **16 passed**，typecheck 与定向 lint 通过；用户需重启桌面端/sidecar 后在教学 Run 与普通可视命令各复测一次。

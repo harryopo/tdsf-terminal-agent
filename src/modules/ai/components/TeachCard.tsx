@@ -44,16 +44,47 @@ const TEACH_MARKDOWN_CLASS =
 // TeachCard 组件
 // ============================================================================
 
-const TYPE_META: Record<TeachSectionType, { label: string; icon: typeof BulbIcon; cls: string }> = {
-  concept: { label: "概念与原理", icon: BulbIcon, cls: "border-border/50" },
-  path: { label: "路径拆解", icon: TerminalIcon, cls: "border-border/50" },
-  philosophy: { label: "设计哲学", icon: BookOpen01Icon, cls: "border-sky-500/30" },
-  example: { label: "操作示例", icon: TerminalIcon, cls: "border-border/50" },
-  pitfall: { label: "易错点", icon: Alert02Icon, cls: "border-amber-500/40" },
-  exercise: { label: "练习", icon: PencilEdit02Icon, cls: "border-emerald-500/30" },
+const TYPE_META: Record<
+  TeachSectionType,
+  { label: string; icon: typeof BulbIcon; cls: string }
+> = {
+  concept: {
+    label: "概念与原理",
+    icon: BulbIcon,
+    cls: "border-sky-500/25 bg-sky-500/[0.035]",
+  },
+  path: {
+    label: "路径拆解",
+    icon: TerminalIcon,
+    cls: "border-violet-500/25 bg-violet-500/[0.035]",
+  },
+  philosophy: {
+    label: "设计哲学",
+    icon: BookOpen01Icon,
+    cls: "border-sky-500/30 bg-sky-500/[0.035]",
+  },
+  example: {
+    label: "操作示例",
+    icon: TerminalIcon,
+    cls: "border-violet-500/30 bg-violet-500/[0.045]",
+  },
+  pitfall: {
+    label: "易错点",
+    icon: Alert02Icon,
+    cls: "border-amber-500/40 bg-amber-500/[0.045]",
+  },
+  exercise: {
+    label: "练习",
+    icon: PencilEdit02Icon,
+    cls: "border-emerald-500/30 bg-emerald-500/[0.035]",
+  },
   // TDSF 2026-08-31 (问题4修复): other 兜底徽标「讲解」——承接标题前导语
   // （自我介绍/开场白）与无法归类的标题，避免内容与徽标错位。
-  other: { label: "讲解", icon: CheckListIcon, cls: "border-border/50" },
+  other: {
+    label: "讲解",
+    icon: CheckListIcon,
+    cls: "border-border/50 bg-card/40",
+  },
 };
 
 export const TeachCard = memo(
@@ -73,16 +104,16 @@ export const TeachCard = memo(
     return (
       <div
         data-testid="teach-card"
-        className="not-prose overflow-hidden rounded-xl border border-border/60 bg-card/60"
+        className="not-prose overflow-hidden rounded-xl border border-violet-500/25 bg-card/70 shadow-sm"
       >
         {/* 头部 */}
-        <div className="flex items-center gap-2 border-b border-border/50 bg-muted/20 px-3 py-2">
-          <span className="flex size-5 items-center justify-center rounded-md bg-emerald-500/15">
+        <div className="flex items-center gap-2 border-b border-violet-500/20 bg-violet-500/[0.04] px-3 py-2.5">
+          <span className="flex size-6 items-center justify-center rounded-md bg-violet-500/15">
             <HugeiconsIcon
               icon={BookOpen01Icon}
-              size={12}
+              size={13}
               strokeWidth={1.75}
-              className="text-emerald-500"
+              className="text-violet-500"
             />
           </span>
           <span className="text-[11.5px] font-semibold text-foreground">
@@ -93,16 +124,27 @@ export const TeachCard = memo(
           </span>
           <Badge
             variant="secondary"
-            className="shrink-0 border-emerald-500/30 bg-emerald-500/10 px-1.5 py-px text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+            className="shrink-0 border-violet-500/30 bg-violet-500/10 px-1.5 py-px text-[10px] font-medium text-violet-600 dark:text-violet-400"
           >
             教学
           </Badge>
         </div>
 
+        <div className="flex gap-1 overflow-x-auto border-b border-border/40 px-3 py-1.5">
+          {sections.map((section, i) => (
+            <span
+              key={`${section.type}-${i}`}
+              className="shrink-0 rounded bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            >
+              {String(i + 1).padStart(2, "0")} {TYPE_META[section.type].label}
+            </span>
+          ))}
+        </div>
+
         {/* 分区 */}
-        <div className="space-y-2 p-3">
+        <div className="space-y-2.5 p-3">
           {sections.map((s, i) => (
-            <TeachSectionBlock key={i} section={s} />
+            <TeachSectionBlock key={i} section={s} index={i} />
           ))}
         </div>
       </div>
@@ -115,18 +157,24 @@ export const TeachCard = memo(
 // 分区渲染
 // ============================================================================
 
-function TeachSectionBlock({ section }: { section: TeachSection }) {
+function TeachSectionBlock({
+  section,
+  index,
+}: {
+  section: TeachSection;
+  index: number;
+}) {
   const meta = TYPE_META[section.type];
 
   return (
     <div
       data-testid={`teach-section-${section.type}`}
-      className={cn(
-        "rounded-lg border bg-card/40 px-2.5 py-2",
-        meta.cls,
-      )}
+      className={cn("rounded-lg border px-3 py-2.5 shadow-sm", meta.cls)}
     >
       <div className="mb-1 flex items-center gap-1.5">
+        <span className="mr-0.5 rounded bg-background/60 px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70">
+          {String(index + 1).padStart(2, "0")}
+        </span>
         <HugeiconsIcon icon={meta.icon} size={12} strokeWidth={1.75} />
         <span className="text-[11px] font-semibold text-foreground">
           {meta.label}
