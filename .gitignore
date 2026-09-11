@@ -132,6 +132,9 @@ diagrams/
 # 根目录 Agent 会话日志测试产物 (sidecar 下同名目录已单独忽略)
 agent-logs/
 
+# 宣传页预览截图产物 (scripts/preview-website.mjs 输出，2026-09-11)
+.preview/
+
 # 上游 terax-ai 全量源码克隆 (仅本机调研参考, 体积大不入库)
 opensource-reference/
 
