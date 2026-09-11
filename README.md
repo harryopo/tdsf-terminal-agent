@@ -20,12 +20,11 @@
 
 ## Demo
 
-<a href="assets/video/demo.mp4">
-  <img src="assets/video/poster.png" alt="TDSF Terminal Agent — demo" width="100%" />
+<a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">
+  <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent — demo" width="100%" />
 </a>
 
-▶ **Watch the demo** — `assets/video/demo.mp4` ([how to add the video](assets/video/README.md))
-
+▶ **Watch the demo** — [promo page demo section](https://harryopo.github.io/tdsf-terminal-agent/#demo) · video file: `website/assets/video/demo.mp4` ([how to add it](website/assets/video/README.md))
 > The demo shows: connecting an SSH workspace, the agent typing a command into the real terminal character by character, the approval card gating the write, and the remote output flowing back into the tool card.
 
 ## What it is

@@ -4,15 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TDSF Terminal Agent — 终端优先的 Linux 运维工作台</title>
-  <meta name="description" content="TDSF Terminal Agent：AI Agent 直接在真实本地 / SSH / WSL 终端里执行命令的桌面工作台。命令逐字敲入真实 shell、全程可见，四档信任模式、命令影响分级、审批门禁、离线知识库，面向 Linux 运维教学。" />
-  <meta name="theme-color" content="#0b0b0c" />
+  <meta name="description" content="TDSF Terminal Agent：AI Agent 直接在真实本地 / SSH / WSL 终端里执行命令的桌面工作台。命令逐字敲入真实 shell、全程可见；四档信任模式、命令影响分级、审批门禁、离线知识库，面向 Linux 运维教学。" />
+  <meta name="theme-color" content="#0a0a0a" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <meta property="og:title" content="TDSF Terminal Agent" />
-  <meta property="og:description" content="AI Agent 在真实终端里执行命令的 Linux 运维工作台 — 逐字可见、步步可控。" />
-  <meta property="og:image" content="assets/logo.svg" />
+  <meta property="og:description" content="AI Agent 在真实终端里执行命令的 Linux 运维工作台 — 逐字可见，步步可控。" />
+  <meta property="og:type" content="website" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -29,7 +29,7 @@
         <a href="#capabilities">能力</a>
         <a href="#demo">演示</a>
         <a href="#architecture">架构</a>
-        <a href="#start">快速开始</a>
+        <a href="#start">开始使用</a>
       </nav>
       <a class="header-cta" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -45,17 +45,16 @@
       <div class="shell hero-grid">
         <div class="hero-copy">
           <img class="hero-mark" src="assets/logo.svg" alt="TDSF Terminal Agent" />
-          <p class="eyebrow">Terminal-first Linux operations · agent in your shell</p>
-          <h1>AI Agent 在<em>真实终端</em><br />每一步，你都看得见</h1>
+          <p class="eyebrow">Terminal · SSH · AI Agent</p>
+          <h1>AI Agent 在<em>真实终端</em><br />每一步都可核对</h1>
           <p class="hero-lead">
-            本地 / SSH / WSL 终端与 AI 运维 Agent 在同一个工作台里 —— Agent 直接在终端里干活：
-            命令按人味节奏逐字敲进真实 shell、蓝色回显，输出回流到工具卡；写操作过影响分级与人工审批，你敲任意键立刻接管。
+            本地 / SSH / WSL 终端与 AI 运维 Agent 在同一个工作台。命令按人味节奏逐字写入真实 shell、
+            在提示符处回显，终端输出回流到对应工具卡；写操作过影响分级与人工审批，你敲任意键立刻接管。
           </p>
           <div class="hero-actions">
-            <a class="btn btn-primary" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">
-              查看源码
-            </a>
+            <a class="btn btn-primary" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">查看源码</a>
             <a class="btn btn-ghost" href="#demo">观看演示</a>
+            <a class="btn btn-ghost" href="#start">开始使用</a>
           </div>
           <div class="hero-facts">
             <div>
@@ -68,7 +67,7 @@
             </div>
             <div>
               <div class="fact-num">2,236</div>
-              <div class="fact-label">后端测试通过（vitest 1,368）</div>
+              <div class="fact-label">后端测试通过（前端 1,368）</div>
             </div>
           </div>
         </div>
@@ -93,10 +92,10 @@
     <section class="section" id="execution" data-section-id="execution">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">执行链路</p>
+          <p class="eyebrow">Execution Loop</p>
           <h2>从一句话到一条真实命令，中间没有黑盒</h2>
           <p>
-            Agent 不是"生成命令让你复制"。它把命令写进当前会话的 PTY / SSH 通道，由远端 shell 自己回显，
+            Agent 不是"生成命令让你复制"。它把命令写进当前会话的 PTY / SSH 通道，由远端 shell 自行回显，
             再把真实结果关联回对应的工具卡。
           </p>
         </div>
@@ -104,28 +103,28 @@
         <div class="beats reveal">
           <article class="beat">
             <div class="beat-index">01 / 感知</div>
-            <h3>先看环境再动手</h3>
-            <p>当前工作区、连接的主机、发行版家族、终端最近的输出与命令块，都会在每轮对话前进入上下文。</p>
+            <h3>先确认环境</h3>
+            <p>当前工作区、连接的主机、发行版家族、终端最近的输出与命令块，在每轮对话前进入上下文。</p>
           </article>
           <article class="beat">
             <div class="beat-index">02 / 思考</div>
             <h3>规划可见</h3>
-            <p>多步任务先建任务清单，条目实时同步到对话顶部；每轮循环显示"第 N 轮 · 已用工具 M"。</p>
+            <p>多步任务先建任务清单并实时同步到对话顶部；循环期间显示"第 N 轮 · 已用工具 M"。</p>
           </article>
           <article class="beat beat-accent">
             <div class="beat-index">03 / 行动</div>
-            <h3>敲进真实 shell</h3>
-            <p>可视模式下命令逐字符写入终端（Weibull 节奏采样），在提示符处蓝色回显；也可选择后台 SSH 通道执行。</p>
+            <h3>写进真实 shell</h3>
+            <p>可视模式下命令逐字符写入终端，在提示符处回显；也可选择后台 SSH 通道执行。</p>
           </article>
           <article class="beat">
             <div class="beat-index">04 / 验证</div>
             <h3>写后必核</h3>
-            <p>写操作后要求只读复核；命令输出、退出码与耗时进入证据链，SSH 非零退出码一律按失败上报。</p>
+            <p>写操作后要求只读复核；输出、退出码与耗时进入证据链，非零退出码一律按失败上报。</p>
           </article>
           <article class="beat">
             <div class="beat-index">05 / 记忆</div>
             <h3>沉淀到工作区</h3>
-            <p>同一工作区内的对话共享长期记忆：会话摘要与排障案例写回知识库，下次同类问题自动召回。</p>
+            <p>同一工作区内的对话共享长期记忆：会话摘要与排障案例写回知识库，同类问题自动召回。</p>
           </article>
         </div>
       </div>
@@ -135,9 +134,9 @@
     <section class="section" id="modes" data-section-id="modes">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">信任模式</p>
-          <h2>一个开关，决定 AI 能动手到什么程度</h2>
-          <p>模式不只是提示词约束：观察模式在 schema 层直接移除写类工具，模型无法调用它从未拿到的工具。</p>
+          <p class="eyebrow">Trust Modes</p>
+          <h2>一个开关，决定 Agent 能动手到什么程度</h2>
+          <p>模式不只是提示词约束：观察模式在 schema 层移除写类工具，模型无法调用它从未拿到的工具。</p>
         </div>
 
         <table class="modes reveal">
@@ -155,7 +154,7 @@
               <td>生产巡检</td>
             </tr>
             <tr>
-              <td><span class="mode-name is-confirm">确认</span><span class="mode-tag">默认</span></td>
+              <td><span class="mode-name">确认</span><span class="mode-tag">默认</span></td>
               <td>全量工具；已识别的只读查询直接执行，未知与状态变更类逐条弹出审批卡</td>
               <td>日常运维，人在回路</td>
             </tr>
@@ -166,7 +165,7 @@
             </tr>
             <tr>
               <td><span class="mode-name">教学</span></td>
-              <td>只读 + 结构化讲解，单步命令卡：一次一条命令，学生点击执行、结果回填后继续</td>
+              <td>只读 + 结构化讲解；单步命令卡，一次一条命令，结果返回后继续</td>
               <td>课堂与自学</td>
             </tr>
           </tbody>
@@ -178,32 +177,32 @@
     <section class="section" id="capabilities" data-section-id="capabilities">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">核心能力</p>
+          <p class="eyebrow">Capabilities</p>
           <h2>运维要用的部分，都在同一个窗口里</h2>
-          <p>终端、远程主机、AI 助手、知识库与教学流程共享同一份环境上下文，不需要在多个工具之间搬运信息。</p>
+          <p>终端、远程主机、AI 助手、知识库与教学流程共享同一份环境上下文，不需要在工具之间搬运信息。</p>
         </div>
 
         <div class="caps reveal">
           <article class="cap">
             <div class="cap-head">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg>
+              <span class="cap-num">01</span>
               <h3>Agent 运行时</h3>
             </div>
             <ul>
-              <li>Strands Agents 驱动的<strong>唯一 main Agent</strong>，工具注册表是实现、Schema 与策略的单一真源</li>
-              <li><strong>25 个内置工具</strong>：SSH 执行、远程文件读写、日志分析、进程检查、网络诊断、服务/软件包/防火墙管理、安全审计、性能分析、知识检索、配置比对、备份恢复、Python 执行等</li>
-              <li>工具调用上限 50 次/轮 + 连续失败 3 次熔断，防止无限循环</li>
-              <li>LLM 连接失败降级为友好只读提示，10 分钟无输出自动中止本轮，会话可继续</li>
+              <li>Strands Agents 驱动的<strong>唯一 main Agent</strong>；工具注册表是实现、Schema 与策略的单一真源</li>
+              <li><strong>25 个内置工具</strong>：SSH 执行、远程文件读写、日志分析、进程检查、网络诊断、服务 / 软件包 / 防火墙管理、安全审计、性能分析、知识检索、配置比对、备份恢复、Python 执行等</li>
+              <li>单轮工具调用上限 50 次 + 连续失败 3 次熔断</li>
+              <li>LLM 不可用时降级为只读提示；10 分钟无输出自动中止本轮，会话可继续</li>
             </ul>
           </article>
 
           <article class="cap">
             <div class="cap-head">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+              <span class="cap-num">02</span>
               <h3>SSH 服务器管理</h3>
             </div>
             <ul>
-              <li>纯 Rust SSH 客户端（russh），密码 / 公钥认证，凭据存入系统密钥库</li>
+              <li>纯 Rust SSH 客户端（russh）；密码 / 公钥认证，凭据存入系统密钥库</li>
               <li><strong>TOFU 主机密钥校验</strong>：未知主机弹审批，密钥变更告警</li>
               <li>SFTP 浏览与编辑、拖拽上传、跟随 <code>cwd</code> 的远程文件树</li>
               <li>本地 / 远程 / 动态（SOCKS5）端口转发；服务器实时监控（CPU、内存、磁盘、网络、进程）</li>
@@ -212,11 +211,11 @@
 
           <article class="cap">
             <div class="cap-head">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+              <span class="cap-num">03</span>
               <h3>安全边界</h3>
             </div>
             <ul>
-              <li>命令影响分级 <strong>L0–L4</strong>，复合命令逐段拆解展示风险</li>
+              <li>命令影响分级 <strong>L0–L4</strong>，复合命令逐段拆解展示</li>
               <li>灾难性操作<strong>硬底线黑名单</strong>：直接拦截，不提供审批选项</li>
               <li>同会话审批 <strong>FIFO</strong>：上一条命令未返回前不展示下一条审批卡</li>
               <li>输出脱敏后才进入界面、模型上下文与日志；SSH 退出码作为结果硬边界</li>
@@ -225,7 +224,7 @@
 
           <article class="cap">
             <div class="cap-head">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 016.5 3H19v16H6.5A2.5 2.5 0 004 21.5z"/><path d="M8 7h7M8 11h7"/></svg>
+              <span class="cap-num">04</span>
               <h3>离线知识库</h3>
             </div>
             <ul>
@@ -238,20 +237,20 @@
 
           <article class="cap">
             <div class="cap-head">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+              <span class="cap-num">05</span>
               <h3>工作区与会话</h3>
             </div>
             <ul>
-              <li>工作区 = 隔离单元：每个工作区保存自己的窗口、标签页与环境（本地 / WSL / SSH）</li>
-              <li>Agent <strong>按工作区隔离</strong>：对话只看所属工作区的环境与主机</li>
+              <li>工作区是隔离单元：每个工作区保存自己的窗口、标签页与环境（本地 / WSL / SSH）</li>
+              <li>Agent <strong>按工作区隔离</strong>：对话只看到所属工作区的环境与主机</li>
               <li><strong>同一工作区的对话共享长期记忆</strong>，跨工作区互不可见</li>
-              <li>未绑定工作区时 Agent 不运行，引导先建工作区再开对话</li>
+              <li>未绑定工作区时 Agent 不运行，先建工作区再开对话</li>
             </ul>
           </article>
 
           <article class="cap">
             <div class="cap-head">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A2.5 2.5 0 015.5 4H10l1.5 2H18.5A2.5 2.5 0 0121 8.5v9A2.5 2.5 0 0118.5 20h-13A2.5 2.5 0 013 17.5z"/></svg>
+              <span class="cap-num">06</span>
               <h3>终端与编辑器</h3>
             </div>
             <ul>
@@ -269,14 +268,14 @@
     <section class="section" id="safety" data-section-id="safety">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">安全设计</p>
+          <p class="eyebrow">Safety Model</p>
           <h2>"AI 说它成功了"不作为事实</h2>
-          <p>拦截、审批、熔断与脱敏是四条独立的防线，任一条都不依赖模型的自觉。</p>
+          <p>拦截、审批、熔断与脱敏是四条独立防线，任何一条都不依赖模型的自觉。</p>
         </div>
         <ul class="safety reveal">
           <li>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
-            <span><strong>硬底线优先</strong>：黑名单命中即拦截，模型无法通过换写法绕过。</span>
+            <span><strong>硬底线优先</strong>：黑名单命中即拦截，无法通过换写法绕过。</span>
           </li>
           <li>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
@@ -298,23 +297,33 @@
     <section class="section" id="demo" data-section-id="demo">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">演示</p>
-          <h2>一分钟看完整链路</h2>
-          <p>连接服务器 → Agent 逐字敲命令 → 审批放行 → 真实输出回流工具卡 → 教学模式单步执行。</p>
+          <p class="eyebrow">In Action</p>
+          <h2>完整链路演示</h2>
+          <p>连接服务器 → Agent 逐字写入命令 → 审批放行 → 真实输出回流工具卡 → 教学模式单步执行。</p>
         </div>
         <div class="video-frame reveal" id="video-frame">
           <!-- 默认展示占位；视频可加载（canplay）时脚本自动切换为播放器 -->
           <video id="demo-video" controls preload="metadata" playsinline hidden
-                 poster="../assets/video/poster.png">
-            <source src="../assets/video/demo.mp4" type="video/mp4" />
+                 poster="assets/video/poster.png">
+            <source src="assets/video/demo.mp4" type="video/mp4" />
           </video>
           <div class="video-placeholder" id="video-placeholder">
             <div class="ph-mark">演示视频位</div>
-            <div>把视频放到 <code>assets/video/demo.mp4</code> 即可在此播放</div>
+            <div>把视频放到 <code>website/assets/video/demo.mp4</code> 即可在此播放</div>
           </div>
         </div>
+
+        <ol class="video-shots reveal">
+          <li><span>新建 SSH 工作区并连接服务器</span></li>
+          <li><span>对 Agent 提出排障需求，命令逐字写入真实终端</span></li>
+          <li><span>审批卡出现 → 确认执行</span></li>
+          <li><span>远端输出回流到工具卡</span></li>
+          <li><span>资源树跟随 <code>cwd</code>、拖拽上传文件</span></li>
+          <li><span>切换教学模式，单步命令卡执行</span></li>
+        </ol>
         <p class="video-note">
-          视频与封面放置说明见 <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/assets/video/README.md" target="_blank" rel="noopener">assets/video/README.md</a>。
+          视频与封面放置说明见
+          <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/website/assets/video/README.md" target="_blank" rel="noopener">website/assets/video/README.md</a>。
         </p>
       </div>
     </section>
@@ -323,7 +332,7 @@
     <section class="section" id="architecture" data-section-id="architecture">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">架构</p>
+          <p class="eyebrow">Architecture</p>
           <h2>三进程分离，各管一层</h2>
           <p>系统级能力留在 Rust，交互留在前端，AI 推理与知识检索放在可独立重启的 Python 进程。</p>
         </div>
@@ -369,9 +378,9 @@
     <section class="section" id="verification" data-section-id="verification">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">验证状态</p>
+          <p class="eyebrow">Verification</p>
           <h2>区分"自动化测试已通过"与"待原生验收"</h2>
-          <p>没有证据的能力不会写成已完成。以下数字为当前代码库实测结果。</p>
+          <p>没有证据的能力不会写成已完成。以下为当前代码库实测结果。</p>
         </div>
 
         <table class="verify reveal">
@@ -401,8 +410,8 @@
     <section class="section" id="start" data-section-id="start">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">快速开始</p>
-          <h2>三步跑起来</h2>
+          <p class="eyebrow">Get Started</p>
+          <h2>从源码运行</h2>
           <p>环境要求：Node.js ≥ 20、pnpm ≥ 9、Rust stable、Python ≥ 3.12。</p>
         </div>
 
@@ -422,6 +431,12 @@ pnpm tauri:dev
             <li><span><strong>在工作区内新建对话</strong>：Agent 只看到该工作区的环境；同工作区的对话共享记忆。</span></li>
           </ol>
         </div>
+
+        <p class="note reveal">
+          当前提供源码运行方式；<strong>打包好的安装包尚未发布</strong>，请在
+          <a href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">GitHub 仓库</a>
+          关注后续发布。
+        </p>
       </div>
     </section>
 
@@ -429,7 +444,7 @@ pnpm tauri:dev
     <section class="section" id="docs" data-section-id="docs">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">文档</p>
+          <p class="eyebrow">Documentation</p>
           <h2>从使用到架构</h2>
         </div>
         <div class="docs-grid reveal">
@@ -460,10 +475,12 @@ pnpm tauri:dev
         <img src="assets/logo.svg" alt="" />
         <span>TDSF Terminal Agent</span>
       </div>
-      <p>
-        架构基于 <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener">terax-ai</a> 优化完善 ·
-        新增 SSH 服务器管理、可见执行 Agent 与 Linux 教学流程 · Apache-2.0
-      </p>
+      <nav class="footer-links" aria-label="页脚导航">
+        <a href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/README.md" target="_blank" rel="noopener">文档</a>
+        <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a>
+      </nav>
+      <p>架构基于 <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener">terax-ai</a> 优化完善，新增 SSH 服务器管理、可见执行 Agent 与 Linux 教学流程。</p>
     </div>
   </footer>
 

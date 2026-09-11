@@ -1,0 +1,48 @@
+name: Deploy promo page to GitHub Pages
+
+# 部署 website/ 目录为项目站点：
+#   https://<owner>.github.io/<repo>/
+# 前置（一次性手动设置）：仓库 Settings → Pages → Build and deployment
+#   → Source 选择 "GitHub Actions"
+on:
+  push:
+    branches: [main, terax-clone-v0]
+    paths:
+      - "website/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          # 首次运行时尝试自动开启 Pages（需仓库 Settings → Pages 允许
+          # GitHub Actions 作为来源；若组织策略禁止，则需手动开启一次）
+          enablement: true
+
+      - name: Upload static site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
