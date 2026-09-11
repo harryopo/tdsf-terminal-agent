@@ -252,8 +252,7 @@ pub fn run() {
     // （远程桌面/旧显卡驱动/多 GPU 切换）会间歇性崩溃 → 应用窗口黑屏且
     // 重启偶发不恢复。实测 --disable-gpu 后渲染稳定（本应用为 DOM 终端
     // 场景，软渲染性能足够）。必须在 webview 创建前设置。
-    // 如需恢复硬件加速：注释以下两行，并参见
-    // docs/guide/troubleshooting-黑屏与显示问题.md。
+    // 如需恢复硬件加速：注释以下两行即可。
     #[cfg(windows)]
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
@@ -261,8 +260,13 @@ pub fn run() {
     );
 
     let mut builder = tauri::Builder::default();
+    // 注：必须用「赋值语句块」而非 `let builder = ...` 重新绑定——
+    // 后者会遮蔽上面的 mut 绑定，导致紧随其后的 debug 分支赋值报 E0384
+    // （该路径仅在 Linux 下编译，Windows 本地与 Windows CI 都走不到）。
     #[cfg(target_os = "linux")]
-    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    {
+        builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    }
     // SHOULD-FIX-2 (2026-09-04): dialog 插件仅在 debug 构建加载
     // （功能仅用于 dev 预检弹窗，release 构建无需加载）
     #[cfg(debug_assertions)]
