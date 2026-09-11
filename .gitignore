@@ -166,6 +166,7 @@ scripts/*
 !scripts/fetch-carapace.ps1
 !scripts/make-app-icon.py
 !scripts/preview-website.mjs
+!scripts/verify-demo-video.mjs
 
 # 演示视频：未压缩原件不入库（>100MB 超出 GitHub 单文件上限）；
 # 压缩后的成品命名为 demo.mp4 放进同目录即可正常提交
