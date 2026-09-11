@@ -97,6 +97,12 @@ jobs:
         with:
           tool: cargo-nextest,cargo-machete
 
+      # tauri 打包资源含 sidecar/tdsf-sidecar/（PyInstaller onedir 产物，不入库）。
+      # 仅做 check/test 时放一个占位目录即可，无需真实二进制。
+      - name: Stub bundled sidecar resource (not built in CI)
+        working-directory: src-tauri
+        run: mkdir -p sidecar/tdsf-sidecar && touch sidecar/tdsf-sidecar/.ci-placeholder
+
       - name: cargo check
         working-directory: src-tauri
         run: cargo check --all-targets --locked
@@ -133,6 +139,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+
+      # 与 rust 任务同理：ci 不构建 PyInstaller sidecar，放占位目录满足打包资源校验
+      - name: Stub bundled sidecar resource (not built in CI)
+        working-directory: src-tauri
+        run: |
+          mkdir -p sidecar/tdsf-sidecar
+          touch sidecar/tdsf-sidecar/.ci-placeholder
 
       - name: cargo check
         working-directory: src-tauri
