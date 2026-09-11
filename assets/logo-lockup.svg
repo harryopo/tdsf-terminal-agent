@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 160" role="img" aria-label="TDSF Terminal Agent">
+  <!-- 横向锁定版（README 页眉用）：标记 + 字标 -->
+  <defs>
+    <linearGradient id="lockup-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#454545" />
+      <stop offset="1" stop-color="#313131" />
+    </linearGradient>
+  </defs>
+  <g transform="translate(8, 16)">
+    <rect width="128" height="128" rx="29" fill="url(#lockup-bg)" />
+    <path d="M37 43 L68 64 L37 85" fill="none" stroke="#F5F1E6" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round" />
+    <rect x="74" y="79.5" width="29" height="9.5" rx="4.75" fill="#F5F1E6" />
+  </g>
+  <g fill="#F5F1E6" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace">
+    <text x="164" y="72" font-size="42" font-weight="700" letter-spacing="-0.5">TDSF</text>
+    <text x="164" y="108" font-size="21" fill="#A8A49B" letter-spacing="2.4">TERMINAL AGENT</text>
+  </g>
+</svg>

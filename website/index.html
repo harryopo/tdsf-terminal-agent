@@ -3,326 +3,467 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台</title>
-  <meta name="description" content="TDSF Terminal Agent 是一款面向 Linux 运维教学场景的桌面应用，集成本地终端、SSH 远程管理、AI Agent 与离线知识库。" />
+  <title>TDSF Terminal Agent — 终端优先的 Linux 运维工作台</title>
+  <meta name="description" content="TDSF Terminal Agent：AI Agent 直接在真实本地 / SSH / WSL 终端里执行命令的桌面工作台。命令逐字敲入真实 shell、全程可见，四档信任模式、命令影响分级、审批门禁、离线知识库，面向 Linux 运维教学。" />
+  <meta name="theme-color" content="#0b0b0c" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <meta property="og:title" content="TDSF Terminal Agent" />
+  <meta property="og:description" content="AI Agent 在真实终端里执行命令的 Linux 运维工作台 — 逐字可见、步步可控。" />
+  <meta property="og:image" content="assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="grid-bg" aria-hidden="true"></div>
 
   <header class="site-header">
-    <div class="container header-inner">
-      <a href="#" class="brand">
-        <img src="assets/logo.svg" alt="TDSF" class="brand-logo" />
-        <span class="brand-text">TDSF Terminal Agent</span>
+    <div class="shell header-inner">
+      <a href="#top" class="brand">
+        <img src="assets/logo.svg" alt="TDSF Terminal Agent" />
+        <span>TDSF Terminal Agent</span>
       </a>
       <nav class="main-nav" aria-label="主导航">
-        <a href="#features">核心能力</a>
+        <a href="#execution">执行链路</a>
+        <a href="#modes">信任模式</a>
+        <a href="#capabilities">能力</a>
+        <a href="#demo">演示</a>
         <a href="#architecture">架构</a>
-        <a href="#gallery">界面</a>
-        <a href="#stack">技术栈</a>
+        <a href="#start">快速开始</a>
       </nav>
-      <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">GitHub</a>
+      <a class="header-cta" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        GitHub
+      </a>
     </div>
   </header>
 
-  <main>
-    <section class="hero">
-      <div class="container hero-inner">
+  <main id="top">
+
+    <!-- ============================== hero ============================== -->
+    <section class="hero" data-section-id="hero">
+      <div class="shell hero-grid">
         <div class="hero-copy">
-          <div class="eyebrow">
-            <span class="status-dot"></span>
-            基于 crynta/terax-ai v0.8.6 魔改
-          </div>
-          <h1 class="hero-title">
-            终端优先的<br />
-            <span class="accent">Linux 运维 AI 工作台</span>
-          </h1>
+          <img class="hero-mark" src="assets/logo.svg" alt="TDSF Terminal Agent" />
+          <p class="eyebrow">Terminal-first Linux operations · agent in your shell</p>
+          <h1>AI Agent 在<em>真实终端</em><br />每一步，你都看得见</h1>
           <p class="hero-lead">
-            本地终端、SSH 远程管理、AI Agent 智能辅助与离线知识库，全部整合在一款桌面应用中。为 Linux 运维教学打造，让“学、练、查、管”无缝衔接。
+            本地 / SSH / WSL 终端与 AI 运维 Agent 在同一个工作台里 —— Agent 直接在终端里干活：
+            命令按人味节奏逐字敲进真实 shell、蓝色回显，输出回流到工具卡；写操作过影响分级与人工审批，你敲任意键立刻接管。
           </p>
           <div class="hero-actions">
-            <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener" class="btn btn-primary">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            <a class="btn btn-primary" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">
               查看源码
             </a>
-            <a href="#features" class="btn btn-ghost">了解更多</a>
+            <a class="btn btn-ghost" href="#demo">观看演示</a>
           </div>
-          <div class="hero-meta">
-            <span><strong>105+</strong> IPC 命令</span>
-            <span><strong>9</strong> 个专职 Agent</span>
-            <span><strong>16</strong> 套主题</span>
+          <div class="hero-facts">
+            <div>
+              <div class="fact-num">25</div>
+              <div class="fact-label">内置运维工具</div>
+            </div>
+            <div>
+              <div class="fact-num">4,137</div>
+              <div class="fact-label">离线知识切片 + 660 条中文索引</div>
+            </div>
+            <div>
+              <div class="fact-num">2,236</div>
+              <div class="fact-label">后端测试通过（vitest 1,368）</div>
+            </div>
           </div>
         </div>
 
         <div class="hero-visual">
-          <div class="terminal-window">
-            <div class="terminal-titlebar">
-              <span class="terminal-dot red"></span>
-              <span class="terminal-dot yellow"></span>
-              <span class="terminal-dot green"></span>
-              <span class="terminal-title">tdsf — zsh</span>
+          <div class="terminal" aria-hidden="true">
+            <div class="terminal-bar">
+              <span class="terminal-dot"></span>
+              <span class="terminal-dot"></span>
+              <span class="terminal-dot"></span>
+              <span class="terminal-title">tdsf — root@lab-server</span>
             </div>
-            <div class="terminal-body">
-              <div class="terminal-line">
-                <span class="prompt">$</span>
-                <span class="command typed" data-text="tdsf --about"></span>
-                <span class="cursor" aria-hidden="true"></span>
-              </div>
-              <div class="terminal-output">
-                <p>TDSF Terminal Agent v4.0.0</p>
-                <p>Linux 运维教学 · AI 工作台</p>
-                <p>本地 PTY / SSH / Agent / Knowledge</p>
-                <p class="output-line"><span class="accent">→</span> 就绪</p>
-              </div>
-              <div class="terminal-line">
-                <span class="prompt">$</span>
-                <span class="command typed" data-text="ssh root@lab-server"></span>
-                <span class="cursor" aria-hidden="true"></span>
-              </div>
+            <div class="terminal-body" id="terminal-body">
+              <div class="tl"><span class="prompt">root@lab-server:~#</span><span class="cmd" id="typed-1" data-text=""></span><span class="caret" id="caret-1"></span></div>
             </div>
           </div>
-          <div class="glow" aria-hidden="true"></div>
         </div>
       </div>
     </section>
 
-    <section id="features" class="features section">
-      <div class="container">
-        <div class="section-header reveal">
-          <p class="section-eyebrow">核心能力</p>
-          <h2 class="section-title">一个工作台，打通运维全流程</h2>
-          <p class="section-desc">从本地命令练习到远程服务器管理，从 AI 答疑到知识沉淀，无需在多个工具间来回切换。</p>
+    <!-- =========================== execution ============================ -->
+    <section class="section" id="execution" data-section-id="execution">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">执行链路</p>
+          <h2>从一句话到一条真实命令，中间没有黑盒</h2>
+          <p>
+            Agent 不是"生成命令让你复制"。它把命令写进当前会话的 PTY / SSH 通道，由远端 shell 自己回显，
+            再把真实结果关联回对应的工具卡。
+          </p>
         </div>
 
-        <div class="feature-list">
-          <article class="feature-item reveal">
-            <div class="feature-icon" aria-hidden="true">>_</div>
-            <div class="feature-content">
-              <h3>终端渲染池</h3>
-              <p>基于 xterm.js 6 的高性能终端，5 槽位渲染池 + DormantRing 回收机制，本地 PTY 与 SSH 远程终端统一渲染、切换保活。</p>
-            </div>
+        <div class="beats reveal">
+          <article class="beat">
+            <div class="beat-index">01 / 感知</div>
+            <h3>先看环境再动手</h3>
+            <p>当前工作区、连接的主机、发行版家族、终端最近的输出与命令块，都会在每轮对话前进入上下文。</p>
           </article>
-          <article class="feature-item reveal">
-            <div class="feature-icon" aria-hidden="true">~</div>
-            <div class="feature-content">
-              <h3>SSH 远程管理</h3>
-              <p>纯 Rust SSH 客户端（russh 0.61），支持密码 / 公钥认证、SFTP 文件浏览与编辑、TOFU 主机密钥审批，凭据存入系统密钥库。</p>
-            </div>
+          <article class="beat">
+            <div class="beat-index">02 / 思考</div>
+            <h3>规划可见</h3>
+            <p>多步任务先建任务清单，条目实时同步到对话顶部；每轮循环显示"第 N 轮 · 已用工具 M"。</p>
           </article>
-          <article class="feature-item reveal">
-            <div class="feature-icon" aria-hidden="true">✦</div>
-            <div class="feature-content">
-              <h3>AI Agent 系统</h3>
-              <p>9 个专职 Agent + PAOR 监督循环（Plan-Act-Observe-Reflect），主 Agent 自动分发任务，变更操作需审批，安全可控。</p>
-            </div>
+          <article class="beat beat-accent">
+            <div class="beat-index">03 / 行动</div>
+            <h3>敲进真实 shell</h3>
+            <p>可视模式下命令逐字符写入终端（Weibull 节奏采样），在提示符处蓝色回显；也可选择后台 SSH 通道执行。</p>
           </article>
-          <article class="feature-item reveal">
-            <div class="feature-icon" aria-hidden="true">⚲</div>
-            <div class="feature-content">
+          <article class="beat">
+            <div class="beat-index">04 / 验证</div>
+            <h3>写后必核</h3>
+            <p>写操作后要求只读复核；命令输出、退出码与耗时进入证据链，SSH 非零退出码一律按失败上报。</p>
+          </article>
+          <article class="beat">
+            <div class="beat-index">05 / 记忆</div>
+            <h3>沉淀到工作区</h3>
+            <p>同一工作区内的对话共享长期记忆：会话摘要与排障案例写回知识库，下次同类问题自动召回。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= modes ============================== -->
+    <section class="section" id="modes" data-section-id="modes">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">信任模式</p>
+          <h2>一个开关，决定 AI 能动手到什么程度</h2>
+          <p>模式不只是提示词约束：观察模式在 schema 层直接移除写类工具，模型无法调用它从未拿到的工具。</p>
+        </div>
+
+        <table class="modes reveal">
+          <thead>
+            <tr>
+              <th scope="col">模式</th>
+              <th scope="col">Agent 能做什么</th>
+              <th scope="col">适用场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="mode-name is-observe">观察</span></td>
+              <td>只读分析；写类工具从工具集中移除</td>
+              <td>生产巡检</td>
+            </tr>
+            <tr>
+              <td><span class="mode-name is-confirm">确认</span><span class="mode-tag">默认</span></td>
+              <td>全量工具；已识别的只读查询直接执行，未知与状态变更类逐条弹出审批卡</td>
+              <td>日常运维，人在回路</td>
+            </tr>
+            <tr>
+              <td><span class="mode-name">自动</span></td>
+              <td>低危（L0–L2）直接执行；L3/L4 高危仍需审批，硬底线不可绕过</td>
+              <td>可信沙箱</td>
+            </tr>
+            <tr>
+              <td><span class="mode-name">教学</span></td>
+              <td>只读 + 结构化讲解，单步命令卡：一次一条命令，学生点击执行、结果回填后继续</td>
+              <td>课堂与自学</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ========================== capabilities ========================== -->
+    <section class="section" id="capabilities" data-section-id="capabilities">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">核心能力</p>
+          <h2>运维要用的部分，都在同一个窗口里</h2>
+          <p>终端、远程主机、AI 助手、知识库与教学流程共享同一份环境上下文，不需要在多个工具之间搬运信息。</p>
+        </div>
+
+        <div class="caps reveal">
+          <article class="cap">
+            <div class="cap-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg>
+              <h3>Agent 运行时</h3>
+            </div>
+            <ul>
+              <li>Strands Agents 驱动的<strong>唯一 main Agent</strong>，工具注册表是实现、Schema 与策略的单一真源</li>
+              <li><strong>25 个内置工具</strong>：SSH 执行、远程文件读写、日志分析、进程检查、网络诊断、服务/软件包/防火墙管理、安全审计、性能分析、知识检索、配置比对、备份恢复、Python 执行等</li>
+              <li>工具调用上限 50 次/轮 + 连续失败 3 次熔断，防止无限循环</li>
+              <li>LLM 连接失败降级为友好只读提示，10 分钟无输出自动中止本轮，会话可继续</li>
+            </ul>
+          </article>
+
+          <article class="cap">
+            <div class="cap-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+              <h3>SSH 服务器管理</h3>
+            </div>
+            <ul>
+              <li>纯 Rust SSH 客户端（russh），密码 / 公钥认证，凭据存入系统密钥库</li>
+              <li><strong>TOFU 主机密钥校验</strong>：未知主机弹审批，密钥变更告警</li>
+              <li>SFTP 浏览与编辑、拖拽上传、跟随 <code>cwd</code> 的远程文件树</li>
+              <li>本地 / 远程 / 动态（SOCKS5）端口转发；服务器实时监控（CPU、内存、磁盘、网络、进程）</li>
+            </ul>
+          </article>
+
+          <article class="cap">
+            <div class="cap-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+              <h3>安全边界</h3>
+            </div>
+            <ul>
+              <li>命令影响分级 <strong>L0–L4</strong>，复合命令逐段拆解展示风险</li>
+              <li>灾难性操作<strong>硬底线黑名单</strong>：直接拦截，不提供审批选项</li>
+              <li>同会话审批 <strong>FIFO</strong>：上一条命令未返回前不展示下一条审批卡</li>
+              <li>输出脱敏后才进入界面、模型上下文与日志；SSH 退出码作为结果硬边界</li>
+            </ul>
+          </article>
+
+          <article class="cap">
+            <div class="cap-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 016.5 3H19v16H6.5A2.5 2.5 0 004 21.5z"/><path d="M8 7h7M8 11h7"/></svg>
               <h3>离线知识库</h3>
-              <p>ChromaDB 向量检索 + SQLite FTS5 关键词检索双路并行，断网也能即时检索运维知识与历史案例。</p>
             </div>
-          </article>
-          <article class="feature-item reveal">
-            <div class="feature-icon" aria-hidden="true">◎</div>
-            <div class="feature-content">
-              <h3>安全审批机制</h3>
-              <p>4 层风险评估管道（L0-L4），AI 工具调用分级审批；SSRF 防护、路径拒绝列表、keyring 密钥存储守护安全边界。</p>
-            </div>
-          </article>
-          <article class="feature-item reveal">
-            <div class="feature-icon" aria-hidden="true">◐</div>
-            <div class="feature-content">
-              <h3>主题与个性化</h3>
-              <p>16 套精心调校的主题，基于 CSS 变量的主题系统，终端配色与 UI 主题联动，支持亮/暗模式无缝切换。</p>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section id="architecture" class="architecture section alt">
-      <div class="container">
-        <div class="section-header reveal">
-          <p class="section-eyebrow">系统架构</p>
-          <h2 class="section-title">三进程分离，职责清晰</h2>
-          <p class="section-desc">Rust 主进程负责系统级操作，React 前端专注 UI，Python Sidecar 承载 AI 推理，彼此通过标准化协议松耦合通信。</p>
-        </div>
-
-        <div class="arch-grid">
-          <div class="arch-card reveal">
-            <div class="arch-head">
-              <span class="arch-badge rust">Rust</span>
-              <h3>Tauri 主进程</h3>
-            </div>
-            <ul class="arch-list">
-              <li>105+ Tauri IPC 命令注册表</li>
-              <li>PTY 管理（portable-pty）</li>
-              <li>SSH 客户端（russh + russh-sftp）</li>
-              <li>文件系统 / Git / 密钥管理</li>
-              <li>Sidecar 进程管理</li>
+            <ul>
+              <li>内置 <strong>4,137 条官方文档切片</strong>：Arch Wiki、nginx、Apache、Docker、Kubernetes、Redis、SSH、SELinux、git 等</li>
+              <li><strong>660 条中文提炼索引</strong>，按主题分组，检索即中文命中</li>
+              <li>SQLite <strong>FTS5</strong> 关键词 + <strong>sqlite-vec</strong> 向量语义混合检索，RRF 融合排序</li>
+              <li>完全本地运行，断网可用</li>
             </ul>
-          </div>
-          <div class="arch-card reveal">
-            <div class="arch-head">
-              <span class="arch-badge react">React</span>
-              <h3>WebView 前端</h3>
+          </article>
+
+          <article class="cap">
+            <div class="cap-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+              <h3>工作区与会话</h3>
             </div>
-            <ul class="arch-list">
-              <li>React 19 + TypeScript 5.7</li>
-              <li>xterm.js 渲染池</li>
-              <li>CodeMirror 编辑器</li>
-              <li>25 个独立模块</li>
-              <li>zustand 状态管理</li>
+            <ul>
+              <li>工作区 = 隔离单元：每个工作区保存自己的窗口、标签页与环境（本地 / WSL / SSH）</li>
+              <li>Agent <strong>按工作区隔离</strong>：对话只看所属工作区的环境与主机</li>
+              <li><strong>同一工作区的对话共享长期记忆</strong>，跨工作区互不可见</li>
+              <li>未绑定工作区时 Agent 不运行，引导先建工作区再开对话</li>
             </ul>
-          </div>
-          <div class="arch-card reveal">
-            <div class="arch-head">
-              <span class="arch-badge python">Python</span>
-              <h3>AI Sidecar</h3>
+          </article>
+
+          <article class="cap">
+            <div class="cap-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A2.5 2.5 0 015.5 4H10l1.5 2H18.5A2.5 2.5 0 0121 8.5v9A2.5 2.5 0 0118.5 20h-13A2.5 2.5 0 013 17.5z"/></svg>
+              <h3>终端与编辑器</h3>
             </div>
-            <ul class="arch-list">
-              <li>LangGraph PAOR 状态图</li>
-              <li>9 个 Agent + 9 个 MCP 工具</li>
-              <li>ChromaDB / FTS5 双路检索</li>
-              <li>JSON-RPC 2.0 over stdio</li>
-              <li>风险评估与决策引擎</li>
+            <ul>
+              <li>本地 PTY / WSL / SSH 终端共用 xterm.js 渲染池，支持分屏与多标签</li>
+              <li>命令预测：内置 spec 索引 + carapace 参数补全 + 中文 tldr 描述 + 远端命令集</li>
+              <li>CodeMirror 6 编辑器 + LSP、远程文件编辑</li>
+              <li>离线选词翻译、命令片段（Snippets）、15 套内置主题</li>
             </ul>
-          </div>
-        </div>
-
-        <div class="protocol-flow reveal">
-          <div class="flow-step">
-            <span class="flow-label">前端</span>
-            <code>invoke()</code>
-          </div>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-step">
-            <span class="flow-label">Rust</span>
-            <code>Tauri IPC</code>
-          </div>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-step">
-            <span class="flow-label">Python</span>
-            <code>JSON-RPC</code>
-          </div>
+          </article>
         </div>
       </div>
     </section>
 
-    <section id="gallery" class="gallery section">
-      <div class="container">
-        <div class="section-header reveal">
-          <p class="section-eyebrow">界面预览</p>
-          <h2 class="section-title">原生桌面体验</h2>
-          <p class="section-desc">无边框窗口、自绘窗控、终端渲染池与 AI 面板在同一界面内协同工作。</p>
+    <!-- ============================= safety ============================= -->
+    <section class="section" id="safety" data-section-id="safety">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">安全设计</p>
+          <h2>"AI 说它成功了"不作为事实</h2>
+          <p>拦截、审批、熔断与脱敏是四条独立的防线，任一条都不依赖模型的自觉。</p>
+        </div>
+        <ul class="safety reveal">
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+            <span><strong>硬底线优先</strong>：黑名单命中即拦截，模型无法通过换写法绕过。</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+            <span><strong>确认模式默认开</strong>：写操作逐条审批，审批卡展示真实命令、用途与影响分级。</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+            <span><strong>退出码即事实</strong>：非零或缺失退出码按失败上报，不谎报成功。</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+            <span><strong>证据可核验</strong>：工具调用按"收集 → 执行 → 验证"分组展示，证据来自真实工具事件。</span>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== demo ============================== -->
+    <section class="section" id="demo" data-section-id="demo">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">演示</p>
+          <h2>一分钟看完整链路</h2>
+          <p>连接服务器 → Agent 逐字敲命令 → 审批放行 → 真实输出回流工具卡 → 教学模式单步执行。</p>
+        </div>
+        <div class="video-frame reveal" id="video-frame">
+          <!-- 默认展示占位；视频可加载（canplay）时脚本自动切换为播放器 -->
+          <video id="demo-video" controls preload="metadata" playsinline hidden
+                 poster="../assets/video/poster.png">
+            <source src="../assets/video/demo.mp4" type="video/mp4" />
+          </video>
+          <div class="video-placeholder" id="video-placeholder">
+            <div class="ph-mark">演示视频位</div>
+            <div>把视频放到 <code>assets/video/demo.mp4</code> 即可在此播放</div>
+          </div>
+        </div>
+        <p class="video-note">
+          视频与封面放置说明见 <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/assets/video/README.md" target="_blank" rel="noopener">assets/video/README.md</a>。
+        </p>
+      </div>
+    </section>
+
+    <!-- =========================== architecture ========================= -->
+    <section class="section" id="architecture" data-section-id="architecture">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">架构</p>
+          <h2>三进程分离，各管一层</h2>
+          <p>系统级能力留在 Rust，交互留在前端，AI 推理与知识检索放在可独立重启的 Python 进程。</p>
         </div>
 
-        <div class="gallery-grid">
-          <figure class="gallery-item reveal wide">
-            <div class="gallery-frame">
-              <img src="assets/screenshots/terminal.png" alt="TDSF Terminal Agent 主界面" loading="lazy" />
-            </div>
-            <figcaption>主界面 · 终端 + 文件资源管理器</figcaption>
-          </figure>
-          <figure class="gallery-item reveal">
-            <div class="gallery-frame">
-              <img src="assets/screenshots/ai-panel.png" alt="AI Agent 面板" loading="lazy" />
-            </div>
-            <figcaption>AI Agent 面板</figcaption>
-          </figure>
-          <figure class="gallery-item reveal">
-            <div class="gallery-frame">
-              <img src="assets/screenshots/agent-teach.png" alt="教学 Agent" loading="lazy" />
-            </div>
-            <figcaption>Teach 教学模式</figcaption>
-          </figure>
-          <figure class="gallery-item reveal wide">
-            <div class="gallery-frame">
-              <img src="assets/screenshots/ssh-explorer.png" alt="SSH 资源管理器" loading="lazy" />
-            </div>
-            <figcaption>SSH 远程主机管理</figcaption>
-          </figure>
+        <div class="arch reveal">
+          <div class="arch-layer">
+            <span class="layer-name">React 19</span>
+            <span class="layer-desc">Agent 面板 · 终端 · 工作区 · 编辑器（TypeScript · Vite · Tailwind v4 · zustand）</span>
+            <span class="layer-metric">140 个测试文件</span>
+          </div>
+          <div class="arch-arrow">│ Tauri invoke / events · 125 个 IPC 命令</div>
+          <div class="arch-layer">
+            <span class="layer-name">Rust（Tauri 2）</span>
+            <span class="layer-desc">PTY · SSH / SFTP · 端口转发 · 打字机引擎 · sidecar 监管</span>
+            <span class="layer-metric">cargo test 364</span>
+          </div>
+          <div class="arch-arrow">│ JSON-RPC over stdio · 121 个 RPC 方法</div>
+          <div class="arch-layer">
+            <span class="layer-name">Python sidecar</span>
+            <span class="layer-desc">Strands Agent · 工具注册表 · 审批 · 知识库 · 证据链</span>
+            <span class="layer-metric">pytest 2,236</span>
+          </div>
+        </div>
+
+        <div class="stack-tags reveal">
+          <span class="tag">Tauri 2</span>
+          <span class="tag">React 19</span>
+          <span class="tag">TypeScript</span>
+          <span class="tag">xterm.js</span>
+          <span class="tag">CodeMirror 6</span>
+          <span class="tag">russh</span>
+          <span class="tag">russh-sftp</span>
+          <span class="tag">portable-pty</span>
+          <span class="tag">keyring</span>
+          <span class="tag">Strands Agents</span>
+          <span class="tag">SQLite FTS5</span>
+          <span class="tag">sqlite-vec</span>
         </div>
       </div>
     </section>
 
-    <section id="stack" class="stack section alt">
-      <div class="container">
-        <div class="section-header reveal">
-          <p class="section-eyebrow">技术栈</p>
-          <h2 class="section-title">现代、安全、可扩展</h2>
+    <!-- =========================== verification ========================= -->
+    <section class="section" id="verification" data-section-id="verification">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">验证状态</p>
+          <h2>区分"自动化测试已通过"与"待原生验收"</h2>
+          <p>没有证据的能力不会写成已完成。以下数字为当前代码库实测结果。</p>
         </div>
-        <div class="stack-grid reveal">
-          <div class="stack-group">
-            <h4>桌面壳</h4>
-            <div class="stack-tags">
-              <span class="tag">Tauri 2</span>
-              <span class="tag">Rust</span>
-              <span class="tag">WebView2</span>
-            </div>
-          </div>
-          <div class="stack-group">
-            <h4>前端</h4>
-            <div class="stack-tags">
-              <span class="tag">React 19</span>
-              <span class="tag">TypeScript 5.7</span>
-              <span class="tag">Vite 6</span>
-              <span class="tag">Tailwind CSS 4</span>
-              <span class="tag">Radix UI</span>
-              <span class="tag">xterm.js 6</span>
-            </div>
-          </div>
-          <div class="stack-group">
-            <h4>后端 / 系统</h4>
-            <div class="stack-tags">
-              <span class="tag">portable-pty</span>
-              <span class="tag">russh 0.61</span>
-              <span class="tag">russh-sftp 2.1</span>
-              <span class="tag">keyring 3.6</span>
-              <span class="tag">git2 0.19</span>
-            </div>
-          </div>
-          <div class="stack-group">
-            <h4>AI 引擎</h4>
-            <div class="stack-tags">
-              <span class="tag">LangGraph</span>
-              <span class="tag">LangChain</span>
-              <span class="tag">ChromaDB</span>
-              <span class="tag">SQLite FTS5</span>
-              <span class="tag">Pydantic 2</span>
-            </div>
-          </div>
+
+        <table class="verify reveal">
+          <thead>
+            <tr>
+              <th scope="col">门禁</th>
+              <th scope="col">范围</th>
+              <th scope="col">结果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>pytest</td><td>Python sidecar（Agent、工具、审批、知识库）</td><td>2,236 通过</td></tr>
+            <tr><td>vitest</td><td>前端（140 个测试文件）</td><td>1,368 通过</td></tr>
+            <tr><td>cargo test</td><td>Rust 壳（PTY、SSH、打字机、隧道）</td><td>364 通过</td></tr>
+            <tr><td>tsc / eslint</td><td>类型与静态检查</td><td>0 错误 0 警告</td></tr>
+          </tbody>
+        </table>
+
+        <div class="pending reveal">
+          <strong>待原生桌面验收</strong>（需要真实 SSH 服务器与已保存的连接配置）：
+          连接与历史恢复、同会话审批 FIFO、教学命令的成功 / 非零退出 / 超时 / 并发卡片闭环、发行版感知补全。
         </div>
       </div>
     </section>
 
-    <section class="cta section">
-      <div class="container">
-        <div class="cta-box reveal">
-          <h2>开始探索 TDSF Terminal Agent</h2>
-          <p>基于 terax-ai 开源基线持续演进，面向 Linux 运维教学场景打造。</p>
-          <div class="cta-actions">
-            <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener" class="btn btn-primary btn-lg">访问 GitHub</a>
-            <a href="#" class="btn btn-ghost btn-lg" onclick="event.preventDefault(); alert('下载功能待发布，请先访问 GitHub 源码。');">下载体验</a>
-          </div>
+    <!-- ============================= start ============================== -->
+    <section class="section" id="start" data-section-id="start">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">快速开始</p>
+          <h2>三步跑起来</h2>
+          <p>环境要求：Node.js ≥ 20、pnpm ≥ 9、Rust stable、Python ≥ 3.12。</p>
+        </div>
+
+        <div class="quick reveal">
+          <pre class="code-block"><span class="c"># 1. 安装前端依赖</span>
+pnpm install
+
+<span class="c"># 2. 启动桌面应用（首次编译 2–5 分钟）</span>
+pnpm tauri:dev
+
+<span class="c"># Windows 用户可直接双击</span>
+<span class="k">启动.bat</span></pre>
+
+          <ol class="steps">
+            <li><span><strong>配置模型</strong>：设置 → 模型，填入 API Key（DeepSeek / 智谱 / 通义 / Kimi / 豆包 / Ollama / 自定义 OpenAI 兼容端点）。</span></li>
+            <li><span><strong>新建工作区</strong>：本地、WSL 或 SSH 服务器；SSH 凭据保存在系统密钥库。</span></li>
+            <li><span><strong>在工作区内新建对话</strong>：Agent 只看到该工作区的环境；同工作区的对话共享记忆。</span></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= docs =============================== -->
+    <section class="section" id="docs" data-section-id="docs">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">文档</p>
+          <h2>从使用到架构</h2>
+        </div>
+        <div class="docs-grid reveal">
+          <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/docs/guide/" target="_blank" rel="noopener">
+            <div class="doc-name">用户文档</div>
+            <div class="doc-desc">信任模式、可视执行、审批白名单、知识库、LSP</div>
+          </a>
+          <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/README.md" target="_blank" rel="noopener">
+            <div class="doc-name">README</div>
+            <div class="doc-desc">项目总览、能力清单、快速开始</div>
+          </a>
+          <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/docs/dev-state.md" target="_blank" rel="noopener">
+            <div class="doc-name">开发状态</div>
+            <div class="doc-desc">当前进度、已知问题、交接记录</div>
+          </a>
+          <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener">
+            <div class="doc-name">路线图</div>
+            <div class="doc-desc">短/长期规划与任务清单</div>
+          </a>
         </div>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <div class="container footer-inner">
+    <div class="shell footer-inner">
       <div class="footer-brand">
-        <img src="assets/logo.svg" alt="" class="footer-logo" />
+        <img src="assets/logo.svg" alt="" />
         <span>TDSF Terminal Agent</span>
       </div>
-      <p class="footer-copy">基于 crynta/terax-ai v0.8.6 魔改 · 开源许可 Apache-2.0</p>
+      <p>
+        架构基于 <a href="https://github.com/crynta/terax-ai" target="_blank" rel="noopener">terax-ai</a> 优化完善 ·
+        新增 SSH 服务器管理、可见执行 Agent 与 Linux 教学流程 · Apache-2.0
+      </p>
     </div>
   </footer>
 
