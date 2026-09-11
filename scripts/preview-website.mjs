@@ -33,14 +33,14 @@ await page.evaluate(() => {
 await page.waitForTimeout(400);
 await page.screenshot({ path: join(outDir, "website-full.png"), fullPage: true });
 
-// README 用演示封面（16:9，与 assets/video/poster.png 对齐）
+// README 用演示封面（16:9，与 website/assets/video/poster.png 对齐）
 const posterPage = await browser.newPage({
   viewport: { width: 1600, height: 900 },
   deviceScaleFactor: 1,
 });
 await posterPage.goto(page_url, { waitUntil: "load" });
 await posterPage.waitForTimeout(5200);
-await posterPage.screenshot({ path: join(root, "assets", "video", "poster.png") });
+await posterPage.screenshot({ path: join(root, "website", "assets", "video", "poster.png") });
 await posterPage.close();
 
 // 控制台错误检查（缺图/脚本异常会在这里暴露）
@@ -50,4 +50,4 @@ page.on("console", (m) => {
 });
 
 await browser.close();
-console.log("preview written to .preview/ + assets/video/poster.png");
+console.log("preview written to .preview/ + website/assets/video/poster.png");
