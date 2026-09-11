@@ -1,9 +1,10 @@
 {
   "name": "tdsf-terminal-agent",
-  "version": "4.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "TDSF Terminal Agent v4.0 — 终端优先的 Linux 运维 AI 工作台",
+  "packageManager": "pnpm@11.24.0",
+  "description": "TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
@@ -13,7 +14,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.app.json",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css,md}\" \"docs/**/*.md\" \"specs/**/*.md\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,md}\" \"website/**/*.{html,css,js}\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:python": "cd src-tauri/sidecar && .\\.venv\\Scripts\\python.exe -m pytest -v --tb=short",

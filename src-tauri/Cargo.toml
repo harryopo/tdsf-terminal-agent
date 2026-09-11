@@ -1,10 +1,10 @@
 [package]
 name = "tdsf-terminal-agent"
-version = "4.0.0"
-description = "TDSF Terminal Agent v4.0 — 终端优先的 Linux 运维 AI 工作台"
+version = "0.1.0"
+description = "TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台"
 authors = ["TDSF Team"]
-license = "MIT"
-repository = "https://github.com/tdsf/terminal-agent"
+license = "Apache-2.0"
+repository = "https://github.com/harryopo/tdsf-terminal-agent"
 edition = "2021"
 # 升级到 1.85 以支持 russh 0.61（async fn in trait 稳定 + 新版 tokio）
 # Rust 1.96.0 已实际安装,远超此最低要求
