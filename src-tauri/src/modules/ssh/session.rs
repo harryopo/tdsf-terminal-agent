@@ -1735,7 +1735,7 @@ pub(crate) mod tests {
     // 2. exec_command 错误路径: connection_closed=true / handle=None 时
     //    必须立即返回 Err(Closed),不发起任何 channel_open_session / exec 调用
     //
-    // 真实链路验证靠 tauri:dev + CDP 9222 实测 (见 docs/dev-state.md §P0-D)。
+    // 真实链路验证靠 tauri:dev + CDP 9222 实测（单测只覆盖可离线验证的两类）。
 
     /// 构造测试用 SshSession,所有字段为 None / 默认值
     ///
