@@ -2982,3 +2982,11 @@ invoke 内部顺序：`_check_degraded`（feature flag / strands 可用性 / mod
 **修复**：回显匹配器改为字符到达即转发；首个匹配字符开启 Agent 蓝色样式，后续字符继续原样流入，命令末尾立即复位。若中途不匹配，关闭临时样式并转发当前字节；同一 PTY 块在命令完成后的提示符和输出不再重新参与匹配。未改变写入 SSH/PTY 的字节、human_type 速度或其他执行模式。
 
 **验证**：`agentCommandEcho` Vitest **3 passed**，覆盖跨 chunk 即时转发、错配复位和非匹配输出原样保留；Luna 子 agent 复跑同一测试并继续执行 typecheck。
+
+### 37.146 Run 注入污染 OSC 7（2026-09-11 ✅）
+
+**用户复测**：点击教学命令卡 Run 后，终端出现 `le://localhost/root[root@server ~]# ...`。`file://localhost/root` 是 SSH shell 用于同步 cwd 的 OSC 7 控制序列，却被渲染成了可见文本。
+
+**根因与修复**：上一版即时着色器在所有字节上寻找命令前缀，遇到 OSC 7 payload 中的字符时也插入蓝色 SGR，破坏了终端控制序列。现在匹配器跨 chunk 跟踪 ESC/CSI/OSC/DCS 等控制序列，控制序列及其 payload 原样转发，只在可打印命令回显上着色；命令完成后的同块提示符/输出仍不参与匹配。
+
+**验证**：`agentCommandEcho` Vitest **4 passed**（含分块 OSC 7 不污染回归）；`pnpm typecheck`、定向 ESLint、Prettier 检查通过。用户重启桌面端/sidecar 后，Run 应从干净 shell 提示符开始，资源管理器 cwd 也应继续跟随。

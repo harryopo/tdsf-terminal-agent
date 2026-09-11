@@ -8,11 +8,13 @@ const RESET_STYLE = "\x1b[0m";
 const encoder = new TextEncoder();
 const AGENT_COMMAND_BLUE_BYTES = encoder.encode(AGENT_COMMAND_BLUE);
 const RESET_STYLE_BYTES = encoder.encode(RESET_STYLE);
+type ControlState = "none" | "escape" | "csi" | "string" | "stringEscape";
 
 export class AgentCommandEcho {
   private readonly expected: Uint8Array;
   private index = 0;
   private complete = false;
+  private controlState: ControlState = "none";
 
   constructor(command: string) {
     this.expected = encoder.encode(command.replace(/[\r\n]+$/, ""));
@@ -27,6 +29,29 @@ export class AgentCommandEcho {
     if (this.complete || bytes.length === 0) return bytes;
     const output: number[] = [];
     for (const byte of bytes) {
+      if (this.controlState !== "none") {
+        this.consumeControlByte(byte, output);
+        continue;
+      }
+
+      // Never inject SGR bytes inside terminal control strings. In particular,
+      // OSC 7 carries `file://localhost/...`; corrupting it makes the URL leak
+      // into the visible shell prompt instead of being consumed by xterm.
+      if (byte === 0x1b) {
+        output.push(byte);
+        this.controlState = "escape";
+        continue;
+      }
+
+      // C0 controls are not command text. Keep them lossless and restart a
+      // partial match at a new line so a previous prompt cannot bleed into the
+      // next command.
+      if (byte < 0x20 || byte === 0x7f) {
+        output.push(byte);
+        if (byte === 0x0a || byte === 0x0d) this.index = 0;
+        continue;
+      }
+
       // The armed command has already completed in this same PTY chunk. Do
       // not try to match the prompt/output that follows it.
       if (this.complete) {
@@ -69,5 +94,40 @@ export class AgentCommandEcho {
       }
     }
     return Uint8Array.from(output);
+  }
+
+  private consumeControlByte(byte: number, output: number[]): void {
+    output.push(byte);
+    switch (this.controlState) {
+      case "escape":
+        if (byte === 0x5b) {
+          this.controlState = "csi";
+        } else if (
+          byte === 0x5d ||
+          byte === 0x50 ||
+          byte === 0x58 ||
+          byte === 0x5e ||
+          byte === 0x5f
+        ) {
+          // OSC / DCS / SOS / PM / APC: all terminate with BEL or ST (ESC \\).
+          this.controlState = "string";
+        } else {
+          this.controlState = "none";
+        }
+        break;
+      case "csi":
+        if (byte >= 0x40 && byte <= 0x7e) this.controlState = "none";
+        break;
+      case "string":
+        if (byte === 0x07) this.controlState = "none";
+        else if (byte === 0x1b) this.controlState = "stringEscape";
+        break;
+      case "stringEscape":
+        if (byte === 0x5c) this.controlState = "none";
+        else if (byte !== 0x1b) this.controlState = "string";
+        break;
+      case "none":
+        break;
+    }
   }
 }

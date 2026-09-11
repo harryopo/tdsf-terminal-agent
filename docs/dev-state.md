@@ -4875,3 +4875,7 @@ invoke 内序：`_check_degraded` → **stalled 短路** → per-session `agent_
 ### 37.145 打字机回显即时转发（2026-09-10 ✅，待用户原生复测）
 
 前端 Agent 命令着色器此前要等整条命令回显匹配完成才输出缓存字节，掩盖了后端已经逐字写入的 human_type 效果。现改为首字节命中即开启蓝色、每个后续字节立即转发，命令完成时复位；错配会关闭临时样式，同一块中命令后的提示符/输出不再误匹配。`agentCommandEcho` 定向 Vitest **3 passed**；待重启桌面端/sidecar 后验证普通命令卡与教学命令卡的 Run 均逐字符可见。
+
+### 37.146 Run 注入不污染 OSC 7（2026-09-11 ✅，待用户原生复测）
+
+即时着色器此前会在 OSC 7 的 `file://localhost/<cwd>` payload 中插入 ANSI，导致控制序列失效并把 `le://localhost/root` 等 URL 片段显示在 shell 提示符前。现新增 ESC/CSI/OSC/DCS 等控制状态跟踪：控制序列完整原样转发，仅对可打印命令回显做蓝色标记。分块 OSC 7 回归与非匹配输出测试均通过，`agentCommandEcho` 共 **4 passed**；重启桌面端/sidecar 后验证 Run 不再产生 URL 前缀，cwd 跟随保持正常。
