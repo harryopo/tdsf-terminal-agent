@@ -20,7 +20,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 type Props = {
   onSelect: (env: WorkspaceEnv) => void;
   /**
-   * TDSF 魔改 2026-08-28（用户反馈）: SSH 选项——SSH 无法像 WSL 一样
+   * TDSF 2026-08-28（用户反馈）: SSH 选项——SSH 无法像 WSL 一样
    * 一步切换（需要主机/凭据），点击后打开"新建 SSH 工作区"对话框，
    * 与欢迎页/新建工作区的 SSH 链路保持同源。
    */
@@ -35,7 +35,7 @@ export function WorkspaceEnvSelector({
   switching = false,
 }: Props) {
   const globalEnv = useWorkspaceEnvStore((s) => s.env);
-  // TDSF 魔改 2026-09-02: 标签以「活跃 Space 的 env」为持久化真源，回退全局 env。
+  // TDSF 2026-09-02: 标签以「活跃 Space 的 env」为持久化真源，回退全局 env。
   // 修复：初次加载 SSH Space 时全局 env 尚未被 adoptWorkspaceEnv 同步
   // （App.tsx prevSpaceRef 的 prev===null 早退守卫），导致底部仍显示 "Windows"
   // 而非服务器地址。活跃 Space 的 env 总是跟随连接状态（含 ssh user@host）。
@@ -48,7 +48,7 @@ export function WorkspaceEnvSelector({
   const error = useWorkspaceEnvStore((s) => s.error);
   const refreshDistros = useWorkspaceEnvStore((s) => s.refreshDistros);
 
-  // TDSF 魔改 2026-09-02（用户钦定）: SSH 工作区跨平台显示服务器地址（user@host），
+  // TDSF 2026-09-02（用户钦定）: SSH 工作区跨平台显示服务器地址（user@host），
   // 本地/WSL 环境选择仅 Windows 有意义——非 Windows 且非 SSH 时才隐藏整个选择器。
   if (!IS_WINDOWS && env.kind !== "ssh") return null;
 

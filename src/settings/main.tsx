@@ -1,4 +1,4 @@
-// TDSF 魔改 2026-07-28: 必须最先导入 tauriMock, 在所有 @tauri-apps/api 模块加载前
+// TDSF 2026-07-28: 必须最先导入 tauriMock, 在所有 @tauri-apps/api 模块加载前
 // 注入 __TAURI_INTERNALS__ stub. 否则 dev 浏览器模式会因为找不到 Tauri runtime
 // 抛 "Cannot read properties of undefined (reading 'invoke')" 错误, 整个 Settings 渲染不出.
 import "../lib/tauriMock";
@@ -24,7 +24,7 @@ ReactDOM.createRoot(
   </ThemeProvider>,
 );
 
-// TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 show window 调用
+// TDSF: dev 模式 (无 Tauri 运行时) 跳过 show window 调用
 // T2 透明窗口修复: 双 rAF 首帧绘制后 show + 2s 兜底（同主窗口）
 if (isTauriRuntime()) {
   const showWindow = () => {

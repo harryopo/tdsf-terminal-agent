@@ -12,7 +12,7 @@ export type ProviderKeys = Record<ProviderId, string | null>;
 export type CustomEndpointKeys = Record<string, string | null>;
 
 export const EMPTY_PROVIDER_KEYS: ProviderKeys = {
-  // TDSF 魔改 2026-08-28: 国产 provider（顺序与 PROVIDERS 一致，国产优先）
+  // TDSF 2026-08-28: 国产 provider（顺序与 PROVIDERS 一致，国产优先）
   deepseek: null,
   qwen: null,
   zhipu: null,

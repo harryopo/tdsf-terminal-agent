@@ -42,7 +42,7 @@ import {
   setCustomEndpointKey,
   setKey,
 } from "@/modules/ai/lib/keyring";
-// TDSF 魔改 2026-08-28: 配置变更后同步 sidecar LLM 配置（agent.configure）
+// TDSF 2026-08-28: 配置变更后同步 sidecar LLM 配置（agent.configure）
 import { scheduleSidecarConfigSync } from "@/modules/ai/lib/sidecar-config-sync";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -118,7 +118,7 @@ const LOCAL_META: Partial<Record<ProviderId, LocalMeta>> = {
   ollama: {
     urlPlaceholder: "http://localhost:11434/v1",
     modelPlaceholder: "qwen2.5-coder:7b",
-    // TDSF 魔改 2026-08-28: 补充国产化推荐模型与拉取命令（教学一体机内存 8GB 可跑）
+    // TDSF 2026-08-28: 补充国产化推荐模型与拉取命令（教学一体机内存 8GB 可跑）
     description:
       "通过 Ollama 内置的 OpenAI 兼容 API 运行本地模型。推荐模型 qwen3:8b（8GB 内存可跑）/ deepseek-r1:8b — 装好 Ollama 后在终端执行 ollama pull qwen3:8b 即可下载。",
     modelHint: <>`ollama list` / `ollama pull` 中显示的模型名称。</>,
@@ -174,7 +174,7 @@ export function ModelsSection() {
     await setKey(provider, value);
     setKeys((prev) => (prev ? { ...prev, [provider]: value } : prev));
     await emitKeysChanged();
-    // TDSF 魔改 2026-08-28: key 变更直接影响 sidecar 可用性，防连击同步
+    // TDSF 2026-08-28: key 变更直接影响 sidecar 可用性，防连击同步
     scheduleSidecarConfigSync();
   };
 
@@ -217,7 +217,7 @@ export function ModelsSection() {
     await setCustomEndpoints(
       customEndpoints.map((e) => (e.id === id ? { ...e, ...patch } : e)),
     );
-    // TDSF 魔改 2026-08-28: endpoint 字段（baseURL/modelId）可能被当前选中
+    // TDSF 2026-08-28: endpoint 字段（baseURL/modelId）可能被当前选中
     // 的 compat 模型引用，变更后防连击同步
     scheduleSidecarConfigSync();
   };
@@ -257,7 +257,7 @@ export function ModelsSection() {
     }
 
     await setCustomEndpoints(remaining);
-    // TDSF 魔改 2026-08-28: 删除 endpoint 可能触发选中模型回退，同步 sidecar
+    // TDSF 2026-08-28: 删除 endpoint 可能触发选中模型回退，同步 sidecar
     scheduleSidecarConfigSync();
   };
 
@@ -616,7 +616,7 @@ function DefaultModelPicker({
                     key={mod.id}
                     onSelect={() => {
                       void setDefaultModel(mod.id as ModelId);
-                      // TDSF 魔改 2026-08-28: 对话模型切换后同步 sidecar LLM 配置
+                      // TDSF 2026-08-28: 对话模型切换后同步 sidecar LLM 配置
                       scheduleSidecarConfigSync();
                     }}
                     className={cn(
@@ -798,7 +798,7 @@ function AutocompleteRow({
           </DropdownMenu>
         </div>
       </FieldRow>
-      {/* TDSF 魔改 2026-08-28: 说明补全模型用途，避免与终端命令预测混淆 */}
+      {/* TDSF 2026-08-28: 说明补全模型用途，避免与终端命令预测混淆 */}
       <p className="pl-19 text-[10.5px] leading-relaxed text-muted-foreground">
         用于编辑器行内代码补全的快速模型（与终端命令预测无关）。
       </p>

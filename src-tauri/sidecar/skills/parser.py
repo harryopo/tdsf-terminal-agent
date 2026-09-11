@@ -116,18 +116,18 @@ class Skill:
     examples: str = ""
     body: str = ""
     file_path: str | None = None
-    # TDSF 魔改 (P0-2 修复 2026-07-28): 可执行体描述
+    # TDSF (P0-2 修复 2026-07-28): 可执行体描述
     # 来自 SKILL.md frontmatter 的 executor 块, 支持 shell/python/http 三种 type
     # - shell:  {type: shell,  command: "...", timeout: 5, args: ["--flag"]}
     # - python: {type: python, script: "import os; print(os.uname())"}
     # - http:   {type: http,   method: GET, url: "...", headers: {}}
     executor: dict[str, Any] | None = None
-    # TDSF 魔改 (T1 2026-08-28): 工具白名单（可选）
+    # TDSF (T1 2026-08-28): 工具白名单（可选）
     # 来自 SKILL.md frontmatter 的 allowed-tools 字段（list[str] 或逗号分隔 str）
     # 语义：该技能执行/推荐时允许使用的 Strands 工具名列表（对齐 Claude Code
     # Agent Skills 的 allowed-tools 前置声明）；空列表 = 不限制
     allowed_tools: list[str] = field(default_factory=list)
-    # TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 结构化剧本
+    # TDSF (T6 2026-08-31, spec add-agent-loop-closure): 结构化剧本
     # 来自 SKILL.md frontmatter 的 steps 字段（YAML 列表），每项：
     #   {description: 步骤描述, tool_hint: 建议工具(可选), success_criteria: 成功判据(可选)}
     # 语义：skill_invoke 命中带剧本的技能时注入 LLM 驱动工具序列，
@@ -143,18 +143,18 @@ class Skill:
             "version": self.version,
             "author": self.author,
             "tags": list(self.tags),
-            # TDSF 魔改 (T1 2026-08-28): 序列化 triggers
+            # TDSF (T1 2026-08-28): 序列化 triggers
             "triggers": list(self.triggers),
             "when_to_use": self.when_to_use,
             "steps": self.steps,
             "examples": self.examples,
             "body": self.body,
             "file_path": self.file_path,
-            # TDSF 魔改 (P0-2 修复 2026-07-28): 序列化 executor
+            # TDSF (P0-2 修复 2026-07-28): 序列化 executor
             "executor": dict(self.executor) if self.executor else None,
-            # TDSF 魔改 (T1 2026-08-28): 序列化 allowed-tools
+            # TDSF (T1 2026-08-28): 序列化 allowed-tools
             "allowed_tools": list(self.allowed_tools),
-            # TDSF 魔改 (T6 2026-08-31): 序列化剧本（浅拷贝每步 dict）
+            # TDSF (T6 2026-08-31): 序列化剧本（浅拷贝每步 dict）
             "playbook": [dict(step) for step in self.playbook],
         }
 
@@ -167,18 +167,18 @@ class Skill:
             version=data.get("version", "0.0.0"),
             author=data.get("author", ""),
             tags=list(data.get("tags", [])),
-            # TDSF 魔改 (T1 2026-08-28): 反序列化 triggers
+            # TDSF (T1 2026-08-28): 反序列化 triggers
             triggers=list(data.get("triggers") or []),
             when_to_use=data.get("when_to_use", ""),
             steps=data.get("steps", ""),
             examples=data.get("examples", ""),
             body=data.get("body", ""),
             file_path=data.get("file_path"),
-            # TDSF 魔改 (P0-2 修复 2026-07-28): 反序列化 executor
+            # TDSF (P0-2 修复 2026-07-28): 反序列化 executor
             executor=data.get("executor"),
-            # TDSF 魔改 (T1 2026-08-28): 反序列化 allowed-tools
+            # TDSF (T1 2026-08-28): 反序列化 allowed-tools
             allowed_tools=list(data.get("allowed_tools") or []),
-            # TDSF 魔改 (T6 2026-08-31): 反序列化剧本（容忍缺失/非法）
+            # TDSF (T6 2026-08-31): 反序列化剧本（容忍缺失/非法）
             playbook=_parse_playbook(data.get("playbook")),
         )
 
@@ -252,19 +252,19 @@ def parse_skill_content(content: str) -> Skill:
         version=str(meta.get("version", "0.0.0")),
         author=str(meta.get("author", "")),
         tags=_normalize_tags(meta.get("tags")),
-        # TDSF 魔改 (T1 2026-08-28): 解析 triggers 触发词
+        # TDSF (T1 2026-08-28): 解析 triggers 触发词
         triggers=_normalize_tags(meta.get("triggers")),
         when_to_use=sections.get("when to use", ""),
         steps=sections.get("steps", ""),
         examples=sections.get("examples", ""),
         body=body,
-        # TDSF 魔改 (P0-2 修复 2026-07-28): 解析 SKILL.md 中的 executor 元数据
+        # TDSF (P0-2 修复 2026-07-28): 解析 SKILL.md 中的 executor 元数据
         # 支持让 Skill 真正执行 shell 命令, 而不是只回显 SKILL.md 文本
         executor=_parse_executor(meta.get("executor")),
-        # TDSF 魔改 (T1 2026-08-28): 解析 allowed-tools 工具白名单
+        # TDSF (T1 2026-08-28): 解析 allowed-tools 工具白名单
         allowed_tools=_normalize_tags(meta.get("allowed-tools")
                                       or meta.get("allowed_tools")),
-        # TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 解析剧本
+        # TDSF (T6 2026-08-31, spec add-agent-loop-closure): 解析剧本
         # frontmatter steps: YAML 列表（与 body 的 "## Steps" 知识章节并存：
         # steps[str] 是人读的参考文本，playbook[list] 是机器执行的结构化剧本）
         playbook=_parse_playbook(meta.get("steps")),
@@ -426,7 +426,7 @@ def _parse_sections(body: str) -> dict[str, str]:
     return sections
 
 
-# TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 剧本解析
+# TDSF (T6 2026-08-31, spec add-agent-loop-closure): 剧本解析
 # ---------------------------------------------------------------------------
 # SKILL.md frontmatter 的 steps 字段（YAML 列表）解析为结构化剧本：
 #
@@ -489,7 +489,7 @@ def _parse_playbook(raw: Any) -> list[dict[str, str]]:
     return playbook
 
 
-# TDSF 魔改 (P0-2 修复 2026-07-28): 解析 executor 元数据
+# TDSF (P0-2 修复 2026-07-28): 解析 executor 元数据
 # ---------------------------------------------------------------------------
 # SKILL.md frontmatter 支持以下三种 executor 格式:
 #

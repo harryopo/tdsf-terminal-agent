@@ -1,5 +1,5 @@
 /**
- * useSshLeafTransport.ts — TDSF 魔改 (2026-08-11): SSH 叶子终端的传输注入 hook
+ * useSshLeafTransport.ts — TDSF (2026-08-11): SSH 叶子终端的传输注入 hook
  * -----------------------------------------------------------------------------
  * 从 SshTerminalHost 提取（#18 → #21 分屏重构）：把「SSH 会话 ↔ TerminalPane」
  * 的 transport 工厂下沉为可复用 hook，供 PaneTreeView 的 SSH 叶子直接使用，

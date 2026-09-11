@@ -17,7 +17,7 @@ export type PaneNode =
       slotId?: PaneId;
       cwd?: string;
       /**
-       * TDSF 魔改 (2026-08-11): SSH 会话绑定（本地/SSH 混合分屏）。
+       * TDSF (2026-08-11): SSH 会话绑定（本地/SSH 混合分屏）。
        * - undefined: 继承所在 tab 的 sshSessionId（向后兼容旧行为）
        * - null: 强制本地 shell（即使在 SSH Space 里也显示本地终端）
        * - string: 渲染该 SSH 会话的远端 shell
@@ -82,7 +82,7 @@ export function splitLeaf(
   newLeafId: PaneId,
   dir: SplitDir,
   newCwd?: string,
-  // TDSF 魔改 (2026-08-11): 新叶子的 SSH 会话绑定。
+  // TDSF (2026-08-11): 新叶子的 SSH 会话绑定。
   // undefined=继承 tab（不写字段）、null=强制本地、string=SSH 会话。
   newSshSessionId?: string | null,
 ): PaneNode {
@@ -125,7 +125,7 @@ export function splitLeaf(
 }
 
 /**
- * TDSF 魔改 (2026-08-11): 设置/清除树中某个叶子节点的 SSH 会话绑定。
+ * TDSF (2026-08-11): 设置/清除树中某个叶子节点的 SSH 会话绑定。
  * `sshSessionId === null` 表示强制本地；`undefined` 恢复继承（不写字段）。
  * 叶子不存在时原样返回（避免无谓的引用变化）。
  */
@@ -149,7 +149,7 @@ export function setLeafSshSession(
 }
 
 /**
- * TDSF 魔改 (2026-08-11): 计算叶子节点的「有效 SSH 会话」——
+ * TDSF (2026-08-11): 计算叶子节点的「有效 SSH 会话」——
  * 叶子显式绑定优先（string=SSH / null=强制本地），否则继承所在 tab 的绑定。
  * 返回 falsy 表示该叶子渲染本地 shell。
  *

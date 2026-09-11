@@ -4,7 +4,7 @@ description: Docker 管理 Skill，覆盖容器生命周期、镜像、网络、
 version: 2.0.0
 author: TDSF
 tags: [docker, container, image, volume, network, devops, compose]
-# TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
+# TDSF (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
 # docker ps -a = 容器排障第一命令: 含已停止容器, 一眼看到 Exited 状态与退出码.
 executor:
   type: shell

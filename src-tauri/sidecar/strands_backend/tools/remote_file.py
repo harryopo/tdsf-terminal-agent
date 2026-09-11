@@ -11,7 +11,7 @@ strands_backend/tools/remote_file.py — 远程文本文件读写工具
 - 二进制文件检测（含 NUL 字节）返回 binary 状态，不返回内容。
 - 返回结构化 dict（不返回裸字符串）。
 
-TDSF 魔改 2026-07-30 P0-C4 修复：
+TDSF 2026-07-30 P0-C4 修复：
 - 原 ipc_invoke 调用的 method 名为 "sftp_read_file"，但 Rust 侧实际命令为
   "sftp_read"（src-tauri/src/modules/ssh/mod.rs:416 + lib.rs:384），现已对齐。
 - 调用结构：{session_id, path, max_size}（注：Rust sftp_read 当前签名是
@@ -250,7 +250,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         }
 
     # 通过 RustBridge 调 Rust 后端 sftp_read
-    # TDSF 魔改 2026-07-30 P0-C4 修复:
+    # TDSF 2026-07-30 P0-C4 修复:
     #   原 method 名 "sftp_read_file" 与 Rust 侧不匹配，
     #   Rust 实际命令为 "sftp_read"（mod.rs:416）。
     # TDSF 修复 2026-07-30 (Critical Bug): 参数名对齐 Rust camelCase (sessionId)，
@@ -307,7 +307,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             "error": result.get("error", result.get("message", "")),
         }
 
-    # TDSF 魔改 2026-07-30 P0-C4: 适配 Rust sftp_read 实际返回值
+    # TDSF 2026-07-30 P0-C4: 适配 Rust sftp_read 实际返回值
     # Rust sftp_read 签名: (app, state, session_id, path) -> Result<Vec<u8>, String>
     # 序列化到 Python 即 list[int]（字节列表），而非 dict。
     # 旧代码假设 result 是 dict 并取 result.get("content")，导致 content 丢失。

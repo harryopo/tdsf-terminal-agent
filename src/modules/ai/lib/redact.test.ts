@@ -57,7 +57,7 @@ describe("redactSensitive", () => {
     expect(out).not.toContain(`sk-proj-${"a".repeat(24)}`);
   });
 
-  // ── TDSF 魔改 2026-08-28 (B1-G1): 对齐 nyaterm redaction.rs 的 3 个新模式 ──
+  // ── TDSF 2026-08-28 (B1-G1): 对齐 nyaterm redaction.rs 的 3 个新模式 ──
 
   it("redacts a PEM private key block across lines", () => {
     const key = [

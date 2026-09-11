@@ -42,7 +42,7 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
   }, [tabs, editorRefs]);
 
   useEffect(() => {
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 fs:file-written 监听
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 fs:file-written 监听
     if (!isTauriRuntime()) return;
     type FileWrittenPayload = { path: string; source?: string };
     const unlistenPromise =
@@ -54,7 +54,7 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
           const currentTabs = tabsRef.current;
           for (const t of currentTabs) {
             if (t.kind !== "editor") continue;
-            // TDSF 魔改 2026-07-30: 远程 tab 不响应本地 fs:file-written
+            // TDSF 2026-07-30: 远程 tab 不响应本地 fs:file-written
             // （sftpWrite 不触发此事件；且避免本地同名 path 撞车误 reload）。
             if (t.remote) continue;
             if (t.path.replace(/\\/g, "/") === normalizedPath) {
@@ -73,7 +73,7 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
     const want = new Set<string>();
     for (const t of tabs) {
       if (t.kind !== "editor") continue;
-      // TDSF 魔改 2026-07-30: 远程 tab 不加本地 fs watch（远程路径无意义）。
+      // TDSF 2026-07-30: 远程 tab 不加本地 fs watch（远程路径无意义）。
       if (t.remote) continue;
       want.add(parentDir(t.path));
     }
@@ -92,7 +92,7 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
       const changed = new Set(paths.map((p) => p.replace(/\\/g, "/")));
       for (const t of tabsRef.current) {
         if (t.kind !== "editor") continue;
-        // TDSF 魔改 2026-07-30: 远程 tab 不响应本地 fs:changed
+        // TDSF 2026-07-30: 远程 tab 不响应本地 fs:changed
         // （远程文件变更不触发本地 watch；避免同名 path 撞车误 reload）。
         if (t.remote) continue;
         if (changed.has(t.path.replace(/\\/g, "/"))) {

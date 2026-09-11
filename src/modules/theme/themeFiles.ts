@@ -5,7 +5,7 @@ import { appConfigDir, join } from "@tauri-apps/api/path";
 import type { Theme } from "./types";
 import { type ValidationResult, validateTheme } from "./validateTheme";
 
-// TDSF 魔改: .terax-theme → .tdsf-theme（与全局 Terax→TDSF 清洗对齐）
+// TDSF: .terax-theme → .tdsf-theme（与全局 Terax→TDSF 清洗对齐）
 // 兼容旧扩展名: 用户已有的 .terax-theme 文件仍可被识别和导入
 const THEME_FILE_EXT = ".tdsf-theme";
 const THEME_FILE_EXT_LEGACY = ".terax-theme";

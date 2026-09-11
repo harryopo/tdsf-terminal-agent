@@ -231,7 +231,7 @@ function Body({
         )}
       </div>
 
-      {/* TDSF 魔改 2026-09-02（用户钦定）: 工作区标签移到底部对话区——
+      {/* TDSF 2026-09-02（用户钦定）: 工作区标签移到底部对话区——
           从顶部 Header 搬到这里，避免与 SessionPicker（历史对话概要）重叠；
           保持可点击打开工作区总览（agent 按工作区隔离运行）。 */}
       <div className="flex shrink-0 items-center gap-1.5 border-t border-border/40 px-3 py-1">
@@ -308,7 +308,7 @@ function Header({
     >
       <div className="flex min-w-0 items-center gap-1.5">
         {/* 用户钦定 2026-09-01: 左侧不放加号——新建对话经右侧"新会话"下拉展开添加 */}
-        {/* TDSF 魔改 2026-09-02（用户钦定）: WorkspaceChip 从顶部移除——
+        {/* TDSF 2026-09-02（用户钦定）: WorkspaceChip 从顶部移除——
             窄窗下左侧工作区与右侧 SessionPicker（历史对话概要）会重叠，
             工作区标签改放底部（见 Body 末尾 footer）。 */}
         <AgentStatusPill isMiniWindow />

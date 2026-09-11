@@ -134,7 +134,7 @@ export async function buildLanguageModel(
       })(resolvedModelId);
       break;
     }
-    // TDSF 魔改 2026-08-28: 国产 provider（阿里百炼/智谱/Kimi/火山方舟）——
+    // TDSF 2026-08-28: 国产 provider（阿里百炼/智谱/Kimi/火山方舟）——
     // 全部 OpenAI 兼容，baseURL 取 config.ts 的 PROVIDER_BASE_URLS 单一真源
     case "qwen":
     case "zhipu":

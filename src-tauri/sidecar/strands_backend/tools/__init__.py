@@ -15,7 +15,7 @@ strands_backend/tools/__init__.py — Strands 运维工具公共基础设施
   mkfs / dd / fork bomb 等），命中时通过 ``event_bus.emit_needs_you`` 推送
   审批事件，与现有 ``needs_you.py`` 协调服务对齐。
 - 提供 ``execute_via_ssh`` 辅助函数：统一通过 RustBridge 调 ssh_command。
-  （TDSF 魔改 2026-07-30 P0-C4: 原 "ssh_exec_in_session" 与 Rust 侧命名约定
+  （TDSF 2026-07-30 P0-C4: 原 "ssh_exec_in_session" 与 Rust 侧命名约定
   不一致，已对齐为 "ssh_command"；当前 Rust 侧尚未实现此命令，属 P2 backlog，
   rust_bridge=None 时返回 unavailable 不会触发实际调用。）
 - 导出 5 个运维工具的工厂函数 + invoke 函数（供适配层注册与单测调用）。
@@ -85,7 +85,7 @@ class RustBridge(Protocol):
         → Rust ipc.rs 收到 request → 调对应 Tauri command
         → 返回结果给 Python
 
-    TDSF 魔改 2026-07-30 P0-D/P0-E 注：
+    TDSF 2026-07-30 P0-D/P0-E 注：
         "ssh_command" Rust 侧已实现（src-tauri/src/modules/ssh/mod.rs:658
         `ssh_command` Tauri command，基于 russh channel exec 模式，返回
         {ok, output, stderr, exit_code, duration}，与 PTY 模式 ssh_write 互斥）。
@@ -231,7 +231,7 @@ class ToolContext:
     # Task 3.3 host 校验: 激活终端会话主机名（前端 live.sshConnection
     # "user@host" 提取 @ 后部分；空 = 不可得 → execute_via_ssh 跳过校验）
     ssh_host: str = ""
-    # TDSF 魔改 (2026-08-09): 终端执行模式——True 时 ssh_command 自动设 visible=True
+    # TDSF (2026-08-09): 终端执行模式——True 时 ssh_command 自动设 visible=True
     auto_execute_in_terminal: bool = False
     # "visible-terminal" executes through the foreground SSH PTY and waits for
     # its OSC command block. It must never fall back to ssh_command in secret.
@@ -1263,7 +1263,7 @@ def execute_via_ssh(
         })
 
     # 5. 通过 RustBridge 调 Rust 后端
-    # TDSF 魔改 2026-07-30 P0-C4: 对齐 Rust 命令名约定（ssh_command），
+    # TDSF 2026-07-30 P0-C4: 对齐 Rust 命令名约定（ssh_command），
     # 当前 Rust 侧尚未实现此命令，P2 backlog 补 russh channel exec 模式。
     # TDSF 修复 2026-07-30 (Critical Bug): 参数名对齐 Rust camelCase (sessionId)，
     # 并把 str session_id 转为 int（Rust 侧期望 u32 via as_u64()）。

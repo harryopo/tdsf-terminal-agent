@@ -1,4 +1,4 @@
-// TDSF 魔改 2026-08-28: sidecar-config-sync 单测
+// TDSF 2026-08-28: sidecar-config-sync 单测
 // =============================================================================
 // 覆盖三块：
 //   1. buildSidecarLlmConfig 纯映射（anthropic 特例 / OpenAI 兼容原名透传 /

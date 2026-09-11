@@ -255,13 +255,13 @@ class LongContextManager:
         return "\n\n".join(chunks)
 
     # ----------------------------------------------------------
-    # summarize — 摘要（TDSF 魔改 2026-08-09: 真 LLM 调用 + hash 回退）
+    # summarize — 摘要（TDSF 2026-08-09: 真 LLM 调用 + hash 回退）
     # ----------------------------------------------------------
 
     def summarize(self, text: str, max_tokens: int = 0) -> str:
         """生成文本摘要（优先用 LLM，回退到 hash 截断）。
 
-        TDSF 魔改 (2026-08-09): 从 hash 模拟重写为真 LLM 摘要。
+        TDSF (2026-08-09): 从 hash 模拟重写为真 LLM 摘要。
         当 LLM 配置可用时调用模型生成摘要；不可用时回退到截断+hash。
 
         Args:
@@ -285,7 +285,7 @@ class LongContextManager:
         if len(text) <= max_chars:
             return text
 
-        # TDSF 魔改: 尝试 LLM 摘要
+        # TDSF: 尝试 LLM 摘要
         summary = self._llm_summarize(text, effective_max)
         if summary:
             return summary
@@ -298,7 +298,7 @@ class LongContextManager:
     def _llm_summarize(self, text: str, max_tokens: int) -> str | None:
         """用已配置的 LLM 生成摘要（失败返回 None）。
 
-        TDSF 魔改 (2026-08-09): 从 sidecar 的 LLMConfig 取模型，
+        TDSF (2026-08-09): 从 sidecar 的 LLMConfig 取模型，
         发一个简单摘要请求。失败时静默返回 None 让上层回退到 hash。
         """
         try:

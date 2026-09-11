@@ -89,7 +89,7 @@ class NeedsYouStatus(str, Enum):
     REJECTED = "rejected"        # 用户拒绝（主要用于 approval 类型）
     RESOLVED = "resolved"        # 用户已解决（用于 question / error / handoff）
     TIMEOUT = "timeout"          # 超时自动拒绝（仅 approval）
-    # TDSF 魔改 (2026-08-09): 方案书 HITL 四决策
+    # TDSF (2026-08-09): 方案书 HITL 四决策
     EDITED = "edited"            # 用户修改了参数后放行（edit 决策）
     RESPONDED = "responded"      # 用户替工具回了结果（respond 决策）
     CANCELLED = "cancelled"      # Agent 主动取消
@@ -819,7 +819,7 @@ class NeedsYouService:
     ) -> NeedsYouStatus:
         """根据请求类型和响应内容推断新状态
 
-        TDSF 魔改 (2026-08-09): 支持方案书 HITL 四决策
+        TDSF (2026-08-09): 支持方案书 HITL 四决策
         - approve → APPROVED
         - reject → REJECTED
         - edit（改参数放行）→ EDITED

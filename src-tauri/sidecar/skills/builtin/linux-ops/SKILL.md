@@ -4,7 +4,7 @@ description: Linux 运维总纲 Skill，覆盖文件、权限、进程、服务�
 version: 2.0.0
 author: TDSF
 tags: [linux, ops, nginx, systemd, journalctl, disk, network, permission]
-# TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
+# TDSF (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
 # uptime = 运维"登录第一命令"：负载、在线时长、登录用户一屏速览。
 executor:
   type: shell

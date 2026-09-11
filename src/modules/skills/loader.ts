@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): Skill 加载器
+// TDSF (P4-T4.4): Skill 加载器
 // -----------------------------------------------------------------------------
 // 通过 IPC 调用 Python sidecar 的 `skill.list` 方法加载 skill 列表，
 // 失败时降级到 registry.getBuiltinSkills() 返回硬编码的 builtin skill。

@@ -587,7 +587,7 @@ pub fn wsl_home(distro: String) -> Result<String, String> {
     }
 }
 
-/// TDSF 魔改 2026-08-28（用户反馈：WSL 切换卡一下）：WSL 探测结果进程内缓存。
+/// TDSF 2026-08-28（用户反馈：WSL 切换卡一下）：WSL 探测结果进程内缓存。
 ///
 /// login shell / home 在发行版生命周期内基本不变，而每次 `build_wsl` 都要
 /// 串行跑多次 `wsl.exe`（VM 未运行时冷启动可达数秒）——这是"选择 WSL 后
@@ -663,7 +663,7 @@ printf %s "$shell""#;
 
 #[cfg(windows)]
 pub fn wsl_login_shell(distro: String) -> Result<String, String> {
-    // TDSF 魔改 2026-08-28: 原实现每次独立跑一次 wsl.exe 探测脚本；
+    // TDSF 2026-08-28: 原实现每次独立跑一次 wsl.exe 探测脚本；
     // 现改为走 cached_wsl_probe（合并探测 + 进程内缓存）。
     cached_wsl_probe(&distro).map(|e| e.login_shell)
 }

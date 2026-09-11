@@ -3,7 +3,7 @@
  * 复用自: terax-ai/src/modules/theme/themes/index.ts
  * License: Apache-2.0, Copyright 2026 Crynta
  *
- * TDSF 魔改: 补齐 kanagawa / kanagawa-dragon / gruvbox / rose-pine / everforest /
+ * TDSF: 补齐 kanagawa / kanagawa-dragon / gruvbox / rose-pine / everforest /
  * solarized / sage / tide / claude / caffeine / tdsf-default 等主题注册，
  * 让 resolveEditorThemeId("auto", ...) 能正确按 app 主题配对 editor 主题。
  */

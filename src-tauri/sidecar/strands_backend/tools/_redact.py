@@ -1,4 +1,4 @@
-"""_redact.py — Sidecar 侧敏感信息脱敏（B1-G1，TDSF 魔改 2026-08-28）
+"""_redact.py — Sidecar 侧敏感信息脱敏（B1-G1，TDSF 2026-08-28）
 
 与前端 src/modules/ai/lib/redact.ts 语义对齐的最小正则集：
 密钥类 token / env 赋值 / PEM 私钥块 / Authorization 头 / DB 连接串凭据。

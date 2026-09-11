@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): Skill 管理面板主组件
+// TDSF (P4-T4.4): Skill 管理面板主组件
 // -----------------------------------------------------------------------------
 // 布局（侧边栏内嵌）:
 //   ┌─────────────────────────────────────┐
@@ -17,7 +17,7 @@
 //   - 用户搜索/切换 tab 时本地筛选（filterSkills 纯函数）
 //   - Agent 在允许时自动调用 skill，无手动调用窗口
 //   - 点击"查看"按钮弹出 SkillContentDialog 预览 SKILL.md 定义
-//   TDSF 魔改 2026-08-15: 移除 SkillInvoker 手动调用弹窗（用户反馈: 无需调用窗口）
+//   TDSF 2026-08-15: 移除 SkillInvoker 手动调用弹窗（用户反馈: 无需调用窗口）
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,7 +40,7 @@ import {
 } from "react";
 import { SkillCard } from "./SkillCard";
 
-// TDSF 魔改: SkillContentDialog 懒加载，避免 streamdown 进入启动 bundle（eager-budget 约束）
+// TDSF: SkillContentDialog 懒加载，避免 streamdown 进入启动 bundle（eager-budget 约束）
 // 仅在用户点击"查看"按钮时才加载 streamdown
 const SkillContentDialog = lazy(() =>
   import("./SkillContentDialog").then((m) => ({
@@ -82,7 +82,7 @@ export function SkillsPanel({ className }: Props) {
   const setSearchQuery = useSkillsStore((s) => s.setSearchQuery);
   const toggleEnabled = useSkillsStore((s) => s.toggleEnabled);
 
-  // TDSF 魔改 2026-07-28: viewerSkill 管内容预览 dialog
+  // TDSF 2026-07-28: viewerSkill 管内容预览 dialog
   const [viewerSkill, setViewerSkill] = useState<SkillMetadata | null>(null);
 
   // mount 时加载 skill 列表（仅首次）
@@ -97,7 +97,7 @@ export function SkillsPanel({ className }: Props) {
     [skills, filterTab, searchQuery],
   );
 
-  // TDSF 魔改 2026-07-28: 处理"查看"按钮点击, 弹 SkillContentDialog
+  // TDSF 2026-07-28: 处理"查看"按钮点击, 弹 SkillContentDialog
   const handleViewContent = useCallback((skill: SkillMetadata) => {
     setViewerSkill(skill);
   }, []);
@@ -116,7 +116,7 @@ export function SkillsPanel({ className }: Props) {
     >
       {/* === 工具栏 === */}
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border/60 px-2">
-        {/* TDSF 魔改: 工具栏图标改用 text-primary 语义色 */}
+        {/* TDSF: 工具栏图标改用 text-primary 语义色 */}
         <HugeiconsIcon
           icon={SparklesIcon}
           size={14}
@@ -180,7 +180,7 @@ export function SkillsPanel({ className }: Props) {
               onClick={() => setFilterTab(tab.id)}
               className={cn(
                 "shrink-0 rounded-md px-2 py-1 text-[10.5px] font-medium transition-colors",
-                // TDSF 魔改: 选中 tab 使用 bg-primary/10 + text-primary 语义色
+                // TDSF: 选中 tab 使用 bg-primary/10 + text-primary 语义色
                 active
                   ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
@@ -196,7 +196,7 @@ export function SkillsPanel({ className }: Props) {
 
       {/* === 主体: 卡片网格 / 加载 / 错误 / 空状态 === */}
       <div className="min-h-0 flex-1 overflow-auto p-2">
-        {/* TDSF 魔改: 修复重试时不显示 LoadingState 的问题
+        {/* TDSF: 修复重试时不显示 LoadingState 的问题
             原条件 `loading && !loaded` 在首次加载完成（无论成功/失败）后 loaded=true，
             导致后续重试（如点击刷新按钮）时 loading=true 但 !loaded=false，
             LoadingState 不会显示，用户感受不到反馈。
@@ -227,7 +227,7 @@ export function SkillsPanel({ className }: Props) {
       </div>
 
       {/* === 内容预览对话框 === */}
-      {/* TDSF 魔改: 由 SkillCard 的"查看内容"按钮触发
+      {/* TDSF: 由 SkillCard 的"查看内容"按钮触发
           懒加载：仅当 viewerSkill 非 null（用户点击"查看内容"按钮）时才挂载，
           避免 streamdown 进入启动 bundle（eager-budget 约束） */}
       {viewerSkill && (
@@ -249,7 +249,7 @@ export function SkillsPanel({ className }: Props) {
 function LoadingState() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 py-8 text-center">
-      {/* TDSF 魔改: 加载图标改用 text-muted-foreground 语义色 */}
+      {/* TDSF: 加载图标改用 text-muted-foreground 语义色 */}
       <HugeiconsIcon
         icon={Loading03Icon}
         size={24}

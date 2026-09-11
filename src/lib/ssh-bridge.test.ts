@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.1): SSH 桥接层单测 — 纯函数 (不依赖 Tauri 运行时)
+// TDSF (P4-T4.1): SSH 桥接层单测 — 纯函数 (不依赖 Tauri 运行时)
 //
 // 覆盖:
 //   - __testToRustAuth: camelCase (前端) → snake_case (Rust) 认证参数转换

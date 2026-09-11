@@ -1,5 +1,5 @@
 /**
- * blocked-command.test.ts — B1-G2 防伪造：拦截命令记录与注入格式（TDSF 魔改 2026-08-28）
+ * blocked-command.test.ts — B1-G2 防伪造：拦截命令记录与注入格式（TDSF 2026-08-28）
  * -----------------------------------------------------------------------------
  * 覆盖 spec add-b1-agent-safety-baseline T1.4：
  *   1. recordBlockedCommand → getRecentBlockedCommandText 返回原文（10 分钟 TTL 内）

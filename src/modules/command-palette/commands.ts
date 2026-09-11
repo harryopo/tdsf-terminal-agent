@@ -146,7 +146,7 @@ export function createCommandItems(
       shortcutId: "tab.new",
       run: ctx.openNewTab,
     },
-    // TDSF 魔改 2026-08-31（用户钦定）: 删"新建块状终端/隐私终端/网页预览"
+    // TDSF 2026-08-31（用户钦定）: 删"新建块状终端/隐私终端/网页预览"
     // 三条命令——入口与本项目 Linux 运维教学定位无关，点击后功能残缺。
     {
       id: "tab.newEditor",
@@ -156,7 +156,7 @@ export function createCommandItems(
       icon: FileEditIcon,
       shortcutId: "tab.newEditor",
       disabledReason: noWorkspaceRoot ? "无工作区根目录" : undefined,
-      // TDSF 魔改 2026-08-28: SSH 空间隐藏（新建文件走远程文件树，非本地编辑器）
+      // TDSF 2026-08-28: SSH 空间隐藏（新建文件走远程文件树，非本地编辑器）
       hidden: ctx.isSshSpace === true,
       run: ctx.openNewEditor,
     },
@@ -190,7 +190,7 @@ export function createCommandItems(
       disabledReason: splitDisabled,
       run: ctx.splitPaneDown,
     },
-    // TDSF 魔改 2026-08-31（用户钦定）: 删"打开 Git 提交图"命令——Git Graph
+    // TDSF 2026-08-31（用户钦定）: 删"打开 Git 提交图"命令——Git Graph
     // 入口与 + 菜单同步移除（源代码管理面板仍可从侧栏打开）。
     {
       id: "git.source",
@@ -199,7 +199,7 @@ export function createCommandItems(
       keywords: ["git", "source control", "changes", "staging", "diff"],
       icon: SourceCodeIcon,
       shortcutId: "pane.source",
-      // TDSF 魔改 2026-08-28: SSH 空间隐藏（源代码管理基于本地 git 仓库）
+      // TDSF 2026-08-28: SSH 空间隐藏（源代码管理基于本地 git 仓库）
       hidden: ctx.isSshSpace === true,
       run: ctx.toggleSourceControl,
     },

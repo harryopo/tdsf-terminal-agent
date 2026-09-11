@@ -1,4 +1,4 @@
-// TDSF 魔改 2026-07-31: 创建 Space 对话框
+// TDSF 2026-07-31: 创建 Space 对话框
 // -----------------------------------------------------------------------------
 // 用户在创建新工作区时可选择:
 //   - 本地工作区 (Local Workspace): 使用当前 workspaceEnv 启动本地 PTY
@@ -291,7 +291,7 @@ export function SpaceCreateDialog({
     onOpenChange(false);
   };
 
-  // TDSF 魔改 2026-08-28（用户反馈）: WSL 工作区创建。
+  // TDSF 2026-08-28（用户反馈）: WSL 工作区创建。
   // root 置 null —— activeSpace.freshTabCwd 对 WSL Space 返回 null，
   // 首终端不带 cwd 启动，Rust 端 build_wsl 用 `--cd ~` 落在 WSL home。
   const handleCreateWsl = () => {

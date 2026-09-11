@@ -241,7 +241,7 @@ class RustBridge:
     def send_notification(self, method: str, params: dict[str, Any]) -> None:
         """发起反向 JSON-RPC notification（不等响应，fire-and-forget）
 
-        TDSF 魔改 (2026-08-09): 用于 inject_terminal — 通知前端把命令注入终端。
+        TDSF (2026-08-09): 用于 inject_terminal — 通知前端把命令注入终端。
         与 send_request 不同：不注册 pending entry、不带 id、不阻塞等待。
 
         Args:

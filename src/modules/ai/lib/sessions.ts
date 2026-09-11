@@ -33,7 +33,7 @@ export type SessionMeta = {
   scope?: SessionScope;
 };
 
-// TDSF 魔改: store path 改为 tdsf-sessions.json(原 "terax-ai-sessions.json" 保留为注释供溯源)
+// TDSF: store path 改为 tdsf-sessions.json(原 "terax-ai-sessions.json" 保留为注释供溯源)
 // 注意: 修改后已存的会话历史将不再可见(可手动迁移)
 // const STORE_PATH_LEGACY = "terax-ai-sessions.json";
 const STORE_PATH = "tdsf-sessions.json";

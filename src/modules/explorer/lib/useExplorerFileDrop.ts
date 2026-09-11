@@ -86,7 +86,7 @@ export function useExplorerFileDrop({
 
     if (disabled) return;
 
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 native drag-drop 监听
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 native drag-drop 监听
     if (!isTauriRuntime()) {
       if (typeof console !== "undefined") {
         console.debug("[useExplorerFileDrop] dev mode, skip native drag-drop");

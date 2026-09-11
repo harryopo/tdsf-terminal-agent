@@ -183,7 +183,7 @@ describe("migrateLegacyCompatEndpoint", () => {
   });
 });
 
-// ── TDSF 魔改 2026-08-28: AI 配置国产化（spec: add-domestic-first-ai-config） ──
+// ── TDSF 2026-08-28: AI 配置国产化（spec: add-domestic-first-ai-config） ──
 describe("domestic-first AI config", () => {
   it("defaults the chat model to DeepSeek V4 Flash", () => {
     expect(DEFAULT_MODEL_ID).toBe("deepseek-v4-flash");

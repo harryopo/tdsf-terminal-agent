@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.1): SSH 文件传输任务列表
+// TDSF (P4-T4.1): SSH 文件传输任务列表
 // -----------------------------------------------------------------------------
 // 展示当前 SSH 会话的文件传输任务 (上传/下载):
 //   - 方向图标 (↑ upload / ↓ download)
@@ -11,7 +11,7 @@
 //   - 当前为展示型组件, 任务由 SshExplorer 工具栏的上传按钮 + 编辑器下载按钮触发
 //   - 任务状态由 useSshStore.transferTasks 维护
 //   - 未来可扩展为实时进度 (需 Rust 端 SFTP 流式读写 + Channel 进度推送)
-// TDSF 魔改 P0-1: 修复 React "getSnapshot should be cached" + "Maximum update depth" 无限循环
+// TDSF P0-1: 修复 React "getSnapshot should be cached" + "Maximum update depth" 无限循环
 // 根因: useSshStore((s) => s.transferTasks.filter(...)) 每次都返回新数组引用,
 //       触发 useSyncExternalStore 的 snapshot 变化检测 → 无限重渲染。
 // 修复: 改用 useMemo 派生过滤结果, 只订阅 transferTasks 数组本身。
@@ -126,7 +126,7 @@ function TaskRow({ task }: { task: SshTransferTask }) {
 }
 
 export function SshFileTransfer({ sessionId }: Props) {
-  // TDSF 魔改 P0-1: 只订阅 transferTasks 数组本身 (引用稳定),
+  // TDSF P0-1: 只订阅 transferTasks 数组本身 (引用稳定),
   // 用 useMemo 派生过滤结果, 避免每次 selector 返回新数组导致无限重渲染。
   const allTasks = useSshStore((s) => s.transferTasks);
   const tasks = useMemo(

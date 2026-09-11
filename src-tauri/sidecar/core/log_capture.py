@@ -20,7 +20,7 @@ core/log_capture.py — Sidecar 后端日志独立通路（T-P4-LOG-01）
 - log.tail 支持 level_filter 过滤 ("INFO"/"WARNING"/"ERROR"/"DEBUG")
 - 推送到前端的 Tauri event 名: "sidecar://log"
 
-TDSF 魔改 2026-07-28：
+TDSF 2026-07-28：
 这是为子审查 agent 专门配置的后端日志独立通路，与开发 agent 完全隔离。
 子审查 agent 只需要知道:
     log.tail({lines: 200, level_filter: "ERROR"})

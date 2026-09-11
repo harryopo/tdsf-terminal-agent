@@ -1,4 +1,4 @@
-// TDSF 魔改 2026-07-28: 隔离侧栏组件错误, 防止单个组件抛错导致整页空白
+// TDSF 2026-07-28: 隔离侧栏组件错误, 防止单个组件抛错导致整页空白
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   ResizableHandle,
@@ -60,11 +60,11 @@ import {
   SidebarRail,
   useSidebarPanel,
 } from "@/modules/sidebar";
-// TDSF 魔改 (P4-T4.4): Skill 管理面板
+// TDSF (P4-T4.4): Skill 管理面板
 import { SkillsPanel } from "@/modules/skills";
-// TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段面板
+// TDSF 2026-08-11 (P2 代码片段管理): 代码片段面板
 import { SnippetsPanel } from "@/modules/snippets";
-// TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
+// TDSF 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
 import { TunnelPanel } from "@/modules/tunnels";
 import { KnowledgePanelLazy } from "@/modules/ai/components/lazy";
 import {
@@ -80,7 +80,7 @@ import {
   useSpacesBoot,
   WelcomeScreen,
 } from "@/modules/spaces";
-// TDSF 魔改 (P4-T4.1): SSH 远程资源管理器
+// TDSF (P4-T4.1): SSH 远程资源管理器
 import {
   isSessionConnected,
   selectActiveSession,
@@ -88,7 +88,7 @@ import {
   selectSessionCurrentPath,
   useSshStore,
 } from "@/modules/ssh-explorer";
-// TDSF 魔改 2026-08-18 (P1-6): 主机审批订阅提升到顶层——
+// TDSF 2026-08-18 (P1-6): 主机审批订阅提升到顶层——
 // SshExplorer 只在 ssh 视图挂载, 其他视图首次连接未知主机时审批事件
 // 无人订阅会永久挂起; 订阅 + HostApprovalDialog 现由 App 顶层常驻。
 import {
@@ -96,8 +96,8 @@ import {
   subscribeHostVerify,
 } from "@/lib/ssh-bridge";
 import { HostApprovalDialog } from "@/modules/ssh-explorer/SshExplorer";
-// TDSF 魔改 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
-// TDSF 魔改 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
+// TDSF 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
+// TDSF 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
 // 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
 import { StatusBar } from "@/modules/statusbar";
 import {
@@ -121,7 +121,7 @@ import {
   useTerminalFileDrop,
   writeToSession,
 } from "@/modules/terminal";
-// TDSF 魔改 (2026-08-11 #21): effectiveLeafSsh 用于派生 sshActiveLeafIdRef
+// TDSF (2026-08-11 #21): effectiveLeafSsh 用于派生 sshActiveLeafIdRef
 import { effectiveLeafSsh } from "@/modules/terminal/lib/panes";
 // TDSF debug (#20): 仅用于 CDP 实测诊断（只读不改业务）
 import {
@@ -138,20 +138,20 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-// TDSF 魔改 2026-07-28 (P1-C): 应用顶层触发 SSH 自动登录, 不依赖 SshExplorer 挂载
+// TDSF 2026-07-28 (P1-C): 应用顶层触发 SSH 自动登录, 不依赖 SshExplorer 挂载
 import { toast } from "sonner";
 
-// TDSF 魔改 2026-07-29: 终端选词翻译（离线词典），模块已恢复
+// TDSF 2026-07-29: 终端选词翻译（离线词典），模块已恢复
 // P2 (2026-08-01): 触发方式改为选中浮层点「翻译」按钮（SelectionAskAi），
 // useTranslateSelection 自动翻译逻辑已移除
 import { TranslateTooltip, useTranslateStore } from "@/modules/translate";
-// TDSF 魔改 2026-08-28 (B1-G4): terminal.find 快捷键 → 终端搜索浮层开关
+// TDSF 2026-08-28 (B1-G4): terminal.find 快捷键 → 终端搜索浮层开关
 import { useTerminalSearchStore } from "@/modules/terminal/terminal-search-store";
-// TDSF 魔改 2026-08-09: 服务器实时监控仪表盘（参考 iShell Pro，右上角浮动面板）
+// TDSF 2026-08-09: 服务器实时监控仪表盘（参考 iShell Pro，右上角浮动面板）
 import { ServerMonitorEntry } from "@/modules/server-monitor";
 // TDSF B2 (2026-08-29): 可视教学打字机"演示中"状态条
 import { AgentTypingIndicator } from "@/modules/ai/components/AgentTypingIndicator";
-// TDSF 魔改 2026-08-09: 终端命令预测弹窗（统一本地+SSH）
+// TDSF 2026-08-09: 终端命令预测弹窗（统一本地+SSH）
 import { TerminalCompletionPopup } from "@/modules/terminal/components/TerminalCompletionPopup";
 import { translateText } from "@/modules/translate/translateApi";
 
@@ -170,7 +170,7 @@ export default function App() {
     tabs,
     activeId,
     setActiveId,
-    // TDSF 魔改 2026-08-11 (#21): allocId 原为 SshTerminalHost 分配游离 leafId，
+    // TDSF 2026-08-11 (#21): allocId 原为 SshTerminalHost 分配游离 leafId，
     // SSH 渲染迁入 PaneTree 后不再需要。
     moveTabToSpace,
     reorderTab,
@@ -182,7 +182,7 @@ export default function App() {
     setActiveSpaceForNewTabs,
     warmUpTab,
     newTab,
-    // TDSF 魔改 2026-08-31: newBlockTab / newPrivateTab 入口已移除（Blocks/隐私终端）
+    // TDSF 2026-08-31: newBlockTab / newPrivateTab 入口已移除（Blocks/隐私终端）
     newAgentTab,
     openFileTab,
     pinTab,
@@ -212,7 +212,7 @@ export default function App() {
   // (e.g. cdInNewTab) read the latest pane state instead of a stale closure.
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  // TDSF 魔改 2026-07-30: activeId 也镜像到 ref, 供 SSH 会话绑定的副作用
+  // TDSF 2026-07-30: activeId 也镜像到 ref, 供 SSH 会话绑定的副作用
   // (useEffect 内订阅 zustand) 读取最新值, 避免闭包过期。
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -278,7 +278,7 @@ export default function App() {
   // TDSF 修复 2026-08-01: 工作区数量（0 = 欢迎界面）
   const spaceCount = useSpaces((s) => s.spaces.length);
 
-  // TDSF 魔改 2026-08-28（用户反馈）: 环境切换 pending 态——WSL 首次冷启动
+  // TDSF 2026-08-28（用户反馈）: 环境切换 pending 态——WSL 首次冷启动
   // 要串行探测 home/login shell/zdotdir（多次 wsl.exe），期间无反馈会显得"卡死"。
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const handleWorkspaceChange = useCallback(
@@ -296,7 +296,7 @@ export default function App() {
     [switchWorkspace, activeSpaceId],
   );
 
-  // TDSF 魔改 2026-08-28（用户反馈）: 左下角环境选择器的 SSH 选项——
+  // TDSF 2026-08-28（用户反馈）: 左下角环境选择器的 SSH 选项——
   // 与欢迎页同源，打开"新建工作区"对话框的 SSH 模式（SSH 需要主机/凭据，
   // 无法像 WSL 一样一步切换）。
   const handleWorkspaceSshClick = useCallback(() => {
@@ -417,7 +417,7 @@ export default function App() {
   const setLive = useChatStore((s) => s.setLive);
   const respondToApproval = useChatStore((s) => s.respondToApproval);
 
-  // TDSF 魔改: 4 Agent 状态由 Header 直接读取 chatStore（单层 UI 整合后）
+  // TDSF: 4 Agent 状态由 Header 直接读取 chatStore（单层 UI 整合后）
   const { hasComposer, keysLoaded } = useAiBootstrap();
 
   const activeTab = tabs.find((t) => t.id === activeId);
@@ -426,15 +426,15 @@ export default function App() {
   const isEditorTab = activeTab?.kind === "editor";
   const isGitHistoryTab = activeTab?.kind === "git-history";
 
-  // TDSF 魔改 2026-07-28 (P1-A): 空状态页判定
+  // TDSF 2026-07-28 (P1-A): 空状态页判定
   // 当 default cold tab (id 1) 是 active tab, 且没有任何活跃 SSH session,
   // 在 WorkspaceSurface 渲染 NoTerminalEmptyState 替代 TerminalStack,
   // 避免空跑本地 shell 出现黑屏.
   //
-  // TDSF 魔改 2026-07-28 (P1-D): SSH 连接后, 右侧工作区应显示 SSH 终端,
+  // TDSF 2026-07-28 (P1-D): SSH 连接后, 右侧工作区应显示 SSH 终端,
   // 而不是本地终端。
   //
-  // TDSF 魔改 2026-07-28 (P1-D+ 修复): 取消"必须在 default cold tab 才接管"限制。
+  // TDSF 2026-07-28 (P1-D+ 修复): 取消"必须在 default cold tab 才接管"限制。
   // 原条件 isDefaultColdTab 太严格, SSH 自动连接完成后用户切到任何 terminal tab,
   // 右侧都应该显示 SSH 终端, 而不是本地 PTY。这里把条件放宽为
   // "active tab 是 terminal 且有活跃 SSH session" 即接管。
@@ -458,7 +458,7 @@ export default function App() {
   // 保留全局 active SSH session 用于非 Space 场景（自动登录、SshExplorer 视图）
   const activeSshSession = useSshStore(selectActiveSession);
   const activeSshSessionId = activeSshSession?.id ?? null;
-  // TDSF 魔改 2026-08-18 (P1-6): 主机审批状态提升到顶层——
+  // TDSF 2026-08-18 (P1-6): 主机审批状态提升到顶层——
   // pendingApproval 由下方常驻订阅 effect 填充, 弹窗任何视图可弹
   const pendingApproval = useSshStore((s) => s.pendingApproval);
   const resolveApproval = useSshStore((s) => s.resolveApproval);
@@ -468,14 +468,14 @@ export default function App() {
   const isDefaultColdTab =
     !!activeTab &&
     activeTab.kind === "terminal" &&
-    // TDSF 魔改 2026-07-30: 不再限定 id===1。重启恢复的 tab id 会重新分配,
+    // TDSF 2026-07-30: 不再限定 id===1。重启恢复的 tab id 会重新分配,
     // 只要 active 的 terminal tab 还是 cold (未跑 shell), 就展示欢迎页引导。
     activeTab.cold === true;
   // TDSF 修复 2026-07-30: 空状态页/终端接管必须以"真正已连接"为准,
   // 而不是 sessionId 一创建就切换。自动连接开始后 sessionId 立即生成,
   // 但此时 Rust SSH 握手/认证/SFTP 还未就绪, 提前切视图会导致
   // FileExplorer 加载远程失败 + 按钮无法点击。
-  // TDSF 魔改 (2026-08-09): SSH 连接进度——connecting 态显示进度界面而非空状态页。
+  // TDSF (2026-08-09): SSH 连接进度——connecting 态显示进度界面而非空状态页。
   // 用户反馈"资源管理器没加载好终端就不显示"——真相是 SSH 握手期间 (数秒)
   // 终端区域显示 NoTerminalEmptyState 空状态引导页, 用户误以为"终端坏了"。
   // 改为连接过程中显示美观的 5 步进度界面, 连接成功后无缝切换到 SSH 终端。
@@ -502,7 +502,7 @@ export default function App() {
     : null;
   const showNoTerminalEmptyState =
     isDefaultColdTab && !isSpaceSshConnected && !isSpaceSshConnecting;
-  // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView leaf 级。
+  // TDSF 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView leaf 级。
   // --------------------------------------------------------------------
   // 此前 (2026-07-30): workspace 级 SshTerminalHost 覆盖右侧工作区, SSH 终端
   // 不在 tab.paneTree 里, 用一个 allocId 分配的游离 leafId 渲染, 无法分屏。
@@ -514,12 +514,12 @@ export default function App() {
   //     leaf 显式绑定优先 (string=SSH / null=强制本地), 否则继承 tab 绑定
   // sshActiveLeafIdRef 不再由 SshTerminalHost 上报, 改由下方 useEffect
   // 从 active tab + active leaf 派生 (会话必须仍 connected 才算有效)。
-  // TDSF 魔改 2026-07-30 注释保留: 绑定仍按 tab 维度 (tab.sshSessionId),
+  // TDSF 2026-07-30 注释保留: 绑定仍按 tab 维度 (tab.sshSessionId),
   // 修复"SSH 连接后打开文件再切回 shell tab 变成本地 shell"的 bug。
   // SSH 连接成功后, 会自动把当前 active terminal tab 的 sshSessionId 设为会话 id
   // (见下方 useEffect)。用户也可手动"新建本地 shell tab"获得本地终端。
   // TDSF 调试: 输出关键判定值
-  // TDSF 魔改 2026-08-18 (P1-9): 仅开发环境挂载 __TDSF_DBG__——
+  // TDSF 2026-08-18 (P1-9): 仅开发环境挂载 __TDSF_DBG__——
   // 生产包挂在 window 上无调试价值, 还扩大内存泄漏面/暴露内部状态。
   if (typeof window !== "undefined" && import.meta.env.DEV) {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
@@ -574,7 +574,7 @@ export default function App() {
       // 供 CDP 验证 Python agent 终端上下文感知 (<env> 块注入) 是否生效
       // 之前只挂了 rendererPool, CDP 没法验证 <env> 块是否注入到 messagesForRun
       // 注意: formatEnvBlock 逻辑内联 (不静态 import transport.ts, 避免 @ai-sdk 污染启动包)
-      // TDSF 魔改 2026-07-30 (Bug 4): 补 sshSessionId 字段，与 transport.ts LiveSnapshot 对齐，
+      // TDSF 2026-07-30 (Bug 4): 补 sshSessionId 字段，与 transport.ts LiveSnapshot 对齐，
       // 供 CDP 验证 SSH 会话注入是否生效（active ssh session → env block 含 ssh_session_id）
       getLive: () => {
         const live = useChatStore.getState().live;
@@ -606,13 +606,13 @@ export default function App() {
     };
   }
 
-  // TDSF 魔改 2026-07-28 (P1-C): 应用启动时自动登录最近使用的 SSH 连接
+  // TDSF 2026-07-28 (P1-C): 应用启动时自动登录最近使用的 SSH 连接
   // ---------------------------------------------------------------
   // 原 SshExplorer.tsx 的自动登录 useEffect 只在 sidebarView === "ssh" 时触发,
   // 但应用启动默认视图是 "explorer", 导致自动登录不执行, 用户反馈"SSH 未自动连接".
   // 修复: 把自动登录提升到 App 顶层, launchCwdResolved 后即触发, 不依赖 SshExplorer 挂载.
   // SshExplorer.tsx 中的重复逻辑已移除, 避免双重登录.
-  // TDSF 魔改 2026-08-18 (P1-6): 主机审批事件常驻订阅。
+  // TDSF 2026-08-18 (P1-6): 主机审批事件常驻订阅。
   // 原因: SshExplorer 只在 sidebarView === "ssh" 时挂载, 其他视图下首次
   // 连接未知主机时 ssh:host_verify / ssh:host_key_mismatch 事件无人订阅,
   // 审批永远无人处理, 连接永久挂起。订阅提升到 App 顶层后任何视图可弹框。
@@ -740,7 +740,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [launchCwdResolved]);
 
-  // === TDSF 魔改 2026-07-30: SSH 连接成功后绑定 terminal tab + 左侧 explorer 视图 ===
+  // === TDSF 2026-07-30: SSH 连接成功后绑定 terminal tab + 左侧 explorer 视图 ===
   // ---------------------------------------------------------------
   // 用户明确需求:
   //   1. "SSH 板块只是一个连接的板块; 连接后左侧 Files 面板应显示服务器
@@ -770,7 +770,7 @@ export default function App() {
       for (const session of connectedSessions) {
         if (boundSshSessionsRef.current.has(session.id)) continue;
         boundSshSessionsRef.current.add(session.id);
-        // TDSF 魔改 2026-08-18 (P1-8): 重连成功后清除 fatalError——
+        // TDSF 2026-08-18 (P1-8): 重连成功后清除 fatalError——
         // 断线时 workspaceFsStore.fatalError 被置为"SSH 连接已断开"且只在
         // Space 切换/重新 navigate 时清除; 同一 Space 内重连成功时残留,
         // 资源管理器会一直显示错误而非远程文件。
@@ -938,7 +938,7 @@ export default function App() {
       const disconnectedSessions = state.sessions.filter(
         (s) => s.state === "closed" || s.state === "failed",
       );
-      // TDSF 魔改 2026-08-18 (P1-7): 断开/失败会话立即从 store 移除——
+      // TDSF 2026-08-18 (P1-7): 断开/失败会话立即从 store 移除——
       // 原实现只遍历 boundSshSessionsRef 解绑 tab, 会话仍残留 sessions 数组
       // (且未绑定过的 failed 会话完全不被处理), disconnect 对无 handle 会话
       // 又直接 return, 残留会话只能重启应用清除。disconnect 已支持无 handle
@@ -1079,7 +1079,7 @@ export default function App() {
         for (const id of leafIds(t.paneTree)) live.add(id);
       }
     }
-    // TDSF 魔改 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree（PaneTreeView
+    // TDSF 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree（PaneTreeView
     // 直接渲染），leafIds 自然包含它们，无需再像 SshTerminalHost 时代那样
     // 把游离的 sshLid 手动纳入 live 集合。
     for (const id of liveLeavesRef.current) {
@@ -1106,7 +1106,7 @@ export default function App() {
     mruRef.current = mruRef.current.filter((id) => live.has(id));
   }, [tabs]);
 
-  // TDSF 魔改 2026-07-30 P1-a → v3.1 移除: sidecar:agent_switch 永久订阅已删除
+  // TDSF 2026-07-30 P1-a → v3.1 移除: sidecar:agent_switch 永久订阅已删除
   // -------------------------------------------------------------------
   // 原用途：main_agent 路由子 Agent 时推送 agent_switch 事件，前端更新
   // currentSubAgent 驱动 AgentStatusPill。v3.1（方案书 §4.1）4 子 agent
@@ -1139,7 +1139,7 @@ export default function App() {
     setActive(spaces[next].id);
   }, []);
 
-  // TDSF 魔改 (2026-08-11 #21): sshActiveLeafIdRef 派生自 active tab + active leaf。
+  // TDSF (2026-08-11 #21): sshActiveLeafIdRef 派生自 active tab + active leaf。
   // -----------------------------------------------------------------------------
   // SshTerminalHost 时代由 onLeafId 上报（组件生命周期驱动）；现在 SSH leaf 就在
   // tab.paneTree 里，本 effect 从 active terminal tab 的 active leaf 计算「有效 SSH
@@ -1174,7 +1174,7 @@ export default function App() {
     const t = tabs.find((x) => x.id === activeId);
     if (!t) return null;
     if (t.kind === "terminal") {
-      // TDSF 魔改 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，activeLeafId
+      // TDSF 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，activeLeafId
       // 直接指向当前 pane（本地或 SSH 同路径），不再需要 SshTerminalHost 时代的
       // sshActiveLeafIdRef 分支。优先从 rendererPool slot 读选区（leafGridSelection，
       // 与组件生命周期一致、天然自愈），handle 未注册时兜底 terminalRefs。
@@ -1283,7 +1283,7 @@ export default function App() {
   });
   const askPresence = usePresence(Boolean(askPopup), 120);
 
-  // TDSF 魔改 2026-07-29: 终端选词翻译（与 SelectionAskAi 并列，使用相同的事件机制）
+  // TDSF 2026-07-29: 终端选词翻译（与 SelectionAskAi 并列，使用相同的事件机制）
   // P2 (2026-08-01) 重构: 选中浮层点「翻译」按钮 → 这里查离线词典并展示卡片。
   // 本地终端与 SSH 终端统一（captureActiveSelection 已按 tab/leafId/SSH leafId 取文本）
   const translateEnabled = useTranslateStore((s) => s.enabled);
@@ -1395,7 +1395,7 @@ export default function App() {
     [openFileTab, newMarkdownTab],
   );
 
-  // TDSF 魔改 2026-07-30: 远程文件点击改走主区 EditorStack（多 tab 并行），
+  // TDSF 2026-07-30: 远程文件点击改走主区 EditorStack（多 tab 并行），
   // 废弃侧栏 SshFileEditor（单文件 singleton textarea）。
   // pin = false 与本地单击行为一致（preview tab，二次单击其他文件替换槽位）。
   const handleOpenRemoteFile = useCallback(
@@ -1418,7 +1418,7 @@ export default function App() {
       for (const path of paths) handleOpenFile(path, true);
     };
     (async () => {
-      // TDSF 魔改: terax:open-file → tdsf:open-file（与全局 Terax→TDSF 清洗对齐）
+      // TDSF: terax:open-file → tdsf:open-file（与全局 Terax→TDSF 清洗对齐）
       unlisten = await listen<string[]>("tdsf:open-file", (e) => {
         openAll(e.payload);
       });
@@ -1571,7 +1571,7 @@ export default function App() {
       "commandPalette.open": () => openCommandPalette("commands"),
       "commandPalette.content": () => openCommandPalette("content"),
       "tab.new": openNewTab,
-      // TDSF 魔改 2026-08-31（用户钦定）: Blocks/Privacy/Preview 入口整体移除
+      // TDSF 2026-08-31（用户钦定）: Blocks/Privacy/Preview 入口整体移除
       "tab.newEditor": () => setNewEditorOpen(true),
       "tab.close": handleCloseTabOrPane,
       "tab.next": () => stepSwitcher(1),
@@ -1586,7 +1586,7 @@ export default function App() {
       "space.overview": () => setSwitcherOpen(true),
       "pane.splitRight": () => splitActivePaneInActiveTab("row"),
       "pane.splitDown": () => splitActivePaneInActiveTab("col"),
-      // TDSF 魔改 (2026-08-11): iTerm2 风格分屏快捷键（Ctrl/Cmd+Shift+H/V）。
+      // TDSF (2026-08-11): iTerm2 风格分屏快捷键（Ctrl/Cmd+Shift+H/V）。
       // 与 splitRight/splitDown 共用 handler——splitActivePane 已自动继承
       // 当前 pane 的有效 SSH 会话（SSH 终端分屏 → 新的 SSH pane）。
       "pane.splitSshRight": () => splitActivePaneInActiveTab("row"),
@@ -1603,11 +1603,11 @@ export default function App() {
       },
       "terminal.toggleInput": () =>
         window.dispatchEvent(new CustomEvent(TOGGLE_BLOCK_INPUT_EVENT)),
-      // TDSF 魔改 2026-07-29: 终端翻译快捷键 (Ctrl+Shift+T)
+      // TDSF 2026-07-29: 终端翻译快捷键 (Ctrl+Shift+T)
       "terminal.translate": () => {
         useTranslateStore.getState().toggleEnabled();
       },
-      // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索（Ctrl/Cmd+Shift+F）
+      // TDSF 2026-08-28 (B1-G4): 终端内搜索（Ctrl/Cmd+Shift+F）
       // 激活 tab 是终端时打开其 active leaf 的搜索浮层（TerminalPane 渲染）；
       // 编辑器 tab 无此响应（编辑器用 Ctrl+F 的 search.focus）。
       "terminal.find": () => {
@@ -1623,7 +1623,7 @@ export default function App() {
         if (editor) editor.openSearch();
         else searchInlineRef.current?.focus();
       },
-      // TDSF 魔改 2026-07-30: 统一 AI 入口 — Ctrl+I 和 Main 按钮都打开浮动小窗
+      // TDSF 2026-07-30: 统一 AI 入口 — Ctrl+I 和 Main 按钮都打开浮动小窗
       // 原实现: Ctrl+I 打开右侧面板 (panelOpen), Main 打开浮动小窗 (mini.open),
       // 两个独立状态会同时存在两个对话框, 用户困惑。
       // 现统一: Ctrl+I / Ctrl+Shift+I / Main 按钮都走 toggleMini, 打开同一个浮动小窗。
@@ -1838,7 +1838,7 @@ export default function App() {
       if (tab?.kind !== "terminal") return;
       // Last pane of the last tab: quit instead of respawning a shell.
       if (leafIds(tab.paneTree).length === 1 && all.length === 1) {
-        // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 close, 否则浏览器会跳到 about:blank
+        // TDSF: dev 模式 (无 Tauri 运行时) 跳过 close, 否则浏览器会跳到 about:blank
         if (isTauriRuntime()) void getCurrentWindow().close();
       } else {
         closePaneByLeaf(leafId);
@@ -1932,7 +1932,7 @@ export default function App() {
           setActiveId(tabId);
         }
       } else if (space.env.kind === "wsl") {
-        // TDSF 魔改 2026-08-28: WSL Space 首终端不带 cwd（cwd=null 时 Rust 端
+        // TDSF 2026-08-28: WSL Space 首终端不带 cwd（cwd=null 时 Rust 端
         // build_wsl 用 `--cd ~` 落在 WSL home；传 activeCwd 本地路径反而错误）
         const tabId = newTab(undefined);
         setActiveId(tabId);
@@ -2121,7 +2121,7 @@ export default function App() {
     [isTerminalTab, activeLeafId],
   );
 
-  // TDSF 魔改 2026-08-11 (P2 代码片段管理): 片段插入终端回调
+  // TDSF 2026-08-11 (P2 代码片段管理): 片段插入终端回调
   // 语义与 insertHistoryCommand 一致：写入当前活动终端 + 聚焦；无活动终端返回 false
   const handleInsertSnippetCommand = useCallback(
     (cmd: string): boolean => {
@@ -2144,7 +2144,7 @@ export default function App() {
     openPreviewTab,
     newAgentTab,
     terminalRefs,
-    // TDSF 魔改 (2026-08-09): 传 SSH 终端 leafId，让 getTerminalContext
+    // TDSF (2026-08-09): 传 SSH 终端 leafId，让 getTerminalContext
     // 在 SSH 场景下也能读到终端 scrollback（SSH 终端不在 tabs 数组里）
     getSshLeafId: () => sshActiveLeafIdRef.current,
   });
@@ -2153,7 +2153,7 @@ export default function App() {
     <ThemeProvider>
       <TooltipProvider>
         <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
-          {/* TDSF 魔改: 单层顶栏（整合 TdsfTitlebar 项目名/4Agent/主题切换/mood 到 Header） */}
+          {/* TDSF: 单层顶栏（整合 TdsfTitlebar 项目名/4Agent/主题切换/mood 到 Header） */}
           {!zenMode && (
             <Header
               tabs={spaceTabs}
@@ -2204,7 +2204,7 @@ export default function App() {
                     key={sidebarView}
                     className="min-h-0 flex-1 tdsf-panel-in"
                   >
-                    {/* TDSF 魔改 2026-07-28: 包裹 ErrorBoundary, 防止 SshConnectDialog
+                    {/* TDSF 2026-07-28: 包裹 ErrorBoundary, 防止 SshConnectDialog
                        等组件在 mock 模式抛错时把整个 root 清空. */}
                     <ErrorBoundary>
                       {sidebarView === "explorer" ? (
@@ -2238,7 +2238,7 @@ export default function App() {
                                 ref={explorerRef}
                                 rootPath={effectiveExplorerRoot}
                                 fsSource={
-                                  // TDSF 魔改 2026-08-28: SSH 判定与 effectiveExplorerRoot 同源
+                                  // TDSF 2026-08-28: SSH 判定与 effectiveExplorerRoot 同源
                                   // （都要求 env.kind === "ssh"），消除断开瞬间
                                   // "rootPath 已回退本地 Windows 路径 × fsSource 仍是 sftp"
                                   // 的抖动窗口（validate_sftp_path 报 invalid_path）。
@@ -2296,7 +2296,7 @@ export default function App() {
                                 }
                               />
                             </div>
-                            {/* TDSF 魔改 2026-07-30: 远程文件编辑器已废弃，
+                            {/* TDSF 2026-07-30: 远程文件编辑器已废弃，
                              远程文件点击改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程），
                              侧栏只保留 FileExplorer（文件树），不再内嵌 SshFileEditor。 */}
                           </div>
@@ -2311,19 +2311,19 @@ export default function App() {
                           onNavigateToPath={cdInNewTab}
                         />
                       ) : sidebarView === "skills" ? (
-                        // TDSF 魔改 (P4-T4.4): Skill 管理面板
+                        // TDSF (P4-T4.4): Skill 管理面板
                         <SkillsPanel />
                       ) : sidebarView === "knowledge" ? (
                         // P2-4: 知识库浏览器（搜索/列表/详情弹窗，lazy 加载）
                         <KnowledgePanelLazy />
                       ) : sidebarView === "snippets" ? (
-                        // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段面板
+                        // TDSF 2026-08-11 (P2 代码片段管理): 代码片段面板
                         <SnippetsPanel
                           onInsertCommand={handleInsertSnippetCommand}
                           currentCwd={activeTerminalLeafCwd ?? undefined}
                         />
                       ) : sidebarView === "tunnels" ? (
-                        // TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
+                        // TDSF 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
                         <TunnelPanel />
                       ) : null}
                     </ErrorBoundary>
@@ -2348,7 +2348,7 @@ export default function App() {
                           setSpaceCreateOpen(true);
                         }}
                         onCreateWsl={() => {
-                          // TDSF 魔改 2026-08-28（用户反馈）: WSL 加入欢迎页
+                          // TDSF 2026-08-28（用户反馈）: WSL 加入欢迎页
                           setSpaceCreateMode("wsl");
                           setSpaceCreateOpen(true);
                         }}
@@ -2377,7 +2377,7 @@ export default function App() {
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={setMarkdownView}
-                        // TDSF 魔改 2026-07-28 (P1-A): 空状态页
+                        // TDSF 2026-07-28 (P1-A): 空状态页
                         showNoTerminalEmptyState={showNoTerminalEmptyState}
                         onWarmUpColdTab={warmUpTab}
                         onOpenAgentFromEmptyState={togglePanelAndFocus}
@@ -2386,7 +2386,7 @@ export default function App() {
                           setSpaceCreateMode("ssh");
                           setSpaceCreateOpen(true);
                         }}
-                        // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView
+                        // TDSF 2026-08-11 (#21): SSH 终端渲染已迁入 PaneTreeView
                         // leaf 级（TerminalStack 透传 tab.sshSessionId），不再需要
                         // workspace 级 SshTerminalHost 覆盖与 sshSessionId/allocId/
                         // onSshLeafId 透传。sshActiveLeafIdRef 改由 App 层派生 effect 维护。
@@ -2411,7 +2411,7 @@ export default function App() {
             </ResizablePanelGroup>
           </main>
 
-          {/* TDSF 魔改 2026-08-18 (P1-6): 主机审批弹窗常驻顶层——任何视图
+          {/* TDSF 2026-08-18 (P1-6): 主机审批弹窗常驻顶层——任何视图
               首次连接未知主机都能弹审批框, 不依赖 SshExplorer 挂载 */}
           <HostApprovalDialog
             request={pendingApproval}
@@ -2457,7 +2457,7 @@ export default function App() {
             </>
           ) : null}
 
-          {/* TDSF 魔改回退 (2026-07-30): 恢复上游 AiMiniWindow（Terax 视觉——
+          {/* TDSF回退 (2026-07-30): 恢复上游 AiMiniWindow（Terax 视觉——
               AgentStatusPill + Context 圆环统计 + SessionPicker + ai-elements
               工具行/Reasoned 折叠），替代自研 TdsfAgentPanel（样式简陋已弃用）。 */}
           {hasComposer && miniPresence.mounted ? (
@@ -2512,17 +2512,17 @@ export default function App() {
 
           <UpdaterDialog />
 
-          {/* TDSF 魔改 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位）
+          {/* TDSF 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位）
               P2: 卡片带「Ask TDSF」操作，把选中词/代码片段发给 AI 深入解释 */}
           <TranslateTooltip onAsk={onAskWithSelection} />
 
-          {/* TDSF 魔改 2026-08-09: 服务器实时监控仪表盘（右上角浮动面板，不遮挡 AI 对话） */}
+          {/* TDSF 2026-08-09: 服务器实时监控仪表盘（右上角浮动面板，不遮挡 AI 对话） */}
           <ServerMonitorEntry />
 
           {/* TDSF B2 (2026-08-29): 可视教学打字机"演示中"状态条（顶部居中，事件驱动） */}
           <AgentTypingIndicator />
 
-          {/* TDSF 魔改 2026-08-09: 终端命令预测弹窗（本地+SSH 统一，通过 rendererPool 注入） */}
+          {/* TDSF 2026-08-09: 终端命令预测弹窗（本地+SSH 统一，通过 rendererPool 注入） */}
           <TerminalCompletionPopup />
 
           <CloseDialogs

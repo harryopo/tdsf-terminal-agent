@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): Skill 卡片组件
+// TDSF (P4-T4.4): Skill 卡片组件
 // -----------------------------------------------------------------------------
 // 单个 skill 的展示卡片，含：
 //   - 顶部：分类图标 + 名称 + 来源 badge + 启用开关
@@ -10,11 +10,11 @@
 //   - 点击"查看内容"按钮触发 onViewContent 回调（由 SkillsPanel 弹出 SkillContentDialog）
 //   - 点击"打开目录"按钮在系统文件管理器中聚焦 SKILL.md
 //
-// TDSF 魔改 2026-07-28 (P0-2 方案A):
+// TDSF 2026-07-28 (P0-2 方案A):
 //   - 原"调用"按钮名实不符（skill.invoke 仅返回 SKILL.md 文本, 无执行逻辑）
 //   - 现统一为"查看内容"按钮, 弹 SkillContentDialog 显示完整 SKILL.md
 //
-// TDSF 魔改: UI 简约大气化，移除 emerald 硬编码，统一使用语义色（primary/secondary）。
+// TDSF: UI 简约大气化，移除 emerald 硬编码，统一使用语义色（primary/secondary）。
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -37,7 +37,7 @@ interface Props {
   onViewContent: (skill: SkillMetadata) => void;
 }
 
-// TDSF 魔改: 分类 → 图标颜色统一为 text-primary，避免硬编码颜色名
+// TDSF: 分类 → 图标颜色统一为 text-primary，避免硬编码颜色名
 const CATEGORY_COLOR: Record<string, string> = {
   linux: "text-primary",
   docker: "text-primary",
@@ -55,7 +55,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   custom: "自定义",
 };
 
-// TDSF 魔改: 来源 → badge 样式统一使用语义色（bg-secondary / bg-muted）
+// TDSF: 来源 → badge 样式统一使用语义色（bg-secondary / bg-muted）
 const SOURCE_BADGE: Record<string, { label: string; className: string }> = {
   builtin: {
     label: "内置",
@@ -78,10 +78,10 @@ export function SkillCard({
 }: Props) {
   const categoryColor = CATEGORY_COLOR[skill.category] ?? CATEGORY_COLOR.custom;
   const sourceBadge = SOURCE_BADGE[skill.source] ?? SOURCE_BADGE.user;
-  // TDSF 魔改: 是否可打开目录（仅当 Python sidecar 返回了 file_path 时）
+  // TDSF: 是否可打开目录（仅当 Python sidecar 返回了 file_path 时）
   const canOpenDir = !!skill.filePath;
 
-  // TDSF 魔改: 调用 tauri-plugin-opener 的 revealItemInDir 在文件管理器中聚焦 SKILL.md
+  // TDSF: 调用 tauri-plugin-opener 的 revealItemInDir 在文件管理器中聚焦 SKILL.md
   const handleOpenDir = async () => {
     if (!skill.filePath) return;
     try {
@@ -95,8 +95,8 @@ export function SkillCard({
   return (
     <div
       className={cn(
-        // TDSF 魔改: 卡片间距 p-3.5 → p-4, hover 边框使用语义色 border-border
-        // TDSF 魔改 2026-07-28: 修复"按钮被遮挡"问题
+        // TDSF: 卡片间距 p-3.5 → p-4, hover 边框使用语义色 border-border
+        // TDSF 2026-07-28: 修复"按钮被遮挡"问题
         //   - 加 h-full 让 grid item 拉伸到同行最高卡片高度
         //   - 加 min-h-[180px] 给最小高度, 防止空描述时按钮贴顶
         //   - 中部描述区 max-h + overflow-y-auto, 描述过长时出滚动条
@@ -146,7 +146,7 @@ export function SkillCard({
       </div>
 
       {/* === 中部：description (可滚动区) ===
-          TDSF 魔改 2026-07-28: flex-1 + min-h-0 + overflow-y-auto
+          TDSF 2026-07-28: flex-1 + min-h-0 + overflow-y-auto
           让内容超出时只在这个区域内滚动, 按钮始终贴底可见 */}
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
         <p
@@ -158,10 +158,10 @@ export function SkillCard({
       </div>
 
       {/* === 底部: 查看内容 + 目录 (固定贴底, 永远可见) ===
-          TDSF 魔改 2026-08-15: 移除"让 Agent 调用"按钮 (SkillInvoker 弹窗),
+          TDSF 2026-08-15: 移除"让 Agent 调用"按钮 (SkillInvoker 弹窗),
           改为 Agent 在允许时自动调用 skill; 保留"查看" (SkillContentDialog) */}
       <div className="flex shrink-0 items-center gap-1 border-t border-border/30 pt-1.5">
-        {/* TDSF 魔改 2026-07-28: "查看" - 弹 SkillContentDialog 显示 SKILL.md 定义 */}
+        {/* TDSF 2026-07-28: "查看" - 弹 SkillContentDialog 显示 SKILL.md 定义 */}
         <Button
           type="button"
           size="sm"
@@ -174,7 +174,7 @@ export function SkillCard({
           <HugeiconsIcon icon={EyeIcon} size={11} strokeWidth={1.75} />
           查看
         </Button>
-        {/* TDSF 魔改: 新增"打开目录"按钮，调用系统文件管理器聚焦 SKILL.md
+        {/* TDSF: 新增"打开目录"按钮，调用系统文件管理器聚焦 SKILL.md
             - 仅当 skill.filePath 存在（Python sidecar 返回 file_path）时显示
             - builtin 降级列表无 file_path，按钮不显示，避免误导用户
             - 使用 revealItemInDir 而非 openPath，让用户直接看到 SKILL.md 文件本身 */}

@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.1): SSH 远程文件树
+// TDSF (P4-T4.1): SSH 远程文件树
 // -----------------------------------------------------------------------------
 // 树形可展开/折叠文件浏览器 (与本地 FileExplorer 行为一致):
 //   - 顶部面包屑显示当前路径 (/ > home > user), 点击片段跳转
@@ -135,7 +135,7 @@ export function SshFileTree({ sessionId }: Props) {
       </div>
 
       {/* === 文件树 (递归可展开) ===
-          TDSF 魔改 2026-07-29: 改单层列表为树形递归, 跟本地 FileExplorer
+          TDSF 2026-07-29: 改单层列表为树形递归, 跟本地 FileExplorer
           行为一致。根节点 = currentPath 下的直接条目; 每个目录项按需
           递归展开 (调用 useSshStore.toggleExpand + lazy loadChildren). */}
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
@@ -162,7 +162,7 @@ export function SshFileTree({ sessionId }: Props) {
 }
 
 // === 子组件: 单层树节点 + 递归 ==============================================
-// TDSF 魔改 2026-07-29: 把单层列表与"目录展开"两个职责拆到独立组件, 避免
+// TDSF 2026-07-29: 把单层列表与"目录展开"两个职责拆到独立组件, 避免
 // SshFileTree 主体过于臃肿。每个 SshTreeLevel 渲染一个目录的子条目列表,
 // 如果某条目是目录且已展开, 在它下面再渲染一个 SshTreeLevel (depth+1).
 

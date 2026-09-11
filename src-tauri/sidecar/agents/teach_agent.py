@@ -94,7 +94,7 @@ class TeachAgent(BaseAgent):
             "- Provide English term translation module for technical terms.\n"
             "- Include practical examples for each concept.\n"
             "- Highlight common pitfalls and exam points (考点).\n\n"
-            # TDSF 魔改 2026-08-28 (B1-G3): 失败块"AI 解释"轻量模式——
+            # TDSF 2026-08-28 (B1-G3): 失败块"AI 解释"轻量模式——
             # 前端 ErrorExplainCard 渲染纯文本，禁用 6 板块格式（否则 teachParser
             # 会把短解释误渲染成 TeachCard）。
             "Lightweight error-explain mode:\n"

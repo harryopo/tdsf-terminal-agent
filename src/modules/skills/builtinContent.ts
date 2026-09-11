@@ -1,4 +1,4 @@
-// TDSF 魔改: builtin skill 的 SKILL.md 原文内容
+// TDSF: builtin skill 的 SKILL.md 原文内容
 // -----------------------------------------------------------------------------
 // 当 Python sidecar 不可用（IPC 降级）时，registry.getBuiltinSkills() 返回的
 // SkillMetadata 仍可通过 rawContent 字段提供 SKILL.md 完整内容，让

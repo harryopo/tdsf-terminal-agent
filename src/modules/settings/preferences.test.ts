@@ -1,5 +1,5 @@
 /**
- * preferences.test.ts — settings store 读取迁移测试（TDSF 魔改 2026-08-28）
+ * preferences.test.ts — settings store 读取迁移测试（TDSF 2026-08-28）
  * -----------------------------------------------------------------------------
  * 覆盖 spec add-domestic-first-ai-config 的迁移语义：
  *   1. 无存储（全新用户）→ defaultModelId 用新默认（国产/本地优先）

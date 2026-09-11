@@ -1,4 +1,4 @@
-// TDSF 魔改 (Outsider Review P0-2 修复 2026-07-28): Mock LLM 警告
+// TDSF (Outsider Review P0-2 修复 2026-07-28): Mock LLM 警告
 // -----------------------------------------------------------------------------
 // 监听 Python sidecar 通过 event_bus 推送的 "mock_llm_active" 事件,
 // 在 status bar 右侧实时显示红色告警 Pill.
@@ -49,7 +49,7 @@ export function MockLLMWarning() {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
 
-    // TDSF 魔改 2026-07-30 P1-c: 启动期补发历史 mock_llm_active 事件
+    // TDSF 2026-07-30 P1-c: 启动期补发历史 mock_llm_active 事件
     // ----------------------------------------------------------------
     // 之前只 listen 实时事件，但应用启动时 Python sidecar 早已在
     // BaseAgent.__init__ 构造时推送过 mock_llm_active（agents/base.py:179-185
@@ -76,7 +76,7 @@ export function MockLLMWarning() {
     };
 
     const setup = async () => {
-      // TDSF 魔改 2026-07-28: 监听 Tauri 事件桥 (后端通过 event_bus.publish("mock_llm_active", ...) 推送)
+      // TDSF 2026-07-28: 监听 Tauri 事件桥 (后端通过 event_bus.publish("mock_llm_active", ...) 推送)
       // 复用 @tauri-apps/api/event 的 listen, 与 ssh:host_verify 等事件一致
       // v2026-07-30 P1-a 修复: 之前缺 "sidecar:" 前缀永远监听不到
       // Rust sidecar.rs:805 `format!("sidecar:{}", method)` 会给所有 Python 事件加前缀
@@ -90,7 +90,7 @@ export function MockLLMWarning() {
       });
       unlisten = un;
 
-      // TDSF 魔改 2026-07-30 P1-c: 启动期补发历史 mock_llm_active 事件
+      // TDSF 2026-07-30 P1-c: 启动期补发历史 mock_llm_active 事件
       // ---------------------------------------------------------------
       // event.history 已在 sidecar/event_bus.py:598-601 注册为 JSON-RPC 方法,
       // 调用签名为 event.history(event_type: str, session_id: str|None, limit: int)
@@ -142,7 +142,7 @@ export function MockLLMWarning() {
         <button
           type="button"
           onClick={() => {
-            // TDSF 魔改: 跳转到设置页配置 LLM
+            // TDSF: 跳转到设置页配置 LLM
             // 触发 ai.open settings=models 事件, 让 settings 主页面打开
             void import("@tauri-apps/api/event").then(({ emit }) =>
               emit("navigate", { route: "settings", section: "models" }),

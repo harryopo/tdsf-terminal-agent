@@ -9,7 +9,7 @@ export type Snippet = {
   content: string;
 };
 
-// TDSF 魔改: store path 改为 tdsf-snippets.json(原 "terax-ai-snippets.json" 保留为注释供溯源)
+// TDSF: store path 改为 tdsf-snippets.json(原 "terax-ai-snippets.json" 保留为注释供溯源)
 // const STORE_PATH_LEGACY = "terax-ai-snippets.json";
 const STORE_PATH = "tdsf-snippets.json";
 const KEY_LIST = "snippets";

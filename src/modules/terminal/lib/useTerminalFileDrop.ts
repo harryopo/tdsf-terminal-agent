@@ -69,7 +69,7 @@ const terminalPathDropTarget = createTerminalPathDropTarget({
  * shell-quoted path(s) on drop. Drops outside any terminal leaf are ignored. */
 export function useTerminalFileDrop(): TerminalPathDropTarget {
   useEffect(() => {
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 native drag-drop 监听
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 native drag-drop 监听
     if (!isTauriRuntime()) {
       if (typeof console !== "undefined") {
         console.debug("[useTerminalFileDrop] dev mode, skip native drag-drop");

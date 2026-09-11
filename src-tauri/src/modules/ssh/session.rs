@@ -1101,7 +1101,7 @@ impl<R: tauri::Runtime> SshSession<R> {
 
     /// 执行单条 SSH 命令并返回结构化结果（exec 模式，非 PTY）
     ///
-    /// TDSF 魔改 P0-D（2026-07-30）：为运维 Agent 提供"执行命令并拿回输出"能力，
+    /// TDSF P0-D（2026-07-30）：为运维 Agent 提供"执行命令并拿回输出"能力，
     /// 与 PTY 交互（`write_data`）解耦。复用现有 SSH Handle 开新 channel，
     /// 用 `channel.exec()` 而非 `request_pty + request_shell`，适合一次性命令
     /// （`uptime` / `systemctl status nginx` / `df -h` 等）。
@@ -1646,7 +1646,7 @@ fn build_integration_commands(
 
 /// SSH exec 命令执行结果（exec 模式，非 PTY）
 ///
-/// TDSF 魔改 P0-D（2026-07-30）：为运维 Agent 提供结构化输出，
+/// TDSF P0-D（2026-07-30）：为运维 Agent 提供结构化输出，
 /// 上层 `ssh_command` Tauri command 包装为 `{ok, output, exit_code, duration}` JSON。
 #[derive(Debug, Clone)]
 pub struct SshCommandOutput {

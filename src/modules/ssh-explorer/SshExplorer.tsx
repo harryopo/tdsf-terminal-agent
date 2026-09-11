@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.1): SSH 连接管理面板
+// TDSF (P4-T4.1): SSH 连接管理面板
 // -----------------------------------------------------------------------------
 // 仅负责 SSH 连接管理: 新建连接 / 会话切换 / 断开 / 主机审批 (TOFU)。
 // 文件资源管理器已合并到左侧 FileExplorer (source="ssh" 模式),
@@ -59,7 +59,7 @@ import {
   useSshStore,
 } from "./sshStore";
 
-// TDSF 魔改 2026-07-29: 文件资源管理器已合并到 FileExplorer,
+// TDSF 2026-07-29: 文件资源管理器已合并到 FileExplorer,
 // SshExplorer 只保留连接管理, 不再引用 SshFileTree/SshFileEditor/SshFileTransfer.
 
 type Props = {
@@ -76,12 +76,12 @@ export function SshExplorer({ className }: Props) {
   const setActiveSession = useSshStore((s) => s.setActiveSession);
   const disconnect = useSshStore((s) => s.disconnect);
 
-  // === TDSF 魔改 2026-08-18 (P1-6): 主机审批订阅已提升到 App.tsx 顶层 ===
+  // === TDSF 2026-08-18 (P1-6): 主机审批订阅已提升到 App.tsx 顶层 ===
   // 原因: 本组件只在 sidebarView === "ssh" 时挂载, 其他视图下首次连接
   // 未知主机时审批事件无人订阅 → 永久挂起。订阅 + HostApprovalDialog
   // 现由 App 顶层常驻渲染, 任何视图下都能弹审批框。
 
-  // === TDSF 魔改 2026-07-28 (P1-C): 自动登录逻辑已提升到 App.tsx 顶层 ===
+  // === TDSF 2026-07-28 (P1-C): 自动登录逻辑已提升到 App.tsx 顶层 ===
   // ---------------------------------------------------------------
   // 原 useEffect 在此组件挂载时触发自动登录, 但 SshExplorer 只在 sidebarView === "ssh"
   // 时挂载, 应用启动默认视图是 "explorer", 导致自动登录不执行.
@@ -135,7 +135,7 @@ export function SshExplorer({ className }: Props) {
       </div>
 
       {/* === 服务器切换器 (弹窗式) =============================================
-          TDSF 魔改 2026-07-29: 改横向 session tabs 为下拉弹窗。
+          TDSF 2026-07-29: 改横向 session tabs 为下拉弹窗。
           原因: 多服务器时横向 tab 会撑爆侧栏, 断开/关闭按钮 (右侧 X) 被遮。
           现在用一个紧凑的"当前服务器"按钮, 点击弹 Popover 列出所有
           session + 新建连接 + 断开按钮, 永远不会被遮挡。
@@ -152,13 +152,13 @@ export function SshExplorer({ className }: Props) {
 
       {/* === 主体: 连接状态 / 空状态提示
           ---------------------------------------------------------------
-          TDSF 魔改 2026-07-29: 文件资源管理器已合并到 FileExplorer,
+          TDSF 2026-07-29: 文件资源管理器已合并到 FileExplorer,
           SshExplorer 仅作为连接管理面板。连接成功后用户会被自动带回
           explorer 视图, 左侧 FileExplorer 以 source="ssh" 显示远程文件。 === */}
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeSession ? (
           isSessionConnected(activeSession) ? (
-            // TDSF 魔改 2026-07-31: 已连接状态不再显示居中大卡片
+            // TDSF 2026-07-31: 已连接状态不再显示居中大卡片
             // 原因: 该卡片在深色/浅色主题下形成明显色块, 与整体风格冲突;
             // 当前连接信息已在顶部 SessionSwitcher 和底部 StatusBar 展示, 无需重复。
             null
@@ -180,7 +180,7 @@ export function SshExplorer({ className }: Props) {
 }
 
 // === 子组件: 服务器切换器 (弹窗式) =============================================
-// TDSF 魔改 2026-07-29: 取代原横向 session tabs。
+// TDSF 2026-07-29: 取代原横向 session tabs。
 //
 // 触发器: 一行紧凑的"当前服务器"按钮 (左侧状态点 + user@host + 下拉箭头)。
 // 弹窗: 列出所有 session, 每行有: 状态点 + 完整 user@host:port + 状态文本 +
@@ -406,7 +406,7 @@ function SessionStatusView({
         <p className="text-[13px] font-medium text-foreground">
           {session.params.user}@{session.params.host}
         </p>
-        {/* TDSF 魔改: busy 状态文案追加 '...' 后缀, 视觉上更明确表示"正在进行中" */}
+        {/* TDSF: busy 状态文案追加 '...' 后缀, 视觉上更明确表示"正在进行中" */}
         <p className="text-[11px] text-muted-foreground">
           {stateLabel(session.state)}
           {isBusy ? "..." : ""}
@@ -460,7 +460,7 @@ export function HostApprovalDialog({
                   ? "已知主机的密钥与本地记录不一致, 可能存在中间人攻击。请仔细核对指纹后再决定是否继续。"
                   : "首次连接此主机, 请核对服务器 SSH 指纹, 确认无误后信任该主机 (TOFU 策略)。"}
               </p>
-              {/* TDSF 魔改 (P2-1 修复 2026-07-28): OpenSSH 艺术指纹
+              {/* TDSF (P2-1 修复 2026-07-28): OpenSSH 艺术指纹
                   在用户首次连接时, 用 randomart 直观展示密钥指纹.
                   算法来自 OpenSSH ssh-keygen -lv (Drijvers et al. 2012 "Hedgehog"). */}
               {request?.fingerprint ? (
@@ -490,7 +490,7 @@ export function HostApprovalDialog({
                   {request?.fingerprint}
                 </div>
               </div>
-              {/* TDSF 魔改 (P2-1 修复 2026-07-28): 引导用户验证指纹
+              {/* TDSF (P2-1 修复 2026-07-28): 引导用户验证指纹
                   提示用户通过 ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub 在服务器核对
                   或与管理员确认. 这是 TOFU 策略的最后一道安全防线. */}
               <p className="text-[10.5px] text-muted-foreground">

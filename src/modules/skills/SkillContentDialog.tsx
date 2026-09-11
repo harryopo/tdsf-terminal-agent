@@ -1,4 +1,4 @@
-// TDSF 魔改: Skill 内容预览对话框
+// TDSF: Skill 内容预览对话框
 // -----------------------------------------------------------------------------
 // 弹窗（shadcn Dialog）用于查看 skill 的 SKILL.md 完整内容：
 //   - 标题：skill name（font-mono）+ 分类标签
@@ -47,10 +47,10 @@ export function SkillContentDialog({ skill, onOpenChange }: Props) {
   const open = skill !== null;
   const content = skill?.rawContent ?? "";
   const hasContent = content.trim().length > 0;
-  // TDSF 魔改: 是否可打开目录（仅当 Python sidecar 返回了 file_path 时）
+  // TDSF: 是否可打开目录（仅当 Python sidecar 返回了 file_path 时）
   const canOpenDir = !!skill?.filePath;
 
-  // TDSF 魔改: 调用系统文件管理器聚焦 SKILL.md
+  // TDSF: 调用系统文件管理器聚焦 SKILL.md
   const handleOpenDir = async () => {
     if (!skill?.filePath) return;
     try {
@@ -101,7 +101,7 @@ export function SkillContentDialog({ skill, onOpenChange }: Props) {
         </div>
 
         <DialogFooter>
-          {/* TDSF 魔改: 新增"打开目录"按钮,与"关闭"按钮并排
+          {/* TDSF: 新增"打开目录"按钮,与"关闭"按钮并排
               - 仅当 skill.filePath 存在时显示
               - 使用 revealItemInDir 在文件管理器中聚焦 SKILL.md */}
           {canOpenDir && (

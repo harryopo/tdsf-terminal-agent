@@ -66,7 +66,7 @@ function makeMessages(text: string): UIMessage[] {
   ];
 }
 
-// TDSF 魔改 2026-07-30 (Bug 5): runSidecarStream 新增必填 live 字段
+// TDSF 2026-07-30 (Bug 5): runSidecarStream 新增必填 live 字段
 // v3.1 (2026-08-29): live 新增可选 agentMode / teach 字段（三模式信任体系传参）
 // 构造默认 live 上下文（无 SSH 会话），各用例按需覆盖字段
 function makeLive(overrides: Partial<{
@@ -116,8 +116,8 @@ async function readStream<T>(stream: ReadableStream<T>): Promise<T[]> {
 }
 
 describe("runSidecarStream — sidecar 不可用时降级", () => {
-  it("dev 模式 + invoke 失败 → yield error（TDSF 魔改 P0-3: 移除 mock 降级）", async () => {
-    // TDSF 魔改 P0-3: 原 mock 降级会让用户误以为 AI 在工作（[mock:coding]），
+  it("dev 模式 + invoke 失败 → yield error（TDSF P0-3: 移除 mock 降级）", async () => {
+    // TDSF P0-3: 原 mock 降级会让用户误以为 AI 在工作（[mock:coding]），
     // 现在改为直接报错让用户看到真实问题（如 LLM 未配置）。
     // 此测试验证新行为：dev 模式下 invoke 失败也直接 yield error。
     _setDevModeCheck(() => true);
@@ -182,7 +182,7 @@ describe("runSidecarStream — Python agent name 映射", () => {
       }),
     );
 
-    // TDSF 魔改 2026-07-30 (Bug 5): state 现在含 live 字段
+    // TDSF 2026-07-30 (Bug 5): state 现在含 live 字段
     // P0 活动感知(2026-09-03): invoke 传 Rust timeoutMs=SIDECAR_TIMEOUT_MAX_MS(600000) 总时长硬上限；前端活动感知超时(默认300s无活动)另 race
     // v3.1 收敛: 旧 coder/explore/history/teach → coding/explore/history/teach
     // 的映射已随子 agent 委派机制删除，TDSF_AGENTS 仅 main 一项。

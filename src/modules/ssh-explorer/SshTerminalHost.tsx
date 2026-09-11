@@ -1,7 +1,7 @@
 /**
- * SshTerminalHost.tsx — TDSF 魔改 (#18): SSH 终端宿主组件，走本地 rendererPool
+ * SshTerminalHost.tsx — TDSF (#18): SSH 终端宿主组件，走本地 rendererPool
  * -----------------------------------------------------------------------------
- * 替代 SshTerminalPane.tsx（魔改另起的裸 xterm），让 SSH 终端成为真正的
+ * 替代 SshTerminalPane.tsx（定制另起的裸 xterm），让 SSH 终端成为真正的
  * TerminalPane leaf，由 useTerminalSession + rendererPool 统一渲染：
  *   - 自动获得与本地终端一致的主题/字体/字号/对比度
  *   - 自动继承 rendererPool 的保活（切 tab 用 visibility:hidden 不 dispose）
@@ -195,7 +195,7 @@ export function SshTerminalHost({
     return () => setLeafSshSession(leafId, null);
   }, [leafId, rustSessionId, session]);
 
-  // TDSF 魔改 (2026-08-09): SSH 终端命令预测弹窗
+  // TDSF (2026-08-09): SSH 终端命令预测弹窗
   // 注意：命令预测拦截已统一注入到 rendererPool 的 attachCustomKeyEventHandler 链中
   // （见 completionInjection.ts），本地和 SSH 终端共用同一个弹窗组件 TerminalCompletionPopup
   const containerRef = useRef<HTMLDivElement>(null);

@@ -407,7 +407,7 @@ pub fn run() {
         .manage(history::HistoryState::default())
         .manage(lsp::LspState::default())
         .manage(fs::grep::ContentSearchState::default())
-        // TDSF 魔改 (P4-T4.1): SSH 远程资源管理器全局状态 (sessions + sftp_sessions 缓存)
+        // TDSF (P4-T4.1): SSH 远程资源管理器全局状态 (sessions + sftp_sessions 缓存)
         .manage(ssh::SshState::default())
         .manage({
             let registry = workspace::WorkspaceRegistry::default();
@@ -518,15 +518,15 @@ pub fn run() {
             sidecar::sidecar_stop,
             sidecar::sidecar_restart,
             sidecar::sidecar_status,
-            // TDSF 魔改 P2-3: Sidecar 日志查看 (前端设置页调用)
+            // TDSF P2-3: Sidecar 日志查看 (前端设置页调用)
             sidecar::sidecar_logs,
             sidecar::sidecar_logs_clear,
             ipc::ipc_invoke,
             ipc::ipc_notify,
-            // TDSF 魔改 2026-08-28 (B1-F0): 前端回传终端 scrollback（sidecar 反向 RPC 响应通道）
+            // TDSF 2026-08-28 (B1-F0): 前端回传终端 scrollback（sidecar 反向 RPC 响应通道）
             sidecar::sidecar_scrollback_response,
             sidecar::sidecar_visible_terminal_response,
-            // TDSF 魔改 (P4-T4.1): SSH 远程资源管理器 (russh 0.61 + SFTP)
+            // TDSF (P4-T4.1): SSH 远程资源管理器 (russh 0.61 + SFTP)
             // ssh_*: SSH 连接/PTY 读写/窗口调整/断开/状态查询/TOFU 主机审批
             // sftp_*: 远程文件 list/stat/read/write/mkdir/remove/rename
             ssh::ssh_connect,
@@ -543,15 +543,15 @@ pub fn run() {
             ssh::sftp_mkdir,
             ssh::sftp_remove,
             ssh::sftp_rename,
-            // TDSF 魔改: SSH 测试连接 + 凭据持久化 (永久保存密钥 + 自动登录)
+            // TDSF: SSH 测试连接 + 凭据持久化 (永久保存密钥 + 自动登录)
             ssh::ssh_test,
-            // TDSF 魔改 P0-D (2026-07-30): SSH exec 命令执行 (运维 Agent 用)
+            // TDSF P0-D (2026-07-30): SSH exec 命令执行 (运维 Agent 用)
             // 复用 Handle 开 channel.exec(),返回 {ok, output, stderr, exit_code, duration}
             ssh::ssh_command,
             // TDSF P2 #42 (2026-09-01): SSH 会话枚举详情 (agent 多主机运维 +
             // sidecar 反向路由 "ssh_status" 数据源; ssh_status 的富化版)
             ssh::ssh_sessions_detail,
-            // TDSF 魔改 P2 #23 (2026-08-11): SSH 隧道与端口转发
+            // TDSF P2 #23 (2026-08-11): SSH 隧道与端口转发
             // 本地端口转发: start (校验会话 + 端口占用) / stop / list
             ssh::tunnel_start,
             ssh::tunnel_stop,
@@ -560,7 +560,7 @@ pub fn run() {
             ssh::credentials::ssh_credentials_list,
             ssh::credentials::ssh_credentials_delete,
             ssh::credentials::ssh_credentials_touch,
-            // TDSF 魔改: carapace 参数补全 (终端参数阶段动态候选, 失败/超时静默降级空候选)
+            // TDSF: carapace 参数补全 (终端参数阶段动态候选, 失败/超时静默降级空候选)
             param_complete::param_complete,
             param_complete::carapace_linux_path,
             param_complete::sftp_upload_file,
@@ -611,7 +611,7 @@ pub fn run() {
                     if let Some(state) = app.try_state::<LaunchFiles>() {
                         *state.0.lock().expect("LaunchFiles mutex poisoned") = target.files.clone();
                     }
-                    // TDSF 魔改: terax:open-file → tdsf:open-file（与全局 Terax→TDSF 清洗对齐）
+                    // TDSF: terax:open-file → tdsf:open-file（与全局 Terax→TDSF 清洗对齐）
                     let _ = app.emit("tdsf:open-file", target.files);
                 }
                 _ => {}

@@ -22,7 +22,7 @@ async function readTdsfMd(
   workspaceRoot: string | null,
 ): Promise<string | null> {
   if (!workspaceRoot) return null;
-  // TDSF 魔改: TERAX.md → TDSF.md
+  // TDSF: TERAX.md → TDSF.md
   const path = `${workspaceRoot.replace(/\/$/, "")}/TDSF.md`;
   const cached = projectMemoryCache.get(workspaceRoot);
   if (cached && Date.now() - cached.mtime < 30_000) return cached.content;
@@ -55,7 +55,7 @@ type LiveSnapshot = {
   /**
    * 活跃 SSH 会话的 Rust session_id (u32)。
    *
-   * TDSF 魔改 2026-07-30: 从 Live.getSshRustSessionId() 取值，
+   * TDSF 2026-07-30: 从 Live.getSshRustSessionId() 取值，
    * 注入到 state.live.sshSessionId，供 Python 侧 Strands 运维工具
    * 通过 RustBridge 调 ssh_command / sftp_* 命令时使用。
    * null 表示当前无活跃 SSH 会话（本地终端模式）。
@@ -67,7 +67,7 @@ type LiveSnapshot = {
   /**
    * 活跃 SSH 会话的友好标识（如 "root@192.168.45.130"）。
    *
-   * TDSF 魔改 (2026-08-09): 用户反馈 agent 向用户暴露 "SSH 会话 #15"
+   * TDSF (2026-08-09): 用户反馈 agent 向用户暴露 "SSH 会话 #15"
    * （即 sshSessionId 数字）——这是实现细节，不应让最终用户看到。
    * 现改为 <env> 块注入 friendly 的 connected_to 字段，让 LLM 自然表达
    * "你已连接到 root@192.168.45.130"，而不是泄露内部 id。
@@ -94,7 +94,7 @@ type LiveSnapshot = {
   /**
    * 活跃终端的 scrollback 尾部摘要（已脱敏）。
    *
-   * TDSF 魔改 (2026-08-09): 用户反馈"agent 看不到终端，不知道我在干啥"。
+   * TDSF (2026-08-09): 用户反馈"agent 看不到终端，不知道我在干啥"。
    * 根因：Python Sidecar 路径的 <env> 块只注入元数据（cwd/sshSessionId），
    * 没有终端屏幕内容 → agent 无上下文感知。
    * 现在每轮自动注入终端尾部输出（截取 N 行），让 agent 收到消息时就能看到
@@ -202,7 +202,7 @@ export function createContextAwareTransport(deps: Deps) {
     const live = deps.getLive();
     const projectMemory = await readTdsfMd(live.workspaceRoot);
     const envBlock = formatEnvBlock(live);
-    // TDSF 魔改 (2026-08-09): 自动注入终端尾部输出到每轮对话，
+    // TDSF (2026-08-09): 自动注入终端尾部输出到每轮对话，
     // 让 agent 无需额外工具调用就能感知用户在终端做了什么。
     // 双轨受益：Python Sidecar（<env>+<terminal-context> 注入 input）+
     // Vercel SDK（注入 messagesForRun 最后一条 user message）。
@@ -282,7 +282,7 @@ export function createContextAwareTransport(deps: Deps) {
       // LLM token 超限 + 长对话"卡住不回复"。保留最近 20 条，避免 token 爆炸。
       // input 已从完整 messages 提取最后一条 user text，裁剪不影响 input。
       const trimmedMessages = trimMessagesForSidecar(messagesForRun);
-      // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文传给 Python agent
+      // TDSF 2026-07-30 (Bug 5): 把 live 上下文传给 Python agent
       // SidecarStreamOptions.live 必填，Python 侧 _build_tool_context / _build_prompt
       // 从 state.live 取 sshSessionId / cwd / activeFile 等
       const sidecarStream = runSidecarStream({
@@ -574,7 +574,7 @@ export async function fetchRecalledMemory(
  *   3. LLM token 超限（多模型上下文窗口 8K-32K tokens）
  *   4. 长对话"卡住不回复"（Python 端处理超时或 LLM 拒绝）
  *
- * TDSF 魔改 (2026-08-09): 两阶段压缩策略
+ * TDSF (2026-08-09): 两阶段压缩策略
  *   阶段 1 — tool-result elide：遍历消息，对超过 1024 字符的 tool-result
  *            内容截断到 512 字符 + "…[已压缩 N 字符]"标注，保留首尾
  *            （最近的 tool-result 不动，保护最新上下文）
@@ -704,7 +704,7 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
   }
   if (live.activeFile) lines.push(`active_file: ${live.activeFile}`);
   if (live.terminalPrivate) lines.push("active_terminal_mode: private");
-  // TDSF 魔改 (2026-08-09): 不再向 <env> 块注入 ssh_session_id 数字。
+  // TDSF (2026-08-09): 不再向 <env> 块注入 ssh_session_id 数字。
   // 原实现 (2026-07-30) 把 Rust 内部 session u32 注入到 env 块，
   // LLM 把它当成"SSH 会话 #15"直接告诉用户——内部实现细节泄露。
   // 现改为 friendly 的 connected_to 字段（user@host），让 LLM 自然表达。
@@ -727,7 +727,7 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
 /**
  * 构建终端尾部输出上下文块，注入到每轮对话让 agent 自动感知终端状态。
  *
- * TDSF 魔改 (2026-08-09): 用户反馈"agent 看不到终端"。
+ * TDSF (2026-08-09): 用户反馈"agent 看不到终端"。
  * 上游 terax 的 <terminal-context> 标签已有 strip 正则（CONTEXT_BLOCK_RE），
  * 说明原设计就有终端上下文注入的预留位——现在补全实现。
  *

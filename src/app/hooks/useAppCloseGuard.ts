@@ -30,7 +30,7 @@ export function useAppCloseGuard(tabsRef: RefObject<Tab[]>) {
   const forceClose = useRef(false);
 
   useEffect(() => {
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 不挂 close 拦截, 默认允许关闭
+    // TDSF: dev 模式 (无 Tauri 运行时) 不挂 close 拦截, 默认允许关闭
     if (!isTauriRuntime()) return;
     let unlisten: (() => void) | undefined;
     let disposed = false;

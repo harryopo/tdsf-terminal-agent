@@ -332,7 +332,7 @@ export function TabBar({
                       ? "text-foreground dark:text-foreground"
                       : "text-muted-foreground hover:text-foreground/80 dark:text-muted-foreground",
                     draggingId === t.id && "opacity-50",
-                    // TDSF 魔改 2026-07-31: tab 内边距收窄, 同样空间容纳更多标签
+                    // TDSF 2026-07-31: tab 内边距收窄, 同样空间容纳更多标签
                     compact
                       ? "px-1!"
                       : tabs.length === 1
@@ -343,7 +343,7 @@ export function TabBar({
                   <span
                     className={cn(
                       "flex min-w-0 items-center gap-1.5",
-                      // TDSF 魔改 2026-07-31: tab 标签最大宽度收窄, 多页面时不易挤占工作区
+                      // TDSF 2026-07-31: tab 标签最大宽度收窄, 多页面时不易挤占工作区
                       compact ? "max-w-32" : "max-w-48",
                     )}
                   >

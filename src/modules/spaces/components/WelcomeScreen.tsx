@@ -14,7 +14,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 type Props = {
   onCreateLocal: () => void;
   onCreateSsh: () => void;
-  /** TDSF 魔改 2026-08-28（用户反馈）: WSL 加入工作区创建入口 */
+  /** TDSF 2026-08-28（用户反馈）: WSL 加入工作区创建入口 */
   onCreateWsl: () => void;
 };
 

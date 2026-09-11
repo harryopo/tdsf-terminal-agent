@@ -47,7 +47,7 @@ fn map_err(path: &str, e: String) -> FsBackendError {
     }
 }
 
-/// 逐级确保父目录存在（mkdir -p 语义，TDSF 魔改 2026-08-28）。
+/// 逐级确保父目录存在（mkdir -p 语义，TDSF 2026-08-28）。
 ///
 /// SFTP 协议没有递归建目录，逐段 `stat` 探测 + `create_dir`。用户在远程文件树
 /// 新建多级路径（如 `/root/lab/test/a.txt`）时，中间目录不存在会导致
@@ -138,7 +138,7 @@ impl FsBackend for SftpFs {
 
     async fn write(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError> {
         let p = validate_sftp_path(path)?;
-        // TDSF 魔改 2026-08-28: 写文件前自动补齐父目录（mkdir -p 语义）——
+        // TDSF 2026-08-28: 写文件前自动补齐父目录（mkdir -p 语义）——
         // 新建多级路径（如 /root/lab/a.txt）不再报 "no such file"。
         ensure_parent_dirs(&self.session, p).await?;
         self.session
@@ -180,7 +180,7 @@ impl FsBackend for SftpFs {
 
     async fn mkdir(&self, path: &str) -> Result<(), FsBackendError> {
         let p = validate_sftp_path(path)?;
-        // TDSF 魔改 2026-08-28: mkdir 同样走逐级创建（mkdir -p 语义），
+        // TDSF 2026-08-28: mkdir 同样走逐级创建（mkdir -p 语义），
         // 新建多级目录一次成功；目标级本身由调用方语义决定，不在此创建。
         ensure_parent_dirs(&self.session, p).await?;
         self.session

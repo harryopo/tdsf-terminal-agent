@@ -122,7 +122,7 @@ export function SettingsApp() {
   }, [init]);
 
   useEffect(() => {
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 listen 订阅
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 listen 订阅
     if (!isTauriRuntime()) return;
     const apply = (detail: string) => {
       if (detail === "ai" || detail === "connections") {
@@ -133,7 +133,7 @@ export function SettingsApp() {
         setActive(detail as SettingsTab);
       }
     };
-    // TDSF 魔改: terax:settings-tab → tdsf:settings-tab（与全局 Terax→TDSF 清洗对齐）
+    // TDSF: terax:settings-tab → tdsf:settings-tab（与全局 Terax→TDSF 清洗对齐）
     const unlistenPromise = getCurrentWebviewWindow().listen<string>(
       "tdsf:settings-tab",
       (e) => apply(e.payload),

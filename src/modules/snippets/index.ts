@@ -1,4 +1,4 @@
-// TDSF 魔改 (P2 代码片段管理, 方案书 v1.1 §5): 模块入口
+// TDSF (P2 代码片段管理, 方案书 v1.1 §5): 模块入口
 export { SnippetsPanel } from "./SnippetsPanel";
 export {
   collectPlaceholders,

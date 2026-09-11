@@ -135,6 +135,41 @@ agent-logs/
 # 宣传页预览截图产物 (scripts/preview-website.mjs 输出，2026-09-11)
 .preview/
 
+# ============================================================================
+# 仓库精简：以下为开发过程资料，仅保留在本地工作区，不入库（2026-09-11）
+# ============================================================================
+docs/
+.trae/
+knowledge-slim-preview/
+AGENTS.md
+CLAUDE.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+.coderabbit.yaml
+nix/
+flake.nix
+flake.lock
+启动-日志版.bat
+.github/CODEOWNERS
+.github/ISSUE_TEMPLATE/
+.github/PULL_REQUEST_TEMPLATE.md
+.github/dependabot.yml
+.github/workflows/signpath-test.yml
+.github/workflows/update-nix-sources.yml
+
+# 开发期调试脚本（仅保留构建/资源生成所需脚本）
+scripts/*
+!scripts/build-fig-specs.mjs
+!scripts/build-tldr-zh.mjs
+!scripts/fetch-carapace.ps1
+!scripts/make-app-icon.py
+!scripts/preview-website.mjs
+
+# 演示视频：未压缩原件不入库（>100MB 超出 GitHub 单文件上限）；
+# 压缩后的成品命名为 demo.mp4 放进同目录即可正常提交
+website/assets/video/宣传视频.mp4
+
 # 上游 terax-ai 全量源码克隆 (仅本机调研参考, 体积大不入库)
 opensource-reference/
 

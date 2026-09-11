@@ -303,7 +303,7 @@ export async function onMoodChange(
 /**
  * 订阅子 Agent 路由切换（sidecar:agent_switch）
  *
- * TDSF 魔改 2026-07-30 P1-a: 之前 Python 端 emit_agent_switch 已发布，
+ * TDSF 2026-07-30 P1-a: 之前 Python 端 emit_agent_switch 已发布，
  * 但前端无监听者，导致 AgentStatusPill 无法实时显示当前路由到的子 Agent。
  *
  * 主 Agent 在 PAOR 循环中路由到子 Agent（coding/explore/teach/debug 等）时

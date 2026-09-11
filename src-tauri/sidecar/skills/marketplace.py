@@ -593,7 +593,7 @@ class Marketplace:
     def _build_skill_md(self, entry: MarketplaceEntry) -> str:
         """根据 MarketplaceEntry 构造 SKILL.md 内容
 
-        TDSF 魔改: 用双引号包裹 description / author 字段，
+        TDSF: 用双引号包裹 description / author 字段，
         避免 YAML 把以 `[` / `{` / `:` 开头的值误解析为 list / dict / mapping。
         name / version 不加引号（受 [a-z0-9-] 字符集约束，安全）。
         tags 保留 inline 数组 [a, b, c] 形式（YAML 原生支持）。

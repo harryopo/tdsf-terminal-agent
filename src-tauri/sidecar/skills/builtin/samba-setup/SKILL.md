@@ -5,7 +5,7 @@ version: 2.0.0
 author: TDSF
 tags: [samba, smb, cifs, file-sharing, linux, ops, selinux]
 allowed-tools: [ssh_command, get_terminal_output, read_remote_file, remote_file, log_analyzer, suggest_command, knowledge_search, config_diff]
-# TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
+# TDSF (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
 # testparm -s = Samba 排障第一命令: 校验 smb.conf 语法并输出实际生效配置.
 executor:
   type: shell

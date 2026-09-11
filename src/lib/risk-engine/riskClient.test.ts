@@ -1,4 +1,4 @@
-// TDSF 魔改: riskClient 单元测试 (T2.2)
+// TDSF: riskClient 单元测试 (T2.2)
 // -----------------------------------------------------------------------------
 // 测试 evaluateRisk 的 RPC 调用 + fail-open 回退逻辑。
 // mock @tauri-apps/api/core 的 invoke 函数，模拟 Sidecar 响应。

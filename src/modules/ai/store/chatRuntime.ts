@@ -184,7 +184,7 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           terminalSession: connected ? "ssh" : "none",
           // 记忆召回过滤维度（同工作区跨对话共享沉淀）
           scopeId: memoryScopeId,
-          // TDSF 魔改 2026-09-02: 解耦——不再把前端 autoExecuteInTerminal 作为
+          // TDSF 2026-09-02: 解耦——不再把前端 autoExecuteInTerminal 作为
           // sidecar ssh_command visible 的自动触发器（visible 会在交互式 PTY
           // inject_terminal+\n 与 execute_via_ssh 之间双重执行，红线9 SSH 链路
           // 问题，需独立可见执行重构）。重构前 visible 保持默认关闭（无回归），
@@ -218,7 +218,7 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         sshConnection: isLocalScope
           ? null
           : (() => {
-              // TDSF 魔改 (2026-08-09): 友好的 SSH 连接标识（user@host），
+              // TDSF (2026-08-09): 友好的 SSH 连接标识（user@host），
               // 从 sshStore 取活跃 connected 会话的 params.host/user 组装。
               const sshState = useSshStore.getState();
               const active = sshState.sessions.find(
@@ -258,7 +258,7 @@ function makeChat(sessionId: string): Chat<UIMessage> {
             : null,
         // 记忆召回过滤维度（同工作区跨对话共享沉淀）
         scopeId: memoryScopeId,
-        // TDSF 魔改 2026-09-02: 解耦——前端 autoExecuteInTerminal 现专用于
+        // TDSF 2026-09-02: 解耦——前端 autoExecuteInTerminal 现专用于
         // “对话区命令卡自动打字+执行”（CommandCard/SuggestCommandCard，前端
         // PTY 注入单次执行）；不再作为 sidecar ssh_command visible 的自动触发器：
         // visible 会在交互式 PTY inject_terminal(+\n 执行) 与 execute_via_ssh(后台
@@ -372,7 +372,7 @@ export async function sendMessage(text: string): Promise<boolean> {
   const sessionId = state.activeSessionId;
   if (!sessionId) return false;
 
-  // TDSF 魔改 P0-3: 走 Sidecar 路径时跳过 Vercel SDK 的 API Key 检查
+  // TDSF P0-3: 走 Sidecar 路径时跳过 Vercel SDK 的 API Key 检查
   // 原因: TDSF Sidecar 使用 Python 端自己配置的 LLM（.tdsf-data/llm_config.json），
   //       不依赖前端 Vercel SDK 的 provider key。若不跳过，用户未配置 OpenAI 等
   //       provider key 时 sendMessage 会返回 false，导致 TdsfAgentPanel 走
