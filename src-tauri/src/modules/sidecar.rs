@@ -965,16 +965,16 @@ async fn reader_task(
                         "[sidecar:reader] stdout EOF (child pid={:?}, alive check below)",
                         pid
                     );
+                    // EOF 存活诊断仅 Windows 实现（其他平台是恒 2 的占位），
+                    // 故整块按 cfg 收拢——否则非 Windows 下 pid_num 未被使用。
+                    #[cfg(target_os = "windows")]
                     if let Some(pid_num) = pid {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let alive = is_process_alive(pid_num).await;
-                            log::warn!(
-                                "[sidecar:reader] child pid={} alive={} (1=alive,0=dead)",
-                                pid_num,
-                                alive
-                            );
-                        }
+                        let alive = is_process_alive(pid_num).await;
+                        log::warn!(
+                            "[sidecar:reader] child pid={} alive={} (1=alive,0=dead)",
+                            pid_num,
+                            alive
+                        );
                     }
                     break;
                 }
@@ -1128,7 +1128,11 @@ async fn is_process_alive(pid: u32) -> u32 {
 }
 
 /// TDSF 2026-07-31 诊断: 非 Windows 平台占位（恒 2=未查询）
+///
+/// 保留与 Windows 版一致的签名；非 Windows 下 EOF 诊断分支被 cfg 收拢，
+/// 故此处暂无调用方。
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 async fn is_process_alive(_pid: u32) -> u32 {
     2
 }
