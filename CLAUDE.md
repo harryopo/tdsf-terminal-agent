@@ -146,6 +146,12 @@ pnpm tauri:dev        # 桌面端实测：窗口可见 + 能点击 + 目标功�
 
 **真实运行调试（2026-09-04 固化，推翻早期“沙箱 tauri:dev 被禁”记录）**：本环境**能真实启动软件**（`pnpm tauri:dev` 或 `启动-日志版.bat`，日志→`.tdsf-data/dev-run.log`）。改 py→sidecar watcher 自动热重载，改前端→vite HMR，改 Rust→cargo 重编重启(~1m)。**边看 dev-run.log 边开发**能发现静态难察的问题（日志噪音/运行时错误/超时），比纯静态分析强。
 
+### 黑屏三步定位法（M0-3 沉淀，遇黑屏/空白窗口按序执行）
+
+1. **CDP 连 9222 截图确认 UI 状态**：`curl http://127.0.0.1:9222/json` 拿 webSocketDebuggerUrl → `Page.captureScreenshot` 截图（合成线程不受主线程卡死影响）→ 确认 UI 是空白、加载失败、还是渲染了但不可见。同时检查页面 URL：9300 = dev 模式（Vite 提供），dist = 发布模式。
+2. **CPU Profiler 定位热点函数**：`Profiler.start` → 等 3-5 秒 → `Profiler.stop` → 看热点。若热点全是 `measure`（React DEV 组件追踪 `logComponentRender`）且调用栈是 `flushPassiveEffects ← commitPassiveMountOnFiber` → **确认是 useEffect 无限循环**，回到上方“诊断方法论”定位具体组件。
+3. **`performance.measure` 计数定位重渲染组件**：patch `window.performance.measure` 统计每个组件 render 次数（按 name 分组计数）→ 找出重渲染最严重的组件 → 检查其 state/context 依赖是否形成自反循环。若全树 Radix 组件都高 → 顶层 state/context 每次变新引用。
+
 ---
 
 ## 6. 记忆保存机制（防止 AI 失忆 / 重复踩坑）
