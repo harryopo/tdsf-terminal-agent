@@ -932,6 +932,9 @@ pub struct SshCommandOutputEvent {
 /// })
 /// # result 应为 {"ok": true, "output": "...", "exit_code": 0, "duration": 0.123}
 /// ```
+// 参数较多是 Tauri IPC 契约本身的要求（前端与 Rust 反向路由都按具名参数调用），
+// 收拢成结构体会改变 JSON 形状并破坏既有调用方，故在此显式豁免该 lint。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn ssh_command(
     app: tauri::AppHandle,

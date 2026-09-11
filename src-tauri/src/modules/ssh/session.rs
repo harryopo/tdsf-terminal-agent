@@ -204,6 +204,12 @@ pub type OnReconnectedCallback = Arc<
     dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
 >;
 
+/// exec 输出流式回调（每收到一段 stdout/stderr 即调用）
+///
+/// 参数：`(数据, 是否 stderr)`。仅用于展示进度，最终事实仍以退出码与
+/// 完整结构化结果为准。
+pub type ExecOutputCallback = Arc<dyn Fn(Vec<u8>, bool) + Send + Sync>;
+
 /// 自动重连配置 (P3 #20)
 ///
 /// 由 `ssh_connect` 命令在 `open_pty` 成功后调用 `enable_reconnect` 注入。
@@ -1158,7 +1164,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         &self,
         command: &str,
         timeout_secs: Option<u64>,
-        on_output: Option<Arc<dyn Fn(Vec<u8>, bool) + Send + Sync>>,
+        on_output: Option<ExecOutputCallback>,
     ) -> Result<SshCommandOutput, SshSessionError> {
         // 1. 连接检查（与 open_sftp_channel 一致，PTY 死亡不影响 exec）
         if self.connection_closed.load(Ordering::Acquire) {
@@ -1231,7 +1237,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         channel: &mut russh::Channel<russh::client::Msg>,
         command: &str,
         timeout_secs: u64,
-        on_output: Option<Arc<dyn Fn(Vec<u8>, bool) + Send + Sync>>,
+        on_output: Option<ExecOutputCallback>,
     ) -> Result<(Vec<u8>, Vec<u8>, i32, bool), russh::Error> {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

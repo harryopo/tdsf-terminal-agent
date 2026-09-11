@@ -159,7 +159,7 @@ flake.lock
 .github/workflows/signpath-test.yml
 .github/workflows/update-nix-sources.yml
 
-# 开发期调试脚本（仅保留构建/资源生成所需脚本）
+# 开发期调试脚本（仅保留构建/资源生成/校验所需脚本；eager-graph 被前端测试引用）
 scripts/*
 !scripts/build-fig-specs.mjs
 !scripts/build-tldr-zh.mjs
@@ -167,6 +167,8 @@ scripts/*
 !scripts/make-app-icon.py
 !scripts/preview-website.mjs
 !scripts/verify-demo-video.mjs
+!scripts/eager-graph.mjs
+!scripts/eager-graph.d.mts
 
 # 演示视频：未压缩原件不入库（>100MB 超出 GitHub 单文件上限）；
 # 压缩后的成品命名为 demo.mp4 放进同目录即可正常提交
