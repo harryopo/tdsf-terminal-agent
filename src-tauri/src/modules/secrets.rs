@@ -153,12 +153,12 @@ pub async fn secrets_set(
         // set 时后写者拿旧快照覆盖先写者, 丢密钥。
         let mut guard = state.cache.lock().map_err(|e| e.to_string())?;
         if guard.is_none() {
-            *guard = Some(read_store(app)?);
+            *guard = Some(read_store(&app)?);
         }
         let map = guard.as_mut().expect("cache initialized above");
         map.insert(key, password);
         // 持锁写盘: 写盘为毫秒级 IO, 密钥写入频率极低, 换无竞态值得
-        write_store(app, map)
+        write_store(&app, map)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -181,11 +181,11 @@ pub async fn secrets_delete(
         // 2026-08-18 修复: 与 secrets_set 同构, 单锁临界区内完成删除+写盘
         let mut guard = state.cache.lock().map_err(|e| e.to_string())?;
         if guard.is_none() {
-            *guard = Some(read_store(app)?);
+            *guard = Some(read_store(&app)?);
         }
         let map = guard.as_mut().expect("cache initialized above");
         map.remove(&key);
-        write_store(app, map)
+        write_store(&app, map)
     }
     #[cfg(not(target_os = "linux"))]
     {
