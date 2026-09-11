@@ -1,5 +1,5 @@
 /**
- * terminal-search-store — 终端搜索浮层开关状态（B1-G4，TDSF 魔改 2026-08-28）
+ * terminal-search-store — 终端搜索浮层开关状态（B1-G4，TDSF 2026-08-28）
  *
  * App 全局快捷键（terminal.find）与 TerminalPane 渲染层解耦：
  * handler 写 openLeafId，TerminalPane 订阅并渲染 TerminalSearchBar。

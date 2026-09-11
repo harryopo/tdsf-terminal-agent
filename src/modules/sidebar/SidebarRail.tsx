@@ -26,10 +26,10 @@ type Props = {
 };
 
 export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
-  // TDSF 魔改 (P4-T4.1): 新增 SSH 远程视图入口 (cloud-server 图标)
-  // TDSF 魔改 (P4-T4.4): 新增 Skills 管理视图入口 (sparkles 图标)
+  // TDSF (P4-T4.1): 新增 SSH 远程视图入口 (cloud-server 图标)
+  // TDSF (P4-T4.4): 新增 Skills 管理视图入口 (sparkles 图标)
   const items: RailItem[] = [
-    // TDSF 魔改 2026-08-29: rail 标签中文化（用户钦定，推翻 2026-08-18 统一英文决策）
+    // TDSF 2026-08-29: rail 标签中文化（用户钦定，推翻 2026-08-18 统一英文决策）
     { id: "explorer", label: "文件", icon: FolderTreeIcon },
     {
       id: "source-control",
@@ -40,9 +40,9 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
 
     { id: "skills", label: "技能", icon: SparklesIcon },
     { id: "knowledge", label: "知识库", icon: BookOpen01Icon },
-    // TDSF 魔改 2026-08-11 (P2 代码片段管理): 代码片段视图入口
+    // TDSF 2026-08-11 (P2 代码片段管理): 代码片段视图入口
     { id: "snippets", label: "片段", icon: CodeIcon },
-    // TDSF 魔改 2026-08-11 (P2 SSH 隧道): SSH 隧道视图入口
+    // TDSF 2026-08-11 (P2 SSH 隧道): SSH 隧道视图入口
     { id: "tunnels", label: "隧道", icon: Router01Icon },
   ];
 
@@ -76,7 +76,7 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
               strokeWidth={isActive ? 2 : 1.75}
               className="shrink-0 transition-[stroke-width] duration-[var(--dur-base)]"
             />
-            {/* TDSF 魔改 2026-08-29: 中文化后「源代码管理」较长，truncate 防拥挤溢出 */}
+            {/* TDSF 2026-08-29: 中文化后「源代码管理」较长，truncate 防拥挤溢出 */}
             <span className="truncate whitespace-nowrap">{item.label}</span>
             {showBadge && badge ? (
               <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-border/60 bg-card px-1 text-[9px] font-semibold leading-none tabular-nums text-muted-foreground/95">

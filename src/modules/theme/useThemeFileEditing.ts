@@ -131,7 +131,7 @@ export function useThemeFileEditing(params: Params = {}) {
 
   // ===== 主题文件编辑: 保存自定义主题后重新加载 =====
   useEffect(() => {
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 fs:file-written 监听
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 fs:file-written 监听
     if (!isTauriRuntime()) return;
     type FileWrittenPayload = { path: string; source?: string };
     const unlistenPromise =

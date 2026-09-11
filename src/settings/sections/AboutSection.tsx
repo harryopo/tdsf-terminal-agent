@@ -8,7 +8,7 @@ import { arch, platform } from "@tauri-apps/plugin-os";
 import { useEffect, useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
 
-// TDSF 魔改: 链接更新为 TDSF 仓库（原 terax-ai 上游链接保留在注释中供溯源）
+// TDSF: 链接更新为 TDSF 仓库（原 terax-ai 上游链接保留在注释中供溯源）
 // const UPSTREAM_REPO = "https://github.com/crynta/terax-ai";
 // const UPSTREAM_WEBSITE = "https://terax.app";
 // 2026-08-30: 仓库迁移至 harryopo 个人仓库（用户钦定）

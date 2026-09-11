@@ -8,7 +8,7 @@
  *   4. initLaunchDir() 解析启动目录
  *   5. render <App />（terax 壳 = src/app/App.tsx）
  *
- * TDSF 魔改：fontsource 字体 + Monaco Editor 本地加载（国内网络不走 CDN）
+ * TDSF：fontsource 字体 + Monaco Editor 本地加载（国内网络不走 CDN）
  *
  * TDSF 永久修复 (2026-08-09): 窗口可见性不再由前端 JS 控制。
  * 上游用 visible:false + setTimeout(show) 来避免 borderless 透明窗口的闪烁，
@@ -26,7 +26,7 @@ import App from "./app/App";
 import { initLaunchDir } from "./lib/launchDir";
 import { USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 
-// TDSF 魔改: fontsource 字体 (Inter Variable + JetBrains Mono)
+// TDSF: fontsource 字体 (Inter Variable + JetBrains Mono)
 import "@fontsource-variable/inter";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";

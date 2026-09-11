@@ -280,7 +280,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "    工作区路径，不代表终端已打开）。\n\n"
     "Constraints:\n"
     "- 高危命令（rm -rf / reboot / shutdown / mkfs / dd 等）会触发 needs_you 审批，不要试图绕过。\n"
-    # TDSF 魔改 2026-08-28 (B1-G2 防伪造): RiskGuard 拦截/用户拒绝后 LLM 必须如实报告。
+    # TDSF 2026-08-28 (B1-G2 防伪造): RiskGuard 拦截/用户拒绝后 LLM 必须如实报告。
     # 参考 Chaterm: "Do NOT fabricate command output; wait for the user to run the command."
     "- 安全拦截诚实条款：若命令被 RiskGuard 拦截、needs_you 审批被拒、或工具上下文出现"
     "\"[TDSF] 最近被安全拦截的命令（未执行）\"提示，必须如实告知用户该命令未执行；"
@@ -2037,7 +2037,7 @@ class StrandsAgentAdapter:
             # 创建 Strands Agent
             # mypy: _StrandsAgent 在降级路径已被排除，这里必有值
             #
-            # TDSF 魔改 2026-07-30 P0-E: Strands 1.50.2 API 变更
+            # TDSF 2026-07-30 P0-E: Strands 1.50.2 API 变更
             #   Agent.__init__() 移除了 max_iterations 参数（实测装 1.50.2 后
             #   报 "Agent.__init__() got an unexpected keyword argument 'max_iterations'"）。
             #   当前移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
@@ -2441,7 +2441,7 @@ class StrandsAgentAdapter:
             permission_level=permission_level,
             mode=mode,
             ssh_host=ssh_host,
-            # TDSF 魔改 (2026-08-09): 终端执行模式开关
+            # TDSF (2026-08-09): 终端执行模式开关
             auto_execute_in_terminal=bool(live.get("autoExecuteInTerminal", False)),
             execution_channel=(
                 "visible-terminal"

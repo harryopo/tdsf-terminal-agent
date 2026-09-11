@@ -1,5 +1,5 @@
 /**
- * TerminalSearchBar — 终端内搜索浮层（B1-G4，TDSF 魔改 2026-08-28）
+ * TerminalSearchBar — 终端内搜索浮层（B1-G4，TDSF 2026-08-28）
  * -----------------------------------------------------------------------------
  * 由 terminal.find 快捷键（Ctrl/Cmd+Shift+F）触发；持有当前 leaf 的 SearchAddon
  * （useTerminalSession.getSearchAddon）直调 findNext/findPrevious，不重挂 slot。

@@ -1,6 +1,6 @@
 """get_terminal_output 工具 — 获取终端最近输出（Sidecar 路径）
 
-TDSF 魔改 (2026-08-09): 方案书集成度补齐。
+TDSF (2026-08-09): 方案书集成度补齐。
 前端 Vercel SDK 路径已有 get_terminal_output（terminal.ts），
 Python Sidecar 路径缺失。本工具让 Sidecar agent 也能读终端 scrollback。
 
@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
-# TDSF 魔改 2026-08-28 (B1-G1): 终端文本进 LLM 前必须脱敏（对齐前端 redact.ts）
+# TDSF 2026-08-28 (B1-G1): 终端文本进 LLM 前必须脱敏（对齐前端 redact.ts）
 from strands_backend.tools._redact import redact_sensitive_text
 
 logger = logging.getLogger("sidecar.strands_backend.tools.get_terminal_output")
@@ -64,7 +64,7 @@ def invoke_get_terminal_output(
         char_truncated = len(output) > max_chars
         if char_truncated:
             output = output[-max_chars:]
-        # TDSF 魔改 2026-08-28 (B1-G1): 送 LLM 前脱敏（前端路径 3 处已覆盖，
+        # TDSF 2026-08-28 (B1-G1): 送 LLM 前脱敏（前端路径 3 处已覆盖，
         # 本工具是 Sidecar 独立路径，此前裸奔）
         output = redact_sensitive_text(output)
         lines_returned = output.count("\n") + 1 if output else 0

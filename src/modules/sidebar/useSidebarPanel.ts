@@ -37,7 +37,7 @@ function readSidebarWidth(): number {
 function readSidebarView(): SidebarViewId {
   try {
     const stored = window.localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY);
-    // TDSF 魔改 (P4-T4.4): 新增 "skills" 视图
+    // TDSF (P4-T4.4): 新增 "skills" 视图
     // TDSF 修复 2026-08-01: 移除 "ssh" 视图（登录统一走新建工作区）
     if (
       stored === "explorer" ||
@@ -59,7 +59,7 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
-// TDSF 魔改 (2026-07-28 P1-A): 抽出纯函数, 供 NoTerminalEmptyState 等非 hook 上下文复用,
+// TDSF (2026-07-28 P1-A): 抽出纯函数, 供 NoTerminalEmptyState 等非 hook 上下文复用,
 // 避免在多处复制 localStorage 写入逻辑.
 export function persistSidebarViewRaw(view: SidebarViewId): void {
   try {

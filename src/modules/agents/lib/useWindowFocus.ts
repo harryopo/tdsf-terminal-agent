@@ -8,7 +8,7 @@ export function useWindowFocus(): boolean {
   );
 
   useEffect(() => {
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 focus 监听
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 focus 监听
     if (!isTauriRuntime()) {
       if (typeof console !== "undefined") {
         console.debug("[useWindowFocus] dev mode, follow document.hasFocus()");

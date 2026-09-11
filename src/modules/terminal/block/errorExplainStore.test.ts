@@ -1,5 +1,5 @@
 /**
- * errorExplainStore.test.ts — B1-G3 报错解释节流与输入构造（TDSF 魔改 2026-08-28）
+ * errorExplainStore.test.ts — B1-G3 报错解释节流与输入构造（TDSF 2026-08-28）
  * -----------------------------------------------------------------------------
  * 覆盖 spec add-b1-agent-safety-baseline T4.5：
  *   1. 全局单飞行：streaming 期间新请求被忽略

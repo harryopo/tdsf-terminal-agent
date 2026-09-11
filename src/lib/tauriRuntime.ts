@@ -1,4 +1,4 @@
-// TDSF 魔改 (P5 浏览器降级): Tauri runtime 检测
+// TDSF (P5 浏览器降级): Tauri runtime 检测
 // -----------------------------------------------------------------------------
 // 在 pnpm dev (纯浏览器) 模式下, @tauri-apps/api 的 invoke / listen / getCurrentWindow
 // 都会因为 `window.__TAURI_INTERNALS__` 不存在而抛 TypeError, 整个 app 渲染不出来。

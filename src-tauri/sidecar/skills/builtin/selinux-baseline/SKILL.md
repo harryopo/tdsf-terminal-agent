@@ -4,14 +4,14 @@ description: SELinux 基线排查 Skill，处理 AVC denied、模式切换、文
 version: 2.1.0
 author: TDSF
 tags: [selinux, security, avc, label, boolean, enforcing]
-# TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
+# TDSF (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
 # sestatus = SELinux 排障第一命令: 一屏给出模式/策略/配置文件模式.
 executor:
   type: shell
   command: "sestatus"
   timeout: 5
   description: "查询 SELinux 完整状态（当前模式 Enforcing/Permissive/Disabled、策略版本、配置文件模式）. Windows 或未装 SELinux 时自动降级."
-# TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 四步基线剧本
+# TDSF (T6 2026-08-31, spec add-agent-loop-closure): 四步基线剧本
 # —— skill_invoke 命中时注入 LLM 驱动工具序列，并同步任务清单跟踪完成度
 steps:
   - description: "查询当前 SELinux 模式（getenforce），确认是否与 SELinux 相关"

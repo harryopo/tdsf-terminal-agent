@@ -19,7 +19,7 @@ const SelectionAskAiInner = lazy(() =>
   import("./SelectionAskAi").then((m) => ({ default: m.SelectionAskAi })),
 );
 
-// TDSF 魔改: TdsfAgentPanel 用 lazy 包装，避免静态引入 @ai-sdk/chatRuntime
+// TDSF: TdsfAgentPanel 用 lazy 包装，避免静态引入 @ai-sdk/chatRuntime
 // 污染 main window 的 eager bundle graph（eager-budget.test.ts 守卫）
 const TdsfAgentPanelInner = lazy(() =>
   import("./TdsfAgentPanel").then((m) => ({ default: m.TdsfAgentPanel })),
@@ -57,7 +57,7 @@ export function SelectionAskAi(props: SelectionAskAiProps) {
   );
 }
 
-// TDSF 魔改: 导出 lazy 包装的 TdsfAgentPanel，App.tsx 用此组件避免 eager 加载
+// TDSF: 导出 lazy 包装的 TdsfAgentPanel，App.tsx 用此组件避免 eager 加载
 // P2-4: 知识库面板 lazy 包装（避免 eager 拉入 markdown 栈，启动预算约束）
 const KnowledgePanelInner = lazy(() =>
   import("./KnowledgeBrowser").then((m) => ({ default: m.KnowledgePanel })),

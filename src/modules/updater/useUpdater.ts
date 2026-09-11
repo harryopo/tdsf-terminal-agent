@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 const LAST_CHECK_KEY = "tdsf:updater:last-check";
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
-// TDSF 魔改: 更新源改为 TDSF 仓库(原上游 terax-ai 保留为注释供溯源)
+// TDSF: 更新源改为 TDSF 仓库(原上游 terax-ai 保留为注释供溯源)
 // const UPSTREAM_RELEASE = "https://api.github.com/repos/crynta/terax-ai/releases/latest";
 const GITHUB_LATEST_RELEASE =
   "https://api.github.com/repos/tdsf-linux-desktop/tdsf-terminal-agent/releases/latest";

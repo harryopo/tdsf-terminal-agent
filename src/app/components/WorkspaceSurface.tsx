@@ -36,7 +36,7 @@ type Props = {
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
 
-  // === TDSF 魔改 2026-07-28 (P1-A): 未连接 SSH 时显示空状态页 ===
+  // === TDSF 2026-07-28 (P1-A): 未连接 SSH 时显示空状态页 ===
   /** 当 default cold tab + 无 SSH 时, 渲染 NoTerminalEmptyState 替代 TerminalStack */
   showNoTerminalEmptyState?: boolean;
   /** 强行 warm 一个 cold tab, 启动本地 shell (从 NoTerminalEmptyState 调用) */
@@ -46,7 +46,7 @@ type Props = {
   /** 切侧栏到 ssh 视图 (从 NoTerminalEmptyState 调用) */
   onSwitchToSshFromEmptyState?: () => void;
 
-  // === TDSF 魔改 2026-07-28 (P1-D): SSH 终端接管右侧工作区 ===
+  // === TDSF 2026-07-28 (P1-D): SSH 终端接管右侧工作区 ===
   // 2026-08-11 (#21): SSH 终端渲染已迁入 TerminalStack → PaneTreeView leaf 级，
   // 本组件不再接收 sshSessionId/allocId/onSshLeafId，也无需 SshTerminalHost 覆盖。
   /** 当 SSH 会话处于 connecting 等中间状态时，终端区域显示连接进度界面。 */
@@ -97,11 +97,11 @@ export function WorkspaceSurface({
   const isGitDiffTab = kind === "git-diff" || kind === "git-commit-file";
   const isGitHistoryTab = kind === "git-history";
 
-  // TDSF 魔改 2026-07-28 (P1-A): 空状态页的可见性
+  // TDSF 2026-07-28 (P1-A): 空状态页的可见性
   // 仅在 active tab 是 terminal 且 App 判定需要空状态时显示
   const showEmptyState = isTerminalTab && !!showNoTerminalEmptyState;
 
-  // TDSF 魔改 2026-08-11 (#21): SSH 终端渲染已迁入 TerminalStack → PaneTreeView
+  // TDSF 2026-08-11 (#21): SSH 终端渲染已迁入 TerminalStack → PaneTreeView
   // leaf 级（SSH 叶子与本地叶子共用 PaneTree，支持分屏），本层不再做 workspace
   // 级 SshTerminalHost 覆盖。此处仅保留 SSH 连接中的进度界面：
   //   - 连接中: 显示 SshConnectingOverlay（覆盖在 TerminalStack 之上）
@@ -111,7 +111,7 @@ export function WorkspaceSurface({
 
   return (
     <div className="relative h-full min-h-0">
-      {/* === TDSF 魔改 2026-07-28 (P1-A): 空状态页 (覆盖在 terminal 之上) === */}
+      {/* === TDSF 2026-07-28 (P1-A): 空状态页 (覆盖在 terminal 之上) === */}
       {showEmptyState &&
       activeTab &&
       onWarmUpColdTab &&
@@ -127,7 +127,7 @@ export function WorkspaceSurface({
         </div>
       ) : null}
 
-      {/* === TDSF 魔改 (2026-08-09): SSH 连接进度界面 === */}
+      {/* === TDSF (2026-08-09): SSH 连接进度界面 === */}
       {/* 渲染顺序：空状态页 → connecting overlay → TerminalStack (后者覆盖前者)。
           SSH 连接成功后 overlay 消失，PaneTreeView 的 SSH leaf 接管渲染。
           用户核心诉求："终端流畅最优先，资源管理器异步加载不阻塞终端"。 */}

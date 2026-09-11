@@ -1,4 +1,4 @@
-// TDSF 魔改 (P2 SSH 隧道, 方案书 v1.1 §四): 模块入口
+// TDSF (P2 SSH 隧道, 方案书 v1.1 §四): 模块入口
 export { TunnelPanel } from "./TunnelPanel";
 export { CreateTunnelDialog } from "./CreateTunnelDialog";
 export { useTunnelsStore } from "./lib/tunnelStore";

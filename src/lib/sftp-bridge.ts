@@ -178,7 +178,7 @@ export async function sftpRename(
 }
 
 /**
- * 上传本地文件到远程 (TDSF 魔改 2026-08-31: 资源管理器上传功能)
+ * 上传本地文件到远程 (TDSF 2026-08-31: 资源管理器上传功能)
  *
  * Rust 端 param_complete::sftp_upload_file: 读盘 + SFTP 写都在 Rust 完成,
  * 前端只传路径, 大文件不经 IPC 搬运字节 (区别于 sftpWrite 的 number[] 中转)。
@@ -226,7 +226,7 @@ export function encodeUtf8(text: string): Uint8Array {
 /**
  * 拼接远程 POSIX 路径 (处理根目录 "/" 与末尾斜杠)
  *
- * TDSF 魔改: 供 sshStore 构造子路径使用。
+ * TDSF: 供 sshStore 构造子路径使用。
  */
 export function joinRemotePath(parent: string, name: string): string {
   const base = parent.endsWith('/') ? parent.slice(0, -1) : parent;

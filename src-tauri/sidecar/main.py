@@ -52,7 +52,7 @@ from typing import Any, Callable
 # 将 sidecar 根目录加入 sys.path，确保 import sidecar_modules.* 可用
 sys.path.insert(0, str(Path(__file__).parent))
 
-# TDSF 魔改: 数据目录移到 src-tauri/ 之外，避免 Tauri dev watcher 检测到
+# TDSF: 数据目录移到 src-tauri/ 之外，避免 Tauri dev watcher 检测到
 # SQLite WAL 文件（.db-shm/.db-wal）变化导致循环重启（窗口反复弹出关闭）
 # 路径: dev = <项目根目录>/.tdsf-data/; frozen (PyInstaller) = 用户数据目录
 # （frozen 时 __file__ 指向 _MEIPASS 临时解压目录, 进程退出即删, 不能作为数据根;
@@ -568,7 +568,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     # 必须在 event_bus 之后注册（Agent 通过 event_bus 推送 mood/message 事件）
     try:
         import agents
-        # TDSF 魔改 P0-3 + P0-C5: LLM 配置加载与共享
+        # TDSF P0-3 + P0-C5: LLM 配置加载与共享
         # ---------------------------------------------------------------
         # 从环境变量 / .tdsf-data/llm_config.json 加载 LLMConfig，
         # 同一份 config 同时供给 LangGraph 路径（make_llm_call）和 Strands 路径
@@ -590,7 +590,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
             llm_call=llm_call,
         )
 
-        # TDSF 魔改 2026-07-30 P0-C1 + P0-C5 + P1-4: Strands 后端 feature flag 注入点
+        # TDSF 2026-07-30 P0-C1 + P0-C5 + P1-4: Strands 后端 feature flag 注入点
         # ---------------------------------------------------------------
         # 通过环境变量 TDSF_AGENT_BACKEND 切换 Agent 后端实现：
         #   - "langgraph"（默认）/ 未设置 / 其他值：走 BaseAgent PAOR 主路径
@@ -730,7 +730,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register sandbox_proxy: {e}")
 
-    # TDSF 魔改 P0-3: 前端可直调的 risk/confidence/decision JSON-RPC
+    # TDSF P0-3: 前端可直调的 risk/confidence/decision JSON-RPC
     # 原因: riskClient.ts / TDSFPanelSection / 风险评估面板都直接调
     #       "risk.evaluate" / "confidence.score" / "decision.list"
     # 旧版只有 invoke_*_tool 内部入口（graph/nodes.py tool_call_node 用），
@@ -837,7 +837,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register langfuse: {e}")
 
-    # T-P4-LOG-01: 后端日志独立通路（2026-07-28 TDSF 魔改）
+    # T-P4-LOG-01: 后端日志独立通路（2026-07-28 TDSF）
     # 提供 log.tail / .clear / .stats / .set_level / .levels
     # 专门为子审查 agent 配置: 不需要进入开发 agent 上下文就能看到所有后端日志
     # 实现: core/log_capture.py 把所有 logger 写入 5000 行 ringbuffer,
@@ -1022,7 +1022,7 @@ def main() -> None:
     logger.info("TDSF Python Sidecar starting...")
     logger.info(f"Python {sys.version.split()[0]} on {sys.platform}")
 
-    # 0. TDSF 魔改 (2026-07-28): 安装后端日志 ringbuffer handler
+    # 0. TDSF (2026-07-28): 安装后端日志 ringbuffer handler
     #    必须在任何业务模块 import 之前, 否则早期日志会丢失
     #    注入 rust_notifier 让新日志实时通过 sidecar:log event 推送到前端
     try:

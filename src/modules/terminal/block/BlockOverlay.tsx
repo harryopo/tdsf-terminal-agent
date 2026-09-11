@@ -49,7 +49,7 @@ type Props = {
   promptReady: boolean;
   onRunAgain: (command: string) => void;
   onRestoreFocus: () => void;
-  // TDSF 魔改 2026-08-28 (B1-G3): 失败块"AI 解释"（手动触发）。
+  // TDSF 2026-08-28 (B1-G3): 失败块"AI 解释"（手动触发）。
   // teachAgentEnabled=false 时调用方传 undefined → 按钮不渲染。
   onExplainError?: (block: PositionedBlock) => void;
 };

@@ -1,4 +1,4 @@
-// TDSF 魔改 2026-07-28: 轻量 ErrorBoundary, 防止单个组件抛错导致整页 rootChildren=0 空白.
+// TDSF 2026-07-28: 轻量 ErrorBoundary, 防止单个组件抛错导致整页 rootChildren=0 空白.
 // 用法: <ErrorBoundary fallback={<div>...</div>}><Component /></ErrorBoundary>
 import { Component, type ReactNode } from "react";
 

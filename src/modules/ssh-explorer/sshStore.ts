@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.1): SSH 远程资源管理器 Zustand store
+// TDSF (P4-T4.1): SSH 远程资源管理器 Zustand store
 // -----------------------------------------------------------------------------
 // 管理 SSH 会话列表 + 远程文件树状态 + 远程文件编辑器状态 + TOFU 主机审批
 //
@@ -204,7 +204,7 @@ interface SshExplorerState {
   /**
    * 每个会话已展开的目录子树缓存: sessionId -> { path -> entries }。
    *
-   * TDSF 魔改 2026-07-29: 让 SshFileTree 跟本地 FileExplorer 一样支持可展开
+   * TDSF 2026-07-29: 让 SshFileTree 跟本地 FileExplorer 一样支持可展开
    * 树形结构, 用户点开哪个目录就 lazy load 哪个目录的子条目, 不再只能
    * 用面包屑逐级 navigate。entriesBySession 只保留"当前 cwd"一份, 这里
    * 缓存所有已展开过的子树, 切换活跃目录/会话时不会重新拉取。
@@ -226,7 +226,7 @@ interface SshExplorerState {
   // === 连接对话框 ===
   connectDialogOpen: boolean;
 
-  // === TDSF 魔改: 已保存的连接 (永久密钥 + 自动登录) ===
+  // === TDSF: 已保存的连接 (永久密钥 + 自动登录) ===
   /** 已保存的连接列表 (按 lastUsed 倒序, 启动时加载) */
   savedConnections: SshCredentialProfile[];
   /** 是否正在加载已保存连接 */
@@ -269,7 +269,7 @@ interface SshExplorerState {
   /**
    * 切换目录的展开/折叠状态。
    *
-   * TDSF 魔改 2026-07-29: 第一次展开时触发 loadChildren lazy 加载该目录
+   * TDSF 2026-07-29: 第一次展开时触发 loadChildren lazy 加载该目录
    * 的子条目, 跟本地 FileExplorer 的 toggle 行为一致。
    * 已展开则折叠并保留缓存 (下次展开不再请求后端)。
    */
@@ -305,7 +305,7 @@ interface SshExplorerState {
   // 传输任务 actions
   removeTransferTask: (id: string) => void;
 
-  // === TDSF 魔改: 凭据持久化 actions ===
+  // === TDSF: 凭据持久化 actions ===
   /** 测试连接 (不保留会话) */
   testConnection: (params: SshConnectParams) => Promise<{ ok: boolean; message: string }>;
   /** 加载已保存的连接列表 (启动时调用) */
@@ -329,7 +329,7 @@ interface SshExplorerState {
   /** 写入会话的检测状态（badge 显隐驱动） */
   setRemoteCarapaceState: (sessionId: string, state: SshRemoteCarapaceState) => void;
 
-  // === TDSF 魔改: SSH 终端数据订阅 (修复黑屏) ===
+  // === TDSF: SSH 终端数据订阅 (修复黑屏) ===
   /**
    * 订阅指定会话的 PTY 输出字节流, 返回 unsubscribe 函数。
    *
@@ -352,7 +352,7 @@ function genId(): string {
   return `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// === TDSF 魔改: SSH 终端数据订阅 (修复黑屏卡顿) ==============================
+// === TDSF: SSH 终端数据订阅 (修复黑屏卡顿) ==============================
 //
 // 问题根因: 原 sshStore.connect 的 onData 是空函数, PTY 输出数据被直接丢弃,
 // 导致 SSH 连接成功后终端区域一片漆黑 (无任何输出)。
@@ -361,7 +361,7 @@ function genId(): string {
 // onData 改为 fan-out 转发到所有订阅者。SshTerminalPane 组件挂载时订阅,
 // 收到字节后写入 xterm 实例渲染。
 //
-// TDSF 魔改 2026-07-28: 新增"先到数据缓冲"机制
+// TDSF 2026-07-28: 新增"先到数据缓冲"机制
 //   - SshTerminalPane 组件挂载前 (Rust 端 SSH 握手 + 认证 + 开 PTY 完成后),
 //     onData 回调已经触发, 但前端组件还没准备好 (React 渲染前).
 //   - 旧实现: 数据直接丢失, xterm.write 永远不调用, 终端一片漆黑.
@@ -380,13 +380,13 @@ type TerminalSubscriber = (bytes: Uint8Array) => void;
 /** module-level 订阅者存储: sessionId -> Set<subscriber> */
 const terminalSubscribers = new Map<string, Set<TerminalSubscriber>>();
 
-/** TDSF 魔改: 先到数据缓冲, sessionId -> 累积的字节数组 (每片一片) */
+/** TDSF: 先到数据缓冲, sessionId -> 累积的字节数组 (每片一片) */
 const pendingBuffer = new Map<string, Uint8Array[]>();
 
-/** TDSF 魔改: 单会话缓冲上限, 防止挂死/不挂订阅时内存爆炸 */
+/** TDSF: 单会话缓冲上限, 防止挂死/不挂订阅时内存爆炸 */
 const BUFFER_LIMIT_BYTES = 256 * 1024;
 
-/** TDSF 魔改: 缓冲中当前会话已缓冲字节数, 用于快速判断是否超限 */
+/** TDSF: 缓冲中当前会话已缓冲字节数, 用于快速判断是否超限 */
 const bufferedSize = new Map<string, number>();
 
 /**
@@ -408,7 +408,7 @@ function subscribeTerminalData(
   }
   set.add(cb);
 
-  // TDSF 魔改: 挂载时立即 flush 缓冲区的先到数据, 修复"打开终端前 SSH 已就绪
+  // TDSF: 挂载时立即 flush 缓冲区的先到数据, 修复"打开终端前 SSH 已就绪
   // 导致前 N 个字节丢失"的经典竞态. 这里同步调用 cb 是 OK 的: 缓冲数据
   // 已经在内存里, 没必要再做 setTimeout(0) 异步化, 同步刷新更快更省。
   const buffered = pendingBuffer.get(sessionId);
@@ -452,7 +452,7 @@ function emitTerminalData(sessionId: string, bytes: Uint8Array): void {
     );
   }
   if (!set || set.size === 0) {
-    // TDSF 魔改: 没有订阅者时, 把数据先缓冲起来, 等订阅者挂载时 flush
+    // TDSF: 没有订阅者时, 把数据先缓冲起来, 等订阅者挂载时 flush
     // 修复黑屏: SSH 握手期间 (auth -> pty_open) 触发的首批数据不再丢失
     let buf = pendingBuffer.get(sessionId);
     let cur = bufferedSize.get(sessionId) ?? 0;
@@ -503,7 +503,7 @@ function emitTerminalData(sessionId: string, bytes: Uint8Array): void {
 /** 清理会话所有订阅者 (在 disconnect 时调用) */
 function clearTerminalSubscribers(sessionId: string): void {
   terminalSubscribers.delete(sessionId);
-  // TDSF 魔改: 同步清理缓冲, 避免断开会话后残余数据被新会话错误消费
+  // TDSF: 同步清理缓冲, 避免断开会话后残余数据被新会话错误消费
   pendingBuffer.delete(sessionId);
   bufferedSize.delete(sessionId);
   // TDSF 诊断: 清理首帧日志标记, 让重连的同 id 会话可再次记录
@@ -520,7 +520,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   currentPathBySession: {},
   entriesBySession: {},
   loadingBySession: {},
-  // TDSF 魔改 2026-07-29: 树形展开所需的子树缓存与加载状态
+  // TDSF 2026-07-29: 树形展开所需的子树缓存与加载状态
   childrenByPathBySession: {},
   loadingChildrenByPathBySession: {},
   expandedPathsBySession: {},
@@ -528,7 +528,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   editingFile: null,
   transferTasks: [],
   connectDialogOpen: false,
-  // TDSF 魔改: 凭据持久化初始状态
+  // TDSF: 凭据持久化初始状态
   savedConnections: [],
   savedConnectionsLoading: false,
   // TDSF 2026-08-28: 远端 carapace 检测状态初始（键不存在 = 未检测）
@@ -540,7 +540,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
 
   connect: async (params, opts) => {
     const sessionId = genId();
-    // TDSF 魔改 2026-08-18 (P1-9): 明文凭据不落 store——auth.password/
+    // TDSF 2026-08-18 (P1-9): 明文凭据不落 store——auth.password/
     // passphrase 是明文, 原实现连同完整 params 存入 zustand, 任何订阅者/
     // DevTools/__TDSF_DBG__ 均可读到密码。会话建立后下游只用 host/user/
     // port (auth 仅在 sshConnect 调用时使用一次), 此处剥离后再入库。
@@ -556,7 +556,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       id: sessionId,
       rustSessionId: null,
       params: safeParams,
-      // TDSF 魔改: 初始状态改为 connecting, 给 UI 立即 loading 反馈
+      // TDSF: 初始状态改为 connecting, 给 UI 立即 loading 反馈
       // 原为 idle 会让用户以为没点上, 也无法触发 SshExplorer 的 SessionStatusView spinner
       state: 'connecting',
       connectedAt: Date.now(),
@@ -572,7 +572,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     try {
       const handle = await sshConnect(params, {
         onData: (bytes: Uint8Array) => {
-          // TDSF 魔改: 转发 PTY 输出到所有订阅者 (SshTerminalPane 组件)
+          // TDSF: 转发 PTY 输出到所有订阅者 (SshTerminalPane 组件)
           // 修复黑屏: 原 onData 是空函数, 数据被丢弃, 现在通过订阅机制 fan-out 到 xterm
           emitTerminalData(sessionId, bytes);
         },
@@ -580,7 +580,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           get().updateSessionStatus(sessionId, event);
         },
         onExit: () => {
-          // TDSF 魔改: 远端 shell 退出时, 标记为 closed 并主动调用 handle.close()
+          // TDSF: 远端 shell 退出时, 标记为 closed 并主动调用 handle.close()
           // 触发 Rust 端 SshState.take() 清理 session + SFTP 缓存, 避免资源泄漏
           const sess = get().sessions.find((s) => s.id === sessionId);
           if (sess?.handle) {
@@ -607,7 +607,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         ),
       }));
 
-      // TDSF 魔改 2026-08-31: 连接后默认进入远端家目录 (而非硬编码 "/")。
+      // TDSF 2026-08-31: 连接后默认进入远端家目录 (而非硬编码 "/")。
       // 用户实测: 参考软件连接后资源管理器显示 /root (家目录), 本项目却进 /。
       // 解析方式: ssh_command exec 'echo $HOME' (exec 模式, 不污染 PTY)。
       // 失败 (超时/非零退出/空输出) 降级 "/" —— 连接已成功, 仅文件树起点降级,
@@ -673,7 +673,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
             : sess,
         ),
       }));
-      // TDSF 魔改: 弹 toast 让用户立即知晓失败原因 (而不只是在会话标签上显示 failed 状态)
+      // TDSF: 弹 toast 让用户立即知晓失败原因 (而不只是在会话标签上显示 failed 状态)
       // 配合 ssh-bridge 的 dev mode 检测和 15s 超时, 用户能清楚知道为什么连不上
       toast.error('SSH 连接失败', { description: msg });
       return null;
@@ -682,7 +682,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
 
   disconnect: async (sessionId) => {
     const session = get().sessions.find((s) => s.id === sessionId);
-    // TDSF 魔改 2026-08-18 (P1-7): 无 handle 的会话（连接失败/未完成）也
+    // TDSF 2026-08-18 (P1-7): 无 handle 的会话（连接失败/未完成）也
     // 能清理——原实现 `if (!session?.handle) return` 导致 failed 会话永久
     // 残留 sessions 数组, 用户无法通过断开按钮移除, 只能重启应用。
     if (!session) return;
@@ -694,7 +694,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         console.warn('[sshStore] disconnect failed:', e);
       }
     }
-    // TDSF 魔改: 清理终端数据订阅者, 避免已断开会话的回调泄漏
+    // TDSF: 清理终端数据订阅者, 避免已断开会话的回调泄漏
     clearTerminalSubscribers(sessionId);
     set((s) => ({
       sessions: s.sessions.filter((sess) => sess.id !== sessionId),
@@ -702,12 +702,12 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         s.activeSessionId === sessionId
           ? (s.sessions.find((x) => x.id !== sessionId)?.id ?? null)
           : s.activeSessionId,
-      // TDSF 魔改: 完整清理会话相关状态, 避免残留影响重连或新会话
+      // TDSF: 完整清理会话相关状态, 避免残留影响重连或新会话
       currentPathBySession: omitSessionKey(s.currentPathBySession, sessionId),
       entriesBySession: omitSessionKey(s.entriesBySession, sessionId),
       loadingBySession: omitSessionKey(s.loadingBySession, sessionId),
       expandedPathsBySession: omitSessionKey(s.expandedPathsBySession, sessionId),
-      // TDSF 魔改 2026-07-29: 树形展开所需的子树缓存也按会话清理
+      // TDSF 2026-07-29: 树形展开所需的子树缓存也按会话清理
       childrenByPathBySession: omitSessionKey(s.childrenByPathBySession, sessionId),
       loadingChildrenByPathBySession: omitSessionKey(s.loadingChildrenByPathBySession, sessionId),
       // TDSF 2026-08-28: 远端 carapace 检测状态也按会话清理
@@ -759,7 +759,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       const entries = await sftpList(session.rustSessionId, path);
       set((s) => ({
         entriesBySession: { ...s.entriesBySession, [sessionId]: entries },
-        // TDSF 魔改 2026-07-29: 同步把"当前 cwd"也写入子树缓存,
+        // TDSF 2026-07-29: 同步把"当前 cwd"也写入子树缓存,
         // 这样 SshFileTree 用统一的 childrenByPathBySession 渲染, 不再
         // 区分"当前目录 vs 已展开子目录", 跟本地 FileExplorer 行为一致.
         childrenByPathBySession: {
@@ -800,7 +800,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
    * 加载指定目录的子条目 (lazy, 树形展开时调用).
    *
    * 已缓存则直接复用, 避免重复请求后端。
-   * TDSF 魔改 2026-07-29: 与本地 useFileTree.fetchChildren 行为对齐。
+   * TDSF 2026-07-29: 与本地 useFileTree.fetchChildren 行为对齐。
    */
   loadChildren: async (sessionId, path) => {
     const session = get().sessions.find((s) => s.id === sessionId);
@@ -857,7 +857,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   /**
    * 切换目录展开/折叠。
    *
-   * TDSF 魔改 2026-07-29: 第一次展开时触发 loadChildren, 跟本地
+   * TDSF 2026-07-29: 第一次展开时触发 loadChildren, 跟本地
    * FileExplorer 的 toggle 行为一致。已展开则折叠 (保留缓存)。
    */
   toggleExpand: (sessionId, path) => {
@@ -1076,7 +1076,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     }));
   },
 
-  // === TDSF 魔改: 凭据持久化 actions ===
+  // === TDSF: 凭据持久化 actions ===
 
   /**
    * 测试连接 (不保留会话)
@@ -1240,7 +1240,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     get().setRemoteCarapaceState(sessionId, installed ? 'installed' : 'missing');
   },
 
-  // === TDSF 魔改: SSH 终端数据订阅 (修复黑屏) ===
+  // === TDSF: SSH 终端数据订阅 (修复黑屏) ===
   // 暴露 module-level subscribeTerminalData 给组件使用
   subscribeTerminalData: (sessionId, cb) => subscribeTerminalData(sessionId, cb),
 }));

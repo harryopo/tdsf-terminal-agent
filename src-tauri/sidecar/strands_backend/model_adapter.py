@@ -1,5 +1,5 @@
 """
-strands_backend/model_adapter.py — Strands Model 适配工厂（TDSF 魔改 P0-C5）
+strands_backend/model_adapter.py — Strands Model 适配工厂（TDSF P0-C5）
 ===================================================================================
 
 职责：
@@ -290,7 +290,7 @@ def _create_openai_model(config: Any) -> Any:
     client_args["max_retries"] = 2
 
     # 构建 params（OpenAI Chat Completions 接口参数）
-    # TDSF 魔改 (2026-08-09): max_tokens <= 0 时不传 → 模型自行决定停止（无上限）
+    # TDSF (2026-08-09): max_tokens <= 0 时不传 → 模型自行决定停止（无上限）
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
     }
@@ -349,7 +349,7 @@ def _create_anthropic_model(config: Any) -> Any:
     client_args["timeout"] = 300.0
     client_args["max_retries"] = 2
 
-    # TDSF 魔改 (2026-08-09): Anthropic max_tokens 是必填参数（必须正整数）
+    # TDSF (2026-08-09): Anthropic max_tokens 是必填参数（必须正整数）
     # max_tokens <= 0（无上限语义）时兜底为 8192
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
@@ -410,7 +410,7 @@ def _create_litellm_model(config: Any) -> Any:
     if config.base_url:
         client_args["api_base"] = config.base_url
 
-    # TDSF 魔改 (2026-08-09): max_tokens <= 0 时不传 → 无上限（同 OpenAI 路径）
+    # TDSF (2026-08-09): max_tokens <= 0 时不传 → 无上限（同 OpenAI 路径）
     params: dict[str, Any] = {
         "temperature": getattr(config, "temperature", 0.7),
     }

@@ -99,7 +99,7 @@ chromadb>=0.5.0
 asyncio-atexit>=1.0  # Python 3.13 异步清理
 
 # ----------------------------------------------------------------------------
-# Strands Agents SDK（TDSF 魔改 2026-07-30 P0-C3 修复）
+# Strands Agents SDK（TDSF 2026-07-30 P0-C3 修复）
 # -----------------------------------------------------------------------------
 # Apache-2.0 协议，AWS 开源 Agent 框架，由 strands_backend/ 适配层封装。
 # - 条件依赖：strands_backend/__init__.py try/except ImportError 优雅降级

@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): Skill 执行器
+// TDSF (P4-T4.4): Skill 执行器
 // -----------------------------------------------------------------------------
 // 通过 IPC 调用 Python sidecar 的 `skill.invoke` 方法执行 skill，
 // 失败时返回 `{success: false, output: error}`，不抛错。
@@ -80,7 +80,7 @@ export async function invokeSkill(
       };
     }
 
-    // TDSF 魔改 2026-07-28 (Outsider Review P0-1): 区分 executor 执行结果 vs 知识卡
+    // TDSF 2026-07-28 (Outsider Review P0-1): 区分 executor 执行结果 vs 知识卡
     // 之前实现只看 result.content / whenToUse, 导致有 executor 的 skill 在前端
     // 全部显示"执行完成（无输出内容）"——后端真跑通, 前端丢数据.
     // 修复: 通过 result.success / exit_code / output 字段判断是否 executor 执行.

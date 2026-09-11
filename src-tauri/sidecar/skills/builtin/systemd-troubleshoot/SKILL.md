@@ -5,14 +5,14 @@ version: 2.1.0
 author: TDSF
 tags: [systemd, service, journalctl, systemctl, linux, ops]
 allowed-tools: [ssh_command, get_terminal_output, read_remote_file, log_analyzer, suggest_command, knowledge_search]
-# TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
+# TDSF (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
 # systemctl list-units --state=failed = 排障第一命令: 一屏列出所有 failed 单元.
 executor:
   type: shell
   command: "systemctl list-units --type=service --state=failed"
   timeout: 5
   description: "列出所有 failed 状态的服务. 无输出行 + '0 loaded units listed' 说明当前没有失败服务."
-# TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 五步排障剧本
+# TDSF (T6 2026-08-31, spec add-agent-loop-closure): 五步排障剧本
 # —— skill_invoke 命中时注入 LLM 驱动工具序列，并同步任务清单跟踪完成度
 steps:
   - description: "查询服务当前状态与退出原因（systemctl status <svc> -l）"

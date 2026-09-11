@@ -22,9 +22,9 @@ type Props = {
   home: string | null;
   onCd: (path: string) => void;
   onWorkspaceChange: (env: WorkspaceEnv) => void;
-  /** TDSF 魔改 2026-08-28: 环境选择器 SSH 选项 → 打开新建 SSH 工作区对话框 */
+  /** TDSF 2026-08-28: 环境选择器 SSH 选项 → 打开新建 SSH 工作区对话框 */
   onWorkspaceSshClick?: () => void;
-  /** TDSF 魔改 2026-08-28: 环境切换进行中（pending 态） */
+  /** TDSF 2026-08-28: 环境切换进行中（pending 态） */
   workspaceSwitching?: boolean;
   /** 已配置模型/API key（composer 可用）——useAiBootstrap 派生（hasAnyKey || hasLocalModel），
    *  与 panelOpen 无关。true 时底部常驻完整 AI 控件（AiStatusBarControls）；false 时引导去设置配 key。 */
@@ -79,7 +79,7 @@ export function StatusBar({
           </Tooltip>
         ) : null}
       </div>
-      {/* TDSF 魔改 2026-09-02（用户钦定）: 模式选择器移到底部状态栏——
+      {/* TDSF 2026-09-02（用户钦定）: 模式选择器移到底部状态栏——
           AgentModeSwitcher（交互式四档抽屉）取代原只读 AgentStatusPill，
           紧邻 BackendPill(Strands)，对话区不再挂切换器保持干净。
           busy/循环进度反馈仍由顶栏 Header 的 AgentStatusPill 承载。 */}

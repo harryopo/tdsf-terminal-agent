@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): 前端 Skill 注册中心
+// TDSF (P4-T4.4): 前端 Skill 注册中心
 // -----------------------------------------------------------------------------
 // 职责:
 //   1. 维护 builtin skill 的硬编码元数据（IPC 降级时使用）
@@ -16,7 +16,7 @@
 //   - tags 含 "linux" / "selinux" / "nginx" / "systemd" → linux
 //   - 其余 → custom
 
-// TDSF 魔改: 引入 builtin SKILL.md 原文，让降级模式下也能预览 Skill 内容
+// TDSF: 引入 builtin SKILL.md 原文，让降级模式下也能预览 Skill 内容
 import { BUILTIN_CONTENT_MAP } from "./builtinContent";
 import type { SkillCategory, SkillDict, SkillMetadata } from "./types";
 
@@ -205,9 +205,9 @@ export function dictToMetadata(dict: SkillDict): SkillMetadata {
     version: dict.version,
     author: dict.author,
     tags: dict.tags,
-    // TDSF 魔改: 透传 body 字段作为 SKILL.md 原文，供 SkillContentDialog 预览
+    // TDSF: 透传 body 字段作为 SKILL.md 原文，供 SkillContentDialog 预览
     rawContent: dict.body ?? "",
-    // TDSF 魔改: 透传 file_path，供 SkillCard / SkillContentDialog 的"打开目录"按钮调用
+    // TDSF: 透传 file_path，供 SkillCard / SkillContentDialog 的"打开目录"按钮调用
     filePath: dict.file_path ?? null,
   };
 }
@@ -216,7 +216,7 @@ export function dictToMetadata(dict: SkillDict): SkillMetadata {
  * 获取 builtin skill 硬编码元数据（IPC 降级用）
  *
  * 返回副本，避免外部修改内部状态。
- * TDSF 魔改: 同时从 BUILTIN_CONTENT_MAP 填充 rawContent 字段，让
+ * TDSF: 同时从 BUILTIN_CONTENT_MAP 填充 rawContent 字段，让
  * SkillContentDialog 在 Python sidecar 不可用时也能预览 SKILL.md 完整内容。
  *
  * @returns builtin skill 的元数据列表
@@ -225,7 +225,7 @@ export function getBuiltinSkills(): SkillMetadata[] {
   return BUILTIN_SKILLS.map((s) => ({
     ...s,
     examples: [...s.examples],
-    // TDSF 魔改: 填充 SKILL.md 原文，确保降级模式下 SkillContentDialog 也能渲染内容
+    // TDSF: 填充 SKILL.md 原文，确保降级模式下 SkillContentDialog 也能渲染内容
     rawContent: BUILTIN_CONTENT_MAP[s.name] ?? "",
   }));
 }

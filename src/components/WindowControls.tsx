@@ -21,7 +21,7 @@ export function WindowControls({ closeOnly = false }: Props) {
 
   useEffect(() => {
     if (!USE_CUSTOM_WINDOW_CONTROLS || closeOnly) return;
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 isMaximized / onResized
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 isMaximized / onResized
     if (!isTauriRuntime()) return;
     const w = getCurrentWindow();
     let unlisten: (() => void) | undefined;
@@ -38,7 +38,7 @@ export function WindowControls({ closeOnly = false }: Props) {
 
   if (!USE_CUSTOM_WINDOW_CONTROLS) return null;
 
-  // TDSF 魔改: dev 模式占位 (按钮渲染但 click noop, 避免 getCurrentWindow 在 onClick 时抛错)
+  // TDSF: dev 模式占位 (按钮渲染但 click noop, 避免 getCurrentWindow 在 onClick 时抛错)
   const tauriOk = isTauriRuntime();
   const w = tauriOk ? getCurrentWindow() : null;
   const noop = () => {

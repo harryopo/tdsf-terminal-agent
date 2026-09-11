@@ -1,4 +1,4 @@
-// TDSF 魔改: AgentPanel — 对齐原自研项目视觉风格（mood 表情 + 4 Agent Tab + tokens）
+// TDSF: AgentPanel — 对齐原自研项目视觉风格（mood 表情 + 4 Agent Tab + tokens）
 // -----------------------------------------------------------------------------
 // 设计参考: tdsf-terminal-agent/src/components/AgentPanel.tsx
 // 适配策略:
@@ -17,7 +17,7 @@
 //   - LoadingShell: sessionId 为 null 时的加载占位
 // 这样 chat 类型严格非空，与 AiMiniWindow.Body 完全一致。
 //
-// TDSF 魔改 P1-1: 浮动窗口支持拖动 + 高度调整
+// TDSF P1-1: 浮动窗口支持拖动 + 高度调整
 //   - 通过 mousedown/mousemove/mouseup 实现拖动（Header 区域可拖）
 //   - 通过右下角 resize handle 实现高度调整
 //   - 位置和大小持久化到 localStorage
@@ -41,14 +41,14 @@ import { useSpaces } from "@/modules/spaces";
 import { AiChatView } from "./AiChat";
 import { TodoStrip } from "./TodoStrip";
 import { WorkspaceGate } from "./WorkspaceGate";
-// TDSF 魔改 (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
+// TDSF (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
   parseSkillCommand,
   useSkillsStore,
 } from "@/modules/skills";
 
 // === 浮动窗口位置/大小持久化 ================================================
-// TDSF 魔改 P1-1: 拖动 + 高度调整后的位置和大小持久化到 localStorage，
+// TDSF P1-1: 拖动 + 高度调整后的位置和大小持久化到 localStorage，
 // 下次打开时恢复。默认靠右下角，宽度 420px，高度 540px。
 const PANEL_STORAGE_KEY = "tdsf-agent-panel-geometry";
 const DEFAULT_GEOMETRY = {
@@ -117,7 +117,7 @@ export function TdsfAgentPanel({ state }: TdsfAgentPanelProps) {
   const closeMini = useChatStore((s) => s.closeMini);
   const sessionId = useChatStore((s) => s.activeSessionId);
 
-  // === TDSF 魔改 P1-1: 拖动 + resize 状态 ===
+  // === TDSF P1-1: 拖动 + resize 状态 ===
   const [geometry, setGeometry] = useState(loadGeometry);
   const [dragging, setDragging] = useState(false);
   // 2026-07-28 P-E: 改为多向 resize 模式，支持底部/右侧/右下角 3 个 handle
@@ -140,7 +140,7 @@ export function TdsfAgentPanel({ state }: TdsfAgentPanelProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [closeMini]);
 
-  // === TDSF 魔改 P1-1: 拖动 Header 移动浮动窗口 ===
+  // === TDSF P1-1: 拖动 Header 移动浮动窗口 ===
   const handleHeaderMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       // 仅左键 + 非按钮区域才触发拖动
@@ -324,7 +324,7 @@ function Body({
   const agentMetaStatus = useChatStore((s) => s.agentMeta.status);
   const isAgentBusy = agentMetaStatus === "thinking" || agentMetaStatus === "streaming";
   const modeMeta = AGENT_MODE_META[agentMode];
-  // TDSF 魔改 (P4-T4.4): Skill 调用入口 — /skill:<name> <args>
+  // TDSF (P4-T4.4): Skill 调用入口 — /skill:<name> <args>
   const invokeSkill = useSkillsStore((s) => s.invoke);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -353,7 +353,7 @@ function Body({
     if (activeSpaceId) syncSessionToWorkspace();
   }, [activeSpaceId, syncSessionToWorkspace]);
 
-  // TDSF 魔改 (2026-08-09): 终端执行模式开关状态
+  // TDSF (2026-08-09): 终端执行模式开关状态
   const autoExec = useChatStore((s) => s.autoExecuteInTerminal);
   const setAutoExec = useChatStore((s) => s.setAutoExecuteInTerminal);
   // 消息更新时自动滚动到底部
@@ -373,7 +373,7 @@ function Body({
   // 优先走 sendMessage（chatRuntime.ts → transport.ts → runSidecarStream）
   // 若 sendMessage 返回 false（如缺 API key），降级到 focusInput 让用户在主输入框发送
   //
-  // TDSF 魔改 (P4-T4.4): 若输入以 `/skill:<name> <args>` 开头，则走 Skill 调用
+  // TDSF (P4-T4.4): 若输入以 `/skill:<name> <args>` 开头，则走 Skill 调用
   // 路径（useSkillsStore.invoke → executor.invokeSkill → IPC skill.invoke），
   // 不经过 LLM。成功/失败都用 toast 提示（2026-08-15: SkillInvoker 手动调用
   // 弹窗已移除，Agent 在允许时自动调用 skill）。
@@ -494,7 +494,7 @@ function Body({
       {/* ===== 信任模式指示（v3.1 改造，只读）
           - 旧版是只读 pill：显示 main_agent 当前路由到的子 Agent
           - v3.1：显示当前信任模式（观察/确认/自动）+ 教学皮肤标记。
-          TDSF 魔改 2026-09-02（用户钦定）: 交互式 AgentModeSwitcher 已统一
+          TDSF 2026-09-02（用户钦定）: 交互式 AgentModeSwitcher 已统一
           移到底部状态栏（StatusBar），本面板（已弃用）仅保留只读模式指示。 === */}
       <div
         className="flex shrink-0 items-center gap-1.5 border-b border-border/60 bg-muted/30 px-2 py-1"
@@ -623,7 +623,7 @@ function Body({
             命令
           </span>
           <div className="flex-1" />
-          {/* TDSF 魔改 (2026-08-09): 终端执行模式开关 */}
+          {/* TDSF (2026-08-09): 终端执行模式开关 */}
           <button
             type="button"
             onClick={() => setAutoExec(!autoExec)}

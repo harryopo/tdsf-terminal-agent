@@ -26,7 +26,7 @@ import { type RefObject, useEffect, useRef } from "react";
 import type { Live, EnvironmentProbe } from "../store/chatStore";
 import { useChatStore } from "../store/chatStore";
 import { redactSensitive } from "./redact";
-// TDSF 魔改 2026-08-28 (B1-G2 防伪造): 拦截命令注入 AI 上下文
+// TDSF 2026-08-28 (B1-G2 防伪造): 拦截命令注入 AI 上下文
 import {
   armAgentCommandEcho,
   clearAgentCommandEcho,
@@ -99,7 +99,7 @@ type Params = {
   ) => { tabId: number; leafId: number };
   terminalRefs: RefObject<Map<number, TerminalPaneHandle>>;
   /**
-   * TDSF 魔改 (2026-08-09): 获取 SSH 终端的 leafId。
+   * TDSF (2026-08-09): 获取 SSH 终端的 leafId。
    * 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree（PaneTreeView 渲染），
    * leafId 由 App 层从 active tab + active leaf 派生（会话 connected 才有效）。
    * getTerminalContext 用它回退读取 SSH 终端的 scrollback。
@@ -122,7 +122,7 @@ export function useAiLiveBridge(params: Params) {
   ref.current = params;
 
   useEffect(() => {
-    // TDSF 魔改 (2026-08-09): 保存 injectIntoActivePty 引用，供 inject_terminal 事件监听器调用
+    // TDSF (2026-08-09): 保存 injectIntoActivePty 引用，供 inject_terminal 事件监听器调用
     let injectFn: (text: string) => boolean = () => false;
 
     // TDSF B1 (2026-08-29): SSH Rust session_id 查询提为局部函数，
@@ -199,7 +199,7 @@ export function useAiLiveBridge(params: Params) {
 
     const findCwd = () => {
       const { activeId, tabs, explorerRoot, launchCwd, home } = ref.current;
-      // TDSF 魔改 (2026-08-09): SSH 终端优先——
+      // TDSF (2026-08-09): SSH 终端优先——
       // SSH 场景下 activeId 对应的 tab 是 cold + SSH 接管，
       // 但 findLeafCwd 会读到本地终端的 cwd（如 C:\Users\Lenovo）。
       // 优先从 sshStore 读 SSH 远端 cwd，避免 agent 收到错误的本地路径。
@@ -255,7 +255,7 @@ export function useAiLiveBridge(params: Params) {
         : null;
     };
 
-    // TDSF 魔改 (2026-08-09): 整段注入核心逻辑（inject_terminal 事件与
+    // TDSF (2026-08-09): 整段注入核心逻辑（inject_terminal 事件与
     // injectIntoActivePty 共用；B2 起也作为打字机失败时的回落路径）。
     const injectFnCore = (t: string): boolean => {
       const sshLeafId = ref.current.getSshLeafId?.();
@@ -286,11 +286,11 @@ export function useAiLiveBridge(params: Params) {
       getCwd: findCwd,
       getTerminalContext: (maxLines = 300) => {
         const requestedLines = Math.max(1, Math.min(Math.trunc(maxLines), 2000));
-        // TDSF 魔改 (2026-08-09): SSH 终端优先——
+        // TDSF (2026-08-09): SSH 终端优先——
         // 2026-08-11 (#21): SSH leaf 已进入 tab.paneTree，active tab 的 activeLeafId
         // 就是当前 pane；getSshLeafId 返回其 leafId（会话 connected 时）。
         // 优先读 SSH 终端的 scrollback，无内容时回退本地终端。
-        // TDSF 魔改 2026-08-28 (B1-G2 防伪造): 尾部追加"最近被拦截命令"提示，
+        // TDSF 2026-08-28 (B1-G2 防伪造): 尾部追加"最近被拦截命令"提示，
         // 让 LLM 知道该命令未执行，防止编造执行结果（见 useTerminalSession）。
         const appendBlockedHint = (ctx: string): string => {
           const blocked = getRecentBlockedCommandText();
@@ -325,7 +325,7 @@ export function useAiLiveBridge(params: Params) {
         return t?.kind === "terminal" && t.private === true;
       },
       injectIntoActivePty: (text) => {
-        // TDSF 魔改 (2026-08-09): 提取核心注入逻辑为共享函数，
+        // TDSF (2026-08-09): 提取核心注入逻辑为共享函数，
         // 同时供 inject_terminal 事件监听器复用。
         // TDSF B2 (2026-08-29): 逐字模式优先分流（tryHumanTyping），不适用或
         // 调用失败时回落整段注入（injectFnCore，原路径零改动）。
@@ -419,7 +419,7 @@ export function useAiLiveBridge(params: Params) {
         const buf = terminalRefs.current.get(leafId)?.getBuffer(300);
         return buf ? redactSensitive(buf) : null;
       },
-      // TDSF 魔改 2026-07-30: 暴露活跃 SSH 会话的 Rust session_id (u32)，
+      // TDSF 2026-07-30: 暴露活跃 SSH 会话的 Rust session_id (u32)，
       // 供 Strands 运维工具通过 RustBridge 调 ssh_command / sftp_* 命令。
       // 取值逻辑与 useDocument.ts:getRustSessionId 一致：
       //   - 实时查询 sshStore（不缓存，SSH 重连后 rustSessionId 会变）
@@ -489,7 +489,7 @@ export function useAiLiveBridge(params: Params) {
       getWslDistro: () => ref.current.wslDistro,
     });
 
-    // TDSF 魔改 (2026-08-09): 监听 sidecar inject_terminal notification
+    // TDSF (2026-08-09): 监听 sidecar inject_terminal notification
     // 当 ssh_command(visible=True) 时，Python sidecar 发 notification → Rust 转发为
     // sidecar:inject_terminal 事件 → 这里监听并注入到前端终端（用户可见）
     const pendingVisibleExecutions = new Map<
@@ -783,7 +783,7 @@ export function useAiLiveBridge(params: Params) {
       console.warn("[tdsf] inject_terminal listen failed:", e);
     });
 
-    // TDSF 魔改 (2026-08-09): 监听 sidecar update_todos notification
+    // TDSF (2026-08-09): 监听 sidecar update_todos notification
     // Python todo_write 工具 → rust_bridge notification → Rust 转发 → 这里更新 TodoStore
     let unlistenTodos: (() => void) | null = null;
     (async () => {
@@ -808,7 +808,7 @@ export function useAiLiveBridge(params: Params) {
       console.warn("[tdsf] update_todos listen failed:", e);
     });
 
-    // TDSF 魔改 2026-08-28 (B1-F0): 响应 sidecar 的终端 scrollback 请求
+    // TDSF 2026-08-28 (B1-F0): 响应 sidecar 的终端 scrollback 请求
     // Python get_terminal_output 工具 → rust_bridge.ipc_invoke("get_terminal_scrollback")
     // → Rust emit 本事件 → 这里读 getTerminalContext()（redact+SSH 优先+private 检查）
     // → invoke("sidecar_scrollback_response") 回传 → Rust oneshot resolve → Python。

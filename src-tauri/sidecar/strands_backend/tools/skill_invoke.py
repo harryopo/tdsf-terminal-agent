@@ -307,7 +307,7 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             "steps": result.get("steps", []),
             "examples": result.get("examples", []),
             "params_schema": result.get("params", {}),
-            # TDSF 魔改 (T1 2026-08-28): 贯通 tags / triggers / allowed-tools
+            # TDSF (T1 2026-08-28): 贯通 tags / triggers / allowed-tools
             # allowed_tools 语义：该技能建议配合使用的工具白名单（空 = 不限制）
             "tags": result.get("tags", []),
             "triggers": result.get("triggers", []),

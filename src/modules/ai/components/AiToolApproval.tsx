@@ -18,7 +18,7 @@ type Props = {
   part: Extract<ToolUIPart, { state: "approval-requested" }>;
   toolName: string;
   onRespond: (approved: boolean) => void;
-  /** TDSF 魔改 (2026-08-09): 方案书 HITL 四决策 — 可选的高级回调 */
+  /** TDSF (2026-08-09): 方案书 HITL 四决策 — 可选的高级回调 */
   onAdvancedRespond?: (decision: "approve" | "deny" | "edit" | "respond" | "trust", payload?: unknown) => void;
 };
 
@@ -68,7 +68,7 @@ function AiToolApprovalImpl({ part, toolName, onRespond, onAdvancedRespond }: Pr
           <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
           Deny
         </Button>
-        {/* TDSF 魔改 (2026-08-09): 方案书 HITL 四决策 — Edit / Respond / Trust */}
+        {/* TDSF (2026-08-09): 方案书 HITL 四决策 — Edit / Respond / Trust */}
         {onAdvancedRespond && (
           <>
             <Button

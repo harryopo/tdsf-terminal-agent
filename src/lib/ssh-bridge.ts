@@ -378,7 +378,7 @@ export function subscribeHostApproval(
   };
 }
 
-// === TDSF 魔改: 主机验证事件订阅（TOFU / 密钥变更） =============================
+// === TDSF: 主机验证事件订阅（TOFU / 密钥变更） =============================
 //
 // Rust handler.rs 在 check_server_key 时按场景推送两个事件（payload 为 snake_case）:
 //   - "ssh:host_verify":       首次连接未知主机 (is_mismatch=false)
@@ -444,7 +444,7 @@ export function subscribeHostKeyMismatch(
   return subscribeHostEvent('ssh:host_key_mismatch', callback);
 }
 
-// === TDSF 魔改: SSH 测试连接（不保留会话） =====================================
+// === TDSF: SSH 测试连接（不保留会话） =====================================
 
 /** ssh_test 命令返回值（与 Rust SshTestResult 对齐，camelCase） */
 export interface SshTestResult {
@@ -471,7 +471,7 @@ export async function sshTest(params: SshConnectParams): Promise<SshTestResult> 
   });
 }
 
-// === TDSF 魔改 P0-D: SSH exec 命令执行（运维 Agent 用） ========================
+// === TDSF P0-D: SSH exec 命令执行（运维 Agent 用） ========================
 //
 // 设计（与 src-tauri/src/modules/ssh/mod.rs:SshCommandResult 对齐, camelCase）:
 //   - 复用现有 SSH 会话的 Handle 开新 channel
@@ -519,7 +519,7 @@ export async function sshCommand(
   });
 }
 
-// === TDSF 魔改: SSH 凭据持久化（永久保存密钥 + 自动登录） =======================
+// === TDSF: SSH 凭据持久化（永久保存密钥 + 自动登录） =======================
 //
 // 设计（与 src-tauri/src/modules/ssh/credentials.rs 对齐）:
 //   - 非敏感元数据 → ssh_credentials_* 命令，存 <app_local_data_dir>/ssh-credentials.json

@@ -1,4 +1,4 @@
-// TDSF 魔改 (P5 浏览器降级): Tauri runtime mock stub for dev 模式
+// TDSF (P5 浏览器降级): Tauri runtime mock stub for dev 模式
 // -----------------------------------------------------------------------------
 // 在 pnpm dev (纯 Vite 浏览器) 模式下, 没有真实的 Tauri 运行时, 所有
 // `@tauri-apps/api` 的 invoke / listen / getCurrentWindow 等调用都会因为
@@ -28,7 +28,7 @@ declare global {
       unregisterCallback: (id: number) => void;
       [key: string]: unknown;
     };
-    // TDSF 魔改 2026-07-28: Tauri 2.x event plugin 新增的 internals 接口,
+    // TDSF 2026-07-28: Tauri 2.x event plugin 新增的 internals 接口,
     // _unlisten 内部调用 __TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener,
     // mock 模式下未注入会抛 "Cannot read properties of undefined (reading 'unregisterListener')".
     // 修饰符必须与 Tauri 自身 event.d.ts 保持一致 (required, 不带 ?), 否则 TS2687 冲突.
@@ -89,7 +89,7 @@ if (isDevBrowser) {
       if (cmd.endsWith("entries") || cmd.endsWith("get_store_entries")) {
         return Promise.resolve([] as unknown as T);
       }
-      // TDSF 魔改 2026-07-28: plugin:store|get 必须返回 [value, exists] 二元组,
+      // TDSF 2026-07-28: plugin:store|get 必须返回 [value, exists] 二元组,
       // 上游解构 const [value, exists] = await invoke(...). 返回 undefined 会抛
       // "(intermediate value) is not iterable". 修复: 返回 [undefined, false].
       if (
@@ -120,7 +120,7 @@ if (isDevBrowser) {
       return Promise.resolve(undefined as unknown as T);
     if (cmd.startsWith("plugin:pty|"))
       return Promise.resolve(undefined as unknown as T);
-    // TDSF 魔改 2026-07-28: plugin:event|listen 期望返回 [eventId, unregisterFn] 二元组.
+    // TDSF 2026-07-28: plugin:event|listen 期望返回 [eventId, unregisterFn] 二元组.
     // mock 返回 undefined 会抛 "unregisterListener of undefined" 错误.
     // 修复: 返回 [0, () => {}] - Tauri 内部用 unregisterListener(eventId).
     if (cmd.startsWith("plugin:event|")) {
@@ -144,7 +144,7 @@ if (isDevBrowser) {
     if (cmd.startsWith("plugin:os|"))
       return Promise.resolve(undefined as unknown as T);
 
-    // === TDSF 魔改 2026-07-28: launchDir 相关命令返回空, 防止 .map 抛错 ===
+    // === TDSF 2026-07-28: launchDir 相关命令返回空, 防止 .map 抛错 ===
     if (cmd === "get_launch_dir" || cmd === "workspace_current_dir") {
       return Promise.resolve(null as unknown as T);
     }
@@ -152,7 +152,7 @@ if (isDevBrowser) {
       return Promise.resolve([] as unknown as T);
     }
 
-    // === TDSF 魔改 2026-07-28: SSH 业务命令 mock 返回, 避免 dev 模式下崩 ===
+    // === TDSF 2026-07-28: SSH 业务命令 mock 返回, 避免 dev 模式下崩 ===
     // ssh_test: 模拟 "测试失败", 让用户知道需要 Tauri 桌面运行时才能真连
     if (cmd === "ssh_test") {
       return Promise.resolve({
@@ -215,7 +215,7 @@ if (isDevBrowser) {
     unregisterListener: unregisterCallback,
   };
 
-  // TDSF 魔改 2026-07-28: Tauri 2.x event plugin 的 internals 接口
+  // TDSF 2026-07-28: Tauri 2.x event plugin 的 internals 接口
   // _unlisten(event, eventId) 内部调用此接口清理 callback,
   // mock 模式下未注入会抛 "Cannot read properties of undefined (reading 'unregisterListener')"
   // biome-ignore lint/suspicious/noExplicitAny: Tauri event plugin internals are untyped; any is required to attach the mock.

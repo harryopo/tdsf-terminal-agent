@@ -21,7 +21,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 
 const ICON_BY_PROVIDER = {
-  // TDSF 魔改 2026-08-28: 国产 provider 图标（hugeicons 无专属品牌图标，
+  // TDSF 2026-08-28: 国产 provider 图标（hugeicons 无专属品牌图标，
   // 用语义近似图标代替：阿里=云 AI、智谱=星火 GLM、Kimi=月之暗面、豆包=火山）
   deepseek: DeepseekIcon,
   qwen: AiCloud01Icon,

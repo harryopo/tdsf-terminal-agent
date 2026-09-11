@@ -147,7 +147,7 @@ describe("swapLeafInDirection", () => {
   });
 });
 
-// TDSF 魔改 (2026-08-11 #21): 本地 + SSH 混合分屏数据模型测试
+// TDSF (2026-08-11 #21): 本地 + SSH 混合分屏数据模型测试
 describe("splitLeaf SSH binding", () => {
   it("writes the SSH session id onto the new leaf when provided", () => {
     const tree: PaneNode = { kind: "leaf", id: 1 };

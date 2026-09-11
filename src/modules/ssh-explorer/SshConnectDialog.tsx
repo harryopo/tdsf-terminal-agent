@@ -1,9 +1,9 @@
-// TDSF 魔改 (P4-T4.1): SSH 连接对话框
+// TDSF (P4-T4.1): SSH 连接对话框
 // -----------------------------------------------------------------------------
 // 表单字段: host / port / user / 认证方式 (password | publickey) / 私钥路径 / 口令
 // 提交时调用 useSshStore.connect(params)
 //
-// TDSF 魔改 (永久保存密钥 + 自动登录):
+// TDSF (永久保存密钥 + 自动登录):
 //   - 顶部展示已保存的连接列表 (savedConnections), 一键点击自动登录
 //   - "测试连接"按钮调用 store.testConnection (走 Rust ssh_test, 不保留会话)
 //   - "永久保存密钥"勾选框: 测试成功后调用 store.saveConnection 写 keyring + JSON
@@ -72,7 +72,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
   const saveConnection = useSshStore((s) => s.saveConnection);
   const deleteSavedConnection = useSshStore((s) => s.deleteSavedConnection);
   const connectWithSaved = useSshStore((s) => s.connectWithSaved);
-  // TDSF 魔改 2026-07-28: 给 savedConnections 加默认值, 防止 mock 模式下
+  // TDSF 2026-07-28: 给 savedConnections 加默认值, 防止 mock 模式下
   // (浏览器 + 无 Tauri runtime) store 异步 hydrate 之前访问 .length 抛错.
   const savedConnections = useSshStore((s) => s.savedConnections) ?? [];
 
@@ -86,12 +86,12 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
   const [passphrase, setPassphrase] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // TDSF 魔改: 测试连接 + 永久保存密钥选项
+  // TDSF: 测试连接 + 永久保存密钥选项
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
   const [testMessage, setTestMessage] = useState<string>("");
   const [saveKey, setSaveKey] = useState(true); // 默认勾选永久保存
-  // TDSF 魔改: 已保存连接 - 一键自动登录中的 profile id
+  // TDSF: 已保存连接 - 一键自动登录中的 profile id
   const [autoConnectingId, setAutoConnectingId] = useState<string | null>(null);
 
   // 关闭时重置表单
@@ -106,7 +106,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
     }
   }, [open]);
 
-  /** TDSF 魔改: 测试连接 — 仅验证参数可达，不保持连接 */
+  /** TDSF: 测试连接 — 仅验证参数可达，不保持连接 */
   const handleTestConnection = async () => {
     if (!host.trim() || !user.trim()) {
       setTestResult("fail");
@@ -224,7 +224,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      // TDSF 魔改: 如果勾选了永久保存, 先保存凭据
+      // TDSF: 如果勾选了永久保存, 先保存凭据
       if (saveKey) {
         const profile: SshCredentialProfile = {
           id: makeProfileId(host.trim(), portNum, user.trim()),
@@ -303,7 +303,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="grid gap-4">
-          {/* TDSF 魔改: 已保存的连接列表 (一键自动登录) */}
+          {/* TDSF: 已保存的连接列表 (一键自动登录) */}
           {savedConnections.length > 0 && (
             <div className="grid gap-1.5">
               <Label className="text-[11px] text-muted-foreground">
@@ -488,7 +488,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
             </div>
           )}
 
-          {/* TDSF 魔改: 测试连接结果提示 (成功不显示 message 防长文本溢出) */}
+          {/* TDSF: 测试连接结果提示 (成功不显示 message 防长文本溢出) */}
           {testResult === "ok" && (
             <div className="max-h-28 overflow-y-auto break-words whitespace-normal rounded-md bg-primary/10 px-3 py-2 text-xs text-foreground">
               ✓ 连接成功
@@ -500,7 +500,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
             </div>
           )}
 
-          {/* TDSF 魔改: 永久保存密钥选项 */}
+          {/* TDSF: 永久保存密钥选项 */}
           <label className="flex items-center gap-2 text-[12px] text-muted-foreground cursor-pointer select-none">
             <input
               type="checkbox"
@@ -541,7 +541,7 @@ export function SshConnectDialog({ open, onOpenChange }: Props) {
               type="submit"
               disabled={submitting || !host.trim() || !user.trim()}
             >
-              {/* TDSF 魔改: 连接中显示 spinner, 给用户即时视觉反馈 (修复原版卡死时无反馈的问题) */}
+              {/* TDSF: 连接中显示 spinner, 给用户即时视觉反馈 (修复原版卡死时无反馈的问题) */}
               {submitting && (
                 <HugeiconsIcon
                   icon={Loading03Icon}

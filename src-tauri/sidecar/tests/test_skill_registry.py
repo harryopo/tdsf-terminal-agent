@@ -59,7 +59,7 @@ def builtin_registry() -> SkillRegistry:
 @pytest.fixture
 def full_registry() -> SkillRegistry:
     """已加载 7 内置 Skill 的 Registry
-    TDSF 魔改 (2026-07-28): 65 mock skill 已禁用, full_registry 仅含 7 builtin
+    TDSF (2026-07-28): 65 mock skill 已禁用, full_registry 仅含 7 builtin
     T1 (2026-08-28): 新增 systemd-troubleshoot / samba-setup, builtin 数 5 → 7
     """
     registry: SkillRegistry = SkillRegistry()
@@ -199,7 +199,7 @@ class TestInvokeSkill:
     def test_invoke_builtin_skill(self, builtin_registry: SkillRegistry):
         """调用内置 Skill 返回完整内容
 
-        TDSF 魔改 (2026-07-28 P0-2): SKILL.md 加 executor 字段后,
+        TDSF (2026-07-28 P0-2): SKILL.md 加 executor 字段后,
         invoke 返回执行结果 (duration_ms/executor/exit_code/name/source)
         而非纯内容 (content/when_to_use/steps). 测试适配两种返回结构.
         """
@@ -223,9 +223,9 @@ class TestInvokeSkill:
             assert "风险评估" in result["steps"]
 
     def test_invoke_mock_skill(self, full_registry: SkillRegistry):
-        """调用 builtin Skill (TDSF 魔改: mock 已禁用, 改用 builtin 验证)"""
+        """调用 builtin Skill (TDSF: mock 已禁用, 改用 builtin 验证)"""
         # 原行为: 调用 mock 的 rust-debug, 验证 source="mock"
-        # TDSF 魔改 (2026-07-28): 改用 builtin skill 验证 invoke 行为
+        # TDSF (2026-07-28): 改用 builtin skill 验证 invoke 行为
         result: dict = full_registry.invoke("linux-ops", {})
         assert result["name"] == "linux-ops"
         assert result["source"] == "builtin"
@@ -365,18 +365,18 @@ class Test70PlusSkills:
     """70+ Skill 集成测试"""
 
     def test_total_70_skills(self, full_registry: SkillRegistry):
-        """7 内置 (TDSF 魔改: mock 已禁用, 只剩 builtin)"""
+        """7 内置 (TDSF: mock 已禁用, 只剩 builtin)"""
         # 原行为: 5 内置 + 65 mock = 70 Skill
-        # TDSF 魔改 (2026-07-28): 清理 65 mock skill, 只保留 builtin
+        # TDSF (2026-07-28): 清理 65 mock skill, 只保留 builtin
         # T1 (2026-08-28): builtin 5 → 7
         assert full_registry.count() >= 7
 
     def test_total_skills_above_70(self):
-        """全局 registry 加载后总数 ≥ 7 (TDSF 魔改: mock 已禁用)"""
+        """全局 registry 加载后总数 ≥ 7 (TDSF: mock 已禁用)"""
         reset_global_registry()
         registry: SkillRegistry = get_global_registry()
         # 原行为: >= 70 (含 65 mock)
-        # TDSF 魔改 (2026-07-28): 只剩 builtin skill; T1 后 7 个
+        # TDSF (2026-07-28): 只剩 builtin skill; T1 后 7 个
         # 注: 用户自定义目录 ~/.tdsf/skills 存在时可能更多, 故用 >=
         assert registry.count() >= 7
         reset_global_registry()
@@ -395,10 +395,10 @@ class Test70PlusSkills:
             assert full_registry.exists(name), f"missing builtin: {name}"
 
     def test_65_mock_in_full_registry(self, full_registry: SkillRegistry):
-        """full_registry 含 7 builtin (TDSF 魔改: mock 已禁用)
+        """full_registry 含 7 builtin (TDSF: mock 已禁用)
 
         原行为: 抽样验证 4 个 mock skill (rust-debug/react-hooks/k8s-deploy/postgres-tuning)
-        TDSF 魔改 (2026-07-28): 65 mock skill 已清理, 改验证 builtin
+        TDSF (2026-07-28): 65 mock skill 已清理, 改验证 builtin
         """
         for name in [
             "docker-management",
@@ -412,9 +412,9 @@ class Test70PlusSkills:
             assert full_registry.exists(name), f"missing builtin: {name}"
 
     def test_to_json(self, full_registry: SkillRegistry):
-        """to_json 返回所有 Skill 的 JSON 兼容列表 (TDSF 魔改: 仅 builtin)"""
+        """to_json 返回所有 Skill 的 JSON 兼容列表 (TDSF: 仅 builtin)"""
         data: list[dict] = full_registry.to_json()
-        # TDSF 魔改 (2026-07-28): 65 mock 已禁用, 只剩 builtin; T1 后 7 个
+        # TDSF (2026-07-28): 65 mock 已禁用, 只剩 builtin; T1 后 7 个
         assert len(data) == full_registry.count()
         assert all(isinstance(d, dict) for d in data)
         assert all("name" in d for d in data)
@@ -563,7 +563,7 @@ class TestRegisterMethods:
         reset_global_registry()
 
     def test_skill_list_method(self):
-        """skill.list 返回 builtin Skill (TDSF 魔改: mock 已禁用)"""
+        """skill.list 返回 builtin Skill (TDSF: mock 已禁用)"""
         reset_global_registry()
         registered: dict = {}
 
@@ -615,7 +615,7 @@ class TestRegisterMethods:
         reset_global_registry()
 
     def test_skill_count_method(self):
-        """skill.count 返回 Skill 总数 (TDSF 魔改: mock 已禁用)"""
+        """skill.count 返回 Skill 总数 (TDSF: mock 已禁用)"""
         reset_global_registry()
         registered: dict = {}
 

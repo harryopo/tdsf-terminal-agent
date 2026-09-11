@@ -1,10 +1,10 @@
-// TDSF 魔改: keyring service 改为 tdsf(原 "terax-ai" 保留为注释供溯源)
+// TDSF: keyring service 改为 tdsf(原 "terax-ai" 保留为注释供溯源)
 // 注意: 修改后已存的 API key 需要重新输入(因为 keyring 按 service 索引)
 // export const KEYRING_SERVICE_LEGACY = "terax-ai";
 export const KEYRING_SERVICE = "tdsf";
 
 export type ProviderId =
-  // TDSF 魔改 2026-08-28: 国产 provider 提前（UI 下拉按数组序展示，国产优先）
+  // TDSF 2026-08-28: 国产 provider 提前（UI 下拉按数组序展示，国产优先）
   | "deepseek"
   | "qwen"
   | "zhipu"
@@ -43,7 +43,7 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   },
   {
     id: "qwen",
-    // TDSF 魔改 2026-08-28: 中文名展示（provider id 保留模型家族名 qwen，
+    // TDSF 2026-08-28: 中文名展示（provider id 保留模型家族名 qwen，
     // 端点即百炼 OpenAI 兼容层，见 PROVIDER_BASE_URLS.qwen）
     label: "阿里百炼",
     keyringAccount: "qwen-api-key",
@@ -52,7 +52,7 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   },
   {
     id: "zhipu",
-    // TDSF 魔改 2026-08-28: 智谱 key 无固定前缀（官方格式为 "id.secret"），
+    // TDSF 2026-08-28: 智谱 key 无固定前缀（官方格式为 "id.secret"），
     // keyPrefix 必须为 null——否则 ProviderKeyCard 的前缀校验会误拒真实 key
     label: "智谱 GLM",
     keyringAccount: "zhipu-api-key",
@@ -286,7 +286,7 @@ export const MODELS = [
     provider: "openai",
     label: "GPT-5.4 mini",
     hint: "Fast",
-    // TDSF 魔改 2026-08-28: 曾是全局默认，现默认已切 deepseek-v4-flash；
+    // TDSF 2026-08-28: 曾是全局默认，现默认已切 deepseek-v4-flash；
     // 条目保留以兼容老用户已存偏好（loadPreferences 的 isKnownModelId 白名单）
     description: "[legacy] Snappy default at low cost. Kept for backward compatibility with existing preferences.",
     capabilities: { intelligence: 4, speed: 4, cost: 4 },
@@ -571,7 +571,7 @@ export const MODELS = [
   },
 
   // ── Zhipu（智谱 GLM，OpenAI 兼容端点） ────────────────────────────────────
-  // TDSF 魔改 2026-08-28: 新增 GLM-5.3 家族（2026-08 快照，规格/定价以官网为准）
+  // TDSF 2026-08-28: 新增 GLM-5.3 家族（2026-08 快照，规格/定价以官网为准）
   {
     id: "glm-5.3",
     provider: "zhipu",
@@ -610,7 +610,7 @@ export const MODELS = [
   },
 
   // ── Moonshot（Kimi，OpenAI 兼容端点） ─────────────────────────────────────
-  // TDSF 魔改 2026-08-28: 新增 Kimi K3（2026-08 快照，规格/定价以官网为准）
+  // TDSF 2026-08-28: 新增 Kimi K3（2026-08 快照，规格/定价以官网为准）
   {
     id: "kimi-k3",
     provider: "moonshot",
@@ -869,7 +869,7 @@ export function modelUsesReasoningTokens(
   );
 }
 
-// TDSF 魔改 2026-08-28: 默认对话模型国产化（DeepSeek V4 Flash——用户已配 key，
+// TDSF 2026-08-28: 默认对话模型国产化（DeepSeek V4 Flash——用户已配 key，
 // 性价比主力；便宜快速，覆盖日常对话/教学场景）
 export const DEFAULT_MODEL_ID: ModelId = "deepseek-v4-flash";
 
@@ -897,7 +897,7 @@ export const PROVIDER_BASE_URLS: Partial<Record<ProviderId, string>> = {
   deepseek: "https://api.deepseek.com",
   mistral: "https://api.mistral.ai/v1",
   openrouter: "https://openrouter.ai/api/v1",
-  // TDSF 魔改 2026-08-28: 国产 provider（阿里百炼/智谱/Kimi/火山方舟）
+  // TDSF 2026-08-28: 国产 provider（阿里百炼/智谱/Kimi/火山方舟）
   qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
   zhipu: "https://open.bigmodel.cn/api/paas/v4",
   moonshot: "https://api.moonshot.cn/v1",
@@ -939,7 +939,7 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "deepseek-v4-pro": 1_000_000,
   "deepseek-v4-flash": 1_000_000,
   "deepseek-reasoner": 128_000,
-  // TDSF 魔改 2026-08-28: 国产 provider 上下文窗口（2026-08 官方公开值；
+  // TDSF 2026-08-28: 国产 provider 上下文窗口（2026-08 官方公开值；
   // 官网未逐一复核的条目给保守值，以官网为准）
   "qwen3.8-max": 262_144,
   "qwen3.8-flash": 262_144,
@@ -1018,7 +1018,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "deepseek-v4-pro": { input: 0.28, output: 1.1, cacheRead: 0.028 },
   "deepseek-v4-flash": { input: 0.07, output: 0.27, cacheRead: 0.007 },
   "deepseek-reasoner": { input: 0.55, output: 2.19, cacheRead: 0.14 },
-  // TDSF 魔改 2026-08-28: 国产模型定价（USD / 百万 tokens，
+  // TDSF 2026-08-28: 国产模型定价（USD / 百万 tokens，
   // 2026-08 快照——qwen3.8-flash 按 ¥1/¥3 折算，以官网为准）
   "glm-5.3": { input: 1.2, output: 4.2 },
   "glm-5.3-flash": { input: 0.12, output: 0.5 },
@@ -1073,7 +1073,7 @@ export type AutocompleteProviderId = ProviderId;
 
 /** Sensible default model id per provider for inline autocomplete.
  *
- * TDSF 魔改 2026-08-28: 补充国产 provider 的 per-provider 默认（补全对延迟
+ * TDSF 2026-08-28: 补充国产 provider 的 per-provider 默认（补全对延迟
  * 极敏感，优先选各家快档/代码档）；openai 从 legacy nano 升为 GPT-5.6 Luna。
  * 全局默认补全 provider 改为 deepseek/deepseek-v4-flash（用户钦定：默认补全
  * 走 DeepSeek 快档；仅作用于编辑器内联代码补全，与终端命令预测无关）。 */
@@ -1081,7 +1081,7 @@ export const DEFAULT_AUTOCOMPLETE_MODEL: Partial<Record<ProviderId, string>> = {
   cerebras: "gpt-oss-120b",
   groq: "openai/gpt-oss-20b",
   lmstudio: "qwen2.5-coder-7b-instruct",
-  // TDSF 魔改 2026-08-28: openai 默认从 legacy gpt-5.4-nano 升为 GPT-5.6 Luna
+  // TDSF 2026-08-28: openai 默认从 legacy gpt-5.4-nano 升为 GPT-5.6 Luna
   // （快档，speed 5）；nano 条目仍保留可选
   openai: "gpt-5.6-luna",
   anthropic: "claude-haiku-4-5",
@@ -1090,7 +1090,7 @@ export const DEFAULT_AUTOCOMPLETE_MODEL: Partial<Record<ProviderId, string>> = {
   deepseek: "deepseek-v4-flash",
   openrouter: "openai/gpt-5.4-mini",
   "openai-compatible": "",
-  // TDSF 魔改 2026-08-28: 国产 provider 快档（对齐 2026-08 目录新条目）
+  // TDSF 2026-08-28: 国产 provider 快档（对齐 2026-08 目录新条目）
   qwen: "qwen3.8-flash",
   zhipu: "glm-5.3-flash",
   moonshot: "kimi-k3",
@@ -1106,7 +1106,7 @@ export function getAutocompleteEligibleModels(): readonly ModelInfo[] {
   );
 }
 
-// TDSF 魔改 2026-08-28: 语音输入（STT/Whisper）功能整体移除——设置页 UI、
+// TDSF 2026-08-28: 语音输入（STT/Whisper）功能整体移除——设置页 UI、
 // composer 语音按钮、useWhisperRecording 钩子、stt.ts 均已删除。
 export const LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1";
 export const MLX_DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1";
@@ -1191,7 +1191,7 @@ const LITE_SYSTEM_PROMPT_MODEL_IDS = new Set<string>([
   "gemini-2.5-flash",
   "gemini-3-flash-preview",
   "deepseek-v4-flash",
-  // TDSF 魔改 2026-08-28: 国产快档模型也走 lite prompt（省 token、降延迟）
+  // TDSF 2026-08-28: 国产快档模型也走 lite prompt（省 token、降延迟）
   "qwen3.8-flash",
   "gpt-oss-120b",
   "openai/gpt-oss-20b",

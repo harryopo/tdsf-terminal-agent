@@ -1,6 +1,6 @@
 """todo_write 工具 — Sidecar 路径任务规划（驱动前端 TodoStrip UI）
 
-TDSF 魔改 (2026-08-09): 让 Python Sidecar 路径也能驱动前端 TodoStrip。
+TDSF (2026-08-09): 让 Python Sidecar 路径也能驱动前端 TodoStrip。
 前端 Vercel SDK 路径有完整的 todo_write → TodoStore → TodoStrip 链路，
 但 Sidecar 路径不经过 buildTools，TodoStrip 收不到更新。
 

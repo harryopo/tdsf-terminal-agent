@@ -1,4 +1,4 @@
-// TDSF 魔改: 接入 RiskGuardDialog (T2.2)
+// TDSF: 接入 RiskGuardDialog (T2.2)
 // 订阅 pendingRiskCommand，命中 L3+ 命令时弹出二次确认/拒绝对话框
 import { RiskGuardDialog } from "@/lib/risk-engine/guard";
 import { useTheme } from "@/modules/theme";
@@ -47,12 +47,12 @@ type Props = {
   initialCwd?: string;
   /** Enable command-block decorations (OSC 133) for this terminal. */
   blocks?: boolean;
-  // TDSF 魔改 (#17): SSH 传输注入 seam —— 由 SshTerminalHost 提供。
+  // TDSF (#17): SSH 传输注入 seam —— 由 SshTerminalHost 提供。
   // 若提供，useTerminalSession 走 SSH 分支，复用 rendererPool 渲染。
   openTransport?: (
     h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
   ) => Promise<TerminalTransport>;
-  // TDSF 魔改 (#17): remote 护栏标志，透传给 useTerminalSession。
+  // TDSF (#17): remote 护栏标志，透传给 useTerminalSession。
   remote?: boolean;
   onSearchReady?: (leafId: number, addon: SearchAddon) => void;
   onExit?: (leafId: number, code: number) => void;
@@ -79,7 +79,7 @@ export const TerminalPane = memo(
     const downYRef = useRef<number | null>(null);
     const { resolvedMode, activeTheme } = useTheme();
 
-    // TDSF 魔改: 订阅 pendingRiskCommand（L3+ 拦截的命令）
+    // TDSF: 订阅 pendingRiskCommand（L3+ 拦截的命令）
     const [pending, setPending] = useState<{
       text: string;
       assessment: RiskRpcAssessment;
@@ -105,7 +105,7 @@ export const TerminalPane = memo(
       focused,
       initialCwd,
       blocks,
-      // TDSF 魔改 (#17): 透传 SSH 传输注入与 remote 护栏。
+      // TDSF (#17): 透传 SSH 传输注入与 remote 护栏。
       openTransport,
       remote,
       onSearchReady: (a) => onSearchReady?.(leafId, a),
@@ -137,10 +137,10 @@ export const TerminalPane = memo(
 
     const promptReady = session.blockMode === "prompt";
 
-    // TDSF 魔改 2026-08-28 (B1-G3): Teach 开关控制"AI 解释"按钮渲染
+    // TDSF 2026-08-28 (B1-G3): Teach 开关控制"AI 解释"按钮渲染
     const teachEnabled = usePreferencesStore((s) => s.teachAgentEnabled);
 
-    // TDSF 魔改: RiskGuardDialog（命中 L3+ 命令时弹出，AlertDialog 用 Portal 不影响布局）
+    // TDSF: RiskGuardDialog（命中 L3+ 命令时弹出，AlertDialog 用 Portal 不影响布局）
     const riskGuardDialog = pending ? (
       <RiskGuardDialog
         open={true}
@@ -154,7 +154,7 @@ export const TerminalPane = memo(
       />
     ) : null;
 
-    // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索浮层（Ctrl/Cmd+Shift+F 触发）
+    // TDSF 2026-08-28 (B1-G4): 终端内搜索浮层（Ctrl/Cmd+Shift+F 触发）
     const searchOpen = useTerminalSearchStore((s) => s.openLeafId) === leafId;
     const closeSearch = useCallback(
       () => useTerminalSearchStore.getState().close(leafId),
@@ -208,7 +208,7 @@ export const TerminalPane = memo(
                 onRestoreFocus={() => {
                   if (session.blockMode === "prompt") focusLeafInput(leafId);
                 }}
-                // TDSF 魔改 2026-08-28 (B1-G3): 失败块"AI 解释"（手动触发，
+                // TDSF 2026-08-28 (B1-G3): 失败块"AI 解释"（手动触发，
                 // Teach 开关关闭时不传回调 → 按钮不渲染）
                 onExplainError={
                   teachEnabled

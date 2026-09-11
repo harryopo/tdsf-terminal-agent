@@ -82,7 +82,7 @@ export function ensureAgentActivityListener(
   onExited = exited;
   if (bound || typeof window === "undefined") return;
   bound = true;
-  // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 listen 订阅, 避免 transformCallback 抛错
+  // TDSF: dev 模式 (无 Tauri 运行时) 跳过 listen 订阅, 避免 transformCallback 抛错
   if (!isTauriRuntime()) {
     if (typeof console !== "undefined") {
       console.debug(
@@ -91,7 +91,7 @@ export function ensureAgentActivityListener(
     }
     return;
   }
-  // TDSF 魔改: terax:agent-signal → tdsf:agent-signal（与全局 Terax→TDSF 清洗对齐）
+  // TDSF: terax:agent-signal → tdsf:agent-signal（与全局 Terax→TDSF 清洗对齐）
   void listen<AgentSignal>("tdsf:agent-signal", (e) => {
     const { id, agent } = e.payload;
     const action = phaseForSignal(e.payload.kind);

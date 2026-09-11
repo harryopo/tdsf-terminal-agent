@@ -17,7 +17,7 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 
 export type ThemePref = "system" | "light" | "dark";
 
-// TDSF 魔改 2026-07-31: 统一使用 terax-default, 移除自定义 tdsf-default 主题
+// TDSF 2026-07-31: 统一使用 terax-default, 移除自定义 tdsf-default 主题
 export const DEFAULT_THEME_ID = "terax-default";
 
 export type BackgroundKind = "none" | "image";
@@ -169,7 +169,7 @@ export type Preferences = {
   // Teach Agent manual explanation preference
   /** 是否显示失败命令的手动 AI 解释入口 */
   teachAgentEnabled: boolean;
-  // TDSF 魔改 2026-08-09: 服务器实时监控偏好
+  // TDSF 2026-08-09: 服务器实时监控偏好
   /** 监控采集间隔（毫秒，合法值 2000/3000/5000/10000，默认 3000） */
   serverMonitorInterval: number;
   // TDSF 2026-08-28: SSH 远端动态补全（carapace）偏好
@@ -274,7 +274,7 @@ const KEY_LSP_ACTIVATION = "lspActivation";
 const KEY_LSP_CUSTOM_SERVERS = "lspCustomServers";
 // Teach Agent manual-explanation preference key
 const KEY_TEACH_AGENT_ENABLED = "teachAgentEnabled";
-// TDSF 魔改 2026-08-09: 服务器监控 key
+// TDSF 2026-08-09: 服务器监控 key
 const KEY_SERVER_MONITOR_INTERVAL = "serverMonitorInterval";
 // TDSF 2026-08-28: SSH 远端动态补全 key
 const KEY_SSH_REMOTE_CARAPACE_PROMPT = "sshRemoteCarapacePrompt";
@@ -362,7 +362,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lspCustomServers: [],
   // Manual error explanation is enabled by default.
   teachAgentEnabled: true,
-  // TDSF 魔改 2026-08-09: 服务器监控默认偏好
+  // TDSF 2026-08-09: 服务器监控默认偏好
   serverMonitorInterval: 3000,
   // TDSF 2026-08-28: SSH 远端动态补全默认开启提示（无弹窗设计，仅小图标）
   sshRemoteCarapacePrompt: true,
@@ -388,7 +388,7 @@ async function writePref<T>(key: string, value: T): Promise<void> {
 }
 
 export async function loadPreferences(): Promise<Preferences> {
-  // TDSF 魔改 (dev 降级): pnpm dev 模式下没有 Tauri 运行时,
+  // TDSF (dev 降级): pnpm dev 模式下没有 Tauri 运行时,
   // 直接返回 DEFAULT_PREFERENCES, 避免 store.entries() 内部 invoke 抛错导致
   // ThemeProvider 卡住, 整个 app 渲染不出内容。
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
@@ -564,7 +564,7 @@ export async function loadPreferences(): Promise<Preferences> {
     teachAgentEnabled:
       get<boolean>(KEY_TEACH_AGENT_ENABLED) ??
       DEFAULT_PREFERENCES.teachAgentEnabled,
-    // TDSF 魔改 2026-08-09: 服务器监控偏好读取
+    // TDSF 2026-08-09: 服务器监控偏好读取
     serverMonitorInterval: coerceServerMonitorInterval(
       get<number>(KEY_SERVER_MONITOR_INTERVAL) ??
         DEFAULT_PREFERENCES.serverMonitorInterval,
@@ -886,7 +886,7 @@ export async function setTeachAgentEnabled(value: boolean): Promise<void> {
   await writePref(KEY_TEACH_AGENT_ENABLED, value);
 }
 
-// TDSF 魔改 2026-08-09: 服务器监控 setter
+// TDSF 2026-08-09: 服务器监控 setter
 export const SERVER_MONITOR_INTERVAL_PRESETS = [2000, 3000, 5000, 10000] as const;
 
 /**
@@ -1035,7 +1035,7 @@ export async function onPreferencesChange(
     [KEY_LSP_CUSTOM_SERVERS]: "lspCustomServers",
     // Teach Agent manual-explanation preference mapping
     [KEY_TEACH_AGENT_ENABLED]: "teachAgentEnabled",
-    // TDSF 魔改 2026-08-09: 服务器监控偏好映射
+    // TDSF 2026-08-09: 服务器监控偏好映射
     [KEY_SERVER_MONITOR_INTERVAL]: "serverMonitorInterval",
     // TDSF 2026-08-28: SSH 远端动态补全偏好映射
     [KEY_SSH_REMOTE_CARAPACE_PROMPT]: "sshRemoteCarapacePrompt",

@@ -1,5 +1,5 @@
 """
-tests/test_strands_model_adapter.py — Strands Model 适配工厂测试（TDSF 魔改 P0-C5）
+tests/test_strands_model_adapter.py — Strands Model 适配工厂测试（TDSF P0-C5）
 ===================================================================================
 
 验证内容：

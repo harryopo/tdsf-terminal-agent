@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): Skill 系统类型定义
+// TDSF (P4-T4.4): Skill 系统类型定义
 // -----------------------------------------------------------------------------
 // 与 Python sidecar `skills/registry.py` 的 SkillDict 字段对齐，
 // 并补充前端专属字段（category / source / enabled）。
@@ -43,10 +43,10 @@ export interface SkillMetadata {
   author?: string;
   /** tags 原始列表（可选，仅展示用） */
   tags?: string[];
-  // TDSF 魔改: SKILL.md 原文内容，供 SkillContentDialog 渲染预览
+  // TDSF: SKILL.md 原文内容，供 SkillContentDialog 渲染预览
   // 来源：Python skill.list 返回的 body 字段；降级模式（IPC 不可用）下可能为空。
   rawContent?: string;
-  // TDSF 魔改: SKILL.md 在磁盘上的绝对路径，供"打开目录"按钮调用 revealItemInDir
+  // TDSF: SKILL.md 在磁盘上的绝对路径，供"打开目录"按钮调用 revealItemInDir
   // 来源：Python skill.list 返回的 file_path 字段；builtin 降级列表无此字段。
   filePath?: string | null;
 }
@@ -138,13 +138,13 @@ export interface SkillDict {
   examples: string;
   body: string;
   file_path: string | null;
-  // TDSF 魔改 (P0-2 修复 2026-07-28): executor 字段, 标识该 skill 是否可真正执行
+  // TDSF (P0-2 修复 2026-07-28): executor 字段, 标识该 skill 是否可真正执行
   // 来自 SKILL.md frontmatter, 支持 shell/python/http 三种 type
   executor?: SkillExecutor | null;
 }
 
 /**
- * Skill 可执行体描述 (TDSF 魔改 P0-2 修复 2026-07-28)
+ * Skill 可执行体描述 (TDSF P0-2 修复 2026-07-28)
  *
  * 来自 SKILL.md frontmatter 的 executor 块, 标识该 skill 是否真的能跑命令.
  *  - shell:  在用户 shell 中跑 command
@@ -175,7 +175,7 @@ export type SkillExecutor =
     };
 
 /**
- * Python `skill.invoke` 的真实执行结果 (TDSF 魔改 P0-2 修复 2026-07-28)
+ * Python `skill.invoke` 的真实执行结果 (TDSF P0-2 修复 2026-07-28)
  *
  * 含 executor 的 skill 被调用时返回这种结构, 包含真正执行 stdout/stderr/exit_code
  */

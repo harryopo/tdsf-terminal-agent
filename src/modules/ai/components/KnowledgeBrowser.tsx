@@ -1,7 +1,7 @@
 /**
  * KnowledgeBrowser.tsx — 知识库浏览器（P2-4 可视化）
  * -----------------------------------------------------------------------------
- * 左侧栏「知识库」视图，双模式（TDSF 魔改 2026-08-30: 6+1 分类两级文件视图）：
+ * 左侧栏「知识库」视图，双模式（TDSF 2026-08-30: 6+1 分类两级文件视图）：
  *
  *   浏览模式（默认）：分类分组（6+1：Linux 哲学与命令对照/基础概念/命令与工具/
  *     系统管理/网络与远程/安全加固/服务部署；未分类归「其他」沉底）→
@@ -16,7 +16,7 @@
  *     （N 从分块 id 尾部序号提取，id 形如 doc-<hash>-<seq>，seq 从 0 起）；
  *     清空搜索回落浏览模式。
  *
- *   导入 md（TDSF 魔改 2026-08-30）：内置教学语料剔除（个人语料不随应用
+ *   导入 md（TDSF 2026-08-30）：内置教学语料剔除（个人语料不随应用
  *     分发），头部「导入 md」按钮 → HTML input 多选 .md（WebView 下读
  *     内容传后端）→ knowledge.import_docs（fail-closed 仅 .md）→
  *     清缓存 + 重载列表。
@@ -110,7 +110,7 @@ type FilesLoadState =
   | { status: "error" };
 
 // ============================================================================
-// 分类分组（TDSF 魔改 2026-08-30: 按 category 6+1 分组浏览，source 名作副行）
+// 分类分组（TDSF 2026-08-30: 按 category 6+1 分组浏览，source 名作副行）
 // source/category 中文标签映射已抽至 @/modules/ai/lib/knowledge-labels
 // （与 tool.tsx 知识卡片共享，2026-08-31）
 // ============================================================================
@@ -325,9 +325,9 @@ function SourceFileList({
               "transition-colors hover:border-border hover:bg-muted/40",
             )}
           >
-            {/* TDSF 魔改 2026-08-30: 中文预览标题主行 + 英文 filename 副行
+            {/* TDSF 2026-08-30: 中文预览标题主行 + 英文 filename 副行
                 （无中文映射时只显示英文 filename 主行，不报错）
-                TDSF 魔改 2026-08-31: 层级修复——主行 10.5px 与组头同级
+                TDSF 2026-08-31: 层级修复——主行 10.5px 与组头同级
                 （原 11.5px 比组头还大），缩进 pl-5 体现从属关系；计数
                 badge 统一为纯数字 + 块数与组头同款式 */}
             <div className="flex items-center gap-1.5">
@@ -347,7 +347,7 @@ function SourceFileList({
                 {file.chunks} 块
               </Badge>
             </div>
-            {/* TDSF 魔改 2026-08-30: 副行 = source 中文名（6+1 分组后同一分类
+            {/* TDSF 2026-08-30: 副行 = source 中文名（6+1 分组后同一分类
                 聚合多来源，source 名保留辨识度）；有中文映射时再补英文
                 filename（无映射时主行已是 filename，不重复显示） */}
             <div className="mt-0.5 flex items-center gap-1.5">
@@ -377,7 +377,7 @@ export function KnowledgePanel() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [detail, setDetail] = useState<DetailTarget | null>(null);
-  // TDSF 魔改 2026-08-30: 可折叠分组（记录已折叠组的 category key）
+  // TDSF 2026-08-30: 可折叠分组（记录已折叠组的 category key）
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     new Set(),
   );
@@ -385,7 +385,7 @@ export function KnowledgePanel() {
   const [filesByCategory, setFilesByCategory] = useState<
     ReadonlyMap<string, FilesLoadState>
   >(new Map());
-  // TDSF 魔改 2026-08-30: 导入 md（个人语料手动导入的唯一入口）
+  // TDSF 2026-08-30: 导入 md（个人语料手动导入的唯一入口）
   const [importing, setImporting] = useState(false);
   // 中文预览标题映射（组级合并：category → url→zh；底层仍 per source 缓存）
   const [titlesByCategory, setTitlesByCategory] = useState<
@@ -550,7 +550,7 @@ export function KnowledgePanel() {
   }, []);
 
   // 条目样式：搜索命中条目与无 url 条目（案例）复用；
-  // TDSF 魔改 2026-08-30: 中文预览标题主行 + 英文原标题副行（无映射只显示英文）
+  // TDSF 2026-08-30: 中文预览标题主行 + 英文原标题副行（无映射只显示英文）
   const renderEntry = (hit: KnowledgeHit) => {
     const zh = hit.url
       ? titlesByCategory.get(hit.category ?? "")?.get(hit.url)
@@ -584,7 +584,7 @@ export function KnowledgePanel() {
             </Badge>
           )}
         </div>
-        {/* TDSF 魔改 2026-08-30: source 中文名副行（6+1 分组后保留来源辨识度）；
+        {/* TDSF 2026-08-30: source 中文名副行（6+1 分组后保留来源辨识度）；
             有中文标题时英文原标题再降一级 */}
         <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
           {sourceGroupLabel(hit.source)}
@@ -617,10 +617,10 @@ export function KnowledgePanel() {
         onChange={(e) => void handleImportFiles(e)}
       />
 
-      {/* 头部：标题 + 导入 md 按钮（TDSF 魔改 2026-08-30，个人语料手动导入入口） */}
+      {/* 头部：标题 + 导入 md 按钮（TDSF 2026-08-30，个人语料手动导入入口） */}
       <div className="flex items-center gap-1.5 border-b border-border/50 px-3 py-2">
         <HugeiconsIcon icon={BookOpen01Icon} size={13} strokeWidth={1.75} />
-        {/* TDSF 魔改 2026-08-29: 视图标签中文化（推翻 2026-08-18 统一英文决策），与侧边栏一致 */}
+        {/* TDSF 2026-08-29: 视图标签中文化（推翻 2026-08-18 统一英文决策），与侧边栏一致 */}
         <span className="text-[11px] font-medium uppercase tracking-wide text-foreground">
           知识库
         </span>
@@ -906,7 +906,7 @@ export function KnowledgeDetailDialog({
                   </Badge>
                 )}
               </div>
-              {/* TDSF 魔改 2026-08-30: 中文摘要条（doc_titles_zh.summary_zh，
+              {/* TDSF 2026-08-30: 中文摘要条（doc_titles_zh.summary_zh，
                   生成端已清洗；plainSummary 前端兜底剥残留 markdown 符号，
                   TDSF 2026-08-31 用户实测反馈摘要以 ###/--- 开头） */}
               {doc.summary_zh && (
@@ -915,9 +915,9 @@ export function KnowledgeDetailDialog({
                   {plainSummary(doc.summary_zh)}
                 </div>
               )}
-              {/* TDSF 魔改 2026-08-18: 完整 md 渲染（MessageResponse = Streamdown），
+              {/* TDSF 2026-08-18: 完整 md 渲染（MessageResponse = Streamdown），
                   像看本地 md 文件一样滚动阅读。
-                  TDSF 魔改 2026-08-29: 任意值子选择器覆盖 streamdown 内置大字号 heading，
+                  TDSF 2026-08-29: 任意值子选择器覆盖 streamdown 内置大字号 heading，
                   知识文档标题改为紧凑层级。 */}
               <MessageResponse className="text-[12.5px] leading-relaxed [&_[data-streamdown=heading-1]]:mt-4 [&_[data-streamdown=heading-1]]:text-base [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-2]]:mt-3.5 [&_[data-streamdown=heading-2]]:text-[14.5px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-3 [&_[data-streamdown=heading-3]]:text-[13.5px] [&_[data-streamdown=heading-3]]:font-semibold">
                 {doc.content}

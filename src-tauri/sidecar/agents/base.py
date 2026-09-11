@@ -146,11 +146,11 @@ class BaseAgent:
             "total_duration": 0.0,
         }
 
-        # TDSF 魔改 (P2-2 修复 2026-07-28): 构造时检测 llm_call=None
+        # TDSF (P2-2 修复 2026-07-28): 构造时检测 llm_call=None
         # 若未注入真实 LLM, 在第一次 invoke 时推送告警给前端
         self._mock_warning_emitted: bool = False
 
-        # TDSF 魔改 2026-07-30 P1-b: mock_llm_active 事件 60s 时间窗 dedup
+        # TDSF 2026-07-30 P1-b: mock_llm_active 事件 60s 时间窗 dedup
         # ----------------------------------------------------------------
         # 之前每次 LLM 调用失败都会触发 _publish_mock_warning("llm_call_failed", ...)
         # 在 PAOR 多轮迭代中（main_agent.invoke 一次循环可能调 5+ 次 call_llm），
@@ -266,7 +266,7 @@ class BaseAgent:
             next_step = reflection_result.get("next_step", "continue")
             reflection_text = reflection_result.get("reflection", "")
 
-            # TDSF 魔改: 保留 reflect_on_result 返回的额外字段（如 TeachAgent.teaching_content）
+            # TDSF: 保留 reflect_on_result 返回的额外字段（如 TeachAgent.teaching_content）
             # 实现：把 next_step / reflection / error 之外的字段合并到状态更新，
             # 让子 Agent（如 TeachAgent）能向前端传递结构化教学内容等富数据。
             # 见 agents/teach_agent.py TeachAgent.reflect_on_result() 的 teaching_content 字段。
@@ -345,7 +345,7 @@ class BaseAgent:
                     },
                     # fix-loop 状态附加到状态更新（便于上层 graph 节点感知）
                     "fix_loop": fix_loop_info,
-                    # TDSF 魔改: 合并 reflect_on_result 返回的额外字段
+                    # TDSF: 合并 reflect_on_result 返回的额外字段
                     # （如 TeachAgent.teaching_content），让前端能拿到结构化教学内容
                     **reflection_extra,
                 },
@@ -541,11 +541,11 @@ class BaseAgent:
                 return self.llm_call(messages)
             except Exception as e:
                 logger.warning(f"llm_call failed, fallback to mock: {e}")
-                # TDSF 魔改 (P2-2 修复 2026-07-28): LLM 失败降级到 mock 必须有强告警
+                # TDSF (P2-2 修复 2026-07-28): LLM 失败降级到 mock 必须有强告警
                 # 避免用户以为在用真实 LLM, 实际收到的是规则化 mock
                 self._publish_mock_warning("llm_call_failed", str(e))
         else:
-            # TDSF 魔改 (P2-2 修复 2026-07-28): llm_call 未注入 (None) 是最常见配置错误
+            # TDSF (P2-2 修复 2026-07-28): llm_call 未注入 (None) 是最常见配置错误
             # 每个 agent 进程生命周期内只发一次告警, 避免日志洪水
             if not self._mock_warning_emitted:
                 self._publish_mock_warning(
@@ -555,7 +555,7 @@ class BaseAgent:
                 )
                 self._mock_warning_emitted = True
 
-        # TDSF 魔改 (P2-2 修复 2026-07-28): Mock LLM 必须有强告警 + 事件通知
+        # TDSF (P2-2 修复 2026-07-28): Mock LLM 必须有强告警 + 事件通知
         # 用户配置好 API Key 后, 此分支应永不进入. 进入则说明:
         #   1. llm_call 注入失败 (启动时 load_config 错误)
         #   2. 用户删除/清空 .tdsf-data/llm_config.json
@@ -564,7 +564,7 @@ class BaseAgent:
         return self._mock_llm(messages)
 
     def _publish_mock_warning(self, reason: str, detail: str) -> None:
-        """TDSF 魔改 (P2-2): 推送 mock LLM 告警到 event_bus
+        """TDSF (P2-2): 推送 mock LLM 告警到 event_bus
 
         v2026-07-30 P1-a 修复: 之前直接调用 publish(event_type_str, dict, source=...)
         传 3 参数，但 publish 签名只接受单个 Event 对象，TypeError 被静默吞掉，

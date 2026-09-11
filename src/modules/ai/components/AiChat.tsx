@@ -590,7 +590,7 @@ const RenderedMessage = memo(function RenderedMessage({
   return (
     <Message from={message.role}>
       <MessageContent>
-        {/* TDSF 魔改: ConfidenceMarker 包裹 assistant 消息，流式结束后显示置信度标记 (T2.3) */}
+        {/* TDSF: ConfidenceMarker 包裹 assistant 消息，流式结束后显示置信度标记 (T2.3) */}
         <ConfidenceMarker
           message={message}
           streaming={streaming}

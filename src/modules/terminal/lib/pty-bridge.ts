@@ -25,7 +25,7 @@ export type PtyHandlers = {
 };
 
 /**
- * TDSF 魔改 (#15): 传输层抽象 seam —— 让本地 PTY 与远程 SSH 共用同一接口。
+ * TDSF (#15): 传输层抽象 seam —— 让本地 PTY 与远程 SSH 共用同一接口。
  *
  * 本地 `PtySession` 天然满足此接口（结构子类型，无需显式 implements）。
  * SSH 终端通过实现此接口，可注入 `useTerminalSession.openTransport`，

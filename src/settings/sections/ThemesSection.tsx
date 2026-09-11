@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.1): 主题设置 (颜色/背景图) — 全量中文化
+// TDSF (P4-T4.1): 主题设置 (颜色/背景图) — 全量中文化
 // -----------------------------------------------------------------------------
 // 涵盖:
 //   - 主题色板选择 (dracula / nord / tokyo-night / gruvbox 等)
@@ -27,7 +27,7 @@ import { useThemeFileEditing } from "@/modules/theme/useThemeFileEditing";
 import { SectionHeader } from "../components/SectionHeader";
 import { SettingRow } from "../components/SettingRow";
 
-// TDSF 魔改 2026-08-09 (用户要求): 主题列表不再按深/浅色分组展示,
+// TDSF 2026-08-09 (用户要求): 主题列表不再按深/浅色分组展示,
 // 合并成一个网格; 明暗切换独立成"显示模式"按钮 (点击直接切换)。
 const THEMES = listBuiltinThemes();
 

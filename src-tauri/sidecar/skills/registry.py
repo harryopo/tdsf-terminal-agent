@@ -49,7 +49,7 @@ logger = logging.getLogger("sidecar.skills.registry")
 # 内置 Skill 根目录（python-sidecar/skills/builtin/）
 _BUILTIN_DIR: Path = Path(__file__).parent / "builtin"
 
-# TDSF 魔改 (T1 2026-08-28): 用户自定义 Skill 目录（~/.tdsf/skills/）
+# TDSF (T1 2026-08-28): 用户自定义 Skill 目录（~/.tdsf/skills/）
 # 启动时若存在则自动加载（<dir>/<skill_name>/SKILL.md 或 <dir>/*.md），
 # 与 tdsf_loader 的 ~/TDSF.md 惯例对齐——用户无需改代码即可沉淀自己的技能包
 _USER_SKILLS_DIR: Path = Path.home() / ".tdsf" / "skills"
@@ -305,7 +305,7 @@ class SkillRegistry:
                 if any(q in tag.lower() for tag in skill.tags):
                     results.append(skill)
                     continue
-                # TDSF 魔改 (T1 2026-08-28): triggers 触发词参与命中
+                # TDSF (T1 2026-08-28): triggers 触发词参与命中
                 if any(q in trig.lower() for trig in skill.triggers):
                     results.append(skill)
                     continue
@@ -384,7 +384,7 @@ class SkillRegistry:
 
         params = params or {}
 
-        # === 分支 1: 含 executor → 真正执行 (TDSF 魔改 P0-2 修复 2026-07-28) ===
+        # === 分支 1: 含 executor → 真正执行 (TDSF P0-2 修复 2026-07-28) ===
         if skill.executor:
             try:
                 exec_result: dict[str, Any] = _run_executor(skill.executor, params)
@@ -399,7 +399,7 @@ class SkillRegistry:
                     "duration_ms": exec_result["duration_ms"],
                     "params": params,
                     "source": "builtin",
-                    # TDSF 魔改 (T6 2026-08-31): 剧本随 executor 结果一并返回——
+                    # TDSF (T6 2026-08-31): 剧本随 executor 结果一并返回——
                     # 执行器输出只是剧本第 1 步的快照，后续步骤由 agent 按
                     # playbook 驱动工具序列推进
                     "playbook": list(skill.playbook),
@@ -421,7 +421,7 @@ class SkillRegistry:
                     "params": params,
                     "source": "builtin",
                     "error": str(e),
-                    # TDSF 魔改 (T6 2026-08-31): 执行器异常时剧本仍返回（后续步骤可继续）
+                    # TDSF (T6 2026-08-31): 执行器异常时剧本仍返回（后续步骤可继续）
                     "playbook": list(skill.playbook),
                 }
 
@@ -434,12 +434,12 @@ class SkillRegistry:
                 "when_to_use": skill.when_to_use,
                 "steps": skill.steps,
                 "examples": skill.examples,
-                # TDSF 魔改 (T1 2026-08-28): 贯通 tags / triggers / allowed-tools，
+                # TDSF (T1 2026-08-28): 贯通 tags / triggers / allowed-tools，
                 # 让 Agent 知道该技能的触发词与建议使用的工具白名单
                 "tags": skill.tags,
                 "triggers": skill.triggers,
                 "allowed_tools": skill.allowed_tools,
-                # TDSF 魔改 (T6 2026-08-31, spec add-agent-loop-closure): 贯通剧本
+                # TDSF (T6 2026-08-31, spec add-agent-loop-closure): 贯通剧本
                 # （frontmatter steps 结构化列表，驱动 agent 工具序列）
                 "playbook": list(skill.playbook),
                 "params": params,
@@ -582,7 +582,7 @@ def _mock_tags_for(name: str) -> list[str]:
     return [parts[0], name]
 
 
-# TDSF 魔改 (P0-2 修复 2026-07-28): Skill 真正执行器
+# TDSF (P0-2 修复 2026-07-28): Skill 真正执行器
 # ---------------------------------------------------------------------------
 # 解析 executor 块并真正执行 shell/python/http, 替代原先的"返回 SKILL.md 文本"
 # 返回结构: {success, exit_code, output, stdout, stderr, duration_ms}
@@ -898,7 +898,7 @@ def get_global_registry() -> SkillRegistry:
             # A read-only packaged fallback keeps the app usable if seeding
             # failed because the user directory cannot be created.
             registry.load_builtin()
-        # TDSF 魔改：不再自动加载 65 个 mock 外部 skill
+        # TDSF：不再自动加载 65 个 mock 外部 skill
         # 原逻辑会注册 "argocd-gitops" / "rust-debug" 等用户不需要的占位 skill,
         # 前端打开后内容是 "mock skill body", 没有实际价值, 干扰用户判断.
         # 如未来需要"市场/Marketplace"功能, 在 Settings 中提供显式开关调用

@@ -106,7 +106,7 @@ class MainAgent(BaseAgent):
             "- default → MainAgent\n\n"
             "Constraints:\n"
             "- Use `risk` tool before recommending any service operations.\n"
-            # TDSF 魔改 2026-08-28 (B1-G2 防伪造): 拦截/拒绝后如实报告，禁止编造执行结果
+            # TDSF 2026-08-28 (B1-G2 防伪造): 拦截/拒绝后如实报告，禁止编造执行结果
             "- Security honesty: if a command was blocked by RiskGuard or rejected by the "
             "user (context may contain \"[TDSF] 最近被安全拦截的命令（未执行）\"), you MUST "
             "truthfully report that it was NOT executed. NEVER fabricate execution results.\n"
@@ -316,7 +316,7 @@ class MainAgent(BaseAgent):
             user_input = state.get("input", "")
             existing_plan = state.get("plan", [])
 
-            # TDSF 魔改 2026-07-29: 启动时推送 "main" agent_switch
+            # TDSF 2026-07-29: 启动时推送 "main" agent_switch
             # 前端 AgentStatusPill 实时显示"统一主 Agent 调度中"
             if iteration == 0:
                 self._emit_agent_switch("main", user_input, session_id)
@@ -338,7 +338,7 @@ class MainAgent(BaseAgent):
             # 所有任务完成
             if current_idx >= len(plan):
                 logger.info("main_agent: all tasks completed")
-                # TDSF 魔改 2026-07-29: 完成时回退到 main
+                # TDSF 2026-07-29: 完成时回退到 main
                 self._emit_agent_switch("main", "所有任务已完成", session_id)
                 return {
                     "plan": plan,
@@ -360,7 +360,7 @@ class MainAgent(BaseAgent):
 
             agent_prefix, task_content = self._parse_task_prefix(current_task)
 
-            # TDSF 魔改 2026-07-29: 路由到子 Agent 时推送 agent_switch 事件
+            # TDSF 2026-07-29: 路由到子 Agent 时推送 agent_switch 事件
             # 前端 AgentStatusPill 实时显示当前路由到的子 Agent
             # （main 表示主 Agent 自处理，不算真正路由到子 Agent）
             if agent_prefix != "main":
@@ -404,7 +404,7 @@ class MainAgent(BaseAgent):
                     "result": sub_agent_update.get("sub_agent_result", {}),
                     "observation": observation,
                 }
-                # TDSF 魔改 2026-07-28: 透传 sub-agent 的 sub_steps / teaching_content
+                # TDSF 2026-07-28: 透传 sub-agent 的 sub_steps / teaching_content
                 # 修复 P0-1 收尾: _invoke_sub_agent 已经循环跑完 sub-agent 多步,
                 # 这里的 sub_steps 是 sub-agent 内每一步的状态 (含 teaching_content),
                 # 必须透传, 否则前端看到 teach agent 1 步就 done (实际多步内容被吞)。
@@ -466,7 +466,7 @@ class MainAgent(BaseAgent):
                 "intermediate_results": intermediate_results,
                 "sub_agent_result": sub_agent_result,
                 "iteration": iteration + 1 if next_step == "continue" else iteration,
-                # TDSF 魔改 2026-07-28: 透传 sub-agent 多步细节到前端
+                # TDSF 2026-07-28: 透传 sub-agent 多步细节到前端
                 # 修复 P0-1: 不透传的话前端永远只看到 sub-agent 跑 1 步的快照
                 **({"sub_steps": _sub_steps, "sub_steps_count": len(_sub_steps)}
                    if agent_prefix != "main" and _sub_steps else {}),
@@ -535,7 +535,7 @@ class MainAgent(BaseAgent):
         task_content: str,
         state: dict[str, Any],
     ) -> dict[str, Any]:
-        """调用子 Agent 并跑完其 PAOR 多步 (TDSF 魔改 2026-07-28, 修复 P0-1)
+        """调用子 Agent 并跑完其 PAOR 多步 (TDSF 2026-07-28, 修复 P0-1)
 
         Args:
             agent_name: 子 Agent 名（coding / explore / history / teach）
@@ -574,7 +574,7 @@ class MainAgent(BaseAgent):
             extra={"sub_agent": agent_name},
         )
 
-        # TDSF 魔改 2026-07-28: 循环推进 sub-agent 的 PAOR 多步
+        # TDSF 2026-07-28: 循环推进 sub-agent 的 PAOR 多步
         # 上限 5 步防死循环, 同时记录每步结果用于前端 streaming
         MAX_SUB_ITER = 5
         all_sub_steps: list[dict[str, Any]] = []

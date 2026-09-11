@@ -1,5 +1,5 @@
 """
-tests/test_llm_config.py — LLM 配置层测试（TDSF 魔改 · 国产 provider 对齐 2026-08）
+tests/test_llm_config.py — LLM 配置层测试（TDSF · 国产 provider 对齐 2026-08）
 ====================================================================================
 
 验证内容（spec: add-domestic-first-ai-config / 任务 T3.1）：

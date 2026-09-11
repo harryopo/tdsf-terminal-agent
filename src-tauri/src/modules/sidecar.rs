@@ -752,7 +752,7 @@ impl SidecarManager {
             .env("TDSF_SIDECAR_LOG", "INFO")
             .env("PYTHONUNBUFFERED", "1") // 强制 unbuffered
             .env("PYTHONDONTWRITEBYTECODE", "1") // 不生成 .pyc
-            // TDSF 魔改 2026-07-30 P0-E 收尾：默认启用 Strands 适配层
+            // TDSF 2026-07-30 P0-E 收尾：默认启用 Strands 适配层
             // 用户可通过外部 TDSF_AGENT_BACKEND 环境变量覆盖（如 =langgraph 回退）
             // Strands 启动失败时 Python 侧会 fallback 到 langgraph + 推送 backend_status 事件
             .env(
@@ -1991,7 +1991,7 @@ pub async fn sidecar_start(
 }
 
 // ============================================================================
-// TDSF 魔改 P2-3: Sidecar 日志缓冲区（专门审查子 Agent 用）
+// TDSF P2-3: Sidecar 日志缓冲区（专门审查子 Agent 用）
 // ============================================================================
 // 设计目标: 让前端能在设置面板实时查看 Python Sidecar 日志,
 //          无需打开 DevTools 或翻 tauri_plugin_log 文件。

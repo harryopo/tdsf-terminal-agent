@@ -1,5 +1,5 @@
 /**
- * ssh/randomart.ts — OpenSSH 艺术指纹生成器（TDSF 魔改 2026-07-28）
+ * ssh/randomart.ts — OpenSSH 艺术指纹生成器（TDSF 2026-07-28）
  * ============================================================
  *
  * 生成 OpenSSH 风格的 ASCII randomart（ssh-keygen -lv 输出的图案）。

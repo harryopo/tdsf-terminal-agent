@@ -82,7 +82,7 @@ export type TerminalTab = TabBase & {
   /** User-set label that overrides the cwd-derived name. Survives cd. */
   customTitle?: string;
   /**
-   * TDSF 魔改 2026-07-30: 绑定到 SSH 会话的前端 UUID。
+   * TDSF 2026-07-30: 绑定到 SSH 会话的前端 UUID。
    * - undefined / null: 本地 PTY tab，工作区渲染 TerminalStack
    * - string: SSH 终端 tab，工作区渲染 SshTerminalHost（仅当会话仍 connected）
    *
@@ -108,7 +108,7 @@ export type EditorTab = TabBase & {
   preview: boolean;
   overrideLanguage?: string | null;
   /**
-   * TDSF 魔改 2026-07-30: 远程文件标记。
+   * TDSF 2026-07-30: 远程文件标记。
    * - undefined / null: 本地文件，走 fs_read_file/fs_write_file/fs_stat + 本地 watch + LSP。
    * - { sessionId }: SSH 远程文件，走 sftpRead/sftpWrite/sftpStat，跳过本地 watch / LSP / 外部 formatter。
    *   sessionId 是前端 UUID (sshStore.sessions[].id)，rustSessionId 在 useDocument 内实时查询，
@@ -197,7 +197,7 @@ export type TabPatch = Partial<{
   customTitle: string;
   overrideLanguage: string | null;
   /**
-   * TDSF 魔改 2026-07-30: 绑定/解绑 terminal tab 到 SSH 会话。
+   * TDSF 2026-07-30: 绑定/解绑 terminal tab 到 SSH 会话。
    * - string: 绑定到该 SSH 会话（前端 UUID），工作区渲染 SshTerminalHost
    * - null: 显式解绑，回退到本地 PTY
    * - undefined: 不变更现有绑定
@@ -424,13 +424,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   }, [activeId]);
 
   // Activating a cold tab warms it: one choke point for every activation path.
-  // TDSF 魔改 2026-07-28 (P1-A): 排除默认 cold tab (id 1)
+  // TDSF 2026-07-28 (P1-A): 排除默认 cold tab (id 1)
   // 默认 tab 1 是 NoTerminalEmptyState 的占位对象, 由 App.tsx 在用户点击
   // "打开本地终端" 时显式调 warmUpTab(1) 触发 shell 启动, 不应在挂载时自动 warm,
   // 否则会白跑本地 shell 同时空状态页立即消失, 失去引导作用.
   // 其他 cold tab (id >= 3) 仍是常规 cold, 切到此 tab 时自动 warm 没问题.
   //
-  // TDSF 魔改 2026-07-30: 恢复路径同样豁免。spaces boot 恢复的 tab 全部
+  // TDSF 2026-07-30: 恢复路径同样豁免。spaces boot 恢复的 tab 全部
   // 序列化为 cold 且 id 重新分配 (≥3), 原先只豁免 id 1 导致 boot 完成瞬间
   // 恢复的 active tab 被自动 warm → 直接空跑 shell, 欢迎页永远不出现。
   // 记录 boot 完成时的 activeId, 该 tab 保持 cold 由欢迎页引导 warm。
@@ -452,7 +452,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
   const markBooted = useCallback(() => setBooted(true), []);
 
-  // TDSF 魔改 2026-07-28 (P1-A): 手动 warm 一个 cold tab
+  // TDSF 2026-07-28 (P1-A): 手动 warm 一个 cold tab
   // 默认情况下 useEffect 会在 activeId 变化时自动 warm cold tab,
   // 但 NoTerminalEmptyState 需要在用户点击 "打开本地终端" 时主动触发,
   // 此时 activeId 没变, useEffect 不会自动执行, 所以需要显式方法.
@@ -708,7 +708,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     (path: string, pin = true, remote?: { sessionId: string }) => {
       let targetId: number | null = null;
       setTabs((curr) => {
-        // TDSF 魔改 2026-07-30: 去重 key 改为 path + remote?.sessionId，
+        // TDSF 2026-07-30: 去重 key 改为 path + remote?.sessionId，
         // 避免本地/远程同名文件（如 /etc/hosts）撞车导致打开错误 tab。
         const matchRemote = (t: Tab): boolean =>
           t.kind === "editor" &&
@@ -1110,7 +1110,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
               customTitle:
                 patch.customTitle === "" ? undefined : patch.customTitle,
             }),
-            // TDSF 魔改 2026-07-30: SSH 会话绑定（显式 null 也能解绑）
+            // TDSF 2026-07-30: SSH 会话绑定（显式 null 也能解绑）
             ...(patch.sshSessionId !== undefined && {
               sshSessionId: patch.sshSessionId,
             }),
@@ -1237,7 +1237,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           const splitId = nextIdRef.current++;
           const leafId = nextIdRef.current++;
           newLeafId = leafId;
-          // TDSF 魔改 (2026-08-11): 新 leaf 继承 active leaf 的有效 SSH 会话——
+          // TDSF (2026-08-11): 新 leaf 继承 active leaf 的有效 SSH 会话——
           // active 是 SSH（string）→ 新 pane 绑同会话（同一服务器双 pane）；
           // active 是本地（null）→ 不写字段（undefined，继承 tab 或保持本地）。
           // 这样「在 SSH 终端分屏」永远得到 SSH pane，而不是本地 shell。

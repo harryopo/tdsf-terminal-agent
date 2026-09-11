@@ -1,5 +1,5 @@
 /**
- * ErrorExplainCard — 失败块"AI 解释"浮层卡片（B1-G3，TDSF 魔改 2026-08-28）
+ * ErrorExplainCard — 失败块"AI 解释"浮层卡片（B1-G3，TDSF 2026-08-28）
  * -----------------------------------------------------------------------------
  * 用户拍板：手动触发。由 BlockOverlay 在失败块工具条下方渲染，
  * 订阅 errorExplainStore（streaming/done/error 三态）。

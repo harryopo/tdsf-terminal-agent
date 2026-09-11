@@ -61,7 +61,7 @@ import { toggleFavoriteModel } from "../lib/modelPrefs";
 import { useChatStore } from "../store/chatStore";
 
 const PROVIDER_ICON = {
-  // TDSF 魔改 2026-08-28: 国产 provider 图标（与 settings/ProviderIcon 保持一致）
+  // TDSF 2026-08-28: 国产 provider 图标（与 settings/ProviderIcon 保持一致）
   deepseek: DeepseekIcon,
   qwen: AiCloud01Icon,
   zhipu: SparklesIcon,

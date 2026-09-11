@@ -1,4 +1,4 @@
-// TDSF 魔改: 接入 RiskEngine 前端拦截 (T2.2)
+// TDSF: 接入 RiskEngine 前端拦截 (T2.2)
 // 命令提交前调 evaluateRiskSync 快速拦截 L3+ 命令，命中后暂存并触发 listeners，
 // UI 层订阅 pendingRiskCommand 弹出 RiskGuardDialog，用户确认后才执行。
 // TDSF 2026-07-31: invalidate vite transform cache (Phase 2 remote cwd fix)
@@ -99,16 +99,16 @@ type Callbacks = {
 };
 
 type Session = {
-  // TDSF 魔改 (#16): pty 类型升级为 TerminalTransport，兼容本地 PTY 与远程 SSH 传输。
+  // TDSF (#16): pty 类型升级为 TerminalTransport，兼容本地 PTY 与远程 SSH 传输。
   // 本地路径 s.pty 是 PtySession（结构子类型，id 是 number）；
   // SSH 路径 s.pty 是 SSH transport（id 是 sessionId 字符串）。
   pty: TerminalTransport | null;
-  // TDSF 魔改 (#16): SSH 传输注入 seam。若提供，openPtyForSession 走 SSH 分支，
+  // TDSF (#16): SSH 传输注入 seam。若提供，openPtyForSession 走 SSH 分支，
   // 跳过 terminalShell/ConPTY/resize-warmup 等本地专属逻辑。
   openTransport?: (
     h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
   ) => Promise<TerminalTransport>;
-  // TDSF 魔改 (#16): remote 护栏标志。控制 leafHasForegroundJob/Process、
+  // TDSF (#16): remote 护栏标志。控制 leafHasForegroundJob/Process、
   // kickPty、respawnSession 等 PTY 专属调用对 SSH 不生效。
   remote: boolean;
   ptyOpening: boolean;
@@ -152,7 +152,7 @@ type Session = {
   commandRunning: boolean;
   hiddenReleaseTimer: ReturnType<typeof setTimeout> | null;
   spawnFailed: boolean;
-  // TDSF 魔改: 待风险确认的命令（L3+ 拦截后暂存，UI 弹窗确认后执行）
+  // TDSF: 待风险确认的命令（L3+ 拦截后暂存，UI 弹窗确认后执行）
   pendingRiskCommand: { text: string; assessment: RiskRpcAssessment } | null;
   /** One-shot display-only marker for a command injected by the Agent. */
   agentCommandEcho: AgentCommandEcho | null;
@@ -164,10 +164,10 @@ const sessions = new Map<number, Session>();
 // overlay (a child) can subscribe before the parent effect creates the session.
 const blockViewportListeners = new Map<number, Set<() => void>>();
 
-// TDSF 魔改: 待风险确认命令的 listeners，UI 层订阅以弹出 RiskGuardDialog
+// TDSF: 待风险确认命令的 listeners，UI 层订阅以弹出 RiskGuardDialog
 const pendingRiskListeners = new Map<number, Set<() => void>>();
 
-// TDSF 魔改 2026-08-28 (B1-G2 防伪造): 最近被用户拒绝/取消的高危命令记录。
+// TDSF 2026-08-28 (B1-G2 防伪造): 最近被用户拒绝/取消的高危命令记录。
 // deny/取消时 RiskGuard 静默不执行，sidecar 侧 LLM 无从感知，可能编造"已执行"。
 // 该记录经 useAiLiveBridge.getTerminalContext 注入 AI 上下文（不写终端——红线 9），
 // 10 分钟过期（超过则视为陈旧不再注入）。
@@ -189,7 +189,7 @@ export function getRecentBlockedCommandText(): string | null {
   return lastBlockedCommand.text;
 }
 
-// TDSF 魔改 2026-08-28 (B1-G4): SearchAddon 注册表（lid → addon），
+// TDSF 2026-08-28 (B1-G4): SearchAddon 注册表（lid → addon），
 // TerminalSearchBar 组件按 leafId 直调 findNext/findPrevious；
 // 绑定 slot 时注册（onSearchReady 回调），session 销毁时清理。
 const searchAddons = new Map<number, SearchAddon>();
@@ -280,7 +280,7 @@ export function submitToLeaf(leafId: number, text: string): void {
   const s = sessions.get(leafId);
   if (!s || s.shellExited) return;
 
-  // TDSF 魔改: 同步快速风险评估（< 1ms，保证终端不卡顿）
+  // TDSF: 同步快速风险评估（< 1ms，保证终端不卡顿）
   const assessment = evaluateRiskSync(text);
   if (assessment.level === "high" || assessment.level === "deny") {
     // 命中 L3 (high) / L4 (deny) → 暂存命令，触发 listeners，不执行
@@ -307,7 +307,7 @@ export function submitToLeaf(leafId: number, text: string): void {
   else queuePendingInput(s, data);
 }
 
-// TDSF 魔改: RiskEngine 拦截相关导出（供 UI 层订阅 + 确认/取消）
+// TDSF: RiskEngine 拦截相关导出（供 UI 层订阅 + 确认/取消）
 
 /** 获取当前待风险确认的命令（无拦截时返回 null） */
 export function getPendingRiskCommand(
@@ -354,7 +354,7 @@ export function confirmPendingRiskCommand(leafId: number): void {
 export function cancelPendingRiskCommand(leafId: number): void {
   const s = sessions.get(leafId);
   if (!s) return;
-  // TDSF 魔改 2026-08-28 (B1-G2): 记录被拒绝的命令，供 AI 上下文防伪造注入
+  // TDSF 2026-08-28 (B1-G2): 记录被拒绝的命令，供 AI 上下文防伪造注入
   if (s.pendingRiskCommand) recordBlockedCommand(s.pendingRiskCommand.text);
   s.pendingRiskCommand = null;
   notifyPendingRiskListeners(leafId);
@@ -479,7 +479,7 @@ export function leafIdForPty(ptyId: number): number | null {
 }
 
 export function ptyIdForLeaf(leafId: number): number | null {
-  // TDSF 魔改 (#16): SSH 终端 pty.id 是 sessionId 字符串，不返回给本地 ptyId 查询。
+  // TDSF (#16): SSH 终端 pty.id 是 sessionId 字符串，不返回给本地 ptyId 查询。
   const s = sessions.get(leafId);
   if (!s || s.remote || !s.pty) return null;
   return s.pty.id as number;
@@ -487,7 +487,7 @@ export function ptyIdForLeaf(leafId: number): number | null {
 
 function leafBusy(s: Session): boolean {
   if (s.commandRunning) return true;
-  // TDSF 魔改 (#16): SSH 终端不参与 agent activity 检测（pty.id 是 string，
+  // TDSF (#16): SSH 终端不参与 agent activity 检测（pty.id 是 string，
   // isAgentActivePty 只跟踪本地 PTY 的数字 id）。
   if (s.remote || !s.pty) return false;
   return isAgentActivePty(s.pty.id as number);
@@ -540,7 +540,7 @@ async function releaseIfIdle(leafId: number, s: Session): Promise<void> {
 async function leafHasForegroundJob(leafId: number): Promise<boolean> {
   const s = sessions.get(leafId);
   if (!s?.pty || s.shellExited) return false;
-  // TDSF 魔改 (#16): SSH 终端保持常驻，不调用 pty_has_foreground_job（无对应 Rust 命令）。
+  // TDSF (#16): SSH 终端保持常驻，不调用 pty_has_foreground_job（无对应 Rust 命令）。
   if (s.remote) return false;
   try {
     return await invoke<boolean>("pty_has_foreground_job", {
@@ -604,7 +604,7 @@ configureRendererPool({
       kickPty: (cols, rows) => {
         const pty = s.pty;
         if (!pty || cols <= 0 || rows <= 0) return;
-        // TDSF 魔改 (#16): SSH 终端不做 SIGWINCH +1 bump（本地 ConPTY/Linux trick，
+        // TDSF (#16): SSH 终端不做 SIGWINCH +1 bump（本地 ConPTY/Linux trick，
         // 远程不适用），仅普通 resize。
         if (s.remote) {
           void pty.resize(cols, rows);
@@ -613,7 +613,7 @@ configureRendererPool({
         // Linux only emits SIGWINCH when the winsize ioctl actually
         // changes dims, so bump +1 row then restore. The TUI receives
         // (possibly two) SIGWINCHes and repaints from scratch.
-        // TDSF 魔改 (#16): TerminalTransport.resize 返回 Promise<void>|void，
+        // TDSF (#16): TerminalTransport.resize 返回 Promise<void>|void，
         // 用 Promise.resolve 归一化为 Promise<void> 以链式 .then。
         Promise.resolve(pty.resize(cols, rows + 1))
           .then(() => pty.resize(cols, rows))
@@ -662,7 +662,7 @@ function ensureSession(
 
   const session: Session = {
     pty: null,
-    // TDSF 魔改 (#16): SSH 传输注入字段初始化（默认本地路径，由 hook 同步覆盖）。
+    // TDSF (#16): SSH 传输注入字段初始化（默认本地路径，由 hook 同步覆盖）。
     openTransport: undefined,
     remote: false,
     ptyOpening: false,
@@ -760,7 +760,7 @@ async function openPtyForSession(
   s: Session,
   cwd: string | undefined,
 ): Promise<TerminalTransport> {
-  // TDSF 魔改 (#16): SSH 传输分支 —— 跳过本地 PTY/ConPTY/terminalShell 专属逻辑。
+  // TDSF (#16): SSH 传输分支 —— 跳过本地 PTY/ConPTY/terminalShell 专属逻辑。
   // openTransport 工厂由 SshTerminalHost 提供：subscribeTerminalData + handle.write/resize。
   // close 只 unsubscribe 前端订阅，不断底层 SSH 连接（SFTP 共用）。
   if (s.openTransport) {
@@ -1054,7 +1054,7 @@ export async function respawnSession(
 ): Promise<void> {
   const s = sessions.get(leafId);
   if (!s || s.disposed) return;
-  // TDSF 魔改 (#16): SSH 终端不支持本地 respawn（需走 sshStore 重连流程，后续接入）。
+  // TDSF (#16): SSH 终端不支持本地 respawn（需走 sshStore 重连流程，后续接入）。
   // 直接 return，保留当前 pane（避免 close 后无法重连导致 pane 死掉）。
   if (s.remote) {
     console.warn(
@@ -1086,7 +1086,7 @@ export async function respawnSession(
   }
 
   s.ptyOpening = true;
-  // TDSF 魔改 (#16): pty 类型升级为 TerminalTransport（兼容本地 PTY 与 SSH 传输）。
+  // TDSF (#16): pty 类型升级为 TerminalTransport（兼容本地 PTY 与 SSH 传输）。
   let pty: TerminalTransport;
   try {
     pty = await openPtyWithRetry(leafId, s, cwd ?? s.initialCwd);
@@ -1113,7 +1113,7 @@ export async function leafHasForegroundProcess(
 ): Promise<boolean> {
   const s = sessions.get(leafId);
   if (!s?.pty || s.shellExited) return false;
-  // TDSF 魔改 (#16): SSH 终端保持常驻，不调用 pty_has_foreground_process。
+  // TDSF (#16): SSH 终端保持常驻，不调用 pty_has_foreground_process。
   if (s.remote) return false;
   try {
     const result = await invoke<boolean>("pty_has_foreground_process", {
@@ -1165,12 +1165,12 @@ type Options = {
   focused?: boolean;
   initialCwd?: string;
   blocks?: boolean;
-  // TDSF 魔改 (#16): SSH 传输注入 seam。若提供，useTerminalSession 走 SSH 分支，
+  // TDSF (#16): SSH 传输注入 seam。若提供，useTerminalSession 走 SSH 分支，
   // 由 SshTerminalHost 提供 subscribeTerminalData + handle.write/resize。
   openTransport?: (
     h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
   ) => Promise<TerminalTransport>;
-  // TDSF 魔改 (#16): remote 护栏标志。true 时跳过 PTY 专属 invoke。
+  // TDSF (#16): remote 护栏标志。true 时跳过 PTY 专属 invoke。
   remote?: boolean;
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
@@ -1199,7 +1199,7 @@ export function useTerminalSession({
   const initialCwdRef = useRef(initialCwd);
   initialCwdRef.current = initialCwd;
 
-  // TDSF 魔改 (#16): openTransport/remote 同样不能是 effect dep（每次 render 引用变化
+  // TDSF (#16): openTransport/remote 同样不能是 effect dep（每次 render 引用变化
   // 会重订阅），用 ref 同步到 session，与 initialCwd 同模式。
   const openTransportRef = useRef(openTransport);
   openTransportRef.current = openTransport;
@@ -1209,13 +1209,13 @@ export function useTerminalSession({
   useEffect(() => {
     let cancelled = false;
     const s = ensureSession(leafId, initialCwdRef.current, blocks);
-    // TDSF 魔改 (#16): 同步传输注入与护栏标志到 session。
+    // TDSF (#16): 同步传输注入与护栏标志到 session。
     // 不放进 deps，防止每次 render 重订阅 effect。
     s.openTransport = openTransportRef.current;
     s.remote = remoteRef.current;
     // TDSF 2026-08-28: 命令预测按环境分流——本地终端预测 Windows 命令，
     // SSH 终端预测 Linux 命令（远程 remote=true → linux 命令集）。
-    // TDSF 魔改 2026-08-28（用户反馈）: WSL Space 的本地 PTY 实际运行 Linux，
+    // TDSF 2026-08-28（用户反馈）: WSL Space 的本地 PTY 实际运行 Linux，
     // 命令预测同样按 linux 命令集分流。WorkspaceSurface 只渲染当前 Space 的
     // tabs，session 创建时 active Space 即 leaf 所属 Space。
     const spaceEnvKind = useSpaces

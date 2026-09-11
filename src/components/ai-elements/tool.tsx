@@ -1747,14 +1747,14 @@ function SuggestCommandCard({
   const autoFiredRef = useRef(false);
   const onInsert = () => {
     const store = useChatStore.getState();
-    // TDSF 魔改 (2026-08-09): 终端执行模式——加换行符自动执行命令
+    // TDSF (2026-08-09): 终端执行模式——加换行符自动执行命令
     const execute =
       store.autoExecuteInTerminal && store.agentMode === "auto";
     const text = execute ? command + "\n" : command;
     const ok = store.live.injectIntoActivePty(text);
     if (ok) setAction(execute ? "executed" : "inserted");
   };
-  // TDSF 魔改 (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
+  // TDSF (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
   useEffect(() => {
     if (autoFiredRef.current) return;
     const { autoExecuteInTerminal, agentMode, live } = useChatStore.getState();
@@ -1785,7 +1785,7 @@ function SuggestCommandCard({
             : "粘贴到活动终端；由你自行确认执行"
         }
       />
-      {/* TDSF 魔改 (2026-08-09): 预测回显——让用户提前知道命令执行后应看到什么 */}
+      {/* TDSF (2026-08-09): 预测回显——让用户提前知道命令执行后应看到什么 */}
       {predictedOutput ? (
         <div className="rounded border border-dashed border-border/50 bg-muted/20">
           <button

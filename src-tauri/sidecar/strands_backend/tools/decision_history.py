@@ -1,6 +1,6 @@
 """decision_history 工具 — Strands 路径决策库检索（向量 + FTS5）
 
-TDSF 魔改 (2026-08-09): 方案书 #10 决策库完善。
+TDSF (2026-08-09): 方案书 #10 决策库完善。
 让 Sidecar agent 在排障前检索历史案例库，给出"之前遇到类似问题怎么解决的"参考。
 
 数据源：RAG 引擎（sqlite-vec 向量 + FTS5 全文 + RRF 融合检索）。

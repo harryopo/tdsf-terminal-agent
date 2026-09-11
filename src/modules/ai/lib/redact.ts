@@ -19,7 +19,7 @@ const PATTERNS: Array<{ kind: string; re: RegExp }> = [
     kind: "env-assign",
     re: /\b((?:[A-Z][A-Z0-9_]*)?(?:API[_-]?KEY|SECRET(?:[_-]?KEY)?|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*)\s*[:=]\s*(["']?)([^\s"';|&]+)\2/gi,
   },
-  // TDSF 魔改 2026-08-28 (B1-G1): 以下 3 模式语义对齐 nyaterm redaction.rs（MIT）。
+  // TDSF 2026-08-28 (B1-G1): 以下 3 模式语义对齐 nyaterm redaction.rs（MIT）。
   // 注意：内网 IP 不脱敏（用户钦定 2026-08-28）——教学场景 AI 需看到 IP 判断连通性。
   {
     kind: "private-key",

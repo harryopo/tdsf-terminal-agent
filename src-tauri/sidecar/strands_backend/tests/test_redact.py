@@ -1,4 +1,4 @@
-"""test_redact.py — B1-G1 Sidecar 侧脱敏测试（TDSF 魔改 2026-08-28）
+"""test_redact.py — B1-G1 Sidecar 侧脱敏测试（TDSF 2026-08-28）
 
 与前端 redact.test.ts 关键样本对齐；双侧语义一致是 _redact.py 的存在前提。
 """

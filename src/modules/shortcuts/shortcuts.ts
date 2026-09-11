@@ -2,7 +2,7 @@ import { IS_MAC, MOD_PROP } from "@/lib/platform";
 
 /**
  * Single source of truth for keyboard shortcuts.
- * TDSF 魔改 (2026-08-29): label 全面中文化（快捷键设置页 / 命令面板 / 状态栏
+ * TDSF (2026-08-29): label 全面中文化（快捷键设置页 / 命令面板 / 状态栏
  * 均消费此字段；本项目为中文教学产品，id 仍保持英文稳定标识）。
  */
 
@@ -20,7 +20,7 @@ export type ShortcutId =
   | "space.overview"
   | "pane.splitRight"
   | "pane.splitDown"
-  // TDSF 魔改 (2026-08-11): iTerm2 风格分屏快捷键（Ctrl/Cmd+Shift+H/V）。
+  // TDSF (2026-08-11): iTerm2 风格分屏快捷键（Ctrl/Cmd+Shift+H/V）。
   // 与 splitRight/splitDown 语义等价——splitActivePane 已自动继承 SSH 会话，
   // 只是提供用户熟悉的按键组合（H=horizontal 左右 / V=vertical 上下）。
   | "pane.splitSshRight"
@@ -35,7 +35,7 @@ export type ShortcutId =
   | "terminal.clear"
   | "terminal.toggleInput"
   | "terminal.translate"
-  // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索（xterm SearchAddon UI）。
+  // TDSF 2026-08-28 (B1-G4): 终端内搜索（xterm SearchAddon UI）。
   // Ctrl+Shift/F 避开 search.focus 的 Ctrl+F（文件/tab 搜索）；Windows Terminal 同惯例。
   | "terminal.find"
   | "blocks.prev"
@@ -110,7 +110,7 @@ export const SHORTCUTS: Shortcut[] = [
     group: "Tabs",
     defaultBindings: [{ [MOD_PROP]: true, key: "t" }],
   },
-  // TDSF 魔改 2026-08-31（用户钦定）: 删 tab.newBlock / tab.newPrivate /
+  // TDSF 2026-08-31（用户钦定）: 删 tab.newBlock / tab.newPrivate /
   // tab.newPreview 三项——Blocks/隐私终端/网页预览入口与本项目定位无关，
   // 已从 + 菜单与命令面板整体移除（原 Ctrl+R / Ctrl+Shift+O 绑定随之释放）。
   {
@@ -176,14 +176,14 @@ export const SHORTCUTS: Shortcut[] = [
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "d" }],
   },
   {
-    // TDSF 魔改 (2026-08-11): iTerm2 风格分屏（H=horizontal）。
+    // TDSF (2026-08-11): iTerm2 风格分屏（H=horizontal）。
     id: "pane.splitSshRight",
     label: "向右分屏（备选键）",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "h" }],
   },
   {
-    // TDSF 魔改 (2026-08-11): iTerm2 风格分屏（V=vertical）。
+    // TDSF (2026-08-11): iTerm2 风格分屏（V=vertical）。
     id: "pane.splitSshDown",
     label: "向下分屏（备选键）",
     group: "Panes",
@@ -247,14 +247,14 @@ export const SHORTCUTS: Shortcut[] = [
     defaultBindings: [{ [MOD_PROP]: true, key: "u" }],
   },
   {
-    // TDSF 魔改 2026-07-29: 终端选词翻译开关
+    // TDSF 2026-07-29: 终端选词翻译开关
     id: "terminal.translate",
     label: "开关终端翻译",
     group: "Terminal",
     defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "t" }],
   },
   {
-    // TDSF 魔改 2026-08-28 (B1-G4): 终端内搜索（Ctrl/Cmd+Shift+F）
+    // TDSF 2026-08-28 (B1-G4): 终端内搜索（Ctrl/Cmd+Shift+F）
     id: "terminal.find",
     label: "终端内查找",
     group: "Terminal",

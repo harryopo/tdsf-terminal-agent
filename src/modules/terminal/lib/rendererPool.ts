@@ -110,7 +110,7 @@ function setWindowActive(active: boolean): void {
 export function configureRendererPool(a: SlotAdapter): void {
   adapter = a;
   bindWindowActivityListeners();
-  // TDSF 魔改 (2026-08-09): 注入命令预测引擎的 xterm 访问和写入能力
+  // TDSF (2026-08-09): 注入命令预测引擎的 xterm 访问和写入能力
   initCompletionInjection(getSlotTerm, (leafId, data) => {
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
   });
@@ -310,7 +310,7 @@ function createSlot(): Slot {
     const leafId = slot.currentLeafId;
     if (leafId === null) return false;
 
-    // TDSF 魔改 (2026-08-09): 命令预测拦截——在 readlineSequence 之前执行
+    // TDSF (2026-08-09): 命令预测拦截——在 readlineSequence 之前执行
     // 如果补全引擎返回 false（拦截了按键），直接阻止 xterm 默认行为
     // P0-2 修复：首次按键时异步加载 shell history（不阻塞）
     loadHistoryIfNeeded().catch(() => {});

@@ -1,6 +1,6 @@
 """confidence 工具 — Strands 路径可信度评估（包装 core/confidence.py）
 
-TDSF 魔改 (2026-08-09): 方案书集成度补齐。
+TDSF (2026-08-09): 方案书集成度补齐。
 将 sidecar/tools/confidence.py 的 MCP tool 包装为 Strands tool，
 让 Sidecar agent 也能调用可信度评估。
 

@@ -224,7 +224,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
         to_shell_command="strands_backend.tools.ops_extended:performance_analyze_to_shell_command",
     ),
-    # --- 魔改增强 6（2026-08-09 集成度补齐；原在 adapter 逐个 try 挂载，
+    # --- 定制增强 6（2026-08-09 集成度补齐；原在 adapter 逐个 try 挂载，
     #     T2 收编入注册表统一治理。注意：backup_restore 原 L1 下也挂载，
     #     收编后受 schema-level safety 管辖（L1 只保留 readonly）——fail-closed 收紧）---
     "todo_write": ToolSpec(

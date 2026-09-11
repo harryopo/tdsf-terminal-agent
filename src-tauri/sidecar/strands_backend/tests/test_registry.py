@@ -48,7 +48,7 @@ class TestRegistryIntegrity(unittest.TestCase):
     """注册表完整性"""
 
     def test_registry_has_24_tools(self):
-        """T2 后注册表 = 13 运维/知识 + 6 魔改增强 + T14 save_skill
+        """T2 后注册表 = 13 运维/知识 + 6 定制增强 + T14 save_skill
         + 2026-08-31 knowledge_get_doc + T5 python_run
         + P2 #42 ssh_list_sessions + 远程写文件 = 24"""
         self.assertEqual(len(TOOL_REGISTRY), 25)

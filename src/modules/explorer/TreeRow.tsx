@@ -30,7 +30,7 @@ export type EntryRowProps = {
   gitStatusCode?: GitStatusCode | null;
   gitignored?: boolean;
   /**
-   * TDSF 魔改 2026-08-31: HTML5 拖拽源——文件/目录行可拖到 AI 对话框
+   * TDSF 2026-08-31: HTML5 拖拽源——文件/目录行可拖到 AI 对话框
    * (attach 引用)。本地行写 application/x-tdsf-path, 远程行写
    * application/x-tdsf-remote, 由 FileExplorer 注入。
    */

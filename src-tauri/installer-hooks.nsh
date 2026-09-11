@@ -1,7 +1,7 @@
 ; "Open in TDSF" shell verbs for folders, folder backgrounds, and drives.
 ; HKCU matches installer currentUser scope. %V = clicked path.
 ; NoWorkingDirectory keeps Explorer from overriding %V (System32 on Drive).
-; TDSF 魔改 2026-08-01: 修复上游 terax 残留 (exe 名 terax.exe → tdsf-terminal-agent.exe,
+; TDSF 2026-08-01: 修复上游 terax 残留 (exe 名 terax.exe → tdsf-terminal-agent.exe,
 ; 菜单名 OpenInTerax → OpenInTDSF)。
 
 !macro NSIS_HOOK_POSTINSTALL

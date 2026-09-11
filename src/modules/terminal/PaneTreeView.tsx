@@ -29,7 +29,7 @@ type Props = {
   tabVisible: boolean;
   activeLeafId: number;
   blocks: boolean;
-  /** TDSF 魔改 (2026-08-11): 所在 tab 的 SSH 会话绑定，供 leaf 继承（undefined=本地 tab）。 */
+  /** TDSF (2026-08-11): 所在 tab 的 SSH 会话绑定，供 leaf 继承（undefined=本地 tab）。 */
   tabSshSessionId?: string | null;
   onFocusLeaf: (leafId: number) => void;
   getBundle: (leafId: number) => LeafBundle;
@@ -48,7 +48,7 @@ export function PaneTreeView(props: Props) {
     } = props;
     const focused = node.id === activeLeafId;
     const b = getBundle(node.id);
-    // TDSF 魔改 (2026-08-11): 计算本 leaf 的有效 SSH 会话。
+    // TDSF (2026-08-11): 计算本 leaf 的有效 SSH 会话。
     // leaf 显式绑定优先，否则继承 tab 绑定；返回 string 才走 SSH 渲染。
     const effectiveSsh = effectiveLeafSsh(node, node.id, tabSshSessionId);
     return (
@@ -115,7 +115,7 @@ type PaneProps = {
 };
 
 /**
- * TDSF 魔改 (2026-08-11): leaf 内容分发 —— 有效 SSH 会话且会话仍 connected
+ * TDSF (2026-08-11): leaf 内容分发 —— 有效 SSH 会话且会话仍 connected
  * 时渲染 SSH 叶子（复用 useSshLeafTransport 注入 openTransport），否则渲染本地
  * TerminalPane。拆成子组件是为了满足 hook 规则：useSshStore 每次渲染都调用，
  * 条件渲染的是子组件而非 hook。
@@ -139,7 +139,7 @@ function TerminalPaneContent({
 }
 
 /**
- * TDSF 魔改 (2026-08-11): SSH 叶子 —— 与 SshTerminalHost 同源 transport 注入，
+ * TDSF (2026-08-11): SSH 叶子 —— 与 SshTerminalHost 同源 transport 注入，
  * 但 leafId 来自 paneTree（可多实例分屏），onCwd 同步远程 cwd 到 sshStore。
  */
 function SshLeafPane({

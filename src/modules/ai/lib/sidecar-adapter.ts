@@ -35,7 +35,7 @@ import {
   type AgentMode,
   type TdsfAgentId,
 } from "../agents/registry";
-// TDSF 魔改 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
+// TDSF 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
 import {
   isSidecarConfigSynced,
   markSidecarConfigSynced,
@@ -321,7 +321,7 @@ export interface SidecarStreamOptions {
   /**
    * 终端运行时上下文快照（cwd / activeFile / workspaceRoot / sshSessionId 等）。
    *
-   * TDSF 魔改 2026-07-30 (Bug 5): 通过 state.live 传给 Python agent，
+   * TDSF 2026-07-30 (Bug 5): 通过 state.live 传给 Python agent，
    * Strands 适配层 StrandsAgentAdapter._build_tool_context() 从 state.live
    * 提取 sshSessionId 填充 ToolContext.ssh_session_id，运维工具据此调
    * ssh_command / sftp_* 命令。Python 端 _build_prompt 也从此处读 cwd /
@@ -411,7 +411,7 @@ export type SidecarStreamPart =
  * 字段都是 optional——不同 Agent 可能不返回 thinking / mood / tokens。
  * 实际字段由 agents/base.py BaseAgent.invoke 决定。
  *
- * TDSF 魔改: 字段对齐 Python 实际返回值
+ * TDSF: 字段对齐 Python 实际返回值
  * - Python BaseAgent.invoke() 通过 AgentResult.to_state_update() 返回 `observation`（不是 `output`）
  * - TeachAgent.reflect_on_result() 额外返回 `teaching_content`（结构化教学内容）
  * - 前端为兼容旧测试与未来扩展，两个字段都接受：优先 observation，回退 output
@@ -426,7 +426,7 @@ interface AgentInvokeResult {
   /**
    * Agent 最终输出（必填，作为 assistant message 文本）
    *
-   * TDSF 魔改: Python 端 BaseAgent.invoke() 实际返回的字段名是 `observation`
+   * TDSF: Python 端 BaseAgent.invoke() 实际返回的字段名是 `observation`
    * （见 agents/base.py AgentResult.to_state_update()）。
    * 前端优先读 observation，回退到 output 以兼容旧 mock 测试。
    */
@@ -835,7 +835,7 @@ export async function* runSidecarStream(
     onUsage,
   } = opts;
 
-  // TDSF 魔改 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
+  // TDSF 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
   // （agent.configure 一次 configure 永久生效）。失败不阻塞对话——sidecar
   // 沿用上次落盘配置；置位标志防止每条消息重复打 IPC，配置变更时由
   // ModelsSection 重置标志（scheduleSidecarConfigSync）。
@@ -854,8 +854,8 @@ export async function* runSidecarStream(
   const streamId = `tdsf-${agentId}-${Date.now()}`;
   const thinkingId = `${streamId}-thinking`;
   const outputId = `${streamId}-output`;
-  // TDSF 魔改: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
-  // TDSF 魔改 (2026-08-09): teachingId 不再需要（teach 走 observation 不走独立字段）
+  // TDSF: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
+  // TDSF (2026-08-09): teachingId 不再需要（teach 走 observation 不走独立字段）
 
   // === AsyncQueue：生产者（事件监听器）push part，消费者（主流程）yield ===
   const queue = createAsyncQueue<SidecarStreamPart>();
@@ -1037,7 +1037,7 @@ export async function* runSidecarStream(
       };
     });
 
-    // TDSF 魔改 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
+    // TDSF 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
     // Python 端 StrandsAgentAdapter._build_tool_context() 从 state.live 取 sshSessionId
     // 填充 ToolContext.ssh_session_id（运维工具据此调 ssh_command/sftp_*），
     // _build_prompt() 从 state.live 取 cwd/activeFile 注入 <live_context> 块给 LLM。
@@ -1132,7 +1132,7 @@ export async function* runSidecarStream(
 
     // 7. 错误处理: sidecar 不可用
     if (!invokeResult && invokeError) {
-      // TDSF 魔改 P0-3: 移除 mock 降级，直接报错让用户看到真实问题
+      // TDSF P0-3: 移除 mock 降级，直接报错让用户看到真实问题
       // P0-4 (2026-08-01): 结构化错误提示——按错误类型区分文案与行动建议
       yield {
         type: "error",
@@ -1216,7 +1216,7 @@ export async function* runSidecarStream(
       yield* streamText(outputText, outputId);
     }
 
-    // TDSF 魔改 (2026-08-09): teach 字段契约清理 — 删除 teaching_content 死代码
+    // TDSF (2026-08-09): teach 字段契约清理 — 删除 teaching_content 死代码
     // Strands 路径走 observation 字段（已在上面处理），不产 teaching_content。
     // 旧 LangGraph teach_agent.py 的 3 板块 teaching_content 已成孤儿，
     // 此分支永远不可达，删除避免误导。

@@ -1,4 +1,4 @@
-// TDSF 魔改 2026-08-31（用户钦定）: 开始界面 + 菜单只保留 Terminal 与 Editor。
+// TDSF 2026-08-31（用户钦定）: 开始界面 + 菜单只保留 Terminal 与 Editor。
 // 上游遗留的 Blocks / Privacy / Preview / Git Graph 入口与本项目 Linux 运维教学
 // 定位无关（点击后功能残缺），已从 + 菜单、命令面板、快捷键中整体移除。
 import { Button } from "@/components/ui/button";

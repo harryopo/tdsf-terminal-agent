@@ -217,7 +217,7 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
     tRef.current = window.setTimeout(() => setSent(false), 1500);
   }, [code]);
 
-  // TDSF 魔改 2026-09-02（用户钦定“自动打字+自动执行”）: 命令卡渲染后
+  // TDSF 2026-09-02（用户钦定“自动打字+自动执行”）: 命令卡渲染后
   // 自动注入活动终端，无需手动点 Run。仅 autoExecuteInTerminal 开启时触发；
   // NOOP_LIVE 下 injectIntoActivePty 返回 false（测试/无终端环境安全无副作用）。
   // autoFiredRef 保证每个命令卡只自动注入一次（防重渲染/多视图重复执行）。

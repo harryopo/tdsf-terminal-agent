@@ -168,7 +168,7 @@ export type Live = {
   /**
    * 获取当前活跃 SSH 会话的 Rust session_id (u32)。
    *
-   * TDSF 魔改 2026-07-30: Strands 运维工具需要通过 RustBridge 调
+   * TDSF 2026-07-30: Strands 运维工具需要通过 RustBridge 调
    * ssh_command / sftp_* 命令，这些命令的 sessionId 参数期望 u32 类型
    * (来自 ssh_connect 返回值)。前端 LiveSnapshot.sshSessionId 字段
    * 从此方法取值，注入到 state.live.sshSessionId，Python 侧
@@ -340,7 +340,7 @@ type StoreState = {
   setSessionReadOnlyTrust: (on: boolean) => void;
 
   /**
-   * 终端执行模式开关（TDSF 魔改 2026-08-09）
+   * 终端执行模式开关（TDSF 2026-08-09）
    *
    * 打开后，agent 建议的命令自动注入终端并执行（加换行符），
    * 用户在终端上实时看到命令执行和输出回显。
@@ -635,7 +635,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
   sessionReadOnlyTrust: false,
   setSessionReadOnlyTrust: (on) => set({ sessionReadOnlyTrust: on }),
 
-  // TDSF 魔改 2026-09-02（用户钦定“自动打字+自动执行”）: 默认开启——
+  // TDSF 2026-09-02（用户钦定“自动打字+自动执行”）: 默认开启——
   // AI 在对话区给出的命令卡（CommandCard / suggest_command）自动通过
   // human_type 打字机逐字注入活动终端并追加 \n 执行，无需手动点 Run。
   // 注：本前端标志与 sidecar 的 ssh_command visible 注入已解耦（见

@@ -86,7 +86,7 @@ type Props = {
   path: string;
   overrideLanguage?: string | null;
   /**
-   * TDSF 魔改 2026-07-30: 远程文件标记，跳过 LSP/外部 formatter/convertFileSrc 媒体预览。
+   * TDSF 2026-07-30: 远程文件标记，跳过 LSP/外部 formatter/convertFileSrc 媒体预览。
    */
   remote?: { sessionId: string } | null;
   onDirtyChange?: (dirty: boolean) => void;
@@ -188,7 +188,7 @@ export const EditorPane = memo(
       const view = cmRef.current?.view;
       const prefs = usePreferencesStore.getState();
       const formatter = resolveFormatter(languageRef.current, prefs);
-      // TDSF 魔改 2026-07-30: 远程文件跳过 format-on-save（LSP/外部 formatter 均走本地，无法处理远程）。
+      // TDSF 2026-07-30: 远程文件跳过 format-on-save（LSP/外部 formatter 均走本地，无法处理远程）。
       if (prefs.editorFormatOnSave && formatter === "lsp" && view && !remote) {
         if (lspActiveRef.current) {
           let res: "done" | "unsupported" = "done";
@@ -219,7 +219,7 @@ export const EditorPane = memo(
       const docAtSave = view?.state.doc;
       const saved = await saveRef.current();
       if (!saved) return;
-      // TDSF 魔改 2026-07-30: 远程文件跳过外部格式化。
+      // TDSF 2026-07-30: 远程文件跳过外部格式化。
       if (prefs.editorFormatOnSave && formatter !== "lsp" && !remote) {
         const error = await runExternalFormatter(
           formatter,
@@ -379,7 +379,7 @@ export const EditorPane = memo(
 
     const lspExt = useLspExtension(path, langId, doc.status === "ready");
     useEffect(() => {
-      // TDSF 魔改 2026-07-30: 远程文件不走 LSP（LSP 绑定本地 fs + workspace）。
+      // TDSF 2026-07-30: 远程文件不走 LSP（LSP 绑定本地 fs + workspace）。
       // reconfigure 为空扩展，避免上次本地 tab 残留的 LSP 扩展继续作用于远程文件。
       if (remote) {
         lspActiveRef.current = false;

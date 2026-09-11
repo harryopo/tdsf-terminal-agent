@@ -54,7 +54,7 @@ export function useWindowTitle(
     }
 
     document.title = title;
-    // TDSF 魔改: dev 模式 (无 Tauri 运行时) 跳过 setTitle 调用
+    // TDSF: dev 模式 (无 Tauri 运行时) 跳过 setTitle 调用
     if (!isTauriRuntime()) return;
     void getCurrentWindow()
       .setTitle(title)

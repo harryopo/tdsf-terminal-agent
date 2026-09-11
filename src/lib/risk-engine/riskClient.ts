@@ -1,4 +1,4 @@
-// TDSF 魔改: RiskEngine RPC 客户端 (T2.2)
+// TDSF: RiskEngine RPC 客户端 (T2.2)
 // -----------------------------------------------------------------------------
 // 通过 Tauri ipc_invoke 调用 Python Sidecar 的 risk.evaluate JSON-RPC 方法，
 // 获取 L0-L4 风险等级。失败时 fail-open 回退到本地 TS 同步评估（./index.ts），

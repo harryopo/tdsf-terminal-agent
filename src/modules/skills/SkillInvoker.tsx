@@ -1,4 +1,4 @@
-// TDSF 魔改 (P4-T4.4): Skill 调用对话框
+// TDSF (P4-T4.4): Skill 调用对话框
 // -----------------------------------------------------------------------------
 // 弹窗（shadcn Dialog）用于调用单个 skill：
 //   - 显示 skill 名称 + 描述
@@ -113,7 +113,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
       <DialogContent className="sm:max-w-[640px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {/* TDSF 魔改: 标题图标改用 text-primary 语义色 */}
+            {/* TDSF: 标题图标改用 text-primary 语义色 */}
             <HugeiconsIcon
               icon={SparklesIcon}
               size={16}
@@ -166,7 +166,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
               <span
                 className={cn(
                   "text-[10px] tabular-nums",
-                  // TDSF 魔改: 成功状态使用 text-primary，失败保持 text-destructive
+                  // TDSF: 成功状态使用 text-primary，失败保持 text-destructive
                   result.success ? "text-primary" : "text-destructive",
                 )}
               >
@@ -182,7 +182,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
             {output ? (
               <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/90">
                 {output}
-                {/* TDSF 魔改: 流式光标改用 bg-primary 语义色 */}
+                {/* TDSF: 流式光标改用 bg-primary 语义色 */}
                 {streaming && (
                   <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-primary align-middle" />
                 )}
@@ -217,7 +217,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
             onClick={() => void handleInvoke()}
             disabled={isInvoking || !skill}
             className={cn(
-              // TDSF 魔改: 调用按钮使用 bg-primary 语义色
+              // TDSF: 调用按钮使用 bg-primary 语义色
               "gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90",
               "disabled:cursor-not-allowed disabled:opacity-50",
             )}

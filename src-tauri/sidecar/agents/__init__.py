@@ -54,7 +54,7 @@ from agents.refactor_agent import RefactorAgent
 from agents.test_agent import TestAgent
 from agents.deploy_agent import DeployAgent
 
-# TDSF 魔改 2026-07-30 P0-C2 修复: Strands 后端 override 调用签名
+# TDSF 2026-07-30 P0-C2 修复: Strands 后端 override 调用签名
 # 与 strands_backend.adapter.StrandsAgentAdapter.invoke 对齐：
 #   (agent_id: str, input: str, state: dict[str, Any]) -> dict[str, Any]
 # invoke_agent() 调用时优先走 override（若已 set_backend），否则走 BaseAgent.invoke
@@ -86,7 +86,7 @@ __all__ = [
     "configure_agents",
     "register_methods",
     "reset_for_test",
-    # TDSF 魔改 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
+    # TDSF 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
     "set_backend",
     "clear_backend",
     "BackendInvokeCallable",
@@ -127,7 +127,7 @@ _agent_instances: dict[str, BaseAgent] = {}
 _global_event_bus = None
 _global_llm_call: LLMCallFunction | None = None
 
-# TDSF 魔改 2026-07-30 P0-C2 修复: Strands 后端 override
+# TDSF 2026-07-30 P0-C2 修复: Strands 后端 override
 # - 非 None 时 invoke_agent() 走 override 路径，绕开 BaseAgent.invoke
 # - 由 main.py 在 TDSF_AGENT_BACKEND=strands 时通过 set_backend(adapter.invoke) 注入
 # - 与现有 BaseAgent PAOR 主路径互斥，二选一（避免双路径并发竞态）
@@ -165,7 +165,7 @@ def configure_agents(
 
 
 # ============================================================================
-# TDSF 魔改 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
+# TDSF 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
 # ============================================================================
 #
 # 设计原则：
@@ -301,7 +301,7 @@ def invoke_agent(name: str, state: dict[str, Any]) -> dict[str, Any]:
     Returns:
         部分状态更新（与 LangGraph 节点返回值兼容）
 
-    TDSF 魔改 2026-07-30 P0-E 修复:
+    TDSF 2026-07-30 P0-E 修复:
         原版直接调 get_agent(name).invoke(state)，忽略 _global_backend_override，
         导致 set_backend() 注入的 Strands 适配层永远不会被调用，Strands 后端
         处于"已激活但未被调用"的"幽灵状态"。修复后优先走 override，让
@@ -385,7 +385,7 @@ def _rpc_agent_configure(
 ) -> dict[str, Any]:
     """JSON-RPC: agent.configure（运行时重新配置 LLM）
 
-    TDSF 魔改 P0-3: 支持通过配置字典重新配置 LLM
+    TDSF P0-3: 支持通过配置字典重新配置 LLM
     （JSON-RPC 无法序列化函数，改为传配置参数）
 
     Args:

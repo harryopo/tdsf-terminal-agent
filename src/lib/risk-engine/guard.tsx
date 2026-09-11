@@ -1,4 +1,4 @@
-// TDSF 魔改: RiskEngine Guard 组件 (T2.2)
+// TDSF: RiskEngine Guard 组件 (T2.2)
 // -----------------------------------------------------------------------------
 // 基于现有 RiskConfirmDialog 的薄包装层，提供 useRiskGuard hook 管理 L3/L4 拦截流程。
 //

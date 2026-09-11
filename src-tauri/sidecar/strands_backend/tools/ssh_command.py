@@ -11,7 +11,7 @@ strands_backend/tools/ssh_command.py — SSH 命令执行工具
   ``RiskChecker`` 检测，命中即 ``emit_needs_you`` 推送审批事件，不直接执行。
 - 返回结构化 dict（不返回裸字符串），与 Strands 工具协议对齐。
 
-TDSF 魔改 2026-07-30 P0-C4:
+TDSF 2026-07-30 P0-C4:
 - 原 docstring / 注释引用 "ssh_exec_in_session"，与 Rust 侧命名约定不一致。
   Rust 侧实际命令风格为 ssh_<verb>（如 ssh_connect/ssh_write/ssh_disconnect），
   故对齐为 "ssh_command"。
@@ -92,7 +92,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     ssh_session_id = params.get("ssh_session_id", "") or ""
     explanation = params.get("explanation", "") or ""
     timeout = int(params.get("timeout", 30))
-    # TDSF 魔改 (2026-08-09): 前端开关 auto_execute_in_terminal 开启时自动设 visible
+    # TDSF (2026-08-09): 前端开关 auto_execute_in_terminal 开启时自动设 visible
 
     # 多行命令拆分检测（Task 3 / Task 4 接入：每行走 assess_command 综合决策）
     # P1-1 (2026-08-01): 命中确认 → 真实等待用户响应，批准后整条执行
@@ -189,7 +189,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         except Exception as e:
             logger.debug(f"emit_tool_call started failed: {e}")
 
-    # TDSF 魔改 (2026-08-09): visible 模式——通知前端把命令注入终端（用户可见）
+    # TDSF (2026-08-09): visible 模式——通知前端把命令注入终端（用户可见）
     # 在后台 exec 执行前，先通知前端把命令写到终端屏幕上让用户看到。
     # 后台 exec 仍然执行以拿到结构化结果返回给 LLM。
     if False:  # Legacy notification path removed: it duplicated real execution.

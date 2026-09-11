@@ -28,7 +28,7 @@ export type DocumentState =
 type Options = {
   path: string;
   /**
-   * TDSF 魔改 2026-07-30: 远程文件标记，非空时 fs 调用分流到 sftp-bridge。
+   * TDSF 2026-07-30: 远程文件标记，非空时 fs 调用分流到 sftp-bridge。
    * undefined / null 走本地 fs_read_file/fs_write_file/fs_stat。
    */
   remote?: { sessionId: string } | null;
@@ -65,7 +65,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
 
   const diskMtimeRef = useRef<number | null>(null);
 
-  // TDSF 魔改 2026-07-30: 实时取 rustSessionId（应对连接断开/重连后的状态迁移）。
+  // TDSF 2026-07-30: 实时取 rustSessionId（应对连接断开/重连后的状态迁移）。
   // 绝不缓存到 ref——SSH 重连后 rustSessionId 会变，缓存会导致保存写到旧 session。
   const getRustSessionId = useCallback((): number | null => {
     if (!remote) return null;
@@ -77,7 +77,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
 
   const writeToDisk = useCallback(async () => {
     const content = bufferRef.current;
-    // TDSF 魔改 2026-07-30: 远程文件分流到 sftpWrite。
+    // TDSF 2026-07-30: 远程文件分流到 sftpWrite。
     // sftpWrite 不返回 mtime，需额外 sftpStat 补，作为下次冲突检测的 baseline。
     if (remote) {
       const sid = getRustSessionId();
@@ -113,7 +113,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
   const saveNow = useCallback(async (): Promise<boolean> => {
     const known = diskMtimeRef.current;
     if (known !== null) {
-      // TDSF 魔改 2026-07-30: 远程用 sftpStat，mtime 秒级 *1000 转毫秒。
+      // TDSF 2026-07-30: 远程用 sftpStat，mtime 秒级 *1000 转毫秒。
       let mtime: number | null = null;
       if (remote) {
         const sid = getRustSessionId();
@@ -174,7 +174,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
 
   const readFromDisk = useCallback(
     (force: boolean): Promise<ReadResult> => {
-      // TDSF 魔改 2026-07-30: 远程用 sftpRead，需前端做 binary 检测 + sftpStat 补 mtime。
+      // TDSF 2026-07-30: 远程用 sftpRead，需前端做 binary 检测 + sftpStat 补 mtime。
       // force 参数远程分支忽略（sftpRead 全量读取，无 force 概念，openAnyway 行为一致）。
       if (remote) {
         const sid = getRustSessionId();

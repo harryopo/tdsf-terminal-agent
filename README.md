@@ -6,7 +6,7 @@
 
 **A terminal-first Linux operations workbench where the AI agent works inside your real shell — visibly, step by step.**
 
-[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Quick start](#quick-start) · [User guide](docs/guide/) · [Status](docs/dev-state.md) · [Roadmap](docs/ROADMAP.md)
+[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Quick start](#quick-start) · [Capabilities](#core-capabilities) · [Architecture](#architecture) · [GitHub](https://github.com/harryopo/tdsf-terminal-agent)
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Shell](https://img.shields.io/badge/shell-Tauri%202%20%2B%20Rust-000)
@@ -112,19 +112,6 @@ Python sidecar      (Strands agent · tool registry · approvals · knowledge ·
 | AI runtime | Python sidecar with Strands Agents (OpenAI-compatible providers: DeepSeek, Zhipu, Qwen, Moonshot, Doubao, Ollama, custom endpoints) |
 | Knowledge | SQLite FTS5 + sqlite-vec (512-dim) + RRF |
 
-## Verification status
-
-This project distinguishes **what is verified by code and automated tests** from **what still needs native desktop acceptance** — no capability is described as end-to-end complete without evidence.
-
-| Gate | Result |
-|------|--------|
-| `pytest` (sidecar) | 2,236 passed |
-| `vitest` | 1,368 passed (140 files) |
-| `cargo test` | 364 passed |
-| `tsc` / `eslint` | 0 errors, 0 warnings |
-
-Still pending **native Tauri verification with a real SSH profile**: connection and history restore, approval FIFO under load, teaching command round-trips (success / non-zero exit / timeout / concurrent cards), and distribution-aware completion. The current status matrix lives in [`docs/agent/当前架构与实施状态矩阵-2026-09-05.md`](docs/agent/当前架构与实施状态矩阵-2026-09-05.md).
-
 ## Quick start
 
 **Requirements**: Node.js ≥ 20, pnpm ≥ 9, Rust stable, Python ≥ 3.12
@@ -138,21 +125,9 @@ The Python sidecar environment lives in `src-tauri/sidecar/` (a virtualenv); `�
 
 Add an API key in **Settings → Models** (DeepSeek, Zhipu, Qwen, Moonshot, Doubao, Ollama or a custom OpenAI-compatible endpoint), then create a workspace — local, WSL or SSH — and start a conversation inside it.
 
-## Documentation
-
-| Document | Contents |
-|----------|----------|
-| [`docs/guide/`](docs/guide/) | **User documentation** — trust modes, visible execution, approval rules, knowledge base, LSP |
-| [`CLAUDE.md`](CLAUDE.md) | Engineering handbook: architecture map, red lines, gates, diagnostic playbook |
-| [`docs/dev-state.md`](docs/dev-state.md) | Current state, known issues, handover chapters (single source of progress truth) |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Short and long term plans |
-| [`docs/DEV-JOURNAL.md`](docs/DEV-JOURNAL.md) | Development journal — root causes and retrospective per task |
-| [`docs/agent/`](docs/agent/) | Agent design books, architecture matrix, audit and stability reports |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution guide and project layout |
-
 ## License and upstream
 
-- Original contributions in this project: **Apache-2.0** — see [`LICENSE`](LICENSE) and [`docs/OPEN-SOURCE-AND-MODIFICATIONS.md`](docs/OPEN-SOURCE-AND-MODIFICATIONS.md).
+- Original contributions in this project: **Apache-2.0** — see [`LICENSE`](LICENSE).
 - Architecture based on [crynta/terax-ai](https://github.com/crynta/terax-ai) (Apache-2.0); this project extends it with SSH server management, the visible-execution agent runtime and the Linux teaching workflow.
 
 ---
@@ -166,7 +141,7 @@ Add an API key in **Settings → Models** (DeepSeek, Zhipu, Qwen, Moonshot, Doub
 
 **终端优先的 Linux 运维工作台 —— AI Agent 直接在真实 shell 里干活，而且你看得见每一步。**
 
-[宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [快速开始](#快速开始) · [用户文档](docs/guide/) · [当前状态](docs/dev-state.md) · [路线图](docs/ROADMAP.md)
+[宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [快速开始](#快速开始) · [核心能力](#核心能力) · [架构](#架构) · [GitHub](https://github.com/harryopo/tdsf-terminal-agent)
 
 </div>
 
@@ -266,8 +241,6 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识库 · �
 | `cargo test` | 364 通过 |
 | `tsc` / `eslint` | 0 错误 0 警告 |
 
-**待原生验收**（需真实 SSH 服务器与保存的连接配置）：连接与历史恢复、同会话审批 FIFO、教学命令成功/非零退出/超时/并发卡片闭环、发行版感知补全。当前状态矩阵见 [`docs/agent/当前架构与实施状态矩阵-2026-09-05.md`](docs/agent/当前架构与实施状态矩阵-2026-09-05.md)。
-
 ## 快速开始
 
 **环境要求**：Node.js ≥ 20、pnpm ≥ 9、Rust stable、Python ≥ 3.12
@@ -281,19 +254,7 @@ Python sidecar 环境位于 `src-tauri/sidecar/`（虚拟环境）；Windows 下
 
 在**设置 → 模型**中填入 API Key（DeepSeek / 智谱 / 通义 / Kimi / 豆包 / Ollama / 自定义 OpenAI 兼容端点），然后新建一个工作区（本地 / WSL / SSH），在工作区内新建对话开始使用。
 
-## 文档
-
-| 文档 | 内容 |
-|------|------|
-| [`docs/guide/`](docs/guide/) | **用户文档**：三模式信任体系、可视执行演示、审批白名单、知识库使用、LSP |
-| [`CLAUDE.md`](CLAUDE.md) | 工程总纲：架构地图、防污染红线、五绿门禁、诊断方法论 |
-| [`docs/dev-state.md`](docs/dev-state.md) | 当前状态、已知问题、交接章（唯一进度记忆源） |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | 短/长期规划 |
-| [`docs/DEV-JOURNAL.md`](docs/DEV-JOURNAL.md) | 开发日志：每个任务的根因与复盘 |
-| [`docs/agent/`](docs/agent/) | Agent 方案书、架构矩阵、审查与稳定性报告 |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 贡献指南与项目结构 |
-
 ## 许可与上游
 
-- 本项目原创贡献以 **Apache-2.0** 授权 —— 见 [`LICENSE`](LICENSE) 与 [`docs/OPEN-SOURCE-AND-MODIFICATIONS.md`](docs/OPEN-SOURCE-AND-MODIFICATIONS.md)。
+- 本项目原创贡献以 **Apache-2.0** 授权 —— 见 [`LICENSE`](LICENSE)。
 - 架构基于 [crynta/terax-ai](https://github.com/crynta/terax-ai)（Apache-2.0）；本项目在其基础上优化完善，并新增 SSH 服务器管理、可见执行 Agent 运行时与 Linux 教学流程。

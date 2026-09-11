@@ -4,7 +4,7 @@ description: Python 调试 Skill，覆盖 Traceback 阅读、pdb 断点、loggin
 version: 2.0.0
 author: TDSF
 tags: [python, debug, pdb, logging, venv, pip]
-# TDSF 魔改 (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
+# TDSF (P0-2 修复 2026-07-28): executor 让 Skill 真正可执行
 # python -c 打印解释器路径与版本 = Python 环境排障第一命令:
 # 确认"跑的是哪个 Python"是 ModuleNotFoundError / 依赖错乱排查的起点.
 executor:
