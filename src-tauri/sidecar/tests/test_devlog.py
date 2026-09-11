@@ -5,10 +5,12 @@
 """
 
 import sys
+from datetime import timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sidecar"))
 
+import devlog  # noqa: E402
 from devlog import analyze_lines, default_log_path, parse_line  # noqa: E402
 
 
@@ -109,8 +111,25 @@ class TestRustLogParsing:
         assert e.level == "INFO"
         assert "connect success" in e.message
         assert "tdsf_terminal_agent_lib" in e.logger
-        # rust.log 是 UTC（16:08 UTC → 本地 +8 = 次日 00:08）
-        assert e.ts == "2026-08-01 00:08:25"
+
+    def test_rust_line_ts_normalized_from_utc(self):
+        """rust.log 为 UTC，解析时归一化到本地时区。
+
+        断言不能写死某个时区（CI 跑在 UTC，开发机在 UTC+8）：这里固定
+        `_LOCAL_TZ` 分别按 UTC+8 与 UTC 各验一次，测试与运行环境无关。
+        """
+        line = (
+            '[2026-07-31][16:08:25][tdsf_terminal_agent_lib::modules::ssh]'
+            '[INFO] [ssh] connect success: id=4'
+        )
+        original = devlog._LOCAL_TZ
+        try:
+            devlog._LOCAL_TZ = timezone(timedelta(hours=8))
+            assert parse_line(line).ts == "2026-08-01 00:08:25"
+            devlog._LOCAL_TZ = timezone.utc
+            assert parse_line(line).ts == "2026-07-31 16:08:25"
+        finally:
+            devlog._LOCAL_TZ = original
 
     def test_rust_line_without_target(self):
         e = parse_line(
