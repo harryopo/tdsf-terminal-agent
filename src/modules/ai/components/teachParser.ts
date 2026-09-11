@@ -39,20 +39,26 @@ const EMOJI_TYPES: Array<[string, TeachSectionType]> = [
 
 const KEYWORD_TYPES: Array<[RegExp, TeachSectionType]> = [
   [/概念|原理/i, "concept"],
-  [/路径解析/i, "path"],
+  [/路径|步骤|流程/i, "path"],
   [/命令哲学|教学/i, "philosophy"],
-  [/操作示例/i, "example"],
-  [/易错/i, "pitfall"],
-  [/练习/i, "exercise"],
+  [/操作|示例|示范/i, "example"],
+  [/易错|注意|陷阱/i, "pitfall"],
+  [/练习|实践/i, "exercise"],
 ];
 
+// Models sometimes omit Markdown hashes while keeping the teaching labels.
+// Recognize those labels only in Teach mode; ordinary Markdown remains safe.
+const PLAIN_HEADING_RE =
+  /^\s*(?:\*\*|__)?\s*(?:(?:\d+|[一二三四五六七八九十]+)[\s.、)．-]+)?(概念(?:与原理)?|原理|路径(?:拆解|解析)?|步骤|流程|Linux\s*设计哲学|命令哲学|操作(?:示例|示范)?|示例|示范|易错点?(?:与(?:考点|检查)|提示)?|注意事项|练习|实践练习)(?:\s*[:：—-]\s*(.*?))?\s*(?:\*\*|__)?\s*$/i;
+
 /**
- * Return true only for an explicitly marked teaching response.
+ * Return true for an explicitly marked teaching response, or a structurally
+ * recognizable legacy teaching response when Teach mode is already enabled.
  *
  * The previous implementation inferred the mode from headings and emoji.
  * That made ordinary knowledge-search summaries turn into TeachCards.  A
- * missing marker is intentionally fail-closed: it is safer to show Markdown
- * than to claim that a tool report is a lesson.
+ * A missing marker is still fail-closed outside Teach mode, so knowledge
+ * reports and tool status cannot become lesson cards accidentally.
  */
 export function isTeachMessage(text: string): boolean {
   return Boolean(text && TEACH_OUTPUT_MARKER_RE.test(text));
@@ -73,7 +79,21 @@ export function shouldRenderTeachCard(
   teachEnabled: boolean,
   streaming: boolean,
 ): boolean {
-  return teachEnabled && !streaming && isTeachMessage(text);
+  if (!teachEnabled || !text.trim()) return false;
+  // The explicit transport marker is authoritative and may be rendered while
+  // tokens are still arriving, so the lesson card does not disappear during
+  // a live response.
+  if (isTeachMessage(text)) return true;
+  if (streaming) return false;
+  // Compatibility with older sidecars that emitted teaching labels without
+  // the marker. Require two distinct lesson sections so a knowledge document
+  // that happens to mention one “示例” heading stays ordinary Markdown.
+  const types = new Set(
+    parseTeachSections(text)
+      .map((section) => section.type)
+      .filter((type) => type !== "other"),
+  );
+  return types.size >= 2;
 }
 
 /** Parse a marked teaching response into the small set of UI sections. */
@@ -104,6 +124,17 @@ export function parseTeachSections(markdown: string): TeachSection[] {
           isHeader = true;
           forcedType = type;
           break;
+        }
+      }
+
+      if (!isHeader) {
+        const plainHeading = line.match(PLAIN_HEADING_RE);
+        if (plainHeading) {
+          const label = plainHeading[1].trim();
+          const suffix = plainHeading[2]?.trim();
+          title = suffix ? `${label}：${suffix}` : label;
+          isHeader = true;
+          forcedType = detectSectionType(label);
         }
       }
     }

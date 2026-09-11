@@ -9,16 +9,25 @@ const encoder = new TextEncoder();
 const AGENT_COMMAND_BLUE_BYTES = encoder.encode(AGENT_COMMAND_BLUE);
 const RESET_STYLE_BYTES = encoder.encode(RESET_STYLE);
 type ControlState = "none" | "escape" | "csi" | "string" | "stringEscape";
+export type AgentCommandEchoOptions = {
+  /** Wait for a shell prompt boundary before matching the command echo. */
+  waitForPrompt?: boolean;
+};
 
 export class AgentCommandEcho {
   private readonly expected: Uint8Array;
   private index = 0;
   private complete = false;
   private controlState: ControlState = "none";
+  private readonly waitForPrompt: boolean;
+  private promptReady: boolean;
+  private promptMarkerPending = false;
 
-  constructor(command: string) {
+  constructor(command: string, options: AgentCommandEchoOptions = {}) {
     this.expected = encoder.encode(command.replace(/[\r\n]+$/, ""));
     this.complete = this.expected.length === 0;
+    this.waitForPrompt = options.waitForPrompt === true;
+    this.promptReady = !this.waitForPrompt;
   }
 
   isComplete(): boolean {
@@ -48,7 +57,28 @@ export class AgentCommandEcho {
       // next command.
       if (byte < 0x20 || byte === 0x7f) {
         output.push(byte);
-        if (byte === 0x0a || byte === 0x0d) this.index = 0;
+        if (byte === 0x0a || byte === 0x0d) {
+          this.index = 0;
+          this.promptReady = !this.waitForPrompt;
+          this.promptMarkerPending = false;
+        }
+        continue;
+      }
+
+      if (!this.promptReady) {
+        output.push(byte);
+        if (this.promptMarkerPending) {
+          this.promptReady = byte === 0x20 || byte === 0x09;
+          this.promptMarkerPending = false;
+        } else if (
+          byte === 0x23 ||
+          byte === 0x24 ||
+          byte === 0x25 ||
+          byte === 0x3e
+        ) {
+          // Common POSIX / PowerShell prompt terminators: #, $, %, >.
+          this.promptMarkerPending = true;
+        }
         continue;
       }
 

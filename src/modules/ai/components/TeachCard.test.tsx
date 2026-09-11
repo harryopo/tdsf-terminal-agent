@@ -112,10 +112,25 @@ describe("isTeachMessage — 教学输出契约", () => {
 });
 
 describe("shouldRenderTeachCard — 流式边界", () => {
-  it("在流式或 token 续跑期间保持 Markdown，完成后再解析卡片", () => {
-    expect(shouldRenderTeachCard(TEACH_MD, true, true)).toBe(false);
+  it("显式教学标记在流式期间也保持教学卡", () => {
+    expect(shouldRenderTeachCard(TEACH_MD, true, true)).toBe(true);
     expect(shouldRenderTeachCard(TEACH_MD, true, false)).toBe(true);
     expect(shouldRenderTeachCard(TEACH_MD, false, false)).toBe(false);
+  });
+
+  it("兼容没有标记但带教学板块标题的旧输出", () => {
+    const legacy = [
+      "**概念与原理**",
+      "先理解服务与端口的关系。",
+      "**易错提示**",
+      "不要把监听地址和防火墙规则混为一谈。",
+    ].join("\n");
+    expect(shouldRenderTeachCard(legacy, true, true)).toBe(false);
+    expect(shouldRenderTeachCard(legacy, true, false)).toBe(true);
+    expect(parseTeachSections(legacy).map((s) => s.type)).toEqual([
+      "concept",
+      "pitfall",
+    ]);
   });
 });
 

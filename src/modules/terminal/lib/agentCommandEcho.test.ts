@@ -41,6 +41,20 @@ describe("AgentCommandEcho", () => {
     expect(echo.isComplete()).toBe(true);
   });
 
+  it("waits for a prompt boundary before coloring a human-typed command", () => {
+    const echo = new AgentCommandEcho("rpm -q samba\n", {
+      waitForPrompt: true,
+    });
+
+    expect(decode(echo.transform(encode("[root@server ~]# ")))).toBe(
+      "[root@server ~]# ",
+    );
+    expect(decode(echo.transform(encode("rpm -q samba\r\n")))).toBe(
+      "\x1b[38;2;91;140;255mrpm -q samba\x1b[0m\r\n",
+    );
+    expect(echo.isComplete()).toBe(true);
+  });
+
   it("leaves non-matching output byte-for-byte unchanged", () => {
     const echo = new AgentCommandEcho("uname -a\n");
     const output = encode("permission denied\r\n");

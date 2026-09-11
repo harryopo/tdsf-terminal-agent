@@ -823,8 +823,8 @@ const RenderedPart = memo(function RenderedPart({
 }) {
   if (part.type === "text") {
     const text = (part as unknown as { text: string }).text;
-    // TeachCard 只能解析完整、带 tdsf:teach 标记的回答。流式或知识检索
-    // 保持普通 Markdown，避免 max-token 续写留下半截 fenced code/section。
+    // Teach 模式的显式标记可在流式期间直接渲染；无标记的旧输出则等
+    // 流式结束后按结构标题兼容解析，知识检索仍保持普通 Markdown。
     const teach = useChatStore.getState().teach;
     if (shouldRenderTeachCard(text, teach, streaming)) {
       return <TeachCard content={text} />;

@@ -35,7 +35,10 @@ import { useTerminalBlocksStore } from "./terminalBlocksStore";
 import type { IMarker } from "@xterm/xterm";
 // outputTail 复用 AI 模块的脱敏函数（redact.ts 零依赖，无循环导入）
 import { redactSensitive } from "@/modules/ai/lib/redact";
-import { AgentCommandEcho } from "./agentCommandEcho";
+import {
+  AgentCommandEcho,
+  type AgentCommandEchoOptions,
+} from "./agentCommandEcho";
 import {
   createShellIntegrationState,
   registerCwdHandler,
@@ -258,9 +261,13 @@ export function writeToSession(leafId: number, data: string): boolean {
 }
 
 /** Mark the next matching terminal echo as an Agent command, display-only. */
-export function armAgentCommandEcho(leafId: number, command: string): void {
+export function armAgentCommandEcho(
+  leafId: number,
+  command: string,
+  options?: AgentCommandEchoOptions,
+): void {
   const s = sessions.get(leafId);
-  if (s) s.agentCommandEcho = new AgentCommandEcho(command);
+  if (s) s.agentCommandEcho = new AgentCommandEcho(command, options);
 }
 
 /** Clear a pending marker when human typing was interrupted before echoing. */
