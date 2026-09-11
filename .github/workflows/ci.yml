@@ -183,6 +183,13 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-nextest
 
+      # 与 rust 任务同理：打包资源要求 sidecar/tdsf-sidecar/ 存在
+      - name: Stub bundled sidecar resource (not built in CI)
+        working-directory: src-tauri
+        run: |
+          mkdir -p sidecar/tdsf-sidecar
+          touch sidecar/tdsf-sidecar/.ci-placeholder
+
       - name: Generate coverage
         working-directory: src-tauri
         run: cargo llvm-cov nextest --locked --lcov --output-path lcov.info
