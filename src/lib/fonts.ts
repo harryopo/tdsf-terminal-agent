@@ -1,4 +1,4 @@
-// 基于上游 terax-ai v0.8.5 的 fonts.ts，TDSF 2026-08-09（用户要求）：
+// 基于上游 fonts.ts，TDSF 2026-08-09（用户要求）：
 // 原 fallback 链以 `monospace` 收尾，Windows 的 monospace 中文映射是宋体
 // （SimSun，衬线），导致终端/编辑器中文显示衬线。改为在 monospace 前插入
 // 无衬线中文字体链（微软雅黑 → 苹方 → 思源黑体），英文仍走 JetBrains Mono

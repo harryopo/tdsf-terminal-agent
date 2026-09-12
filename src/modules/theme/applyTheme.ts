@@ -1,6 +1,6 @@
-/* applyTheme.ts — TDSF CSS变量应用引擎 (源自 terax-ai, Apache-2.0)
+/* applyTheme.ts — TDSF CSS变量应用引擎 (源自上游开源实现, Apache-2.0)
  * -----------------------------------------------------------------------------
- * 复用自: terax-ai/src/modules/theme/applyTheme.ts
+ * 复用自: 上游开源项目的 applyTheme 实现
  * License: Apache-2.0, Copyright 2026 Crynta
  *
  * 负责将 Theme 对象中的颜色/终端配色写入 :root CSS 变量,

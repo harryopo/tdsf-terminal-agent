@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveFontFamily } from "./fonts";
 
-// 上游 terax-ai v0.8.5 的 FALLBACK_CHAIN + TDSF（2026-08-09）：
+// 上游 FALLBACK_CHAIN + TDSF（2026-08-09）：
 // monospace 前插入无衬线中文字体链（微软雅黑/苹方/思源黑体），
 // 避免 Windows 下 monospace 中文回退到宋体（衬线）。
 const FALLBACK =

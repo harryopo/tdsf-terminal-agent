@@ -87,8 +87,8 @@
       }
     },
     "category": "DeveloperTool",
-    "shortDescription": "Linux ops terminal with AI tutor (TDSF clone of terax-ai)",
-    "longDescription": "TDSF Terminal Agent — open-source AI-native Linux ops terminal with multi-tab, file explorer, code editor, web preview, voice input, and AI agents. Cloned from terax-ai v0.8.6.",
+    "shortDescription": "AI-native Linux ops terminal with a built-in teaching agent",
+    "longDescription": "TDSF Terminal Agent — open-source AI-native Linux ops terminal with multi-tab, file explorer, code editor, web preview, voice input, and AI agents. Built on top of an open-source terminal project and extended with SSH server management, visible execution and Linux teaching workflows.",
     "fileAssociations": [
       {
         "name": "TDSF Document",

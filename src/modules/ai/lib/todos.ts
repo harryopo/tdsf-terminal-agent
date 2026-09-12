@@ -16,8 +16,7 @@ export type Todo = {
   completedAt?: string | null;
 };
 
-// TDSF: store path 改为 tdsf-todos.json(原 "terax-ai-todos.json" 保留为注释供溯源)
-// const STORE_PATH_LEGACY = "terax-ai-todos.json";
+// 存储文件名
 const STORE_PATH = "tdsf-todos.json";
 const todosKey = (sessionId: string) => `todos:${sessionId}`;
 

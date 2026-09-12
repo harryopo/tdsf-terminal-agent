@@ -133,7 +133,6 @@ export function SettingsApp() {
         setActive(detail as SettingsTab);
       }
     };
-    // TDSF: terax:settings-tab → tdsf:settings-tab（与全局 Terax→TDSF 清洗对齐）
     const unlistenPromise = getCurrentWebviewWindow().listen<string>(
       "tdsf:settings-tab",
       (e) => apply(e.payload),

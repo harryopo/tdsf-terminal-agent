@@ -345,7 +345,7 @@ export function useSourceControl(
         lastRefreshAtRef.current = Date.now();
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
     [contextPath, workspaceKey],
   );
 

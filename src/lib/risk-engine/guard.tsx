@@ -154,7 +154,7 @@ export function RiskGuardDialog(props: UseRiskGuardReturn["dialogProps"]) {
     if (props.command === "" && props.open) {
       props.onOpenChange(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   }, [props.command, props.open, props.onOpenChange]);
 
   return <RiskConfirmDialog {...props} />;

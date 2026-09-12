@@ -1,4 +1,4 @@
-// modules/mod.rs — 从 terax-ai 搬运的核心 Rust 模块
+// modules/mod.rs — 复用上游开源实现的核心 Rust 模块
 // ============================================================================
 // PTY 真终端引擎 (3线程 reader/flusher/waiter 架构)
 pub mod pty;

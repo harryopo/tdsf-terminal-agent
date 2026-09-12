@@ -165,7 +165,7 @@ function ModelDropdown() {
       ? !!apiKeys[current.provider]
       : true;
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   const hasKeyFor = (id: ProviderId) =>
     providerNeedsKey(id) ? !!apiKeys[id] : true;
 

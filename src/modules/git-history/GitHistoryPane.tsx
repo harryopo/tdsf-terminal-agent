@@ -480,7 +480,7 @@ export function GitHistoryPane({
   const openFilesEntry = useMemo(() => {
     if (!openAnchor) return null;
     return filesCacheRef.current.get(openAnchor.sha) ?? null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   }, [openAnchor, filesTick]);
 
   const handleFileOpen = useCallback(

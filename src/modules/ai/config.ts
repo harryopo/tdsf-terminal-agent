@@ -1,6 +1,4 @@
-// TDSF: keyring service 改为 tdsf(原 "terax-ai" 保留为注释供溯源)
-// 注意: 修改后已存的 API key 需要重新输入(因为 keyring 按 service 索引)
-// export const KEYRING_SERVICE_LEGACY = "terax-ai";
+// keyring 按 service 索引；service 名变更后已存的 API key 需要重新输入
 export const KEYRING_SERVICE = "tdsf";
 
 export type ProviderId =

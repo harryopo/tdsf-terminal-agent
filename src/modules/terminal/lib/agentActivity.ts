@@ -91,7 +91,6 @@ export function ensureAgentActivityListener(
     }
     return;
   }
-  // TDSF: terax:agent-signal → tdsf:agent-signal（与全局 Terax→TDSF 清洗对齐）
   void listen<AgentSignal>("tdsf:agent-signal", (e) => {
     const { id, agent } = e.payload;
     const action = phaseForSignal(e.payload.kind);

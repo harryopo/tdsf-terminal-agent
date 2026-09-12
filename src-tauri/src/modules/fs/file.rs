@@ -270,8 +270,8 @@ mod tests {
         std::fs::write(&outside, b"untouched").unwrap();
 
         let target = dir.path().join("note.txt");
-        // Pre-stage a symlink at the legacy deterministic staging path.
-        let legacy = dir.path().join(".note.txt.terax.tmp");
+        // Pre-stage a symlink at the old deterministic staging path.
+        let legacy = dir.path().join(".note.txt.tdsf.tmp");
         symlink(&outside, &legacy).unwrap();
 
         write_atomic(&target, b"payload").unwrap();
