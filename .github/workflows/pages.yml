@@ -6,7 +6,7 @@ name: Deploy promo page to GitHub Pages
 #   → Source 选择 "GitHub Actions"
 on:
   push:
-    branches: [main, terax-clone-v0]
+    branches: [main]
     paths:
       - "website/**"
       - ".github/workflows/pages.yml"
