@@ -17,8 +17,8 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 
 export type ThemePref = "system" | "light" | "dark";
 
-// TDSF 2026-07-31: 统一使用 terax-default, 移除自定义 tdsf-default 主题
-export const DEFAULT_THEME_ID = "terax-default";
+// 2026-07-31 起统一使用内置默认主题；2026-09-11 主题 ID 由上游命名改为 tdsf-default
+export const DEFAULT_THEME_ID = "tdsf-default";
 
 export type BackgroundKind = "none" | "image";
 

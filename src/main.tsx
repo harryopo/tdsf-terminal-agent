@@ -1,12 +1,12 @@
 /**
- * TDSF Terminal Agent — 应用入口（基于 terax-ai v0.8.6 上游 main.tsx 架构）
+ * TDSF Terminal Agent — 应用入口（沿用上游开源项目的启动链架构）
  * -----------------------------------------------------------------------------
- * 上游启动链 (crynta/terax-ai src/main.tsx)：
+ * 上游启动链（开源项目 src/main.tsx）：
  *   1. xterm.css + globals.css
  *   2. USE_CUSTOM_WINDOW_CONTROLS → data-chrome="borderless"
  *   3. invoke("pty_close_all") 清理孤儿 PTY
  *   4. initLaunchDir() 解析启动目录
- *   5. render <App />（terax 壳 = src/app/App.tsx）
+ *   5. render <App />（应用主壳 = src/app/App.tsx）
  *
  * TDSF：fontsource 字体 + Monaco Editor 本地加载（国内网络不走 CDN）
  *

@@ -1,6 +1,6 @@
-/* types.ts — TDSF 主题类型定义 (源自 terax-ai, Apache-2.0)
+/* types.ts — TDSF 主题类型定义 (源自上游开源主题, Apache-2.0)
  * -----------------------------------------------------------------------------
- * 复用自: terax-ai/src/modules/theme/types.ts
+ * 复用自: 上游开源项目的对应实现
  * License: Apache-2.0, Copyright 2026 Crynta
  * 适配: 移除编辑器主题部分(TDSF不集成CodeMirror),保留终端+UI主题
  */
@@ -73,4 +73,4 @@ export type Theme = {
   };
 };
 
-export const DEFAULT_THEME_ID = "terax-default";
+export const DEFAULT_THEME_ID = "tdsf-default";

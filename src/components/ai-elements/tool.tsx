@@ -727,7 +727,7 @@ const ToolImpl = ({
 
       {hasDetails && (
         <CollapsibleContent
-          className={cn("terax-collapsible-content")}
+          className={cn("tdsf-collapsible-content")}
         >
           <div className="ml-3 mt-1 space-y-2 border-l border-border/60 pl-3 pb-1">
             {showInputBody ? (
@@ -1398,7 +1398,7 @@ function KnowledgeSearchOutput({ data }: { data: Record<string, unknown> }) {
           className="shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
         />
       </CollapsibleTrigger>
-      <CollapsibleContent className="terax-collapsible-content border-t border-border/40">
+      <CollapsibleContent className="tdsf-collapsible-content border-t border-border/40">
         <div className="space-y-1 px-2 py-1.5">
           {hits.map((hit, idx) => {
             const title = hit.title || "（无标题）";
@@ -1496,7 +1496,7 @@ function KnowledgeDocCard({ data }: { data: Record<string, unknown> }) {
           全文
         </span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="terax-collapsible-content">
+      <CollapsibleContent className="tdsf-collapsible-content">
         <pre className="max-h-72 overflow-auto border-t border-border/40 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
           {content}
         </pre>

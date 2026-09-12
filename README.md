@@ -31,7 +31,7 @@
 
 TDSF Terminal Agent is a **desktop terminal IDE with an AI operations agent built into the shell path** — not a chat panel bolted onto a terminal.
 
-It is built on the architecture of [terax-ai](https://github.com/crynta/terax-ai) and extended with **SSH server management**, a **visible-execution agent runtime**, and a **step-by-step teaching workflow** for Linux operations.
+It is built on top of an open-source terminal IDE and extended with **SSH server management**, a **visible-execution agent runtime**, and a **step-by-step teaching workflow** for Linux operations.
 
 Two properties separate it from "AI in a sidebar":
 
@@ -128,7 +128,7 @@ Add an API key in **Settings → Models** (DeepSeek, Zhipu, Qwen, Moonshot, Doub
 ## License and upstream
 
 - Original contributions in this project: **Apache-2.0** — see [`LICENSE`](LICENSE).
-- Architecture based on [crynta/terax-ai](https://github.com/crynta/terax-ai) (Apache-2.0); this project extends it with SSH server management, the visible-execution agent runtime and the Linux teaching workflow.
+- Built on top of an open-source terminal IDE (Apache-2.0); this project extends it with SSH server management, the visible-execution agent runtime and the Linux teaching workflow.
 
 ---
 ---
@@ -149,7 +149,7 @@ Add an API key in **Settings → Models** (DeepSeek, Zhipu, Qwen, Moonshot, Doub
 
 TDSF Terminal Agent 是一款**把 AI 运维 Agent 装进 shell 执行链路的桌面终端 IDE**，而不是"终端旁边挂一个聊天框"。
 
-项目在 [terax-ai](https://github.com/crynta/terax-ai) 的架构基础上优化完善，并新增 **SSH 服务器管理**、**可见执行的 Agent 运行时**，以及面向 Linux 运维的**步步确认教学模式**。
+项目在开源终端项目的架构基础之上开发完善，并新增 **SSH 服务器管理**、**可见执行的 Agent 运行时**，以及面向 Linux 运维的**步步确认教学模式**。
 
 两点让它区别于普通的"侧边栏 AI"：
 
@@ -257,4 +257,4 @@ Python sidecar 环境位于 `src-tauri/sidecar/`（虚拟环境）；Windows 下
 ## 许可与上游
 
 - 本项目原创贡献以 **Apache-2.0** 授权 —— 见 [`LICENSE`](LICENSE)。
-- 架构基于 [crynta/terax-ai](https://github.com/crynta/terax-ai)（Apache-2.0）；本项目在其基础上优化完善，并新增 SSH 服务器管理、可见执行 Agent 运行时与 Linux 教学流程。
+- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、可见执行 Agent 运行时与 Linux 教学流程。

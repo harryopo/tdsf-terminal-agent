@@ -4,7 +4,7 @@
 用法：python scripts/make-app-icon.py
 输出：src-tauri/icons/source-icon.png（之后用 `pnpm tauri icon src-tauri/icons/source-icon.png` 生成全套尺寸）
 
-设计说明（基于上游 terax 图标定制，2026-08-28 用户拍板）：
+设计说明（基于上游图标定制，2026-08-28 用户拍板）：
 - 保留 ">_" 终端提示符骨架，主题绿 #34D399（从原 512 图取样，Tailwind emerald-400）
 - 箭头 ">" 缩小：高度占画布 ~49%（原 ~75%）
 - 光标 "_" 加大：150/1024 ≈ 15% 见方（原 ~9%），底边与箭头底对齐（终端基线）

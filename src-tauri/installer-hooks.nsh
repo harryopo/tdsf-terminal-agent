@@ -1,8 +1,8 @@
 ; "Open in TDSF" shell verbs for folders, folder backgrounds, and drives.
 ; HKCU matches installer currentUser scope. %V = clicked path.
 ; NoWorkingDirectory keeps Explorer from overriding %V (System32 on Drive).
-; TDSF 2026-08-01: 修复上游 terax 残留 (exe 名 terax.exe → tdsf-terminal-agent.exe,
-; 菜单名 OpenInTerax → OpenInTDSF)。
+; TDSF 2026-08-01: 清理上游残留 (可执行文件名与右键菜单名迁移到 TDSF 命名；
+; 下方注册表键名为待清理的旧键，不可改名否则清理失效)。
 
 !macro NSIS_HOOK_POSTINSTALL
   WriteRegStr HKCU "Software\Classes\Directory\shell\OpenInTDSF" "" "Open in TDSF Terminal Agent"
@@ -25,7 +25,7 @@
   DeleteRegKey HKCU "Software\Classes\Directory\shell\OpenInTDSF"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\OpenInTDSF"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInTDSF"
-  ; 清理上游 terax 残留菜单
+  ; 清理上游残留菜单
   DeleteRegKey HKCU "Software\Classes\Directory\shell\OpenInTerax"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\OpenInTerax"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\OpenInTerax"

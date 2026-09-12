@@ -372,7 +372,7 @@ html *::-webkit-scrollbar {
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-@keyframes terax-collapsible-down {
+@keyframes tdsf-collapsible-down {
   from {
     height: 0;
     opacity: 0;
@@ -383,7 +383,7 @@ html *::-webkit-scrollbar {
   }
 }
 
-@keyframes terax-collapsible-up {
+@keyframes tdsf-collapsible-up {
   from {
     height: var(--radix-collapsible-content-height);
     opacity: 1;
@@ -394,14 +394,14 @@ html *::-webkit-scrollbar {
   }
 }
 
-.terax-collapsible-content {
+.tdsf-collapsible-content {
   overflow: hidden;
 }
-.terax-collapsible-content[data-state="open"] {
-  animation: terax-collapsible-down var(--dur-base) var(--ease-soft);
+.tdsf-collapsible-content[data-state="open"] {
+  animation: tdsf-collapsible-down var(--dur-base) var(--ease-soft);
 }
-.terax-collapsible-content[data-state="closed"] {
-  animation: terax-collapsible-up var(--dur-base) var(--ease-soft);
+.tdsf-collapsible-content[data-state="closed"] {
+  animation: tdsf-collapsible-up var(--dur-base) var(--ease-soft);
 }
 
 /* Height auto<->0 reveal without JS measuring: animate the grid track from 0fr

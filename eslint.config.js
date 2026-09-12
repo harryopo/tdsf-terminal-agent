@@ -56,7 +56,7 @@ export default tseslint.config(
       'prefer-const': 'error',
       // null: 'ignore' 保留 `x == null` / `x != null` 的惯用 null/undefined 检查写法
       eqeqeq: ['error', 'always', { null: 'ignore' }],
-      // terax 上游大量使用 best-effort 空 catch (剪贴板/持久化等可失败操作), 全部 29 处均为 catch 块
+      // 上游大量使用 best-effort 空 catch (剪贴板/持久化等可失败操作), 全部 29 处均为 catch 块
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },
