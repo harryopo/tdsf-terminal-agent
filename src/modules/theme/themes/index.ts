@@ -50,13 +50,8 @@ export function listBuiltinThemes(): Theme[] {
   return BUILTIN;
 }
 
-// 旧版本持久化的主题 id 映射：主题 ID 改名后仍能命中，避免用户已保存的设置失效
-const LEGACY_THEME_IDS: Record<string, string> = {
-  "terax-default": "tdsf-default",
-};
-
 export function getBuiltinTheme(id: string): Theme | undefined {
-  return BY_ID.get(id) ?? BY_ID.get(LEGACY_THEME_IDS[id] ?? "");
+  return BY_ID.get(id);
 }
 
 export function getDefaultTheme(): Theme {

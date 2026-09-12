@@ -2,7 +2,7 @@
  * workspace-env.ts — 最小化工作区环境桩
  * -----------------------------------------------------------------------------
  * pty-bridge.ts 依赖此模块获取当前工作区环境 (local / wsl)。
- * 当前阶段仅支持 local, WSL 后续从 terax-ai 搬运。
+ * 当前阶段仅支持 local，WSL 后续再补。
  */
 export type WorkspaceEnv =
   | { kind: 'local' }

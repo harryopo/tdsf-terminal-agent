@@ -79,9 +79,7 @@ export const BUILTIN_AGENTS: readonly Agent[] = [
   },
 ] as const;
 
-// TDSF: store path 改为 tdsf-agents.json(原 "terax-ai-agents.json" 保留为注释供溯源)
-// 注意: 修改后已存的自定义 Agent 配置需要重新创建
-// const STORE_PATH_LEGACY = "terax-ai-agents.json";
+// 存储文件名；改名后已存的自定义 Agent 配置需要重新创建
 const STORE_PATH = "tdsf-agents.json";
 const KEY_CUSTOM = "customAgents";
 const KEY_ACTIVE = "activeAgentId";

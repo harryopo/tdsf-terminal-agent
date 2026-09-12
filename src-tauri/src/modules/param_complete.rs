@@ -316,10 +316,10 @@ mod tests {
     /// (v1.7.3 实测, value 为 t 前缀过滤后的分支名)
     #[test]
     fn parse_real_git_checkout_sample() {
-        let raw = r#"{"version":"v1.7.3","messages":[],"noprefix":false,"nospace":false,"usage":"","values":[{"value":"terax-clone-v0","display":"terax-clone-v0","description":"","tag":"local branches"}]}"#;
+        let raw = r#"{"version":"v1.7.3","messages":[],"noprefix":false,"nospace":false,"usage":"","values":[{"value":"tdsf-terminal-agent","display":"tdsf-terminal-agent","description":"","tag":"local branches"}]}"#;
         let got = parse_carapace_output(raw);
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].value, "terax-clone-v0");
+        assert_eq!(got[0].value, "tdsf-terminal-agent");
         // 真实输出里分支条目 description 为空串, tag 标注来源
         assert_eq!(got[0].description.as_deref(), Some(""));
         assert_eq!(got[0].tag.as_deref(), Some("local branches"));

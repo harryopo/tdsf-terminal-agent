@@ -1418,7 +1418,6 @@ export default function App() {
       for (const path of paths) handleOpenFile(path, true);
     };
     (async () => {
-      // TDSF: terax:open-file → tdsf:open-file（与全局 Terax→TDSF 清洗对齐）
       unlisten = await listen<string[]>("tdsf:open-file", (e) => {
         openAll(e.payload);
       });
@@ -2457,7 +2456,7 @@ export default function App() {
             </>
           ) : null}
 
-          {/* TDSF回退 (2026-07-30): 恢复上游 AiMiniWindow（Terax 视觉——
+          {/* TDSF回退 (2026-07-30): 恢复上游 AiMiniWindow（上游视觉——
               AgentStatusPill + Context 圆环统计 + SessionPicker + ai-elements
               工具行/Reasoned 折叠），替代自研 TdsfAgentPanel（样式简陋已弃用）。 */}
           {hasComposer && miniPresence.mounted ? (

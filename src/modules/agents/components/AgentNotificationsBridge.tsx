@@ -107,7 +107,6 @@ export function AgentNotificationsBridge({
   useEffect(() => {
     let alive = true;
     let unlisten: (() => void) | undefined;
-    // TDSF: terax:agent-signal → tdsf:agent-signal（与全局 Terax→TDSF 清洗对齐）
     listen<AgentSignal>("tdsf:agent-signal", (e) =>
       handleSignal(e.payload, ctxRef.current),
     )

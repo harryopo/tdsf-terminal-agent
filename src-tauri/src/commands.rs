@@ -1,7 +1,7 @@
 /**
  * commands.rs — TDSF Terminal Agent Tauri Commands (P0 健康检查)
  * -----------------------------------------------------------------------------
- * PTY/Shell/Agent 等命令已迁移到 modules/ 目录 (从 terax-ai 搬运)
+ * PTY/Shell/Agent 等命令已迁移到 modules/ 目录 (复用上游开源实现)
  * 此文件仅保留 TDSF 自有命令
  */
 use crate::error::ApiResult;

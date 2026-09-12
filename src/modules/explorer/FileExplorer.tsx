@@ -236,7 +236,7 @@ export const FileExplorer = memo(
           entryIndexByPath: new Map<string, number>(),
         };
       return buildRows(rootPath, tree, lookupGitStatus);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
     }, [
       rootPath,
       tree.nodes,
@@ -306,7 +306,7 @@ export const FileExplorer = memo(
       if (tree.expanded.has(dropTargetDir)) return;
       const id = window.setTimeout(() => tree.expand(dropTargetDir), 700);
       return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
     }, [dropTargetDir, rootPath, tree.expanded, tree.expand]);
 
     useEffect(() => {

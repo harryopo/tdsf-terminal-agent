@@ -292,7 +292,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       rememberExpansion(expansionKey, expandedRef.current);
       if (watchedRef.current.size > 0) {
         watchRemove([...watchedRef.current]);
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
         watchedRef.current.clear();
       }
     };
@@ -328,7 +328,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       .filter(([, state]) => state.status === "loaded")
       .map(([path]) => path);
     for (const path of loadedPaths) void fetchChildren(path);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   }, [showHidden, gitDecorations, rootPath, sourceKey, fetchChildren]);
 
   const toggle = useCallback(

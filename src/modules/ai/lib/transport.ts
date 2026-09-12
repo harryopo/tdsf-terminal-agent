@@ -22,7 +22,7 @@ async function readTdsfMd(
   workspaceRoot: string | null,
 ): Promise<string | null> {
   if (!workspaceRoot) return null;
-  // TDSF: TERAX.md → TDSF.md
+  // 项目级长期记忆文件：<workspace>/TDSF.md
   const path = `${workspaceRoot.replace(/\/$/, "")}/TDSF.md`;
   const cached = projectMemoryCache.get(workspaceRoot);
   if (cached && Date.now() - cached.mtime < 30_000) return cached.content;
@@ -728,7 +728,7 @@ export function formatEnvBlock(live: LiveSnapshot): string | null {
  * 构建终端尾部输出上下文块，注入到每轮对话让 agent 自动感知终端状态。
  *
  * TDSF (2026-08-09): 用户反馈"agent 看不到终端"。
- * 上游 terax 的 <terminal-context> 标签已有 strip 正则（CONTEXT_BLOCK_RE），
+ * 上游的 <terminal-context> 标签已有 strip 正则（CONTEXT_BLOCK_RE），
  * 说明原设计就有终端上下文注入的预留位——现在补全实现。
  *
  * 设计：

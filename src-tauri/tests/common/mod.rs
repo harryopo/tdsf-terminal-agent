@@ -23,8 +23,8 @@ impl GitRepoFixture {
 
         run_git_in(&canonical, &["init", "-q"]);
         run_git_in(&canonical, &["symbolic-ref", "HEAD", "refs/heads/main"]);
-        run_git_in(&canonical, &["config", "user.email", "test@terax.local"]);
-        run_git_in(&canonical, &["config", "user.name", "Terax Test"]);
+        run_git_in(&canonical, &["config", "user.email", "test@tdsf.local"]);
+        run_git_in(&canonical, &["config", "user.name", "TDSF Test"]);
         run_git_in(&canonical, &["config", "commit.gpgsign", "false"]);
         run_git_in(&canonical, &["config", "core.autocrlf", "false"]);
 

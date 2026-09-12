@@ -5,10 +5,8 @@ import { appConfigDir, join } from "@tauri-apps/api/path";
 import type { Theme } from "./types";
 import { type ValidationResult, validateTheme } from "./validateTheme";
 
-// 主题文件扩展名已统一为 .tdsf-theme；下方常量保留旧扩展名以兼容用户已有文件
-// （旧扩展名本身是待兼容的格式标识，不可改动，否则老文件无法识别）
+// 主题文件扩展名
 const THEME_FILE_EXT = ".tdsf-theme";
-const THEME_FILE_EXT_LEGACY = ".terax-theme";
 const THEME_EDIT_EVENT = "tdsf://theme-edit";
 
 export type ThemeEditRequest =
@@ -17,9 +15,7 @@ export type ThemeEditRequest =
 
 export function isThemeFilePath(path: string): boolean {
   const lower = path.toLowerCase();
-  return (
-    lower.endsWith(THEME_FILE_EXT) || lower.endsWith(THEME_FILE_EXT_LEGACY)
-  );
+  return lower.endsWith(THEME_FILE_EXT);
 }
 
 async function themesDir(): Promise<string> {

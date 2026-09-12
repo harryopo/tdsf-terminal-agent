@@ -156,7 +156,7 @@ export function useExplorerFileDrop({
       setTargetDir(null);
       unlisten?.();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- terax 上游既有依赖设计, 变更 deps 有回归风险
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   }, []);
 
   return { externalTargetDir: targetDir };

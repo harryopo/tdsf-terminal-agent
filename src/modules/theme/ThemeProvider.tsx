@@ -1,6 +1,6 @@
-/* ThemeProvider.tsx — TDSF 主题上下文 Provider (源自 terax-ai, Apache-2.0)
+/* ThemeProvider.tsx — TDSF 主题上下文 Provider (源自上游开源实现, Apache-2.0)
  * -----------------------------------------------------------------------------
- * 复用自: terax-ai/src/modules/theme/ThemeProvider.tsx
+ * 复用自: 上游开源项目的 ThemeProvider 实现
  * License: Apache-2.0, Copyright 2026 Crynta
  *
  * 适配:

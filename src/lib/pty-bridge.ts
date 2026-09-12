@@ -1,12 +1,12 @@
 /**
- * pty-bridge.ts — TDSF PTY 桥接层 (基于 terax-ai pty-bridge.ts 搬运)
+ * pty-bridge.ts — TDSF PTY 桥接层 (复用上游 pty-bridge 实现)
  * -----------------------------------------------------------------------------
  * 核心改进 (相对于旧 tauri.ts):
  *   - 原始字节 Channel (Channel<ArrayBuffer>), 无 JSON 序列化开销
  *   - pty_write 通过 HTTP Header x-pty-id 传递会话 ID, 请求体为原始字节
  *   - 零基 JSON 往返 (每次按键不再序列化/反序列化)
  *
- * 搬运来源: opensource-reference/terax-ai/src/modules/terminal/lib/pty-bridge.ts
+ * 来源: 上游开源实现 src/modules/terminal/lib/pty-bridge.ts
  */
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { currentWorkspaceEnv } from './workspace-env';
