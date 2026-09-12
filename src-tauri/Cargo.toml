@@ -39,7 +39,7 @@ tauri-plugin-process = "2"
 # 注: Cargo 无原生 debug-only 依赖机制，保留在 [dependencies] 但代码侧已 cfg 守卫
 tauri-plugin-dialog = "2"
 
-# PTY (伪终端) — 从 terax-ai 搬运的 portable-pty 0.9
+# PTY (伪终端) — 从上游搬运的 portable-pty 0.9
 portable-pty = "0.9"
 
 # 进程管理

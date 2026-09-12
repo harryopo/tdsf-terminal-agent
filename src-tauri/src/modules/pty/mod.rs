@@ -84,7 +84,7 @@ pub async fn pty_open(
     if exited {
         if let Some(s) = state.take(id) {
             if let Err(e) = thread::Builder::new()
-                .name(format!("terax-pty-drop-{id}"))
+                .name(format!("tdsf-pty-drop-{id}"))
                 .spawn(move || session::drop_session(s))
             {
                 log::warn!("pty_open: spawn drop thread failed id={id}: {e}");
@@ -236,7 +236,7 @@ pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
         // Detached: on Windows `ClosePseudoConsole` can block until conhost
         // drains, which would freeze this Tauri worker thread and stall IPC.
         if let Err(e) = thread::Builder::new()
-            .name(format!("terax-pty-drop-{id}"))
+            .name(format!("tdsf-pty-drop-{id}"))
             .spawn(move || {
                 let t0 = std::time::Instant::now();
                 session::drop_session(s);
@@ -349,7 +349,7 @@ pub fn pty_close_all(state: tauri::State<PtyState>) -> Result<usize, String> {
             log::debug!("pty_close_all: kill id={id} returned {e}");
         }
         if let Err(e) = thread::Builder::new()
-            .name(format!("terax-pty-drop-{id}"))
+            .name(format!("tdsf-pty-drop-{id}"))
             .spawn(move || session::drop_session(s))
         {
             log::warn!("pty_close_all: spawn drop thread failed id={id}: {e}");

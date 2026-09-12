@@ -1,10 +1,10 @@
-/* themes/index.ts — TDSF 内置主题注册表 (源自 terax-ai, Apache-2.0)
+/* themes/index.ts — TDSF 内置主题注册表 (源自上游开源主题, Apache-2.0)
  * -----------------------------------------------------------------------------
- * 复用自: terax-ai/src/modules/theme/themes/index.ts
+ * 复用自: 上游开源项目的主题注册表
  * License: Apache-2.0, Copyright 2026 Crynta
  *
  * TDSF: 补齐 kanagawa / kanagawa-dragon / gruvbox / rose-pine / everforest /
- * solarized / sage / tide / claude / caffeine / tdsf-default 等主题注册，
+ * solarized / sage / tide / claude / caffeine 等主题注册，
  * 让 resolveEditorThemeId("auto", ...) 能正确按 app 主题配对 editor 主题。
  */
 
@@ -21,13 +21,13 @@ import { nord } from "./nord";
 import { rosePine } from "./rose-pine";
 import { sage } from "./sage";
 import { solarized } from "./solarized";
-import { teraxDefault } from "./terax-default";
+import { tdsfDefault } from "./tdsf-default";
 import { tide } from "./tide";
 import { tokyoNight } from "./tokyo-night";
 
 /** 内置主题列表 */
 const BUILTIN: Theme[] = [
-  teraxDefault,
+  tdsfDefault,
   tokyoNight,
   catppuccin,
   dracula,
@@ -50,8 +50,13 @@ export function listBuiltinThemes(): Theme[] {
   return BUILTIN;
 }
 
+// 旧版本持久化的主题 id 映射：主题 ID 改名后仍能命中，避免用户已保存的设置失效
+const LEGACY_THEME_IDS: Record<string, string> = {
+  "terax-default": "tdsf-default",
+};
+
 export function getBuiltinTheme(id: string): Theme | undefined {
-  return BY_ID.get(id);
+  return BY_ID.get(id) ?? BY_ID.get(LEGACY_THEME_IDS[id] ?? "");
 }
 
 export function getDefaultTheme(): Theme {

@@ -174,7 +174,7 @@ scripts/*
 # 压缩后的成品命名为 demo.mp4 放进同目录即可正常提交
 website/assets/video/宣传视频.mp4
 
-# 上游 terax-ai 全量源码克隆 (仅本机调研参考, 体积大不入库)
+# 上游开源项目全量源码克隆 (仅本机调研参考, 体积大不入库)
 opensource-reference/
 
 # sidecar 诊断临时产物 (ping 测试 / stdout 重定向 / null 输入)

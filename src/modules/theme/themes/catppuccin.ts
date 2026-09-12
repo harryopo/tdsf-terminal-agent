@@ -1,6 +1,6 @@
-/* catppuccin.ts — Catppuccin 主题 (源自 terax-ai, Apache-2.0)
+/* catppuccin.ts — Catppuccin 主题 (源自上游开源主题, Apache-2.0)
  * -----------------------------------------------------------------------------
- * 复用自: terax-ai/src/modules/theme/themes/catppuccin.ts
+ * 复用自: 上游开源项目的主题定义
  * License: Apache-2.0, Copyright 2026 Crynta
  *
  * Mocha + Latte — soothing pastel (支持 dark + light)
