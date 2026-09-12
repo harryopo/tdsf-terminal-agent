@@ -180,7 +180,7 @@ export async function buildLanguageModel(
         apiKey: key,
         headers: {
           "HTTP-Referer":
-            "https://github.com/tdsf-linux-desktop/tdsf-terminal-agent",
+            "https://github.com/harryopo/tdsf-terminal-agent",
           "X-Title": "TDSF",
         },
       })(resolvedModelId);

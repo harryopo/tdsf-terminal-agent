@@ -8,8 +8,9 @@ const LAST_CHECK_KEY = "tdsf:updater:last-check";
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 // TDSF: 更新源改为 TDSF 仓库(原上游 terax-ai 保留为注释供溯源)
 // const UPSTREAM_RELEASE = "https://api.github.com/repos/crynta/terax-ai/releases/latest";
+// 2026-09-11: 仓库归属由旧账号 tdsf-linux-desktop 迁到 harryopo（旧账号同名仓库已废弃）
 const GITHUB_LATEST_RELEASE =
-  "https://api.github.com/repos/tdsf-linux-desktop/tdsf-terminal-agent/releases/latest";
+  "https://api.github.com/repos/harryopo/tdsf-terminal-agent/releases/latest";
 
 export interface ManualUpdateInfo {
   version: string;
