@@ -862,7 +862,7 @@ def create_decision_engine(
 #   风险级——L0-L4 全部 deny（fail-closed，agent 收到 command_blocked 后
 #   必须如实报告未执行，对齐 B1 防伪造条款）
 # - confirm: L0-L1 allow；L2-L4 confirm（逐条审批卡）
-# - auto:    L0-L4 allow（命令 denylist 在本映射之前独立阻断）
+# - auto:    L0-L2 allow；L3-L4 confirm（命令 denylist 更早独立阻断）
 _MODE_RISK_MATRIX: dict[str, dict[str, frozenset[str]]] = {
     "observe": {
         "allow": frozenset(),
@@ -875,8 +875,8 @@ _MODE_RISK_MATRIX: dict[str, dict[str, frozenset[str]]] = {
         "deny": frozenset(),
     },
     "auto": {
-        "allow": frozenset({"L0", "L1", "L2", "L3", "L4"}),
-        "confirm": frozenset(),
+        "allow": frozenset({"L0", "L1", "L2"}),
+        "confirm": frozenset({"L3", "L4"}),
         "deny": frozenset(),
     },
 }
@@ -917,7 +917,7 @@ def decide(risk_l: int | str | RiskLevel, mode: "AgentMode | str") -> str:
     方案书 v3.1 §3.2 核心不变量（与 ``_MODE_RISK_MATRIX`` 一致）：
     - observe：L0-L4 全部 deny（只读类由调用方按 ToolPolicy.readonly 先行短路）
     - confirm：L0-L1 allow；L2-L4 confirm
-    - auto：L0-L4 allow（命令硬底线 denylist 仍在本函数前阻断）
+    - auto：L0-L2 allow；L3-L4 confirm（命令硬底线 denylist 更早阻断）
 
     注意：本函数与 ``DecisionEngine.decide``（LangGraph 实例方法）同名不同
     语义——实例方法产出完整决策卡，本函数是执行链的模式映射纯函数（Task 3

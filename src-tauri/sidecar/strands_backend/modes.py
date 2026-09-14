@@ -26,7 +26,8 @@ class AgentMode(str, Enum):
         OBSERVE: 只读观察——一切写/执行类操作 fail-closed 拒绝（工具集
             schema 级裁剪为只读白名单）
         CONFIRM: 确认——L0-L1 放行，L2-L4 逐条审批（缺省模式）
-        AUTO: 自动——L0-L4 直接执行（命令硬底线 denylist 仍阻断）
+        AUTO: 自动——L0-L2 直接执行，L3-L4 逐条审批（命令硬底线
+            denylist 仍阻断）
     """
 
     OBSERVE = "observe"
@@ -104,6 +105,8 @@ def decide(risk_l: Any, mode: AgentMode | str) -> str:
     if parsed_mode == AgentMode.OBSERVE:
         return "deny"
     if parsed_mode == AgentMode.CONFIRM and level >= 2:
+        return "confirm"
+    if parsed_mode == AgentMode.AUTO and level >= 3:
         return "confirm"
     return "allow"
 

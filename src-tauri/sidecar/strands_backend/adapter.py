@@ -1109,7 +1109,7 @@ _MODE_PROMPTS: dict[AgentMode, str] = {
     ),
     AgentMode.AUTO: (
         "\n\nCurrent mode: AUTO.\n"
-        "- 直接执行：所有风险等级（L0-L4）的操作均无需逐步请示。\n"
+        "- 自动执行：L0-L2 操作无需逐步请示；L3-L4 高风险操作仍须用户批准。\n"
         "- 命中命令硬底线 denylist 时仍会被阻断；不要试图绕过。\n"
         "- 事后简要报告做了什么、结果如何。"
     ),

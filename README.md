@@ -12,7 +12,7 @@
 ![Shell](https://img.shields.io/badge/shell-Tauri%202%20%2B%20Rust-000)
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
 ![Runtime](https://img.shields.io/badge/runtime-Python%20sidecar%20(Strands)-3776AB)
-![Tests](https://img.shields.io/badge/tests-2236%20pytest%20%C2%B7%201368%20vitest%20%C2%B7%20364%20cargo-2EA043)
+![Tests](https://img.shields.io/badge/quality-pytest%20%C2%B7%20vitest%20%C2%B7%20cargo-2EA043)
 
 </div>
 
@@ -53,7 +53,7 @@ Two properties separate it from "AI in a sidebar":
 | **Observe** | Read-only analysis; write tools removed from the schema | Production inspection |
 | **Confirm** *(default)* | Full toolset; recognised read-only queries run, anything unknown or state-changing goes through an approval card | Day-to-day operations, human in the loop |
 | **Auto** | Low-risk (L0–L2) runs directly; L3/L4 still require approval | Trusted sandbox |
-| **Teach** | Read-only + structured lesson output with single-step command cards | Classroom / self-paced learning |
+| **Teach** | Observe-mode permissions plus the teaching UI; one command card at a time | Classroom / self-paced learning |
 
 **SSH server management**
 
@@ -64,27 +64,27 @@ Two properties separate it from "AI in a sidebar":
 
 **Safety boundary**
 
-- Command impact classification (L0–L4) with per-segment breakdown of compound commands.
+- Active command-impact levels are L0/L2/L3/L4 (L1 is reserved for compatibility); unknown commands fail closed at high risk, and compound commands are assessed segment by segment.
 - Hard denylist for catastrophic operations — blocked outright, not offered for approval.
 - Per-session FIFO: the next approval card is not shown until the previous command returns from SSH.
 - Tool-call cap (50 per turn) plus a 3-consecutive-failure circuit breaker.
 - Output redaction before anything reaches the UI, the model, or the logs.
 - **SSH exit-code hard boundary**: a non-zero or missing exit code is reported as an error, never as success.
 
-**Offline knowledge base**
+**Local knowledge retrieval**
 
-- Ships with **4,137 embedded documentation chunks** (Arch Wiki, nginx, Apache, Docker, Kubernetes, Redis, SSH, SELinux, git and more) plus a **660-entry distilled Chinese index**.
-- Hybrid retrieval: SQLite **FTS5** keyword search + **sqlite-vec** semantic search, fused with RRF. Fully local, no network required.
+- Indexes the documentation and notes available in the local data directory; the exact entry count depends on what is installed or imported on that machine.
+- Hybrid retrieval runs locally with SQLite **FTS5** keyword search + **sqlite-vec** semantic search, fused with RRF. Agent reasoning still uses the configured model provider unless you select a local model.
 
 **Workspaces, sessions and memory**
 
 - Workspace = the isolation unit. Each workspace keeps its own windows and tabs; the agent sees only the environment of the conversation's own workspace.
-- Conversations are **isolated per workspace**, and **conversations inside one workspace share the same long-term memory** (session summaries and diagnosed cases are written back and recalled with the workspace tag).
+- Conversations are **isolated per workspace**. Session summaries and successful troubleshooting cases can be stored locally with a workspace tag and recalled by later conversations in that workspace.
 
 **Teaching workflow**
 
 - Lesson output in a fixed section contract (concepts & principles, path breakdown, design philosophy, worked examples, pitfalls, exercise).
-- **Single-step command cards**: the lesson produces one command card at a time; the student clicks Run, it is typed into the visible terminal, and only after the real result returns does the lesson continue.
+- **Single-step command cards**: the frontend sends Teach as observe-mode permissions plus a teaching flag. The runtime emits one card at a time; the command is not executed by the backend, and the lesson continues only after the student runs it in the visible terminal and the real result returns.
 
 **Terminal, editor and workspace tooling**
 
@@ -96,10 +96,10 @@ Two properties separate it from "AI in a sidebar":
 
 ```
 React 19 frontend   (agent panel, terminals, workspaces, editor)
-      │  Tauri invoke / events       125 Tauri IPC commands
+      │  Tauri invoke / events
       ▼
 Rust shell          (PTY · SSH · SFTP · tunnels · human-type engine · sidecar supervisor)
-      │  JSON-RPC over stdio         121 sidecar RPC methods
+      │  JSON-RPC over stdio
       ▼
 Python sidecar      (Strands agent · tool registry · approvals · knowledge · evidence)
 ```
@@ -171,7 +171,7 @@ TDSF Terminal Agent 是一款**把 AI 运维 Agent 装进 shell 执行链路的�
 | **观察** | 只读分析，写类工具从 schema 移除 | 生产巡检 |
 | **确认**（默认） | 全量工具；已识别的只读查询直接跑，未知与状态变更类逐条走审批卡 | 日常运维，人在回路 |
 | **自动** | 低危（L0–L2）直接执行，L3/L4 仍需审批 | 可信沙箱 |
-| **教学** | 只读 + 结构化讲解，单步命令卡 | 课堂 / 自学 |
+| **教学** | 观察模式权限 + 教学界面，一次一张命令卡 | 课堂 / 自学 |
 
 **SSH 服务器管理**
 
@@ -182,27 +182,27 @@ TDSF Terminal Agent 是一款**把 AI 运维 Agent 装进 shell 执行链路的�
 
 **安全边界**
 
-- 命令影响分级（L0–L4），复合命令逐段拆解展示。
+- 当前命令影响分级使用 L0/L2/L3/L4（L1 仅保留兼容）；未识别命令按高危险 fail-closed，复合命令逐段拆解展示。
 - 灾难性操作硬底线黑名单 —— 直接拦截，不提供审批选项。
 - 同会话 FIFO：上一条命令未从 SSH 返回前，不展示下一条审批卡。
 - 单次调用工具上限 50 次 + 连续失败 3 次熔断。
 - 输出脱敏：进入 UI、模型上下文与日志前统一处理。
 - **SSH 退出码硬边界**：非零或缺失退出码一律按错误上报，不谎报成功。
 
-**离线知识库**
+**本地知识检索**
 
-- 内置 **4137 条官方文档切片**（Arch Wiki、nginx、Apache、Docker、Kubernetes、Redis、SSH、SELinux、git 等）+ **660 条中文提炼索引**。
-- 混合检索：SQLite **FTS5** 关键词 + **sqlite-vec** 向量语义，RRF 融合。全程本地，无需联网。
+- 索引本机数据目录中已有或由用户导入的文档与笔记；条目数量取决于该设备实际安装、导入的数据。
+- 检索过程在本地完成：SQLite **FTS5** 关键词 + **sqlite-vec** 向量语义，RRF 融合。Agent 推理仍依赖已配置的模型服务；选择本地模型时除外。
 
 **工作区、会话与记忆**
 
 - 工作区是隔离单元：每个工作区保存自己的窗口与标签页；Agent 只看到当前对话所属工作区的环境。
-- **对话按工作区隔离**，而**同一工作区内的不同对话共享同一份长期记忆**（会话摘要与排障案例写回后按工作区标签召回）。
+- **对话按工作区隔离**。会话摘要与成功排障案例可按工作区标签保存在本地，并由同一工作区中的后续对话检索召回。
 
 **教学流程**
 
 - 讲解输出遵循固定板块契约（概念与原理、路径拆解、设计哲学、操作示例、易错点、练习）。
-- **单步命令卡**：一次只给一条命令，学生点击 Run 后敲进可见终端，真实结果返回后才继续下一步。
+- **单步命令卡**：前端以观察模式权限叠加教学标记发送请求；运行时一次只生成一张卡，后端不代为执行。学生点击 Run 将命令送入可见终端，真实结果返回后才继续下一步。
 
 **终端、编辑器与工作区工具**
 
@@ -214,10 +214,10 @@ TDSF Terminal Agent 是一款**把 AI 运维 Agent 装进 shell 执行链路的�
 
 ```
 React 19 前端    （Agent 面板 · 终端 · 工作区 · 编辑器）
-      │  Tauri invoke / 事件        125 个 Tauri IPC 命令
+      │  Tauri invoke / 事件
       ▼
 Rust 壳          （PTY · SSH · SFTP · 隧道 · 打字机引擎 · sidecar 监管）
-      │  JSON-RPC over stdio        121 个 sidecar RPC 方法
+      │  JSON-RPC over stdio
       ▼
 Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识库 · 证据链）
 ```
@@ -230,16 +230,18 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识库 · �
 | AI 运行时 | Python sidecar + Strands Agents（DeepSeek / 智谱 / 通义 / Kimi / 豆包 / Ollama / 自定义 OpenAI 兼容端点） |
 | 知识库 | SQLite FTS5 + sqlite-vec（512 维）+ RRF |
 
-## 验证状态
+## 验证规则
 
-本项目严格区分**"代码与自动化测试已验证"**与**"仍需原生桌面验收"**，没有证据的能力不会写成端到端完成。
+本项目严格区分**"代码与自动化测试已验证"**与**"仍需原生桌面验收"**。测试数量会随实现变化，不把某次运行的固定数字当成功能指标。
 
-| 门禁 | 结果 |
-|------|------|
-| `pytest`（sidecar） | 2236 通过 |
-| `vitest` | 1368 通过（140 个文件） |
-| `cargo test` | 364 通过 |
-| `tsc` / `eslint` | 0 错误 0 警告 |
+| 门禁 | 验证范围 |
+|------|----------|
+| `pytest`（sidecar） | Agent、工具、安全策略与知识检索 |
+| `vitest` | 前端状态、交互与渲染契约 |
+| `cargo test` | Tauri、PTY、SSH 与系统边界 |
+| `tsc` / `eslint` | 类型与静态质量 |
+
+涉及真实终端、SSH、审批卡与教学闭环的能力，还必须在原生桌面端单独验收。
 
 ## 快速开始
 

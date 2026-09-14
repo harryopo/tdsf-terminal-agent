@@ -26,9 +26,9 @@ strands_backend/trust_store.py — 免确认记忆三级（Task 5，方案书 v3
    本模块不做重复检测（单测锁定：denylist 命令加入白名单 allow 仍被拦截）。
 
 安全不变量（spec 验收条款，消费方 tools.assess_command 保证）：
-- **L4 永远确认**——白名单 allow / 前缀免批仅对 ``risk_l <= 3`` 生效，
+- **L3-L4 永远确认**——白名单 allow / 前缀免批仅对 ``risk_l <= 2`` 生效，
   会话只读免审仅对 ``risk_l <= 1`` 生效（⚡ 按钮也仅 L0-L1 显示）；
-  无任何模式/白名单可绕过 L4。
+  无任何模式/白名单可绕过 L3-L4。
 - **危险构造永不自动放行**——``dangerous_construct=True``（$() / 反引号 /
   eval / 重定向系统文件 / 管道到 shell）时白名单与免审全部失效。
 - **observe 模式跳过一切自动放行**（fail-closed，只读观察语义不被白名单扩大）。
@@ -60,8 +60,8 @@ DECISION_ASK = "ask"
 DECISION_DENY = "deny"
 _VALID_DECISIONS = frozenset({DECISION_ALLOW, DECISION_ASK, DECISION_DENY})
 
-# 放行上限（spec：「L4 永远确认——无任何模式/白名单可绕过」）
-_PREFIX_ALLOW_MAX_RISK = 3
+# 放行上限（spec：「L3-L4 永远确认——无任何模式/白名单可绕过」）
+_PREFIX_ALLOW_MAX_RISK = 2
 _READONLY_TRUST_MAX_RISK = 1
 
 # sudo/env 等透明前缀（与 command_impact._TRANSPARENT_PREFIXES 同源；独立
@@ -405,7 +405,7 @@ def record_session_trust(session_id: str, command: str, risk_l: Any = None) -> N
         session_id: 对话会话 ID（req.session_id）
         command: 被批准的命令原文（req.extra["command"]）
         risk_l: 综合 L 级（req.extra["risk_l"]；None 时按不满足只读免审处理，
-                仍记前缀——前缀放行另有 risk_l<=3 兜底）
+                仍记前缀——前缀放行另有 risk_l<=2 兜底）
     """
     store = get_global_trust_store()
     sid = str(session_id or "")
