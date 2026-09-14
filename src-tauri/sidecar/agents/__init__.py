@@ -88,6 +88,7 @@ __all__ = [
     "reset_for_test",
     # TDSF 2026-07-30 P0-C2 修复: 后端切换接口（Strands 适配层注入）
     "set_backend",
+    "set_backend_unavailable",
     "clear_backend",
     "BackendInvokeCallable",
     # P1-NEW-v3-1 修复 (2026-07-30): Strands adapter 引用注入
@@ -175,10 +176,10 @@ def configure_agents(
 #       (agent_id: str, input: str, state: dict) -> dict
 #    返回值结构与 BaseAgent.to_state_update() 对齐（observation / next_step /
 #    mood / intermediate_results），让前端 sidecar-adapter.ts 切片零改动。
-# 3. clear_backend() 清除 override，回退到 LangGraph BaseAgent PAOR 路径。
-# 4. 同时仍走 configure_agents() 实例化所有 BaseAgent（保留 fallback 路径，
-#    Strands 适配层降级时可回退；同时让前端 agent.list / agent.info JSON-RPC
-#    拿到的 system_prompt / tools 元数据仍可用）。
+# 3. clear_backend() 仅保留给旧兼容测试；生产启动始终安装 Strands override
+#    或 fail-closed override，不允许激活失败后回退 BaseAgent。
+# 4. configure_agents() 暂时仍实例化 BaseAgent，以维持 agent.list / agent.info
+#    的既有元数据契约；后续拆分 RPC 门面后再移除旧实现。
 # ============================================================================
 
 
@@ -215,10 +216,27 @@ def set_backend(backend: BackendInvokeCallable) -> None:
     )
 
 
-def clear_backend() -> None:
-    """清除后端 override，回退到 BaseAgent PAOR 主路径
+def set_backend_unavailable(reason: str) -> None:
+    """安装 fail-closed 后端，禁止错误时静默回退旧 BaseAgent。"""
+    message = str(reason or "Strands backend unavailable")
 
-    用于运行时切换后端（如 Strands → LangGraph）或单元测试隔离。
+    def _raise_unavailable(
+        agent_id: str,
+        input: str,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        del agent_id, input, state
+        raise RuntimeError(message)
+
+    set_backend(_raise_unavailable)
+    set_strands_adapter(None)
+    logger.error(f"agent backend unavailable (fail-closed): {message}")
+
+
+def clear_backend() -> None:
+    """清除后端 override，供旧兼容测试隔离使用。
+
+    生产启动不得用此函数处理激活失败；应调用 set_backend_unavailable()。
     """
     global _global_backend_override, _global_strands_adapter
     if _global_backend_override is not None:
@@ -421,13 +439,13 @@ def _rpc_agent_configure(
                 for agent in _agent_instances.values():
                     agent.llm_call = new_llm_call
                 # P1-NEW-v3-1 修复 (2026-07-30): Strands 后端配置热更新
-                # - 原版仅更新 LangGraph 路径 (_global_llm_call + BaseAgent.llm_call),
+                # - 旧代码仅更新兼容层 (_global_llm_call + BaseAgent.llm_call),
                 #   Strands adapter.strands_model 和 _agent_cache 未更新,
                 #   前端误报 ok:true 实际 Strands 仍用旧 model
                 # - 修复: 检查 _global_strands_adapter 是否注入, 有则调用
                 #   update_model (内部会 clear_cache 旧 Agent 实例)
-                # - create_strands_model 失败时不阻断 LangGraph 路径,
-                #   只记日志 (Strands 降级, LangGraph 正常)
+                # - create_strands_model 失败时保留当前 Strands 后端并记录警告；
+                #   该旧配置门面的返回契约将在 llm_config 解耦时一并收紧
                 if _global_strands_adapter is not None:
                     try:
                         from strands_backend.model_adapter import create_strands_model
@@ -439,7 +457,7 @@ def _rpc_agent_configure(
                             f"model_available={new_model is not None}"
                         )
                     except Exception as se:
-                        # Strands 更新失败不阻断 LangGraph 路径, 只降级 Strands
+                        # Strands 更新失败只记录当前后端异常，不切换其他 Agent 后端
                         logger.warning(
                             f"Strands model hot-reload failed (degraded): {se}"
                         )

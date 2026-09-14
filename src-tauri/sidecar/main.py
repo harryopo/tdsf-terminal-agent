@@ -253,18 +253,18 @@ _rust_bridge: Any = None  # type: ignore[assignment]
 # ---------------------------------------------------------------
 # 由 register_business_methods 中 Strands 注入段写入，供 sidecar.health
 # JSON-RPC 读取。前端启动时调用 sidecar.health 拿到 backend_type，
-# 渲染 Backend Pill（Strands 绿色 / LangGraph 黄色 / 降级红色）。
+# 渲染 Backend Pill（Strands 绿色 / 不可用红色）。
 #
 # 字段说明：
-#   backend_type: "strands" | "langgraph"  (用户配置 TDSF_AGENT_BACKEND)
+#   backend_type: 请求的后端名称（当前仅支持 "strands"）
 #   backend_activated: bool                (Strands 适配层是否真实激活)
 #   strands_available: bool                (strands 包是否可导入)
 #   rust_bridge_active: bool               (rust_bridge 是否注入)
 #   llm_configured: bool                   (LLMConfig 是否配置 api_key)
-#   fallback_reason: str | None            (Strands 启动失败时的异常信息)
+#   fallback_reason: str | None            (后端不可用时的兼容字段名)
 #   activate_time: float                   (激活/降级时间戳)
 _backend_status: dict[str, Any] = {
-    "backend_type": "langgraph",
+    "backend_type": "strands",
     "backend_activated": False,
     "strands_available": False,
     "rust_bridge_active": False,
@@ -272,6 +272,30 @@ _backend_status: dict[str, Any] = {
     "fallback_reason": None,
     "activate_time": 0.0,
 }
+
+
+def _requested_agent_backend() -> str:
+    """读取唯一受支持的 Agent 后端；未知值显式失败。"""
+    backend = os.environ.get("TDSF_AGENT_BACKEND", "strands").strip().lower()
+    if backend != "strands":
+        raise ValueError(
+            f"unsupported TDSF_AGENT_BACKEND={backend!r}; only 'strands' is supported"
+        )
+    return backend
+
+
+def _mark_agent_backend_unavailable(
+    agents_module: Any,
+    backend_type: str,
+    reason: str,
+) -> None:
+    """记录不可用状态，并让 agent.invoke 保持 fail-closed。"""
+    agents_module.set_backend_unavailable(reason)
+    _backend_status["backend_type"] = backend_type
+    _backend_status["backend_activated"] = False
+    _backend_status["fallback_reason"] = reason
+    _backend_status["activate_time"] = time.time()
+    send_notification("backend_status", dict(_backend_status))
 
 
 def write_message(msg: dict) -> None:
@@ -566,14 +590,16 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
 
     # T-P1-11: Agent 框架（主 Agent + 4 子 Agent）
     # 必须在 event_bus 之后注册（Agent 通过 event_bus 推送 mood/message 事件）
+    agents_module = None
     try:
         import agents
+        agents_module = agents
         # TDSF P0-3 + P0-C5: LLM 配置加载与共享
         # ---------------------------------------------------------------
         # 从环境变量 / .tdsf-data/llm_config.json 加载 LLMConfig，
-        # 同一份 config 同时供给 LangGraph 路径（make_llm_call）和 Strands 路径
+        # 同一份 config 同时供给旧 RPC 元数据兼容层（make_llm_call）和 Strands
         # （configure_strands → create_strands_model），避免双套配置导致行为分裂。
-        # 未配置时 llm_call=None，Agent 降级到 mock LLM（保持离线可用）。
+        # 未配置时 llm_call=None；Strands 会显式报告模型未配置。
         from core.llm_config import load_config, make_llm_call
         llm_config = load_config()
         llm_call = make_llm_call(llm_config)
@@ -592,19 +618,19 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
 
         # TDSF 2026-07-30 P0-C1 + P0-C5 + P1-4: Strands 后端 feature flag 注入点
         # ---------------------------------------------------------------
-        # 通过环境变量 TDSF_AGENT_BACKEND 切换 Agent 后端实现：
-        #   - "langgraph"（默认）/ 未设置 / 其他值：走 BaseAgent PAOR 主路径
-        #   - "strands"：注入 StrandsAgentAdapter，invoke_agent() 走 override
+        # 通过环境变量 TDSF_AGENT_BACKEND 声明 Agent 后端实现：
+        #   - 未设置 / "strands"：注入 StrandsAgentAdapter
+        #   - 其他值：显式标记不可用，agent.invoke fail-closed
         #
         # 集成点对齐方案文档 §4.2 与 strands_backend/adapter.py docstring：
         #   - configure_strands 便捷构造 StrandsAgentAdapter
         #   - agents.set_backend() 注入 override（agents/__init__.py P0-C2 提供）
-        #   - 失败时 clear_backend() 回退到 BaseAgent PAOR（保证 sidecar 可用）
+        #   - 失败时保留 sidecar RPC，但 agent.invoke 不回退旧 BaseAgent
         #
         # P0-C5（2026-07-30 完成）：strands_model 自动注入
         #   - configure_strands(strands_model=None) 内部自动调用
         #     create_strands_model(llm_config) 创建 Strands Model（OpenAI/Anthropic/LiteLLM）
-        #   - 与 LangGraph 路径共享同一份 LLMConfig，前端 agent.configure RPC
+        #   - 与旧 RPC 配置门面共享同一份 LLMConfig，前端 agent.configure RPC
         #     重新配置后下次 sidecar 启动自动生效（运行时切换待 P1 双向 JSON-RPC 桥）
         #   - LLM 未配置 / Strands 未安装 / provider 不支持时 strands_model 仍为 None，
         #     adapter.invoke 走降级路径（_check_degraded → emit_needs_you）
@@ -620,9 +646,14 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         #   - 返回 {ok, output, stderr, exitCode, duration} 结构化结果
         #
         # 当前限制（P2 阶段补充）：
-        #   - Strands 真实端到端实测待 P0-E（设 TDSF_AGENT_BACKEND=strands 启动验证）
+        #   - 旧 Agent 元数据门面仍待拆除，但不再进入生产 invoke 路径
         # ---------------------------------------------------------------
-        _tdsf_backend = os.environ.get("TDSF_AGENT_BACKEND", "langgraph").lower()
+        try:
+            _tdsf_backend = _requested_agent_backend()
+            _backend_error = None
+        except ValueError as backend_error:
+            _tdsf_backend = os.environ.get("TDSF_AGENT_BACKEND", "").strip().lower()
+            _backend_error = str(backend_error)
         # P0-E: 写入 _backend_status（供 sidecar.health RPC 读取）
         _backend_status["backend_type"] = _tdsf_backend
         _backend_status["rust_bridge_active"] = _rust_bridge is not None
@@ -630,16 +661,41 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
             getattr(llm_config, "api_key", "") if llm_config else False
         )
         # 检测 strands 包是否可导入
+        # 包入口本身允许诊断态导入，因此读取显式可用性标记，不能把
+        # “适配层可导入”误当成 Strands SDK 已就绪。
         try:
-            import strands  # type: ignore[import]
-            _backend_status["strands_available"] = True
-        except ImportError:
+            import strands_backend as strands_runtime
+            _backend_status["strands_available"] = bool(
+                strands_runtime.is_strands_available
+            )
+        except Exception as strands_error:
+            strands_runtime = None
             _backend_status["strands_available"] = False
+            strands_runtime_error = (
+                f"{type(strands_error).__name__}: {strands_error}"
+            )
+        else:
+            strands_runtime_error = None
 
-        if _tdsf_backend == "strands":
+        if _backend_error is not None:
+            logger.error(_backend_error)
+            _mark_agent_backend_unavailable(
+                agents,
+                _tdsf_backend or "unknown",
+                _backend_error,
+            )
+        else:
             try:
-                from strands_backend import configure_strands
                 from strands_backend.tools import DefaultRustBridge
+
+                if (
+                    strands_runtime is None
+                    or not _backend_status["strands_available"]
+                ):
+                    raise RuntimeError(
+                        strands_runtime_error
+                        or "strands-agents package is not installed"
+                    )
 
                 # P1-4: 用全局 _rust_bridge 包装成 DefaultRustBridge
                 # RustBridge 协议 ipc_invoke(method, params) → send_request(method, params)
@@ -663,7 +719,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                         "rust_bridge not initialized, Strands tools will be unavailable"
                     )
 
-                _strands_adapter = configure_strands(
+                _strands_adapter = strands_runtime.configure_strands(
                     event_bus=event_bus.get_global_bus(),
                     rust_bridge=_rust_bridge_impl,  # P1-4: 真实注入
                     llm_config=llm_config,  # P0-C5: 共享同一份 LLMConfig
@@ -682,35 +738,19 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 _backend_status["fallback_reason"] = None
                 _backend_status["activate_time"] = time.time()
                 logger.info(
-                    f"Strands backend activated (TDSF_AGENT_BACKEND=strands): "
+                    f"Strands backend activated: "
                     f"{_strands_adapter.get_stats()}"
                 )
                 # 推送 backend_status 事件给前端（前端 BackendPill 监听渲染）
                 send_notification("backend_status", dict(_backend_status))
             except Exception as se:
-                # Strands 注入失败：清空 override（防残留半初始化状态），回退 PAOR
-                logger.exception(
-                    f"failed to activate Strands backend, "
-                    f"fallback to BaseAgent PAOR: {se}"
+                # Strands 注入失败：保留 RPC 与诊断，但禁止回退旧 BaseAgent。
+                logger.exception(f"failed to activate Strands backend: {se}")
+                _mark_agent_backend_unavailable(
+                    agents,
+                    "strands",
+                    f"{type(se).__name__}: {se}",
                 )
-                agents.clear_backend()
-                # P0-E: 标记降级 + 推送 fallback 事件给前端
-                # P1-NEW-v2-5 修复 (2026-07-30): 补重置 backend_type="langgraph"，
-                # 否则前端 sidecar.health 拿到 backend_type="strands" + activated=false，
-                # 语义上暗示"仍是 strands 后端"但实际已回退 LangGraph（状态机不一致）。
-                _backend_status["backend_type"] = "langgraph"
-                _backend_status["backend_activated"] = False
-                _backend_status["fallback_reason"] = f"{type(se).__name__}: {se}"
-                _backend_status["activate_time"] = time.time()
-                send_notification("backend_status", dict(_backend_status))
-        else:
-            logger.info(
-                f"agent backend: {_tdsf_backend} (default BaseAgent PAOR)"
-            )
-            # P0-E: langgraph 模式也推送状态给前端
-            _backend_status["backend_activated"] = False
-            _backend_status["activate_time"] = time.time()
-            send_notification("backend_status", dict(_backend_status))
 
         logger.info(
             f"agents methods registered + configured: "
@@ -718,6 +758,12 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         )
     except Exception as e:
         logger.exception(f"failed to register agents: {e}")
+        if agents_module is not None:
+            _mark_agent_backend_unavailable(
+                agents_module,
+                "strands",
+                f"{type(e).__name__}: {e}",
+            )
 
     # T-P2-08.5: Docker 沙箱代理（DEC-V321-10）
     # 提供 sandbox.status / sandbox.execute / sandbox.list / sandbox.parse_command
@@ -852,12 +898,12 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     # TDSF P0-E（2026-07-30）: sidecar.health JSON-RPC（Critical-2 可观测性修复）
     # ---------------------------------------------------------------
     # 提供后端运行时状态查询，让前端 BackendPill / 启动诊断能感知：
-    #   - 当前 backend_type（strands / langgraph）
-    #   - Strands 适配层是否真实激活（非 fallback）
+    #   - 当前请求的 backend_type（仅 strands 受支持）
+    #   - Strands 适配层是否真实激活
     #   - strands 包是否可导入
     #   - rust_bridge 是否注入
     #   - LLM 是否配置
-    #   - fallback 原因（如 Strands 启动失败）
+    #   - 后端不可用原因（沿用 fallback_reason 字段保持线协议兼容）
     #   - agents 数量 + 列表
     #   - uptime / 启动时间
     #
