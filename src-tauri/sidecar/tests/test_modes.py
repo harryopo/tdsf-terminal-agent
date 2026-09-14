@@ -67,7 +67,7 @@ class TestDecideMatrix:
     def test_confirm_L4_confirm(self):
         assert decide(4, AgentMode.CONFIRM) == "confirm"
 
-    # --- auto：L0-L4 allow（命令 denylist 在 decide 之前单独阻断）---
+    # --- auto：L0-L2 allow，L3-L4 confirm（denylist 更早单独阻断）---
 
     def test_auto_L0_allow(self):
         assert decide(0, AgentMode.AUTO) == "allow"
@@ -78,11 +78,11 @@ class TestDecideMatrix:
     def test_auto_L2_allow(self):
         assert decide(2, AgentMode.AUTO) == "allow"
 
-    def test_auto_L3_allow(self):
-        assert decide(3, AgentMode.AUTO) == "allow"
+    def test_auto_L3_confirm(self):
+        assert decide(3, AgentMode.AUTO) == "confirm"
 
-    def test_auto_L4_allow(self):
-        assert decide(4, AgentMode.AUTO) == "allow"
+    def test_auto_L4_confirm(self):
+        assert decide(4, AgentMode.AUTO) == "confirm"
 
 
 class TestDecideInputForms:
@@ -99,21 +99,21 @@ class TestDecideInputForms:
 
     def test_risk_level_enum_high(self):
         # HIGH → L3
-        assert decide(RiskLevel.HIGH, "auto") == "allow"
+        assert decide(RiskLevel.HIGH, "auto") == "confirm"
 
     def test_risk_level_enum_deny(self):
-        # DENY → L4；命令 denylist 另行阻断。
-        assert decide(RiskLevel.DENY, "auto") == "allow"
+        # DENY → L4；命令 denylist 另行阻断，非硬底线仍须审批。
+        assert decide(RiskLevel.DENY, "auto") == "confirm"
         assert decide(RiskLevel.DENY, "observe") == "deny"
 
     def test_l_string_upper(self):
-        assert decide("L3", "auto") == "allow"
+        assert decide("L3", "auto") == "confirm"
 
     def test_l_string_lower(self):
         assert decide("l2", "confirm") == "confirm"
 
     def test_risk_level_value_string(self):
-        assert decide("high", "auto") == "allow"
+        assert decide("high", "auto") == "confirm"
         assert decide("low", "observe") == "deny"
 
     def test_agent_mode_string_value(self):
@@ -263,8 +263,8 @@ class TestModeAwarePrompt:
 
     def test_auto_mode_instruction_composed(self):
         prompt = self._compose(AgentMode.AUTO, teach=False)
-        assert "所有风险等级" in prompt
-        assert "无需逐步请示" in prompt
+        assert "L0-L2" in prompt
+        assert "L3-L4 高风险操作仍须用户批准" in prompt
 
     def test_teach_skin_appended_when_on(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=True)

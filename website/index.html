@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TDSF Terminal Agent — 终端优先的 Linux 运维工作台</title>
-  <meta name="description" content="TDSF Terminal Agent：AI Agent 直接在真实本地 / SSH / WSL 终端里执行命令的桌面工作台。命令逐字敲入真实 shell、全程可见；四档信任模式、命令影响分级、审批门禁、离线知识库，面向 Linux 运维教学。" />
+  <meta name="description" content="TDSF Terminal Agent：AI Agent 直接在真实本地 / SSH / WSL 终端里执行命令的桌面工作台。命令逐字敲入真实 shell、全程可见；四档信任模式、命令影响分级、审批门禁与本地知识检索，面向 Linux 运维教学。" />
   <meta name="theme-color" content="#0a0a0a" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <meta property="og:title" content="TDSF Terminal Agent" />
@@ -62,12 +62,12 @@
               <div class="fact-label">内置运维工具</div>
             </div>
             <div>
-              <div class="fact-num">4,137</div>
-              <div class="fact-label">离线知识切片 + 660 条中文索引</div>
+              <div class="fact-num">8</div>
+              <div class="fact-label">内置 Linux 运维技能</div>
             </div>
             <div>
-              <div class="fact-num">2,236</div>
-              <div class="fact-label">后端测试通过（前端 1,368）</div>
+              <div class="fact-num">15</div>
+              <div class="fact-label">深浅色终端主题</div>
             </div>
           </div>
         </div>
@@ -165,7 +165,7 @@
             </tr>
             <tr>
               <td><span class="mode-name">教学</span></td>
-              <td>只读 + 结构化讲解；单步命令卡，一次一条命令，结果返回后继续</td>
+              <td>观察模式权限 + 教学界面；单步命令卡，一次一条，真实结果返回后继续</td>
               <td>课堂与自学</td>
             </tr>
           </tbody>
@@ -215,7 +215,7 @@
               <h3>安全边界</h3>
             </div>
             <ul>
-              <li>命令影响分级 <strong>L0–L4</strong>，复合命令逐段拆解展示</li>
+              <li>当前使用 <strong>L0 / L2 / L3 / L4</strong> 影响分级（L1 保留兼容）；未识别命令按高危险处理</li>
               <li>灾难性操作<strong>硬底线黑名单</strong>：直接拦截，不提供审批选项</li>
               <li>同会话审批 <strong>FIFO</strong>：上一条命令未返回前不展示下一条审批卡</li>
               <li>输出脱敏后才进入界面、模型上下文与日志；SSH 退出码作为结果硬边界</li>
@@ -225,13 +225,13 @@
           <article class="cap">
             <div class="cap-head">
               <span class="cap-num">04</span>
-              <h3>离线知识库</h3>
+              <h3>本地知识检索</h3>
             </div>
             <ul>
-              <li>内置 <strong>4,137 条官方文档切片</strong>：Arch Wiki、nginx、Apache、Docker、Kubernetes、Redis、SSH、SELinux、git 等</li>
-              <li><strong>660 条中文提炼索引</strong>，按主题分组，检索即中文命中</li>
+              <li>索引本机已有或用户导入的文档与笔记，内容量以设备上的实际数据为准</li>
+              <li>会话摘要与成功排障案例可按工作区标签保存，并供后续检索</li>
               <li>SQLite <strong>FTS5</strong> 关键词 + <strong>sqlite-vec</strong> 向量语义混合检索，RRF 融合排序</li>
-              <li>完全本地运行，断网可用</li>
+              <li>检索在本地运行；Agent 推理仍依赖配置的模型服务，本地模型除外</li>
             </ul>
           </article>
 
@@ -243,7 +243,7 @@
             <ul>
               <li>工作区是隔离单元：每个工作区保存自己的窗口、标签页与环境（本地 / WSL / SSH）</li>
               <li>Agent <strong>按工作区隔离</strong>：对话只看到所属工作区的环境与主机</li>
-              <li><strong>同一工作区的对话共享长期记忆</strong>，跨工作区互不可见</li>
+              <li>本地记忆按工作区标签隔离，后续对话可检索已保存的摘要与成功案例</li>
               <li>未绑定工作区时 Agent 不运行，先建工作区再开对话</li>
             </ul>
           </article>
@@ -341,19 +341,19 @@
           <div class="arch-layer">
             <span class="layer-name">React 19</span>
             <span class="layer-desc">Agent 面板 · 终端 · 工作区 · 编辑器（TypeScript · Vite · Tailwind v4 · zustand）</span>
-            <span class="layer-metric">140 个测试文件</span>
+            <span class="layer-metric">交互与可视化</span>
           </div>
-          <div class="arch-arrow">│ Tauri invoke / events · 125 个 IPC 命令</div>
+          <div class="arch-arrow">│ Tauri invoke / events</div>
           <div class="arch-layer">
             <span class="layer-name">Rust（Tauri 2）</span>
             <span class="layer-desc">PTY · SSH / SFTP · 端口转发 · 打字机引擎 · sidecar 监管</span>
-            <span class="layer-metric">cargo test 364</span>
+            <span class="layer-metric">唯一系统执行面</span>
           </div>
-          <div class="arch-arrow">│ JSON-RPC over stdio · 121 个 RPC 方法</div>
+          <div class="arch-arrow">│ JSON-RPC over stdio</div>
           <div class="arch-layer">
             <span class="layer-name">Python sidecar</span>
             <span class="layer-desc">Strands Agent · 工具注册表 · 审批 · 知识库 · 证据链</span>
-            <span class="layer-metric">pytest 2,236</span>
+            <span class="layer-metric">可独立重启</span>
           </div>
         </div>
 
@@ -379,8 +379,8 @@
       <div class="shell">
         <div class="section-head reveal">
           <p class="eyebrow">Verification</p>
-          <h2>区分"自动化测试已通过"与"待原生验收"</h2>
-          <p>没有证据的能力不会写成已完成。以下为当前代码库实测结果。</p>
+          <h2>自动化门禁与原生验收分开</h2>
+          <p>测试数量会随实现变化，不把某一次运行的固定数字当成功能指标。</p>
         </div>
 
         <table class="verify reveal">
@@ -388,14 +388,14 @@
             <tr>
               <th scope="col">门禁</th>
               <th scope="col">范围</th>
-              <th scope="col">结果</th>
+              <th scope="col">发布要求</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>pytest</td><td>Python sidecar（Agent、工具、审批、知识库）</td><td>2,236 通过</td></tr>
-            <tr><td>vitest</td><td>前端（140 个测试文件）</td><td>1,368 通过</td></tr>
-            <tr><td>cargo test</td><td>Rust 壳（PTY、SSH、打字机、隧道）</td><td>364 通过</td></tr>
-            <tr><td>tsc / eslint</td><td>类型与静态检查</td><td>0 错误 0 警告</td></tr>
+            <tr><td>pytest</td><td>Python sidecar（Agent、工具、审批、知识库）</td><td>完整套件通过</td></tr>
+            <tr><td>vitest</td><td>前端状态、交互与渲染契约</td><td>完整套件通过</td></tr>
+            <tr><td>cargo test</td><td>Rust 壳（PTY、SSH、打字机、隧道）</td><td>完整套件通过</td></tr>
+            <tr><td>tsc / eslint</td><td>类型与静态检查</td><td>零错误、零警告</td></tr>
           </tbody>
         </table>
 

@@ -478,18 +478,17 @@ def assess_command(
        任何白名单/模式不可绕（spec「deny 硬底线」）
     4. 免确认记忆三级（Task 5，trust_store）：
        a. 白名单 deny 命中 → blocked；b. 白名单 allow 命中（无危险构造、
-       risk_l<=3、非 observe）→ allow；c. 会话级免审命中（⚡只读免审
-       risk_l<=1 / 前缀免批 risk_l<=3）→ allow；d. 白名单 ask 命中 →
+       risk_l<=2、非 observe）→ allow；c. 会话级免审命中（⚡只读免审
+       risk_l<=1 / 前缀免批 risk_l<=2）→ allow；d. 白名单 ask 命中 →
        强制逐条审批（覆盖 decide 的 allow）
-    5. core.decision_engine.decide —— 模式 × 风险映射（observe=全 deny /
+    5. strands_backend.modes.decide —— 模式 × 风险映射（observe=全 deny /
        confirm=L0-L1 allow、L2-L4 confirm / auto=L0-L2 allow、L3-L4 confirm）；
        decide 抛 ValueError（非法输入）时 fail-closed 按 deny 处理
     6. observe 只读短路（readonly=True 时 L0-L1 放行）
 
     安全不变量：危险构造（$()/eval/管道到 shell → dangerous_construct=True）
-    与 L4 命令不能被白名单/会话记忆降级；但 AUTO 模式按产品契约仍放行
-    非 denylist 命令。observe 模式跳过白名单 allow 与会话级免审（只读观察
-    语义不被记忆体系扩大）。
+    与 L3-L4 命令不能被白名单/会话记忆降级；AUTO 模式也必须逐条审批。
+    observe 模式跳过白名单 allow 与会话级免审（只读观察语义不被记忆体系扩大）。
 
     Args:
         ctx: 工具上下文（读 mode / session_id）
@@ -554,11 +553,11 @@ def assess_command(
 
     # 3.5 免确认记忆三级（Task 5，方案书 v3.1 §4.5-4.6）——在 decide 之前：
     #     ① 白名单 deny 命中 → blocked（用户显式 deny 规则，直接拦截不审批）
-    #     ② 白名单 allow 命中（无危险构造、risk_l<=3、非 observe）→ allow
-    #     ③ 会话级免审命中（⚡只读免审 risk_l<=1 / 前缀免批 risk_l<=3）→ allow
+    #     ② 白名单 allow 命中（无危险构造、risk_l<=2、非 observe）→ allow
+    #     ③ 会话级免审命中（⚡只读免审 risk_l<=1 / 前缀免批 risk_l<=2）→ allow
     #     ④ 白名单 ask 命中 → 强制逐条审批（覆盖 decide 的 allow）
-    #     安全不变量：危险构造与 L4 不得靠白名单/会话记忆降级；AUTO
-    #     模式自身仍按产品契约放行非 denylist 命令。observe 模式跳过一切
+    #     安全不变量：危险构造与 L3-L4 不得靠白名单/会话记忆降级；AUTO
+    #     模式也必须审批。observe 模式跳过一切
     #     自动放行（fail-closed）；impact 解析失败
     #     （dangerous 不可判）时同样不放行。
     force_confirm = False
@@ -588,7 +587,7 @@ def assess_command(
         dangerous = bool(impact.get("dangerous_construct")) if impact else True
         mode_value = getattr(ctx.mode, "value", str(ctx.mode))
         observe = mode_value == "observe"
-        if wl_decision == "allow" and not dangerous and not observe and risk_l <= 3:
+        if wl_decision == "allow" and not dangerous and not observe and risk_l <= 2:
             logger.info(
                 f"assess_command whitelist allow hit: command={command[:80]}"
             )
@@ -617,7 +616,7 @@ def assess_command(
                     "reason": "",
                     "trust_source": "session_readonly",
                 }
-            if risk_l <= 3 and trust.is_prefix_allowed(sid, command):
+            if risk_l <= 2 and trust.is_prefix_allowed(sid, command):
                 logger.info(
                     f"assess_command session prefix-trust hit: "
                     f"session={sid}, command={command[:80]}"
@@ -646,10 +645,8 @@ def assess_command(
         logger.warning(f"decide unavailable, fail-closed to deny: {e}")
         decision = "deny"
 
-    # 4.5 白名单 ask 命中 → 确认模式强制逐条审批。自动模式的定义是
-    #     无交互直接执行，故不把 allow 改写为 confirm；deny/blocked 不受影响。
-    mode_value = getattr(ctx.mode, "value", str(ctx.mode))
-    if force_confirm and mode_value != "auto" and decision == "allow":
+    # 4.5 白名单 ask 命中 → 所有可执行模式均强制逐条审批；deny/blocked 不受影响。
+    if force_confirm and decision == "allow":
         decision = "confirm"
 
     # 5. observe 只读短路（方案书 §3.2：只读类由调用方按 ToolPolicy.readonly

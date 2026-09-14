@@ -2422,7 +2422,7 @@ class TestModeDecision(unittest.TestCase):
     矩阵（core/decision_engine.py）：
     - observe: L0-L4 全 deny（只读工具 readonly=True 短路放行 L0-L1）
     - confirm: L0-L1 allow；L2-L4 confirm（缺省模式）
-    - auto:    L0-L4 allow；命令 denylist 仍在 assess_command 处阻断
+    - auto:    L0-L2 allow；L3-L4 confirm；命令 denylist 更早阻断
     """
 
     def _run(self, command, mode, readonly=False, output="ok"):
@@ -2509,7 +2509,7 @@ class TestModeDecision(unittest.TestCase):
         r = self._run("rm -rf /tmp/x", AgentMode.CONFIRM)
         self.assertEqual(r["status"], "needs_approval")
 
-    # --- auto：L0-L4 直接执行；命令 denylist 仍在 assess_command 处阻断 ---
+    # --- auto：L0-L2 直接执行；L3-L4 审批；命令 denylist 更早阻断 ---
 
     def test_auto_readonly_allows(self):
         r = self._run("uptime", AgentMode.AUTO)
@@ -2520,15 +2520,15 @@ class TestModeDecision(unittest.TestCase):
         r = self._run("mv /a /b", AgentMode.AUTO)
         self.assertEqual(r["status"], "success")
 
-    def test_auto_high_risk_allows(self):
-        """auto 模式 L4 直接执行。"""
+    def test_auto_high_risk_requires_approval(self):
+        """auto 模式 L4 仍需审批。"""
         r = self._run("rm -rf /tmp/x", AgentMode.AUTO)
-        self.assertEqual(r["status"], "success")
+        self.assertEqual(r["status"], "needs_approval")
 
-    def test_auto_service_restart_allows(self):
-        """auto 模式 L3 服务操作直接执行。"""
+    def test_auto_service_restart_requires_approval(self):
+        """auto 模式 L3 服务操作仍需审批。"""
         r = self._run("systemctl restart nginx", AgentMode.AUTO)
-        self.assertEqual(r["status"], "success")
+        self.assertEqual(r["status"], "needs_approval")
 
     def test_default_mode_is_confirm(self):
         """ctx 未设 mode 时缺省 confirm（中间态最安全）"""
