@@ -86,6 +86,7 @@ from agents import (
     register_methods,
     reset_for_test,
     set_backend,
+    set_backend_unavailable,
     clear_backend,
 )
 
@@ -1262,6 +1263,11 @@ class TestAgentRegistry:
         # 不应包含 override 的标记
         assert update2.get("observation") != "strands-handled: 回退测试"
 
+    def test_invoke_agent_fails_when_backend_unavailable(self, configured_agents):
+        set_backend_unavailable("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            invoke_agent("main", {"input": "hello"})
+
     def test_set_backend_rejects_non_callable(self):
         """set_backend 拒绝非可调用对象"""
         with pytest.raises(TypeError, match="callable"):
@@ -1325,6 +1331,13 @@ class TestJsonRpcMethods:
         state = {"input": "测试", "session_id": "", "iteration": 0}
         update = _rpc_agent_invoke("main", state)
         assert "next_step" in update
+
+    def test_rpc_agent_configure_query(self):
+        from agents import _rpc_agent_configure
+        result = _rpc_agent_configure()
+        assert isinstance(result, dict)
+        assert isinstance(result["ok"], bool)
+        assert isinstance(result["llm_call_set"], bool)
 
 
 # ============================================================================

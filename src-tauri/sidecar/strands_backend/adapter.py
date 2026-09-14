@@ -12,8 +12,8 @@ strands_backend/adapter.py — Strands Agent 适配层
   callback_handler 事件转发），替代当前 dict 切片模拟流式。
 - 错误处理：try/except 包裹 invoke 全流程，失败时 ``emit_needs_you``
   通知前端（needs_type="error"），不抛错阻塞 agent loop。
-- 优雅降级：Strands 未安装 / model 未注入 / feature flag 关闭时，
-  返回 degraded 状态的结构化结果（与 BaseAgent mock LLM 降级模式一致）。
+- 安全降级：Strands 未安装 / model 未注入 / feature flag 关闭时，
+  返回 degraded 状态的结构化失败结果，不切换其他 Agent 后端。
 
 P0-A1 (2026-08-29, 方案书 v3.1 三模式信任体系)：
 - **main 是唯一 agent 实例**：4 子 agent 委派机制（_SUB_AGENT_SPECS /
@@ -29,7 +29,7 @@ P0-A1 (2026-08-29, 方案书 v3.1 三模式信任体系)：
   agent:<子 agent> 前缀事件；前端 "agent:" 卡片逻辑由 Task 2 处理。
 
 设计原则：
-1. Strands 是条件依赖（运行时缺失时优雅降级，不影响 sidecar 启动）。
+1. Strands 是现役 Agent 后端（运行时缺失不影响诊断 RPC 启动，但 invoke 不可用）。
 2. 工具通过 ``make_all_ops_tools(ctx)`` 构造，自动绑定 ``ToolContext``。
 3. callback_handler 内联实现，把 Strands 事件 → event_bus 便捷方法。
 """
@@ -1923,11 +1923,11 @@ class StrandsAgentAdapter:
     ) -> dict[str, Any]:
         """构建降级响应
 
-        与 BaseAgent mock LLM 降级模式一致：返回结构化结果 + emit_needs_you 通知。
+        返回结构化失败结果 + emit_needs_you 通知，不切换其他 Agent 后端。
         """
         duration = time.time() - start_time
         reason_messages = {
-            "feature_flag_disabled": "Strands 后端 feature flag 未启用（TDSF_AGENT_BACKEND!=strands）",
+            "feature_flag_disabled": "Strands 后端未启用",
             "strands_not_installed": "strands-agents 包未安装，请 pip install strands-agents",
             "strands_model_not_injected": "Strands Model 对象未注入（需 P0 阶段实现 model_adapter.py）",
         }
@@ -1941,7 +1941,7 @@ class StrandsAgentAdapter:
         observation = (
             f"[strands-backend-degraded] {message}\n"
             f"输入: {input[:200]}\n"
-            f"建议: 切换回 LangGraph 后端（TDSF_AGENT_BACKEND=langgraph）或配置 Strands 依赖。"
+            f"建议: 检查 Strands SDK、模型配置与 sidecar.health 状态。"
         )
 
         # 推送 needs_you 事件（前端状态栏显示降级告警）
@@ -2717,7 +2717,7 @@ class StrandsAgentAdapter:
                     f"Agent {agent_id} 的 Strands 后端降级运行:\n"
                     f"  原因: {reason}\n"
                     f"  详情: {message}\n"
-                    f"当前 invoke 返回 degraded 状态，建议切换回 LangGraph 后端。"
+                    f"当前 invoke 返回 degraded 状态，请检查 Strands SDK 与模型配置。"
                 ),
                 session_id=session_id or None,
                 source=f"{agent_id}_agent.strands.adapter",

@@ -169,6 +169,10 @@ class TestRegisterBusinessMethods:
             f"expected >= 50 methods, got {len(methods)}: {methods}"
         )
 
+    def test_sidecar_health_backend_fields(self, registered_dispatcher: FakeDispatcher):
+        result = registered_dispatcher.dispatch("sidecar.health")
+        assert all(key in result for key in ("backend_type", "backend_activated", "fallback_reason"))
+
 
 # ============================================================================
 # JSONRPCError 测试（覆盖 main.py 的错误类）
@@ -307,3 +311,96 @@ class TestWriteMessageResilience:
         # 写成功后应复位 broken 标志，且内容真正写出
         assert main._stdout_broken is False
         assert '"ping"' in ok.data
+
+
+def test_requested_agent_backend_contract(monkeypatch):
+    monkeypatch.delenv("TDSF_AGENT_BACKEND", raising=False)
+    assert main._requested_agent_backend() == "strands"
+    monkeypatch.setenv("TDSF_AGENT_BACKEND", "strands")
+    assert main._requested_agent_backend() == "strands"
+    for value in ("langgraph", "unknown"):
+        monkeypatch.setenv("TDSF_AGENT_BACKEND", value)
+        with pytest.raises(ValueError):
+            main._requested_agent_backend()
+
+
+def test_mark_agent_backend_unavailable(monkeypatch):
+    import agents
+
+    agents.reset_for_test()
+    snapshot = dict(main._backend_status)
+    events = []
+    monkeypatch.setattr(main, "send_notification", lambda name, payload: events.append((name, payload)))
+    try:
+        main._mark_agent_backend_unavailable(agents, "strands", "boom")
+        assert main._backend_status["backend_activated"] is False
+        assert main._backend_status["fallback_reason"] == "boom"
+        assert main._backend_status["backend_type"] == "strands"
+        assert events[-1][0] == "backend_status"
+        assert events[-1][1]["backend_activated"] is False
+        assert events[-1][1]["fallback_reason"] == "boom"
+        with pytest.raises(RuntimeError, match="boom"):
+            agents.invoke_agent("main", {"input": "hello"})
+    finally:
+        main._backend_status.clear()
+        main._backend_status.update(snapshot)
+        agents.reset_for_test()
+
+
+def test_register_strands_activation_failure_fails_closed(monkeypatch):
+    import agents
+    import strands_backend
+
+    snapshot = dict(main._backend_status)
+    events = []
+    agents.reset_for_test()
+    monkeypatch.delenv("TDSF_AGENT_BACKEND", raising=False)
+    monkeypatch.setattr(strands_backend, "is_strands_available", True)
+    monkeypatch.setattr(
+        strands_backend,
+        "configure_strands",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("activate boom")),
+    )
+    monkeypatch.setattr(main, "send_notification", lambda name, payload: events.append((name, payload)))
+    try:
+        dispatcher = FakeDispatcher()
+        main.register_business_methods(dispatcher)
+        result = dispatcher.dispatch("sidecar.health")
+        assert result["backend_type"] == "strands"
+        assert result["backend_activated"] is False
+        assert "activate boom" in result["fallback_reason"]
+        assert events[-1][0] == "backend_status"
+        with pytest.raises(RuntimeError, match="activate boom"):
+            agents.invoke_agent("main", {"input": "hello"})
+    finally:
+        main._backend_status.clear()
+        main._backend_status.update(snapshot)
+        agents.reset_for_test()
+
+
+def test_register_strands_sdk_missing_fails_closed(monkeypatch):
+    import agents
+    import strands_backend
+
+    snapshot = dict(main._backend_status)
+    agents.reset_for_test()
+    monkeypatch.delenv("TDSF_AGENT_BACKEND", raising=False)
+    monkeypatch.setattr(strands_backend, "is_strands_available", False)
+    monkeypatch.setattr(
+        strands_backend,
+        "configure_strands",
+        lambda **_: pytest.fail("configure_strands must not run when SDK is missing"),
+    )
+    try:
+        dispatcher = FakeDispatcher()
+        main.register_business_methods(dispatcher)
+        result = dispatcher.dispatch("sidecar.health")
+        assert result["strands_available"] is False
+        assert result["backend_activated"] is False
+        assert "package is not installed" in result["fallback_reason"]
+        with pytest.raises(RuntimeError):
+            agents.invoke_agent("main", {"input": "hello"})
+    finally:
+        main._backend_status.clear()
+        main._backend_status.update(snapshot)
+        agents.reset_for_test()

@@ -2,20 +2,20 @@
  * BackendPill — 后端类型指示器（Critical-2 可观测性收尾）
  * =============================================================================
  *
- * 显示当前 Agent 后端是 Strands（绿）还是 LangGraph（黄），
- * 若 Strands 启动失败回退 LangGraph 则显示降级（红）+ tooltip 显示原因。
+ * 显示当前 Agent 后端是 Strands（绿）还是不可用（红），
+ * 激活失败时 tooltip 显示真实原因，不宣称回退到其他后端。
  *
  * 数据来源：
  *   1. 启动时调 `sidecar.health` JSON-RPC 拉初始状态
  *   2. 监听 `sidecar:backend_status` 事件实时更新（Strands 注入三路径推送）
  *
  * 字段契约（与 sidecar/main.py `_backend_status` 对齐）：
- *   - backend_type:        "strands" | "langgraph"
+ *   - backend_type:        string（当前仅支持 "strands"，保留未知请求值供诊断）
  *   - backend_activated:   bool（Strands 适配层是否真实激活）
  *   - strands_available:   bool（strands 包是否可导入）
  *   - rust_bridge_active:  bool（rust_bridge 是否注入）
  *   - llm_configured:      bool（LLMConfig 是否配置 api_key）
- *   - fallback_reason:     string | null（Strands 启动失败时的异常信息）
+ *   - fallback_reason:     string | null（后端不可用原因；兼容既有字段名）
  *   - activate_time:       float（激活/降级时间戳）
  *   - agents_count?:       int（仅 sidecar.health 返回）
  *   - agents_list?:        string[]（仅 sidecar.health 返回）
@@ -23,8 +23,7 @@
  *
  * 配色规则：
  *   - Strands 激活（backend_type=strands & backend_activated）→ 绿色 emerald
- *   - LangGraph 正常（backend_type=langgraph & 无 fallback_reason）→ 黄色 amber
- *   - 降级（fallback_reason 非空）→ 红色 rose + pulse 动画
+ *   - 未激活或失败（含未知 backend_type）→ 红色 rose + pulse 动画
  *   - 加载中（初始 null）→ 灰色 muted + ping 动画
  *
  * 挂载位置：StatusBar 中 MockLLMWarning 与 AgentStatusPill 之间。
@@ -42,7 +41,7 @@ import { invokeRpc, subscribe } from "@/lib/sidecar-bridge";
 
 /** 后端状态（与 sidecar/main.py _backend_status 字段对齐） */
 export interface BackendStatus {
-  backend_type: "strands" | "langgraph";
+  backend_type: string;
   backend_activated: boolean;
   strands_available: boolean;
   rust_bridge_active: boolean;
@@ -77,8 +76,8 @@ type DisplayState = {
 
 /**
  * 拼接 tooltip 副行：运行时长。
- * 注意：不再显示 agents_count——sidecar.health 的该字段来自 LangGraph
- * fallback 的 AGENT_REGISTRY（顶层 agents/ 遗产注册表），Strands 激活时
+ * 注意：不再显示 agents_count——sidecar.health 的该字段来自兼容层
+ * AGENT_REGISTRY（顶层 agents/ 遗产注册表），Strands 激活时
  * 它与真实引擎无关（2026-08-31 用户质疑"9 个智能体是真的吗"，实测确认
  * 是误导数据，移除显示；字段本身保留给后端调试）。
  */
@@ -101,16 +100,17 @@ function deriveDisplay(status: BackendStatus | null): DisplayState {
     };
   }
 
-  // 降级：Strands 启动失败回退 LangGraph（原因保留，排障关键）
-  if (status.fallback_reason) {
+  // 失败关闭：原因与请求值保留供排障，但不宣称切换到其他后端。
+  if (status.fallback_reason || !status.backend_activated) {
     return {
       dotColor: "bg-rose-500",
       labelColor: "text-rose-600 dark:text-rose-400",
       bgColor: "bg-rose-500/10",
-      label: "Degraded",
+      label: "Unavailable",
       pulse: true,
-      tooltipTitle: "Strands 启动失败，已降级 LangGraph",
-      tooltipDetail: status.fallback_reason,
+      tooltipTitle: "Agent 后端不可用",
+      tooltipDetail:
+        status.fallback_reason ?? `不支持或未激活的后端：${status.backend_type}`,
     };
   }
 
@@ -129,15 +129,15 @@ function deriveDisplay(status: BackendStatus | null): DisplayState {
     };
   }
 
-  // LangGraph 正常模式
+  // 防御性兜底：当前只有 Strands 能进入已激活状态。
   return {
-    dotColor: "bg-amber-500",
-    labelColor: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-500/10",
-    label: "LangGraph",
-    pulse: false,
-    tooltipTitle: "LangGraph 引擎（默认 PAOR）",
-    tooltipDetail: buildDetail(status),
+    dotColor: "bg-rose-500",
+    labelColor: "text-rose-600 dark:text-rose-400",
+    bgColor: "bg-rose-500/10",
+    label: "Unavailable",
+    pulse: true,
+    tooltipTitle: "Agent 后端不可用",
+    tooltipDetail: `不支持的后端：${status.backend_type}`,
   };
 }
 
@@ -212,12 +212,15 @@ export function BackendPill() {
       // 事件 payload 是 _backend_status 字段（无 agents_count/uptime 等扩展字段）
       // 保留上一次的扩展字段（来自 sidecar.health）
       setStatus((prev) => ({
-        backend_type: p.backend_type ?? prev?.backend_type ?? "langgraph",
+        backend_type: p.backend_type ?? prev?.backend_type ?? "strands",
         backend_activated: p.backend_activated ?? prev?.backend_activated ?? false,
         strands_available: p.strands_available ?? prev?.strands_available ?? false,
         rust_bridge_active: p.rust_bridge_active ?? prev?.rust_bridge_active ?? false,
         llm_configured: p.llm_configured ?? prev?.llm_configured ?? false,
-        fallback_reason: p.fallback_reason ?? prev?.fallback_reason ?? null,
+        fallback_reason:
+          "fallback_reason" in p
+            ? (p.fallback_reason ?? null)
+            : (prev?.fallback_reason ?? null),
         activate_time: p.activate_time ?? prev?.activate_time ?? 0,
         agents_count: prev?.agents_count,
         agents_list: prev?.agents_list,

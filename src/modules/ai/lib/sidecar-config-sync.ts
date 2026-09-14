@@ -21,7 +21,7 @@
 //   - strands_backend/model_adapter.py create_strands_model：openai/未知 provider
 //     均落 OpenAIModel（client_args 尊重 base_url），仅 anthropic 走原生
 //   → 因此 anthropic 特判传 "anthropic"，其余一律传前端原 provider 名
-//     （deepseek/qwen/ollama/...），两条路径等价且 sidecar 日志可读性更好
+//     （deepseek/qwen/ollama/...），供现役 Strands 与待清理配置门面共用
 //
 // 失败策略：静默降级（console.warn 单条）——配置同步失败不阻塞 AI 对话，
 // sidecar 会沿用上次落盘配置或 mock LLM。
@@ -209,7 +209,8 @@ export function buildSidecarLlmConfig(input: {
     // 实测 sidecar：非 anthropic 的任意 provider 字符串均按 OpenAI 兼容处理
     // （llm_config.py make_llm_call 默认分支 + model_adapter.py 兜底分支），
     // 传原 provider 名（deepseek/qwen/ollama/...）而非硬编码 "openai"，
-    // 两条后端路径（LangGraph/Strands）等价且 sidecar 日志可读性更好
+    // 保留真实 provider，让 Strands 与 RPC 配置门面使用同一份配置，
+    // 同时保持 sidecar 日志可读性。
     provider: input.provider,
     api_key: apiKey,
     base_url: input.baseURL.trim(),
