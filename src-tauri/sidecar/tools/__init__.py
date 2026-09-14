@@ -30,19 +30,8 @@ tools/__init__.py — TDSF Terminal Agent MCP tools 模块
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any, Callable
-
-# === 子模块导入（按 spec 顺序）===
-from tools.confidence import invoke_confidence_tool
-from tools.credibility import invoke_credibility_tool
-from tools.decision import invoke_decision_tool
-from tools.ground import invoke_ground_tool
-from tools.history import invoke_history_tool
-from tools.risk import invoke_risk_tool
-# P4 新增 tools
-from tools.worktree_fanout import invoke_worktree_fanout_tool
-from tools.rlm_fanout import invoke_rlm_fanout_tool
-from tools.steer_inject import invoke_steer_inject_tool
 
 __all__ = [
     "risk",
@@ -78,7 +67,45 @@ __all__ = [
 # 工具注册表（统一调度入口）
 # ============================================================================
 
-# 工具名 → invoke 函数
+# 工具名 → 模块。包导入时不得急切加载旧工具：main.py 注册 rpc_methods 会先执行
+# 本文件，急切导入 decision 会连带要求 langgraph，即使现役 Strands 路径并不用它。
+_TOOL_MODULES: dict[str, str] = {
+    "risk": "tools.risk",
+    "confidence": "tools.confidence",
+    "ground": "tools.ground",
+    "decision": "tools.decision",
+    "credibility": "tools.credibility",
+    "history": "tools.history",
+    "worktree_fanout": "tools.worktree_fanout",
+    "rlm_fanout": "tools.rlm_fanout",
+    "steer_inject": "tools.steer_inject",
+}
+
+
+def _make_lazy_invoker(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """创建保持既有公开 API 的惰性工具入口。"""
+
+    def _invoke(params: dict[str, Any]) -> dict[str, Any]:
+        module = import_module(_TOOL_MODULES[name])
+        invoke = getattr(module, f"invoke_{name}_tool")
+        return invoke(params)
+
+    _invoke.__name__ = f"invoke_{name}_tool"
+    return _invoke
+
+
+# 保留 ``from tools import invoke_*_tool`` 与 TOOL_REGISTRY 的既有 callable 契约。
+invoke_risk_tool = _make_lazy_invoker("risk")
+invoke_confidence_tool = _make_lazy_invoker("confidence")
+invoke_ground_tool = _make_lazy_invoker("ground")
+invoke_decision_tool = _make_lazy_invoker("decision")
+invoke_credibility_tool = _make_lazy_invoker("credibility")
+invoke_history_tool = _make_lazy_invoker("history")
+invoke_worktree_fanout_tool = _make_lazy_invoker("worktree_fanout")
+invoke_rlm_fanout_tool = _make_lazy_invoker("rlm_fanout")
+invoke_steer_inject_tool = _make_lazy_invoker("steer_inject")
+
+
 TOOL_REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "risk": invoke_risk_tool,
     "confidence": invoke_confidence_tool,
@@ -123,46 +150,12 @@ def get_tool_metadata(name: str) -> dict[str, Any]:
     Returns:
         工具元数据字典（含 name / description / input_schema / output_schema）
     """
-    metadata_map = {
-        "risk": "tools.risk",
-        "confidence": "tools.confidence",
-        "ground": "tools.ground",
-        "decision": "tools.decision",
-        "credibility": "tools.credibility",
-        "history": "tools.history",
-        # P4 新增 tools
-        "worktree_fanout": "tools.worktree_fanout",
-        "rlm_fanout": "tools.rlm_fanout",
-        "steer_inject": "tools.steer_inject",
-    }
-    if name not in metadata_map:
+    if name not in _TOOL_MODULES:
         raise KeyError(
-            f"unknown tool: '{name}', available: {list(metadata_map.keys())}"
+            f"unknown tool: '{name}', available: {list(_TOOL_MODULES.keys())}"
         )
-
-    # 延迟导入对应模块的 get_tool_metadata
-    if name == "risk":
-        from tools.risk import get_tool_metadata as _get
-    elif name == "confidence":
-        from tools.confidence import get_tool_metadata as _get
-    elif name == "ground":
-        from tools.ground import get_tool_metadata as _get
-    elif name == "decision":
-        from tools.decision import get_tool_metadata as _get
-    elif name == "credibility":
-        from tools.credibility import get_tool_metadata as _get
-    elif name == "history":
-        from tools.history import get_tool_metadata as _get
-    elif name == "worktree_fanout":
-        from tools.worktree_fanout import get_tool_metadata as _get
-    elif name == "rlm_fanout":
-        from tools.rlm_fanout import get_tool_metadata as _get
-    elif name == "steer_inject":
-        from tools.steer_inject import get_tool_metadata as _get
-    else:
-        raise KeyError(f"unknown tool: {name}")
-
-    return _get()
+    module = import_module(_TOOL_MODULES[name])
+    return module.get_tool_metadata()
 
 
 def list_tools() -> list[str]:
