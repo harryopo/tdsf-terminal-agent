@@ -30,11 +30,17 @@ import pytest
 def _isolate_agent_log(tmp_path, monkeypatch):
     """隔离：TDSF_DATA_DIR → tmp_path（loop_progress 落盘目标）"""
     from strands_backend.agent_log import reset_for_test
+    from fix_loop import reset_for_test as reset_fix_loop_for_test
+    from needs_you import reset_for_test as reset_needs_you_for_test
 
     monkeypatch.setenv("TDSF_DATA_DIR", str(tmp_path))
     reset_for_test()
+    reset_fix_loop_for_test()
+    reset_needs_you_for_test()
     yield
     reset_for_test()
+    reset_fix_loop_for_test()
+    reset_needs_you_for_test()
 
 
 def _make_event(name="ssh_command", exception=None):
@@ -141,6 +147,58 @@ class TestConsecutiveFailureBreaker:
             hook._before_tool_call(_make_event("ssh_command"))
         hook.event_bus.emit_agent_message.assert_called_once()
 
+    def test_breaker_creates_needs_you_handoff(self, monkeypatch):
+        """连续失败熔断后进入 needs-you 队列，而不是只输出文本。"""
+        service = MagicMock()
+        monkeypatch.setattr("needs_you.get_global_service", lambda: service)
+        hook = _make_hook()
+        hook.current_task = "安装 fastfetch"
+        _run_calls(hook, 3, fail=True)
+
+        hook._before_tool_call(_make_event("ssh_command"))
+
+        service.notify_fix_loop_exhausted.assert_called_once()
+        kwargs = service.notify_fix_loop_exhausted.call_args.kwargs
+        assert kwargs["session_id"] == "hook-s1"
+        assert kwargs["retry_count"] == 3
+        assert kwargs["max_retry"] == 3
+        assert kwargs["task"] == "安装 fastfetch"
+        assert kwargs["last_error"] == "boom"
+        from fix_loop import get_global_tracker
+
+        assert get_global_tracker().get_retry_count(
+            "hook-s1", kwargs["operation_key"]
+        ) == 3
+
+    def test_handoff_uses_the_tool_that_triggered_the_breaker(self, monkeypatch):
+        """其他工具的较新失败不能覆盖本次连续失败工具。"""
+        service = MagicMock()
+        monkeypatch.setattr("needs_you.get_global_service", lambda: service)
+        hook = _make_hook()
+        _run_calls(hook, 3, name="ssh_command", fail=True)
+        _run_calls(hook, 1, name="knowledge_search", fail=True)
+
+        hook._before_tool_call(_make_event("ssh_command"))
+
+        kwargs = service.notify_fix_loop_exhausted.call_args.kwargs
+        assert kwargs["retry_count"] == 3
+        assert kwargs["operation_key"].endswith(":ssh_command")
+        assert kwargs["last_error"] == "boom"
+
+    def test_success_resets_fix_loop_retry_budget(self):
+        """同一任务/工具成功后，跨回合查询不再残留失败预算。"""
+        from fix_loop import get_global_tracker
+
+        hook = _make_hook()
+        hook.current_task = "检查 nginx"
+        _run_calls(hook, 2, fail=True)
+        operation_key = hook._fix_loop_operation_key("ssh_command")
+        assert get_global_tracker().get_retry_count("hook-s1", operation_key) == 1
+
+        _run_calls(hook, 1, fail=False)
+
+        assert get_global_tracker().get_retry_count("hook-s1", operation_key) == 0
+
     def test_after_breaker_all_tools_cancelled(self):
         """熔断后任何工具调用都被取消（循环停止语义）"""
         hook = _make_hook()
@@ -181,6 +239,18 @@ class TestTotalCallLimit:
         hook._before_tool_call(before_51)
         assert hook.cancelled is True
         assert "50" in before_51.cancel_tool
+
+    def test_total_call_limit_does_not_misreport_repeated_failure(self, monkeypatch):
+        """总调用数护栏不是连续失败，不创建错误语义的 fix-loop 卡。"""
+        service = MagicMock()
+        monkeypatch.setattr("needs_you.get_global_service", lambda: service)
+        hook = _make_hook(max_tool_calls=1)
+        _run_calls(hook, 1)
+
+        hook._before_tool_call(_make_event("another_tool"))
+
+        assert hook.cancelled is True
+        service.notify_fix_loop_exhausted.assert_not_called()
 
     def test_50_limit_is_per_invoke_after_reset(self):
         """reset（单任务语义）后 50 上限重新计算，不跨 invoke 累计误杀"""

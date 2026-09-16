@@ -28,7 +28,7 @@ import { usePlanStore } from "./planStore";
 /**
  * 把 Python 端 mood 字符串映射到 clone 的 AgentRunStatus
  *
- * Python 端 mood（来自 BaseAgent._emit_mood）:
+ * Python 端 mood（来自 Agent 事件流）:
  *   "idle" / "thinking" / "streaming" / "working" / "waiting" / "done" / "error"
  *
  * clone 的 AgentRunStatus:

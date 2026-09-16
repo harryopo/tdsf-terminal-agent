@@ -4,7 +4,7 @@
 // 背景：Python sidecar（src-tauri/sidecar/）的 AI 引擎有自己独立的 LLM 配置
 // （core/llm_config.py：{provider, api_key, base_url, model}），持久化在
 // .tdsf-data/llm_config.json，与前端 keyring/偏好 store 相互独立。
-// agent.configure JSON-RPC（agents/__init__.py _rpc_agent_configure）已实现
+// agent.configure JSON-RPC（agent_facade.configure）负责
 // 运行时重配置 + 落盘（一次 configure 永久生效，sidecar 重启后 load_config 自盘读）。
 //
 // 本模块职责：把前端"当前选中的对话模型配置"（chatStore.selectedModelId +
@@ -16,15 +16,13 @@
 //     → _rpc_agent_configure(config={...}) → reconfigure → save_config 落盘
 //
 // provider 映射结论（实测 sidecar 源码，勿凭猜测）：
-//   - core/llm_config.py make_llm_call：仅 provider == "anthropic" 走原生分支，
-//     其余任意字符串一律按 OpenAI 兼容（ChatOpenAI）处理，且尊重 base_url
 //   - strands_backend/model_adapter.py create_strands_model：openai/未知 provider
 //     均落 OpenAIModel（client_args 尊重 base_url），仅 anthropic 走原生
 //   → 因此 anthropic 特判传 "anthropic"，其余一律传前端原 provider 名
-//     （deepseek/qwen/ollama/...），供现役 Strands 与待清理配置门面共用
+//     （deepseek/qwen/ollama/...），供现役 Strands 配置门面使用
 //
 // 失败策略：静默降级（console.warn 单条）——配置同步失败不阻塞 AI 对话，
-// sidecar 会沿用上次落盘配置或 mock LLM。
+// sidecar 会沿用上次落盘配置；没有可用模型时 Agent 失败关闭。
 
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -49,7 +47,7 @@ export type SidecarLlmConfig = {
   model: string;
 };
 
-/** agent.configure 的返回值（agents/__init__.py：{ok, llm_call_set, message}） */
+/** agent.configure 的稳定返回值：{ok, llm_call_set, message} */
 type SidecarConfigureResult = {
   ok?: boolean;
   llm_call_set?: boolean;
@@ -207,7 +205,7 @@ export function buildSidecarLlmConfig(input: {
   }
   return {
     // 实测 sidecar：非 anthropic 的任意 provider 字符串均按 OpenAI 兼容处理
-    // （llm_config.py make_llm_call 默认分支 + model_adapter.py 兜底分支），
+    // （model_adapter.py 兜底分支），
     // 传原 provider 名（deepseek/qwen/ollama/...）而非硬编码 "openai"，
     // 保留真实 provider，让 Strands 与 RPC 配置门面使用同一份配置，
     // 同时保持 sidecar 日志可读性。

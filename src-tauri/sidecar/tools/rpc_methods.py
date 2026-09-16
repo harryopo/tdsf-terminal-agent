@@ -3,7 +3,7 @@ tools/rpc_methods.py — 为前端暴露 risk/confidence/decision JSON-RPC 入�
 ============================================================================
 背景:
   - risk.py / confidence.py 只提供 invoke_*_tool(params) 作为 MCP tool 入口
-    （被 graph/nodes.py 的 tool_call_node 内部调用）
+    （同时供现役 Strands 工具包装器复用）
   - 前端 riskClient.ts 的 evaluateRisk() 直接调 "risk.evaluate" JSON-RPC
   - 旧版缺少 JSON-RPC 入口，导致前端 fail-open 回退到本地 TS 评估
   - confidence.score 同理缺失

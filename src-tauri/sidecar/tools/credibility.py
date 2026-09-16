@@ -54,10 +54,7 @@ spec 要求：
         }
     }
 
-集成点：
-- 被 DecisionEngine 调用评估历史案例可信度（success_rate 调整）
-- 被 LangGraph tool_call 节点调用（tool_name == "credibility"）
-- 输出 factors 可用于可信度归因（哪个维度拉低/拉高了综合分）
+集成点：作为可信度评估 RPC tool 输出综合分与 factors 归因。
 """
 
 from __future__ import annotations
@@ -548,20 +545,3 @@ TOOL_METADATA: dict[str, Any] = {
 def get_tool_metadata() -> dict[str, Any]:
     """获取工具元数据"""
     return TOOL_METADATA
-
-
-# ============================================================================
-# 集成到 LangGraph tool_call 节点
-# ============================================================================
-
-
-def register_to_graph_nodes() -> None:
-    """将 credibility tool 注册到 graph/nodes.py 的 tool_call_node
-
-    使用方式（在 graph/nodes.py 中）：
-        from tools.credibility import invoke_credibility_tool
-
-        if tool_name == "credibility":
-            result = invoke_credibility_tool(params)
-    """
-    logger.info("register_to_graph_nodes: credibility tool ready for integration")

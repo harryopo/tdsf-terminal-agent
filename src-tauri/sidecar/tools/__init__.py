@@ -6,9 +6,8 @@ tools/__init__.py — TDSF Terminal Agent MCP tools 模块
 - risk:        风险评估 tool（T-P1-07.1，4 层风控管道 → L0-L4 + 理由）
 - confidence:  置信度融合 tool（T-P1-07.2，D-S + PCR5 证据融合 → 0-1 分数）
 - ground:      知识接地 tool（T-P1-07.3，ChromaDB 向量 + FTS5 关键词双路检索）
-- decision:    决策引擎 tool（T-P1-07.4，调用 LangGraph DecisionEngine）
 - credibility: 可信度评估 tool（T-P1-07.5，来源 + 时效 + 一致性三维度）
-- history:     历史案例 tool（T-P1-07.6，CRUD + 多维检索 + DecisionEngine 适配器）
+- history:     历史案例 tool（T-P1-07.6，CRUD + 多维检索）
 - worktree_fanout: WorktreeFanout tool（T-P4-03，git worktree 并行任务执行）
 - rlm_fanout:  RLMFanout tool（T-P4-04，1-16 路并行子任务执行 + 结果聚合）
 - steer_inject: SteerInject tool（T-P4-06，运行时向 Agent 注入指令）
@@ -23,7 +22,7 @@ tools/__init__.py — TDSF Terminal Agent MCP tools 模块
     from tools import invoke_risk_tool, invoke_confidence_tool
     result = invoke_risk_tool({"command": "sudo rm -rf /"})
 
-工具注册表（供 MCP / LangGraph tool_call_node 调用）：
+工具注册表：
     from tools import TOOL_REGISTRY, invoke_tool
     result = invoke_tool("risk", {"command": "..."})
 """
@@ -37,7 +36,6 @@ __all__ = [
     "risk",
     "confidence",
     "ground",
-    "decision",
     "credibility",
     "history",
     # P4 新增 tools
@@ -48,7 +46,6 @@ __all__ = [
     "invoke_risk_tool",
     "invoke_confidence_tool",
     "invoke_ground_tool",
-    "invoke_decision_tool",
     "invoke_credibility_tool",
     "invoke_history_tool",
     # P4 新增函数导出
@@ -67,13 +64,11 @@ __all__ = [
 # 工具注册表（统一调度入口）
 # ============================================================================
 
-# 工具名 → 模块。包导入时不得急切加载旧工具：main.py 注册 rpc_methods 会先执行
-# 本文件，急切导入 decision 会连带要求 langgraph，即使现役 Strands 路径并不用它。
+# 工具名 → 模块。包导入时保持惰性加载，避免注册 rpc_methods 时加载无关依赖。
 _TOOL_MODULES: dict[str, str] = {
     "risk": "tools.risk",
     "confidence": "tools.confidence",
     "ground": "tools.ground",
-    "decision": "tools.decision",
     "credibility": "tools.credibility",
     "history": "tools.history",
     "worktree_fanout": "tools.worktree_fanout",
@@ -98,7 +93,6 @@ def _make_lazy_invoker(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
 invoke_risk_tool = _make_lazy_invoker("risk")
 invoke_confidence_tool = _make_lazy_invoker("confidence")
 invoke_ground_tool = _make_lazy_invoker("ground")
-invoke_decision_tool = _make_lazy_invoker("decision")
 invoke_credibility_tool = _make_lazy_invoker("credibility")
 invoke_history_tool = _make_lazy_invoker("history")
 invoke_worktree_fanout_tool = _make_lazy_invoker("worktree_fanout")
@@ -110,7 +104,6 @@ TOOL_REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "risk": invoke_risk_tool,
     "confidence": invoke_confidence_tool,
     "ground": invoke_ground_tool,
-    "decision": invoke_decision_tool,
     "credibility": invoke_credibility_tool,
     "history": invoke_history_tool,
     # P4 新增 tools
@@ -124,7 +117,7 @@ def invoke_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
     """统一工具调用入口（按 name 路由到对应 invoke 函数）
 
     Args:
-        name: 工具名（risk / confidence / ground / decision / credibility / history）
+        name: 工具名（risk / confidence / ground / credibility / history）
         params: 工具参数
 
     Returns:

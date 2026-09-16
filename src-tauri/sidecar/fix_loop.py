@@ -17,10 +17,9 @@ spec 要求（DEC-V321-11 Fix-loop max_retry=3）：
 5. **全局单例**：get_global_tracker()，与 NeedsYouService 一致风格
 6. **JSON-RPC 接口**：4 个方法（stats / get / reset / is_exhausted）
 
-集成点：
-- agents/base.py 的 invoke() 末尾：工具失败 + Agent 决定 continue 时 record_retry
-- agents/base.py 的 invoke() 末尾：is_exhausted 时强制 next_step="error" + 通知 needs_you
-- agents/base.py 的 invoke() 末尾：工具成功时 reset 对应 operation_key
+当前定位：重试计数与诊断 RPC。生产 Agent 的单轮工具调用上限与连续失败熔断
+由 ``strands_backend.adapter.ToolCallLimitHook`` 负责；该 hook 只在模型实际重试
+失败工具时写入 tracker，成功后清零，达到上限且再次重试时创建 needs-you handoff。
 
 JSON-RPC 方法（注册到 MethodDispatcher）：
 - fix_loop.stats:           获取统计信息（全局或按 session）

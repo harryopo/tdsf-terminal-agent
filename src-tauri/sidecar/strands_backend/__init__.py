@@ -15,9 +15,9 @@ strands_backend/__init__.py — Strands Agents 后端适配层包入口
             rust_bridge=rust_bridge,
             llm_config=llm_config,
         )
-        agents.set_backend(adapter.invoke)
+        agent_facade.set_backend(adapter.invoke)
     except Exception as error:
-        agents.set_backend_unavailable(str(error))
+        agent_facade.set_backend_unavailable(str(error))
 """
 from __future__ import annotations
 

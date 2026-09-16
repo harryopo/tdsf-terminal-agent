@@ -4,10 +4,9 @@ strands_backend/adapter.py — Strands Agent 适配层
 
 职责：
 - ``StrandsAgentAdapter`` 类：封装 Strands Agent 的创建、工具注册、invoke 调用，
-  与现有 needs_you BaseAgent PAOR 架构协作（通过 feature flag 切换）。
-- 与现有 ``agents/base.py`` 的 ``BaseAgent.invoke(state)`` 签名对齐（返回值
-  含 observation / next_step / mood / intermediate_results），让前端
-  ``sidecar-adapter.ts`` 切片流式逻辑零改动。
+  并接入 needs_you、模式决策与事件总线。
+- 返回稳定的 Agent RPC 结果（observation / next_step / mood /
+  intermediate_results），供前端事件流与缺失事件兜底逻辑消费。
 - 流式响应：通过 ``event_bus.emit_agent_message`` 推送中间结果（Strands
   callback_handler 事件转发），替代当前 dict 切片模拟流式。
 - 错误处理：try/except 包裹 invoke 全流程，失败时 ``emit_needs_you``
@@ -22,7 +21,7 @@ P0-A1 (2026-08-29, 方案书 v3.1 三模式信任体系)：
 - **三模式信任**：AgentMode（observe/confirm/auto）随 invoke 传参下发
   （state.live.agentMode 或 state.mode），缺省 confirm（中间态最安全）。
   工具集 = TOOL_REGISTRY 全量 × 模式过滤（observe → 只读白名单）；
-  模式 × 风险映射矩阵见 core/decision_engine.py:decide。
+  模式 × 风险映射矩阵由 strands_backend.modes.decide 统一处理。
 - **教学皮肤**：原 teach agent 的结构化教学契约迁为 _TEACH_SKIN_PROMPT，
   invoke 传参 teach=True 时拼入 main system prompt（不改变权限矩阵）。
 - agent_switch 事件保留 emit（agent_id 透传），委派路径删除后不再产生
@@ -309,6 +308,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- 虚拟机网络：用 systemd-detect-virt、DMI/网卡驱动等只读证据识别虚拟化；区分来宾机配置与"
     "宿主机 NAT/桥接/仅主机网卡故障。证据指向宿主层时说明虚拟化产品和应检查的网卡模式，"
     "不要在来宾机内盲改 DNS/路由，也不要中断承载当前 SSH 的接口。\n"
+    "- 排障先做低侵入、只读取证，再按证据排序根因假设；证据不足时明确不确定，严禁编造根因。\n"
     "\n"
     "Task planning:\n"
     # T3 规划-执行回环 (2026-08-31): 规划段从"建议"升格为"必须"——
@@ -330,11 +330,13 @@ _DEFAULT_SYSTEM_PROMPT = (
     # T7 执行后验证回环 (2026-08-31, spec add-agent-loop-closure): 行动约束——
     # 写操作后必须只读验证才能宣告完成（配套收尾检测 _maybe_verify_followup）
     "Post-change verification:\n"
+    "- 配置、服务或部署类修改在执行前必须明确备份或回滚路径；无法安全回滚时如实说明风险。\n"
     "- 写操作（写文件/改配置/修改类命令）后必须用只读工具验证"
     "（systemctl status/cat/ls 等）才能宣告完成；未验证不得声称成功。\n"
     "\n"
     "Decision history:\n"
     "- 排障前先 search_history 检索历史案例，参考类似问题的解法。\n"
+    "- 历史案例只作线索，不是执行许可；必须用当前主机、版本、配置和实时工具证据验证适用性。\n"
     "- 给出建议后调 assess_confidence 评估可信度，让用户了解结论的可靠程度。\n"
 )
 
@@ -477,14 +479,15 @@ except ImportError:
 
 
 class ToolCallLimitHook:
-    """Strands HookProvider：工具调用次数保护（P1-NEW-v2-3，fix-loop 近似）
+    """Strands HookProvider：工具调用次数保护与 fix-loop 接线。
 
-    LangGraph 路径有 BaseAgent._check_fix_loop 防重试风暴；Strands override
-    路径的工具调用由 Strands event loop 驱动，绕过该保护。本 hook 用
-    Strands 公共 Hook API（Before/AfterToolCallEvent）实现同等语义：
+    工具调用由 Strands event loop 驱动。本 hook 用
+    Strands 公共 Hook API（Before/AfterToolCallEvent）实现：
     - 单次 invoke 总工具调用数超过 max_tool_calls → 熔断（防死循环）
     - 同一工具连续失败 max_failures 次 → 熔断
       （成功调用重置该工具失败计数，与 fix_loop 的 reset 语义一致）
+      仅在 Agent 真正重试时写入 FixLoopTracker；成功后清零；下一次重试前
+      创建 needs-you handoff，请用户检查环境或调整策略。
 
     T2 循环护栏 (2026-08-31, spec add-agent-loop-closure)：
     - max_tool_calls 12 → 50（放开长任务自由度，spec"单任务工具调用上限 50"）
@@ -522,8 +525,10 @@ class ToolCallLimitHook:
         self.agent_name = agent_name
         self.event_bus = event_bus
         self.session_id = session_id
+        self.current_task = ""
         self.total_calls = 0
         self.failures_by_tool: dict[str, int] = {}
+        self.last_error_by_tool: dict[str, str] = {}
         self.cancelled = False
         # T2: LLM 推理轮次（BeforeModelCallEvent 计数）
         self.round = 0
@@ -580,21 +585,93 @@ class ToolCallLimitHook:
             self._trip_breaker(
                 event,
                 f"工具调用次数超过上限（{self.max_tool_calls}）",
+                notify_fix_loop=False,
             )
             return
         name = self._tool_name(event)
-        if self.failures_by_tool.get(name, 0) >= self.max_failures:
+        failure_count = self.failures_by_tool.get(name, 0)
+        if failure_count > 0:
+            self._record_fix_loop_retry(name)
+        if failure_count >= self.max_failures:
             self._trip_breaker(
                 event,
                 f"工具 {name} 连续失败 {self.max_failures} 次",
+                notify_fix_loop=True,
             )
 
-    def _trip_breaker(self, event: Any, reason: str) -> None:
+    def _trip_breaker(
+        self,
+        event: Any,
+        reason: str,
+        *,
+        notify_fix_loop: bool,
+    ) -> None:
         """熔断：取消当前工具 + 停止后续所有工具调用 + 输出解释"""
         self.cancelled = True
         message = f"{reason}，已熔断停止任务"
         event.cancel_tool = message
         self._emit_breaker_explanation(reason)
+        if notify_fix_loop:
+            self._notify_fix_loop_exhausted(event, reason)
+
+    def _fix_loop_operation_key(self, tool_name: str) -> str:
+        from fix_loop import build_operation_key
+
+        return build_operation_key(self.current_task or "agent task", tool_name)
+
+    def _record_fix_loop_retry(self, tool_name: str) -> None:
+        """仅在模型确实再次调用失败工具时记录一次重试。"""
+        if not self.session_id:
+            return
+        try:
+            from fix_loop import get_global_tracker
+
+            get_global_tracker().record_retry(
+                self.session_id,
+                self._fix_loop_operation_key(tool_name),
+                error=self.last_error_by_tool.get(tool_name, "tool call failed"),
+            )
+        except Exception as error:  # noqa: BLE001 — 统计失败不削弱熔断本身
+            logger.warning("failed to record fix-loop retry: %s", error)
+
+    def _reset_fix_loop(self, tool_name: str) -> None:
+        """工具成功后清除同一任务/工具的历史重试预算。"""
+        if not self.session_id:
+            return
+        try:
+            from fix_loop import get_global_tracker
+
+            get_global_tracker().reset(
+                self.session_id,
+                self._fix_loop_operation_key(tool_name),
+            )
+        except Exception as error:  # noqa: BLE001 — 统计失败不影响工具结果
+            logger.warning("failed to reset fix-loop retry: %s", error)
+
+    def _notify_fix_loop_exhausted(self, event: Any, reason: str) -> None:
+        """把 Strands 熔断接入现役 needs-you 协调队列。"""
+        if not self.session_id:
+            return
+        tool_name = self._tool_name(event)
+        failure_count = self.failures_by_tool.get(tool_name, 0)
+        if failure_count < self.max_failures:
+            return
+        last_error = self.last_error_by_tool.get(tool_name, reason)
+        task = self.current_task or reason
+        try:
+            from needs_you import get_global_service
+
+            get_global_service().notify_fix_loop_exhausted(
+                session_id=self.session_id,
+                operation_key=self._fix_loop_operation_key(tool_name),
+                retry_count=failure_count,
+                max_retry=self.max_failures,
+                last_error=last_error,
+                task=task,
+                source=f"{self.agent_name}_agent.strands.hook",
+            )
+        except Exception as error:  # noqa: BLE001 — 通知失败不削弱熔断本身
+            logger.warning("failed to create fix-loop handoff: %s", error)
 
     def _emit_breaker_explanation(self, reason: str) -> None:
         """熔断解释：agent_log 落盘 + event_bus 推送（用户可见，只发一次）"""
@@ -774,9 +851,13 @@ class ToolCallLimitHook:
         )
         if failed:
             self.failures_by_tool[name] = self.failures_by_tool.get(name, 0) + 1
-            self._last_failure = (name, self._error_summary(event))
+            error_summary = self._error_summary(event)
+            self.last_error_by_tool[name] = error_summary
+            self._last_failure = (name, error_summary)
         else:
             self.failures_by_tool[name] = 0
+            self.last_error_by_tool.pop(name, None)
+            self._reset_fix_loop(name)
         # T7: 工具调用流水（name + input + 成功与否 + duration_ms）——收尾验证判定数据源
         tool_input = self._tool_input(event)
         tool_entry = {
@@ -836,8 +917,10 @@ class ToolCallLimitHook:
 
     def reset(self) -> None:
         """重置计数（每次 invoke 开始时调用——单任务护栏语义）"""
+        self.current_task = ""
         self.total_calls = 0
         self.failures_by_tool.clear()
+        self.last_error_by_tool.clear()
         self.cancelled = False
         self.round = 0
         self._last_failure = None
@@ -1220,8 +1303,8 @@ def _compose_system_prompt(mode: AgentMode, teach: bool, base: str | None = None
 class StrandsAgentAdapter:
     """Strands Agent 适配层
 
-    封装 Strands Agent 的创建、工具注册、invoke 调用，与现有 needs_you
-    BaseAgent PAOR 架构协作。
+    封装 Strands Agent 的创建、工具注册、invoke 调用，并接入 needs_you
+    协调服务。
 
     P0-A1: main 是唯一 agent 实例（4 子 agent 委派已删除）。每次 invoke
     携带模式（observe/confirm/auto，缺省 confirm）与教学开关（teach bool）。
@@ -1469,7 +1552,7 @@ class StrandsAgentAdapter:
     ) -> dict[str, Any]:
         """Strands Agent 调用主入口
 
-        与现有 ``BaseAgent.invoke(state)`` 返回值结构对齐：
+        返回稳定的 Agent RPC 结果结构：
         - observation: str, Agent 最终输出
         - next_step: str, "done" | "error"
         - mood: str, "thinking" | "working" | "done" | "error"
@@ -1487,7 +1570,7 @@ class StrandsAgentAdapter:
                 缺省 confirm）、live.teach 或 teach（教学皮肤开关）。
 
         Returns:
-            结构化结果 dict（与 BaseAgent.invoke 返回值对齐）
+            结构化结果 dict
         """
         state = state or {}
         session_id = state.get("session_id", "") or ""
@@ -1658,6 +1741,7 @@ class StrandsAgentAdapter:
                         )
                         if limit_hook is not None:
                             limit_hook.reset()
+                            limit_hook.current_task = input
 
                         # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
                         response = self._invoke_with_token_continuation(
@@ -2830,9 +2914,7 @@ class StrandsAgentAdapter:
         """更新 LLM 模型并清空 Agent 缓存（agent.configure 调用时同步更新）
 
         P1-NEW-v3-1 修复 (2026-07-30):
-        - 原版 _rpc_agent_configure 仅更新 _global_llm_call + BaseAgent.llm_call,
-          Strands adapter.strands_model 和 _agent_cache 未更新, 前端误报 ok:true
-        - 修复: agent.configure 在 Strands 模式下显式调用 adapter.update_model,
+        - agent.configure 显式调用 adapter.update_model,
           更新 strands_model + 清空 _agent_cache (旧 Agent 实例绑定了旧 model)
         - 清空缓存是必须的: Strands Agent 在构造时绑定 model 闭包,
           即使 adapter.strands_model 更新, 旧 Agent 实例仍用旧 model

@@ -75,7 +75,8 @@ class TestRegisterBusinessMethods:
     """register_business_methods 集成测试"""
 
     @pytest.fixture(scope="class")
-    def registered_dispatcher(self) -> FakeDispatcher:
+    @staticmethod
+    def registered_dispatcher() -> FakeDispatcher:
         """Class 级 fixture：所有测试共享一次注册过程
 
         注册过程会启动一些后台线程（needs_you 超时扫描），
@@ -172,6 +173,51 @@ class TestRegisterBusinessMethods:
     def test_sidecar_health_backend_fields(self, registered_dispatcher: FakeDispatcher):
         result = registered_dispatcher.dispatch("sidecar.health")
         assert all(key in result for key in ("backend_type", "backend_activated", "fallback_reason"))
+        assert result["agents_count"] == 1
+        assert result["agents_list"] == ["main"]
+
+
+def test_register_agents_uses_strands_config_without_legacy_llm(monkeypatch):
+    """Agent registration must not construct the retired LangChain llm_call."""
+    import agent_facade as agents
+    import strands_backend
+    from core import llm_config
+
+    agents.reset_for_test()
+    monkeypatch.delenv("TDSF_AGENT_BACKEND", raising=False)
+    monkeypatch.setattr(
+        llm_config,
+        "make_llm_call",
+        lambda _config: pytest.fail("legacy make_llm_call must not be called"),
+    )
+    monkeypatch.setattr(
+        agents,
+        "configure_agents",
+        lambda **_: pytest.fail("legacy configure_agents must not be called"),
+        raising=False,
+    )
+    seen: dict[str, object] = {}
+
+    class FakeAdapter:
+        def get_stats(self) -> dict[str, object]:
+            return {"model_available": False}
+
+        def invoke(self, agent_id: str, input: str, state: dict) -> dict:
+            return {"agent": agent_id, "input": input, "state": state}
+
+    def configure_strands(**kwargs):
+        seen["llm_config"] = kwargs["llm_config"]
+        return FakeAdapter()
+
+    monkeypatch.setattr(strands_backend, "is_strands_available", True)
+    monkeypatch.setattr(strands_backend, "configure_strands", configure_strands)
+    try:
+        dispatcher = FakeDispatcher()
+        main.register_business_methods(dispatcher)
+        assert "llm_config" in seen
+        assert seen["llm_config"] is not None
+    finally:
+        agents.reset_for_test()
 
 
 # ============================================================================
@@ -325,7 +371,7 @@ def test_requested_agent_backend_contract(monkeypatch):
 
 
 def test_mark_agent_backend_unavailable(monkeypatch):
-    import agents
+    import agent_facade as agents
 
     agents.reset_for_test()
     snapshot = dict(main._backend_status)
@@ -348,7 +394,7 @@ def test_mark_agent_backend_unavailable(monkeypatch):
 
 
 def test_register_strands_activation_failure_fails_closed(monkeypatch):
-    import agents
+    import agent_facade as agents
     import strands_backend
 
     snapshot = dict(main._backend_status)
@@ -379,7 +425,7 @@ def test_register_strands_activation_failure_fails_closed(monkeypatch):
 
 
 def test_register_strands_sdk_missing_fails_closed(monkeypatch):
-    import agents
+    import agent_facade as agents
     import strands_backend
 
     snapshot = dict(main._backend_status)

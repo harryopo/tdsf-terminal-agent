@@ -35,13 +35,7 @@ tests/test_fix_loop.py — Fix-loop 重试计数器单元测试（T-P2-12.3 / DE
    - notify_fix_loop_exhausted 创建 handoff 请求
    - extra 字段包含 fix_loop / retry_count / max_retry
 
-7. BaseAgent 集成
-   - 工具失败 + continue 时 record_retry
-   - 工具成功时 reset
-   - 超限时强制 next_step=error
-   - 超限时通知 needs_you
-
-8. JSON-RPC 方法注册
+7. JSON-RPC 方法注册
    - 7 个方法注册（stats/get/is_exhausted/is_near_limit/reset/list_exhausted/configure）
 
 运行：
@@ -57,7 +51,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# 确保能 import fix_loop / needs_you / agents
+# 确保能 import fix_loop / needs_you
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
@@ -587,219 +581,7 @@ class TestNeedsYouIntegration:
 
 
 # ============================================================================
-# 8. BaseAgent 集成测试
-# ============================================================================
-
-
-class TestBaseAgentFixLoopIntegration:
-    """BaseAgent.fix_loop 集成测试"""
-
-    def _make_agent(self):
-        """创建测试用 BaseAgent 子类实例"""
-        from agents.base import BaseAgent
-
-        class TestAgent(BaseAgent):
-            """测试用 Agent：reflect 总是 continue（触发 fix-loop）"""
-
-            def select_tool(self, task, state):
-                return {"tool_name": "risk", "params": {}}
-
-            def reflect_on_result(self, state):
-                # 总是 continue，让 fix-loop 检测到失败重试
-                return {
-                    "next_step": "continue",
-                    "reflection": "retry",
-                }
-
-        return TestAgent(
-            name="test",
-            role="test agent",
-            description="for testing fix-loop",
-            tools=["risk"],
-            event_bus=None,
-        )
-
-    def _make_failing_tool_call_result(self, error="tool failed"):
-        """构造失败的 tool_call_result"""
-        return {
-            "tool_name": "risk",
-            "params": {},
-            "result": {"error": error},
-            "duration": 0.1,
-            "success": False,
-            "error": error,
-        }
-
-    def _make_success_tool_call_result(self):
-        """构造成功的 tool_call_result"""
-        return {
-            "tool_name": "risk",
-            "params": {},
-            "result": {"risk_level": "L1"},
-            "duration": 0.1,
-            "success": True,
-        }
-
-    def test_check_fix_loop_records_retry_on_failure(self):
-        """工具失败 + continue → 记录重试"""
-        agent = self._make_agent()
-        tracker = get_global_tracker()
-
-        result = agent._check_fix_loop(
-            session_id="sess-1",
-            current_task="nginx restart",
-            tool_call_result=self._make_failing_tool_call_result("err-1"),
-            next_step="continue",
-        )
-
-        assert result["enabled"] is True
-        assert result["retry_count"] == 1
-        assert result["exhausted"] is False
-        assert result["near_limit"] is False
-        assert result["last_error"] == "err-1"
-        assert result["notified"] is False
-
-        # 验证 tracker 状态
-        assert tracker.get_retry_count("sess-1", result["operation_key"]) == 1
-
-    def test_check_fix_loop_resets_on_success(self):
-        """工具成功 → reset 对应 operation_key"""
-        agent = self._make_agent()
-        tracker = get_global_tracker()
-
-        # 先记录 2 次失败
-        op_key = build_operation_key("nginx restart", "risk")
-        tracker.record_retry("sess-1", op_key, error="err-1")
-        tracker.record_retry("sess-1", op_key, error="err-2")
-        assert tracker.get_retry_count("sess-1", op_key) == 2
-
-        # 工具成功 → reset
-        result = agent._check_fix_loop(
-            session_id="sess-1",
-            current_task="nginx restart",
-            tool_call_result=self._make_success_tool_call_result(),
-            next_step="continue",
-        )
-
-        assert result["retry_count"] == 0
-        assert result["exhausted"] is False
-        # 验证 tracker 已重置
-        assert tracker.get_retry_count("sess-1", op_key) == 0
-
-    def test_check_fix_loop_exhausted_forces_notify(self):
-        """超限时通知 needs_you"""
-        agent = self._make_agent()
-        tracker = get_global_tracker()
-        needs_service = __import__("needs_you").get_global_service()
-
-        # 记录 2 次失败（接近上限）
-        for i in range(2):
-            agent._check_fix_loop(
-                session_id="sess-1",
-                current_task="nginx restart",
-                tool_call_result=self._make_failing_tool_call_result(f"err-{i}"),
-                next_step="continue",
-            )
-
-        # 第 3 次失败 → 超限 + 通知
-        result = agent._check_fix_loop(
-            session_id="sess-1",
-            current_task="nginx restart",
-            tool_call_result=self._make_failing_tool_call_result("err-3"),
-            next_step="continue",
-        )
-
-        assert result["exhausted"] is True
-        assert result["retry_count"] == 3
-        assert result["notified"] is True
-
-        # 验证 needs_you 收到 handoff 请求
-        pending = needs_service.list_pending()
-        assert len(pending) == 1
-        assert pending[0]["type"] == "handoff"
-        assert pending[0]["extra"]["fix_loop"] is True
-        assert pending[0]["extra"]["retry_count"] == 3
-
-    def test_check_fix_loop_skip_when_next_step_done(self):
-        """next_step=done 时不记录重试（Agent 已放弃）"""
-        agent = self._make_agent()
-        tracker = get_global_tracker()
-
-        result = agent._check_fix_loop(
-            session_id="sess-1",
-            current_task="nginx restart",
-            tool_call_result=self._make_failing_tool_call_result("err"),
-            next_step="done",
-        )
-
-        # 不记录新重试
-        assert result["retry_count"] == 0
-        assert tracker.get_retry_count("sess-1", result["operation_key"]) == 0
-
-    def test_check_fix_loop_degraded_on_exception(self):
-        """fix-loop 异常时降级，不阻塞 Agent 执行"""
-        agent = self._make_agent()
-
-        # 模拟 fix_loop 模块导入失败
-        import sys
-        original_fix_loop = sys.modules.get("fix_loop")
-        sys.modules["fix_loop"] = None  # 破坏导入
-
-        try:
-            result = agent._check_fix_loop(
-                session_id="sess-1",
-                current_task="nginx restart",
-                tool_call_result=self._make_failing_tool_call_result(),
-                next_step="continue",
-            )
-            # 降级返回默认值
-            assert result["enabled"] is False
-            assert result["exhausted"] is False
-        finally:
-            # 恢复
-            if original_fix_loop is not None:
-                sys.modules["fix_loop"] = original_fix_loop
-            else:
-                sys.modules.pop("fix_loop", None)
-
-    def test_invoke_propagates_fix_loop_exhausted_to_next_step(self):
-        """invoke() 在超限时强制 next_step=error"""
-        agent = self._make_agent()
-        tracker = get_global_tracker()
-
-        # 构造 state
-        state = {
-            "session_id": "sess-1",
-            "iteration": 0,
-            "input": "nginx restart",
-            "current_task": "nginx restart",
-            "plan": ["nginx restart"],
-            "current_task_index": 0,
-        }
-
-        # 模拟 call_tool 总是失败
-        original_call_tool = agent.call_tool
-        agent.call_tool = lambda name, params: self._make_failing_tool_call_result("fail")
-
-        try:
-            # 调用 invoke 3 次（前 2 次应该 continue，第 3 次应该 error）
-            r1 = agent.invoke(state)
-            assert r1["next_step"] == "continue"  # 第 1 次失败，未超限
-
-            r2 = agent.invoke({**state, "iteration": 1})
-            assert r2["next_step"] == "continue"  # 第 2 次失败，未超限
-
-            r3 = agent.invoke({**state, "iteration": 2})
-            assert r3["next_step"] == "error"  # 第 3 次失败，超限强制 error
-            assert "fix-loop" in r3.get("error", "") or "fix_loop" in r3.get("error", "")
-            assert r3["fix_loop"]["exhausted"] is True
-            assert r3["fix_loop"]["retry_count"] == 3
-        finally:
-            agent.call_tool = original_call_tool
-
-
-# ============================================================================
-# 9. JSON-RPC 方法注册测试
+# 8. JSON-RPC 方法注册测试
 # ============================================================================
 
 
@@ -827,7 +609,7 @@ class TestJsonRpcRegistration:
 
 
 # ============================================================================
-# 10. 线程安全测试
+# 9. 线程安全测试
 # ============================================================================
 
 
@@ -882,7 +664,7 @@ class TestThreadSafety:
 
 
 # ============================================================================
-# 11. 端到端场景测试
+# 10. 端到端场景测试
 # ============================================================================
 
 

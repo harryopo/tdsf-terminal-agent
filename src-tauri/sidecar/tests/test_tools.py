@@ -15,18 +15,14 @@ tests/test_tools.py — MCP tools 单元测试（T-P1-07.8 验证）
    - FTS5 入库 + 检索
    - hybrid 融合（ChromaDB 不可用时降级为 keyword）
    - 参数校验
-4. decision tool（T-P1-07.4）
-   - 调用 DecisionEngine
-   - 参数校验
-5. credibility tool（T-P1-07.5）
+4. credibility tool（T-P1-07.5）
    - 三维度评估
    - 权重归一化
    - 时效衰减
-6. history tool（T-P1-07.6）
+5. history tool（T-P1-07.6）
    - CRUD 全流程
    - FTS5 关键词检索
-   - make_history_callback 适配器
-7. tools/__init__.py 注册表
+6. tools/__init__.py 注册表
    - TOOL_REGISTRY 完整性
    - invoke_tool 路由
    - list_tools / get_tool_metadata
@@ -53,7 +49,6 @@ from tools import (
     get_tool_metadata,
     invoke_confidence_tool,
     invoke_credibility_tool,
-    invoke_decision_tool,
     invoke_ground_tool,
     invoke_history_tool,
     invoke_risk_tool,
@@ -61,7 +56,6 @@ from tools import (
     list_tools,
 )
 from tools.confidence import reset_calculators as reset_confidence_calculators
-from tools.decision import reset_decision_engine
 from tools.ground import (
     add_documents as ground_add_documents,
     reset_chroma,
@@ -82,7 +76,6 @@ def reset_singletons():
     # 测试前重置（防止上一次测试残留状态污染）
     reset_risk_engine()
     reset_confidence_calculators()
-    reset_decision_engine()
     reset_kb_db()
     reset_chroma()
     reset_history_db()
@@ -90,7 +83,6 @@ def reset_singletons():
     # 测试后重置（清理本次测试产生的状态）
     reset_risk_engine()
     reset_confidence_calculators()
-    reset_decision_engine()
     reset_kb_db()
     reset_chroma()
     reset_history_db()
@@ -295,46 +287,7 @@ class TestGroundTool:
 
 
 # ============================================================================
-# 4. decision tool 测试（T-P1-07.4）
-# ============================================================================
-
-
-class TestDecisionTool:
-    """decision tool 接口测试"""
-
-    def test_missing_problem_description_raises(self):
-        """缺少 problem_description 应抛 ValueError"""
-        with pytest.raises(ValueError, match="problem_description is required"):
-            invoke_decision_tool({})
-
-    def test_invalid_problem_description_type_raises(self):
-        """problem_description 非 str 应抛 ValueError"""
-        with pytest.raises(ValueError, match="problem_description must be str"):
-            invoke_decision_tool({"problem_description": 123})
-
-    def test_invalid_fix_commands_type_raises(self):
-        """fix_commands 非 list 应抛 ValueError"""
-        with pytest.raises(ValueError, match="fix_commands must be list"):
-            invoke_decision_tool({
-                "problem_description": "test",
-                "fix_commands": "not a list",
-            })
-
-    def test_low_risk_proceed(self):
-        """低风险命令应返回 decision=proceed"""
-        result = invoke_decision_tool({
-            "problem_description": "查看系统状态",
-            "fix_commands": ["ls -la"],
-        })
-        assert result["decision"] in ["proceed", "needs_approval", "abort", "use_history"]
-        assert "alternatives" in result
-        assert "reasoning" in result
-        assert "confidence" in result
-        assert "hitl_status" in result
-
-
-# ============================================================================
-# 5. credibility tool 测试（T-P1-07.5）
+# 4. credibility tool 测试（T-P1-07.5）
 # ============================================================================
 
 
@@ -396,7 +349,7 @@ class TestCredibilityTool:
 
 
 # ============================================================================
-# 6. history tool 测试（T-P1-07.6）
+# 5. history tool 测试（T-P1-07.6）
 # ============================================================================
 
 
@@ -571,33 +524,6 @@ class TestHistoryTool:
         assert all(c["session_id"] == "sess-A" for c in result["cases"])
         assert result["total"] >= 1
 
-    def test_make_history_callback(self):
-        """make_history_callback 应返回符合 DecisionEngine 期望格式的列表"""
-        from tools.history import make_history_callback
-
-        # 添加案例
-        invoke_history_tool({
-            "action": "add",
-            "case": {
-                "problem_description": "nginx 启动失败",
-                "fix_commands": ["nginx -t", "systemctl restart nginx"],
-                "success_rating": 0.95,
-                "outcome": "success",
-            },
-        })
-
-        callback = make_history_callback(min_success_rating=0.8)
-        cases = callback("nginx 启动失败")
-
-        assert isinstance(cases, list)
-        assert len(cases) >= 1
-        case = cases[0]
-        # DecisionEngine 期望的字段
-        assert "problem_description" in case
-        assert "fix_commands" in case
-        assert "success_rating" in case
-        assert case["source"] == "history"
-
     def test_invalid_action_raises(self):
         """非法 action 应抛 ValueError"""
         with pytest.raises(ValueError, match="action must be one of"):
@@ -605,26 +531,26 @@ class TestHistoryTool:
 
 
 # ============================================================================
-# 7. tools/__init__.py 注册表测试
+# 6. tools/__init__.py 注册表测试
 # ============================================================================
 
 
 class TestToolRegistry:
     """tools/__init__.py 注册表测试"""
 
-    def test_registry_has_nine_tools(self):
-        """TOOL_REGISTRY 应包含 9 个工具（P4 新增 worktree_fanout/rlm_fanout/steer_inject）"""
-        assert len(TOOL_REGISTRY) == 9
+    def test_registry_has_eight_tools(self):
+        """TOOL_REGISTRY 应包含 8 个工具（P4 新增 worktree_fanout/rlm_fanout/steer_inject）"""
+        assert len(TOOL_REGISTRY) == 8
         expected_names = {
-            "risk", "confidence", "ground", "decision", "credibility", "history",
+            "risk", "confidence", "ground", "credibility", "history",
             "worktree_fanout", "rlm_fanout", "steer_inject",
         }
         assert set(TOOL_REGISTRY.keys()) == expected_names
 
-    def test_list_tools_returns_nine(self):
-        """list_tools() 应返回 9 个工具名"""
+    def test_list_tools_returns_eight(self):
+        """list_tools() 应返回 8 个工具名"""
         tools = list_tools()
-        assert len(tools) == 9
+        assert len(tools) == 8
 
     def test_invoke_tool_routes_correctly(self):
         """invoke_tool 应正确路由到对应工具"""
@@ -641,7 +567,7 @@ class TestToolRegistry:
     def test_get_tool_metadata_for_each(self):
         """每个工具都应有元数据"""
         for name in [
-            "risk", "confidence", "ground", "decision", "credibility", "history",
+            "risk", "confidence", "ground", "credibility", "history",
             "worktree_fanout", "rlm_fanout", "steer_inject",
         ]:
             metadata = get_tool_metadata(name)
@@ -658,7 +584,7 @@ class TestToolRegistry:
 
 
 # ============================================================================
-# 8. 工具元数据完整性测试
+# 7. 工具元数据完整性测试
 # ============================================================================
 
 
@@ -666,7 +592,7 @@ class TestToolMetadata:
     """所有工具元数据的完整性测试"""
 
     @pytest.mark.parametrize("tool_name", [
-        "risk", "confidence", "ground", "decision", "credibility", "history"
+        "risk", "confidence", "ground", "credibility", "history"
     ])
     def test_metadata_has_required_fields(self, tool_name):
         """每个工具元数据应包含必填字段"""

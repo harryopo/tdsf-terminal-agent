@@ -433,8 +433,7 @@ class NeedsYouService:
 
         spec 要求：Agent 同一操作 max_retry=3，超限强制停手 + needs-you 通知。
 
-        本方法由 agents/base.py 的 invoke() 在 is_exhausted=True 时自动调用，
-        创建 type=HANDOFF 的请求，提示用户人工介入。
+        调用方在循环防护达到上限时创建 type=HANDOFF 的请求，提示用户人工介入。
 
         Args:
             session_id:    会话 ID
@@ -449,7 +448,7 @@ class NeedsYouService:
             NeedsYouRequest（type=HANDOFF，priority=LOW，无 deadline）
 
         用法：
-            # 在 BaseAgent.invoke() 中：
+            # 在调用方的循环防护中：
             if tracker.is_exhausted(session_id, op_key):
                 needs_service.notify_fix_loop_exhausted(
                     session_id=session_id,

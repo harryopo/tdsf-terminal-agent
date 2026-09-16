@@ -60,10 +60,7 @@ spec 要求：
         "method": "hybrid"
     }
 
-集成点：
-- 被 graph/nodes.py 的 tool_call_node 调用（tool_name == "ground"）
-- 被 Teach Agent 调用做 Linux 运维知识库检索
-- 被 DecisionEngine 调用做历史案例检索
+集成点：作为知识接地 RPC tool 提供入库与检索。
 """
 
 from __future__ import annotations
@@ -825,20 +822,3 @@ TOOL_METADATA: dict[str, Any] = {
 def get_tool_metadata() -> dict[str, Any]:
     """获取工具元数据"""
     return TOOL_METADATA
-
-
-# ============================================================================
-# 集成到 LangGraph tool_call 节点
-# ============================================================================
-
-
-def register_to_graph_nodes() -> None:
-    """将 ground tool 注册到 graph/nodes.py 的 tool_call_node
-
-    使用方式（在 graph/nodes.py 中）：
-        from tools.ground import invoke_ground_tool
-
-        if tool_name == "ground":
-            result = invoke_ground_tool(params)
-    """
-    logger.info("register_to_graph_nodes: ground tool ready for integration")
