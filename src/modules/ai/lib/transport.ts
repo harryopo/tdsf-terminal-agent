@@ -130,7 +130,7 @@ type LiveSnapshot = {
    *
    * 会话级状态（chatStore.agentMode，per-session 持久化），由 chatRuntime
    * getLive() 注入；经 runSidecarStream 原样透传到 Python agent.invoke 的
-   * state.live.agentMode，sidecar 的 decision_engine.decide(risk, mode)
+   * state.live.agentMode，sidecar 的 strands_backend.modes.decide(risk, mode)
    * 据此控制放行/审批/拒绝。缺省 undefined 时 sidecar 按 confirm 执行
    * （spec: 老会话兼容 / 缺省缺字段默认 confirm）。
    */

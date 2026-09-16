@@ -5,7 +5,6 @@ tools/history.py — 历史案例 CRUD + 检索 MCP tool（T-P1-07.6）
 实现方案书 4.6 节的历史案例库：
 - CRUD（Create / Read / Update / Delete）
 - 多维检索（按时间 / 按关键词 / 按 session_id）
-- 与 DecisionEngine 集成（提供 HistoryRetrieveCallback 适配器）
 
 spec 要求：
 - CRUD 历史记录
@@ -17,8 +16,6 @@ spec 要求：
    因字段结构不同，专门为决策引擎案例库设计）
 2. **FTS5 全文检索**：对 ``problem_description`` 建立 FTS5 索引，支持关键词模糊匹配
 3. **多维过滤**：支持 session_id / time_range / min_success_rating / max_risk_level 多维过滤
-4. **决策引擎适配**：提供 ``make_history_callback`` 函数，返回符合 DecisionEngine
-   期望格式的回调
 
 历史案例字段结构：
     {
@@ -59,10 +56,7 @@ spec 要求：
         "total": N
     }
 
-集成点：
-- 被 DecisionEngine 通过 ``make_history_callback`` 调用做历史检索
-- 被 LangGraph tool_call 节点调用（tool_name == "history"）
-- 被 History Agent 调用做上下文压缩
+集成点：作为历史案例 RPC tool 提供 CRUD 与检索。
 """
 
 from __future__ import annotations
@@ -75,7 +69,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("sidecar.tools.history")
 
@@ -762,70 +756,6 @@ def invoke_history_tool(params: dict[str, Any]) -> dict[str, Any]:
 
 
 # ============================================================================
-# DecisionEngine 适配器
-# ============================================================================
-
-
-def make_history_callback(
-    min_success_rating: float = 0.0,
-    limit: int = 20,
-) -> Callable[[str], list[dict[str, Any]]]:
-    """创建适配 DecisionEngine 的历史检索回调
-
-    DecisionEngine 期望 ``HistoryRetrieveCallback = Callable[[str], list[dict]]``，
-    传入问题描述，返回历史案例列表。
-
-    本函数包装 ``search_cases``，将结果转换为 DecisionEngine 期望的精简格式：
-        {
-            "problem_description": "...",
-            "fix_commands": [...],
-            "success_rating": 0.0-1.0,
-            "source": "history"
-        }
-
-    Args:
-        min_success_rating: 最低 success_rating 过滤（默认 0.0 不过滤）
-        limit: 返回数（默认 20）
-
-    Returns:
-        HistoryRetrieveCallback 函数
-    """
-    def callback(problem_description: str) -> list[dict[str, Any]]:
-        if not problem_description:
-            return []
-
-        try:
-            result = search_cases(
-                query=problem_description,
-                min_success_rating=min_success_rating,
-                limit=limit,
-            )
-        except Exception as e:
-            logger.warning(f"history callback failed: {e}")
-            return []
-
-        # 转换为 DecisionEngine 期望的精简格式
-        simplified: list[dict[str, Any]] = []
-        for case in result["cases"]:
-            simplified.append({
-                "problem_description": case["problem_description"],
-                "fix_commands": case["fix_commands"],
-                "success_rating": case["success_rating"],
-                "source": "history",
-                "case_id": case["case_id"],
-                "risk_level": case["risk_level"],
-                "outcome": case["outcome"],
-            })
-        logger.info(
-            f"history callback: query='{problem_description[:40]}', "
-            f"returned {len(simplified)} cases"
-        )
-        return simplified
-
-    return callback
-
-
-# ============================================================================
 # 工具元数据
 # ============================================================================
 
@@ -833,8 +763,7 @@ def make_history_callback(
 TOOL_METADATA: dict[str, Any] = {
     "name": "history",
     "description": (
-        "历史案例 CRUD + 多维检索（按时间/关键词/session/success_rating/risk_level），"
-        "提供 DecisionEngine 适配器 make_history_callback。"
+        "历史案例 CRUD + 多维检索（按时间/关键词/session/success_rating/risk_level）。"
     ),
     "input_schema": {
         "type": "object",
@@ -896,20 +825,3 @@ TOOL_METADATA: dict[str, Any] = {
 def get_tool_metadata() -> dict[str, Any]:
     """获取工具元数据"""
     return TOOL_METADATA
-
-
-# ============================================================================
-# 集成到 LangGraph tool_call 节点
-# ============================================================================
-
-
-def register_to_graph_nodes() -> None:
-    """将 history tool 注册到 graph/nodes.py 的 tool_call_node
-
-    使用方式（在 graph/nodes.py 中）：
-        from tools.history import invoke_history_tool
-
-        if tool_name == "history":
-            result = invoke_history_tool(params)
-    """
-    logger.info("register_to_graph_nodes: history tool ready for integration")

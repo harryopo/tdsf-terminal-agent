@@ -3,9 +3,9 @@
 // 监听 Python sidecar 通过 event_bus 推送的 "mock_llm_active" 事件,
 // 在 status bar 右侧实时显示红色告警 Pill.
 //
-// 触发场景 (Python agents/base.py._publish_mock_warning):
-//   1. BaseAgent.llm_call is None (未注入真实 LLM) - 最常见配置错误
-//   2. LLM 调用抛异常降级到 mock
+// 触发场景（Python sidecar 发布 mock_llm_active）：
+//   1. 未注入真实 LLM
+//   2. LLM 调用异常
 //   3. 用户在前端清空 .tdsf-data/llm_config.json
 //
 // 设计要点:
@@ -51,9 +51,8 @@ export function MockLLMWarning() {
 
     // TDSF 2026-07-30 P1-c: 启动期补发历史 mock_llm_active 事件
     // ----------------------------------------------------------------
-    // 之前只 listen 实时事件，但应用启动时 Python sidecar 早已在
-    // BaseAgent.__init__ 构造时推送过 mock_llm_active（agents/base.py:179-185
-    // "Bug 2" 修复：构造时立即推送，覆盖所有 Agent 路径），前端挂载晚于事件
+    // 之前只 listen 实时事件，但应用启动时 Python sidecar 可能已经推送过
+    // mock_llm_active，前端挂载晚于事件
     // 发射，导致启动期告警丢失，用户必须手动触发 Agent 调用才能看到红色 Pill。
     //
     // 补发策略：

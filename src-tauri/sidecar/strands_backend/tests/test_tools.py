@@ -1868,6 +1868,13 @@ class TestSystemPromptSkillListSync(unittest.TestCase):
         self.assertIn("systemd-detect-virt", _DEFAULT_SYSTEM_PROMPT)
         self.assertIn("不要 nohup", _DEFAULT_SYSTEM_PROMPT)
 
+    def test_prompt_preserves_diagnostic_and_rollback_guardrails(self):
+        self.assertIn("低侵入、只读取证", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("严禁编造根因", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("明确备份或回滚路径", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("历史案例只作线索，不是执行许可", _DEFAULT_SYSTEM_PROMPT)
+        self.assertIn("实时工具证据验证适用性", _DEFAULT_SYSTEM_PROMPT)
+
     def test_skill_names_line_matches_registry(self):
         """_skill_names_line 应返回 registry 实际注册的技能清单"""
         from skills.registry import get_global_registry
@@ -2419,7 +2426,7 @@ class TestRedactSensitive(unittest.TestCase):
 class TestModeDecision(unittest.TestCase):
     """execute_via_ssh 按 ctx.mode 三模式决策（decide(risk_l, mode)）
 
-    矩阵（core/decision_engine.py）：
+    矩阵（strands_backend.modes.decide）：
     - observe: L0-L4 全 deny（只读工具 readonly=True 短路放行 L0-L1）
     - confirm: L0-L1 allow；L2-L4 confirm（缺省模式）
     - auto:    L0-L2 allow；L3-L4 confirm；命令 denylist 更早阻断

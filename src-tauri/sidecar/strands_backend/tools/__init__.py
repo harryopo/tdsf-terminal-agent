@@ -92,7 +92,7 @@ class RustBridge(Protocol):
         P0-D 已完成：Rust 侧 ssh_command 命令 + SshCommandResult 结构。
         P0-E 已完成：main.py 注入 RustBridge（_rust_bridge = RustBridge(write_message)）
         + DefaultRustBridge(send_request=lambda m,p: _rust_bridge.send_request(m,p))
-        + agents.set_backend() 注入 Strands 适配层 + invoke_agent 优先走 override。
+        + agent_facade.set_backend() 注入唯一 Strands 适配层。
 
     当前架构（Python→Rust 双向 JSON-RPC）下，DefaultRustBridge 已注入
     send_request 回调时正常调 Rust 后端；未注入时返回 unavailable 状态，

@@ -5,10 +5,10 @@ strands_backend/model_adapter.py — Strands Model 适配工厂（TDSF P0-C5）
 职责：
 - 把现有 ``core.llm_config.LLMConfig`` 转换为 Strands 官方 Model Provider 实例
   （``OpenAIModel`` / ``AnthropicModel`` / ``LiteLLMModel``）。
-- 与现有 LangGraph 路径**共享同一份配置源**（环境变量 / .tdsf-data/llm_config.json），
-  保证前后端切换时 API Key / base_url / model 一致，避免双套配置导致行为分裂。
-- 优雅降级：未配置 API Key / Strands 未安装 / provider 不支持时返回 None，
-  由 ``StrandsAgentAdapter._check_degraded`` 走降级路径（推送 mock_llm_active 告警）。
+- 使用统一配置源（环境变量 / .tdsf-data/llm_config.json），保证启动与热更新时
+  API Key / base_url / model 一致，避免双套配置导致行为分裂。
+- 失败关闭：未配置 API Key / Strands 未安装 / provider 不支持时返回 None，
+  由 ``StrandsAgentAdapter._check_degraded`` 返回结构化不可用结果并请求用户处理。
 
 设计原则：
 1. **零造轮子**：直接复用 Strands 官方 Model Provider（OpenAIModel/AnthropicModel/LiteLLMModel），
@@ -17,7 +17,7 @@ strands_backend/model_adapter.py — Strands Model 适配工厂（TDSF P0-C5）
    （DeepSeek / Ollama / OneAPI / NewAPI / SiliconFlow / vLLM 等）。
 3. **Anthropic 原生**：provider="anthropic" 时走 AnthropicModel（claude-3-* 系列）。
 4. **LiteLLM 兜底**：未来可扩展支持 ``litellm/<model>`` 字符串模型 ID，覆盖 Bedrock/Ollama 等。
-5. **配置共享**：通过 ``load_config()`` 复用 LangGraph 路径的同一份配置，
+5. **配置共享**：通过 ``load_config()`` 读取统一配置，
    前端 ``agent.configure`` RPC 重新配置后，下次 ``configure_strands`` 调用自动生效。
 
 字段映射（LLMConfig → Strands Model 参数）：
@@ -41,7 +41,7 @@ strands_backend/model_adapter.py — Strands Model 适配工厂（TDSF P0-C5）
         rust_bridge=None,
         strands_model=None,  # 留空时 configure_strands 自动调用 create_strands_model(load_config())
     )
-    agents.set_backend(lambda agent_id, input, state: adapter.invoke(agent_id, input, state))
+    agent_facade.set_backend(adapter.invoke)
 
 测试用例（见 tests/test_strands_model_adapter.py）：
 - provider="openai" + 配置完整 → 返回 OpenAIModel 实例

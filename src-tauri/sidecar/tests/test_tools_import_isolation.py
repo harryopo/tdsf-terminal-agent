@@ -25,7 +25,7 @@ builtins.__import__ = guarded_import
 import tools
 from tools import rpc_methods
 
-assert len(tools.TOOL_REGISTRY) == 9
+assert len(tools.TOOL_REGISTRY) == 8
 assert callable(rpc_methods.register_methods)
 """
     env = os.environ.copy()

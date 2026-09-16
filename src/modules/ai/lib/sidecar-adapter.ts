@@ -18,9 +18,8 @@
 //   前端 invoke('ipc_invoke', {method:'agent.invoke', params:{name, state}})
 //     → Rust ipc_invoke (src-tauri/src/modules/ipc.rs:278)
 //     → IPCClient.invoke → stdio JSON-RPC → Python MethodDispatcher
-//     → agents.__init__._rpc_agent_invoke → invoke_agent(name, state)
-//     → BaseAgent.invoke (PAOR 监督循环) → 返回 dict
-//     → 前端拿到 dict 后切片流式 yield（模拟真实流式输出）
+//     → agent_facade._rpc_agent_invoke → StrandsAgentAdapter.invoke
+//     → 事件流实时输出，并返回稳定的结果 dict
 //
 // 同时 Python 端通过 event_bus 推送 mood_change / agent_message 事件 →
 //   Rust sidecar.rs reader_task 接收 notification → emit Tauri event →
@@ -215,14 +214,14 @@ export function toolFailureText(output: unknown): string {
 }
 
 /**
- * 兜底切片流式（仅 LangGraph 后端 / 无事件推送时使用）的 chunk 大小（字符数）。
+ * 事件缺失时兜底切片流式的 chunk 大小（字符数）。
  *
  * TDSF 修复 2026-07-31 (P1): 从 24 提升到 96。
  * P0-2 (2026-08-01) 说明：Strands 后端（默认主路径）已通过
  * `sidecar:agent_message` 事件实现**真流式**（LLM data 增量实时推送，
  * 见 runSidecarStream 第 3 步消费循环），streamText 仅作兜底——当
- * invokeResult 返回了 observation 但事件未推送 output 时（如 LangGraph
- * 后端），按块切片让 UI 逐块渲染。
+ * invokeResult 返回了 observation 但事件未推送 output 时，按块切片让 UI
+ * 逐块渲染。
  * 24 字符/chunk 对长文本（5000+ 字符）会产生 200+ chunks，
  * 每个 chunk 走一次 useChat 的 state 更新 + React 重渲染，
  * 累积延迟明显（5000 字符 = 200 chunks × 8ms = 1.6s 额外延迟）。
@@ -288,8 +287,8 @@ export function unwrapEventPayload<T>(payload: unknown): T | undefined {
  * 事件（LLM 文本增量）通过 event_bus.emit_agent_message 实时推送，
  * 前端订阅此事件实现**真正流式输出**（替代伪流式切片）。
  *
- * 同时 base.py BaseAgent._emit_message 在 plan/act/observe 各阶段推送
- * thinking 类型消息，前端订阅后实现**深度思考 UI**（Reasoning 折叠段）。
+ * thinking 类型消息由同一事件通道推送，前端订阅后实现**深度思考 UI**
+ * （Reasoning 折叠段）。
  */
 const EVENT_AGENT_MESSAGE = "sidecar:agent_message";
 
@@ -328,7 +327,7 @@ export interface SidecarStreamOptions {
    * activeFile 注入 <live_context> 块给 LLM。
    *
    * v3.1 三模式信任体系（方案书 §4.3）:
-   *   - agentMode: observe/confirm/auto，sidecar 的 decision_engine.decide(risk, mode)
+   *   - agentMode: observe/confirm/auto，sidecar 的 strands_backend.modes.decide(risk, mode)
    *     据此控制放行/审批/拒绝；缺省 undefined 时 sidecar 按 confirm 执行
    *   - teach: 教学皮肤开关，true 时 main system prompt 拼入 TeachCard 输出契约
    *
@@ -406,15 +405,11 @@ export type SidecarStreamPart =
   | { type: "error"; error: string };
 
 /**
- * Python `agent.invoke` 返回值结构（BaseAgent.invoke 的 PAOR 输出）
+ * Python `agent.invoke` 的稳定返回值结构
  *
  * 字段都是 optional——不同 Agent 可能不返回 thinking / mood / tokens。
- * 实际字段由 agents/base.py BaseAgent.invoke 决定。
- *
- * TDSF: 字段对齐 Python 实际返回值
- * - Python BaseAgent.invoke() 通过 AgentResult.to_state_update() 返回 `observation`（不是 `output`）
- * - TeachAgent.reflect_on_result() 额外返回 `teaching_content`（结构化教学内容）
- * - 前端为兼容旧测试与未来扩展，两个字段都接受：优先 observation，回退 output
+ * 字段对齐 StrandsAgentAdapter.invoke：正文使用 `observation`；前端保留
+ * `output` 回退以兼容测试桩和异常响应。
  */
 interface AgentInvokeResult {
   /** P0-4: 运行时失败/降级标志 */
@@ -426,8 +421,7 @@ interface AgentInvokeResult {
   /**
    * Agent 最终输出（必填，作为 assistant message 文本）
    *
-   * TDSF: Python 端 BaseAgent.invoke() 实际返回的字段名是 `observation`
-   * （见 agents/base.py AgentResult.to_state_update()）。
+   * Python 端 StrandsAgentAdapter.invoke 返回的字段名是 `observation`。
    * 前端优先读 observation，回退到 output 以兼容旧 mock 测试。
    */
   observation?: string;
@@ -436,9 +430,7 @@ interface AgentInvokeResult {
   /**
    * TeachAgent 专属：结构化教学内容（教程 + 知识卡 + 学习路径）
    *
-   * 由 agents/teach_agent.py TeachAgent.reflect_on_result() 返回，
-   * BaseAgent.invoke() 通过 extra_update 合并到状态更新中传给前端。
-   * 前端在 observation/output 之后追加展示，确保教学内容不丢失。
+   * 兼容早期测试桩保留；当前教学模式通过普通事件流和 TeachCard 工具卡输出。
    */
   teaching_content?: string;
   /** Agent 心情标识（如 "thinking" / "streaming" / "done"） */
@@ -490,8 +482,8 @@ interface ToolCallPayload {
  *
  * Strands 后端 TdsfStrandsCallbackHandler._emit_agent_message 把 LLM `data`
  * 事件（文本增量）以 type="output" 推送，前端订阅后实现真正流式输出。
- * BaseAgent._emit_message 在 plan 阶段推送 type="thinking"，前端订阅后
- * 实现深度思考 UI（Reasoning 折叠段）。
+ * adapter 同时推送 type="thinking"，前端订阅后实现深度思考 UI
+ * （Reasoning 折叠段）。
  */
 interface AgentMessagePayload {
   content?: string;
@@ -627,12 +619,11 @@ function createAsyncQueue<T>() {
 }
 
 /**
- * 把长文本切成若干 chunk 流式 yield（兜底路径：LangGraph 后端 / 无事件推送）
+ * 把长文本切成若干 chunk 流式 yield（兜底路径：无事件推送）
  *
  * P0-2 (2026-08-01) 说明：Strands 后端（默认主路径）走事件真流式
  * （sidecar:agent_message → text-delta 实时渲染），此函数仅用于
- * `agent.invoke` 同步返回完整 dict 的后端（LangGraph）或事件缺失时兜底，
- * 避免一次性渲染长文本造成 UI 卡顿。
+ * `agent.invoke` 完成但事件缺失时兜底，避免一次性渲染长文本造成 UI 卡顿。
  *
  * @param text 待流式输出的完整文本
  * @param id   text stream id（同一 id 的 chunk 会被合并到同一个 text part）
@@ -742,7 +733,7 @@ async function registerSidecarListeners(
 
   // TDSF 修复 2026-07-31 (P1): agent_message 事件订阅
   // Strands 后端 TdsfStrandsCallbackHandler 把 LLM `data` 事件（文本增量）
-  // 以 type="output" 推送，BaseAgent._emit_message 在 plan 阶段推送 type="thinking"。
+  // 以 type="output" 推送；思考增量以 type="thinking" 走同一事件通道。
   // 前端订阅后实时 yield 为 text-delta / reasoning-delta，实现真正流式 +
   // 深度思考 UI（替代伪流式切片 + 无 thinking 的旧方案）。
   if (onAgentMessage) {
@@ -803,8 +794,7 @@ async function registerSidecarListeners(
  *      - close queue，drain 剩余 items
  *   4. invoke 完成后处理最终 result：
  *      - 如果 event 推送了 output（streamedOutput 非空）→ 跳过 result.observation 切片（避免重复）
- *      - 否则 → 走伪流式切片 result.observation（LangGraph 后端兼容）
- *      - yield result.teaching_content（TeachAgent 专属，event 不推送）
+ *      - 否则 → 走兜底切片 result.observation
  *   5. yield finish
  *
  * 协议:
@@ -1002,7 +992,7 @@ export async function* runSidecarStream(
 
     // 超时 + abort 保护
     // P0 活动感知超时 (2026-09-03 用户钦定“稳定性最优” + 开源调研借鉴 Cloudflare
-    //   keepAlive / LangGraph 分层超时): 超时改为“无活动超时”——每收到一个流式
+    //   keepAlive / 分层超时): 超时改为“无活动超时”——每收到一个流式
     //   事件（token/tool_call）就重置计时器，只有连续 activityTimeoutMs 无任何事件
     //   （真卡死）才超时。避免“总时长超时”误杀有进展的长任务（调研结论：单纯
     //   调大超时是反模式，把清晰错误变静默错误）。与 Python watchdog(600s 无活动) 对齐。
@@ -1199,27 +1189,21 @@ export async function* runSidecarStream(
       });
     }
 
-    // 10. 处理 thinking：如果 event 未推送 thinking（LangGraph 后端），走伪流式
-    //     如果 event 已推送（Strands 后端），跳过避免重复
+    // 10. 处理 thinking：event 未推送时走兜底切片，已推送时跳过避免重复。
     if (!streamedThinking && invokeResult.thinking) {
       onStep?.("Thinking");
       yield* streamText(invokeResult.thinking, thinkingId, "reasoning");
     }
 
-    // 11. 处理 output：如果 event 未推送 output（LangGraph 后端），走伪流式切片
-    //     如果 event 已推送（Strands 后端），跳过避免重复
-    //     Python BaseAgent.invoke() 返回 `observation` 字段（非 `output`），
-    //     优先读 observation，回退到 output 兼容旧测试。
+    // 11. 处理 output：event 未推送时走兜底切片，已推送时跳过避免重复。
+    //     Strands 返回 `observation` 字段；回退到 `output` 兼容测试桩。
     const outputText = invokeResult.observation ?? invokeResult.output ?? "";
     if (!streamedOutput && outputText) {
       onStep?.("Streaming");
       yield* streamText(outputText, outputId);
     }
 
-    // TDSF (2026-08-09): teach 字段契约清理 — 删除 teaching_content 死代码
-    // Strands 路径走 observation 字段（已在上面处理），不产 teaching_content。
-    // 旧 LangGraph teach_agent.py 的 3 板块 teaching_content 已成孤儿，
-    // 此分支永远不可达，删除避免误导。
+    // 教学模式走 observation 与 TeachCard 工具事件，不另产 teaching_content。
 
     // 13. finish
     onStep?.(null);

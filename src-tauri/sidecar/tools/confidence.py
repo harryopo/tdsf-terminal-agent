@@ -47,8 +47,8 @@ spec 要求：
     }
 
 集成点：
-- 被 graph/nodes.py 的 tool_call_node 调用（tool_name == "confidence"）
-- 被 decision_engine 调用做证据链置信度计算
+- 被 ``tools.rpc_methods`` 暴露为 ``confidence.score``
+- 被 Strands ``confidence_tool`` 复用做证据链置信度计算
 """
 
 from __future__ import annotations
@@ -411,27 +411,3 @@ TOOL_METADATA: dict[str, Any] = {
 def get_tool_metadata() -> dict[str, Any]:
     """获取工具元数据（供 MCP tool 注册表使用）"""
     return TOOL_METADATA
-
-
-# ============================================================================
-# 集成到 LangGraph tool_call 节点
-# ============================================================================
-
-
-def register_to_graph_nodes() -> None:
-    """将 confidence tool 注册到 graph/nodes.py 的 tool_call_node
-
-    在 graph/nodes.py 的 tool_call_node 中，当 tool_name == "confidence" 时，
-    调用 invoke_confidence_tool(params) 替代 mock 实现。
-
-    使用方式（在 graph/nodes.py 中）：
-        from tools.confidence import invoke_confidence_tool
-
-        if tool_name == "confidence":
-            result = invoke_confidence_tool(params)
-
-    本函数提供显式注册接口（便于初始化时调用），
-    但实际集成建议直接在 graph/nodes.py 中导入 invoke_confidence_tool。
-    """
-    # 注册信号：导入本模块即视为注册（避免循环依赖）
-    logger.info("register_to_graph_nodes: confidence tool ready for integration")

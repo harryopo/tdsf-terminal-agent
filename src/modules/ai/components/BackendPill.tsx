@@ -76,10 +76,7 @@ type DisplayState = {
 
 /**
  * 拼接 tooltip 副行：运行时长。
- * 注意：不再显示 agents_count——sidecar.health 的该字段来自兼容层
- * AGENT_REGISTRY（顶层 agents/ 遗产注册表），Strands 激活时
- * 它与真实引擎无关（2026-08-31 用户质疑"9 个智能体是真的吗"，实测确认
- * 是误导数据，移除显示；字段本身保留给后端调试）。
+ * 状态栏保持简洁，只显示运行时长；Agent 数量保留在 health 诊断数据中。
  */
 function buildDetail(status: BackendStatus): string | null {
   return status.uptime_seconds ? `已运行 ${Math.floor(status.uptime_seconds)}s` : null;

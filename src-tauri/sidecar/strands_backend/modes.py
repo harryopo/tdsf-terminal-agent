@@ -7,8 +7,7 @@ strands_backend/modes.py — Agent 三模式信任体系（P0-A1，方案书 v3.
   state.mode，前端模式切换器 → IPC → sidecar；P0-A1 后端约定）
 - 缺省 / 非法 → confirm（中间态最安全，spec「老会话兼容」场景）+ 降级
   warning 日志（同一原始值进程级仅记一次，防每条 invoke 刷屏）
-- 模式 × 风险映射矩阵（decide）见 ``core/decision_engine.py``——本模块只
-  负责模式定义与解析，不承载决策逻辑
+- ``decide`` 在本模块集中实现模式 × 风险映射矩阵。
 """
 from __future__ import annotations
 

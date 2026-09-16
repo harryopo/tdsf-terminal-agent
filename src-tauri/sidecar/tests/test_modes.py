@@ -3,7 +3,7 @@ tests/test_modes.py — 三模式信任体系单测（P0-A1，方案书 v3.1 §3
 ====================================================================
 
 验证内容：
-1. core.decision_engine.decide 模式 × 风险映射矩阵——全格覆盖 5 风险 × 3 模式
+1. strands_backend.modes.decide 模式 × 风险映射矩阵——全格覆盖 5 风险 × 3 模式
    （15 断言）+ 多种输入形态（RiskLevel / int / "L3" / "low"）+ 非法输入 fail-closed
 2. strands_backend.modes.parse_mode——合法解析 / AgentMode 透传 / 缺省与非法
    降级 confirm + 降级 warning（同值仅一次）
@@ -21,9 +21,8 @@ import logging
 
 import pytest
 
-from core.decision_engine import decide
 from core.schemas import RiskLevel
-from strands_backend.modes import AgentMode, parse_mode
+from strands_backend.modes import AgentMode, decide, parse_mode
 
 # ============================================================================
 # 1. decide 模式 × 风险映射矩阵（方案书 §3.2 全格覆盖）

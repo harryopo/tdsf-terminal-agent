@@ -2,11 +2,10 @@
 core/schemas.py — 核心数据模型（T-P1-06 迁移自 projects/src/tdsf/storage/schemas.py）
 ========================================================================================
 
-迁移原则（用户决策④：仅复用 RiskEngine + Confidence）：
-- 保留 RiskEngine / Confidence / Grounding 依赖的核心模型
-- 移除原项目中 LangGraph AgentState（已在新 graph/state.py 重写）
-- 移除 DecisionCard 等决策相关模型（DecisionEngine 用 LangGraph 重写）
-- 新增 L0-L4 风险等级映射方法（spec 要求 4 档风险：L0-L4）
+核心约束：
+- 保留 RiskEngine / Confidence 依赖的核心模型
+- 不在 schemas 中承载 Agent 运行状态
+- 保留 L0-L4 风险等级映射方法
 
 模型清单：
 - RiskLevel:        风险等级枚举（low/medium/high/deny，原 4 档）

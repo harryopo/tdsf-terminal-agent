@@ -463,12 +463,11 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     """注册所有业务模块的方法
 
     后续 task 会在这里追加:
-    - T-P1-05: graph.register_methods(dispatcher)
     - T-P1-07: tools.register_methods(dispatcher)
     - T-P1-08: permissions.register_methods(dispatcher)
     - T-P1-09: tdsf_loader.register_methods(dispatcher)
     - T-P1-10: needs_you.register_methods(dispatcher)
-    - T-P1-11: agents.register_methods(dispatcher)
+    - T-P1-11: agent_facade.register_methods(dispatcher)
     """
     # T-P1-03: Project Service（SQLite WAL + 5 表 CRUD + 写租约 + 事务）
     try:
@@ -588,44 +587,35 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register tdsf_loader: {e}")
 
-    # T-P1-11: Agent 框架（主 Agent + 4 子 Agent）
+    # T-P1-11: 单一 main Agent RPC 门面
     # 必须在 event_bus 之后注册（Agent 通过 event_bus 推送 mood/message 事件）
-    agents_module = None
+    agent_facade_module = None
     try:
-        import agents
-        agents_module = agents
-        # TDSF P0-3 + P0-C5: LLM 配置加载与共享
+        import agent_facade
+        agent_facade_module = agent_facade
+        # LLM 配置加载：同一份 LLMConfig 供启动和 agent.configure 使用。
         # ---------------------------------------------------------------
         # 从环境变量 / .tdsf-data/llm_config.json 加载 LLMConfig，
-        # 同一份 config 同时供给旧 RPC 元数据兼容层（make_llm_call）和 Strands
-        # （configure_strands → create_strands_model），避免双套配置导致行为分裂。
-        # 未配置时 llm_call=None；Strands 会显式报告模型未配置。
-        from core.llm_config import load_config, make_llm_call
+        # configure_strands → create_strands_model 构造生产模型。
+        # 未配置时 Strands 会显式报告模型不可用。
+        from core.llm_config import load_config
         llm_config = load_config()
-        llm_call = make_llm_call(llm_config)
-        if llm_call is not None:
-            logger.info("LLM configured, agents will use real LLM")
+        if llm_config.is_configured:
+            logger.info("LLM configuration loaded for Strands")
         else:
-            logger.warning("LLM not configured, agents will use mock LLM")
+            logger.warning("LLM not configured, Strands model is unavailable")
 
         # 注册 JSON-RPC 方法：agent.invoke / agent.list / agent.info / agent.configure
-        agents.register_methods(dispatcher)
-        # 配置全局依赖并实例化所有 Agent
-        agents.configure_agents(
-            event_bus=event_bus.get_global_bus(),
-            llm_call=llm_call,
-        )
+        agent_facade.register_methods(dispatcher)
 
-        # TDSF 2026-07-30 P0-C1 + P0-C5 + P1-4: Strands 后端 feature flag 注入点
+        # Strands 后端生产入口
         # ---------------------------------------------------------------
         # 通过环境变量 TDSF_AGENT_BACKEND 声明 Agent 后端实现：
         #   - 未设置 / "strands"：注入 StrandsAgentAdapter
         #   - 其他值：显式标记不可用，agent.invoke fail-closed
         #
-        # 集成点对齐方案文档 §4.2 与 strands_backend/adapter.py docstring：
-        #   - configure_strands 便捷构造 StrandsAgentAdapter
-        #   - agents.set_backend() 注入 override（agents/__init__.py P0-C2 提供）
-        #   - 失败时保留 sidecar RPC，但 agent.invoke 不回退旧 BaseAgent
+        # configure_strands 构造 StrandsAgentAdapter，agent_facade 持有唯一后端。
+        # 初始化失败时保留诊断 RPC，agent.invoke 明确失败关闭。
         #
         # P0-C5（2026-07-30 完成）：strands_model 自动注入
         #   - configure_strands(strands_model=None) 内部自动调用
@@ -680,7 +670,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         if _backend_error is not None:
             logger.error(_backend_error)
             _mark_agent_backend_unavailable(
-                agents,
+                agent_facade,
                 _tdsf_backend or "unknown",
                 _backend_error,
             )
@@ -724,7 +714,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                     rust_bridge=_rust_bridge_impl,  # P1-4: 真实注入
                     llm_config=llm_config,  # P0-C5: 共享同一份 LLMConfig
                 )
-                agents.set_backend(
+                agent_facade.set_backend(
                     lambda agent_id, input, state: _strands_adapter.invoke(
                         agent_id, input, state
                     )
@@ -732,7 +722,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 # P1-NEW-v3-1 修复 (2026-07-30): 注入 adapter 引用,
                 # 让 agent.configure RPC 能调用 adapter.update_model
                 # (否则 Strands 模式下重新配置 LLM 后仍用旧 model)
-                agents.set_strands_adapter(_strands_adapter)
+                agent_facade.set_strands_adapter(_strands_adapter)
                 # P0-E: 标记 Strands 真实激活
                 _backend_status["backend_activated"] = True
                 _backend_status["fallback_reason"] = None
@@ -744,23 +734,23 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                 # 推送 backend_status 事件给前端（前端 BackendPill 监听渲染）
                 send_notification("backend_status", dict(_backend_status))
             except Exception as se:
-                # Strands 注入失败：保留 RPC 与诊断，但禁止回退旧 BaseAgent。
+                # Strands 注入失败：保留 RPC 与诊断，agent.invoke 失败关闭。
                 logger.exception(f"failed to activate Strands backend: {se}")
                 _mark_agent_backend_unavailable(
-                    agents,
+                    agent_facade,
                     "strands",
                     f"{type(se).__name__}: {se}",
                 )
 
         logger.info(
-            f"agents methods registered + configured: "
-            f"{agents.list_agents()}"
+            f"agent methods registered + configured: "
+            f"{agent_facade.list_agents()}"
         )
     except Exception as e:
         logger.exception(f"failed to register agents: {e}")
-        if agents_module is not None:
+        if agent_facade_module is not None:
             _mark_agent_backend_unavailable(
-                agents_module,
+                agent_facade_module,
                 "strands",
                 f"{type(e).__name__}: {e}",
             )
@@ -779,8 +769,8 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     # TDSF P0-3: 前端可直调的 risk/confidence/decision JSON-RPC
     # 原因: riskClient.ts / TDSFPanelSection / 风险评估面板都直接调
     #       "risk.evaluate" / "confidence.score" / "decision.list"
-    # 旧版只有 invoke_*_tool 内部入口（graph/nodes.py tool_call_node 用），
-    # 前端 fail-open 回退到本地 TS 评估，丢失了 Python 端的真实实现。
+    # invoke_*_tool 仍供 Strands 工具包装器复用；这里额外提供前端直调入口，
+    # 避免前端 fail-open 回退到本地 TS 评估而丢失 Python 端的真实实现。
     try:
         from tools import rpc_methods
         rpc_methods.register_methods(dispatcher)
@@ -916,7 +906,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
             Returns:
                 dict: 见 _backend_status 字段说明 + agents 元信息 + uptime
             """
-            import agents as _agents_mod
+            import agent_facade as _agents_mod
             return {
                 **_backend_status,
                 "agents_count": len(_agents_mod.AGENT_REGISTRY),

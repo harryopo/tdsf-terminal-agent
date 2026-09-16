@@ -688,7 +688,7 @@ class TestEndToEndParameterMapping:
     """端到端参数映射：LLMConfig → Strands Model 构造参数
 
     验证所有 LLMConfig 字段正确映射到 Strands Model 构造参数，
-    保证与现有 LangGraph 路径行为一致。
+    保证配置字段在 Strands provider 中完整生效。
     """
 
     def test_openai_full_config_mapping(self, injected_model_adapter):

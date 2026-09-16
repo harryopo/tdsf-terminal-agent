@@ -54,13 +54,9 @@ class EventType(str, Enum):
     NEEDS_YOU = "needs_you"
     PROJECT_UPDATE = "project_update"
     SIDECAR_EVENT = "sidecar_event"
-    # v2026-07-29: 主 Agent 路由子 Agent 事件
-    # main_agent 在 PAOR 循环中路由到子 Agent 时推送，前端 AgentStatusPill 实时显示
+    # Agent 活动事件，前端 AgentStatusPill 实时显示当前 main Agent。
     AGENT_SWITCH = "agent_switch"
-    # v2026-07-30 P1-a 修复: Mock LLM 告警事件
-    # agents/base.py._publish_mock_warning 推送，前端 MockLLMWarning.tsx 实时显示红色 Pill
-    # 之前因 EventType 缺失 + base.py 调用 publish 签名错误（传 3 参数而非 Event 对象）
-    # 导致事件连 EventBus 都进不去，前端永远不显示告警（三重断裂）
+    # LLM 不可用告警事件，前端 MockLLMWarning.tsx 显示红色 Pill。
     MOCK_LLM_ACTIVE = "mock_llm_active"
     # T2 循环护栏 (2026-08-31, spec add-agent-loop-closure): 循环进度事件
     # strands_backend/adapter.py ToolCallLimitHook 每次工具调用完成时推送
@@ -404,16 +400,14 @@ class EventBus:
             session_id: 会话 ID
             source: 来源 Agent
 
-        TDSF 修复 2026-07-31 (P4): payload 字段名从 ``message_type`` 改为 ``type``，
-        与 ``agents/base.py::_emit_message`` 和前端 ``sidecar-adapter.ts`` 期望对齐。
+        payload 使用 ``type`` 字段，与前端 ``sidecar-adapter.ts`` 约定对齐。
 
         之前字段名不一致导致：
         - Strands 后端通过 ``emit_agent_message`` 推送的消息全部被前端误判为 output
         - 深度思考 UI（thinking）无法显示
         - LLM 文本流式输出全部走 output 通道（虽然能显示，但语义错乱）
 
-        base.py 的 ``_emit_message`` 直接 ``publish(Event(...))`` 用 ``"type"`` 字段，
-        本方法与之对齐，确保两条路径（LangGraph + Strands）的 payload 结构一致。
+        Strands adapter 与本方法使用同一 payload 结构。
         """
         payload = {"content": content, "type": message_type}
         return self.publish(
@@ -577,12 +571,8 @@ class EventBus:
     ) -> int:
         """发布 mock_llm_active 事件（v2026-07-30 P1-a 修复新增）
 
-        当 BaseAgent 未注入 llm_call 或 llm_call 抛异常降级到 mock 时，
-        通过此方法推送告警事件，前端 MockLLMWarning.tsx 实时显示红色 Pill。
-
-        之前因 base.py 直接调用 publish("mock_llm_active", dict, source=...) 传 3 参数，
-        而 publish 签名只接受单个 Event 对象，TypeError 被静默吞掉，
-        导致 mock LLM 告警事件连 EventBus 都进不去（三重断裂的第一重）。
+        后端发现模型不可用时可通过此方法推送告警事件，前端
+        MockLLMWarning.tsx 实时显示红色 Pill。
 
         Args:
             agent: Agent 名称（如 "main" / "coding"）

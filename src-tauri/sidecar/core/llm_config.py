@@ -4,25 +4,25 @@ core/llm_config.py — LLM 配置与调用封装（TDSF P0-3）
 
 职责：
 - 从环境变量 / 配置文件读取 LLM provider 配置（API Key / BaseURL / Model）
-- 提供 ``make_llm_call()`` 函数，返回符合 BaseAgent.llm_call 签名的 callable
+- 提供 ``make_llm_call()`` 函数，返回供知识库离线脚本使用的 callable
 - 支持 OpenAI 兼容接口（方便国内用户使用各种代理 / OneAPI / DeepSeek 等）
 - 支持 Anthropic 原生接口
-- 不可用时返回 None，Agent 降级到 mock LLM（保持离线可用）
+- 不可用时返回 None，由调用方显式处理
 
 设计要点：
 1. **环境变量优先**：TDSF_LLM_API_KEY / TDSF_LLM_BASE_URL / TDSF_LLM_MODEL
 2. **配置文件回退**：.tdsf-data/llm_config.json（前端通过 IPC 写入）
 3. **OpenAI 兼容**：默认使用 langchain-openai 的 ChatOpenAI，
    通过 base_url 指向任意 OpenAI 兼容端点（DeepSeek / OneAPI / 代理等）
-4. **错误隔离**：LLM 调用失败时抛异常，由 BaseAgent.call_llm 捕获降级到 mock
+4. **错误隔离**：LLM 调用失败时抛异常，由调用脚本决定重试或终止
 
-llm_call 签名（与 BaseAgent.call_llm 一致）：
+llm_call 签名：
     Input:  messages: list[dict[str, Any]]  # OpenAI Chat Completions 格式
     Output: str                              # LLM 回复文本
 
 集成点：
-- main.py 启动时调用 make_llm_call() 获取 llm_call，注入 agents.configure_agents
-- 前端 agent.configure JSON-RPC 方法可运行时重新配置
+- 知识库蒸馏、翻译与标题生成脚本调用 ``make_llm_call()``
+- ``agent_facade.configure`` 复用 ``LLMConfig``，并通过 Strands provider 热更新模型
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ logger = logging.getLogger("sidecar.core.llm_config")
 # ============================================================================
 
 class LLMCallFunction(Protocol):
-    """LLM 调用函数签名（与 BaseAgent.llm_call 一致）"""
+    """知识库离线脚本使用的 LLM 调用函数签名。"""
     def __call__(self, messages: list[dict[str, Any]]) -> str: ...
 
 
@@ -96,7 +96,7 @@ def load_config() -> LLMConfig:
     优先级：
     1. 环境变量 TDSF_LLM_* （启动时设置，便于开发调试）
     2. 配置文件 .tdsf-data/llm_config.json（前端通过 IPC 写入）
-    3. 默认空配置（is_configured=False，Agent 使用 mock LLM）
+    3. 默认空配置（is_configured=False，由调用方显式处理）
     """
     # 1. 环境变量
     env_api_key = os.environ.get("TDSF_LLM_API_KEY", "")
@@ -242,7 +242,7 @@ def _make_openai_call(config: LLMConfig) -> LLMCallFunction:
             LLM 回复文本
 
         Raises:
-            Exception: LLM 调用失败时抛出（由 BaseAgent.call_llm 捕获降级）
+            Exception: LLM 调用失败时抛出，由调用脚本处理
         """
         from langchain_core.messages import (
             AIMessage,
@@ -326,7 +326,7 @@ def make_llm_call(config: LLMConfig | None = None) -> LLMCallFunction | None:
 
     if not config.is_configured:
         logger.warning(
-            "LLM not configured (no API Key), agents will use mock LLM. "
+            "LLM not configured (no API Key); model calls are unavailable. "
             "Set TDSF_LLM_API_KEY env or write .tdsf-data/llm_config.json"
         )
         return None
