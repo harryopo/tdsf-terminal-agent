@@ -146,6 +146,23 @@ class TestNeedsVerifyJudgment:
         ]
         assert _needs_verify_followup(log) is False
 
+    def test_write_followed_by_failed_verify_still_triggers(self):
+        from strands_backend.adapter import _needs_verify_followup
+
+        log = [
+            {
+                "name": "write_remote_file",
+                "input": {"path": "/tmp/x"},
+                "success": True,
+            },
+            {
+                "name": "ssh_command",
+                "input": {"command": "cat /tmp/x"},
+                "success": False,
+            },
+        ]
+        assert _needs_verify_followup(log) is True
+
     def test_write_followed_by_readonly_ssh_command_not_triggers(self):
         """写后用 ssh_command 只读命令验证（systemctl status）→ 不触发"""
         from strands_backend.adapter import _needs_verify_followup
