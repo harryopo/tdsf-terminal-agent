@@ -437,7 +437,7 @@ def _needs_verify_followup(tool_log: list[dict[str, Any]]) -> bool:
     if last_write_idx < 0:
         return False  # 无写类成功调用（纯读会话/写全失败）→ 不触发
     for entry in tool_log[last_write_idx + 1:]:
-        if _tool_call_is_verify_class(
+        if entry.get("success") and _tool_call_is_verify_class(
             str(entry.get("name", "")), entry.get("input") or {}
         ):
             return False  # 最后一次写类成功之后已有验证 → 不触发
