@@ -480,21 +480,25 @@ class TestDomesticOpenAICompatibleProviders:
         assert isinstance(result, _MockOpenAIModel)
         assert "unknown provider" not in caplog.text
 
-    @pytest.mark.parametrize("provider", ["zhipu", "dashscope", "moonshot"])
+    @pytest.mark.parametrize(
+        ("provider", "expected_base_url"),
+        [
+            ("zhipu", "https://open.bigmodel.cn/api/paas/v4"),
+            ("dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            ("moonshot", "https://api.moonshot.cn/v1"),
+        ],
+    )
     def test_domestic_provider_without_base_url(
-        self, injected_model_adapter, provider: str
+        self, injected_model_adapter, provider: str, expected_base_url: str
     ):
-        """国产 provider + base_url 留空 → OpenAIModel 创建成功、不传 base_url
-
-        端点预填/回退在 core/llm_config.py 层完成，adapter 层只透传 config。
-        """
+        """国产 provider 留空时与离线 callable 使用同一官方端点回退。"""
         config = LLMConfig(
             provider=provider, api_key="sk-domestic-test", model="test-model"
         )
         result = injected_model_adapter.create_strands_model(config)
 
         assert isinstance(result, _MockOpenAIModel)
-        assert "base_url" not in result.client_args
+        assert result.client_args["base_url"] == expected_base_url
 
 
 # ============================================================================

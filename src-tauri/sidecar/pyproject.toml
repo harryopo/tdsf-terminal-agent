@@ -28,10 +28,8 @@ classifiers = [
 # 运行时依赖（与 requirements.txt 同步）
 dependencies = [
     "strands-agents>=1.0,<2.0",
-    "langchain-core>=0.3.0",
-    "langchain-community>=0.3.0",
-    "langchain-openai>=0.2.0",
-    "langchain-anthropic>=0.2.0",
+    "openai>=1.68,<3",
+    "anthropic>=0.21,<1",
     "pydantic>=2.0",
     "chromadb>=0.5.0",
     "asyncio-atexit>=1.0",
@@ -86,7 +84,6 @@ markers = [
 
 # 过滤器配置
 filterwarnings = [
-    "ignore::DeprecationWarning:langchain.*",
     "ignore::DeprecationWarning:chromadb.*",
 ]
 
