@@ -19,11 +19,10 @@ beautifulsoup4>=4.12
 # ----------------------------------------------------------------------------
 markdownify>=0.13
 
-# LLM 客户端（按需选择，P1-B 默认使用 OpenAI 兼容接口）
-#   - langchain-openai: core/llm_config.py 的 _make_openai_call() 依赖
-#     `from langchain_openai import ChatOpenAI`；缺失会导致 LLM 不可用
-#     （启动日志报 "langchain-openai 未安装"），2026-08-28 换机环境踩坑补录
-langchain-openai>=0.3.0
+# 离线知识库脚本使用的官方同步 LLM 客户端。
+# 上限与 Strands 1.x provider 约束保持一致，避免换机安装出不兼容组合。
+openai>=1.68,<3
+anthropic>=0.21,<1
 
 # ----------------------------------------------------------------------------
 # 数据验证（Pydantic v2）
@@ -37,7 +36,7 @@ pydantic>=2.0
 # YAML 配置解析
 #   - 2026-08-28 换机踩坑：squilla_router / long_context / self_evolution 三个
 #     模块 import yaml，缺失则启动报 "No module named 'yaml'"。venv 必须显式装
-#     （strands/langchain 的传递依赖不保证带 PyYAML）。
+#     （第三方框架的传递依赖不保证带 PyYAML）。
 # ----------------------------------------------------------------------------
 PyYAML>=6.0
 

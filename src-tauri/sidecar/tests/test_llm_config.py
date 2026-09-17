@@ -1,118 +1,122 @@
-"""
-tests/test_llm_config.py — LLM 配置层测试（TDSF · 国产 provider 对齐 2026-08）
-====================================================================================
-
-验证内容（spec: add-domestic-first-ai-config / 任务 T3.1）：
-1. ``PROVIDER_DEFAULT_BASE_URLS`` 映射：zhipu / dashscope / moonshot 三家
-   的官方 OpenAI 兼容端点值与 spec 一致
-2. ``_resolve_base_url`` 回退语义：
-   - 显式 base_url 优先（用户自定义代理不被官方端点覆盖）
-   - base_url 为空 + 已知国产 provider → 回退官方端点
-   - base_url 为空 + 未收录 provider（openai/deepseek/unknown）→ 返回空串
-     （默认 OpenAI 兼容行为不变，ChatOpenAI 走默认官方端点）
-3. ``_make_openai_call`` 集成：最终 ChatOpenAI 构造参数里的 base_url 正确
-4. ``make_llm_call`` 分发：provider="zhipu" 走 OpenAI 兼容路径（非 anthropic）
-
-测试策略：
-- fake ``langchain_openai.ChatOpenAI``（sys.modules 注入），记录构造 kwargs，
-  100% 离线、不依赖 langchain-openai 是否真实安装
-- 不发起任何真实网络请求
-
-运行：
-    cd src-tauri/sidecar
-    python -m pytest tests/test_llm_config.py -v
-"""
+"""Tests for the provider-neutral synchronous LLM callable."""
 from __future__ import annotations
 
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
-# 确保能 import core
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
+from core import llm_config
 from core.llm_config import (
-    PROVIDER_DEFAULT_BASE_URLS,
     LLMConfig,
+    PROVIDER_DEFAULT_BASE_URLS,
+    _make_anthropic_call,
     _make_openai_call,
     _resolve_base_url,
     make_llm_call,
 )
 
 
-# ============================================================================
-# Fake langchain_openai（记录 ChatOpenAI 构造参数，不发网络请求）
-# ============================================================================
+class _FakeOpenAICompletions:
+    def create(self, **kwargs: object) -> object:
+        _FakeOpenAI.last_request_kwargs = dict(kwargs)
+        if _FakeOpenAI.request_error is not None:
+            raise _FakeOpenAI.request_error
+        if _FakeOpenAI.empty_choices:
+            return SimpleNamespace(choices=[])
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=_FakeOpenAI.response_content)
+                )
+            ]
+        )
 
-class _FakeChatOpenAI:
-    """Fake ChatOpenAI：记录构造 kwargs，供断言 base_url 透传
 
-    last_init_kwargs 为类级记录（_make_openai_call 内部只构造一个实例，
-    构造后即可断言）；fixture 每次重置，避免测试间残留。
-    """
-
-    last_init_kwargs: dict = {}
+class _FakeOpenAI:
+    last_init_kwargs: dict[str, object] = {}
+    last_request_kwargs: dict[str, object] = {}
+    response_content: object = "ok"
+    request_error: Exception | None = None
+    init_error: Exception | None = None
+    empty_choices = False
 
     def __init__(self, **kwargs: object) -> None:
-        self._init_kwargs = dict(kwargs)
-        _FakeChatOpenAI.last_init_kwargs = dict(kwargs)
+        if type(self).init_error is not None:
+            raise type(self).init_error
+        type(self).last_init_kwargs = dict(kwargs)
+        self.chat = SimpleNamespace(
+            completions=_FakeOpenAICompletions(),
+        )
+
+
+class _FakeAnthropicMessages:
+    def create(self, **kwargs: object) -> object:
+        _FakeAnthropic.last_request_kwargs = dict(kwargs)
+        if _FakeAnthropic.request_error is not None:
+            raise _FakeAnthropic.request_error
+        return SimpleNamespace(content=list(_FakeAnthropic.response_blocks))
+
+
+class _FakeAnthropic:
+    last_init_kwargs: dict[str, object] = {}
+    last_request_kwargs: dict[str, object] = {}
+    response_blocks: list[object] = [
+        SimpleNamespace(type="text", text="ok"),
+    ]
+    request_error: Exception | None = None
+    init_error: Exception | None = None
+
+    def __init__(self, **kwargs: object) -> None:
+        if type(self).init_error is not None:
+            raise type(self).init_error
+        type(self).last_init_kwargs = dict(kwargs)
+        self.messages = _FakeAnthropicMessages()
 
 
 @pytest.fixture
-def fake_chat_openai(monkeypatch):
-    """向 sys.modules 注入 fake langchain_openai 模块
+def fake_openai(monkeypatch):
+    module = types.ModuleType("openai")
+    module.OpenAI = _FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", module)
+    monkeypatch.setattr(_FakeOpenAI, "last_init_kwargs", {})
+    monkeypatch.setattr(_FakeOpenAI, "last_request_kwargs", {})
+    monkeypatch.setattr(_FakeOpenAI, "response_content", "ok")
+    monkeypatch.setattr(_FakeOpenAI, "request_error", None)
+    monkeypatch.setattr(_FakeOpenAI, "init_error", None)
+    monkeypatch.setattr(_FakeOpenAI, "empty_choices", False)
+    return _FakeOpenAI
 
-    _make_openai_call 内部延迟导入 ``from langchain_openai import ChatOpenAI``，
-    注入 sys.modules 后该导入会命中 fake 模块（无论真实包是否已安装）。
-    """
-    fake_module = types.ModuleType("langchain_openai")
-    fake_module.ChatOpenAI = _FakeChatOpenAI  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
-    # 重置类级记录，避免测试间残留
-    monkeypatch.setattr(_FakeChatOpenAI, "last_init_kwargs", {})
-    return _FakeChatOpenAI
 
+@pytest.fixture
+def fake_anthropic(monkeypatch):
+    module = types.ModuleType("anthropic")
+    module.Anthropic = _FakeAnthropic  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", module)
+    monkeypatch.setattr(_FakeAnthropic, "last_init_kwargs", {})
+    monkeypatch.setattr(_FakeAnthropic, "last_request_kwargs", {})
+    monkeypatch.setattr(
+        _FakeAnthropic,
+        "response_blocks",
+        [SimpleNamespace(type="text", text="ok")],
+    )
+    monkeypatch.setattr(_FakeAnthropic, "request_error", None)
+    monkeypatch.setattr(_FakeAnthropic, "init_error", None)
+    return _FakeAnthropic
 
-# ============================================================================
-# 1. PROVIDER_DEFAULT_BASE_URLS 映射值（与 spec 端点逐字对照）
-# ============================================================================
 
 class TestProviderDefaultBaseUrls:
-    """国产三家官方 OpenAI 兼容端点映射测试"""
-
-    def test_mapping_contains_three_domestic_providers(self):
-        """映射含且仅含国产三家（不含 openai/deepseek 等，避免改变既有行为）"""
-        assert set(PROVIDER_DEFAULT_BASE_URLS.keys()) == {
+    def test_mapping_contains_only_supported_fallbacks(self):
+        assert set(PROVIDER_DEFAULT_BASE_URLS) == {
             "zhipu",
             "dashscope",
             "moonshot",
         }
 
-    def test_official_endpoint_values_match_spec(self):
-        """三家端点值与 spec（add-domestic-first-ai-config）一致"""
-        assert (
-            PROVIDER_DEFAULT_BASE_URLS["zhipu"]
-            == "https://open.bigmodel.cn/api/paas/v4"
-        )
-        assert (
-            PROVIDER_DEFAULT_BASE_URLS["dashscope"]
-            == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        assert (
-            PROVIDER_DEFAULT_BASE_URLS["moonshot"]
-            == "https://api.moonshot.cn/v1"
-        )
-
-
-# ============================================================================
-# 2. _resolve_base_url 回退语义
-# ============================================================================
-
-class TestResolveBaseUrl:
-    """_resolve_base_url：显式配置优先 / 已知 provider 回退 / 未收录不变"""
-
     @pytest.mark.parametrize(
         ("provider", "expected"),
         [
@@ -121,111 +125,246 @@ class TestResolveBaseUrl:
             ("moonshot", "https://api.moonshot.cn/v1"),
         ],
     )
-    def test_domestic_provider_fallback_when_base_url_empty(
+    def test_domestic_provider_fallback(
         self, provider: str, expected: str
-    ):
-        """base_url 为空 + 已知国产 provider → 回退官方 OpenAI 兼容端点"""
-        config = LLMConfig(provider=provider, api_key="sk-test", base_url="")
+    ) -> None:
+        config = LLMConfig(provider=provider, api_key="sk-test")
         assert _resolve_base_url(config) == expected
 
-    @pytest.mark.parametrize("provider", ["zhipu", "dashscope", "moonshot"])
-    def test_blank_base_url_falls_back(self, provider: str):
-        """base_url 仅含空白字符 → 视同为空，同样回退官方端点"""
-        config = LLMConfig(provider=provider, api_key="sk-test", base_url="   ")
-        assert _resolve_base_url(config) != ""
-
     def test_explicit_base_url_wins(self):
-        """显式 base_url（用户自定义代理）优先，不被官方端点覆盖"""
         config = LLMConfig(
             provider="zhipu",
             api_key="sk-test",
-            base_url="https://my-oneapi-proxy.example.com/v1",
+            base_url="https://proxy.example/v1",
         )
-        assert (
-            _resolve_base_url(config)
-            == "https://my-oneapi-proxy.example.com/v1"
-        )
+        assert _resolve_base_url(config) == "https://proxy.example/v1"
 
     @pytest.mark.parametrize(
-        "provider", ["openai", "deepseek", "ollama", "totally-unknown", ""]
+        "provider", ["openai", "deepseek", "ollama", "unknown", ""]
     )
-    def test_unlisted_provider_returns_empty(self, provider: str):
-        """未收录 provider（含 openai/未知 id/空串）→ 返回空串（行为不变）"""
-        config = LLMConfig(provider=provider, api_key="sk-test", base_url="")
+    def test_unlisted_provider_keeps_sdk_default(self, provider: str):
+        config = LLMConfig(provider=provider, api_key="sk-test")
         assert _resolve_base_url(config) == ""
 
-    def test_provider_case_insensitive(self):
-        """provider 大小写不敏感（防御非小写输入）"""
-        config = LLMConfig(provider="ZhiPu", api_key="sk-test", base_url="")
+    def test_provider_lookup_is_case_insensitive(self):
+        config = LLMConfig(provider="ZhiPu", api_key="sk-test")
         assert (
-            _resolve_base_url(config) == "https://open.bigmodel.cn/api/paas/v4"
+            _resolve_base_url(config)
+            == "https://open.bigmodel.cn/api/paas/v4"
         )
 
 
-# ============================================================================
-# 3. _make_openai_call 集成（ChatOpenAI 构造参数验证）
-# ============================================================================
-
-class TestMakeOpenAILBaseUrl:
-    """_make_openai_call：最终 ChatOpenAI kwargs 的 base_url 正确"""
-
-    @pytest.mark.parametrize(
-        ("provider", "expected"),
-        [
-            ("zhipu", "https://open.bigmodel.cn/api/paas/v4"),
-            ("dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            ("moonshot", "https://api.moonshot.cn/v1"),
-        ],
-    )
-    def test_chat_openai_receives_official_base_url(
-        self, fake_chat_openai, provider: str, expected: str
-    ):
-        """国产 provider + base_url 为空 → ChatOpenAI 收到官方端点"""
-        config = LLMConfig(provider=provider, api_key="sk-test", model="x")
-        llm_call = _make_openai_call(config)
-        assert callable(llm_call)
-        # _make_openai_call 内部只构造一个 ChatOpenAI 实例
-        assert fake_chat_openai.last_init_kwargs["base_url"] == expected
-
-    def test_chat_openai_no_base_url_for_unlisted_provider(
-        self, fake_chat_openai
-    ):
-        """未收录 provider + base_url 为空 → kwargs 不含 base_url（默认行为不变）"""
-        config = LLMConfig(provider="openai", api_key="sk-test", model="gpt-4o")
-        llm_call = _make_openai_call(config)
-        assert callable(llm_call)
-        assert "base_url" not in fake_chat_openai.last_init_kwargs
-
-    def test_chat_openai_explicit_base_url_passthrough(self, fake_chat_openai):
-        """显式 base_url 原样透传给 ChatOpenAI"""
+class TestOpenAICall:
+    def test_client_and_request_contract(self, fake_openai):
         config = LLMConfig(
             provider="zhipu",
             api_key="sk-test",
-            base_url="https://custom.example.com/v1",
-            model="glm-5.3",
+            model="glm-test",
+            temperature=0.2,
+            max_tokens=321,
         )
-        llm_call = _make_openai_call(config)
-        assert callable(llm_call)
+        call = _make_openai_call(config)
+        reply = call(
+            [
+                {"role": "system", "content": "rules"},
+                {"role": "assistant", "content": "prior"},
+                {"role": "tool", "content": "treated as user"},
+            ]
+        )
+
+        assert reply == "ok"
+        assert fake_openai.last_init_kwargs == {
+            "api_key": "sk-test",
+            "timeout": 300.0,
+            "max_retries": 2,
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        }
+        assert fake_openai.last_request_kwargs == {
+            "model": "glm-test",
+            "messages": [
+                {"role": "system", "content": "rules"},
+                {"role": "assistant", "content": "prior"},
+                {"role": "user", "content": "treated as user"},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 321,
+        }
+
+    def test_explicit_base_url_passthrough(self, fake_openai):
+        config = LLMConfig(
+            api_key="sk-test",
+            base_url="https://proxy.example/v1",
+        )
+        _make_openai_call(config)
         assert (
-            fake_chat_openai.last_init_kwargs["base_url"]
-            == "https://custom.example.com/v1"
+            fake_openai.last_init_kwargs["base_url"]
+            == "https://proxy.example/v1"
         )
 
+    @pytest.mark.parametrize("max_tokens", [0, -1])
+    def test_non_positive_tokens_are_omitted_and_blocks_are_joined(
+        self, fake_openai, monkeypatch, max_tokens: int
+    ):
+        monkeypatch.setattr(
+            fake_openai,
+            "response_content",
+            [{"text": "first"}, SimpleNamespace(text=" second")],
+        )
+        call = _make_openai_call(
+            LLMConfig(api_key="sk-test", max_tokens=max_tokens)
+        )
+        assert call([{"role": "user", "content": "go"}]) == "first second"
+        assert "max_tokens" not in fake_openai.last_request_kwargs
+        assert "base_url" not in fake_openai.last_init_kwargs
 
-# ============================================================================
-# 4. make_llm_call 分发（zhipu 走 OpenAI 兼容路径）
-# ============================================================================
+    def test_empty_choices_return_empty_text(self, fake_openai, monkeypatch):
+        monkeypatch.setattr(fake_openai, "empty_choices", True)
+        call = _make_openai_call(LLMConfig(api_key="sk-test"))
+        assert call([{"role": "user", "content": "go"}]) == ""
 
-class TestMakeLLMCallDomesticProvider:
-    """make_llm_call：国产 provider 走 OpenAI 兼容工厂（非 anthropic 分支）"""
+    def test_request_error_propagates(self, fake_openai, monkeypatch):
+        monkeypatch.setattr(
+            fake_openai, "request_error", RuntimeError("network down")
+        )
+        call = _make_openai_call(LLMConfig(api_key="sk-test"))
+        with pytest.raises(RuntimeError, match="network down"):
+            call([{"role": "user", "content": "go"}])
+
+
+class TestAnthropicCall:
+    def test_client_message_conversion_and_text_extraction(
+        self, fake_anthropic, monkeypatch
+    ):
+        monkeypatch.setattr(
+            fake_anthropic,
+            "response_blocks",
+            [
+                SimpleNamespace(type="text", text="first"),
+                SimpleNamespace(type="tool_use", text="ignored"),
+                SimpleNamespace(type="text", text=" second"),
+            ],
+        )
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="sk-ant",
+            model="claude-test",
+            temperature=0.3,
+            max_tokens=0,
+        )
+        call = _make_anthropic_call(config)
+        reply = call(
+            [
+                {"role": "system", "content": "rule one"},
+                {"role": "user", "content": "question"},
+                {"role": "system", "content": "rule two"},
+                {"role": "assistant", "content": "prior"},
+                {"role": "tool", "content": "treated as user"},
+            ]
+        )
+
+        assert reply == "first second"
+        assert fake_anthropic.last_init_kwargs == {
+            "api_key": "sk-ant",
+            "timeout": 300.0,
+            "max_retries": 2,
+        }
+        assert fake_anthropic.last_request_kwargs == {
+            "model": "claude-test",
+            "messages": [
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": "prior"},
+                {"role": "user", "content": "treated as user"},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 8192,
+            "system": "rule one\n\nrule two",
+        }
+
+    def test_positive_max_tokens_are_preserved(self, fake_anthropic):
+        call = _make_anthropic_call(
+            LLMConfig(
+                provider="anthropic",
+                api_key="sk-ant",
+                max_tokens=456,
+            )
+        )
+        call([{"role": "user", "content": "go"}])
+        assert fake_anthropic.last_request_kwargs["max_tokens"] == 456
+        assert "system" not in fake_anthropic.last_request_kwargs
+
+    @pytest.mark.parametrize("max_tokens", [0, -1])
+    def test_non_positive_max_tokens_fall_back(
+        self, fake_anthropic, max_tokens: int
+    ):
+        call = _make_anthropic_call(
+            LLMConfig(
+                provider="anthropic",
+                api_key="sk-ant",
+                max_tokens=max_tokens,
+            )
+        )
+        call([{"role": "user", "content": "go"}])
+        assert fake_anthropic.last_request_kwargs["max_tokens"] == 8192
+
+    def test_request_error_propagates(self, fake_anthropic, monkeypatch):
+        monkeypatch.setattr(
+            fake_anthropic, "request_error", RuntimeError("rate limited")
+        )
+        call = _make_anthropic_call(
+            LLMConfig(provider="anthropic", api_key="sk-ant")
+        )
+        with pytest.raises(RuntimeError, match="rate limited"):
+            call([{"role": "user", "content": "go"}])
+
+
+class TestMakeLLMCall:
+    def test_unconfigured_returns_none(self):
+        assert make_llm_call(LLMConfig(api_key="")) is None
 
     @pytest.mark.parametrize("provider", ["zhipu", "dashscope", "moonshot"])
-    def test_domestic_provider_returns_llm_call(
-        self, fake_chat_openai, provider: str
+    def test_domestic_provider_returns_callable(
+        self, fake_openai, provider: str
     ):
-        """已配置 key 的国产 provider → 返回 callable（OpenAI 兼容路径创建成功）"""
-        config = LLMConfig(
-            provider=provider, api_key="sk-test", model="test-model"
+        result = make_llm_call(
+            LLMConfig(provider=provider, api_key="sk-test")
         )
-        llm_call = make_llm_call(config)
-        assert callable(llm_call)
+        assert callable(result)
+
+    def test_anthropic_dispatches_to_native_sdk(self, fake_anthropic):
+        result = make_llm_call(
+            LLMConfig(provider="anthropic", api_key="sk-ant")
+        )
+        assert callable(result)
+
+    def test_openai_client_construction_failure_returns_none(
+        self, fake_openai, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(
+            fake_openai, "init_error", RuntimeError("openai constructor failed")
+        )
+        result = make_llm_call(LLMConfig(api_key="sk-test"))
+        assert result is None
+        assert "openai constructor failed" in caplog.text
+
+    def test_anthropic_client_construction_failure_returns_none(
+        self, fake_anthropic, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(
+            fake_anthropic,
+            "init_error",
+            RuntimeError("anthropic constructor failed"),
+        )
+        result = make_llm_call(
+            LLMConfig(provider="anthropic", api_key="sk-ant")
+        )
+        assert result is None
+        assert "anthropic constructor failed" in caplog.text
+
+    def test_factory_creation_failure_returns_none(self, monkeypatch, caplog):
+        def fail(_config: LLMConfig):
+            raise RuntimeError("constructor failed")
+
+        monkeypatch.setattr(llm_config, "_make_openai_call", fail)
+        result = make_llm_call(LLMConfig(api_key="sk-test"))
+        assert result is None
+        assert "constructor failed" in caplog.text

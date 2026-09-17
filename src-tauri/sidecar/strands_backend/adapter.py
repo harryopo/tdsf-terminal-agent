@@ -86,6 +86,35 @@ INVOKE_WATCHDOG_IDLE_SECS = 600
 INVOKE_WATCHDOG_POLL_SECS = 5
 
 
+def _context_management_kwargs() -> dict[str, Any]:
+    """Build explicit context management across supported Strands 1.x releases.
+
+    Strands 1.53 accepted the ``context_manager="auto"`` facade, while 1.56
+    removed that facade and otherwise leaves a ``NullConversationManager``.
+    Both releases expose the concrete manager and offloader plugin, so prefer
+    those stable components and retain the facade only for older 1.x builds.
+    """
+    try:
+        from strands.agent.conversation_manager import (  # type: ignore[import]
+            SummarizingConversationManager,
+        )
+        from strands.vended_plugins.context_offloader import (  # type: ignore[import]
+            ContextOffloader,
+        )
+    except ImportError:
+        return {"context_manager": "auto"}
+
+    return {
+        "conversation_manager": SummarizingConversationManager(
+            summary_ratio=0.3,
+            proactive_compression={"compression_threshold": 0.85},
+        ),
+        "plugins": [
+            ContextOffloader(max_result_tokens=1500, preview_tokens=750)
+        ],
+    }
+
+
 # Teaching is a semantic permission, not a presentation heuristic.  The UI
 # can only render a TeachCard when the model emits the explicit marker, while
 # this gate prevents a model response from adding that marker to a retrieval
@@ -1314,7 +1343,7 @@ class StrandsAgentAdapter:
     其对 prompt 与工具集的影响改为每次 invoke 动态刷新
     （_refresh_agent_runtime）；messages 历史 per-session 独立存储
     （_session_messages），实例重建（perm 变化/update_model）时迁移，
-    切模式/教学开关对话历史零丢失；context_manager="auto" 长对话自动压缩。
+    切模式/教学开关对话历史零丢失；显式上下文管理保证长对话自动压缩。
 
     T2 循环护栏 (2026-08-31): 每会话挂载 ToolCallLimitHook——单次
     invoke 工具调用上限 MAX_TOOL_CALLS（50）、同一工具连续失败 ≥3 熔断
@@ -2078,7 +2107,7 @@ class StrandsAgentAdapter:
           重填——SDK 侧 get_all_tools_config 每次动态生成，无缓存陷阱）。
         - perm 变化仍重建实例（权限影响工具集合法性），历史从
           _session_messages 迁移（messages 构造参数装载）。
-        - context_manager="auto"：SummarizingConversationManager
+        - 显式上下文管理：SummarizingConversationManager
           （summary_ratio=0.3, compression_threshold=0.85）+ ContextOffloader，
           长对话自动压缩不报错。
 
@@ -2141,12 +2170,12 @@ class StrandsAgentAdapter:
                 system_prompt=self.system_prompt,
                 messages=migrated,
                 callback_handler=handler,
-                # T1 (spec add-agent-loop-closure Task 1.3): auto 上下文管理
-                # ——SDK 1.53.0 组合 SummarizingConversationManager
+                # T1 (spec add-agent-loop-closure Task 1.3): 显式上下文管理
+                # ——Strands 1.53/1.56 均组合 SummarizingConversationManager
                 # (summary_ratio=0.3, compression_threshold=0.85) +
                 # ContextOffloader(max_result_tokens=1500, preview_tokens=750)，
                 # 长对话在上下文窗口 85% 时主动压缩摘要（方案书 v4.0 T1）。
-                context_manager="auto",
+                **_context_management_kwargs(),
                 # 工具事件协议仍有历史工具未携带唯一 tool_call_id；串行执行可
                 # 保证 started/completed 与审计证据一一对应。待全工具完成 ID
                 # 迁移并具备乱序回归测试后再评估恢复并行。
@@ -2161,7 +2190,7 @@ class StrandsAgentAdapter:
             logger.info(
                 f"Strands Agent created: agent_id={agent_id}, "
                 f"session_id={ctx.session_id}, mode={mode.value}, teach={teach}, "
-                f"context_manager=auto, migrated_msgs={len(migrated) if migrated else 0}"
+                f"context_manager=explicit, migrated_msgs={len(migrated) if migrated else 0}"
             )
 
         # T1: 每次 invoke（无论新建还是缓存命中）都刷新 prompt 与工具集
@@ -2206,7 +2235,7 @@ class StrandsAgentAdapter:
         if teach and mode == AgentMode.OBSERVE:
             all_tools.append(make_teach_command_tool(ctx))
 
-        # context_manager="auto" registers ContextOffloader's
+        # Explicit context management registers ContextOffloader's
         # ``retrieve_offloaded_content`` through the plugin registry at agent
         # construction time.  The runtime refresh below replaces the main
         # registry, so plugin tools must be carried over explicitly or an

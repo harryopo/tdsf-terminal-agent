@@ -178,7 +178,7 @@ class TestRegisterBusinessMethods:
 
 
 def test_register_agents_uses_strands_config_without_legacy_llm(monkeypatch):
-    """Agent registration must not construct the retired LangChain llm_call."""
+    """Agent registration must not construct the offline-script llm_call."""
     import agent_facade as agents
     import strands_backend
     from core import llm_config

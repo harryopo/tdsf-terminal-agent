@@ -12,7 +12,7 @@ core/llm_config.py — LLM 配置与调用封装（TDSF P0-3）
 设计要点：
 1. **环境变量优先**：TDSF_LLM_API_KEY / TDSF_LLM_BASE_URL / TDSF_LLM_MODEL
 2. **配置文件回退**：.tdsf-data/llm_config.json（前端通过 IPC 写入）
-3. **OpenAI 兼容**：默认使用 langchain-openai 的 ChatOpenAI，
+3. **OpenAI 兼容**：默认使用 官方 openai SDK 的同步客户端，
    通过 base_url 指向任意 OpenAI 兼容端点（DeepSeek / OneAPI / 代理等）
 4. **错误隔离**：LLM 调用失败时抛异常，由调用脚本决定重试或终止
 
@@ -31,9 +31,12 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger("sidecar.core.llm_config")
+
+_CLIENT_TIMEOUT_SECONDS = 300.0
+_CLIENT_MAX_RETRIES = 2
 
 
 # ============================================================================
@@ -164,7 +167,7 @@ def save_config(config: LLMConfig) -> None:
 # ----------------------------------------------------------------------------
 # 为什么需要：base_url 理论上由前端预填写入配置，但环境变量 / 手写
 # llm_config.json 两条路径可能只带 provider 不带 base_url；若不回退，
-# ChatOpenAI 会默认打到 api.openai.com，国产 key 必然 401。
+# OpenAI SDK 会默认打到 api.openai.com，国产 key 必然 401。
 # 仅收录官方提供 OpenAI 兼容端点的国产三家；deepseek / ollama 等既有
 # provider 由前端预填 base_url，留空时保持既有行为（OpenAI 默认端点），
 # 未知 provider 同样不回退（默认 OpenAI 兼容语义不变）。
@@ -185,7 +188,7 @@ def _resolve_base_url(config: LLMConfig) -> str:
         config: LLM 配置
 
     Returns:
-        base_url（可能为空串 = 走 ChatOpenAI 默认 OpenAI 官方端点）
+        base_url（可能为空串 = 走 OpenAI SDK 默认 OpenAI 官方端点）
     """
     explicit = (config.base_url or "").strip()
     if explicit:
@@ -195,119 +198,118 @@ def _resolve_base_url(config: LLMConfig) -> str:
 
 
 def _make_openai_call(config: LLMConfig) -> LLMCallFunction:
-    """创建 OpenAI 兼容的 LLM 调用函数
-
-    使用 langchain-openai 的 ChatOpenAI，通过 base_url 支持任意兼容端点：
-    - OpenAI 官方: https://api.openai.com/v1
-    - DeepSeek: https://api.deepseek.com/v1
-    - 智谱(zhipu): https://open.bigmodel.cn/api/paas/v4
-    - 阿里百炼(dashscope): https://dashscope.aliyuncs.com/compatible-mode/v1
-    - Kimi(moonshot): https://api.moonshot.cn/v1
-    - OneAPI / NewAPI 代理: 用户自定义
-    - 本地 Ollama: http://localhost:11434/v1
-
-    base_url 为空时：已知国产 provider（见 PROVIDER_DEFAULT_BASE_URLS）
-    回退到官方 OpenAI 兼容端点；其余 provider 维持 OpenAI 默认端点不变。
-    """
+    """创建供离线脚本使用的同步 OpenAI 兼容调用函数。"""
     try:
-        from langchain_openai import ChatOpenAI
+        from openai import OpenAI
     except ImportError as e:
         raise RuntimeError(
-            f"langchain-openai 未安装，无法创建 LLM 调用: {e}。"
-            f"请运行: pip install langchain-openai"
+            f"openai SDK 未安装，无法创建 LLM 调用: {e}。"
+            "请安装 openai>=1.68,<3"
         ) from e
 
-    # 构造 ChatOpenAI 参数（base_url 解析含国产 provider 官方端点回退）
-    kwargs: dict[str, Any] = {
-        "model": config.model,
+    client_kwargs: dict[str, Any] = {
         "api_key": config.api_key,
-        "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
+        "timeout": _CLIENT_TIMEOUT_SECONDS,
+        "max_retries": _CLIENT_MAX_RETRIES,
     }
     resolved_base_url = _resolve_base_url(config)
     if resolved_base_url:
-        kwargs["base_url"] = resolved_base_url
+        client_kwargs["base_url"] = resolved_base_url
 
-    llm = ChatOpenAI(**kwargs)
+    client = OpenAI(**client_kwargs)
 
     def llm_call(messages: list[dict[str, Any]]) -> str:
-        """调用 LLM（OpenAI 兼容）
+        """调用 OpenAI Chat Completions 兼容端点。"""
+        normalized_messages = [
+            {
+                "role": role if (role := str(msg.get("role", "user"))) in {
+                    "system",
+                    "assistant",
+                } else "user",
+                "content": str(msg.get("content", "") or ""),
+            }
+            for msg in messages
+        ]
+        request_kwargs: dict[str, Any] = {
+            "model": config.model,
+            "messages": normalized_messages,
+            "temperature": config.temperature,
+        }
+        if config.max_tokens > 0:
+            request_kwargs["max_tokens"] = config.max_tokens
 
-        Args:
-            messages: OpenAI Chat Completions 格式的消息列表
-                [{"role": "system", "content": "..."},
-                 {"role": "user", "content": "..."}]
-
-        Returns:
-            LLM 回复文本
-
-        Raises:
-            Exception: LLM 调用失败时抛出，由调用脚本处理
-        """
-        from langchain_core.messages import (
-            AIMessage,
-            HumanMessage,
-            SystemMessage,
+        response = client.chat.completions.create(**request_kwargs)
+        if not response.choices:
+            return ""
+        content = response.choices[0].message.content
+        if isinstance(content, str):
+            return content
+        if not content:
+            return ""
+        return "".join(
+            str(text)
+            for part in content
+            if (
+                text := (
+                    part.get("text")
+                    if isinstance(part, dict)
+                    else getattr(part, "text", None)
+                )
+            )
+            is not None
         )
-
-        # 转换消息格式
-        lc_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system":
-                lc_messages.append(SystemMessage(content=content))
-            elif role == "assistant":
-                lc_messages.append(AIMessage(content=content))
-            else:
-                lc_messages.append(HumanMessage(content=content))
-
-        # 调用 LLM
-        response = llm.invoke(lc_messages)
-        return response.content if hasattr(response, "content") else str(response)
 
     return llm_call
 
 
 def _make_anthropic_call(config: LLMConfig) -> LLMCallFunction:
-    """创建 Anthropic 原生 LLM 调用函数"""
+    """创建供离线脚本使用的同步 Anthropic 调用函数。"""
     try:
-        from langchain_anthropic import ChatAnthropic
+        from anthropic import Anthropic
     except ImportError as e:
         raise RuntimeError(
-            f"langchain-anthropic 未安装: {e}。"
-            f"请运行: pip install langchain-anthropic"
+            f"anthropic SDK 未安装，无法创建 LLM 调用: {e}。"
+            "请安装 anthropic>=0.21,<1"
         ) from e
 
-    kwargs: dict[str, Any] = {
-        "model": config.model,
-        "api_key": config.api_key,
-        "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
-    }
-
-    llm = ChatAnthropic(**kwargs)
+    client = Anthropic(
+        api_key=config.api_key,
+        timeout=_CLIENT_TIMEOUT_SECONDS,
+        max_retries=_CLIENT_MAX_RETRIES,
+    )
 
     def llm_call(messages: list[dict[str, Any]]) -> str:
-        from langchain_core.messages import (
-            AIMessage,
-            HumanMessage,
-            SystemMessage,
-        )
-
-        lc_messages = []
+        system_parts: list[str] = []
+        normalized_messages: list[dict[str, str]] = []
         for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content", "") or "")
             if role == "system":
-                lc_messages.append(SystemMessage(content=content))
-            elif role == "assistant":
-                lc_messages.append(AIMessage(content=content))
+                system_parts.append(content)
             else:
-                lc_messages.append(HumanMessage(content=content))
+                normalized_messages.append(
+                    {
+                        "role": "assistant" if role == "assistant" else "user",
+                        "content": content,
+                    }
+                )
 
-        response = llm.invoke(lc_messages)
-        return response.content if hasattr(response, "content") else str(response)
+        request_kwargs: dict[str, Any] = {
+            "model": config.model,
+            "messages": normalized_messages,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens if config.max_tokens > 0 else 8192,
+        }
+        if system_parts:
+            request_kwargs["system"] = "\n\n".join(system_parts)
+
+        response = client.messages.create(**request_kwargs)
+        return "".join(
+            str(text)
+            for block in response.content
+            if getattr(block, "type", None) == "text"
+            and (text := getattr(block, "text", None)) is not None
+        )
 
     return llm_call
 

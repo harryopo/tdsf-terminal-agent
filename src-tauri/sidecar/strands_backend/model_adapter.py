@@ -281,8 +281,11 @@ def _create_openai_model(config: Any) -> Any:
     client_args: dict[str, Any] = {
         "api_key": config.api_key,
     }
-    if config.base_url:
-        client_args["base_url"] = config.base_url
+    from core.llm_config import _resolve_base_url
+
+    resolved_base_url = _resolve_base_url(config)
+    if resolved_base_url:
+        client_args["base_url"] = resolved_base_url
     # T9 稳定性 (2026-09-01, spec 9.1): 此前 LLM 请求裸跑无超时——模型服务
     # 挂起时 invoke 永久阻塞。显式单请求超时（httpx 秒）+ 有限重试；
     # 读超时兜底之外，adapter 层另有 10 分钟无输出 watchdog。
@@ -306,7 +309,7 @@ def _create_openai_model(config: Any) -> Any:
 
     logger.info(
         f"OpenAIModel created: model_id={config.model}, "
-        f"base_url={'custom' if config.base_url else 'default'}, "
+        f"base_url={'configured' if resolved_base_url else 'default'}, "
         f"temperature={params['temperature']}, max_tokens={params.get('max_tokens', 'unlimited')}"
     )
     return model

@@ -881,7 +881,7 @@ export const DEFAULT_MODEL_ID: ModelId = "deepseek-v4-flash";
  * 注意：
  *   - deepseek 与 agent.ts 既有实现一致，不带 /v1（DeepSeek 服务端同时支持）
  *   - google 是 Gemini 官方 OpenAI 兼容层（/v1beta/openai/），供 sidecar
- *     （LangChain ChatOpenAI）以 OpenAI 协议调用 Gemini；前端 AI SDK 路径
+ *     通过官方 OpenAI SDK 以兼容协议调用 Gemini；前端 AI SDK 路径
  *     仍走 @ai-sdk/google 专属实现，不受此表影响
  *   - anthropic 走 sidecar 原生分支，无需 base_url，故不出现在此表
  *   - 本地 provider（lmstudio/mlx/ollama）端点用户可改，见 *_DEFAULT_BASE_URL
