@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Windows release packaging. Keep the major version bounded so a future
+# PyInstaller breaking change cannot silently alter the installer build.
+pyinstaller>=6.11,<7

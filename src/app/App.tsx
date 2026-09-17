@@ -132,7 +132,6 @@ import {
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
-import { UpdaterDialog } from "@/modules/updater";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -2508,8 +2507,6 @@ export default function App() {
             initialMode={spaceCreateMode}
             onCreated={handleSpaceCreated}
           />
-
-          <UpdaterDialog />
 
           {/* TDSF 2026-07-29: 终端翻译悬浮面板（全局挂载，fixed 定位）
               P2: 卡片带「Ask TDSF」操作，把选中词/代码片段发给 AI 深入解释 */}

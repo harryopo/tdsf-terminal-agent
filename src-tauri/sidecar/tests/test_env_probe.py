@@ -268,3 +268,18 @@ class TestRegisterMethods:
         # **kwargs 解包签名兼容（MethodDispatcher dict params 语义）
         result = handler(session_id="s1", ssh_session_id=None)
         assert result["ok"] is True
+
+    def test_registered_handler_accepts_frontend_camel_case_params(self):
+        dispatcher = mock.MagicMock()
+        env_probe.register_methods(dispatcher)
+        _, handler = dispatcher.register.call_args[0]
+
+        with mock.patch.object(env_probe, "probe_env") as probe:
+            probe.return_value = {"ok": True}
+            result = handler(sessionId="chat-1", sshSessionId=42)
+
+        assert result == {"ok": True}
+        probe.assert_called_once_with(
+            session_id="chat-1",
+            ssh_session_id=42,
+        )

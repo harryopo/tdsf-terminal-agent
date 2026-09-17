@@ -296,10 +296,16 @@ def register_methods(dispatcher: Any) -> None:
     def _probe_env(
         session_id: str = "",
         ssh_session_id: int | None = None,
+        sessionId: str = "",
+        sshSessionId: int | None = None,
     ) -> dict[str, Any]:
+        resolved_session_id = session_id or sessionId
+        resolved_ssh_session_id = (
+            ssh_session_id if ssh_session_id is not None else sshSessionId
+        )
         return probe_env(
-            session_id=str(session_id or ""),
-            ssh_session_id=ssh_session_id,
+            session_id=str(resolved_session_id or ""),
+            ssh_session_id=resolved_ssh_session_id,
         )
 
     dispatcher.register("system.probe_env", _probe_env)
