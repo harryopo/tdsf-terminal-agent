@@ -2,7 +2,7 @@
 # TDSF sidecar PyInstaller spec
 # 只读资源随包分发（frozen 后 __file__ 指向 _MEIPASS, datas 解压到同目录可读）:
 #   - config/: 模型/功能开关/风险规则 yaml
-#   - knowledge/corpus/: 内置教学语料种子（首启幂等索引入 knowledge.db）
+#   - knowledge/philosophy/: 随源码分发的通用 Linux 教学语料
 #   - skills/builtin/: 内置 5 个运维技能
 # 可写数据（.tdsf-data/*.db、skills-installed 等）由代码 frozen 分支重定向到
 # exe 同级 .tdsf-data/（见 main.py / self_evolution.py / marketplace.py 等）。
@@ -14,7 +14,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('config', 'config'),
-        ('knowledge/corpus', 'knowledge/corpus'),
+        ('knowledge/philosophy', 'knowledge/philosophy'),
         ('skills/builtin', 'skills/builtin'),
     ],
     hiddenimports=[],

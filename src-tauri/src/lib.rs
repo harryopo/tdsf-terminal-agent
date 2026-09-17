@@ -259,6 +259,7 @@ pub fn run() {
         "--disable-gpu",
     );
 
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     // 注：必须用「赋值语句块」而非 `let builder = ...` 重新绑定——
     // 后者会遮蔽上面的 mut 绑定，导致紧随其后的 debug 分支赋值报 E0384
@@ -275,8 +276,6 @@ pub fn run() {
     }
     builder
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // TDSF 永久修复 (2026-08-09): 恢复 VISIBLE 状态保存。
         // 上游用 visible:false + 前端 JS show() 来避免 borderless 透明窗口闪烁。
         // 我们已将 tauri.conf.json 改为 visible:true（窗口启动即可见），
@@ -370,8 +369,8 @@ pub fn run() {
             // T2.1: 启动 Python Sidecar（TDSF Agent 引擎桥接）
             // ====================================================================
             // Sidecar 运行目标:
-            //   - 发布模式: <resource_dir>/sidecar/tdsf-sidecar.exe（PyInstaller onefile,
-            //     tauri.conf.json bundle.resources 打包, 安装后随程序分发）
+            //   - 发布模式: <resource_dir>/sidecar/tdsf-sidecar/tdsf-sidecar.exe
+            //     （PyInstaller onedir，由 tauri.conf.json bundle.resources 分发）
             //   - dev 模式: <workspace>/tdsf-terminal-agent-clone/src-tauri/sidecar/main.py
             //     由系统 python 解释器运行
             let sidecar_script = locate_sidecar_script(_app);

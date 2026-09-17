@@ -161,6 +161,8 @@ flake.lock
 
 # 开发期调试脚本（仅保留构建/资源生成/校验所需脚本；eager-graph 被前端测试引用）
 scripts/*
+!scripts/build-sidecar.ps1
+!scripts/check-release-version.ps1
 !scripts/build-fig-specs.mjs
 !scripts/build-tldr-zh.mjs
 !scripts/fetch-carapace.ps1
@@ -179,6 +181,7 @@ opensource-reference/
 
 # sidecar 诊断临时产物 (ping 测试 / stdout 重定向 / null 输入)
 src-tauri/sidecar/_*.py
+!src-tauri/sidecar/_exe_smoke.py
 src-tauri/sidecar/err.txt
 src-tauri/sidecar/out.txt
 src-tauri/sidecar/nul_input.txt

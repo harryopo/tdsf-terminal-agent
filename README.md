@@ -112,6 +112,27 @@ Python sidecar      (Strands agent · tool registry · approvals · knowledge ·
 | AI runtime | Python sidecar with Strands Agents (OpenAI-compatible providers: DeepSeek, Zhipu, Qwen, Moonshot, Doubao, Ollama, custom endpoints) |
 | Knowledge | SQLite FTS5 + sqlite-vec (512-dim) + RRF |
 
+## Windows installation
+
+The 1.0 competition release is distributed as a **Windows x64 NSIS installer**.
+
+1. Download the installer and `SHA256SUMS.txt` from the matching GitHub Release.
+2. Verify the installer before running it:
+
+   ```powershell
+   Get-FileHash '.\TDSF Terminal Agent_1.0.0_x64-setup.exe' -Algorithm SHA256
+   ```
+
+3. Run the installer. It installs for the current Windows user and downloads
+   the Microsoft WebView2 bootstrapper only when WebView2 is missing.
+4. Open **Settings → Models**, configure a model provider, then create a local,
+   WSL, or SSH workspace.
+
+The competition build may be unsigned, so Windows SmartScreen can show an
+unknown-publisher warning. Verify the SHA-256 checksum before continuing.
+Automatic updates are not enabled in 1.0; install a newer release manually.
+See [PRIVACY.md](PRIVACY.md) for local data and network behavior.
+
 ## Quick start
 
 **Requirements**: Node.js ≥ 20, pnpm ≥ 9, Rust stable, Python ≥ 3.12

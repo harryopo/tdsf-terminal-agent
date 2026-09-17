@@ -18,7 +18,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type JSX, useEffect, useState } from "react";
-import { AboutSection } from "./sections/AboutSection";
+import { AboutSection } from "./sections/AboutReleaseSection";
 import { AgentHistorySection } from "./sections/AgentHistorySection";
 import { AgentsSection } from "./sections/AgentsSection";
 import { EditorSection } from "./sections/EditorSection";

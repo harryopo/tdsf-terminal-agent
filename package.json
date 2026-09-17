@@ -1,6 +1,6 @@
 {
   "name": "tdsf-terminal-agent",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.24.0",
@@ -24,7 +24,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "build:win": "tauri build"
+    "check:release-version": "pwsh -NoProfile -File scripts/check-release-version.ps1",
+    "build:sidecar:win": "pwsh -NoProfile -File scripts/build-sidecar.ps1",
+    "test:sidecar:exe": "python src-tauri/sidecar/_exe_smoke.py",
+    "build:win": "pnpm check:release-version && pnpm build:sidecar:win && pnpm test:sidecar:exe && tauri build --bundles nsis"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.21",
@@ -68,10 +71,8 @@
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-os": "^2.3.2",
-    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.0.1",
     "@tauri-apps/plugin-store": "^2.4.4",
-    "@tauri-apps/plugin-updater": "^2.10.1",
     "@uiw/codemirror-theme-atomone": "^4.25.11",
     "@uiw/codemirror-theme-aura": "^4.25.11",
     "@uiw/codemirror-theme-copilot": "^4.25.11",

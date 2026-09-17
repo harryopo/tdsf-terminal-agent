@@ -1,6 +1,6 @@
 [package]
 name = "tdsf-terminal-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台"
 authors = ["TDSF Team"]
 license = "Apache-2.0"
@@ -33,7 +33,6 @@ tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
-tauri-plugin-process = "2"
 # SHOULD-FIX-2 (2026-09-04): dialog 仅用于 debug 预检弹窗，release 构建无需加载
 # 移到 dev-dependencies 或保持可选——此处保持依赖但代码侧 cfg 守卫
 # 注: Cargo 无原生 debug-only 依赖机制，保留在 [dependencies] 但代码侧已 cfg 守卫
@@ -144,7 +143,6 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
-tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
 
 [dev-dependencies]
