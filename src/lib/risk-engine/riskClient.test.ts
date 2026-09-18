@@ -10,7 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { evaluateRisk, evaluateRiskSync } from "./riskClient";
+import { evaluateRisk, evaluateRiskSync, maxRiskLevel } from "./riskClient";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -135,17 +135,20 @@ describe("evaluateRisk — fail-open 回退", () => {
 });
 
 describe("evaluateRisk — payload 边界情况", () => {
-  it("空 payload（所有字段缺失）回退到 safe", async () => {
+  // 深度体检 Q1（2026-09-18）改了这里的契约：认不出的载荷以前当"safe"处理
+  // （fail-open），但 Python 引擎异常时返回的正是这种载荷 → 会把本地已判 deny 的
+  // 命令降级。现在"认不出 = 没有信息"，按 high 交给审批，不再冒充安全。
+  it("空 payload（所有字段缺失）→ 按 high 处理，不再冒充 safe", async () => {
     mockInvoke.mockResolvedValue({});
     const r = await evaluateRisk("ls");
-    expect(r.level).toBe("safe");
+    expect(r.level).toBe("high");
     expect(r.source).toBe("rpc");
   });
 
-  it("未知 level 值回退到 safe", async () => {
+  it("未知 level 值 → 按 high 处理", async () => {
     mockInvoke.mockResolvedValue({ level: "L99", risk_level: "unknown" });
     const r = await evaluateRisk("ls");
-    expect(r.level).toBe("safe");
+    expect(r.level).toBe("high");
   });
 
   it("require_approval=true 强制 requiresConfirmation=true", async () => {
@@ -180,5 +183,36 @@ describe("evaluateRiskSync — 同步快速评估", () => {
     const r = evaluateRiskSync("rm -rf /");
     expect(r.source).toBe("local");
     expect(r.level).toBe("deny");
+  });
+});
+
+// 深度体检 Q1（2026-09-18，P1）：submitToLeaf 里"本地已判 deny/high → 再拿 RPC 结果
+// 精修"这条链，以前是**整体替换**。Python 侧 risk.evaluate 在引擎异常时返回
+// `{error, level:"L0"}`，映射后是 safe —— 于是审批卡从「已拒绝(disabled)」
+// 变成「仍然执行(enabled)」。现在要求：RPC 只能升不能降。
+describe("evaluateRisk — 引擎异常载荷不得降级本地判定（Q1）", () => {
+  it("payload 带 error → 视为无信息，回退本地判定", async () => {
+    mockInvoke.mockResolvedValue({
+      error: "risk engine error",
+      level: "L0",
+      risk_level: "low",
+    });
+    const r = await evaluateRisk("rm -rf /");
+    expect(r.source).toBe("local");
+    expect(r.level).toBe("deny");
+  });
+
+  it("level/risk_level 都认不出来 → 按 high 处理，绝不返回 safe", async () => {
+    mockInvoke.mockResolvedValue({ level: "L-∞", risk_level: "wtf" });
+    const r = await evaluateRisk("anything");
+    expect(r.level).toBe("high");
+  });
+
+  it("maxRiskLevel 取高者（合并策略的纯函数）", () => {
+    expect(maxRiskLevel("deny", "safe")).toBe("deny");
+    expect(maxRiskLevel("safe", "deny")).toBe("deny");
+    expect(maxRiskLevel("medium", "high")).toBe("high");
+    expect(maxRiskLevel("high", "medium")).toBe("high");
+    expect(maxRiskLevel("low", "low")).toBe("low");
   });
 });

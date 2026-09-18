@@ -29,12 +29,28 @@ export interface RiskRpcPayload {
   syntax_valid?: boolean;
   syntax_error?: string;
   matched_rule_name?: string;
+  /** Python 侧引擎异常时返回 `{error, level:"L0"}`（见 rpc_methods 的 except 分支） */
+  error?: string;
 }
 
 /** RPC 返回的扩展 assessment（带 source 标识，便于 UI 区分来源） */
 export interface RiskRpcAssessment extends RiskAssessment {
   /** 评分来源：rpc（Python sidecar） / local（TS fallback） */
   source: "rpc" | "local";
+}
+
+/** 风险等级序（低 → 高），用于"只升不降"合并 */
+export const RISK_LEVEL_ORDER: RiskLevel[] = [
+  "safe",
+  "low",
+  "medium",
+  "high",
+  "deny",
+];
+
+/** 取两个评估里更高的那个（按 RISK_LEVEL_ORDER） */
+export function maxRiskLevel(a: RiskLevel, b: RiskLevel): RiskLevel {
+  return RISK_LEVEL_ORDER.indexOf(a) >= RISK_LEVEL_ORDER.indexOf(b) ? a : b;
 }
 
 /** Python L0-L4 → 前端 RiskLevel 映射 */
@@ -59,8 +75,11 @@ function mapL0L4ToFrontendLevel(
     if (lower === "high") return "high";
     if (lower === "deny") return "deny";
   }
-  // 默认 safe（fail-open）
-  return "safe";
+  // TDSF 修复 2026-09-18（深度体检 Q1）：认不出来的载荷以前返回 "safe"，
+  // 而 Python 侧 `risk.evaluate` 在引擎异常时正是返回 `{error, level:"L0"}`
+  // 这种载荷 —— 于是终端里本地已判 deny 的命令会被远端结果**降级成可执行**。
+  // 认不出来就是"没有信息"，交给调用侧的"只升不降"合并，这里按 high 处理。
+  return "high";
 }
 
 /** 类型守卫：判断 invoke 返回值是否为对象（RPC 成功响应） */
@@ -109,6 +128,9 @@ export async function evaluateRisk(
       return localFallback(command);
     }
     const payload = raw as RiskRpcPayload;
+    // 引擎自己报错时 Python 侧回 `{error, level:"L0"}`。那不是"这条命令安全"，
+    // 而是"没有信息" —— 必须回退本地判定，否则会把本地已判 deny 的命令降级。
+    if (payload.error) return localFallback(command);
     return payloadToAssessment(payload);
   } catch {
     // Sidecar 不可用 / 方法未注册 / 网络错误 → fail-open 回退

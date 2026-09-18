@@ -15,6 +15,7 @@ import {
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { toast } from "sonner";
 import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { Shimmer } from "./shimmer";
@@ -212,10 +213,29 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
 
   // 注入命令到活动终端。execute=true 追加 \n（打字并执行）；
   // execute=false 只把命令逐字打字到提示符，回车留给用户自己按。
+  //
+  // TDSF 修复 2026-09-18（深度体检 S-01，P0）：PTY 把**每一个** \n 当成回车，所以
+  // 多行代码块走 execute=false 时，除最后一行外的每一行都会立刻真实执行 —— 既不经
+  // 审批卡也不经风险闸门，正是 2026-09-03"确认模式没点确认就自动执行"的翻版，
+  // 只是这次藏在"多行"这个没人测过的形态里（单行验证全绿也照样错）。
+  // 因此非 execute 路径只接受单行；多行留给用户复制，或显式用 auto 模式执行。
   const inject = useCallback(
     (execute: boolean): boolean => {
       const store = useChatStore.getState();
-      const text = execute ? code + "\n" : code;
+      // 剥掉除 \t / \n 以外的 C0 控制字符与 DEL：它们会污染 readline 与回显。
+      const payload = Array.from(code)
+        .filter((ch) => {
+          const cp = ch.codePointAt(0) ?? 0;
+          return cp === 9 || cp === 10 || (cp >= 32 && cp !== 127);
+        })
+        .join("");
+      if (!execute && payload.includes("\n")) {
+        toast.warning("多行命令不自动打字到终端：换行会被 shell 当成回车逐行执行", {
+          description: "请点「复制」自己粘贴，或切到 auto 模式让它整段执行。",
+        });
+        return false;
+      }
+      const text = execute ? payload + "\n" : payload;
       const ok = store.live.injectIntoActivePty(text);
       if (!ok) return false;
       setSent(true);

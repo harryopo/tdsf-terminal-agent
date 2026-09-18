@@ -46,14 +46,23 @@ describe("terminalInputState — 脏行判定", () => {
     expect(isUserLineDirty(LEAF)).toBe(false);
   });
 
-  it.each([
-    ["Ctrl-C", "\x03"],
-    ["Ctrl-U", "\x15"],
-    ["Ctrl-W", "\x17"],
-  ])("%s 清空当前行 → 取消脏标记", (_label, seq) => {
+  it("Ctrl-C 整行作废 → 取消脏标记", () => {
     noteUserInput(LEAF, "rm -rf");
-    noteUserInput(LEAF, seq);
+    noteUserInput(LEAF, "\x03");
     expect(isUserLineDirty(LEAF)).toBe(false);
+  });
+
+  // 深度体检 Q3（2026-09-18）：这三条以前被钉成"清行 → 取消脏标记"，但那是错的语义 ——
+  // Ctrl-U 只删到行首、Ctrl-W 只删一个词、Ctrl-K 只删到行尾，行里都可能还有内容。
+  // 若此时清账，闸门会放行，AI 就把命令打在用户残行上（正是 M1 修的那类事故）。
+  it.each([
+    ["Ctrl-U（删到行首）", "\x15"],
+    ["Ctrl-W（删一个词）", "\x17"],
+    ["Ctrl-K（删到行尾）", "\x0b"],
+  ])("%s 之后仍保持脏，不擅自认为行已空", (_label, seq) => {
+    noteUserInput(LEAF, "docker-compose -f ");
+    noteUserInput(LEAF, seq);
+    expect(isUserLineDirty(LEAF)).toBe(true);
   });
 
   it("纯退格不改变已有脏状态（无法判断行是否已空，保守保持脏）", () => {
