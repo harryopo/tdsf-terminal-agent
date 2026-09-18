@@ -23,19 +23,24 @@ _SIDECAR_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if _SIDECAR_DIR not in sys.path:
     sys.path.insert(0, _SIDECAR_DIR)
 
-from strands_backend.tests.replay.replay import (  # noqa: E402 — sys.path 先行注入
-    SCENARIOS_DIR,
-    load_scenario,
-    replay,
-    run_checks,
-)
-
 try:
     from strands.models.model import Model  # noqa: F401
 
     _STRANDS_AVAILABLE = True
 except ImportError:
     _STRANDS_AVAILABLE = False
+
+# 必须先探测再导入 replay：replay.py 顶层 import strands，缺依赖时会在
+# 收集阶段抛 ModuleNotFoundError，把整个 sidecar 套件一起中断（不是跳过）。
+if not _STRANDS_AVAILABLE:
+    pytest.skip("strands-agents 未安装，跳过回放", allow_module_level=True)
+
+from strands_backend.tests.replay.replay import (  # noqa: E402 — sys.path 先行注入
+    SCENARIOS_DIR,
+    load_scenario,
+    replay,
+    run_checks,
+)
 
 pytestmark = [
     pytest.mark.skipif(not _STRANDS_AVAILABLE, reason="strands-agents 未安装，跳过回放"),

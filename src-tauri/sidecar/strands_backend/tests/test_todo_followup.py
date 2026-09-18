@@ -38,6 +38,9 @@ try:
 except ImportError:
     _STRANDS_AVAILABLE = False
 
+# 同 test_e2e_strands：缺依赖时不得在收集期 NameError 拖崩整个 sidecar 套件
+_ModelBase = Model if _STRANDS_AVAILABLE else object
+
 
 # ============================================================================
 # 测试隔离：agent_log 目录 + todo 镜像
@@ -169,7 +172,7 @@ class TestSessionMirror:
 
 
 @unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
-class FakeContextModel(Model):
+class FakeContextModel(_ModelBase):
     """单轮 end_turn 假模型：每次调用计数（供断言追加轮次数）"""
 
     def __init__(self, final_text: str = "ok") -> None:

@@ -38,9 +38,13 @@ try:
 except ImportError:
     _STRANDS_AVAILABLE = False
 
+# 缺 strands 时用 object 占位：装饰器救不了类定义期的 NameError，
+# 整个模块会在 pytest 收集阶段直接报错，把 2000+ 条无关用例一起拖崩。
+_ModelBase = Model if _STRANDS_AVAILABLE else object
+
 
 @unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
-class FakeStrandsModel(Model):
+class FakeStrandsModel(_ModelBase):
     """最小 Strands Model：第一轮 tool_use(read_remote_file)，第二轮最终文本"""
 
     def __init__(self, file_content: bytes, final_text: str) -> None:
