@@ -390,6 +390,18 @@ export function getLeafBlockMode(leafId: number): BlockMode {
   return sessions.get(leafId)?.blockMode ?? "prompt";
 }
 
+/**
+ * 该 leaf 是否有命令正在执行（本地：agent activity + OSC-133；SSH：OSC-133 的
+ * commandRunning）。代码审查 H1：`blockMode` 只在 `s.blocks` 为真时才被更新，
+ * 而普通终端标签与 SSH leaf 都是 blocks=false，所以"是否在提示符"不能只看
+ * getLeafBlockMode —— 必须再问这个真实信号，否则 AI 会把命令打进正在运行的
+ * top/vim/mysql 里。未知 leaf 返回 false（保持 fail-open）。
+ */
+export function isLeafBusy(leafId: number): boolean {
+  const s = sessions.get(leafId);
+  return !!s && leafBusy(s);
+}
+
 export function subscribeLeafBlockMode(
   leafId: number,
   cb: () => void,

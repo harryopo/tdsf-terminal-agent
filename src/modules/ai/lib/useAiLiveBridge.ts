@@ -15,6 +15,13 @@ import {
 } from "@/modules/terminal";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
 import { isUserLineDirty } from "@/modules/terminal/lib/terminalInputState";
+// 代码审查 H1：判断"终端此刻能不能安全接命令"要的是真实执行信号，不是 blockMode
+// （blockMode 只在 blocks 视图里更新，普通标签与 SSH leaf 恒为 "prompt"）。
+import { isLeafBusy } from "@/modules/terminal/lib/useTerminalSession";
+import { isLeafAltScreen } from "@/modules/terminal/lib/rendererPool";
+// 代码审查 H3：注入必须打在**可见 leaf 自己绑定的**那个 SSH 会话上，
+// 而不是 sshStore.activeSessionId（在列表里点一下就会改它）。
+import { getLeafSshSession } from "@/lib/param-complete-client";
 import {
   matchesVisibleTerminalCommand,
   useTeachingExecutionStore,
@@ -155,17 +162,12 @@ export function useAiLiveBridge(params: Params) {
       const speed = prefs.agentTypingSpeed;
       const sshLeafId = ref.current.getSshLeafId?.();
       if (sshLeafId !== null && sshLeafId !== undefined) {
-        // 只认「活跃且已连接」的会话：sshRustSessionId() 会回退到任意已连接会话，
-        // 而 sshLeafId 来自可见面板，两者可能不是同一台服务器 → 逐字节的命令
-        // 被打进用户没在看的那台机器（#56）。此处宁可返回 false 走本地整段路径。
-        const sshState = useSshStore.getState();
-        const visibleSession = sshState.sessions.find(
-          (s) => s.id === sshState.activeSessionId,
-        );
-        const sessionId =
-          visibleSession && isSessionConnected(visibleSession)
-            ? visibleSession.rustSessionId
-            : null;
+        // 逐字节的命令必须打进**可见 leaf 自己绑定的**那个会话。原先用
+        // sshStore.activeSessionId 判定，而它会在 SSH 面板里"点一下另一台服务器"
+        // 时就改变（SshExplorer onSelect=setActiveSession）→ 字节进 B 机、
+        // 回显却挂在 A 机上（代码审查 H3）。leaf→会话注册表才是对的来源；
+        // 取不到（未注册/已断开）就返回 false，回落本地整段路径。
+        const sessionId = getLeafSshSession(sshLeafId);
         if (sessionId === null) return false;
         useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
         armAgentCommandEcho(sshLeafId, t, { waitForPrompt: true });
@@ -350,7 +352,19 @@ export function useAiLiveBridge(params: Params) {
         if (leafId === null || leafId === undefined) return false;
         if (tab?.kind === "terminal" && tab.private === true) return false;
         if (isUserLineDirty(leafId)) return false;
-        // 未知 leaf 默认 "prompt"（fail-open），不会误杀自动打字功能。
+        // 代码审查 M2：上一条 agent 打进去的命令还停在提示符没结算时，绝不能再打
+        // 第二条 —— 同一条回复里的两张卡（工具卡 + 代码块）可能分属两次 commit，
+        // 只靠"同一批次放行一张"拦不住，整段注入会把两条拼成一行。
+        // agentPending 正是"这条已打出、尚未提交/结算"的现成领域信号。
+        if (
+          useTerminalBlocksStore.getState().agentPending[leafId] !== undefined
+        )
+          return false;
+        // 代码审查 H1：这道"在提示符"的臂此前是死的 —— blockMode 只在 blocks 视图
+        // 里被更新，普通标签与 SSH leaf 恒为 "prompt"。真正在跑什么要问执行信号：
+        // 命令执行中、或程序占着备用屏（top / vim / mysql>）时都不能往里打字。
+        // 未知 leaf 两个信号都返回 false → 仍然 fail-open，不会静默废掉自动打字。
+        if (isLeafBusy(leafId) || isLeafAltScreen(leafId)) return false;
         return getLeafBlockMode(leafId) === "prompt";
       },
       injectIntoActivePty: (text) => {

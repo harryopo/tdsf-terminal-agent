@@ -6,7 +6,6 @@
  * 修法：StatusBar 只认活跃工作区 —— hasWorkspace=false 时不渲染路径面包屑。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StatusBar } from "./StatusBar";
@@ -20,7 +19,11 @@ const base = {
 };
 
 /** StatusBar 内的 Private / RemoteOs 徽标用了 Tooltip，必须在 TooltipProvider 下渲染 */
-function renderBar(props: Partial<ComponentProps<typeof StatusBar>> = {}) {
+function renderBar(props: {
+  cwd: string | null;
+  hasWorkspace: boolean;
+  filePath?: string | null;
+}) {
   return render(
     <TooltipProvider>
       <StatusBar {...base} {...props} />

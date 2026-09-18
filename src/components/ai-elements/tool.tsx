@@ -39,7 +39,10 @@ import {
   Tick02Icon,
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
-import { claimAutoType } from "@/modules/ai/lib/autoTypeLedger";
+import {
+  claimAutoType,
+  markAutoTyped,
+} from "@/modules/ai/lib/autoTypeLedger";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { sendMessage } from "@/modules/ai/store/chatRuntime";
@@ -1774,17 +1777,20 @@ function SuggestCommandCard({
   // 叠加 injectIntoActivePty 回流重渲染可致 "Maximum update depth exceeded"。
   useEffect(() => {
     if (autoFiredRef.current) return;
-    const { agentMode, live, teach } = useChatStore.getState();
+    const { activeSessionId, agentMode, live, teach } = useChatStore.getState();
     if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
     // 自动打字闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
     const gate = live.canAutoTypeToActiveTerminal;
     if (gate && !gate()) return;
     // 重挂重放 / 同批互踩由 ledger 拦住：见 autoTypeLedger 注释。
-    if (!claimAutoType(command)) return;
+    // 记账等注入成功之后——失败就记账会让常见命令整轮应用再也不自动打字。
+    if (!claimAutoType(command, activeSessionId)) return;
     autoFiredRef.current = true;
     const execute = agentMode === "auto" && !teach;
     const ok = live.injectIntoActivePty(execute ? command + "\n" : command);
-    if (ok) setAction(execute ? "executed" : "inserted");
+    if (!ok) return;
+    markAutoTyped(command, activeSessionId);
+    setAction(execute ? "executed" : "inserted");
   }, [command]);
   return (
     <div className="space-y-1.5">
