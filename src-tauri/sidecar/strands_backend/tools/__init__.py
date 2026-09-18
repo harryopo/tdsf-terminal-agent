@@ -848,6 +848,30 @@ def complete_approval_execution(req: Any | None) -> None:
         logger.exception(f"approval execution completion failed: id={req_id}, error={e}")
 
 
+class _ExecutionGate:
+    """已批准的 execution_gate 请求句柄：保证任意退出路径都恰好释放一次。
+
+    needs_you 的 execution_gate 在用户批准后仍占用该 session 的审批队首，
+    只有 complete_execution 才放行下一条。execute_via_ssh 有二十多个 return
+    分支，逐个记得调 releases 不可靠（审计 A3：批准后账本迁移失败那条路径
+    直接 return，队首永久卡死 → 该会话后续所有审批再也弹不出来）。
+    因此把释放责任收到 execute_via_ssh 的 finally 里，adopt/release 幂等。
+    """
+
+    __slots__ = ("req",)
+
+    def __init__(self) -> None:
+        self.req: Any | None = None
+
+    def adopt(self, req: Any) -> None:
+        self.req = req
+
+    def release(self) -> None:
+        req, self.req = self.req, None
+        if req is not None:
+            complete_approval_execution(req)
+
+
 def execute_via_ssh(
     ctx: ToolContext,
     command: str,
@@ -857,6 +881,39 @@ def execute_via_ssh(
     explanation: str = "",
     readonly: bool = False,
     skip_approval: bool = False,
+) -> dict[str, Any]:
+    """通过 RustBridge 执行 SSH 命令（带风险决策与真实 HITL 审批）。
+
+    本函数只是 _execute_via_ssh_impl 的安全外壳：无论实现体走哪条 return、
+    还是中途抛异常，已批准的 execution_gate 都会被释放（A3）。
+    """
+    gate = _ExecutionGate()
+    try:
+        return _execute_via_ssh_impl(
+            ctx,
+            command,
+            ssh_session_id=ssh_session_id,
+            timeout=timeout,
+            tool_name=tool_name,
+            explanation=explanation,
+            readonly=readonly,
+            skip_approval=skip_approval,
+            gate=gate,
+        )
+    finally:
+        gate.release()
+
+
+def _execute_via_ssh_impl(
+    ctx: ToolContext,
+    command: str,
+    ssh_session_id: str = "",
+    timeout: int = 30,
+    tool_name: str = "ssh_command",
+    explanation: str = "",
+    readonly: bool = False,
+    skip_approval: bool = False,
+    gate: _ExecutionGate | None = None,
 ) -> dict[str, Any]:
     """通过 RustBridge 调用 Rust 后端执行 SSH 命令
 
@@ -1045,7 +1102,7 @@ def execute_via_ssh(
                 "message": "操作账本无法创建记录；未尝试派发 SSH 命令。",
             }
 
-    approved_req: Any | None = None
+    gate = gate if gate is not None else _ExecutionGate()
     if decision == "confirm" and not skip_approval:
         req = request_approval_and_wait(
             ctx, command, risk, tool_name,
@@ -1071,7 +1128,7 @@ def execute_via_ssh(
                 f"execute_via_ssh approved by user: tool={tool_name}, "
                 f"command={command[:80]}"
             )
-            approved_req = req
+            gate.adopt(req)
             if not _transition_operation("approved"):
                 return _with_operation({
                     "status": "error",
@@ -1139,7 +1196,9 @@ def execute_via_ssh(
             }
 
     def _complete_after_execution(result: dict[str, Any]) -> dict[str, Any]:
-        complete_approval_execution(approved_req)
+        # 正常路径：命令真的跑完了就立即放行队首，让下一条审批尽早激活。
+        # 异常/提前 return 的路径由 execute_via_ssh 外壳的 finally 兜底。
+        gate.release()
         return _with_operation(result)
 
     # 3. 会话校验（Task 3.3 → P2 #42 放宽，2026-09-01）：
