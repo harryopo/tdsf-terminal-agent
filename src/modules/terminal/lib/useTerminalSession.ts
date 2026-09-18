@@ -5,7 +5,7 @@
 
 import { ensureMonoFontsLoaded } from "@/lib/fonts";
 import type { RiskRpcAssessment } from "@/lib/risk-engine/riskClient";
-import { evaluateRisk, evaluateRiskSync } from "@/lib/risk-engine/riskClient";
+import { evaluateRisk, evaluateRiskSync, maxRiskLevel } from "@/lib/risk-engine/riskClient";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useSpaces } from "@/modules/spaces";
 import { invoke } from "@tauri-apps/api/core";
@@ -290,7 +290,23 @@ export function submitToLeaf(leafId: number, text: string): void {
     void evaluateRisk(text).then((rpcAssessment) => {
       const current = sessions.get(leafId);
       if (current?.pendingRiskCommand?.text === text) {
-        current.pendingRiskCommand = { text, assessment: rpcAssessment };
+        // TDSF 修复 2026-09-18（深度体检 Q1，P1）：RPC 只用来"更精确"，
+        // **绝不能把本地已判 high/deny 的评估降级**。以前是整体替换，
+        // 于是 sidecar 半死时返回 `{error, level:"L0"}`（映射成 safe）
+        // 会让审批卡从「已拒绝(disabled)」变成「仍然执行(enabled)」。
+        const mergedLevel = maxRiskLevel(
+          current.pendingRiskCommand.assessment.level,
+          rpcAssessment.level,
+        );
+        current.pendingRiskCommand = {
+          text,
+          assessment: {
+            ...rpcAssessment,
+            level: mergedLevel,
+            requiresConfirmation:
+              rpcAssessment.requiresConfirmation || mergedLevel === "deny",
+          },
+        };
         notifyPendingRiskListeners(leafId);
       }
     });
@@ -994,7 +1010,13 @@ function bindLeafToSlot(leafId: number, s: Session): void {
       disposers.push(osc52);
       return disposers;
     },
-    onSearchReady: (addon) => s.callbacks.onSearchReady?.(addon),
+    onSearchReady: (addon) => {
+      // TDSF 修复 2026-09-18（深度体检 F2）：这张表此前只有 get/delete，
+      // 从来没有写入点 → TerminalSearchBar 的 getSearchAddon() 恒为 null，
+      // 终端内搜索框（Ctrl+Shift+F）输入后什么都不发生，连"无匹配"都不提示。
+      searchAddons.set(leafId, addon);
+      s.callbacks.onSearchReady?.(addon);
+    },
   });
   s.snapshot = null;
   s.hasSlot = true;
