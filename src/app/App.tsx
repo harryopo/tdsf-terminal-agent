@@ -1048,6 +1048,15 @@ export default function App() {
         `/home/${activeSpace.env.user}`)
       : explorerRoot;
 
+  // TDSF 修复 2026-09-18（用户实测：还没建工作区，状态栏已经显示 Home）：
+  // useTabs() 开机必定先建一个绑隐式 default 空间的冷终端，它的 cwd 落在启动/
+  // 家目录，于是 explorerRoot / 状态栏 / 窗口标题就把家目录当成"当前工作区根"。
+  // 终端本身继续在 default 空间里正常运行，但**工作区上下文一律只以活跃 Space
+  // 为准**——没有活跃工作区时展示层不冒充任何目录（与 git 面板的 hasActiveSpace
+  // 守卫同一原则，见 useSourceControlContext）。
+  const hasWorkspace = !!activeSpace;
+  const displayExplorerRoot = hasWorkspace ? effectiveExplorerRoot : null;
+
   // TDSF 修复 2026-07-29: SSH 连接后, 窗口标题/状态栏路径显示 SSH 远程位置。
   // TDSF 修复 2026-07-31: 顶栏项目名固定显示本地工作区, 不显示 SSH 地址
   //   (地址已在左下角 StatusBar 展示, 避免顶栏重复且拥挤)。
@@ -1059,7 +1068,7 @@ export default function App() {
   // TDSF 修复 2026-08-12 (ROADMAP #9): SSH 位置作为第三参数传入 useWindowTitle，
   // SSH Space 时窗口标题显示 user@host:path（此前混入 explorerRoot 计算导致
   // 标题显示本地目录名、丢主机信息）。
-  useWindowTitle(activeTab, effectiveExplorerRoot, sshLocationLabel);
+  useWindowTitle(activeTab, displayExplorerRoot, sshLocationLabel);
 
   useEffect(() => {
     setActiveSearchAddon(
@@ -1491,10 +1500,11 @@ export default function App() {
 
   // TDSF 修复 2026-07-29: 状态栏/输入栏 cwd 在 SSH 连接后显示远程路径。
   // TDSF 修复 2026-07-31: 按当前 Space 的 SSH session 显示路径，切 Space 时同步切换。
-  const statusBarCwd =
-    isSpaceSshConnected && isTerminalTab
+  const statusBarCwd = hasWorkspace
+    ? isSpaceSshConnected && isTerminalTab
       ? (spaceSshCurrentPath ?? "/")
-      : activeTerminalLeafCwd;
+      : activeTerminalLeafCwd
+    : null;
 
   const activeFilePath = (() => {
     if (activeTab?.kind === "editor") return activeTab.path;
@@ -2271,7 +2281,7 @@ export default function App() {
                             <div className="min-h-0 flex-1">
                               <FileExplorer
                                 ref={explorerRef}
-                                rootPath={effectiveExplorerRoot}
+                                rootPath={displayExplorerRoot}
                                 fsSource={
                                   // TDSF 2026-08-28: SSH 判定与 effectiveExplorerRoot 同源
                                   // （都要求 env.kind === "ssh"），消除断开瞬间
@@ -2470,6 +2480,7 @@ export default function App() {
                   : null
               }
               terminalAddress={activeTerminalAddress}
+              hasWorkspace={hasWorkspace}
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
@@ -2520,7 +2531,7 @@ export default function App() {
             onOpenChange={setCommandPaletteOpen}
             initialMode={paletteInitialMode}
             commandItems={commandPaletteItems}
-            workspaceRoot={explorerRoot}
+            workspaceRoot={displayExplorerRoot}
             onOpenContentHit={openContentHit}
             insertCommand={insertHistoryCommand}
           />
