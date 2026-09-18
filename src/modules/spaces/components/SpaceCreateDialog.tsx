@@ -35,7 +35,7 @@ import {
   CloudServerIcon,
   CubeIcon,
   Loading03Icon,
-  Square01Icon,
+  TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -428,7 +428,7 @@ export function SpaceCreateDialog({
                 : "border-border bg-background text-muted-foreground hover:bg-muted",
             )}
           >
-            <HugeiconsIcon icon={Square01Icon} size={14} strokeWidth={1.75} />
+            <HugeiconsIcon icon={TerminalIcon} size={14} strokeWidth={1.75} />
             本地工作区
           </button>
           <button
