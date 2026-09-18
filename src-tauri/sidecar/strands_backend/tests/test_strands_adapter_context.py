@@ -61,19 +61,34 @@ class TestTeachContinuationIntent(unittest.TestCase):
         self.assertIn("ssh_command", names)
         self.assertIn("read_remote_file", names)
         self.assertIn("knowledge_search", names)
+        # L1 下 todo_write（readonly）随只读集合保留
+        self.assertIn("todo_write", names)
         self.assertNotIn("service_manage", names)
         self.assertNotIn("suggest_command", names)
-        self.assertNotIn("todo_write", names)
         self.assertNotIn("get_terminal_output", names)
+
+    def test_teach_filter_keeps_skill_and_todo_at_confirmed_perm(self):
+        """perm>=2 全量工具经教学白名单过滤后保留 skill_invoke/todo_write"""
+        from strands_backend.adapter import _filter_teach_tools
+        from strands_backend.tools import ToolContext, make_all_ops_tools
+
+        ctx = ToolContext(permission_level=2, mode=AgentMode.OBSERVE, teach=True)
+        tools = _filter_teach_tools(make_all_ops_tools(ctx))
+        names = {getattr(tool, "__name__", "") for tool in tools}
+        self.assertIn("skill_invoke", names)
+        self.assertIn("todo_write", names)
+        self.assertNotIn("suggest_command", names)
 
     def test_teach_prompt_requires_command_cards_instead_of_prose_commands(self):
         from strands_backend.adapter import _compose_system_prompt
 
         prompt = _compose_system_prompt(AgentMode.OBSERVE, teach=True)
         self.assertIn("teach_command", prompt)
-        self.assertIn("反引号命令", prompt)
-        self.assertIn("任何可执行命令都必须进入教学命令卡", prompt)
-        self.assertIn("不用 ;、&&、|| 串联多个步骤", prompt)
+        # 新教学输出契约：步骤结构化 + 每轮一张卡 + 命令禁入 bash 围栏
+        self.assertIn("第 N 步 / 共 M 步", prompt)
+        self.assertIn("每轮最多一张卡", prompt)
+        self.assertIn("bash 围栏", prompt)
+        self.assertIn("suggest_command、get_terminal_output", prompt)
 
     def test_runtime_always_registers_dedicated_teaching_card_tool(self):
         from strands_backend.adapter import StrandsAgentAdapter
@@ -396,10 +411,123 @@ class TestTeachingPromptExecutionBoundary(unittest.TestCase):
 
         prompt = _compose_system_prompt(AgentMode.OBSERVE, teach=True)
 
-        self.assertIn("本轮工具调用不会得到执行结果", prompt)
-        self.assertIn("禁止调用 suggest_command、todo_write 或 get_terminal_output", prompt)
+        self.assertIn("学生点击后才注入终端执行", prompt)
+        self.assertIn("suggest_command、get_terminal_output", prompt)
         self.assertIn("<teaching-command-result>", prompt)
-        self.assertIn("基于结果继续讲解", prompt)
+        self.assertIn("永远不猜测命令输出", prompt)
+
+
+class TestTeachPromptSurface(unittest.TestCase):
+    """教学 prompt/gate 文本与工具白名单的静态契约（防内部措辞泄漏）。"""
+
+    def test_teach_text_has_no_internal_jargon(self):
+        from strands_backend.adapter import _TEACH_SKIN_PROMPT, _teach_turn_gate
+
+        banned = (
+            "信息汇报", "知识回合", "报告回合", "证据盘点",
+            "事实层", "推断层", "未实层",
+        )
+        for text in (_TEACH_SKIN_PROMPT, _teach_turn_gate(True, True)):
+            for word in banned:
+                self.assertNotIn(word, text)
+
+    def test_teach_gate_has_single_neutral_teaching_branch(self):
+        from strands_backend.adapter import _teach_turn_gate
+
+        self.assertEqual(_teach_turn_gate(False, False), "")
+        self.assertEqual(_teach_turn_gate(False, True), "")
+        for intent in (False, True):
+            gate = _teach_turn_gate(True, intent)
+            self.assertIn("[教学模式进行中]", gate)
+            self.assertIn("绝不编造工具输出或终端回显", gate)
+
+    def test_teach_aux_tools_include_skill_and_todo(self):
+        from strands_backend.adapter import _TEACH_AUX_TOOL_NAMES
+
+        self.assertIn("skill_invoke", _TEACH_AUX_TOOL_NAMES)
+        self.assertIn("todo_write", _TEACH_AUX_TOOL_NAMES)
+
+    def test_teach_skin_strict_turn_contract(self):
+        """皮肤必须绑定严格回合制（单卡/不剧透/开场自动探测），禁旧分步措辞"""
+        from strands_backend.adapter import _TEACH_SKIN_PROMPT
+
+        for required in (
+            "严格回合制", "恰好一张命令卡", "system_probe_teaching",
+            "绝不提前写出后续步骤",
+        ):
+            self.assertIn(required, _TEACH_SKIN_PROMPT)
+        # v4 旧措辞（分步多建议/双轨命令）已按用户实测反馈移除
+        for stale in ("一次回复可以按阶段给出多步建议", "命令卡与正文命令建议"):
+            self.assertNotIn(stale, _TEACH_SKIN_PROMPT)
+
+
+class _PromptRecordingModel(FakeContextModel):
+    """在 FakeContextModel 基础上记录 system_prompt 与 user 消息文本。"""
+
+    def __init__(self, final_text: str = "ok") -> None:
+        super().__init__(final_text)
+        self.system_prompts: list[str] = []
+        self.user_prompts: list[str] = []
+
+    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs):
+        if isinstance(system_prompt, str):
+            self.system_prompts.append(system_prompt)
+        for message in messages:
+            if message.get("role") != "user":
+                continue
+            for block in message.get("content") or []:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    self.user_prompts.append(block["text"])
+        async for chunk in super().stream(
+            messages, tool_specs, system_prompt=system_prompt, **kwargs
+        ):
+            yield chunk
+
+
+@unittest.skipUnless(_STRANDS_AVAILABLE, "strands-agents 未安装，跳过真实 e2e")
+class TestTeachIntentPassthrough(unittest.TestCase):
+    """教学意图直通：teach=True 时任意学生回复都走教学分支（不再卡死）。"""
+
+    def _invoke(self, model, text: str, teach: bool = True) -> dict:
+        from strands_backend.adapter import StrandsAgentAdapter
+
+        adapter = StrandsAgentAdapter(
+            event_bus=MagicMock(),
+            rust_bridge=MagicMock(),
+            backend_enabled=True,
+            strands_model=model,
+        )
+        adapter._strands_available = True
+        adapter._model_available = True
+        return adapter.invoke(
+            "main",
+            text,
+            {
+                "session_id": "t-teach-intent",
+                "live": {"agentMode": "confirm", "teach": teach},
+            },
+        )
+
+    def test_any_student_reply_is_teaching_intent(self):
+        for text in ("开始", "下一步", "好的继续吧", "看到了，继续"):
+            with self.subTest(input=text):
+                model = _PromptRecordingModel("第 1 步 / 共 3 步：查看运行级别")
+                result = self._invoke(model, text)
+                self.assertEqual(result["next_step"], "done")
+                # gate 注入教学模式分支文本，绝无知识/报告回合措辞
+                joined = "\n".join(model.user_prompts)
+                self.assertIn("[教学模式进行中]", joined)
+                self.assertNotIn("[知识/报告回合]", joined)
+                # 教学输出补 marker（TeachCard 显式契约）
+                self.assertTrue(
+                    result["observation"].startswith("<!-- tdsf:teach -->")
+                )
+
+    def test_non_teach_turn_strips_marker(self):
+        model = _PromptRecordingModel("<!-- tdsf:teach -->\n普通回答")
+        result = self._invoke(model, "普通问题", teach=False)
+        self.assertEqual(result["next_step"], "done")
+        self.assertFalse(result["observation"].startswith("<!-- tdsf:teach -->"))
 
 
 if __name__ == "__main__":

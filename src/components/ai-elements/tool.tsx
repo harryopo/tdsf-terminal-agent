@@ -1736,7 +1736,10 @@ function SuggestCommandCard({
   const [action, setAction] = useState<"inserted" | "executed" | null>(null);
   const autoExecuteInTerminal = useChatStore((s) => s.autoExecuteInTerminal);
   const agentMode = useChatStore((s) => s.agentMode);
-  const executeOnClick = autoExecuteInTerminal && agentMode === "auto";
+  // 教学模式禁止自动插入终端，学生手动逐条执行：teach 会话下该偏好强制视为 false。
+  const teach = useChatStore((s) => s.teach);
+  const executeOnClick =
+    autoExecuteInTerminal && !teach && agentMode === "auto";
   // 确认模式步步确认（2026-09-04 用户钦定）：预测回显默认展开，
   // 让用户点“执行”前先看到命令预期输出（“预测命令的回显是什么”）。
   const [showPredicted, setShowPredicted] = useState(true);
@@ -1748,8 +1751,9 @@ function SuggestCommandCard({
   const onInsert = () => {
     const store = useChatStore.getState();
     // TDSF (2026-08-09): 终端执行模式——加换行符自动执行命令
+    // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
     const execute =
-      store.autoExecuteInTerminal && store.agentMode === "auto";
+      store.autoExecuteInTerminal && !store.teach && store.agentMode === "auto";
     const text = execute ? command + "\n" : command;
     const ok = store.live.injectIntoActivePty(text);
     if (ok) setAction(execute ? "executed" : "inserted");
@@ -1757,8 +1761,11 @@ function SuggestCommandCard({
   // TDSF (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
   useEffect(() => {
     if (autoFiredRef.current) return;
-    const { autoExecuteInTerminal, agentMode, live } = useChatStore.getState();
+    const { autoExecuteInTerminal, agentMode, live, teach } =
+      useChatStore.getState();
     if (!autoExecuteInTerminal) return;
+    // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
+    if (teach) return;
     // 问题2修复(2026-09-03 用户实测)：仅 auto 模式自动注入；确认模式须用户点
     // Insert/审批，否则绕过 HITL 审批（确认模式没点确认就自动打字机执行）。
     if (agentMode !== "auto") return;

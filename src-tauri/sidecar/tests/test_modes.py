@@ -267,13 +267,13 @@ class TestModeAwarePrompt:
 
     def test_teach_skin_appended_when_on(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=True)
-        # 教学契约：系统负责标记；模型每回合只给一张可见终端步骤卡，
-        # 必须等学生提交精确结果后才可继续下一步。
-        assert "系统会添加教学卡标记" in prompt
-        assert "每轮只推进一步" in prompt
-        assert "禁止一次给多条命令" in prompt
+        # 教学输出契约：步骤结构化分步建议；命令卡学生点击后才注入终端，
+        # 结果以 <teaching-command-result> 回流，绝不猜测命令输出。
+        assert "第 N 步 / 共 M 步" in prompt
+        assert "每轮最多一张卡" in prompt
+        assert "学生点击后才注入终端执行" in prompt
         assert "<teaching-command-result>" in prompt
-        assert "基于结果继续讲解" in prompt
+        assert "永远不猜测命令输出" in prompt
 
     def test_teach_skin_absent_when_off(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=False)

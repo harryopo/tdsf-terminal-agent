@@ -183,3 +183,68 @@ def test_dedicated_teaching_card_emits_paired_ui_events() -> None:
     assert [
         call.kwargs["status"] for call in event_bus.emit_tool_call.call_args_list
     ] == ["started", "completed"]
+
+
+def test_teach_context_keeps_aux_tools_under_l1_construction() -> None:
+    """perm=1 构造期只读裁剪在教学模式下豁免教学辅助工具（防御性豁免）"""
+    from strands_backend.tools import make_all_ops_tools
+
+    teach_names = {
+        getattr(t, "__name__", "")
+        for t in make_all_ops_tools(ToolContext(teach=True, permission_level=1))
+    }
+    # 教学能力：知识/技能/进度工具不被构造期裁剪
+    assert "skill_invoke" in teach_names
+    assert "todo_write" in teach_names
+    assert "knowledge_search" in teach_names
+    # 安全底线：写类工具仍被裁
+    assert "write_file" not in teach_names
+
+    plain_names = {
+        getattr(t, "__name__", "")
+        for t in make_all_ops_tools(ToolContext(permission_level=1))
+    }
+    # 非教学 fail-closed 不变：L1 构造期仍裁 skill_invoke
+    assert "skill_invoke" not in plain_names
+
+
+def test_system_probe_teaching_requires_teach_context() -> None:
+    """非教学模式调用教学开场探测 → unavailable（fail-closed）"""
+    from strands_backend.tools.system_probe_teaching import (
+        invoke_system_probe_teaching_tool,
+    )
+
+    result = invoke_system_probe_teaching_tool(ToolContext())
+    assert result["status"] == "system_probe_teaching_unavailable"
+
+
+def test_system_probe_teaching_runs_fixed_readonly_script(
+    monkeypatch,
+) -> None:
+    """教学开场探测：固定只读脚本 + skip_approval 透传，不接受模型输入"""
+    import strands_backend.tools.system_probe_teaching as probe_mod
+
+    captured: dict = {}
+
+    def _fake_execute_via_ssh(_ctx, command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return {"status": "success", "output": "NAME=Rocky", "exit_code": 0}
+
+    monkeypatch.setattr(probe_mod, "execute_via_ssh", _fake_execute_via_ssh)
+
+    result = probe_mod.invoke_system_probe_teaching_tool(ToolContext(teach=True))
+
+    assert result["status"] == "success"
+    assert "cat /etc/os-release" in captured["command"]
+    assert "uname -r" in captured["command"]
+    assert captured["kwargs"]["skip_approval"] is True
+    assert captured["kwargs"]["readonly"] is True
+    assert captured["kwargs"]["tool_name"] == "system_probe_teaching"
+
+
+def test_system_probe_teaching_not_shell_mapped() -> None:
+    """探测工具无 shell 映射 → 教学 wrap 不转卡，真实执行通道保持"""
+    from strands_backend.tools.shell_mapping import has_shell_mapping
+
+    assert has_shell_mapping("system_probe_teaching") is False

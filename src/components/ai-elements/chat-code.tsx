@@ -209,7 +209,9 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   // （与 tool.tsx SuggestCommandCard 同源逻辑，human_type 打字机逐字写入）。
   const inject = useCallback(() => {
     const store = useChatStore.getState();
-    const text = store.autoExecuteInTerminal ? code + "\n" : code;
+    // 教学模式禁止自动插入终端，学生手动逐条执行：teach 会话下该偏好强制视为 false（只粘贴不带 \n）。
+    const execute = store.autoExecuteInTerminal && !store.teach;
+    const text = execute ? code + "\n" : code;
     const ok = store.live.injectIntoActivePty(text);
     if (!ok) return;
     setSent(true);
@@ -228,7 +230,8 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   useEffect(() => {
     if (autoFiredRef.current) return;
     const store = useChatStore.getState();
-    if (!store.autoExecuteInTerminal) return;
+    // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
+    if (!store.autoExecuteInTerminal || store.teach) return;
     if (store.agentMode !== "auto") return;
     autoFiredRef.current = true;
     inject();

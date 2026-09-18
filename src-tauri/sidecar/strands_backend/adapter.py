@@ -51,6 +51,7 @@ from strands_backend.tools import (
     TOOL_DECORATOR_AVAILABLE,
     VERIFY_CLASS_TOOL_NAMES,
     WRITE_CLASS_TOOL_NAMES,
+    TEACH_AUX_TOOL_NAMES,
     filter_tools_readonly,
     make_all_ops_tools,
     wrap_tool_for_teach_mode,
@@ -162,19 +163,17 @@ def _is_teaching_continuation(text: str) -> bool:
 
 
 def _teach_turn_gate(teach: bool, intent: bool) -> str:
-    """Build a short per-turn instruction that overrides stale chat history."""
+    """Build a short per-turn instruction that overrides stale chat history.
+
+    教学意图直通后 intent 恒为 True：教学分支只保留一条中性指令，避免
+    "知识/报告回合"等内部措辞被模型原样复述给学生。intent 参数保留以
+    兼容既有调用方与测试，不再参与分支。
+    """
     if not teach:
         return ""
-    if intent:
-        return (
-            "\n\n[教学回合]\n"
-            "这是明确教学或已建立教学的继续回合。系统会自动添加教学标记；"
-            "绝不编造工具输出。\n"
-        )
     return (
-        "\n\n[知识/报告回合]\n"
-        "用户请求的是检索或状态信息，而不是教学。使用普通 Markdown，不能输出 tdsf:teach 标记、"
-        "教学分节或教学命令卡。\n"
+        "\n\n[教学模式进行中]\n"
+        "以 Linux 运维教学者身份继续课程。系统已添加教学标记，绝不编造工具输出或终端回显。\n"
     )
 
 
@@ -183,13 +182,9 @@ def _strip_teach_marker(text: str) -> str:
     return _TEACH_MARKER_RE.sub("", text or "", count=1)
 
 
-_TEACH_AUX_TOOL_NAMES = frozenset({
-    "ask_user",
-    "knowledge_search",
-    "knowledge_get_doc",
-    "ssh_list_sessions",
-    "teach_command",
-})
+# 教学辅助工具白名单单一真源在 tools/__init__.py（TEACH_AUX_TOOL_NAMES）：
+# 同时供 make_all_ops_tools 构造期只读裁剪做防御性豁免，避免双源漂移。
+_TEACH_AUX_TOOL_NAMES = TEACH_AUX_TOOL_NAMES
 
 
 def _filter_teach_tools(tools: list[Any]) -> list[Any]:
@@ -1231,9 +1226,11 @@ _TEACH_MODE_PROMPT = (
     "\n\nCurrent mode: TEACH (read-only, terminal-visible learning).\n"
     "- 带 shell 映射的工具只生成一张可见终端教学命令卡，不会在后端执行；"
     "学生点击卡片后，命令才会输入当前终端。\n"
-    "- 教学模式覆盖前述 OBSERVE 命令建议和 Task planning 规则：不调用 suggest_command、"
-    "todo_write 或 get_terminal_output，不并行，也不在未收到教学结果前规划后续步骤。\n"
-    "- 只有 `<teaching-command-result>` 是命令完成证据；没有它时如实等待，绝不猜测回显。"
+    "- 教学模式覆盖前述 OBSERVE 命令建议规则：不调用 suggest_command 或 "
+    "get_terminal_output；todo_write 仅用于课程大纲与步骤进度；工具逐个调用。\n"
+    "- system_probe_teaching 是唯一自动执行的只读探测通道（教学开场采集基线）。\n"
+    "- 学生执行的终端输出会自动回流，直接基于它讲解；"
+    "<teaching-command-result> 是最强证据。永远不猜测回显。"
 )
 
 # 教学皮肤（P0-A1：原 teach agent 的结构化教学契约迁入。Teach 开关 ON 时
@@ -1287,17 +1284,29 @@ _LEGACY_TEACH_SKIN_PROMPT = (
  # “always six sections” wording conflicts with knowledge-only requests.
 _TEACH_SKIN_PROMPT = (
     "\n\n教学皮肤（已开启）：\n"
-    "系统会添加教学卡标记，你绝不能自行输出该标记。真正的教学每轮只推进一步："
-    "先用至多一个带 shell 映射的工具或 teach_command 生成一张教学命令卡；卡内只能是一条单一 shell 命令，不用 ;、&&、|| 串联多个步骤，然后只用一两句说明学生要观察什么，立刻停止。"
-    "禁止一次给多条命令、命令清单、Markdown shell 围栏、反引号命令或在正文嵌入命令；任何可执行命令都必须进入教学命令卡。"
-    "命令卡已经展示预测回显；正文不要复述风险或影响标签，例如“只读探测，无副作用”。"
-    "禁止调用 suggest_command、todo_write 或 get_terminal_output。\n"
-    "教学命令卡不代表后端已经执行。本轮工具调用不会得到执行结果；学生点击后会在当前可见终端输入并执行。"
-    "禁止工具调用后假定执行结果；只有 `<teaching-command-result>` 才是执行证据。收到该结果后，"
-    "先解释本步回显，再按同样规则给下一张且仅一张命令卡。\n"
-    "知识库检索和文档读取只能辅助解释，不能替代教学命令卡；不能调用 schema 未出现的工具。"
-    "学生点击「基于结果继续讲解」后才会提交该证据。"
-    "教学会话不加载技能执行器；用户想执行 Skill 时，应先切换到相应的非教学模式。\n"
+    "【角色】你是面向 Linux 初学者的运维教学者：讲解生活化，术语首现给一句中文解释。\n"
+    "【开场】教学开始先调用 system_probe_teaching 自动执行只读探测采集环境基线，"
+    "学生无需操作。拿到结果后用两三个短段介绍这台机器（发行版/内核/资源"
+    "各一句），然后直接进入学生想学的主题。绝不让学生手敲环境探测类命令或罗列学习计划。\n"
+    "【大纲】用 todo_write 建一次课程大纲（每项=一个知识点，只写名称不写命令），"
+    "仅完成或切换知识点时更新；正文绝不预告未讲到的步骤。\n"
+    "【严格回合制——最重要的规则】每一轮回复只做一件事，按此结构输出：\n"
+    "  (a) 若学生刚执行了上一步：先用两三个短段解读实际回显——一段一个发现，可用"
+    "短列表；对照预期讲清实际结果说明什么，不重复卡上原文；然后更新 "
+    "todo 勾掉该步。\n"
+    "  (b) 讲解完给出恰好一张命令卡（带 shell 映射工具或 teach_command）："
+    "每轮最多一张卡，卡内单条命令，卡上写「第 N 步 / 共 M 步」、本步目标、预期"
+    "看到；学生点击后才注入终端执行。\n"
+    "  (c) 立即停止。没有下一轮执行结果，绝不提前写出后续步骤内容或命令。\n"
+    "【形态统一】学生的每一步都必须通过命令卡执行：正文不得出现“请执行 xxx”式"
+    "指令（讲解中引用命令名除外），不用 bash 围栏；不调用 suggest_command、"
+    "get_terminal_output。学生手敲结果同样回流。\n"
+    "【事实来源】学生点卡或手输后终端输出自动回流，直接基于它讲解；"
+    "<teaching-command-result> 是最强证据但非继续前提。永远不猜测命令输出；"
+    "回显异常时如实说明并给排查卡。\n"
+    "【课程节奏】由基础到进阶，穿插重难点与易错点；阶段结束主动询问“要不要动手"
+    "练习”；学生卡住给最小提示不代做；被追问只做简短回应。\n"
+    "【净化】不得出现回合类型、权限状态、证据分层、“系统标记/本回合”等内部词汇。\n"
 )
 
 
@@ -1615,13 +1624,12 @@ class StrandsAgentAdapter:
         teaching_key = (agent_id, session_id)
         if not teach:
             self._teaching_sessions.discard(teaching_key)
-        teach_intent = teach and (
-            _has_explicit_teaching_intent(input)
-            or (
-                teaching_key in self._teaching_sessions
-                and _is_teaching_continuation(input)
-            )
-        )
+        # 教学意图直通（2026-09-18）：教学模式开启即教学意图，不再做文本
+        # 判定。旧正则 fullmatch 只认"继续/接着讲"等固定短语，学生的
+        # "开始/下一步/好的继续吧"一律判成检索回合 → 教学标记被剥 +
+        # 知识 gate 注入 → 课程卡死。_TEACH_INTENT_RE/_TEACH_CONTINUATION_RE
+        # 与对应判定函数保留（供非教学场景判别与单测引用）。
+        teach_intent = bool(teach)
 
         logger.info(
             f"StrandsAgentAdapter.invoke: agent_id={agent_id}, "
@@ -1868,23 +1876,21 @@ class StrandsAgentAdapter:
             # "继续"，其最终答复才是用户应看到的收尾结果；空输出沿用主轮。
             # T7 验证轮在 T3 续做轮之后触发，覆盖优先级最高）
             observation = self._extract_response_text(response)
-            if teach and not teach_intent:
-                # Defense in depth for non-streaming/fallback handlers and for
-                # stale history: a retrieval turn can never activate TeachCard.
-                observation = _strip_teach_marker(observation)
             if followup_observation:
                 observation = followup_observation
             if verify_observation:
                 observation = verify_observation
-            if teach and not teach_intent:
+            # 教学意图直通后 teach_intent 恒等于 teach：原"teach 且非教学
+            # 意图 → 剥标记"分支不可达，收敛为——非教学时剥标记（防御模型
+            # 偶发泄漏），教学时补标记。
+            if not teach:
                 observation = _strip_teach_marker(observation)
-            elif teach and teach_intent and observation:
+            elif observation and not _TEACH_MARKER_RE.match(observation):
                 # 模型偶尔会遗漏 marker。最终回退输出与真流式都必须以同一
                 # 显式契约进入 TeachCard，不能因格式失误退回普通 Markdown。
-                if not _TEACH_MARKER_RE.match(observation):
-                    observation = f"<!-- tdsf:teach -->\n{observation}"
+                observation = f"<!-- tdsf:teach -->\n{observation}"
 
-            if teach and teach_intent and (
+            if teach and (
                 _TEACH_MARKER_RE.match(observation or "")
                 or bool(getattr(handler, "_emitted_teach_marker", False))
             ):
