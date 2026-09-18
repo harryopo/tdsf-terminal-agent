@@ -29,8 +29,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // Matches the renderer slot pool size — over this we'd evict an active leaf.
 export const MAX_PANES_PER_TAB = 4;
 
-/** 目标 Space 是 SSH 且绑定了 session 时返回该 sessionId，否则 undefined */
-function sshSessionIdForSpace(spaceId: string | null): string | undefined {
+/**
+ * 目标 Space 是 SSH 且绑定了 session 时返回该 sessionId，否则 undefined。
+ * 导出仅为让"幽灵 sessionId 守卫"可被单测钉住（#61-A 之后手点旧 SSH Space
+ * 成了常规路径，这条回退不能再只靠读代码保证）。
+ */
+export function sshSessionIdForSpace(spaceId: string | null): string | undefined {
   if (!spaceId) return undefined;
   const space = useSpaces
     .getState()
