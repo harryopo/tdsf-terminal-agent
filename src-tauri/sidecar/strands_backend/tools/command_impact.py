@@ -98,14 +98,26 @@ _DENYLIST: list[tuple[str, re.Pattern[str], str]] = [
         re.compile(r"\bdd\b[^|;&]*\bof=/dev/"),
         "dd 直接写入块设备可能摧毁磁盘数据",
     ),
+    # TDSF 修复 2026-09-18（深度体检 A2）：这两条以前用 `\bshutdown|reboot|halt\b`
+    # 在**整串任意位置**匹配，于是 `journalctl -k | grep reboot`、
+    # `grep -i shutdown /var/log/syslog`、`dmesg | grep halt` 这类最高频的只读日志
+    # 检索被硬封死（不给审批、直接 command_blocked），而真正的破坏命令反而放行（见 A1）。
+    # 现在只在**命令位**命中（允许可选的 sudo/env 前缀）；参数位上的这些词交给
+    # RiskChecker 走审批。`analyze()` 的整条兜底匹配同样只命中命令位，无需另改。
     (
         "shutdown",
-        re.compile(r"\b(?:shutdown|poweroff|halt)\b|^\s*init\s+0\b"),
+        re.compile(
+            r"^\s*(?:sudo\s+(?:-\S+\s+)*|env\s+|nohup\s+)?"
+            r"(?:shutdown\b|poweroff\b|halt\b|init\s+0\b)"
+        ),
         "关机/停机命令将中断服务器运行",
     ),
     (
         "reboot",
-        re.compile(r"\breboot\b|^\s*init\s+6\b"),
+        re.compile(
+            r"^\s*(?:sudo\s+(?:-\S+\s+)*|env\s+|nohup\s+)"
+            r"?(?:reboot\b|init\s+6\b)"
+        ),
         "重启系统将中断服务器运行",
     ),
     (
@@ -550,8 +562,8 @@ def classify_segment(seg: str) -> dict:
             if actions & _IP_WRITE_ACTIONS
             else CATEGORY_READONLY
         )
-    # --- 只读白名单 ---
-    elif base in _READONLY_CMDS:
+    # --- 只读白名单（带写/执行型 flag 时否决，见 _readonly_veto_hit）---
+    elif base in _READONLY_CMDS and not _readonly_veto_hit(base, seg):
         category = CATEGORY_READONLY
     # --- 兜底：未知（fail-closed 偏高风险）---
     else:
@@ -565,6 +577,52 @@ def classify_segment(seg: str) -> dict:
         "objects": objects,
         "risk_l": CATEGORY_RISK.get(category, CATEGORY_RISK[CATEGORY_UNKNOWN]),
     }
+
+
+def _readonly_veto_hit(base: str, seg: str) -> bool:
+    """只读白名单的 flag 否决（2026-09-18 深度体检 A1，P0）。
+
+    这些命令**名字**看着只读，但带上特定 flag 就会删文件、写盘或执行任意程序。
+    命中即不再算只读 —— 落 UNKNOWN(L3) 走审批。修复前的事实（我自己跑出来复核的）：
+    confirm 模式下 `find / -delete`、`awk BEGIN{system("id")}`、
+    `sort -o /etc/shadow /dev/null` 全部返回 `allow`，零审批直接执行。
+    """
+    if base == "find":
+        # -delete 直接删；-exec/-execdir/-ok/-okdir 起任意子进程
+        return bool(re.search(r"\s-(?:delete|exec|execdir|ok|okdir)\b", seg))
+    if base in {"awk", "gawk", "mawk", "busybox"}:
+        # system()/gensub 执行命令、getline 从管道或命令读、> 重定向写文件
+        return bool(re.search(r"\b(?:system|gensub)\s*\(|\bgetline\b", seg)) or _has_file_redirect(seg)
+    if base == "sort":
+        return bool(re.search(r"\s-o\b", seg)) or _has_file_redirect(seg)
+    if base == "tar":
+        # -c 打包写文件、-x 解包落盘、-u/-r 追加；-t/-v 只是列目录，不否决。
+        # 还要覆盖 BSD 风格连写（`tar czf x.tgz /etc` 根本没有前导 -）。
+        bundled = re.match(r"\s*tar\s+(-?[A-Za-z]{1,6})\b", seg)
+        if bundled and any(ch in "cxur" for ch in bundled.group(1).lstrip("-")):
+            return True
+        return bool(re.search(r"(?:^|\s)-[A-Za-z-]*[cxur]", seg)) or bool(
+            re.search(r"--(?:create|extract|update|append|delete|to-command)\b", seg)
+        )
+    if base in {"gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "zstd", "lzma", "compress"}:
+        # 默认就地替换/删除输入文件；只有 -k/--keep 才保留原文件
+        return not re.search(r"(?:^|\s)-[a-z]*k|--keep\b", seg, flags=re.IGNORECASE)
+    if base in {"uniq", "cut"}:
+        return bool(re.search(r"\s-[dDoO]\b", seg)) or _has_file_redirect(seg)
+    return False
+
+
+def _has_file_redirect(seg: str) -> bool:
+    """`>` / `>>` 重定向到非 /dev/ 目标 = 写盘。
+
+    排除 `2>`、`&>`、`>|` 之类：它们要么改的是 stderr，要么是既有的合并写法。
+    """
+    for m in re.finditer(r"(?<![0-9&])>{1,2}\s*([^\s;|&]+)", seg):
+        target = m.group(1)
+        if target.startswith("/dev/") or target in {"", "&1", "&2"}:
+            continue
+        return True
+    return False
 
 
 # ============================================================================
