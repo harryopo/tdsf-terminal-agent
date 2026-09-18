@@ -16,6 +16,7 @@ import {
   writeTerminalClipboard,
 } from "./terminalClipboard";
 import { pasteIntoTerminal } from "./terminalPaste";
+import { clearUserLine, noteUserInput } from "./terminalInputState";
 
 export const POOL_MAX_SIZE = 5;
 const FIT_DEBOUNCE_MS = 8;
@@ -358,6 +359,8 @@ function createSlot(): Slot {
   term.onData((data) => {
     const leafId = slot.currentLeafId;
     if (leafId === null) return;
+    // 记账"用户正在这一行上输入"，供 AI 命令卡自动打字前避让（#55）。
+    noteUserInput(leafId, data);
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
   });
 
@@ -733,6 +736,8 @@ function detachSlotFromLeaf(slot: Slot, retain: boolean): void {
   cancelPendingUnhide(slot);
   slot.host.style.visibility = "";
 
+  // leafId 可能被复用，先清掉该行的"用户正在输入"记账，避免串台误挡自动打字。
+  if (slot.currentLeafId !== null) clearUserLine(slot.currentLeafId);
   slot.currentLeafId = null;
   slot.lastUsedAt = performance.now();
   scheduleWebglReap(slot);

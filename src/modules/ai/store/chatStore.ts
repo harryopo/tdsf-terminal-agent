@@ -146,6 +146,11 @@ export type Live = {
   getCwd: () => string | null;
   getTerminalContext: (maxLines?: number) => string | null;
   isActiveTerminalPrivate: () => boolean;
+  /**
+   * 无人点击的自动打字是否安全：无可用终端 / Private 终端 / 用户正在敲半行 /
+   * 终端不在提示符时返回 false。手动 Run 不受此约束。
+   */
+  canAutoTypeToActiveTerminal: () => boolean;
   injectIntoActivePty: (text: string) => boolean;
   /**
    * 教学卡专用的确认执行入口。它先在终端 leaf 上登记等待中的教学执行，
@@ -340,14 +345,9 @@ type StoreState = {
   setSessionReadOnlyTrust: (on: boolean) => void;
 
   /**
-   * 终端执行模式开关（TDSF 2026-08-09）
-   *
-   * 打开后，agent 建议的命令自动注入终端并执行（加换行符），
-   * 用户在终端上实时看到命令执行和输出回显。
-   * 关闭时（默认），命令只生成卡片等用户点击 Insert。
+   * 终端执行模式开关已迁至持久化偏好 `usePreferencesStore.agentAutoTypeCommands`
+   * （ROADMAP #58：原先放在非 persist 的 chatStore 里，用户关掉后重启就失效）。
    */
-  autoExecuteInTerminal: boolean;
-  setAutoExecuteInTerminal: (on: boolean) => void;
 
   mini: MiniState;
   openMini: () => void;
@@ -402,6 +402,7 @@ const NOOP_LIVE: Live = {
   getCwd: () => null,
   getTerminalContext: () => null,
   isActiveTerminalPrivate: () => false,
+  canAutoTypeToActiveTerminal: () => false,
   injectIntoActivePty: () => false,
   startTeachingCommand: () => ({ ok: false, reason: "no-active-terminal" }),
   getWorkspaceRoot: () => null,
@@ -634,14 +635,6 @@ export const useChatStore = create<StoreState>((set, get) => ({
   // 会话级只读免审（Task 5 ⚡）：纯内存不落盘，切会话随 restoreModeFromMeta 重置
   sessionReadOnlyTrust: false,
   setSessionReadOnlyTrust: (on) => set({ sessionReadOnlyTrust: on }),
-
-  // TDSF 2026-09-02（用户钦定“自动打字+自动执行”）: 默认开启——
-  // AI 在对话区给出的命令卡（CommandCard / suggest_command）自动通过
-  // human_type 打字机逐字注入活动终端并追加 \n 执行，无需手动点 Run。
-  // 注：本前端标志与 sidecar 的 ssh_command visible 注入已解耦（见
-  // chatRuntime.ts），避免交互式 PTY 注入+\n 与 execute_via_ssh 双重执行。
-  autoExecuteInTerminal: true,
-  setAutoExecuteInTerminal: (on) => set({ autoExecuteInTerminal: on }),
 
   mini: { open: false },
   openMini: () => set({ mini: { open: true } }),

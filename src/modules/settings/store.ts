@@ -182,6 +182,12 @@ export type Preferences = {
   agentTypingSpeed: number;
   /** Agent tool commands use one real execution channel; this does not alter approval policy. */
   agentExecutionChannel: AgentExecutionChannel;
+  /**
+   * AI 给出的命令是否自动打字到活动终端（无需点 Run）。关掉后命令卡只留手动 Run。
+   * 取代原先不持久化的 chatStore.autoExecuteInTerminal（ROADMAP #58：
+   * 旧实现每次启动都回到"开"，用户关了又会被打开）。
+   */
+  agentAutoTypeCommands: boolean;
 };
 
 /** Agent 命令注入节奏模式 */
@@ -282,6 +288,8 @@ const KEY_SSH_REMOTE_CARAPACE_PROMPT = "sshRemoteCarapacePrompt";
 const KEY_AGENT_TYPING_MODE = "agentTypingMode";
 const KEY_AGENT_TYPING_SPEED = "agentTypingSpeed";
 const KEY_AGENT_EXECUTION_CHANNEL = "agentExecutionChannel";
+// ROADMAP #58: 命令自动打字开关（持久化，取代 chatStore.autoExecuteInTerminal）
+const KEY_AGENT_AUTO_TYPE_COMMANDS = "agentAutoTypeCommands";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = 8;
@@ -371,6 +379,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   agentTypingMode: "instant",
   agentTypingSpeed: 1.0,
   agentExecutionChannel: "background",
+  // 与迁移前 chatStore.autoExecuteInTerminal 的默认值保持一致（默认开）
+  agentAutoTypeCommands: true,
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -584,6 +594,9 @@ export async function loadPreferences(): Promise<Preferences> {
       get<string>(KEY_AGENT_EXECUTION_CHANNEL) ??
         DEFAULT_PREFERENCES.agentExecutionChannel,
     ),
+    agentAutoTypeCommands:
+      get<boolean>(KEY_AGENT_AUTO_TYPE_COMMANDS) ??
+      DEFAULT_PREFERENCES.agentAutoTypeCommands,
   };
 }
 
@@ -943,6 +956,11 @@ export async function setAgentTypingSpeed(value: number): Promise<void> {
   await writePref(KEY_AGENT_TYPING_SPEED, coerceAgentTypingSpeed(value));
 }
 
+/** ROADMAP #58: 命令自动打字开关（持久化，重启后保持用户的选择）。 */
+export async function setAgentAutoTypeCommands(value: boolean): Promise<void> {
+  await writePref(KEY_AGENT_AUTO_TYPE_COMMANDS, value);
+}
+
 export function coerceAgentExecutionChannel(
   value: string,
 ): AgentExecutionChannel {
@@ -1043,6 +1061,7 @@ export async function onPreferencesChange(
     [KEY_AGENT_TYPING_MODE]: "agentTypingMode",
     [KEY_AGENT_TYPING_SPEED]: "agentTypingSpeed",
     [KEY_AGENT_EXECUTION_CHANNEL]: "agentExecutionChannel",
+    [KEY_AGENT_AUTO_TYPE_COMMANDS]: "agentAutoTypeCommands",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

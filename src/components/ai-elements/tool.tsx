@@ -40,6 +40,7 @@ import {
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
 import { claimAutoType } from "@/modules/ai/lib/autoTypeLedger";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { sendMessage } from "@/modules/ai/store/chatRuntime";
 import {
@@ -1737,12 +1738,14 @@ function SuggestCommandCard({
   predictedOutput: string | null;
 }) {
   const [action, setAction] = useState<"inserted" | "executed" | null>(null);
-  const autoExecuteInTerminal = useChatStore((s) => s.autoExecuteInTerminal);
+  const autoTypeCommands = usePreferencesStore(
+    (s) => s.agentAutoTypeCommands,
+  );
   const agentMode = useChatStore((s) => s.agentMode);
   // 教学模式禁止自动插入终端，学生手动逐条执行：teach 会话下该偏好强制视为 false。
   const teach = useChatStore((s) => s.teach);
   const executeOnClick =
-    autoExecuteInTerminal && !teach && agentMode === "auto";
+    autoTypeCommands && !teach && agentMode === "auto";
   // 确认模式步步确认（2026-09-04 用户钦定）：预测回显默认展开，
   // 让用户点“执行”前先看到命令预期输出（“预测命令的回显是什么”）。
   const [showPredicted, setShowPredicted] = useState(true);
@@ -1756,7 +1759,9 @@ function SuggestCommandCard({
     // TDSF (2026-08-09): 终端执行模式——加换行符自动执行命令
     // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
     const execute =
-      store.autoExecuteInTerminal && !store.teach && store.agentMode === "auto";
+      usePreferencesStore.getState().agentAutoTypeCommands &&
+      !store.teach &&
+      store.agentMode === "auto";
     const text = execute ? command + "\n" : command;
     const ok = store.live.injectIntoActivePty(text);
     if (ok) setAction(execute ? "executed" : "inserted");
@@ -1769,11 +1774,11 @@ function SuggestCommandCard({
   // 叠加 injectIntoActivePty 回流重渲染可致 "Maximum update depth exceeded"。
   useEffect(() => {
     if (autoFiredRef.current) return;
-    const { autoExecuteInTerminal, agentMode, live, teach } =
-      useChatStore.getState();
-    if (!autoExecuteInTerminal) return;
-    // Private 终端刻意对 AI 隐藏，不自动打字（手动 Run 不受限）。
-    if (live.isActiveTerminalPrivate?.() === true) return;
+    const { agentMode, live, teach } = useChatStore.getState();
+    if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
+    // 自动打字闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
+    const gate = live.canAutoTypeToActiveTerminal;
+    if (gate && !gate()) return;
     // 重挂重放 / 同批互踩由 ledger 拦住：见 autoTypeLedger 注释。
     if (!claimAutoType(command)) return;
     autoFiredRef.current = true;
@@ -1831,7 +1836,7 @@ function SuggestCommandCard({
 // A3 (2026-09-04): 教学模式命令卡——学生手动点击注入终端（打字机）
 // ============================================================================
 // 与 SuggestCommandCard 的关键差异：
-// 1. 永不自动执行（即使 autoExecuteInTerminal=true + auto 模式），必须学生手动点击
+// 1. 永不自动执行（即使自动打字偏好开启 + auto 模式），必须学生手动点击
 // 2. 显示命令预测回显，帮助学生判断下一步
 // 3. 教学模式专属紫色调（与 teach 模式强调色一致）
 // 4. 只以 TerminalBlockCollector 已划定的命令块回填结果；不读取全量滚屏
