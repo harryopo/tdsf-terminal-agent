@@ -253,3 +253,72 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     expect(inject).toHaveBeenCalledTimes(1);
   });
 });
+
+// ============================================================================
+// 深度体检 S-01（2026-09-18，P0）：多行块在"只打字不回车"的模式下不能整段写进 PTY
+// ----------------------------------------------------------------------------
+// PTY 把每一个 \n 都当回车，所以 `execute=false` 时整段多行命令一旦写入，
+// 除最后一行外的每一行都会**立即真实执行** —— 既不经审批卡也不经风险闸门，
+// 等于把"非 auto 模式永不执行"这条产品承诺从结构上打破。
+// ============================================================================
+describe("ChatCodeBlock — 多行命令块不得在非 auto 模式下自动打字（S-01）", () => {
+  const originalLive = useChatStore.getState().live;
+  const originalAutoType = usePreferencesStore.getState().agentAutoTypeCommands;
+  const originalAgentMode = useChatStore.getState().agentMode;
+  const originalTeach = useChatStore.getState().teach;
+
+  beforeEach(() => {
+    __resetAutoTypeLedger();
+    usePreferencesStore.setState({ agentAutoTypeCommands: true });
+    useChatStore.setState((s) => ({
+      live: {
+        ...s.live,
+        isActiveTerminalPrivate: () => false,
+        canAutoTypeToActiveTerminal: () => true,
+      },
+    }));
+  });
+
+  afterEach(() => {
+    useChatStore.setState({
+      live: originalLive,
+      agentMode: originalAgentMode,
+      teach: originalTeach,
+    });
+    usePreferencesStore.setState({ agentAutoTypeCommands: originalAutoType });
+    vi.restoreAllMocks();
+  });
+
+  const MULTI = "for f in *.log; do\n  gzip \"$f\"\ndone";
+
+  it.each(["confirm", "observe"] as const)(
+    "%s 模式：多行 bash 块零注入（换行会被 shell 逐行执行）",
+    (mode) => {
+      const inject = vi.fn(() => true);
+      useChatStore.setState({ agentMode: mode, teach: false });
+      useChatStore.setState((s) => ({
+        live: { ...s.live, injectIntoActivePty: inject },
+      }));
+      renderBlock(MULTI, "bash", false);
+      expect(inject).not.toHaveBeenCalled();
+    },
+  );
+
+  it("教学档：多行块同样不注入（学生自己粘贴、自己回车）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ agentMode: "observe", teach: true });
+    useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
+    renderBlock(MULTI, "bash", false);
+    expect(inject).not.toHaveBeenCalled();
+  });
+
+  it("单行命令在 confirm 档仍然自动打字（不回归本功能的初衷）", () => {
+    const inject = vi.fn((_text: string) => true);
+    useChatStore.setState({ agentMode: "confirm", teach: false });
+    useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
+    renderBlock("systemctl status nginx", "bash", false);
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject.mock.calls[0][0]).toBe("systemctl status nginx");
+    expect(inject.mock.calls[0][0]).not.toContain("\n");
+  });
+});

@@ -19,8 +19,17 @@ const dirtyLines = new Set<number>();
 
 /** Enter / Ctrl-M / Ctrl-J：这一行已提交 */
 const SUBMITTED = /[\r\n]/;
-/** Ctrl-C 放弃、Ctrl-U 删到行首、Ctrl-W 删词：行内容已被用户清空 */
-const LINE_WIPED = /[\x03\x15\x17]/;
+/**
+ * 只有 Ctrl-C 才是"整行作废"。
+ *
+ * TDSF 修复 2026-09-18（深度体检 Q3）：以前把 Ctrl-U(\x15) 与 Ctrl-W(\x17) 也算成
+ * 清行，但它们都只删一部分 —— 本仓 `keymap.ts` 自己就写着 `\x17` 是
+ * "kill-word-backward"、`\x15` 是"删到行首"（光标在行中时后半行还在）。
+ * 反例：用户敲 `docker-compose -f ` 后按一次 Ctrl-W，行里还剩 `docker-compose `，
+ * 但记账被清 → 闸门放行 → AI 把命令打在用户残行上（正是 M1 要防的事）。
+ * 保持"脏"只会让自动打字保守一点，方向安全。
+ */
+const LINE_ABANDONED = /\x03/;
 /** 至少含一个可见字符才算"往行上打了东西"（纯方向键不改变脏否状态） */
 const PRINTABLE = /[^\x00-\x1f\x7f]/;
 
@@ -34,7 +43,7 @@ export function noteUserInput(leafId: number, data: string): void {
     }
     return;
   }
-  if (LINE_WIPED.test(data)) {
+  if (LINE_ABANDONED.test(data)) {
     dirtyLines.delete(leafId);
     return;
   }
