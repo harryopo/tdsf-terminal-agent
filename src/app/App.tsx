@@ -454,6 +454,33 @@ export default function App() {
   );
   const isSpaceSshConnected =
     !!spaceSshSession && isSessionConnected(spaceSshSession);
+  // TDSF 2026-09-18（用户实测）: 状态栏环境标签必须以「命令实际跑在哪台机器」为准。
+  // 旧口径只看 Space 绑定的 env —— 本地 Space 里开 SSH 终端 tab 时 Space.env 仍是
+  // local，标签就恒显 "Windows"。优先取当前终端 leaf 的有效 SSH 会话，回退 Space 级会话。
+  const activeTabSshSessionId =
+    activeTerminalTab && activeLeafId !== null
+      ? (() => {
+          const eff = effectiveLeafSsh(
+            activeTerminalTab.paneTree,
+            activeLeafId,
+            activeTerminalTab.sshSessionId,
+          );
+          return typeof eff === "string" ? eff : null;
+        })()
+      : null;
+  const activeTabSshSession = useSshStore((s) =>
+    selectSessionById(s, activeTabSshSessionId),
+  );
+  const activeTerminalAddress = (() => {
+    const session =
+      activeTabSshSession && isSessionConnected(activeTabSshSession)
+        ? activeTabSshSession
+        : isSpaceSshConnected
+          ? spaceSshSession
+          : null;
+    if (!session) return null;
+    return `${session.params.user}@${session.params.host}`;
+  })();
   // 保留全局 active SSH session 用于非 Space 场景（自动登录、SshExplorer 视图）
   const activeSshSession = useSshStore(selectActiveSession);
   const activeSshSessionId = activeSshSession?.id ?? null;
@@ -1488,6 +1515,7 @@ export default function App() {
       launchCwd,
       launchCwdResolved,
       home,
+      hasActiveSpace: !!activeSpace,
       sidebarView,
       cycleSidebarView,
       openCommitHistoryTab,
@@ -2432,6 +2460,7 @@ export default function App() {
                   ? (spaceSshSession?.remoteOsInfo ?? null)
                   : null
               }
+              terminalAddress={activeTerminalAddress}
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true
               }

@@ -384,7 +384,9 @@ const TOOL_META: Record<
   teach_command: { label: "教学命令", icon: BookOpen01Icon, category: "plan" },
   todo_write: { label: "Todos", icon: CheckListIcon, category: "plan" },
   run_subagent: { label: "Subagent", icon: RobotIcon, category: "plan" },
-  assess_confidence: { label: "置信度", icon: ShieldUserIcon, category: "plan" },
+  // TDSF 2026-09-18: 标签不再叫「置信度」——旧的分数算法已被会话证据三态取代，
+  // 这是 UI 里最后一处常驻「置信度」字样（任何模式都渲染），保留会误导。
+  assess_confidence: { label: "证据评估", icon: ShieldUserIcon, category: "plan" },
 };
 
 const STATUS_DOT: Record<ToolPart["state"], string> = {
@@ -1758,20 +1760,21 @@ function SuggestCommandCard({
     const ok = store.live.injectIntoActivePty(text);
     if (ok) setAction(execute ? "executed" : "inserted");
   };
-  // TDSF (2026-08-09): 终端执行模式——自动执行（组件渲染时触发一次）
+  // TDSF 2026-09-18（用户钦定"要写入命令就自动输出到终端，别让我点 Run"）:
+  // 建议命令卡渲染后自动打字到活动终端，四种模式全开。
+  // 安全边界保留 2026-09-03 教训（确认模式自动执行=绕过 HITL 审批）：
+  // 只有 auto 模式追加 \n 真正执行，confirm/observe/teach 只打字不回车。
+  // autoFiredRef 守卫不可省：流式期间 command 逐字变化会反复触发本 effect，
+  // 叠加 injectIntoActivePty 回流重渲染可致 "Maximum update depth exceeded"。
   useEffect(() => {
     if (autoFiredRef.current) return;
     const { autoExecuteInTerminal, agentMode, live, teach } =
       useChatStore.getState();
     if (!autoExecuteInTerminal) return;
-    // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
-    if (teach) return;
-    // 问题2修复(2026-09-03 用户实测)：仅 auto 模式自动注入；确认模式须用户点
-    // Insert/审批，否则绕过 HITL 审批（确认模式没点确认就自动打字机执行）。
-    if (agentMode !== "auto") return;
     autoFiredRef.current = true;
-    const ok = live.injectIntoActivePty(command + "\n");
-    if (ok) setAction("executed");
+    const execute = agentMode === "auto" && !teach;
+    const ok = live.injectIntoActivePty(execute ? command + "\n" : command);
+    if (ok) setAction(execute ? "executed" : "inserted");
   }, [command]);
   return (
     <div className="space-y-1.5">

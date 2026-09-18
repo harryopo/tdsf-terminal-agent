@@ -205,36 +205,40 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   const tRef = useRef<number>(0);
   useEffect(() => () => window.clearTimeout(tRef.current), []);
 
-  // 注入命令到活动终端：autoExecuteInTerminal 开启时追加 \n 自动执行
-  // （与 tool.tsx SuggestCommandCard 同源逻辑，human_type 打字机逐字写入）。
-  const inject = useCallback(() => {
-    const store = useChatStore.getState();
-    // 教学模式禁止自动插入终端，学生手动逐条执行：teach 会话下该偏好强制视为 false（只粘贴不带 \n）。
-    const execute = store.autoExecuteInTerminal && !store.teach;
-    const text = execute ? code + "\n" : code;
-    const ok = store.live.injectIntoActivePty(text);
-    if (!ok) return;
-    setSent(true);
-    window.clearTimeout(tRef.current);
-    tRef.current = window.setTimeout(() => setSent(false), 1500);
-  }, [code]);
+  // 注入命令到活动终端。execute=true 追加 \n（打字并执行）；
+  // execute=false 只把命令逐字打字到提示符，回车留给用户自己按。
+  const inject = useCallback(
+    (execute: boolean) => {
+      const store = useChatStore.getState();
+      const text = execute ? code + "\n" : code;
+      const ok = store.live.injectIntoActivePty(text);
+      if (!ok) return;
+      setSent(true);
+      window.clearTimeout(tRef.current);
+      tRef.current = window.setTimeout(() => setSent(false), 1500);
+    },
+    [code],
+  );
 
-  // TDSF 2026-09-02（用户钦定“自动打字+自动执行”）: 命令卡渲染后
-  // 自动注入活动终端，无需手动点 Run。仅 autoExecuteInTerminal 开启时触发；
-  // NOOP_LIVE 下 injectIntoActivePty 返回 false（测试/无终端环境安全无副作用）。
-  // autoFiredRef 保证每个命令卡只自动注入一次（防重渲染/多视图重复执行）。
-  // 问题2修复（2026-09-03 用户实测：确认模式没点确认就自动打字机）：
-  // 仅 auto（自动）模式才自动注入执行；confirm/observe/teach 模式下命令卡
-  // 不自动执行——确认模式须用户点 Run 或走 HITL 审批，否则自动注入=绕过审批安全 bug。
+  // 手动点 Run：沿用既有语义——偏好开启且非教学模式时打字并执行，
+  // 教学模式下只粘贴（学生自己回车）。
+  const onRunClick = () => {
+    const store = useChatStore.getState();
+    inject(store.autoExecuteInTerminal && !store.teach);
+  };
+
+  // TDSF 2026-09-18（用户钦定"要写入命令就自动输出到终端，别让我点 Run"）:
+  // 命令卡渲染后自动打字到活动终端，四种模式全开。
+  // 安全边界保留 2026-09-03 的教训（"确认模式没点确认就自动打字机执行"= 绕过
+  // HITL 审批）：只有 auto 模式追加 \n 真正执行，confirm/observe/teach 一律
+  // 只打字不回车，执行权仍在用户手上。autoFiredRef 保证每张卡只注入一次。
   const autoFiredRef = useRef(false);
   useEffect(() => {
     if (autoFiredRef.current) return;
     const store = useChatStore.getState();
-    // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
-    if (!store.autoExecuteInTerminal || store.teach) return;
-    if (store.agentMode !== "auto") return;
+    if (!store.autoExecuteInTerminal) return;
     autoFiredRef.current = true;
-    inject();
+    inject(store.agentMode === "auto" && !store.teach);
   }, [inject]);
 
   return (
@@ -244,7 +248,7 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
           {normalizeLangLabel(lang)}
         </span>
         <div className="flex items-center gap-1">
-          <RunInTerminalButton sent={sent} onRun={inject} />
+          <RunInTerminalButton sent={sent} onRun={onRunClick} />
           <CopyButton text={code} />
         </div>
       </div>
