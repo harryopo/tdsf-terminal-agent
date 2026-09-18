@@ -39,6 +39,8 @@ import {
   type AgentMode,
 } from "../agents/registry";
 import { useChatStore } from "../store/chatStore";
+import { setAgentAutoTypeCommands } from "@/modules/settings/store";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 
 /** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电 / 教学=书，与 AgentStatusPill 一致） */
 const MODE_ICON: Record<AgentMode, typeof EyeIcon> = {
@@ -68,9 +70,8 @@ const VIEWPORT_MARGIN = 8;
 export function AgentModeSwitcher({ className }: { className?: string }) {
   const agentMode = useChatStore((s) => s.agentMode);
   const setAgentMode = useChatStore((s) => s.setAgentMode);
-  // 命令自动打字开关：唯一可达入口（TdsfAgentPanel 里的旧开关随面板弃用已不可达）。
-  const autoType = useChatStore((s) => s.autoExecuteInTerminal);
-  const setAutoType = useChatStore((s) => s.setAutoExecuteInTerminal);
+  // 命令自动打字开关：唯一可达入口，且已迁到持久化偏好（重启后保持）。
+  const autoType = usePreferencesStore((s) => s.agentAutoTypeCommands);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<MenuPos | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -273,7 +274,7 @@ export function AgentModeSwitcher({ className }: { className?: string }) {
                 role="switch"
                 aria-checked={autoType}
                 data-testid="agent-mode-autotype"
-                onClick={() => setAutoType(!autoType)}
+                onClick={() => void setAgentAutoTypeCommands(!autoType)}
                 title="开启时 AI 给出的命令会自动打字到活动终端；仅自动模式追加回车执行"
                 className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-accent/40"
               >

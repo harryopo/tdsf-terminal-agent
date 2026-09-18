@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 import { __resetAutoTypeLedger } from "@/modules/ai/lib/autoTypeLedger";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { ChatCodeBlock, ChatStreamingProvider } from "./chat-code";
 
@@ -67,31 +68,37 @@ describe("ChatCodeBlock — 流式结束后", () => {
 // ============================================================================
 describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   const originalLive = useChatStore.getState().live;
-  const originalAutoExec = useChatStore.getState().autoExecuteInTerminal;
+  const originalAutoType = usePreferencesStore.getState().agentAutoTypeCommands;
   const originalAgentMode = useChatStore.getState().agentMode;
   const originalTeach = useChatStore.getState().teach;
 
   beforeEach(() => {
     // ledger 是模块级的（防重挂重放/同批互踩），逐例重置避免相互污染。
     __resetAutoTypeLedger();
+    usePreferencesStore.setState({ agentAutoTypeCommands: true });
+    // 闸门默认放行：本组用例测的是命令卡决策逻辑，闸门自身另有用例。
     useChatStore.setState((s) => ({
-      live: { ...s.live, isActiveTerminalPrivate: () => false },
+      live: {
+        ...s.live,
+        isActiveTerminalPrivate: () => false,
+        canAutoTypeToActiveTerminal: () => true,
+      },
     }));
   });
 
   afterEach(() => {
     useChatStore.setState({
       live: originalLive,
-      autoExecuteInTerminal: originalAutoExec,
       agentMode: originalAgentMode,
       teach: originalTeach,
     });
+    usePreferencesStore.setState({ agentAutoTypeCommands: originalAutoType });
     vi.restoreAllMocks();
   });
 
-  it("autoExecuteInTerminal 开启 + auto 模式 → shell 命令卡渲染后自动注入 code+\\n（自动执行）", () => {
+  it("自动打字开启 + auto 模式 → shell 命令卡渲染后自动注入 code+\\n（自动执行）", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "auto" });
+    useChatStore.setState({ agentMode: "auto" });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -102,7 +109,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("确认模式 → 自动打字但不追加 \\n（执行权留给用户，不绕过审批）", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "confirm" });
+    useChatStore.setState({ agentMode: "confirm" });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -119,7 +126,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("观察模式 → 同样自动打字不追加 \\n", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "observe" });
+    useChatStore.setState({ agentMode: "observe" });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -127,9 +134,9 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     expect(inject).toHaveBeenCalledWith("uptime");
   });
 
-  it("autoExecuteInTerminal 关闭 → 不自动注入（保留手动 Run）", () => {
+  it("自动打字偏好关闭 → 不自动注入（保留手动 Run）", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: false });
+    usePreferencesStore.setState({ agentAutoTypeCommands: false });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -143,7 +150,6 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("流式期间 → 不渲染命令卡也不自动注入", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -154,7 +160,6 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   it("教学模式（teach=true）→ 自动打字但绝不追加 \\n，执行仍由学生自己回车", () => {
     const inject = vi.fn(() => true);
     useChatStore.setState({
-      autoExecuteInTerminal: true,
       agentMode: "auto",
       teach: true,
     });
@@ -177,7 +182,6 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   it("非教学模式行为不变：autoExecuteInTerminal 开启 + auto 模式下手动 Run 仍自动执行（code+\\n）", () => {
     const inject = vi.fn(() => true);
     useChatStore.setState({
-      autoExecuteInTerminal: true,
       agentMode: "auto",
       teach: false,
     });
@@ -195,19 +199,19 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   // 代码审查加固（2026-09-18）：Private 终端 / 同批多卡互踩 / 重挂重放
   // ==========================================================================
 
-  it("Private 终端（用户刻意对 AI 隐藏）→ 不自动打字，手动 Run 仍可用", () => {
+  it("自动打字闸门拒绝（Private/脏行/非提示符）→ 不自动打字，手动 Run 仍可用", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "auto" });
+    useChatStore.setState({ agentMode: "auto" });
     useChatStore.setState((s) => ({
       live: {
         ...s.live,
-        isActiveTerminalPrivate: () => true,
+        canAutoTypeToActiveTerminal: () => false,
         injectIntoActivePty: inject,
       },
     }));
     renderBlock("uptime", "bash", false);
     expect(inject).not.toHaveBeenCalled();
-    // 手动 Run 是用户明示动作，不受 private 限制
+    // 手动 Run 是用户明示动作，不受闸门限制
     fireEvent.click(
       screen.getByRole("button", { name: "Run in active terminal" }),
     );
@@ -216,7 +220,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("一条回复含多个代码块 → 同一 commit 内只有第一张卡自动打字（不拼接/不互清）", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "confirm" });
+    useChatStore.setState({ agentMode: "confirm" });
     useChatStore.setState((s) => ({
       live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
     }));
@@ -237,7 +241,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("重挂同一命令卡（重开小窗重放历史）→ 不再自动打字", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "auto" });
+    useChatStore.setState({ agentMode: "auto" });
     useChatStore.setState((s) => ({
       live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
     }));

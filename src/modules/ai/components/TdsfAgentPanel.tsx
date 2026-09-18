@@ -37,6 +37,8 @@ import { toast } from "sonner";
 import { AGENT_MODE_META } from "../agents/registry";
 import { getOrCreateChat, sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
+import { setAgentAutoTypeCommands } from "@/modules/settings/store";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useSpaces } from "@/modules/spaces";
 import { AiChatView } from "./AiChat";
 import { TodoStrip } from "./TodoStrip";
@@ -353,9 +355,9 @@ function Body({
     if (activeSpaceId) syncSessionToWorkspace();
   }, [activeSpaceId, syncSessionToWorkspace]);
 
-  // TDSF (2026-08-09): 终端执行模式开关状态
-  const autoExec = useChatStore((s) => s.autoExecuteInTerminal);
-  const setAutoExec = useChatStore((s) => s.setAutoExecuteInTerminal);
+  // TDSF (2026-08-09): 终端执行模式开关状态（#58 起为持久化偏好）
+  const autoExec = usePreferencesStore((s) => s.agentAutoTypeCommands);
+  const setAutoExec = (on: boolean) => void setAgentAutoTypeCommands(on);
   // 消息更新时自动滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({

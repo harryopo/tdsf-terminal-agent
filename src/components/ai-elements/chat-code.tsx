@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { claimAutoType } from "@/modules/ai/lib/autoTypeLedger";
 import { useChatStore } from "@/modules/ai/store/chatStore";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   ArrowRight01Icon,
   CheckmarkCircle01Icon,
@@ -225,7 +226,9 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   // 教学模式下只粘贴（学生自己回车）。
   const onRunClick = () => {
     const store = useChatStore.getState();
-    inject(store.autoExecuteInTerminal && !store.teach);
+    inject(
+      usePreferencesStore.getState().agentAutoTypeCommands && !store.teach,
+    );
   };
 
   // TDSF 2026-09-18（用户钦定"要写入命令就自动输出到终端，别让我点 Run"）:
@@ -237,9 +240,11 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   useEffect(() => {
     if (autoFiredRef.current) return;
     const store = useChatStore.getState();
-    if (!store.autoExecuteInTerminal) return;
-    // Private 终端是用户刻意对 AI 隐藏的，不往里自动打字（手动 Run 是明示动作，不受限）。
-    if (store.live.isActiveTerminalPrivate?.() === true) return;
+    if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
+    // 自动打字专用闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
+    // 手动 Run 是用户明示动作，不走这里。
+    const gate = store.live.canAutoTypeToActiveTerminal;
+    if (gate && !gate()) return;
     // 重挂重放 / 同批互踩由 ledger 拦住：见 autoTypeLedger 注释。
     if (!claimAutoType(code)) return;
     autoFiredRef.current = true;

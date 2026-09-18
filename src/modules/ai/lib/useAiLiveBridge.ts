@@ -14,6 +14,7 @@ import {
   writeToSession,
 } from "@/modules/terminal";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
+import { isUserLineDirty } from "@/modules/terminal/lib/terminalInputState";
 import {
   matchesVisibleTerminalCommand,
   useTeachingExecutionStore,
@@ -154,7 +155,17 @@ export function useAiLiveBridge(params: Params) {
       const speed = prefs.agentTypingSpeed;
       const sshLeafId = ref.current.getSshLeafId?.();
       if (sshLeafId !== null && sshLeafId !== undefined) {
-        const sessionId = sshRustSessionId();
+        // 只认「活跃且已连接」的会话：sshRustSessionId() 会回退到任意已连接会话，
+        // 而 sshLeafId 来自可见面板，两者可能不是同一台服务器 → 逐字节的命令
+        // 被打进用户没在看的那台机器（#56）。此处宁可返回 false 走本地整段路径。
+        const sshState = useSshStore.getState();
+        const visibleSession = sshState.sessions.find(
+          (s) => s.id === sshState.activeSessionId,
+        );
+        const sessionId =
+          visibleSession && isSessionConnected(visibleSession)
+            ? visibleSession.rustSessionId
+            : null;
         if (sessionId === null) return false;
         useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
         armAgentCommandEcho(sshLeafId, t, { waitForPrompt: true });
@@ -323,6 +334,24 @@ export function useAiLiveBridge(params: Params) {
         const { activeId, tabs } = ref.current;
         const t = tabs.find((x) => x.id === activeId);
         return t?.kind === "terminal" && t.private === true;
+      },
+      /**
+       * 自动打字（无人点击）是否安全。命令卡渲染即注入，必须避开三种情况：
+       * Private 终端、用户正在敲的半行、以及不在提示符（程序正在运行）的终端。
+       * 手动 Run 不调用本函数——那是用户明示动作。
+       */
+      canAutoTypeToActiveTerminal: () => {
+        const { activeId, tabs } = ref.current;
+        const tab = tabs.find((x) => x.id === activeId);
+        const sshLeafId = ref.current.getSshLeafId?.();
+        const leafId =
+          sshLeafId ??
+          (tab?.kind === "terminal" ? tab.activeLeafId : null);
+        if (leafId === null || leafId === undefined) return false;
+        if (tab?.kind === "terminal" && tab.private === true) return false;
+        if (isUserLineDirty(leafId)) return false;
+        // 未知 leaf 默认 "prompt"（fail-open），不会误杀自动打字功能。
+        return getLeafBlockMode(leafId) === "prompt";
       },
       injectIntoActivePty: (text) => {
         // TDSF (2026-08-09): 提取核心注入逻辑为共享函数，
@@ -770,7 +799,8 @@ export function useAiLiveBridge(params: Params) {
           const { command } = event.payload;
           if (!command) return;
           // 终端执行模式开启时加换行符自动执行
-          const autoExec = useChatStore.getState().autoExecuteInTerminal;
+          const autoExec =
+            usePreferencesStore.getState().agentAutoTypeCommands;
           const text = autoExec ? command + "\n" : command;
           // C3 修复 (2026-09-01, 用户实测"打字机开了没用/命令不回显终端"):
           // 此前调用捕获的 injectFn 变量——它在 injectIntoActivePty 首次被
