@@ -6,7 +6,7 @@
  * 现在流式期间照常渲染纯文本代码，只跳过语法高亮。
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { ChatCodeBlock, ChatStreamingProvider } from "./chat-code";
@@ -68,12 +68,14 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   const originalLive = useChatStore.getState().live;
   const originalAutoExec = useChatStore.getState().autoExecuteInTerminal;
   const originalAgentMode = useChatStore.getState().agentMode;
+  const originalTeach = useChatStore.getState().teach;
 
   afterEach(() => {
     useChatStore.setState({
       live: originalLive,
       autoExecuteInTerminal: originalAutoExec,
       agentMode: originalAgentMode,
+      teach: originalTeach,
     });
     vi.restoreAllMocks();
   });
@@ -126,5 +128,43 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     }));
     renderBlock("uptime", "bash", true);
     expect(inject).not.toHaveBeenCalled();
+  });
+
+  it("教学模式（teach=true）→ 自动注入失效（偏好视为 false），学生手动逐条执行", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({
+      autoExecuteInTerminal: true,
+      agentMode: "auto",
+      teach: true,
+    });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", false);
+    // 教学模式禁止自动插入终端
+    expect(inject).not.toHaveBeenCalled();
+    // 手动 Run 仍在：点击后只粘贴命令本身（不带 \n，不自动执行）
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run in active terminal" }),
+    );
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith("uptime");
+  });
+
+  it("非教学模式行为不变：autoExecuteInTerminal 开启 + auto 模式下手动 Run 仍自动执行（code+\\n）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({
+      autoExecuteInTerminal: true,
+      agentMode: "auto",
+      teach: false,
+    });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", false);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run in active terminal" }),
+    );
+    expect(inject).toHaveBeenCalledWith("uptime\n");
   });
 });

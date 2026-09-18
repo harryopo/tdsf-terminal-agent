@@ -234,6 +234,15 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         # 只写前端 todo 状态，无系统风险 → readonly（L1 下保留，与原行为一致）
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
+    "system_probe_teaching": ToolSpec(
+        name="system_probe_teaching",
+        factory="strands_backend.tools.system_probe_teaching:make_system_probe_teaching_tool",
+        description="教学开场只读探测：采集主机系统环境基线（仅教学模式，自动执行一次）",
+        # 固定只读脚本、无参数、仅教学上下文可调 → readonly。刻意不注册
+        # to_shell_command：避免被教学 wrap 转卡——它是教学模式唯一允许
+        # 后端真实执行的探测通道（refine-teaching-mode-ux 2026-09-18）。
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+    ),
     "get_terminal_output": ToolSpec(
         name="get_terminal_output",
         factory="strands_backend.tools.get_terminal_output:make_get_terminal_output_tool",

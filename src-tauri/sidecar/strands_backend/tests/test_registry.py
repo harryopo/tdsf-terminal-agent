@@ -50,8 +50,9 @@ class TestRegistryIntegrity(unittest.TestCase):
     def test_registry_has_24_tools(self):
         """T2 后注册表 = 13 运维/知识 + 6 定制增强 + T14 save_skill
         + 2026-08-31 knowledge_get_doc + T5 python_run
-        + P2 #42 ssh_list_sessions + 远程写文件 = 24"""
-        self.assertEqual(len(TOOL_REGISTRY), 25)
+        + P2 #42 ssh_list_sessions + 远程写文件 = 24
+        + refine-teaching-mode-ux (2026-09-18) system_probe_teaching = 26"""
+        self.assertEqual(len(TOOL_REGISTRY), 26)
 
     def test_key_matches_spec_name(self):
         """dict key 必须与 spec.name 一致（防复制粘贴错位）"""
@@ -90,6 +91,8 @@ class TestRegistryIntegrity(unittest.TestCase):
             "knowledge_get_doc",
             # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具
             "python_run",
+            # refine-teaching-mode-ux (2026-09-18): 教学开场只读探测
+            "system_probe_teaching",
             # P2 #42 (2026-09-01, §37.90): SSH 会话枚举（多主机运维）
             "ssh_list_sessions",
             # 远程文件安全覆盖写入（备份 + 回读验证）

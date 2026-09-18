@@ -224,7 +224,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         self.assertIs(observe_agent, confirm_agent)
         self.assertIn("ssh_command", set(confirm_agent.tool_names))
-        self.assertEqual(len(set(confirm_agent.tool_names)), 26)
+        self.assertEqual(len(set(confirm_agent.tool_names)), 27)
 
     def test_main_agent_has_full_toolset(self):
         """main（唯一 agent）：业务工具 + 1 个上下文回读工具
@@ -240,7 +240,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         ctx = adapter._build_tool_context("main", "e2e-s3", {})
         agent = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM)
         tool_names = set(agent.tool_names)
-        self.assertEqual(len(tool_names), 26)
+        self.assertEqual(len(tool_names), 27)
         # 核心工具齐全
         for name in (
             "ssh_command", "ssh_list_sessions", "ask_user", "skill_invoke", "knowledge_search",
@@ -264,7 +264,7 @@ class TestStrandsRealE2E(unittest.TestCase):
         )
         tool_names = set(agent.tool_names)
         self.assertIn("ssh_command", tool_names)
-        self.assertEqual(len(tool_names), 26)
+        self.assertEqual(len(tool_names), 27)
 
 
 if __name__ == "__main__":

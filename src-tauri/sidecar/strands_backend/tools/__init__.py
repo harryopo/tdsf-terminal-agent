@@ -1772,6 +1772,21 @@ def filter_tools_readonly(tools: list) -> list:
     ]
 
 
+# 教学辅助工具白名单（单一真源，adapter.py 亦从此导入）：教学模式下除
+# shell 映射工具（转命令卡）外，保留知识检索/技能剧本/任务进度/提问/会话
+# 枚举类参考工具——教学模式收窄的是命令执行路径，不裁剪知识与技能能力。
+TEACH_AUX_TOOL_NAMES = frozenset({
+    "ask_user",
+    "knowledge_search",
+    "knowledge_get_doc",
+    "skill_invoke",
+    "ssh_list_sessions",
+    "system_probe_teaching",
+    "teach_command",
+    "todo_write",
+})
+
+
 def emit_teach_tool_call(
     ctx: ToolContext,
     tool_name: str,
@@ -1950,6 +1965,10 @@ def make_all_ops_tools(
                 for spec in TOOL_REGISTRY.values()
                 if spec.to_shell_command is not None
             )
+        if getattr(ctx, "teach", False):
+            # 教学模式防御性豁免：构造期只读裁剪不得裁掉教学辅助工具
+            # （知识检索/技能剧本/任务进度），否则教学中能力静默缺失。
+            allowed.update(TEACH_AUX_TOOL_NAMES)
         tools = [t for t in tools if getattr(t, "__name__", "") in allowed]
     if tool_names is not None:
         allowed = set(tool_names)
@@ -1974,6 +1993,7 @@ __all__ = [
     "assess_command",
     "execute_via_ssh",
     "filter_tools_readonly",
+    "TEACH_AUX_TOOL_NAMES",
     "emit_teach_tool_call",
     "wrap_tool_for_teach_mode",
     # 工具注册（T2: TOOL_REGISTRY 单一真源 + 派生集合）
