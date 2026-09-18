@@ -113,6 +113,10 @@ export function configureRendererPool(a: SlotAdapter): void {
   bindWindowActivityListeners();
   // TDSF (2026-08-09): 注入命令预测引擎的 xterm 访问和写入能力
   initCompletionInjection(getSlotTerm, (leafId, data) => {
+    // 代码审查 M1：接受补全是"用户把这一行填上了"，但它绕过 term.onData 直接写
+    // PTY。不记这一笔，随后到来的 AI 自动打字就会把用户刚接受的建议整行盖掉，
+    // 且用户回车时不会被撤销 agentPending（作者被误标成 agent）。
+    noteUserInput(leafId, data);
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
   });
 }
@@ -326,11 +330,15 @@ function createSlot(): Slot {
     });
     if (readlineSequence) {
       event.preventDefault();
+      // 代码审查 M1：这些直写 PTY 的路径同样不经过 term.onData，必须自己记账，
+      // 否则"用户正在敲这一行"的信号会漏。
+      if (event.type === "keydown") noteUserInput(leafId, readlineSequence);
       if (event.type === "keydown") bridge.writeToPty(readlineSequence);
       return false;
     }
     if (isShiftEnter(event)) {
       event.preventDefault();
+      if (event.type === "keydown") noteUserInput(leafId, "\x1b\r");
       if (event.type === "keydown") bridge.writeToPty("\x1b\r");
       return false;
     }
@@ -825,6 +833,11 @@ function disposeSlot(slot: Slot): void {
     console.warn("[tdsf] slot dispose failed:", e);
   }
   slot.host.remove();
+  // 代码审查 L1：标签页关闭走的是 disposeSession → disposeSlot，不经过
+  // detachSlotFromLeaf，脏行标记会留在集合里。leafId 目前单调递增所以不会立刻
+  // 出错，但"这个 leaf 用户正在敲"的信号必须随 leaf 一起消失。
+  if (slot.currentLeafId !== null) clearUserLine(slot.currentLeafId);
+  if (slot.retainedLeafId !== null) clearUserLine(slot.retainedLeafId);
   const i = slots.indexOf(slot);
   if (i >= 0) slots.splice(i, 1);
 }

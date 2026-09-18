@@ -2,7 +2,10 @@
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { claimAutoType } from "@/modules/ai/lib/autoTypeLedger";
+import {
+  claimAutoType,
+  markAutoTyped,
+} from "@/modules/ai/lib/autoTypeLedger";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
@@ -210,14 +213,15 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   // 注入命令到活动终端。execute=true 追加 \n（打字并执行）；
   // execute=false 只把命令逐字打字到提示符，回车留给用户自己按。
   const inject = useCallback(
-    (execute: boolean) => {
+    (execute: boolean): boolean => {
       const store = useChatStore.getState();
       const text = execute ? code + "\n" : code;
       const ok = store.live.injectIntoActivePty(text);
-      if (!ok) return;
+      if (!ok) return false;
       setSent(true);
       window.clearTimeout(tRef.current);
       tRef.current = window.setTimeout(() => setSent(false), 1500);
+      return true;
     },
     [code],
   );
@@ -246,9 +250,13 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
     const gate = store.live.canAutoTypeToActiveTerminal;
     if (gate && !gate()) return;
     // 重挂重放 / 同批互踩由 ledger 拦住：见 autoTypeLedger 注释。
-    if (!claimAutoType(code)) return;
+    // 记账要等注入成功——冷标签没有渲染槽时注入会返回 false，若此刻就记账，
+    // 常见命令（git status）会在整个应用生命周期里再也不自动打字且无提示。
+    if (!claimAutoType(code, store.activeSessionId)) return;
     autoFiredRef.current = true;
-    inject(store.agentMode === "auto" && !store.teach);
+    if (inject(store.agentMode === "auto" && !store.teach)) {
+      markAutoTyped(code, store.activeSessionId);
+    }
   }, [code, inject]);
 
   return (
