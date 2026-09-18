@@ -173,7 +173,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "suggest_command": ToolSpec(
         name="suggest_command",
         factory="strands_backend.tools.suggest_command:make_suggest_command_tool",
-        description="根据用户意图生成可执行的 Linux 命令建议（不执行）",
+        description="根据用户意图生成可执行的命令建议（不执行）。target_os 必须与用户当前终端实际所在系统一致：本地 Windows 终端传 \"windows\"（返回 PowerShell 命令），Linux/SSH 传 \"linux\"。",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
     "knowledge_search": ToolSpec(
