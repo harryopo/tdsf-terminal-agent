@@ -10,7 +10,8 @@ import {
   CloudServerIcon,
   CubeIcon,
   FolderOpenIcon,
-  Square01Icon,
+  // 本地入口用 TerminalIcon：本版本 hugeicons 的 Square01Icon 其实是「x²」数学符号
+  TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -39,9 +40,14 @@ export function WelcomeScreen({
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-8 bg-background">
       <div className="flex flex-col items-center gap-3">
-        <div className="flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-2xl font-bold text-primary">
-          ⬡
-        </div>
+        {/* 与 AiMiniWindow 空态 / 关于页 / 水印同一份 logo.svg（v8 深灰底 + 米白 >_），
+            不再用 ⬡ 字符占位 */}
+        <img
+          src="/logo.svg"
+          alt="TDSF"
+          draggable={false}
+          className="size-14 rounded-lg"
+        />
         <h1 className="text-2xl font-semibold text-foreground">
           TDSF Terminal Agent
         </h1>
@@ -73,7 +79,7 @@ export function WelcomeScreen({
           onClick={onCreateLocal}
           data-testid="welcome-local"
         >
-          <HugeiconsIcon icon={Square01Icon} size={16} strokeWidth={1.75} />
+          <HugeiconsIcon icon={TerminalIcon} size={16} strokeWidth={1.75} />
           新建本地工作区
         </Button>
         <Button

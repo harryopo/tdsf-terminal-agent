@@ -15,6 +15,16 @@ const base = {
 };
 
 describe("WelcomeScreen — 已有工作区的回程入口", () => {
+  it("中央标识用同一份 logo.svg，不再用 ⬡ 字符占位", () => {
+    render(
+      <WelcomeScreen {...base} existingCount={0} onOpenExisting={() => {}} />,
+    );
+    const logo = document.querySelector('img[src="/logo.svg"]');
+    expect(logo).toBeTruthy();
+    expect(logo?.getAttribute("alt")).toBe("TDSF");
+    expect(document.body.textContent).not.toContain("⬡");
+  });
+
   it("existingCount>0：显示「打开已有工作区（N）」并回调 onOpenExisting", () => {
     const onOpenExisting = vi.fn();
     render(
