@@ -127,6 +127,16 @@ function buildQuestionItem(
   };
 }
 
+/** 按 needs_type 组装卡片（事件推送与挂载补水合两条路径共用同一套字段解析） */
+function buildItem(
+  payload: NeedsYouEventPayload,
+  reqId: string,
+): NeedsYouItem {
+  return payload.needs_type === "question"
+    ? buildQuestionItem(payload, reqId)
+    : buildApprovalItem(payload, reqId);
+}
+
 function NeedsYouQuestionCard({
   item,
   onAnswer,
@@ -209,10 +219,7 @@ export function NeedsYouApprovalCards() {
       const eventName = asStr(payload.event) ?? "created";
       if (eventName === "created") {
         if (resolvedRef.current.has(reqId)) return;
-        const item =
-          payload.needs_type === "question"
-            ? buildQuestionItem(payload, reqId)
-            : buildApprovalItem(payload, reqId);
+        const item = buildItem(payload, reqId);
         setItems((cur) => {
           const idx = cur.findIndex((i) => i.reqId === reqId);
           if (idx < 0) return [...cur, item];
@@ -237,6 +244,47 @@ export function NeedsYouApprovalCards() {
     return () => {
       cancelled = true;
       unlisten?.();
+    };
+  }, []);
+
+  // #59 补水合：needs_you 的 created 只推一次，页面重载 / 挂载竞态期间错过的
+  // 事件不会重放。approval 还有 300s 超时兜底，而 question 的 deadline 恒为
+  // None（needs_you.py 只给 approval 设超时），Python 侧 wait_for_response 会
+  // 无限阻塞工具线程 —— 少这一次补拉就是"agent 卡死且界面上没有任何可点的东西"。
+  // 故挂载时按 needs_you.list 拉一次 pending 请求，把错过的卡片补齐。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      // sidecar 未起 / 浏览器模式下这个 RPC 会 reject：属正常启动时序，静默跳过，
+      // 事件订阅通道仍在（created 后续到达照样出卡）。
+      let rows: NeedsYouEventPayload["request"][] | null = null;
+      try {
+        rows = await invokeRpc<NeedsYouEventPayload["request"][]>(
+          "needs_you.list",
+          {},
+        );
+      } catch {
+        return;
+      }
+      if (cancelled || !Array.isArray(rows)) return;
+      const pending = rows.filter(
+        (req) => req?.type === "approval" || req?.type === "question",
+      );
+      if (pending.length === 0) return;
+      setItems((cur) => {
+        const seen = new Set(cur.map((i) => i.reqId));
+        const next = cur.slice();
+        for (const req of pending) {
+          const reqId = req?.id;
+          if (!reqId || seen.has(reqId)) continue;
+          seen.add(reqId);
+          next.push(buildItem({ needs_type: req.type, request: req }, reqId));
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
     };
   }, []);
 
