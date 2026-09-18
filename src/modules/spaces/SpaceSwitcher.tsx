@@ -241,7 +241,11 @@ export function SpaceSwitcher({
     endDrag(e.currentTarget);
   };
 
-  if (!current) return null;
+  // TDSF 修复 2026-09-18 (ROADMAP #61 方案 A)：启动后不再自动进入工作区
+  // （activeId 恒为 null），所以「没有 current」不再是「没有工作区」。
+  // 注册表里还有历史工作区时必须照旧渲染触发器，否则留存下来的清单在 UI 上
+  // 一个入口都没有——用户只能重复「新建」，#61-A 就白做了。
+  if (!current && spaces.length === 0) return null;
 
   // TDSF 2026-09-01（用户钦定工作区-窗口重构）: 顶栏收敛为"单触发器 + 单窗口栏"。
   // 旧版每 Space 一个 chip（带字母头像）+ 独立新建加号，与 TabBar 的窗口加号
@@ -264,7 +268,7 @@ export function SpaceSwitcher({
             data-testid="space-trigger"
             className="flex h-7 max-w-44 min-w-0 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
           >
-            <span className="truncate">{current?.name ?? "工作区"}</span>
+            <span className="truncate">{current?.name ?? "选择工作区"}</span>
             <HugeiconsIcon
               icon={ArrowDown01Icon}
               size={13}

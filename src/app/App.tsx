@@ -100,6 +100,7 @@ import { HostApprovalDialog } from "@/modules/ssh-explorer/SshExplorer";
 // TDSF 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
 // 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
 import { StatusBar } from "@/modules/statusbar";
+import { terminalAddressOf } from "@/modules/statusbar/lib/terminalAddress";
 import {
   TabSwitcherHud,
   useTabSwitcher,
@@ -442,6 +443,10 @@ export default function App() {
   const activeSpace = useSpaces((s) =>
     s.spaces.find((sp) => sp.id === activeSpaceId),
   );
+  // TDSF 2026-09-18 (#61 方案 A)：欢迎页/侧栏空态的判据从"注册过几个工作区"改成
+  // "**当前有没有**活跃工作区"。注册表现在跨重启留存，用 spaceCount 判空会让
+  // 首屏不再是欢迎页，直接违背 2026-08-07 的钦定。
+  const hasActiveWorkspace = !!activeSpace;
   const spaceSshSessionId =
     activeSpace?.env.kind === "ssh"
       ? (activeSpace.env.sessionId ?? null)
@@ -471,16 +476,10 @@ export default function App() {
   const activeTabSshSession = useSshStore((s) =>
     selectSessionById(s, activeTabSshSessionId),
   );
-  const activeTerminalAddress = (() => {
-    const session =
-      activeTabSshSession && isSessionConnected(activeTabSshSession)
-        ? activeTabSshSession
-        : isSpaceSshConnected
-          ? spaceSshSession
-          : null;
-    if (!session) return null;
-    return `${session.params.user}@${session.params.host}`;
-  })();
+  // #63（用户 2026-09-18 决策）：右下角只认活动 tab 自己绑定的已连接 SSH 会话。
+  // 旧实现回退到 Space 的 SSH 会话，导致"SSH 工作区里开本地终端标签"时仍显示
+  // user@host，而命令其实跑在本地 —— 与"这里要显示命令实际跑在哪台机器"的口径相反。
+  const activeTerminalAddress = terminalAddressOf(activeTabSshSession);
   // 保留全局 active SSH session 用于非 Space 场景（自动登录、SshExplorer 视图）
   const activeSshSession = useSshStore(selectActiveSession);
   const activeSshSessionId = activeSshSession?.id ?? null;
@@ -2255,15 +2254,15 @@ export default function App() {
                       {sidebarView === "explorer" ? (
                         // TDSF 修复 2026-08-01: 无任何工作区时资源管理器显示
                         // "新建工作区"引导（保留侧栏骨架，用户可看清整体功能）
-                        spaceCount === 0 ? (
+                        !hasActiveWorkspace ? (
                           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
                             <div className="text-[13px] font-medium text-foreground">
-                              暂无工作区
+                              {spaceCount === 0 ? "暂无工作区" : "未选择工作区"}
                             </div>
                             <p className="text-[12px] leading-relaxed text-muted-foreground">
-                              点击右侧工作区的「新建本地工作区」或「连接 SSH
-                              服务器」开始使用；也可使用 Skills 面板与 AI
-                              智能体。
+                              {spaceCount === 0
+                                ? "点击右侧工作区的「新建本地工作区」或「连接 SSH 服务器」开始使用；也可使用 Skills 面板与 AI 智能体。"
+                                : "顶栏「选择工作区」可回到已有工作区；也可从这里新建一个。"}
                             </p>
                             <button
                               type="button"
@@ -2386,7 +2385,7 @@ export default function App() {
                   <div className="relative min-h-0 flex-1">
                     {/* TDSF 修复 2026-08-01: 无工作区时终端区域显示欢迎（保留
                         侧栏/顶栏/状态栏，用户可看清整体功能）；否则正常工作区 */}
-                    {spaceCount === 0 ? (
+                    {!hasActiveWorkspace ? (
                       <WelcomeScreen
                         onCreateLocal={() => {
                           setSpaceCreateMode("local");
@@ -2401,6 +2400,8 @@ export default function App() {
                           setSpaceCreateMode("ssh");
                           setSpaceCreateOpen(true);
                         }}
+                        existingCount={spaceCount}
+                        onOpenExisting={() => setSwitcherOpen(true)}
                       />
                     ) : (
                       <WorkspaceSurface
