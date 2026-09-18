@@ -5,9 +5,10 @@
  * 而本项目回答的主体常是 shell 命令 → 长答案看起来一片空白。
  * 现在流式期间照常渲染纯文本代码，只跳过语法高亮。
  */
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
+import { __resetAutoTypeLedger } from "@/modules/ai/lib/autoTypeLedger";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { ChatCodeBlock, ChatStreamingProvider } from "./chat-code";
 
@@ -69,6 +70,14 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   const originalAutoExec = useChatStore.getState().autoExecuteInTerminal;
   const originalAgentMode = useChatStore.getState().agentMode;
   const originalTeach = useChatStore.getState().teach;
+
+  beforeEach(() => {
+    // ledger 是模块级的（防重挂重放/同批互踩），逐例重置避免相互污染。
+    __resetAutoTypeLedger();
+    useChatStore.setState((s) => ({
+      live: { ...s.live, isActiveTerminalPrivate: () => false },
+    }));
+  });
 
   afterEach(() => {
     useChatStore.setState({
@@ -180,5 +189,63 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
       screen.getByRole("button", { name: "Run in active terminal" }),
     );
     expect(inject).toHaveBeenCalledWith("uptime\n");
+  });
+
+  // ==========================================================================
+  // 代码审查加固（2026-09-18）：Private 终端 / 同批多卡互踩 / 重挂重放
+  // ==========================================================================
+
+  it("Private 终端（用户刻意对 AI 隐藏）→ 不自动打字，手动 Run 仍可用", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "auto" });
+    useChatStore.setState((s) => ({
+      live: {
+        ...s.live,
+        isActiveTerminalPrivate: () => true,
+        injectIntoActivePty: inject,
+      },
+    }));
+    renderBlock("uptime", "bash", false);
+    expect(inject).not.toHaveBeenCalled();
+    // 手动 Run 是用户明示动作，不受 private 限制
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run in active terminal" }),
+    );
+    expect(inject).toHaveBeenCalledTimes(1);
+  });
+
+  it("一条回复含多个代码块 → 同一 commit 内只有第一张卡自动打字（不拼接/不互清）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "confirm" });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
+    }));
+    render(
+      <>
+        <ChatStreamingProvider value={false}>
+          <ChatCodeBlock code="ls -la" lang="bash" />
+        </ChatStreamingProvider>
+        <ChatStreamingProvider value={false}>
+          <ChatCodeBlock code="cd /tmp" lang="bash" />
+        </ChatStreamingProvider>
+      </>,
+    );
+    // 若两张都注入，整段路径会拼成 "ls -lacd /tmp"、逐字路径会互相 \x03 清行
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith("ls -la");
+  });
+
+  it("重挂同一命令卡（重开小窗重放历史）→ 不再自动打字", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "auto" });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
+    }));
+    const first = renderBlock("systemctl restart nginx", "bash", false);
+    expect(inject).toHaveBeenCalledTimes(1);
+    // auto 模式下重挂会**重新执行**旧命令，这是必须堵住的路径
+    first.unmount();
+    renderBlock("systemctl restart nginx", "bash", false);
+    expect(inject).toHaveBeenCalledTimes(1);
   });
 });

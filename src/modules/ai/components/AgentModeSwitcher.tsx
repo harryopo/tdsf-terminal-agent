@@ -68,6 +68,9 @@ const VIEWPORT_MARGIN = 8;
 export function AgentModeSwitcher({ className }: { className?: string }) {
   const agentMode = useChatStore((s) => s.agentMode);
   const setAgentMode = useChatStore((s) => s.setAgentMode);
+  // 命令自动打字开关：唯一可达入口（TdsfAgentPanel 里的旧开关随面板弃用已不可达）。
+  const autoType = useChatStore((s) => s.autoExecuteInTerminal);
+  const setAutoType = useChatStore((s) => s.setAutoExecuteInTerminal);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<MenuPos | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -261,6 +264,40 @@ export function AgentModeSwitcher({ className }: { className?: string }) {
                 </button>
               );
             })}
+
+            {/* 自动打字总开关：关掉后命令卡只保留手动 Run。
+                点它不收起抽屉，方便连续切模式 + 切开关。 */}
+            <div className="mt-1 border-t border-border/40 pt-1">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoType}
+                data-testid="agent-mode-autotype"
+                onClick={() => setAutoType(!autoType)}
+                title="开启时 AI 给出的命令会自动打字到活动终端；仅自动模式追加回车执行"
+                className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-accent/40"
+              >
+                <span
+                  className={cn(
+                    "relative h-3.5 w-6 shrink-0 rounded-full transition-colors",
+                    autoType ? "bg-foreground/70" : "bg-muted",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 size-2.5 rounded-full bg-background transition-all",
+                      autoType ? "left-[13px]" : "left-0.5",
+                    )}
+                  />
+                </span>
+                <span className="shrink-0 text-[11.5px] text-foreground/90">
+                  命令自动打字到终端
+                </span>
+                <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground">
+                  {autoType ? "开" : "关"}
+                </span>
+              </button>
+            </div>
           </div>,
           document.body,
         )}
