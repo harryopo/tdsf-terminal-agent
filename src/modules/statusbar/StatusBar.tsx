@@ -36,6 +36,10 @@ type Props = {
    *  本地/WSL 终端为 null。用于让环境标签反映"命令跑在哪台机器"，
    *  修本地 Space 里开 SSH tab 时标签恒显 "Windows" 的问题。 */
   terminalAddress?: string | null;
+  /** TDSF 2026-09-18: 是否已有活跃工作区。false（欢迎页）时路径面包屑改显示
+   *  「未选择工作区」——开机那个隐式 default 空间的冷终端 cwd 落在家目录，
+   *  直接渲染会让人觉得"还没建工作区就已经在工作区里了"。 */
+  hasWorkspace: boolean;
 };
 
 export function StatusBar({
@@ -50,6 +54,7 @@ export function StatusBar({
   privateActive,
   remoteOsInfo = null,
   terminalAddress = null,
+  hasWorkspace,
 }: Props) {
   return (
     <footer
@@ -64,7 +69,21 @@ export function StatusBar({
           terminalAddress={terminalAddress}
         />
         <RemoteOsBadge info={remoteOsInfo} />
-        <CwdBreadcrumb cwd={cwd} filePath={filePath} home={home} onCd={onCd} />
+        {hasWorkspace ? (
+          <CwdBreadcrumb
+            cwd={cwd}
+            filePath={filePath}
+            home={home}
+            onCd={onCd}
+          />
+        ) : (
+          <span
+            className="shrink-0 cursor-default text-xs text-muted-foreground/70"
+            data-testid="statusbar-no-workspace"
+          >
+            未选择工作区
+          </span>
+        )}
         <LspStatusPill filePath={filePath ?? null} />
         <DiagnosticsBadge filePath={filePath ?? null} />
         {privateActive ? (
