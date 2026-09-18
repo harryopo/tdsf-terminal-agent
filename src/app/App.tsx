@@ -551,6 +551,15 @@ export default function App() {
     (window as unknown as { __TDSF_DBG__?: unknown }).__TDSF_DBG__ = {
       // TDSF debug (AI mini window): 暴露 chatStore 供 CDP 诊断 AI 入口问题
       getChatStore: () => useChatStore,
+      // TDSF debug (#54, 2026-09-18): dev-only 可编程对话入口。
+      // CDP 打不进 WebView2 的 composer（合成事件不更新 React 受控值），
+      // 导致命令自动打字 / 证据态这类行为只能靠人手测。走真实 sendMessage 链路。
+      // 必须动态 import：静态引入会把 @ai-sdk 拉进 App 启动 chunk（本文件他处
+      // 已为此避免 import transport.ts）。
+      sendChat: (text: string): Promise<boolean> =>
+        import("@/modules/ai/store/chatRuntime").then((m) => m.sendMessage(text)),
+      // TDSF debug (#54): 暴露状态栏终端地址派生结果，无 SSH 会话也能断言链路。
+      getTerminalAddress: () => activeTerminalAddress,
       // TDSF debug (2026-08-01): 暴露 sshStore 内部状态供 CDP 排查
       // "终端已连但 SSH 面板/activeSessionId 未连" 的状态不一致问题
       getSshStore: () => useSshStore,
