@@ -467,8 +467,8 @@ const ContinueRow = memo(function ContinueRow({
   );
 });
 
-// 教学模式仅展示最新助手消息的会话证据状态；它不把历史工具结果伪装成
-// 当前段落逐句引用，也不再按模型文本关键词推断“置信度”。
+// 教学模式与确认模式展示最新助手消息的会话证据状态；它不把历史工具结果伪装成
+// 当前段落逐句引用，也不按模型文本关键词推断“置信度”。
 const ConfidenceMarker = memo(function ConfidenceMarker({
   message,
   streaming,
@@ -481,7 +481,8 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
   children: React.ReactNode;
 }) {
   const [result, setResult] = useState<EvidenceAssessment | null>(null);
-  // 仅教学模式显示；其他模式不增加证据状态噪声。
+  // 仅教学/确认模式显示：教学要给学生依据、确认要在审批前看到依据；
+  // observe/auto 不增加证据状态噪声（用户 2026-09-18 钦定）。
   const agentMode = useChatStore((s) => s.agentMode);
   const sessionId = useChatStore((s) => s.activeSessionId);
 
@@ -490,7 +491,11 @@ const ConfidenceMarker = memo(function ConfidenceMarker({
       setResult(null);
       return;
     }
-    if (message.role !== "assistant" || agentMode !== "teach" || !showEvidence) {
+    if (
+      message.role !== "assistant" ||
+      (agentMode !== "teach" && agentMode !== "confirm") ||
+      !showEvidence
+    ) {
       setResult(null);
       return;
     }

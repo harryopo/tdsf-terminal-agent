@@ -20,6 +20,12 @@ type Params = {
   launchCwd: string | null;
   launchCwdResolved: boolean;
   home: string | null;
+  /**
+   * TDSF 2026-09-18（用户实测）: 是否已选择工作区。未选择时不解析任何仓库——
+   * 无 Space 时 explorerRoot 会退到 launchCwd/home，从仓库根启动 app 会把
+   * 项目自身仓库的分支/工作树/未跟踪文件列进源代码管理面板。
+   */
+  hasActiveSpace: boolean;
   sidebarView: SidebarViewId;
   cycleSidebarView: (view: SidebarViewId) => void;
   openCommitHistoryTab: (args: {
@@ -41,6 +47,7 @@ export function useSourceControlContext({
   launchCwd,
   launchCwdResolved,
   home,
+  hasActiveSpace,
   sidebarView,
   cycleSidebarView,
   openCommitHistoryTab,
@@ -49,6 +56,8 @@ export function useSourceControlContext({
     ? (launchCwd ?? home ?? null)
     : null;
   const sourceControlContextPath = (() => {
+    // 未选择工作区 → 不解析仓库（欢迎页不该出现任何 git 状态）。
+    if (!hasActiveSpace) return null;
     if (activeTab?.kind === "terminal") {
       return activeTerminalLeafCwd ?? explorerRoot ?? workspaceFallbackPath;
     }
@@ -72,7 +81,9 @@ export function useSourceControlContext({
   // Ambient path tracks the explorer root so the rail badge and explorer git
   // decorations reflect the repo you are actually looking at. cd-within-repo
   // churn is absorbed by the status TTL + reusable-root path in useSourceControl.
-  const badgeContextPath = explorerRoot ?? workspaceFallbackPath;
+  const badgeContextPath = hasActiveSpace
+    ? (explorerRoot ?? workspaceFallbackPath)
+    : null;
   const sourceControlPath = sourceControlActive
     ? sourceControlContextPath
     : badgeContextPath;

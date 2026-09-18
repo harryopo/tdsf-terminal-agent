@@ -32,6 +32,10 @@ type Props = {
   privateActive: boolean;
   /** Only a known, currently connected SSH session may supply this badge. */
   remoteOsInfo?: RemoteOsBadgeInfo | null;
+  /** TDSF 2026-09-18: 当前终端 leaf 实际绑定的已连接 SSH 会话地址（user@host）；
+   *  本地/WSL 终端为 null。用于让环境标签反映"命令跑在哪台机器"，
+   *  修本地 Space 里开 SSH tab 时标签恒显 "Windows" 的问题。 */
+  terminalAddress?: string | null;
 };
 
 export function StatusBar({
@@ -45,6 +49,7 @@ export function StatusBar({
   hasComposer,
   privateActive,
   remoteOsInfo = null,
+  terminalAddress = null,
 }: Props) {
   return (
     <footer
@@ -56,6 +61,7 @@ export function StatusBar({
           onSelect={onWorkspaceChange}
           onSelectSsh={onWorkspaceSshClick}
           switching={workspaceSwitching}
+          terminalAddress={terminalAddress}
         />
         <RemoteOsBadge info={remoteOsInfo} />
         <CwdBreadcrumb cwd={cwd} filePath={filePath} home={home} onCd={onCd} />

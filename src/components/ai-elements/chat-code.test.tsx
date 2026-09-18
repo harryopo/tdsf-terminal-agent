@@ -91,19 +91,31 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     expect(inject).toHaveBeenCalledWith("uptime\n");
   });
 
-  it("问题2：autoExecuteInTerminal 开启但确认模式 → 不自动注入（须用户点 Run/审批）", () => {
+  it("确认模式 → 自动打字但不追加 \\n（执行权留给用户，不绕过审批）", () => {
     const inject = vi.fn(() => true);
     useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "confirm" });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
     renderBlock("uptime", "bash", false);
-    // 确认模式不自动执行（绕过 HITL 审批是安全 bug）
-    expect(inject).not.toHaveBeenCalled();
-    // 手动 Run 按钮仍在
+    // 2026-09-18 用户钦定：命令自动输出到终端，无需点 Run；
+    // 但只有 auto 模式追加 \n，确认模式打字后由用户自己回车。
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith("uptime");
+    // 手动 Run 按钮仍在（重跑/换终端用）
     expect(
       screen.getByRole("button", { name: "Run in active terminal" }),
     ).toBeTruthy();
+  });
+
+  it("观察模式 → 同样自动打字不追加 \\n", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState({ autoExecuteInTerminal: true, agentMode: "observe" });
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderBlock("uptime", "bash", false);
+    expect(inject).toHaveBeenCalledWith("uptime");
   });
 
   it("autoExecuteInTerminal 关闭 → 不自动注入（保留手动 Run）", () => {
@@ -130,7 +142,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     expect(inject).not.toHaveBeenCalled();
   });
 
-  it("教学模式（teach=true）→ 自动注入失效（偏好视为 false），学生手动逐条执行", () => {
+  it("教学模式（teach=true）→ 自动打字但绝不追加 \\n，执行仍由学生自己回车", () => {
     const inject = vi.fn(() => true);
     useChatStore.setState({
       autoExecuteInTerminal: true,
@@ -141,14 +153,16 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
       live: { ...s.live, injectIntoActivePty: inject },
     }));
     renderBlock("uptime", "bash", false);
-    // 教学模式禁止自动插入终端
-    expect(inject).not.toHaveBeenCalled();
-    // 手动 Run 仍在：点击后只粘贴命令本身（不带 \n，不自动执行）
+    // 2026-09-18 用户钦定：教学模式同样自动输出命令到终端。
+    expect(inject).toHaveBeenCalledTimes(1);
+    // 但 teach 下永不追加 \n —— 即便 agentMode==="auto"，执行权归学生。
+    expect(inject).toHaveBeenCalledWith("uptime");
+    // 手动 Run 在 teach 下也只粘贴，不自动执行。
     fireEvent.click(
       screen.getByRole("button", { name: "Run in active terminal" }),
     );
-    expect(inject).toHaveBeenCalledTimes(1);
-    expect(inject).toHaveBeenCalledWith("uptime");
+    expect(inject).toHaveBeenCalledTimes(2);
+    expect(inject).toHaveBeenLastCalledWith("uptime");
   });
 
   it("非教学模式行为不变：autoExecuteInTerminal 开启 + auto 模式下手动 Run 仍自动执行（code+\\n）", () => {

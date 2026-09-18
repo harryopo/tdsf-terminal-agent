@@ -27,12 +27,19 @@ type Props = {
   onSelectSsh?: () => void;
   /** 环境切换进行中（按钮 pending 态，防止"卡一下"的错觉） */
   switching?: boolean;
+  /**
+   * TDSF 2026-09-18（用户实测）: 当前终端 leaf 实际绑定的已连接 SSH 地址
+   * （user@host）。优先级高于 Space env——本地 Space 里开 SSH 终端时
+   * Space.env 仍是 local，旧口径会让标签恒显 "Windows"。
+   */
+  terminalAddress?: string | null;
 };
 
 export function WorkspaceEnvSelector({
   onSelect,
   onSelectSsh,
   switching = false,
+  terminalAddress = null,
 }: Props) {
   const globalEnv = useWorkspaceEnvStore((s) => s.env);
   // TDSF 2026-09-02: 标签以「活跃 Space 的 env」为持久化真源，回退全局 env。
@@ -50,7 +57,8 @@ export function WorkspaceEnvSelector({
 
   // TDSF 2026-09-02（用户钦定）: SSH 工作区跨平台显示服务器地址（user@host），
   // 本地/WSL 环境选择仅 Windows 有意义——非 Windows 且非 SSH 时才隐藏整个选择器。
-  if (!IS_WINDOWS && env.kind !== "ssh") return null;
+  // TDSF 2026-09-18: 终端已连 SSH 时同样保留（Space 可能仍是 local）。
+  if (!IS_WINDOWS && env.kind !== "ssh" && !terminalAddress) return null;
 
   // 每次打开菜单都重新拉取 WSL 发行版列表（取代已删除的手动 Refresh 项，
   // 保证新建/删除发行版后列表始终最新）
@@ -60,13 +68,16 @@ export function WorkspaceEnvSelector({
     }
   };
 
-  // SSH 时显示服务器地址（如 root@192.168.45.200），而非笼统的 "Windows"
+  // SSH 时显示服务器地址（如 root@192.168.45.200），而非笼统的 "Windows"。
+  // terminalAddress 优先：它表示"当前终端的命令实际落在哪台机器"。
   const label =
-    env.kind === "ssh"
+    terminalAddress ??
+    (env.kind === "ssh"
       ? `${env.user}@${env.host}`
       : env.kind === "wsl"
         ? `WSL: ${env.distro}`
-        : "Windows";
+        : "Windows");
+  const remote = env.kind === "ssh" || terminalAddress !== null;
 
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>
@@ -76,7 +87,11 @@ export function WorkspaceEnvSelector({
           disabled={switching}
           className="flex h-6 shrink-0 items-center gap-1 rounded-sm px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent data-[state=open]:text-foreground disabled:opacity-60"
           title={
-            switching ? "Switching environment..." : "Workspace environment"
+            switching
+              ? "Switching environment..."
+              : remote
+                ? `当前终端命令执行于 ${label}`
+                : "Workspace environment"
           }
         >
           <HugeiconsIcon
