@@ -227,6 +227,44 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     Ok(())
 }
 
+/// WebView2 的进程级附加浏览器参数。
+///
+/// `debug` 为真（`cargo tauri dev` / `--debug` 构建）时才开放 CDP 端口，
+/// 供真机探针（`__TDSF_DBG__` + `Input.dispatchMouseEvent`）连进去做端到端验证。
+/// **发布构建绝不能带这两个参数**：`--remote-debugging-port` + `--remote-allow-origins=*`
+/// 等于把主窗 webview 的任意 JS 执行权交给同机任意进程与用户浏览器里的任意网页。
+fn webview_browser_arguments(debug: bool) -> String {
+    let mut args = String::from("--disable-gpu");
+    if debug {
+        args.push_str(" --remote-debugging-port=9222 --remote-allow-origins=*");
+    }
+    args
+}
+
+#[cfg(test)]
+mod webview_args_tests {
+    use super::webview_browser_arguments;
+
+    #[test]
+    fn release_builds_never_open_a_cdp_port() {
+        let release = webview_browser_arguments(false);
+        assert!(
+            !release.contains("remote-debugging"),
+            "发布构建的 webview 参数里不允许出现调试端口: {release}"
+        );
+        assert!(!release.contains("remote-allow-origins"));
+        assert!(release.contains("--disable-gpu"));
+    }
+
+    #[test]
+    fn debug_builds_keep_the_probe_port() {
+        assert!(
+            webview_browser_arguments(true).contains("--remote-debugging-port=9222"),
+            "debug 构建要保留 CDP，否则真机探针全部失效"
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -252,11 +290,20 @@ pub fn run() {
     // （远程桌面/旧显卡驱动/多 GPU 切换）会间歇性崩溃 → 应用窗口黑屏且
     // 重启偶发不恢复。实测 --disable-gpu 后渲染稳定（本应用为 DOM 终端
     // 场景，软渲染性能足够）。必须在 webview 创建前设置。
-    // 如需恢复硬件加速：注释以下两行即可。
+    // 如需恢复硬件加速：去掉 --disable-gpu 即可。
+    //
+    // TDSF 修复 2026-09-18（深度体检 R1，P0 发布阻断）：CDP 调试端口以前写在
+    // tauri.windows.conf.json 的 additionalBrowserArgs 里，而**平台配置文件在 dev 与
+    // build 两条路径上都会被合并进产物** —— 结果发布版安装包也常驻
+    // 127.0.0.1:9222 且 --remote-allow-origins=*，同机任意进程、或用户在任意浏览器
+    // 打开的任意网页都能连进来在主窗 webview 里执行任意 JS（读 store 里的 LLM API
+    // Key、直接 invoke pty_open 以用户身份跑命令）。现在只在 debug 构建开放，
+    // 并且改由进程级环境变量统一带上，settings 窗天然继承，不再有"两个 webview
+    // args 不一致 → 0x8007139F"那一类问题。
     #[cfg(windows)]
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        "--disable-gpu",
+        webview_browser_arguments(cfg!(debug_assertions)),
     );
 
     #[allow(unused_mut)]
