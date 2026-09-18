@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { claimAutoType } from "@/modules/ai/lib/autoTypeLedger";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import {
   ArrowRight01Icon,
@@ -237,9 +238,13 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
     if (autoFiredRef.current) return;
     const store = useChatStore.getState();
     if (!store.autoExecuteInTerminal) return;
+    // Private 终端是用户刻意对 AI 隐藏的，不往里自动打字（手动 Run 是明示动作，不受限）。
+    if (store.live.isActiveTerminalPrivate?.() === true) return;
+    // 重挂重放 / 同批互踩由 ledger 拦住：见 autoTypeLedger 注释。
+    if (!claimAutoType(code)) return;
     autoFiredRef.current = true;
     inject(store.agentMode === "auto" && !store.teach);
-  }, [inject]);
+  }, [code, inject]);
 
   return (
     <div className="not-prose my-2 overflow-hidden rounded-lg border border-border/50 bg-muted/40">

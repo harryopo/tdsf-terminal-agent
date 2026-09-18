@@ -39,6 +39,7 @@ import {
   Tick02Icon,
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
+import { claimAutoType } from "@/modules/ai/lib/autoTypeLedger";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { sendMessage } from "@/modules/ai/store/chatRuntime";
 import {
@@ -1771,6 +1772,10 @@ function SuggestCommandCard({
     const { autoExecuteInTerminal, agentMode, live, teach } =
       useChatStore.getState();
     if (!autoExecuteInTerminal) return;
+    // Private 终端刻意对 AI 隐藏，不自动打字（手动 Run 不受限）。
+    if (live.isActiveTerminalPrivate?.() === true) return;
+    // 重挂重放 / 同批互踩由 ledger 拦住：见 autoTypeLedger 注释。
+    if (!claimAutoType(command)) return;
     autoFiredRef.current = true;
     const execute = agentMode === "auto" && !teach;
     const ok = live.injectIntoActivePty(execute ? command + "\n" : command);
