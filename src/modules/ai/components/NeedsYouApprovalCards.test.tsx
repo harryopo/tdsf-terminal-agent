@@ -319,12 +319,26 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     await waitFor(() => {
       expect(screen.queryByText("等待你的确认")).toBeNull();
     });
-    expect(invokeRpc).not.toHaveBeenCalled();
+    // 超时/已响应由后端收尾，前端不再回传 respond
+    // （#59 后挂载会调一次 needs_you.list，故只断言 respond 没被调用）
+    expect(
+      vi.mocked(invokeRpc).mock.calls.filter(
+        (call) => call[0] === "needs_you.respond",
+      ),
+    ).toHaveLength(0);
   });
 
   it("RPC 失败 → 卡保留可重试 + console.error（不静默吞错）", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(invokeRpc).mockRejectedValueOnce(new Error("sidecar down"));
+    // 只让 respond 失败；挂载时的 needs_you.list 补拉（#59）正常返回空
+    const respondCalls = () =>
+      vi.mocked(invokeRpc).mock.calls.filter(
+        (call) => call[0] === "needs_you.respond",
+      ).length;
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
+      if (method === "needs_you.respond") throw new Error("sidecar down");
+      return [];
+    });
     await mount();
     emitNeedsYou(toolDirectCreated({ risk_l: 1 }));
 
@@ -338,10 +352,16 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     });
     // 卡保留（请求仍 pending），可再次点击重试
     expect(screen.getByText("等待你的确认")).toBeTruthy();
-    vi.mocked(invokeRpc).mockResolvedValue({});
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
+      if (method === "needs_you.respond") return {};
+      return [];
+    });
     fireEvent.click(screen.getByText("执行"));
     await waitFor(() => {
-      expect(vi.mocked(invokeRpc)).toHaveBeenCalledTimes(2);
+      expect(respondCalls()).toBe(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("等待你的确认")).toBeNull();
     });
   });
 });
@@ -349,12 +369,14 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
 describe("NeedsYouApprovalCards FIFO", () => {
   it("shows only the queue head and reveals the next approval after a successful response", async () => {
     let resolveResponse: ((value: unknown) => void) | undefined;
-    vi.mocked(invokeRpc).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveResponse = resolve;
-        }),
-    );
+    // 按方法分派（不是 Once）：挂载时的 needs_you.list 补拉（#59）不能吃掉
+    // 这个为 respond 准备的 deferred promise。
+    vi.mocked(invokeRpc).mockImplementation((method: string) => {
+      if (method !== "needs_you.respond") return Promise.resolve([]);
+      return new Promise((resolve) => {
+        resolveResponse = resolve;
+      });
+    });
     await mount();
     emitNeedsYou(
       toolDirectCreated({ id: "ny-first", command: "echo FIRST_APPROVAL" }),
@@ -381,5 +403,140 @@ describe("NeedsYouApprovalCards FIFO", () => {
     });
     expect(await screen.findByText("echo SECOND_APPROVAL")).toBeTruthy();
     expect(screen.queryByText("echo FIRST_APPROVAL")).toBeNull();
+  });
+});
+
+// ==========================================================================
+// #59：挂载时按 needs_you.list 补水合
+// --------------------------------------------------------------------------
+// created 事件只推一次；页面重载 / 挂载竞态期间错过的请求不会重放。approval 尚有
+// 300s 超时兜底，question 的 deadline 恒为 None → Python wait_for_response 永久
+// 阻塞工具线程。所以下面钉住：挂载必须补拉一次，并且不与后到的事件重复插入。
+// ==========================================================================
+
+/** needs_you.list 返回的就是 NeedsYouRequest.to_dict() 列表 */
+const pendingQuestionRow = (overrides: Record<string, unknown> = {}) => ({
+  id: "ny-r1",
+  type: "question",
+  title: "Agent 需要你的回答",
+  description: "请选择虚拟机网络模式",
+  session_id: "sess-1",
+  status: "pending",
+  extra: {
+    question: "请选择虚拟机网络模式",
+    options: ["NAT", "桥接"],
+    confirm_label: "确认并继续",
+  },
+  ...overrides,
+});
+
+describe("NeedsYouApprovalCards — #59 挂载补水合", () => {
+  it("挂载时拉 needs_you.list，把错过的 pending question 补成可回答的卡片", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) =>
+      method === "needs_you.list" ? [pendingQuestionRow()] : {},
+    );
+
+    render(<NeedsYouApprovalCards />);
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(invokeRpc).toHaveBeenCalledWith("needs_you.list", {});
+    expect(await screen.findByText("请选择虚拟机网络模式")).toBeTruthy();
+    expect(screen.getByText("NAT")).toBeTruthy();
+  });
+
+  it("补水合后用户作答 → needs_you.respond 带 answer 唤醒后端等待线程", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
+      if (method === "needs_you.list") return [pendingQuestionRow()];
+      return {};
+    });
+    render(<NeedsYouApprovalCards />);
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    fireEvent.click(await screen.findByText("桥接"));
+    fireEvent.click(screen.getByText("确认并继续"));
+
+    await waitFor(() =>
+      expect(invokeRpc).toHaveBeenCalledWith("needs_you.respond", {
+        req_id: "ny-r1",
+        response: { answer: "桥接" },
+      }),
+    );
+    await waitFor(() =>
+      expect(document.querySelector("[data-question-card]")).toBeNull(),
+    );
+  });
+
+  it("同一请求：先补拉后到 created 事件 → 只有一张卡（不重复插入）", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) =>
+      method === "needs_you.list" ? [pendingQuestionRow()] : {},
+    );
+    render(<NeedsYouApprovalCards />);
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    await screen.findByText("请选择虚拟机网络模式");
+
+    emitNeedsYou({
+      needs_type: "question",
+      event: "created",
+      request: pendingQuestionRow(),
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(document.querySelectorAll("[data-question-card]")).toHaveLength(1);
+    expect(
+      document
+        .querySelector("[data-needs-you-cards]")
+        ?.getAttribute("data-queued-approvals"),
+    ).toBe("0");
+  });
+
+  it("补拉失败（sidecar 未就绪）不崩、不渲染，且事件通道仍然可用", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
+      if (method === "needs_you.list") throw new Error("sidecar not running");
+      return {};
+    });
+    await mount();
+    expect(document.querySelector("[data-needs-you-cards]")).toBeNull();
+
+    emitNeedsYou(toolDirectCreated());
+    expect(await screen.findByText("等待你的确认")).toBeTruthy();
+  });
+
+  it("其他会话的 pending 请求不补水渲染（跨会话隔离对补拉同样生效）", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) =>
+      method === "needs_you.list"
+        ? [pendingQuestionRow({ id: "ny-other", session_id: "sess-2" })]
+        : {},
+    );
+    render(<NeedsYouApprovalCards />);
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryByText("请选择虚拟机网络模式")).toBeNull();
+  });
+
+  it("error / handoff 类请求不参与补水合（沿用既有状态提示通道）", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) =>
+      method === "needs_you.list"
+        ? [
+            pendingQuestionRow({ id: "ny-e", type: "error" }),
+            pendingQuestionRow({ id: "ny-h", type: "handoff" }),
+          ]
+        : {},
+    );
+    render(<NeedsYouApprovalCards />);
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(document.querySelector("[data-needs-you-cards]")).toBeNull();
   });
 });
