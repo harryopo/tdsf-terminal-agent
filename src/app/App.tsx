@@ -339,10 +339,24 @@ export default function App() {
     ) {
       useSshStore.getState().setActiveSession(metaSshSessionId);
     }
-    if (prev === null || prev === activeSpaceId) return;
+    // TDSF 修复 2026-09-18（深度体检 F1）：这里原本还有 `prev === null` 一条早退，
+    // 意图是"首次挂载不重复 adopt"。但 #61 方案 A 之后启动恒不自动进入工作区，
+    // 开机后第一次进入必然 prev===null → 直接跳过 adoptWorkspaceEnv，于是
+    // **第一次进入的 WSL / SSH 工作区拿到的仍是本地 shell**，而状态栏标签已经
+    // 写成 WSL/user@host（ptyWorkspaceEnv 吃的是 env store）。
+    // 首次挂载的幂等性由下一条 `prev === activeSpaceId` 保证，不需要 null 这条。
+    if (prev === activeSpaceId) return;
     if (meta) void adoptWorkspaceEnv(meta.env);
     const inSpace = tabsRef.current.filter((t) => t.spaceId === activeSpaceId);
-    if (inSpace.length === 0) return;
+    if (inSpace.length === 0) {
+      // TDSF 修复 2026-09-18（深度体检 F3）：#61-A 之后"从欢迎页点进一个还没标签的
+      // 工作区"是常规路径。原先这里直接 return —— activeId 仍指着**别的空间**的冷
+      // 标签，于是顶栏标签条整条空白、点「+」继承外来 cwd、资源管理器根目录错位，
+      // 2026-08-01 的"按 Space 隔离"被绕过。就地给这个空间补一个终端标签并激活。
+      const tabId = newTabInSpace(activeSpaceId, meta?.root ?? undefined);
+      setActiveId(tabId);
+      return;
+    }
     // Keep the active tab if it already belongs to the newly active space (a
     // cross-space jump set it explicitly); else fall to the space's last tab.
     if (inSpace.some((t) => t.id === activeId)) return;
@@ -353,6 +367,7 @@ export default function App() {
     spacesHydrated,
     setActiveSpaceForNewTabs,
     setActiveId,
+    newTabInSpace,
     adoptWorkspaceEnv,
   ]);
 
