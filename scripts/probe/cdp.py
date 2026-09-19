@@ -78,6 +78,55 @@ class CdpPage:
                 },
             )
 
+    def click_text(self, text: str) -> dict:
+        """按可见文字做**受信任**点击，返回实际点到的元素信息。
+
+        为什么不用 `el.click()`：Radix Tabs / 自绘行等组件在 mousedown/pointerdown
+        上挂激活逻辑，JS 合成一个 click 事件它们根本不理——历史上因此把正常 UI
+        判成"点了没反应"。走 Input.dispatchMouseEvent 才生成浏览器认可的输入。
+        """
+        rect = self._rect_for(text)
+        if not rect:
+            raise RuntimeError(f"页面上找不到文字为 {text!r} 的可点元素")
+        self.call(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseMoved", "x": rect["x"], "y": rect["y"], "button": "none"},
+        )
+        self.call(
+            "Input.dispatchMouseEvent",
+            {"type": "mousePressed", "x": rect["x"], "y": rect["y"],
+             "button": "left", "clickCount": 1},
+        )
+        self.call(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseReleased", "x": rect["x"], "y": rect["y"],
+             "button": "left", "clickCount": 1},
+        )
+        return rect
+
+    def _rect_for(self, text: str) -> dict | None:
+        js = """
+          (({ text }) => {
+            const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+            const els = [...document.querySelectorAll(
+              'button,[role="button"],[role="tab"],a,label,[role="menuitem"]')];
+            const el = els.find((e) => norm(e.textContent).includes(text)
+              || norm(e.getAttribute('aria-label')).includes(text)
+              || norm(e.getAttribute('title')).includes(text));
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2,
+                     tag: el.tagName.toLowerCase(), w: r.width, h: r.height };
+          })
+        """
+        return self.call(
+            "Runtime.evaluate",
+            {
+                "expression": f"({js})( {json.dumps({'text': text})} )",
+                "returnByValue": True,
+            },
+        ).get("result", {}).get("value")
+
 
 def list_pages() -> list[dict]:
     url = f"http://{CDP_HOST}:{CDP_PORT}/json/list"
