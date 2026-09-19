@@ -42,6 +42,8 @@ import time
 from typing import Any, Callable
 
 from strands_backend.modes import AgentMode, parse_mode
+# P3 (2026-09-19): 模型请求退避的唯一主人（尝试数 + 单回合请求预算）
+from strands_backend.retry_policy import build_retry_policy
 from strands_backend.tools import (
     DefaultRustBridge,
     READONLY_TOOL_NAMES,
@@ -238,6 +240,18 @@ _LLM_TRANSPORT_ERROR_MARKERS = (
     "unreachable",
     "getaddrinfo failed",
     "name or service not known",
+)
+
+# P3 (2026-09-19): 限流/额度类特征——与传输错误分开措辞。strands 把 openai /
+# anthropic 的 429 统一包成 ModelThrottledException（类名也在比对文本里），
+# 各家网关的原始文案差异大，所以类名 + 状态码 + 常见措辞都列上。
+_LLM_RATE_LIMIT_MARKERS = (
+    "modelthrottledexception",
+    "error code: 429",
+    "rate_limit_exceeded",
+    "rate limit",
+    "too many requests",
+    "insufficient_quota",
 )
 
 # 默认 system prompt（构造时未提供则用此）
@@ -1440,6 +1454,11 @@ class StrandsAgentAdapter:
         # 会话走；perm 重建实例不重置护栏，计数由 invoke 开始时 reset 单任务化）。
         self._limit_hooks: dict[tuple[str, str], ToolCallLimitHook] = {}
 
+        # P3 退避预算: TdsfRetryPolicy 与 Agent **实例**一一对应（同 cache_key，
+        # 含 perm）——策略内部带"当前调用点已尝试几次"的状态，两个实例共用会互相
+        # 吃掉对方的重试额度。单回合请求计数在每次 invoke 开始时清零。
+        self._retry_policies: dict[tuple[str, str, int], Any] = {}
+
         # T3 规划-执行回环: 已触发过收尾追加轮的会话（限一次，防死循环）。
         # 会话生命周期内最多追加一轮"继续执行或向用户说明原因"。
         self._todo_followup_done: set[tuple[str, str]] = set()
@@ -1578,6 +1597,17 @@ class StrandsAgentAdapter:
         """T9.2 (spec 9.2): 判断异常是否为 LLM 连接/超时类传输错误"""
         text = f"{type(error).__name__}: {error}".lower()
         return any(marker in text for marker in _LLM_TRANSPORT_ERROR_MARKERS)
+
+    @staticmethod
+    def _is_llm_rate_limit_error(error: Exception) -> bool:
+        """P3 (2026-09-19): 判断异常是否为模型服务限流/额度不足。
+
+        退避收口到一次重试之后，限流第一次真的会露到用户面前（此前被 18 次重
+        试掩盖成"慢"）。它不能套用传输错误那句"网络连接失败或超时"——诊断错了，
+        用户会去查网线而不是查额度（同 P6 那条"失败要分种"）。
+        """
+        text = f"{type(error).__name__}: {error}".lower()
+        return any(marker in text for marker in _LLM_RATE_LIMIT_MARKERS)
 
     def invoke(
         self,
@@ -1777,6 +1807,18 @@ class StrandsAgentAdapter:
                             limit_hook.reset()
                             limit_hook.current_task = input
 
+                        # P3: 单回合请求预算与护栏同口径（每次 invoke 从零开始）。
+                        # 先记上一回合的实际请求数——预算是否够用要有数，不能靠猜。
+                        retry_policy = self._retry_policies.get(
+                            (agent_id, ctx.session_id, ctx.permission_level)
+                        )
+                        if retry_policy is not None:
+                            logger.info(
+                                f"[p3] previous turn model_calls="
+                                f"{retry_policy.turn_model_calls}"
+                            )
+                            retry_policy.reset_turn_budget()
+
                         # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
                         response = self._invoke_with_token_continuation(
                             strands_agent, prompt, agent_id, session_id
@@ -1966,6 +2008,24 @@ class StrandsAgentAdapter:
             # 已进 agent.messages，同步后 perm 变化重建实例时仍保留本轮上下文
             # （失败同步只降级为丢本轮，不影响主流程错误上报）。
             self._sync_session_messages(agent_id, session_id, strands_agent)
+
+            # P3 (2026-09-19): 限流单独一档——退避收口后这是最常见的显式失败，
+            # 措辞必须说"限流/额度"，不能套下面那句"网络连接失败或超时"。
+            if self._is_llm_rate_limit_error(e):
+                return {
+                    "observation": (
+                        "模型服务正在限流（请求过于频繁或账户额度不足），"
+                        "本轮已停止重试并中止。请稍后再发一次——短时间内连续追问"
+                        "会让限流更难恢复。本轮会话历史已保留，不影响后续对话。"
+                    ),
+                    "next_step": "done",
+                    "mood": "error",
+                    "degraded": True,
+                    "degraded_reason": "llm_rate_limited",
+                    "degraded_message": str(e),
+                    "intermediate_results": [],
+                    "tokens": {},
+                }
 
             # T9.2 (spec 9.2): LLM 传输类错误（连接失败/超时）→ 只读问答降级：
             # 友好说明替代报错卡，**对话不中断**；服务恢复后自动回到正常链路。
@@ -2166,6 +2226,13 @@ class StrandsAgentAdapter:
             #   进度上报（agent_log 落盘 + 前端状态条）。计数在每次 invoke
             #   开始时 reset（单任务语义），不再跨 invoke 累计误杀。
             limit_hook = self._get_limit_hook(agent_id, ctx.session_id)
+            # P3 (2026-09-19): 退避策略与实例同生命周期。不传时 strands 默认
+            # max_attempts=6（退避累计 124s），叠加 HTTP 层 max_retries=2 就是
+            # 单调用点 18 个请求——现在 HTTP 层已归零，这里收紧到 2 次尝试，
+            # 并由策略自带的 BeforeModelCallEvent 计数把单回合请求数封顶。
+            retry_policy = build_retry_policy()
+            if retry_policy is not None:
+                self._retry_policies[cache_key] = retry_policy
             agent = _StrandsAgent(  # type: ignore[misc]
                 model=self.strands_model,
                 # T1: 工具集改由 _refresh_agent_runtime 动态填充（创建路径
@@ -2186,6 +2253,8 @@ class StrandsAgentAdapter:
                 tool_executor=_SequentialToolExecutor(),
                 # T2: 循环护栏（50 上限 / 连续失败 3 熔断 / 进度上报）
                 hooks=[limit_hook],
+                # P3: 模型请求退避（单点 2 次尝试 + 单回合请求数封顶）
+                retry_strategy=retry_policy,
                 name=agent_id,
             )
 
@@ -2939,6 +3008,9 @@ class StrandsAgentAdapter:
         self._agent_cache.clear()
         # TDSF 修复 2026-08-09: 一并清空锁字典
         self._agent_locks.clear()
+        # P3: 退避策略绑在实例上（构造时交给 Agent），实例清了策略也要清——
+        # 留着会让新实例复用旧策略的尝试计数。
+        self._retry_policies.clear()
         # P0-A1: 子 agent 工具缓存已随委派机制删除（原 _sub_agent_cache）
         logger.info(f"Strands Agent cache cleared: {count} entries")
 

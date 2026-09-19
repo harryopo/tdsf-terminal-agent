@@ -234,10 +234,13 @@ class TestCreateStrandsModelOpenAI:
         # 验证 params
         assert result.params["temperature"] == 0.5
         assert result.params["max_tokens"] == 1024
-        # T9.1 (spec 9.1 / ROADMAP #45): 传输层超时 + 有限重试必须真的带上
-        # ——否则模型端挂起会无限阻塞 RPC 线程（watchdog 只能兜底不能防）
+        # T9.1 (spec 9.1 / ROADMAP #45): 传输层超时必须真的带上——否则模型端
+        # 挂起会无限阻塞 RPC 线程（watchdog 只能兜底不能防）
         assert result.client_args["timeout"] == 300.0
-        assert result.client_args["max_retries"] == 2
+        # P3 (2026-09-19): 退避只留 SDK 一个主人。这里曾是 max_retries=2，
+        # 与 strands 默认 max_attempts=6 相乘 → 单个调用点 18 个 HTTP 请求
+        # （实测）。HTTP 层归零后，1 次模型尝试 == 1 个请求，预算才可计算。
+        assert result.client_args["max_retries"] == 0
 
     def test_openai_model_without_base_url(
         self, injected_model_adapter
@@ -305,7 +308,8 @@ class TestCreateStrandsModelAnthropic:
         # T9.1 (spec 9.1 / ROADMAP #45): Anthropic 分支与 OpenAI 分支同等对待——
         # 此前只 OpenAI 带 timeout，Anthropic 挂起会一直占住 RPC 线程
         assert result.client_args["timeout"] == 300.0
-        assert result.client_args["max_retries"] == 2
+        # P3 (2026-09-19): 同 OpenAI 分支——HTTP 层不做退避，退避归 SDK
+        assert result.client_args["max_retries"] == 0
         # 验证 params
         assert result.params["temperature"] == 0.3
         assert result.params["max_tokens"] == 4096
