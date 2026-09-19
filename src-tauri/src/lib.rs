@@ -529,6 +529,10 @@ pub fn run() {
             sidecar::sidecar_logs_clear,
             ipc::ipc_invoke,
             ipc::ipc_notify,
+            // 命令实现与"便于前端记忆的别名"注释一直在，但从未进这张表 ——
+            // 于是 sidecar-bridge.getStatus() 运行时必报 "Command ipc_status not found"
+            // （2026-09-19 被 #67 真机探针当场撞出，src/lib/tauri-command-registry.test.ts 现在盯着这类洞）
+            ipc::ipc_status,
             // TDSF 2026-08-28 (B1-F0): 前端回传终端 scrollback（sidecar 反向 RPC 响应通道）
             sidecar::sidecar_scrollback_response,
             sidecar::sidecar_visible_terminal_response,

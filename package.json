@@ -24,6 +24,7 @@
     "tauri": "tauri",
     "dev:seed": "node scripts/dev-seed-store.mjs",
     "probe:ui": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ui.py",
+    "probe:ipc": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ipc_allowlist.py",
     "tauri:dev": "node scripts/dev-seed-store.mjs && tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build",
     "check:release-version": "pwsh -NoProfile -File scripts/check-release-version.ps1",

@@ -102,7 +102,8 @@ export type NotificationCallback = (payload: NotificationPayload) => void;
 /**
  * 调用 Python Sidecar 的 JSON-RPC 方法（等待响应，30s 超时）
  *
- * @param method JSON-RPC 方法名（如 "agent.invoke" / "project.list"）
+ * @param method JSON-RPC 方法名（如 "agent.invoke"）；必须是 sidecar 已注册的方法，
+ *   Rust 侧 `ipc_invoke` 以 sidecar ready 快照的方法表为白名单（#67），未注册直接拒。
  * @param params 调用参数（对象或数组）
  * @returns result 字段内容
  * @throws IPCError（前端可解析 .code 和 .data.type 精确处理）
@@ -110,7 +111,7 @@ export type NotificationCallback = (payload: NotificationPayload) => void;
  * @example
  * ```ts
  * try {
- *   const result = await invoke('agent.invoke', { input: 'nginx 启动失败' });
+ *   const result = await invokeRpc('agent.invoke', { input: 'nginx 启动失败' });
  *   console.log(result);
  * } catch (e) {
  *   const err = e as IPCError;
@@ -138,15 +139,14 @@ export async function invokeRpc<T = unknown>(
 /**
  * 向 Python Sidecar 发送通知（无 id，无响应）
  *
- * 适用于不需要等待结果的场景，如取消任务、更新配置。
+ * 适用于不需要等待结果的场景。**注意**：sidecar 目前没有注册任何业务通知方法，
+ * 生产代码也没有本函数的调用点 —— 之前这里拿 "task.cancel" 当示例，而那个方法
+ * 根本不存在（真取消语义还没做，ROADMAP #69）。要用通知通道，先在 sidecar 侧
+ * `dispatcher.register_notification(...)` 注册，并同步给 Rust 的 ipc_notify 补白名单
+ * （`tests/test_ipc_method_parity.py` 会在这两条任一不成立时报红）。
  *
- * @param method JSON-RPC 方法名（如 "task.cancel"）
+ * @param method 已注册的通知方法名
  * @param params 通知参数
- *
- * @example
- * ```ts
- * await notify('task.cancel', { task_id: 'xxx' });
- * ```
  */
 export async function notify(
   method: string,
