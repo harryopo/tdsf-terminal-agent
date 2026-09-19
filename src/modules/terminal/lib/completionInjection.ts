@@ -20,6 +20,8 @@
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { PREDICTION_CLEAR_EVENT } from '@/lib/predictionEvents';
 import {
   buildParamRequest,
   getLeafCwd,
@@ -125,6 +127,37 @@ export function initCompletionInjection(
   // P2 #13: 保存 getTerm 供光标像素定位（按键追踪本身不从 xterm buffer 反推）
   getTermFn = getTerm;
   writeFn = write;
+}
+
+/** 监听只注册一次 */
+let clearListenerReady = false;
+
+/**
+ * 主窗启动时注册（src/main.tsx）：设置窗点「清空预测历史」时，动手的必须是本窗——
+ * 预测历史活在主窗内存里，设置窗是独立 JS context，它自己那份引擎永远是空的。
+ * 放在 main.tsx 而不是 initCompletionInjection：后者要等第一个终端渲染器创建，
+ * 而用户可能一个终端都没开就去设置里点清空。
+ * 浏览器预览模式没有 Tauri 事件总线，注册失败安静跳过。
+ */
+export function initPredictionClearListener(): void {
+  if (clearListenerReady || typeof window === 'undefined') return;
+  clearListenerReady = true;
+  try {
+    void listen(PREDICTION_CLEAR_EVENT, () => clearPredictionHistory()).catch(() => {
+      // 无 Tauri 运行时（浏览器预览）：忽略
+    });
+  } catch {
+    // 同上
+  }
+}
+
+/**
+ * 清空本窗预测历史（两个环境一起清），并把"历史已加载"钉成 true ——
+ * 否则用户清空后第一次敲键又会触发一次 histfile 导入，清空当场被回填。
+ */
+export function clearPredictionHistory(): void {
+  historyLoaded = true;
+  getSuggestEngine().clearHistory();
 }
 
 // ============================================================================
@@ -758,15 +791,16 @@ export async function loadHistoryIfNeeded(): Promise<void> {
   if (historyLoaded) return;
   historyLoaded = true;
   try {
-    const { loadHistoryFromRust, parseShellHistory } = await import('@/lib/shell-history');
-    const { historyCommands } = await import('@/modules/terminal/block/lib/history');
-    const info = await loadHistoryFromRust();
     // 用户可以从设置里关掉这条导入：否则「清空预测历史」一重启就被 histfile 里的
-    // 手误行重新灌满，清空等于没做。
+    // 手误行重新灌满，清空等于没做。判断放在读文件之前——关掉就应当连
+    // ~/.bash_history / ConsoleHost_history.txt 都不去读，而不是读了再丢掉。
     const { usePreferencesStore } = await import('@/modules/settings/preferences');
     if (!usePreferencesStore.getState().predictionImportShellHistory) {
       return;
     }
+    const { loadHistoryFromRust, parseShellHistory } = await import('@/lib/shell-history');
+    const { historyCommands } = await import('@/modules/terminal/block/lib/history');
+    const info = await loadHistoryFromRust();
     if (info.commands.length === 0) return;
     const engine = getSuggestEngine();
     // 先用真实环境命令集（本机 PATH 可执行文件 + 历史首词）扩充候选，再拿它当

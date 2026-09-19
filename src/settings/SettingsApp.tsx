@@ -97,17 +97,12 @@ const TABS: {
   },
 ];
 
-const VALID_TABS: SettingsTab[] = [
-  "general",
-  "editor",
-  "themes",
-  "shortcuts",
-  "models",
-  "agents",
-  "history",
-  "logs",
-  "about",
-];
+/**
+ * 深链/事件可用的页签白名单。**必须**从 TABS 派生：手抄一份的后果是新增页签
+ * 出现在标签栏里却永远进不去（`?tab=prediction` 与 `tdsf:settings-tab` 都会
+ * 静默退回「通用」，2026-09-19 真机探针当场撞上）。
+ */
+const VALID_TABS: string[] = TABS.map((t) => t.id);
 
 function readInitialTab(): SettingsTab {
   if (typeof window === "undefined") return "general";
@@ -115,7 +110,7 @@ function readInitialTab(): SettingsTab {
   const t = url.searchParams.get("tab");
   // Back-compat: legacy "ai" / "connections" → "models".
   if (t === "ai" || t === "connections") return "models";
-  if (t && (VALID_TABS as string[]).includes(t)) return t as SettingsTab;
+  if (t && VALID_TABS.includes(t)) return t as SettingsTab;
   return "general";
 }
 
@@ -136,7 +131,7 @@ export function SettingsApp() {
         setActive("models");
         return;
       }
-      if ((VALID_TABS as string[]).includes(detail)) {
+      if (VALID_TABS.includes(detail)) {
         setActive(detail as SettingsTab);
       }
     };
