@@ -26,7 +26,7 @@ describe("TranslateTooltip 未命中态", () => {
     // 真实客户端会把结果写进增量词库；这里照同样的契约模拟，才能验证"下次本地命中"
     enrichTerm.mockImplementation(async (term: string) => {
       putEnrichment({ word: term, zh: "本地补出来的释义" });
-      return [{ word: term, zh: "本地补出来的释义", exact: true }];
+      return { ok: true, entries: [{ word: term, zh: "本地补出来的释义", exact: true }] };
     });
     useTranslateStore.getState().showMissing("glorp", 10, 10);
 
@@ -43,8 +43,8 @@ describe("TranslateTooltip 未命中态", () => {
     expect(translateText("glorp").entries[0].zh).toBe("本地补出来的释义");
   });
 
-  it("模型没给结果时保持未命中态，只把按钮变成可重试", async () => {
-    enrichTerm.mockResolvedValue(null);
+  it("模型没给释义时保持未命中态，按钮变成可重试并说清原因", async () => {
+    enrichTerm.mockResolvedValue({ ok: false, reason: "no-answer" });
     useTranslateStore.getState().showMissing("glorp2", 10, 10);
 
     render(<TranslateTooltip />);
@@ -52,10 +52,12 @@ describe("TranslateTooltip 未命中态", () => {
     // 点击后先是「AI 补全中…」，异步失败后才换成可重试文案，
     // 所以两个断言都要放在 waitFor 里等状态稳定。
     await vi.waitFor(() => {
-      const text = screen.getByTestId("translate-enrich").textContent ?? "";
-      expect(text).toContain("可再试");
+      expect(screen.getByTestId("translate-enrich").textContent).toContain("再试一次");
       expect(screen.getByTestId("translate-tooltip-missing")).toBeTruthy();
     });
     expect(enrichTerm).toHaveBeenCalledWith("glorp2");
+    // 原因说"没把握"，不能谎报额度用完
+    expect(screen.getByTestId("translate-enrich-reason").textContent).toContain("没把握");
+    expect(screen.getByTestId("translate-enrich-reason").textContent).not.toContain("额度");
   });
 });

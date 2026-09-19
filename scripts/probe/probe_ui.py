@@ -218,8 +218,9 @@ def main() -> int:
     ap.add_argument("--viewport", default="", help="形如 430x290，用 CDP 视口模拟")
     ap.add_argument(
         "--wait-for",
-        default="document.querySelectorAll('button,input').length > 20",
-        help="UI 就绪判据（JS 表达式）",
+        default="document.readyState === 'complete' && document.body.children.length > 0",
+        help="UI 就绪判据（JS 表达式）。默认只等页面完成且有内容：拿按钮个数或 #root "
+        "当判据会把控件少、挂载节点不同的窗口（设置窗）永远等超时。",
     )
     ap.add_argument("--update-baseline", action="store_true")
     args = ap.parse_args()

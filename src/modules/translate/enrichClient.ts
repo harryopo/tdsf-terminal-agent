@@ -76,22 +76,38 @@ export function parseEnrichResponse(text: string): { zh: string; example?: strin
   return { zh, example: example && example.length <= 160 ? example : undefined };
 }
 
+/** 兜底失败的原因——必须分得清"模型没把握"和"链路不通"，否则文案在撒谎 */
+export type EnrichFailure =
+  /** 选中的文本不像一个词/命令（路径、代码片段等），交给 Ask TDSF */
+  | "not-a-term"
+  /** 本次会话的兜底次数已用完 */
+  | "no-quota"
+  /** 还没配置模型 Key */
+  | "no-key"
+  /** 调通了但模型没给出可用释义（按 prompt 要求它会承认不认识） */
+  | "no-answer"
+  /** 请求本身失败（网络 / 鉴权 / 供应商报错） */
+  | "error";
+
+export type EnrichResult =
+  | { ok: true; entries: LookupResult[] }
+  | { ok: false; reason: EnrichFailure };
+
 /**
  * 请求一条兜底释义并写入本地增量词库。
  *
- * @returns 命中后的词条；额度用尽 / 没有配 key / 输入不像词 / 模型没给可用结果时 null
+ * 失败一律带原因返回；调用方（翻译卡片）据此给措辞，但**任何失败都只降级为
+ * 原来的"未找到释义"**，不打断终端操作。
  */
-export async function enrichTerm(
-  term: string,
-): Promise<LookupResult[] | null> {
+export async function enrichTerm(term: string): Promise<EnrichResult> {
   const word = term.trim();
-  if (!isEnrichableTerm(word)) return null;
-  if (sessionCalls >= ENRICH_SESSION_QUOTA) return null;
+  if (!isEnrichableTerm(word)) return { ok: false, reason: "not-a-term" };
+  if (sessionCalls >= ENRICH_SESSION_QUOTA) return { ok: false, reason: "no-quota" };
   sessionCalls += 1;
 
   try {
     const keys = await getAllKeys();
-    if (!hasAnyKey(keys)) return null;
+    if (!hasAnyKey(keys)) return { ok: false, reason: "no-key" };
     const meta = getModel(DEFAULT_MODEL_ID);
     const model = await buildLanguageModel(meta.provider, keys, meta.id);
     const { text } = await generateText({
@@ -101,11 +117,13 @@ export async function enrichTerm(
       maxOutputTokens: 160,
     });
     const parsed = parseEnrichResponse(text);
-    if (!parsed) return null;
+    if (!parsed) return { ok: false, reason: "no-answer" };
     putEnrichment({ word, zh: parsed.zh, example: parsed.example });
-    return [{ word, zh: parsed.zh, example: parsed.example, exact: true }];
+    return {
+      ok: true,
+      entries: [{ word, zh: parsed.zh, example: parsed.example, exact: true }],
+    };
   } catch {
-    // 兜底失败必须静默降级为原来的"未找到释义"，不打断终端操作
-    return null;
+    return { ok: false, reason: "error" };
   }
 }

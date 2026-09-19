@@ -29,6 +29,18 @@ type Props = {
 const GAP = 12;
 /** 卡片距视口边缘的最小边距（px） */
 const EDGE = 8;
+/**
+ * 兜底失败措辞：分开说"模型没把握"和"链路不通"。
+ * 合成一句会误导——用户会以为是自己点太多，其实是没配 Key 或断网。
+ * 键与 enrichClient 的 EnrichFailure 一一对应（多写少写由用例兜住）。
+ */
+const ENRICH_FAILURE_COPY: Record<string, string> = {
+  "not-a-term": "这段不像一个词或命令，用下面「Ask TDSF 解释这段」更合适",
+  "no-quota": "本次会话的 AI 补全次数已用完",
+  "no-key": "还没配模型 Key（设置 → AI 模型），暂时补不了",
+  "no-answer": "AI 对这个词也没把握，可再试一次",
+  error: "AI 调用失败（网络或供应商），可再试一次",
+};
 
 export function TranslateTooltip({ onAsk }: Props) {
   const result = useTranslateStore((s) => s.result);
@@ -43,23 +55,23 @@ export function TranslateTooltip({ onAsk }: Props) {
   const [dir, setDir] = useState<"below" | "above">("below");
   // P6 模型兜底：只在用户点击后发生，且带会话额度上限
   const [enriching, setEnriching] = useState(false);
-  const [enrichFailed, setEnrichFailed] = useState(false);
+  const [enrichReason, setEnrichReason] = useState<string | null>(null);
 
   const runEnrich = async () => {
     const term = useTranslateStore.getState().missing;
     if (!term || enriching) return;
     setEnriching(true);
-    setEnrichFailed(false);
+    setEnrichReason(null);
     // 懒加载：兜底要经 AI SDK（generateText），静态引入会把整个 AI 栈拉进主窗
     // 首屏包（src/app/eager-budget.test.ts 就是拦这个的）。只有点击才付出代价。
     const { enrichTerm } = await import("./enrichClient");
-    const entries = await enrichTerm(term);
+    const res = await enrichTerm(term);
     const st = useTranslateStore.getState();
     // 用户可能已经选走了别的词：只有当前仍显示同一个词时才替换成释义
-    if (entries && st.missing === term) {
-      st.showTooltip(translateText(term), st.x, st.y);
-    } else if (!entries) {
-      setEnrichFailed(true);
+    if (res.ok) {
+      if (st.missing === term) st.showTooltip(translateText(term), st.x, st.y);
+    } else {
+      setEnrichReason(ENRICH_FAILURE_COPY[res.reason] ?? "AI 没给出释义，可再试");
     }
     setEnriching(false);
   };
@@ -164,12 +176,16 @@ export function TranslateTooltip({ onAsk }: Props) {
             className="mt-2 h-6 gap-1.5 px-2 text-[11px]"
           >
             <HugeiconsIcon icon={SparklesIcon} size={11} strokeWidth={1.75} />
-            {enriching
-              ? "AI 补全中…"
-              : enrichFailed
-                ? "AI 未给出释义（或本次会话额度已用完），可再试"
-                : "AI 补全释义"}
+            {enriching ? "AI 补全中…" : enrichReason ? "再试一次" : "AI 补全释义"}
           </Button>
+          {enrichReason && (
+            <p
+              data-testid="translate-enrich-reason"
+              className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground"
+            >
+              {enrichReason}
+            </p>
+          )}
         </div>
       ) : (
         /* 命中：词头 + 释义 + 示例/详细 */
