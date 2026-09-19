@@ -17,6 +17,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { translateText } from "./translateApi";
 import { useTranslateStore } from "./translateStore";
 
 type Props = {
@@ -40,6 +41,28 @@ export function TranslateTooltip({ onAsk }: Props) {
   const [pos, setPos] = useState({ top: 0, left: 0 });
   // 卡片相对选中点的方向：below=下方(默认)；above=下方空间不足时翻转上方
   const [dir, setDir] = useState<"below" | "above">("below");
+  // P6 模型兜底：只在用户点击后发生，且带会话额度上限
+  const [enriching, setEnriching] = useState(false);
+  const [enrichFailed, setEnrichFailed] = useState(false);
+
+  const runEnrich = async () => {
+    const term = useTranslateStore.getState().missing;
+    if (!term || enriching) return;
+    setEnriching(true);
+    setEnrichFailed(false);
+    // 懒加载：兜底要经 AI SDK（generateText），静态引入会把整个 AI 栈拉进主窗
+    // 首屏包（src/app/eager-budget.test.ts 就是拦这个的）。只有点击才付出代价。
+    const { enrichTerm } = await import("./enrichClient");
+    const entries = await enrichTerm(term);
+    const st = useTranslateStore.getState();
+    // 用户可能已经选走了别的词：只有当前仍显示同一个词时才替换成释义
+    if (entries && st.missing === term) {
+      st.showTooltip(translateText(term), st.x, st.y);
+    } else if (!entries) {
+      setEnrichFailed(true);
+    }
+    setEnriching(false);
+  };
 
   // 阶段 1：估算下方位置先渲染（实际高度未知，layout effect 再修正/翻转）
   useEffect(() => {
@@ -123,14 +146,30 @@ export function TranslateTooltip({ onAsk }: Props) {
       style={{ left: pos.left, top: pos.top }}
     >
       {missing ? (
-        /* 未命中：中性提示（Ask 按钮由底部统一追问区提供） */
+        /* 未命中：中性提示 + 用户主动触发的模型兜底（不点就不会花额度） */
         <div data-testid="translate-tooltip-missing" className="p-3">
           <div className="font-mono text-[12px] font-semibold text-foreground">
             {missing}
           </div>
           <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            未在离线词典中找到释义——可让 AI 解释这段
+            未在离线词典中找到释义
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="translate-enrich"
+            disabled={enriching}
+            onClick={() => void runEnrich()}
+            className="mt-2 h-6 gap-1.5 px-2 text-[11px]"
+          >
+            <HugeiconsIcon icon={SparklesIcon} size={11} strokeWidth={1.75} />
+            {enriching
+              ? "AI 补全中…"
+              : enrichFailed
+                ? "AI 未给出释义（或本次会话额度已用完），可再试"
+                : "AI 补全释义"}
+          </Button>
         </div>
       ) : (
         /* 命中：词头 + 释义 + 示例/详细 */
