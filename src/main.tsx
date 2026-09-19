@@ -54,3 +54,11 @@ initLaunchDir().catch(() => {});
 getCurrentWindow()
   .setFocus()
   .catch(() => {});
+
+// P5 (2026-09-19): 设置窗点「清空预测历史」→ 只有主窗这份内存里的引擎清得掉
+// （设置窗是独立 JS context，它自己那份 suggest-engine 永远是空的）。
+// 注册点放在主窗入口而不是终端初始化：用户可能一个终端都没开就去设置里清空。
+// 动态 import：不为了一个监听把整条终端注入链拉进 eager 启动包（eager-budget 拦这个）。
+void import("./modules/terminal/lib/completionInjection").then((m) => {
+  m.initPredictionClearListener();
+});

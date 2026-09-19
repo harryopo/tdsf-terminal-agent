@@ -612,6 +612,20 @@ export default function App() {
       // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
       // getRendererPoolDebug 是只读函数, 不改业务逻辑
       rendererPool: () => getRendererPoolDebug(),
+      // TDSF debug (P5, 2026-09-19): 暴露主窗**真身**的预测引擎，用来验证
+      // 「设置窗点清空 → 主窗内存真的被清」这条跨窗链路。探针若自己 import
+      // suggest-engine 拿到的是另一份实例，那种测量毫无意义。
+      // 必须动态 import：静态引入会把预测链拉进主窗 eager 包（见 #54 同因）。
+      peekPredictionEngine: (): Promise<{ windows: string[]; linux: string[] }> =>
+        import("@/lib/suggest-engine").then((m) => {
+          const e = m.getSuggestEngine();
+          return { windows: [...e.getHistory("windows")], linux: [...e.getHistory("linux")] };
+        }),
+      seedPredictionHistory: (cmd: string, env: "windows" | "linux"): Promise<boolean> =>
+        import("@/lib/suggest-engine").then((m) => {
+          m.getSuggestEngine().addHistory(cmd, env);
+          return true;
+        }),
       // TDSF debug (Phase 2): 暴露 xterm Terminal 实例，供 CDP 直接注入
       // OSC 7 字节，隔离 xterm 解析层与 SSH 传输层。
       getSlotTerm: (leafId: number) => getSlotTerm(leafId),
