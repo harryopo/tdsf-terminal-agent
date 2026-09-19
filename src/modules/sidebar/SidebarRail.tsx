@@ -77,7 +77,11 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
               className="shrink-0 transition-[stroke-width] duration-[var(--dur-base)]"
             />
             {/* TDSF 2026-08-29: 中文化后「源代码管理」较长，truncate 防拥挤溢出 */}
-            <span className="truncate whitespace-nowrap">{item.label}</span>
+            {/* data-allow-truncate = 显式声明"这里的省略号是设计意图"，
+                真机 UI 探针（scripts/probe/probe_ui.py）据此豁免该行裁切告警 */}
+            <span className="truncate whitespace-nowrap" data-allow-truncate>
+              {item.label}
+            </span>
             {showBadge && badge ? (
               <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-border/60 bg-card px-1 text-[9px] font-semibold leading-none tabular-nums text-muted-foreground/95">
                 {badge > 99 ? "99+" : badge}
