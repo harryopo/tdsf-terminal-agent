@@ -91,12 +91,17 @@ asyncio-atexit>=1.0  # Python 3.13 异步清理
 # Apache-2.0 协议，AWS 开源 Agent 框架，由 strands_backend/ 适配层封装。
 # - 默认后端：未设置 TDSF_AGENT_BACKEND 时 main.py 注入 Strands 适配层
 # - 未安装或激活失败时显式报告不可用，不回退旧 Agent
-# - 版本约束：1.x 稳定 API（@tool / Agent(tools=...) / stream_async）
-#   2.x 可能引入 breaking change，故 <2.0
+# - **版本为什么写死**：本应用贴上了 SDK 的半公开面（Agent(retry_strategy=...) /
+#   ModelRetryStrategy / vended_plugins.context_offloader），历史上宽 pin 已经
+#   造成过真实故障（`Agent(max_iterations=)` 在 1.50.2 被移除），而 #77 实测
+#   到"门禁 1.53 / 桌面 1.50.2 / 安装包 1.56"三份运行时并存、连打包目录里都混着
+#   两份 dist-info。应用不是库，装哪一版必须写死。
+# - 唯一真值是 `STRANDS_RUNTIME_VERSION`；升级时同时改这两处并跑
+#   `strands_backend/tests/test_runtime_parity.py`，再重跑 e2e（含审批/教学链路）。
 # - 安装后还需配置 LLM provider（OpenAI/Anthropic/Bedrock 等），
 #   通过 strands_backend.adapter 的 strands_model 参数注入
 # -----------------------------------------------------------------------------
-strands-agents>=1.53,<2.0
+strands-agents==1.53.0
 
 # ----------------------------------------------------------------------------
 # 测试（pytest）

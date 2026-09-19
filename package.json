@@ -28,8 +28,8 @@
     "tauri:dev": "node scripts/dev-seed-store.mjs && tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build",
     "check:release-version": "pwsh -NoProfile -File scripts/check-release-version.ps1",
-    "build:sidecar:win": "pwsh -NoProfile -File scripts/build-sidecar.ps1",
-    "test:sidecar:exe": "python src-tauri/sidecar/_exe_smoke.py",
+    "build:sidecar:win": "pwsh -NoProfile -File scripts/build-sidecar.ps1 -Python src-tauri/sidecar/.venv/Scripts/python.exe",
+    "test:sidecar:exe": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe src-tauri/sidecar/_exe_smoke.py",
     "build:win": "pnpm check:release-version && pnpm build:sidecar:win && pnpm test:sidecar:exe && tauri build --bundles nsis"
   },
   "dependencies": {

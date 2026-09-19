@@ -47,7 +47,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install sidecar build dependencies
-        run: python -m pip install -r src-tauri/sidecar/requirements-build.txt
+        shell: pwsh
+        run: |
+          # 打包解释器必须是 sidecar/.venv —— `pnpm build:sidecar:win` 现在把 -Python
+          # 显式指到那里，并且会核对里面的 strands 版本 == STRANDS_RUNTIME_VERSION。
+          # 装在 PATH python 里等于没装（#77 的成因就是"谁在 PATH 上算谁"）。
+          python -m venv src-tauri/sidecar/.venv
+          src-tauri/sidecar/.venv/Scripts/python.exe -m pip install --upgrade pip
+          src-tauri/sidecar/.venv/Scripts/python.exe -m pip install -r src-tauri/sidecar/requirements-build.txt
 
       - name: Build and smoke-test bundled sidecar
         shell: pwsh
