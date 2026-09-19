@@ -552,16 +552,15 @@ impl SidecarManager {
         // 3. 等待 3s 让 Python 优雅退出
         tokio::time::sleep(SHUTDOWN_GRACE).await;
 
-        // 4. 强制 kill
+        // 4. 强制 kill（#68：句柄通常已被 exit_watcher_task take 走，此时必须按 PID 杀，
+        //    否则这一步在正常运行期是死代码，Python 卡死就留孤儿进程）
+        let pid = { self.state.read().await.pid };
+        let route = terminate_sidecar(&self.child, pid).await;
+        if matches!(route, KillRoute::ByPid(false) | KillRoute::Nothing) {
+            log::error!("[sidecar] stop() cannot guarantee process death: {:?}", route);
+        }
         {
             let mut guard = self.child.lock().await;
-            if let Some(child) = guard.as_mut() {
-                match child.kill().await {
-                    Ok(_) => log::info!("[sidecar] process killed"),
-                    Err(e) => log::warn!("[sidecar] kill failed: {}", e),
-                }
-                let _ = child.wait().await; // 回收 zombie
-            }
             *guard = None;
         }
 
@@ -1169,6 +1168,52 @@ async fn kill_process(pid: u32) -> bool {
         .await
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// #68 关停路由：`stop()` 到底靠什么杀进程，测试要能断言这一条。
+#[derive(Debug)]
+pub(crate) enum KillRoute {
+    /// `self.child` 里还有句柄 → 走 tokio 的 kill + wait
+    ByHandle,
+    /// 句柄已被 `exit_watcher_task` take 走 → 按记录好的 PID 系统级强杀（bool=是否杀到）
+    ByPid(bool),
+    /// 两条腿都没有（进程本来就不在 / PID 没记上）
+    Nothing,
+}
+
+/// #68: 关停时的强制终止入口。
+///
+/// 为什么不能只留原来那段 `if let Some(child)`：`exit_watcher_task` 一启动就把
+/// `Child` 从 mutex 里 `take()` 走并持有到进程退出，所以**正常运行期** `stop()`
+/// 拿到的恒是 `None` —— 强杀分支是死代码，Python 卡死时只会留下孤儿进程
+/// （实测与 14 个 exe 并存同源）。心跳链路早已用 `kill_process(pid)` 解决过
+/// 同一件事，这里把同一手法接到关停路径。
+async fn terminate_sidecar(child_slot: &Mutex<Option<Child>>, pid: Option<u32>) -> KillRoute {
+    if let Some(mut child) = child_slot.lock().await.take() {
+        match child.kill().await {
+            Ok(_) => {
+                let _ = child.wait().await; // 回收 zombie
+                log::info!("[sidecar] process killed via child handle");
+            }
+            Err(e) => log::warn!("[sidecar] kill via child handle failed: {}", e),
+        }
+        return KillRoute::ByHandle;
+    }
+    match pid {
+        Some(pid_num) => {
+            let killed = kill_process(pid_num).await;
+            log::warn!(
+                "[sidecar:stop] no child handle (watcher holds it), kill by pid={} success={}",
+                pid_num,
+                killed
+            );
+            KillRoute::ByPid(killed)
+        }
+        None => {
+            log::warn!("[sidecar:stop] no child handle and no pid recorded — nothing to kill");
+            KillRoute::Nothing
+        }
+    }
 }
 
 /// TDSF P1（2026-07-30）: 处理 Python→Rust 反向 JSON-RPC 请求
@@ -2173,5 +2218,79 @@ mod tests {
         assert_eq!(compute_backoff(7), Duration::from_secs(30));
         // 防御性：retry=0 → saturating_sub(1)=0 → 1<<0=1 → 1s
         assert_eq!(compute_backoff(0), Duration::from_secs(1));
+    }
+
+    // ================================================================
+    // #68 关停必须真的能杀掉进程
+    // ================================================================
+    //
+    // 回归的正是"死代码"这件事：exit_watcher_task 一启动就把 Child 从
+    // self.child `take()` 走，stop() 里 `if let Some(child)` 正常运行期恒为
+    // None → 只剩"发 shutdown + 等 3s"一条腿，Python 卡死时留下孤儿进程。
+    // 下面两个用例分别在"句柄已被 take 走"和"句柄还在"两种状态下断言路由，
+    // 前者就是修不出来必挂的那一条。
+
+    /// 起一个长睡进程（不依赖 python，避免与门禁环境耦合）。
+    #[cfg(target_os = "windows")]
+    fn spawn_sleeper() -> Child {
+        tokio::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW：测试期间不弹窗
+            .spawn()
+            .expect("failed to spawn sleeper")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn spawn_sleeper() -> Child {
+        tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("failed to spawn sleeper")
+    }
+
+    #[tokio::test]
+    async fn stop_kills_process_when_child_handle_was_taken_by_watcher() {
+        let child = spawn_sleeper();
+        let pid = child.id().expect("sleeper must have a pid");
+        let slot: Mutex<Option<Child>> = Mutex::new(Some(child));
+
+        // 模拟 exit_watcher_task：句柄被取走。像真 watcher 一样 wait 它，
+        // 这样进程被杀后会被回收 —— 否则 PID 以 zombie 形式留着，
+        // "第二次杀不到"这条断言在 unix 上就不成立。
+        let mut taken = slot.lock().await.take().expect("watcher takes the handle");
+        let reaper = tokio::spawn(async move { taken.wait().await });
+
+        let route = terminate_sidecar(&slot, Some(pid)).await;
+        assert!(
+            matches!(route, KillRoute::ByPid(true)),
+            "句柄不在时应按 PID 强杀且成功: {route:?}"
+        );
+
+        reaper.await.expect("reaper task").expect("wait the killed child");
+
+        // 真死了：第二次必须杀不到（Windows OpenProcess 返回 null / unix kill 报 ESRCH）
+        let again = terminate_sidecar(&slot, Some(pid)).await;
+        assert!(
+            matches!(again, KillRoute::ByPid(false)),
+            "进程已死，第二次不应报成功"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_prefers_child_handle_when_present() {
+        let child = spawn_sleeper();
+        let pid = child.id().unwrap();
+        let slot: Mutex<Option<Child>> = Mutex::new(Some(child));
+
+        let route = terminate_sidecar(&slot, Some(pid)).await;
+        assert!(matches!(route, KillRoute::ByHandle), "{route:?}");
+        assert!(slot.lock().await.is_none(), "用完必须置 None");
+    }
+
+    #[tokio::test]
+    async fn stop_without_handle_and_without_pid_reports_nothing() {
+        let slot: Mutex<Option<Child>> = Mutex::new(None);
+        let route = terminate_sidecar(&slot, None).await;
+        assert!(matches!(route, KillRoute::Nothing), "{route:?}");
     }
 }
