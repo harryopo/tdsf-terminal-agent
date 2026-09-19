@@ -1882,16 +1882,18 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
     - 映射失败不能回退到原工具执行，否则教学模式会绕过可见终端链路。
     - 一轮最多返回一张 teach_command 卡；后续调用明确要求等待该卡回显。
     - 非 teach 模式下此函数不会被调用（守卫隔离）。
+    - 返回值必须是 SDK 认识的 AgentTool：`ToolRegistry.process_tools` 对
+      未知规格只打一条 WARNING 就丢弃（2026-09-19 深度体检 A4：裸
+      functools.wraps 函数让 ssh_command 等 8 个工具在教学模式下凭空消失，
+      拦截器根本没机会跑）。因此包装完必须再过一次 @tool。
 
     Args:
         tool_fn: @tool 装饰后的工具函数（带 __name__/__doc__ 等属性）
         ctx: ToolContext 运行时上下文（由调用侧直接传入，不从工具参数提取）
 
     Returns:
-        包装后的函数；teach 拦截时返回 teach_command dict，否则调原函数
+        重新装饰后的工具；teach 拦截时返回 teach_command dict，否则调原函数
     """
-    import functools
-
     tool_name = getattr(tool_fn, "__name__", "")
 
     # 快速路径：未注册 shell 映射的工具不包装（零开销）
@@ -1899,7 +1901,6 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
     if not has_shell_mapping(tool_name):
         return tool_fn
 
-    @functools.wraps(tool_fn)
     def _teach_wrapper(*args: Any, **kwargs: Any) -> Any:
         if getattr(ctx, "teach", False):
             # 解析工具参数：工厂函数签名是 fn(params: dict) 或 fn(**params)
@@ -1958,7 +1959,45 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
         # 非 teach 或无映射 → 正常执行
         return tool_fn(*args, **kwargs)
 
-    return _teach_wrapper
+    # 元数据手工挑着复制，**不复制 __dict__、不设 __wrapped__**：
+    # 原工具是 DecoratedFunctionTool 实例，它的 __dict__ 里带着 _tool_func（真执行
+    # 函数）、input_model 等；functools.wraps 会把这些一并搬到包装函数上，SDK 再装饰
+    # 时就认回了原函数 —— 教学拦截被静默旁路、命令真的去后端执行（比丢工具更危险）。
+    import inspect
+
+    _teach_wrapper.__name__ = tool_name
+    _teach_wrapper.__qualname__ = getattr(tool_fn, "__qualname__", tool_name)
+    _teach_wrapper.__doc__ = getattr(tool_fn, "__doc__", None)
+    _teach_wrapper.__module__ = getattr(tool_fn, "__module__", __name__)
+    try:
+        _teach_wrapper.__signature__ = inspect.signature(tool_fn)  # type: ignore[attr-defined]
+    except (TypeError, ValueError):
+        pass  # 拿不到签名就留给 SDK 反推；具名工具都有 tool_spec，不影响主路径
+
+    # 重新装饰成 SDK 认识的工具对象。优先沿用原 tool_spec（name/description/
+    # inputSchema 逐字不变），既避开"从签名反推 schema"的坑（如参数名带下划线
+    # 前缀会被 Pydantic 拒收），也保证模型看到的契约与包装前完全一致。
+    spec = getattr(tool_fn, "tool_spec", None)
+    try:
+        if isinstance(spec, dict) and spec.get("name"):
+            decorated = tool(
+                _teach_wrapper,
+                name=spec["name"],
+                description=spec.get("description"),
+                inputSchema=spec.get("inputSchema"),
+            )
+            # 双保险：SDK 若仍从 __dict__ 认回原函数，这里显式指回我们的包装函数，
+            # 保证 teach 拦截一定在调用链上。
+            if getattr(decorated, "_tool_func", None) is not _teach_wrapper:
+                decorated._tool_func = _teach_wrapper  # noqa: SLF001
+            return decorated
+        return tool(_teach_wrapper)
+    except Exception as e:  # noqa: BLE001 — 装饰失败不得让工具刷新整体崩掉
+        logger.exception(
+            f"teach wrapper re-decoration failed: tool={tool_name}, error={e}; "
+            f"回退为未注册函数（SDK registry 会丢弃并告警）"
+        )
+        return _teach_wrapper
 
 
 def _teaching_predicted_output(tool_name: str) -> str:
