@@ -442,6 +442,10 @@ async function updatePredictions(leafId: number): Promise<void> {
   if (isLinux) {
     const sessionId = getLeafSshSession(leafId);
     const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+    // 远端命令全集（compgen -c 预取）既是过滤器也是候选来源：只被用来"剔掉假候选"
+    // 时，远端装了但静态字典没收录的工具永远预测不出来（用户反馈"有的命令没法预测"）。
+    // 播种进候选集后，跨主机的污染仍由下面 filterCommandItems 按当前会话剔除。
+    if (cmds) engine.setEnvironmentCommands(cmds, 'linux');
     const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
     items = filterCommandItems(items, cmds, 5, family);
   }
@@ -719,21 +723,56 @@ export function completionKeyHandler(
 
 let historyLoaded = false;
 
+/**
+ * 把 shell 历史行洗成"可以用于预测的命令名"（TDSF 2026-09-19，用户反馈
+ * "有时候敲错命令也当成历史了"）。
+ *
+ * shell 的 histfile 不区分成功与失败（bash/zsh/pwsh 都会把 command not found
+ * 那一行原样写进去），所以整份导入就等于把手误也变成预测候选。规则：
+ * 取首词、先剥 `sudo` 再校验，长度 ≥2、只允许命令名字符、丢控制字符残行，
+ * 最关键的是**必须在"真实环境命令集 ∪ 字典"里**——不在的一律不进预测历史。
+ *
+ * 纯函数：`isKnown` 由调用方注入，方便单测双向断言。
+ */
+export function sanitizeShellHistory(
+  lines: readonly string[],
+  isKnown: (name: string) => boolean,
+): string[] {
+  const out: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.length < 2) continue;
+    if (/[\x00-\x1f\x7f]/.test(line)) continue; // 历史文件里的控制字符残行
+    const tokens = line.split(/\s+/);
+    let name = tokens[0] ?? '';
+    if (name === 'sudo' || name === 'doas') name = tokens[1] ?? '';
+    if (name.length < 2) continue;
+    if (!/^[A-Za-z0-9._+-]+$/.test(name)) continue; // 纯参数 / 路径 / 变量赋值残行
+    if (!isKnown(name)) continue; // 字典与真实环境都没有 → 大概率是敲错的
+    out.push(name);
+  }
+  return out;
+}
+
 export async function loadHistoryIfNeeded(): Promise<void> {
   if (historyLoaded) return;
   historyLoaded = true;
   try {
     const { loadHistoryFromRust, parseShellHistory } = await import('@/lib/shell-history');
+    const { historyCommands } = await import('@/modules/terminal/block/lib/history');
     const info = await loadHistoryFromRust();
-    if (info.commands.length > 0) {
-      const parsed = parseShellHistory(info.commands.join('\n'), info.shellType);
-      const commandNames = parsed
-        .map((cmd) => cmd.trim().split(/\s+/)[0] ?? '')
-        .filter((cmd) => cmd.length > 0);
-      // 本地 shell（pwsh/powershell/cmd）历史 → windows 环境
-      // （SSH 会话的历史由远端 shell 自身管理，不在此加载）
-      getSuggestEngine().loadHistory(commandNames, 'windows');
-    }
+    if (info.commands.length === 0) return;
+    const engine = getSuggestEngine();
+    // 先用真实环境命令集（本机 PATH 可执行文件 + 历史首词）扩充候选，再拿它当
+    // 过滤器：这样"本机装了但静态字典没有"的工具仍然预测得到，而错拼的名字进不来。
+    engine.setEnvironmentCommands(await historyCommands('', 2000), 'windows');
+    const parsed = parseShellHistory(info.commands.join('\n'), info.shellType);
+    // 本地 shell（pwsh/powershell/cmd）历史 → windows 环境
+    // （SSH 会话的历史由远端 shell 自身管理，不在此加载）
+    engine.loadHistory(
+      sanitizeShellHistory(parsed, (name) => engine.isKnownCommand(name, 'windows')),
+      'windows',
+    );
   } catch (e) {
     // 非致命——浏览器预览模式或 Rust 命令未注册时降级
     console.warn('[completion] loadHistoryIfNeeded failed:', e);

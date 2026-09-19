@@ -246,10 +246,12 @@ describe("acceptPrediction", () => {
   it("接受 history 预测时同样先退格再写完整命令", async () => {
     // 用独立 leafId 隔离输入缓冲区（leafId 1 已在上一个测试使用）。
     // 2026-08-28 环境分流后：未注册环境默认 windows，显式注册为 linux
-    // 以匹配 ipp（Linux 命令）的历史。
+    // 以匹配 ipcx（Linux 侧不存在的纯历史命令）的历史。
+    // 2026-09-19 改名：候选排序改为「字典占首位、历史保底占一席」，用 ipp 会先
+    // 命中字典里的 ip，测的就不是"接受历史预测"而是排序了。ipcx 只有历史命中。
     setLeafEnvironment(2, "linux");
     getSuggestEngine().clearHistory();
-    getSuggestEngine().loadHistory(["ipp"], "linux");
+    getSuggestEngine().loadHistory(["ipcx"], "linux");
     const written: string[] = [];
     initCompletionInjection(
       () => null,
@@ -260,14 +262,15 @@ describe("acceptPrediction", () => {
 
     expect(completionKeyHandler(2, key("i"))).toBe(true);
     expect(completionKeyHandler(2, key("p"))).toBe(true);
+    expect(completionKeyHandler(2, key("c"))).toBe(true);
     await tick();
 
     const state = getCompletionState();
     expect(state.visible).toBe(true);
-    expect(state.items[0]?.command).toBe("ipp");
+    expect(state.items[0]?.command).toBe("ipcx");
 
     expect(completionKeyHandler(2, key("ArrowRight"))).toBe(false);
-    expect(written).toEqual(["\b\b" + "ipp"]);
+    expect(written).toEqual(["\b\b\b" + "ipcx"]);
   });
 
   it("Enter 永远透传：弹窗可见时也不接受预测，仅 → 接受（用户 2026-08-28 钦定）", async () => {
