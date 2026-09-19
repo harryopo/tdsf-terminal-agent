@@ -71,9 +71,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
 
     const baseLabel = target?.kind === "git-history" ? "Git search" : "Search";
 
-    const placeholder = useMemo(() => {
-      return shortcutText ? `${baseLabel} (${shortcutText})` : baseLabel;
-    }, [baseLabel, shortcutText]);
+    const placeholder = baseLabel;
 
     const tooltipTitle = useMemo(() => {
       return shortcutText ? `${baseLabel} (${shortcutText})` : baseLabel;
@@ -152,7 +150,8 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
               ref={setInputRef}
               value={q}
               placeholder={placeholder}
-              className="h-7 w-full bg-muted/80 pr-7 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0"
+              aria-label={tooltipTitle}
+              className={`h-7 w-full bg-muted/80 pl-7 text-[13px]! placeholder:text-muted-foreground/70 focus-visible:ring-0 ${q ? "pr-7" : "pr-2"}`}
               onChange={(e) => {
                 const next = e.target.value;
                 setQ(next);
