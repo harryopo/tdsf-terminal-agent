@@ -1,6 +1,6 @@
 [package]
 name = "tdsf-terminal-agent"
-version = "1.0.0"
+version = "1.0.1"
 description = "TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台"
 authors = ["TDSF Team"]
 license = "Apache-2.0"
