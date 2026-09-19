@@ -116,9 +116,10 @@ describe("enrichClient（模型兜底）", () => {
 
   it("用户点击后才调模型，成功后写入本地词库并返回词条", async () => {
     generateText.mockResolvedValue({ text: '{"zh":"K8s 命令行工具"}' });
-    const entries = await enrichTerm("kubectlx");
+    const res = await enrichTerm("kubectlx");
     expect(generateText).toHaveBeenCalledTimes(1);
-    expect(entries?.[0].zh).toBe("K8s 命令行工具");
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.entries[0].zh).toBe("K8s 命令行工具");
     // 下一次查词无需再联网
     expect(translateText("kubectlx").entries[0].zh).toBe("K8s 命令行工具");
   });
@@ -132,25 +133,34 @@ describe("enrichClient（模型兜底）", () => {
     expect(args.system).not.toContain("glorp");
   });
 
-  it("没配 API Key 时静默降级，不发请求也不抛错", async () => {
+  it("失败原因分得开：没配 Key / 模型没把握 / 调用报错，各说各的话", async () => {
     getAllKeys.mockResolvedValue({ openai: null });
-    expect(await enrichTerm("glorp")).toBeNull();
+    expect(await enrichTerm("glorp")).toEqual({ ok: false, reason: "no-key" });
     expect(generateText).not.toHaveBeenCalled();
+
+    getAllKeys.mockResolvedValue({ openai: "sk-test" });
+    generateText.mockResolvedValue({ text: '{"zh":""}' });
+    expect(await enrichTerm("glorp2")).toEqual({ ok: false, reason: "no-answer" });
+
+    generateText.mockRejectedValue(new Error("429"));
+    expect(await enrichTerm("glorp3")).toEqual({ ok: false, reason: "error" });
+    expect(listEnrichments()).toHaveLength(0);
   });
 
-  it("模型报错时降级为 null（当次仍显示未找到）", async () => {
-    generateText.mockRejectedValue(new Error("429"));
-    expect(await enrichTerm("glorp")).toBeNull();
-    expect(listEnrichments()).toHaveLength(0);
+  it("不像词的输入直接拒掉，一次费用都不产生", async () => {
+    const res = await enrichTerm("rm -rf /");
+    expect(res).toEqual({ ok: false, reason: "not-a-term" });
+    expect(generateText).not.toHaveBeenCalled();
+    expect(enrichQuotaLeft()).toBe(ENRICH_SESSION_QUOTA);
   });
 
   it("会话额度用尽后不再产生任何费用", async () => {
     generateText.mockResolvedValue({ text: '{"zh":"释义"}' });
     for (let i = 0; i < ENRICH_SESSION_QUOTA; i++) {
-      expect(await enrichTerm(`term${i}`)).not.toBeNull();
+      expect((await enrichTerm(`term${i}`)).ok).toBe(true);
     }
     expect(enrichQuotaLeft()).toBe(0);
-    expect(await enrichTerm("one-more")).toBeNull();
+    expect(await enrichTerm("one-more")).toEqual({ ok: false, reason: "no-quota" });
     expect(generateText).toHaveBeenCalledTimes(ENRICH_SESSION_QUOTA);
   });
 });
