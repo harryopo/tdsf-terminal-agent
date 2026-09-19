@@ -96,7 +96,7 @@ asyncio-atexit>=1.0  # Python 3.13 异步清理
 # - 安装后还需配置 LLM provider（OpenAI/Anthropic/Bedrock 等），
 #   通过 strands_backend.adapter 的 strands_model 参数注入
 # -----------------------------------------------------------------------------
-strands-agents>=1.0,<2.0
+strands-agents>=1.53,<2.0
 
 # ----------------------------------------------------------------------------
 # 测试（pytest）

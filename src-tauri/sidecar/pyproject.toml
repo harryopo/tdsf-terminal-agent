@@ -27,7 +27,7 @@ classifiers = [
 
 # 运行时依赖（与 requirements.txt 同步）
 dependencies = [
-    "strands-agents>=1.0,<2.0",
+    "strands-agents>=1.53,<2.0",
     "openai>=1.68,<3",
     "anthropic>=0.21,<1",
     "pydantic>=2.0",
