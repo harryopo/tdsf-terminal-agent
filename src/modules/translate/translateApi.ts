@@ -33,6 +33,8 @@ import {
   PROGRAMMING_DICT_SIZE,
 } from "./programmingDictionary";
 import zhDictJson from "./dict/linux-commands-zh.json";
+// P6 本地增量词库（模型兜底留下的释义）
+import { lookupEnrichments } from "./enrichmentStore";
 // T3 词库增强（ECDICT 子集 + lemma 词形还原）
 import ecdictCommonJson from "./dict/ecdict-common.json";
 import lemmaReverseJson from "./dict/lemma-reverse.json";
@@ -182,6 +184,14 @@ export function translateText(text: string): TranslationResult {
   if (entries.length === 0) {
     entries = lookupProgramming(trimmed);
   }
+  if (entries.length > 0) {
+    return finishTranslate(text, entries);
+  }
+
+  // 6.5 本地增量词库（用户在翻译卡片上点「AI 补全」留下的释义）
+  //     位置有意放在 ECDICT 之前：用户主动补过的词条比通用词典释义更贴这台机器
+  //     上的语境；且命中即本地完成，不再重复花模型额度。
+  entries = lookupEnrichments(trimmed);
   if (entries.length > 0) {
     return finishTranslate(text, entries);
   }
