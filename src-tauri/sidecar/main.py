@@ -709,6 +709,13 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                         "rust_bridge not initialized, Strands tools will be unavailable"
                     )
 
+                # 构造任何 Agent 之前钉死遥测：strands 的 span 属性默认不脱敏
+                # （消息与工具入参出参都在里面），strands 自己虽不装 exporter，
+                # 但用户机器上若有 OTel auto-instrumentation，就会把终端内容带出去。
+                from strands_backend.telemetry_guard import disable_outbound_tracing
+
+                logger.info("telemetry guard: %s", disable_outbound_tracing())
+
                 _strands_adapter = strands_runtime.configure_strands(
                     event_bus=event_bus.get_global_bus(),
                     rust_bridge=_rust_bridge_impl,  # P1-4: 真实注入

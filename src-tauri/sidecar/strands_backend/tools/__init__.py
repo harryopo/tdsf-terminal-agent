@@ -1986,10 +1986,6 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 description=spec.get("description"),
                 inputSchema=spec.get("inputSchema"),
             )
-            # 双保险：SDK 若仍从 __dict__ 认回原函数，这里显式指回我们的包装函数，
-            # 保证 teach 拦截一定在调用链上。
-            if getattr(decorated, "_tool_func", None) is not _teach_wrapper:
-                decorated._tool_func = _teach_wrapper  # noqa: SLF001
             return decorated
         return tool(_teach_wrapper)
     except Exception as e:  # noqa: BLE001 — 装饰失败不得让工具刷新整体崩掉

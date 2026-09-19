@@ -88,22 +88,22 @@ INVOKE_WATCHDOG_POLL_SECS = 5
 
 
 def _context_management_kwargs() -> dict[str, Any]:
-    """Build explicit context management across supported Strands 1.x releases.
+    """Explicit context management for the pinned Strands 1.x range.
 
-    Strands 1.53 accepted the ``context_manager="auto"`` facade, while 1.56
-    removed that facade and otherwise leaves a ``NullConversationManager``.
-    Both releases expose the concrete manager and offloader plugin, so prefer
-    those stable components and retain the facade only for older 1.x builds.
+    实测（1.53 与 1.56 两个包都查过）：``context_manager="auto"`` 门面**并没有**被
+    1.56 移除，两版都接受 —— 只是 "auto" 由框架自己决定用什么、不写日志，出问题时
+    看不出来。这里显式点名具体组件（摘要压缩 + 结果外置），让行为可读可测。
+
+    导入失败说明实际装上的运行时不是 pin 住的那一个 —— 直接抛出，不再退回
+    ``context_manager="auto"``：那条兜底曾配着一句错误的注释，把版本漂移
+    伪装成"兼容处理"，是 #77 的帮凶。
     """
-    try:
-        from strands.agent.conversation_manager import (  # type: ignore[import]
-            SummarizingConversationManager,
-        )
-        from strands.vended_plugins.context_offloader import (  # type: ignore[import]
-            ContextOffloader,
-        )
-    except ImportError:
-        return {"context_manager": "auto"}
+    from strands.agent.conversation_manager import (  # type: ignore[import]
+        SummarizingConversationManager,
+    )
+    from strands.vended_plugins.context_offloader import (  # type: ignore[import]
+        ContextOffloader,
+    )
 
     return {
         "conversation_manager": SummarizingConversationManager(
@@ -1376,7 +1376,6 @@ class StrandsAgentAdapter:
                        模式指令与教学皮肤在其后按 invoke 传参拼接）
         strands_model: Strands Model 对象（OpenAIModel / AnthropicModel / OllamaModel / LiteLLMModel），
                        None 时降级（不调真实 LLM）
-        max_iterations: Strands Agent 最大迭代次数（防死循环），默认 10
         extra_tools: 额外工具列表（除 TOOL_REGISTRY 全量外），默认空
 
     用法：
@@ -1400,7 +1399,6 @@ class StrandsAgentAdapter:
         backend_enabled: bool = True,
         system_prompt: str | None = None,
         strands_model: Any = None,
-        max_iterations: int = 10,
         extra_tools: list | None = None,
         operation_service: Any = None,
         require_operation_ledger: bool = False,
@@ -1410,7 +1408,6 @@ class StrandsAgentAdapter:
         self.backend_enabled = backend_enabled
         self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self.strands_model = strands_model
-        self.max_iterations = max_iterations
         self.extra_tools = list(extra_tools) if extra_tools else []
         self.operation_service = operation_service
         self.require_operation_ledger = require_operation_ledger
@@ -2156,11 +2153,12 @@ class StrandsAgentAdapter:
             # 创建 Strands Agent
             # mypy: _StrandsAgent 在降级路径已被排除，这里必有值
             #
-            # TDSF 2026-07-30 P0-E: Strands 1.50.2 API 变更
-            #   Agent.__init__() 移除了 max_iterations 参数（实测装 1.50.2 后
-            #   报 "Agent.__init__() got an unexpected keyword argument 'max_iterations'"）。
-            #   当前移除该参数让 LLM 调用工作起来，self.max_iterations 字段保留
-            #   供未来用 LimitToolCounts hook 实现总工具调用次数限制（防死循环）。
+            # TDSF 2026-09-19（P2 清死配置）：SDK 自 1.50.2 起就没有 Agent(max_iterations=...)
+            #   这个 kwarg。历史上这里只是把它注释掉，字段却一直留着、还在 status 里报
+            #   "max_iterations: 10"，看起来像有迭代上限，实际从未生效 —— 属于谎报。
+            #   防死循环的真实主人一直是下面挂上的 ToolCallLimitHook
+            #   （50 次总调用 / 连续 3 次失败熔断 / 进度上报），字段已删除。
+            #   #74 计划进一步用 SDK 原生 limits= 取代手写计数。
             # T2 循环护栏 (2026-08-31, spec add-agent-loop-closure): 重新挂载
             #   ToolCallLimitHook——2026-08-09 曾因"12 次上限误伤长排查任务"整体
             #   摘除；现参数调整后回归：总上限 12→50（放开长任务自由度）+
@@ -2189,7 +2187,6 @@ class StrandsAgentAdapter:
                 # T2: 循环护栏（50 上限 / 连续失败 3 熔断 / 进度上报）
                 hooks=[limit_hook],
                 name=agent_id,
-                # max_iterations=self.max_iterations,  # Strands 1.50.2 已移除
             )
 
             self._agent_cache[cache_key] = agent
@@ -2983,7 +2980,6 @@ class StrandsAgentAdapter:
             ],
             # T1: per-session 历史条数（messages 解耦状态可见性）
             "session_history_entries": len(self._session_messages),
-            "max_iterations": self.max_iterations,
             "extra_tools_count": len(self.extra_tools),
         }
 

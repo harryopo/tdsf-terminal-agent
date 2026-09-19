@@ -55,7 +55,6 @@ def configure_strands(
     llm_config: Any = None,
     backend_enabled: bool = True,
     system_prompt: str | None = None,
-    max_iterations: int = 10,
 ) -> StrandsAgentAdapter:
     """便捷构造函数：创建并返回 StrandsAgentAdapter 实例
 
@@ -77,7 +76,6 @@ def configure_strands(
                     显式传入便于测试 / 运行时重新配置（如 agent.configure RPC 切换 LLM 后调用）。
         backend_enabled: feature flag，False 时直接降级
         system_prompt: 系统提示词（None 时用默认）
-        max_iterations: Strands Agent 最大迭代次数
 
     Returns:
         StrandsAgentAdapter 实例（``strands_model`` 仍可能为 None，例如未配置 API Key 或
@@ -125,7 +123,6 @@ def configure_strands(
         backend_enabled=backend_enabled,
         system_prompt=system_prompt,
         strands_model=strands_model,
-        max_iterations=max_iterations,
         operation_service=operation_service,
         require_operation_ledger=True,
     )
