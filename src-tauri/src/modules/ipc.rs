@@ -75,6 +75,10 @@ pub enum IPCError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// 方法不在白名单（#67 纵深防御：webview 被注入后也不能自行调任意 RPC）
+    #[error("method not allowed: {0}")]
+    MethodNotAllowed(String),
+
     /// Python 侧返回的 JSON-RPC 错误（包含 error code + message + data）
     #[error("remote error {code}: {message}")]
     RemoteError {
@@ -137,6 +141,13 @@ impl Serialize for IPCError {
                 -32000,
                 format!("io error: {}", e),
                 Some(json!({"type": "io_error"})),
+            ),
+            // -32601 = JSON-RPC 标准的 "Method not found"：白名单命中时对外
+            // 表现得与"该方法不存在"一致，不给探测者区分"不存在"和"被拒"的信息
+            IPCError::MethodNotAllowed(m) => (
+                -32601,
+                format!("method not allowed: {m}"),
+                Some(json!({"type": "method_not_allowed", "method": m})),
             ),
             IPCError::RemoteError {
                 code,
@@ -263,6 +274,25 @@ impl IPCClient {
 // Tauri 命令（前端通过 invoke 调用 Python Sidecar）
 // ============================================================================
 
+/// #67 未就绪期兜底核心集：只放健康检查。
+///
+/// 白名单的**唯一真源是 sidecar `ready` 快照里的 `methods`**（`jsonrpc.py`
+/// 的注册表 → Rust `SidecarState.methods`）。快照为空说明还没 ready，
+/// 此时任何业务请求本来都会 `NotRunning` —— 所以核心集小不是功能妥协，
+/// 而是把"未就绪期能调什么"钉到最小面：新增 RPC 一律不需要改这里。
+pub(crate) const CORE_IPC_METHODS: &[&str] = &["sidecar.health"];
+
+/// 快照非空 → 快照说了算；快照为空 → fail-closed 到核心集。
+///
+/// 为什么不做成"两份名单取并集"：并集意味着 sidecar 删了某个方法后 Rust 还在放行，
+/// 而放行面只会随时间单调变大 —— 那正是这次要收掉的东西。
+fn method_allowed(known: &[String], core: &[&str], method: &str) -> bool {
+    match known.first() {
+        None => core.contains(&method),
+        Some(_) => known.iter().any(|m| m == method),
+    }
+}
+
 /// ipc_invoke: 前端调用 Python Sidecar 的 JSON-RPC 方法
 ///
 /// 用法（前端 TypeScript）:
@@ -277,7 +307,8 @@ impl IPCClient {
 ///
 /// 错误处理:
 ///   - 返回 Err(String)，内容是 JSON 序列化的 { code, message, data }
-///   - 前端 JSON.parse 后可拿到 error code（-32000/-32001/-32700 等）
+///   - 前端 JSON.parse 后可拿到 error code（-32000/-32001/-32700/-32601 等）
+///   - `-32601` = 方法不在白名单（#67）
 #[tauri::command]
 pub async fn ipc_invoke(
     sidecar: tauri::State<'_, SidecarManager>,
@@ -286,6 +317,15 @@ pub async fn ipc_invoke(
     timeout_ms: Option<u64>,
 ) -> Result<Value, IPCError> {
     let client = IPCClient::new(sidecar.inner().clone());
+
+    // #67 纵深防御：webview 一旦被注入（R1 修前门槛极低），也不能自行调任意 RPC
+    // —— 例如 `needs_you.approve` 自批、改白名单、`skill.invoke` 落盘、关停应用。
+    let snap = client.status().await;
+    if !method_allowed(&snap.methods, CORE_IPC_METHODS, &method) {
+        log::warn!("[ipc] rejected not-allowlisted method={}", method);
+        return Err(IPCError::MethodNotAllowed(method));
+    }
+
     let params = params.unwrap_or(json!({}));
     match timeout_ms {
         // P0-3: 前端显式传 timeoutMs 时覆盖默认（夹取 10s-10min，防误配）
@@ -424,5 +464,41 @@ mod tests {
         let manager = SidecarManager::new(PathBuf::from("/tmp/test.py"));
         let client = IPCClient::new(manager);
         let _cloned = client.clone();
+    }
+
+    // ============================================================
+    // #67 方法白名单
+    // ============================================================
+
+    #[test]
+    fn allowlist_uses_ready_snapshot_as_single_source() {
+        // knowledge.rebuild 不在核心集里，但快照里有 → 放行（证明真源确实是 sidecar，
+        // Rust 不再另持一张会过期的表）；快照里没有的一律拒，哪怕它听起来人畜无害。
+        let known = [
+            "agent.invoke".to_string(),
+            "risk.evaluate".to_string(),
+            "knowledge.rebuild".to_string(),
+        ];
+        assert!(method_allowed(&known, CORE_IPC_METHODS, "agent.invoke"));
+        assert!(method_allowed(&known, CORE_IPC_METHODS, "knowledge.rebuild"));
+        assert!(!method_allowed(&known, CORE_IPC_METHODS, "needs_you.approve"));
+    }
+
+    #[test]
+    fn allowlist_fails_closed_to_core_set_when_snapshot_empty() {
+        // 空快照 = sidecar 还没 ready。此时任何请求本来都会 NotRunning，
+        // 所以只放行健康检查不是妥协，而是把"未就绪期能调什么"钉到最小面。
+        assert!(method_allowed(&[], CORE_IPC_METHODS, "sidecar.health"));
+        assert!(!method_allowed(&[], CORE_IPC_METHODS, "agent.invoke"));
+        assert!(!method_allowed(&[], CORE_IPC_METHODS, "shutdown"));
+    }
+
+    #[test]
+    fn method_not_allowed_serializes_jsonrpc_method_not_found() {
+        let err = IPCError::MethodNotAllowed("python.exec".to_string());
+        let json_str = serde_json::to_string(&err).unwrap();
+        assert!(json_str.contains("-32601"), "{json_str}");
+        assert!(json_str.contains("python.exec"), "{json_str}");
+        assert!(json_str.contains("method_not_allowed"), "{json_str}");
     }
 }
