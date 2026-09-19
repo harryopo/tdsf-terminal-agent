@@ -161,10 +161,11 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         // when the user clicks back into the editor or terminal (#33).
         .always_on_top(true);
 
-    // TDSF fix (2026-07-30): the main window ships custom additionalBrowserArgs
-    // (CDP --remote-debugging-port). WebView2 refuses to create a second webview
-    // in the same user-data dir with different browser args (0x8007139F
-    // ERROR_INVALID_STATE), so the settings webview must inherit them.
+    // WebView2 只允许同一 user-data folder 上所有 webview 用**完全相同**的启动
+    // 参数，否则第二个 webview 直接 0x8007139F ERROR_INVALID_STATE。参数现在写在
+    // 配置的 app.windows[label=main].additionalBrowserArgs 里（发布版只有
+    // --disable-gpu；dev 由 tauri.dev.conf.json 追加 CDP 端口），settings 窗必须
+    // 原样继承，否则一打开设置窗口就崩。
     let main_browser_args = app
         .config()
         .app
@@ -227,44 +228,6 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     Ok(())
 }
 
-/// WebView2 的进程级附加浏览器参数。
-///
-/// `debug` 为真（`cargo tauri dev` / `--debug` 构建）时才开放 CDP 端口，
-/// 供真机探针（`__TDSF_DBG__` + `Input.dispatchMouseEvent`）连进去做端到端验证。
-/// **发布构建绝不能带这两个参数**：`--remote-debugging-port` + `--remote-allow-origins=*`
-/// 等于把主窗 webview 的任意 JS 执行权交给同机任意进程与用户浏览器里的任意网页。
-fn webview_browser_arguments(debug: bool) -> String {
-    let mut args = String::from("--disable-gpu");
-    if debug {
-        args.push_str(" --remote-debugging-port=9222 --remote-allow-origins=*");
-    }
-    args
-}
-
-#[cfg(test)]
-mod webview_args_tests {
-    use super::webview_browser_arguments;
-
-    #[test]
-    fn release_builds_never_open_a_cdp_port() {
-        let release = webview_browser_arguments(false);
-        assert!(
-            !release.contains("remote-debugging"),
-            "发布构建的 webview 参数里不允许出现调试端口: {release}"
-        );
-        assert!(!release.contains("remote-allow-origins"));
-        assert!(release.contains("--disable-gpu"));
-    }
-
-    #[test]
-    fn debug_builds_keep_the_probe_port() {
-        assert!(
-            webview_browser_arguments(true).contains("--remote-debugging-port=9222"),
-            "debug 构建要保留 CDP，否则真机探针全部失效"
-        );
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -286,25 +249,18 @@ pub fn run() {
     let cli_dir = launch.dir.clone();
     workspace::init_launch_cwd(cli_dir.as_deref());
 
-    // TDSF 永久修复 (2026-08-30): WebView2 GPU 硬件加速在部分 Windows 环境
-    // （远程桌面/旧显卡驱动/多 GPU 切换）会间歇性崩溃 → 应用窗口黑屏且
-    // 重启偶发不恢复。实测 --disable-gpu 后渲染稳定（本应用为 DOM 终端
-    // 场景，软渲染性能足够）。必须在 webview 创建前设置。
-    // 如需恢复硬件加速：去掉 --disable-gpu 即可。
+    // WebView2 启动参数（--disable-gpu 挡远程桌面/旧显卡的间歇性黑屏；dev 再开
+    // CDP 探针口）只能来自配置：app.windows[label=main].additionalBrowserArgs。
     //
-    // TDSF 修复 2026-09-18（深度体检 R1，P0 发布阻断）：CDP 调试端口以前写在
-    // tauri.windows.conf.json 的 additionalBrowserArgs 里，而**平台配置文件在 dev 与
-    // build 两条路径上都会被合并进产物** —— 结果发布版安装包也常驻
-    // 127.0.0.1:9222 且 --remote-allow-origins=*，同机任意进程、或用户在任意浏览器
-    // 打开的任意网页都能连进来在主窗 webview 里执行任意 JS（读 store 里的 LLM API
-    // Key、直接 invoke pty_open 以用户身份跑命令）。现在只在 debug 构建开放，
-    // 并且改由进程级环境变量统一带上，settings 窗天然继承，不再有"两个 webview
-    // args 不一致 → 0x8007139F"那一类问题。
-    #[cfg(windows)]
-    std::env::set_var(
-        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        webview_browser_arguments(cfg!(debug_assertions)),
-    );
+    // 2026-09-18 的 R1 修复曾把参数改成走进程级环境变量
+    // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，起因是调试端口写在平台配置文件里、
+    // 被一起合进了发布版安装包（同机任意进程都能连进主窗执行任意 JS）。
+    // **2026-09-19 真机取证：这条环境变量路线完全不生效** —— dev 实例起来后
+    // msedgewebview2.exe 的命令行里既没有 --disable-gpu 也没有调试端口，9222
+    // 也没人监听。也就是说 R1 之后连"黑屏缓解"那道措施都是空的。
+    // 现在回到配置驱动：发布版只带 --disable-gpu，调试端口只写在
+    // tauri.dev.conf.json（仅 pnpm tauri:dev 加载）。
+    // src/app/tauri-dev-isolation.test.ts 钉住"发布路径不得出现调试端口"。
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();

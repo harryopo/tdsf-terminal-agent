@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "com.tdsf.terminal-agent.dev",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "TDSF Terminal Agent",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 420,
+        "minHeight": 280,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#1a1a1a",
+        "visible": true,
+        "center": true,
+        "dragDropEnabled": true,
+        "devtools": true,
+        "decorations": false,
+        "additionalBrowserArgs": "--disable-gpu --remote-debugging-port=9222 --remote-allow-origins=*"
+      }
+    ]
+  }
+}

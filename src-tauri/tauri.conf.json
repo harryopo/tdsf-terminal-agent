@@ -24,7 +24,8 @@
         "visible": true,
         "center": true,
         "dragDropEnabled": true,
-        "devtools": true
+        "devtools": true,
+        "additionalBrowserArgs": "--disable-gpu"
       }
     ],
     "security": {
