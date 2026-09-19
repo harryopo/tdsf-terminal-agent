@@ -169,6 +169,9 @@ export type Preferences = {
   // Teach Agent manual explanation preference
   /** 是否显示失败命令的手动 AI 解释入口 */
   teachAgentEnabled: boolean;
+  // TDSF 2026-09-19 (P5): 终端预测历史来源开关
+  /** 是否在启动时把本地 shell 历史导入终端预测历史；关掉后「清空预测历史」才留得住 */
+  predictionImportShellHistory: boolean;
   // TDSF 2026-08-09: 服务器实时监控偏好
   /** 监控采集间隔（毫秒，合法值 2000/3000/5000/10000，默认 3000） */
   serverMonitorInterval: number;
@@ -280,6 +283,7 @@ const KEY_LSP_ACTIVATION = "lspActivation";
 const KEY_LSP_CUSTOM_SERVERS = "lspCustomServers";
 // Teach Agent manual-explanation preference key
 const KEY_TEACH_AGENT_ENABLED = "teachAgentEnabled";
+const KEY_PREDICTION_IMPORT_SHELL_HISTORY = "predictionImportShellHistory";
 // TDSF 2026-08-09: 服务器监控 key
 const KEY_SERVER_MONITOR_INTERVAL = "serverMonitorInterval";
 // TDSF 2026-08-28: SSH 远端动态补全 key
@@ -370,6 +374,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lspCustomServers: [],
   // Manual error explanation is enabled by default.
   teachAgentEnabled: true,
+  // 默认照旧导入 shell 历史（清空时会在设置里主动改这个值）
+  predictionImportShellHistory: true,
   // TDSF 2026-08-09: 服务器监控默认偏好
   serverMonitorInterval: 3000,
   // TDSF 2026-08-28: SSH 远端动态补全默认开启提示（无弹窗设计，仅小图标）
@@ -574,6 +580,10 @@ export async function loadPreferences(): Promise<Preferences> {
     teachAgentEnabled:
       get<boolean>(KEY_TEACH_AGENT_ENABLED) ??
       DEFAULT_PREFERENCES.teachAgentEnabled,
+    // TDSF 2026-09-19 (P5): 关掉后不再把本地 shell 历史灌进预测历史
+    predictionImportShellHistory:
+      get<boolean>(KEY_PREDICTION_IMPORT_SHELL_HISTORY) ??
+      DEFAULT_PREFERENCES.predictionImportShellHistory,
     // TDSF 2026-08-09: 服务器监控偏好读取
     serverMonitorInterval: coerceServerMonitorInterval(
       get<number>(KEY_SERVER_MONITOR_INTERVAL) ??
@@ -899,6 +909,11 @@ export async function setTeachAgentEnabled(value: boolean): Promise<void> {
   await writePref(KEY_TEACH_AGENT_ENABLED, value);
 }
 
+// TDSF 2026-09-19 (P5): 预测历史导入开关 setter
+export async function setPredictionImportShellHistory(value: boolean): Promise<void> {
+  await writePref(KEY_PREDICTION_IMPORT_SHELL_HISTORY, value);
+}
+
 // TDSF 2026-08-09: 服务器监控 setter
 export const SERVER_MONITOR_INTERVAL_PRESETS = [2000, 3000, 5000, 10000] as const;
 
@@ -1053,6 +1068,7 @@ export async function onPreferencesChange(
     [KEY_LSP_CUSTOM_SERVERS]: "lspCustomServers",
     // Teach Agent manual-explanation preference mapping
     [KEY_TEACH_AGENT_ENABLED]: "teachAgentEnabled",
+    [KEY_PREDICTION_IMPORT_SHELL_HISTORY]: "predictionImportShellHistory",
     // TDSF 2026-08-09: 服务器监控偏好映射
     [KEY_SERVER_MONITOR_INTERVAL]: "serverMonitorInterval",
     // TDSF 2026-08-28: SSH 远端动态补全偏好映射
