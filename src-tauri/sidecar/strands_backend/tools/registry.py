@@ -289,14 +289,17 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     # T5 (2026-08-31, spec add-agent-loop-closure): python_run PTC 工具
     # （无沙箱版）——本地 subprocess 受控执行（30s 超时 / 输出截断 10KB /
     # cwd 锁定 workspace；SSH 会话与无工作区 fail-closed 拒绝）
+    # #66 (2026-09-19): 审批收紧到工具内部——python_risk 静态判级 + decide(risk_l,
+    # mode)，删除/联网/起进程在 auto 档也弹卡。needs_approval 这个标记位仍然
+    # False：它描述的是「命令走 RiskChecker 文本规则」，python 源码不走那条链路，
+    # 门禁由 python_run 自己实现（改这里不影响执行，别误当成"没审批"）。
     "python_run": ToolSpec(
         name="python_run",
         factory="strands_backend.tools.python_run:make_python_run_tool",
-        description="在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）",
-        # 进程级受控（无沙箱）：本地 subprocess 执行 → 非 readonly（observe/L1
-        # 模式 schema 裁剪）。needs_approval=False 对齐 save_skill/skill_invoke
-        # 哲学——审批链路（RiskChecker/needs_you）针对 shell 命令，python 源码
-        # 不走该链路，由三模式 schema 门禁 + 进程级受控边界管控
+        description=(
+            "在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB、"
+            "危险动作需审批）"
+        ),
         policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False),
     ),
 }

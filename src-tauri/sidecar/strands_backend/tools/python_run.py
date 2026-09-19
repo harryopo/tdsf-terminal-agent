@@ -7,6 +7,10 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
   供 agent 做多文件交叉统计 / 复杂解析 / 批量操作——写一段 Python 一次完成，
   优于逐工具往返。
 - 受控（进程级，无沙箱——用户拍板暂不做沙箱）：
+  * 分级审批（#66，2026-09-19）：代码先过 ``python_risk.analyze_python_code`` 静态
+    判级，再走与 ssh_command 同一条 ``decide(risk_l, ctx.mode)`` 信任链——
+    纯计算/只读不打扰；写入类在 confirm 档逐条审批；删除、联网、起进程这类
+    动作在 auto 档也照样弹审批卡
   * cwd 锁定 ``ToolContext.workspace``（本地工作区根目录）
   * 超时 30s（TimeoutExpired → 子进程 kill + 返回已捕获的部分输出）
   * stdout / stderr 各自截断 10KB（超出标注 truncated=true + 原始长度）
@@ -15,6 +19,7 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
   * SSH 会话（ctx.ssh_session_id 非空）→ error（本期仅支持本地工作区，
     不静默跑在远端或别的机器）
   * workspace 不可得 → error（不臆测目录）
+  * 风险分级器自身异常 → 按 L4 处理（看不清就当作高危，不放行）
 
 设计（对齐 suggest_command / ssh_command 的两层结构）：
 - ``invoke_python_run_tool(params, ctx)``：核心实现，无 Strands 依赖，便于单测。
@@ -31,6 +36,10 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
               truncated, message}（stdout/stderr 为 kill 前已捕获的部分输出）
     fail-closed: {status:"error", exit_code:None, stdout:"", stderr:"",
               duration_ms:0, truncated:False, message}（参数/环境拒绝，未执行）
+    审批未过: {status:"rejected" | "needs_approval", exit_code:None, ...,
+              risk_l:<级>, message}（用户拒绝 / 审批未建立或超时，未执行）
+    只读拦截: {status:"command_blocked", ...}（observe 档，message 带
+              "command_blocked!" 前缀——给 LLM 的双轨契约，勿改）
 
 截断语义：stdout 与 stderr **各自**上限 10KB（text 模式按字符计，近似 10KB），
 任一被截断则 truncated=true 并附 ``stdout_full_len`` / ``stderr_full_len``
@@ -49,7 +58,15 @@ import sys
 import time
 from typing import Any
 
-from strands_backend.tools import ToolContext, tool
+from needs_you import NeedsYouStatus
+from strands_backend.modes import decide
+from strands_backend.tools import (
+    ToolContext,
+    _audit_append,
+    complete_approval_execution,
+    request_approval_and_wait,
+    tool,
+)
 
 logger = logging.getLogger("sidecar.strands_backend.tools.python_run")
 
@@ -184,7 +201,32 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
 
     timeout_s = _timeout_params(params.get("timeout", DEFAULT_TIMEOUT_SECONDS))
 
-    # ---- 受控执行（cwd 锁定本地工作区；超时由 subprocess.run 内部 kill）----
+    # ---- #66 分级审批门：AST 判级 → decide(risk_l, ctx.mode) → 必要时弹审批卡 ----
+    blocked, approved_req = _approval_gate(
+        ctx, code, str(params.get("explanation", "") or "")
+    )
+    if blocked is not None:
+        _emit_tool_call_completed(ctx, params, blocked)
+        return blocked
+
+    # ---- 受控执行 ----
+    try:
+        result = _execute_python(code, workspace, wsl_distro, timeout_s)
+    finally:
+        if approved_req is not None:
+            complete_approval_execution(approved_req)
+
+    _emit_tool_call_completed(ctx, params, result)
+    return result
+
+
+def _execute_python(
+    code: str,
+    workspace: str,
+    wsl_distro: str,
+    timeout_s: int,
+) -> dict[str, Any]:
+    """真正跑 subprocess 的一段（已通过 fail-closed 与审批门）"""
     start = time.perf_counter()
     try:
         command = [sys.executable, "-c", code]
@@ -227,7 +269,6 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
             f"python_run timeout killed: timeout={timeout_s}s, "
             f"duration_ms={duration_ms}, code_len={len(code)}"
         )
-        _emit_tool_call_completed(ctx, params, result)
         return result
     except OSError as exc:
         # 解释器启动失败（如 sys.executable 失效）——工具级 error
@@ -243,7 +284,6 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
             "error": str(exc),
         }
         logger.exception(f"python_run spawn failed: {exc}")
-        _emit_tool_call_completed(ctx, params, result)
         return result
 
     duration_ms = int((time.perf_counter() - start) * 1000)
@@ -266,9 +306,169 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
         result["message"] = (
             f"脚本以退出码 {completed.returncode} 结束（失败详情见 stderr）"
         )
-
-    _emit_tool_call_completed(ctx, params, result)
     return result
+
+
+# ============================================================================
+# #66 分级审批门
+# ============================================================================
+
+def _assess_python_risk(code: str) -> dict[str, Any]:
+    """调用分级器；分级器自身异常按最高危处理（fail-closed，不退回静默执行）"""
+    from strands_backend.tools import python_risk
+
+    try:
+        return python_risk.analyze_python_code(code)
+    except Exception as exc:  # noqa: BLE001 — 看不清就先当高危，不能放行
+        logger.exception(f"python risk analyze failed, treating as L4: {exc}")
+        return {
+            "risk_l": 4,
+            "level": "L4",
+            "summary": f"风险分级失败（{exc}），按高危保守处理",
+            "reasons": [f"风险分级器异常：{exc}"],
+            "actions": [],
+            "parse_error": "",
+        }
+
+
+def _approval_gate(
+    ctx: ToolContext,
+    code: str,
+    purpose: str,
+) -> tuple[dict[str, Any] | None, Any | None]:
+    """python_run 的执行前审批门（#66，用户 2026-09-19 决策 3）
+
+    判级口径见 python_risk 模块 docstring；裁决统一走 ``decide(risk_l, mode)``，
+    与 ssh_command 同一把尺子：
+    - observe → deny（command_blocked，不弹卡、不执行）
+    - confirm → L2+ 逐条审批（写文件/删除/联网/执行），纯算与只读直接跑
+    - auto    → L3+ 审批（删除 / 联网 / 执行系统命令照样打扰）
+
+    Returns:
+        (提前结束时的结果 dict 或 None, 已批准的审批请求或 None)。调用方必须在
+        执行结束后对第二个返回值调 complete_approval_execution —— execution_gate
+        批准后仍占着该会话的审批队首，不释放则该会话后续审批永久卡死（审计 A3）。
+    """
+    risk_info = _assess_python_risk(code)
+    risk_l = int(risk_info.get("risk_l", 4) or 0)
+
+    try:
+        decision = decide(risk_l, ctx.mode)
+    except ValueError as exc:  # 非法 mode / risk 输入 → fail-closed 按拒绝
+        logger.warning(f"python_run decide failed, fail-closed deny: {exc}")
+        decision = "deny"
+
+    if decision == "allow":
+        return None, None
+
+    if decision == "deny":
+        return {
+            "status": "command_blocked",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 0,
+            "truncated": False,
+            "risk_l": risk_l,
+            "message": (
+                f"command_blocked! 只读模式或安全规则禁止执行：python_run 的这段代码"
+                f"{risk_info.get('summary', '存在风险')}。该代码未执行，"
+                f"也不提供替代方案。"
+            ),
+        }, None
+
+    # decision == "confirm" —— 真实等待用户响应（5 分钟无响应按拒绝处理）
+    risk_result = {
+        "level": f"L{risk_l}",
+        "high_risk": risk_l >= 4,
+        "write": risk_l >= 2,
+        "matched_rules": [f"python_{a['kind']}:{a['call']}" for a in risk_info["actions"]]
+        or ["python_unparsable"],
+        "reason": str(risk_info.get("summary", "")),
+    }
+    impact = {
+        "max_risk_l": risk_l,
+        "summary": str(risk_info.get("summary", "")),
+        "segments": [
+            {
+                "command": f"第 {a.get('line', '?')} 行：{a['call']}",
+                "category": a.get("category", "code_execution"),
+                "category_label": a["kind"],
+                "objects": [a["call"]],
+                "risk_l": int(a["level"]),
+            }
+            for a in risk_info["actions"][:3]
+        ],
+    }
+    req = request_approval_and_wait(
+        ctx,
+        code,
+        risk_result,
+        tool_name="python_run",
+        explanation=purpose,
+        impact=impact,
+        risk_l=risk_l,
+    )
+    if req is None:
+        return {
+            "status": "needs_approval",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 0,
+            "truncated": False,
+            "risk_l": risk_l,
+            "message": "审批请求创建失败；未执行任何代码。",
+        }, None
+
+    _audit_append(
+        event="approval",
+        decision=req.status.value if hasattr(req.status, "value") else str(req.status),
+        tool="python_run",
+        command=code,
+        session_id=ctx.ssh_session_id or "",
+        agent=ctx.agent_name,
+    )
+
+    if req.status == NeedsYouStatus.APPROVED:
+        return None, req
+
+    reason = ""
+    if isinstance(req.response, dict):
+        reason = str(req.response.get("reason", "") or "")
+    if req.status == NeedsYouStatus.REJECTED:
+        return {
+            "status": "rejected",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 0,
+            "truncated": False,
+            "risk_l": risk_l,
+            "message": (
+                "用户拒绝了这段 Python 代码，未执行。"
+                + (f"用户附言：{reason}" if reason else "")
+            ),
+        }, None
+
+    # TIMEOUT / CANCELLED / 未知 —— fail-closed 按拒绝处理
+    logger.warning(
+        f"python_run approval not answered: status={req.status}, "
+        f"risk_l={risk_l}, code_len={len(code)}"
+    )
+    return {
+        "status": "needs_approval",
+        "exit_code": None,
+        "stdout": "",
+        "stderr": "",
+        "duration_ms": 0,
+        "truncated": False,
+        "risk_l": risk_l,
+        "message": (
+            "审批超时（5 分钟无响应），按拒绝处理；未执行任何代码。"
+            "需要执行请重新发起。"
+        ),
+    }, None
 
 
 def _emit_tool_call_completed(
@@ -316,6 +516,8 @@ def make_python_run_tool(ctx: ToolContext):
         - 工作目录锁定为本地工作区根目录
         - 执行超过 30 秒会被终止（status=timeout）
         - stdout/stderr 各自超过 10KB 会截断（truncated=true）
+        - 代码里有危险动作（删文件、联网、起子进程、动态执行）会先弹审批卡，
+          用户拒绝或未响应则该代码不执行；纯统计与只读代码不打扰
 
         Args:
             code (str): 要执行的 Python 源码（一段完整可执行的脚本）。
@@ -323,7 +525,9 @@ def make_python_run_tool(ctx: ToolContext):
         Returns:
             dict: {status, exit_code, stdout, stderr, duration_ms, truncated}。
             status: success（退出码 0）/ error（脚本失败或参数/环境被拒，
-            fail-closed 未执行）/ timeout（超时被终止）。
+            fail-closed 未执行）/ timeout（超时被终止）/ rejected（用户拒绝，
+            未执行）/ needs_approval（等待审批或审批未建立，未执行）/
+            command_blocked（只读模式禁止，未执行）。
         """
         # 推送 tool_call 开始事件，让前端实时显示工具调用卡片
         if ctx.event_bus is not None:
