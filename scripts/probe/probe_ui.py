@@ -166,7 +166,28 @@ AUDIT_JS = r"""
   for (const el of document.querySelectorAll(INTERACTIVE)) {
     if (el.closest(SKIP) || !visible(el)) continue;
     const r = el.getBoundingClientRect();
-    if (r.width < 24 || r.height < 24) bump('smallHitTarget', el, { w: Math.round(r.width), h: Math.round(r.height) });
+    if (r.width < 24 || r.height < 24) {
+      // rect 小于 24 不等于"点不中"：Radix Switch 这类别有 `after:-inset-*` 伪元素
+      // 扩展区，CSS 命中测试会把落在伪元素上的点击交给宿主元素 —— 量具只看
+      // getBoundingClientRect 就会把 68×36 的可点区误报成 44×20 的缺陷。
+      // 判据是"拇指能不能点中"，所以直接做四角真命中测试（±12px = 24×24 的半幅）。
+      // 只认两种命中：点到了它本身，或点到它的子节点（点击会冒泡到宿主 = 真能触发）。
+      // **祖先被命中不算** —— 第一版写了 `t.contains(el)`，于是父容器的 padding 也把
+      // 21px 高的按钮判成"点得中"，两处真缺陷当场假绿 0 违规。量具放水的代价是
+      // 缺陷永久隐身，所以这条判据要往严里定。
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const corners = [[cx - 12, cy - 12], [cx + 12, cy - 12], [cx - 12, cy + 12], [cx + 12, cy + 12]];
+      const unreachable = corners.filter(([x, y]) => {
+        if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return true; // 贴边算不出就当作打不中
+        const t = document.elementFromPoint(x, y);
+        return !(t && (t === el || el.contains(t)));
+      });
+      if (unreachable.length) {
+        bump('smallHitTarget', el, {
+          w: Math.round(r.width), h: Math.round(r.height), miss: unreachable.length,
+        });
+      }
+    }
     if (!nameOf(el)) bump('missingName', el, { role: el.getAttribute('role') || el.tagName.toLowerCase() });
   }
   freeze.remove();

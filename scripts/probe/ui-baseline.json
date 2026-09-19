@@ -4,23 +4,30 @@
       "clippedText": 0,
       "inputTextOverflow": 0,
       "lowContrast": 0,
-      "smallHitTarget": 1,
+      "smallHitTarget": 0,
       "missingName": 0
     },
     "http://127.0.0.1:9300": {
       "clippedText": 0,
       "inputTextOverflow": 0,
       "lowContrast": 0,
-      "smallHitTarget": 2,
+      "smallHitTarget": 0,
       "missingName": 0
     }
   },
   "min-window": {
+    "http://127.0.0.1:9300/settings.html?tab=prediction [emulated 430x290]": {
+      "clippedText": 0,
+      "inputTextOverflow": 0,
+      "lowContrast": 0,
+      "smallHitTarget": 0,
+      "missingName": 0
+    },
     "http://127.0.0.1:9300 [emulated 430x290]": {
       "clippedText": 0,
       "inputTextOverflow": 0,
       "lowContrast": 0,
-      "smallHitTarget": 2,
+      "smallHitTarget": 0,
       "missingName": 0
     }
   }
