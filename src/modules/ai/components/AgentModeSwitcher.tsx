@@ -178,7 +178,9 @@ export function AgentModeSwitcher({ className }: { className?: string }) {
         onClick={() => (open ? setOpen(false) : openMenu())}
         data-testid="agent-mode-trigger"
         className={cn(
-          "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium transition-colors",
+          // min-h-6：状态栏这枚触发器原本 62×21，落在 UI 门禁的 24×24 命中区下限以下
+          // （`pnpm probe:ui` 会点名它）。只补高度下限，字号与内边距不变。
+          "flex min-h-6 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium transition-colors",
           open
             ? "border-border/60 bg-accent/60"
             : "border-border/40 bg-card/40 hover:bg-accent/40",

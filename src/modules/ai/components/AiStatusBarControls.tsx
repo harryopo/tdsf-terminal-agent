@@ -228,7 +228,10 @@ function ModelDropdown() {
           variant="ghost"
           size="sm"
           className={cn(
-            "h-5.5 gap-1 rounded-md px-1.5 my-1 text-xs hover:bg-accent hover:text-foreground",
+            // h-6：这里原本写 h-5.5（22px）把 shadcn size="sm" 的 h-8 覆盖掉了，
+            // 结果低于 UI 门禁的 24px 命中区下限（`pnpm probe:ui` 点名过它）。
+            // 回到 24px 档；同时去掉配套的 my-1 —— 高度够了就不再需要靠外边距挤进那一行。
+            "h-6 gap-1 rounded-md px-1.5 text-xs hover:bg-accent hover:text-foreground",
             currentProviderHasKey
               ? "text-muted-foreground"
               : "text-amber-600 dark:text-amber-400",
