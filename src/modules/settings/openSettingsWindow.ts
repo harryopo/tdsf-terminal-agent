@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type SettingsTab =
+  | "prediction"
   | "general"
   | "editor"
   | "themes"

@@ -761,6 +761,12 @@ export async function loadHistoryIfNeeded(): Promise<void> {
     const { loadHistoryFromRust, parseShellHistory } = await import('@/lib/shell-history');
     const { historyCommands } = await import('@/modules/terminal/block/lib/history');
     const info = await loadHistoryFromRust();
+    // 用户可以从设置里关掉这条导入：否则「清空预测历史」一重启就被 histfile 里的
+    // 手误行重新灌满，清空等于没做。
+    const { usePreferencesStore } = await import('@/modules/settings/preferences');
+    if (!usePreferencesStore.getState().predictionImportShellHistory) {
+      return;
+    }
     if (info.commands.length === 0) return;
     const engine = getSuggestEngine();
     // 先用真实环境命令集（本机 PATH 可执行文件 + 历史首词）扩充候选，再拿它当

@@ -22,6 +22,7 @@ import { AboutSection } from "./sections/AboutReleaseSection";
 import { AgentHistorySection } from "./sections/AgentHistorySection";
 import { AgentsSection } from "./sections/AgentsSection";
 import { EditorSection } from "./sections/EditorSection";
+import { PredictionHistorySection } from "./sections/PredictionHistorySection";
 import { GeneralSection } from "./sections/GeneralSection";
 import { ModelsSection } from "./sections/ModelsSection";
 import { RuntimeLogsSection } from "./sections/RuntimeLogsSection";
@@ -45,6 +46,12 @@ const TABS: {
     label: "编辑器",
     icon: SourceCodeIcon,
     component: EditorSection,
+  },
+  {
+    id: "prediction",
+    label: "终端预测",
+    icon: SourceCodeIcon,
+    component: PredictionHistorySection,
   },
   {
     id: "themes",
