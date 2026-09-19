@@ -26,8 +26,10 @@ classifiers = [
 ]
 
 # 运行时依赖（与 requirements.txt 同步）
+# strands-agents 写死精确版本，理由见 requirements.txt 的注释与 ROADMAP #77：
+# 我们贴的是 SDK 的半公开面，宽 pin 让门禁/桌面/产物各跑一版。
 dependencies = [
-    "strands-agents>=1.53,<2.0",
+    "strands-agents==1.53.0",
     "openai>=1.68,<3",
     "anthropic>=0.21,<1",
     "pydantic>=2.0",
