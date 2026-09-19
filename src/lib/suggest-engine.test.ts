@@ -2,9 +2,10 @@
  * suggest-engine.test.ts — Fish autosuggest 三层预测引擎单元测试
  * -----------------------------------------------------------------------------
  * 覆盖 SuggestEngine 的核心行为:
- *   - 三层匹配优先级 (history > dictionary > fuzzy)
- *   - 历史去重 / 批量加载 / 上限保护
- *   - 空输入 / 空格截断 / limit 控制
+ *   - 三层匹配优先级 (dictionary > history > fuzzy)
+ *   - 字典与历史重名时只保留字典那一条（历史挤不掉可信候选）
+ *   - 真实环境命令播种（compgen -c / PATH）扩充候选集
+ *   - 历史去重 / 批量加载 / 上限保护 / 清空
  *
  * 注意: 每个用例创建独立的 `new SuggestEngine()` 实例, 不依赖单例,
  * 天然实现测试间状态隔离。
@@ -14,27 +15,25 @@ import { SuggestEngine } from "./suggest-engine";
 
 describe("SuggestEngine", () => {
   // ──────────────────────────────────────────────────────────────────────
-  // 用例 1: 三层匹配优先级 — history > dictionary > fuzzy
+  // 用例 1: 三层匹配优先级 — dictionary > history > fuzzy
+  //   2026-09-19 语义调整：历史里混着敲错的命令（shell 失败行也会进 histfile），
+  //   让它占首位等于把错命令推给用户。
   // ──────────────────────────────────────────────────────────────────────
-  it("returns history matches before dictionary matches (三层优先级)", () => {
+  it("returns dictionary matches before history matches (历史降到第二档)", () => {
     const engine = new SuggestEngine();
-    // gitstatus 不在命令字典中, 仅作为历史存在
+    // gitstatus 不在命令字典中, 仅作为历史存在（模拟一次敲错）
     engine.addHistory("gitstatus");
     const results = engine.getSuggestions("git", 5);
 
-    // 第一条必须是 history 来源 (优先级最高)
-    expect(results[0].command).toBe("gitstatus");
-    expect(results[0].source).toBe("history");
+    // 首位必须来自字典：名字一定存在，而且带中文说明
+    expect(results[0].source).toBe("dictionary");
+    expect(results[0].command).toBe("git");
 
-    // 字典中的 git 应排在历史之后 (dictionary 来源)
-    const dictMatch = results.find((r) => r.command === "git");
-    expect(dictMatch).toBeDefined();
-    expect(dictMatch!.source).toBe("dictionary");
-
-    // history 条目必须出现在 dictionary 条目之前
-    const historyIdx = results.findIndex((r) => r.source === "history");
+    // 历史命中仍然给出来，只是排在字典之后
     const dictIdx = results.findIndex((r) => r.source === "dictionary");
-    expect(historyIdx).toBeLessThan(dictIdx);
+    const historyIdx = results.findIndex((r) => r.source === "history");
+    expect(results[historyIdx]?.command).toBe("gitstatus");
+    expect(dictIdx).toBeLessThan(historyIdx);
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -102,19 +101,21 @@ describe("SuggestEngine", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // 用例 8: loadHistory 批量加载后历史匹配层生效
+  // 用例 8: loadHistory 批量加载后历史档依然生效（只是不再占首位）
   // ──────────────────────────────────────────────────────────────────────
-  it("loads history in batch and uses it for matching (批量加载历史)", () => {
+  it("loads history in batch and keeps it as the second tier (批量加载历史)", () => {
     const engine = new SuggestEngine();
     engine.loadHistory(["gitstatus", "lslist"]);
 
     const results = engine.getSuggestions("git", 5);
-    expect(results[0].command).toBe("gitstatus");
-    expect(results[0].source).toBe("history");
+    expect(results[0].source).toBe("dictionary");
+    expect(
+      results.some((r) => r.command === "gitstatus" && r.source === "history"),
+    ).toBe(true);
 
-    const lsResults = engine.getSuggestions("ls", 5);
-    expect(lsResults[0].command).toBe("lslist");
-    expect(lsResults[0].source).toBe("history");
+    // 字典里没有、只有历史命中的候选不会因此丢失（建议必须比输入长，故用前缀）
+    const lsResults = engine.getSuggestions("lsli", 5);
+    expect(lsResults[0]).toMatchObject({ command: "lslist", source: "history" });
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -130,10 +131,10 @@ describe("SuggestEngine", () => {
     const history = engine.getHistory();
     expect(history.length).toBeLessThanOrEqual(500);
 
-    // 引擎仍能正常工作 — cmd 前缀在历史中足够多, 全部走 history 层
+    // 引擎仍能正常工作 — cmd 前缀的历史候选照样给得出来
     const results = engine.getSuggestions("cmd", 5);
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every((r) => r.source === "history")).toBe(true);
+    expect(results.some((r) => r.source === "history")).toBe(true);
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -151,5 +152,40 @@ describe("SuggestEngine", () => {
     // 清空后不再产生 history 来源的匹配
     const results = engine.getSuggestions("gi", 5);
     expect(results.every((r) => r.source !== "history")).toBe(true);
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // 用例 11: 跨层去重 — 同一条命令既在字典又在历史，只留字典那条（带中文说明）
+  // ──────────────────────────────────────────────────────────────────────
+  it("keeps only the dictionary entry when history repeats it (跨层去重)", () => {
+    const engine = new SuggestEngine();
+    engine.addHistory("gitstatus");
+    engine.addHistory("git");
+
+    const results = engine.getSuggestions("git", 5);
+    const gitItems = results.filter((r) => r.command === "git");
+    expect(gitItems).toHaveLength(1);
+    expect(gitItems[0].source).toBe("dictionary");
+    expect(gitItems[0].zh).toBeTruthy();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // 用例 12: 真实环境播种 — 字典没收录但远端确实装了（compgen -c 里有）的命令
+  // 也要预测得出来；播种必须幂等，且不得跨环境串味
+  // ──────────────────────────────────────────────────────────────────────
+  it("predicts commands that only exist in the real environment (真实环境播种)", () => {
+    const engine = new SuggestEngine();
+    // 用字典里肯定没有的合成名（k9s 之类真实工具已在 Fig specs 里，测不出播种效果）
+    expect(engine.getSuggestions("zxctl", 5)).toEqual([]); // 播种前预测不出来
+
+    engine.setEnvironmentCommands(["zxctl", "zxctlinstall"], "linux");
+    engine.setEnvironmentCommands(["zxctl", "zxctlinstall"], "linux"); // 幂等
+
+    const results = engine.getSuggestions("zxctl", 5);
+    expect(results.map((r) => r.command)).toContain("zxctl");
+    expect(results.map((r) => r.command)).toContain("zxctlinstall");
+    expect(results.every((r) => r.source === "dictionary")).toBe(true);
+    // 播种不得污染另一个环境（windows 侧没有 zxctl）
+    expect(engine.isKnownCommand("zxctl", "windows")).toBe(false);
   });
 });

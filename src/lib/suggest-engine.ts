@@ -4,9 +4,14 @@
  * 核心算法移植自 fish-shell 的 autosuggest（C++ → TypeScript），
  * 参考 deep-research-ultra 调研报告的推荐方案：
  *
- *   Layer 1: 命令历史匹配（fish 风格，最近优先）
- *   Layer 2: 命令字典精确匹配（前缀 startsWith，按匹配质量排序）
+ *   Layer 1: 命令字典精确匹配（前缀 startsWith，按匹配质量排序；含真实环境命令名）
+ *   Layer 2: 命令历史匹配（fish 风格，最近优先）
  *   Layer 3: fuzzysort 模糊匹配（fzf 风格子序列匹配 + 评分，严格阈值兜底）
+ *
+ * 为什么字典排在历史之前（TDSF 2026-09-19，用户反馈）：历史里混着敲错的命令
+ * （shell 的 histfile 与本地会话记录都会把失败命令一起存下来），让它优先占满
+ * 候选位就等于把错命令推给用户。字典命中带中文说明、且一定是真实存在的命令，
+ * 所以放第一位；历史降到第二档，并且与字典重名时只保留字典那一条。
  *
  * 环境分流（TDSF 2026-08-28，用户反馈"本地预测 Linux 命令输入了没用"）：
  *   - windows 环境：本地 pwsh/cmd → WINDOWS_COMMAND_LIST（真实可用的
@@ -80,6 +85,14 @@ export class SuggestEngine {
   private linuxCommands: EnvCommand[];
   /** windows 环境：手编 PowerShell/cmd 命令表 */
   private windowsCommands: EnvCommand[];
+  /** 静态词典快照：环境命令集是"词典 ∪ 真实环境"，重新播种时不能把上次播种的留下 */
+  private readonly baseLinux: EnvCommand[];
+  private readonly baseWindows: EnvCommand[];
+  /** 已播种的真实环境命令名，避免每次按键都重扫一遍远端全集 */
+  private readonly envSeen: Record<TerminalEnv, Set<string>> = {
+    windows: new Set(),
+    linux: new Set(),
+  };
 
   constructor() {
     // 手编词典（180+ 常用 Linux 命令，含 ll/la 等 shell 别名）
@@ -133,6 +146,39 @@ export class SuggestEngine {
       name: e.command,
       zh: e.zh,
     }));
+    this.baseLinux = this.linuxCommands;
+    this.baseWindows = this.windowsCommands;
+  }
+
+  /**
+   * 用"真实环境里确实存在的命令名"扩充候选集（用户 2026-09-19 选的口径：
+   * 命令覆盖面以真实环境为准，静态字典只当说明书用）。
+   *
+   * linux 侧传远端 `compgen -c` 缓存的并集即可：多主机之间互不污染，因为
+   * `filterCommandItems` 仍会按**当前会话**的命令集剔掉假候选（这里只负责"补全"）。
+   */
+  setEnvironmentCommands(names: Iterable<string>, env: TerminalEnv): void {
+    const seen = this.envSeen[env];
+    const extra: EnvCommand[] = [];
+    for (const raw of names) {
+      const name = raw.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      extra.push({ name });
+    }
+    if (extra.length === 0) return;
+    if (env === "windows") {
+      this.windowsCommands = [...this.baseWindows, ...extra];
+    } else {
+      this.linuxCommands = [...this.baseLinux, ...extra];
+    }
+  }
+
+  /** 这个名字是不是"真实存在/字典里有"的命令（用于过滤历史里的敲错命令） */
+  isKnownCommand(name: string, env: TerminalEnv = "linux"): boolean {
+    const commands =
+      env === "windows" ? this.windowsCommands : this.linuxCommands;
+    return commands.some((c) => c.name === name);
   }
 
   // ========================================================================
@@ -163,42 +209,51 @@ export class SuggestEngine {
     const results: SuggestionResult[] = [];
     const seen = new Set<string>();
 
-    // ── Layer 1: 历史匹配（fish 核心算法，最近优先）─────────────────────
-    for (let i = history.length - 1; i >= 0 && results.length < limit; i--) {
-      const cmd = history[i];
-      if (!cmd.startsWith(input)) continue;
-      if (cmd.length <= input.length) continue; // 建议必须比输入长
-      if (seen.has(cmd)) continue;
-      seen.add(cmd);
-      results.push({ command: cmd, source: "history" });
-    }
-
-    // ── Layer 2: 精确前缀匹配（收集全部命中后按匹配质量排序）────────────
+    // ── Layer 1: 字典精确前缀（含真实环境播种的命令名）──────────────────
     // 2026-08-28 修复"模糊感"：原先按字母序边遍历边截断，前几个字母序命令
     // 会占满 limit，真正贴近输入的匹配进不来。现收集全部命中后按
     // 「长度差升序（越贴近输入越靠前）→ 字母序」排序再截断。
-    if (results.length < limit) {
-      const lower = input.toLowerCase();
-      const matched: EnvCommand[] = [];
-      for (const c of commands) {
-        if (c.name.toLowerCase().startsWith(lower)) matched.push(c);
-      }
-      matched.sort((a, b) => {
+    // 2026-09-19：这一层提到 Layer 1 —— 字典里的名字一定存在且带中文说明，
+    // 历史则可能被敲错的命令污染，不能让它占首位。
+    const lower = input.toLowerCase();
+    const dictHits = commands
+      .filter((c) => c.name.toLowerCase().startsWith(lower))
+      .sort((a, b) => {
         const da = a.name.length - input.length;
         const db = b.name.length - input.length;
         return da !== db ? da - db : a.name.localeCompare(b.name);
       });
-      for (const c of matched) {
-        if (results.length >= limit) break;
-        if (seen.has(c.name)) continue;
-        seen.add(c.name);
-        results.push({
-          command: c.name,
-          source: "dictionary",
-          zh: c.zh,
-          description: c.description,
-        });
-      }
+
+    // ── Layer 2: 历史匹配（fish 风格，最近优先；建议必须比输入长）────────
+    const histHits: string[] = [];
+    for (let i = history.length - 1; i >= 0 && histHits.length < limit; i--) {
+      const cmd = history[i];
+      if (!cmd.startsWith(input)) continue;
+      if (cmd.length <= input.length) continue;
+      histHits.push(cmd);
+    }
+
+    // 组装：字典占首位，但**给历史留一个槽位**。否则只要字典命中凑满 limit
+    // （输入 git 就是这种常见情况），历史就被彻底挤没——用户要的是
+    // "第一给预测、第二给历史"，不是"历史永远看不见"。
+    const dictBudget =
+      histHits.length > 0 && limit > 1 ? limit - 1 : limit;
+    for (const c of dictHits) {
+      if (results.length >= dictBudget) break;
+      if (seen.has(c.name)) continue;
+      seen.add(c.name);
+      results.push({
+        command: c.name,
+        source: "dictionary",
+        zh: c.zh,
+        description: c.description,
+      });
+    }
+    for (const cmd of histHits) {
+      if (results.length >= limit) break;
+      if (seen.has(cmd)) continue;
+      seen.add(cmd);
+      results.push({ command: cmd, source: "history" });
     }
 
     // ── Layer 3: fuzzysort 模糊匹配（严格阈值 + 首字符约束，仅兜底）──────
