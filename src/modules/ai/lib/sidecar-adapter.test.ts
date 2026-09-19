@@ -705,11 +705,13 @@ describe("runSidecarStream — agent 委派工具事件（P0-6）", () => {
 // ============================================================================
 
 describe("runSidecarStream — 可恢复降级走 assistant 正文", () => {
-  // 后端三条可恢复降级：next_step=done + 中文 observation（对齐 adapter.py）
+  // 后端四条可恢复降级：next_step=done + 中文 observation（对齐 adapter.py）
   const FRIENDLY_CASES: Array<[string, string]> = [
     ["invoke_watchdog_timeout", "AI 调用超时：模型超过 10 分钟没有输出，本轮已中止。"],
     ["invoke_stalled", "上一轮调用超时后仍在后台收尾，请稍等片刻再发消息。"],
     ["llm_transport_error", "模型服务连接异常，本轮已停止；你可以稍后重试。"],
+    // P3 退避收口后限流会真的露出来，措辞要说"限流"而不是套连接异常那句
+    ["llm_rate_limited", "模型服务正在限流，本轮已停止重试；请稍后再发。"],
   ];
 
   it.each(FRIENDLY_CASES)(

@@ -287,10 +287,13 @@ def _create_openai_model(config: Any) -> Any:
     if resolved_base_url:
         client_args["base_url"] = resolved_base_url
     # T9 稳定性 (2026-09-01, spec 9.1): 此前 LLM 请求裸跑无超时——模型服务
-    # 挂起时 invoke 永久阻塞。显式单请求超时（httpx 秒）+ 有限重试；
-    # 读超时兜底之外，adapter 层另有 10 分钟无输出 watchdog。
+    # 挂起时 invoke 永久阻塞。显式单请求超时（httpx 秒）。
+    # P3 (2026-09-19): max_retries 从 2 收到 0——退避只由 strands 的
+    # retry_policy.TdsfRetryPolicy 做。此前两层各自退避，一次 429 在单个模型
+    # 调用点上会打出 6×3=18 个请求（实测）；归零后 1 次模型尝试 == 1 个请求，
+    # 回合预算才数得准。超时保留：它防的是"挂起"，不是"重试"。
     client_args["timeout"] = 300.0
-    client_args["max_retries"] = 2
+    client_args["max_retries"] = 0
 
     # 构建 params（OpenAI Chat Completions 接口参数）
     # TDSF (2026-08-09): max_tokens <= 0 时不传 → 模型自行决定停止（无上限）
@@ -349,8 +352,9 @@ def _create_anthropic_model(config: Any) -> Any:
     }
     # T9 稳定性 (2026-09-02, spec 9.1 / ROADMAP #45): 与 OpenAI 兼容分支同源——
     # 此前只给 OpenAI 分支加了超时，Anthropic 路径仍会因服务挂起而永久阻塞。
+    # P3 (2026-09-19): max_retries 同样归零，退避统一由 retry_policy 负责。
     client_args["timeout"] = 300.0
-    client_args["max_retries"] = 2
+    client_args["max_retries"] = 0
 
     # TDSF (2026-08-09): Anthropic max_tokens 是必填参数（必须正整数）
     # max_tokens <= 0（无上限语义）时兜底为 8192

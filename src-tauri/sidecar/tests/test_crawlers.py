@@ -286,16 +286,28 @@ def test_registry_get_crawler():
     assert none_crawler is None
 
 
-def test_registry_crawl_all_offline():
-    """测试 crawl_all 离线模式（无缓存时应全部失败）"""
+def test_registry_crawl_all_offline(tmp_path: Path):
+    """测试 crawl_all 离线模式（无缓存时应全部失败）
+
+    TDSF 2026-09-19 修正：这里原来直接用默认缓存目录，而本机
+    ``data/crawlers-cache`` 已经躺了 202MB 真实缓存——于是"无缓存应全部失败"
+    这条写着的意图从未被测到，实际变成把 17 个源的缓存 HTML 全解析一遍
+    （单测跑数分钟，门禁无法完成）。改成把每个爬虫的 cache_dir 指到空的
+    临时目录：确定性地测它本来的语义。
+    """
     reset_registry()
-    # 使用临时缓存目录（每个爬虫内部 cache_root 是默认路径，但离线模式下
-    # 无缓存会返回失败，不影响测试）
+    for source in list_crawlers():
+        get_crawler(source).cache_dir = tmp_path / "crawlers-cache" / source
+
     results = crawl_all(offline=True)
+
     assert len(results) == 17
     for source, result in results.items():
         assert isinstance(result, CrawlerResult)
         assert result.source == source
+        # 空缓存 + 离线 ⇒ 不发网络请求、不解析任何 HTML，只能报 miss
+        assert result.success is False, f"{source} 不应命中缓存"
+        assert result.error.startswith("offline cache miss"), result.error
 
 
 # ============================================================================

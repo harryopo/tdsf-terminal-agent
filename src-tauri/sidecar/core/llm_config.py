@@ -36,6 +36,10 @@ from typing import Any, Protocol
 logger = logging.getLogger("sidecar.core.llm_config")
 
 _CLIENT_TIMEOUT_SECONDS = 300.0
+# 只作用于 make_llm_call() 这条**离线单次调用**链（知识库蒸馏/翻译/标题生成）：
+# 那里没有 agent 循环、也没有第二层退避，HTTP 重试是唯一主人，所以保留 2。
+# Agent 链路走 strands_backend/model_adapter（P3, 2026-09-19 起 max_retries=0，
+# 退避统一由 strands_backend/retry_policy.py 负责）——两边不是同一套预算，勿互相同步。
 _CLIENT_MAX_RETRIES = 2
 
 

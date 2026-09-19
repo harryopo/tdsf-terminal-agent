@@ -90,12 +90,14 @@ export function getSidecarTimeoutMs(): number {
  * error：真实故障（依赖缺失 / 执行异常），保留报错卡并按原因给行动建议。
  *
  * 与 Python 侧对齐：`adapter.py` 中 `invoke_stalled` / `invoke_watchdog_timeout` /
- * `llm_transport_error` 三处返回 `next_step="done"` + 中文 observation。
+ * `llm_transport_error` / `llm_rate_limited` 四处返回 `next_step="done"` +
+ * 中文 observation（P3 退避收口后限流会真的露出来，措辞与传输错误分档）。
  */
 const FRIENDLY_DEGRADED_REASONS = new Set([
   "invoke_stalled",
   "invoke_watchdog_timeout",
   "llm_transport_error",
+  "llm_rate_limited",
 ]);
 
 const DEGRADED_REASON_HINTS: Record<string, string> = {
