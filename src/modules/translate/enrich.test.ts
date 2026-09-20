@@ -47,9 +47,18 @@ beforeEach(() => {
 
 describe("enrichmentStore（本地增量词库）", () => {
   it("写入后可查回，且带 exact 标记", () => {
-    putEnrichment({ word: "kubectlx", zh: "K8s 命令行工具", example: "kubectl get po" });
+    putEnrichment({
+      word: "kubectlx",
+      zh: "K8s 命令行工具",
+      example: "kubectl get po",
+    });
     expect(lookupEnrichments("kubectlx")).toEqual([
-      { word: "kubectlx", zh: "K8s 命令行工具", example: "kubectl get po", exact: true },
+      {
+        word: "kubectlx",
+        zh: "K8s 命令行工具",
+        example: "kubectl get po",
+        exact: true,
+      },
     ]);
   });
 
@@ -102,7 +111,9 @@ describe("enrichClient（模型兜底）", () => {
   });
 
   it("解析模型回复：容忍围栏与前后废话，空 zh / 坏 JSON 视为失败", () => {
-    expect(parseEnrichResponse('{"zh":"容器编排平台","example":"kubectl get po"}')).toEqual({
+    expect(
+      parseEnrichResponse('{"zh":"容器编排平台","example":"kubectl get po"}'),
+    ).toEqual({
       zh: "容器编排平台",
       example: "kubectl get po",
     });
@@ -127,10 +138,16 @@ describe("enrichClient（模型兜底）", () => {
   it("请求里不带终端上下文（prompt 只有那个词，避免整段内容外发）", async () => {
     generateText.mockResolvedValue({ text: '{"zh":"释义"}' });
     await enrichTerm("glorp");
-    const args = generateText.mock.calls[0][0] as { prompt: string; system: string };
+    const args = generateText.mock.calls[0][0] as {
+      prompt: string;
+      system: string;
+      maxRetries: number;
+    };
     expect(args.prompt).toBe("glorp");
     expect(args.system).toContain("不要编造");
     expect(args.system).not.toContain("glorp");
+    // #82：真的把 0 传给了 SDK（只扫源码的门禁证明不了运行时值）
+    expect(args.maxRetries).toBe(0);
   });
 
   it("失败原因分得开：没配 Key / 模型没把握 / 调用报错，各说各的话", async () => {
@@ -140,7 +157,10 @@ describe("enrichClient（模型兜底）", () => {
 
     getAllKeys.mockResolvedValue({ openai: "sk-test" });
     generateText.mockResolvedValue({ text: '{"zh":""}' });
-    expect(await enrichTerm("glorp2")).toEqual({ ok: false, reason: "no-answer" });
+    expect(await enrichTerm("glorp2")).toEqual({
+      ok: false,
+      reason: "no-answer",
+    });
 
     generateText.mockRejectedValue(new Error("429"));
     expect(await enrichTerm("glorp3")).toEqual({ ok: false, reason: "error" });
@@ -160,7 +180,10 @@ describe("enrichClient（模型兜底）", () => {
       expect((await enrichTerm(`term${i}`)).ok).toBe(true);
     }
     expect(enrichQuotaLeft()).toBe(0);
-    expect(await enrichTerm("one-more")).toEqual({ ok: false, reason: "no-quota" });
+    expect(await enrichTerm("one-more")).toEqual({
+      ok: false,
+      reason: "no-quota",
+    });
     expect(generateText).toHaveBeenCalledTimes(ENRICH_SESSION_QUOTA);
   });
 });

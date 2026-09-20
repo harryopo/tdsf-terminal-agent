@@ -11,6 +11,7 @@ import {
   native,
 } from "@/modules/ai/lib/native";
 import { useChatStore } from "@/modules/ai/store/chatStore";
+import { BROWSER_LLM_MAX_RETRIES } from "@/modules/ai/lib/llmRetries";
 import {
   invalidateDiff,
   invalidateRepoDiffs,
@@ -907,6 +908,7 @@ export function useSourceControlPanel(
         system: COMMIT_MESSAGE_SYSTEM_PROMPT,
         prompt: buildCommitMessagePrompt(stagedEntries, diffText, truncated),
         maxOutputTokens: COMMIT_MESSAGE_MAX_OUTPUT_TOKENS,
+        maxRetries: BROWSER_LLM_MAX_RETRIES,
         ...(selectedModelSupportsTemperature ? { temperature: 0.2 } : {}),
       });
       let message = cleanCommitMessage(result.text);
@@ -916,6 +918,7 @@ export function useSourceControlPanel(
           system: COMMIT_MESSAGE_SYSTEM_PROMPT,
           prompt: buildRepairCommitMessagePrompt(message, stagedEntries),
           maxOutputTokens: COMMIT_MESSAGE_MAX_OUTPUT_TOKENS,
+          maxRetries: BROWSER_LLM_MAX_RETRIES,
           ...(selectedModelSupportsTemperature ? { temperature: 0 } : {}),
         });
         message = cleanCommitMessage(repair.text);

@@ -17,6 +17,7 @@ import { generateText } from "ai";
 import { DEFAULT_MODEL_ID, getModel } from "@/modules/ai/config";
 import { buildLanguageModel } from "@/modules/ai/lib/agent";
 import { getAllKeys, hasAnyKey } from "@/modules/ai/lib/keyring";
+import { BROWSER_LLM_MAX_RETRIES } from "@/modules/ai/lib/llmRetries";
 import type { LookupResult } from "./linuxDictionary";
 import { putEnrichment } from "./enrichmentStore";
 
@@ -29,11 +30,11 @@ const MAX_ZH_CHARS = 160;
 const ENRICH_SYSTEM_PROMPT = [
   "你是终端场景的中英词典补全器。",
   "输入是一个离线词典未收录的词、命令或短语，输出它的中文释义。",
-  "严格输出一行 JSON，形如 {\"zh\":\"中文释义\",\"example\":\"可选示例\"}；",
+  '严格输出一行 JSON，形如 {"zh":"中文释义","example":"可选示例"}；',
   "zh 用简体中文、不超过 40 个汉字、不要前言后语、不要 Markdown；",
   "example 只在确实是 Linux 命令/工具时给出，且必须是可以直接照抄的安全只读示例，",
   "不得包含删除、覆写、提权、联网下载等破坏性操作。",
-  "无法确定含义时输出 {\"zh\":\"\"}，不要编造。",
+  '无法确定含义时输出 {"zh":""}，不要编造。',
 ].join("");
 
 let sessionCalls = 0;
@@ -53,12 +54,15 @@ export function isEnrichableTerm(term: string): boolean {
   if (t.length === 0 || t.length > MAX_TERM_CHARS) return false;
   // 词 / 带连字符下划线的命令名，最多再接一个普通词；
   // 明确不允许路径、选项、重定向等 shell 元字符出现在兜底输入里。
-  if (!/^[A-Za-z][A-Za-z0-9._+-]*(?: [A-Za-z][A-Za-z0-9._+-]*)?$/.test(t)) return false;
+  if (!/^[A-Za-z][A-Za-z0-9._+-]*(?: [A-Za-z][A-Za-z0-9._+-]*)?$/.test(t))
+    return false;
   return true;
 }
 
 /** 从模型回复里抠出 JSON（容忍被 ``` 包裹或前后带解释的情况） */
-export function parseEnrichResponse(text: string): { zh: string; example?: string } | null {
+export function parseEnrichResponse(
+  text: string,
+): { zh: string; example?: string } | null {
   const match = /\{[\s\S]*\}/.exec(text ?? "");
   if (!match) return null;
   let parsed: unknown;
@@ -73,7 +77,10 @@ export function parseEnrichResponse(text: string): { zh: string; example?: strin
   const zh = o.zh.trim();
   if (!zh || zh.length > MAX_ZH_CHARS) return null;
   const example = typeof o.example === "string" ? o.example.trim() : undefined;
-  return { zh, example: example && example.length <= 160 ? example : undefined };
+  return {
+    zh,
+    example: example && example.length <= 160 ? example : undefined,
+  };
 }
 
 /** 兜底失败的原因——必须分得清"模型没把握"和"链路不通"，否则文案在撒谎 */
@@ -90,8 +97,7 @@ export type EnrichFailure =
   | "error";
 
 export type EnrichResult =
-  | { ok: true; entries: LookupResult[] }
-  | { ok: false; reason: EnrichFailure };
+  { ok: true; entries: LookupResult[] } | { ok: false; reason: EnrichFailure };
 
 /**
  * 请求一条兜底释义并写入本地增量词库。
@@ -102,7 +108,8 @@ export type EnrichResult =
 export async function enrichTerm(term: string): Promise<EnrichResult> {
   const word = term.trim();
   if (!isEnrichableTerm(word)) return { ok: false, reason: "not-a-term" };
-  if (sessionCalls >= ENRICH_SESSION_QUOTA) return { ok: false, reason: "no-quota" };
+  if (sessionCalls >= ENRICH_SESSION_QUOTA)
+    return { ok: false, reason: "no-quota" };
   sessionCalls += 1;
 
   try {
@@ -115,6 +122,7 @@ export async function enrichTerm(term: string): Promise<EnrichResult> {
       system: ENRICH_SYSTEM_PROMPT,
       prompt: word,
       maxOutputTokens: 160,
+      maxRetries: BROWSER_LLM_MAX_RETRIES,
     });
     const parsed = parseEnrichResponse(text);
     if (!parsed) return { ok: false, reason: "no-answer" };

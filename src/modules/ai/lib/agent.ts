@@ -26,6 +26,7 @@ import {
 import { buildTools, type ToolContext } from "../tools/tools";
 import { compactModelMessagesDetailed } from "./compact";
 import type { CustomEndpointKeys, ProviderKeys } from "./keyring";
+import { BROWSER_LLM_MAX_RETRIES } from "./llmRetries";
 import { prepareAgentPrompt } from "./prompt";
 import { createProxyFetch } from "./proxyFetch";
 
@@ -124,9 +125,8 @@ export async function buildLanguageModel(
       break;
     }
     case "deepseek": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "deepseek",
         baseURL: "https://api.deepseek.com",
@@ -140,9 +140,8 @@ export async function buildLanguageModel(
     case "zhipu":
     case "moonshot":
     case "doubao": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       const baseURL = PROVIDER_BASE_URLS[provider];
       if (!baseURL) {
         throw new Error(`No base URL configured for ${provider}`);
@@ -155,9 +154,8 @@ export async function buildLanguageModel(
       break;
     }
     case "mistral": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "mistral",
         baseURL: "https://api.mistral.ai/v1",
@@ -171,16 +169,14 @@ export async function buildLanguageModel(
       break;
     }
     case "openrouter": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "openrouter",
         baseURL: "https://openrouter.ai/api/v1",
         apiKey: key,
         headers: {
-          "HTTP-Referer":
-            "https://github.com/harryopo/tdsf-terminal-agent",
+          "HTTP-Referer": "https://github.com/harryopo/tdsf-terminal-agent",
           "X-Title": "TDSF",
         },
       })(resolvedModelId);
@@ -192,9 +188,8 @@ export async function buildLanguageModel(
           "OpenAI-compatible provider has no base URL. Set it in Settings → Models.",
         );
       }
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "openai-compatible",
         baseURL: compatURL,
@@ -204,9 +199,8 @@ export async function buildLanguageModel(
       break;
     }
     case "lmstudio": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "lmstudio",
         baseURL: lmstudioURL,
@@ -215,9 +209,8 @@ export async function buildLanguageModel(
       break;
     }
     case "mlx": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "mlx",
         baseURL: mlxURL,
@@ -226,9 +219,8 @@ export async function buildLanguageModel(
       break;
     }
     case "ollama": {
-      const { createOpenAICompatible } = await import(
-        "@ai-sdk/openai-compatible"
-      );
+      const { createOpenAICompatible } =
+        await import("@ai-sdk/openai-compatible");
       built = createOpenAICompatible({
         name: "ollama",
         baseURL: ollamaURL,
@@ -453,6 +445,7 @@ export async function runAgentStream(opts: RunAgentOptions) {
     messages: prompt.messages,
     allowSystemInMessages: false,
     tools: buildTools(opts.toolContext),
+    maxRetries: BROWSER_LLM_MAX_RETRIES,
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
     abortSignal: opts.abortSignal,
     onStepFinish: (step) => {
