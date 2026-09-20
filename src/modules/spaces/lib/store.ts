@@ -51,6 +51,18 @@ export async function saveSpacesList(spaces: SpaceMeta[]): Promise<void> {
   await store.set(KEY_SPACES, spaces);
 }
 
+/**
+ * #64: the space list is shared by every window in the process, so a window
+ * must patch what is actually on disk rather than its own boot snapshot —
+ * otherwise a rename in one window silently deletes a space the other window
+ * just created. Reads go through the backend store, which is the single
+ * in-process source of truth.
+ */
+export async function readSpaces(): Promise<SpaceMeta[]> {
+  const current = (await store.get(KEY_SPACES)) as SpaceMeta[] | undefined;
+  return current ?? [];
+}
+
 export async function saveActiveId(id: string | null): Promise<void> {
   await store.set(KEY_ACTIVE, id);
 }
