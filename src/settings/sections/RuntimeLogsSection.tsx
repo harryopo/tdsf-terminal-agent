@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { invokeRpc } from "@/lib/sidecar-bridge";
-import { isTauri } from "@/lib/tauri";
+import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -88,13 +88,13 @@ export function RuntimeLogsSection() {
   }, [levelFilter]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     void load();
   }, [load]);
 
   // 自动刷新（2s 轮询）
   useEffect(() => {
-    if (!autoRefresh || !isTauri()) return;
+    if (!autoRefresh || !isTauriRuntime()) return;
     const t = window.setInterval(() => void load(), 2000);
     return () => window.clearInterval(t);
   }, [autoRefresh, load]);
@@ -122,7 +122,7 @@ export function RuntimeLogsSection() {
         description="后端 Python 引擎（sidecar）运行日志，便于检查检测与开发调试。数据源：内存环形缓冲（最近 5000 行），经 log.tail 读取。"
       />
 
-      {!isTauri() ? (
+      {!isTauriRuntime() ? (
         <div className="rounded-xl border border-border/60 bg-card/60 p-6 text-center text-[12px] text-muted-foreground">
           运行日志仅在桌面模式可用（需 Tauri 运行时连接 sidecar）
         </div>

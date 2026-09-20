@@ -25,7 +25,7 @@
  * -----------------------------------------------------------------------------
  */
 import { invoke } from '@tauri-apps/api/core';
-import { isTauri } from './tauri';
+import { isTauriRuntime } from '@/lib/tauriRuntime';
 
 // ============================================================================
 // 类型定义
@@ -212,7 +212,7 @@ export function parseShellHistory(
  */
 export async function loadHistoryFromRust(): Promise<ShellHistoryInfo> {
   // 浏览器预览模式: Tauri 内部对象不存在, 返回空结果
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     return {
       shellType: 'unknown',
       historyPath: '',

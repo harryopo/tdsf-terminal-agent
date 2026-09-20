@@ -33,7 +33,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { isTauri } from './tauri';
+import { isTauriRuntime } from '@/lib/tauriRuntime';
 
 // === 类型定义 ================================================================
 
@@ -125,7 +125,7 @@ export async function invokeRpc<T = unknown>(
   method: string,
   params?: Record<string, unknown> | unknown[]
 ): Promise<T> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     throw createBrowserOnlyError(method);
   }
   // Rust 侧 ipc_invoke 返回 Value（result 字段内容）
@@ -152,7 +152,7 @@ export async function notify(
   method: string,
   params?: Record<string, unknown> | unknown[]
 ): Promise<void> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     throw createBrowserOnlyError(method);
   }
   await invoke('ipc_notify', {
@@ -175,7 +175,7 @@ export async function notify(
  * ```
  */
 export async function getStatus(): Promise<SidecarStateSnapshot> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     return createMockSnapshot();
   }
   return invoke<SidecarStateSnapshot>('ipc_status');
@@ -185,7 +185,7 @@ export async function getStatus(): Promise<SidecarStateSnapshot> {
  * 启动 Sidecar（手动启动，通常应用启动时已自动启动）
  */
 export async function start(): Promise<SidecarStateSnapshot> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     return createMockSnapshot();
   }
   return invoke<SidecarStateSnapshot>('sidecar_start');
@@ -195,7 +195,7 @@ export async function start(): Promise<SidecarStateSnapshot> {
  * 停止 Sidecar（优雅退出：shutdown → 3s → kill）
  */
 export async function stop(): Promise<SidecarStateSnapshot> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     return createMockSnapshot();
   }
   return invoke<SidecarStateSnapshot>('sidecar_stop');
@@ -205,7 +205,7 @@ export async function stop(): Promise<SidecarStateSnapshot> {
  * 重启 Sidecar（手动重启，重置 retry_count）
  */
 export async function restart(): Promise<SidecarStateSnapshot> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     return createMockSnapshot();
   }
   return invoke<SidecarStateSnapshot>('sidecar_restart');
@@ -235,7 +235,7 @@ export async function subscribe(
   eventName: string,
   cb: NotificationCallback
 ): Promise<UnlistenFn> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     // 浏览器模式下返回 no-op unlisten
     return () => {
       /* no-op */
@@ -383,7 +383,7 @@ export async function waitForReady(
   timeoutMs = 10000,
   intervalMs = 200
 ): Promise<void> {
-  if (!isTauri()) {
+  if (!isTauriRuntime()) {
     return; // 浏览器模式立即返回
   }
   const deadline = Date.now() + timeoutMs;

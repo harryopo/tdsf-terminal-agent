@@ -73,28 +73,20 @@ function frontendInvokedCommands(): Map<string, string[]> {
 }
 
 /**
- * 已知的"前端在调、Rust 没注册"历史欠账 —— 逐个核过：调用方全部是**没有生产入口的
- * 死包装**（`grep` 过 import：没有任何模块引用这两个文件的这些函数），
- * 所以今天不会炸在用户面前。列在这里而不是放宽测试，理由有两条：
- *  1. 新增未注册命令必须当场红（异常清单只减不增）；
- *  2. 这批死包装属于 #71 同一族（半退役通道 / 模板残留），下线时要连着这张清单一并删。
- * 见 ROADMAP #81。
+ * 已知的"前端在调、Rust 没注册"欠账 —— **#81 已清空（2026-09-20，用户决策 6：同意删）**。
+ * 原先挂着 13 条：`sandbox_*`（`src/lib/sandbox-bridge.ts` 整文件无调用方）、
+ * `ping/get_version/get_build_info`、`pty_spawn/pty_kill/pty_list`（`src/lib/tauri.ts` 的
+ * Tauri 模板残留 + 旧命令名）。处置是**整文件删**而不是逐个补注册 —— 给死代码注册命令
+ * 等于把它永久焊住。那两个文件里唯一还在用的是 `isTauri()`，它与 `@/lib/tauriRuntime`
+ * 的 `isTauriRuntime()` 是同一句判定，已合并到后者（顺带少一个重复概念）。
+ *
+ * 空表是本文件的硬要求：新增条目必须带 ROADMAP 编号并写清"为什么现在不能注册"，
+ * 否则就地补注册或删调用方。
+ * Rust 侧那笔没动：`src-tauri/src/modules/sandbox/`（1921 行、外部零引用、命令从未进
+ * `generate_handler!`）与 `commands.rs` 的 ping/get_version/get_build_info ——
+ * 那是"要不要做 T-P2-08 Docker 沙箱"的产品决定，见 ROADMAP #86。
  */
-const KNOWN_DEAD_CALLS: Record<string, string> = {
-  sandbox_create: "src/lib/sandbox-bridge.ts 整体无调用方（Rust 侧 sandbox 模块实现存在但未注册）",
-  sandbox_status: "同上",
-  sandbox_start: "同上",
-  sandbox_stop: "同上",
-  sandbox_remove: "同上",
-  sandbox_exec: "同上",
-  sandbox_list: "同上",
-  ping: "src/lib/tauri.ts 的 Tauri 模板残留（commands.rs::ping 未注册）",
-  get_version: "同上",
-  get_build_info: "同上",
-  pty_spawn: "src/lib/tauri.ts 旧包装；现网走 pty_open / pty_write（Rust 无 pty_spawn）",
-  pty_kill: "同上（Rust 侧叫 pty_close）",
-  pty_list: "同上（Rust 侧叫 pty_list_shells）",
-};
+const KNOWN_DEAD_CALLS: Record<string, string> = {};
 
 describe("前端 invoke 的 Tauri 命令注册表一致性", () => {
   const registered = registeredCommands(readFileSync(LIB_RS, "utf8"));
@@ -126,7 +118,11 @@ describe("前端 invoke 的 Tauri 命令注册表一致性", () => {
     ).toEqual([]);
   });
 
-  it("欠账清单只减不增（修掉一个就把它从 KNOWN_DEAD_CALLS 删掉）", () => {
+  it("欠账清单只减不增（#81 起必须保持为空）", () => {
+    expect(
+      Object.keys(KNOWN_DEAD_CALLS),
+      "死包装清单已在 #81 清空；再加条目要带 ROADMAP 编号并说明为什么不能就地补注册",
+    ).toEqual([]);
     const stillUnregistered = Object.keys(KNOWN_DEAD_CALLS).filter(
       (name) => !registered.has(name),
     );

@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { invokeRpc } from "@/lib/sidecar-bridge";
-import { isTauri } from "@/lib/tauri";
+import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useState } from "react";
@@ -136,12 +136,12 @@ export function AgentHistorySection() {
   }, [activeSession, typeFilter]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     void loadSessions();
   }, [loadSessions]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     void loadLines();
   }, [loadLines]);
 
@@ -152,7 +152,7 @@ export function AgentHistorySection() {
         description="后端 Agent 流水（用户输入 / 环境注入 / 思考 / 工具调用 / 回答），便于追溯每一轮对话的完整链路。数据源 agent-logs/*.jsonl。"
       />
 
-      {!isTauri() ? (
+      {!isTauriRuntime() ? (
         <div className="rounded-xl border border-border/60 bg-card/60 p-6 text-center text-[12px] text-muted-foreground">
           对话历史仅在桌面模式可用（需 Tauri 运行时读取后端流水）
         </div>

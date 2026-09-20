@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { RuntimeLogsSection } from "./RuntimeLogsSection";
 
 const isTauriMock = vi.fn();
-vi.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }));
+vi.mock("@/lib/tauriRuntime", () => ({ isTauriRuntime: () => isTauriMock() }));
 
 const invokeRpcMock = vi.fn();
 vi.mock("@/lib/sidecar-bridge", () => ({
