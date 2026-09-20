@@ -1,6 +1,7 @@
 import { generateText, stepCountIs } from "ai";
 import { DEFAULT_MODEL_ID, getModel, type ModelId } from "../config";
 import { buildLanguageModel } from "../lib/agent";
+import { BROWSER_LLM_MAX_RETRIES } from "../lib/llmRetries";
 import type { ProviderKeys } from "../lib/keyring";
 import type { ToolContext } from "../tools/context";
 import { buildFsTools } from "../tools/fs";
@@ -59,6 +60,7 @@ export async function runSubagent({
     system: def.systemPrompt,
     prompt,
     tools: tools as Parameters<typeof generateText>[0]["tools"],
+    maxRetries: BROWSER_LLM_MAX_RETRIES,
     stopWhen: stepCountIs(SUBAGENT_MAX_STEPS),
     onStepFinish: (step) => {
       if (!onStep) return;

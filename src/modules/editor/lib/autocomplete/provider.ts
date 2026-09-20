@@ -7,6 +7,7 @@ import {
 } from "@/modules/ai/config";
 import { buildLanguageModel } from "@/modules/ai/lib/agent";
 import { EMPTY_PROVIDER_KEYS } from "@/modules/ai/lib/keyring";
+import { BROWSER_LLM_MAX_RETRIES } from "@/modules/ai/lib/llmRetries";
 import { generateText } from "ai";
 import {
   buildUserPrompt,
@@ -66,7 +67,7 @@ export async function requestCompletion(
     maxOutputTokens: isReasoning
       ? MAX_OUTPUT_TOKENS_REASONING
       : MAX_OUTPUT_TOKENS_DEFAULT,
-    maxRetries: 0,
+    maxRetries: BROWSER_LLM_MAX_RETRIES,
     abortSignal: signal,
     ...(modelSupportsTemperature(deps.provider, modelId)
       ? { temperature: 0.1 }
