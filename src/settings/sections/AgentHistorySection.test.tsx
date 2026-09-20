@@ -4,7 +4,7 @@ import { AgentHistorySection } from "./AgentHistorySection";
 
 // isTauri / invokeRpc 可控 mock（B2 对话历史面板）
 const isTauriMock = vi.fn();
-vi.mock("@/lib/tauri", () => ({ isTauri: () => isTauriMock() }));
+vi.mock("@/lib/tauriRuntime", () => ({ isTauriRuntime: () => isTauriMock() }));
 
 const invokeRpcMock = vi.fn();
 vi.mock("@/lib/sidecar-bridge", () => ({
