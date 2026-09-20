@@ -8,6 +8,25 @@
 # exe 同级 .tdsf-data/（见 main.py / self_evolution.py / marketplace.py 等）。
 
 
+import pathlib
+
+# 工具模块必须显式声明为 hiddenimports —— registry 用 "module:attr" 点路径字符串
+# + importlib 延迟解析工厂（防循环依赖），PyInstaller 的静态分析看不到这些导入。
+# 实测证据（2026-09-19 打 1.0.1 时）：不声明的话 PYZ 里只有 14/26 个
+# strands_backend.tools.* 模块，python_run / ask_user / knowledge_* /
+# service_manage 等在安装包里根本不存在，而 make_all_ops_tools 只 warning 跳过
+# → 装完的 agent 静默少掉一半工具。列目录（不 import 包，零副作用）即全覆盖。
+#
+# SPECPATH 是 PyInstaller 注入的“spec 文件所在目录”。这里没有 __file__ ——
+# spec 是被 exec 进一个自建命名空间的，写 __file__ 会当场 NameError（实测过）。
+_TOOLS_DIR = pathlib.Path(SPECPATH) / "strands_backend" / "tools"  # noqa: F821
+_tool_hiddenimports = sorted(
+    f"strands_backend.tools.{p.stem}"
+    for p in _TOOLS_DIR.glob("*.py")
+    if p.name != "__init__.py"
+)
+
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -17,7 +36,7 @@ a = Analysis(
         ('knowledge/philosophy', 'knowledge/philosophy'),
         ('skills/builtin', 'skills/builtin'),
     ],
-    hiddenimports=[],
+    hiddenimports=_tool_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

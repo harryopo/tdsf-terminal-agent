@@ -86,6 +86,16 @@ if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
     throw "Sidecar executable was not produced: $exePath"
 }
 
+# 产物能力校验（#83）：registry 用点路径字符串 importlib 解析工具工厂，PyInstaller 看不见
+# 这种导入 —— 实测不声明 hiddenimports 时 26 个工具里有 16 个根本不在包内，而运行时只
+# warning 跳过，装完的 agent 静默少一半能力。缺一个模块就 fail 构建，别让它进安装包。
+& $pythonExe (Join-Path $sidecarRoot "_bundle_check.py") --toc (
+    Join-Path $workRoot "tdsf-sidecar/PYZ-00.toc"
+)
+if ($LASTEXITCODE -ne 0) {
+    throw "Sidecar bundle check failed (agent tool modules missing from the built bundle)"
+}
+
 $exe = Get-Item -LiteralPath $exePath
 if ($exe.Length -lt 1MB) {
     throw "Sidecar executable is unexpectedly small: $($exe.Length) bytes"
