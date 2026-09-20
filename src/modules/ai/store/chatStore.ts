@@ -37,6 +37,7 @@ import {
   type SessionMeta,
 } from "../lib/sessions";
 import { pushRecentModel } from "../lib/modelPrefs";
+import { cancelSidecarTurn } from "../lib/sidecar-adapter";
 // TDSF B1 (2026-08-29): 终端 block 流水账类型（<terminal-history> 数据源）
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 // A1 多服务器隔离 (2026-09-01): 新会话按当前环境绑定 scope。
@@ -1031,7 +1032,24 @@ export function getChat(sessionId?: string): Chat<UIMessage> | undefined {
 }
 
 export function stop(): void {
-  const id = useChatStore.getState().activeSessionId;
-  if (!id) return;
-  void chats.get(id)?.stop();
+  stopGeneration(useChatStore.getState().activeSessionId);
+}
+
+/**
+ * #69: 停止 = 关掉前端事件流 **+ 通知 sidecar 真的别再往下跑**。
+ *
+ * 只做前者时 Python 侧的 Strands 循环还在继续：还在烧 token、auto 档还会继续
+ * 派发命令、挂着待批的审批卡还压在会话队列头上。后端收到 agent.cancel 会置熔断
+ * 并结掉挂着的 needs-you 请求，同时留下一份"上一轮是被打断的"现场，
+ * 供下一轮衔接（用户口径：突然打断后要能重新接上话）。
+ */
+export function stopGeneration(sessionId: string | null | undefined): void {
+  if (!sessionId) return;
+  void chats.get(sessionId)?.stop();
+  void cancelSidecarTurn(sessionId).catch((error: unknown) => {
+    console.error(
+      "[tdsf] agent.cancel 未能送达 —— 后端可能仍在继续这一轮:",
+      error,
+    );
+  });
 }

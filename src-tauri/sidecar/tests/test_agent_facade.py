@@ -71,13 +71,14 @@ def test_set_backend_unavailable_is_fail_closed() -> None:
         facade.invoke_agent("main", {"input": "hello"})
 
 
-def test_registers_four_rpcs_and_dispatches_list_info_invoke() -> None:
+def test_registers_five_rpcs_and_dispatches_list_info_invoke() -> None:
     dispatcher = FakeDispatcher()
     facade.set_backend(lambda agent_id, input, state: {"agent": agent_id, "input": input})
     facade.register_methods(dispatcher)
 
     assert set(dispatcher.methods) == {
         "agent.invoke",
+        "agent.cancel",
         "agent.list",
         "agent.info",
         "agent.configure",
@@ -88,6 +89,14 @@ def test_registers_four_rpcs_and_dispatches_list_info_invoke() -> None:
     assert info["name"] == "main"
     invoked = dispatcher.dispatch("agent.invoke", {"name": "main", "state": {"input": "pwd"}})
     assert invoked == {"agent": "main", "input": "pwd"}
+    # #69: 停止 RPC 在 set_backend 注入的裸 callable（非真 adapter）下 fail-soft，
+    # 不能抛错——否则前端点停止会看到 IPC 失败而不是"没东西可停"。
+    cancelled = dispatcher.dispatch("agent.cancel", {"session_id": "s1", "reason": "用户点击停止"})
+    assert cancelled == {
+        "session_id": "s1",
+        "cancelled": False,
+        "reason": "Strands backend unavailable",
+    }
 
 
 def test_configure_query_does_not_rebuild_model(monkeypatch: pytest.MonkeyPatch) -> None:

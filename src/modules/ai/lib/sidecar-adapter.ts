@@ -29,6 +29,7 @@ import type { UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { UIMessageChunk } from "ai";
+import { isTauriRuntime } from "@/lib/tauriRuntime";
 import {
   TDSF_AGENTS,
   type AgentMode,
@@ -767,6 +768,26 @@ async function registerSidecarListeners(
       }
     }
   };
+}
+
+/**
+ * #69: 告诉 sidecar「这一轮别再往下跑了」。
+ *
+ * 前端的 stop() 只是 abort 事件流：Python 里的 Strands 循环还在跑，继续烧
+ * token、auto 档还会继续派发命令，挂着待批的审批卡也还挂在会话队列头上。
+ * 这条 RPC 让后端置熔断（后续工具一律不执行）并结掉挂着的 needs-you 请求。
+ *
+ * 失败必须出声：没送到 = 用户看到的"停了"只是界面停了，后端还在花钱。
+ * 非桌面运行时（vitest / 纯浏览器 dev）没有 ipc_invoke，直接跳过。
+ */
+export async function cancelSidecarTurn(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  if (!isTauriRuntime()) return;
+  await invoke("ipc_invoke", {
+    method: "agent.cancel",
+    params: { session_id: sessionId, reason: "用户点击停止" },
+    timeoutMs: 10_000,
+  });
 }
 
 // === 主函数: runSidecarStream ================================================
