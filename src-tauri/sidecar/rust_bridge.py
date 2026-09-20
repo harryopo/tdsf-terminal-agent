@@ -241,11 +241,13 @@ class RustBridge:
     def send_notification(self, method: str, params: dict[str, Any]) -> None:
         """发起反向 JSON-RPC notification（不等响应，fire-and-forget）
 
-        TDSF (2026-08-09): 用于 inject_terminal — 通知前端把命令注入终端。
+        TDSF (2026-09-20, #71): 目前唯一在用的通知是 update_todos（驱动前端 TodoStrip）。
         与 send_request 不同：不注册 pending entry、不带 id、不阻塞等待。
+        历史注脚：inject_terminal 曾走这条通道让前端把命令注入终端，与后台
+        execute_via_ssh 构成双重执行，#71 已整体下线；不要再往这条路上加新通知。
 
         Args:
-            method: Rust 侧命令名（如 "inject_terminal"）
+            method: Rust 侧命令名（如 "update_todos"）
             params: 命令参数（dict）
 
         Raises:

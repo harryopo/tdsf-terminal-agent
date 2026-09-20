@@ -141,8 +141,8 @@ pub fn pty_write(
 
 /// TDSF B2 (2026-08-29): 可视教学打字机 —— 逐字符按人味节奏写入本地 PTY。
 ///
-/// 数据流：Python sidecar inject_terminal → 前端 useAiLiveBridge（按设置分流）
-/// → 本命令 → 后台 pump 逐字写 session.writer。立即返回 HumanTypeReport，
+/// 数据流：前端 useAiLiveBridge（打字机分流）→ 本命令 → 后台 pump 逐字写
+/// session.writer。立即返回 HumanTypeReport，
 /// 打字结束/打断通过 `terminal:human_typing` end 事件通知前端。
 ///
 /// 8 项注意事项落地（详见 human_type.rs 模块注释）：

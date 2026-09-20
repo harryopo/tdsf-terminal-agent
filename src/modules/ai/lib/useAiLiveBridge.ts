@@ -130,9 +130,6 @@ export function useAiLiveBridge(params: Params) {
   ref.current = params;
 
   useEffect(() => {
-    // TDSF (2026-08-09): 保存 injectIntoActivePty 引用，供 inject_terminal 事件监听器调用
-    let injectFn: (text: string) => boolean = () => false;
-
     // TDSF B1 (2026-08-29): SSH Rust session_id 查询提为局部函数，
     // 供 getSshRustSessionId（setLive）与 getEnvironmentProbe 共用。
     // 取值逻辑与原 inline 实现一致（实时查 sshStore，SSH 重连后 rustSessionId 会变）。
@@ -268,8 +265,7 @@ export function useAiLiveBridge(params: Params) {
         : null;
     };
 
-    // TDSF (2026-08-09): 整段注入核心逻辑（inject_terminal 事件与
-    // injectIntoActivePty 共用；B2 起也作为打字机失败时的回落路径）。
+    // TDSF (2026-08-09): 整段注入核心逻辑（B2 起作为打字机失败时的回落路径）。
     const injectFnCore = (t: string): boolean => {
       const sshLeafId = ref.current.getSshLeafId?.();
       if (sshLeafId !== null && sshLeafId !== undefined) {
@@ -368,12 +364,9 @@ export function useAiLiveBridge(params: Params) {
         return getLeafBlockMode(leafId) === "prompt";
       },
       injectIntoActivePty: (text) => {
-        // TDSF (2026-08-09): 提取核心注入逻辑为共享函数，
-        // 同时供 inject_terminal 事件监听器复用。
-        // TDSF B2 (2026-08-29): 逐字模式优先分流（tryHumanTyping），不适用或
-        // 调用失败时回落整段注入（injectFnCore，原路径零改动）。
-        injectFn = (t: string) => (tryHumanTyping(t) ? true : injectFnCore(t));
-        return injectFn(text);
+        // TDSF B2 (2026-08-29): 逐字模式优先（tryHumanTyping），不适用或调用
+        // 失败时回落整段注入 injectFnCore（打字机 → 整段，原路径零改动）。
+        return tryHumanTyping(text) ? true : injectFnCore(text);
       },
       startTeachingCommand: (command) => {
         const leafId = getTeachingTerminalLeafId();
@@ -532,9 +525,8 @@ export function useAiLiveBridge(params: Params) {
       getWslDistro: () => ref.current.wslDistro,
     });
 
-    // TDSF (2026-08-09): 监听 sidecar inject_terminal notification
-    // 当 ssh_command(visible=True) 时，Python sidecar 发 notification → Rust 转发为
-    // sidecar:inject_terminal 事件 → 这里监听并注入到前端终端（用户可见）
+    // 可视终端执行（"visible-terminal" 通道）的待回执台账：每条命令等前端
+    // 终端 OSC 块结束后结算，避免与后台 execute_via_ssh 结果串位。
     const pendingVisibleExecutions = new Map<
       string,
       PendingVisibleTerminalExecution
@@ -804,28 +796,9 @@ export function useAiLiveBridge(params: Params) {
       console.warn("[tdsf] visible terminal listeners failed:", e);
     });
 
-    let unlistenInject: (() => void) | null = null;
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlistenInject = await listen<{ command: string; sessionId?: string }>(
-        "sidecar:inject_terminal",
-        (event) => {
-          const { command } = event.payload;
-          if (!command) return;
-          // 终端执行模式开启时加换行符自动执行
-          const autoExec =
-            usePreferencesStore.getState().agentAutoTypeCommands;
-          const text = autoExec ? command + "\n" : command;
-          // C3 修复 (2026-09-01, 用户实测"打字机开了没用/命令不回显终端"):
-          // 此前调用捕获的 injectFn 变量——它在 injectIntoActivePty 首次被
-          // 调用前是 no-op 存根，早到的可视执行事件被静默丢弃。改为始终经
-          // live getter 的 injectIntoActivePty（打字机优先→失败回落整段）。
-          useChatStore.getState().live.injectIntoActivePty(text);
-        },
-      );
-    })().catch((e) => {
-      console.warn("[tdsf] inject_terminal listen failed:", e);
-    });
+    // #71：sidecar:inject_terminal 监听已整体下线 —— 发送端（`ssh_command.py` 的
+    // `if False:` 死块）删掉了，用户可见执行统一走 visible-terminal 通道
+    // （sidecar:visible-terminal-execute），不再留第二条注入路径。
 
     // TDSF (2026-08-09): 监听 sidecar update_todos notification
     // Python todo_write 工具 → rust_bridge notification → Rust 转发 → 这里更新 TodoStore
@@ -892,7 +865,6 @@ export function useAiLiveBridge(params: Params) {
         useTerminalBlocksStore.getState().clearAgentPending(pending.leafId);
       }
       pendingVisibleExecutions.clear();
-      if (unlistenInject) unlistenInject();
       if (unlistenTodos) unlistenTodos();
       if (unlistenScrollback) unlistenScrollback();
     };

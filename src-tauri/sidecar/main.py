@@ -696,7 +696,8 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
                         ),
                         # 2026-08-28 审查修复: 注入通知回调, 否则工具里的
                         # send_notification 调用 AttributeError 静默失效
-                        # (update_todos / inject_terminal 两条链路断)
+                        # (当时断的是 update_todos / inject_terminal 两条链路,
+                        #  inject_terminal 已在 #71 下线, 现在只剩 update_todos)
                         send_notification=lambda m, p: send_notification(m, p),
                     )
                     logger.info(

@@ -185,9 +185,9 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           // 记忆召回过滤维度（同工作区跨对话共享沉淀）
           scopeId: memoryScopeId,
           // TDSF 2026-09-02: 解耦——不再把前端 autoExecuteInTerminal 作为
-          // sidecar ssh_command visible 的自动触发器（visible 会在交互式 PTY
-          // inject_terminal+\n 与 execute_via_ssh 之间双重执行，红线9 SSH 链路
-          // 问题，需独立可见执行重构）。重构前 visible 保持默认关闭（无回归），
+          // sidecar ssh_command visible 的自动触发器（visible 会让"前端 PTY 注入执行"
+          // 与"后台 execute_via_ssh"各跑一遍同一条服务器命令，红线9 SSH 链路
+          // 双重执行问题，需独立可见执行重构）。重构前 visible 保持默认关闭（无回归），
           // 前端命令卡自动执行另走 chat-code.tsx / tool.tsx 的 PTY 注入路径。
           executionChannel:
             usePreferencesStore.getState().agentExecutionChannel,
@@ -261,8 +261,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         // TDSF 2026-09-02: 解耦——前端 autoExecuteInTerminal 现专用于
         // “对话区命令卡自动打字+执行”（CommandCard/SuggestCommandCard，前端
         // PTY 注入单次执行）；不再作为 sidecar ssh_command visible 的自动触发器：
-        // visible 会在交互式 PTY inject_terminal(+\n 执行) 与 execute_via_ssh(后台
-        // exec) 之间双重执行服务器命令（红线9 SSH 链路问题，需独立的可见执行
+        // visible 会让"前端 PTY 注入(回车执行)"与"execute_via_ssh(后台
+        // exec)"各跑一遍同一条服务器命令（红线9 SSH 链路双重执行问题，需独立的可见执行
         // 重构=PTY 执行+scrollback 回读、跳过 execute_via_ssh）。重构前 sidecar 侧
         // visible 保持默认关闭（与历史 autoExec=false 行为一致，无回归）；
         // AI 仍可显式传 visible=true。

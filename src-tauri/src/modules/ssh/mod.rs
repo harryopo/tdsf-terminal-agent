@@ -468,8 +468,8 @@ pub async fn ssh_write(
 
 /// TDSF B2 (2026-08-29): 可视教学打字机 —— 逐字符按人味节奏写入 SSH PTY channel。
 ///
-/// 数据流：Python sidecar inject_terminal → 前端 useAiLiveBridge（按设置分流）
-/// → 本命令 → 后台 pump 逐字调 write_data（russh data_bytes，SSH 流控窗口
+/// 数据流：前端 useAiLiveBridge（打字机分流）→ 本命令 → 后台 pump 逐字调
+/// write_data（russh data_bytes，SSH 流控窗口
 /// 自带背压，逐字低速天然无压力）。立即返回，结束/打断走
 /// `terminal:human_typing` end 事件。
 ///
