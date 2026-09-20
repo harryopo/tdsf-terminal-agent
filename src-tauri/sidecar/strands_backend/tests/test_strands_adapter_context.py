@@ -227,12 +227,20 @@ class TestCacheKeyExcludesModeTeach(unittest.TestCase):
         self.assertNotIn("ssh_command", set(a.tool_names))
         self.assertIn("Current mode: OBSERVE", a.system_prompt)
         self.assertNotIn("教学皮肤（已开启）", a.system_prompt)
-        # 切 confirm + teach：同实例，全量工具 + CONFIRM/TEACH prompt
+        # 切 confirm：同实例，全量工具 + CONFIRM prompt；教学皮肤不跟过来
+        # （#90：皮肤条件必须与工具注册条件 teach and OBSERVE 同一条）
         a2 = adapter._get_or_create_agent("main", ctx, mode=AgentMode.CONFIRM, teach=True)
         self.assertIs(a, a2)
         self.assertIn("ssh_command", set(a2.tool_names))
         self.assertIn("Current mode: CONFIRM", a2.system_prompt)
-        self.assertIn("教学皮肤（已开启）", a2.system_prompt)
+        self.assertNotIn("教学皮肤（已开启）", a2.system_prompt)
+        # 切 observe + teach：教学皮肤与教学工具集同时到位
+        a3 = adapter._get_or_create_agent(
+            "main", ctx, mode=AgentMode.OBSERVE, teach=True
+        )
+        self.assertIs(a, a3)
+        self.assertIn("教学皮肤（已开启）", a3.system_prompt)
+        self.assertIn("teach_command", set(a3.tool_names))
 
     def test_perm_change_creates_new_instance(self):
         """perm 变化仍重建实例（权限影响工具集合法性）"""
@@ -448,17 +456,20 @@ class TestTeachPromptSurface(unittest.TestCase):
         self.assertIn("todo_write", _TEACH_AUX_TOOL_NAMES)
 
     def test_teach_skin_strict_turn_contract(self):
-        """皮肤必须绑定严格回合制（单卡/不剧透/开场自动探测），禁旧分步措辞"""
+        """皮肤必须绑定严格回合制（单卡/不剧透/基础环境靠上下文），禁旧措辞"""
         from strands_backend.adapter import _TEACH_SKIN_PROMPT
 
         for required in (
-            "严格回合制", "恰好一张命令卡", "system_probe_teaching",
+            "严格回合制", "恰好一张命令卡", "<environment>",
             "绝不提前写出后续步骤",
         ):
             self.assertIn(required, _TEACH_SKIN_PROMPT)
         # v4 旧措辞（分步多建议/双轨命令）已按用户实测反馈移除
         for stale in ("一次回复可以按阶段给出多步建议", "命令卡与正文命令建议"):
             self.assertNotIn(stale, _TEACH_SKIN_PROMPT)
+        # #90 (2026-09-20 用户实测)：开场自动环境探测整体下线
+        for retired in ("system_probe_teaching", "探测", "基线"):
+            self.assertNotIn(retired, _TEACH_SKIN_PROMPT)
 
 
 class _PromptRecordingModel(FakeContextModel):

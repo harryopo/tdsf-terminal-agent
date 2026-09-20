@@ -1866,7 +1866,6 @@ TEACH_AUX_TOOL_NAMES = frozenset({
     "knowledge_get_doc",
     "skill_invoke",
     "ssh_list_sessions",
-    "system_probe_teaching",
     "teach_command",
     "todo_write",
 })

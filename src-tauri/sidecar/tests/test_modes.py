@@ -266,7 +266,7 @@ class TestModeAwarePrompt:
         assert "L3-L4 高风险操作仍须用户批准" in prompt
 
     def test_teach_skin_appended_when_on(self):
-        prompt = self._compose(AgentMode.CONFIRM, teach=True)
+        prompt = self._compose(AgentMode.OBSERVE, teach=True)
         # 教学输出契约：步骤结构化分步建议；命令卡学生点击后才注入终端，
         # 结果以 <teaching-command-result> 回流，绝不猜测命令输出。
         assert "第 N 步 / 共 M 步" in prompt
@@ -278,6 +278,16 @@ class TestModeAwarePrompt:
     def test_teach_skin_absent_when_off(self):
         prompt = self._compose(AgentMode.CONFIRM, teach=False)
         assert "教学皮肤（已开启）" not in prompt
+
+    def test_teach_skin_absent_in_confirm_and_auto(self):
+        """#90（用户 2026-09-20 实测）：教学说明书只属于观察档
+
+        确认/自动档拼上教学皮肤 = 让模型去调只在该皮肤覆盖的工具集里注册的
+        teach_command 等工具，实测表现为"确认模式弹教学探测"。皮肤拼装条件
+        必须与工具注册条件（teach and mode == OBSERVE）同一条。
+        """
+        for mode in (AgentMode.CONFIRM, AgentMode.AUTO):
+            assert "教学皮肤（已开启）" not in self._compose(mode, teach=True)
 
     # TDSF 2026-08-31 (任务C 环境感知前置): 任何模式/开关下系统提示都必须含
     # 前置感知流程约束（用户钦定方向——agent 回答前先确认环境再行动）

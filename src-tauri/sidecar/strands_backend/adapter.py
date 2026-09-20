@@ -39,7 +39,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from strands_backend.modes import AgentMode, parse_mode
 # P3 (2026-09-19): 模型请求退避的唯一主人（尝试数 + 单回合请求预算）
@@ -198,6 +198,77 @@ def _filter_teach_tools(tools: list[Any]) -> list[Any]:
         if has_shell_mapping(getattr(tool, "__name__", ""))
         or getattr(tool, "__name__", "") in _TEACH_AUX_TOOL_NAMES
     ]
+
+
+def resolve_runtime_toolset(
+    ctx: ToolContext,
+    *,
+    mode: AgentMode = AgentMode.CONFIRM,
+    teach: bool = False,
+    extra_tools: Sequence[Any] = (),
+    plugin_tools: Sequence[Any] = (),
+) -> list[Any]:
+    """本次 invoke 应注册的工具集——单一真源（#90）
+
+    此前这段装配逻辑埋在 `_refresh_agent_runtime` 里，只能拿真 Agent 实例才
+    能验；而 system prompt 片段（尤其教学皮肤）却由另一处条件拼装，两边各改
+    各的，就会出现"皮肤叫模型去调一个该组合下根本没注册的工具"（真机：确认档
+    + 教学开关撞 system_probe_teaching）。抽成纯函数后，prompt 与工具集可以在
+    同一张 (mode, teach) 矩阵上互相核对，测试才抓得住这一类漂移。
+
+    装配顺序（与历史行为逐条对应）：
+    1. TOOL_REGISTRY 全量（带 ctx 闭包；L1 权限在 make_all_ops_tools 内裁剪）
+    2. 教学命令卡原语（仅 observe+teach）
+    3. 插件工具按名去重带入（ContextOffloader 的 retrieve_offloaded_content）
+    4. observe → schema 级裁剪（teach 走教学白名单，否则只读白名单）
+    5. observe+teach → 工具拦截包装（转命令卡，不后端执行）
+    """
+    all_tools = list(
+        make_all_ops_tools(
+            ctx,
+            include_teach_shell_tools=teach and mode == AgentMode.OBSERVE,
+        )
+    ) + list(extra_tools)
+
+    # A teaching card is a schema-level primitive, not a best-effort
+    # fallback from an operations tool.  It never executes remotely and
+    # gives lessons a safe one-step path for commands such as deployment
+    # examples that have no matching operations-tool parameter schema.
+    if teach and mode == AgentMode.OBSERVE:
+        all_tools.append(make_teach_command_tool(ctx))
+
+    registered_names = {
+        getattr(tool, "tool_name", getattr(tool, "__name__", ""))
+        for tool in all_tools
+    }
+    all_tools.extend(
+        plugin_tool
+        for plugin_tool in plugin_tools
+        if getattr(plugin_tool, "tool_name", "") not in registered_names
+    )
+
+    # P0-A1 观察模式 schema 级隔离：裁剪为只读白名单——LLM 无法调用
+    # 不存在于 schema 的执行/写类工具（remove 优于 instruct+intercept）。
+    # A3 (2026-09-04): teach 模式下恢复有 shell 映射的工具可见性——
+    # 教学模式需要 LLM 能调用这些工具，拦截层会将其转为 teach_command
+    # 事件（前端渲染命令卡，学生手动执行），而非后端直接执行。
+    if mode == AgentMode.OBSERVE:
+        if teach:
+            # 教学独立工具集：只有 shell 映射工具可产生可见终端命令卡；
+            # 其余仅保留不触碰终端的参考/提问工具。特别排除 suggest_command，
+            # 否则未匹配 JSON 会泄漏进教学步骤且绕过链式回显契约。
+            all_tools = _filter_teach_tools(all_tools)
+        else:
+            all_tools = filter_tools_readonly(all_tools)
+
+    # A3 (2026-09-04): teach 模式工具拦截包装——有 shell 映射的工具
+    # 被包装后，调用时返回 teach_command 结构化结果而非执行后端逻辑。
+    # 守卫隔离：仅 teach=True 且 observe 模式时包装（前端 teach 映射为
+    # observe+teach:true，其他组合下 teach 拦截不生效，fail-closed）。
+    if teach and mode == AgentMode.OBSERVE:
+        all_tools = [wrap_tool_for_teach_mode(t, ctx) for t in all_tools]
+
+    return all_tools
 
 
 def _watchdog_thresholds() -> tuple[float, float]:
@@ -1286,9 +1357,9 @@ class TdsfStrandsCallbackHandler:
 _MODE_PROMPTS: dict[AgentMode, str] = {
     AgentMode.OBSERVE: (
         "\n\nCurrent mode: OBSERVE (read-only).\n"
-        "- 只读观察模式：写操作与命令执行被禁止，工具集已裁剪为只读白名单——"
-        "ssh_command 等执行类工具已从 schema 移除，调用会报 Unknown tool；"
+        "- 只读观察模式：写操作与命令执行被禁止，工具集已裁剪为只读白名单；"
         "此前轮次用过执行类工具也不例外，不要重复尝试。\n"
+        "- 本模式不可用：ssh_command, python_run, skill_invoke。\n"
         "- 专注解释与教学：读文件/分析日志/检查进程/诊断网络；"
         "需要执行时用 suggest_command 生成命令并说明作用，等用户自己执行。\n"
         "- 若工具返回 command_blocked 或 Unknown tool，如实报告未执行，"
@@ -1312,9 +1383,10 @@ _TEACH_MODE_PROMPT = (
     "\n\nCurrent mode: TEACH (read-only, terminal-visible learning).\n"
     "- 带 shell 映射的工具只生成一张可见终端教学命令卡，不会在后端执行；"
     "学生点击卡片后，命令才会输入当前终端。\n"
-    "- 教学模式覆盖前述 OBSERVE 命令建议规则：不调用 suggest_command 或 "
-    "get_terminal_output；todo_write 仅用于课程大纲与步骤进度；工具逐个调用。\n"
-    "- system_probe_teaching 是唯一自动执行的只读探测通道（教学开场采集基线）。\n"
+    "- 教学模式覆盖前述 OBSERVE 规则：todo_write 仅用于课程大纲与步骤进度；"
+    "工具逐个调用。\n"
+    "- 本模式不可用：suggest_command, get_terminal_output, python_run, "
+    "assess_confidence, search_history。\n"
     "- 学生执行的终端输出会自动回流，直接基于它讲解；"
     "<teaching-command-result> 是最强证据。永远不猜测回显。"
 )
@@ -1371,9 +1443,9 @@ _LEGACY_TEACH_SKIN_PROMPT = (
 _TEACH_SKIN_PROMPT = (
     "\n\n教学皮肤（已开启）：\n"
     "【角色】你是面向 Linux 初学者的运维教学者：讲解生活化，术语首现给一句中文解释。\n"
-    "【开场】教学开始先调用 system_probe_teaching 自动执行只读探测采集环境基线，"
-    "学生无需操作。拿到结果后用两三个短段介绍这台机器（发行版/内核/资源"
-    "各一句），然后直接进入学生想学的主题。绝不让学生手敲环境探测类命令或罗列学习计划。\n"
+    "【基础环境】发行版/内核/当前目录已在 <environment> 上下文里，直接引用它介绍"
+    "机器，不必再去采集；要看具体资源（内存/磁盘/进程）时讲到哪步出哪步的卡。"
+    "绝不让学生手敲环境类命令或罗列学习计划。\n"
     "【大纲】用 todo_write 建一次课程大纲（每项=一个知识点，只写名称不写命令），"
     "仅完成或切换知识点时更新；正文绝不预告未讲到的步骤。\n"
     "【严格回合制——最重要的规则】每一轮回复只做一件事，按此结构输出：\n"
@@ -1416,7 +1488,10 @@ def _compose_system_prompt(mode: AgentMode, teach: bool, base: str | None = None
         else _MODE_PROMPTS[mode]
     )
     prompt = (base if base is not None else _DEFAULT_SYSTEM_PROMPT) + mode_prompt
-    if teach:
+    # #90 (2026-09-20 用户实测)：皮肤的拼装条件必须与工具集的注册条件
+    # （`teach and mode == OBSERVE`）同一条，否则确认/自动档会拿到一段
+    # 指挥模型去调 teach_command 等未注册工具的说明书——与开场探测同一病根。
+    if teach and mode == AgentMode.OBSERVE:
         # The concise runtime skin contains the intent gate and marker contract.
         # Do not append the retired “always six sections” prompt: it caused
         # knowledge-only reports to be rendered as lessons.
@@ -2370,57 +2445,20 @@ class StrandsAgentAdapter:
         顺带收益：工具闭包每次重建绑定最新 ctx（ssh_host / cwd 等
         live 字段变化即时生效，修复缓存命中路径闭包陈旧的隐患）。
         """
-        # 构建运维工具（TOOL_REGISTRY 全量，带 ctx 闭包；L1 权限由
-        # make_all_ops_tools 内部按 READONLY_TOOL_NAMES 过滤）
-        all_tools = make_all_ops_tools(
-            ctx,
-            include_teach_shell_tools=teach and mode == AgentMode.OBSERVE,
-        ) + self.extra_tools
-
-        # A teaching card is a schema-level primitive, not a best-effort
-        # fallback from an operations tool.  It never executes remotely and
-        # gives lessons a safe one-step path for commands such as deployment
-        # examples that have no matching operations-tool parameter schema.
-        if teach and mode == AgentMode.OBSERVE:
-            all_tools.append(make_teach_command_tool(ctx))
-
         # Explicit context management registers ContextOffloader's
         # ``retrieve_offloaded_content`` through the plugin registry at agent
         # construction time.  The runtime refresh below replaces the main
         # registry, so plugin tools must be carried over explicitly or an
         # oversized tool result becomes an unreadable external reference.
         # 私有字段名统一收在 strands_priv（漂移时会打 ERROR，不再静默）。
-        plugin_tools = iter_plugin_tools(agent)
-        registered_names = {
-            getattr(tool, "tool_name", getattr(tool, "__name__", ""))
-            for tool in all_tools
-        }
-        all_tools.extend(
-            plugin_tool
-            for plugin_tool in plugin_tools
-            if getattr(plugin_tool, "tool_name", "") not in registered_names
+        # 工具集装配本身在 resolve_runtime_toolset（单一真源，与 prompt 同矩阵可验）。
+        all_tools = resolve_runtime_toolset(
+            ctx,
+            mode=mode,
+            teach=teach,
+            extra_tools=self.extra_tools,
+            plugin_tools=iter_plugin_tools(agent),
         )
-
-        # P0-A1 观察模式 schema 级隔离：裁剪为只读白名单——LLM 无法调用
-        # 不存在于 schema 的执行/写类工具（remove 优于 instruct+intercept）。
-        # A3 (2026-09-04): teach 模式下恢复有 shell 映射的工具可见性——
-        # 教学模式需要 LLM 能调用这些工具，拦截层会将其转为 teach_command
-        # 事件（前端渲染命令卡，学生手动执行），而非后端直接执行。
-        if mode == AgentMode.OBSERVE:
-            if teach:
-                # 教学独立工具集：只有 shell 映射工具可产生可见终端命令卡；
-                # 其余仅保留不触碰终端的参考/提问工具。特别排除 suggest_command，
-                # 否则未匹配 JSON 会泄漏进教学步骤且绕过链式回显契约。
-                all_tools = _filter_teach_tools(all_tools)
-            else:
-                all_tools = filter_tools_readonly(all_tools)
-
-        # A3 (2026-09-04): teach 模式工具拦截包装——有 shell 映射的工具
-        # 被包装后，调用时返回 teach_command 结构化结果而非执行后端逻辑。
-        # 守卫隔离：仅 teach=True 且 observe 模式时包装（前端 teach 映射为
-        # observe+teach:true，其他组合下 teach 拦截不生效，fail-closed）。
-        if teach and mode == AgentMode.OBSERVE:
-            all_tools = [wrap_tool_for_teach_mode(t, ctx) for t in all_tools]
 
         # 模式感知 prompt：基础段 + 模式指令 (+ 教学皮肤)
         agent.system_prompt = _compose_system_prompt(mode, teach, base=self.system_prompt)
