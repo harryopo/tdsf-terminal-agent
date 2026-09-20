@@ -44,6 +44,7 @@ from typing import Any, Callable
 from strands_backend.modes import AgentMode, parse_mode
 # P3 (2026-09-19): 模型请求退避的唯一主人（尝试数 + 单回合请求预算）
 from strands_backend.retry_policy import build_retry_policy
+from strands_backend.strands_priv import iter_plugin_tools, replace_registered_tools
 from strands_backend.tools import (
     DefaultRustBridge,
     READONLY_TOOL_NAMES,
@@ -2388,13 +2389,8 @@ class StrandsAgentAdapter:
         # construction time.  The runtime refresh below replaces the main
         # registry, so plugin tools must be carried over explicitly or an
         # oversized tool result becomes an unreadable external reference.
-        plugin_registry = getattr(agent, "_plugin_registry", None)
-        plugins = getattr(plugin_registry, "_plugins", {}).values()
-        plugin_tools = [
-            plugin_tool
-            for plugin in plugins
-            for plugin_tool in getattr(plugin, "tools", ())
-        ]
+        # 私有字段名统一收在 strands_priv（漂移时会打 ERROR，不再静默）。
+        plugin_tools = iter_plugin_tools(agent)
         registered_names = {
             getattr(tool, "tool_name", getattr(tool, "__name__", ""))
             for tool in all_tools
@@ -2431,10 +2427,7 @@ class StrandsAgentAdapter:
 
         # 工具集重填（保留 ToolRegistry 对象，清空 dict 后 process_tools——
         # _ToolCaller/event_loop 均经由 agent.tool_registry 动态访问，安全）
-        registry = agent.tool_registry
-        registry.registry.clear()
-        registry.dynamic_tools.clear()
-        registry.process_tools(all_tools)
+        replace_registered_tools(agent.tool_registry, all_tools)
 
     def _sync_session_messages(
         self,
