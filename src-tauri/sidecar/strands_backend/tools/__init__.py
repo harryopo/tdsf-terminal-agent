@@ -1168,7 +1168,35 @@ def _execute_via_ssh_impl(
                     + (f"用户附言：{reason}" if reason else "")
                 ),
             }
-        else:  # TIMEOUT / CANCELLED / 未知 —— fail-closed 按拒绝处理
+        elif req.status == NeedsYouStatus.CANCELLED:
+            # #69: 用户按停止时 agent.cancel 会结掉挂着的需求，等待线程在这里醒来。
+            # 回话必须说"被停止"而不是"超时"，否则模型会以为再等一次就能接着跑。
+            logger.info(
+                f"execute_via_ssh approval cancelled: tool={tool_name}, "
+                f"command={command[:80]}"
+            )
+            _audit_append(
+                event="approval",
+                decision="cancelled",
+                tool=tool_name,
+                command=command,
+                session_id=session_id,
+                agent=ctx.agent_name,
+            )
+            _cancel_operation("approval_cancelled")
+            return {
+                "operation_id": operation_id,
+                "status": "rejected",
+                "command": command,
+                "ssh_session_id": session_id,
+                "risk": risk,
+                "impact": impact,
+                "message": (
+                    "用户停止了本次任务，这条待审批命令未执行。"
+                    "本轮请就此收尾，不要再发起新的工具调用。"
+                ),
+            }
+        else:  # TIMEOUT / 未知 —— fail-closed 按拒绝处理
             logger.warning(
                 f"execute_via_ssh approval not answered: "
                 f"status={req.status.value}, tool={tool_name}, command={command[:80]}"

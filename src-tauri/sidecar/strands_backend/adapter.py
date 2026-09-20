@@ -568,6 +568,8 @@ class ToolCallLimitHook:
         self.failures_by_tool: dict[str, int] = {}
         self.last_error_by_tool: dict[str, str] = {}
         self.cancelled = False
+        # #69: 用户按停止的原因（与循环护栏共用 cancelled 位，文案分开）
+        self.cancel_reason = ""
         # T2: LLM 推理轮次（BeforeModelCallEvent 计数）
         self.round = 0
         # T2: 最近一次失败 (tool_name, error_summary)——熔断解释引用
@@ -575,6 +577,8 @@ class ToolCallLimitHook:
         # T2: 熔断解释只 emit 一次（cancelled 后每次工具调用都会进
         # _before_tool_call，防重复刷屏）
         self._breaker_emitted = False
+        # #69: 停止回执同样只发一次
+        self._stop_emitted = False
         # T7 (2026-08-31, spec add-agent-loop-closure): 本轮 invoke 的工具
         # 调用流水（name + input + 成功与否）——adapter 收尾检测
         # _maybe_verify_followup 判定"写类成功调用后无验证类调用"的数据源
@@ -613,7 +617,9 @@ class ToolCallLimitHook:
 
     def _before_tool_call(self, event: Any) -> None:
         if self.cancelled:
-            event.cancel_tool = True
+            # 用户主动停止：把原因作为取消消息回传给模型，让它据此收尾
+            # （护栏熔断走 _trip_breaker，取消消息本身就是熔断文案）。
+            event.cancel_tool = self.cancel_reason or True
             return
         self.total_calls += 1
         # C1 工具级 tracing：记录开始时间戳（用于计算 duration_ms）
@@ -953,6 +959,69 @@ class ToolCallLimitHook:
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"emit_loop_progress failed: {e}")
 
+    def request_user_stop(self, reason: str) -> dict[str, Any]:
+        """#69 用户按停止：置熔断位，之后一律不再发起工具调用。
+
+        能从外部确定杀掉的只有"下一个工具调用"——正在流式的那一次模型调用
+        在 hook 里杀不掉，所以同时记一份现场（轮次 / 工具数 / 最后一步），
+        交给 adapter 存成衔接笔记，下一轮 prompt 会带上（见 _cancel_notes）。
+        """
+        first = not self.cancelled
+        self.cancelled = True
+        self.cancel_reason = reason or "用户已停止本次任务"
+        snapshot: dict[str, Any] = {
+            "agent": self.agent_name,
+            "round": self.round,
+            "tool_count": self.total_calls,
+            "last_tool": (
+                str(self.tool_log[-1].get("name", "")) if self.tool_log else ""
+            ),
+            "reason": self.cancel_reason,
+        }
+        if first:
+            self._emit_stop_notice(snapshot)
+        return snapshot
+
+    def _emit_stop_notice(self, snapshot: dict[str, Any]) -> None:
+        """停止回执：agent_log 落盘 + 用户可见的一条 output（只发一次）"""
+        if self._stop_emitted:
+            return
+        self._stop_emitted = True
+        where = f"第 {snapshot['round']} 轮 · 已调用 {snapshot['tool_count']} 次工具"
+        if snapshot["last_tool"]:
+            where += f"（最后一步 {snapshot['last_tool']}）"
+        text = (
+            f"[已停止] {snapshot['reason']}。停在{where}。"
+            f"之后我不会再发起工具调用；已经执行过的动作不会自动撤销。"
+        )
+        if self.session_id:
+            try:
+                from strands_backend.agent_log import log_event
+
+                log_event(
+                    self.session_id,
+                    "loop_progress",
+                    text,
+                    meta={
+                        "agent": self.agent_name,
+                        "status": "cancelled",
+                        "round": snapshot["round"],
+                        "tool_count": snapshot["tool_count"],
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — 流水日志失败不影响停止
+                logger.debug(f"agent_log loop_progress cancel failed: {e}")
+        if self.event_bus is not None:
+            try:
+                self.event_bus.emit_agent_message(
+                    content=text,
+                    message_type="output",
+                    session_id=self.session_id or None,
+                    source=f"{self.agent_name}_agent.strands.hook",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"emit stop notice failed: {e}")
+
     def reset(self) -> None:
         """重置计数（每次 invoke 开始时调用——单任务护栏语义）"""
         self.current_task = ""
@@ -960,6 +1029,8 @@ class ToolCallLimitHook:
         self.failures_by_tool.clear()
         self.last_error_by_tool.clear()
         self.cancelled = False
+        self.cancel_reason = ""
+        self._stop_emitted = False
         self.round = 0
         self._last_failure = None
         self._breaker_emitted = False
@@ -1475,6 +1546,11 @@ class StrandsAgentAdapter:
         # T7 执行后验证回环: 已触发过"写后未验证"追加轮的会话（限一次，
         # 与 _todo_followup_done 独立计数——两种收尾检测互不挤占机会）。
         self._verify_followup_done: set[tuple[str, str]] = set()
+
+        # #69 (2026-09-20): 用户按停止后留下的中断现场（session_id -> note）。
+        # 下一轮 _build_prompt 取用一次即消费，用来把"上次是被打断的、不是做完了"
+        # 告诉模型。护栏 hook 每次 invoke 会 reset，所以中断信息必须存在这里。
+        self._cancel_notes: dict[str, dict[str, Any]] = {}
 
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
@@ -2403,6 +2479,61 @@ class StrandsAgentAdapter:
             )
         return hook
 
+    def request_cancel(self, session_id: str, reason: str = "") -> dict[str, Any]:
+        """#69: 用户按停止 → 真的把这一会话的 agent 循环停下来。
+
+        前端 abort 只关掉了事件流，循环还在跑、还在烧 token、auto 档还会继续派发
+        命令。这里做三件事：
+          1. 该会话名下所有护栏置熔断 —— 后续工具调用一律 cancel_tool，模型拿到
+             停止原因后收尾；
+          2. 结掉该会话挂着未答的 needs-you 请求 —— 否则卡在审批卡上的工具线程要
+             等满超时，取消根本传不进去（wait_for_response 会被 cancel 唤醒）；
+          3. 留一份中断现场，下一轮 prompt 据此做衔接（见 _append_interrupt_note）。
+
+        没有任何在跑的东西时不留笔记：不然下一轮会莫名看到"上次被打断"。
+        """
+        if not session_id:
+            return {"session_id": "", "cancelled": False, "hooks": 0, "requests": 0}
+        snapshots = [
+            hook.request_user_stop(reason)
+            for (_agent_id, sid), hook in list(self._limit_hooks.items())
+            if sid == session_id
+        ]
+        requests = self._cancel_pending_needs_you(session_id, reason)
+        if snapshots or requests:
+            note = snapshots[-1] if snapshots else {"reason": reason}
+            self._cancel_notes[session_id] = note
+        logger.info(
+            f"[#69] agent.cancel session={session_id} hooks={len(snapshots)} "
+            f"needs_you={requests}"
+        )
+        return {
+            "session_id": session_id,
+            "cancelled": bool(snapshots or requests),
+            "hooks": len(snapshots),
+            "requests": requests,
+        }
+
+    @staticmethod
+    def _cancel_pending_needs_you(session_id: str, reason: str) -> int:
+        """结掉该会话挂着不动的 needs-you 请求（失败不阻断取消本身）"""
+        try:
+            import needs_you
+
+            service = needs_you.get_global_service()
+            rows = service.list_pending(session_id=session_id)
+            count = 0
+            for row in rows:
+                req_id = row.get("id") or row.get("req_id")
+                if not req_id:
+                    continue
+                if service.cancel(str(req_id), reason or "用户已停止") is not None:
+                    count += 1
+            return count
+        except Exception as error:  # noqa: BLE001 — 审批服务不可用也要继续停工具
+            logger.warning(f"[#69] cancel pending needs_you failed: {error}")
+            return 0
+
     # ========================================================================
     # T3 规划-执行回环：invoke 收尾校验（todo 未完成 → 追加一轮，限一次）
     # ========================================================================
@@ -2715,10 +2846,36 @@ class StrandsAgentAdapter:
             )
 
         if not lines:
-            return input
+            return self._append_interrupt_note(input, state, [])
 
         context_block = "<live_context>\n" + "\n".join(lines) + "\n</live_context>"
-        return f"{input}\n\n{context_block}"
+        return self._append_interrupt_note(input, state, [context_block])
+
+    def _append_interrupt_note(
+        self, input: str, state: dict[str, Any], blocks: list[str]
+    ) -> str:
+        """#69 衔接：上一轮是被用户打断的 → 本轮开头就告诉模型别当成已完成。
+
+        中断现场只在紧接的下一轮生效（pop 掉即消费），不复述历史中断；
+        措辞重点在两件事：上次结果不可信（别自动重发写操作）、已执行的动作为真
+        （要改动现状前先只读核实）。
+        """
+        note = self._cancel_notes.pop(str(state.get("session_id") or ""), None)
+        if isinstance(note, dict):
+            where = f"第 {note.get('round', 0)} 轮 · 已调用 {note.get('tool_count', 0)} 次工具"
+            if note.get("last_tool"):
+                where += f"（最后一步 {note['last_tool']}）"
+            blocks.append(
+                "<interrupted_task>\n"
+                f"上一轮任务被用户主动停止：{note.get('reason', '用户已停止')}。停在{where}。\n"
+                "衔接要求：把上一轮当成未完成——不要沿用它\"已经做好了\"的结论，也不要自动重发"
+                "上次没走完的写操作；上次真正执行过的动作可能已经生效（环境状态是真的），"
+                "需要改动现状前先用只读命令核实现状，再决定下一步。\n"
+                "</interrupted_task>"
+            )
+        if not blocks:
+            return input
+        return f"{input}\n\n" + "\n\n".join(blocks)
 
     # ========================================================================
     # Strands 响应解析

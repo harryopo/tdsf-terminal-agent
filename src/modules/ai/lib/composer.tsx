@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { expandSnippetTokens, type Snippet } from "../lib/snippets";
-import { getChat, useChatStore } from "../store/chatStore";
+import { stopGeneration, useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
 
 export type FileAttachment = {
@@ -201,9 +201,8 @@ export function AiComposerProvider({ children }: ProviderProps) {
   // Listen for explorer's remote "Attach to Agent" event (SSH rows).
   useEffect(() => {
     const onAttach = (e: Event) => {
-      const detail = (
-        e as CustomEvent<{ path?: string; sessionId?: number }>
-      ).detail;
+      const detail = (e as CustomEvent<{ path?: string; sessionId?: number }>)
+        .detail;
       if (
         detail &&
         typeof detail.path === "string" &&
@@ -273,12 +272,7 @@ export function AiComposerProvider({ children }: ProviderProps) {
   const submit = useCallback(() => {
     if (isBusy) return;
     const trimmed = value.trim();
-    if (
-      !trimmed &&
-      files.length === 0 &&
-      pickedSnippets.length === 0
-    )
-      return;
+    if (!trimmed && files.length === 0 && pickedSnippets.length === 0) return;
 
     // `/skill:<name> <input>` remains in the user message.  The runtime
     // prompt turns this explicit syntax into a context-aware skill_invoke;
@@ -355,15 +349,13 @@ export function AiComposerProvider({ children }: ProviderProps) {
   }, [isBusy, value, files, pickedSnippets, sessionId]);
 
   const stop = useCallback(() => {
-    if (!sessionId) return;
-    void getChat(sessionId)?.stop();
+    // #69: 走 stopGeneration —— 除了掐前端事件流，还要通知 sidecar 停下来
+    stopGeneration(sessionId);
   }, [sessionId]);
 
   const canSend =
     !isBusy &&
-    (value.trim().length > 0 ||
-      files.length > 0 ||
-      pickedSnippets.length > 0);
+    (value.trim().length > 0 || files.length > 0 || pickedSnippets.length > 0);
 
   // Context value 必须 useMemo（CLAUDE.md 红线 5）：本 Provider 是全树最外层，
   // 裸对象会在每次渲染时都是新引用，强制 3 个消费者全量重渲染。

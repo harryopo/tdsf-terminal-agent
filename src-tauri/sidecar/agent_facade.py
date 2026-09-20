@@ -101,13 +101,33 @@ def reset_for_test() -> None:
 def register_methods(dispatcher: Any) -> None:
     """Register the stable Agent JSON-RPC surface."""
     dispatcher.register("agent.invoke", _rpc_agent_invoke)
+    dispatcher.register("agent.cancel", _rpc_agent_cancel)
     dispatcher.register("agent.list", _rpc_agent_list)
     dispatcher.register("agent.info", _rpc_agent_info)
     dispatcher.register("agent.configure", configure)
 
 
+def cancel_agent_session(session_id: str, reason: str = "") -> dict[str, Any]:
+    """#69: 让用户按停止后这一会话真的停下来（前端 abort 只关了事件流）。"""
+    if _global_strands_adapter is None:
+        logger.warning(
+            "agent.cancel: no strands adapter, session=%s (backend unavailable)",
+            session_id,
+        )
+        return {
+            "session_id": session_id,
+            "cancelled": False,
+            "reason": "Strands backend unavailable",
+        }
+    return _global_strands_adapter.request_cancel(session_id, reason)
+
+
 def _rpc_agent_invoke(name: str, state: dict[str, Any]) -> dict[str, Any]:
     return invoke_agent(name, state)
+
+
+def _rpc_agent_cancel(session_id: str, reason: str = "") -> dict[str, Any]:
+    return cancel_agent_session(session_id, reason)
 
 
 def _rpc_agent_list() -> dict[str, Any]:
