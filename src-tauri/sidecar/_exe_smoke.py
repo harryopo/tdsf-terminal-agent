@@ -113,6 +113,15 @@ try:
     res = r.get("result", {})
     print(f"  status resp: {json.dumps(r, ensure_ascii=False)[:200]}")
     assert "version" in res or "status" in res, "status missing fields"
+    # #83 同类兜底：RPC 面也是运行时动态注册的（register_business_methods 里
+    # 一条 import 失败会被 except 吞掉 → 整个模块的方法静默消失，#67 的白名单
+    # 又会把"前端在调但没注册"变成 -32601）。冒烟不花 LLM 配额，这里必须看到
+    # 完整方法面。阈值取 100（dev 真值 121），关键方法逐个点名。
+    methods = res.get("methods") or []
+    print(f"  methods registered: {len(methods)}")
+    assert len(methods) >= 100, f"RPC 面不全：只有 {len(methods)} 个方法（期望 ≥100）"
+    for critical in ("sidecar.health", "agent.invoke", "agent.list", "skill.list"):
+        assert critical in methods, f"关键方法未注册: {critical}"
 
     # 4. 数据目录 (frozen 适配: %APPDATA%/tdsf-terminal-agent/.tdsf-data/)
     print("== 4. data dir ==")
