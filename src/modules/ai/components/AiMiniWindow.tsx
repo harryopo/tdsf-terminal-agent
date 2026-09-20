@@ -11,6 +11,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -29,7 +30,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { useSpaces } from "@/modules/spaces";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 import {
   estimateCost,
   getModel,
@@ -48,7 +49,11 @@ import type { SessionMeta } from "../lib/sessions";
 import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
 import { useAgentsStore } from "../store/agentsStore";
 import { getOrCreateChat } from "../store/chatRuntime";
-import { sessionsVisibleInWorkspace, useChatStore } from "../store/chatStore";
+import {
+  groupSessionsByConnection,
+  spaceGroupKeyOf,
+  useChatStore,
+} from "../store/chatStore";
 import { usePlanStore } from "../store/planStore";
 import { AgentStatusPill } from "./AgentStatusPill";
 import { WorkspaceGate } from "./WorkspaceGate";
@@ -500,22 +505,18 @@ function SessionPicker() {
   const openSession = useChatStore((s) => s.openSession);
   const newSession = useChatStore((s) => s.newSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
-  // 方案1：独立对话列表——只显示绑定当前工作区的会话（防跨区污染）
+  // #65（2026-09-20 用户决策 2）：按「连接对象」归组显示——当前工作区一组，
+  // 其它服务器/目录各一组，失去归属的老对话单列一组，三组都可点开，
+  // 不再因为工作区 id 变化就看不见。
   const activeSpaceId = useSpaces((s) => s.activeId);
   const spaces = useSpaces((s) => s.spaces);
 
-  const wsSessions = sessionsVisibleInWorkspace(
-    sessions,
-    spaces,
-    activeSpaceId,
+  const groups = groupSessionsByConnection(sessions, spaces, activeSpaceId);
+  const currentKey = spaceGroupKeyOf(
+    spaces.find((space) => space.id === activeSpaceId),
   );
-  const active =
-    wsSessions.find((s) => s.id === activeId) ??
-    sessions.find((s) => s.id === activeId) ??
-    null;
+  const active = sessions.find((s) => s.id === activeId) ?? null;
   if (!active) return null;
-
-  const sorted = [...wsSessions].sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
     <DropdownMenu>
@@ -538,7 +539,10 @@ function SessionPicker() {
           />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-56">
+      <DropdownMenuContent
+        align="start"
+        className="max-h-[60vh] min-w-56 overflow-y-auto"
+      >
         <DropdownMenuItem
           onSelect={() => newSession()}
           className="gap-2 text-xs"
@@ -546,30 +550,56 @@ function SessionPicker() {
           <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={1.75} />
           新建会话
         </DropdownMenuItem>
-        {sorted.length > 0 ? <DropdownMenuSeparator /> : null}
-        {sorted.map((s) => (
-          <SessionRow
-            key={s.id}
-            session={s}
-            active={s.id === activeId}
-            onSelect={() => void openSession(s.id)}
-            onDelete={() => deleteSession(s.id)}
-          />
+        {groups.map((group) => (
+          <Fragment key={group.key}>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="flex items-center gap-1.5 px-1.5 py-1 text-[10px] font-normal text-muted-foreground">
+              <span
+                className={cn(
+                  "truncate",
+                  group.kind === "unassigned" && "italic",
+                )}
+                title={group.detail}
+              >
+                {group.label}
+              </span>
+              <span className="shrink-0 opacity-60">
+                ({group.sessions.length})
+              </span>
+              {group.key === currentKey ? (
+                <span className="shrink-0 rounded bg-accent px-1 py-px text-[9px] text-accent-foreground">
+                  当前
+                </span>
+              ) : null}
+            </DropdownMenuLabel>
+            {group.sessions.map((s) => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                active={s.id === activeId}
+                onSelect={() => void openSession(s.id)}
+                onDelete={() => deleteSession(s.id)}
+              />
+            ))}
+          </Fragment>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/** 工作区 scope 徽章：显示绑定的工作区名（A1 工作区隔离联动） */
+/** 工作区 scope 徽章：显示绑定的工作区名（A1 工作区隔离联动）。
+ *  #65：工作区已不存在时不再标「工作区」——那正是"未归属"，组标题已经说明，
+ *  再挂个徽章会把人骗回去。 */
 function WorkspaceBadge({ spaceId }: { spaceId: string }) {
   const name = useSpaces((s) => s.spaces.find((x) => x.id === spaceId)?.name);
+  if (!name) return null;
   return (
     <span
       className="shrink-0 rounded bg-violet-500/10 px-1 py-px text-[10px] text-violet-600 dark:text-violet-400"
-      title={`绑定工作区 ${name ?? spaceId}`}
+      title={`绑定工作区 ${name}`}
     >
-      {name ?? "工作区"}
+      {name}
     </span>
   );
 }

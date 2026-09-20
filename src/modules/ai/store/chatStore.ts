@@ -86,10 +86,147 @@ function sessionSshScope(
 }
 
 /**
- * Keep local/WSL history isolated by workspace id, while an SSH workspace
- * shows every conversation bound to the same exact server identity.  This
- * also includes older workspace-scoped sessions while their Space metadata is
- * still available.
+ * #65 (2026-09-20, 用户决策 2): 对话按「连接对象」归组，不按工作区记录 id。
+ *
+ * 工作区 id 是易逝的（删掉重建就是新 id），历史上 22 条对话因此失去入口：
+ * 它们绑的 spaceId 已经不存在，或压根没 scope。归组改按稳定身份——
+ * SSH 用 `user@host:port`，本地用目录路径，解析不出身份的进「未归属」，
+ * 绝不靠猜来伪造归属。
+ */
+export const UNGROUPED_KEY = "unassigned";
+
+type SessionGroupShape = {
+  key: string;
+  kind: "ssh" | "local" | "space" | "unassigned";
+  /** 组标题：服务器地址 / 目录名 / 工作区名 / 「未归属」 */
+  label: string;
+  /** 悬停详情：完整路径等 */
+  detail: string;
+};
+
+export type SessionGroup = SessionGroupShape & { sessions: SessionMeta[] };
+
+function sshGroupKey(scope: SshSessionScope): string {
+  return `ssh:${scope.user}@${scope.host}:${scope.port}`;
+}
+
+function normalizeRoot(root: string): string {
+  // 同一目录可能有两种写法（Space 由不同入口创建）：统一分隔符 + 大小写，
+  // 否则 Windows 下 /srv 与 \srv 会被拆成两组。
+  return root.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function rootBasename(root: string): string {
+  const segments = root.split(/[\\/]+/).filter(Boolean);
+  return segments[segments.length - 1] ?? root;
+}
+
+const UNGROUPED_SHAPE: SessionGroupShape = {
+  key: UNGROUPED_KEY,
+  kind: "unassigned",
+  label: "未归属",
+  detail: "这些对话没有可解析的连接对象（早期版本遗留），仍可打开",
+};
+
+function groupOfSpace(space: SpaceMeta): SessionGroupShape {
+  const server = sshScopeFromSpace(space);
+  if (server) {
+    const label = `${server.user}@${server.host}:${server.port}`;
+    return { key: sshGroupKey(server), kind: "ssh", label, detail: label };
+  }
+  const root = space.root;
+  if (root) {
+    // 环境类型必须进键：WSL 里的 /home/x 和本机终端的 /home/x 不是同一台机器
+    const env = space.env;
+    const tag =
+      env?.kind === "wsl" ? `wsl:${env.distro.toLowerCase()}` : "local";
+    return {
+      key: `${tag}:${normalizeRoot(root)}`,
+      kind: "local",
+      label: rootBasename(root),
+      detail: env?.kind === "wsl" ? `${root}（WSL ${env.distro}）` : root,
+    };
+  }
+  // 既非 SSH 也拿不到目录（WSL/测试用的残缺 Space）→ 退回按工作区区分，
+  // 宁可拆成两组，也不要把两个不同工作区的历史并成一组造成污染。
+  const label = space.name || space.id;
+  return { key: `space:${space.id}`, kind: "space", label, detail: label };
+}
+
+function resolveSessionGroup(
+  session: SessionMeta,
+  spaces: SpaceMeta[],
+): SessionGroupShape {
+  const server = sessionSshScope(session, spaces);
+  if (server) {
+    const label = `${server.user}@${server.host}:${server.port}`;
+    return { key: sshGroupKey(server), kind: "ssh", label, detail: label };
+  }
+  const scope = session.scope;
+  if (scope?.kind === "workspace") {
+    const space = spaces.find((item) => item.id === scope.spaceId);
+    if (space) return groupOfSpace(space);
+  }
+  return UNGROUPED_SHAPE;
+}
+
+export function sessionGroupKeyOf(
+  session: SessionMeta,
+  spaces: SpaceMeta[],
+): string {
+  return resolveSessionGroup(session, spaces).key;
+}
+
+/** 某个工作区落在哪个归组（供 UI 判定"当前组"）。 */
+export function spaceGroupKeyOf(space: SpaceMeta | undefined): string | null {
+  return space ? groupOfSpace(space).key : null;
+}
+
+/**
+ * 把全部对话按连接对象分桶。排序：当前工作区所在组 → 其它组（按最近活动）
+ * → 「未归属」永远压轴（保证它一直在视野里，不会被时间序冲掉）。
+ */
+export function groupSessionsByConnection(
+  sessions: SessionMeta[],
+  spaces: SpaceMeta[],
+  activeSpaceId: string | null,
+): SessionGroup[] {
+  const buckets = new Map<string, SessionGroup>();
+  for (const session of sessions) {
+    const shape = resolveSessionGroup(session, spaces);
+    let bucket = buckets.get(shape.key);
+    if (!bucket) {
+      bucket = { ...shape, sessions: [] };
+      buckets.set(shape.key, bucket);
+    }
+    bucket.sessions.push(session);
+  }
+  for (const bucket of buckets.values()) {
+    bucket.sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  const activeSpace = activeSpaceId
+    ? spaces.find((space) => space.id === activeSpaceId)
+    : undefined;
+  const currentKey = activeSpace
+    ? groupOfSpace(activeSpace).key
+    : activeSpaceId
+      ? `space:${activeSpaceId}`
+      : null;
+  const rank = (group: SessionGroup) =>
+    group.key === currentKey ? 0 : group.kind === "unassigned" ? 2 : 1;
+  const newest = (group: SessionGroup) =>
+    Math.max(...group.sessions.map((session) => session.updatedAt));
+
+  return [...buckets.values()].sort(
+    (a, b) => rank(a) - rank(b) || newest(b) - newest(a),
+  );
+}
+
+/**
+ * 当前连接对象下可见的历史：SSH 工作区显示同一台服务器（user+host+port）
+ * 的全部对话，本地/WSL 显示同一目录（同一工作区）的对话。
+ * 「未归属」不在此列——它由 #65 的分组入口单独呈现。
  */
 export function sessionsVisibleInWorkspace(
   sessions: SessionMeta[],
@@ -98,17 +235,16 @@ export function sessionsVisibleInWorkspace(
 ): SessionMeta[] {
   if (!activeSpaceId) return sessions;
   const activeSpace = spaces.find((space) => space.id === activeSpaceId);
-  const activeServer = sshScopeFromSpace(activeSpace);
-  if (activeServer) {
-    return sessions.filter((session) => {
-      const server = sessionSshScope(session, spaces);
-      return server ? sameSshServer(server, activeServer) : false;
-    });
+  if (!activeSpace) {
+    // 活跃工作区自身查不到元数据：退回旧的按 id 精确匹配，不放大可见面
+    const fallbackKey = `space:${activeSpaceId}`;
+    return sessions.filter(
+      (session) => sessionGroupKeyOf(session, spaces) === fallbackKey,
+    );
   }
+  const activeKey = groupOfSpace(activeSpace).key;
   return sessions.filter(
-    (session) =>
-      session.scope?.kind === "workspace" &&
-      session.scope.spaceId === activeSpaceId,
+    (session) => sessionGroupKeyOf(session, spaces) === activeKey,
   );
 }
 
@@ -833,9 +969,27 @@ export const useChatStore = create<StoreState>((set, get) => ({
         return true;
       }
     } else if (spacesState.activeId && !server) {
-      const targetSpaceId =
-        session.scope?.kind === "workspace" ? session.scope.spaceId : null;
-      if (targetSpaceId !== spacesState.activeId) return false;
+      const targetKey = sessionGroupKeyOf(session, knownSpaces);
+      if (targetKey === UNGROUPED_KEY) {
+        // #65: 无归属对话（scope 缺失 / 绑的工作区已不存在）在任何工作区
+        // 都能打开——否则它永远没有入口。打开即对齐到当前工作区：对话此后
+        // 确实是在这里继续的，只补绑定，不删任何历史记录。
+        const adoptedScope: SessionScope = sshScopeFromSpace(activeSpace) ?? {
+          kind: "workspace",
+          spaceId: spacesState.activeId,
+        };
+        const bound = get().sessions.map((item) =>
+          item.id === id ? { ...item, scope: adoptedScope } : item,
+        );
+        set({ sessions: bound });
+        void saveSessionsList(bound);
+        get().switchSession(id);
+        return true;
+      }
+      const activeKey = activeSpace
+        ? groupOfSpace(activeSpace).key
+        : `space:${spacesState.activeId}`;
+      if (targetKey !== activeKey) return false;
       get().switchSession(id);
       return true;
     } else if (!spacesState.activeId && !server) {
