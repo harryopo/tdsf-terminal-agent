@@ -2,7 +2,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { IS_WINDOWS } from "@/lib/platform";
@@ -12,9 +11,7 @@ import {
   useWorkspaceEnvStore,
   type WorkspaceEnv,
 } from "@/modules/workspace";
-import {
-  ServerStack03Icon,
-} from "@hugeicons/core-free-icons";
+import { ServerStack03Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
 type Props = {
@@ -88,10 +85,10 @@ export function WorkspaceEnvSelector({
           className="flex h-6 shrink-0 items-center gap-1 rounded-sm px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent data-[state=open]:text-foreground disabled:opacity-60"
           title={
             switching
-              ? "Switching environment..."
+              ? "正在切换环境…"
               : remote
                 ? `当前终端命令执行于 ${label}`
-                : "Workspace environment"
+                : "切换工作区环境"
           }
         >
           <HugeiconsIcon
@@ -101,40 +98,37 @@ export function WorkspaceEnvSelector({
             className={switching ? "animate-pulse" : undefined}
           />
           <span className="max-w-44 truncate">
-            {switching ? "Switching..." : label}
+            {switching ? "切换中…" : label}
           </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-48">
         <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
-          {IS_WINDOWS ? "Windows Local" : "Local"}
+          本地
         </DropdownMenuItem>
-        {/* TDSF 2026-08-31（用户反馈）：齿轮图标删除——三个条目纯文字、间距统一 */}
-        <DropdownMenuItem onSelect={onSelectSsh}>SSH Server...</DropdownMenuItem>
+        {/* 2026-09-20 用户实测：三类条目必须等距——分隔线会让 SSH 与 WSL 之间
+            多出一次空隙，看着像"间距不一样"；条目文案一律纯文字、不带省略号。 */}
+        <DropdownMenuItem onSelect={onSelectSsh}>SSH 服务器</DropdownMenuItem>
         {/* WSL 发行版仅 Windows 平台有意义 */}
-        {IS_WINDOWS && (
-          <>
-            <DropdownMenuSeparator />
-            {distros.length === 0 ? (
-              <DropdownMenuItem disabled>
-                {loading
-                  ? "Loading WSL distros..."
-                  : error
-                    ? "WSL unavailable"
-                    : "No WSL distros found"}
+        {IS_WINDOWS &&
+          (distros.length === 0 ? (
+            <DropdownMenuItem disabled>
+              {loading
+                ? "读取 WSL 发行版…"
+                : error
+                  ? "WSL 不可用"
+                  : "无 WSL 发行版"}
+            </DropdownMenuItem>
+          ) : (
+            distros.map((distro) => (
+              <DropdownMenuItem
+                key={distro.name}
+                onSelect={() => onSelect({ kind: "wsl", distro: distro.name })}
+              >
+                WSL · {distro.name}
               </DropdownMenuItem>
-            ) : (
-              distros.map((distro) => (
-                <DropdownMenuItem
-                  key={distro.name}
-                  onSelect={() => onSelect({ kind: "wsl", distro: distro.name })}
-                >
-                  WSL: {distro.name}
-                </DropdownMenuItem>
-              ))
-            )}
-          </>
-        )}
+            ))
+          ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
