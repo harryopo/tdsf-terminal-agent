@@ -148,6 +148,40 @@ def test_frontend_never_passes_a_computed_method_name():
     )
 
 
+def test_inject_terminal_channel_stays_retired():
+    """#71（2026-09-20 用户拍板整体下线）：inject_terminal 两头都不许再出现代码级引用。
+
+    发送端原先是 `ssh_command.py` 里的 `if False:` 死块，前端仍留一个
+    `sidecar:inject_terminal` 监听器 —— 半退役通道比没有更危险：下一次有人把
+    `if False` 改回来，就会和 execute_via_ssh 双重执行同一条服务器命令，正是
+    当初停掉它的理由。用户可见执行只有一条路（visible-terminal 通道）。
+
+    判据用**调用形态**而不是裸子串，注释里讲历史不算复活
+    （第一版用子串匹配，被自己写的解释性注释误报过一次）。
+    """
+    sender_re = re.compile(r"""send_notification\(\s*['"]inject_terminal""")
+    listeners_re = re.compile(r"""['"]sidecar:inject_terminal['"]""")
+    # 只扫真正的生产源码目录：sidecar 下还有 PyInstaller 产物/虚拟环境，rglob 全仓
+    # 会把门禁耗时交给磁盘上有多少拷贝。
+    sidecar_sources = [
+        *(_SIDECAR_DIR / "strands_backend").rglob("*.py"),
+        *_SIDECAR_DIR.glob("*.py"),
+    ]
+    senders = [
+        str(p.relative_to(_REPO_ROOT))
+        for p in sidecar_sources
+        if "tests" not in p.parts
+        and sender_re.search(p.read_text(encoding="utf-8"))
+    ]
+    listeners = [
+        str(p.relative_to(_REPO_ROOT))
+        for p in _frontend_source_files()
+        if listeners_re.search(_strip_comments(p.read_text(encoding="utf-8")))
+    ]
+    assert not senders, f"sidecar 又出现 inject_terminal 发送端: {senders}"
+    assert not listeners, f"前端又出现 inject_terminal 监听器: {listeners}"
+
+
 def test_notification_channel_still_has_no_production_caller():
     """#67 的白名单只拦请求通道，理由必须可测：sidecar 没注册任何通知方法，
     生产代码也没有 `ipc_notify` 调用点。任何一条不再成立，就必须回去给通知通道

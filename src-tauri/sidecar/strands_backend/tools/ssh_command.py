@@ -189,18 +189,11 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         except Exception as e:
             logger.debug(f"emit_tool_call started failed: {e}")
 
-    # TDSF (2026-08-09): visible 模式——通知前端把命令注入终端（用户可见）
-    # 在后台 exec 执行前，先通知前端把命令写到终端屏幕上让用户看到。
-    # 后台 exec 仍然执行以拿到结构化结果返回给 LLM。
-    if False:  # Legacy notification path removed: it duplicated real execution.
-        try:
-            ctx.rust_bridge.send_notification("inject_terminal", {
-                "command": command,
-                "sessionId": ssh_session_id or ctx.ssh_session_id or "",
-            })
-        except Exception as e:
-            # visible 模式下通知失败 = 用户看不到命令注入，必须可见（warning）
-            logger.warning(f"inject_terminal notification failed: {e}")
+    # #71 (2026-09-20): 这里原先有一段 `if False:` 的 inject_terminal 通知死块
+    # （"后台执行前先让用户在终端看到命令"），发送端与前端监听一并删除。
+    # 用户可见执行走 "visible-terminal" 通道（execution_channel 分流 +
+    # sidecar:visible-terminal-execute），由 Rust PTY 真实执行并回读 OSC 块，
+    # 不存在"通知注入 + 后台 exec"两条腿同时跑的双重执行路径。
 
     # 执行（Task 3/4 接入后内部含影响预测 + 三模式决策 + denylist 拦截 +
     # host 校验 + 审批链；多行命令已在上方整条审批通过时传 skip_approval）

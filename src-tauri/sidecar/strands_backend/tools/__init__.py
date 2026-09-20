@@ -111,8 +111,7 @@ class DefaultRustBridge:
         send_request: 双向 JSON-RPC 请求回调，签名 (method: str, params: dict) -> Any。
                       None 时所有 ipc_invoke 返回 unavailable 状态（当前架构默认）。
         send_notification: 单向通知回调，签名 (method: str, params: dict) -> None。
-                      供 todo_write / ssh_command(visible) 等工具向前端推送
-                      sidecar:update_todos / sidecar:inject_terminal 通知。
+                      供 todo_write 等工具向前端推送 sidecar:update_todos 通知。
                       None 时静默降级（仅 debug 日志）。
 
     用法：
@@ -181,8 +180,7 @@ class DefaultRustBridge:
 
         2026-08-28 审查修复：此前该类只有 ipc_invoke，工具里调用
         send_notification 会 AttributeError 被 except 吞掉（仅 debug 日志），
-        导致 update_todos（TodoStrip 双轨）与 inject_terminal（SSH 可见执行）
-        两条通知链路静默失效。
+        导致 update_todos（TodoStrip 双轨）通知链路静默失效。
         """
         if self._send_notification is None:
             logger.debug(
