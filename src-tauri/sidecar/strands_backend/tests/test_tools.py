@@ -1498,13 +1498,13 @@ class TestMakeAllOpsTools(unittest.TestCase):
         + P2 #42 ssh_list_sessions + 远程安全写入 + ask_user = 25）"""
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 25)
         for t in tools:
             self.assertTrue(callable(t))
 
     def test_ops_tool_names_complete(self):
         """OPS_TOOL_NAMES 应由 TOOL_REGISTRY 派生，含全部 25 个工具名"""
-        self.assertEqual(len(OPS_TOOL_NAMES), 26)
+        self.assertEqual(len(OPS_TOOL_NAMES), 25)
         self.assertIn("ask_user", OPS_TOOL_NAMES)
         self.assertIn("ssh_command", OPS_TOOL_NAMES)
         self.assertIn("remote_file", OPS_TOOL_NAMES)
@@ -2320,7 +2320,7 @@ class TestToolWhitelistAndReadonlyFilter(unittest.TestCase):
         """main（唯一 agent）：TOOL_REGISTRY 全量 25 工具（含 ask_user）。"""
         tools = make_all_ops_tools(self._ctx())
         names = self._tool_names(tools)
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 25)
         self.assertIn("ssh_command", names)
         self.assertIn("ssh_list_sessions", names)
         self.assertIn("knowledge_search", names)
@@ -2644,7 +2644,7 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertIn("ssh_list_sessions", names)
         # backup_restore（restore 写操作）L1 下被裁——schema-level safety 补口
         self.assertNotIn("backup_restore", names)
-        self.assertEqual(len(tools), 17)
+        self.assertEqual(len(tools), 16)
 
     def test_l2_keeps_all_tools(self):
         ctx = make_ctx()
@@ -2654,12 +2654,12 @@ class TestSchemaLevelToolFilter(unittest.TestCase):
         self.assertIn("ssh_command", names)
         self.assertIn("backup_restore", names)
         self.assertIn("write_remote_file", names)
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 25)
 
     def test_default_level_keeps_all_tools(self):
         ctx = make_ctx()
         tools = make_all_ops_tools(ctx)
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 25)
 
 
 # ============================================================================
