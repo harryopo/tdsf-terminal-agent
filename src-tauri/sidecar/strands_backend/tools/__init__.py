@@ -2044,12 +2044,22 @@ def make_all_ops_tools(
     from strands_backend.tools.registry import resolve_factory
 
     tools: list = []
+    skipped: list[str] = []
     for spec in TOOL_REGISTRY.values():
         try:
             factory = resolve_factory(spec)
             tools.append(factory(ctx))
         except Exception as e:  # noqa: BLE001 — 单工具失败不阻断其余工具构建
-            logger.warning(f"tool '{spec.name}' build failed, skipped: {e}")
+            skipped.append(spec.name)
+            logger.error(f"tool '{spec.name}' build failed, skipped: {e}")
+
+    if skipped:
+        # ERROR 级 + 汇总：#83 实测打包产物缺 16 个工具模块时，逐条 warning 埋在上千行
+        # 日志里没人看见，装完的 agent 能力减半却"运行正常"。少了什么必须一眼能查到。
+        logger.error(
+            f"agent toolset incomplete: {len(skipped)}/{len(TOOL_REGISTRY)} tools "
+            f"unavailable: {', '.join(skipped)}"
+        )
 
     if getattr(ctx, "permission_level", 2) <= 1:
         allowed = set(READONLY_TOOL_NAMES)
