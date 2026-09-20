@@ -6,6 +6,8 @@
 3. status 请求 → 响应 (版本/python 信息)
 4. 数据目录: %APPDATA%/tdsf-terminal-agent/.tdsf-data 被创建 (frozen 适配关键验证)
 5. shutdown 优雅退出
+6. 自报版本 (ready + sidecar.status) == sidecar_version.SIDECAR_VERSION —— #84:
+   版本号此前在 main.py 里写死成 "1.0.0"，用户诊断里拿到的永远是假的那一个
 """
 import json
 import os
@@ -13,6 +15,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# 期望版本 = 被打包进去的同一份常量（脚本目录已在 sys.path[0]）
+from sidecar_version import SIDECAR_VERSION as EXPECTED_VERSION
 
 # onedir 产物: dist-sidecar/tdsf-sidecar/tdsf-sidecar.exe
 _EXE_CANDIDATES = [
@@ -100,6 +105,11 @@ try:
         print(f"  [pre-ready] {line[:100]}")
     print(f"  ready: {ready_line[:160]}")
     assert "ready" in ready_line, "no ready notification within 180s"
+    # #84: 冻结包自报的版本必须是真的那个 —— 排查"用户装的是哪一版"就看这个数
+    ready_version = json.loads(ready_line).get("params", {}).get("version")
+    assert ready_version == EXPECTED_VERSION, (
+        f"ready 自报版本 {ready_version!r} != 期望 {EXPECTED_VERSION!r}")
+    print(f"  ready version: {ready_version}")
 
     # 2. ping
     print("== 2. ping ==")
@@ -113,6 +123,10 @@ try:
     res = r.get("result", {})
     print(f"  status resp: {json.dumps(r, ensure_ascii=False)[:200]}")
     assert "version" in res or "status" in res, "status missing fields"
+    status_version = res.get("version") or (res.get("status") or {}).get("version")
+    assert status_version == EXPECTED_VERSION, (
+        f"sidecar.status 自报版本 {status_version!r} != 期望 {EXPECTED_VERSION!r}")
+    print(f"  status version: {status_version}")
     # #83 同类兜底：RPC 面也是运行时动态注册的（register_business_methods 里
     # 一条 import 失败会被 except 吞掉 → 整个模块的方法静默消失，#67 的白名单
     # 又会把"前端在调但没注册"变成 -32601）。冒烟不花 LLM 配额，这里必须看到

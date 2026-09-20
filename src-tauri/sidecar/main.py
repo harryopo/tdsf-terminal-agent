@@ -18,7 +18,7 @@ TDSF Terminal Agent — Python Sidecar 入口（T-P1-01.1）
 - Rust spawn 后阻塞等待 Python 发送 ready 通知
 - Python 启动完成后发送:
     {"jsonrpc": "2.0", "method": "ready",
-     "params": {"version": "1.0.0", "python": "3.13.x", "platform": "win32"}}
+     "params": {"version": SIDECAR_VERSION, "python": "3.13.x", "platform": "win32"}}
 
 心跳：
 - Rust 每 5s 发送: {"jsonrpc": "2.0", "method": "ping", "id": N}
@@ -51,6 +51,10 @@ from typing import Any, Callable
 
 # 将 sidecar 根目录加入 sys.path，确保 import sidecar_modules.* 可用
 sys.path.insert(0, str(Path(__file__).parent))
+
+# #84: 自报版本只有一个真源（frozen 下 importlib.metadata 不保证带元数据，
+# 故单独一个常量模块；漂移由 test_sidecar_version_parity + check-release-version.ps1 两头挡）
+from sidecar_version import SIDECAR_VERSION
 
 # TDSF: 数据目录移到 src-tauri/ 之外，避免 Tauri dev watcher 检测到
 # SQLite WAL 文件（.db-shm/.db-wal）变化导致循环重启（窗口反复弹出关闭）
@@ -429,7 +433,7 @@ class MethodDispatcher:
     def _status(self) -> dict:
         """返回 Sidecar 状态（版本 + uptime + 已注册方法列表）"""
         return {
-            "version": "1.0.0",
+            "version": SIDECAR_VERSION,
             "python": sys.version.split()[0],
             "platform": sys.platform,
             "uptime": time.time() - START_TIME,
@@ -1113,7 +1117,7 @@ def main() -> None:
     send_notification(
         "ready",
         {
-            "version": "1.0.0",
+            "version": SIDECAR_VERSION,
             "python": sys.version.split()[0],
             "platform": sys.platform,
             "methods": dispatcher.list_methods(),

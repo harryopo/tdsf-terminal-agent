@@ -26,11 +26,25 @@ $tauriVersion = (Get-Content -LiteralPath (Join-Path $repoRoot "src-tauri/tauri.
 $cargoVersion = Read-TomlVersion -Path (Join-Path $repoRoot "src-tauri/Cargo.toml") -Section "package"
 $sidecarVersion = Read-TomlVersion -Path (Join-Path $repoRoot "src-tauri/sidecar/pyproject.toml") -Section "project"
 
+# #84: the version the sidecar self-reports (ready notification + sidecar.status).
+# Frozen builds cannot rely on package metadata, so it is a standalone constant -
+# if it is not compared here it silently drifts into a wrong version number.
+# NOTE: keep this file ASCII-only. Windows PowerShell 5.1 reads BOM-less files as
+# ANSI, so non-ASCII comments get mis-decoded and can break the parser.
+$constantMatch = [regex]::Match(
+    (Get-Content -LiteralPath (Join-Path $repoRoot "src-tauri/sidecar/sidecar_version.py") -Raw -Encoding utf8),
+    'SIDECAR_VERSION\s*=\s*"([^"]+)"'
+)
+if (-not $constantMatch.Success) {
+    throw "SIDECAR_VERSION not found in src-tauri/sidecar/sidecar_version.py"
+}
+
 $versions = [ordered]@{
     package = $packageVersion
     tauri = $tauriVersion
     cargo = $cargoVersion
     sidecar = $sidecarVersion
+    sidecarSelfReported = $constantMatch.Groups[1].Value
 }
 
 $unique = @($versions.Values | Sort-Object -Unique)
