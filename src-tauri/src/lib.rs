@@ -1,6 +1,7 @@
 pub mod modules;
 
 use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, param_complete, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(debug_assertions)]
@@ -12,22 +13,57 @@ use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri::{PhysicalPosition, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
-/// Drained on first read so HMR / re-mounts can't replay the launch dir.
+/// Launch target per window label. Drained on first read so HMR / re-mounts
+/// can't replay the launch dir or files.
+///
+/// Keyed by label since #64: one process now owns several main windows — the
+/// second exe launch hands its argv to the running process instead of starting
+/// a competing process (which was overwriting `tdsf-spaces.json`), and each
+/// window must receive its own "Open With" target.
 #[derive(Default)]
-struct LaunchDir(Mutex<Option<String>>);
+struct LaunchTargets(Mutex<HashMap<String, LaunchTarget>>);
 
-/// Drained on first read so HMR / re-mounts can't replay the launch files.
-#[derive(Default)]
-struct LaunchFiles(Mutex<Vec<String>>);
+impl LaunchTargets {
+    fn seed(&self, label: &str, target: LaunchTarget) {
+        self.0
+            .lock()
+            .expect("LaunchTargets mutex poisoned")
+            .insert(label.to_string(), target);
+    }
 
-#[tauri::command]
-fn get_launch_dir(state: State<'_, LaunchDir>) -> Option<String> {
-    state.0.lock().expect("LaunchDir mutex poisoned").take()
+    fn take_dir(&self, label: &str) -> Option<String> {
+        self.0
+            .lock()
+            .expect("LaunchTargets mutex poisoned")
+            .get_mut(label)
+            .and_then(|target| target.dir.take())
+    }
+
+    fn take_files(&self, label: &str) -> Vec<String> {
+        self.0
+            .lock()
+            .expect("LaunchTargets mutex poisoned")
+            .get_mut(label)
+            .map(|target| std::mem::take(&mut target.files))
+            .unwrap_or_default()
+    }
+
+    fn discard(&self, label: &str) {
+        self.0
+            .lock()
+            .expect("LaunchTargets mutex poisoned")
+            .remove(label);
+    }
 }
 
 #[tauri::command]
-fn get_launch_files(state: State<'_, LaunchFiles>) -> Vec<String> {
-    std::mem::take(&mut *state.0.lock().expect("LaunchFiles mutex poisoned"))
+fn get_launch_dir(label: String, state: State<'_, LaunchTargets>) -> Option<String> {
+    state.take_dir(&label)
+}
+
+#[tauri::command]
+fn get_launch_files(label: String, state: State<'_, LaunchTargets>) -> Vec<String> {
+    state.take_files(&label)
 }
 
 enum LaunchEntry {
@@ -35,7 +71,7 @@ enum LaunchEntry {
     File(PathBuf),
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct LaunchTarget {
     dir: Option<String>,
     files: Vec<String>,
@@ -64,11 +100,19 @@ fn resolve_launch_target(entries: Vec<LaunchEntry>) -> LaunchTarget {
     LaunchTarget { dir, files }
 }
 
-fn parse_launch_target() -> LaunchTarget {
-    let entries = std::env::args()
+/// Same argv semantics for a handoff from a rejected second instance (#64):
+/// args[0] is that process's own exe path, so skip it here just like `skip(1)`
+/// does on a cold start.
+fn launch_target_from_args<I, S>(args: I) -> LaunchTarget
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let entries = args
+        .into_iter()
         .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .filter_map(|arg| std::fs::canonicalize(arg).ok())
+        .filter(|arg| !arg.as_ref().starts_with('-'))
+        .filter_map(|arg| std::fs::canonicalize(arg.as_ref()).ok())
         .filter_map(|path| {
             let meta = std::fs::metadata(&path).ok()?;
             Some(if meta.is_dir() {
@@ -79,6 +123,88 @@ fn parse_launch_target() -> LaunchTarget {
         })
         .collect();
     resolve_launch_target(entries)
+}
+
+fn parse_launch_target() -> LaunchTarget {
+    launch_target_from_args(std::env::args())
+}
+
+/// True for the main window family: "main", "main-2", "main-3", …
+/// Any `main-<digits>` counts, so a label produced elsewhere can never be
+/// mistaken for a free slot by `next_main_label`.
+fn is_main_label(label: &str) -> bool {
+    label == "main"
+        || label
+            .strip_prefix("main-")
+            .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Pick the next free main label. "main" stays label #1 so every existing
+/// `get_webview_window("main")` caller (settings parent, macOS lifecycle, the
+/// capability lists) keeps working; extra windows start at main-2.
+fn next_main_label(existing: &[String]) -> String {
+    if !existing.iter().any(|l| is_main_label(l)) {
+        return "main".to_string();
+    }
+    let mut n: u32 = 2;
+    loop {
+        let candidate = format!("main-{n}");
+        if !existing.iter().any(|l| l == &candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Open another main window in this process. #64: called from the
+/// single-instance handoff with the rejected second launch's argv — the exe is
+/// still the entry point for "new window", it just no longer starts a second
+/// config-writing process. (An in-app menu entry would need a command wrapper;
+/// deliberately not added, see ROADMAP #85.)
+fn open_main_window(
+    app: &tauri::AppHandle,
+    state: &LaunchTargets,
+    target: LaunchTarget,
+) -> Result<String, String> {
+    let base = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .ok_or("app.windows[main] is not configured")?;
+    let existing: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let label = next_main_label(&existing);
+
+    if let Some(dir) = &target.dir {
+        if let Some(registry) = app.try_state::<workspace::WorkspaceRegistry>() {
+            let _ = registry.authorize(dir);
+        }
+    }
+    let opened_dir = target.dir.clone().unwrap_or_else(|| "-".into());
+    // Seed before build(): the new webview can invoke get_launch_dir as soon
+    // as its page starts, and must not see another window's target.
+    state.seed(&label, target);
+
+    // Copy the configured main window instead of re-listing options:
+    // additionalBrowserArgs has to be byte-identical across webviews that share
+    // one WebView2 user-data folder, and the borderless/transparent titlebar
+    // flags are the same story.
+    let mut conf = base;
+    conf.label = label.clone();
+    conf.center = true;
+    let window = match WebviewWindowBuilder::from_config(app, &conf).and_then(|b| b.build()) {
+        Ok(window) => window,
+        Err(e) => {
+            state.discard(&label);
+            return Err(format!("open_main_window({label}) failed: {e}"));
+        }
+    };
+    let _ = window.show();
+    let _ = window.set_focus();
+    log::info!("[main-window] opened '{label}' dir={opened_dir}");
+    Ok(label)
 }
 
 /// True for the settings window family: "settings", "settings-1", "settings-2", …
@@ -277,6 +403,29 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_dialog::init());
     }
+    // #64 (2026-09-20): 写配置文件的进程只允许有一个。再启动一次 exe（双击图标、
+    // 资源管理器"打开方式"、命令行带路径）不再另起一个进程 —— argv 交给已经在跑
+    // 的那个进程，由它开一扇新的主窗。之前 14 个 tdsf-terminal-agent.exe 并存，
+    // 每个进程各把内存里整个 spaces 数组覆写回 tdsf-spaces.json，后写者赢，
+    // 用户看到的是"工作区自己消失了"。
+    // 放在插件链最前是官方建议的写法：单实例判定要早于其它插件初始化。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(
+            |app, argv, _cwd| match app.try_state::<LaunchTargets>() {
+                Some(state) => {
+                    let target = launch_target_from_args(&argv);
+                    match open_main_window(app, state.inner(), target) {
+                        Ok(label) => {
+                            log::info!("[single-instance] second launch opened window '{label}'")
+                        }
+                        Err(e) => log::error!("[single-instance] {e}"),
+                    }
+                }
+                None => log::error!("[single-instance] LaunchTargets 未就绪，丢弃 argv {argv:?}"),
+            },
+        ));
+    }
     builder
         .plugin(tauri_plugin_shell::init())
         // TDSF 永久修复 (2026-08-09): 恢复 VISIBLE 状态保存。
@@ -423,8 +572,12 @@ pub fn run() {
             }
             registry
         })
-        .manage(LaunchDir(Mutex::new(cli_dir)))
-        .manage(LaunchFiles(Mutex::new(launch.files)))
+        .manage({
+            let targets = LaunchTargets::default();
+            // 配置文件里第一扇窗的 label 就是默认的 "main"。
+            targets.seed("main", launch);
+            targets
+        })
         .invoke_handler(tauri::generate_handler![
             fs_backend::commands::fsb_list,
             fs_backend::commands::fsb_read,
@@ -614,12 +767,11 @@ pub fn run() {
                         if let Some(registry) = app.try_state::<workspace::WorkspaceRegistry>() {
                             let _ = registry.authorize(dir);
                         }
-                        if let Some(state) = app.try_state::<LaunchDir>() {
-                            *state.0.lock().expect("LaunchDir mutex poisoned") = Some(dir.clone());
-                        }
                     }
-                    if let Some(state) = app.try_state::<LaunchFiles>() {
-                        *state.0.lock().expect("LaunchFiles mutex poisoned") = target.files.clone();
+                    // 冷启动时前端还没挂载，先把目标按 label 存着让它自取；
+                    // 暖启动时下面的事件直接送进已经跑着的那扇窗。
+                    if let Some(state) = app.try_state::<LaunchTargets>() {
+                        state.seed("main", target.clone());
                     }
                     let _ = app.emit("tdsf:open-file", target.files);
                 }
@@ -710,6 +862,103 @@ mod launch_target_tests {
         ]);
         assert_eq!(out.dir.as_deref(), Some("/workspace"));
         assert_eq!(out.files, vec!["/other/x.rs".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod main_window_tests {
+    use super::{is_main_label, launch_target_from_args, next_main_label, LaunchTargets};
+
+    #[test]
+    fn first_extra_window_is_labelled_main_2() {
+        assert_eq!(next_main_label(&["main".to_string()]), "main-2");
+    }
+
+    #[test]
+    fn extra_window_labels_count_up() {
+        let existing = vec!["main".to_string(), "main-2".to_string()];
+        assert_eq!(next_main_label(&existing), "main-3");
+    }
+
+    #[test]
+    fn occupied_numbered_label_is_not_reused() {
+        let existing = vec!["main".to_string(), "main-2".to_string(), "main-3".to_string()];
+        assert_eq!(next_main_label(&existing), "main-4");
+    }
+
+    #[test]
+    fn settings_labels_are_not_main_windows() {
+        assert_eq!(next_main_label(&["settings-2".to_string()]), "main");
+        assert!(!is_main_label("settings"));
+        assert!(!is_main_label("mainx"));
+        assert!(!is_main_label("main-"));
+        assert!(is_main_label("main"));
+        assert!(is_main_label("main-7"));
+    }
+
+    #[test]
+    fn handoff_argv_skips_exe_path_and_flags() {
+        let root = std::env::temp_dir().join(format!("tdsf-launch-{}", std::process::id()));
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).expect("create temp proj");
+        let file = proj.join("notes.md");
+        std::fs::write(&file, "x").expect("write temp file");
+
+        let target = launch_target_from_args(vec![
+            std::env::current_exe()
+                .expect("exe path")
+                .display()
+                .to_string(),
+            "--flagged".to_string(),
+            proj.display().to_string(),
+            file.display().to_string(),
+        ]);
+
+        // 断言用同一个 to_canon 归一，路径文本才不会被大小写/分隔符差异绊倒。
+        assert_eq!(target.dir.as_deref(), Some(super::fs::to_canon(&proj).as_str()));
+        assert_eq!(target.files, vec![super::fs::to_canon(&file)]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn each_window_drains_only_its_own_target() {
+        let targets = LaunchTargets::default();
+        targets.seed(
+            "main",
+            super::LaunchTarget {
+                dir: Some("/a".into()),
+                files: vec!["/a/one.txt".into()],
+            },
+        );
+        targets.seed(
+            "main-2",
+            super::LaunchTarget {
+                dir: Some("/b".into()),
+                files: vec![],
+            },
+        );
+
+        assert_eq!(targets.take_dir("main").as_deref(), Some("/a"));
+        // drained: an HMR re-mount in the same window must not re-open folder /a
+        assert_eq!(targets.take_dir("main"), None);
+        assert_eq!(targets.take_dir("main-2").as_deref(), Some("/b"));
+        assert_eq!(targets.take_files("main"), vec!["/a/one.txt".to_string()]);
+        assert!(targets.take_files("main").is_empty());
+        assert!(targets.take_files("never-seeded").is_empty());
+    }
+
+    #[test]
+    fn discard_rolls_back_a_window_that_failed_to_build() {
+        let targets = LaunchTargets::default();
+        targets.seed(
+            "main-2",
+            super::LaunchTarget {
+                dir: Some("/b".into()),
+                files: vec![],
+            },
+        );
+        targets.discard("main-2");
+        assert_eq!(targets.take_dir("main-2"), None);
     }
 }
 

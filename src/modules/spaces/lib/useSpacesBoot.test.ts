@@ -24,15 +24,23 @@ const persisted: SpaceMeta[] = [
   },
 ];
 
+// #64 之后每个动作先 readSpaces() 再写回，所以假 store 要真的存东西，
+// 否则测的是"追加"、跑的是"读不到任何清单"。
+const stored: SpaceMeta[] = [];
 const loadAll = vi.fn(async (): Promise<{
   spaces: SpaceMeta[];
   activeId: string | null;
   states: Map<string, { tabs: never[]; activeTabIndex: number }>;
 }> => ({ spaces: [], activeId: null, states: new Map() }));
-const saveSpacesList = vi.fn(async (_spaces: SpaceMeta[]) => {});
+const readSpaces = vi.fn(async (): Promise<SpaceMeta[]> => stored);
+const saveSpacesList = vi.fn(async (spaces: SpaceMeta[]) => {
+  stored.length = 0;
+  stored.push(...spaces);
+});
 
 vi.mock("./store", () => ({
   loadAll: () => loadAll(),
+  readSpaces: () => readSpaces(),
   saveSpacesList: (spaces: SpaceMeta[]) => saveSpacesList(spaces),
   saveActiveId: vi.fn(async () => {}),
   deleteSpaceData: vi.fn(async () => {}),
@@ -41,6 +49,8 @@ vi.mock("./store", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  stored.length = 0;
+  stored.push(...persisted);
   // 重置 store（persist 未启用，直接 setState 即可回到初始态）
   useSpaces.setState({
     spaces: [],
@@ -83,6 +93,8 @@ describe("useSpacesBoot", () => {
 
     const ids = useSpaces.getState().spaces.map((x) => x.id);
     expect(ids).toEqual(["sp-old", "sp-new"]);
+    // 写盘是"读回清单 → 只追加自己这一条 → 落盘"，所以等队列排空
+    await waitFor(() => expect(saveSpacesList).toHaveBeenCalled());
     expect(saveSpacesList.mock.lastCall?.[0].map((x) => x.id)).toEqual([
       "sp-old",
       "sp-new",
