@@ -15,6 +15,23 @@ const SIDEBAR_WIDTH_STORAGE_KEY = "tdsf.sidebar.width";
 const SIDEBAR_VIEW_STORAGE_KEY = "tdsf.sidebar.view";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "tdsf.sidebar.collapsed";
 
+/**
+ * 侧栏宽度对 CSS 暴露的自定义属性名。顶栏左侧簇用它把自己的宽度钉成侧栏宽度，
+ * 于是「顶栏工作区/通知之间的分隔线」与「侧栏右边界线」始终落在同一 x
+ * （用户 2026-09-20 实测：两条线差几十像素，看着像没对齐）。
+ * 走 CSS 变量而不是 React state：拖拽时 onResize 每帧都触发，重渲染整棵 App
+ * 换 1 像素的对齐不划算。
+ */
+export const SIDEBAR_WIDTH_CSS_VAR = "--tdsf-sidebar-w";
+
+/** 把面板像素宽度写进根元素；0（折叠）也照写，顶栏据此回退到内容宽 */
+function publishSidebarWidthVar(px: number) {
+  document.documentElement.style.setProperty(
+    SIDEBAR_WIDTH_CSS_VAR,
+    `${Math.max(0, Math.round(px))}px`,
+  );
+}
+
 function clampSidebarWidth(width: number): number {
   return Math.min(
     SIDEBAR_MAX_WIDTH,
@@ -94,6 +111,8 @@ export function useSidebarPanel(
   const persistSidebarCollapsed = useCallback((collapsed: boolean) => {
     if (collapsedRef.current === collapsed) return;
     collapsedRef.current = collapsed;
+    // 折叠 = 侧栏那条线不存在了，顶栏宽度回退到自身内容宽（见 Header 的 min-w-max）
+    if (collapsed) publishSidebarWidthVar(0);
     try {
       window.localStorage.setItem(
         SIDEBAR_COLLAPSED_STORAGE_KEY,
@@ -131,6 +150,7 @@ export function useSidebarPanel(
 
   const persistSidebarWidth = useCallback((next: number) => {
     sidebarWidthRef.current = next;
+    publishSidebarWidthVar(next);
     if (sidebarWidthWriteTimerRef.current) {
       window.clearTimeout(sidebarWidthWriteTimerRef.current);
     }
@@ -143,6 +163,14 @@ export function useSidebarPanel(
       }
     }, 200);
   }, []);
+
+  useEffect(() => {
+    // 首帧就钉好两条竖线的对齐：面板 defaultSize 用的是同一个 ref，不一定触发
+    // onResize，所以初始值自己发布一次。
+    publishSidebarWidthVar(
+      initialSidebarCollapsed ? 0 : sidebarWidthRef.current,
+    );
+  }, [initialSidebarCollapsed]);
 
   useEffect(() => {
     return () => {
