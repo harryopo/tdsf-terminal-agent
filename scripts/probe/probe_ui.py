@@ -203,23 +203,46 @@ AUDIT_JS = r"""
   // 注意不能用上面的 visible()：它把宽 <3px 的元素当不可见，而分隔线正好是
   // 1px —— 第一版因此永远跳过、报 0 违规，是量具自己造出来的假绿。这里只要求
   // 侧栏面板真的占地方（折叠时宽为 0，两条线没有可比性，如实跳过）。
+  //
+  // **为什么要横扫缩放**：2026-09-21 用户又报没对齐，而只量当前一档的探针报 0
+  // 违规 —— 漏的就是「改缩放之后」。旧实现把缩放系数写在消费方（CSS 变量存的是
+  // react-resizable-panels 的布局像素），改缩放会让面板重新布局却常常不触发
+  // onResize，变量停在旧值：CDP 实测同一窗口 1.05→1.2 歪 +44px、切回来歪 −70px。
+  // 横扫几档就把这类「只在换算里成立」的写法钉死。
   {
     const dv = document.querySelector('[data-testid="header-divider"]');
     const sp = document.querySelector('[data-testid="sidebar-panel"]');
-    const spRect = sp && sp.getBoundingClientRect();
-    if (dv && spRect && spRect.width > 3) {
-      const bw = parseFloat(getComputedStyle(sp).borderRightWidth) || 0;
-      // 侧栏那条线的左边缘 = 面板右边缘 - border 宽；分隔线要落在同一列
-      const delta = dv.getBoundingClientRect().left - (spRect.right - bw);
-      out.meta.dividerDeltaPx = Math.round(delta * 10) / 10;
-      if (Math.abs(delta) > 1) {
-        bump('dividerMisaligned', dv, {
-          deltaPx: Math.round(delta * 10) / 10,
-          dividerLeft: Math.round(dv.getBoundingClientRect().left),
-          sidebarLineLeft: Math.round(spRect.right - bw),
-        });
+    const root = document.documentElement;
+    const origZoom = root.style.getPropertyValue('--app-zoom');
+    const restore = () => {
+      if (origZoom) root.style.setProperty('--app-zoom', origZoom);
+      else root.style.removeProperty('--app-zoom');
+    };
+    const deltas = {};
+    try {
+      for (const z of [origZoom || '1', '1.2', '0.9']) {
+        root.style.setProperty('--app-zoom', z);
+        // 改完立刻读 rect：强制同步布局，量的是这一档缩放下的真实位置
+        const spRect = sp && sp.getBoundingClientRect();
+        if (!dv || !spRect || spRect.width <= 3) break;
+        const bw = parseFloat(getComputedStyle(sp).borderRightWidth) || 0;
+        // 侧栏那条线的左边缘 = 面板右边缘 - border 宽；分隔线要落在同一列
+        const delta = dv.getBoundingClientRect().left - (spRect.right - bw);
+        deltas[z] = Math.round(delta * 10) / 10;
+        if (Math.abs(delta) > 1) {
+          bump('dividerMisaligned', dv, {
+            deltaPx: deltas[z],
+            zoom: z,
+            dividerLeft: Math.round(dv.getBoundingClientRect().left),
+            sidebarLineLeft: Math.round(spRect.right - bw),
+          });
+        }
       }
+    } finally {
+      restore();
     }
+    out.meta.dividerDeltaPx = deltas[origZoom || '1'] ?? null;
+    out.meta.dividerDeltaByZoom = deltas;
   }
   freeze.remove();
   return out;
