@@ -78,6 +78,9 @@ describe("openSshShellForEnv", () => {
       user: "root",
       port: 22,
     });
+    // #101：必须标成"为这个标签页开的连接"。少了它，连接成功订阅会当成工作区
+    // 级连接处理——再补建一条 tab 并改写工作区主会话，用户看到"像复制了一份 shell"。
+    expect(connectWithSaved.mock.calls[0][1]).toMatchObject({ origin: "tab" });
   });
 
   it("端口不同就不算同一台机器（不许拿错凭据去连）", async () => {

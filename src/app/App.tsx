@@ -91,6 +91,8 @@ import {
   openSshShellForEnv,
   wantsPerTabSshShell,
 } from "@/modules/spaces/lib/openSpaceShell";
+// TDSF #101（2026-09-21）：连接成功后"该落在哪个终端标签页"的决策真源（可测）
+import { planSshTabTarget } from "@/modules/spaces/lib/sshConnectedPlan";
 // TDSF (P4-T4.1): SSH 远程资源管理器
 import {
   isSessionConnected,
@@ -879,6 +881,18 @@ export default function App() {
         // 资源管理器会一直显示错误而非远程文件。
         useWorkspaceFsStore.getState().setFatalError(null);
 
+        // TDSF #101（2026-09-21）：为单个标签页开的连接（openSshShellForEnv）到
+        // 这里就停。往下三段都是"工作区级连接"才该有的待遇——按 host 匹配不到就
+        // 新建 Space、把 space.env.sessionId 改写成它、给它抢一个终端落点。
+        // 对 tab 专用连接来说这些全是副作用：改写会把工作区主会话指针（重连锚点、
+        // 连接失败时的回收判据）挪到一条"关掉那个标签页就该释放"的连接上，
+        // 抢落点则造出"一条会话两条 tab"（用户说的"像复制了一份 shell"）。
+        // 它自己那条 tab 由调用方建好并绑定，这里只把活动会话跟上。
+        if (session.origin === "tab") {
+          useSshStore.getState().setActiveSession(session.id);
+          continue;
+        }
+
         // TDSF 修复 2026-08-31（用户实测：新建本地工作区被自动导向服务器）:
         // 连接成功只允许绑定"专属 SSH Space"（env.kind==="ssh" 且 host/user 匹配），
         // 绝不改写本地/WSL Space——Space 类型由创建时的用户意图决定。
@@ -971,67 +985,43 @@ export default function App() {
         const targetSpaceId = targetSpace.id;
         const currentTabs = tabsRef.current;
         const currentActiveId = activeIdRef.current;
-        // TDSF 修复 2026-08-07: tab 绑定条件放宽——绑定的 sessionId 若已失效
-        // (幽灵 id: 服务器关闭/断线后残留), 允许新会话重绑。此前要求
-        // `!t.sshSessionId || t.sshSessionId === session.id`, 断线重连后旧 tab
-        // 绑着失效 id 永远匹配不上 → 终端显示本地。
-        const sessionExists = (id: string | null | undefined) =>
-          !!id && useSshStore.getState().sessions.some((s) => s.id === id);
-        const canRebind = (id: string | null | undefined) =>
-          !id || !sessionExists(id) || id === session.id;
         // 在 subscribe 回调里用 getState() 读取最新远程路径, 避免 stale closure
         const remoteCwd =
           useSshStore.getState().currentPathBySession[session.id] ?? "/";
+        // TDSF 修复 2026-08-07: 绑定条件放宽——绑定的 sessionId 若已失效
+        // (幽灵 id: 服务器关闭/断线后残留), 允许新会话重绑。此前要求
+        // `!t.sshSessionId || t.sshSessionId === session.id`, 断线重连后旧 tab
+        // 绑着失效 id 永远匹配不上 → 终端显示本地。
         // TDSF 修复 2026-08-31: 只在"属于本 Space 且是本地 shell（未绑会话）或
-        // 幽灵绑定"的 terminal tab 上重绑。绝不跨 Space 抢占——此前 canRebind
-        // 对无 sshSessionId 的本地 tab 返回 true，若 targetSpace 判定失误会把
-        // 别的工作区的本地终端改成 SSH。
-        let targetTab = currentTabs.find(
-          (t) =>
-            t.spaceId === targetSpaceId &&
-            t.kind === "terminal" &&
-            t.sshSessionId === session.id,
-        );
-        if (!targetTab) {
-          targetTab = currentTabs.find(
-            (t) =>
-              t.spaceId === targetSpaceId &&
-              t.id === currentActiveId &&
-              t.kind === "terminal" &&
-              canRebind(t.sshSessionId),
-          );
-        }
-        if (!targetTab) {
-          targetTab = currentTabs.find(
-            (t) =>
-              t.spaceId === targetSpaceId &&
-              t.kind === "terminal" &&
-              canRebind(t.sshSessionId),
-          );
-        }
-        if (targetTab) {
-          // TDSF 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（服务器标识已在
-          // Space 名 / 左下角状态栏展示，tab 不重复显示 user@host）。
-          updateTab(targetTab.id, {
-            sshSessionId: session.id,
-            customTitle: "shell",
-            cwd: remoteCwd,
-          });
-          // 切到该 tab, 让用户立即看到 SSH 终端
-          if (targetTab.id !== currentActiveId) {
-            setActiveId(targetTab.id);
-          }
-        } else {
-          // TDSF 修复 2026-08-31: 新建的 SSH Space 里还没有任何 terminal tab
-          // （连接来自 SshExplorer 面板 / 欢迎页 cold tab 等无 Space 上下文入口），
-          // 主动补一个 shell tab，避免"连上了却没有终端"。
-          const tabId = newTabInSpace(targetSpaceId, remoteCwd);
-          updateTab(tabId, {
-            sshSessionId: session.id,
-            customTitle: "shell",
-            cwd: remoteCwd,
-          });
-          setActiveId(tabId);
+        // 幽灵绑定"的 terminal tab 上重绑，绝不跨 Space 抢占；一个终端都没有时
+        // 补一个，避免"连上了却没有终端"。
+        // TDSF #101: 这套三级查找搬进纯函数 `planSshTabTarget`（App.tsx 里的订阅
+        // 回调没法测，判据原样保留）。
+        const sessionExists = (id: string | null | undefined) =>
+          !!id && useSshStore.getState().sessions.some((s) => s.id === id);
+        const target = planSshTabTarget({
+          origin: session.origin,
+          sessionId: session.id,
+          targetSpaceId,
+          activeTabId: currentActiveId,
+          tabs: currentTabs,
+          sessionExists,
+        });
+        if (target.action === "none") continue;
+        const bindTabId =
+          target.action === "create"
+            ? newTabInSpace(targetSpaceId, remoteCwd)
+            : target.tabId;
+        // TDSF 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（服务器标识已在
+        // Space 名 / 左下角状态栏展示，tab 不重复显示 user@host）。
+        updateTab(bindTabId, {
+          sshSessionId: session.id,
+          customTitle: "shell",
+          cwd: remoteCwd,
+        });
+        // 切到该 tab, 让用户立即看到 SSH 终端
+        if (bindTabId !== currentActiveId) {
+          setActiveId(bindTabId);
         }
       }
 

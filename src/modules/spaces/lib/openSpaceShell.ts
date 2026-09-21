@@ -45,7 +45,11 @@ export async function openSshShellForEnv(
     });
     return null;
   }
-  const sessionId = await useSshStore.getState().connectWithSaved(profile);
+  // #101：标成"为这个标签页开的连接"。连接成功订阅据此**不**补建 tab、也不把
+  // 工作区主会话指针挪过来——否则调用方建的 tab 和订阅补的 tab 会绑同一条会话。
+  const sessionId = await useSshStore.getState().connectWithSaved(profile, {
+    origin: "tab",
+  });
   return sessionId;
 }
 
