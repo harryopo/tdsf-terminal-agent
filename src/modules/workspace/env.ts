@@ -58,6 +58,26 @@ export function currentWorkspaceEnv(): WorkspaceEnv {
   return useWorkspaceEnvStore.getState().env;
 }
 
+/**
+ * 交给**只认 local / wsl** 的本地命令（`fs_*` / `git_*` / `lsp_*` / `watch_*` / `pty_open` …）
+ * 的环境参数。
+ *
+ * Rust 侧的 `WorkspaceEnv` 枚举**没有 ssh 变体**（`src-tauri/src/modules/workspace.rs:313`），
+ * 传 `{kind:"ssh"}` 会让命令在反序列化阶段就整体失败 —— 用户实测报
+ * `invalid args 'workspace' for command 'fs_read_dir': unknown variant 'ssh',
+ * expected 'local' or 'wsl'`，表现是"切到本地工作区后资源管理器不刷新，要点刷新才行"。
+ *
+ * 语义上也是对的：SSH 工作区的文件操作走 `fsb_*` + sessionId（另一条通道），
+ * 真按本地盘寻址时那台机器就是本地盘。WSL 原样透传（Rust 认这个变体）。
+ *
+ * 需要**身份**的地方（scope key、"这是不是远端"的判断）请继续用 `currentWorkspaceEnv()`，
+ * 别拿本函数当"当前环境"。
+ */
+export function ipcWorkspaceEnv(): WorkspaceEnv {
+  const env = currentWorkspaceEnv();
+  return env.kind === "ssh" ? LOCAL_WORKSPACE : env;
+}
+
 export function workspaceScopeKey(env: WorkspaceEnv): string {
   if (env.kind === "wsl") return `wsl:${env.distro}`;
   if (env.kind === "ssh")

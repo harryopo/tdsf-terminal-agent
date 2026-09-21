@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import {
   ArrowDown01Icon,
   Folder01Icon,
@@ -183,7 +183,7 @@ function CurrentSegmentDropdown({
       const dirs = await invoke<string[]>("list_subdirs", {
         path,
         showHidden,
-        workspace: currentWorkspaceEnv(),
+        workspace: ipcWorkspaceEnv(),
       });
       setChildren(dirs);
     } catch (e) {

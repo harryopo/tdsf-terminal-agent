@@ -2,7 +2,7 @@ import { decodeUtf8, encodeUtf8, sftpRead, sftpStat, sftpWrite } from "@/lib/sft
 import { notifyDocumentSaved } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useSshStore } from "@/modules/ssh-explorer";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -98,7 +98,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
     const mtime = await invoke<number>("fs_write_file", {
       path,
       content: restoreEol(content, eolRef.current),
-      workspace: currentWorkspaceEnv(),
+      workspace: ipcWorkspaceEnv(),
       source: "editor",
     });
     diskMtimeRef.current = mtime;
@@ -123,7 +123,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
       } else {
         const stat = await invoke<FileStat>("fs_stat", {
           path,
-          workspace: currentWorkspaceEnv(),
+          workspace: ipcWorkspaceEnv(),
         }).catch(() => null);
         mtime = stat?.mtime ?? null;
       }
@@ -211,7 +211,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
       }
       return invoke<ReadResult>("fs_read_file", {
         path,
-        workspace: currentWorkspaceEnv(),
+        workspace: ipcWorkspaceEnv(),
         force,
       });
     },

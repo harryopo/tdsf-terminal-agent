@@ -1,4 +1,4 @@
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { appConfigDir, join } from "@tauri-apps/api/path";
@@ -28,7 +28,7 @@ export async function themeFilePath(id: string): Promise<string> {
 
 export async function writeThemeFile(theme: Theme): Promise<string> {
   const dir = await themesDir();
-  const ws = currentWorkspaceEnv();
+  const ws = ipcWorkspaceEnv();
   const dirExists = await invoke("fs_stat", { path: dir, workspace: ws })
     .then(() => true)
     .catch(() => false);
@@ -48,7 +48,7 @@ export async function writeThemeFile(theme: Theme): Promise<string> {
 export async function deleteThemeFile(id: string): Promise<void> {
   try {
     const path = await themeFilePath(id);
-    await invoke("fs_delete", { path, workspace: currentWorkspaceEnv() });
+    await invoke("fs_delete", { path, workspace: ipcWorkspaceEnv() });
   } catch {
     /* file may not exist yet — nothing to clean up */
   }

@@ -1,5 +1,5 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -199,7 +199,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           path,
           showHidden: showHiddenRef.current,
           gitDecorations: gitDecorationsRef.current,
-          workspace: currentWorkspaceEnv(),
+          workspace: ipcWorkspaceEnv(),
         });
       }
 
@@ -420,7 +420,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         } else {
           const cmd =
             pendingCreate.kind === "dir" ? "fs_create_dir" : "fs_create_file";
-          await invoke(cmd, { path, workspace: currentWorkspaceEnv() });
+          await invoke(cmd, { path, workspace: ipcWorkspaceEnv() });
         }
         await fetchChildren(pendingCreate.parentPath);
       } catch (e) {
@@ -467,7 +467,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           await invoke("fs_rename", {
             from: renaming,
             to,
-            workspace: currentWorkspaceEnv(),
+            workspace: ipcWorkspaceEnv(),
           });
         }
         options?.onPathRenamed?.(renaming, to);
@@ -488,7 +488,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         if (sftp) {
           await invoke("fsb_delete", { ...sftp, path });
         } else {
-          await invoke("fs_delete", { path, workspace: currentWorkspaceEnv() });
+          await invoke("fs_delete", { path, workspace: ipcWorkspaceEnv() });
         }
         options?.onPathDeleted?.(path);
         await fetchChildren(dirname(path));
@@ -520,7 +520,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           await invoke("fs_rename", {
             from,
             to,
-            workspace: currentWorkspaceEnv(),
+            workspace: ipcWorkspaceEnv(),
           });
         }
         options?.onPathRenamed?.(from, to);

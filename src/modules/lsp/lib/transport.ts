@@ -1,4 +1,4 @@
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Transport } from "codemirror-languageserver";
 
@@ -63,7 +63,7 @@ export class TauriLspTransport implements Transport {
       env: config.env ?? null,
       root: config.root,
       maxRssMb: config.maxMemoryMb ?? null,
-      workspace: currentWorkspaceEnv(),
+      workspace: ipcWorkspaceEnv(),
       onMessage,
       onExit,
     });

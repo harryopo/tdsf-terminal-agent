@@ -1,4 +1,4 @@
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { type Completion, startCompletion } from "@codemirror/autocomplete";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -40,7 +40,7 @@ export async function pathCompletions(
     entries = await invoke<DirEntry[]>("fs_read_dir", {
       path: dir,
       showHidden: base.startsWith("."),
-      workspace: currentWorkspaceEnv(),
+      workspace: ipcWorkspaceEnv(),
     });
   } catch {
     return null;

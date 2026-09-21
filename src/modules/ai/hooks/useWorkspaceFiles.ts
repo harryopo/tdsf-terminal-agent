@@ -1,4 +1,4 @@
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
@@ -29,7 +29,7 @@ function fetchFiles(root: string): Promise<CacheEntry> {
   if (existing) return existing;
   const promise = invoke<ListFilesResult>("fs_list_files", {
     root,
-    workspace: currentWorkspaceEnv(),
+    workspace: ipcWorkspaceEnv(),
   })
     .then((res) => {
       const entry: CacheEntry = {

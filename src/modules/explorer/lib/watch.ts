@@ -1,5 +1,5 @@
 import { isTauriRuntime } from "@/lib/tauriRuntime";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -13,7 +13,7 @@ export function watchAdd(paths: string[]): void {
   if (!isTauriRuntime()) return;
   void invoke("fs_watch_add", {
     paths,
-    workspace: currentWorkspaceEnv(),
+    workspace: ipcWorkspaceEnv(),
   }).catch(() => {});
 }
 
@@ -23,7 +23,7 @@ export function watchRemove(paths: string[]): void {
   if (!isTauriRuntime()) return;
   void invoke("fs_watch_remove", {
     paths,
-    workspace: currentWorkspaceEnv(),
+    workspace: ipcWorkspaceEnv(),
   }).catch(() => {});
 }
 

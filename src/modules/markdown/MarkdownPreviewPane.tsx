@@ -1,6 +1,6 @@
 import { MarkdownCode } from "@/components/ai-elements/markdown-code";
 import { cn } from "@/lib/utils";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
@@ -34,7 +34,7 @@ export function MarkdownPreviewPane({ path, visible, onSetView }: Props) {
     setStatus({ kind: "loading" });
     invoke<ReadResult>("fs_read_file", {
       path,
-      workspace: currentWorkspaceEnv(),
+      workspace: ipcWorkspaceEnv(),
     })
       .then((res) => {
         if (cancelled) return;

@@ -1,7 +1,7 @@
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { setThemeId as persistThemeId } from "@/modules/settings/store";
 import type { Tab } from "@/modules/tabs";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
@@ -144,7 +144,7 @@ export function useThemeFileEditing(params: Params = {}) {
             try {
               const res = await invoke<{ kind: string; content?: string }>(
                 "fs_read_file",
-                { path: event.payload.path, workspace: currentWorkspaceEnv() },
+                { path: event.payload.path, workspace: ipcWorkspaceEnv() },
               );
               if (res.kind !== "text" || typeof res.content !== "string")
                 return;
