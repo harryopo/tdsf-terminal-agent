@@ -159,7 +159,7 @@ describe("#65 归组键", () => {
   });
 
   it("WSL 与本机终端下的同名目录不算同一组（不是同一台机器）", () => {
-    const spaces = [
+    const spaces: SpaceMeta[] = [
       space("ws-local", "/home/me/app"),
       {
         ...space("ws-wsl", "/home/me/app"),
