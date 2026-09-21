@@ -6,6 +6,10 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useShortcutLabel } from "@/modules/shortcuts";
+import {
+  isSessionConnected,
+  useSshStore,
+} from "@/modules/ssh-explorer/sshStore";
 import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
 import {
   ArrowDown01Icon,
@@ -43,11 +47,25 @@ type Props = {
 
 type Edge = "top" | "bottom";
 
-/** 环境徽章文案（命名撞车时凭环境可分：本地 / WSL·发行版 / user@host） */
-function envBadge(env: SpaceMeta["env"]): string {
-  if (env.kind === "ssh") return env.label || `${env.user}@${env.host}`;
-  if (env.kind === "wsl") return `WSL · ${env.distro}`;
-  return "本地";
+/**
+ * 行内小字副标：说「这个工作区现在落在哪儿、还需不需要我动手」，不重复工作区名。
+ *
+ * TDSF 2026-09-20（用户实测）：原来这里放的是"环境徽章"，SSH 工作区渲染成
+ * `user@host`——跟工作区名一模一样，等于把名字抄了两遍。改成状态/落点：
+ * SSH 看有没有活着的会话（决定要不要重连），其余看落点。落点与工作区名重合时
+ * 只留类型词，否则又变成"名字抄两遍"（本地工作区常以目录名命名）。
+ */
+function spaceSubtitle(space: SpaceMeta, connected: boolean): string {
+  const { env, name, root } = space;
+  if (env.kind === "ssh")
+    return connected ? "SSH · 已连接" : "SSH · 未连接";
+  const kind = env.kind === "wsl" ? "WSL" : "本地";
+  const detail =
+    env.kind === "wsl"
+      ? env.distro
+      : (root?.split(/[\\/]/).filter(Boolean).slice(-1)[0] ?? null);
+  if (!detail || name.includes(detail)) return kind;
+  return `${kind} · ${detail}`;
 }
 
 type DragState = {
@@ -94,6 +112,7 @@ export function SpaceSwitcher({
   const activeId = useSpaces((s) => s.activeId);
   const setActive = useSpaces((s) => s.setActive);
   const rename = useSpaces((s) => s.rename);
+  const sshSessions = useSshStore((s) => s.sessions);
   const shortcut = useShortcutLabel("space.overview");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() =>
@@ -110,6 +129,13 @@ export function SpaceSwitcher({
   const [overlay, setOverlay] = useState<{ x: number; y: number } | null>(null);
 
   const current = spaces.find((s) => s.id === activeId);
+
+  // 小字副标要区分"这个 Space 的 SSH 会话还活着吗"——只有真正 connected 且
+  // 拿到 Rust 句柄才算（判据复用 sshStore.isSessionConnected，不另立一套）。
+  const liveSshIds = useMemo(
+    () => new Set(sshSessions.filter(isSessionConnected).map((s) => s.id)),
+    [sshSessions],
+  );
 
   const tabsBySpace = useMemo(() => {
     const m = new Map<string, Tab[]>();
@@ -296,6 +322,12 @@ export function SpaceSwitcher({
               canDelete={spaces.length >= 1}
               expanded={expanded.has(sp.id)}
               editing={editingId === sp.id}
+              subtitle={spaceSubtitle(
+                sp,
+                sp.env.kind === "ssh" && sp.env.sessionId
+                  ? liveSshIds.has(sp.env.sessionId)
+                  : false,
+              )}
               dragging={dragging}
               drop={drop}
               draggingTabFromOther={
@@ -363,6 +395,8 @@ type SpaceRowProps = {
   canDelete: boolean;
   expanded: boolean;
   editing: boolean;
+  /** 名字后的小字：状态/落点，不重复工作区名（见 spaceSubtitle） */
+  subtitle: string;
   dragging: { kind: "space" | "tab"; id: string | number } | null;
   drop: DropTarget | null;
   draggingTabFromOther: boolean;
@@ -391,6 +425,7 @@ function SpaceRow({
   canDelete,
   expanded,
   editing,
+  subtitle,
   dragging,
   drop,
   draggingTabFromOther,
@@ -470,9 +505,10 @@ function SpaceRow({
         ) : (
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
             {space.name}
-            {/* 环境徽章：命名撞车时（如 WSL 用户名 == 服务器用户名）凭环境可分 */}
+            {/* 小字=状态/落点，不再重复工作区名（2026-09-20 用户实测：SSH 工作区
+                曾把 `user@host` 抄两遍）；命名撞车时仍靠它区分本地/WSL/服务器 */}
             <span className="ml-1.5 text-[10px] font-normal text-muted-foreground/60">
-              {envBadge(space.env)}
+              {subtitle}
             </span>
           </span>
         )}
