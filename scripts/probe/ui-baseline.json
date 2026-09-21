@@ -6,7 +6,8 @@
       "lowContrast": 0,
       "smallHitTarget": 0,
       "missingName": 0,
-      "dividerMisaligned": 0
+      "dividerMisaligned": 0,
+      "controlOutsideLeftCluster": 0
     },
     "http://127.0.0.1:9300": {
       "clippedText": 0,
@@ -14,7 +15,8 @@
       "lowContrast": 0,
       "smallHitTarget": 0,
       "missingName": 0,
-      "dividerMisaligned": 0
+      "dividerMisaligned": 0,
+      "controlOutsideLeftCluster": 0
     }
   },
   "min-window": {
@@ -24,7 +26,8 @@
       "lowContrast": 0,
       "smallHitTarget": 0,
       "missingName": 0,
-      "dividerMisaligned": 0
+      "dividerMisaligned": 0,
+      "controlOutsideLeftCluster": 0
     },
     "http://127.0.0.1:9300 [emulated 430x290]": {
       "clippedText": 0,
@@ -32,7 +35,8 @@
       "lowContrast": 0,
       "smallHitTarget": 0,
       "missingName": 0,
-      "dividerMisaligned": 0
+      "dividerMisaligned": 0,
+      "controlOutsideLeftCluster": 0
     }
   }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""真机 UI 审计：通过 CDP 在 dev 实例里量四类"看不见的显示缺陷"。
+"""真机 UI 审计：通过 CDP 在 dev 实例里量七类"看不见的显示缺陷"。
 
 背景：这类缺陷（文字被裁切、对比度不足、命中区过小、图标按钮没有可访问名）
 在 jsdom 里量不出来——jsdom 不做布局。只有真机 webview 的 scrollWidth /
@@ -33,6 +33,7 @@ RULES = (
     "smallHitTarget",
     "missingName",
     "dividerMisaligned",
+    "controlOutsideLeftCluster",
 )
 
 # 一次性在页面里跑完全部规则，只把违规项带回来（终端 xterm 子树整体跳过：
@@ -49,7 +50,7 @@ AUDIT_JS = r"""
     meta: { url: location.href, w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
     rules: {},
   };
-  for (const k of ['clippedText', 'inputTextOverflow', 'lowContrast', 'smallHitTarget', 'missingName', 'dividerMisaligned']) {
+  for (const k of ['clippedText', 'inputTextOverflow', 'lowContrast', 'smallHitTarget', 'missingName', 'dividerMisaligned', 'controlOutsideLeftCluster']) {
     out.rules[k] = { count: 0, samples: [] };
   }
   const bump = (k, el, detail) => {
@@ -243,6 +244,37 @@ AUDIT_JS = r"""
     }
     out.meta.dividerDeltaPx = deltas[origZoom || '1'] ?? null;
     out.meta.dividerDeltaByZoom = deltas;
+  }
+  // ── 7. 顶栏左簇那两个控件（⌘ / 通知）没贴在左簇右边界 ──────────────
+  // 用户 2026-09-21 说的「通知那俩 UI 右对齐」= **顶栏左簇（宽度跟着侧栏）的最右侧**，
+  // 不是窗口右端。第一版理解错了搬到右簇，被当场退回，所以这句原话钉成规则：
+  //   ① 两个控件必须整体在分隔线左边（不许跑到窗口那头）
+  //   ② 最右那个（通知）必须顶着左簇右边界（不许缩在簇中间 —— 那是改动前的旧位置）
+  // jsdom 不做布局，这条只有真机能量，判据与规则 6 同源。
+  {
+    const cluster = document.querySelector('[data-testid="header-left-cluster"]');
+    const cr = cluster && cluster.getBoundingClientRect();
+    if (cr && cr.width > 0) {
+      for (const sel of ['header-command-palette', 'header-notification-bell']) {
+        const el = document.querySelector(`[data-testid="${sel}"]`);
+        if (!el) {
+          bump('controlOutsideLeftCluster', cluster, { reason: `左簇里找不到 ${sel}` });
+          continue;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.right > cr.right + 1) {
+          bump('controlOutsideLeftCluster', el, {
+            reason: '跑出了左簇', control: sel,
+            controlRight: Math.round(r.right), clusterRight: Math.round(cr.right),
+          });
+        } else if (sel === 'header-notification-bell' && cr.right - r.right > 2) {
+          bump('controlOutsideLeftCluster', el, {
+            reason: '没有顶到左簇右边界', control: sel,
+            gapPx: Math.round((cr.right - r.right) * 10) / 10,
+          });
+        }
+      }
+    }
   }
   freeze.remove();
   return out;
