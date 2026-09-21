@@ -11,6 +11,7 @@ import {
   useSshStore,
 } from "@/modules/ssh-explorer/sshStore";
 import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
+import { effectiveLeafSsh, findLeafCwd } from "@/modules/terminal/lib/panes";
 import {
   ArrowDown01Icon,
   ArrowRight01Icon,
@@ -82,11 +83,35 @@ type DropTarget =
   | { kind: "tab"; tabId: number; edge: Edge }
   | { kind: "into-space"; spaceId: string };
 
-function subtitleFor(tab: Tab): string | null {
+/**
+ * 标签页这一行的**实时**落点。
+ *
+ * 不能读 `tab.cwd` —— 那是建 tab 那一刻的快照，之后没人再写它，所以用户在 shell 里
+ * `cd` 到 `/usr/bin`，下拉里还写着 `/`（2026-09-21 用户实测）。口径与状态栏、
+ * 资源管理器保持一致：
+ * - SSH：跟着**这个 tab 自己那条会话**的 OSC7 路径（#89 之后每条 tab 一条会话）；
+ * - 本地：跟着可见 leaf 的 cwd（OSC7 由 `setLeafCwd` 写进 paneTree）。
+ * 拿不到就返回 null（宁可少写一行，也不写一个会撒谎的路径）。
+ */
+function liveCwdOf(
+  tab: Tab,
+  sshPaths: Record<string, string>,
+): string | null {
+  if (tab.kind !== "terminal") return null;
+  const ssh = effectiveLeafSsh(
+    tab.paneTree,
+    tab.activeLeafId,
+    tab.sshSessionId,
+  );
+  if (ssh) return sshPaths[ssh] ?? null;
+  return findLeafCwd(tab.paneTree, tab.activeLeafId) ?? tab.cwd ?? null;
+}
+
+function subtitleFor(tab: Tab, cwd: string | null): string | null {
   if (tab.kind === "terminal") {
-    if (!tab.cwd) return null;
-    const segs = tab.cwd.split(/[\\/]/).filter(Boolean);
-    return segs.slice(-2).join("/") || tab.cwd;
+    if (!cwd) return null;
+    const segs = cwd.split(/[\\/]/).filter(Boolean);
+    return segs.slice(-2).join("/") || cwd;
   }
   if (tab.kind === "editor" || tab.kind === "markdown") {
     const segs = tab.path.split(/[\\/]/).filter(Boolean);
@@ -113,6 +138,7 @@ export function SpaceSwitcher({
   const setActive = useSpaces((s) => s.setActive);
   const rename = useSpaces((s) => s.rename);
   const sshSessions = useSshStore((s) => s.sessions);
+  const sshPaths = useSshStore((s) => s.currentPathBySession);
   const shortcut = useShortcutLabel("space.overview");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() =>
@@ -328,6 +354,7 @@ export function SpaceSwitcher({
                   ? liveSshIds.has(sp.env.sessionId)
                   : false,
               )}
+              tabCwd={(t) => liveCwdOf(t, sshPaths)}
               dragging={dragging}
               drop={drop}
               draggingTabFromOther={
@@ -397,6 +424,8 @@ type SpaceRowProps = {
   editing: boolean;
   /** 名字后的小字：状态/落点，不重复工作区名（见 spaceSubtitle） */
   subtitle: string;
+  /** 标签页那一行的实时落点（见 liveCwdOf），不读 tab.cwd 那个建 tab 时的快照 */
+  tabCwd: (tab: Tab) => string | null;
   dragging: { kind: "space" | "tab"; id: string | number } | null;
   drop: DropTarget | null;
   draggingTabFromOther: boolean;
@@ -426,6 +455,7 @@ function SpaceRow({
   expanded,
   editing,
   subtitle,
+  tabCwd,
   dragging,
   drop,
   draggingTabFromOther,
@@ -550,6 +580,7 @@ function SpaceRow({
             <TabRow
               key={t.id}
               tab={t}
+              cwd={tabCwd(t)}
               dragging={dragging}
               drop={drop}
               onPointerDown={onPointerDown}
@@ -572,6 +603,7 @@ function SpaceRow({
 
 function TabRow({
   tab,
+  cwd,
   dragging,
   drop,
   onPointerDown,
@@ -581,6 +613,8 @@ function TabRow({
   onClose,
 }: {
   tab: Tab;
+  /** 实时落点（终端类标签页），由 SpaceRow 用 liveCwdOf 算好传进来 */
+  cwd: string | null;
   dragging: { kind: "space" | "tab"; id: string | number } | null;
   drop: DropTarget | null;
   onPointerDown: (
@@ -593,7 +627,7 @@ function TabRow({
   onJump: () => void;
   onClose: () => void;
 }) {
-  const subtitle = subtitleFor(tab);
+  const subtitle = subtitleFor(tab, cwd);
   const isDragging = dragging?.kind === "tab" && dragging.id === tab.id;
   const reorderEdge =
     drop?.kind === "tab" && drop.tabId === tab.id ? drop.edge : null;
