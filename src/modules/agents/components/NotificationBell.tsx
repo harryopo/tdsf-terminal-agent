@@ -253,6 +253,7 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
           size="icon"
           className="relative size-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           title="智能体通知"
+          data-testid="header-notification-bell"
         >
           <HugeiconsIcon
             icon={Notification01Icon}

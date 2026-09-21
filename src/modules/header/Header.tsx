@@ -4,10 +4,12 @@
 // 定制后: 单层顶栏整合所有功能，避免双层 UI 冲突
 //
 // 布局（h-10, 40px）:
-//   左: [侧栏切换] [Agent 状态 pill]        ← 宽度跟着侧栏，分隔线才对齐
+//   左: [侧栏切换] [Agent 状态 pill] —————— [命令面板] [NotificationBell]
+//       ↑ 整簇宽度跟着侧栏（分隔线才对齐），⌘ 与通知 ml-auto 顶到簇的右边界
 //   中: [SpaceSwitcher] [TabBar] (flex-1)
-//   右: [命令面板] [NotificationBell] [SearchInline] [主题切换] [翻译] [设置] [WindowControls]
-//   TDSF 2026-09-21（用户钦定）：命令面板与通知从左侧簇挪到右簇统一右对齐；
+//   右: [SearchInline] [主题切换] [翻译] [设置] [WindowControls]
+//   TDSF 2026-09-21（用户实测纠正）：「右对齐」指的是顶栏左簇（= 侧栏那一栏宽度）
+//   的最右侧，不是窗口右端；位置大致还在原来那里，只是从靠左改成靠右顶格。
 //   「切换模式」右边那个 mood 笑脸删掉 —— 状态 pill 已经把同一件事说过了。
 import { Button } from "@/components/ui/button";
 import { WindowControls } from "@/components/WindowControls";
@@ -162,10 +164,11 @@ export function Header({
         IS_MAC ? "pl-20 pr-2" : "pr-0"
       }`}
     >
-      {/* ===== 左侧: 侧栏切换 + Agent 状态 pill（整簇宽度跟着侧栏，见 leftClusterStyle） ===== */}
+      {/* ===== 左侧: 侧栏切换 + 状态 pill +（靠右顶格）命令面板 + 通知 ===== */}
       <div
         className="flex shrink-0 items-center gap-0.5 pl-2 min-w-max"
         style={leftClusterStyle}
+        data-testid="header-left-cluster"
       >
         <Button
           onClick={onToggleSidebar}
@@ -184,6 +187,27 @@ export function Header({
         {/* TDSF 2026-07-31: 复用 AgentStatusPill, 与右下角状态栏风格统一,
             去除 Header 独立的彩色标签, 节省水平空间。 */}
         {!narrow && <AgentStatusPill data-testid="header-agent-status-pill" />}
+
+        {/* TDSF 2026-09-21（用户纠正："右对齐"= 顶栏左簇的最右侧，不是窗口右端）：
+            吃掉中间余量，把 ⌘ 与通知顶到簇的右边界（≈ 侧栏右边界）。
+            侧栏折叠时簇回退到内容宽（min-w-max），这层 spacer 分到 0 宽，按钮自然挨在一起。 */}
+        <div className="flex-1" aria-hidden="true" />
+
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          onClick={onOpenCommandPalette}
+          title="Command palette"
+          className="shrink-0 gap-1.5 rounded-md px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          data-testid="header-command-palette"
+        >
+          <HugeiconsIcon icon={CommandIcon} size={14} strokeWidth={1.75} />
+        </Button>
+
+        <NotificationBell
+          onActivate={onActivateAgent}
+          onActivateLocal={onActivateLocalAgent}
+        />
       </div>
 
       {/* 无 mx：左簇宽度已经按 gap-2 扣过 9px，再加水平边距就会错开侧栏那条线。
@@ -225,24 +249,7 @@ export function Header({
         <div data-tauri-drag-region className="h-full min-w-1 flex-1" />
       </div>
 
-      {/* TDSF 2026-09-21（用户钦定"剩下的通知那俩 UI 右对齐"）：命令面板与通知
-          从左侧簇挪到这里，和搜索框一起贴着右端。 */}
-      <Button
-        size="icon-sm"
-        variant="ghost"
-        onClick={onOpenCommandPalette}
-        title="Command palette"
-        className="shrink-0 gap-1.5 rounded-md px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        data-testid="header-command-palette"
-      >
-        <HugeiconsIcon icon={CommandIcon} size={14} strokeWidth={1.75} />
-      </Button>
-
-      <NotificationBell
-        onActivate={onActivateAgent}
-        onActivateLocal={onActivateLocalAgent}
-      />
-
+      {/* TDSF 2026-09-21：命令面板与通知在左簇靠右顶格（见上面），右簇从搜索框起。 */}
       <SearchInline ref={searchRef} target={searchTarget} compact={compact} />
 
       {/* ===== 右侧: 主题切换 + 设置 + 窗口控制 ===== */}
@@ -287,7 +294,7 @@ export function Header({
         </span>
       </Button>
 
-      {/* 通知与命令面板已移到右簇统一对齐（上面），这里不再按 IS_MAC 分叉 */}
+      {/* 通知与命令面板统一在左簇靠右顶格（全平台一份），这里不再有 IS_MAC 分叉 */}
       {settingsButton}
 
       {USE_CUSTOM_WINDOW_CONTROLS && (
