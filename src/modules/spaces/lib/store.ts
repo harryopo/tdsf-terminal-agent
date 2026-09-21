@@ -1,6 +1,5 @@
 import type { WorkspaceEnv } from "@/modules/workspace";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import type { SerializedTab } from "./serialize";
 
 export type SpaceMeta = {
   id: string;
@@ -11,11 +10,6 @@ export type SpaceMeta = {
   color?: number;
   createdAt: number;
   updatedAt: number;
-};
-
-export type SpaceState = {
-  tabs: SerializedTab[];
-  activeTabIndex: number;
 };
 
 const STORE_PATH = "tdsf-spaces.json";
@@ -29,22 +23,19 @@ const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 500 });
 export type LoadedSpaces = {
   spaces: SpaceMeta[];
   activeId: string | null;
-  states: Map<string, SpaceState>;
 };
 
 export async function loadAll(): Promise<LoadedSpaces> {
   const entries = await store.entries();
   let spaces: SpaceMeta[] = [];
   let activeId: string | null = null;
-  const states = new Map<string, SpaceState>();
   for (const [k, v] of entries) {
     if (k === KEY_SPACES) spaces = (v as SpaceMeta[]) ?? [];
     else if (k === KEY_ACTIVE) activeId = (v as string | null) ?? null;
-    else if (k.startsWith(STATE_PREFIX)) {
-      states.set(k.slice(STATE_PREFIX.length), v as SpaceState);
-    }
+    // #96 之后 `state:*` 是历史遗留键：老用户盘上还在，读回来只会污染清单，
+    // 所以在这里明确跳过（不是"没实现"，是不再消费）。
   }
-  return { spaces, activeId, states };
+  return { spaces, activeId };
 }
 
 export async function saveSpacesList(spaces: SpaceMeta[]): Promise<void> {
@@ -67,10 +58,10 @@ export async function saveActiveId(id: string | null): Promise<void> {
   await store.set(KEY_ACTIVE, id);
 }
 
-export async function saveState(id: string, state: SpaceState): Promise<void> {
-  await store.set(stateKey(id), state);
-}
-
+/**
+ * #96：删掉工作区时顺带清掉它可能残留的 `state:*` 旧键。
+ * 新数据不再写这个键，这里只负责把老用户盘上的遗留收走。
+ */
 export async function deleteSpaceData(id: string): Promise<void> {
   await store.delete(stateKey(id));
 }

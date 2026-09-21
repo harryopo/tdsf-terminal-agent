@@ -75,7 +75,6 @@ import {
   SpaceCreateDialog,
   SpaceSwitcher,
   type SpaceMeta,
-  useSpacePersistence,
   useSpaces,
   useSpacesBoot,
   WelcomeScreen,
@@ -321,13 +320,6 @@ export default function App() {
   useSpacesBoot({
     ready: launchCwdResolved,
     markBooted,
-  });
-
-  useSpacePersistence({
-    tabs,
-    activeId,
-    activeSpaceId: activeSpaceId ?? DEFAULT_SPACE_ID,
-    enabled: spacesHydrated,
   });
 
   const prevSpaceRef = useRef(activeSpaceId);
