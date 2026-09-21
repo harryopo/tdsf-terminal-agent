@@ -11,8 +11,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import type { WorkspaceEnv } from "@/modules/workspace";
 import { toast } from "sonner";
-import { openSshShellForEnv, wantsPerTabSshShell } from "./openSpaceShell";
-
+import {
+  __resetReconnectGuard,
+  openSshShellForEnv,
+  reconnectSshSpace,
+  wantsPerTabSshShell,
+} from "./openSpaceShell";
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn() } }));
 
 const env: WorkspaceEnv = {
@@ -121,5 +125,75 @@ describe("openSshShellForEnv", () => {
     expect(await openSshShellForEnv({ kind: "local" })).toBeNull();
     expect(connectWithSaved).not.toHaveBeenCalled();
     expect(loadSavedConnections).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// #102（2026-09-21 用户实测"点击打开已有工作区的时候，显示 sftp time out"）
+// ----------------------------------------------------------------------------
+// SSH 工作区的身份跨重启留着（#93），会话却随上个生命周期没了；启动自动连接只覆盖
+// "最近使用的那一台"。进这种工作区不重连，界面就按 SSH 渲染、左侧文件树拿着失效的
+// 会话号去开 SFTP，握手 10 秒后整块面板报 `[fsb] sftp session error: Timeout`。
+// 判据：① 命中保存凭据 → 以**工作区重连**身份连（autoConnect，不带 origin:"tab"，
+// 否则 #101 的闸门会让它没有落点）；② 连不上必须说话，不许静默显示成本地文件树；
+// ③ 同一个工作区重复触发只连一次。
+// ============================================================================
+describe("reconnectSshSpace — 进入失效的 SSH 工作区要主动重连", () => {
+  beforeEach(() => {
+    __resetReconnectGuard();
+  });
+
+  it("命中保存凭据 → 以 autoConnect 重连，且**不**标成标签页专用", async () => {
+    connectWithSaved.mockResolvedValue("s-reconnected");
+    const id = await reconnectSshSpace("space-1", env);
+    expect(id).toBe("s-reconnected");
+    expect(connectWithSaved).toHaveBeenCalledTimes(1);
+    expect(connectWithSaved.mock.calls[0][1]).toEqual({ autoConnect: true });
+  });
+
+  it("没有保存凭据 → null + 说清是哪台，不静默", async () => {
+    useSshStore.setState({ savedConnections: [] as never });
+    expect(await reconnectSshSpace("space-1", env)).toBeNull();
+    expect(connectWithSaved).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const desc = vi.mocked(toast.warning).mock.calls[0][1] as {
+      description: string;
+    };
+    expect(desc.description).toContain("root@10.0.0.8:22");
+  });
+
+  it("连不上（返回 null）也明示，不留「看着像连着」的界面", async () => {
+    connectWithSaved.mockResolvedValue(null);
+    expect(await reconnectSshSpace("space-1", env)).toBeNull();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+  });
+
+  it("同一个工作区并发触发只连一次（切进切出 / 重复渲染）", async () => {
+    let release: (v: string) => void = () => {};
+    connectWithSaved.mockImplementation(
+      () => new Promise<string>((resolve) => (release = resolve)),
+    );
+    const first = reconnectSshSpace("space-1", env);
+    const second = reconnectSshSpace("space-1", env);
+    // 取凭据是异步的，等第一次真发起连接后再放行
+    await vi.waitFor(() => expect(connectWithSaved).toHaveBeenCalledTimes(1));
+    release("s-x");
+    expect(await second).toBeNull();
+    expect(await first).toBe("s-x");
+    expect(connectWithSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("不同工作区各连各的（配对正向断言：闸门不许把别人也挡住）", async () => {
+    connectWithSaved.mockResolvedValue("s-x");
+    await Promise.all([
+      reconnectSshSpace("space-1", env),
+      reconnectSshSpace("space-2", env),
+    ]);
+    expect(connectWithSaved).toHaveBeenCalledTimes(2);
+  });
+
+  it("非 SSH 工作区不碰 store", async () => {
+    expect(await reconnectSshSpace("space-1", { kind: "local" })).toBeNull();
+    expect(connectWithSaved).not.toHaveBeenCalled();
   });
 });
