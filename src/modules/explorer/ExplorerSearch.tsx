@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import {
   Cancel01Icon,
   Folder01Icon,
@@ -117,7 +117,7 @@ export const ExplorerSearch = forwardRef<ExplorerSearchHandle, Props>(
             query: q,
             limit: 200,
             showHidden,
-            workspace: currentWorkspaceEnv(),
+            workspace: ipcWorkspaceEnv(),
           });
           if (alive) {
             setResults(res.hits);

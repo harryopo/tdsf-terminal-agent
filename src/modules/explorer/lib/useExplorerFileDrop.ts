@@ -1,5 +1,5 @@
 import { isTauriRuntime } from "@/lib/tauriRuntime";
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useRef, useState } from "react";
@@ -115,7 +115,7 @@ export function useExplorerFileDrop({
               ? invoke("fs_copy", {
                   sources: p.paths,
                   destDir: dir,
-                  workspace: currentWorkspaceEnv(),
+                  workspace: ipcWorkspaceEnv(),
                 })
               : (async () => {
                   let uploaded = 0;

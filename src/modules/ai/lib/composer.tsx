@@ -1,4 +1,4 @@
-import { currentWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { sftpRead } from "@/lib/sftp-bridge";
 import {
@@ -114,7 +114,7 @@ export function AiComposerProvider({ children }: ProviderProps) {
         | { kind: "toolarge"; size: number; limit: number };
       const result = await invoke<ReadResult>("fs_read_file", {
         path,
-        workspace: currentWorkspaceEnv(),
+        workspace: ipcWorkspaceEnv(),
       });
       if (result.kind !== "text") {
         // Binary/oversize files: skip (could surface a toast in future).
