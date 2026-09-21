@@ -9,19 +9,36 @@ import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 import { __resetAutoTypeLedger } from "@/modules/ai/lib/autoTypeLedger";
+import {
+  LiveMessageProvider,
+  __resetAutoTypeProvenance,
+} from "@/modules/ai/lib/autoTypeProvenance";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { ChatCodeBlock, ChatStreamingProvider } from "./chat-code";
 
+/**
+ * live = 「这条消息是本次运行里 AI 刚生成的」——自动打字的前提。
+ * 用例默认走 live=true；测出身闸门的用例显式传 false，或 "absent"（不包 Provider，
+ * 等价于知识库那类非消息渲染面）。
+ */
 function renderBlock(
   code: string,
   lang: string | null,
   streaming: boolean,
+  live: boolean | "absent" = true,
 ) {
-  return render(
+  const block = (
     <ChatStreamingProvider value={streaming}>
       <ChatCodeBlock code={code} lang={lang} />
-    </ChatStreamingProvider>,
+    </ChatStreamingProvider>
+  );
+  return render(
+    live === "absent" ? (
+      block
+    ) : (
+      <LiveMessageProvider value={live}>{block}</LiveMessageProvider>
+    ),
   );
 }
 
@@ -75,6 +92,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
   beforeEach(() => {
     // ledger 是模块级的（防重挂重放/同批互踩），逐例重置避免相互污染。
     __resetAutoTypeLedger();
+    __resetAutoTypeProvenance();
     usePreferencesStore.setState({ agentAutoTypeCommands: true });
     // 闸门默认放行：本组用例测的是命令卡决策逻辑，闸门自身另有用例。
     useChatStore.setState((s) => ({
@@ -226,14 +244,14 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
       live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
     }));
     render(
-      <>
+      <LiveMessageProvider value>
         <ChatStreamingProvider value={false}>
           <ChatCodeBlock code="ls -la" lang="bash" />
         </ChatStreamingProvider>
         <ChatStreamingProvider value={false}>
           <ChatCodeBlock code="cd /tmp" lang="bash" />
         </ChatStreamingProvider>
-      </>,
+      </LiveMessageProvider>,
     );
     // 若两张都注入，整段路径会拼成 "ls -lacd /tmp"、逐字路径会互相 \x03 清行
     expect(inject).toHaveBeenCalledTimes(1);
@@ -321,5 +339,78 @@ describe("ChatCodeBlock — 多行命令块不得在非 auto 模式下自动打�
     expect(inject).toHaveBeenCalledTimes(1);
     expect(inject.mock.calls[0][0]).toBe("systemctl status nginx");
     expect(inject.mock.calls[0][0]).not.toContain("\n");
+  });
+});
+
+// ============================================================================
+// 出身闸门（2026-09-21 用户实测）：打开历史对话不得把旧命令重新打进终端
+// ----------------------------------------------------------------------------
+// autoTypeLedger 挡不住这条：它按会话分域记账，而账本是模块级内存——重启即清空，
+// 冷启动后第一次打开这个会话时也没有任何记录。所以判据是「这条消息是不是本次
+// 运行生成的」，由 LiveMessageProvider 从消息层传下来。
+// 每条负向断言都配一条同命令的 live 正向断言：证明"该打的时候确实打了"，
+// 而不是因为注入链路整个坏了才看起来"没打字"。
+// ============================================================================
+describe("ChatCodeBlock — 历史消息（读回来的）一律不自动打字", () => {
+  const originalLive = useChatStore.getState().live;
+  const originalAutoType = usePreferencesStore.getState().agentAutoTypeCommands;
+  const originalAgentMode = useChatStore.getState().agentMode;
+  const originalTeach = useChatStore.getState().teach;
+
+  beforeEach(() => {
+    __resetAutoTypeLedger();
+    __resetAutoTypeProvenance();
+    usePreferencesStore.setState({ agentAutoTypeCommands: true });
+    useChatStore.setState({ agentMode: "auto", teach: false });
+    useChatStore.setState((s) => ({
+      live: {
+        ...s.live,
+        isActiveTerminalPrivate: () => false,
+        canAutoTypeToActiveTerminal: () => true,
+      },
+    }));
+  });
+
+  afterEach(() => {
+    useChatStore.setState({
+      live: originalLive,
+      agentMode: originalAgentMode,
+      teach: originalTeach,
+    });
+    usePreferencesStore.setState({ agentAutoTypeCommands: originalAutoType });
+    vi.restoreAllMocks();
+  });
+
+  it("live=false（从盘读回来的历史消息）→ 零注入", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
+    renderBlock("rm -rf /tmp/cache", "bash", false, false);
+    expect(inject).not.toHaveBeenCalled();
+  });
+
+  it("同一条命令在 live 消息里照常注入（配对正向断言）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
+    renderBlock("rm -rf /tmp/cache", "bash", false, true);
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith("rm -rf /tmp/cache\n");
+  });
+
+  it("没有 Provider（知识库等非消息渲染面）→ 零注入", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
+    renderBlock("uptime", "bash", false, "absent");
+    expect(inject).not.toHaveBeenCalled();
+  });
+
+  it("历史消息仍保留手动 Run，且手动 Run 不受出身闸门限制", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
+    renderBlock("uptime", "bash", false, false);
+    expect(inject).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run in active terminal" }),
+    );
+    expect(inject).toHaveBeenCalledTimes(1);
   });
 });

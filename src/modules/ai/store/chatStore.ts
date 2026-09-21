@@ -37,6 +37,8 @@ import {
   type SessionMeta,
 } from "../lib/sessions";
 import { pushRecentModel } from "../lib/modelPrefs";
+// 出身登记（2026-09-21）：从盘读回来的消息不再参与命令卡自动打字
+import { markMessagesRestored } from "../lib/autoTypeProvenance";
 // #91 第⑤条：命令卡的归属终端类型（真源在 commandCardTarget，chatStore 只借类型）
 import type { TerminalTarget } from "../lib/commandCardTarget";
 import { cancelSidecarTurn } from "../lib/sidecar-adapter";
@@ -914,6 +916,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
       return;
     }
     void loadMessages(id).then((m) => {
+      // 出身登记：这批消息不是本次运行生成的，命令卡据此不再自动打字。
+      // loadMessages 的另一处调用（记忆沉淀）不进 UI，所以这里登记就够。
+      markMessagesRestored(m);
       if (m && m.length > 0 && !chats.has(id)) seedMessages.set(id, m);
       flip();
     });

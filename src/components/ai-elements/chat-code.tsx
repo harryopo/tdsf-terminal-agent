@@ -6,6 +6,7 @@ import {
   claimAutoType,
   markAutoTyped,
 } from "@/modules/ai/lib/autoTypeLedger";
+import { useAutoTypeAllowed } from "@/modules/ai/lib/autoTypeProvenance";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
@@ -269,9 +270,15 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   // 安全边界保留 2026-09-03 的教训（"确认模式没点确认就自动打字机执行"= 绕过
   // HITL 审批）：只有 auto 模式追加 \n 真正执行，confirm/observe/teach 一律
   // 只打字不回车，执行权仍在用户手上。autoFiredRef 保证每张卡只注入一次。
+  //
+  // TDSF 2026-09-21（用户实测"打开历史对话把旧命令又输一遍"）：再加一道出身闸门
+  // ——只有本次运行里生成的消息才自动打字，读回来的历史消息不注入（手动 Run 照旧）。
   const autoFiredRef = useRef(false);
+  const autoTypeAllowed = useAutoTypeAllowed();
   useEffect(() => {
     if (autoFiredRef.current) return;
+    // 出身闸门：历史消息（从盘上读回来的）一律不注入。见 autoTypeProvenance。
+    if (!autoTypeAllowed) return;
     const store = useChatStore.getState();
     if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
     // 自动打字专用闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
@@ -286,7 +293,7 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
     if (inject(store.agentMode === "auto" && !store.teach)) {
       markAutoTyped(code, store.activeSessionId);
     }
-  }, [code, inject]);
+  }, [autoTypeAllowed, code, inject]);
 
   return (
     <div className="not-prose my-2 overflow-hidden rounded-lg border border-border/50 bg-muted/40">
