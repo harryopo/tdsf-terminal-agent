@@ -21,7 +21,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { isOsFamily, type OsFamily } from './os-family';
-import { sshCommand } from './ssh-bridge';
+import { sshCommand, probeCmd, readProbeValue } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
 
 // ============================================================================
@@ -63,8 +63,11 @@ export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null
 /** 检测命令成功时的输出标记 */
 export const CARAPACE_YES_MARK = '__TDSF_CARAPACE_YES__';
 
-/** 安装第 1 步：建目录 + 顺便带回 $HOME（SFTP 上传需要绝对路径，~ 不会被 sftp 展开） */
-export const CARAPACE_MKDIR_CMD = `mkdir -p ~/.local/bin && echo $HOME`;
+/**
+ * 安装第 1 步：建目录 + 顺便带回 $HOME（SFTP 上传需要绝对路径，~ 不会被 sftp 展开）
+ * 走哨兵协议：部分服务器连非交互 exec 也先吐一段欢迎横幅，整段 trim 会把横幅当路径用。
+ */
+export const CARAPACE_MKDIR_CMD = probeCmd(`mkdir -p ~/.local/bin && echo $HOME`);
 
 /** 安装第 4 步：上传后 chmod + 验证（一条 exec 完成，~ 由远端 /bin/sh 展开） */
 export const CARAPACE_CONFIGURE_CMD = `chmod +x ${CARAPACE_REMOTE_PATH} && ${CARAPACE_REMOTE_PATH} --version`;
@@ -476,7 +479,7 @@ export async function installRemoteCarapace(
       onError?.(sshInstallError('创建远端目录', mkdir));
       return false;
     }
-    const home = mkdir.output.trim();
+    const home = readProbeValue(mkdir.output) ?? '';
     // home 取不到时退回 ~ 路径（Rust 侧 sftp_upload_file 可能支持展开，T7 对齐点）
     const remotePath = home
       ? `${home}/.local/bin/carapace`

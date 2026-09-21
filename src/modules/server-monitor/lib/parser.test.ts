@@ -14,6 +14,7 @@ import {
   parseProcNetDev,
   parseProcStat,
   parsePsOutput,
+  splitSections,
   type CpuSnap,
   type NetSnap,
 } from './parser';
@@ -336,5 +337,83 @@ describe('calcNetworkRates', () => {
     const rates = calcNetworkRates(prev, curr, 1);
     expect(rates[0].rxRate).toBe(0);
     expect(rates[0].txRate).toBe(0);
+  });
+});
+
+// ============================================================================
+// splitSections（===NAME=== 分节）
+// ============================================================================
+// 为什么单独测这一类：部分服务器（实测 192.168.45.128）连**非交互 exec** 都会
+// 先往 stdout 吐一段欢迎横幅 —— 同一条链路上 `echo $HOME` 返回 1802 字节，而
+// `$HOME` 只有 5 字节。横幅末尾常常不带换行，于是第一条标记被粘在横幅尾巴上
+// （`…温馨提示===STAT===`）。按"标记必须在行首"切分会把整段 STAT 丢掉，面板就
+// 报「解析采集数据失败」并连错 3 次停掉轮询。
+
+const SECTION_TEXT = [
+  '===STAT===',
+  'cpu  1000 200 300 8000 400 0 50 0 0 0',
+  '===CORES===',
+  'cpu0 600 100 200 4000 200 0 30 0 0 0',
+  'cpu1 400 100 100 4000 200 0 20 0 0 0',
+  '===MEM===',
+  '              total        used        free      shared  buff/cache   available',
+  'Mem:            786         412         120           8         253         344',
+  '===DISK===',
+  '/dev/vda1      41152700 12345678  26876540  32% /',
+  '===NET===',
+  'eth0: 100000 100 0 0 0 0 90000 80 0 0 0 0 0 0 0 0',
+  '===PROC===',
+  'USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND',
+  'root           1  0.5  0.8 167412 12340 ?        Ss   Jan01   0:12 /sbin/init',
+].join('\n');
+
+const SECTION_NAMES = ['STAT', 'CORES', 'MEM', 'DISK', 'NET', 'PROC'];
+
+/** 真实服务器横幅：多行、含 === 装饰线，末尾是否带换行由调用方决定 */
+const BANNER_LINES = [
+  'Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-88-generic x86_64)',
+  '*************************************************************',
+  '*  提示：本服务器已开启防火墙，请联系管理员开放端口          *',
+  '*************************************************************',
+  'Last login: Mon Sep 21 19:37:24 2026 from 192.168.45.1',
+];
+
+describe('splitSections', () => {
+  it('clean payload: every marker becomes its own section', () => {
+    const sections = splitSections(SECTION_TEXT);
+    expect([...sections.keys()]).toEqual(SECTION_NAMES);
+    expect(sections.get('STAT')).toContain('cpu  1000 200 300');
+    expect(sections.get('PROC')).toContain('/sbin/init');
+  });
+
+  it('banner ending with a newline: prelude dropped, all sections kept', () => {
+    const sections = splitSections(`${BANNER_LINES.join('\n')}\n${SECTION_TEXT}`);
+    expect([...sections.keys()]).toEqual(SECTION_NAMES);
+    expect(sections.get('STAT')).not.toContain('Welcome to Ubuntu');
+  });
+
+  it('banner glued to the first marker (no trailing newline): STAT survives', () => {
+    const glued = `${BANNER_LINES.join('\n')}${SECTION_TEXT}`;
+    const sections = splitSections(glued);
+    expect([...sections.keys()]).toEqual(SECTION_NAMES);
+    expect(sections.get('STAT')).toContain('cpu  1000 200 300');
+    expect(sections.get('STAT')).not.toContain('Last login');
+  });
+
+  it('decorative === rules in the banner do not invent sections', () => {
+    const sections = splitSections(`${BANNER_LINES.join('\n')}\n${SECTION_TEXT}`);
+    expect([...sections.keys()]).toEqual(SECTION_NAMES);
+  });
+
+  it('glued banner still yields usable CPU and memory metrics end to end', () => {
+    const sections = splitSections(`${BANNER_LINES.join('\n')}${SECTION_TEXT}`);
+    const snaps = [
+      ...parseProcStat(sections.get('STAT') ?? ''),
+      ...parseProcStat(sections.get('CORES') ?? ''),
+    ];
+    expect(snaps.map((s) => s.name)).toEqual(['cpu', 'cpu0', 'cpu1']);
+    const mem = parseFreeOutput(sections.get('MEM') ?? '');
+    // parseFreeOutput 把 free -m 的 MB 换算成字节
+    expect(mem?.total).toBe(786 * 1024 * 1024);
   });
 });

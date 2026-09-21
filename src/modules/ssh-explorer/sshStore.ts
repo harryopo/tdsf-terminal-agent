@@ -18,6 +18,8 @@ import {
   sshCredentialsTouch,
   sshCommand,
   sshTest,
+  probeCmd,
+  readProbeValue,
   type SshConnectParams,
   type SshCredentialProfile,
   type SshSession,
@@ -633,9 +635,11 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           const sid = get().sessions.find((s) => s.id === sessionId)
             ?.rustSessionId;
           if (sid != null) {
-            const r = await sshCommand(sid, 'echo $HOME', 5);
-            const home = r.output.trim().split('\n')[0]?.trim() ?? '';
-            if (r.ok && r.exitCode === 0 && home.startsWith('/')) {
+            // 走哨兵协议：部分服务器连非交互 exec 也先吐一段欢迎横幅，
+            // 直接取首行会把横幅当成路径（详见 ssh-bridge PROBE_MARK）。
+            const r = await sshCommand(sid, probeCmd('echo $HOME'), 5);
+            const home = r.ok && r.exitCode === 0 ? readProbeValue(r.output) : null;
+            if (home?.startsWith('/')) {
               initial = home;
             }
           }

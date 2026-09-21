@@ -494,6 +494,47 @@ export interface SshCommandResult {
   duration: number;
 }
 
+// ----------------------------------------------------------------------------
+// 单值探测的哨兵协议
+// ----------------------------------------------------------------------------
+//
+// 有些远端服务器连**非交互 exec** 都会先往 stdout 吐一段欢迎横幅（实测
+// 192.168.45.128：`echo $HOME` 返回 1802 字节，而 $HOME 只有 5 字节 —— 多半是
+// .bashrc / /etc/profile.d 里的 echo 没被 `[ -n "$PS1" ]` 守卫挡住）。横幅末尾
+// 常常不带换行，于是它和真正的值粘在同一行（`…温馨提示/root`）。
+//
+// 这种形状下"取第一行""取最后一行""整段 trim"三种写法都会拿到横幅：
+// 资源管理器落到 /、SFTP 上传目标被拼成横幅路径、监控面板报解析失败。
+// 唯一不依赖横幅换行的办法是自己先在值前面打一个哨兵 —— 哨兵由我们自己的
+// `echo` 输出，一定独占一行，所以值必然从哨兵的下一行开始。
+//
+// 只支持单行值（当前两处调用方：`echo $HOME`）。多行值请改用
+// server-monitor 的 splitSections（===NAME=== 分节）。
+
+/** 单值探测的哨兵 */
+export const PROBE_MARK = '__TDSF_PROBE__';
+
+/** 把单条取值命令包成"先打哨兵再取值" */
+export function probeCmd(command: string): string {
+  return `echo ${PROBE_MARK}; ${command}`;
+}
+
+/**
+ * 从 exec 输出里取哨兵之后那一行的值。
+ * 哨兵由 `echo` 单独打一行，所以值必然是**哨兵行的下一行**（哨兵行内
+ * marker 之后只剩一个换行，直接取后半截会拿到空串）。
+ * 取**最后一个**哨兵：横幅里不会自带它，重复出现只可能是命令回声。
+ * 拿不到哨兵或值为空都返回 null，让调用方显式走降级分支。
+ */
+export function readProbeValue(output: string): string | null {
+  const idx = output.lastIndexOf(PROBE_MARK);
+  if (idx < 0) return null;
+  const markLineEnd = output.indexOf('\n', idx + PROBE_MARK.length);
+  if (markLineEnd < 0) return null;
+  const line = output.slice(markLineEnd + 1).split('\n')[0]?.trim();
+  return line ? line : null;
+}
+
 /**
  * 执行单条 SSH 命令并返回结构化结果（exec 模式, 非 PTY）
  *

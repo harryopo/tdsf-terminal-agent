@@ -30,28 +30,46 @@ import {
   parseProcStat,
   parsePsOutput,
   parseSystemOverview,
+  splitSections,
   type CpuSnap,
   type NetSnap,
 } from './parser';
 
-/** 合并采集命令（一次 SSH 往返采集所有指标） */
-const COLLECT_CMD = [
-  'echo "===STAT==="; head -n 1 /proc/stat',
-  'echo "===CORES==="; grep "^cpu[0-9]" /proc/stat',
-  'echo "===MEM==="; free -m',
-  'echo "===DISK==="; df -kP | awk \'$1 ~ /^\\/dev\\// {print}\'',
-  'echo "===NET==="; cat /proc/net/dev | tail -n +3',
-  'echo "===PROC==="; ps aux --sort=-%cpu | head -6',
-].join('; ');
+/**
+ * 合并采集命令（一次 SSH 往返采集所有指标）
+ *
+ * 段名由这张表单点定义：`===NAME===` 既是远端 echo 出来的标记，也是
+ * splitSections 的键和下面的缺段判据，写死两处就会漂移。
+ */
+export const COLLECT_PARTS: ReadonlyArray<readonly [string, string]> = [
+  ['STAT', 'head -n 1 /proc/stat'],
+  ['CORES', 'grep "^cpu[0-9]" /proc/stat'],
+  ['MEM', 'free -m'],
+  ['DISK', `df -kP | awk '$1 ~ /^\\/dev\\// {print}'`],
+  ['NET', 'cat /proc/net/dev | tail -n +3'],
+  ['PROC', 'ps aux --sort=-%cpu | head -6'],
+];
 
-/** 概览采集命令（仅在首次连接时执行一次） */
-const OVERVIEW_CMD = [
-  'hostname',
-  'cat /etc/os-release 2>/dev/null || echo "PRETTY_NAME=\\"Unknown\\""', 
-  'uname -r',
-  'cat /proc/uptime',
-  'cat /proc/loadavg',
-].join('; echo "===SEP==="; ');
+/** 概览采集命令（仅在首次连接时执行一次），与 COLLECT_PARTS 同一套标记协议 */
+export const OVERVIEW_PARTS: ReadonlyArray<readonly [string, string]> = [
+  ['HOST', 'hostname'],
+  ['OS', 'cat /etc/os-release 2>/dev/null || echo "PRETTY_NAME=\\"Unknown\\""'],
+  ['KERNEL', 'uname -r'],
+  ['UPTIME', 'cat /proc/uptime'],
+  ['LOAD', 'cat /proc/loadavg'],
+];
+
+/** 算不出指标就必须报缺段的必需段 */
+const REQUIRED_COLLECT = ['STAT', 'CORES', 'MEM'];
+
+function buildProbeCmd(parts: ReadonlyArray<readonly [string, string]>): string {
+  return parts.map(([name, cmd]) => `echo "===${name}==="; ${cmd}`).join('; ');
+}
+
+/** 导出仅为契约测试：命令里的标记必须与读取端声明的段名一致 */
+export const COLLECT_CMD = buildProbeCmd(COLLECT_PARTS);
+/** 同上 */
+export const OVERVIEW_CMD = buildProbeCmd(OVERVIEW_PARTS);
 
 /** 历史数据最大保留点数 */
 const MAX_HISTORY = 60;
@@ -200,7 +218,14 @@ export function useServerMetrics(
 
         const parsed = parseCollectOutput(result.output, intervalSecs);
         if (!parsed) {
-          throw new Error('解析采集数据失败');
+          // 报清缺哪一段：只说「解析失败」时，横幅污染这类真因在面板上看不出来
+          const sections = splitSections(result.output);
+          const missing = REQUIRED_COLLECT.filter((k) => !sections.has(k));
+          throw new Error(
+            missing.length
+              ? `采集输出缺 ${missing.join('、')} 段（远端命令被改写了输出？）`
+              : '采集输出各段齐全，但算不出 CPU / 内存指标',
+          );
         }
 
         const now = Date.now();
@@ -265,16 +290,23 @@ export function useServerMetrics(
     try {
       const result = await sshCommand(sid, OVERVIEW_CMD, 10);
       if (!result.ok) return;
-      const parts = result.output.split('===SEP===').map((s) => s.trim());
-      if (parts.length >= 5) {
-        overviewRef.current = parseSystemOverview(
-          parts[0],
-          parts[1],
-          parts[2],
-          parts[3],
-          parts[4],
-        );
+      // 与指标采集同一套 ===NAME=== 分节：段名之后的内容才可信，
+      // 段名之前的前缀（部分服务器的欢迎横幅）一律丢弃。
+      const sections = splitSections(result.output);
+      const missing = OVERVIEW_PARTS.map(([name]) => name).filter(
+        (name) => !sections.has(name),
+      );
+      if (missing.length) {
+        console.warn('[server-monitor] 概览采集缺段:', missing.join('、'));
+        return;
       }
+      overviewRef.current = parseSystemOverview(
+        (sections.get('HOST') ?? '').trim(),
+        sections.get('OS') ?? '',
+        (sections.get('KERNEL') ?? '').trim(),
+        (sections.get('UPTIME') ?? '').trim(),
+        (sections.get('LOAD') ?? '').trim(),
+      );
     } catch (e) {
       // U5 修复：概览采集失败不影响主流程，但记录日志便于排查
       console.warn('[server-monitor] collectOverview failed:', e);
@@ -339,32 +371,3 @@ export function useServerMetrics(
   };
 }
 
-// ============================================================================
-// 内部工具
-// ============================================================================
-
-/** 将合并命令输出按 "===SECTION===" 标记拆分为多个段 */
-function splitSections(output: string): Map<string, string> {
-  const sections = new Map<string, string>();
-  const lines = output.split('\n');
-  let currentSection = '';
-  let currentLines: string[] = [];
-
-  for (const line of lines) {
-    const match = line.match(/^===(\w+)===/);
-    if (match) {
-      if (currentSection) {
-        sections.set(currentSection, currentLines.join('\n'));
-      }
-      currentSection = match[1];
-      currentLines = [];
-    } else if (currentSection) {
-      currentLines.push(line);
-    }
-  }
-  if (currentSection) {
-    sections.set(currentSection, currentLines.join('\n'));
-  }
-
-  return sections;
-}
