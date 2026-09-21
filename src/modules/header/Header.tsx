@@ -12,6 +12,10 @@ import { WindowControls } from "@/components/WindowControls";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { NotificationBell } from "@/modules/agents";
+import {
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_WIDTH_CSS_VAR,
+} from "@/modules/sidebar/useSidebarPanel";
 import { useTheme } from "@/modules/theme";
 import { useTranslateStore } from "@/modules/translate";
 import type { Tab } from "@/modules/tabs";
@@ -147,16 +151,35 @@ export function Header({
   const mood = agentMeta.status;
   const moodFace = MOOD_FACE[mood] ?? "⬡‿⬡";
 
+  // TDSF 2026-09-20（用户实测）: 顶栏「工作区 / 通知」的分隔线要和侧栏右边界
+  // 那条线对齐，且在拖拽、折叠过程中也跟着走。做法=左侧簇宽度跟着侧栏面板宽度
+  // （CSS 变量由 useSidebarPanel 实时发布）。两个换算不能省：
+  //   × --app-zoom —— 侧栏在 main.zoom-content 里会被缩放，顶栏不会（实测用户
+  //     机器 zoom=1.05，271px 的面板实际占 284.9px，不乘就差 14px）；
+  //   − 9px —— 行 gap-2 的 8px + 侧栏那条线是 panel 内最后 1px 的 border-r。
+  // min-w-max 兜住退化场景：折叠（变量为 0）与侧栏压得比这簇还窄时，簇回退到
+  // 自身内容宽，按钮不会被裁掉。
+  const leftClusterStyle = IS_MAC
+    ? undefined
+    : {
+        width:
+          `calc(var(${SIDEBAR_WIDTH_CSS_VAR}, ` +
+          `${SIDEBAR_DEFAULT_WIDTH}px) * var(--app-zoom, 1) - 9px)`,
+      };
+
   return (
     <div
       ref={rootRef}
       data-tauri-drag-region
       className={`flex h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-card select-none ${
-        IS_MAC ? "pl-20 pr-2" : "pl-2 pr-0"
+        IS_MAC ? "pl-20 pr-2" : "pr-0"
       }`}
     >
       {/* ===== 左侧: 侧栏 + 品牌 + 4 Agent + 命令面板 + 通知 ===== */}
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div
+        className="flex shrink-0 items-center gap-0.5 pl-2 min-w-max"
+        style={leftClusterStyle}
+      >
         <Button
           onClick={onToggleSidebar}
           title="Toggle sidebar (Ctrl+B)"
@@ -204,7 +227,14 @@ export function Header({
         )}
       </div>
 
-      {!IS_MAC && <span className="mx-1 h-full w-px shrink-0 bg-border/70" />}
+      {/* 无 mx：左簇宽度已经按 gap-2 扣过 9px，再加水平边距就会错开侧栏那条线。
+          色值与侧栏 border-border/60 取齐，让两条线读起来是同一条。 */}
+      {!IS_MAC && (
+        <span
+          data-testid="header-divider"
+          className="h-full w-px shrink-0 bg-border/60"
+        />
+      )}
 
       {IS_MAC && <span className="mr-1 h-full w-px shrink-0 bg-border/70" />}
 

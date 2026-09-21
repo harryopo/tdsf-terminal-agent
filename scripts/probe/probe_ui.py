@@ -26,7 +26,14 @@ import cdp  # noqa: E402
 
 BASELINE = Path(__file__).resolve().parent / "ui-baseline.json"
 
-RULES = ("clippedText", "inputTextOverflow", "lowContrast", "smallHitTarget", "missingName")
+RULES = (
+    "clippedText",
+    "inputTextOverflow",
+    "lowContrast",
+    "smallHitTarget",
+    "missingName",
+    "dividerMisaligned",
+)
 
 # 一次性在页面里跑完全部规则，只把违规项带回来（终端 xterm 子树整体跳过：
 # 那是自绘网格，overflow:hidden 是它自己的滚动语义，不是显示缺陷）。
@@ -42,7 +49,7 @@ AUDIT_JS = r"""
     meta: { url: location.href, w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
     rules: {},
   };
-  for (const k of ['clippedText', 'inputTextOverflow', 'lowContrast', 'smallHitTarget', 'missingName']) {
+  for (const k of ['clippedText', 'inputTextOverflow', 'lowContrast', 'smallHitTarget', 'missingName', 'dividerMisaligned']) {
     out.rules[k] = { count: 0, samples: [] };
   }
   const bump = (k, el, detail) => {
@@ -189,6 +196,30 @@ AUDIT_JS = r"""
       }
     }
     if (!nameOf(el)) bump('missingName', el, { role: el.getAttribute('role') || el.tagName.toLowerCase() });
+  }
+  // ── 6. 顶栏分隔线与侧栏右边界没对齐 ──────────────────────────────
+  // 这两条线本该是同一条（用户 2026-09-20 实测差几十像素）。jsdom 不做布局，
+  // 只有真机能量，所以把它钉成探针规则而不是快照。
+  // 注意不能用上面的 visible()：它把宽 <3px 的元素当不可见，而分隔线正好是
+  // 1px —— 第一版因此永远跳过、报 0 违规，是量具自己造出来的假绿。这里只要求
+  // 侧栏面板真的占地方（折叠时宽为 0，两条线没有可比性，如实跳过）。
+  {
+    const dv = document.querySelector('[data-testid="header-divider"]');
+    const sp = document.querySelector('[data-testid="sidebar-panel"]');
+    const spRect = sp && sp.getBoundingClientRect();
+    if (dv && spRect && spRect.width > 3) {
+      const bw = parseFloat(getComputedStyle(sp).borderRightWidth) || 0;
+      // 侧栏那条线的左边缘 = 面板右边缘 - border 宽；分隔线要落在同一列
+      const delta = dv.getBoundingClientRect().left - (spRect.right - bw);
+      out.meta.dividerDeltaPx = Math.round(delta * 10) / 10;
+      if (Math.abs(delta) > 1) {
+        bump('dividerMisaligned', dv, {
+          deltaPx: Math.round(delta * 10) / 10,
+          dividerLeft: Math.round(dv.getBoundingClientRect().left),
+          sidebarLineLeft: Math.round(spRect.right - bw),
+        });
+      }
+    }
   }
   freeze.remove();
   return out;
