@@ -11,7 +11,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useSpaces } from "@/modules/spaces/lib/useSpaces";
 import type { SpaceMeta } from "@/modules/spaces/lib/store";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
-import { sshSessionIdForSpace } from "./useTabs";
+import {
+  resolveNewTabSshSession,
+  sshSessionIdForSpace,
+} from "./useTabs";
 
 const sshSpace: SpaceMeta = {
   id: "sp-ssh",
@@ -108,5 +111,34 @@ describe("sshSessionIdForSpace", () => {
     });
     setSessions(["s-stale"]);
     expect(sshSessionIdForSpace("sp-ssh")).toBeUndefined();
+  });
+});
+
+/**
+ * #89：新建标签页绑哪条会话。显式传入优先，且 `null` 必须被尊重 ——
+ * 这是"这条工作区没有保存凭据、开出来就是本地壳"的出口。若在这里悄悄回退成
+ * 工作区那条会话，用户看到的是一个"新标签页"，实际还跟老标签页共用一条 shell，
+ * 本次要修的病就原地复活了。
+ */
+describe("resolveNewTabSshSession", () => {
+  beforeEach(() => {
+    setSessions(["s-stale"]);
+  });
+
+  it("显式给新会话 id → 用它，不看工作区那条", () => {
+    expect(resolveNewTabSshSession("sp-ssh", "s-brand-new")).toBe("s-brand-new");
+  });
+
+  it("显式给 null → 就是 null，绝不回退到工作区会话", () => {
+    expect(resolveNewTabSshSession("sp-ssh", null)).toBeNull();
+  });
+
+  it("没给（undefined）→ 沿用旧行为，绑工作区那条活会话", () => {
+    expect(resolveNewTabSshSession("sp-ssh")).toBe("s-stale");
+  });
+
+  it("没给且工作区会话不活 → null", () => {
+    setSessions(["s-stale"], { state: "closed" });
+    expect(resolveNewTabSshSession("sp-ssh")).toBeNull();
   });
 });

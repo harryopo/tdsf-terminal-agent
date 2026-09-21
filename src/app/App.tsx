@@ -86,6 +86,11 @@ import {
   isSshEnvConnected,
   staleSshSpaceIds,
 } from "@/modules/spaces/lib/sshSpaceSession";
+// TDSF #89（2026-09-21）：SSH 工作区里每个终端标签页各开一条连接
+import {
+  openSshShellForEnv,
+  wantsPerTabSshShell,
+} from "@/modules/spaces/lib/openSpaceShell";
 // TDSF (P4-T4.1): SSH 远程资源管理器
 import {
   isSessionConnected,
@@ -500,6 +505,23 @@ export default function App() {
   // 旧实现回退到 Space 的 SSH 会话，导致"SSH 工作区里开本地终端标签"时仍显示
   // user@host，而命令其实跑在本地 —— 与"这里要显示命令实际跑在哪台机器"的口径相反。
   const activeTerminalAddress = terminalAddressOf(activeTabSshSession);
+  // TDSF #89（2026-09-21，用户决策 1）：左侧资源管理器 / 状态栏路径 / 窗口标题
+  // 跟随**活动 tab 自己那条会话**，而不是"这个 Space 的那条会话"。
+  // 同一工作区里现在可以有多条各连各的 shell，切 tab 却还看着另一个 tab 的目录，
+  // 就是用户报的"我在 tab2 cd，tab1 的资源管理器也跟着变"的另一半。
+  // 活动 tab 是终端 → 完全以它为准（它开的是本地壳时这里就是 null，不再借用
+  // Space 的远端会话）；活动 tab 是编辑器/预览 → 回退 Space 级会话。
+  const explorerSshSessionId = activeTerminalTab
+    ? activeTabSshSessionId
+    : spaceSshSessionId;
+  const explorerSshSession = useSshStore((s) =>
+    selectSessionById(s, explorerSshSessionId),
+  );
+  const explorerSshConnected =
+    !!explorerSshSession && isSessionConnected(explorerSshSession);
+  const explorerCurrentPath = useSshStore((s) =>
+    selectSessionCurrentPath(s, explorerSshSessionId),
+  );
   // 保留全局 active SSH session 用于非 Space 场景（自动登录、SshExplorer 视图）
   const activeSshSession = useSshStore(selectActiveSession);
   const activeSshSessionId = activeSshSession?.id ?? null;
@@ -509,7 +531,10 @@ export default function App() {
   const resolveApproval = useSshStore((s) => s.resolveApproval);
   // Space 环境决定左侧 Files 面板来源：SSH Space 用远程文件资源管理器，
   // 本地/WSL Space 用本地文件资源管理器。
-  const explorerSource: "local" | "ssh" = isSpaceSshConnected ? "ssh" : "local";
+  // TDSF #89：判据换成"活动 tab 那条会话活着"（上面 explorerSsh*）。
+  const explorerSource: "local" | "ssh" = explorerSshConnected
+    ? "ssh"
+    : "local";
   const isDefaultColdTab =
     !!activeTab &&
     activeTab.kind === "terminal" &&
@@ -1082,12 +1107,13 @@ export default function App() {
     activeSpace?.root ?? null,
     activeSpaceId,
   );
-  // SSH 连通时左侧 Files 面板根路径使用当前 Space 的远程当前目录
+  // SSH 连通时左侧 Files 面板根路径使用**活动 tab 那条会话**的远程当前目录
+  // （TDSF #89：原来是 Space 级会话，两条 SSH tab 会互相顶掉目录）
   const effectiveExplorerRoot =
-    explorerSource === "ssh" && activeSpace?.env.kind === "ssh"
-      ? (spaceSshCurrentPath ??
-        activeSpace.root ??
-        `/home/${activeSpace.env.user}`)
+    explorerSource === "ssh" && explorerSshSession
+      ? (explorerCurrentPath ??
+        activeSpace?.root ??
+        `/home/${explorerSshSession.params.user}`)
       : explorerRoot;
 
   // TDSF 修复 2026-09-18（用户实测：还没建工作区，状态栏已经显示 Home）：
@@ -1104,8 +1130,8 @@ export default function App() {
   //   (地址已在左下角 StatusBar 展示, 避免顶栏重复且拥挤)。
   // 按当前 Space 的 SSH session 生成位置标签，切 Space 时标题同步切换。
   const sshLocationLabel =
-    isSpaceSshConnected && spaceSshSession && activeSpace?.env.kind === "ssh"
-      ? `${spaceSshSession.params.user}@${spaceSshSession.params.host}:${spaceSshCurrentPath ?? "/"}`
+    explorerSshConnected && explorerSshSession
+      ? `${explorerSshSession.params.user}@${explorerSshSession.params.host}:${explorerCurrentPath ?? "/"}`
       : null;
   // TDSF 修复 2026-08-12 (ROADMAP #9): SSH 位置作为第三参数传入 useWindowTitle，
   // SSH Space 时窗口标题显示 user@host:path（此前混入 explorerRoot 计算导致
@@ -1423,24 +1449,35 @@ export default function App() {
     [updateTab],
   );
 
-  const openNewTab = useCallback(() => {
-    // TDSF 修复 2026-08-01: SSH Space 新建终端继承远程 cwd（spaceSshCurrentPath），
-    // 而非本地 spaceRoot 残留路径（此前新建 SSH tab 的 cwd 是本地 D:/）。
-    // TDSF #93：判据从"这是 SSH 工作区"改成"这条会话真连着"——未连接的 SSH 工作区
-    // 开的是本地 shell，cwd 必须走本地继承，否则 "/" 会喂给本地 PTY。
-    const sshLive = isSpaceSshConnected;
-    const cwd = sshLive
-      ? (spaceSshCurrentPath ?? "/")
-      : inheritedCwdForNewTab();
-    const tabId = newTab(cwd);
+  const openNewTab = useCallback(async () => {
+    const env = activeSpace?.env;
+    // TDSF #89（用户决策 1）：SSH 工作区里**每个标签页各开一条连接**。
+    // 此前新 tab 复用 space.env.sessionId，两条 tab 订阅同一条远端 shell：
+    // tab2 里 cd，tab1 的目录/资源管理器/状态栏全跟着变，新 tab 还要按一次
+    // 回车才看到提示符（提示符早被另一个 pane 消费掉了）。
+    if (env && wantsPerTabSshShell(env)) {
+      const sessionId = await openSshShellForEnv(env);
+      // cwd 留空：新连上的远端 shell 自己会打印起点；这里的 cwd 只服务本地 PTY。
+      const tabId = newTab(undefined, { sshSessionId: sessionId });
+      if (sessionId) {
+        // 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（customTitle 防远端 cd 后标题漂移）
+        updateTab(tabId, { customTitle: "shell" });
+      }
+      // sessionId===null 时 openSshShellForEnv 已经 toast 明示，这里开的就是本地壳
+      return tabId;
+    }
+    // TDSF 修复 2026-08-01: 非"每 tab 一条连接"的路径保持原样（WSL / 本地 /
+    // 由连接成功事件建立的第一个 SSH tab 走 bindTabToSshSpace）。
+    const tabId = newTab(inheritedCwdForNewTab());
     bindTabToSshSpace(tabId, activeSpaceId ?? DEFAULT_SPACE_ID);
+    return tabId;
   }, [
     newTab,
+    updateTab,
     inheritedCwdForNewTab,
     bindTabToSshSpace,
     activeSpaceId,
-    isSpaceSshConnected,
-    spaceSshCurrentPath,
+    activeSpace,
   ]);
 
   const sendCd = useCallback(
@@ -1449,14 +1486,15 @@ export default function App() {
       // 但本地 terminalRefs 对应的是隐藏的本地终端, 点击 breadcrumb 不应
       // 把 cd 命令写入错误终端。SSH 目录切换由用户在 SSH 终端内操作。
       // TDSF 修复 2026-07-31: 按当前 Space 判定，避免本地 Space 仍受全局 SSH 连接影响。
-      if (isSpaceSshConnected) return;
+      // TDSF #89：判据跟随活动 tab —— 这个 tab 自己连的是远端就不该写本地终端。
+      if (explorerSshConnected) return;
       if (activeLeafId === null) return;
       const term = terminalRefs.current.get(activeLeafId);
       if (!term) return;
       term.write(`cd ${quoteShellArg(path)}\r`);
       term.focus();
     },
-    [activeLeafId, isSpaceSshConnected],
+    [activeLeafId, explorerSshConnected],
   );
 
   const cdInNewTab = useCallback(
@@ -1492,11 +1530,11 @@ export default function App() {
     (path: string) => {
       // TDSF 修复 2026-07-31: 远程文件打开使用当前 Space 的 SSH sessionId，
       // 切 Space 后点击远程文件不会串到其它 session。
-      const sessionId = spaceSshSessionId ?? activeSshSessionId;
+      const sessionId = explorerSshSessionId ?? spaceSshSessionId ?? activeSshSessionId;
       if (!sessionId) return;
       openFileTab(path, false, { sessionId });
     },
-    [spaceSshSessionId, activeSshSessionId, openFileTab],
+    [explorerSshSessionId, spaceSshSessionId, activeSshSessionId, openFileTab],
   );
 
   // "Open With" files arrive via the event (warm start) and get_launch_files
@@ -1545,10 +1583,10 @@ export default function App() {
       : null;
 
   // TDSF 修复 2026-07-29: 状态栏/输入栏 cwd 在 SSH 连接后显示远程路径。
-  // TDSF 修复 2026-07-31: 按当前 Space 的 SSH session 显示路径，切 Space 时同步切换。
+  // TDSF #89：取活动 tab 那条会话的 cwd（同一 Space 里两条 SSH tab 各自独立）。
   const statusBarCwd = hasWorkspace
-    ? isSpaceSshConnected && isTerminalTab
-      ? (spaceSshCurrentPath ?? "/")
+    ? explorerSshConnected && isTerminalTab
+      ? (explorerCurrentPath ?? "/")
       : activeTerminalLeafCwd
     : null;
 
@@ -2093,11 +2131,20 @@ export default function App() {
   );
 
   const handleNewTabInSpace = useCallback(
-    (spaceId: string) => {
+    async (spaceId: string) => {
       const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
-      const root = space?.root;
-      // newTabInSpace 内部已按 Space env 绑定有效 sshSessionId（幽灵 id 有校验）
-      const tabId = newTabInSpace(spaceId, root ?? undefined);
+      // TDSF #89：总览面板里点"在这个工作区新建终端"同样是**开一条自己的连接**
+      // （与顶栏 + 同口径）。工作区被切到非活动状态时 wantsPerTabSshShell 读的是
+      // 该 Space 自己的 env，不受当前活动 tab 影响。
+      if (space && wantsPerTabSshShell(space.env)) {
+        const sessionId = await openSshShellForEnv(space.env);
+        const tabId = newTabInSpace(spaceId, undefined, {
+          sshSessionId: sessionId,
+        });
+        if (sessionId) updateTab(tabId, { customTitle: "shell" });
+        return;
+      }
+      const tabId = newTabInSpace(spaceId, space?.root ?? undefined);
       // TDSF #93：标题按"会话真活着"判，不按"这是 SSH 工作区"判 ——
       // 未连接的工作区开出来的是本地 shell，叫 "shell" 会误导。
       if (space && isSshEnvConnected(space.env)) {
@@ -2341,13 +2388,12 @@ export default function App() {
                                   // "rootPath 已回退本地 Windows 路径 × fsSource 仍是 sftp"
                                   // 的抖动窗口（validate_sftp_path 报 invalid_path）。
                                   explorerSource === "ssh" &&
-                                  activeSpace?.env.kind === "ssh" &&
-                                  spaceSshSession?.rustSessionId != null
+                                  explorerSshSession?.rustSessionId != null
                                     ? {
                                         kind: "sftp",
                                         sessionId:
-                                          spaceSshSession.rustSessionId,
-                                        root: spaceSshCurrentPath ?? "/",
+                                          explorerSshSession.rustSessionId,
+                                        root: explorerCurrentPath ?? "/",
                                       }
                                     : { kind: "local" }
                                 }
