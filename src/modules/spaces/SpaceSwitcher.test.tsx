@@ -7,8 +7,9 @@
  * 现在：只要注册表非空就渲染触发器，文案「选择工作区」。
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
+import type { Tab } from "@/modules/tabs";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import type { SpaceMeta } from "./lib/store";
 import { useSpaces } from "./lib/useSpaces";
@@ -104,13 +105,13 @@ describe("SpaceSwitcher — 未选择工作区时的可达性", () => {
  * 状态走（判据与 isSessionConnected 一致：connected 且拿到 Rust 句柄）。
  */
 /** 打开总览面板（Popover 内容渲染在 portal 里，用 findByText 断言） */
-function renderOpen() {
+function renderOpen(tabs: Tab[] = []) {
   const noop = () => {};
   return render(
     <SpaceSwitcher
       open
       onOpenChange={noop}
-      tabs={[]}
+      tabs={tabs}
       onNewSpace={noop}
       onDeleteSpace={noop}
       onNewTabInSpace={noop}
@@ -230,5 +231,119 @@ describe("SpaceSwitcher — 小字副标不重复工作区名", () => {
     });
     renderOpen();
     expect(await screen.findByText("本地 · api")).toBeTruthy();
+  });
+});
+
+/**
+ * 标签页那一行的小字 = **实时**落点（2026-09-21 用户实测：「工作区下拉的终端的地址
+ * 不会自动更新，第二个 shell 在 /usr/bin，下拉里不显示」）
+ * -----------------------------------------------------------------------------
+ * 旧实现读 `tab.cwd`，那是建 tab 那一刻的快照、之后没人再写，所以永远停在初始目录。
+ * 判据（口径与状态栏/资源管理器一致）：
+ * - SSH 跟**这个 tab 自己那条会话**的 OSC7 路径（#89 之后一 tab 一条会话）；
+ * - 本地跟可见 leaf 的 cwd；
+ * - 拿不到就不写（宁缺勿撒谎）。
+ * tab 行只在展开的工作区里渲染，所以三个用例都把工作区设为 activeId。
+ */
+function sshSpaceMeta(sessionId: string): SpaceMeta {
+  return {
+    id: "sp-ssh",
+    name: "生产机",
+    root: "/root",
+    env: {
+      kind: "ssh",
+      host: "10.0.0.8",
+      user: "root",
+      port: 22,
+      sessionId,
+      label: "生产机",
+    },
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+/** 终端 tab：`cwd` 故意留成建 tab 时的旧快照，用来证明小字不再读它 */
+function termTab(
+  id: number,
+  spaceId: string,
+  sshSessionId: string | null,
+  leafCwd?: string,
+): Tab {
+  return {
+    id,
+    kind: "terminal",
+    spaceId,
+    title: "shell",
+    customTitle: `shell-${id}`,
+    cwd: "/old-snapshot",
+    sshSessionId,
+    paneTree: { kind: "leaf", id: id * 10, cwd: leafCwd },
+    activeLeafId: id * 10,
+  } as Tab;
+}
+
+describe("SpaceSwitcher — 标签页小字跟随实时地址", () => {
+  beforeEach(() => {
+    useSshStore.setState({ sessions: [], currentPathBySession: {} });
+  });
+
+  it("SSH：每个 tab 读自己那条会话的路径，不是 tab.cwd", async () => {
+    useSpaces.setState({
+      spaces: [sshSpaceMeta("s-a")],
+      activeId: "sp-ssh",
+    });
+    useSshStore.setState({
+      currentPathBySession: { "s-a": "/root", "s-b": "/usr/bin" },
+    });
+    renderOpen([
+      termTab(1, "sp-ssh", "s-a"),
+      termTab(2, "sp-ssh", "s-b"),
+    ]);
+    // 两条 tab 各自的小字（旧实现会两行都写成 /old-snapshot → 这里取到的就是快照）
+    expect(await screen.findByText("root")).toBeTruthy();
+    expect(screen.getByText("usr/bin")).toBeTruthy();
+    expect(screen.queryByText("old-snapshot")).toBeNull();
+  });
+
+  it("SSH：会话路径变了，已打开的面板立刻跟着改（不需要重开）", async () => {
+    useSpaces.setState({
+      spaces: [sshSpaceMeta("s-a")],
+      activeId: "sp-ssh",
+    });
+    useSshStore.setState({ currentPathBySession: { "s-b": "/var/log" } });
+    renderOpen([termTab(2, "sp-ssh", "s-b")]);
+    expect(await screen.findByText("var/log")).toBeTruthy();
+
+    // 用户在 tab2 里 cd：store 一写，小字就得跟着换。这是「不会自动更新」的正身。
+    act(() => {
+      useSshStore.setState({ currentPathBySession: { "s-b": "/etc/nginx" } });
+    });
+    expect(screen.getByText("etc/nginx")).toBeTruthy();
+    expect(screen.queryByText("var/log")).toBeNull();
+  });
+
+  it("本地：小字读可见 leaf 的 cwd，不是 tab.cwd", async () => {
+    useSpaces.setState({ spaces: [spaceA], activeId: "sp-a" });
+    renderOpen([termTab(3, "sp-a", null, "/projects/api")]);
+    expect(await screen.findByText("projects/api")).toBeTruthy();
+    expect(screen.queryByText("old-snapshot")).toBeNull();
+  });
+
+  it("会话还没记录路径：宁可不写，也不拿别处的地址冒充", async () => {
+    useSpaces.setState({
+      spaces: [sshSpaceMeta("s-a")],
+      activeId: "sp-ssh",
+    });
+    // 正向配对：同一次渲染里 s-b 有路径 → 它的小字确实出来了，证明 tab 行在渲染，
+    // 下面那条「没有小字」不是因为整块没渲染而假绿。
+    useSshStore.setState({ currentPathBySession: { "s-b": "/usr/bin" } });
+    renderOpen([
+      termTab(4, "sp-ssh", "s-pending"),
+      termTab(5, "sp-ssh", "s-b"),
+    ]);
+    expect(await screen.findByText("usr/bin")).toBeTruthy();
+    expect(screen.getByText("shell-4")).toBeTruthy();
+    expect(screen.queryByText("old-snapshot")).toBeNull();
   });
 });
