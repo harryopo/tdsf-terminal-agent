@@ -46,6 +46,7 @@ import {
   setLeafSshSession,
 } from './param-complete-client';
 import { invoke } from '@tauri-apps/api/core';
+import { PROBE_MARK } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
 
 const mockInvoke = vi.mocked(invoke);
@@ -508,11 +509,13 @@ describe('installRemoteCarapace', () => {
       if (cmd === 'sftp_upload_file') return undefined;
       if (cmd === 'ssh_command') {
         const { command } = (args ?? {}) as { command: string };
-        if (command.startsWith('mkdir -p')) {
+        // 按 includes 认命令：$HOME 探测现在带哨兵前缀（echo __TDSF_PROBE__; …），
+        // startsWith 会把整条安装链路判成"unexpected invoke"。
+        if (command.includes('mkdir -p')) {
           if (over?.mkdirFail) return sshResult('', 1);
-          return sshResult('/root\n');
+          return sshResult(`${PROBE_MARK}\n/root\n`);
         }
-        if (command.startsWith('chmod +x')) {
+        if (command.includes('chmod +x')) {
           if (over?.verifyFail) return sshResult('permission denied', 1);
           return sshResult('carapace version 0.7.0');
         }
@@ -546,6 +549,36 @@ describe('installRemoteCarapace', () => {
     });
     // 进度回调完整走完
     expect(stages).toEqual(['preparing', 'uploading', 'configuring', 'done']);
+  });
+
+  it('远端欢迎横幅盖住输出时，上传目标仍是 /root/…（不是横幅拼出来的路径）', async () => {
+    // 实测服务器连非交互 exec 也先吐横幅，且末尾不带换行 —— 旧实现
+    // `mkdir.output.trim()` 会把整段横幅当成 $HOME 拼进 remotePath。
+    const banner = [
+      'Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-88-generic x86_64)',
+      '*** 本服务器已开启防火墙，请联系管理员开放端口 ***',
+      'Last login: Mon Sep 21 19:37:24 2026 from 192.168.45.1',
+    ].join('\n');
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      calls.push({ cmd, args });
+      if (cmd === 'carapace_linux_path') return 'C:/pkg/carapace-linux-amd64';
+      if (cmd === 'sftp_upload_file') return undefined;
+      if (cmd === 'ssh_command') {
+        const { command } = (args ?? {}) as { command: string };
+        if (command.includes('mkdir -p')) {
+          return sshResult(`${banner}${PROBE_MARK}\n/root\n`);
+        }
+        return sshResult('carapace version 0.7.0');
+      }
+      throw new Error(`unexpected invoke: ${cmd}`);
+    });
+
+    await expect(installRemoteCarapace(42)).resolves.toBe(true);
+    const upload = calls.find((c) => c.cmd === 'sftp_upload_file');
+    expect((upload?.args as { remotePath: string }).remotePath).toBe(
+      '/root/.local/bin/carapace',
+    );
   });
 
   it('mkdir 失败 → false 且不触发上传', async () => {
