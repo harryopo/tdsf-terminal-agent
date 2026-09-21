@@ -56,17 +56,43 @@ export function sshSessionIdForSpace(spaceId: string | null): string | undefined
 }
 
 /**
+ * 新建 terminal tab 时到底绑哪条 SSH 会话（#89 的取舍点，单独抽出来钉住）。
+ *
+ * - 调用方**显式给值**（含 `null`）→ 一律照办。`null` 是"这个 tab 就是本地壳"，
+ *   典型场景：这条工作区没有保存凭据、`openSshShellForEnv` 已经 toast 明示过，
+ *   此时**绝不能**回退去绑工作区那条旧会话 —— 那会让用户以为新 tab 是独立的，
+ *   其实还跟老 tab 共用一条 shell（就是本次要修的病）。
+ * - 调用方没给（`undefined`）→ 沿用旧行为：绑工作区那条**活着的**会话，
+ *   重启恢复 / 首次进入工作区自动建 tab 这些路径靠它。
+ */
+export function resolveNewTabSshSession(
+  spaceId: string | null,
+  explicit?: string | null,
+): string | null {
+  if (explicit !== undefined) return explicit;
+  return sshSessionIdForSpace(spaceId) ?? null;
+}
+
+/**
  * 新建终端 tab 的初始标题（用户钦定 2026-08-28）：
  * SSH Space → "shell"、WSL Space → "shell"、本地 Space → "terminal"。
  * 注意：tabLabel 显示优先级 customTitle > cwd basename > title，
  * 本地 tab 被 OSC7 同步 cwd 后仍会显示目录名（既有跟随行为，不受影响）。
+ *
+ * TDSF #89：`sshSessionId` 是**这个 tab 实际绑到的那条会话**（调用方已经算好了）。
+ * SSH 工作区里没绑上会话（没有保存凭据 / 连接失败）时开出来的是本地壳，
+ * 标题必须跟着变回 terminal，否则用户以为自己在远端。
  */
-function terminalTitleForSpace(spaceId: string | null): string {
+function terminalTitleForSpace(
+  spaceId: string | null,
+  sshSessionId?: string | null,
+): string {
   if (!spaceId) return "terminal";
   const space = useSpaces
     .getState()
     .spaces.find((s) => s.id === spaceId);
-  if (space?.env.kind === "ssh" || space?.env.kind === "wsl") return "shell";
+  if (space?.env.kind === "wsl") return "shell";
+  if (space?.env.kind === "ssh") return sshSessionId ? "shell" : "terminal";
   return "terminal";
 }
 
@@ -483,26 +509,37 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   // overview can populate a space in place; it spawns when first opened.
   // TDSF 修复 2026-08-01: 目标 Space 是 SSH 时绑定 sshSessionId，
   // 新建的 terminal tab 直接渲染服务器 shell，而非本地 Windows shell。
-  const newTabInSpace = useCallback((spaceId: string, cwd?: string) => {
-    const tabId = nextIdRef.current++;
-    const leafId = nextIdRef.current++;
-    const sshSessionId = sshSessionIdForSpace(spaceId);
-    setTabs((curr) => [
-      ...curr,
-      {
-        id: tabId,
-        kind: "terminal",
-        spaceId,
-        cold: true,
-        title: cwd ? basename(cwd) : terminalTitleForSpace(spaceId),
-        cwd,
-        sshSessionId,
-        paneTree: { kind: "leaf", id: leafId, cwd },
-        activeLeafId: leafId,
-      },
-    ]);
-    return tabId;
-  }, []);
+  // TDSF #89：`opts.sshSessionId` 显式指定时用它（每个标签页各一条连接），
+  // 只有没指定才回退到 Space 的那条会话。
+  const newTabInSpace = useCallback(
+    (
+      spaceId: string,
+      cwd?: string,
+      opts?: { sshSessionId?: string | null },
+    ) => {
+      const tabId = nextIdRef.current++;
+      const leafId = nextIdRef.current++;
+      const sshSessionId = resolveNewTabSshSession(spaceId, opts?.sshSessionId);
+      setTabs((curr) => [
+        ...curr,
+        {
+          id: tabId,
+          kind: "terminal",
+          spaceId,
+          cold: true,
+          title: cwd
+            ? basename(cwd)
+            : terminalTitleForSpace(spaceId, sshSessionId),
+          cwd,
+          sshSessionId,
+          paneTree: { kind: "leaf", id: leafId, cwd },
+          activeLeafId: leafId,
+        },
+      ]);
+      return tabId;
+    },
+    [],
+  );
 
   // Reassigns a tab to another space. Returns true when the moved tab was active
   // and emptied its source space, so the caller should follow it into the target.
@@ -598,26 +635,37 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   // TDSF 修复 2026-08-01: 当前 Space 是 SSH 时绑定 sshSessionId，
   // 新建 terminal tab 直接渲染服务器 shell（此前只依赖 isSpaceSshConnected
   // 全局条件，会话状态异常时新 tab 会显示本地终端）。
-  const newTab = useCallback((cwd?: string) => {
-    const tabId = nextIdRef.current++;
-    const leafId = nextIdRef.current++;
-    const sshSessionId = sshSessionIdForSpace(activeSpaceIdRef.current);
-    setTabs((t) => [
-      ...t,
-      {
-        id: tabId,
-        kind: "terminal",
-        spaceId: activeSpaceIdRef.current,
-        title: terminalTitleForSpace(activeSpaceIdRef.current),
-        cwd,
-        sshSessionId,
-        paneTree: { kind: "leaf", id: leafId, cwd },
-        activeLeafId: leafId,
-      },
-    ]);
-    setActiveId(tabId);
-    return tabId;
-  }, []);
+  // TDSF #89：`opts.sshSessionId` 显式传入时用它 —— SSH 工作区里每个标签页
+  // 各开一条连接，两条 tab 的 cd / 提示符才互不影响。
+  const newTab = useCallback(
+    (cwd?: string, opts?: { sshSessionId?: string | null }) => {
+      const tabId = nextIdRef.current++;
+      const leafId = nextIdRef.current++;
+      const sshSessionId = resolveNewTabSshSession(
+        activeSpaceIdRef.current,
+        opts?.sshSessionId,
+      );
+      setTabs((t) => [
+        ...t,
+        {
+          id: tabId,
+          kind: "terminal",
+          spaceId: activeSpaceIdRef.current,
+          title: terminalTitleForSpace(
+            activeSpaceIdRef.current,
+            sshSessionId,
+          ),
+          cwd,
+          sshSessionId,
+          paneTree: { kind: "leaf", id: leafId, cwd },
+          activeLeafId: leafId,
+        },
+      ]);
+      setActiveId(tabId);
+      return tabId;
+    },
+    [],
+  );
 
   const newBlockTab = useCallback((cwd?: string) => {
     const tabId = nextIdRef.current++;
