@@ -33,20 +33,14 @@ export function useSpacesBoot({ ready, markBooted }: Params) {
 
     void (async () => {
       let spaces: SpaceMeta[] = [];
-      // 每个 Space 上次的活跃标签下标：不传下去，首次落盘会把没打开过的
-      // Space 的 activeTabIndex 归零（持久化侧的既有约定）。
-      const initialActiveIndex: Record<string, number> = {};
       try {
         const persisted = await loadAll();
         spaces = persisted.spaces;
-        for (const [id, state] of persisted.states) {
-          initialActiveIndex[id] = state.activeTabIndex;
-        }
       } catch (error) {
         // 读不到就按"没有历史工作区"处理，绝不因此卡住启动。
         console.warn("[spaces] 读取持久化工作区清单失败，按空清单启动:", error);
       }
-      useSpaces.getState().hydrate(spaces, null, initialActiveIndex);
+      useSpaces.getState().hydrate(spaces, null);
       markBooted();
     })();
   }, [ready, markBooted]);

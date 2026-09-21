@@ -59,7 +59,6 @@ beforeEach(() => {
     spaces: [],
     activeId: null,
     hydrated: true,
-    initialActiveIndex: {},
   });
 });
 

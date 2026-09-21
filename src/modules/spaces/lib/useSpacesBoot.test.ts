@@ -30,8 +30,7 @@ const stored: SpaceMeta[] = [];
 const loadAll = vi.fn(async (): Promise<{
   spaces: SpaceMeta[];
   activeId: string | null;
-  states: Map<string, { tabs: never[]; activeTabIndex: number }>;
-}> => ({ spaces: [], activeId: null, states: new Map() }));
+}> => ({ spaces: [], activeId: null }));
 const readSpaces = vi.fn(async (): Promise<SpaceMeta[]> => stored);
 const saveSpacesList = vi.fn(async (spaces: SpaceMeta[]) => {
   stored.length = 0;
@@ -56,12 +55,10 @@ beforeEach(() => {
     spaces: [],
     activeId: null,
     hydrated: false,
-    initialActiveIndex: {},
   });
   loadAll.mockResolvedValue({
     spaces: persisted,
     activeId: "sp-old",
-    states: new Map([["sp-old", { tabs: [], activeTabIndex: 2 }]]),
   });
 });
 
@@ -79,10 +76,14 @@ describe("useSpacesBoot", () => {
     expect(loadAll).toHaveBeenCalled();
   });
 
-  it("把每个 Space 上次的活跃标签下标交给持久化层，避免首次落盘归零", async () => {
+  it("#96：启动不再向布局持久化交接任何东西（写侧已下线）", async () => {
     renderHook(() => useSpacesBoot({ ready: true, markBooted: () => {} }));
     await waitFor(() => expect(useSpaces.getState().hydrated).toBe(true));
-    expect(useSpaces.getState().initialActiveIndex).toEqual({ "sp-old": 2 });
+    // 正向配对：注册表确实读回来了，所以"没有 initialActiveIndex"不是因为没启动。
+    expect(useSpaces.getState().spaces.map((x) => x.id)).toEqual(["sp-old"]);
+    expect(
+      "initialActiveIndex" in useSpaces.getState(),
+    ).toBe(false);
   });
 
   it("注册表留存后，新建是追加而不是覆盖", async () => {
