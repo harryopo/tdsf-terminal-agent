@@ -24,6 +24,25 @@ export async function openSshShellForEnv(
   env: WorkspaceEnv,
 ): Promise<string | null> {
   if (env.kind !== "ssh") return null;
+  const profile = await savedProfileForEnv(env);
+  if (!profile) {
+    toast.warning("这台服务器没有保存凭据", {
+      description: `${env.user}@${env.host}:${env.port} 的新终端无法自动连接，请在 SSH 面板重新登录一次。`,
+      duration: 6000,
+    });
+    return null;
+  }
+  // #101：标成"为这个标签页开的连接"。连接成功订阅据此**不**补建 tab、也不把
+  // 工作区主会话指针挪过来——否则调用方建的 tab 和订阅补的 tab 会绑同一条会话。
+  const sessionId = await useSshStore.getState().connectWithSaved(profile, {
+    origin: "tab",
+  });
+  return sessionId;
+}
+
+/** 按 host/user/port 找保存的凭据；列表还没加载过时补拉一次。 */
+async function savedProfileForEnv(env: WorkspaceEnv) {
+  if (env.kind !== "ssh") return null;
   const store = useSshStore.getState();
   let profile = store.savedConnections.find(
     (p) => p.host === env.host && p.user === env.user && p.port === env.port,
@@ -38,19 +57,59 @@ export async function openSshShellForEnv(
         (p) => p.host === env.host && p.user === env.user && p.port === env.port,
       );
   }
-  if (!profile) {
-    toast.warning("这台服务器没有保存凭据", {
-      description: `${env.user}@${env.host}:${env.port} 的新终端无法自动连接，请在 SSH 面板重新登录一次。`,
-      duration: 6000,
+  return profile ?? null;
+}
+
+/** 正在重连中的工作区，防止切进切出或重复渲染连发多条连接。 */
+const reconnecting = new Set<string>();
+
+/**
+ * #102：进入"身份还在、会话已经不在"的 SSH 工作区时**主动重连一次**。
+ *
+ * 不重连的现场（用户 2026-09-21 实测"点击打开已有工作区的时候，显示 sftp time out"）：
+ * 工作区注册表跨重启留着 `env.sessionId`，那是一条上个生命周期的会话；启动自动连接
+ * 只覆盖"最近使用的那一台"，其余的没人管 → 界面按 SSH 渲染，左侧文件树拿着失效的
+ * 会话号去开 SFTP，握手 10 秒后整块面板报 `[fsb] sftp session error: SFTP error: Timeout`。
+ *
+ * 口径：**重连成功**由连接成功订阅接管（改回工作区主会话、绑终端）；**重连不起来**
+ * 必须 toast 说清楚是哪台、为什么，绝不静默把服务器工作区显示成本地文件树。
+ */
+export async function reconnectSshSpace(
+  spaceId: string,
+  env: WorkspaceEnv,
+): Promise<string | null> {
+  if (env.kind !== "ssh") return null;
+  if (reconnecting.has(spaceId)) return null;
+  reconnecting.add(spaceId);
+  try {
+    const profile = await savedProfileForEnv(env);
+    if (!profile) {
+      toast.warning("服务器连接已失效", {
+        description: `${env.user}@${env.host}:${env.port} 没有保存凭据，无法自动重连，请在 SSH 面板重新登录。`,
+        duration: 6000,
+      });
+      return null;
+    }
+    // autoConnect:true —— 这是"恢复既有工作区"，不是用户手动新建：
+    // 连接订阅据此不再凭空新建/切换工作区。
+    const sessionId = await useSshStore.getState().connectWithSaved(profile, {
+      autoConnect: true,
     });
-    return null;
+    if (!sessionId) {
+      toast.warning("服务器重连失败", {
+        description: `${env.user}@${env.host}:${env.port} 连不上，左侧文件树暂时不可用；可在 SSH 面板手动重试。`,
+        duration: 6000,
+      });
+    }
+    return sessionId;
+  } finally {
+    reconnecting.delete(spaceId);
   }
-  // #101：标成"为这个标签页开的连接"。连接成功订阅据此**不**补建 tab、也不把
-  // 工作区主会话指针挪过来——否则调用方建的 tab 和订阅补的 tab 会绑同一条会话。
-  const sessionId = await useSshStore.getState().connectWithSaved(profile, {
-    origin: "tab",
-  });
-  return sessionId;
+}
+
+/** 仅供测试重置并发闸门。 */
+export function __resetReconnectGuard(): void {
+  reconnecting.clear();
 }
 
 /**

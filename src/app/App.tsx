@@ -89,6 +89,7 @@ import {
 // TDSF #89（2026-09-21）：SSH 工作区里每个终端标签页各开一条连接
 import {
   openSshShellForEnv,
+  reconnectSshSpace,
   wantsPerTabSshShell,
 } from "@/modules/spaces/lib/openSpaceShell";
 // TDSF #101（2026-09-21）：连接成功后"该落在哪个终端标签页"的决策真源（可测）
@@ -358,6 +359,13 @@ export default function App() {
     // 写成 WSL/user@host（ptyWorkspaceEnv 吃的是 env store）。
     // 首次挂载的幂等性由下一条 `prev === activeSpaceId` 保证，不需要 null 这条。
     if (prev === activeSpaceId) return;
+    // TDSF #102（2026-09-21）：SSH 工作区的**身份**跨重启留着（#93），会话却随上个
+    // 生命周期没了，而启动自动连接只覆盖"最近使用的那一台"。进这种工作区若不重连，
+    // 界面按 SSH 渲染、左侧文件树拿着失效的会话号去开 SFTP，握手 10 秒后整块面板
+    // 报 `[fsb] sftp session error: SFTP error: Timeout`（用户实测那条）。
+    if (meta && meta.env.kind === "ssh" && !isSshEnvConnected(meta.env)) {
+      void reconnectSshSpace(meta.id, meta.env);
+    }
     if (meta) void adoptWorkspaceEnv(meta.env);
     const inSpace = tabsRef.current.filter((t) => t.spaceId === activeSpaceId);
     if (inSpace.length === 0) {
