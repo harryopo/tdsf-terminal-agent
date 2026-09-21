@@ -6,8 +6,10 @@
  * env 仍是 local → 恒显 "Windows"。
  *   1. 无 Space、无 terminalAddress → 回退本地标签
  *   2. terminalAddress 存在 → 优先显示 user@host（即使 Space env 仍是 local）
- *   3. Space env 为 ssh 且无 terminalAddress → 显示该 Space 的 user@host
- *   4. terminalAddress 同样优先于 ssh Space env
+ *   3. Space env 为 ssh 但**没有活着的会话** → 地址照常显示 + 标「未连接」
+ *      （#93 之后 SSH 身份跨断线留着，"是 ssh"不再蕴含"命令在远端"）
+ *   4. ssh 会话真活着 → 只显示 user@host，tooltip 说命令落在远端
+ *   5. terminalAddress 同样优先于 ssh Space env
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -21,6 +23,7 @@ vi.mock("@/lib/platform", async (importOriginal) => {
 });
 
 import { useSpaces } from "@/modules/spaces";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
 import { WorkspaceEnvSelector } from "./WorkspaceEnvSelector";
 
@@ -35,6 +38,7 @@ const SSH_ENV: WorkspaceEnv = {
 beforeEach(() => {
   useSpaces.setState({ spaces: [], activeId: null });
   useWorkspaceEnvStore.setState({ env: { kind: "local" } });
+  useSshStore.setState({ sessions: [] });
 });
 
 function label(): string {
@@ -72,10 +76,29 @@ describe("WorkspaceEnvSelector — 标签取值优先级", () => {
     );
   });
 
-  it("Space env 为 ssh 且无 terminalAddress → 显示 Space 的 user@host", () => {
+  it("Space env 为 ssh 但没有活着的会话 → 地址照常显示，并如实标「未连接」", () => {
+    // #93（2026-09-21）：SSH 身份跨断线留着，"是 ssh"不再等于"命令在远端跑"。
+    // tooltip 若还说"当前终端命令执行于 root@…"就是说谎，所以标签要带状态。
     seedSpace("ssh-space", SSH_ENV);
     render(<WorkspaceEnvSelector onSelect={() => {}} />);
+    expect(label()).toBe("root@192.168.45.200 · 未连接");
+    expect(screen.getByRole("button").getAttribute("title")).toBe(
+      "切换工作区环境",
+    );
+  });
+
+  it("ssh 会话真活着 → 只显示 user@host，且 tooltip 说命令落在远端", () => {
+    seedSpace("ssh-space", { ...SSH_ENV, sessionId: "s-live" });
+    useSshStore.setState({
+      sessions: [
+        { id: "s-live", state: "connected", rustSessionId: 3 },
+      ] as never,
+    });
+    render(<WorkspaceEnvSelector onSelect={() => {}} />);
     expect(label()).toBe("root@192.168.45.200");
+    expect(screen.getByRole("button").getAttribute("title")).toContain(
+      "当前终端命令执行于 root@192.168.45.200",
+    );
   });
 
   it("terminalAddress 优先于 ssh Space env（跨机器的 tab 才是真相）", () => {

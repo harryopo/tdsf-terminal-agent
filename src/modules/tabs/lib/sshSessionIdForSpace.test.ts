@@ -38,9 +38,18 @@ const localSpace: SpaceMeta = {
   updatedAt: 1,
 };
 
-function setSessions(ids: string[]) {
+/**
+ * 造会话表。**默认造"活着的"**（connected + 已拿到 Rust 句柄）——
+ * #93（2026-09-21）之后"会话存在"不再够格，判据收紧成 `sshStore.isSessionConnected`，
+ * 所以想表达"接管"必须给真会话，想表达"不接管"要么不给、要么给一条死的。
+ */
+function setSessions(
+  ids: string[],
+  over: { state?: string; rustSessionId?: number | null } = {},
+) {
+  const { state = "connected", rustSessionId = 1 } = over;
   useSshStore.setState({
-    sessions: ids.map((id) => ({ id })) as never,
+    sessions: ids.map((id) => ({ id, state, rustSessionId })) as never,
   });
 }
 
@@ -62,6 +71,17 @@ describe("sshSessionIdForSpace", () => {
   it("会话仍在本次运行的 sessions 里 → 正常接管", () => {
     setSessions(["s-other", "s-stale"]);
     expect(sshSessionIdForSpace("sp-ssh")).toBe("s-stale");
+  });
+
+  // #93（2026-09-21）之后 SSH 工作区身份跨断线留着，"存在"这一条不再够格。
+  it("会话在本次运行里但已断开 → 不接管（此前只看存在，会把 tab 接到死流上）", () => {
+    setSessions(["s-stale"], { state: "closed" });
+    expect(sshSessionIdForSpace("sp-ssh")).toBeUndefined();
+  });
+
+  it("状态 connected 却还没拿到 Rust 句柄 → 不接管（判据同 isSessionConnected）", () => {
+    setSessions(["s-stale"], { rustSessionId: null });
+    expect(sshSessionIdForSpace("sp-ssh")).toBeUndefined();
   });
 
   it("本地工作区 / 未知 space / null → 一律 undefined", () => {

@@ -23,16 +23,21 @@ import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
 // TDSF 修复 2026-08-01: newTab/newTabInSpace 需要读目标 Space 的 env 来绑定
 // SSH 会话。useSpaces 本体不依赖 tabs（依赖方只有 App 层 hook），无循环依赖。
 import { useSpaces } from "@/modules/spaces";
-import { useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // Matches the renderer slot pool size — over this we'd evict an active leaf.
 export const MAX_PANES_PER_TAB = 4;
 
 /**
- * 目标 Space 是 SSH 且绑定了 session 时返回该 sessionId，否则 undefined。
+ * 目标 Space 是 SSH 且**当前真有一条活着的会话**时返回该 sessionId，否则 undefined。
+ *
  * 导出仅为让"幽灵 sessionId 守卫"可被单测钉住（#61-A 之后手点旧 SSH Space
  * 成了常规路径，这条回退不能再只靠读代码保证）。
+ *
+ * TDSF #93（2026-09-21）：判据从"会话存在"收紧成"会话活着"。SSH 工作区的身份
+ * 现在跨断线留着，`env.sessionId` 可能指向一条 closed/failed 的会话 —— 绑上去
+ * 等于把新 tab 接到一条已经死的流上（表现为"看着连着了其实什么都没跑"）。
  */
 export function sshSessionIdForSpace(spaceId: string | null): string | undefined {
   if (!spaceId) return undefined;
@@ -40,12 +45,10 @@ export function sshSessionIdForSpace(spaceId: string | null): string | undefined
     .getState()
     .spaces.find((s) => s.id === spaceId);
   if (space?.env.kind === "ssh" && space.env.sessionId) {
-    // TDSF 修复 2026-08-07: 幽灵 sessionId 校验——session 是运行时态,
-    // Space env 持久化可能携带上次生命周期的失效 id (服务器关闭/断线重连)。
-    // 失效时不绑定, 新 tab 保持本地 shell 欢迎页, 用户手动重连后再接管。
     const sessionId = space.env.sessionId;
     const sessions = useSshStore.getState().sessions;
-    if (sessions.some((s) => s.id === sessionId)) {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session && isSessionConnected(session)) {
       return sessionId;
     }
   }

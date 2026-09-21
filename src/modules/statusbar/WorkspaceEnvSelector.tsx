@@ -6,6 +6,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { IS_WINDOWS } from "@/lib/platform";
 import { useSpaces } from "@/modules/spaces";
+import { isSshEnvConnected } from "@/modules/spaces/lib/sshSpaceSession";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import {
   LOCAL_WORKSPACE,
   useWorkspaceEnvStore,
@@ -51,6 +53,12 @@ export function WorkspaceEnvSelector({
   const loading = useWorkspaceEnvStore((s) => s.loading);
   const error = useWorkspaceEnvStore((s) => s.error);
   const refreshDistros = useWorkspaceEnvStore((s) => s.refreshDistros);
+  // TDSF #93（2026-09-21）：SSH 工作区身份跨断线留着，所以这里要分开两件事——
+  // **地址是什么**（身份，一直显示）与**命令实际落在哪**（只有真连着才算远端）。
+  // 未连接时如实标出来，否则 tooltip 会说谎："当前终端命令执行于 root@…"。
+  // 订阅必须放在下面那个提前 return 之前（Hook 顺序不能变）。
+  const sshSessions = useSshStore((s) => s.sessions);
+  const sshConnected = isSshEnvConnected(env, sshSessions);
 
   // TDSF 2026-09-02（用户钦定）: SSH 工作区跨平台显示服务器地址（user@host），
   // 本地/WSL 环境选择仅 Windows 有意义——非 Windows 且非 SSH 时才隐藏整个选择器。
@@ -70,11 +78,11 @@ export function WorkspaceEnvSelector({
   const label =
     terminalAddress ??
     (env.kind === "ssh"
-      ? `${env.user}@${env.host}`
+      ? `${env.user}@${env.host}${sshConnected ? "" : " · 未连接"}`
       : env.kind === "wsl"
         ? `WSL: ${env.distro}`
         : "Windows");
-  const remote = env.kind === "ssh" || terminalAddress !== null;
+  const remote = sshConnected || terminalAddress !== null;
 
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>
