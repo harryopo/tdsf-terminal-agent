@@ -116,9 +116,14 @@ function collapseExpanded(
 
 // === 类型定义 ================================================================
 
+/**
+ * SSH 连接的出身（#101）。真源在 `spaces/lib/sshConnectedPlan`，此处只做类型别名，
+ * 让会话对象与决策函数共用一个定义。
+ */
+export type SshSessionOrigin = 'space' | 'tab';
+
 /** SSH 会话信息 (前端管理) */
-export interface SshSessionInfo {
-  /** 前端唯一 id (crypto.randomUUID) */
+export interface SshSessionInfo {  /** 前端唯一 id (crypto.randomUUID) */
   id: string;
   /** Rust 端分配的 session_id (ssh_connect 成功后填充) */
   rustSessionId: number | null;
@@ -143,6 +148,15 @@ export interface SshSessionInfo {
    * 转换在其之前就已触发订阅）。
    */
   autoConnect?: boolean;
+  /**
+   * TDSF #101（2026-09-21）：这条连接的出身。
+   * - `"space"`（缺省）：工作区级连接（对话框 / 开机自动 / 恢复历史对话），
+   *   连接成功后可以成为工作区主会话并占用一个终端标签页。
+   * - `"tab"`：#89 之后「新建标签页」为**那一个 tab**单独开的连接 —— 它的 tab
+   *   由调用方自己建、自己绑。连接订阅据此不再补建 tab、也不把工作区主会话指针
+   *   挪到它身上（否则两条 tab 绑同一条会话 = 用户看到的"复制了一份 shell"）。
+   */
+  origin?: SshSessionOrigin;
 }
 
 /** 远程文件编辑状态 */
@@ -245,7 +259,7 @@ interface SshExplorerState {
    */
   connect: (
     params: SshConnectParams,
-    opts?: { autoConnect?: boolean },
+    opts?: { autoConnect?: boolean; origin?: SshSessionOrigin },
   ) => Promise<string | null>;
   disconnect: (sessionId: string) => Promise<void>;
   setActiveSession: (id: string) => void;
@@ -320,7 +334,7 @@ interface SshExplorerState {
   /** 用已保存的连接配置自动登录 (从 keyring 取敏感字段后调用 connect) */
   connectWithSaved: (
     profile: SshCredentialProfile,
-    opts?: { autoConnect?: boolean },
+    opts?: { autoConnect?: boolean; origin?: SshSessionOrigin },
   ) => Promise<string | null>;
 
   // === TDSF 2026-08-28: 远端 carapace 检测 (无弹窗设计) ===
@@ -562,6 +576,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       connectedAt: Date.now(),
       handle: null,
       autoConnect: opts?.autoConnect,
+      origin: opts?.origin,
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -1190,6 +1205,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       //    "无匹配 SSH Space"时跳过（开机自动）还是新建（对话框手动））
       const sessionId = await get().connect(params, {
         autoConnect: opts?.autoConnect,
+        origin: opts?.origin,
       });
 
       // 4. 连接成功后更新 lastUsed
