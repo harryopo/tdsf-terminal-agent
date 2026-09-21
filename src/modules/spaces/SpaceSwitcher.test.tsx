@@ -6,14 +6,26 @@
  * 整个不渲染，于是"留存注册表"在 UI 上没有任何入口，用户只能重复新建。
  * 现在：只要注册表非空就渲染触发器，文案「选择工作区」。
  */
-import { beforeEach, describe, expect, it } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import type { Tab } from "@/modules/tabs";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import type { SpaceMeta } from "./lib/store";
 import { useSpaces } from "./lib/useSpaces";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
+
+// 本文件用 SpaceSwitcher 会连带加载 spaces store（@tauri-apps/plugin-store）。
+// jsdom 里没有 Tauri 运行时，任何真写盘都会变成未处理拒绝把整个 run 弄脏。
+// （setActive 的用例尤其如此：它落盘 activeId。）
+vi.mock("./lib/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/store")>();
+  return {
+    ...actual,
+    saveActiveId: vi.fn(async () => {}),
+    saveSpacesList: vi.fn(async () => {}),
+  };
+});
 
 const spaceA: SpaceMeta = {
   id: "sp-a",
@@ -345,5 +357,51 @@ describe("SpaceSwitcher — 标签页小字跟随实时地址", () => {
     expect(await screen.findByText("usr/bin")).toBeTruthy();
     expect(screen.getByText("shell-4")).toBeTruthy();
     expect(screen.queryByText("old-snapshot")).toBeNull();
+  });
+});
+
+// ============================================================================
+// #103（2026-09-21 用户钦定"在工作区哪里新添一个回到主页的小选项"）
+// ----------------------------------------------------------------------------
+// 顶栏那个 × 是真退出（Rust 侧没有 close→hide），所以"回到工作区选择页"必须
+// 有入口。口径：**纯换视图** —— 只把 activeId 置空，标签页/连接一律不动。
+// 负向断言（不碰 spaces）必须配正向断言（activeId 真的清空了），否则"什么都没发生"
+// 也会让它假绿。
+// ============================================================================
+describe("SpaceSwitcher — 回到工作区选择页", () => {
+  it("点「回到工作区选择页」：activeId 清空、工作区与标签页都还在、面板关闭", async () => {
+    const onOpenChange = vi.fn();
+    useSpaces.setState({ spaces: [spaceA], activeId: "sp-a" });
+    const tab: Tab = {
+      id: 7,
+      kind: "terminal",
+      spaceId: "sp-a",
+      title: "shell",
+      customTitle: "shell-7",
+      cwd: "/root",
+      sshSessionId: null,
+      paneTree: { kind: "leaf", id: 70, cwd: "/root" },
+      activeLeafId: 70,
+    } as unknown as Tab;
+    render(
+      <SpaceSwitcher
+        open
+        onOpenChange={onOpenChange}
+        tabs={[tab]}
+        onNewSpace={() => {}}
+        onDeleteSpace={() => {}}
+        onNewTabInSpace={() => {}}
+        onJumpTab={() => {}}
+        onCloseTab={() => {}}
+        onMoveTabToSpace={() => {}}
+        onReorderTab={() => {}}
+        onReorderSpaces={() => {}}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId("space-switcher-home"));
+    expect(useSpaces.getState().activeId).toBeNull();
+    // 配对正向断言：这是"只换视图"，工作区注册表不许被清掉
+    expect(useSpaces.getState().spaces.map((s) => s.id)).toEqual(["sp-a"]);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

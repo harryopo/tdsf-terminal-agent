@@ -1,16 +1,17 @@
-// TDSF: Header 整合 TdsfTitlebar 功能（项目名 / 4 Agent / 主题切换 / mood）
+// TDSF: Header 整合 TdsfTitlebar 功能（项目名 / Agent 状态 / 主题切换）
 // -----------------------------------------------------------------------------
 // 原设计: Header 仅承载 tab 栏 + 命令面板 + 通知 + 设置
 // 定制后: 单层顶栏整合所有功能，避免双层 UI 冲突
 //
 // 布局（h-10, 40px）:
-//   左: [侧栏切换] [TDSF logo + 项目名] [4 Agent Segmented] | [命令面板] [NotificationBell]
+//   左: [侧栏切换] [Agent 状态 pill]        ← 宽度跟着侧栏，分隔线才对齐
 //   中: [SpaceSwitcher] [TabBar] (flex-1)
-//   右: [SearchInline] [mood] [主题切换] [设置] [WindowControls]
+//   右: [命令面板] [NotificationBell] [SearchInline] [主题切换] [翻译] [设置] [WindowControls]
+//   TDSF 2026-09-21（用户钦定）：命令面板与通知从左侧簇挪到右簇统一右对齐；
+//   「切换模式」右边那个 mood 笑脸删掉 —— 状态 pill 已经把同一件事说过了。
 import { Button } from "@/components/ui/button";
 import { WindowControls } from "@/components/WindowControls";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
-import { useChatStore } from "@/modules/ai/store/chatStore";
 import { NotificationBell } from "@/modules/agents";
 import {
   SIDEBAR_DEFAULT_WIDTH,
@@ -48,15 +49,6 @@ import { AgentStatusPill } from "@/modules/ai/components/AgentStatusPill";
 // v3.1 收敛（方案书 §4.1）: 旧版 "4 Agent Segmented Control" 已删除，
 // 顶栏只读显示模式指示（AgentStatusPill 内部订阅 agentMode/teach）。
 // 原 agentId/onAgentChange props（无调用方）一并移除。
-
-// === mood 表情映射（与原 TdsfTitlebar 一致） ===============================
-const MOOD_FACE: Record<string, string> = {
-  idle: "⬡‿⬡",
-  thinking: "⬡_⬡",
-  streaming: "⬡~⬡",
-  "awaiting-approval": "⬡⏸⬡",
-  error: "⬡✗⬡",
-};
 
 type Props = {
   tabs: Tab[];
@@ -109,9 +101,6 @@ export function Header({
   const [compact, setCompact] = useState(false);
   const [narrow, setNarrow] = useState(false);
 
-  // TDSF: 从 chatStore 读取 agent 状态（mood）
-  const agentMeta = useChatStore((s) => s.agentMeta);
-
   // TDSF: 主题切换（通过 ThemeProvider，持久化 + 响应 system 偏好）
   const { resolvedMode, setMode } = useTheme();
   const toggleTheme = () => {
@@ -147,10 +136,6 @@ export function Header({
     </Button>
   );
 
-  // TDSF: mood 表情（紧凑显示，仅占 ~70px）
-  const mood = agentMeta.status;
-  const moodFace = MOOD_FACE[mood] ?? "⬡‿⬡";
-
   // TDSF 2026-09-20（用户实测）: 顶栏「工作区 / 通知」的分隔线要和侧栏右边界
   // 那条线对齐，且在拖拽、折叠、改缩放过程中也跟着走。做法=左侧簇宽度跟着侧栏
   // 面板的实际渲染宽（CSS 变量由 useSidebarPanel 的 ResizeObserver 发布）。
@@ -177,7 +162,7 @@ export function Header({
         IS_MAC ? "pl-20 pr-2" : "pr-0"
       }`}
     >
-      {/* ===== 左侧: 侧栏 + 品牌 + 4 Agent + 命令面板 + 通知 ===== */}
+      {/* ===== 左侧: 侧栏切换 + Agent 状态 pill（整簇宽度跟着侧栏，见 leftClusterStyle） ===== */}
       <div
         className="flex shrink-0 items-center gap-0.5 pl-2 min-w-max"
         style={leftClusterStyle}
@@ -199,34 +184,6 @@ export function Header({
         {/* TDSF 2026-07-31: 复用 AgentStatusPill, 与右下角状态栏风格统一,
             去除 Header 独立的彩色标签, 节省水平空间。 */}
         {!narrow && <AgentStatusPill data-testid="header-agent-status-pill" />}
-
-        {/* mood 表情（紧凑显示） */}
-        {!narrow && (
-          <span
-            className="shrink-0 font-mono text-[10px] text-muted-foreground px-1"
-            title={`Agent status: ${mood}`}
-            data-testid="header-mood"
-          >
-            {moodFace}
-          </span>
-        )}
-
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={onOpenCommandPalette}
-          title="Command palette"
-          className="shrink-0 gap-1.5 rounded-md px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <HugeiconsIcon icon={CommandIcon} size={14} strokeWidth={1.75} />
-        </Button>
-
-        {!IS_MAC && (
-          <NotificationBell
-            onActivate={onActivateAgent}
-            onActivateLocal={onActivateLocalAgent}
-          />
-        )}
       </div>
 
       {/* 无 mx：左簇宽度已经按 gap-2 扣过 9px，再加水平边距就会错开侧栏那条线。
@@ -267,6 +224,24 @@ export function Header({
         />
         <div data-tauri-drag-region className="h-full min-w-1 flex-1" />
       </div>
+
+      {/* TDSF 2026-09-21（用户钦定"剩下的通知那俩 UI 右对齐"）：命令面板与通知
+          从左侧簇挪到这里，和搜索框一起贴着右端。 */}
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        onClick={onOpenCommandPalette}
+        title="Command palette"
+        className="shrink-0 gap-1.5 rounded-md px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+        data-testid="header-command-palette"
+      >
+        <HugeiconsIcon icon={CommandIcon} size={14} strokeWidth={1.75} />
+      </Button>
+
+      <NotificationBell
+        onActivate={onActivateAgent}
+        onActivateLocal={onActivateLocalAgent}
+      />
 
       <SearchInline ref={searchRef} target={searchTarget} compact={compact} />
 
@@ -312,17 +287,8 @@ export function Header({
         </span>
       </Button>
 
-      {IS_MAC && (
-        <>
-          <NotificationBell
-            onActivate={onActivateAgent}
-            onActivateLocal={onActivateLocalAgent}
-          />
-          {settingsButton}
-        </>
-      )}
-
-      {!IS_MAC && settingsButton}
+      {/* 通知与命令面板已移到右簇统一对齐（上面），这里不再按 IS_MAC 分叉 */}
+      {settingsButton}
 
       {USE_CUSTOM_WINDOW_CONTROLS && (
         <>

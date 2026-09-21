@@ -36,7 +36,7 @@ type State = {
   setColor: (id: string, color: number | undefined) => void;
   reorder: (orderedIds: string[]) => void;
   remove: (id: string) => string | null;
-  setActive: (id: string) => void;
+  setActive: (id: string | null) => void;
 };
 
 /** Patch one space's fields against whatever list is currently stored. */
@@ -182,7 +182,14 @@ export const useSpaces = create<State>((set, get) => {
       return activeId;
     },
 
-    setActive: (id) => {
+    /**
+     * 切到某个工作区；传 `null` = 回到工作区选择页（欢迎页）。
+     *
+     * #103（2026-09-21 用户钦定）：这是**纯换视图**——标签页、本地 shell、SSH 连接
+     * 全部留在后台继续跑，回来时原样还在。顶栏关闭按钮是真退出，所以"回到主页"
+     * 必须有入口，否则用户只能靠重启回到欢迎页。
+     */
+    setActive: (id: string | null) => {
       if (get().activeId === id) return;
       set({ activeId: id });
       void saveActiveId(id);

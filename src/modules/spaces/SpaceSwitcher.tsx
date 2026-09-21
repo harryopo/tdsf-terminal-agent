@@ -391,6 +391,22 @@ export function SpaceSwitcher({
             <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={1.75} />
             <span className="flex-1">New space</span>
           </button>
+          {/* TDSF #103（2026-09-21 用户钦定"在工作区哪里新添一个回到主页的小选项"）：
+              顶栏那个 × 是真退出（Rust 侧没有 close→hide），所以"回到工作区选择页"
+              必须有入口，否则只能靠重启回到欢迎页。**纯换视图**：标签页、本地 shell、
+              SSH 连接全部留在后台继续跑。 */}
+          <button
+            type="button"
+            data-testid="space-switcher-home"
+            onClick={() => {
+              setActive(null);
+              onOpenChange(false);
+            }}
+            className="mt-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          >
+            <span className="flex-1">回到工作区选择页</span>
+            <span className="text-[10px] opacity-60">标签页与连接保留</span>
+          </button>
         </div>
       </PopoverContent>
       {overlay &&

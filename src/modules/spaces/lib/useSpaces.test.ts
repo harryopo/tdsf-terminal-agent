@@ -8,6 +8,7 @@ import type { SpaceMeta } from "./store";
  * 了"的成因）。
  */
 const remote = vi.hoisted(() => ({ spaces: [] as SpaceMeta[] }));
+const mocks = vi.hoisted(() => ({ saveActiveId: vi.fn(async () => {}) }));
 
 vi.mock("./store", () => ({
   readSpaces: async () => remote.spaces,
@@ -15,7 +16,7 @@ vi.mock("./store", () => ({
     remote.spaces = list;
   },
   deleteSpaceData: async () => {},
-  saveActiveId: async () => {},
+  saveActiveId: mocks.saveActiveId,
   newSpaceId: () => `sp-test-${Math.random().toString(36).slice(2, 8)}`,
 }));
 
@@ -115,5 +116,32 @@ describe("useSpaces 的多窗口写入", () => {
     await settled();
 
     expect(remote.spaces.map((s) => s.id)).toEqual(["b", "a", "late"]);
+  });
+});
+
+// ============================================================================
+// #103（2026-09-21 用户钦定）：「回到工作区选择页」= setActive(null)
+// ----------------------------------------------------------------------------
+// 顶栏 × 是真退出（Rust 侧没有 close→hide），所以"回主页"必须能只把视图切回
+// 欢迎页、工作区与连接全部保留。落盘的 activeId 也要是 null，否则重启又被
+// 自动带进上次那个工作区，等于入口白做。
+// ============================================================================
+describe("useSpaces.setActive — 回到工作区选择页", () => {
+  it("传 null：activeId 清空并落盘 null，工作区列表一个不少", async () => {
+    remote.spaces = [space("a"), space("b")];
+    useSpaces.getState().hydrate([space("a"), space("b")], "a");
+    mocks.saveActiveId.mockClear();
+
+    useSpaces.getState().setActive(null);
+
+    expect(useSpaces.getState().activeId).toBeNull();
+    await vi.waitFor(() => expect(mocks.saveActiveId).toHaveBeenCalledWith(null));
+    expect(useSpaces.getState().spaces.map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  it("配对正向断言：传 id 仍然切得进去（同一函数不能只会清空）", () => {
+    useSpaces.getState().hydrate([space("a"), space("b")], "a");
+    useSpaces.getState().setActive("b");
+    expect(useSpaces.getState().activeId).toBe("b");
   });
 });
