@@ -74,6 +74,42 @@ export function resolveNewTabSshSession(
 }
 
 /**
+ * #89 的连带账：关掉一个标签页，它**独占**的那条 SSH 会话要跟着释放。
+ *
+ * 在此之前一个 SSH 工作区只有一条会话，关标签页不断开是有意为之（连接是工作区的）。
+ * #89 之后每个标签页可能各连一条，不释放就是**攒连接** —— MaxSessions 小的服务器
+ * 会被自己的历史标签页挡在门外。
+ *
+ * 保守规则：只回收"这个 tab 引用、其余 tab 都不再引用、且不是工作区当前那条会话"的
+ * 连接。工作区主会话留着当重连锚点（状态栏 / 资源管理器还在用），行为与 #89 之前一致。
+ */
+export function orphanedSshSessions(
+  remaining: readonly Tab[],
+  closed: Tab | undefined,
+  spaceSessionId?: string | null,
+): string[] {
+  if (!closed || closed.kind !== "terminal") return [];
+  const stillUsed = new Set<string>();
+  for (const t of remaining) {
+    if (t.kind !== "terminal") continue;
+    if (t.sshSessionId) stillUsed.add(t.sshSessionId);
+    for (const id of leafSshSessionIds(t.paneTree)) stillUsed.add(id);
+  }
+  if (spaceSessionId) stillUsed.add(spaceSessionId);
+  const mine = new Set<string>();
+  if (closed.sshSessionId) mine.add(closed.sshSessionId);
+  for (const id of leafSshSessionIds(closed.paneTree)) mine.add(id);
+  return [...mine].filter((id) => !stillUsed.has(id));
+}
+
+/** 收集 paneTree 里**显式绑定**了 SSH 会话的 leaf（undefined=继承 tab，null=强制本地）。 */
+function leafSshSessionIds(node: PaneNode): string[] {
+  if (node.kind === "leaf")
+    return typeof node.sshSessionId === "string" ? [node.sshSessionId] : [];
+  return node.children.flatMap(leafSshSessionIds);
+}
+
+/**
  * 新建终端 tab 的初始标题（用户钦定 2026-08-28）：
  * SSH Space → "shell"、WSL Space → "shell"、本地 Space → "terminal"。
  * 注意：tabLabel 显示优先级 customTitle > cwd basename > title，
@@ -1136,20 +1172,41 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [],
   );
 
+  // TDSF #89：关标签页时释放它独占的 SSH 会话（不是工作区主会话）。
+  //
+  // 为什么把计算搬到 updater 外面：`setTabs(curr => {...})` 的 updater 不保证在
+  // setState 返回前执行（React 只在队列空闲时才 eager 求值），原来"在 updater 里
+  // 给外层变量赋值、回到外面立刻用"的写法因此是碰运气 —— 同一批事件里连着建两个
+  // tab 再关一个时，updater 被推迟，外层拿到的还是空数组（本次加用例时才暴露）。
+  // 改成先读 tabsRef 算清楚，再提交状态，副作用与状态更新同序。
   const closeTab = useCallback((id: number) => {
-    let toDispose: number[] = [];
-    setTabs((curr) => {
-      const fallback = nextActiveInSpace(curr, id);
-      if (fallback === null) return curr;
-      const target = curr.find((t) => t.id === id);
-      if (target?.kind === "terminal") {
-        toDispose = leafIds(target.paneTree);
-      }
-      const next = curr.filter((t) => t.id !== id);
-      setActiveId((active) => (id === active ? fallback : active));
-      return next;
-    });
+    const curr = tabsRef.current;
+    const target = curr.find((t) => t.id === id);
+    if (!target) return;
+    const fallback = nextActiveInSpace(curr, id);
+    if (fallback === null) return;
+    const next = curr.filter((t) => t.id !== id);
+    tabsRef.current = next;
+
+    const env = useSpaces.getState().spaces.find((s) => s.id === target.spaceId)
+      ?.env;
+    const orphanSsh = orphanedSshSessions(
+      next,
+      target,
+      env?.kind === "ssh" ? env.sessionId : null,
+    );
+
+    setTabs(next);
+    setActiveId((active) => (id === active ? fallback : active));
+
+    const toDispose =
+      target.kind === "terminal" ? leafIds(target.paneTree) : [];
     for (const lid of toDispose) disposeSession(lid);
+    for (const sid of orphanSsh) {
+      void useSshStore.getState().disconnect(sid).catch((e) => {
+        console.warn("[useTabs] 释放标签页独占的 SSH 会话失败:", e);
+      });
+    }
   }, []);
 
   const updateTab = useCallback((id: number, patch: TabPatch) => {
