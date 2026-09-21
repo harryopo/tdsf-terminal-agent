@@ -152,19 +152,21 @@ export function Header({
   const moodFace = MOOD_FACE[mood] ?? "⬡‿⬡";
 
   // TDSF 2026-09-20（用户实测）: 顶栏「工作区 / 通知」的分隔线要和侧栏右边界
-  // 那条线对齐，且在拖拽、折叠过程中也跟着走。做法=左侧簇宽度跟着侧栏面板宽度
-  // （CSS 变量由 useSidebarPanel 实时发布）。两个换算不能省：
-  //   × --app-zoom —— 侧栏在 main.zoom-content 里会被缩放，顶栏不会（实测用户
-  //     机器 zoom=1.05，271px 的面板实际占 284.9px，不乘就差 14px）；
-  //   − 9px —— 行 gap-2 的 8px + 侧栏那条线是 panel 内最后 1px 的 border-r。
+  // 那条线对齐，且在拖拽、折叠、改缩放过程中也跟着走。做法=左侧簇宽度跟着侧栏
+  // 面板的实际渲染宽（CSS 变量由 useSidebarPanel 的 ResizeObserver 发布）。
+  // TDSF 2026-09-21 修正：这里**不再乘 --app-zoom** —— 变量原本发布的是
+  // react-resizable-panels 的布局像素，所以必须换算；但那个值只在 onResize 时给，
+  // 用户改缩放会重布局却不触发 onResize，变量停在旧值，CDP 实测两条线歪 70px。
+  // 现在变量直接就是面板渲染出来的视觉宽（与探针量的是同一个坐标空间），拿掉系数
+  // 既少了单位歧义也少了滞后。唯一还要扣的是 −9px：行 gap-2 的 8px + 侧栏那条
+  // border-r 自己占的 1px（实测 0.76~0.8px，取 1 让分隔线的左边缘压住边界线）。
   // min-w-max 兜住退化场景：折叠（变量为 0）与侧栏压得比这簇还窄时，簇回退到
   // 自身内容宽，按钮不会被裁掉。
   const leftClusterStyle = IS_MAC
     ? undefined
     : {
         width:
-          `calc(var(${SIDEBAR_WIDTH_CSS_VAR}, ` +
-          `${SIDEBAR_DEFAULT_WIDTH}px) * var(--app-zoom, 1) - 9px)`,
+          `calc(var(${SIDEBAR_WIDTH_CSS_VAR}, ` + `${SIDEBAR_DEFAULT_WIDTH}px) - 9px)`,
       };
 
   return (

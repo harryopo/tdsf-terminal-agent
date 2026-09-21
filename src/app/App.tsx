@@ -395,6 +395,7 @@ export default function App() {
 
   const {
     sidebarRef,
+    sidebarPanelRef,
     sidebarWidthRef,
     sidebarView,
     initialSidebarCollapsed,
@@ -2342,6 +2343,7 @@ export default function App() {
                 }}
               >
                 <div
+                  ref={sidebarPanelRef}
                   data-testid="sidebar-panel"
                   className="flex h-full min-h-0 flex-col border-r border-border/60 bg-card"
                 >

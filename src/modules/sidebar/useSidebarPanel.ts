@@ -21,10 +21,18 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "tdsf.sidebar.collapsed";
  * （用户 2026-09-20 实测：两条线差几十像素，看着像没对齐）。
  * 走 CSS 变量而不是 React state：拖拽时 onResize 每帧都触发，重渲染整棵 App
  * 换 1 像素的对齐不划算。
+ *
+ * **单位 = 侧栏在屏幕上实际占的视觉像素**（`getBoundingClientRect().width`），
+ * 不是 react-resizable-panels 的 `inPixels`。后者是布局像素，会随 `--app-zoom`
+ * 变（实测 zoom=1.05 时 294 布局 px ↔ 308.5 视觉 px），拿它去乘 zoom 只是把
+ * 单位换算写在了消费方，而它**只在 onResize 时发布**：改缩放会让面板重新布局却
+ * 常常不触发 onResize，变量就停在旧值上 —— CDP 实测这样能歪 70px。
+ * 现在由 ResizeObserver 直接量面板自己的渲染宽，顶栏拿到的数字与探针量的是同一个，
+ * 不需要再乘任何系数，也不可能滞后。
  */
 export const SIDEBAR_WIDTH_CSS_VAR = "--tdsf-sidebar-w";
 
-/** 把面板像素宽度写进根元素；0（折叠）也照写，顶栏据此回退到内容宽 */
+/** 把面板**视觉**像素宽度写进根元素；0（折叠）也照写，顶栏据此回退到内容宽 */
 function publishSidebarWidthVar(px: number) {
   document.documentElement.style.setProperty(
     SIDEBAR_WIDTH_CSS_VAR,
@@ -111,8 +119,6 @@ export function useSidebarPanel(
   const persistSidebarCollapsed = useCallback((collapsed: boolean) => {
     if (collapsedRef.current === collapsed) return;
     collapsedRef.current = collapsed;
-    // 折叠 = 侧栏那条线不存在了，顶栏宽度回退到自身内容宽（见 Header 的 min-w-max）
-    if (collapsed) publishSidebarWidthVar(0);
     try {
       window.localStorage.setItem(
         SIDEBAR_COLLAPSED_STORAGE_KEY,
@@ -150,7 +156,6 @@ export function useSidebarPanel(
 
   const persistSidebarWidth = useCallback((next: number) => {
     sidebarWidthRef.current = next;
-    publishSidebarWidthVar(next);
     if (sidebarWidthWriteTimerRef.current) {
       window.clearTimeout(sidebarWidthWriteTimerRef.current);
     }
@@ -164,16 +169,33 @@ export function useSidebarPanel(
     }, 200);
   }, []);
 
-  useEffect(() => {
-    // 首帧就钉好两条竖线的对齐：面板 defaultSize 用的是同一个 ref，不一定触发
-    // onResize，所以初始值自己发布一次。
-    publishSidebarWidthVar(
-      initialSidebarCollapsed ? 0 : sidebarWidthRef.current,
-    );
-  }, [initialSidebarCollapsed]);
+  const sidebarPanelObserverRef = useRef<ResizeObserver | null>(null);
+
+  /**
+   * 挂到侧栏面板 DOM 元素上的 callback ref：把面板**实际渲染出来的宽度**发布成
+   * CSS 变量，顶栏那条分隔竖线据此与侧栏右边界对齐。
+   *
+   * 为什么量 DOM 而不是直接用 react-resizable-panels 的 `size.inPixels`：那个值是
+   * 布局像素、且只在 onResize 时给出；改缩放（`--app-zoom`）会让面板重新布局却常常
+   * 不触发 onResize，变量就停在旧值上（CDP 实测歪 70px）。ResizeObserver 对任何
+   * 原因引起的尺寸变化都会回调，折叠成 0 也照样发布，所以顶栏永远拿到当前真值。
+   */
+  const sidebarPanelRef = useCallback((el: HTMLElement | null) => {
+    sidebarPanelObserverRef.current?.disconnect();
+    sidebarPanelObserverRef.current = null;
+    if (!el) return;
+    const publish = () => publishSidebarWidthVar(el.getBoundingClientRect().width);
+    publish();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    sidebarPanelObserverRef.current = ro;
+  }, []);
 
   useEffect(() => {
     return () => {
+      sidebarPanelObserverRef.current?.disconnect();
+      sidebarPanelObserverRef.current = null;
       if (sidebarWidthWriteTimerRef.current) {
         window.clearTimeout(sidebarWidthWriteTimerRef.current);
       }
@@ -214,6 +236,7 @@ export function useSidebarPanel(
 
   return {
     sidebarRef,
+    sidebarPanelRef,
     sidebarWidthRef,
     sidebarView,
     initialSidebarCollapsed,
