@@ -16,6 +16,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { toast } from "sonner";
+import { useTerminalCardTarget } from "@/modules/ai/lib/useTerminalCardTarget";
 import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { Shimmer } from "./shimmer";
@@ -209,6 +210,7 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   const prompt = shellPrompt(lang);
   const [sent, setSent] = useState(false);
   const tRef = useRef<number>(0);
+  const terminalGuard = useTerminalCardTarget();
   useEffect(() => () => window.clearTimeout(tRef.current), []);
 
   // 注入命令到活动终端。execute=true 追加 \n（打字并执行）；
@@ -222,6 +224,13 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   const inject = useCallback(
     (execute: boolean): boolean => {
       const store = useChatStore.getState();
+      // #91 第⑤条：只打进这张卡生成时那条终端。用户切走后再点 Run，
+      // 命令不该落到另一个 shell（#89 之后那可能是另一台机器）。
+      const block = terminalGuard.blockReason();
+      if (block) {
+        toast.warning(block);
+        return false;
+      }
       // 剥掉除 \t / \n 以外的 C0 控制字符与 DEL：它们会污染 readline 与回显。
       const payload = Array.from(code)
         .filter((ch) => {
@@ -243,7 +252,7 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
       tRef.current = window.setTimeout(() => setSent(false), 1500);
       return true;
     },
-    [code],
+    [code, terminalGuard],
   );
 
   // 手动点 Run：沿用既有语义——偏好开启且非教学模式时打字并执行，

@@ -48,6 +48,13 @@ type HumanTypeReport = {
   warning?: string;
 };
 
+/** 给守卫的提示语用的终端名：本地终端取目录末段，拿不到就说"本地终端"。 */
+function terminalLabelOf(cwd: string | null | undefined): string {
+  if (!cwd) return "本地终端";
+  const parts = cwd.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : cwd;
+}
+
 /** TDSF B2 (2026-08-29): 8 项之 8 —— 超过此长度的命令自动整段注入（前端判断） */
 type HumanTypingEventPayload = {
   phase: "start" | "end";
@@ -362,6 +369,29 @@ export function useAiLiveBridge(params: Params) {
         // 未知 leaf 两个信号都返回 false → 仍然 fail-open，不会静默废掉自动打字。
         if (isLeafBusy(leafId) || isLeafAltScreen(leafId)) return false;
         return getLeafBlockMode(leafId) === "prompt";
+      },
+      /**
+       * #91 第⑤条：命令卡首次渲染时记下"这条命令是给哪一条终端的"。
+       * 取值口径与真正的注入路径完全一致（可见 leaf + leaf→会话注册表），
+       * 否则守卫会拦错人或放错人。
+       */
+      getActiveTerminalTarget: () => {
+        const { activeId, tabs } = ref.current;
+        const tab = tabs.find((x) => x.id === activeId);
+        if (tab?.kind !== "terminal") return null;
+        const sshLeafId = ref.current.getSshLeafId?.();
+        const leafId = sshLeafId ?? tab.activeLeafId;
+        const sshRustSessionId = getLeafSshSession(leafId);
+        const session =
+          sshRustSessionId === null
+            ? undefined
+            : useSshStore
+                .getState()
+                .sessions.find((s) => s.rustSessionId === sshRustSessionId);
+        const label = session
+          ? `${session.params.user}@${session.params.host}`
+          : terminalLabelOf(findLeafCwd(tab.paneTree, leafId) ?? tab.cwd);
+        return { tabId: tab.id, leafId, sshRustSessionId, label };
       },
       injectIntoActivePty: (text) => {
         // TDSF B2 (2026-08-29): 逐字模式优先（tryHumanTyping），不适用或调用
