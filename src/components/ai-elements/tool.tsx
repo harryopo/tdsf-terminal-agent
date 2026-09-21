@@ -52,6 +52,8 @@ import {
   sourceGroupLabel,
 } from "@/modules/ai/lib/knowledge-labels";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { toast } from "sonner";
+import { useTerminalCardTarget } from "@/modules/ai/lib/useTerminalCardTarget";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import type { ComponentProps, ReactNode } from "react";
 import { isValidElement, memo, useEffect, useRef, useState } from "react";
@@ -1757,7 +1759,15 @@ function SuggestCommandCard({
   // 触发 useEffect，叠加 injectIntoActivePty 回流重渲染可能高频循环直至 React
   // 抛 "Maximum update depth exceeded"。与 chat-code.tsx CommandCard 同款守卫。
   const autoFiredRef = useRef(false);
+  // #91 第⑤条：这张卡归属哪一条终端，在首次渲染时就定下来；点 Run 时若活动终端
+  // 已经换人，宁可拒绝也不把命令打进别的 shell（#89 之后那可能是另一台机器）。
+  const terminalGuard = useTerminalCardTarget();
   const onInsert = () => {
+    const block = terminalGuard.blockReason();
+    if (block) {
+      toast.warning(block);
+      return;
+    }
     const store = useChatStore.getState();
     // TDSF (2026-08-09): 终端执行模式——加换行符自动执行命令
     // 教学模式禁止自动插入终端，学生手动逐条执行（teach 下视为偏好关闭）。
@@ -1861,6 +1871,7 @@ function TeachCommandCard({
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
   const [continued, setContinued] = useState(false);
+  const terminalGuard = useTerminalCardTarget();
   const execution = useTeachingExecutionStore((state) =>
     executionId ? state.executions[executionId] ?? null : null,
   );
@@ -1879,6 +1890,12 @@ function TeachCommandCard({
   // （与 SuggestCommandCard 的 auto 模式自动注入不同）
   const onExecute = () => {
     if (executionId) return;
+    // #91 第⑤条：教学单步执行同样只认这张卡当初那条终端。
+    const block = terminalGuard.blockReason();
+    if (block) {
+      setCardError(block);
+      return;
+    }
     const store = useChatStore.getState();
     // 该入口会先登记 terminal leaf 的等待态，再以当前打字机设置可见注入。
     const started = store.live.startTeachingCommand(command);

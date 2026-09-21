@@ -118,7 +118,8 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     // 但只有 auto 模式追加 \n，确认模式打字后由用户自己回车。
     expect(inject).toHaveBeenCalledTimes(1);
     expect(inject).toHaveBeenCalledWith("uptime");
-    // 手动 Run 按钮仍在（重跑/换终端用）
+    // 手动 Run 按钮仍在（重跑用；#91 第⑤条后它只认这张卡归属的那条终端，
+    // "切到别的标签页再点"会被守卫拦下，不再换终端）
     expect(
       screen.getByRole("button", { name: "Run in active terminal" }),
     ).toBeTruthy();

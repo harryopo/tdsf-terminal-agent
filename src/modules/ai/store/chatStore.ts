@@ -37,6 +37,8 @@ import {
   type SessionMeta,
 } from "../lib/sessions";
 import { pushRecentModel } from "../lib/modelPrefs";
+// #91 第⑤条：命令卡的归属终端类型（真源在 commandCardTarget，chatStore 只借类型）
+import type { TerminalTarget } from "../lib/commandCardTarget";
 import { cancelSidecarTurn } from "../lib/sidecar-adapter";
 // TDSF B1 (2026-08-29): 终端 block 流水账类型（<terminal-history> 数据源）
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
@@ -290,6 +292,11 @@ export type Live = {
   canAutoTypeToActiveTerminal: () => boolean;
   injectIntoActivePty: (text: string) => boolean;
   /**
+   * #91 第⑤条：命令卡首次渲染时取"这条命令归属哪一条终端"，点击时再取一次当前值比对。
+   * 无活动终端时返回 null（此时卡片没有归属可言，保持既有行为）。
+   */
+  getActiveTerminalTarget: () => TerminalTarget | null;
+  /**
    * 教学卡专用的确认执行入口。它先在终端 leaf 上登记等待中的教学执行，
    * 再注入命令；结果只能由同一 leaf 的 TerminalBlockCollector 回填。
    */
@@ -541,6 +548,7 @@ const NOOP_LIVE: Live = {
   isActiveTerminalPrivate: () => false,
   canAutoTypeToActiveTerminal: () => false,
   injectIntoActivePty: () => false,
+  getActiveTerminalTarget: () => null,
   startTeachingCommand: () => ({ ok: false, reason: "no-active-terminal" }),
   getWorkspaceRoot: () => null,
   getActiveFile: () => null,

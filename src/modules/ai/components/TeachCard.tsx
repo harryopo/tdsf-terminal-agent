@@ -15,6 +15,8 @@
  */
 
 import { memo, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { useTerminalCardTarget } from "../lib/useTerminalCardTarget";
 import { useChatStore } from "../store/chatStore";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -211,6 +213,7 @@ function TeachSectionBlock({
 function CommandRow({ command }: { command: string }) {
   const [inserted, setInserted] = useState(false);
   const [copied, setCopied] = useState(false);
+  const terminalGuard = useTerminalCardTarget();
 
   useEffect(() => {
     if (!copied) return;
@@ -219,6 +222,12 @@ function CommandRow({ command }: { command: string }) {
   }, [copied]);
 
   const onInsert = () => {
+    // #91 第⑤条：只打进这张卡生成时那条终端，切走了就拒绝而不是换终端。
+    const block = terminalGuard.blockReason();
+    if (block) {
+      toast.warning(block);
+      return;
+    }
     const ok = useChatStore.getState().live.injectIntoActivePty(command);
     if (ok) setInserted(true);
   };
