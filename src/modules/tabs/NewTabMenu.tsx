@@ -17,6 +17,8 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { useSpaces } from "@/modules/spaces";
+import { isSshEnvConnected } from "@/modules/spaces/lib/sshSpaceSession";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 
 type Props = {
   onNew: () => void;
@@ -27,11 +29,18 @@ export function NewTabMenu({ onNew, onNewEditor }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   // 用户钦定 2026-09-01: SSH 连接/WSL 工作区新建的是 "shell"，Windows 本地
   // 才叫 "Terminal"——菜单标签随当前工作区环境分流（与 tab 命名口径一致）。
+  // TDSF #93（2026-09-21）：SSH 身份跨断线留着，所以"SSH 工作区"不再等于"开出来是
+  // 远端 shell"——没连上时这里必须说 Terminal，否则点下去是个本地壳。
   const activeSpace = useSpaces((s) =>
     s.spaces.find((x) => x.id === s.activeId),
   );
+  const sshSessions = useSshStore((s) => s.sessions);
   const newTabLabel =
-    activeSpace && activeSpace.env.kind !== "local" ? "Shell" : "Terminal";
+    activeSpace &&
+    (activeSpace.env.kind === "wsl" ||
+      isSshEnvConnected(activeSpace.env, sshSessions))
+      ? "Shell"
+      : "Terminal";
 
   return (
     <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>

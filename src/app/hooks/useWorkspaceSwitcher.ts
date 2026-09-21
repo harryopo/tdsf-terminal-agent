@@ -1,4 +1,5 @@
 import { native } from "@/modules/ai/lib/native";
+import { isSshEnvConnected } from "@/modules/spaces/lib/sshSpaceSession";
 import type { Tab } from "@/modules/tabs";
 import {
   getWslHome,
@@ -10,7 +11,11 @@ import { type RefObject, useCallback, useEffect, useState } from "react";
 
 async function resolveEnvHome(env: WorkspaceEnv): Promise<string> {
   if (env.kind === "wsl") return getWslHome(env.distro);
-  if (env.kind === "ssh") return `/home/${env.user}`;
+  // TDSF #93（2026-09-21）：SSH 工作区的身份现在跨断线留着，所以"是 ssh"不再等于
+  // "连上了"。只有真活着的会话才把远程家目录当 home —— 否则这个 /home/<user>
+  // 会被交给本地 PTY 与 workspaceAuthorize（`pty-bridge.ts` 把 ssh env 映射成
+  // local 起壳），结果是本地 shell 试图 cd 进一个 Linux 路径。
+  if (env.kind === "ssh" && isSshEnvConnected(env)) return `/home/${env.user}`;
   return (await homeDir()).replace(/\\/g, "/");
 }
 

@@ -1,4 +1,6 @@
 import { resolveLanguage } from "@/modules/editor/lib/languageResolver";
+import { isSshEnvConnected } from "@/modules/spaces/lib/sshSpaceSession";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useWorkspaceEnvStore } from "@/modules/workspace";
 import { useEffect, useState } from "react";
@@ -14,7 +16,13 @@ export type LspHint =
 
 export function useLspHint(filePath: string | null): LspHint | null {
   const [langId, setLangId] = useState<string | null>(null);
-  const envKind = useWorkspaceEnvStore((s) => s.env.kind);
+  const env = useWorkspaceEnvStore((s) => s.env);
+  // TDSF #93（2026-09-21）：SSH 工作区身份跨断线留着，"是 ssh"不再等于"命令在远端跑"。
+  // 未连接的 SSH 工作区里编辑器与文件都在本地，LSP 提示该照常出现 —— 所以判据从
+  // `env.kind !== "local"` 改成"真的落在远端"（WSL 仍按原样抑制，行为不变）。
+  const sshSessions = useSshStore((s) => s.sessions);
+  const remoteActive =
+    env.kind === "wsl" || isSshEnvConnected(env, sshSessions);
 
   useEffect(() => {
     if (!filePath) {
@@ -49,12 +57,12 @@ export function useLspHint(filePath: string | null): LspHint | null {
   );
 
   useEffect(() => {
-    if (preset && envKind === "local" && activation === undefined) {
+    if (preset && !remoteActive && activation === undefined) {
       void detectBinary(preset.command);
     }
-  }, [preset, envKind, activation]);
+  }, [preset, remoteActive, activation]);
 
-  if (!preset || envKind !== "local") return null;
+  if (!preset || remoteActive) return null;
   if (activation === "dismissed") return null;
   if (activation === "enabled") {
     if (session) return { kind: "active", preset, status: session.status };

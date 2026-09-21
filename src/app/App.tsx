@@ -80,6 +80,12 @@ import {
   useSpacesBoot,
   WelcomeScreen,
 } from "@/modules/spaces";
+// TDSF #93（2026-09-21）：SSH 身份跨断线留着之后，"算不算已连接"只有一个判据主人。
+import {
+  detachSshSession,
+  isSshEnvConnected,
+  staleSshSpaceIds,
+} from "@/modules/spaces/lib/sshSpaceSession";
 // TDSF (P4-T4.1): SSH 远程资源管理器
 import {
   isSessionConnected,
@@ -333,10 +339,9 @@ export default function App() {
     // SSH 面板误显未连接 + AI 拿不到 ssh_session_id。
     const metaSshSessionId =
       meta && meta.env.kind === "ssh" ? meta.env.sessionId : null;
-    if (
-      metaSshSessionId &&
-      useSshStore.getState().sessions.some((s) => s.id === metaSshSessionId)
-    ) {
+    // TDSF #93（2026-09-21）：从"会话存在"收紧成"会话活着"——身份现在跨断线留着，
+    // 把 activeSessionId 指到一条 closed 会话上，SSH 面板会显示成"连着但没数据"。
+    if (metaSshSessionId && meta && isSshEnvConnected(meta.env)) {
       useSshStore.getState().setActiveSession(metaSshSessionId);
     }
     // TDSF 修复 2026-09-18（深度体检 F1）：这里原本还有 `prev === null` 一条早退，
@@ -739,12 +744,17 @@ export default function App() {
                 .getState()
                 .sessions.some((s) => s.id === ghostSshSessionId)
             ) {
-              useSpaces.getState().setEnv(spaceId!, { kind: "local" });
+              // TDSF #93（2026-09-21）：只摘会话引用，**身份留着**（host/user/port/label）。
+              // 旧写法把整个 env 改写成 local，于是服务器工作区在界面上变成"本地"，
+              // 重连所需的线索也一起没了。远程 root 仍要清掉（见下）。
+              useSpaces
+                .getState()
+                .setEnv(spaceId!, detachSshSession(space!.env));
               // TDSF 修复 2026-08-31: 降级时同步清掉远程 root（/home/... 是
               // Linux 路径，本地文件树校验会报 InvalidPath）
               useSpaces.getState().setRoot(spaceId!, null);
               console.warn(
-                "[App] auto-connect failed, downgraded ghost SSH space to local",
+                "[App] auto-connect failed, detached ghost SSH session (identity kept)",
                 space?.name,
               );
             }
@@ -781,23 +791,27 @@ export default function App() {
   // 是上个生命周期的旧 UUID，store 里不存在）会一直保持 env.kind=ssh 却
   // 无可用会话 → 该 Space 显示异常。此处等自动连接 settle（成功或跳过）
   // 后统一扫描降级。
+  //
+  // TDSF #93（2026-09-21）：清理动作从"降级成 local"改成"只摘 sessionId"——
+  // 工作区名字来自哪台服务器就该一直说得出是哪台服务器；root 仍清掉，
+  // 因为 Linux 路径喂给本地文件树会报 InvalidPath（用户实测截图那条）。
   useEffect(() => {
     if (!launchCwdResolved) return;
     const timer = window.setTimeout(() => {
-      const spaces = useSpaces.getState();
-      const sessions = useSshStore.getState().sessions;
-      for (const sp of spaces.spaces) {
-        const sshSessionId = sp.env.kind === "ssh" ? sp.env.sessionId : null;
-        if (!sshSessionId) continue;
-        if (sessions.some((s) => s.id === sshSessionId)) continue;
+      const spacesState = useSpaces.getState();
+      const stale = staleSshSpaceIds(
+        spacesState.spaces,
+        useSshStore.getState().sessions,
+      );
+      for (const id of stale) {
+        const sp = spacesState.spaces.find((s) => s.id === id);
+        if (!sp) continue;
         console.warn(
-          "[App] ghost SSH space detected at startup, downgrading to local:",
+          "[App] ghost SSH space at startup, detached stale session (identity kept):",
           sp.name,
         );
-        useSpaces.getState().setEnv(sp.id, { kind: "local" });
-        // TDSF 修复 2026-08-31: 降级时清掉远程 root，否则本地文件树打开
-        // /home/... 报 InvalidPath（用户实测截图里的报错）
-        useSpaces.getState().setRoot(sp.id, null);
+        spacesState.setEnv(id, detachSshSession(sp.env));
+        spacesState.setRoot(id, null);
       }
     }, 6000);
     return () => window.clearTimeout(timer);
@@ -1020,16 +1034,16 @@ export default function App() {
             }
           }
         }
-        // TDSF 修复 2026-08-31: 会话断开 → 所有绑定该会话的 Space 降级为本地
-        // （env→local、root→null 让资源管理器回退本地 home）。此前只给"当前
-        // Space"设 fatalError 且保留 env.kind=ssh，导致：① 幽灵 SSH Space 的
-        // root 还是远程 Linux 路径，本地文件树报 InvalidPath；② 用户删掉工作区
-        // 重开时残留 env 继续把新界面导向服务器。降级后重连会生成干净的专属
-        // SSH Space（见上方 connected 分支），本地/WSL Space 永不受连接污染。
+        // TDSF 修复 2026-08-31: 会话断开 → 所有绑定该会话的 Space 摘掉会话引用
+        // （root→null 让资源管理器回退本地 home）。此前只给"当前 Space"设
+        // fatalError 且保留 env.sessionId，导致：① root 还是远程 Linux 路径，
+        // 本地文件树报 InvalidPath；② 残留 id 让新 tab 绑到一条已死的流上。
+        // TDSF #93（2026-09-21）：不再把 env 改写成 local —— **服务器身份留着**，
+        // 于是工作区下拉能如实显示「SSH · 未连接」，重连时也不必新建一个工作区。
         const spacesState = useSpaces.getState();
         for (const sp of spacesState.spaces) {
           if (sp.env.kind === "ssh" && sp.env.sessionId === sessionId) {
-            spacesState.setEnv(sp.id, { kind: "local" });
+            spacesState.setEnv(sp.id, detachSshSession(sp.env));
             useSpaces.getState().setRoot(sp.id, null);
             if (spacesState.activeId === sp.id) {
               useWorkspaceFsStore.getState().setFatalError(null);
@@ -1393,10 +1407,12 @@ export default function App() {
 
   const bindTabToSshSpace = useCallback(
     (tabId: number, spaceId: string) => {
-      const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
-      if (space?.env.kind === "ssh" && space.env.sessionId) {
+      const env = useSpaces.getState().spaces.find((s) => s.id === spaceId)?.env;
+      // TDSF #93：判据是"这条会话真活着"，不是"这是个 SSH 工作区"——
+      // 工作区身份现在跨断线留着，绑上去会把新 tab 接到一条已死的流上。
+      if (env?.kind === "ssh" && isSshEnvConnected(env)) {
         updateTab(tabId, {
-          sshSessionId: space.env.sessionId,
+          sshSessionId: env.sessionId,
           // 用户钦定 2026-08-28: SSH tab 固定叫 "shell"（原显示 user@host）。
           // customTitle 必须设——tabLabel 里 cwd basename 优先级高于 title，
           // 不设的话远端 cd 后标题会漂移成目录名。
@@ -1410,8 +1426,10 @@ export default function App() {
   const openNewTab = useCallback(() => {
     // TDSF 修复 2026-08-01: SSH Space 新建终端继承远程 cwd（spaceSshCurrentPath），
     // 而非本地 spaceRoot 残留路径（此前新建 SSH tab 的 cwd 是本地 D:/）。
-    const isSshSpace = activeSpace?.env.kind === "ssh";
-    const cwd = isSshSpace
+    // TDSF #93：判据从"这是 SSH 工作区"改成"这条会话真连着"——未连接的 SSH 工作区
+    // 开的是本地 shell，cwd 必须走本地继承，否则 "/" 会喂给本地 PTY。
+    const sshLive = isSpaceSshConnected;
+    const cwd = sshLive
       ? (spaceSshCurrentPath ?? "/")
       : inheritedCwdForNewTab();
     const tabId = newTab(cwd);
@@ -1421,7 +1439,7 @@ export default function App() {
     inheritedCwdForNewTab,
     bindTabToSshSpace,
     activeSpaceId,
-    activeSpace,
+    isSpaceSshConnected,
     spaceSshCurrentPath,
   ]);
 
@@ -2080,7 +2098,9 @@ export default function App() {
       const root = space?.root;
       // newTabInSpace 内部已按 Space env 绑定有效 sshSessionId（幽灵 id 有校验）
       const tabId = newTabInSpace(spaceId, root ?? undefined);
-      if (space?.env.kind === "ssh" && space.env.sessionId) {
+      // TDSF #93：标题按"会话真活着"判，不按"这是 SSH 工作区"判 ——
+      // 未连接的工作区开出来的是本地 shell，叫 "shell" 会误导。
+      if (space && isSshEnvConnected(space.env)) {
         // TDSF 用户钦定 2026-08-28: SSH tab 固定叫 "shell"
         updateTab(tabId, { customTitle: "shell" });
       }
@@ -2139,8 +2159,10 @@ export default function App() {
             openKeyboardShortcuts: () => void openSettingsWindow("shortcuts"),
             spaces: useSpaces.getState().spaces,
             activeSpaceId,
-            // TDSF 修复 2026-08-01: SSH 空间隐藏本地专属命令（网页预览）
-            isSshSpace: activeSpace?.env.kind === "ssh",
+            // TDSF 修复 2026-08-01: SSH 空间隐藏本地专属命令（网页预览）。
+            // TDSF #93：判据是"会话真活着"——未连接的 SSH 工作区里命令其实跑在本地，
+            // 本地专属命令该照常可用。
+            isSshSpace: !!activeSpace && isSshEnvConnected(activeSpace.env),
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),
