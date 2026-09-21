@@ -8,8 +8,12 @@
  *   4. L3/L4 无会话免审选项；denied / dangerous_construct 时 ⚡ 隐藏
  *   5. Tool 组件 approval-requested + onApprovalRespond → 渲染审批卡
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { __resetAutoTypeLedger } from "@/modules/ai/lib/autoTypeLedger";
+import { LiveMessageProvider } from "@/modules/ai/lib/autoTypeProvenance";
+import { useChatStore } from "@/modules/ai/store/chatStore";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { Tool, ToolApprovalCard } from "./tool";
 
 function renderCard(
@@ -615,5 +619,73 @@ describe("Tool — B1 工具类别配色与标签补全", () => {
     );
     expect(screen.getByText("Python")).toBeTruthy();
     expect(screen.queryByText("python_run")).toBeNull();
+  });
+});
+
+// ============================================================================
+// 出身闸门（2026-09-21）：建议命令卡与代码块卡同一条规矩
+// ----------------------------------------------------------------------------
+// 打开历史对话时 SuggestCommandCard 也会随消息重新挂载并自动打字，与 chat-code 的
+// CommandCard 是同一个缺陷的两个现场，所以判据必须一致。
+// ============================================================================
+describe("Tool — suggest_command 自动打字只认本次运行的消息", () => {
+  const originalLive = useChatStore.getState().live;
+  const originalAutoType = usePreferencesStore.getState().agentAutoTypeCommands;
+  const originalAgentMode = useChatStore.getState().agentMode;
+  const originalTeach = useChatStore.getState().teach;
+
+  function renderSuggest(command: string, live: boolean) {
+    return render(
+      <LiveMessageProvider value={live}>
+        <Tool
+          toolName="suggest_command"
+          state="output-available"
+          input={{ intent: "看磁盘", target_os: "linux" }}
+          output={{ command, explanation: "查看磁盘占用" }}
+          defaultOpen
+        />
+      </LiveMessageProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    __resetAutoTypeLedger();
+    usePreferencesStore.setState({ agentAutoTypeCommands: true });
+    useChatStore.setState({ agentMode: "auto", teach: false });
+    useChatStore.setState((s) => ({
+      live: {
+        ...s.live,
+        canAutoTypeToActiveTerminal: () => true,
+        isActiveTerminalPrivate: () => false,
+      },
+    }));
+  });
+
+  afterEach(() => {
+    useChatStore.setState({
+      live: originalLive,
+      agentMode: originalAgentMode,
+      teach: originalTeach,
+    });
+    usePreferencesStore.setState({ agentAutoTypeCommands: originalAutoType });
+  });
+
+  it("live=false（历史对话读回来）→ 不往终端打一个字", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderSuggest("df -h", false);
+    expect(inject).not.toHaveBeenCalled();
+  });
+
+  it("同一条命令在 live 消息里照常打字并执行（配对正向断言）", () => {
+    const inject = vi.fn(() => true);
+    useChatStore.setState((s) => ({
+      live: { ...s.live, injectIntoActivePty: inject },
+    }));
+    renderSuggest("df -h", true);
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith("df -h\n");
   });
 });

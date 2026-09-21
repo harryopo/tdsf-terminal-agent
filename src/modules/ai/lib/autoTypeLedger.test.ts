@@ -5,6 +5,10 @@
  *   H2：注入失败不能被永久记账，且记账要按会话分域，否则 `git status` 这类
  *       常见命令会在整个应用生命周期里再也不自动打字且无任何提示；
  *   批次边界：同一次宏任务内只放行一张卡，下一条流式增量（新的宏任务）可以正常打字。
+ *
+ * ⚠️ 这里证明的只是**账本层**的去重规则。「打开历史对话不该重放旧命令」不由账本
+ * 负责（账本是内存态，重启即空），由 autoTypeProvenance 负责，用例在
+ * chat-code.test.tsx / tool.test.tsx / AiChat.autoType.test.tsx。
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -27,7 +31,9 @@ describe("autoTypeLedger — 会话内去重", () => {
     expect(claimAutoType("git status", "sess-A")).toBe(false);
   });
 
-  it("换到另一个会话，同一条命令可以重新自动打字（H2 回归）", async () => {
+  it("账本层：作用域按会话精确匹配，换会话不共用同一条记录（H2 回归）", async () => {
+    // 只钉"账本键里 scope 参与"这一件事。历史会话能不能重打由出身闸门决定，
+    // 不是这里的职责——别把这条读成"换会话就该重放旧命令"。
     expect(claimAutoType("git status", "sess-A")).toBe(true);
     markAutoTyped("git status", "sess-A");
     // 批次边界是"同一时刻只打一条"，与会话分域无关，先让本批结束

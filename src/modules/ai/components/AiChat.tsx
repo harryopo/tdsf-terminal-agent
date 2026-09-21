@@ -43,6 +43,7 @@ import type {
   UIMessagePart,
 } from "ai";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isLiveMessage, LiveMessageProvider } from "../lib/autoTypeProvenance";
 import { sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
 // P1-2: 会话证据面板
@@ -224,13 +225,17 @@ export function AiChatView({
     <Conversation>
       <ConversationContent className="gap-3 p-3">
         {messages.map((m) => (
-          <RenderedMessage
-            key={m.id}
-            message={m}
-            onApproval={onApproval}
-            streaming={m.id === streamingMessageId}
-            showEvidence={m.id === lastAssistantMessageId}
-          />
+          // 出身闸门：只有本次运行生成的消息，其命令卡才允许自动打字到终端。
+          // 从盘上读回来的历史消息（打开旧对话 / 冷启动后再进来）一律不许——
+          // 否则每条历史命令都会被重新打一遍，auto 档下等于重新执行。
+          <LiveMessageProvider key={m.id} value={isLiveMessage(m.id)}>
+            <RenderedMessage
+              message={m}
+              onApproval={onApproval}
+              streaming={m.id === streamingMessageId}
+              showEvidence={m.id === lastAssistantMessageId}
+            />
+          </LiveMessageProvider>
         ))}
         {/* Task 6.5: sidecar needs_you 审批闭环——approval 类 HITL 请求渲染
             四层审批卡（semantic/command/explanation/impact），三按钮经

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loadPersistedSpaces: vi.fn(),
   toastError: vi.fn(),
+  loadMessages: vi.fn(async () => [] as unknown[]),
 }));
 
 vi.mock("../lib/sessions", async (importOriginal) => {
@@ -12,7 +13,7 @@ vi.mock("../lib/sessions", async (importOriginal) => {
     saveSessionsList: vi.fn(async () => {}),
     saveActiveId: vi.fn(async () => {}),
     saveMessages: vi.fn(async () => {}),
-    loadMessages: vi.fn(async () => []),
+    loadMessages: mocks.loadMessages,
     loadAll: vi.fn(async () => ({ sessions: [], activeId: null })),
   };
 });
@@ -37,6 +38,10 @@ import { useSpaces } from "@/modules/spaces";
 import type { SpaceMeta } from "@/modules/spaces/lib/store";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import type { SessionMeta } from "../lib/sessions";
+import {
+  __resetAutoTypeProvenance,
+  isLiveMessage,
+} from "../lib/autoTypeProvenance";
 import {
   chats,
   seedMessages,
@@ -502,5 +507,36 @@ describe("SSH-bound conversation history", () => {
         port: profile.port,
       });
     expect(useChatStore.getState().activeSessionId).toBe(target.id);
+  });
+
+  // ==========================================================================
+  // 出身登记（2026-09-21）：从盘上读回来的消息在这里进 UI，也必须在这里被记住
+  // --------------------------------------------------------------------------
+  // 命令卡的自动打字只允许发生在"本次运行生成的消息"上。switchSession 是持久化
+  // 消息进入界面的唯一入口（loadMessages 的另一处调用只做记忆沉淀，不进 UI），
+  // 所以登记必须钉在这里——漏一次，冷启动打开历史对话就会重放旧命令。
+  // ==========================================================================
+  it("marks persisted messages as restored so their command cards never auto-type", async () => {
+    __resetAutoTypeProvenance();
+    const current = meta("current", { kind: "local" });
+    const target = meta("target", { kind: "local" });
+    useChatStore.setState({
+      sessions: [current, target],
+      activeSessionId: current.id,
+    });
+    mocks.loadMessages.mockResolvedValueOnce([
+      { id: "old-user", role: "user", parts: [] },
+      { id: "old-assistant", role: "assistant", parts: [] },
+    ]);
+
+    useChatStore.getState().switchSession(target.id);
+
+    await vi.waitFor(() =>
+      expect(useChatStore.getState().activeSessionId).toBe(target.id),
+    );
+    expect(isLiveMessage("old-user")).toBe(false);
+    expect(isLiveMessage("old-assistant")).toBe(false);
+    // 配对正向断言：本次运行里新产生的消息（未登记）仍然是 live
+    expect(isLiveMessage("brand-new-message")).toBe(true);
   });
 });

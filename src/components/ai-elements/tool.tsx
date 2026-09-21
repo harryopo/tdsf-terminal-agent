@@ -43,6 +43,7 @@ import {
   claimAutoType,
   markAutoTyped,
 } from "@/modules/ai/lib/autoTypeLedger";
+import { useAutoTypeAllowed } from "@/modules/ai/lib/autoTypeProvenance";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useChatStore } from "@/modules/ai/store/chatStore";
 import { sendMessage } from "@/modules/ai/store/chatRuntime";
@@ -1759,6 +1760,9 @@ function SuggestCommandCard({
   // 触发 useEffect，叠加 injectIntoActivePty 回流重渲染可能高频循环直至 React
   // 抛 "Maximum update depth exceeded"。与 chat-code.tsx CommandCard 同款守卫。
   const autoFiredRef = useRef(false);
+  // TDSF 2026-09-21（用户实测"打开历史对话把旧命令又输一遍"）：出身闸门
+  // ——只有本次运行里生成的消息才自动打字，读回来的历史消息不注入（手动 Run 照旧）。
+  const autoTypeAllowed = useAutoTypeAllowed();
   // #91 第⑤条：这张卡归属哪一条终端，在首次渲染时就定下来；点 Run 时若活动终端
   // 已经换人，宁可拒绝也不把命令打进别的 shell（#89 之后那可能是另一台机器）。
   const terminalGuard = useTerminalCardTarget();
@@ -1787,6 +1791,8 @@ function SuggestCommandCard({
   // 叠加 injectIntoActivePty 回流重渲染可致 "Maximum update depth exceeded"。
   useEffect(() => {
     if (autoFiredRef.current) return;
+    // 出身闸门：历史消息（从盘上读回来的）一律不注入。见 autoTypeProvenance。
+    if (!autoTypeAllowed) return;
     const { activeSessionId, agentMode, live, teach } = useChatStore.getState();
     if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
     // 自动打字闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
@@ -1801,7 +1807,7 @@ function SuggestCommandCard({
     if (!ok) return;
     markAutoTyped(command, activeSessionId);
     setAction(execute ? "executed" : "inserted");
-  }, [command]);
+  }, [autoTypeAllowed, command]);
   return (
     <div className="space-y-1.5">
       {explanation ? (
