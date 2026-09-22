@@ -311,19 +311,24 @@ function Header({
       onPointerDown={onHeaderPointerDown}
       className="relative flex h-11 shrink-0 cursor-grab items-center justify-between gap-2 border-b border-border/60 px-3 active:cursor-grabbing"
     >
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5">
         {/* 用户钦定 2026-09-01: 左侧不放加号——新建对话经右侧"新会话"下拉展开添加 */}
         {/* TDSF 2026-09-02（用户钦定）: WorkspaceChip 从顶部移除——
             窄窗下左侧工作区与右侧 SessionPicker（历史对话概要）会重叠，
             工作区标签改放底部（见 Body 末尾 footer）。 */}
+        {/* TDSF 2026-09-22（用户实测重叠）: 这簇改回 shrink-0。旧写法 min-w-0 让
+            左簇被压到比内容还窄，而里面的「第 N 轮 · 工具 M」是 shrink-0 的，
+            文字于是溢出盒子画到右边标题上（主窗顶栏同一类问题由 min-w-max 挡住）。 */}
         <AgentStatusPill isMiniWindow />
         {messages !== undefined ? (
           <ContextIndicator messages={messages} />
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
         {/* 2026-09-03（用户钦定）: 移除 Header 的“思考中…”step 显示——agent 对话
             本身已有 thinking 卡片，顶部再显示 step 冗余且与 SessionPicker 拥挤。 */}
+        {/* 2026-09-22: 让位的一律是这一簇——小窗最窄 400px，长文字只有会话标题，
+            它自带 truncate，所以由它出省略号，而不是把左簇挤出去。 */}
         <SessionPicker />
         <Button
           type="button"
