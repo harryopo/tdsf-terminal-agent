@@ -159,7 +159,13 @@ impl SshState {
             .open_sftp_channel()
             .await
             .map_err(|e| format!("open SFTP channel failed: {e}"))?;
-        let sftp = Arc::new(SftpSession::new(stream).await?);
+        // #102: 走到这里说明通道已开通、子系统已被接受，失败只能是协议握手层
+        // ——报错要区别于上面的"开不了通道"，否则运维方向被带偏到 sshd 配置。
+        let sftp = Arc::new(
+            SftpSession::new(stream)
+                .await
+                .map_err(|e| format!("SFTP 协议握手失败: {e}"))?,
+        );
 
         // 3. write 锁 double-check: 防止并发请求重复创建
         let mut sftp_map = self.sftp_sessions.write().await;

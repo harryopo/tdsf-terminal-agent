@@ -194,6 +194,81 @@ pub enum SshSessionError {
     Other(String),
 }
 
+/// 等 sftp 子系统回执的上限 (秒)。真 sshd 一个 RTT 就回，装死的服务器按上限失败。
+const SFTP_SUBSYSTEM_REPLY_TIMEOUT_SECS: u64 = 5;
+
+/// 读服务器对 `subsystem sftp` 的回执，把三种失败分成三种说法 (TDSF #102)
+///
+/// 必须在把通道交给 russh-sftp 之前调用：一旦交出去，`Success`/`Failure`
+/// 会被协议层的读循环丢掉，故障就只剩一句 `SFTP error: Timeout`。
+///
+/// 确认之前到达的 `Data` 不能吞掉——那是协议错位，直接报出来比继续握手有用。
+async fn wait_for_sftp_subsystem_accepted(
+    channel: &mut russh::Channel<russh::client::Msg>,
+) -> Result<(), SshSessionError> {
+    loop {
+        let msg = match tokio::time::timeout(
+            std::time::Duration::from_secs(SFTP_SUBSYSTEM_REPLY_TIMEOUT_SECS),
+            channel.wait(),
+        )
+        .await
+        {
+            Err(_) => {
+                return Err(SshSessionError::Other(format!(
+                    "服务器对 sftp 子系统请求没有响应（{SFTP_SUBSYSTEM_REPLY_TIMEOUT_SECS} 秒内既没接受也没拒绝）"
+                )))
+            }
+            Ok(None) => {
+                return Err(SshSessionError::Other(
+                    "SFTP 通道在子系统启动确认前已关闭".to_string(),
+                ))
+            }
+            Ok(Some(msg)) => msg,
+        };
+        match msg {
+            ChannelMsg::Success => return Ok(()),
+            ChannelMsg::Failure => {
+                return Err(SshSessionError::Other(
+                    "服务器拒绝启动 sftp 子系统（sshd 未配置 Subsystem sftp，或未安装 openssh-sftp-server）"
+                        .to_string(),
+                ))
+            }
+            ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                return Err(SshSessionError::Other(format!(
+                    "SFTP 通道在子系统启动确认前收到 {} 字节非协议数据: {}",
+                    data.len(),
+                    preview_bytes(&data)
+                )))
+            }
+            ChannelMsg::Eof | ChannelMsg::Close => {
+                return Err(SshSessionError::Other(
+                    "SFTP 通道在子系统启动确认前已关闭".to_string(),
+                ))
+            }
+            // 与本请求无关的通道消息（窗口调整、退出状态等）继续等
+            _ => {}
+        }
+    }
+}
+
+/// 把来路不明的一段字节转成可日志化的预览（最多 64 字节，不可打印字符转义）
+fn preview_bytes(data: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in data.iter().take(64) {
+        match b {
+            0x20..=0x7e => out.push(b as char),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            _ => out.push_str(&format!("\\x{b:02x}")),
+        }
+    }
+    if data.len() > 64 {
+        out.push('…');
+    }
+    out
+}
+
 /// 重连成功回调 (P1 §37.90, 2026-09-01)
 ///
 /// `perform_reconnect` 热替换底层连接后、广播 "connected" 状态**之前** await,
@@ -991,6 +1066,13 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 不再检查 `exited`。PTY reader 死亡 (用户敲 `exit` 退出 shell) 后,
     /// SFTP 仍能继续用, 因为 SSH 连接本身还在。
     ///
+    /// TDSF (#102): 子系统回执必须自己读。russh 的 `request_subsystem(true, ..)`
+    /// 只把 want_reply 写进报文就返回 (channels/mod.rs 的 send_msg),
+    /// 而服务器回的 CHANNEL_FAILURE 随后被 ChannelRx 的 `_` 分支静默丢弃
+    /// (channels/io/rx.rs) —— 结果"服务器根本没有 sftp 子系统"和"SFTP 协议
+    /// 握手慢"长成同一张脸: 10 秒后一条 `SFTP error: Timeout`。见
+    /// `wait_for_sftp_subsystem_accepted`。
+    ///
     /// # 返回
     /// `Channel<Msg>::into_stream()` 结果,即 AsyncRead+AsyncWrite 流。
     pub async fn open_sftp_channel(
@@ -1009,9 +1091,10 @@ impl<R: tauri::Runtime> SshSession<R> {
         let channel = handle.channel_open_session().await?;
         drop(handle_guard);
 
-        // 请求 sftp 子系统 (RFC 4254 6.5)
-        // want_reply=true: 等待服务器确认子系统启动
+        // 请求 sftp 子系统 (RFC 4254 6.5)。真正的确认在下一步读。
+        let mut channel = channel;
         channel.request_subsystem(true, "sftp").await?;
+        wait_for_sftp_subsystem_accepted(&mut channel).await?;
 
         // 转为 stream (russh-sftp 期望 AsyncRead+AsyncWrite)
         Ok(channel.into_stream())

@@ -14,6 +14,9 @@
 //!   3. `SshSession::exec_command` 拿到 mock server 回显输出
 //!   4. `SshSession::write_data` 数据推到 on_data channel (真流式链路)
 //!   5. 认证失败路径 (错误密码 → SshClientError::AuthFailed)
+//!   6. `SshSession::open_sftp_channel` 的子系统回执闸门 (TDSF #102):
+//!      服务器接受 / 拒绝 / 装死 / 确认前喷文字 四种行为必须有四种结果，
+//!      不许统一退化成 `SFTP error: Timeout`
 //!
 //! ## TOFU 绕过
 //! `SshClientHandler::check_server_key` 对"未知主机"会 emit HostVerify 事件并
@@ -53,12 +56,27 @@ use tdsf_terminal_agent_lib::modules::ssh::session::SshSession;
 /// | exec "exec bash --rcfile ..." (注入)| channel_success, 保持 channel 打开     |
 /// | exec 其他命令 (exec_command)        | 回显 "mock-exec-echo: <cmd>" + exit 0 + eof |
 /// | data (write_data)                   | 回显 "mock-data: <data>"               |
+/// mock server 对 `subsystem sftp` 请求的反应 (TDSF #102: 客户端必须分辨得出来)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SubsysMode {
+    /// 正常: 回 CHANNEL_SUCCESS (真 sshd 装了 openssh-sftp-server 时就这样)
+    Accept,
+    /// 拒绝: 回 CHANNEL_FAILURE (真 sshd 缺 sftp-server 二进制 / 没配 Subsystem)
+    Reject,
+    /// 装死: 什么都不回 (russh server 默认 handler 的行为)
+    Silent,
+    /// 确认前先把一段文字喷进通道 (即"欢迎语污染子系统通道")
+    BannerThenAccept,
+}
+
 #[derive(Clone)]
 struct MockSshServer {
     /// 最近一次 exec 请求的命令 (供断言)
     last_exec: Arc<Mutex<Option<String>>>,
     /// 最近一次 data 请求的字节 (供断言)
     last_data: Arc<Mutex<Vec<u8>>>,
+    /// sftp 子系统请求怎么回 (测试中可随时改)
+    subsys_mode: Arc<Mutex<SubsysMode>>,
 }
 
 impl server::Server for MockSshServer {
@@ -117,6 +135,37 @@ impl server::Handler for MockSshHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
+        Ok(())
+    }
+
+    /// sftp 子系统请求: 按 subsys_mode 决定回什么 (TDSF #102)
+    ///
+    /// 真 sshd 一定会回 SUCCESS 或 FAILURE 之一; russh server 的默认 handler
+    /// 什么都不回，所以 `Silent` 就是"什么都不回"这种半吊子服务器的模型。
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if name != "sftp" {
+            session.channel_failure(channel)?;
+            return Ok(());
+        }
+        match *self.server.subsys_mode.lock().await {
+            SubsysMode::Accept => {
+                session.channel_success(channel)?;
+            }
+            SubsysMode::Reject => {
+                session.channel_failure(channel)?;
+            }
+            SubsysMode::Silent => {}
+            SubsysMode::BannerThenAccept => {
+                // 确认前就把文字喷进通道: 真发生在这里的东西会让二进制协议错位
+                session.data(channel, "Welcome to Rocky Linux 8.10\n")?;
+                session.channel_success(channel)?;
+            }
+        }
         Ok(())
     }
 
@@ -183,7 +232,8 @@ impl server::Handler for MockSshHandler {
 /// `run_on_socket(&mut self, config, &socket)` 借用外部 `srv`/`socket`,
 /// 因此 server future 必须在同一个闭包内创建 (srv/socket 作为闭包局部变量),
 /// 才能满足 `tokio::spawn` 的 `'static` 约束。handle 通过 oneshot 传出。
-async fn start_server_with_known_hosts() -> (u16, server::RunningServerHandle) {
+async fn start_server_with_known_hosts(
+) -> (u16, server::RunningServerHandle, Arc<Mutex<SubsysMode>>) {
     let private_key = russh::keys::PrivateKey::random(
         &mut rand::rng(),
         russh::keys::Algorithm::Ed25519,
@@ -222,10 +272,13 @@ async fn start_server_with_known_hosts() -> (u16, server::RunningServerHandle) {
 
     // server future 必须被 poll, 否则不接受连接 (spawn 到 tokio runtime)
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let subsys_mode = Arc::new(Mutex::new(SubsysMode::Accept));
+    let mode_for_server = subsys_mode.clone();
     tokio::spawn(async move {
         let mut srv = MockSshServer {
             last_exec: Arc::new(Mutex::new(None)),
             last_data: Arc::new(Mutex::new(Vec::new())),
+            subsys_mode: mode_for_server,
         };
         let running = srv.run_on_socket(config, &socket);
         let _ = tx.send(running.handle());
@@ -233,7 +286,7 @@ async fn start_server_with_known_hosts() -> (u16, server::RunningServerHandle) {
     });
     let handle = rx.await.expect("mock server task should start");
 
-    (port, handle)
+    (port, handle, subsys_mode)
 }
 
 // === 集成测试 ==================================================================
@@ -243,7 +296,7 @@ async fn start_server_with_known_hosts() -> (u16, server::RunningServerHandle) {
 #[tokio::test]
 async fn ssh_roundtrip_against_mock_server() {
     // 1. 启动 mock server + 预写 known_hosts
-    let (port, server_handle) = start_server_with_known_hosts().await;
+    let (port, server_handle, subsys_mode) = start_server_with_known_hosts().await;
 
     // mock Tauri App (MockRuntime) 作为 AppHandle
     let app = tauri::test::mock_app();
@@ -300,6 +353,59 @@ async fn ssh_roundtrip_against_mock_server() {
         .await
         .expect("write_data should succeed");
     tokio::time::sleep(Duration::from_millis(200)).await; // 等 mock 回显
+
+    // 5.5 SFTP 子系统回执闸门 (TDSF #102 的后半):
+    //     russh 的 request_subsystem(want_reply=true) 发完就返回，服务器拒绝时
+    //     回执又被 ChannelRx 静默丢掉 → 失败只会以 "SFTP error: Timeout" 露脸。
+    //     这里要求 open_sftp_channel 自己把回执读出来，三种服务器行为三种说法。
+
+    // (a) 服务器拒绝 → 必须报"拒绝"，不许再退化成一个笼统的 Timeout
+    *subsys_mode.lock().await = SubsysMode::Reject;
+    let err = session
+        .open_sftp_channel()
+        .await
+        .err()
+        .expect("服务器拒绝 sftp 子系统时，开通道必须失败");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("拒绝"),
+        "拒绝回执要说成「服务器拒绝启动 sftp 子系统」, got: {msg:?}"
+    );
+
+    // (b) 正向配对: 服务器确认 → 必须成功拿到可用通道
+    //     (少了这条，(a) 会因为"任何情况都失败"而假绿)
+    *subsys_mode.lock().await = SubsysMode::Accept;
+    session
+        .open_sftp_channel()
+        .await
+        .expect("服务器回 channel_success 时必须能开出 SFTP 通道");
+
+    // (c) 服务器装死不回执 → 报"没有响应"，且不许伪装成协议层超时
+    *subsys_mode.lock().await = SubsysMode::Silent;
+    let err = session
+        .open_sftp_channel()
+        .await
+        .err()
+        .expect("服务器不回执时必须在超时后失败，不能永久挂住");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("没有响应"),
+        "装死的服务器应报「对 sftp 子系统请求没有响应」, got: {msg:?}"
+    );
+
+    // (d) 确认前就喷文字 → 说清是"非协议数据"，别留给下游一个错位的二进制流
+    *subsys_mode.lock().await = SubsysMode::BannerThenAccept;
+    let err = session
+        .open_sftp_channel()
+        .await
+        .err()
+        .expect("子系统通道上出现提前喷出的文字必须失败");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("非协议数据"),
+        "应报「SFTP 通道在确认前收到非协议数据」, got: {msg:?}"
+    );
+    *subsys_mode.lock().await = SubsysMode::Accept;
 
     // 6. close: 干净断开
     session
