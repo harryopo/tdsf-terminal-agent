@@ -39,7 +39,7 @@ function activeStepIndex(state: SshSessionStateValue): number {
     case "authenticated":
       return 4;
     case "connected":
-      return 5; // 全部完成（此时 SshTerminalHost 应已接管渲染）
+      return 5; // 全部完成（此后该标签页的 SSH leaf 走远端 shell 渲染）
     case "reconnecting":
       return 0; // 重连从头开始
     default:

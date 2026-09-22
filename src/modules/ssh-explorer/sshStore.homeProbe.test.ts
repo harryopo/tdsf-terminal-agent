@@ -1,5 +1,5 @@
 /**
- * sshStore.homeProbe.test.ts — 连上之后资源管理器该开在哪个目录（#104 同类）
+ * sshStore.homeProbe.test.ts — 连上之后远端 shell 的起点目录（#104 同类）
  * -----------------------------------------------------------------------------
  * 实测服务器（192.168.45.128）连**非交互 exec** 都会先吐一段欢迎横幅，
  * `echo $HOME` 因此返回 1802 字节而真实 $HOME 只有 5 字节，且横幅末尾不带换行
@@ -71,15 +71,9 @@ function fakeExec(home: string) {
   });
 }
 
-let navigateSpy: ReturnType<typeof vi.fn>;
-
 beforeEach(() => {
   vi.clearAllMocks();
   useSshStore.setState({ sessions: [], activeSessionId: null });
-  navigateSpy = vi.fn(async () => {});
-  // $HOME 解析完调的是 get().navigateTo —— 换掉它即可观察落点，
-  // 不必把整棵 SFTP 目录树 mock 出来。
-  useSshStore.setState({ navigateTo: navigateSpy } as never);
   mocks.sshConnect.mockResolvedValue({
     id: 85,
     write: vi.fn(),
@@ -88,20 +82,33 @@ beforeEach(() => {
   });
 });
 
+/** 解析完之后 store 里那条会话的远端 cwd（#91② 之后这是唯一的落点，没有第二棵树要刷） */
+function seededPath(sessionId: string | null) {
+  const path = sessionId
+    ? useSshStore.getState().currentPathBySession[sessionId]
+    : undefined;
+  expect(path).toBeDefined();
+  return path;
+}
+
 describe("sshStore — 连接后的家目录落点（横幅污染）", () => {
-  it("带横幅的 exec 输出 → 资源管理器开在 /root，不是 /", async () => {
+  it("带横幅的 exec 输出 → 起点是 /root，不是 /", async () => {
     fakeExec("/root");
 
     const sessionId = await useSshStore.getState().connect(params);
-    await vi.waitFor(() => expect(navigateSpy).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(useSshStore.getState().currentPathBySession[sessionId!]).toBeDefined(),
+    );
 
-    expect(navigateSpy).toHaveBeenCalledWith(sessionId, "/root");
+    expect(seededPath(sessionId)).toBe("/root");
   });
 
   it("发出去的探测命令必须带哨兵（否则上一条只是碰巧绿）", async () => {
     fakeExec("/root");
-    await useSshStore.getState().connect(params);
-    await vi.waitFor(() => expect(navigateSpy).toHaveBeenCalled());
+    const sessionId = await useSshStore.getState().connect(params);
+    await vi.waitFor(() =>
+      expect(useSshStore.getState().currentPathBySession[sessionId!]).toBeDefined(),
+    );
 
     const homeCmd = mocks.sshCommand.mock.calls
       .map((c) => String(c[1]))
@@ -114,8 +121,10 @@ describe("sshStore — 连接后的家目录落点（横幅污染）", () => {
     mocks.sshCommand.mockResolvedValue(result(`${BANNER}/root\n`));
 
     const sessionId = await useSshStore.getState().connect(params);
-    await vi.waitFor(() => expect(navigateSpy).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(useSshStore.getState().currentPathBySession[sessionId!]).toBeDefined(),
+    );
 
-    expect(navigateSpy).toHaveBeenCalledWith(sessionId, "/");
+    expect(seededPath(sessionId)).toBe("/");
   });
 });
