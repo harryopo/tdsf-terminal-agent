@@ -9,6 +9,7 @@
 //     事件推送, 弹窗按到达顺序逐条询问用户
 import { create } from 'zustand';
 import { toast } from 'sonner';
+import { describeSshFailure } from './lib/sshErrorText';
 import {
   sshConnect,
   sshCredentialsDelete,
@@ -540,8 +541,12 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         ),
       }));
       // TDSF: 弹 toast 让用户立即知晓失败原因 (而不只是在会话标签上显示 failed 状态)
-      // 配合 ssh-bridge 的 dev mode 检测和 15s 超时, 用户能清楚知道为什么连不上
-      toast.error('SSH 连接失败', { description: msg });
+      // 配合 ssh-bridge 的 dev mode 检测和 15s 超时, 用户能清楚知道为什么连不上。
+      // #110：russh 的 Debug 结构体（`Failure { remaining_methods: MethodSet(...) }`）
+      // 用户读不出该做什么 —— 认得出的形状翻成人话 + 指真实入口，认不出的原样保留。
+      // 原文仍留在 session.error 里（状态点 tooltip / 排查用）。
+      const copy = describeSshFailure(msg);
+      toast.error(copy.headline, { description: copy.description });
       return null;
     }
   },

@@ -98,7 +98,8 @@ export function SshExplorerOffline({
           data-testid="explorer-ssh-offline-failed"
           className="text-[11px] leading-relaxed text-destructive"
         >
-          重连失败：确认服务器可达后再试一次，或在 SSH 面板重新登录。
+          重连失败：这台服务器拒绝了保存的凭据。可再点一次「重新连接」，或在「新建工作区 →
+          SSH 服务器」里重填密码 / 改用私钥（服务器若只允许密钥登录，密码是连不上的）。
         </div>
       ) : null}
     </div>
