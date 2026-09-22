@@ -1509,7 +1509,21 @@ async fn handle_reverse_request(
                 format!("vt-{}", *counter)
             };
             let (tx, rx) = oneshot::channel::<Value>();
-            VISIBLE_TERMINAL_PENDING.lock().await.insert(request_id.clone(), tx);
+            let started_at = now_ms();
+            VISIBLE_TERMINAL_PENDING
+                .lock()
+                .await
+                .insert(request_id.clone(), (tx, started_at));
+            // #113①：只打长度不打命令正文（可能含密码），正文在 sidecar 审计链里
+            log::info!(
+                "[vt-probe] rust-emit req={} op={} session={} timeout_s={} cmd_chars={} t_ms={}",
+                request_id,
+                operation_id,
+                session_id,
+                timeout_secs,
+                command.chars().count(),
+                started_at
+            );
 
             let emitted = {
                 let guard = app_handle.lock().await;
@@ -1530,6 +1544,11 @@ async fn handle_reverse_request(
             };
             if !emitted {
                 VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id);
+                log::warn!(
+                    "[vt-probe] rust-emit-failed req={} op={} (emit 返回 Err，事件没发出去)",
+                    request_id,
+                    operation_id
+                );
                 return Ok(json!({
                     "status": "unavailable",
                     "reason": "visible_terminal_unavailable",
@@ -1538,6 +1557,8 @@ async fn handle_reverse_request(
                 }));
             }
 
+            let budget_ms =
+                (timeout_secs + VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS) * 1_000;
             match timeout(
                 Duration::from_secs(timeout_secs + VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS),
                 rx,
@@ -1547,6 +1568,17 @@ async fn handle_reverse_request(
                 Ok(Ok(result)) => Ok(result),
                 Ok(Err(_)) | Err(_) => {
                     VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id);
+                    // #113①：这一条是"前端一句话都没回"的现场证据 —— waited ≈ budget
+                    // 说明是前端链路卡住；waited 明显小于 budget 说明 oneshot 被丢弃。
+                    let now = now_ms();
+                    log::warn!(
+                        "[vt-probe] rust-timeout req={} op={} t_ms={} waited_ms={} budget_ms={}",
+                        request_id,
+                        operation_id,
+                        now,
+                        now.saturating_sub(started_at),
+                        budget_ms
+                    );
                     Ok(json!({
                         "status": "timed_out",
                         "reason": "visible_terminal_timeout",
@@ -1607,11 +1639,36 @@ static SCROLLBACK_PENDING: std::sync::LazyLock<
 static SCROLLBACK_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(0));
 
+/// #113①：oneshot 发送端 + Rust 侧「事件已发出」的 epoch 毫秒（探针用它算总等待）
+type PendingVisibleTerminal = (oneshot::Sender<Value>, u64);
+
 static VISIBLE_TERMINAL_PENDING: std::sync::LazyLock<
-    tokio::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>,
+    tokio::sync::Mutex<HashMap<String, PendingVisibleTerminal>>,
 > = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
 static VISIBLE_TERMINAL_REQ_COUNTER: std::sync::LazyLock<tokio::sync::Mutex<u64>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(0));
+
+// #113① (2026-09-22): 可见终端往返耗时探针。Python / Rust / 前端三个进程都在
+// 同一台机器上，所以用**同一种时钟**（Unix epoch 毫秒）才可直接相减对账；
+// 两份日志时区不一致（rust.log = UTC，sidecar.log = 本地时间），毫秒数不受影响。
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// #113①：取出并**剥掉**回执里的 `_probe`。
+/// 探针只服务于日志对账，绝不进 Python 工具结果、更不进模型可见载荷。
+fn take_probe(result: &mut Value) -> Option<serde_json::Map<String, Value>> {
+    result
+        .as_object_mut()
+        .and_then(|obj| obj.remove("_probe"))
+        .and_then(|p| match p {
+            Value::Object(map) => Some(map),
+            _ => None,
+        })
+}
 
 /// 前端回传终端 scrollback（配合 get_terminal_scrollback 反向 RPC）
 ///
@@ -1639,10 +1696,76 @@ pub async fn sidecar_scrollback_response(
 #[tauri::command]
 pub async fn sidecar_visible_terminal_response(
     request_id: String,
-    result: Value,
+    mut result: Value,
 ) -> Result<(), String> {
-    if let Some(tx) = VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id) {
-        let _ = tx.send(result);
+    // #113①：前端把三个时刻（收到事件 / 注入完成 / 结算）塞进 `_probe` 一起带回。
+    // 这里记完日志就剥掉该键，Python 与模型看到的载荷跟以前完全一样。
+    let probe = take_probe(&mut result);
+    let at = |k: &str| -> u64 {
+        probe
+            .as_ref()
+            .and_then(|p| p.get(k))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+    };
+    let text = |k: &str| -> String {
+        result
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let status = text("status");
+    let reason = text("reason");
+    let op = text("operationId");
+
+    let entry = VISIBLE_TERMINAL_PENDING.lock().await.remove(&request_id);
+    let has_probe = probe.is_some();
+    // 没有 `_probe` 的回执（unavailable/reroute 快路径）各分段记 0。
+    let seg = |a: u64, b: u64| -> u64 {
+        if !has_probe || a == 0 || b == 0 {
+            0
+        } else {
+            a.saturating_sub(b)
+        }
+    };
+    match entry {
+        Some((tx, started_at)) => {
+            // 一条日志钉住整趟往返：Rust 总等待 = 前端排队 + 注入 + 等块闭合 + 回执传输。
+            let now = now_ms();
+            let (recv_at, inject_at, settle_at) =
+                (at("recvAt"), at("injectedAt"), at("settledAt"));
+            log::info!(
+                "[vt-probe] resolve req={} op={} status={} reason={} probe={} t_ms={} \
+                 rust_waited_ms={} emit_to_recv_ms={} recv_to_inject_ms={} \
+                 inject_to_settle_ms={} settle_to_rust_ms={} fe_wall_ms={}",
+                request_id,
+                op,
+                status,
+                reason,
+                has_probe,
+                now,
+                now.saturating_sub(started_at),
+                seg(recv_at, started_at),
+                seg(inject_at, recv_at),
+                seg(settle_at, inject_at),
+                seg(now, settle_at),
+                seg(settle_at, recv_at)
+            );
+            let _ = tx.send(result);
+        }
+        None => {
+            // 迟到的回执：Rust 侧已经按超时结过账（或本就没有这条请求）。
+            log::warn!(
+                "[vt-probe] late req={} op={} status={} reason={} fe_wall_ms={} \
+                 （Rust 侧已超时或本就没有这条请求）",
+                request_id,
+                op,
+                status,
+                reason,
+                seg(at("settledAt"), at("recvAt"))
+            );
+        }
     }
     Ok(())
 }
@@ -2149,6 +2272,51 @@ mod tests {
         assert_eq!(json, "\"running\"");
         let status: SidecarStatus = serde_json::from_str("\"stopped\"").unwrap();
         assert_eq!(status, SidecarStatus::Stopped);
+    }
+
+    /// #113①：探针字段是"日志专用"的，Rust 记完必须剥掉 —— 漏进回执就会顺着
+    /// oneshot 进 Python 工具结果，再进模型上下文（多一份没人认的键）。
+    #[test]
+    fn take_probe_strips_probe_from_forwarded_payload() {
+        let mut result = json!({
+            "status": "success",
+            "exitCode": 0,
+            "_probe": { "recvAt": 1000, "injectedAt": 1100, "settledAt": 2500 },
+        });
+        let probe = take_probe(&mut result).expect("应取出 _probe");
+        assert_eq!(probe.get("injectedAt").unwrap().as_u64(), Some(1100));
+        assert!(result.get("_probe").is_none(), "_probe 必须被剥掉");
+        assert_eq!(
+            result,
+            json!({ "status": "success", "exitCode": 0 }),
+            "剥完不能顺手改掉业务字段"
+        );
+    }
+
+    #[test]
+    fn take_probe_tolerates_missing_and_malformed_probe() {
+        // 快路径（unavailable / reroute）的回执压根没有 _probe
+        let mut plain = json!({ "status": "reroute", "reason": "execution_channel_changed" });
+        assert!(take_probe(&mut plain).is_none());
+        assert_eq!(plain["status"], "reroute");
+
+        // 前端塞了个非对象（或被中间层改坏）也不能 panic，且同样要剥掉
+        let mut junk = json!({ "status": "success", "_probe": "oops" });
+        assert!(take_probe(&mut junk).is_none());
+        assert!(junk.get("_probe").is_none());
+
+        let mut not_object = json!("scalar");
+        assert!(take_probe(&mut not_object).is_none());
+    }
+
+    #[test]
+    fn now_ms_is_epoch_milliseconds_not_seconds() {
+        // 探针跨进程相减的前提：毫秒级精度（同一秒内两次取值必须能拉开）
+        let a = now_ms();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let b = now_ms();
+        assert!(b > a, "now_ms 应是毫秒钟，实际 {a} -> {b}");
+        assert!(b > 1_700_000_000_000, "now_ms 应落在 epoch 毫秒量级: {b}");
     }
 
     #[test]
