@@ -131,7 +131,10 @@ impl SshState {
     /// 获取或创建 SFTP 会话
     ///
     /// 首次调用时: 通过 SshSession::open_sftp_channel() 开 channel,创建 SftpSession。
-    /// 后续调用: 直接返回缓存的 SftpSession。
+    /// 后续调用: 命中缓存且**该通道未被证伪**才复用；已证伪的条目先丢弃再走重建。
+    ///
+    /// #106: "证伪"由 `SftpSession` 在协议层失败时自己打标记（Timeout/IO/协议中断），
+    /// 业务级失败（文件不存在/没权限）不算 —— 判据见 `sftp::channel_proved_dead`。
     ///
     /// # 参数
     /// - `session_id`: SSH 会话 ID
@@ -143,9 +146,25 @@ impl SshState {
         // 此前并发请求各自创建 SFTP channel 后无条件 insert，后者覆盖前者导致孤儿泄漏。
         // 修复：创建后在 write 锁内再次检查，已有则用现有的、丢弃新建的。
 
-        // 1. 快速路径: read 锁检查
-        if let Some(sftp) = self.sftp_sessions.read().await.get(&session_id) {
-            return Ok(sftp.clone());
+        // 1. 快速路径: read 锁检查（先把 Arc 取出来再决定，避免持读锁去拿写锁）
+        let cached = self.sftp_sessions.read().await.get(&session_id).cloned();
+        if let Some(sftp) = cached {
+            if !sftp.is_poisoned() {
+                return Ok(sftp);
+            }
+            // #106: 缓存里这条通道已经被证伪（服务器没回话 / 流断了）。
+            // 继续发下去 = 之后每一次文件操作都重复同样的失败，而且每次都要等满
+            // russh-sftp 的 10s 请求超时 —— 用户看到的"资源管理器之前能看，现在一直
+            // Loading / Timeout，重开工作区才好"就是这个粘滞。丢弃后走下面重建。
+            log::warn!(
+                "[sftp] 丢弃已失效的缓存会话并重建: ssh_id={}",
+                session_id
+            );
+            if let Some(dead) = self.remove_sftp(session_id).await {
+                // 不再 close()：那要在一条不可信的通道上等一轮协议往返。
+                // 交出最后一个引用即可，通道随 Drop 释放。
+                drop(dead);
+            }
         }
 
         // 2. 缓存未命中，创建新 SFTP 会话（不持锁，避免 tokio::sync Guard 跨 await）
@@ -1564,6 +1583,59 @@ mod tests {
         // 重复调用安全 (幂等)
         state.invalidate_session_resources(1).await;
         assert!(state.get_tunnel(1).await.is_none());
+    }
+
+    // === #106（2026-09-22）: 缓存命中必须先验活性，否则失效通道会永久粘住 ===
+    //
+    // 用户报的是间歇性（"之前就可以看，现在又不行了"），粘滞正是间歇性的形状：
+    // 第一次建通道时是好的，通道死后缓存仍把它当好的发下去，之后每次都是同样的失败。
+
+    #[tokio::test]
+    async fn test_poisoned_sftp_cache_entry_is_dropped_not_reused() {
+        let state = SshState::default();
+        state
+            .sftp_sessions
+            .write()
+            .await
+            .insert(7, Arc::new(SftpSession::dead_for_test()));
+
+        // 会话本体不在了也照样要先把死缓存丢掉：这里用"报的是会话找不到、
+        // 而不是把缓存那条发出去"来证明丢弃发生过。
+        let err = state
+            .get_or_create_sftp(7)
+            .await
+            .err()
+            .expect("失效缓存 + 没有 SSH 会话 → 必须报错，不能交出死通道");
+        assert!(
+            err.contains("SSH session not found"),
+            "应该继续往下走重建流程，实际错误: {err}"
+        );
+        assert!(
+            state.sftp_sessions.read().await.get(&7).is_none(),
+            "已证伪的通道必须从缓存里清掉，否则下次还会命中它"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_live_sftp_cache_entry_is_still_reused() {
+        // 正向配对：上面的判据不能靠"永远重建"通过 —— 快路径必须还有效，
+        // 否则每点一次文件树都要重开一条 SFTP 通道。
+        let state = SshState::default();
+        let live = Arc::new(SftpSession::alive_for_test());
+        state
+            .sftp_sessions
+            .write()
+            .await
+            .insert(8, live.clone());
+
+        let got = state
+            .get_or_create_sftp(8)
+            .await
+            .expect("活着的缓存会话应当直接命中");
+        assert!(
+            Arc::ptr_eq(&got, &live),
+            "命中的必须是缓存里那一条，而不是新开的通道"
+        );
     }
 
     #[tokio::test]

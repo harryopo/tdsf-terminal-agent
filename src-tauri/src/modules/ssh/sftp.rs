@@ -21,8 +21,10 @@
 //! ## 错误处理
 //! 所有错误转为 String 返回前端,前端用 i18n 显示。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use russh_sftp::client::error::Error as SftpProtocolError;
 use russh_sftp::client::SftpSession as RawSftpSession;
 use tokio::sync::Mutex;
 
@@ -100,6 +102,24 @@ pub struct SftpSession {
     /// 2. 多个 Tauri 命令可能并发访问同一 session
     /// 3. close 时需要 take 出来 drop
     inner: Arc<Mutex<Option<RawSftpSession>>>,
+    /// #106: 这条通道已被证伪（服务器没回话 / 流断了），不可再复用。
+    ///
+    /// 存在的理由：`SshState` 缓存的是 `Arc<SftpSession>`，命中即返回、原先**不做任何
+    /// 活性判断**。一旦底层通道死掉（远端 sftp-server 退出、链路中断后重连前的窗口期），
+    /// 缓存会把这条死通道一直发下去 —— 用户看到的正是"资源管理器之前能看，现在一直
+    /// Loading / Timeout，重开工作区才好"。这里把"失败过一次"记成同步标志，
+    /// 让缓存命中处能零成本地把它丢弃并重建。
+    poisoned: AtomicBool,
+}
+
+/// #106: 判断"这次失败是否说明通道本身已经不能用了"。
+///
+/// 只有服务器真的回了话（`Status` 状态码、`Limited` 超出协议配额）才说明通道还活着 ——
+/// 那属于业务级失败（文件不存在/没权限），换一条通道也是同样结果，不该重建。
+/// 其余（`Timeout` / `IO` / `UnexpectedPacket` / `UnexpectedBehavior`）
+/// 都意味着请求没能拿到一个可信的应答，这条通道之后的每一次操作都会重复同样的失败。
+fn channel_proved_dead(err: &SftpProtocolError) -> bool {
+    !matches!(err, SftpProtocolError::Status(_) | SftpProtocolError::Limited(_))
 }
 
 /// SFTP 错误 (统一转为 String 给 Tauri 命令层)
@@ -120,12 +140,52 @@ impl SftpSession {
         stream: russh::ChannelStream<russh::client::Msg>,
     ) -> Result<Self, String> {
         log::info!("[sftp] initializing SFTP session");
-        let session = RawSftpSession::new(stream)
-            .await
-            .map_err(sftp_err)?;
+        // 握手失败时对象还没进缓存，不需要证伪标记，直接透出错误
+        let session = match RawSftpSession::new(stream).await {
+            Ok(s) => s,
+            Err(e) => return Err(sftp_err(e)),
+        };
         Ok(Self {
             inner: Arc::new(Mutex::new(Some(session))),
+            poisoned: AtomicBool::new(false),
         })
+    }
+
+    /// 仅供单测：构造一条"没有通道"的会话，用来验证 `SshState` 的缓存丢弃逻辑
+    /// （真实 `SftpSession` 需要 russh channel，离线构造不出来）。
+    #[cfg(test)]
+    pub(crate) fn dead_for_test() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+            poisoned: AtomicBool::new(true),
+        }
+    }
+
+    /// 仅供单测：构造一条"未被证伪"的空会话，用来证明快路径仍然会命中缓存
+    /// （负向断言必须配一条"该命中的确实命中了"）。
+    #[cfg(test)]
+    pub(crate) fn alive_for_test() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+            poisoned: AtomicBool::new(false),
+        }
+    }
+
+    /// #106: 这条通道是否已被证伪（缓存持有者据此丢弃并重建）
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::Relaxed)
+    }
+
+    /// 统一失败出口：判定通道是否已不可信，并把协议错误转成给前端的字符串。
+    fn fail(&self, err: SftpProtocolError) -> String {
+        if channel_proved_dead(&err) {
+            log::warn!(
+                "[sftp] 通道已被证伪（{}），缓存持有者下次命中时应丢弃重建",
+                err
+            );
+            self.poisoned.store(true, Ordering::Relaxed);
+        }
+        sftp_err(err)
     }
 
     /// 列目录
@@ -140,7 +200,7 @@ impl SftpSession {
         let guard = self.inner.lock().await;
         let session = guard.as_ref().ok_or("SFTP session closed")?;
 
-        let read_dir = session.read_dir(path.to_string()).await.map_err(sftp_err)?;
+        let read_dir = session.read_dir(path.to_string()).await.map_err(|e| self.fail(e))?;
         let mut entries: Vec<SftpEntry> = Vec::new();
 
         // read_dir 实现标准 Iterator trait (同步 next)
@@ -196,7 +256,7 @@ impl SftpSession {
         let guard = self.inner.lock().await;
         let session = guard.as_ref().ok_or("SFTP session closed")?;
 
-        let metadata = session.metadata(path.to_string()).await.map_err(sftp_err)?;
+        let metadata = session.metadata(path.to_string()).await.map_err(|e| self.fail(e))?;
 
         Ok(SftpAttrs {
             size: metadata.size.unwrap_or(0),
@@ -217,7 +277,7 @@ impl SftpSession {
         let guard = self.inner.lock().await;
         let session = guard.as_ref().ok_or("SFTP session closed")?;
 
-        let data = session.read(path.to_string()).await.map_err(sftp_err)?;
+        let data = session.read(path.to_string()).await.map_err(|e| self.fail(e))?;
         log::info!("[sftp] read_file success: {} bytes", data.len());
         Ok(data)
     }
@@ -233,7 +293,7 @@ impl SftpSession {
         session
             .write(path.to_string(), content)
             .await
-            .map_err(sftp_err)?;
+            .map_err(|e| self.fail(e))?;
         log::info!("[sftp] write_file success");
         Ok(())
     }
@@ -247,7 +307,7 @@ impl SftpSession {
         session
             .create_dir(path.to_string())
             .await
-            .map_err(sftp_err)?;
+            .map_err(|e| self.fail(e))?;
         Ok(())
     }
 
@@ -263,7 +323,7 @@ impl SftpSession {
         session
             .remove_file(path.to_string())
             .await
-            .map_err(sftp_err)?;
+            .map_err(|e| self.fail(e))?;
         Ok(())
     }
 
@@ -276,7 +336,7 @@ impl SftpSession {
         session
             .remove_dir(path.to_string())
             .await
-            .map_err(sftp_err)?;
+            .map_err(|e| self.fail(e))?;
         Ok(())
     }
 
@@ -289,7 +349,7 @@ impl SftpSession {
         session
             .rename(from.to_string(), to.to_string())
             .await
-            .map_err(sftp_err)?;
+            .map_err(|e| self.fail(e))?;
         Ok(())
     }
 
@@ -298,6 +358,7 @@ impl SftpSession {
     /// 调用 RawSftpSession::close 发送 close packet,然后 take 出来 drop 释放资源。
     pub async fn close(&self) -> Result<(), String> {
         log::info!("[sftp] closing session");
+        self.poisoned.store(true, Ordering::Relaxed);
         let mut guard = self.inner.lock().await;
         if let Some(session) = guard.take() {
             // close 失败不阻断清理 (drop 也会释放资源)
@@ -320,7 +381,7 @@ impl SftpSession {
         let resolved = session
             .canonicalize(path.to_string())
             .await
-            .map_err(sftp_err)?;
+            .map_err(|e| self.fail(e))?;
         Ok(resolved)
     }
 }
@@ -350,7 +411,8 @@ fn mode_to_permission_string(mode: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use russh_sftp::protocol::FileType;
+    use russh_sftp::client::error::Error as SftpProtocolError;
+    use russh_sftp::protocol::{FileType, Status, StatusCode};
 
     #[test]
     fn test_mode_to_permission_string_rwx() {
@@ -422,5 +484,67 @@ mod tests {
         assert!(FileType::File.is_file());
         assert!(FileType::Symlink.is_symlink());
         assert!(FileType::Other.is_other());
+    }
+
+    // === #106（2026-09-22）: 哪种失败说明"这条通道不能再用" ===
+    //
+    // 判据错一格的后果不对称：把业务级失败（文件不存在）当成通道死掉，会在每次
+    // `ls` 一个不存在的目录时白白重开一条 SFTP 通道；反过来把 Timeout 当成业务失败，
+    // 缓存里那条死通道就永远粘着不放 —— 用户报的"之前能看，现在一直 Timeout"就是后者。
+
+    fn status_err(code: StatusCode) -> SftpProtocolError {
+        SftpProtocolError::Status(Status {
+            id: 1,
+            status_code: code,
+            error_message: String::new(),
+            language_tag: "en".to_string(),
+        })
+    }
+
+    #[test]
+    fn test_timeout_proves_channel_dead() {
+        assert!(channel_proved_dead(&SftpProtocolError::Timeout));
+    }
+
+    #[test]
+    fn test_io_and_protocol_breakage_prove_channel_dead() {
+        assert!(channel_proved_dead(&SftpProtocolError::IO(
+            "Broken pipe (os error 32)".to_string()
+        )));
+        assert!(channel_proved_dead(&SftpProtocolError::UnexpectedPacket));
+        // 协议运行时把请求通道丢了（russh-sftp 内部 RecvError）= 这条流已经没了
+        assert!(channel_proved_dead(&SftpProtocolError::UnexpectedBehavior(
+            "SendError: ...".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_server_answer_keeps_channel_usable() {
+        // 服务器真的回了话 ⇒ 通道还活着，换一条也是同样结果，不该重建
+        assert!(!channel_proved_dead(&status_err(StatusCode::NoSuchFile)));
+        assert!(!channel_proved_dead(&status_err(StatusCode::PermissionDenied)));
+        assert!(!channel_proved_dead(&SftpProtocolError::Limited(
+            "openssh-sftp-server count limit".to_string()
+        )));
+    }
+
+    #[tokio::test]
+    async fn test_fail_poisons_only_on_channel_loss() {
+        let session = SftpSession::alive_for_test();
+        assert!(!session.is_poisoned(), "新建的通道不该一上来就被判定失效");
+
+        let _ = session.fail(status_err(StatusCode::NoSuchFile));
+        assert!(
+            !session.is_poisoned(),
+            "「文件不存在」是业务级失败，毒化它会让缓存无谓重建"
+        );
+
+        let msg = session.fail(SftpProtocolError::Timeout);
+        assert!(
+            session.is_poisoned(),
+            "Timeout 之后再无应答，必须让缓存丢弃这条通道去重建"
+        );
+        // 错误文案不变（前端/日志按 "SFTP error: ..." 归一）
+        assert_eq!(msg, "SFTP error: Timeout");
     }
 }
