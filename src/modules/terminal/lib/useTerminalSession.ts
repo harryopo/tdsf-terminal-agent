@@ -270,10 +270,19 @@ export function armAgentCommandEcho(
   if (s) s.agentCommandEcho = new AgentCommandEcho(command, options);
 }
 
-/** Clear a pending marker when human typing was interrupted before echoing. */
+/**
+ * Clear a pending marker when human typing was interrupted before echoing.
+ * The matcher may be holding candidate bytes (confirmed mode) or an open color
+ * span (typewriter mode) — both are handed back to the display so dropping the
+ * arm never loses terminal output.
+ */
 export function clearAgentCommandEcho(leafId: number): void {
   const s = sessions.get(leafId);
-  if (s) s.agentCommandEcho = null;
+  const echo = s?.agentCommandEcho;
+  if (!s || !echo) return;
+  s.agentCommandEcho = null;
+  const leftover = echo.discard();
+  if (leftover.length > 0) deliverPtyBytes(leafId, leftover);
 }
 
 export function submitToLeaf(leafId: number, text: string): void {
