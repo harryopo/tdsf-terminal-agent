@@ -37,7 +37,6 @@ beforeEach(() => {
     spaces: [sshSpace],
     activeId: "sp-ssh",
     hydrated: true,
-    initialActiveIndex: {},
   });
   useSshStore.setState({
     sessions: [

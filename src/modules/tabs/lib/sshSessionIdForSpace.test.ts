@@ -61,7 +61,6 @@ beforeEach(() => {
     spaces: [sshSpace, localSpace],
     activeId: null,
     hydrated: true,
-    initialActiveIndex: {},
   });
   setSessions([]);
 });
