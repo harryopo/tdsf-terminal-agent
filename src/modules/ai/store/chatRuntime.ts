@@ -12,6 +12,7 @@ import {
 import { getModel, type ModelId, providerNeedsKey } from "../config";
 import { toSidecarMode } from "../agents/registry";
 import { BUILTIN_AGENTS } from "../lib/agents";
+import { resolveScopedSshSession } from "../lib/sshScopeTarget";
 import { createContextAwareTransport } from "../lib/transport";
 import type { ToolContext } from "../tools/tools";
 import { useAgentsStore } from "./agentsStore";
@@ -145,16 +146,18 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       // === SSH scope：环境只看绑定（工作区或会话）的那台服务器 ===
       if (scopeKind === "ssh" && sshBinding) {
         const sshState = useSshStore.getState();
-        const bound = sshState.sessions.find(
-          (s) =>
-            s.params.host === sshBinding.host &&
-            s.params.user === sshBinding.user &&
-            (s.params.port ?? 22) === sshBinding.port,
+        // #91⑨：一台服务器上现在可以并着多条连接（#89 每个标签页各一条），
+        // 旧口径 `find(按 host/user/port)` 拿到的是数组第一条 —— 于是标签写
+        // A 机、命令打 B 机。改成优先"用户正看着的那条"（与注入路径同源）。
+        const activeSshId = live.getSshRustSessionId();
+        const bound = resolveScopedSshSession(
+          sshState.sessions,
+          sshBinding,
+          activeSshId,
         );
         const connected = bound && isSessionConnected(bound) ? bound : null;
-        // 终端上下文只在绑定会话恰为全局活跃 SSH 会话时注入
-        // （隔离：其他服务器的 scrollback 不进入本对话）
-        const activeSshId = live.getSshRustSessionId();
+        // 终端上下文只在绑定会话恰为可见终端那条会话时注入
+        // （隔离：其他服务器 / 其他标签页那条 shell 的 scrollback 不进入本对话）
         const boundRustId = connected ? connected.rustSessionId : null;
         const terminalOutput =
           boundRustId !== null &&

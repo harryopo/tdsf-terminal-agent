@@ -6,7 +6,8 @@
 //   - 每个会话有前端 id (crypto.randomUUID) + Rust sessionId (ssh_connect 返回)
 //   - 文件树状态按前端 id 隔离 (currentPath / entries / loading / expandedPaths)
 //   - 编辑器一次只编辑一个文件 (editingFile), 与 SshFileEditor 组件配合
-//   - 主机审批请求 (pendingApproval) 由 ssh:host_verify 事件推送, 弹窗询问用户
+//   - 主机审批请求 (pendingApprovals 队列) 由 ssh:host_verify / ssh:host_key_mismatch
+//     事件推送, 弹窗按到达顺序逐条询问用户
 import { create } from 'zustand';
 import { toast } from 'sonner';
 import {
@@ -207,8 +208,14 @@ interface SshExplorerState {
   // === 会话管理 ===
   sessions: SshSessionInfo[];
   activeSessionId: string | null;
-  /** 待处理的主机审批请求 (ssh:host_verify 事件推送) */
-  pendingApproval: HostApprovalRequest | null;
+  /**
+   * #91④：待处理的主机审批请求**队列**（ssh:host_verify / ssh:host_key_mismatch 推送）。
+   *
+   * 原先是单例字段：第二条请求覆盖第一条，用户从没见过第一条就问什么，而那条连接
+   * 正挂在 Rust 侧等回执（5 分钟超时按拒绝处理）。并发连两台新主机必然踩到。
+   * 弹窗只呈现队首，应答一条出队一条。
+   */
+  pendingApprovals: HostApprovalRequest[];
 
   // === 文件树状态 (按会话 id 隔离) ===
   /** 每个会话的当前目录路径 (用于 SSH 终端默认 cwd / "返回上一级" 面包屑) */
@@ -269,6 +276,8 @@ interface SshExplorerState {
     sessionId: string,
     event: SshStatusEvent,
   ) => void;
+  /** 主机审批请求入队（同一 approvalId 重复推送只留一条） */
+  pushApproval: (req: HostApprovalRequest) => void;
   resolveApproval: (approved: boolean) => Promise<void>;
 
   // 文件树 actions
@@ -532,7 +541,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   // === 初始状态 ===
   sessions: [],
   activeSessionId: null,
-  pendingApproval: null,
+  pendingApprovals: [],
   currentPathBySession: {},
   entriesBySession: {},
   loadingBySession: {},
@@ -752,16 +761,31 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     }));
   },
 
+  pushApproval: (req) => {
+    set((s) =>
+      s.pendingApprovals.some((r) => r.approvalId === req.approvalId)
+        ? {}
+        : { pendingApprovals: [...s.pendingApprovals, req] },
+    );
+  },
+
   resolveApproval: async (approved) => {
-    const { pendingApproval } = get();
-    if (!pendingApproval) return;
+    const head = get().pendingApprovals[0];
+    if (!head) return;
     try {
       const { sshApproveHost } = await import('@/lib/ssh-bridge');
-      await sshApproveHost(pendingApproval.approvalId, approved);
+      await sshApproveHost(head.approvalId, approved);
     } catch (e) {
       console.warn('[sshStore] approve host failed:', e);
     } finally {
-      set({ pendingApproval: null });
+      // 按 id 出队（不是 shift）：await 期间可能有新请求入队，
+      // 而后端对已失效的 approval_id 回 Err —— 也必须出队，否则整条
+      // 审批链永远卡在一个答不上的队首上。
+      set((s) => ({
+        pendingApprovals: s.pendingApprovals.filter(
+          (r) => r.approvalId !== head.approvalId,
+        ),
+      }));
     }
   },
 
@@ -1329,7 +1353,7 @@ export function selectSessionCurrentPath(
 
 // === 事件订阅 (在 SshExplorer 挂载时调用) =====================================
 //
-// 监听 ssh:host_verify / ssh:host_key_mismatch 事件, 推送到 pendingApproval。
+// 监听 ssh:host_verify / ssh:host_key_mismatch 事件, pushApproval 入队。
 // 由 SshExplorer useEffect 中调用 subscribeHostVerify / subscribeHostKeyMismatch。
 
 export { joinRemotePath };

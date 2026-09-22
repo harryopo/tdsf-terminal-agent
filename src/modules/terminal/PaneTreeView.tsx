@@ -164,7 +164,8 @@ function SshLeafPane({
     );
     return () => setLeafSshSession(leafId, null);
   }, [leafId, rustSessionId, sessionId]);
-  // SSH 终端 OSC 7 解析后同步远程 cwd（与 SshTerminalHost.handleCwd 一致）
+  // OSC 7 的远端 cwd 只写会话级那一份：leaf.cwd 槽位刻意留给本地 shell，
+  // "这块 leaf 现在在哪"由 leafCwdOf 联合口径回答（见 lib/leafCwd.ts，#91①）。
   const handleCwd = useCallback(
     (_leafId: number, cwd: string) => {
       getOsc7Log()?.push({ source: "SshLeafPane.handleCwd", sessionId, cwd });

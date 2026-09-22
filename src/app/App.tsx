@@ -144,6 +144,7 @@ import {
 } from "@/modules/terminal";
 // TDSF (2026-08-11 #21): effectiveLeafSsh 用于派生 sshActiveLeafIdRef
 import { effectiveLeafSsh } from "@/modules/terminal/lib/panes";
+import { leafCwdOf } from "@/modules/terminal/lib/leafCwd";
 // TDSF debug (#20): 仅用于 CDP 实测诊断（只读不改业务）
 import {
   getRendererPoolDebug,
@@ -537,7 +538,7 @@ export default function App() {
   const activeSshSessionId = activeSshSession?.id ?? null;
   // TDSF 2026-08-18 (P1-6): 主机审批状态提升到顶层——
   // pendingApproval 由下方常驻订阅 effect 填充, 弹窗任何视图可弹
-  const pendingApproval = useSshStore((s) => s.pendingApproval);
+  const pendingApproval = useSshStore((s) => s.pendingApprovals[0] ?? null);
   const resolveApproval = useSshStore((s) => s.resolveApproval);
   // Space 环境决定左侧 Files 面板来源：SSH Space 用远程文件资源管理器，
   // 本地/WSL Space 用本地文件资源管理器。
@@ -733,11 +734,13 @@ export default function App() {
   // 连接未知主机时 ssh:host_verify / ssh:host_key_mismatch 事件无人订阅,
   // 审批永远无人处理, 连接永久挂起。订阅提升到 App 顶层后任何视图可弹框。
   useEffect(() => {
+    // #91④：入队而不是覆写单例——两条连接同时等新主机审批时，后到的那条
+    // 不能把前一条顶掉（被顶掉的那条会在 Rust 侧挂满 5 分钟后按拒绝失败）。
     const off1 = subscribeHostVerify((req) => {
-      useSshStore.setState({ pendingApproval: req });
+      useSshStore.getState().pushApproval(req);
     });
     const off2 = subscribeHostKeyMismatch((req) => {
-      useSshStore.setState({ pendingApproval: req });
+      useSshStore.getState().pushApproval(req);
     });
     return () => {
       off1();
@@ -1591,6 +1594,14 @@ export default function App() {
       ? (findLeafCwd(activeTab.paneTree, activeTab.activeLeafId) ??
         activeTab.cwd ??
         null)
+      : null;
+  // #91①：paneTree 的 leaf.cwd 只装本地 shell 的 cwd（远端 OSC7 走 sshStore，
+  // 没人回写槽位）。凡"以当前终端所在目录为落点"的功能都要走 leafCwdOf 这个
+  // 联合口径，否则 SSH 标签页里拿到的是建 tab 时的本地快照。
+  const sshCwdBySession = useSshStore((s) => s.currentPathBySession);
+  const activeTerminalCwd =
+    activeTab?.kind === "terminal"
+      ? leafCwdOf(activeTab, activeTab.activeLeafId, sshCwdBySession)
       : null;
 
   // TDSF 修复 2026-07-29: 状态栏/输入栏 cwd 在 SSH 连接后显示远程路径。
@@ -2491,7 +2502,7 @@ export default function App() {
                         // TDSF 2026-08-11 (P2 代码片段管理): 代码片段面板
                         <SnippetsPanel
                           onInsertCommand={handleInsertSnippetCommand}
-                          currentCwd={activeTerminalLeafCwd ?? undefined}
+                          currentCwd={activeTerminalCwd ?? undefined}
                         />
                       ) : sidebarView === "tunnels" ? (
                         // TDSF 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
