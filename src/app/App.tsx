@@ -1940,14 +1940,13 @@ export default function App() {
     (leafId: number, cwd: string) => {
       setLeafCwd(leafId, cwd);
 
-      // TDSF 修复 2026-07-31 (Phase 2): SSH 终端 cd 时同步
-      // sshStore.currentPathBySession，让左侧远程资源管理器跟随终端 cwd
-      // 自动刷新。本地路径仍走 workspaceAuthorize 申请文件系统权限。
-      // TDSF 修复 2026-08-08 (WorkspaceFs): SSH tab 在 TerminalStack 里
-      // 也有本地保活 pty, 其 OSC 7 上报本地路径 (C:/...)——绝不能写入 SSH
-      // 会话的 currentPath (污染远程路径 → sftp 后端收到本地路径被拒)。
-      // 只接受远程绝对路径 (/ 开头); SshTerminalHost 的远程 cwd 走其内部
-      // setCurrentPath (SshTerminalHost.tsx:108), 此处不重复写。
+      // TDSF 2026-07-31 (Phase 2): SSH 终端 cd 时同步 sshStore 那份远端 cwd
+      // （左侧远程树以它为根）。本地路径仍走 workspaceAuthorize 申请文件系统权限。
+      // TDSF 2026-08-08 (WorkspaceFs): SSH tab 在 TerminalStack 里也有本地保活
+      // pty，其 OSC 7 上报本地路径 (C:/...)——只接受 "/" 开头的远端路径，否则
+      // 会把本地路径写成远端 cwd，sftp 后端报 invalid_path。
+      // SSH leaf 自己也会按**它绑的那条会话**写一次（PaneTreeView.SshLeafPane）；
+      // 这一份按 **tab 绑的会话**写，继承场景下两者同值，重复写只是浪费一次刷新。
       const tab = tabsRef.current.find(
         (t) => t.kind === "terminal" && hasLeaf(t.paneTree, leafId),
       );
