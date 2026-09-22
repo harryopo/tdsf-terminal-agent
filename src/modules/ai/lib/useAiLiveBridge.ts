@@ -77,6 +77,12 @@ type PendingVisibleTerminalExecution = VisibleTerminalRequest & {
   requestedAt: number;
   phase: "typing" | "running";
   timeoutHandle: number | null;
+  /**
+   * #113①（2026-09-22）探针：命令真正写进终端的那一刻（整段 write 返回 /
+   * 打字机 end 事件）。null = 还没注入。回执时随 `_probe` 带回 Rust，
+   * 用来把"等了很久"钉死在排队、注入、等块闭合中的某一段。
+   */
+  injectedAt: number | null;
 };
 
 // Rust caps long-command visual typing by duration; never replace a long
@@ -595,6 +601,13 @@ export function useAiLiveBridge(params: Params) {
           operationId: pending.operationId ?? "",
           command: pending.command,
           ...result,
+          // #113①：三个同机 Unix 毫秒绝对时刻。Rust 侧算分段耗时后会把 `_probe`
+          // 剥掉，不进 Python、不进模型可见的工具结果。
+          _probe: {
+            recvAt: pending.requestedAt,
+            injectedAt: pending.injectedAt ?? 0,
+            settledAt: Date.now(),
+          },
         },
       }).catch((e) => {
         console.warn("[tdsf] visible terminal response failed:", e);
@@ -606,6 +619,9 @@ export function useAiLiveBridge(params: Params) {
     ) => {
       if (pending.phase !== "typing") return;
       pending.phase = "running";
+      // #113①：三个提交入口（整段 write / 打字机 end / human_type 回落）都经过这里，
+      // "命令已写进终端"的时刻只在此处记一次。
+      if (pending.injectedAt === null) pending.injectedAt = Date.now();
     };
 
     const armVisibleExecutionTimeout = (
@@ -752,6 +768,7 @@ export function useAiLiveBridge(params: Params) {
         requestedAt: Date.now(),
         phase: "typing",
         timeoutHandle: null,
+        injectedAt: null,
       };
       pendingVisibleExecutions.set(request.requestId, pending);
       const text = request.command.endsWith("\n")

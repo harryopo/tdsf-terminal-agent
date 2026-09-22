@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -1406,10 +1407,29 @@ def _execute_via_ssh_impl(
         )
         execution_channel = "visible-terminal" if visible_terminal else "background"
         if visible_terminal:
+            # #113①（2026-09-22）探针：Python 这一端只知道"什么时候把请求交给
+            # Rust"和"什么时候拿到回执"两个时刻。中间各跳由 Rust 侧 `[vt-probe]`
+            # （rust.log）和前端带回的 `_probe`（Rust 汇总成一条）补齐。
+            # 三处都用 Unix 毫秒墙钟，同一台机器上可直接相减。
+            _vt_sent = time.monotonic()
+            logger.info(
+                "[vt-probe] py-send op=%s timeout_s=%s t_ms=%s",
+                operation_id,
+                int(timeout),
+                int(time.time() * 1000),
+            )
             result = ctx.rust_bridge.ipc_invoke(
                 "visible_terminal_execute",
                 ssh_params,
                 timeout=max(5.0, float(timeout) + 170.0),
+            )
+            logger.info(
+                "[vt-probe] py-recv op=%s t_ms=%s waited_ms=%s status=%s reason=%s",
+                operation_id,
+                int(time.time() * 1000),
+                int((time.monotonic() - _vt_sent) * 1000),
+                result.get("status") if isinstance(result, dict) else type(result).__name__,
+                result.get("reason") if isinstance(result, dict) else "",
             )
             if (
                 isinstance(result, dict)
