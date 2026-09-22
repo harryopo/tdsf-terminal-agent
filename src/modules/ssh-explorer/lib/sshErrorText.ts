@@ -91,3 +91,13 @@ export function describeSshFailure(raw: string): SshFailureCopy {
     description: msg,
   };
 }
+
+/**
+ * 单行版：给「测试连接」这类只有一段文本可放的地方用。
+ *
+ * 分两段呈现（标题 + 正文）的地方直接用 `describeSshFailure`，别再拼一遍。
+ */
+export function describeSshFailureText(raw: string): string {
+  const { headline, description } = describeSshFailure(raw);
+  return `${headline}：${description}`;
+}

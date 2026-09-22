@@ -105,6 +105,8 @@ export function SpaceCreateDialog({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
   const [testMessage, setTestMessage] = useState("");
+  /** Rust 原文（中文文案之外的那一份），只挂在 tooltip 上供排查 */
+  const [testRaw, setTestRaw] = useState("");
 
   const defaultName = useMemo(() => {
     if (mode === "ssh")
@@ -137,6 +139,7 @@ export function SpaceCreateDialog({
       setTesting(false);
       setTestResult(null);
       setTestMessage("");
+      setTestRaw("");
       return;
     }
     if (!initializedRef.current) {
@@ -176,20 +179,27 @@ export function SpaceCreateDialog({
     try {
       resolved = await resolveAuth(params);
     } catch (e) {
+      // 这条本来就是人话（"密码为空且系统密钥库中无已保存凭据…"），不再套翻译
+      const msg = e instanceof Error ? e.message : String(e);
       setTestResult("fail");
-      setTestMessage(e instanceof Error ? e.message : String(e));
+      setTestMessage(msg);
+      setTestRaw("");
       return;
     }
     setTesting(true);
     setTestResult(null);
     setTestMessage("");
+    setTestRaw("");
     try {
       const r = await testConnection(resolved);
       setTestResult(r.ok ? "ok" : "fail");
       setTestMessage(r.message);
+      setTestRaw(r.raw ?? "");
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       setTestResult("fail");
-      setTestMessage(e instanceof Error ? e.message : String(e));
+      setTestMessage(msg);
+      setTestRaw(msg);
     } finally {
       setTesting(false);
     }
@@ -708,24 +718,27 @@ export function SpaceCreateDialog({
                   )}
                   测试连接
                 </Button>
-                {testResult && (
-                  <span
-                    title={
-                      testResult === "ok" ? undefined : testMessage || undefined
-                    }
-                    className={cn(
-                      "min-w-0 flex-1 truncate text-[11px]",
-                      testResult === "ok"
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-destructive",
-                    )}
-                  >
-                    {testResult === "ok"
-                      ? "连接成功（点击下方「连接并创建」进入服务器）"
-                      : `连接失败${testMessage ? `：${testMessage}` : ""}`}
-                  </span>
-                )}
               </div>
+              {/* #111：结果**自己一行**。原先跟按钮挤在同一行 flex 里用
+                  `min-w-0 flex-1 truncate`，实测（Edge 无头，弹窗 max-w-md=448px）
+                  长报错把文字画到弹窗外 296px —— 父层是 grid 项，自动最小尺寸按内容算，
+                  `truncate` 根本没生效；只补 `min-w-0` 又会截断得读不全。 */}
+              {testResult && (
+                <div
+                  data-testid="space-create-test-result"
+                  title={testRaw || undefined}
+                  className={cn(
+                    "max-h-28 overflow-y-auto break-words whitespace-normal rounded-md px-3 py-2 text-[11px]",
+                    testResult === "ok"
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : "bg-destructive/10 text-destructive",
+                  )}
+                >
+                  {testResult === "ok"
+                    ? "连接成功（点击下方「连接并创建」进入服务器）"
+                    : testMessage || "连接失败（服务器没有给出原因）"}
+                </div>
+              )}
             </>
           )}
 

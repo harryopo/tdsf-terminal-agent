@@ -9,7 +9,7 @@
 //     事件推送, 弹窗按到达顺序逐条询问用户
 import { create } from 'zustand';
 import { toast } from 'sonner';
-import { describeSshFailure } from './lib/sshErrorText';
+import { describeSshFailure, describeSshFailureText } from './lib/sshErrorText';
 import {
   sshConnect,
   sshCredentialsDelete,
@@ -178,8 +178,13 @@ interface SshExplorerState {
   setCurrentPath: (sessionId: string, path: string) => void;
 
   // === TDSF: 凭据持久化 actions ===
-  /** 测试连接 (不保留会话) */
-  testConnection: (params: SshConnectParams) => Promise<{ ok: boolean; message: string }>;
+  /** 测试连接 (不保留会话)；失败时 message 是人话、raw 留原文 */
+  testConnection: (params: SshConnectParams) => Promise<{
+    ok: boolean;
+    message: string;
+    /** 失败时的 Rust 原文（tooltip / 排查用；成功时没有） */
+    raw?: string;
+  }>;
   /** 加载已保存的连接列表 (启动时调用) */
   loadSavedConnections: () => Promise<void>;
   /** 保存当前连接配置 (含敏感字段写入 keyring) */
@@ -633,14 +638,19 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
    * 测试连接 (不保留会话)
    *
    * 调用 Rust ssh_test 命令, 成功后立即断开。
-   * 用于 SshConnectDialog 的"测试连接"按钮, 让用户在保存前验证凭据可用。
+   * 用于「新建工作区 → SSH 服务器」与 SshConnectDialog 的"测试连接"按钮。
+   *
+   * #111：失败原因在这里统一翻成人话（`describeSshFailureText`），两个调用方都受益 ——
+   * Rust 回的是 russh 的 Debug 结构体，用户读不出该做什么。原文放 `raw`，界面拿它做 tooltip。
    */
   testConnection: async (params) => {
     try {
-      return await sshTest(params);
+      const r = await sshTest(params);
+      if (r.ok) return r;
+      return { ok: false, message: describeSshFailureText(r.message), raw: r.message };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return { ok: false, message: msg };
+      return { ok: false, message: describeSshFailureText(msg), raw: msg };
     }
   },
 
