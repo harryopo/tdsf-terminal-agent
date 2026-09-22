@@ -200,6 +200,22 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       const noTerminal = activeTerminal === "none";
       const localActive =
         activeTerminal === "local" || activeTerminal === "wsl";
+      // #107 (2026-09-22): 这条对话寻址的会话号——live 已改成"可见 leaf 自己绑的那条"
+      // （旧实现只认 sshStore.activeSessionId，#89 之后那是另一台机器）。
+      // 连接标识必须描述**同一个值**，不能再各查一次全局活跃会话，
+      // 否则标签写 A 机、命令打 B 机。
+      const sshTarget = isLocalScope ? null : live.getSshRustSessionId();
+      const sshConnection =
+        sshTarget === null
+          ? null
+          : (() => {
+              const session = useSshStore
+                .getState()
+                .sessions.find((s) => s.rustSessionId === sshTarget);
+              if (!session) return null;
+              const { user, host } = session.params;
+              return `${user}@${host}`;
+            })();
       return {
         // B1: 无终端（欢迎页）→ cwd/workspace 置 null；local scope 只认
         // 本地终端（SSH 活跃也不算本对话的终端）；工作区有显式 root 时优先
@@ -214,24 +230,11 @@ function makeChat(sessionId: string): Chat<UIMessage> {
             : null,
         activeFile: live.getActiveFile(),
         // A1: 本地 scope 的对话绝不操作 SSH（即便全局活跃着 SSH 会话）
-        sshSessionId: isLocalScope ? null : live.getSshRustSessionId(),
-        sshConnection: isLocalScope
-          ? null
-          : (() => {
-              // TDSF (2026-08-09): 友好的 SSH 连接标识（user@host），
-              // 从 sshStore 取活跃 connected 会话的 params.host/user 组装。
-              const sshState = useSshStore.getState();
-              const active = sshState.sessions.find(
-                (s) => s.id === sshState.activeSessionId,
-              );
-              const session =
-                active && isSessionConnected(active)
-                  ? active
-                  : sshState.sessions.find((s) => isSessionConnected(s));
-              if (!session) return null;
-              const { user, host } = session.params;
-              return `${user}@${host}`;
-            })(),
+        sshSessionId: sshTarget,
+        // TDSF (2026-08-09): 友好的 SSH 连接标识（user@host），
+        // 由上面 sshTarget 反查同一条会话组装（#107：不许再各查一次全局活跃会话）。
+        sshConnection,
+
         conversationServer: null,
         terminalOutput: isLocalScope
           ? localActive

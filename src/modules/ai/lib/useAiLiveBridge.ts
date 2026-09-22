@@ -139,8 +139,25 @@ export function useAiLiveBridge(params: Params) {
   useEffect(() => {
     // TDSF B1 (2026-08-29): SSH Rust session_id 查询提为局部函数，
     // 供 getSshRustSessionId（setLive）与 getEnvironmentProbe 共用。
-    // 取值逻辑与原 inline 实现一致（实时查 sshStore，SSH 重连后 rustSessionId 会变）。
+    // #107 (2026-09-22): 取值口径改成"先问命令会打进哪块终端，再问它绑的会话"，
+    // 与 getActiveTerminalTarget / 注入路径同源。旧实现只认 `sshStore.activeSessionId`
+    // （外加"随便挑一条已连接的"兜底），而 #89 之后"全局活跃会话"与"可见 leaf 绑的
+    // 会话"可以是**两条不同机器的连接** —— 后果正是用户报的两件事：逐字模式按全局
+    // 那条的 PTY 写字节（用户看的终端没有回显），等待却挂在可见 leaf 上（永远等不到
+    // 那块 OSC 块）→ `[indeterminate] 可见终端在命令提交后等待超时`。
+    // 可见终端不是 SSH（本地壳 / 没有终端标签页）时保持旧行为回落全局会话，
+    // 免得把"agent 用不了 SSH"做成这次的副作用。
     const sshRustSessionId = (): number | null => {
+      const { activeId, tabs } = ref.current;
+      const tab = tabs.find((x) => x.id === activeId);
+      const leafId =
+        ref.current.getSshLeafId?.() ??
+        (tab?.kind === "terminal" ? tab.activeLeafId : null);
+      const bound =
+        leafId === null || leafId === undefined
+          ? null
+          : getLeafSshSession(leafId);
+      if (bound !== null) return bound;
       const state = useSshStore.getState();
       const active = state.sessions.find((s) => s.id === state.activeSessionId);
       if (active && isSessionConnected(active)) return active.rustSessionId;
@@ -222,21 +239,22 @@ export function useAiLiveBridge(params: Params) {
       // 优先从 sshStore 读 SSH 远端 cwd，避免 agent 收到错误的本地路径。
       const sshLeafId = ref.current.getSshLeafId?.();
       if (sshLeafId !== null && sshLeafId !== undefined) {
-        // 优先从 sshStore 读当前 SSH 会话的远端 cwd
+        // 优先从 sshStore 读**可见 leaf 那条会话**的远端 cwd。
+        // #107 同源横扫：这里原先直接吃 `sshState.activeSessionId`，而会话号
+        // （sshRustSessionId）已经改成按 leaf 解析 —— 两边不同源就会让 agent
+        // 拿到"B 机的会话号 + A 机的当前目录"，比修之前更糟，所以一起跟上。
+        // leaf 注册表取不到（未注册/已断开）时仍退回全局活跃会话，保持旧行为。
         const sshState = useSshStore.getState();
-        const cwd = selectSessionCurrentPath(
-          sshState,
-          sshState.activeSessionId,
-        );
+        const bound = getLeafSshSession(sshLeafId);
+        const session =
+          (bound === null
+            ? undefined
+            : sshState.sessions.find((s) => s.rustSessionId === bound)) ??
+          sshState.sessions.find((s) => s.id === sshState.activeSessionId);
+        const cwd = selectSessionCurrentPath(sshState, session?.id);
         if (cwd) return cwd;
         // currentPath 未就绪时回退到 home 或 root
-        const active = sshState.sessions.find(
-          (s) => s.id === sshState.activeSessionId,
-        );
-        const fallback = active?.params?.user
-          ? `/home/${active.params.user}`
-          : "/";
-        return fallback;
+        return session?.params?.user ? `/home/${session.params.user}` : "/";
       }
       const active = tabs.find((x) => x.id === activeId);
       if (active?.kind === "terminal") {
