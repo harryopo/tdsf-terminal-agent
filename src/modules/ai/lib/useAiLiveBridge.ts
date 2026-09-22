@@ -191,7 +191,7 @@ export function useAiLiveBridge(params: Params) {
         const sessionId = getLeafSshSession(sshLeafId);
         if (sessionId === null) return false;
         useTerminalBlocksStore.getState().markAgentPending(sshLeafId);
-        armAgentCommandEcho(sshLeafId, t, { waitForPrompt: true });
+        armAgentCommandEcho(sshLeafId, t, { progressive: true });
         void invoke<HumanTypeReport>("ssh_write_human", {
           sessionId,
           text: t,
@@ -215,7 +215,7 @@ export function useAiLiveBridge(params: Params) {
       const id = ptyIdForLeaf(tab.activeLeafId);
       if (id === null) return false;
       useTerminalBlocksStore.getState().markAgentPending(tab.activeLeafId);
-      armAgentCommandEcho(tab.activeLeafId, t, { waitForPrompt: true });
+      armAgentCommandEcho(tab.activeLeafId, t, { progressive: true });
       void invoke<HumanTypeReport>("pty_write_human", { id, text: t, speed })
         .then((r) => {
           if (r?.mode === "fallback" && r.warning) toast.warning(r.warning);
@@ -772,7 +772,7 @@ export function useAiLiveBridge(params: Params) {
       }
 
       useTerminalBlocksStore.getState().markAgentPending(leafId);
-      armAgentCommandEcho(leafId, text, { waitForPrompt: true });
+      armAgentCommandEcho(leafId, text, { progressive: true });
       void invoke<HumanTypeReport>("ssh_write_human", {
         sessionId: request.sessionId,
         text,
