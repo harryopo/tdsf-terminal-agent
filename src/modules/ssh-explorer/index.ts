@@ -18,6 +18,7 @@ export {
   selectSessionById,
   selectSessionCurrentPath,
   isSessionConnected,
+  isSessionConnecting,
   type SshSessionInfo,
   type SshEditingFile,
   type SshTransferTask,

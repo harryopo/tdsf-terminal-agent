@@ -36,7 +36,12 @@ import {
   useApplyEditorFontSize,
   useEditorFileSync,
 } from "@/modules/editor";
-import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
+import {
+  FileExplorer,
+  SshExplorerOffline,
+  type FileExplorerHandle,
+} from "@/modules/explorer";
+import { explorerSshGate } from "@/modules/explorer/lib/explorerSshGate";
 import { useWorkspaceFsStore } from "@/modules/explorer/lib/workspaceFsStore";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
@@ -83,6 +88,7 @@ import {
 import {
   detachSshSession,
   isSshEnvConnected,
+  sshEnvIsConnecting,
   staleSshSpaceIds,
 } from "@/modules/spaces/lib/sshSpaceSession";
 // TDSF #89（2026-09-21）：SSH 工作区里每个终端标签页各开一条连接
@@ -96,6 +102,7 @@ import { planSshTabTarget } from "@/modules/spaces/lib/sshConnectedPlan";
 // TDSF (P4-T4.1): SSH 远程资源管理器
 import {
   isSessionConnected,
+  isSessionConnecting,
   selectActiveSession,
   selectSessionById,
   selectSessionCurrentPath,
@@ -538,6 +545,25 @@ export default function App() {
   const explorerSource: "local" | "ssh" = explorerSshConnected
     ? "ssh"
     : "local";
+  // TDSF #102 收尾：服务器工作区的会话失效时，左侧**不再**静默回退成本地文件树。
+  // 旧口径（下面 explorerSource 一条）只问"当前视图那条会话活着吗"，否 → 列本地盘，
+  // 用户看到的就是"服务器工作区变成我的电脑"（他报的资源管理器串台这一类）。
+  const explorerGate = explorerSshGate({
+    isSshSpace: activeSpace?.env.kind === "ssh",
+    remoteViewLive: explorerSshConnected,
+    spaceSessionAlive: isSpaceSshConnected,
+  });
+  const offlineSshSpace =
+    explorerGate === "offline" && activeSpace?.env.kind === "ssh"
+      ? { id: activeSpace.id, env: activeSpace.env }
+      : null;
+  // 进入工作区时 #102 已经自动重连过一次；那条重连还在跑就不要摆可点的按钮
+  // （重复请求会被 reconnectSshSpace 的并发闸门吞掉，面板会谎报"重连失败"）。
+  const explorerSshReconnecting = useSshStore((s) =>
+    activeSpace?.env.kind === "ssh"
+      ? sshEnvIsConnecting(activeSpace.env, s.sessions)
+      : false,
+  );
   const isDefaultColdTab =
     !!activeTab &&
     activeTab.kind === "terminal" &&
@@ -553,18 +579,12 @@ export default function App() {
   // 终端区域显示 NoTerminalEmptyState 空状态引导页, 用户误以为"终端坏了"。
   // 改为连接过程中显示美观的 5 步进度界面, 连接成功后无缝切换到 SSH 终端。
   // 核心原则："终端流畅最优先, 资源管理器异步加载不阻塞终端"。
-  const SSH_CONNECTING_STATES = new Set<string>([
-    "connecting",
-    "handshaking",
-    "host_verifying",
-    "authenticating",
-    "authenticated",
-    "reconnecting",
-  ]);
+  // TDSF #102 收尾：连接中状态清单收进 sshStore.isSessionConnecting（离线面板要用
+  // 同一个口径判断"这台服务器正在重连"），此处不再本地抄一份。
   const isSpaceSshConnecting =
     !!spaceSshSession &&
     !isSpaceSshConnected &&
-    SSH_CONNECTING_STATES.has(spaceSshSession.state);
+    isSessionConnecting(spaceSshSession);
   const sshConnectingInfo = isSpaceSshConnecting
     ? {
         host: spaceSshSession.params?.host ?? "",
@@ -2368,6 +2388,21 @@ export default function App() {
                               新建工作区
                             </button>
                           </div>
+                        ) : offlineSshSpace ? (
+                          // TDSF #102 收尾：服务器工作区断话 → 说清是哪台 + 就地重连，
+                          // 不拿本地文件树冒充远端。
+                          <SshExplorerOffline
+                            host={offlineSshSpace.env.host}
+                            port={offlineSshSpace.env.port}
+                            user={offlineSshSpace.env.user}
+                            connecting={explorerSshReconnecting}
+                            onReconnect={() =>
+                              reconnectSshSpace(
+                                offlineSshSpace.id,
+                                offlineSshSpace.env,
+                              )
+                            }
+                          />
                         ) : (
                           <div className="flex h-full min-h-0 flex-col">
                             <div className="min-h-0 flex-1">
