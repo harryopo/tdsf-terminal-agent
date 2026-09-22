@@ -27,7 +27,7 @@ export async function openSshShellForEnv(
   const profile = await savedProfileForEnv(env);
   if (!profile) {
     toast.warning("这台服务器没有保存凭据", {
-      description: `${env.user}@${env.host}:${env.port} 的新终端无法自动连接，请在 SSH 面板重新登录一次。`,
+      description: `${env.user}@${env.host}:${env.port} 的新终端无法自动连接，请在「新建工作区 → SSH 服务器」里连一次并勾选保存凭据。`,
       duration: 6000,
     });
     return null;
@@ -72,7 +72,8 @@ const reconnecting = new Set<string>();
  * 会话号去开 SFTP，握手 10 秒后整块面板报 `[fsb] sftp session error: SFTP error: Timeout`。
  *
  * 口径：**重连成功**由连接成功订阅接管（改回工作区主会话、绑终端）；**重连不起来**
- * 必须 toast 说清楚是哪台、为什么，绝不静默把服务器工作区显示成本地文件树。
+ * 绝不静默把服务器工作区显示成本地文件树 —— 原因由 `connect()` 弹一次人话 toast，
+ * 落点由左侧离线面板就地说明（两边都说不清就是两条重复通知，见 #110）。
  */
 export async function reconnectSshSpace(
   spaceId: string,
@@ -85,7 +86,7 @@ export async function reconnectSshSpace(
     const profile = await savedProfileForEnv(env);
     if (!profile) {
       toast.warning("服务器连接已失效", {
-        description: `${env.user}@${env.host}:${env.port} 没有保存凭据，无法自动重连，请在 SSH 面板重新登录。`,
+        description: `${env.user}@${env.host}:${env.port} 没有保存凭据，无法自动重连，请在「新建工作区 → SSH 服务器」里重连一次并保存凭据。`,
         duration: 6000,
       });
       return null;
@@ -95,12 +96,9 @@ export async function reconnectSshSpace(
     const sessionId = await useSshStore.getState().connectWithSaved(profile, {
       autoConnect: true,
     });
-    if (!sessionId) {
-      toast.warning("服务器重连失败", {
-        description: `${env.user}@${env.host}:${env.port} 连不上，左侧文件树暂时不可用；可在 SSH 面板手动重试。`,
-        duration: 6000,
-      });
-    }
+    // #110：连不上时**不再**在这里补一条 toast —— connect() 已经按翻译后的原因弹过一条，
+    // 两条叠在一起就是用户截图那样（一条英文 Debug + 一条"可在 SSH 面板重试"，
+    // 而那个面板早就没入口了）。左侧的离线面板会就地显示"重连失败"和能做的下一步。
     return sessionId;
   } finally {
     reconnecting.delete(spaceId);

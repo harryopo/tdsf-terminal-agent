@@ -162,10 +162,14 @@ describe("reconnectSshSpace — 进入失效的 SSH 工作区要主动重连", (
     expect(desc.description).toContain("root@10.0.0.8:22");
   });
 
-  it("连不上（返回 null）也明示，不留「看着像连着」的界面", async () => {
+  // #110：这里**不再**自己弹第二条。旧行为是 connect() 弹一条英文 Debug、
+  // 这里再弹一条"可在 SSH 面板手动重试"（那个面板早已没入口），两条叠在屏幕上。
+  // "不许静默"这条保证换了归属：connect() 按翻译后的原因弹一条（见
+  // sshStore.connectToast.test.ts），左侧离线面板就地显示失败（见 SshExplorerOffline.test.tsx）。
+  it("连不上时不重复弹 toast，避免一次失败两条通知", async () => {
     connectWithSaved.mockResolvedValue(null);
     expect(await reconnectSshSpace("space-1", env)).toBeNull();
-    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it("同一个工作区并发触发只连一次（切进切出 / 重复渲染）", async () => {

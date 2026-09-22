@@ -57,6 +57,19 @@ describe("SshExplorerOffline", () => {
     expect(screen.getByTestId("explorer-ssh-offline-reconnect")).toBeTruthy();
   });
 
+  // #110：旧文案写"或在 SSH 面板重新登录"，而独立的 SSH 连接面板早就没有入口了
+  // （侧栏视图枚举里没有 "ssh"，见 ROADMAP #109）—— 指一条不存在的路等于没说。
+  it("失败文案只指界面上真有的入口，不许提「SSH 面板」", async () => {
+    const onReconnect = vi.fn().mockResolvedValue(null);
+    renderPanel({ ...base, onReconnect });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("explorer-ssh-offline-reconnect"));
+    });
+    const text = screen.getByTestId("explorer-ssh-offline-failed").textContent ?? "";
+    expect(text).not.toContain("SSH 面板");
+    expect(text).toContain("新建工作区");
+  });
+
   it("重连成功 → 不报失败（成功由连接订阅接管改回远端树）", async () => {
     const onReconnect = vi.fn().mockResolvedValue("s-new");
     renderPanel({ ...base, onReconnect });
