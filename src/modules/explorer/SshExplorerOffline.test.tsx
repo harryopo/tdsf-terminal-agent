@@ -18,7 +18,9 @@ const base = {
   connecting: false,
 };
 
-function renderPanel(over: Partial<typeof base> & { onReconnect: () => Promise<string | null> }) {
+function renderPanel(
+  over: typeof base & { onReconnect: () => Promise<string | null> },
+) {
   return render(
     <SshExplorerOffline
       host={over.host}

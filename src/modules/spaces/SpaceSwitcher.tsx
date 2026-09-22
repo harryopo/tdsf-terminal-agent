@@ -11,7 +11,7 @@ import {
   useSshStore,
 } from "@/modules/ssh-explorer/sshStore";
 import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
-import { effectiveLeafSsh, findLeafCwd } from "@/modules/terminal/lib/panes";
+import { leafCwdOf } from "@/modules/terminal/lib/leafCwd";
 import {
   ArrowDown01Icon,
   ArrowRight01Icon,
@@ -84,27 +84,15 @@ type DropTarget =
   | { kind: "into-space"; spaceId: string };
 
 /**
- * 标签页这一行的**实时**落点。
- *
- * 不能读 `tab.cwd` —— 那是建 tab 那一刻的快照，之后没人再写它，所以用户在 shell 里
- * `cd` 到 `/usr/bin`，下拉里还写着 `/`（2026-09-21 用户实测）。口径与状态栏、
- * 资源管理器保持一致：
- * - SSH：跟着**这个 tab 自己那条会话**的 OSC7 路径（#89 之后每条 tab 一条会话）；
- * - 本地：跟着可见 leaf 的 cwd（OSC7 由 `setLeafCwd` 写进 paneTree）。
+ * 标签页这一行的**实时**落点。判据收在 `leafCwdOf`（#91①）：SSH 跟着**这个 tab
+ * 自己那条会话**的 OSC7 路径（#89 之后每条 tab 一条会话），本地跟着可见 leaf 的
+ * cwd。不能读 `tab.cwd` —— 那是建 tab 那一刻的快照，之后没人再写它，所以用户在
+ * shell 里 `cd` 到 `/usr/bin`，下拉里还写着 `/`（2026-09-21 用户实测）。
  * 拿不到就返回 null（宁可少写一行，也不写一个会撒谎的路径）。
  */
-function liveCwdOf(
-  tab: Tab,
-  sshPaths: Record<string, string>,
-): string | null {
+function liveCwdOf(tab: Tab, sshPaths: Record<string, string>): string | null {
   if (tab.kind !== "terminal") return null;
-  const ssh = effectiveLeafSsh(
-    tab.paneTree,
-    tab.activeLeafId,
-    tab.sshSessionId,
-  );
-  if (ssh) return sshPaths[ssh] ?? null;
-  return findLeafCwd(tab.paneTree, tab.activeLeafId) ?? tab.cwd ?? null;
+  return leafCwdOf(tab, tab.activeLeafId, sshPaths);
 }
 
 function subtitleFor(tab: Tab, cwd: string | null): string | null {

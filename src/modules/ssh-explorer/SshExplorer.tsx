@@ -13,8 +13,8 @@
 //   │ 连接状态 / 空状态提示                │
 //   └─────────────────────────────────────┘
 //
-// 主机审批: 当 Rust 端 check_server_key 推送 ssh:host_verify 事件时,
-// 设置 pendingApproval, 弹出 AlertDialog 询问用户是否信任。
+// 主机审批: 当 Rust 端 check_server_key 推送 ssh:host_verify / ssh:host_key_mismatch
+// 事件时, 请求进 pendingApprovals 队列, 弹窗按到达顺序逐条询问用户是否信任。
 
 import {
   AlertDialog,
