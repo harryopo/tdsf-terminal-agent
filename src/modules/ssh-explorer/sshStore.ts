@@ -1,11 +1,10 @@
-// TDSF (P4-T4.1): SSH 远程资源管理器 Zustand store
+// TDSF (P4-T4.1): SSH 会话 Zustand store
 // -----------------------------------------------------------------------------
-// 管理 SSH 会话列表 + 远程文件树状态 + 远程文件编辑器状态 + TOFU 主机审批
+// 管理 SSH 会话列表 + 每条会话远端 shell 的当前目录 + 已保存凭据 + TOFU 主机审批队列
 //
 // 设计要点:
 //   - 每个会话有前端 id (crypto.randomUUID) + Rust sessionId (ssh_connect 返回)
-//   - 文件树状态按前端 id 隔离 (currentPath / entries / loading / expandedPaths)
-//   - 编辑器一次只编辑一个文件 (editingFile), 与 SshFileEditor 组件配合
+//   - 远端 shell 的 cwd 按前端 id 隔离；远程文件树不走这里（见 currentPathBySession 注释）
 //   - 主机审批请求 (pendingApprovals 队列) 由 ssh:host_verify / ssh:host_key_mismatch
 //     事件推送, 弹窗按到达顺序逐条询问用户
 import { create } from 'zustand';
@@ -28,18 +27,6 @@ import {
   type SshStatusEvent,
   type HostApprovalRequest,
 } from '@/lib/ssh-bridge';
-import {
-  sftpList,
-  sftpRead,
-  sftpWrite,
-  sftpMkdir,
-  sftpRemove,
-  sftpRename,
-  decodeUtf8,
-  encodeUtf8,
-  type SftpEntry,
-  joinRemotePath,
-} from '@/lib/sftp-bridge';
 import {
   fetchRemoteCommands,
   fetchRemoteOsInfo,
@@ -73,48 +60,6 @@ function omitSessionKey<T>(record: Record<string, T>, sessionId: string): Record
   return Object.fromEntries(
     Object.entries(record).filter(([k]) => k !== sessionId),
   );
-}
-
-/** 使指定父路径的 children 缓存失效并重新加载，同时刷新 cwd（如果匹配） */
-async function invalidateChildrenCache(
-  get: () => SshExplorerState,
-  set: (partial: Partial<SshExplorerState> | ((s: SshExplorerState) => Partial<SshExplorerState>)) => void,
-  sessionId: string,
-  parentPath: string,
-): Promise<void> {
-  set((s: SshExplorerState) => ({
-    childrenByPathBySession: {
-      ...s.childrenByPathBySession,
-      [sessionId]: {
-        ...(s.childrenByPathBySession[sessionId] ?? {}),
-        [parentPath]: [],
-      },
-    },
-  }));
-  await get().loadChildren(sessionId, parentPath);
-  if (get().currentPathBySession[sessionId] === parentPath) {
-    await get().listDir(sessionId, parentPath);
-  }
-}
-
-/** 折叠已展开但已失效的目录（重命名/删除后路径不再有效） */
-function collapseExpanded(
-  get: () => SshExplorerState,
-  set: (partial: Partial<SshExplorerState> | ((s: SshExplorerState) => Partial<SshExplorerState>)) => void,
-  sessionId: string,
-  path: string,
-): void {
-  const expanded = get().expandedPathsBySession[sessionId] ?? new Set<string>();
-  if (expanded.has(path)) {
-    const next = new Set(expanded);
-    next.delete(path);
-    set((s: SshExplorerState) => ({
-      expandedPathsBySession: {
-        ...s.expandedPathsBySession,
-        [sessionId]: next,
-      },
-    }));
-  }
 }
 
 // === 类型定义 ================================================================
@@ -162,46 +107,6 @@ export interface SshSessionInfo {  /** 前端唯一 id (crypto.randomUUID) */
   origin?: SshSessionOrigin;
 }
 
-/** 远程文件编辑状态 */
-export interface SshEditingFile {
-  /** 远程文件完整路径 */
-  path: string;
-  /** 文件名 (路径最后一段) */
-  name: string;
-  /** 文件内容 (UTF-8 文本) */
-  content: string;
-  /** 原始内容 (用于 dirty 判断) */
-  originalContent: string;
-  /** 关联的会话前端 id */
-  sessionId: string;
-  /** 是否已修改 (content !== originalContent) */
-  dirty: boolean;
-  /** 是否正在保存 */
-  saving: boolean;
-  /** 是否加载中 (读取远程文件) */
-  loading: boolean;
-}
-
-/** 单次文件传输任务 (上传/下载) */
-export interface SshTransferTask {
-  id: string;
-  /** 关联会话前端 id */
-  sessionId: string;
-  /** 方向 */
-  direction: 'upload' | 'download';
-  /** 远程路径 */
-  remotePath: string;
-  /** 本地路径 (上传时源, 下载时目标) */
-  localPath: string;
-  /** 已传输字节 */
-  transferred: number;
-  /** 总字节 (未知为 null) */
-  total: number | null;
-  /** 状态 */
-  status: 'pending' | 'transferring' | 'done' | 'error';
-  error?: string;
-}
-
 // === Store 定义 ==============================================================
 
 interface SshExplorerState {
@@ -217,34 +122,17 @@ interface SshExplorerState {
    */
   pendingApprovals: HostApprovalRequest[];
 
-  // === 文件树状态 (按会话 id 隔离) ===
-  /** 每个会话的当前目录路径 (用于 SSH 终端默认 cwd / "返回上一级" 面包屑) */
-  currentPathBySession: Record<string, string>;
-  /** 每个会话当前目录的条目列表 (即 currentPath 下的直接子条目) */
-  entriesBySession: Record<string, SftpEntry[]>;
-  /** 每个会话的当前目录加载状态 */
-  loadingBySession: Record<string, boolean>;
+  // === 远端 shell 的当前目录 (按会话 id 隔离) ===
   /**
-   * 每个会话已展开的目录子树缓存: sessionId -> { path -> entries }。
+   * **只有一个语义**：这个会话里那条 shell 现在在哪个目录。
    *
-   * TDSF 2026-07-29: 让 SshFileTree 跟本地 FileExplorer 一样支持可展开
-   * 树形结构, 用户点开哪个目录就 lazy load 哪个目录的子条目, 不再只能
-   * 用面包屑逐级 navigate。entriesBySession 只保留"当前 cwd"一份, 这里
-   * 缓存所有已展开过的子树, 切换活跃目录/会话时不会重新拉取。
+   * 写它的人只有两类：① 远端终端的 OSC 7（`PaneTreeView` 的 SSH leaf、
+   * `App.handleTerminalCwd`）；② 连接成功后 `echo $HOME` 的探针（新 shell 起点=家目录）。
+   * 左侧远程文件树**不**写这里 —— 它走 `FileExplorer` + `fsb_*`（自己按路径缓存），
+   * 曾有的 `SshFileTree`/`navigateTo` 那套已在 #91② 删除（见 retired-remote-tree.test.ts）。
+   * 读它的人：状态栏/窗口标题/工作区下拉的落点、agent 的远端 cwd、carapace 动态候选。
    */
-  childrenByPathBySession: Record<string, Record<string, SftpEntry[]>>;
-  /** 每个会话每个展开目录的子条目加载状态: sessionId -> { path -> boolean } */
-  loadingChildrenByPathBySession: Record<string, Record<string, boolean>>;
-  /** 每个会话展开的目录路径集合 */
-  expandedPathsBySession: Record<string, Set<string>>;
-  /** 选中的文件路径 (单选, 用于高亮) */
-  selectedPath: string | null;
-
-  // === 编辑器状态 ===
-  editingFile: SshEditingFile | null;
-
-  // === 文件传输任务 ===
-  transferTasks: SshTransferTask[];
+  currentPathBySession: Record<string, string>;
 
   // === 连接对话框 ===
   connectDialogOpen: boolean;
@@ -280,55 +168,13 @@ interface SshExplorerState {
   pushApproval: (req: HostApprovalRequest) => void;
   resolveApproval: (approved: boolean) => Promise<void>;
 
-  // 文件树 actions
-  listDir: (sessionId: string, path: string) => Promise<void>;
   /**
-   * 仅更新当前目录路径，不触发网络请求。
+   * 记录某个会话里远端 shell 的当前目录（不触发网络请求）。
    *
-   * TDSF 修复 2026-07-31: 用于 SSH 终端 OSC 7 cwd 同步——终端里 cd
-   * 时先写路径，再触发 listDir 刷新左侧资源管理器，避免与 navigateTo
-   * 重复请求后端。
+   * 调用方只有两类：SSH leaf 的 OSC 7 处理器，和连接成功后解析 `$HOME` 的探针。
+   * 左侧远程文件树不写这里（它走 FileExplorer + fsb_*，见 retired-remote-tree.test.ts）。
    */
   setCurrentPath: (sessionId: string, path: string) => void;
-  navigateTo: (sessionId: string, path: string) => Promise<void>;
-  /**
-   * 切换目录的展开/折叠状态。
-   *
-   * TDSF 2026-07-29: 第一次展开时触发 loadChildren lazy 加载该目录
-   * 的子条目, 跟本地 FileExplorer 的 toggle 行为一致。
-   * 已展开则折叠并保留缓存 (下次展开不再请求后端)。
-   */
-  toggleExpand: (sessionId: string, path: string) => void;
-  /**
-   * 加载指定目录的子条目 (用于 SshFileTree 树形展开时 lazy 加载)。
-   * 如果已缓存则直接复用, 不重复请求后端。
-   */
-  loadChildren: (sessionId: string, path: string) => Promise<void>;
-  selectPath: (path: string | null) => void;
-  refreshCurrent: (sessionId: string) => Promise<void>;
-  /**
-   * 创建远程目录。
-   */
-  createDir: (sessionId: string, parentPath: string, name: string) => Promise<void>;
-  /**
-   * 重命名远程文件/目录。
-   */
-  renamePath: (sessionId: string, from: string, to: string) => Promise<void>;
-  /**
-   * 删除远程文件/目录。
-   *
-   * 目录删除目前只支持空目录 (Rust sftp_remove_dir 未暴露), 非空会报错。
-   */
-  deletePath: (sessionId: string, path: string) => Promise<void>;
-
-  // 编辑器 actions
-  openFile: (sessionId: string, path: string, name: string) => Promise<void>;
-  saveFile: () => Promise<void>;
-  closeEditor: () => void;
-  updateEditorContent: (content: string) => void;
-
-  // 传输任务 actions
-  removeTransferTask: (id: string) => void;
 
   // === TDSF: 凭据持久化 actions ===
   /** 测试连接 (不保留会话) */
@@ -543,15 +389,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   activeSessionId: null,
   pendingApprovals: [],
   currentPathBySession: {},
-  entriesBySession: {},
-  loadingBySession: {},
-  // TDSF 2026-07-29: 树形展开所需的子树缓存与加载状态
-  childrenByPathBySession: {},
-  loadingChildrenByPathBySession: {},
-  expandedPathsBySession: {},
-  selectedPath: null,
-  editingFile: null,
-  transferTasks: [],
   connectDialogOpen: false,
   // TDSF: 凭据持久化初始状态
   savedConnections: [],
@@ -633,11 +470,12 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         ),
       }));
 
-      // TDSF 2026-08-31: 连接后默认进入远端家目录 (而非硬编码 "/")。
-      // 用户实测: 参考软件连接后资源管理器显示 /root (家目录), 本项目却进 /。
-      // 解析方式: ssh_command exec 'echo $HOME' (exec 模式, 不污染 PTY)。
-      // 失败 (超时/非零退出/空输出) 降级 "/" —— 连接已成功, 仅文件树起点降级,
-      // 用户仍可经路径栏手动导航。
+      // TDSF 2026-08-31: 连接后默认落到远端家目录 (而非硬编码 "/")。
+      // 用户实测: 参考软件连接后显示 /root (家目录), 本项目却进 /。
+      // 解析方式: ssh_command exec 'echo $HOME'（exec 模式，不污染 PTY）。
+      // 失败 (超时/非零退出/空输出) 降级 "/" —— 连接已成功, 仅起点降级。
+      // 这也是**新 shell 的起点**, 所以写进"远端 shell 的 cwd"那一份即可
+      // （#91② 之后这里只有一个 currentPathBySession, 不再有文件树要刷新）。
       void (async () => {
         let initial = '/';
         try {
@@ -656,11 +494,11 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           console.warn('[sshStore] resolve $HOME failed, fallback /:', e);
         }
         // 会话可能在解析期间已断开 —— 断开时 currentPathBySession 已清理,
-        // navigateTo 会重新写入孤儿键; 守卫: 仅当会话仍存在时导航。
+        // 再写会留下孤儿键; 守卫: 仅当会话仍存在时写入。
         if (!get().sessions.some((s) => s.id === sessionId)) return;
-        await get().navigateTo(sessionId, initial);
+        get().setCurrentPath(sessionId, initial);
       })().catch((e) => {
-        console.warn('[sshStore] initial navigateTo failed:', e);
+        console.warn('[sshStore] initial $HOME seed failed:', e);
       });
 
       // TDSF 2026-08-28: 连接成功后静默检测远端 carapace（无弹窗设计：
@@ -714,7 +552,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     // 能清理——原实现 `if (!session?.handle) return` 导致 failed 会话永久
     // 残留 sessions 数组, 用户无法通过断开按钮移除, 只能重启应用。
     if (!session) return;
-    const wasActive = get().activeSessionId === sessionId;
     if (session.handle) {
       try {
         await session.handle.close();
@@ -732,20 +569,8 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           : s.activeSessionId,
       // TDSF: 完整清理会话相关状态, 避免残留影响重连或新会话
       currentPathBySession: omitSessionKey(s.currentPathBySession, sessionId),
-      entriesBySession: omitSessionKey(s.entriesBySession, sessionId),
-      loadingBySession: omitSessionKey(s.loadingBySession, sessionId),
-      expandedPathsBySession: omitSessionKey(s.expandedPathsBySession, sessionId),
-      // TDSF 2026-07-29: 树形展开所需的子树缓存也按会话清理
-      childrenByPathBySession: omitSessionKey(s.childrenByPathBySession, sessionId),
-      loadingChildrenByPathBySession: omitSessionKey(s.loadingChildrenByPathBySession, sessionId),
       // TDSF 2026-08-28: 远端 carapace 检测状态也按会话清理
       remoteCarapaceBySession: omitSessionKey(s.remoteCarapaceBySession, sessionId),
-      // 清理传输任务 (会话已断开, 任务不再有意义)
-      transferTasks: s.transferTasks.filter((t) => t.sessionId !== sessionId),
-      // 清理选中状态: 断开的是活跃会话时, selectedPath 必然属于该会话, 应清空
-      selectedPath: wasActive ? null : s.selectedPath,
-      editingFile:
-        s.editingFile?.sessionId === sessionId ? null : s.editingFile,
     }));
   },
 
@@ -789,333 +614,11 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     }
   },
 
-  // === 文件树 actions ===
-  listDir: async (sessionId, path) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) return;
-
-    set((s) => ({
-      loadingBySession: { ...s.loadingBySession, [sessionId]: true },
-    }));
-
-    try {
-      const entries = await sftpList(session.rustSessionId, path);
-      set((s) => ({
-        entriesBySession: { ...s.entriesBySession, [sessionId]: entries },
-        // TDSF 2026-07-29: 同步把"当前 cwd"也写入子树缓存,
-        // 这样 SshFileTree 用统一的 childrenByPathBySession 渲染, 不再
-        // 区分"当前目录 vs 已展开子目录", 跟本地 FileExplorer 行为一致.
-        childrenByPathBySession: {
-          ...s.childrenByPathBySession,
-          [sessionId]: {
-            ...(s.childrenByPathBySession[sessionId] ?? {}),
-            [path]: entries,
-          },
-        },
-        loadingBySession: { ...s.loadingBySession, [sessionId]: false },
-      }));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] listDir failed:', path, msg);
-      set((s) => ({
-        loadingBySession: { ...s.loadingBySession, [sessionId]: false },
-      }));
-      throw e;
-    }
-  },
-
   setCurrentPath: (sessionId, path) => {
     const log = getOsc7Log();
     log?.push({ source: "sshStore.setCurrentPath", sessionId, path });
     set((s) => ({
       currentPathBySession: { ...s.currentPathBySession, [sessionId]: path },
-    }));
-  },
-
-  navigateTo: async (sessionId, path) => {
-    set((s) => ({
-      currentPathBySession: { ...s.currentPathBySession, [sessionId]: path },
-    }));
-    await get().listDir(sessionId, path);
-  },
-
-  /**
-   * 加载指定目录的子条目 (lazy, 树形展开时调用).
-   *
-   * 已缓存则直接复用, 避免重复请求后端。
-   * TDSF 2026-07-29: 与本地 useFileTree.fetchChildren 行为对齐。
-   */
-  loadChildren: async (sessionId, path) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) return;
-
-    const cache = get().childrenByPathBySession[sessionId] ?? {};
-    // 已缓存: 跳过网络请求, 复用本地数据
-    if (cache[path]) return;
-
-    set((s) => ({
-      loadingChildrenByPathBySession: {
-        ...s.loadingChildrenByPathBySession,
-        [sessionId]: {
-          ...(s.loadingChildrenByPathBySession[sessionId] ?? {}),
-          [path]: true,
-        },
-      },
-    }));
-
-    try {
-      const entries = await sftpList(session.rustSessionId, path);
-      set((s) => ({
-        childrenByPathBySession: {
-          ...s.childrenByPathBySession,
-          [sessionId]: {
-            ...(s.childrenByPathBySession[sessionId] ?? {}),
-            [path]: entries,
-          },
-        },
-        loadingChildrenByPathBySession: {
-          ...s.loadingChildrenByPathBySession,
-          [sessionId]: {
-            ...(s.loadingChildrenByPathBySession[sessionId] ?? {}),
-            [path]: false,
-          },
-        },
-      }));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] loadChildren failed:', path, msg);
-      set((s) => ({
-        loadingChildrenByPathBySession: {
-          ...s.loadingChildrenByPathBySession,
-          [sessionId]: {
-            ...(s.loadingChildrenByPathBySession[sessionId] ?? {}),
-            [path]: false,
-          },
-        },
-      }));
-      // 加载失败不抛出, 保持 UI 稳定; 用户可点重试或刷新
-    }
-  },
-
-  /**
-   * 切换目录展开/折叠。
-   *
-   * TDSF 2026-07-29: 第一次展开时触发 loadChildren, 跟本地
-   * FileExplorer 的 toggle 行为一致。已展开则折叠 (保留缓存)。
-   */
-  toggleExpand: (sessionId, path) => {
-    const current = get().expandedPathsBySession[sessionId] ?? new Set<string>();
-    const wasExpanded = current.has(path);
-    const next = new Set(current);
-    if (wasExpanded) {
-      next.delete(path);
-    } else {
-      next.add(path);
-    }
-    set({
-      expandedPathsBySession: {
-        ...get().expandedPathsBySession,
-        [sessionId]: next,
-      },
-    });
-    // 展开时: 第一次没缓存则 lazy 加载
-    if (!wasExpanded) {
-      void get().loadChildren(sessionId, path);
-    }
-  },
-
-  selectPath: (path) => set({ selectedPath: path }),
-
-  refreshCurrent: async (sessionId) => {
-    const path = get().currentPathBySession[sessionId];
-    if (path) await get().listDir(sessionId, path);
-  },
-
-  /**
-   * 创建远程目录。
-   */
-  createDir: async (sessionId, parentPath, name) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) {
-      throw new Error('SSH 会话未连接, 无法创建目录');
-    }
-    const path = joinRemotePath(parentPath, name);
-    try {
-      await sftpMkdir(session.rustSessionId, path);
-      await invalidateChildrenCache(get, set, sessionId, parentPath);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] createDir failed:', path, msg);
-      toast.error('创建目录失败', { description: msg });
-      throw e;
-    }
-  },
-
-  /**
-   * 重命名远程文件/目录。
-   */
-  renamePath: async (sessionId, from, to) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) {
-      throw new Error('SSH 会话未连接, 无法重命名');
-    }
-    const fromParent = from.slice(0, from.lastIndexOf('/') || 1);
-    const toParent = to.slice(0, to.lastIndexOf('/') || 1);
-    try {
-      await sftpRename(session.rustSessionId, from, to);
-      // 刷新涉及的父目录
-      const refreshParents = [fromParent];
-      if (toParent !== fromParent) refreshParents.push(toParent);
-      for (const p of refreshParents) {
-        await invalidateChildrenCache(get, set, sessionId, p);
-      }
-      // 如果被重命名的是已展开目录, 需要折叠它 (路径失效)
-      collapseExpanded(get, set, sessionId, from);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] renamePath failed:', from, '->', to, msg);
-      toast.error('重命名失败', { description: msg });
-      throw e;
-    }
-  },
-
-  /**
-   * 删除远程文件/目录。
-   *
-   * 目录删除: 当前 Rust 端只暴露了 sftp_remove, 它通常只能删除空目录。
-   * 非空目录会报错, 用户需先清空目录再删除。
-   */
-  deletePath: async (sessionId, path) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) {
-      throw new Error('SSH 会话未连接, 无法删除');
-    }
-    const parent = path.slice(0, path.lastIndexOf('/') || 1);
-    try {
-      await sftpRemove(session.rustSessionId, path);
-      // 清理被删路径及其父目录的缓存
-      set((s) => ({
-        childrenByPathBySession: {
-          ...s.childrenByPathBySession,
-          [sessionId]: {
-            ...(s.childrenByPathBySession[sessionId] ?? {}),
-            [parent]: [],
-            [path]: [],
-          },
-        },
-      }));
-      await get().loadChildren(sessionId, parent);
-      if (get().currentPathBySession[sessionId] === parent) {
-        await get().listDir(sessionId, parent);
-      }
-      // 折叠已删除的展开目录
-      collapseExpanded(get, set, sessionId, path);
-      // 如果当前选中的是被删除路径, 清空选中
-      if (get().selectedPath === path) {
-        set({ selectedPath: null });
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] deletePath failed:', path, msg);
-      toast.error('删除失败', { description: msg });
-      throw e;
-    }
-  },
-
-  // === 编辑器 actions ===
-  openFile: async (sessionId, path, name) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session?.rustSessionId) return;
-
-    // 先设置 loading 状态
-    set({
-      editingFile: {
-        path,
-        name,
-        content: '',
-        originalContent: '',
-        sessionId,
-        dirty: false,
-        saving: false,
-        loading: true,
-      },
-    });
-
-    try {
-      const bytes = await sftpRead(session.rustSessionId, path);
-      const content = decodeUtf8(bytes);
-      set({
-        editingFile: {
-          path,
-          name,
-          content,
-          originalContent: content,
-          sessionId,
-          dirty: false,
-          saving: false,
-          loading: false,
-        },
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] openFile failed:', path, msg);
-      set({ editingFile: null });
-      throw e;
-    }
-  },
-
-  saveFile: async () => {
-    const { editingFile } = get();
-    if (!editingFile || editingFile.saving) return;
-
-    const session = get().sessions.find(
-      (s) => s.id === editingFile.sessionId,
-    );
-    if (!session?.rustSessionId) return;
-
-    set({
-      editingFile: { ...editingFile, saving: true },
-    });
-
-    try {
-      const bytes = encodeUtf8(editingFile.content);
-      await sftpWrite(session.rustSessionId, editingFile.path, bytes);
-      set({
-        editingFile: {
-          ...editingFile,
-          originalContent: editingFile.content,
-          dirty: false,
-          saving: false,
-        },
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[sshStore] saveFile failed:', msg);
-      set({
-        editingFile: { ...editingFile, saving: false },
-      });
-      throw e;
-    }
-  },
-
-  closeEditor: () => set({ editingFile: null }),
-
-  updateEditorContent: (content) => {
-    set((s) => {
-      if (!s.editingFile) return s;
-      return {
-        editingFile: {
-          ...s.editingFile,
-          content,
-          dirty: content !== s.editingFile.originalContent,
-        },
-      };
-    });
-  },
-
-  removeTransferTask: (id) => {
-    set((s) => ({
-      transferTasks: s.transferTasks.filter((t) => t.id !== id),
     }));
   },
 
@@ -1333,15 +836,6 @@ export function selectSessionById(
   return state.sessions.find((s) => s.id === id) ?? null;
 }
 
-/** 获取当前活跃会话的远程当前目录 (无活跃会话或未记录时返回 null) */
-export function selectActiveSessionCurrentPath(
-  state: SshExplorerState,
-): string | null {
-  const id = state.activeSessionId;
-  if (!id) return null;
-  return state.currentPathBySession[id] ?? null;
-}
-
 /** 按 id 获取会话的远程当前目录 */
 export function selectSessionCurrentPath(
   state: SshExplorerState,
@@ -1350,10 +844,3 @@ export function selectSessionCurrentPath(
   if (!id) return null;
   return state.currentPathBySession[id] ?? null;
 }
-
-// === 事件订阅 (在 SshExplorer 挂载时调用) =====================================
-//
-// 监听 ssh:host_verify / ssh:host_key_mismatch 事件, pushApproval 入队。
-// 由 SshExplorer useEffect 中调用 subscribeHostVerify / subscribeHostKeyMismatch。
-
-export { joinRemotePath };
