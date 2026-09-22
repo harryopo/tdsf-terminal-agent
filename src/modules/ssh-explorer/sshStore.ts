@@ -1279,6 +1279,27 @@ export function isSessionConnected(state: SshSessionInfo): boolean {
   return state.state === 'connected' && state.rustSessionId !== null;
 }
 
+/**
+ * "连接正在建立"的状态集合（含断线自动重连）。
+ *
+ * 收口前这份清单抄在两处：App.tsx 用它决定终端区显示连接进度还是空状态页，
+ * #102 的离线面板要用同一个口径判断"这台服务器正在重连"。口径分开写就会漂,
+ * 所以只留这一个主人。
+ */
+const SSH_CONNECTING_STATES: ReadonlySet<SshSessionStateValue> = new Set([
+  'connecting',
+  'handshaking',
+  'host_verifying',
+  'authenticating',
+  'authenticated',
+  'reconnecting',
+]);
+
+/** 判断会话是否处于"正在建立连接"（既不是已连上, 也不是死掉） */
+export function isSessionConnecting(session: SshSessionInfo): boolean {
+  return SSH_CONNECTING_STATES.has(session.state);
+}
+
 /** 按 id 获取会话 (不存在时返回 null) */
 export function selectSessionById(
   state: SshExplorerState,

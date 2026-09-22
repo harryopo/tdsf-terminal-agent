@@ -12,6 +12,7 @@ import type { WorkspaceEnv } from "@/modules/workspace";
 import {
   detachSshSession,
   isSshEnvConnected,
+  sshEnvIsConnecting,
   staleSshSpaceIds,
 } from "./sshSpaceSession";
 
@@ -117,5 +118,85 @@ describe("staleSshSpaceIds：启动清理与断线降级共用的那一个判据
 
   it("已经没有 sessionId 的 SSH 工作区不再被反复写（幂等，避免每次启动都动 store）", () => {
     expect(staleSshSpaceIds([spaces[5]], [])).toEqual([]);
+  });
+});
+
+// ============================================================================
+// #102 收尾（2026-09-22）：离线面板要把"没人管"和"重连已经在跑"分开
+// ----------------------------------------------------------------------------
+// 分不清的两种坏结果都在这条链上：把已在重连显示成可点的「重新连接」，用户重复点会被
+// reconnectSshSpace 的并发闸门吞掉（返回 null），面板于是谎报"重连失败"；反过来把没人管
+// 显示成"正在重连…"，用户就只能干等一块再也不会动的面板。
+// 匹配必须按 host/user/port —— 同一次会话表里别的服务器在连，不算这台在重连。
+// ============================================================================
+describe("sshEnvIsConnecting：只认这台服务器的连接进度", () => {
+  const params = { host: "10.0.0.8", port: 22, user: "root" };
+
+  it("同一台服务器有会话正在建立 → true", () => {
+    expect(
+      sshEnvIsConnecting(sshEnv, [
+        session({ rustSessionId: null, state: "connecting", params } as never),
+      ]),
+    ).toBe(true);
+  });
+
+  it("另一台机器在连 → false（两个 SSH 工作区各说各的）", () => {
+    expect(
+      sshEnvIsConnecting(sshEnv, [
+        session({
+          rustSessionId: null,
+          state: "connecting",
+          params: { ...params, host: "10.0.0.9" },
+        } as never),
+      ]),
+    ).toBe(false);
+  });
+
+  it("同主机同用户但端口不同 → false（那是另一台机器）", () => {
+    expect(
+      sshEnvIsConnecting(sshEnv, [
+        session({
+          rustSessionId: null,
+          state: "connecting",
+          params: { ...params, port: 2222 },
+        } as never),
+      ]),
+    ).toBe(false);
+  });
+
+  it("已经连上 → false（那时左侧走远端树，不该再显示重连提示）", () => {
+    expect(
+      sshEnvIsConnecting(sshEnv, [session({ params } as never)]),
+    ).toBe(false);
+  });
+
+  it("自动重连中的会话也算这台在连接", () => {
+    expect(
+      sshEnvIsConnecting(sshEnv, [
+        session({ rustSessionId: 7, state: "reconnecting", params } as never),
+      ]),
+    ).toBe(true);
+  });
+
+  it("本地工作区 → false，即使会话表里有 SSH 在连", () => {
+    expect(
+      sshEnvIsConnecting({ kind: "local" } as WorkspaceEnv, [
+        session({ rustSessionId: null, state: "connecting", params } as never),
+      ]),
+    ).toBe(false);
+  });
+
+  it("不传 sessions 时读 store 当前值（渲染期之外的调用点也能判）", () => {
+    useSshStore.setState({
+      sessions: [
+        session({
+          id: "sess-1",
+          rustSessionId: null,
+          state: "authenticating",
+          params,
+        } as never),
+      ],
+    });
+    expect(sshEnvIsConnecting(sshEnv)).toBe(true);
   });
 });
