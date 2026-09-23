@@ -14,6 +14,7 @@
  *   - ssh_resize(session_id, cols, rows) -> ()
  *   - ssh_disconnect(session_id) -> ()
  *   - ssh_status() -> Vec<(u32, SshSessionState)>
+ *   - ssh_sessions_detail() -> Vec<SshSessionDetail>  (含 ownerWindow，#117 启动对账用)
  *   - ssh_approve_host(approval_id, approved) -> ()
  *
  * 命名约定:
@@ -272,6 +273,27 @@ export async function sshDisconnect(sessionId: number): Promise<void> {
  */
 export async function sshStatus(): Promise<Array<[number, SshSessionStateValue]>> {
   return invoke<Array<[number, SshSessionStateValue]>>('ssh_status');
+}
+
+/** 会话详情（与 Rust SshSessionDetail 对齐，camelCase） */
+export interface SshSessionDetail {
+  sessionId: number;
+  host: string;
+  port: number;
+  user: string;
+  state: SshSessionStateValue;
+  /** 建这条连接的 webview 窗口 label；Rust 不认识出身时为 null */
+  ownerWindow: string | null;
+}
+
+/**
+ * 查询所有 SSH 会话详情（含 user@host 与出身窗口）
+ *
+ * 与 `sshStatus()` 的区别：状态栏只要 (id, state)，而跨页面代际对账
+ * （#117 回收上一代页面留下的连接）要按会话身份与出身判断。
+ */
+export async function sshSessionsDetail(): Promise<SshSessionDetail[]> {
+  return invoke<SshSessionDetail[]>('ssh_sessions_detail');
 }
 
 /**
