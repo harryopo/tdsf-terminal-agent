@@ -76,7 +76,6 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             - ssh_session_id (str, 可选): SSH 会话 ID，空则用 ctx.ssh_session_id
             - explanation (str, 可选): 命令解释（前端展示用）
             - timeout (int, 可选): 超时秒数，默认 30
-            - visible (bool, 可选): 是否同时注入前端终端（用户可见执行），默认 False
             - tool_name (str, 可选): 发起方工具名（backup_restore / config_diff 这类
               复用本实现的工具必须传，否则卡与审批一律显示成 ssh_command）
         ctx: ToolContext 运行时上下文
@@ -94,7 +93,6 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     ssh_session_id = params.get("ssh_session_id", "") or ""
     explanation = params.get("explanation", "") or ""
     timeout = int(params.get("timeout", 30))
-    # TDSF (2026-08-09): 前端开关 auto_execute_in_terminal 开启时自动设 visible
 
     # 复用本实现的上游工具（backup_restore / config_diff）在这里传自己的名字，
     # 否则审批卡、审计、聊天卡一律显示成 ssh_command（#114 用户报的"混用"）。
@@ -232,7 +230,6 @@ def make_ssh_command_tool(ctx: ToolContext):
         ssh_session_id: str = "",
         explanation: str = "",
         timeout: int = 30,
-        visible: bool = False,
     ) -> dict:
         """在 SSH 会话上执行 shell 命令。
 
@@ -245,13 +242,12 @@ def make_ssh_command_tool(ctx: ToolContext):
             ssh_session_id (str): SSH 会话 ID，空则用上下文默认会话。
             explanation (str): 命令解释，前端审批卡第 3 层展示用（可选）。
             timeout (int): 超时秒数，默认 30。
-            visible (bool): 为 True 时同时把命令注入前端终端（用户可见执行）。默认 False。
 
         Returns:
             dict: 结构化结果，含 status / command / output / exit_code / risk /
                 impact 等字段。
                 status 取值: success | command_blocked | rejected |
-                needs_approval | unavailable | error
+                needs_approval | unavailable | indeterminate | error
         """
         return invoke_ssh_command_tool(
             params={
@@ -259,7 +255,6 @@ def make_ssh_command_tool(ctx: ToolContext):
                 "ssh_session_id": ssh_session_id,
                 "explanation": explanation,
                 "timeout": timeout,
-                "visible": visible,
             },
             ctx=ctx,
         )

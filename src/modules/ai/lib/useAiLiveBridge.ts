@@ -28,6 +28,10 @@ import {
 } from "@/modules/terminal/lib/teachingExecutionStore";
 import type { TerminalBlock } from "@/modules/terminal/lib/terminalBlocks";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import {
+  shouldRerouteForMissingIntegration,
+  VISIBLE_INTEGRATION_GRACE_MS,
+} from "./visibleIntegrationGrace";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { type RefObject, useEffect, useRef } from "react";
@@ -83,6 +87,8 @@ type PendingVisibleTerminalExecution = VisibleTerminalRequest & {
    * 用来把"等了很久"钉死在排队、注入、等块闭合中的某一段。
    */
   injectedAt: number | null;
+  /** #113③：注入后"这台 shell 会不会回报执行标记"的宽限定时器句柄 */
+  graceHandle: number | null;
 };
 
 // Rust caps long-command visual typing by duration; never replace a long
@@ -595,6 +601,10 @@ export function useAiLiveBridge(params: Params) {
       if (pending.timeoutHandle !== null) {
         window.clearTimeout(pending.timeoutHandle);
       }
+      if (pending.graceHandle !== null) {
+        window.clearTimeout(pending.graceHandle);
+        pending.graceHandle = null;
+      }
       void invoke("sidecar_visible_terminal_response", {
         requestId: pending.requestId,
         result: {
@@ -614,6 +624,37 @@ export function useAiLiveBridge(params: Params) {
       });
     };
 
+    /**
+     * #113③：注入完成后给远端 shell 一个短宽限去报"命令开始执行"标记。
+     * 宽限期到点仍没标记 ⇒ 这台机器的 shell 不回报 OSC 块（不是 bash/zsh，
+     * 或 PROMPT_COMMAND / DEBUG trap 被接管），回 `reroute` 让 sidecar 改道
+     * 后台 exec 取真结果 —— 是否允许改道重跑由 sidecar 按风险级决定，
+     * 写命令在那里会被拦下，绝不二次派发。
+     */
+    const armVisibleIntegrationGrace = (
+      pending: PendingVisibleTerminalExecution,
+    ) => {
+      if (pending.graceHandle !== null) return;
+      pending.graceHandle = window.setTimeout(() => {
+        pending.graceHandle = null;
+        if (
+          !shouldRerouteForMissingIntegration({
+            now: Date.now(),
+            injectedAt: pending.injectedAt,
+            lastExecStartedAt: useTerminalBlocksStore.getState()
+              .execStartedAtByLeaf[pending.leafId],
+          })
+        ) {
+          return;
+        }
+        settleVisibleExecution(pending, {
+          status: "reroute",
+          channel: "background",
+          reason: "no_shell_integration",
+        });
+      }, VISIBLE_INTEGRATION_GRACE_MS);
+    };
+
     const markVisibleExecutionRunning = (
       pending: PendingVisibleTerminalExecution,
     ) => {
@@ -622,6 +663,7 @@ export function useAiLiveBridge(params: Params) {
       // #113①：三个提交入口（整段 write / 打字机 end / human_type 回落）都经过这里，
       // "命令已写进终端"的时刻只在此处记一次。
       if (pending.injectedAt === null) pending.injectedAt = Date.now();
+      armVisibleIntegrationGrace(pending);
     };
 
     const armVisibleExecutionTimeout = (
@@ -769,6 +811,7 @@ export function useAiLiveBridge(params: Params) {
         phase: "typing",
         timeoutHandle: null,
         injectedAt: null,
+        graceHandle: null,
       };
       pendingVisibleExecutions.set(request.requestId, pending);
       const text = request.command.endsWith("\n")

@@ -230,10 +230,14 @@ class ToolContext:
     # Task 3.3 host 校验: 激活终端会话主机名（前端 live.sshConnection
     # "user@host" 提取 @ 后部分；空 = 不可得 → execute_via_ssh 跳过校验）
     ssh_host: str = ""
-    # TDSF (2026-08-09): 终端执行模式——True 时 ssh_command 自动设 visible=True
+    # TDSF (2026-09-23, #113④): 只保留前端"命令卡自动执行"开关的语义；
+    # ssh_command 的 visible 参数已删（全仓无人读取，通道由 execution_channel 定）
     auto_execute_in_terminal: bool = False
     # "visible-terminal" executes through the foreground SSH PTY and waits for
-    # its OSC command block. It must never fall back to ssh_command in secret.
+    # its OSC command block. Falling back to ssh_command is never silent:
+    # #113③ allows a reroute only with an explicit `reason`, and a reason that
+    # means "the command may already have run" (no_shell_integration) is refused
+    # for write risk levels (L2+) so nothing gets executed twice.
     execution_channel: str = "background"
     # T5 (2026-08-31, spec add-agent-loop-closure): 本地工作区路径
     # （live.workspaceRoot 优先，cwd 兜底）——python_run 的 subprocess cwd。
@@ -1465,6 +1469,34 @@ def _execute_via_ssh_impl(
                 and result.get("status") == "reroute"
                 and result.get("channel") == "background"
             ):
+                # #113③（2026-09-23）：改道重跑的代价按"命令到底有没有进过终端"分两类。
+                # - execution_channel_changed：派发前通道就没了，压根没执行 → 任何风险级都能改道；
+                # - no_shell_integration：远端 shell 不吐 OSC 块，**命令可能已经跑过一遍**，
+                #   所以只有只读/低风险可以承担"再来一次"；写操作绝不重放（红线9 双重执行家族）。
+                # 认不出的原因一律按"可能已执行"处理 —— 新增原因默认不获得豁免。
+                reroute_reason = str(result.get("reason") or "")
+                maybe_already_ran = reroute_reason != "execution_channel_changed"
+                if maybe_already_ran and risk_l >= 2:
+                    _transition_operation("indeterminate", error_code=reroute_reason)
+                    _audit_append(
+                        event="command_indeterminate",
+                        tool=tool_name,
+                        command=command,
+                        session_id=session_id,
+                        agent=ctx.agent_name,
+                        reason=reroute_reason,
+                    )
+                    return _complete_after_execution({
+                        "status": "indeterminate",
+                        "command": command,
+                        "ssh_session_id": session_id,
+                        "reason": reroute_reason,
+                        "message": (
+                            "命令已送进可见终端，但这台机器的 shell 没有回报执行结果，"
+                            "且这是写操作 —— 不重放（重跑可能造成二次改动）。"
+                            "请到终端窗口确认实际结果后再决定是否重试。"
+                        ),
+                    })
                 visible_terminal = False
                 execution_channel = "background"
                 result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
