@@ -449,10 +449,21 @@ pub fn run() {
                 // JetBrainsMono 等宽字体 + 暗模式 token 正确), 诊断期结束, 还原 russh 为 Info.
                 // 排查 SSH 问题临时开 Debug: 把下行注释解除即可, 不需改 RUST_LOG (无效).
                 // .level_for("russh", tauri_plugin_log::log::LevelFilter::Debug)
-                // TDSF 2026-08-01: Rust 日志落盘 <项目根>/.tdsf-data/rust.log
-                // （dev 模式 current_dir 即项目根；打包后为 exe 所在目录），
-                // 与 sidecar.log 同目录，scripts/dev-log.py 可统一离线分析
-                // （崩溃/重启/SSH 连接等 Rust 侧事件与 Python 侧时间线对照）。
+                // TDSF 2026-08-01: Rust 日志落盘 <项目根>/src-tauri/.tdsf-data/rust.log
+                // （dev 模式 current_dir 即 src-tauri；打包后为 exe 所在目录）。
+                // 注意：Python 侧 sidecar.log 落在**项目根**的 .tdsf-data/，不是同一目录，
+                // 两侧对账时别只盯一个文件夹。
+                //
+                // TDSF (#71, 2026-09-23): 下面三行都是**偏离库默认值**的必需配置，
+                // 由 rust_log_rotation_tests 钉住，删回默认会让排障无从下手：
+                // 1) 默认 max_file_size=40_000 + KeepOne 会在切分时 fs::remove_file
+                //    直接删掉旧日志。SSH 每次 exec 打 4~6 条 INFO，40KB 只够两三分钟，
+                //    rust.log 于是变成一块不断被抹掉的短时内存（#113① 对不上账的根因）。
+                // 2) 默认时区 UTC，而 [python] 行的正文由 Python 打成的是本地时间，
+                //    同一瞬间外内两层差 8 小时，肉眼对账必然算错。
+                .max_file_size(4 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                 .targets([
                     tauri_plugin_log::Target::new(
                         tauri_plugin_log::TargetKind::Stdout,
@@ -1029,4 +1040,103 @@ fn locate_sidecar_script(app: &tauri::App) -> PathBuf {
     // 开发模式: sidecar 目录直接位于 src-tauri/sidecar/（与 Cargo.toml 同级）
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir.join("sidecar").join("main.py")
+}
+
+/// #71（2026-09-23）：落盘日志必须钉住"不删历史 + 时间戳按本地"。
+///
+/// tauri-plugin-log 的默认值是 `max_file_size=40_000` + `KeepOne`，
+/// 而 `KeepOne` 的 rotate 分支直接 `fs::remove_file` —— 没有归档文件。
+/// SSH exec 每次调用打 4~6 条 INFO，40KB 只够两三分钟，
+/// 于是 `rust.log` 变成一块不断被抹掉的短时内存：
+/// #113① 要拿 Rust 侧 `[ssh]` 与转发的 `[python]` 对同一条时间线，
+/// 每次都只能看到"上次被删之后"的残段。
+/// 另外默认时区是 UTC，而 `[python]` 行的正文是 Python 打的本地时间，
+/// 同一瞬间外内两层差 8 小时，肉眼对账必然算错。
+///
+/// 这三条都在 Builder 上一行配好，没有可单测的纯函数，
+/// 所以按仓库既有做法（静态扫描 + 正向锚点）把配置钉成门禁：
+/// 谁把它们删回默认值，这里就红。
+#[cfg(test)]
+mod rust_log_rotation_tests {
+    /// 返回 `[ssh]` 落盘那个 Builder 的源码片段（从构造到 `.build(),`）。
+    ///
+    /// 只保留代码行：注释里会解释"默认值为什么会毁掉排障"，
+    /// 那些字样（如 KeepOne）不能算进断言。
+    fn log_plugin_block() -> String {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("读取 src/lib.rs");
+        let start = src
+            .find("tauri_plugin_log::Builder::new()")
+            .expect("找不到 tauri_plugin_log::Builder::new()");
+        let end = src[start..]
+            .find(".build(),")
+            .map(|i| start + i)
+            .expect("找不到 Builder 的 .build(),");
+        src[start..end]
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// 把 `max_file_size(4 * 1024 * 1024)` 这类表达式算成字节数。
+    fn parse_bytes(expr: &str) -> u128 {
+        expr.split('*')
+            .map(|part| {
+                part.trim()
+                    .replace('_', "")
+                    .parse::<u128>()
+                    .unwrap_or_else(|_| panic!("无法解析字节数字面量: {part}"))
+            })
+            .product()
+    }
+
+    #[test]
+    fn folder_target_anchor_is_the_block_being_scanned() {
+        // 正向锚点：证明扫描命中的是真正的落盘 target，而不是"没匹配到所以全绿"。
+        let block = log_plugin_block();
+        assert!(block.contains("TargetKind::Folder"), "Folder target 不见了");
+        assert!(block.contains("rust.log"), "落盘文件名不是 rust.log");
+    }
+
+    #[test]
+    fn max_file_size_is_pinned_far_above_the_40kb_default() {
+        let block = log_plugin_block();
+        let at = block
+            .find("max_file_size(")
+            .expect("max_file_size 未显式配置 —— 会退回默认 40_000，日志每几分钟被清空一次");
+        let expr = &block[at + "max_file_size(".len()..];
+        let expr = &expr[..expr.find(')').expect("max_file_size 参数未闭合")];
+        // 默认值 40_000 只差一个数量级都不到，钉到 ≥1MB 才留得住一轮排障。
+        assert!(
+            parse_bytes(expr) >= 1024 * 1024,
+            "max_file_size 太小（{expr}），历史仍会被频繁切掉"
+        );
+    }
+
+    #[test]
+    fn rotation_keeps_archives_instead_of_deleting() {
+        let block = log_plugin_block();
+        assert!(
+            block.contains("rotation_strategy("),
+            "rotation_strategy 未显式配置 —— 默认 KeepOne 会直接删掉旧日志"
+        );
+        assert!(
+            block.contains("KeepSome(") || block.contains("KeepAll"),
+            "rotation_strategy 必须保留归档（KeepSome/KeepAll）"
+        );
+        assert!(
+            !block.contains("KeepOne"),
+            "rotation_strategy 仍是 KeepOne —— 该分支会 fs::remove_file 删除历史"
+        );
+    }
+
+    #[test]
+    fn timestamps_use_local_timezone_to_match_forwarded_python_lines() {
+        let block = log_plugin_block();
+        assert!(
+            block.contains("UseLocal"),
+            "timezone_strategy 未设为 UseLocal —— 默认 UTC 与 [python] 正文的本地时间差 8 小时"
+        );
+    }
 }
