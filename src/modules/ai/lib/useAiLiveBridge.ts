@@ -33,6 +33,10 @@ import {
   VISIBLE_INTEGRATION_GRACE_MS,
 } from "./visibleIntegrationGrace";
 import { rejectForVisibleTerminal } from "./visibleTerminalGate";
+import {
+  resultForAbandonedVisibleExecution,
+  type AbandonedVisibleExecutionCause,
+} from "./visibleTerminalTeardown";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { type RefObject, useEffect, useRef } from "react";
@@ -626,6 +630,22 @@ export function useAiLiveBridge(params: Params) {
     };
 
     /**
+     * #119：界面要没了（effect 重挂 / 整页卸载），把还在等的请求**逐条回话**再走。
+     * 静默清空台账等于让 Rust 白等到自己的传输预算耗尽（实测 200 秒），
+     * 而且清空之后连超时回调都成了哑的（settleVisibleExecution 开头就 delete 失败早退）。
+     */
+    const abandonPendingVisibleExecutions = (
+      cause: AbandonedVisibleExecutionCause,
+    ) => {
+      for (const pending of [...pendingVisibleExecutions.values()]) {
+        settleVisibleExecution(
+          pending,
+          resultForAbandonedVisibleExecution({phase: pending.phase, cause}),
+        );
+      }
+    };
+
+    /**
      * #113③：注入完成后给远端 shell 一个短宽限去报"命令开始执行"标记。
      * 宽限期到点仍没标记 ⇒ 这台机器的 shell 不回报 OSC 块（不是 bash/zsh，
      * 或 PROMPT_COMMAND / DEBUG trap 被接管），回 `reroute` 让 sidecar 改道
@@ -960,17 +980,17 @@ export function useAiLiveBridge(params: Params) {
       console.warn("[tdsf] scrollback listen failed:", e);
     });
 
+    // #119：整页重载不会跑 React 的清理函数，JS 上下文直接没了 —— 所以离场回话
+    // 必须挂 pagehide（浏览器保证在卸载路径上触发），否则这条命令的结果永远没人结。
+    const onPageHide = () => abandonPendingVisibleExecutions("page-unload");
+    window.addEventListener("pagehide", onPageHide);
+
     return () => {
       unlistenVisibleBlocks();
       unlistenVisibleExecution?.();
       unlistenHumanTyping?.();
-      for (const pending of pendingVisibleExecutions.values()) {
-        if (pending.timeoutHandle !== null) {
-          window.clearTimeout(pending.timeoutHandle);
-        }
-        useTerminalBlocksStore.getState().clearAgentPending(pending.leafId);
-      }
-      pendingVisibleExecutions.clear();
+      window.removeEventListener("pagehide", onPageHide);
+      abandonPendingVisibleExecutions("bridge-reset");
       if (unlistenTodos) unlistenTodos();
       if (unlistenScrollback) unlistenScrollback();
     };

@@ -333,6 +333,11 @@ class TestSshCommandTool(unittest.TestCase):
             result = execute_via_ssh(ctx, "uname -a", timeout=30)
 
         self.assertEqual(result["status"], "success")
+        from strands_backend.tools import VISIBLE_TERMINAL_IPC_OVERHEAD_SECS
+
+        # Python 的等待必须比 Rust 的总预算（timeout + 170，见 sidecar.rs）更久，
+        # 否则 Rust 备好那份带原因的 timed_out 会被自己的超时异常顶成孤儿包（#119）。
+        self.assertGreater(VISIBLE_TERMINAL_IPC_OVERHEAD_SECS, 170.0)
         bridge.ipc_invoke.assert_any_call(
             "visible_terminal_execute",
             {
@@ -342,7 +347,7 @@ class TestSshCommandTool(unittest.TestCase):
                 "conversationSessionId": "test-session",
                 "toolName": "ssh_command",
             },
-            timeout=200.0,
+            timeout=30 + VISIBLE_TERMINAL_IPC_OVERHEAD_SECS,
         )
         self.assertNotIn(
             "ssh_command",
