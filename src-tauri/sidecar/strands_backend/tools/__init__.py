@@ -883,12 +883,22 @@ def execute_via_ssh(
 ) -> dict[str, Any]:
     """通过 RustBridge 执行 SSH 命令（带风险决策与真实 HITL 审批）。
 
-    本函数只是 _execute_via_ssh_impl 的安全外壳：无论实现体走哪条 return、
-    还是中途抛异常，已批准的 execution_gate 都会被释放（A3）。
+    本函数是 _execute_via_ssh_impl 的外壳，兜住两件事：
+    - A3：无论实现体走哪条 return、还是中途抛异常，已批准的 execution_gate 都会被释放；
+    - #114（2026-09-23）：命令进了终端，聊天里就必须有一张卡回答"是哪一步敲的"。
+      卡片事件只在这里发一次 —— 上游工具不得再自己 emit_tool_call（会叠成双卡）。
     """
     gate = _ExecutionGate()
+    card_params: dict[str, Any] = {
+        "command": command,
+        "ssh_session_id": ssh_session_id,
+        "timeout": timeout,
+    }
+    if explanation:
+        card_params["explanation"] = explanation
+    emit_tool_call_card(ctx, tool_name, card_params, "started")
     try:
-        return _execute_via_ssh_impl(
+        result = _execute_via_ssh_impl(
             ctx,
             command,
             ssh_session_id=ssh_session_id,
@@ -899,8 +909,27 @@ def execute_via_ssh(
             skip_approval=skip_approval,
             gate=gate,
         )
+    except Exception as exc:
+        # 只有 started 会让前端留一张永远转圈的卡：孤儿 completed 会被丢弃，
+        # 反向的孤儿 started 没人收尾。异常路径同样要闭合。
+        emit_tool_call_card(
+            ctx,
+            tool_name,
+            card_params,
+            "error",
+            {"status": "error", "command": command, "error": str(exc)},
+        )
+        raise
     finally:
         gate.release()
+    emit_tool_call_card(
+        ctx,
+        tool_name,
+        card_params,
+        "completed" if result.get("status") == "success" else "error",
+        result,
+    )
+    return result
 
 
 def _execute_via_ssh_impl(
@@ -1891,14 +1920,20 @@ TEACH_AUX_TOOL_NAMES = frozenset({
 })
 
 
-def emit_teach_tool_call(
+def emit_tool_call_card(
     ctx: ToolContext,
     tool_name: str,
     params: dict[str, Any],
     status: str,
     result: dict[str, Any] | None = None,
 ) -> None:
-    """Emit the paired event that lets the UI construct a teaching tool card."""
+    """聊天里那张"工具调用卡"的唯一出口（started / completed / error 成对）。
+
+    #114（2026-09-23）：以前每个工具各自手抄一遍 emit_tool_call，结果卡"有有、
+    没有没有"——ops_extended 五个工具一个都不发，命令照样进了终端却查不到来源。
+    凡往终端写命令的路径都由 execute_via_ssh 走这里；教学链复用同一个出口，
+    因为前端只认这一种事件（sidecar-adapter.ts 按 tool_name FIFO 配对 started/终态）。
+    """
     if ctx.event_bus is None:
         return
     try:
@@ -1910,8 +1945,8 @@ def emit_teach_tool_call(
             session_id=ctx.session_id or None,
             source=f"{ctx.agent_name}_agent.strands_tool.{tool_name}",
         )
-    except Exception as exc:  # noqa: BLE001 — UI telemetry must not block a lesson
-        logger.debug("emit teaching tool event failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — UI telemetry must not block execution
+        logger.debug("emit_tool_call failed: tool=%s status=%s err=%s", tool_name, status, exc)
 
 
 def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
@@ -1958,10 +1993,10 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 # 收集全部 kwargs 作为参数（工具签名是具名参数如 command=...）
                 params = dict(kwargs)
 
-            emit_teach_tool_call(ctx, tool_name, params, "started")
+            emit_tool_call_card(ctx, tool_name, params, "started")
 
             def complete(result: dict[str, Any]) -> dict[str, Any]:
-                emit_teach_tool_call(ctx, tool_name, params, "completed", result)
+                emit_tool_call_card(ctx, tool_name, params, "completed", result)
                 return result
 
             from strands_backend.tools.shell_mapping import resolve_shell_command
@@ -2143,7 +2178,7 @@ __all__ = [
     "execute_via_ssh",
     "filter_tools_readonly",
     "TEACH_AUX_TOOL_NAMES",
-    "emit_teach_tool_call",
+    "emit_tool_call_card",
     "wrap_tool_for_teach_mode",
     # 工具注册（T2: TOOL_REGISTRY 单一真源 + 派生集合）
     "OPS_TOOL_NAMES",

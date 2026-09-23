@@ -154,20 +154,8 @@ def invoke_log_analyzer_tool(params: dict[str, Any], ctx: ToolContext) -> dict[s
     # 构建命令（可能抛 ValueError）
     command = _build_command(log_path, mode, lines, pattern)
 
-    # 推送 tool_call 开始事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="analyze_logs",
-                params={"log_path": log_path, "mode": mode, "lines": lines, "pattern": pattern},
-                status="started",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.log_analyzer",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call started failed: {e}")
-
     # 通过 execute_via_ssh 执行（内部含影响预测 + 三模式决策 + RustBridge）。
+    # 工具调用卡由 execute_via_ssh 统一发（#114），这里再发一遍会变双卡。
     # readonly=True：analyze_logs 是 registry 只读工具——observe 模式下
     # L0-L1 命令（tail/grep）短路放行（方案书 §3.2 只读短路）
     exec_result = execute_via_ssh(
@@ -191,20 +179,6 @@ def invoke_log_analyzer_tool(params: dict[str, Any], ctx: ToolContext) -> dict[s
     # 成功 → 提取输出 + 摘要
     raw_output = exec_result.get("output", "")
     summary = _summarize(raw_output, mode, pattern)
-
-    # 推送 tool_call 完成事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="analyze_logs",
-                params={"log_path": log_path, "mode": mode, "lines": lines, "pattern": pattern},
-                result={"status": "success", "total_lines": summary["total_lines"]},
-                status="completed",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.log_analyzer",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call completed failed: {e}")
 
     return {
         "status": "success",

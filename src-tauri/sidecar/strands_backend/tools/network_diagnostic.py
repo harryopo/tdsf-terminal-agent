@@ -242,20 +242,7 @@ def invoke_network_diagnostic_tool(params: dict[str, Any], ctx: ToolContext) -> 
     # 构建命令（可能抛 ValueError）
     command = _build_command(mode, target, count, port)
 
-    # 推送 tool_call 开始事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="network_diagnose",
-                params={"mode": mode, "target": target, "count": count, "port": port},
-                status="started",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.network_diagnostic",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call started failed: {e}")
-
-    # 通过 execute_via_ssh 执行。
+    # 通过 execute_via_ssh 执行（工具调用卡由它统一发，#114：这里再发一遍就是双卡）。
     # readonly=True：network_diagnose 是 registry 只读工具——observe 模式下
     # L0-L1 命令（ping/ss）短路放行（方案书 §3.2 只读短路）
     exec_result = execute_via_ssh(
@@ -296,20 +283,6 @@ def invoke_network_diagnostic_tool(params: dict[str, Any], ctx: ToolContext) -> 
     elif mode == "dns":
         parsed = {"resolved_lines": raw_output.splitlines()}
         summary["resolved"] = bool(raw_output.strip())
-
-    # 推送 tool_call 完成事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="network_diagnose",
-                params={"mode": mode, "target": target, "count": count, "port": port},
-                result={"status": "success", "summary": summary},
-                status="completed",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.network_diagnostic",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call completed failed: {e}")
 
     return {
         "status": "success",
