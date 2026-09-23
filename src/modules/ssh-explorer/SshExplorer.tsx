@@ -16,16 +16,6 @@
 // 主机审批: 当 Rust 端 check_server_key 推送 ssh:host_verify / ssh:host_key_mismatch
 // 事件时, 请求进 pendingApprovals 队列, 弹窗按到达顺序逐条询问用户是否信任。
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -33,9 +23,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-// 2026-08-18 (P1-6): 仅保留类型 import——HostApprovalDialog 导出给 App 顶层
-// 使用; 订阅函数 subscribeHostVerify/subscribeHostKeyMismatch 已移至 App.tsx
-import type { HostApprovalRequest } from "@/lib/ssh-bridge";
+// 2026-09-23: HostApprovalDialog 搬入同目录自己的文件（App 顶层常驻渲染它）。
+// 原先寄生在本文件里，而本文件那片面板的去留还挂在 #109 上等用户拍。
 import { cn } from "@/lib/utils";
 import {
   Add01Icon,
@@ -49,7 +38,6 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { generateRandomArt } from "./randomart";
 import { SshConnectDialog } from "./SshConnectDialog";
 import { SshStatusDot, stateLabel } from "./SshStatusDot";
 import type { SshSessionInfo } from "./sshStore";
@@ -418,111 +406,5 @@ function SessionStatusView({
         )}
       </div>
     </div>
-  );
-}
-
-// === 子组件: 主机审批对话框 (TOFU) ===========================================
-// 2026-08-18 (P1-6): 从 SshExplorer 内部提升为导出组件, 由 App.tsx 顶层
-// 常驻渲染——SshExplorer 只在 ssh 视图挂载, 其他视图首次连接未知主机
-// 时审批弹窗必须仍可用, 否则连接永久挂起。
-
-export function HostApprovalDialog({
-  request,
-  onApprove,
-  onReject,
-}: {
-  request: HostApprovalRequest | null;
-  onApprove: () => Promise<void>;
-  onReject: () => Promise<void>;
-}) {
-  const [handling, setHandling] = useState(false);
-
-  const handle = (fn: () => Promise<void>) => async () => {
-    setHandling(true);
-    try {
-      await fn();
-    } finally {
-      setHandling(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={request !== null}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {request?.isMismatch ? "⚠ 主机密钥已变更" : "未知主机 (首次连接)"}
-          </AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div className="space-y-2 text-sm">
-              <p>
-                {request?.isMismatch
-                  ? "已知主机的密钥与本地记录不一致, 可能存在中间人攻击。请仔细核对指纹后再决定是否继续。"
-                  : "首次连接此主机, 请核对服务器 SSH 指纹, 确认无误后信任该主机 (TOFU 策略)。"}
-              </p>
-              {/* TDSF (P2-1 修复 2026-07-28): OpenSSH 艺术指纹
-                  在用户首次连接时, 用 randomart 直观展示密钥指纹.
-                  算法来自 OpenSSH ssh-keygen -lv (Drijvers et al. 2012 "Hedgehog"). */}
-              {request?.fingerprint ? (
-                <pre
-                  className="overflow-x-auto rounded-md border border-border/40 bg-muted/40 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-foreground/80"
-                  data-testid="ssh-host-randomart"
-                  role="img"
-                  aria-label="OpenSSH 艺术指纹"
-                >
-                  {generateRandomArt(
-                    request.fingerprint,
-                    request.keyType ?? "ssh-ed25519",
-                  )}
-                </pre>
-              ) : null}
-              <div className="rounded-md bg-muted/60 px-2.5 py-1.5 font-mono text-[11px]">
-                <div>
-                  <span className="text-muted-foreground">主机: </span>
-                  {request?.host}:{request?.port}
-                </div>
-                <div>
-                  <span className="text-muted-foreground">算法: </span>
-                  {request?.keyType}
-                </div>
-                <div className="break-all">
-                  <span className="text-muted-foreground">指纹: </span>
-                  {request?.fingerprint}
-                </div>
-              </div>
-              {/* TDSF (P2-1 修复 2026-07-28): 引导用户验证指纹
-                  提示用户通过 ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub 在服务器核对
-                  或与管理员确认. 这是 TOFU 策略的最后一道安全防线. */}
-              <p className="text-[10.5px] text-muted-foreground">
-                验证方法: 在服务器执行{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
-                  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-                </code>{" "}
-                (或 ssh-rsa), 比对指纹是否一致。
-              </p>
-            </div>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel
-            disabled={handling}
-            onClick={handle(onReject)}
-          >
-            拒绝
-          </AlertDialogCancel>
-          <AlertDialogAction
-            disabled={handling}
-            onClick={handle(onApprove)}
-            className={cn(
-              request?.isMismatch
-                ? "bg-destructive text-destructive-foreground hover:bg-destructive/80"
-                : "",
-            )}
-          >
-            信任并连接
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

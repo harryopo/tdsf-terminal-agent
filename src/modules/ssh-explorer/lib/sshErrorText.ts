@@ -79,7 +79,26 @@ export function describeSshFailure(raw: string): SshFailureCopy {
     };
   }
 
-  if (/kex|key exchange|invalid message|unknown|protocol/i.test(msg)) {
+  // russh 在 `check_server_key` 返回 Err 时抛 `Unknown server key`（首次连接的确认被拒/没答）
+  // 或 `host key mismatch`（已知主机的密钥变了）。这两种都不是网络或算法问题，而是
+  // **主机身份没被信任**。
+  // ⚠️ 上一版把 `unknown` 留在下面 kex 那条正则里，这条错误就被翻成"多半是双方算法不兼容"——
+  // 方向完全错：用户会去改服务器的 KexAlgorithms，而真正该做的是核对指纹后点「信任并连接」。
+  // 用户 2026-09-23 实测截图就是这条（虚机重装导致密钥变更）。
+  if (/unknown server key|host key mismatch|hostkey/i.test(msg)) {
+    return {
+      headline: "这台服务器的主机密钥没被信任",
+      description:
+        "连接停在核对主机身份这一步：刚才的指纹确认框被点了拒绝，或者没来得及回答。" +
+        `请在${CREDENTIAL_ENTRY}重新点「连接并创建」，在弹出的确认框里核对指纹后再选「信任并连接」。` +
+        `原始信息：${msg}`,
+    };
+  }
+
+  // 注意：这条桶**不再**收 `unknown`。russh 的 `Unknown server key` 由上面的主机密钥桶
+  // 接住（靠顺序，不靠这里的词表），而任何别的含 "unknown" 的错误也不该被一律
+  // 判成"算法不兼容"——这条只认真正的协商失败字样。
+  if (/kex|key exchange|invalid message|protocol/i.test(msg)) {
     return {
       headline: "SSH 协议协商失败",
       description: `多半是双方算法不兼容（服务器太旧或太新）。原始信息：${msg}`,

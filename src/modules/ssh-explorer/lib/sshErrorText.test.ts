@@ -64,6 +64,33 @@ describe("describeSshFailure", () => {
     expect(typeof r.description).toBe("string");
   });
 
+  // 用户 2026-09-23 实测：虚机重装导致主机密钥变更，russh 抛 `Unknown server key`，
+  // 旧实现的 kex 正则里有一条贪心的 `unknown`，把它翻成了"多半是双方算法不兼容"。
+  // 方向完全错 —— 用户会去改服务器的 KexAlgorithms，而该做的是核对指纹后点信任。
+  describe("主机密钥未被信任 ≠ 算法不兼容", () => {
+    it.each([
+      ["russh error: Unknown server key", "Unknown server key"],
+      [
+        "host key mismatch for 192.168.45.128: host key has changed",
+        "host key mismatch",
+      ],
+    ])("%s 走「主机密钥没被信任」桶", (raw) => {
+      const r = describeSshFailure(raw);
+      expect(r.headline).toBe("这台服务器的主机密钥没被信任");
+      expect(r.headline).not.toBe("SSH 协议协商失败");
+      // 必须给出可执行的下一步，且把原文留着（#110 口径：不许为了文案干净吞掉线索）
+      expect(r.description).toContain("指纹");
+      expect(r.description).toContain("信任并连接");
+      expect(r.description).toContain(raw);
+    });
+
+    it("反向配对：真·算法不兼容仍然走 kex 桶，没被新桶顺手吃掉", () => {
+      const r = describeSshFailure("kex algorithms unavailable");
+      expect(r.headline).toBe("SSH 协议协商失败");
+      expect(r.description).toContain("算法不兼容");
+    });
+  });
+
   it("文案里不许指向已经不存在的「SSH 面板」", () => {
     for (const raw of [
       KEY_ONLY,
