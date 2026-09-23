@@ -847,7 +847,18 @@ export const useChatStore = create<StoreState>((set, get) => ({
     let nextSessions: SessionMeta[];
     let freshId: string;
     if (reusable) {
-      nextSessions = sessions;
+      // #116 (2026-09-23): 占位会话从没写过消息，它的 scope 是**上次创建那一刻**
+      // 的快照。环境会换（早上没连服务器 → 现在连着 SSH），沿用旧标签会让
+      // chatRuntime 按 local 口径把可见 SSH 掩成 connection_mode: none，
+      // agent 遂回"没打开终端"并拒绝执行任何命令 —— 实测就是这样断送一整个回合。
+      // 只重算未使用的占位；已有消息的会话归属不许改写。
+      const scope = deriveSessionScope();
+      const stale =
+        JSON.stringify(reusable.scope ?? null) !== JSON.stringify(scope);
+      nextSessions = stale
+        ? sessions.map((s) => (s.id === reusable.id ? { ...s, scope } : s))
+        : sessions;
+      if (stale) void saveSessionsList(nextSessions);
       freshId = reusable.id;
     } else {
       freshId = newSessionId();
