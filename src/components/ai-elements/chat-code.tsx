@@ -266,10 +266,12 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
   };
 
   // TDSF 2026-09-18（用户钦定"要写入命令就自动输出到终端，别让我点 Run"）:
-  // 命令卡渲染后自动打字到活动终端，四种模式全开。
+  // 命令卡渲染后自动打字到活动终端。
+  // TDSF 2026-09-23（#114，用户改口"只有在教学模式下才有命令建议"）：**收到只在教学模式**
+  // ——非教学模式下 agent 要执行一律走 ssh_command 工具调用，聊天里有卡可追溯；
+  // 代码块卡只展示，手动 Run 照旧。理由：终端里出现无法追溯到"哪一步"的无声写入。
   // 安全边界保留 2026-09-03 的教训（"确认模式没点确认就自动打字机执行"= 绕过
-  // HITL 审批）：只有 auto 模式追加 \n 真正执行，confirm/observe/teach 一律
-  // 只打字不回车，执行权仍在用户手上。autoFiredRef 保证每张卡只注入一次。
+  // HITL 审批）：自动打字只写不回车，执行权在用户手上。autoFiredRef 保证每张卡只注入一次。
   //
   // TDSF 2026-09-21（用户实测"打开历史对话把旧命令又输一遍"）：再加一道出身闸门
   // ——只有本次运行里生成的消息才自动打字，读回来的历史消息不注入（手动 Run 照旧）。
@@ -281,6 +283,8 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
     if (!autoTypeAllowed) return;
     const store = useChatStore.getState();
     if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
+    // #114 模式闸门：只在教学模式自动打字（放在 ledger 之前，非教学模式不占记账位）
+    if (!store.teach) return;
     // 自动打字专用闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
     // 手动 Run 是用户明示动作，不走这里。
     const gate = store.live.canAutoTypeToActiveTerminal;
@@ -290,7 +294,8 @@ function CommandCard({ code, lang }: { code: string; lang: string }) {
     // 常见命令（git status）会在整个应用生命周期里再也不自动打字且无提示。
     if (!claimAutoType(code, store.activeSessionId)) return;
     autoFiredRef.current = true;
-    if (inject(store.agentMode === "auto" && !store.teach)) {
+    // teach 档恒定"只打字不回车"，所以这里永远是 false（执行权归学生）。
+    if (inject(false)) {
       markAutoTyped(code, store.activeSessionId);
     }
   }, [autoTypeAllowed, code, inject]);

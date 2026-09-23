@@ -63,6 +63,7 @@ describe("AiChatView — 历史消息不自动打字（出身闸门接线）", (
   const originalLive = useChatStore.getState().live;
   const originalAutoType = usePreferencesStore.getState().agentAutoTypeCommands;
   const originalAgentMode = useChatStore.getState().agentMode;
+  const originalTeach = useChatStore.getState().teach;
   const inject = vi.fn(() => true);
 
   beforeEach(() => {
@@ -70,7 +71,13 @@ describe("AiChatView — 历史消息不自动打字（出身闸门接线）", (
     __resetAutoTypeProvenance();
     inject.mockClear();
     usePreferencesStore.setState({ agentAutoTypeCommands: true });
-    useChatStore.setState({ agentMode: "confirm", activeSessionId: "sess-1" });
+    // #114（2026-09-23）：自动打字只在教学档，这里必须 teach=true —— 否则"零注入"
+    // 是模式闸门给的，出身闸门这条链路根本没接到电，正向断言也会一起假绿。
+    useChatStore.setState({
+      agentMode: "confirm",
+      teach: true,
+      activeSessionId: "sess-1",
+    });
     useChatStore.setState((s) => ({
       live: {
         ...s.live,
@@ -82,7 +89,11 @@ describe("AiChatView — 历史消息不自动打字（出身闸门接线）", (
   });
 
   afterEach(() => {
-    useChatStore.setState({ live: originalLive, agentMode: originalAgentMode });
+    useChatStore.setState({
+      live: originalLive,
+      agentMode: originalAgentMode,
+      teach: originalTeach,
+    });
     usePreferencesStore.setState({ agentAutoTypeCommands: originalAutoType });
   });
 

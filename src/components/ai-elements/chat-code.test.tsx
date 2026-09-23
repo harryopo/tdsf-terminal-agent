@@ -114,48 +114,29 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     vi.restoreAllMocks();
   });
 
-  it("自动打字开启 + auto 模式 → shell 命令卡渲染后自动注入 code+\\n（自动执行）", () => {
-    const inject = vi.fn(() => true);
-    useChatStore.setState({ agentMode: "auto" });
-    useChatStore.setState((s) => ({
-      live: { ...s.live, injectIntoActivePty: inject },
-    }));
-    renderBlock("uptime", "bash", false);
-    expect(inject).toHaveBeenCalledTimes(1);
-    expect(inject).toHaveBeenCalledWith("uptime\n");
-  });
+  // #114（2026-09-23 用户改口"只有在教学模式下才有命令建议"）：自动打字收到只在教学档。
+  // 非教学模式下 agent 要执行一律走 ssh_command 工具调用（聊天里有卡可追溯到是哪一步），
+  // 命令卡只展示；手动 Run 是用户明示动作，语义不变。
+  it.each(["auto", "confirm", "observe"] as const)(
+    "#114 %s 模式（非教学）→ 命令卡零自动注入，手动 Run 仍在",
+    (mode) => {
+      const inject = vi.fn(() => true);
+      useChatStore.setState({ agentMode: mode, teach: false });
+      useChatStore.setState((s) => ({
+        live: { ...s.live, injectIntoActivePty: inject },
+      }));
+      renderBlock("uptime", "bash", false);
+      expect(inject).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("button", { name: "Run in active terminal" }),
+      ).toBeTruthy();
+    },
+  );
 
-  it("确认模式 → 自动打字但不追加 \\n（执行权留给用户，不绕过审批）", () => {
-    const inject = vi.fn(() => true);
-    useChatStore.setState({ agentMode: "confirm" });
-    useChatStore.setState((s) => ({
-      live: { ...s.live, injectIntoActivePty: inject },
-    }));
-    renderBlock("uptime", "bash", false);
-    // 2026-09-18 用户钦定：命令自动输出到终端，无需点 Run；
-    // 但只有 auto 模式追加 \n，确认模式打字后由用户自己回车。
-    expect(inject).toHaveBeenCalledTimes(1);
-    expect(inject).toHaveBeenCalledWith("uptime");
-    // 手动 Run 按钮仍在（重跑用；#91 第⑤条后它只认这张卡归属的那条终端，
-    // "切到别的标签页再点"会被守卫拦下，不再换终端）
-    expect(
-      screen.getByRole("button", { name: "Run in active terminal" }),
-    ).toBeTruthy();
-  });
-
-  it("观察模式 → 同样自动打字不追加 \\n", () => {
-    const inject = vi.fn(() => true);
-    useChatStore.setState({ agentMode: "observe" });
-    useChatStore.setState((s) => ({
-      live: { ...s.live, injectIntoActivePty: inject },
-    }));
-    renderBlock("uptime", "bash", false);
-    expect(inject).toHaveBeenCalledWith("uptime");
-  });
-
-  it("自动打字偏好关闭 → 不自动注入（保留手动 Run）", () => {
+  it("自动打字偏好关闭（教学档）→ 不自动注入（证明偏好这道闸还在，没被模式闸门顺手挡掉）", () => {
     const inject = vi.fn(() => true);
     usePreferencesStore.setState({ agentAutoTypeCommands: false });
+    useChatStore.setState({ agentMode: "observe", teach: true });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -167,8 +148,9 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
     ).toBeTruthy();
   });
 
-  it("流式期间 → 不渲染命令卡也不自动注入", () => {
+  it("流式期间（教学档）→ 不渲染命令卡也不自动注入", () => {
     const inject = vi.fn(() => true);
+    useChatStore.setState({ teach: true });
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
@@ -220,7 +202,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("自动打字闸门拒绝（Private/脏行/非提示符）→ 不自动打字，手动 Run 仍可用", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ agentMode: "auto" });
+    useChatStore.setState({ agentMode: "auto", teach: true });
     useChatStore.setState((s) => ({
       live: {
         ...s.live,
@@ -239,7 +221,7 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("一条回复含多个代码块 → 同一 commit 内只有第一张卡自动打字（不拼接/不互清）", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ agentMode: "confirm" });
+    useChatStore.setState({ agentMode: "observe", teach: true });
     useChatStore.setState((s) => ({
       live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
     }));
@@ -260,13 +242,13 @@ describe("ChatCodeBlock — 命令卡自动注入终端", () => {
 
   it("重挂同一命令卡（重开小窗重放历史）→ 不再自动打字", () => {
     const inject = vi.fn(() => true);
-    useChatStore.setState({ agentMode: "auto" });
+    useChatStore.setState({ agentMode: "observe", teach: true });
     useChatStore.setState((s) => ({
       live: { ...s.live, isActiveTerminalPrivate: () => false, injectIntoActivePty: inject },
     }));
     const first = renderBlock("systemctl restart nginx", "bash", false);
     expect(inject).toHaveBeenCalledTimes(1);
-    // auto 模式下重挂会**重新执行**旧命令，这是必须堵住的路径
+    // 重挂会**重新执行**旧命令，这是必须堵住的路径
     first.unmount();
     renderBlock("systemctl restart nginx", "bash", false);
     expect(inject).toHaveBeenCalledTimes(1);
@@ -310,11 +292,13 @@ describe("ChatCodeBlock — 多行命令块不得在非 auto 模式下自动打�
 
   const MULTI = "for f in *.log; do\n  gzip \"$f\"\ndone";
 
+  // #114 之后自动打字只在教学档发生，所以本组用例一律 teach=true：
+  // 否则"零注入"会被模式闸门顺手满足，测不到"多行块"这条真正的判据。
   it.each(["confirm", "observe"] as const)(
-    "%s 模式：多行 bash 块零注入（换行会被 shell 逐行执行）",
+    "%s 模式（教学档）：多行 bash 块零注入（换行会被 shell 逐行执行）",
     (mode) => {
       const inject = vi.fn(() => true);
-      useChatStore.setState({ agentMode: mode, teach: false });
+      useChatStore.setState({ agentMode: mode, teach: true });
       useChatStore.setState((s) => ({
         live: { ...s.live, injectIntoActivePty: inject },
       }));
@@ -331,9 +315,9 @@ describe("ChatCodeBlock — 多行命令块不得在非 auto 模式下自动打�
     expect(inject).not.toHaveBeenCalled();
   });
 
-  it("单行命令在 confirm 档仍然自动打字（不回归本功能的初衷）", () => {
+  it("单行命令在教学档仍然自动打字，且不追加 \\n（本功能的初衷）", () => {
     const inject = vi.fn((_text: string) => true);
-    useChatStore.setState({ agentMode: "confirm", teach: false });
+    useChatStore.setState({ agentMode: "confirm", teach: true });
     useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
     renderBlock("systemctl status nginx", "bash", false);
     expect(inject).toHaveBeenCalledTimes(1);
@@ -361,7 +345,9 @@ describe("ChatCodeBlock — 历史消息（读回来的）一律不自动打字"
     __resetAutoTypeLedger();
     __resetAutoTypeProvenance();
     usePreferencesStore.setState({ agentAutoTypeCommands: true });
-    useChatStore.setState({ agentMode: "auto", teach: false });
+    // #114 后自动打字只在教学档：这里必须 teach=true，否则"零注入"是模式闸门给的，
+    // 出身闸门根本没被检验（正向那条也会一起假绿/假红）。
+    useChatStore.setState({ agentMode: "auto", teach: true });
     useChatStore.setState((s) => ({
       live: {
         ...s.live,
@@ -393,7 +379,8 @@ describe("ChatCodeBlock — 历史消息（读回来的）一律不自动打字"
     useChatStore.setState((s) => ({ live: { ...s.live, injectIntoActivePty: inject } }));
     renderBlock("rm -rf /tmp/cache", "bash", false, true);
     expect(inject).toHaveBeenCalledTimes(1);
-    expect(inject).toHaveBeenCalledWith("rm -rf /tmp/cache\n");
+    // #114 之后自动打字只在教学档，教学档恒定"只打字不回车"（执行权归学生）
+    expect(inject).toHaveBeenCalledWith("rm -rf /tmp/cache");
   });
 
   it("没有 Provider（知识库等非消息渲染面）→ 零注入", () => {

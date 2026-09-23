@@ -651,7 +651,9 @@ describe("Tool — suggest_command 自动打字只认本次运行的消息", () 
   beforeEach(() => {
     __resetAutoTypeLedger();
     usePreferencesStore.setState({ agentAutoTypeCommands: true });
-    useChatStore.setState({ agentMode: "auto", teach: false });
+    // #114（2026-09-23）自动打字收到只在教学档：这里必须 teach=true，否则"零打字"
+    // 是模式闸门给的，出身闸门没被检验，正向那条也会一起假绿。
+    useChatStore.setState({ agentMode: "auto", teach: true });
     useChatStore.setState((s) => ({
       live: {
         ...s.live,
@@ -679,13 +681,31 @@ describe("Tool — suggest_command 自动打字只认本次运行的消息", () 
     expect(inject).not.toHaveBeenCalled();
   });
 
-  it("同一条命令在 live 消息里照常打字并执行（配对正向断言）", () => {
+  it("同一条命令在 live 消息里照常打字（配对正向断言）", () => {
     const inject = vi.fn(() => true);
     useChatStore.setState((s) => ({
       live: { ...s.live, injectIntoActivePty: inject },
     }));
     renderSuggest("df -h", true);
     expect(inject).toHaveBeenCalledTimes(1);
-    expect(inject).toHaveBeenCalledWith("df -h\n");
+    // #114 后自动打字只在教学档，教学档恒定"只打字不回车"（执行权归学生）
+    expect(inject).toHaveBeenCalledWith("df -h");
   });
+
+  // #114（2026-09-23 用户改口"只有在教学模式下才有命令建议"）：非教学档建议卡只展示，
+  // agent 要执行一律走 ssh_command 工具调用，聊天里能追溯到是哪一步写的终端。
+  it.each(["auto", "confirm", "observe"] as const)(
+    "#114 %s 模式（非教学）→ 建议卡零自动打字，插入按钮仍在",
+    (mode) => {
+      const inject = vi.fn(() => true);
+      useChatStore.setState({ agentMode: mode, teach: false });
+      useChatStore.setState((s) => ({
+        live: { ...s.live, injectIntoActivePty: inject },
+      }));
+      renderSuggest("df -h", true);
+      expect(inject).not.toHaveBeenCalled();
+      // 卡还在（只是不再自动打字）——否则"没打字"可能因为整张卡没渲染
+      expect(screen.getByText("df -h")).toBeTruthy();
+    },
+  );
 });
