@@ -1607,10 +1607,14 @@ def _execute_via_ssh_impl(
     output_text = redact_sensitive(
         result.get("output", "") if isinstance(result, dict) else str(result)
     )
+    # #113②：非 0 时诊断信息常在 stderr，只交回 stdout 会让模型看不见"为什么不是 0"。
+    stderr_text = redact_sensitive(
+        (result.get("stderr", "") if isinstance(result, dict) else "") or ""
+    )
     if not isinstance(exit_code, int) or isinstance(exit_code, bool):
-        _transition_operation("failed", error_code="missing_or_invalid_exit_code")
+        _transition_operation("indeterminate", error_code="missing_or_invalid_exit_code")
         _audit_append(
-            event="command_failed",
+            event="command_indeterminate",
             tool=tool_name,
             command=command,
             session_id=session_id,
@@ -1628,17 +1632,58 @@ def _execute_via_ssh_impl(
             source="strands_tool",
         )
         return _complete_after_execution({
-            "status": "error",
+            "status": "indeterminate",
             "command": command,
             "ssh_session_id": session_id,
             "target_endpoint": target_endpoint,
             "execution_channel": execution_channel,
             "output": output_text,
+            "stderr": stderr_text,
             "truncated": bool(result.get("truncated", False)),
             "reason": "missing_or_invalid_exit_code",
-            "error": "SSH 返回缺少可验证的退出码，执行结果未知。",
+            "message": "SSH 回包没有可验证的退出码，命令可能已执行但结果未知。",
         })
-    if exit_code != 0:
+    if exit_code < 0:
+        # -1 是 Rust 侧"没收到退出状态"的哨兵（exec 通道超时/连接断），
+        # 不是远端命令真的返回了 -1 —— 报成"以退出码 -1 结束"是假事实。
+        _transition_operation("indeterminate", error_code="exit_code_unavailable")
+        _audit_append(
+            event="command_indeterminate",
+            tool=tool_name,
+            command=command,
+            session_id=session_id,
+            agent=ctx.agent_name,
+            reason="exit_code_unavailable",
+            target_endpoint=target_endpoint,
+        )
+        _track_evidence(
+            session_id=ctx.session_id,
+            tool_name=tool_name,
+            status="error",
+            detail=command,
+            result=result,
+            agent=ctx.agent_name,
+            source="strands_tool",
+        )
+        return _complete_after_execution({
+            "status": "indeterminate",
+            "command": command,
+            "ssh_session_id": session_id,
+            "target_endpoint": target_endpoint,
+            "execution_channel": execution_channel,
+            "output": output_text,
+            "stderr": stderr_text,
+            "truncated": bool(result.get("truncated", False)),
+            "reason": "exit_code_unavailable",
+            "message": "未收到远端退出状态（连接中断或超时），命令是否跑完未知。",
+        })
+
+    # #113②（2026-09-23，用户钦定口径）：**非 0 不等于失败**。
+    # `grep -c` 无匹配返回 1、`diff` 有差异返回 1、`systemctl is-active` 未启用返回 3 ——
+    # 这些是 shell 的正常语义，旧实现一律判 error，实测把一次完整的体检说成失败，
+    # 还会喂给"同一工具连续失败 3 次即熔断"的护栏（adapter._before_tool_call）把整个会话叫停。
+    # 判断权交回模型：只读/低风险（L0-L1）非 0 也算跑完；写操作（L2 以上）非 0 仍是失败。
+    if exit_code != 0 and risk_l >= 2:
         _transition_operation("failed", exit_code=exit_code, error_code="command_failed")
         _audit_append(
             event="command_failed",
@@ -1665,6 +1710,7 @@ def _execute_via_ssh_impl(
             "target_endpoint": target_endpoint,
             "execution_channel": execution_channel,
             "output": output_text,
+            "stderr": stderr_text,
             "truncated": bool(result.get("truncated", False)),
             "exit_code": exit_code,
             "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
@@ -1709,7 +1755,7 @@ def _execute_via_ssh_impl(
         agent=ctx.agent_name,
         source="strands_tool",
     )
-    return _complete_after_execution({
+    payload: dict[str, Any] = {
         "status": "success",
         "command": command,
         "ssh_session_id": session_id,
@@ -1718,10 +1764,18 @@ def _execute_via_ssh_impl(
         "target_endpoint": target_endpoint,
         "execution_channel": execution_channel,
         "output": output_text,
+        "stderr": stderr_text,
         "truncated": bool(result.get("truncated", False)),
         "exit_code": exit_code,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
-    })
+    }
+    if exit_code != 0:
+        # 不替模型下"失败"结论，但把非 0 的含义讲清楚，防止它把"无匹配"读成"出事"
+        payload["note"] = (
+            f"退出码 {exit_code}（非 0）。只读诊断命令的常见含义是"
+            "「没有匹配项 / 有差异 / 未启用」，不一定是失败；请按 output 判断。"
+        )
+    return _complete_after_execution(payload)
 
 
 def _audit_append(**entry: Any) -> None:

@@ -920,6 +920,23 @@ class ToolCallLimitHook:
         except Exception:
             return value[:500]
 
+    @staticmethod
+    def _records_own_evidence(name: str) -> bool:
+        """该工具的证据是否由 execute_via_ssh 自己记（注册表声明，不是一张名字名单）。
+
+        #113②：免记原先硬写成 `name == "ssh_command"`，其余 10 个同样经执行器的工具
+        于是在证据面板各留两条。声明位是 `ToolPolicy.via_ssh_executor`，
+        由 tests/test_evidence_single_owner.py 静态校验它与实际调用一致。
+        """
+        try:
+            from strands_backend.tools.registry import TOOL_REGISTRY
+
+            spec = TOOL_REGISTRY.get(name)
+            return bool(spec is not None and spec.policy.via_ssh_executor)
+        except Exception as exc:  # noqa: BLE001 — 记账归属判断失败不该拖垮 hook
+            logger.debug("evidence-owner lookup failed for %s: %s", name, exc)
+            return False
+
     def _record_evidence(
         self,
         name: str,
@@ -927,13 +944,13 @@ class ToolCallLimitHook:
         result: Any,
         failed: bool,
     ) -> None:
-        """Record actual Strands completions for all tools except SSH.
+        """Record actual Strands completions for tools that don't record themselves.
 
         ``execute_via_ssh`` already records its own result so direct tool tests
         and real hook calls share one event instead of creating duplicates.
         Every other tool, including knowledge retrieval, reaches this hook.
         """
-        if not self.session_id or name == "ssh_command":
+        if not self.session_id or self._records_own_evidence(name):
             return
         try:
             from strands_backend.evidence import get_global_tracker
