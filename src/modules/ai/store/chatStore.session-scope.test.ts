@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -50,7 +52,7 @@ import {
   type SshSessionInfo,
 } from "@/modules/ssh-explorer/sshStore";
 import type { SessionMeta } from "../lib/sessions";
-import { useChatStore } from "./chatStore";
+import { seedMessages, useChatStore } from "./chatStore";
 
 function placeholder(
   id: string,
@@ -228,5 +230,112 @@ describe("hydrateSessions 复用占位会话时重算 scope（#116）", () => {
     expect(useChatStore.getState().sessions[0]?.scope).toEqual({
       kind: "local",
     });
+  });
+});
+
+/**
+ * #116 续（2026-09-23 第二次实测）：上面那轮只补了「跨启动复用」这一半，
+ * 冷启动这一半当时没抓到 —— 因为量具本身就是错的（把 store api 当状态读，
+ * 读出 sessions: []）。真实现场是：13:45 冷启动 → hydrateSessions 先跑，
+ * 启动自动连接**后**到，所以那条「新会话」的 scope 必然停在 {kind:"local"}，
+ * 而 sshStore 随后就有了 connected 的会话。⇒ **每次冷启动的第一个对话都认不出服务器**，
+ * 与用户有没有手动新建对话无关。所以重算的时刻必须是"要用它的时候"，不能只有"启动的时候"。
+ */
+describe("空占位在开跑前重算环境口径（#116 续：hydrate 早于自动连接）", () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      sessions: [placeholder("s-new", { kind: "local" })],
+      activeSessionId: "s-new",
+      sessionsHydrated: true,
+    });
+  });
+
+  it("连接在 hydrate 之后才建立 → 重算后占位升级到那台服务器并落盘", () => {
+    useSshStore.setState({
+      sessions: [connectedSsh("uuid-1", 7, "192.168.45.200")],
+      activeSessionId: "uuid-1",
+    });
+
+    const changed = useChatStore.getState().rebindEmptySessionScope();
+
+    expect(changed).toBe(true);
+    expect(useChatStore.getState().sessions[0]?.scope).toEqual({
+      kind: "ssh",
+      user: "root",
+      host: "192.168.45.200",
+      port: 22,
+    });
+    expect(mocks.saveSessionsList).toHaveBeenCalledTimes(1);
+  });
+
+  it("口径已经是新的 → 不写盘（不为了刷新而空转一次持久化）", () => {
+    useSshStore.setState({
+      sessions: [connectedSsh("uuid-1", 7, "192.168.45.200")],
+      activeSessionId: "uuid-1",
+    });
+    useChatStore.setState({
+      sessions: [
+        placeholder("s-new", {
+          kind: "ssh",
+          user: "root",
+          host: "192.168.45.200",
+          port: 22,
+        }),
+      ],
+    });
+
+    expect(useChatStore.getState().rebindEmptySessionScope()).toBe(false);
+    expect(mocks.saveSessionsList).not.toHaveBeenCalled();
+  });
+
+  it("已经说过话的会话不许重绑（A1 隔离：归属是历史事实）", () => {
+    seedMessages.set("s-new", [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "刚才那句" }] },
+    ] as never);
+    useSshStore.setState({
+      sessions: [connectedSsh("uuid-1", 7, "192.168.45.200")],
+      activeSessionId: "uuid-1",
+    });
+
+    expect(useChatStore.getState().rebindEmptySessionScope()).toBe(false);
+    expect(mocks.saveSessionsList).not.toHaveBeenCalled();
+    // 正向配对：不是"什么都没测到"，是这条被明确跳过了
+    expect(useChatStore.getState().sessions[0]?.scope).toEqual({
+      kind: "local",
+    });
+    seedMessages.delete("s-new");
+  });
+
+  it("没连服务器也没工作区 → 保持 local，不无中生有", () => {
+    expect(useChatStore.getState().rebindEmptySessionScope()).toBe(false);
+    expect(useChatStore.getState().sessions[0]?.scope).toEqual({
+      kind: "local",
+    });
+  });
+});
+
+/**
+ * 接线钉：上面那条"开跑前重算"的实际生效点在 chatRuntime.sendMessage()，
+ * 而 chatRuntime 装了 @ai-sdk 的 Chat 构造，单元层测不到它。删掉那一行
+ * 上面所有用例仍然全绿 —— 所以按本仓既有做法（静态扫描型门禁）钉住顺序。
+ * 判据形状照 retired-remote-tree / ipcWorkspaceEnv：锚点必须存在且唯一，
+ * 找不到就抛错，绝不"没扫到 = 通过"。
+ */
+describe("sendMessage 在取环境快照前重算占位 scope（接线）", () => {
+  it("chatRuntime.sendMessage 里 rebind 必须出现在 getOrCreateChat 之前", () => {
+    const src = readFileSync(
+      join(process.cwd(), "src/modules/ai/store/chatRuntime.ts"),
+      "utf8",
+    );
+    const start = src.indexOf("export async function sendMessage(");
+    expect(start, "找不到 sendMessage，门禁失效").toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}", start) + 2);
+    const rebind = body.indexOf("rebindEmptySessionScope()");
+    const chat = body.indexOf("getOrCreateChat(sessionId)");
+    expect(rebind, "sendMessage 里不再重算占位 scope —— #116 会复发").toBeGreaterThan(
+      -1,
+    );
+    expect(chat).toBeGreaterThan(-1);
+    expect(rebind).toBeLessThan(chat);
   });
 });

@@ -542,6 +542,15 @@ type StoreState = {
    * 无活跃工作区时不动（由门控 spaces.length===0 引导新建）。
    */
   syncSessionToWorkspace: () => void;
+  /**
+   * #116（2026-09-23）：把**还没说过话**的会话的 scope 重新按当前环境算一遍。
+   * 空对话的 scope 不是历史事实，而是"当前环境的投影"——冷启动时
+   * hydrateSessions 跑在启动自动连接**之前**，快照必然停在 {kind:"local"}，
+   * 于是 chatRuntime 按 local 口径把可见 SSH 掩成 connection_mode: none，
+   * agent 回"没打开终端"并拒绝执行任何命令。所以重算的时刻是"要用它的时候"。
+   * 有过消息的会话一条都不动（A1 隔离：归属是历史事实）。返回是否发生改写。
+   */
+  rebindEmptySessionScope: () => boolean;
 };
 
 const NOOP_LIVE: Live = {
@@ -847,18 +856,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
     let nextSessions: SessionMeta[];
     let freshId: string;
     if (reusable) {
-      // #116 (2026-09-23): 占位会话从没写过消息，它的 scope 是**上次创建那一刻**
-      // 的快照。环境会换（早上没连服务器 → 现在连着 SSH），沿用旧标签会让
-      // chatRuntime 按 local 口径把可见 SSH 掩成 connection_mode: none，
-      // agent 遂回"没打开终端"并拒绝执行任何命令 —— 实测就是这样断送一整个回合。
-      // 只重算未使用的占位；已有消息的会话归属不许改写。
-      const scope = deriveSessionScope();
-      const stale =
-        JSON.stringify(reusable.scope ?? null) !== JSON.stringify(scope);
-      nextSessions = stale
-        ? sessions.map((s) => (s.id === reusable.id ? { ...s, scope } : s))
-        : sessions;
-      if (stale) void saveSessionsList(nextSessions);
+      // #116: 占位的 scope 交给 rebindEmptySessionScope() 统一重算（见下面），
+      // 这里只负责把列表装进 store。
+      nextSessions = sessions;
       freshId = reusable.id;
     } else {
       freshId = newSessionId();
@@ -883,6 +883,7 @@ export const useChatStore = create<StoreState>((set, get) => ({
       activeSessionId: freshId,
       sessionsHydrated: true,
     });
+    if (reusable) get().rebindEmptySessionScope();
   },
 
   newSession: () => {
@@ -1073,6 +1074,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
         title: "新会话",
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        // #116 同类：占位必须带当前环境口径，缺省会退回"全局跟随"，
+        // 于是跨服务器串上下文（与 newSession/hydrate 两处口径保持一致）
+        scope: deriveSessionScope(),
       };
       set({ sessions: [fresh], activeSessionId: fresh.id });
       // v3.1: 全删后新建的会话重置为默认模式
@@ -1177,6 +1181,22 @@ export const useChatStore = create<StoreState>((set, get) => ({
     } else {
       get().newSession();
     }
+  },
+
+  rebindEmptySessionScope: () => {
+    const { sessions } = get();
+    const empty = sessions.filter((s) => isSessionEmpty(s.id, s));
+    if (empty.length === 0) return false;
+    const scope = deriveSessionScope();
+    const stale = empty.filter(
+      (s) => JSON.stringify(s.scope ?? null) !== JSON.stringify(scope),
+    );
+    if (stale.length === 0) return false;
+    const ids = new Set(stale.map((s) => s.id));
+    const next = sessions.map((s) => (ids.has(s.id) ? { ...s, scope } : s));
+    set({ sessions: next });
+    void saveSessionsList(next);
+    return true;
   },
 }));
 

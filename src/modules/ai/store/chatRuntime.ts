@@ -393,6 +393,11 @@ export async function sendMessage(text: string): Promise<boolean> {
       return false;
   }
 
+  // #116 续（2026-09-23）：还没说过话的对话，环境口径以"此刻"为准。
+  // 冷启动时 hydrateSessions 跑在启动自动连接之前，占位的 scope 停在 local，
+  // 不在开跑前重算，本轮就会继续按"没有终端"上报并拒绝执行任何命令。
+  state.rebindEmptySessionScope();
+
   const c = getOrCreateChat(sessionId);
   await c.sendMessage({ text });
   return true;
