@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_backend.tools import ToolContext, emit_teach_tool_call, tool
+from strands_backend.tools import ToolContext, emit_tool_call_card, tool
 from strands_backend.tools.command_impact import analyze
 
 
@@ -73,9 +73,9 @@ def make_teach_command_tool(ctx: ToolContext):
             "explanation": explanation,
             "predicted_output": predicted_output,
         }
-        emit_teach_tool_call(ctx, "teach_command", params, "started")
+        emit_tool_call_card(ctx, "teach_command", params, "started")
         result = invoke_teach_command_tool(params, ctx)
-        emit_teach_tool_call(ctx, "teach_command", params, "completed", result)
+        emit_tool_call_card(ctx, "teach_command", params, "completed", result)
         return result
 
     teach_command.__name__ = "teach_command"

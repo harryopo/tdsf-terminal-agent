@@ -77,6 +77,8 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             - explanation (str, 可选): 命令解释（前端展示用）
             - timeout (int, 可选): 超时秒数，默认 30
             - visible (bool, 可选): 是否同时注入前端终端（用户可见执行），默认 False
+            - tool_name (str, 可选): 发起方工具名（backup_restore / config_diff 这类
+              复用本实现的工具必须传，否则卡与审批一律显示成 ssh_command）
         ctx: ToolContext 运行时上下文
 
     Returns:
@@ -93,6 +95,10 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     explanation = params.get("explanation", "") or ""
     timeout = int(params.get("timeout", 30))
     # TDSF (2026-08-09): 前端开关 auto_execute_in_terminal 开启时自动设 visible
+
+    # 复用本实现的上游工具（backup_restore / config_diff）在这里传自己的名字，
+    # 否则审批卡、审计、聊天卡一律显示成 ssh_command（#114 用户报的"混用"）。
+    tool_name = str(params.get("tool_name") or "ssh_command")
 
     # 多行命令拆分检测（Task 3 / Task 4 接入：每行走 assess_command 综合决策）
     # P1-1 (2026-08-01): 命中确认 → 真实等待用户响应，批准后整条执行
@@ -141,7 +147,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 ctx,
                 command,
                 first_assessment["risk"],
-                tool_name="ssh_command",
+                tool_name=tool_name,
                 explanation=explanation,
                 impact=first_assessment["impact"],
                 risk_l=first_assessment["risk_l"],
@@ -176,18 +182,9 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             multiline_approved = True
             multiline_approval_req = req
 
-    # 推送 tool_call 事件（前端 AgentStatusPill + 工具调用面板展示）
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="ssh_command",
-                params={"command": command, "ssh_session_id": ssh_session_id, "timeout": timeout},
-                status="started",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.ssh_command",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call started failed: {e}")
+    # TDSF 2026-09-23（#114）：这里原先手写一对 emit_tool_call（started / completed），
+    # 现在由 execute_via_ssh 统一发——工具名跟着上游走，且拦截/审批/异常路径也会闭合。
+    # 这里再发一遍就会双卡（test_terminal_tool_call_events.py 钉住"恰好一对"）。
 
     # #71 (2026-09-20): 这里原先有一段 `if False:` 的 inject_terminal 通知死块
     # （"后台执行前先让用户在终端看到命令"），发送端与前端监听一并删除。
@@ -203,7 +200,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             command=command,
             ssh_session_id=ssh_session_id,
             timeout=timeout,
-            tool_name="ssh_command",
+            tool_name=tool_name,
             explanation=explanation,
             skip_approval=bool(multiline_approved),
         )
@@ -212,20 +209,6 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
 
     # 补充 explanation 字段
     result["explanation"] = explanation
-
-    # 推送 tool_call 完成事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="ssh_command",
-                params={"command": command, "ssh_session_id": ssh_session_id, "timeout": timeout},
-                result=result,
-                status="completed" if result.get("status") == "success" else "error",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.ssh_command",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call completed failed: {e}")
 
     return result
 

@@ -54,7 +54,7 @@ def invoke_backup_restore(
 
     backup_path = str(params.get("backup_path", "")).strip()
 
-    # 复用 ssh_command 执行
+    # 复用 ssh_command 执行，但传自己的工具名（#114：卡与审批都要说清是 backup_restore）
     from strands_backend.tools.ssh_command import invoke_ssh_command_tool
 
     if action == "backup":
@@ -71,6 +71,7 @@ def invoke_backup_restore(
                 "ssh_session_id": params.get("ssh_session_id", ""),
                 "explanation": f"备份 {file_path} → {backup_path}",
                 "timeout": 10,
+                "tool_name": "backup_restore",
             },
             ctx=ctx,
         )
@@ -94,6 +95,7 @@ def invoke_backup_restore(
                     "ssh_session_id": params.get("ssh_session_id", ""),
                     "explanation": f"查找 {file_path} 的最新备份",
                     "timeout": 5,
+                    "tool_name": "backup_restore",
                 },
                 ctx=ctx,
             )
@@ -112,6 +114,7 @@ def invoke_backup_restore(
                 "ssh_session_id": params.get("ssh_session_id", ""),
                 "explanation": f"恢复 {backup_path} → {file_path}",
                 "timeout": 10,
+                "tool_name": "backup_restore",
             },
             ctx=ctx,
         )

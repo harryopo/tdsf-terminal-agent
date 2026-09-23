@@ -43,7 +43,7 @@ def invoke_config_diff(
     # 0=相同 / 1=有差异 / 2=错误 都是合法值, 无需兜底。
     cmd = f"diff -u {shlex.quote(file_a)} {shlex.quote(file_b)} 2>&1"
 
-    # 复用 ssh_command 执行
+    # 复用 ssh_command 执行，但卡上写自己的名字（#114：否则聊天里分不清是哪一步）
     from strands_backend.tools.ssh_command import invoke_ssh_command_tool
     result = invoke_ssh_command_tool(
         params={
@@ -51,6 +51,7 @@ def invoke_config_diff(
             "ssh_session_id": params.get("ssh_session_id", ""),
             "explanation": f"对比 {file_a} 与 {file_b} 的差异",
             "timeout": 10,
+            "tool_name": "config_diff",
         },
         ctx=ctx,
     )
