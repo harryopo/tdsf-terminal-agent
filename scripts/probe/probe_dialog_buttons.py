@@ -1,10 +1,15 @@
-"""真机门禁：弹窗的按钮等高 + 不许顶满窗口高度 + SSH 档左列两个操作按钮在位。
+"""真机门禁：弹窗的按钮等高 + 不许顶满 + 左列不留空洞 + 两列标签基线对齐。
 
 为什么必须真机：happy-dom 不做布局，`getBoundingClientRect()` 全是 0，
-"两个按钮差 4px""弹窗高到 93% 视口"这类问题只能在 WebView2 里量出来。
+"两个按钮差 4px""弹窗高到 93% 视口""列表下面那块空白"这类问题只能在 WebView2 里量出来。
 
 为什么要"打不开就报错"：这类判据最阴的假绿是**弹窗根本没开，于是扫到 0 个按钮、
 报 0 违规**。所以本脚本先自己把「新建工作区 → SSH 服务器」打开，打不开直接非零退出。
+
+两条 2026-09-23 新增的几何判据（用户原话：「减少错位和留白异常，要对齐」）：
+- `trailingHolePx`：左列最后一块内容到列底之间的空白。列表原来是固定 max-h，右侧表单比它高时
+  下面就挂着一大块空白 → 这条量出来的就是这个洞。
+- `labelTopDeltaPx`：左列标题与右列第一个字段标签的上边缘差。两列并排时不齐就是一眼可见的错位。
 
 跑法：`pnpm probe:dialog`（dev 实例需在跑；CDP 9222 只在 dev 配置里开）
 """
@@ -49,12 +54,31 @@ MEASURE_JS = r"""(() => {
     const cs = getComputedStyle(b);
     return r.width > 8 && r.height > 8 && cs.visibility !== 'hidden' && cs.opacity !== '0';
   };
-  // 只比**底部动作区**的按钮。行内小按钮（如"复制命令"、列表里的详情/删除）
+  // 只比**底部动作区**的按钮。行内小按钮（如"复制命令"、列表里的删除）
   // 本来就该比主按钮小，把它们算进"等高"判据会把正确的做法判成违规。
   const footer = dlg.querySelector('[data-slot="alert-dialog-footer"], [data-slot="dialog-footer"]');
   const footBtns = footer ? [...footer.querySelectorAll('button')].filter(vis) : [];
   const allBtns = [...dlg.querySelectorAll('button')].filter(vis);
   const heights = footBtns.map((b) => +b.getBoundingClientRect().height.toFixed(2));
+
+  // 两条几何判据：左列的空洞、两列标签的基线差
+  const col = dlg.querySelector('[data-testid="ssh-saved-column"]');
+  const form = dlg.querySelector('[data-testid="ssh-form-column"]');
+  let trailingHolePx = null;
+  let labelTopDeltaPx = null;
+  if (col && form) {
+    const kids = [...col.children].filter(vis);
+    if (kids.length) {
+      const colR = col.getBoundingClientRect();
+      const lastR = kids[kids.length - 1].getBoundingClientRect();
+      trailingHolePx = +(colR.bottom - lastR.bottom).toFixed(1);
+    }
+    const l1 = [...col.querySelectorAll('label')].filter(vis)[0];
+    const l2 = [...form.querySelectorAll('label')].filter(vis)[0];
+    if (l1 && l2) {
+      labelTopDeltaPx = +(l1.getBoundingClientRect().top - l2.getBoundingClientRect().top).toFixed(1);
+    }
+  }
   return {
     dialogCount: dlgs.length,
     viewportH: innerHeight,
@@ -65,10 +89,12 @@ MEASURE_JS = r"""(() => {
     })),
     spread: heights.length ? +(Math.max(...heights) - Math.min(...heights)).toFixed(2) : 0,
     footerCount: footBtns.length,
-    hasDetailBtn: allBtns.some((b) => /查看 .* 详情/.test(b.getAttribute('aria-label') || '')),
+    rowCount: dlg.querySelectorAll('[data-testid="saved-server-row"]').length,
     hasDeleteBtn: allBtns.some((b) => /删除 /.test(b.getAttribute('aria-label') || '')),
+    trailingHolePx,
+    labelTopDeltaPx,
   };
-})"""
+})()"""
 
 
 def click(page, label: str) -> bool:
@@ -92,7 +118,17 @@ def click(page, label: str) -> bool:
 
 def measure(page) -> dict:
     time.sleep(0.6)
-    return page.evaluate(MEASURE_JS)
+    m = page.evaluate(MEASURE_JS)
+    # 结构不对 = **脚本自己的问题**，绝不能报成"现场没有弹窗"。
+    # 上一轮这条门禁就是这么哑的：MEASURE_JS 写成 (() => {...}) 少了一对调用括号，
+    # evaluate 返回一个函数的序列化结果 {}，于是 dialogCount 永远取不到，
+    # 探针永远输出"点了两下仍没有弹窗渲染出来"——查的人会被带去查弹窗，而不是查尺子。
+    if not isinstance(m, dict) or "dialogCount" not in m:
+        raise SystemExit(
+            f"MEASURE_JS 没有返回预期结构（拿到 {type(m).__name__}: {str(m)[:80]}）"
+            "—— 这是探针脚本自身的故障，不是界面问题。"
+        )
+    return m
 
 
 KIND_JS = r"""(() => {
@@ -151,11 +187,13 @@ def main() -> int:
     if not m.get("dialogCount"):
         raise SystemExit("点了两下仍没有弹窗渲染出来 —— 现场不对，不算通过。")
 
-    # 有已保存的服务器才谈得上左列两个按钮；一条都没有时这两项判据无从成立，
-    # 明确报出来而不是当成"通过"。
-    saved = m["hasDetailBtn"] or m["hasDeleteBtn"]
-
+    # 有已保存的服务器才谈得上"列表面板要撑满、删除入口要在位"；
+    # 一条都没有时这两项判据无从成立，明确报出来而不是当成"通过"。
     problems: list[str] = []
+    if m["rowCount"] == 0:
+        problems.append(
+            f"左列有 {m['rowCount']} 条已保存的服务器 —— 空洞/删除两条判据没有现场"
+        )
     if m["footerCount"] < 2:
         # 没有底部动作区 = 这条判据无从成立。报出来，别让它当成"0 违规"通过。
         problems.append(f"底部动作区里只找到 {m['footerCount']} 个按钮 —— 判据没有现场")
@@ -169,8 +207,18 @@ def main() -> int:
         problems.append(
             f"弹窗高 {m['dialog']['h']}px = 视口 {m['viewportH']}px 的 {ratio:.0%}（>72%，顶满窗口）"
         )
-    if not saved:
-        problems.append("左列没有「详情 / 删除」两个操作按钮 —— 已保存服务器的管理入口不在位")
+    if m["trailingHolePx"] is None:
+        problems.append("量不到左列（ssh-saved-column 不在现场）—— 判据没有现场")
+    elif m["trailingHolePx"] > 4.0:
+        problems.append(
+            f"左列底部残留 {m['trailingHolePx']}px 空洞（>4px，列表没随行高撑满）"
+        )
+    if m["labelTopDeltaPx"] is None:
+        problems.append("量不到两列的标签（ssh-form-column 或左列标题不在现场）")
+    elif abs(m["labelTopDeltaPx"]) > 1.0:
+        problems.append(
+            f"左列标题与右列首个字段标签上边缘差 {m['labelTopDeltaPx']}px（>1px，两列不齐）"
+        )
 
     print(json.dumps(m, ensure_ascii=False))
     # 收尾只关自己打开的那个；万一一轮量完又冒出审批框，同样不碰
@@ -185,7 +233,9 @@ def main() -> int:
         print("PROBE_DIALOG FAIL")
         return 1
     print(
-        f"判据: 底部按钮高度差 {m['spread']}px | 弹窗高占视口 {ratio:.0%} | 左列详情/删除在位"
+        f"判据: 底部按钮高度差 {m['spread']}px | 弹窗高占视口 {ratio:.0%} | "
+        f"左列底部空洞 {m['trailingHolePx']}px | 两列标签基线差 {m['labelTopDeltaPx']}px | "
+        f"已保存 {m['rowCount']} 条、删除入口 {m['hasDeleteBtn']}"
     )
     print("PROBE_DIALOG PASS")
     return 0

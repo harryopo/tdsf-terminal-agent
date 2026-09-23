@@ -19,6 +19,18 @@
 //   ③ **状态只有一槽**。原先 `testResult`（测试连接）与 `error`（校验/创建失败）是两个
 //      互不相干的块，谁也不清谁 —— 用户截图里"连接成功"和"SSH 连接失败"同屏就是这么来的。
 //      现在任何一条新结果都覆盖旧结果，结构上不可能再同屏打架。
+//
+// 2026-09-23 二次重排（用户看完成品再提三条）:
+//   ④ **删掉左列的就地「详情」面板**。点一行本来就已经把 host/port/user/认证方式回填到
+//      右侧表单，再在列表里嵌一块 `<dl>` 等于把同一件事说两遍；那块小字既不能编辑也不能
+//      操作，就是用户说的"UI 做得很鸡肋"。密码那只眼睛因此搬进表单的密码行 —— 它服务的
+//      是"这条连接的密码从哪来"，留在列表里反而看不懂。
+//   ⑤ 左列改成 flex 列 + 列表 `flex-1`：原先 ul 是固定 `max-h-[19rem]`，右侧表单比它高时
+//      列表下面就挂着**一块没人认领的空洞**。现在面板随行高撑满，空洞结构上不存在。
+//   ⑥ 右列收成一条两列栅格（窄列只给端口），其余字段跨两列、标签基线齐平；「测试连接」
+//      从独占一行改为与「永久保存」同行两端对齐。
+//      ⑤⑥ 这两条几何事实由 `pnpm probe:dialog` 在真机量 —— happy-dom 不做布局，
+//      单测里 `getBoundingClientRect()` 全是 0，量不出"对齐"这件事。
 
 import { Button } from "@/components/ui/button";
 import {
@@ -45,7 +57,6 @@ import {
   Delete02Icon,
   EyeIcon,
   EyeOffIcon,
-  InformationCircleIcon,
   Loading03Icon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
@@ -129,8 +140,7 @@ export function SpaceCreateDialog({
   // === 测试连接状态（P1 2026-08-01: 对齐主界面 SSH 面板交互）===
   const [testing, setTesting] = useState(false);
 
-  // === 已保存服务器：详情展开 / 删除确认 / 明文密码（2026-09-23 用户要求） ===
-  const [detailId, setDetailId] = useState<string | null>(null);
+  // === 已保存服务器：删除确认 / 明文密码（2026-09-23 用户要求） ===
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   /** 明文只在点眼睛后存在这里；收起、切档、关窗一律清空（不落任何持久层） */
   const [revealed, setRevealed] = useState<{ id: string; secret: string } | null>(
@@ -167,7 +177,6 @@ export function SpaceCreateDialog({
       setPassphrase("");
       setSaveKey(true);
       setTesting(false);
-      setDetailId(null);
       setConfirmDeleteId(null);
       setRevealed(null);
       return;
@@ -278,18 +287,6 @@ export function SpaceCreateDialog({
     setName(`${p.user}@${p.host}`);
   };
 
-  const toggleDetail = (id: string) => {
-    if (detailId === id) {
-      setDetailId(null);
-      setConfirmDeleteId(null);
-      setRevealed(null);
-      return;
-    }
-    setDetailId(id);
-    setConfirmDeleteId(null);
-    setRevealed(null);
-  };
-
   /** 眼睛：只有点开那一刻才去密钥库取，取到才显示；再点即清 */
   const toggleReveal = async (id: string) => {
     if (revealed?.id === id) {
@@ -320,10 +317,7 @@ export function SpaceCreateDialog({
   const handleDelete = async (p: SshCredentialProfile) => {
     try {
       await deleteSavedConnection(p.id);
-      if (detailId === p.id) {
-        setDetailId(null);
-        setRevealed(null);
-      }
+      if (revealed?.id === p.id) setRevealed(null);
       if (confirmDeleteId === p.id) setConfirmDeleteId(null);
     } catch (e) {
       setStatus({
@@ -500,8 +494,8 @@ export function SpaceCreateDialog({
     }
   };
 
-  const nameField = (
-    <div className="grid gap-1.5">
+  const nameField = (extra?: string) => (
+    <div className={cn("grid gap-1.5", extra)}>
       <Label htmlFor="space-name">
         名称 {mode === "ssh" ? "(默认 user@host)" : ""}
       </Label>
@@ -516,6 +510,30 @@ export function SpaceCreateDialog({
       />
     </div>
   );
+
+  /**
+   * 「当前表单是不是正好等于某条已保存的服务器」——**派生**而不是另存一个 id：
+   * 用户手改过主机/端口/用户名之后高亮就该自己消失，多一份 state 迟早和表单不一致。
+   */
+  const selectedProfile = useMemo(
+    () =>
+      savedConnections.find(
+        (p) =>
+          p.host === host.trim() &&
+          p.user === user.trim() &&
+          String(p.port ?? 22) === port.trim(),
+      ),
+    [savedConnections, host, user, port],
+  );
+  /** 明文只显示在密码框里，且只在"当前选中的就是取密钥那条"时显示 */
+  const secretShown = Boolean(
+    revealed && selectedProfile && revealed.id === selectedProfile.id,
+  );
+  const canRevealSecret =
+    authKind === "password" &&
+    selectedProfile?.auth.type === "password" &&
+    !password.trim();
+  const selectedLastUsed = formatLastUsed(selectedProfile?.lastUsed);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -558,222 +576,174 @@ export function SpaceCreateDialog({
         <form onSubmit={handleSubmit} className="grid gap-4">
           {mode === "ssh" ? (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-[15rem_minmax(0,1fr)]">
-              {/* 左列：已保存的服务器（详情就地展开、可删除） */}
-              <div className="grid gap-1.5 md:min-h-0">
-                <Label>已保存的服务器</Label>
-                {savedConnections.length === 0 ? (
-                  <p className="rounded-md border border-dashed border-border/60 px-2.5 py-3 text-[11px] text-muted-foreground">
-                    还没有保存过服务器。填好下面的信息并勾上「永久保存」，下次就能从这里直接选。
-                  </p>
-                ) : (
-                  <ul className="max-h-[19rem] overflow-y-auto rounded-md border border-border/60">
-                    {savedConnections.map((p) => {
-                      const expanded = detailId === p.id;
-                      const lastUsed = formatLastUsed(p.lastUsed);
-                      return (
-                        <li
-                          key={p.id}
-                          className={cn(
-                            "border-b border-border/40 last:border-b-0",
-                            expanded && "bg-muted/30",
-                          )}
-                        >
-                          <div className="flex items-center gap-1 px-1">
-                            <button
-                              type="button"
-                              onClick={() => applySavedProfile(p)}
-                              disabled={submitting}
-                              className="flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1.5 text-left text-[12px] hover:bg-muted/60 disabled:opacity-50"
-                            >
-                              <span className="truncate font-medium text-foreground">
-                                {p.alias || `${p.user}@${p.host}`}
-                              </span>
-                              <span className="shrink-0 text-[10px] text-muted-foreground">
-                                {p.auth.type === "password" ? "密码" : "公钥"}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => toggleDetail(p.id)}
-                              aria-label={`查看 ${p.alias || p.id} 详情`}
-                              aria-expanded={expanded}
-                              className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                            >
-                              <HugeiconsIcon
-                                icon={InformationCircleIcon}
-                                size={14}
-                                strokeWidth={1.75}
-                              />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setConfirmDeleteId(
-                                  confirmDeleteId === p.id ? null : p.id,
-                                )
-                              }
-                              aria-label={`删除 ${p.alias || p.id}`}
-                              className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                            >
-                              <HugeiconsIcon
-                                icon={Delete02Icon}
-                                size={14}
-                                strokeWidth={1.75}
-                              />
-                            </button>
-                          </div>
-
-                          {confirmDeleteId === p.id && (
-                            <div className="mx-1.5 mb-1.5 flex items-center justify-between gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
-                              <span>删除本机保存的这条凭据？工作区不受影响。</span>
-                              <div className="flex shrink-0 gap-1">
-                                <Button
-                                  type="button"
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => setConfirmDeleteId(null)}
-                                >
-                                  取消
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="xs"
-                                  variant="destructive"
-                                  onClick={() => void handleDelete(p)}
-                                >
-                                  删除
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-
-                          {expanded && (
-                            <dl
-                              data-testid="saved-server-detail"
-                              className="mx-1.5 mb-2 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 rounded-md border border-border/50 bg-background/60 px-2.5 py-2 text-[11px]"
-                            >
-                              <dt className="text-muted-foreground">主机</dt>
-                              <dd className="break-all font-mono">{p.host}</dd>
-                              <dt className="text-muted-foreground">端口</dt>
-                              <dd className="font-mono">{p.port ?? 22}</dd>
-                              <dt className="text-muted-foreground">用户名</dt>
-                              <dd className="break-all font-mono">{p.user}</dd>
-                              <dt className="text-muted-foreground">认证</dt>
-                              <dd>{p.auth.type === "password" ? "密码" : "公钥"}</dd>
-                              {p.auth.type === "publickey" &&
-                                p.auth.privateKeyPath && (
-                                  <>
-                                    <dt className="text-muted-foreground">私钥</dt>
-                                    <dd className="break-all font-mono">
-                                      {p.auth.privateKeyPath}
-                                    </dd>
-                                  </>
-                                )}
-                              {p.auth.type === "password" && (
-                                <>
-                                  <dt className="text-muted-foreground">密码</dt>
-                                  <dd className="flex items-center gap-1.5">
-                                    <span className="min-w-0 flex-1 break-all font-mono">
-                                      {revealed?.id === p.id
-                                        ? revealed.secret
-                                        : "••••••••"}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => void toggleReveal(p.id)}
-                                      disabled={revealing}
-                                      aria-label={
-                                        revealed?.id === p.id
-                                          ? "隐藏密码"
-                                          : "显示密码"
-                                      }
-                                      className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                                    >
-                                      <HugeiconsIcon
-                                        icon={
-                                          revealed?.id === p.id
-                                            ? EyeOffIcon
-                                            : EyeIcon
-                                        }
-                                        size={13}
-                                        strokeWidth={1.75}
-                                      />
-                                    </button>
-                                  </dd>
-                                </>
-                              )}
-                              {lastUsed && (
-                                <>
-                                  <dt className="text-muted-foreground">
-                                    最后使用
-                                  </dt>
-                                  <dd>{lastUsed}</dd>
-                                </>
-                              )}
-                            </dl>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              {/* 右列：连接表单 */}
-              <div className="grid min-w-0 gap-4">
-                {nameField}
-
-                {/* 主机 + 端口 */}
-                <div className="grid grid-cols-[minmax(0,1fr)_7rem] gap-3">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="ssh-host">主机 (Host)</Label>
-                    <Input
-                      id="ssh-host"
-                      value={host}
-                      onChange={(e) => setHost(e.target.value)}
-                      placeholder="192.168.1.10 或 example.com"
-                      autoComplete="off"
-                      spellCheck={false}
-                      disabled={submitting}
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="ssh-port">端口 (Port)</Label>
-                    <Input
-                      id="ssh-port"
-                      value={port}
-                      onChange={(e) => setPort(e.target.value)}
-                      onBlur={handlePortBlur}
-                      inputMode="numeric"
-                      placeholder="22"
-                      autoComplete="off"
-                      disabled={submitting}
-                    />
-                  </div>
+              {/* 左列：面板随行高撑满，说明钉在面板底。原先 ul 是固定 max-h，
+                  右侧表单比它高时列表下面就是**一块没人认领的空洞**
+                  （用户 2026-09-23：留白异常）。空洞与否由 probe:dialog 真机量。 */}
+              <div
+                data-testid="ssh-saved-column"
+                className="flex min-h-0 flex-col gap-1.5"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <Label>已保存的服务器</Label>
+                  {savedConnections.length > 0 && (
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
+                      共 {savedConnections.length} 台
+                    </span>
+                  )}
                 </div>
 
-                {/* 用户名 */}
+                {/* 面板是一整块有底色的容器，说明钉在它的底部：
+                    右侧表单比列表高时，这块剩余空间由面板本身认领，不留白 */}
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border/60 bg-muted/20">
+                  {savedConnections.length === 0 ? (
+                    <p className="flex min-h-0 flex-1 items-center justify-center px-3 py-4 text-center text-[11px] leading-relaxed text-muted-foreground">
+                      还没有保存过服务器。填好右侧信息并勾上「永久保存」，
+                      下次就能从这里直接选。
+                    </p>
+                  ) : (
+                    <ul
+                      data-testid="saved-server-list"
+                      className="min-h-0 flex-1 divide-y divide-border/40 overflow-y-auto"
+                    >
+                      {savedConnections.map((p) => (
+                        <li key={p.id} className="flex items-center gap-1 p-1">
+                          <button
+                            type="button"
+                            data-testid="saved-server-row"
+                            onClick={() => applySavedProfile(p)}
+                            disabled={submitting}
+                            aria-pressed={selectedProfile?.id === p.id}
+                            className={cn(
+                              "min-w-0 flex-1 rounded px-1.5 py-1 text-left transition-colors disabled:opacity-50",
+                              selectedProfile?.id === p.id
+                                ? "bg-primary/10 ring-1 ring-primary/40"
+                                : "hover:bg-muted/60",
+                            )}
+                          >
+                            <span className="block truncate text-[12px] font-medium text-foreground">
+                              {p.alias || `${p.user}@${p.host}`}
+                            </span>
+                            <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                              {p.user}@{p.host}:{p.port ?? 22} ·{" "}
+                              {p.auth.type === "password" ? "密码" : "公钥"}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmDeleteId(
+                                confirmDeleteId === p.id ? null : p.id,
+                              )
+                            }
+                            aria-label={`删除 ${p.alias || p.id}`}
+                            className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            <HugeiconsIcon
+                              icon={Delete02Icon}
+                              size={14}
+                              strokeWidth={1.75}
+                            />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {confirmDeleteId && (
+                    <div className="flex shrink-0 items-center justify-between gap-2 border-t border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+                      <span>删除这条本机凭据？工作区不受影响。</span>
+                      <div className="flex shrink-0 gap-1">
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => setConfirmDeleteId(null)}
+                        >
+                          取消
+                        </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="destructive"
+                          onClick={() => {
+                            const target = savedConnections.find(
+                              (p) => p.id === confirmDeleteId,
+                            );
+                            if (target) void handleDelete(target);
+                          }}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 说明钉在面板底部：这一格剩下的空间由它认领，而不是留成空白 */}
+                  <p className="shrink-0 border-t border-border/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {selectedProfile
+                      ? `已选用，连接信息已填入右侧表单${
+                          selectedLastUsed ? `（上次 ${selectedLastUsed}）` : ""
+                        }。`
+                      : "选中一项即把连接信息填入右侧表单。已保存的密码不写入表单，也不显示。"}
+                  </p>
+                </div>
+              </div>
+
+              {/* 右列：一条三列栅格 —— 主机 / 端口 / 用户名 同一行三格，其余字段跨满。
+                  每个字段都是"标签在上、输入在下"，标签都是单行，左边界与基线全部对齐。
+                  少一行 = 少 64px：弹窗原先纵向顶到视口 76%，被 probe:dialog 的 72% 上限判红 */}
+              <div
+                data-testid="ssh-form-column"
+                className="grid min-w-0 grid-cols-[minmax(0,1fr)_4.5rem_minmax(0,1fr)] gap-x-3 gap-y-3"
+              >
+                {nameField("col-span-3")}
+
                 <div className="grid gap-1.5">
-                  <Label htmlFor="ssh-user">用户名 (User)</Label>
+                  <Label htmlFor="ssh-host">主机</Label>
+                  <Input
+                    id="ssh-host"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="192.168.1.10"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={submitting}
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ssh-port">端口</Label>
+                  <Input
+                    id="ssh-port"
+                    value={port}
+                    onChange={(e) => setPort(e.target.value)}
+                    onBlur={handlePortBlur}
+                    inputMode="numeric"
+                    placeholder="22"
+                    autoComplete="off"
+                    disabled={submitting}
+                  />
+                </div>
+
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ssh-user">用户名</Label>
                   <Input
                     id="ssh-user"
                     value={user}
                     onChange={(e) => setUser(e.target.value)}
-                    placeholder="root / ubuntu / 你的用户名"
+                    placeholder="root"
                     autoComplete="off"
                     spellCheck={false}
                     disabled={submitting}
                   />
                 </div>
 
-                {/* 认证方式 */}
-                <div className="grid gap-1.5">
-                  <Label>认证方式 (Authentication)</Label>
+                <div className="col-span-3 grid gap-1.5">
+                  <Label>认证方式</Label>
                   <div className="grid grid-cols-2 gap-2">
                     {(
                       [
-                        ["password", "密码 (Password)"],
-                        ["publickey", "公钥 (Public Key)"],
+                        ["password", "密码"],
+                        ["publickey", "公钥"],
                       ] as const
                     ).map(([kind, label]) => (
                       <button
@@ -795,38 +765,59 @@ export function SpaceCreateDialog({
                 </div>
 
                 {authKind === "password" ? (
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="ssh-password">密码 (Password)</Label>
+                  <div className="col-span-3 grid gap-1.5">
+                    <div className="flex min-h-5 items-center justify-between gap-2">
+                      <Label htmlFor="ssh-password">密码</Label>
+                      {/* 眼睛挪到表单里：已保存的密码本来就只服务于这条连接，
+                          再在左列单开一块"详情"就是把同一件事说两遍 */}
+                      {canRevealSecret && selectedProfile && (
+                        <button
+                          type="button"
+                          onClick={() => void toggleReveal(selectedProfile.id)}
+                          disabled={revealing}
+                          aria-label={
+                            secretShown ? "隐藏已保存的密码" : "显示已保存的密码"
+                          }
+                          className="flex h-5 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                        >
+                          <HugeiconsIcon
+                            icon={secretShown ? EyeOffIcon : EyeIcon}
+                            size={13}
+                            strokeWidth={1.75}
+                          />
+                          {secretShown ? "隐藏" : "显示已保存的密码"}
+                        </button>
+                      )}
+                    </div>
                     <Input
                       id="ssh-password"
-                      type="password"
-                      value={password}
+                      type={secretShown && revealed ? "text" : "password"}
+                      value={
+                        password ||
+                        (secretShown && revealed ? revealed.secret : "")
+                      }
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
+                      placeholder="留空即用本机密钥库中已存的密码"
                       autoComplete="off"
                       disabled={submitting}
                     />
                   </div>
                 ) : (
                   <>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="ssh-key">
-                        私钥路径 (Private Key Path)
-                      </Label>
+                    <div className="col-span-3 grid gap-1.5">
+                      <Label htmlFor="ssh-key">私钥路径</Label>
                       <Input
                         id="ssh-key"
                         value={privateKeyPath}
                         onChange={(e) => setPrivateKeyPath(e.target.value)}
-                        placeholder="~/.ssh/id_ed25519 或 C:\\Users\\you\\.ssh\\id_rsa"
+                        placeholder="~/.ssh/id_ed25519"
                         autoComplete="off"
                         spellCheck={false}
                         disabled={submitting}
                       />
                     </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="ssh-passphrase">
-                        口令 (Passphrase, 可选)
-                      </Label>
+                    <div className="col-span-3 grid gap-1.5">
+                      <Label htmlFor="ssh-passphrase">口令（可选）</Label>
                       <Input
                         id="ssh-passphrase"
                         type="password"
@@ -840,20 +831,19 @@ export function SpaceCreateDialog({
                   </>
                 )}
 
-                <label className="flex cursor-pointer select-none items-center gap-2 text-[12px] text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={saveKey}
-                    onChange={(e) => setSaveKey(e.target.checked)}
-                    className="size-3.5 accent-primary"
-                    disabled={submitting}
-                  />
-                  <span>永久保存密钥到本机（下次自动登录）</span>
-                </label>
-
-                {/* P1 2026-08-01: 测试连接。size 与底部按钮统一成 h-9 ——
-                    原先 size="sm"(h-8) 紧贴 h-9 的取消/创建，实测差 4px 看着就是"没对齐" */}
-                <div className="flex items-center gap-2">
+                {/* 勾选与「测试连接」并成一行：原先测试连接独占一行、右边什么都没有，
+                    看着就是"下面还该有点什么"的空洞。尺寸都是 h-9，与底部按钮同高 */}
+                <div className="col-span-3 flex h-9 items-center justify-between gap-3">
+                  <label className="flex min-w-0 cursor-pointer select-none items-center gap-2 text-[12px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={saveKey}
+                      onChange={(e) => setSaveKey(e.target.checked)}
+                      className="size-3.5 shrink-0 accent-primary"
+                      disabled={submitting}
+                    />
+                    <span className="truncate">永久保存密钥到本机（下次自动登录）</span>
+                  </label>
                   <Button
                     type="button"
                     variant="outline"
@@ -877,7 +867,7 @@ export function SpaceCreateDialog({
             </div>
           ) : (
             <div className="grid gap-4">
-              {nameField}
+              {nameField()}
 
               {mode === "wsl" && (
                 <div className="grid gap-1.5">
