@@ -1784,17 +1784,20 @@ function SuggestCommandCard({
     if (ok) setAction(execute ? "executed" : "inserted");
   };
   // TDSF 2026-09-18（用户钦定"要写入命令就自动输出到终端，别让我点 Run"）:
-  // 建议命令卡渲染后自动打字到活动终端，四种模式全开。
-  // 安全边界保留 2026-09-03 教训（确认模式自动执行=绕过 HITL 审批）：
-  // 只有 auto 模式追加 \n 真正执行，confirm/observe/teach 只打字不回车。
+  // 建议命令卡渲染后自动打字到活动终端。
+  // TDSF 2026-09-23（#114，用户改口"只有在教学模式下才有命令建议"）：**收到只在教学模式**
+  // ——非教学模式下 agent 要执行一律走 ssh_command 工具调用，聊天里有卡可追溯到是哪一步；
+  // 建议卡只展示，插入/执行由用户点按钮明示（手动入口的语义不变）。
   // autoFiredRef 守卫不可省：流式期间 command 逐字变化会反复触发本 effect，
   // 叠加 injectIntoActivePty 回流重渲染可致 "Maximum update depth exceeded"。
   useEffect(() => {
     if (autoFiredRef.current) return;
     // 出身闸门：历史消息（从盘上读回来的）一律不注入。见 autoTypeProvenance。
     if (!autoTypeAllowed) return;
-    const { activeSessionId, agentMode, live, teach } = useChatStore.getState();
+    const { activeSessionId, live, teach } = useChatStore.getState();
     if (!usePreferencesStore.getState().agentAutoTypeCommands) return;
+    // #114 模式闸门：只在教学模式自动打字（放在 ledger 之前，非教学模式不占记账位）
+    if (!teach) return;
     // 自动打字闸门：Private 终端 / 用户正在敲的半行 / 不在提示符 → 不注入。
     const gate = live.canAutoTypeToActiveTerminal;
     if (gate && !gate()) return;
@@ -1802,11 +1805,11 @@ function SuggestCommandCard({
     // 记账等注入成功之后——失败就记账会让常见命令整轮应用再也不自动打字。
     if (!claimAutoType(command, activeSessionId)) return;
     autoFiredRef.current = true;
-    const execute = agentMode === "auto" && !teach;
-    const ok = live.injectIntoActivePty(execute ? command + "\n" : command);
+    // teach 档恒定"只打字不回车"（执行权归学生），所以这里没有 auto 分支。
+    const ok = live.injectIntoActivePty(command);
     if (!ok) return;
     markAutoTyped(command, activeSessionId);
-    setAction(execute ? "executed" : "inserted");
+    setAction("inserted");
   }, [autoTypeAllowed, command]);
   return (
     <div className="space-y-1.5">
