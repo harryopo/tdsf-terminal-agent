@@ -69,6 +69,12 @@ except ImportError:  # Strands 未安装时优雅降级
 tool = _strands_tool
 TOOL_DECORATOR_AVAILABLE = _STRANDS_AVAILABLE
 
+# 可见终端执行：Python 等 ipc 回执的额外宽限，必须**严格大于** Rust 那一侧的传输
+# 宽限（sidecar.rs 的 VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS）。两个数相等时两边同秒
+# 掐表，Rust 刚备好的结构化 timed_out 会被 Python 的超时异常顶成孤儿包 ——
+# 2026-09-23 #119 实测 200002ms vs 200007ms。由 tests/test_visible_terminal_budget_ordering.py 钉住。
+VISIBLE_TERMINAL_IPC_OVERHEAD_SECS = 200.0
+
 
 # ============================================================================
 # RustBridge 协议 — Python 调用 Rust 后端的抽象层
@@ -1454,7 +1460,7 @@ def _execute_via_ssh_impl(
             result = ctx.rust_bridge.ipc_invoke(
                 "visible_terminal_execute",
                 ssh_params,
-                timeout=max(5.0, float(timeout) + 170.0),
+                timeout=max(5.0, float(timeout) + VISIBLE_TERMINAL_IPC_OVERHEAD_SECS),
             )
             logger.info(
                 "[vt-probe] py-recv op=%s t_ms=%s waited_ms=%s status=%s reason=%s",
@@ -1534,7 +1540,12 @@ def _execute_via_ssh_impl(
             "target_endpoint": target_endpoint,
             "execution_channel": execution_channel,
             "reason": result.get("reason", "visible_terminal_indeterminate"),
-            "message": "可见终端未提供可验证的退出码，未对命令结果作出结论。",
+            # 前端知道是"没拿到退出码"还是"界面在结果回来前没了"，沿用下方
+            # unavailable 分支的口径：带得上文案就用人家那句。
+            "message": str(
+                result.get("message")
+                or "可见终端未提供可验证的退出码，未对命令结果作出结论。"
+            ),
         })
 
     if (

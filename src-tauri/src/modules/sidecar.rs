@@ -67,6 +67,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 // A short command at the slowest 0.2x setting can spend about 158 seconds
 // typing before the frontend starts its command timeout. This is a transport
 // guard only; terminal OSC completion remains the semantic success signal.
+//
+// 改这个数必须同时看 Python 那一侧：`tools/__init__.py` 的
+// VISIBLE_TERMINAL_IPC_OVERHEAD_SECS 要**严格大于**它，否则两边同秒掐表，
+// 这里备好的 timed_out 会被 Python 的超时异常顶成孤儿包（#119，
+// tests/test_visible_terminal_budget_ordering.py 钉住这条不等式）。
 const VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS: u64 = 170;
 
 /// 优雅退出等待时间（3s，超时后 SIGKILL）
