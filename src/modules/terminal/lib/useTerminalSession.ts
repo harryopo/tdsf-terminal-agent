@@ -906,6 +906,9 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         resolveAuthor: (command) =>
           useTerminalBlocksStore.getState().resolveAuthor(leafId, command),
         onExecStart: () => {
+          // #113③：把"这台 shell 会回报执行标记"这件事记到 leaf 上，
+          // 可见终端执行据此区分"没集成"与"命令还在跑"。
+          useTerminalBlocksStore.getState().noteExecStarted(leafId);
           execStartMarker = term.registerMarker(0);
         },
         onOutputCapture: () => {

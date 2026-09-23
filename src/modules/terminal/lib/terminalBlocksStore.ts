@@ -25,9 +25,16 @@ type TerminalBlocksState = {
   blocksByLeaf: Record<number, TerminalBlock[]>;
   /** leafId → agent 注入待命标记时刻（undefined = 无标记） */
   agentPending: Record<number, number | undefined>;
+  /**
+   * leafId → 最近一次"命令开始执行"标记（OSC 133;C / 633;E）的时刻。
+   * #113③ 用它区分"这台机器的 shell 不回报块"与"命令还在慢慢跑"。
+   */
+  execStartedAtByLeaf: Record<number, number | undefined>;
   pushBlock: (block: TerminalBlock) => void;
   markAgentPending: (leafId: number) => void;
   clearAgentPending: (leafId: number) => void;
+  /** collector 观察到命令开始执行时调用 */
+  noteExecStarted: (leafId: number) => void;
   /** block 结算时调用：命中待命标记 → "agent" 并清除；否则 "user" */
   resolveAuthor: (leafId: number, command: string) => TerminalBlockAuthor;
   getRecent: (leafId: number, n: number) => TerminalBlock[];
@@ -38,6 +45,13 @@ export const useTerminalBlocksStore = create<TerminalBlocksState>(
   (set, get) => ({
     blocksByLeaf: {},
     agentPending: {},
+    execStartedAtByLeaf: {},
+
+    noteExecStarted(leafId) {
+      set((s) => ({
+        execStartedAtByLeaf: { ...s.execStartedAtByLeaf, [leafId]: Date.now() },
+      }));
+    },
 
     pushBlock(block) {
       set((s) => {
@@ -91,7 +105,13 @@ export const useTerminalBlocksStore = create<TerminalBlocksState>(
         delete next[leafId];
         const nextPending = { ...s.agentPending };
         delete nextPending[leafId];
-        return { blocksByLeaf: next, agentPending: nextPending };
+        const nextExec = { ...s.execStartedAtByLeaf };
+        delete nextExec[leafId];
+        return {
+          blocksByLeaf: next,
+          agentPending: nextPending,
+          execStartedAtByLeaf: nextExec,
+        };
       });
     },
   }),
