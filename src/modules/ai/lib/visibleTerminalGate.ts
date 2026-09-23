@@ -38,21 +38,25 @@ export function rejectForVisibleTerminal(
   }
   if (
     input.currentSessionId === null ||
-    input.currentSessionId !== input.requestedSessionId
+    input.leafId === null ||
+    input.leafId === undefined ||
+    !input.terminalMounted
   ) {
+    // 顺序很重要：没有可见终端时 currentSessionId 必然也是 null，
+    // 先判会话号就会把"界面上没终端"说成"切错标签页"（2026-09-23 真机复现）。
+    return {
+      reason: "no_visible_terminal",
+      message:
+        "这台服务器已连接，但界面上没有打开的终端可以写（还停在欢迎页／当前标签页是本地壳），" +
+        "命令未执行。请先在顶栏打开这个工作区、切到它的终端标签页，再让我执行。",
+    };
+  }
+  if (input.currentSessionId !== input.requestedSessionId) {
     return {
       reason: "session_mismatch",
       message:
         "当前看着的终端不是这条 SSH 会话（可能切了标签页或换了服务器），命令未执行。" +
         "请切回该服务器对应的终端标签页再试。",
-    };
-  }
-  if (input.leafId === null || input.leafId === undefined || !input.terminalMounted) {
-    return {
-      reason: "no_visible_terminal",
-      message:
-        "这台服务器已连接，但界面上没有打开的终端可以写（还停在欢迎页／该标签页没挂载终端），" +
-        "命令未执行。请先在顶栏打开这个工作区，让终端显示出来再让我执行。",
     };
   }
   return null;
