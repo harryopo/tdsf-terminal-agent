@@ -65,6 +65,13 @@ use crate::modules::human_type::{write_human_common, HumanTypeReport};
 /// 首次 SFTP 操作时创建,SSH 断开时清理。
 pub struct SshState {
     sessions: RwLock<HashMap<u32, Arc<SshSession>>>,
+    /// 每条会话由哪个 webview 窗口建立 (#117)。
+    ///
+    /// 会话注册表活在应用进程里，前端页面重载（dev 的 HMR、设置页的「重新加载
+    /// 应用」按钮）时它不跟着清，而新页面的 store 是空的 ⇒ 上一代那条远端
+    /// shell 从此无人引用，一直活到进程退出。有了出身，前端启动时才能分辨
+    /// "我这一代留下的僵尸" 与 "另一个还活着的窗口正在用的连接"，只回收前者。
+    owners: RwLock<HashMap<u32, String>>,
     /// SFTP 会话缓存 (T-P2-05)
     /// 与 sessions 共享 session_id,首次 SFTP 操作时通过 SshSession::open_sftp_channel 创建。
     sftp_sessions: RwLock<HashMap<u32, Arc<SftpSession>>>,
@@ -80,6 +87,7 @@ impl Default for SshState {
     fn default() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            owners: RwLock::new(HashMap::new()),
             sftp_sessions: RwLock::new(HashMap::new()),
             tunnels: RwLock::new(HashMap::new()),
             // 从 1 开始,避免前端把 0 误判为 "未设置"
@@ -95,9 +103,10 @@ impl SshState {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// 插入新会话
-    pub async fn insert(&self, id: u32, session: Arc<SshSession>) {
+    /// 插入新会话，并同时记下建立它的 webview 窗口 label（#117）
+    pub async fn insert(&self, id: u32, session: Arc<SshSession>, owner: String) {
         self.sessions.write().await.insert(id, session);
+        self.owners.write().await.insert(id, owner);
     }
 
     /// 取出会话 (移除)
@@ -113,6 +122,7 @@ impl SshState {
                 }
             });
         }
+        self.owners.write().await.remove(&id);
         self.sessions.write().await.remove(&id)
     }
 
@@ -366,6 +376,8 @@ fn default_term() -> String {
 pub async fn ssh_connect(
     app: tauri::AppHandle,
     state: tauri::State<'_, SshState>,
+    // #117: 谁建的这条连接，就得记下来 —— 页面重载后新那一代才能只回收自己留下的
+    window: tauri::WebviewWindow,
     params: SshConnectCommand,
     on_data: Channel<Vec<u8>>,
     on_status: Channel<SshStatusEvent>,
@@ -373,11 +385,12 @@ pub async fn ssh_connect(
 ) -> Result<u32, String> {
     let session_id = state.allocate_id();
     log::info!(
-        "[ssh] connect start: id={} host={} port={} user={}",
+        "[ssh] connect start: id={} host={} port={} user={} window={}",
         session_id,
         params.host,
         params.port,
-        params.user
+        params.user,
+        window.label()
     );
 
     // 1. 建立连接 (含 TOFU + 认证)
@@ -459,7 +472,9 @@ pub async fn ssh_connect(
         });
     }
 
-    state.insert(session_id, session_arc).await;
+    state
+        .insert(session_id, session_arc, window.label().to_string())
+        .await;
 
     log::info!("[ssh] connect success: id={}", session_id);
     Ok(session_id)
@@ -600,6 +615,8 @@ pub struct SshSessionDetail {
     pub port: u16,
     pub user: String,
     pub state: SshSessionState,
+    /// 建立这条连接的 webview 窗口 label (#117)；认不出出身时为 None
+    pub owner_window: Option<String>,
 }
 
 /// 列出全部会话详情 (按 session_id 升序)
@@ -608,6 +625,7 @@ pub struct SshSessionDetail {
 /// `ssh_sessions_detail` 命令与 sidecar 反向路由 `"ssh_status"` 均委托此函数。
 pub async fn sessions_detail(state: &SshState) -> Vec<SshSessionDetail> {
     let sessions = state.sessions.read().await;
+    let owners = state.owners.read().await;
     let mut result: Vec<SshSessionDetail> = sessions
         .iter()
         .map(|(id, s)| SshSessionDetail {
@@ -616,6 +634,7 @@ pub async fn sessions_detail(state: &SshState) -> Vec<SshSessionDetail> {
             port: s.port(),
             user: s.user().to_string(),
             state: s.state(),
+            owner_window: owners.get(id).cloned(),
         })
         .collect();
     result.sort_by_key(|d| d.session_id);
@@ -1649,6 +1668,7 @@ mod tests {
                 Arc::new(super::session::tests::make_test_session_with_endpoint::<
                     tauri::Wry,
                 >("10.0.0.2", 2222, "deploy")),
+                "main-2".to_string(),
             )
             .await;
         state
@@ -1657,6 +1677,7 @@ mod tests {
                 Arc::new(super::session::tests::make_test_session_with_endpoint::<
                     tauri::Wry,
                 >("10.0.0.1", 22, "root")),
+                "main".to_string(),
             )
             .await;
 
@@ -1671,5 +1692,43 @@ mod tests {
         assert_eq!(details[1].host, "10.0.0.2");
         assert_eq!(details[1].port, 2222);
         assert_eq!(details[1].user, "deploy");
+    }
+
+    /// #117（2026-09-23）：出身账必须跟着会话走。
+    ///
+    /// 前端页面重载后只能靠 `ownerWindow` 分辨"我这一代留下的僵尸"和
+    /// "另一个还活着的窗口正在用的连接"。所以：注册要记账、序列化出来的字段名
+    /// 是 camelCase（前端契约）、断开后要摘账 —— 漏了最后一条的话，
+    /// id 复用时（虽然目前单调递增）或注册表增长后都会读到假出身。
+    #[tokio::test]
+    async fn test_session_owner_window_is_recorded_and_dropped_with_session() {
+        let state = SshState::default();
+        state
+            .insert(
+                5,
+                Arc::new(
+                    super::session::tests::make_test_session_with_endpoint::<tauri::Wry>(
+                        "10.0.0.9", 22, "root",
+                    ),
+                ),
+                "main".to_string(),
+            )
+            .await;
+
+        let details = sessions_detail(&state).await;
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].owner_window.as_deref(), Some("main"));
+        // 前端 `sshSessionsDetail()` 按 camelCase 取值，字段名改了门禁抓不到
+        let json = serde_json::to_string(&details[0]).unwrap();
+        assert!(
+            json.contains("\"ownerWindow\":\"main\""),
+            "ownerWindow 未按时约定为 camelCase: {json}"
+        );
+
+        state.take(5).await;
+        assert!(
+            state.owners.read().await.get(&5).is_none(),
+            "会话断开后出身账没摘，留着就是脏数据"
+        );
     }
 }
