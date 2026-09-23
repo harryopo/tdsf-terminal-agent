@@ -102,8 +102,10 @@ describe("#91② 退役的远程文件树不许回来", () => {
 
 describe("配对：删的是文件树，不是整个 SSH 模块", () => {
   it("主机审批对话框的宿主文件仍在（审批队列的挂载点）", () => {
-    expect(existsSync(join(MODULE, "SshExplorer.tsx"))).toBe(true);
-    expect(code("SshExplorer.tsx")).toContain(
+    // 2026-09-23：组件从 SshExplorer.tsx 搬进自己的文件 —— 那片面板的去留还挂在
+    // #109 上等用户拍，审批框是活的，不该寄生在可能被整片删掉的文件里。
+    expect(existsSync(join(MODULE, "HostApprovalDialog.tsx"))).toBe(true);
+    expect(code("HostApprovalDialog.tsx")).toContain(
       "export function HostApprovalDialog",
     );
   });

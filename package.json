@@ -26,6 +26,7 @@
     "probe:ui": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ui.py",
     "probe:ipc": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ipc_allowlist.py",
     "probe:ssh": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ssh_reload_no_leak.py",
+    "probe:dialog": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_dialog_buttons.py",
     "tauri:dev": "node scripts/dev-seed-store.mjs && tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build",
     "check:release-version": "pwsh -NoProfile -File scripts/check-release-version.ps1",

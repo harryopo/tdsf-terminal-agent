@@ -119,7 +119,7 @@ import {
   subscribeHostKeyMismatch,
   subscribeHostVerify,
 } from "@/lib/ssh-bridge";
-import { HostApprovalDialog } from "@/modules/ssh-explorer/SshExplorer";
+import { HostApprovalDialog } from "@/modules/ssh-explorer/HostApprovalDialog";
 // TDSF 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
 // TDSF 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
 // 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
