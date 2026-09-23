@@ -32,6 +32,7 @@ import {
   shouldRerouteForMissingIntegration,
   VISIBLE_INTEGRATION_GRACE_MS,
 } from "./visibleIntegrationGrace";
+import { rejectForVisibleTerminal } from "./visibleTerminalGate";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { type RefObject, useEffect, useRef } from "react";
@@ -770,19 +771,16 @@ export function useAiLiveBridge(params: Params) {
         });
         return;
       }
-      if (
-        !request.requestId ||
-        !request.command ||
-        currentSessionId === null ||
-        currentSessionId !== request.sessionId ||
-        leafId === null ||
-        leafId === undefined ||
-        !terminal
-      ) {
-        reject(
-          "visible_terminal_unavailable",
-          "当前没有与该 SSH 会话匹配的可见终端，命令未执行。",
-        );
+      const rejected = rejectForVisibleTerminal({
+        hasRequestId: Boolean(request.requestId),
+        hasCommand: Boolean(request.command),
+        currentSessionId,
+        requestedSessionId: request.sessionId,
+        leafId,
+        terminalMounted: terminal !== undefined,
+      });
+      if (rejected) {
+        reject(rejected.reason, rejected.message);
         return;
       }
       if (getLeafBlockMode(leafId) !== "prompt") {
