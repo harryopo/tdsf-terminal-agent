@@ -199,7 +199,7 @@ describe("SpaceCreateDialog — 状态只有一槽", () => {
   });
 });
 
-describe("SpaceCreateDialog — 已保存的服务器：详情 / 眼睛 / 删除", () => {
+describe("SpaceCreateDialog — 已保存的服务器：选中 / 眼睛 / 删除", () => {
   const profile = {
     id: "root@10.0.0.1:22",
     alias: "root@10.0.0.1:22",
@@ -218,76 +218,72 @@ describe("SpaceCreateDialog — 已保存的服务器：详情 / 眼睛 / 删除
     sshState.savedConnections = [];
   });
 
-  function openDetail() {
-    fireEvent.click(screen.getByLabelText(/查看 root@10\.0\.0\.1:22 详情/));
-  }
+  const field = (id: string) =>
+    document.getElementById(id) as HTMLInputElement;
+  const selectSaved = () => fireEvent.click(screen.getByTestId("saved-server-row"));
 
-  it("详情默认不渲染；点开后密码是掩码，且不会自己去碰密钥库", async () => {
+  it("点一行回填右侧表单（两栏重排不许把这个旧行为弄丢）", () => {
     renderSshDialog();
-    expect(
-      screen.queryByTestId("saved-server-detail"),
-    ).toBeNull();
+    selectSaved();
+    expect(field("ssh-host").value).toBe("10.0.0.1");
+    expect(field("ssh-user").value).toBe("root");
+    expect(field("ssh-port").value).toBe("22");
+    // 配对：这一行确实被认成"当前选中"，不是只填了表单而列表毫无反馈
+    expect(screen.getByTestId("saved-server-row").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
 
-    openDetail();
-    const detail = await screen.findByTestId("saved-server-detail");
-    expect(detail.textContent).toContain("10.0.0.1");
-    expect(detail.textContent).toContain("••••••••");
-    expect(detail.textContent).not.toContain("pw");
+  it("选中态是派生的：手改过主机之后高亮自己消失", () => {
+    renderSshDialog();
+    selectSaved();
+    fireEvent.change(field("ssh-host"), { target: { value: "10.0.0.99" } });
+    expect(screen.getByTestId("saved-server-row").getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  it("选中一条不会自己去碰密钥库，密码框保持为空", () => {
+    renderSshDialog();
+    selectSaved();
+    expect(field("ssh-password").value).toBe("");
     expect(sshCredentialsGetSecret).not.toHaveBeenCalled();
   });
 
-  it("点眼睛才去密钥库取明文，再点收起就从界面消失", async () => {
+  it("点「显示已保存的密码」才取明文，再点即从界面消失", async () => {
     renderSshDialog();
-    openDetail();
-    await screen.findByTestId("saved-server-detail");
-
-    fireEvent.click(screen.getByLabelText("显示密码"));
-    // 等界面出现明文，而不是等"函数被调用"
-    await vi.waitFor(() =>
-      expect(
-        screen.getByTestId("saved-server-detail").textContent,
-      ).toContain("pw"),
-    );
+    selectSaved();
+    fireEvent.click(screen.getByLabelText("显示已保存的密码"));
+    // 等界面真的出现明文，而不是等"函数被调用过"
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe("pw"));
     expect(sshCredentialsGetSecret).toHaveBeenCalledWith("root@10.0.0.1:22");
 
-    fireEvent.click(screen.getByLabelText("隐藏密码"));
-    await vi.waitFor(() =>
-      expect(
-        screen.getByTestId("saved-server-detail").textContent,
-      ).not.toContain("pw"),
-    );
+    fireEvent.click(screen.getByLabelText("隐藏已保存的密码"));
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe(""));
   });
 
-  it("收起再展开，明文不许自己回来——必须重新点眼睛、重新取一次", async () => {
+  it("隐藏后再显示必须重新点、重新取一次——明文不许自己回来", async () => {
     renderSshDialog();
-    openDetail();
-    await screen.findByTestId("saved-server-detail");
-    fireEvent.click(screen.getByLabelText("显示密码"));
-    // 先证明明文真的上过屏，否则后面的"没回来"是假绿
-    await vi.waitFor(() =>
-      expect(
-        screen.getByTestId("saved-server-detail").textContent,
-      ).toContain("pw"),
-    );
+    selectSaved();
+    fireEvent.click(screen.getByLabelText("显示已保存的密码"));
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe("pw"));
     expect(sshCredentialsGetSecret).toHaveBeenCalledTimes(1);
 
-    openDetail(); // 收起
-    await vi.waitFor(() =>
-      expect(screen.queryByTestId("saved-server-detail")).toBeNull(),
-    );
-
-    openDetail(); // 再展开同一台
-    const detail = await screen.findByTestId("saved-server-detail");
-    expect(detail.textContent).not.toContain("pw");
-    // 取密钥这件事只能由"点眼睛"触发，展开本身不许顺手取
+    fireEvent.click(screen.getByLabelText("隐藏已保存的密码"));
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe(""));
+    // 取密钥这件事只能由"点眼睛"触发：隐藏本身不许留着缓存
     expect(sshCredentialsGetSecret).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByLabelText("显示已保存的密码"));
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe("pw"));
+    expect(sshCredentialsGetSecret).toHaveBeenCalledTimes(2);
   });
 
   it("删除要二次确认：第一下只出确认条，确认后才调 store", async () => {
     renderSshDialog();
     fireEvent.click(screen.getByLabelText(/删除 root@10\.0\.0\.1:22/));
     expect(sshState.deleteSavedConnection).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("删除本机保存的这条凭据");
+    expect(document.body.textContent).toContain("删除这条本机凭据");
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     await vi.waitFor(() =>
@@ -295,18 +291,5 @@ describe("SpaceCreateDialog — 已保存的服务器：详情 / 眼睛 / 删除
         "root@10.0.0.1:22",
       ),
     );
-  });
-
-  it("点整行仍然回填表单（两栏重排不许把旧行为弄丢）", () => {
-    renderSshDialog();
-    fireEvent.click(
-      screen.getByText("root@10.0.0.1:22").closest("button") as HTMLElement,
-    );
-    expect(
-      (document.getElementById("ssh-host") as HTMLInputElement).value,
-    ).toBe("10.0.0.1");
-    expect(
-      (document.getElementById("ssh-user") as HTMLInputElement).value,
-    ).toBe("root");
   });
 });

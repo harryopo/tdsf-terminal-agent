@@ -7,6 +7,9 @@
  *
  * 口径：可能原因按**可能性从高到低**排，中间人一定列在最后但不省略 —— 不列是失职，
  * 只列中间人会把用户吓得不敢连自己的实验虚机。
+ *
+ * 语域：安全提示是要人照着做的说明书，**用书面语**（用户 2026-09-23 明确指出第一版太口语）。
+ * 界面按纯文本渲染，所以说明里不写 markdown 反引号 —— 反引号会原样出现在屏幕上。
  */
 
 export interface HostKeySituation {
@@ -51,17 +54,21 @@ export function hostKeyVerifyCommand(keyType?: string): string {
 }
 
 const MISMATCH_CAUSES = [
-  "服务器重装了系统、恢复了快照，或重新生成过主机密钥（`ssh-keygen -A` / 首次启动 sshd）",
-  "同一个 IP 和端口现在指向了另一台机器 —— 虚机重建、DHCP 重新分配、端口转发改了目标都会这样",
-  "这台机器换过网卡或改过 hosts，本机 `known_hosts` 里留的是它早先的身份",
-  "网络路径上有设备替换了服务器身份（中间人）。在只属于你的实验网里概率很低，但公共网络上必须先带外核对指纹再信任",
+  "服务器重装过操作系统、回滚至较早的快照，或重新生成过主机密钥（例如执行 ssh-keygen -A，或 sshd 首次启动）。该成因最为常见。",
+  "当前 IP 地址与端口指向了另一台主机：虚拟机重建、DHCP 重新分配地址、端口转发的目标发生变更，均属此类。",
+  "该主机更换过网卡或调整过主机名解析，而本机 known_hosts 中保留的仍是其先前的记录。",
+  "网络路径上存在替换服务器身份的中转方（中间人攻击）。在仅供个人使用的隔离实验网络中概率较低；在公共网络环境下，务必先以带外方式核对指纹，再行信任。",
 ];
 
 const FIRST_CONNECT_CAUSES = [
-  "你第一次连接这个地址，本机还没有它的任何记录",
-  "服务器是新建 / 刚重装完的，主机密钥是全新的",
-  "这个 IP 之前分给了别的机器，现在换了一台",
+  "本机首次连接该地址，此前未保存过任何记录。",
+  "服务器为新部署或刚完成重装，其主机密钥为新生成。",
+  "该 IP 地址此前分配给其他主机，现已换用当前主机。",
 ];
+
+/** 两种情形共用：界面按纯文本渲染，说明里不得出现 markdown 反引号 */
+const VERIFY_NOTE =
+  "请在被连接的服务器上执行以下命令，将所得 SHA256 指纹与上方数值逐项比对；两者不一致时不应选择信任。";
 
 export function hostKeyGuidance(s: HostKeySituation): HostKeyGuidance {
   const verifyCommand = hostKeyVerifyCommand(s.keyType);
@@ -69,11 +76,12 @@ export function hostKeyGuidance(s: HostKeySituation): HostKeyGuidance {
     return {
       title: "主机密钥已变更",
       summary:
-        "这台主机本机记录的指纹，和它现在给出的不一致。继续之前请核对下面的指纹，" +
-        "确认是这台机器自己变了，而不是有人在中间。",
+        "本机此前已记录该主机的公钥指纹，而本次连接所收到的指纹与该记录不一致。" +
+        "该差异通常源于服务器端主机密钥的重新生成，亦不排除网络路径上存在身份替换。" +
+        "请在批准连接之前完成下方指纹核对，确认无误后再行信任。",
       causes: MISMATCH_CAUSES,
       verifyCommand,
-      verifyNote: "在服务器本机执行，比对 SHA256 指纹是否一致",
+      verifyNote: VERIFY_NOTE,
       approveLabel: "我已核对，信任并连接",
       rejectLabel: "拒绝",
       danger: true,
@@ -82,11 +90,12 @@ export function hostKeyGuidance(s: HostKeySituation): HostKeyGuidance {
   return {
     title: "首次连接该主机",
     summary:
-      "本机第一次连接这个地址，还没有可比对的记录。请核对指纹后再信任 —— " +
-      "这是 TOFU（第一次使用即信任）：现在记下来，以后一旦变化就会报警。",
+      "本机首次连接该地址，known_hosts 中尚无可供比对的记录，下方指纹由服务器在本次连接中直接提供。" +
+      "确认无误后，本机将保存该指纹；此后该指纹一旦变更即会触发警示。" +
+      "此即 TOFU（Trust On First Use，首次使用即信任）策略。",
     causes: FIRST_CONNECT_CAUSES,
     verifyCommand,
-    verifyNote: "在服务器本机执行，比对 SHA256 指纹是否一致",
+    verifyNote: VERIFY_NOTE,
     approveLabel: "信任并连接",
     rejectLabel: "取消",
     danger: false,

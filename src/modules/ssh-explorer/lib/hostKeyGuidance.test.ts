@@ -35,6 +35,34 @@ describe("hostKeyGuidance — 两种情形各说各话", () => {
   });
 });
 
+describe("hostKeyGuidance — 语域：书面语（用户 2026-09-23：第一版太口语）", () => {
+  it("说明文字不许出现口语措辞", () => {
+    for (const isMismatch of [true, false]) {
+      const g = hostKeyGuidance({ isMismatch, keyType: "ssh-ed25519" });
+      const prose = [g.summary, g.verifyNote, ...g.causes].join("\n");
+      // 语气词与口语动词：这些字在本模块的书面表述里根本没有合法用法
+      expect(prose).not.toMatch(/[吧呢啊哦嘛]/);
+      expect(prose).not.toMatch(/吓|搞|弄|有人在中间|自己变了/);
+    }
+  });
+
+  it("界面按纯文本渲染，反引号会原样上屏 —— 说明里一个都不许有", () => {
+    for (const isMismatch of [true, false]) {
+      const g = hostKeyGuidance({ isMismatch, keyType: "ssh-ed25519" });
+      expect([g.summary, g.verifyNote, ...g.causes].join("\n")).not.toContain(
+        "`",
+      );
+    }
+  });
+
+  it("密钥变更那句要说清「不一致」和「先核对再信任」，不能只喊危险", () => {
+    const g = hostKeyGuidance({ isMismatch: true });
+    expect(g.summary).toContain("不一致");
+    expect(g.summary).toContain("核对");
+    expect(g.verifyNote).toContain("不一致");
+  });
+});
+
 describe("hostKeyVerifyCommand — 文件名要跟着算法走", () => {
   it.each([
     ["ssh-ed25519", "ssh_host_ed25519_key.pub"],

@@ -163,7 +163,7 @@ export function HostApprovalDialog({
           </section>
 
           <section className="space-y-1.5">
-            <h3 className="text-[12px] font-medium">怎么核对</h3>
+            <h3 className="text-[12px] font-medium">核对方法</h3>
             <p className="text-[11px] text-muted-foreground">{g.verifyNote}</p>
             <div className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1.5">
               <code
