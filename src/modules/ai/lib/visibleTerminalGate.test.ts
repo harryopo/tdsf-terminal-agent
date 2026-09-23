@@ -54,9 +54,24 @@ describe("可见终端执行门禁：原因必须可分辨", () => {
     expect(mismatch?.message).toContain("标签页");
   });
 
-  it("当前没有可见终端会话（null）→ session_mismatch，不许当成匹配放行", () => {
-    expect(rejectForVisibleTerminal(gate({currentSessionId: null}))?.reason).toBe(
-      "session_mismatch",
+  it("真实现场：当前压根没有可见 SSH 终端（本地标签页在前／欢迎页）→ no_visible_terminal", () => {
+    // 上一轮我把这条写成 session_mismatch —— 那是把缺陷写进期望。
+    // 现场三件事是同时成立的：取不到可见会话号、没有 SSH leaf、终端没挂载，
+    // 而旧顺序先判会话号，于是"根本没终端"被告知"切回那台服务器的标签页"，
+    // 用户照着切却发现没有这个标签页（2026-09-23 真机 agent 回合复现）。
+    const r = rejectForVisibleTerminal(
+      gate({currentSessionId: null, leafId: null, terminalMounted: false}),
+    );
+    expect(r?.reason).toBe("no_visible_terminal");
+    expect(r?.message).toContain("终端");
+  });
+
+  it("只有会话号不同（那块终端确实存在，只是另一台机器）→ 才说 session_mismatch", () => {
+    const r = rejectForVisibleTerminal(gate({currentSessionId: 3}));
+    expect(r?.reason).toBe("session_mismatch");
+    // 两态不许塌成一态：同样"不执行"，但指点的动作不同。
+    expect(r?.reason).not.toBe(
+      rejectForVisibleTerminal(gate({currentSessionId: null, leafId: null}))?.reason,
     );
   });
 
