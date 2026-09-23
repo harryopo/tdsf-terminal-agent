@@ -276,8 +276,12 @@ class TestSshCommandTool(unittest.TestCase):
             },
         )
 
-    def test_nonzero_exit_is_error_not_completed_evidence(self):
-        """真实非零退出码不能被包装成 success 或 completed 证据。"""
+    def test_readonly_nonzero_exit_reports_code_not_failure(self):
+        """#113②（2026-09-23）改了口径：只读命令非 0 不再判 error，但退出码与 stderr 必须原样带回。
+
+        写操作非 0 仍算失败（见 test_exit_code_semantics.py），所以"不许把真失败包装成
+        success"这条原意仍在——只是不再由代码替模型判读只读诊断命令。
+        """
         bridge = make_mock_rust_bridge({
             "ok": True,
             "output": "cat: /missing: No such file or directory",
@@ -288,19 +292,20 @@ class TestSshCommandTool(unittest.TestCase):
         with patch("strands_backend.tools._track_evidence") as evidence:
             result = invoke_ssh_command_tool({"command": "cat /missing"}, ctx)
 
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(result["exit_code"], 1)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["exit_code"], 1)  # 码没被吞掉，模型据此判读
         self.assertIn("No such file", result["output"])
-        self.assertEqual(evidence.call_args.kwargs["status"], "error")
+        self.assertNotIn("error", result)
+        self.assertEqual(evidence.call_args.kwargs["status"], "completed")
 
-    def test_missing_exit_code_is_error_not_completed_evidence(self):
-        """没有退出码只能表示未知结果，不能伪装为成功。"""
+    def test_missing_exit_code_is_indeterminate_not_success(self):
+        """没有退出码只能表示未知结果，不能伪装为成功（#107/#113②：诚实标 indeterminate）。"""
         bridge = make_mock_rust_bridge({"ok": True, "output": "partial output"})
         ctx = make_ctx(rust_bridge=bridge)
         with patch("strands_backend.tools._track_evidence") as evidence:
             result = invoke_ssh_command_tool({"command": "echo partial"}, ctx)
 
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "indeterminate")
         self.assertEqual(result["reason"], "missing_or_invalid_exit_code")
         self.assertEqual(evidence.call_args.kwargs["status"], "error")
 

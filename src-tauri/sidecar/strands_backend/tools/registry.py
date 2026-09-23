@@ -51,11 +51,16 @@ class ToolPolicy:
             需走 needs_you 审批（对齐 T3 fail-closed 门禁的判定输入）。
         sanitize_output: 返回体含不可信文本，需经 redact_sensitive 脱敏
             （当前 execute_via_ssh 已统一脱敏，此标记供独立路径工具参考）。
+        via_ssh_executor: 该工具经 execute_via_ssh 落进终端，证据由那个外壳统一记账，
+            adapter 的 after-tool hook 据此免记。免记若按工具名单硬写就会漏——历史 bug
+            是只排除了 ssh_command，其余执行器工具在证据面板各留两条（2026-09-23 #113②）。
+            声明与实际调用的一致性由 tests/test_evidence_single_owner.py 静态校验。
     """
 
     readonly: bool = False
     needs_approval: bool = False
     sanitize_output: bool = False
+    via_ssh_executor: bool = False
 
 
 # ============================================================================
@@ -111,7 +116,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         name="ssh_command",
         factory="strands_backend.tools.ssh_command:make_ssh_command_tool",
         description="在远程 SSH 会话执行命令，返回 stdout/stderr/exit_code（高危命令触发审批）",
-        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
+        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.ssh_command:to_shell_command",
     ),
     "ask_user": ToolSpec(
@@ -145,21 +150,21 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         name="analyze_logs",
         factory="strands_backend.tools.log_analyzer:make_log_analyzer_tool",
         description="分析远程日志文件，提取错误/告警模式（只读）",
-        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.log_analyzer:to_shell_command",
     ),
     "inspect_processes": ToolSpec(
         name="inspect_processes",
         factory="strands_backend.tools.process_inspector:make_process_inspector_tool",
         description="检查远程进程/资源占用（只读）",
-        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.process_inspector:to_shell_command",
     ),
     "network_diagnose": ToolSpec(
         name="network_diagnose",
         factory="strands_backend.tools.network_diagnostic:make_network_diagnostic_tool",
         description="诊断远程网络连通性（ping/端口/DNS，只读）",
-        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.network_diagnostic:to_shell_command",
     ),
     "skill_invoke": ToolSpec(
@@ -196,32 +201,32 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         name="service_manage",
         factory="strands_backend.tools.ops_extended:make_service_manage_tool",
         description="管理 systemd 服务（start/stop/restart/enable/status，写操作需审批）",
-        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=False),
+        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=False, via_ssh_executor=True),
     ),
     "package_manage": ToolSpec(
         name="package_manage",
         factory="strands_backend.tools.ops_extended:make_package_manage_tool",
         description="管理软件包（yum/dnf install/remove 等，写操作需审批）",
-        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=False),
+        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=False, via_ssh_executor=True),
     ),
     "firewall_manage": ToolSpec(
         name="firewall_manage",
         factory="strands_backend.tools.ops_extended:make_firewall_manage_tool",
         description="管理 firewalld 防火墙规则（写操作需审批）",
-        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=False),
+        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=False, via_ssh_executor=True),
     ),
     "security_audit": ToolSpec(
         name="security_audit",
         factory="strands_backend.tools.ops_extended:make_security_audit_tool",
         description="安全基线审计（SELinux/登录/口令策略检查，只读）",
-        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.ops_extended:security_audit_to_shell_command",
     ),
     "performance_analyze": ToolSpec(
         name="performance_analyze",
         factory="strands_backend.tools.ops_extended:make_performance_analyze_tool",
         description="性能分析（CPU/内存/磁盘 IO 采样，只读）",
-        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.ops_extended:performance_analyze_to_shell_command",
     ),
     # --- 定制增强 6（2026-08-09 集成度补齐；原在 adapter 逐个 try 挂载，
@@ -246,7 +251,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         factory="strands_backend.tools.config_diff:make_config_diff_tool",
         description="对比两个远程配置文件的差异（diff -u，只读）",
         # 配置文件差异可能含密码 → sanitize_output=True
-        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
+        policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True, via_ssh_executor=True),
         to_shell_command="strands_backend.tools.config_diff:to_shell_command",
     ),
     "backup_restore": ToolSpec(
@@ -255,7 +260,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         description="备份或恢复远程配置文件（cp；restore 为写操作）",
         # restore 是远端 cp 写操作 → needs_approval；L1 下被裁剪（原行为直挂，
         # 收编后统一受 L1 readonly 过滤——schema-level safety 补口）
-        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
+        policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True, via_ssh_executor=True),
     ),
     "assess_confidence": ToolSpec(
         name="assess_confidence",
