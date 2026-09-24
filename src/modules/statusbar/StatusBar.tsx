@@ -62,12 +62,18 @@ export function StatusBar({
       className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-border/60 bg-card/60 pl-3 pr-4 text-[11px]"
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <WorkspaceEnvSelector
-          onSelect={onWorkspaceChange}
-          onSelectSsh={onWorkspaceSshClick}
-          switching={workspaceSwitching}
-          terminalAddress={terminalAddress}
-        />
+        {/* #127（2026-09-24 真机）：这一格**属于工作区**（它同时是"切换工作区环境"的
+            下拉入口），停在欢迎页时没有作用对象，而地址来自后台那条已连的 SSH ——
+            于是同一栏左边写 root@host、右边写「未选择工作区」。没有活跃工作区就整格
+            不渲染，而不是只抹掉地址留一个 "Windows"（那仍是在宣称一个不存在的环境）。 */}
+        {hasWorkspace ? (
+          <WorkspaceEnvSelector
+            onSelect={onWorkspaceChange}
+            onSelectSsh={onWorkspaceSshClick}
+            switching={workspaceSwitching}
+            terminalAddress={terminalAddress}
+          />
+        ) : null}
         <RemoteOsBadge info={remoteOsInfo} />
         {hasWorkspace ? (
           <CwdBreadcrumb

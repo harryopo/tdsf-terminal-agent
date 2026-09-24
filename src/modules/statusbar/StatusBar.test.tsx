@@ -23,6 +23,7 @@ function renderBar(props: {
   cwd: string | null;
   hasWorkspace: boolean;
   filePath?: string | null;
+  terminalAddress?: string | null;
 }) {
   return render(
     <TooltipProvider>
@@ -64,5 +65,35 @@ describe("StatusBar — 工作区上下文", () => {
   it("基线：同一个家目录 cwd，有工作区时确实渲染成 Home", () => {
     renderBar({ cwd: base.home, hasWorkspace: true });
     expect(screen.getByText("Home")).toBeTruthy();
+  });
+});
+
+/**
+ * #127（2026-09-24 真机抓到）：欢迎页挂着的同时，状态栏左边那格写着
+ * `root@192.168.45.128`，右边一格写着「未选择工作区」—— 同一栏自己打自己。
+ * 那格还是「切换工作区环境」的下拉入口，没有工作区时点它没有作用对象。
+ * 所以口径是：**这一格属于工作区，没有活跃工作区就整格不渲染**，
+ * 而不是只把地址抹掉留一个 "Windows"（那仍是在宣称一个不存在的工作区环境）。
+ */
+describe("StatusBar — #127 未选工作区时不挂环境格", () => {
+  it("已连着 SSH 但没有活跃工作区：地址不出现，环境格整体不渲染", () => {
+    renderBar({
+      cwd: base.home,
+      hasWorkspace: false,
+      terminalAddress: "root@10.0.0.5",
+    });
+    expect(screen.queryByText("root@10.0.0.5")).toBeNull();
+    // 那一格的 tooltip 口径是"当前终端命令执行于 …"，没有工作区时不许出现
+    expect(
+      document.querySelector('[title*="当前终端命令执行于"]'),
+    ).toBeNull();
+    expect(screen.getByTestId("statusbar-no-workspace")).toBeTruthy();
+  });
+
+  /** 正向配对：证明上一条消失的是**闸**而不是地址本身（否则判据会因为
+   *  "地址压根没渲染出来"而假绿 —— 本仓踩过多次的那类假绿）。 */
+  it("基线：同一个地址，有活跃工作区时确实渲染出来", () => {
+    renderBar({ cwd: "/root", hasWorkspace: true, terminalAddress: "root@10.0.0.5" });
+    expect(screen.getByText("root@10.0.0.5")).toBeTruthy();
   });
 });
