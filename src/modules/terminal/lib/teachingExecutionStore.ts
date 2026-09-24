@@ -64,11 +64,24 @@ export function matchesTerminalCommand(
 }
 
 /**
- * Visible Agent execution has one additional, narrow correlation case. Bash's
- * DEBUG hook reports the first simple command in a compound input (`a; b`),
- * while its prompt hook reports the exit status for the complete input. Only
- * accept that prefix when the terminal itself marked it as Agent input.
- * Teaching execution intentionally stays exact-match only.
+ * Visible Agent execution has two additional, narrow correlation cases beyond
+ * exact text equality. Both keep the same trust preconditions as each other:
+ * same leaf, a block that started after the request, and a block the terminal
+ * itself attributed to Agent input (`author === "agent"`).
+ *
+ * 1. Compound input. Bash's DEBUG hook reports the first simple command of
+ *    `a; b` while its prompt hook reports the exit status of the whole line, so
+ *    accept an agent-marked prefix as long as what follows it is a separator.
+ * 2. Alias expansion (#129). `$BASH_COMMAND` is reported **after** alias
+ *    expansion, while the injector only knows the line it typed. RHEL's default
+ *    root profile ships `alias grep='grep --color=auto'` (same shape for
+ *    ls/rm/cp/mv/less), so exact equality can never hold and the request used to
+ *    sit until the timeout (`inject_to_settle_ms=30012` measured on a real
+ *    server) and come back as a failure. Accept only the one shape a self
+ *    referencing alias produces: same argv[0], extra tokens inserted right after
+ *    it, and the caller's remaining arguments verbatim at the tail. Aliases that
+ *    rename the command (`ll` → `ls -l`) are deliberately **not** matched —
+ *    refusing to settle is safer than attributing the wrong block.
  */
 export function matchesVisibleTerminalCommand(
   request: Pick<TeachingExecution, "leafId" | "command" | "requestedAt">,
@@ -84,9 +97,23 @@ export function matchesVisibleTerminalCommand(
   }
   const requested = normalizeTeachingCommand(request.command);
   const reported = normalizeTeachingCommand(block.command);
-  if (!reported || !requested.startsWith(reported)) return false;
-  const suffix = requested.slice(reported.length).trimStart();
-  return /^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix);
+  if (!reported) return false;
+  if (requested.startsWith(reported)) {
+    const suffix = requested.slice(reported.length).trimStart();
+    return /^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix);
+  }
+  return isSelfAliasExpansion(requested, reported);
+}
+
+/** See rule 2 of {@link matchesVisibleTerminalCommand}. */
+function isSelfAliasExpansion(requested: string, reported: string): boolean {
+  const req = requested.split(/\s+/).filter(Boolean);
+  const rep = reported.split(/\s+/).filter(Boolean);
+  const tail = req.slice(1);
+  if (rep.length <= req.length || rep[0] !== req[0]) return false;
+  const inserted = rep.slice(1, rep.length - tail.length);
+  if (inserted.some((token) => /[;|&<>]/.test(token))) return false;
+  return rep.slice(rep.length - tail.length).join(" ") === tail.join(" ");
 }
 
 /**
