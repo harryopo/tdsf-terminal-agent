@@ -82,6 +82,18 @@ export function matchesTerminalCommand(
  *    it, and the caller's remaining arguments verbatim at the tail. Aliases that
  *    rename the command (`ll` → `ls -l`) are deliberately **not** matched —
  *    refusing to settle is safer than attributing the wrong block.
+ * 3. Pipeline + alias + re-spaced redirection (#131). The two rules above are
+ *    mutually exclusive, and a real server hits both at once. Measured on a live
+ *    Rocky 8 session: 4 of 22 tool calls came back `indeterminate`, every single
+ *    one of them a pipeline. Two separate rewrites were involved —
+ *      - `$BASH_COMMAND` carries only the **first segment** of a pipeline, so
+ *        the reported text is *shorter* than the request and rule 2 rejected it;
+ *      - bash **inserts a space after a redirection operator** while expanding
+ *        the line (`2>/dev/null` is reported as `2> /dev/null`), which broke
+ *        rule 1's literal prefix test on a single character.
+ *    `matchesFirstSegment` compares canonical token sequences of the first
+ *    segment instead of raw strings, so spacing drift and alias insertion stop
+ *    being mutually exclusive.
  */
 export function matchesVisibleTerminalCommand(
   request: Pick<TeachingExecution, "leafId" | "command" | "requestedAt">,
@@ -103,9 +115,75 @@ export function matchesVisibleTerminalCommand(
     // at a fixed length, so only accept a prefix that stops exactly there.
     if (reported.length === REPORTED_COMMAND_CAP_CHARS) return true;
     const suffix = requested.slice(reported.length).trimStart();
-    return /^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix);
+    if (/^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix)) return true;
   }
-  return isSelfAliasExpansion(requested, reported);
+  return (
+    isSelfAliasExpansion(requested, reported) ||
+    matchesFirstSegment(requested, reported)
+  );
+}
+
+/** bash rewrites `2>/dev/null` as `2> /dev/null` in `$BASH_COMMAND`; removing the
+ *  space on both sides is what makes the two comparable. */
+function canonicalizeShellSpacing(command: string): string {
+  return command.replace(/(\d*&?[<>]{1,2})\s+/g, "$1");
+}
+
+function shellTokens(command: string): string[] {
+  return canonicalizeShellSpacing(command).split(/\s+/).filter(Boolean);
+}
+
+const PIPE_OR_LIST = new Set(["|", "||", "&&", ";", "&"]);
+const REDIRECT_TOKEN = /^\d*&?[<>]{1,2}\S*$/;
+
+/** The DEBUG trap fires per simple command, so a block only ever carries this. */
+function firstSegmentTokens(tokens: string[]): string[] {
+  const at = tokens.findIndex((t) => PIPE_OR_LIST.has(t));
+  return at === -1 ? tokens : tokens.slice(0, at);
+}
+
+function sameTokens(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((t, i) => t === b[i]);
+}
+
+/**
+ * #131. Reported text equals the request's first segment, allowing the two
+ * rewrites bash performs on it: re-spaced redirection (handled by
+ * `canonicalizeShellSpacing`) and trailing redirections the DEBUG hook drops
+ * altogether (`ls -la /tmp 2>&1` reports as `ls -la /tmp`). Alias expansion is
+ * then re-checked **against the segment**, which is what lets `grep` inside a
+ * pipeline correlate at all.
+ */
+function matchesFirstSegment(requested: string, reported: string): boolean {
+  const seg = firstSegmentTokens(shellTokens(requested));
+  const rep = shellTokens(reported);
+  if (seg.length === 0 || rep.length === 0) return false;
+  if (sameTokens(rep, seg)) return true;
+  if (
+    rep.length < seg.length &&
+    rep.every((t, i) => t === seg[i]) &&
+    seg.slice(rep.length).every((t) => REDIRECT_TOKEN.test(t))
+  ) {
+    return true;
+  }
+  return isSelfAliasExpansionTokens(seg, rep);
+}
+
+/** See rule 2 of {@link matchesVisibleTerminalCommand}. */
+function isSelfAliasExpansion(requested: string, reported: string): boolean {
+  return isSelfAliasExpansionTokens(shellTokens(requested), shellTokens(reported));
+}
+
+/**
+ * The one shape a self-referencing alias produces: same argv[0], extra tokens
+ * inserted directly after it, caller's remaining arguments verbatim at the tail.
+ */
+function isSelfAliasExpansionTokens(req: string[], rep: string[]): boolean {
+  const tail = req.slice(1);
+  if (rep.length <= req.length || rep[0] !== req[0]) return false;
+  const inserted = rep.slice(1, rep.length - tail.length);
+  if (inserted.some((token) => /[;|&<>]/.test(token))) return false;
+  return sameTokens(rep.slice(rep.length - tail.length), tail);
 }
 
 /**
@@ -117,17 +195,6 @@ export function matchesVisibleTerminalCommand(
  * languages and nothing else would notice them drifting apart.
  */
 export const REPORTED_COMMAND_CAP_CHARS = 256;
-
-/** See rule 2 of {@link matchesVisibleTerminalCommand}. */
-function isSelfAliasExpansion(requested: string, reported: string): boolean {
-  const req = requested.split(/\s+/).filter(Boolean);
-  const rep = reported.split(/\s+/).filter(Boolean);
-  const tail = req.slice(1);
-  if (rep.length <= req.length || rep[0] !== req[0]) return false;
-  const inserted = rep.slice(1, rep.length - tail.length);
-  if (inserted.some((token) => /[;|&<>]/.test(token))) return false;
-  return rep.slice(rep.length - tail.length).join(" ") === tail.join(" ");
-}
 
 /**
  * 教学命令通常精确匹配；Bash 对 `a; b`、管道等复合命令只会上报首段时，

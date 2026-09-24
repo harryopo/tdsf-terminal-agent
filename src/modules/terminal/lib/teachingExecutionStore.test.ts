@@ -395,3 +395,120 @@ describe("#130 本地发报截断到 256 字符的命令仍要能关联", () => 
     }
   });
 });
+
+// ============================================================================
+// #131 真机读数（会话 s-mufglk4r-fju5co，22 次工具调用里 4 次 indeterminate，
+// 全部是管道/复合命令）。四条 requested / reported 都是从页面里的
+// terminalBlocksStore 直接 dump 出来的原文，不是构造的：
+//   ① grep -En '...' '/var/log/messages' | tail -n 60
+//      → grep --color=auto -En '...' '/var/log/messages'        （别名 + 只报首段）
+//   ② journalctl ... -o short 2>/dev/null | sed -E '...' | sort | ...
+//      → journalctl ... -o short 2> /dev/null                   （bash 把 `2>` 后重排空格）
+//   ③ journalctl ... 2>/dev/null | grep -v 'sshd' | tail -n 20; echo ...
+//      → journalctl ... 2> /dev/null
+//   ④ grep -E '...' /etc/ssh/sshd_config 2>/dev/null | grep -v '^#'
+//      → grep --color=auto -E '...' /etc/ssh/sshd_config 2> /dev/null （两个毛病同时）
+// 旧判据为什么挡不住：前缀通道要求"逐字 startsWith"，被 ② 的空格重排打断；
+// 别名通道要求"报告比请求长"，而管道让报告反而更短 ⇒ 两条通道互斥，
+// 管道里再叠别名就必然配不上。
+// ============================================================================
+describe("#131 管道 + 别名 + 重排空格：三条毛病叠在一起也要能关联", () => {
+  const agent = (command: string) =>
+    block({ sessionId: 4, command, author: "agent", startedAt: 10_001 });
+
+  it("① 别名展开 + 只上报管道首段", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        {
+          leafId: 4,
+          command:
+            "grep -En 'error|Error|ERROR|fail|Fail|FAIL|denied|OOM|segfault|corrupt' '/var/log/messages' | tail -n 60",
+          requestedAt: 10_000,
+        },
+        agent(
+          "grep --color=auto -En 'error|Error|ERROR|fail|Fail|FAIL|denied|OOM|segfault|corrupt' '/var/log/messages'",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("② bash 把 `2>/dev/null` 重排成 `2> /dev/null`（没有别名，只有空格）", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        {
+          leafId: 4,
+          command:
+            "journalctl -b -p err --no-pager -o short 2>/dev/null | sed -E 's/^[^ ]+ [^ ]+ [^ ]+ ([^:]+): .*/\\1/' | sort | uniq -c | sort -rn | head -20",
+          requestedAt: 10_000,
+        },
+        agent("journalctl -b -p err --no-pager -o short 2> /dev/null"),
+      ),
+    ).toBe(true);
+  });
+
+  it("③ 首段之后还有管道和分号，也只认首段", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        {
+          leafId: 4,
+          command:
+            "journalctl -b -p err --no-pager 2>/dev/null | grep -v 'sshd' | tail -n 20; echo '---NON-SSHD-COUNT---'; journalctl -b -p err --no-pager 2>/dev/null | grep -vc 'sshd'",
+          requestedAt: 10_000,
+        },
+        agent("journalctl -b -p err --no-pager 2> /dev/null"),
+      ),
+    ).toBe(true);
+  });
+
+  it("④ 别名 + 重排空格 + 管道，三个毛病同时出现", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        {
+          leafId: 4,
+          command:
+            "grep -E 'PermitRootLogin|PasswordAuthentication|Port ' /etc/ssh/sshd_config 2>/dev/null | grep -v '^#'",
+          requestedAt: 10_000,
+        },
+        agent(
+          "grep --color=auto -E 'PermitRootLogin|PasswordAuthentication|Port ' /etc/ssh/sshd_config 2> /dev/null",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("负向：首段边界不是控制符（报告只是请求的前几个词）不许认", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "systemctl restart nginx --now", requestedAt: 10_000 },
+        agent("systemctl restart"),
+      ),
+    ).toBe(false);
+  });
+
+  it("负向：报告比请求多出一段管道（不是「只报首段」的形状）不许认", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "df -h", requestedAt: 10_000 },
+        agent("df -h | wc -l"),
+      ),
+    ).toBe(false);
+  });
+
+  it("负向：别名插入段里夹了命令分隔符（伪造展开）不许认", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "echo hi | wc -c", requestedAt: 10_000 },
+        agent("echo ; rm -rf / hi"),
+      ),
+    ).toBe(false);
+  });
+
+  it("负向：换一个 argv[0] 就不许把别人的块认过来", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "ls -l /tmp | head", requestedAt: 10_000 },
+        agent("cat /etc/passwd"),
+      ),
+    ).toBe(false);
+  });
+});
