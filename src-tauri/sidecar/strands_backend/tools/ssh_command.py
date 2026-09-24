@@ -240,7 +240,11 @@ def make_ssh_command_tool(ctx: ToolContext):
         Args:
             command (str): 待执行的 shell 命令，单行，无尾随换行。
             ssh_session_id (str): SSH 会话 ID，空则用上下文默认会话。
-            explanation (str): 命令解释，前端审批卡第 3 层展示用（可选）。
+            explanation (str): 一句话说明这次调用要查什么/做什么，中文，
+                10 个字以内，动词开头，例如「查看 IP」「确认 nginx 在跑」
+                「数一下失败服务」。聊天里工具卡折叠时标题显示的就是这句
+                （命令原文收在展开区），所以每次调用都要写；写成整句解释
+                或照抄命令都不合格。
             timeout (int): 超时秒数，默认 30。
 
         Returns:

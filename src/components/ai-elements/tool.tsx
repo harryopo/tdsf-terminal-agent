@@ -474,9 +474,12 @@ function deriveSummary(toolName: string, input: unknown): string | null {
       return str("path");
     case "bash_run":
     case "bash_background":
-    case "ssh_command":
     case "teach_command":
       return str("command");
+    case "ssh_command":
+      // 用户 2026-09-24：折叠那一行要说「这次调用是干什么用的」，命令原文留给展开区。
+      // explanation 是 ssh_command 已有的入参（模型填），缺省才回落到命令 —— 不留空行。
+      return str("explanation") ?? str("semantic") ?? str("command");
     case "bash_logs":
     case "bash_kill":
       return str("id");
