@@ -34,6 +34,10 @@ import {
   type AgentMode,
 } from "../agents/registry";
 import { useChatStore } from "../store/chatStore";
+import {
+  isAwaitingUser,
+  useNeedsYouWait,
+} from "../store/needsYouWaitStore";
 
 /** 模式 → 图标（观察=眼 / 确认=盾 / 自动=闪电 / 教学=书，与切换器一致） */
 const MODE_ICON: Record<AgentMode, typeof EyeIcon> = {
@@ -62,7 +66,13 @@ export function AgentStatusPill({
   const teach = useChatStore((s) => s.teach);
   const status = useChatStore((s) => s.agentMeta.status);
   const loopProgress = useChatStore((s) => s.agentMeta.loopProgress);
-  const isBusy = status === "thinking" || status === "streaming";
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  // #133 整轮停在"等你回答"上时，Python 的 mood 仍是 working ⇒ status 看着像忙。
+  // 顶栏不许跟着宣称"我在跑"：脉冲停掉、圆点转琥珀、循环进度那格改成等待提示。
+  const awaitingUser = useNeedsYouWait((s) =>
+    isAwaitingUser(s, activeSessionId),
+  );
+  const isBusy = !awaitingUser && (status === "thinking" || status === "streaming");
   // T2 循环护栏: invoke 期间显示"第 N 轮 · 已用工具 M"（sidecar:loop_progress
   // 事件推流；新一轮 thinking / 终态时由 chatRuntime 清空）
   const showLoopProgress = isBusy && loopProgress !== null;
@@ -85,7 +95,7 @@ export function AgentStatusPill({
       )}
       title={`信任模式：${meta.badge} — ${meta.desc}${teach ? "（教学皮肤已开启）" : ""}`}
     >
-      {/* 状态圆点：busy 时 emerald pulse, 空闲时 muted 灰 */}
+      {/* 状态圆点：busy 时 emerald pulse，等待用户时转琥珀常亮，空闲时 muted 灰 */}
       <span className="relative flex size-1.5 items-center justify-center">
         <span
           className={cn(
@@ -96,7 +106,11 @@ export function AgentStatusPill({
         <span
           className={cn(
             "relative inline-flex size-1.5 rounded-full",
-            isBusy ? "bg-emerald-500" : "bg-muted-foreground/60",
+            awaitingUser
+              ? "bg-amber-500"
+              : isBusy
+                ? "bg-emerald-500"
+                : "bg-muted-foreground/60",
           )}
         />
       </span>
@@ -114,18 +128,30 @@ export function AgentStatusPill({
       >
         {meta.badge}
       </span>
-      {/* T2 循环护栏: invoke 期间循环进度（第 N 轮 · 已用工具 M） */}
-      {showLoopProgress && loopProgress && (
+      {/* #133 等待优先：整轮停在用户身上时，"第 N 轮 · 工具 M"那个会动的计数器
+          就是假的忙相。替换而非追加——顶栏宽度是量过的（#103/#99），新串更短。 */}
+      {awaitingUser ? (
         <span
-          data-testid="agent-loop-progress"
-          className="hidden shrink-0 items-center gap-0.5 font-mono text-[9.5px] tabular-nums text-muted-foreground/70 md:flex"
-          title={`循环进度：第 ${loopProgress.round} 轮推理 · 已用工具 ${loopProgress.toolCount} 次（单任务上限 50）`}
+          data-testid="agent-awaiting-user"
+          className="hidden shrink-0 font-mono text-[9.5px] text-amber-600 dark:text-amber-400 md:inline"
+          title="AI 已停下，等你在审批卡或提问卡上回答"
         >
-          <span>·</span>
-          <span>
-            第 {loopProgress.round} 轮 · 工具 {loopProgress.toolCount}
-          </span>
+          · 等你确认
         </span>
+      ) : (
+        showLoopProgress &&
+        loopProgress && (
+          <span
+            data-testid="agent-loop-progress"
+            className="hidden shrink-0 items-center gap-0.5 font-mono text-[9.5px] tabular-nums text-muted-foreground/70 md:flex"
+            title={`循环进度：第 ${loopProgress.round} 轮推理 · 已用工具 ${loopProgress.toolCount} 次（单任务上限 50）`}
+          >
+            <span>·</span>
+            <span>
+              第 {loopProgress.round} 轮 · 工具 {loopProgress.toolCount}
+            </span>
+          </span>
+        )
       )}
       {teach && agentMode !== "teach" && (
         <span className="flex items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-violet-600 dark:text-violet-400">
