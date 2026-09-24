@@ -193,10 +193,15 @@
 :root {
   --app-zoom: 1;
   --editor-font-size: 13px;
+  /* 窗口自绘圆角。用户 2026-09-24：「圆角再圆一点点，参考 ai 对话面板」——
+   * AI 小窗用的是 rounded-2xl（16px），所以窗口对齐到同一个值。
+   * 前提是窗口真的透明（tauri.{windows,linux}.conf.json 的 transparent: true），
+   * 否则这道弧只是画在不透明方窗上的装饰（见 src/lib/tauri-window-config.test.ts）。 */
+  --window-radius: 16px;
 }
 
 html[data-chrome="borderless"] .tdsf-bg-surface {
-  border-radius: 12px;
+  border-radius: var(--window-radius);
 }
 .zoom-content {
   zoom: var(--app-zoom);
@@ -219,7 +224,7 @@ html[data-chrome="borderless"] #root,
 html[data-chrome="borderless"] #settings-root {
   min-height: 100%;
   height: 100%;
-  border-radius: 12px;
+  border-radius: var(--window-radius);
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--background);

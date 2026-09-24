@@ -205,3 +205,38 @@ describe("TodoStrip — 折叠展开 + 状态标记不套娃", () => {
     expect(pending?.querySelector("svg")).toBeNull();
   });
 });
+
+// ============================================================================
+// 用户 2026-09-24 看图提的两处排版缺陷（图5）：
+//   ①「todo 代办进行时的待完成圆圈不在卡片中间」—— 标记原来钉在 `top-1.5`，
+//      所以两行的卡片（进行中带 description）里它贴在顶上；
+//   ②「下滑栏和已完成文字重叠，应当有一些间距」—— ScrollArea 的滚动条是
+//      绝对定位盖在内容上的（w-2.5），列表没有右内边距就会被它压住。
+// happy-dom 不做布局，所以这里钉的是**结构事实**（类名），不是像素；
+// 像素级由 pnpm probe:ui 负责。装回旧写法这两条都会红。
+// ============================================================================
+describe("TodoStrip — 标记垂直居中 + 列表给滚动条留位", () => {
+  it("状态标记垂直居中于整行（两行的卡片里也居中），不再钉在行首", () => {
+    setTodos([
+      { id: "a", title: "正在跑的步骤", status: "in_progress", description: "两行卡片" },
+    ]);
+    const { container } = render(<TodoStrip sessionId={SESSION} />);
+    const marker = container.querySelector('[aria-label="进行中"]');
+    expect(marker).not.toBeNull();
+    const cls = String(marker?.className);
+    expect(cls).toContain("top-1/2");
+    expect(cls).toContain("-translate-y-1/2");
+    expect(cls).not.toContain("top-1.5");
+  });
+
+  it("列表右侧留出滚动条的位子，状态文字不被压住", () => {
+    setTodos([
+      { id: "a", title: "完成的", status: "completed", completedAt: "2026-09-24T10:00:00" },
+    ]);
+    const { container } = render(<TodoStrip sessionId={SESSION} />);
+    expandList();
+    const ul = container.querySelector("ul");
+    expect(ul).not.toBeNull();
+    expect(String(ul?.className)).toMatch(/\bpr-\d/);
+  });
+});

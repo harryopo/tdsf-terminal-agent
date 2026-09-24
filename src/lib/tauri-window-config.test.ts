@@ -105,8 +105,11 @@ describe("Tauri 窗口配置 —— 平台覆盖不得丢字段、自绘圆角�
     const css = readFileSync(join(process.cwd(), "src/styles/globals.css"), "utf-8");
     expect(css).toContain('html[data-chrome="borderless"]');
     expect(css).toMatch(/html\[data-chrome="borderless"\][^{]*\{[^}]*background:\s*transparent/);
+    // 半径走 --window-radius（用户 2026-09-24 要求对齐 AI 对话面板的 rounded-2xl），
+    // 所以字面值和变量都认 —— 但变量必须真的定义过，删掉定义同样会红。
+    expect(css).toMatch(/--window-radius:\s*\d+px/);
     expect(css).toMatch(
-      /html\[data-chrome="borderless"\][^{]*#root[^{]*\{[^}]*border-radius:\s*\d+px/,
+      /html\[data-chrome="borderless"\][^{]*#root[^{]*\{[^}]*border-radius:\s*(?:var\(--window-radius\)|\d+px)/,
     );
   });
 });
