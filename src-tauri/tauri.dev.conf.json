@@ -18,7 +18,7 @@
         "devtools": true,
         "decorations": false,
         "transparent": true,
-        "additionalBrowserArgs": "--disable-gpu --remote-debugging-port=9222 --remote-allow-origins=*"
+        "additionalBrowserArgs": "--disable-gpu --remote-debugging-port=9315 --remote-allow-origins=*"
       }
     ]
   }
