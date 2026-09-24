@@ -43,6 +43,14 @@ function mainWindow(config: ReturnType<typeof readJson>): WindowConf {
   return win;
 }
 
+// `titleBarStyle` / `hiddenTitle` 只在 macOS 生效（tauri-runtime-wry 的 `with_config`
+// 把这两个键整段包在 `#[cfg(target_os = "macos")]` 里），所以不参与 Windows 侧的
+// dev/发布一致性判断 —— 否则就得为了过测试往 Windows 配置里塞两个不起作用的键。
+const MAC_ONLY = new Set(["titleBarStyle", "hiddenTitle"]);
+function stripMacOnly(o: WindowConf): WindowConf {
+  return Object.fromEntries(Object.entries(o).filter(([k]) => !MAC_ONLY.has(k)));
+}
+
 describe("dev / release app isolation", () => {
   it("dev uses a different identifier so stores and the WebView2 UDF are separate", () => {
     expect(readJson(RELEASE).identifier).toBe("com.tdsf.terminal-agent");
@@ -58,16 +66,33 @@ describe("dev / release app isolation", () => {
   it("dev window = release window as merged on Windows + CDP probe port", () => {
     const base = mainWindow(readJson(RELEASE));
     const windowsPlatform = mainWindow(readJson("src-tauri/tauri.windows.conf.json"));
-    const expected = { ...base, ...windowsPlatform };
-    const dev = { ...mainWindow(readJson(DEV)) };
+
+    // 合并语义是 RFC 7386（json_patch::merge），**数组整体替换**：发布版 Windows 的
+    // 主窗配置就是平台文件里那一个对象本身，base 的字段只有被重抄进来才生效。
+    // 这一条以前写成 `{ ...base, ...windowsPlatform }`（浅合并），于是"平台文件只抄了
+    // label + decorations"没人看得见 —— 而实际后果是发布版把尺寸、标题和
+    // --disable-gpu 全丢了（2026-09-24 实测：target/release/*.exe 里搜不到 disable-gpu，
+    // target/debug 里有）。
+    const dropped = Object.keys(stripMacOnly(base)).filter(
+      (k) => !(k in windowsPlatform),
+    );
+    // 唯一的合法例外：开 transparent 的窗口必须同时不刷 backgroundColor
+    // （tao 的 WM_ERASEBKGND 与 draw_surface 都只取 RGB、忽略 alpha，留着它 = 四个角
+    // 被刷成不透明色 = 用户说的"假圆角"）。
+    expect(
+      dropped.filter((k) => !(k === "backgroundColor" && windowsPlatform.transparent === true)),
+      `平台文件丢掉了 base 的字段：${dropped.join(", ")}`,
+    ).toEqual([]);
+
+    const expected = stripMacOnly({ ...windowsPlatform });
+    const dev = stripMacOnly({ ...mainWindow(readJson(DEV)) });
 
     const baseArgs = String(expected.additionalBrowserArgs ?? "");
     delete expected.additionalBrowserArgs;
     const devArgs = String(dev.additionalBrowserArgs ?? "");
     delete dev.additionalBrowserArgs;
 
-    // `--config` 走 JSON Merge Patch，数组是整体替换而非逐项合并：dev 的窗口对象
-    // 必须逐字段跟住基础配置，否则改一处忘一处会让 dev 与发布版长得不一样。
+    // dev 的窗口对象必须逐字段跟住发布版，否则改一处忘一处会让两边长得不一样。
     expect(dev).toEqual(expected);
     expect(devArgs).toContain(baseArgs);
     for (const flag of DEBUG_ARGS) expect(devArgs).toContain(flag);

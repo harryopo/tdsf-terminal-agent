@@ -4,7 +4,18 @@
     "windows": [
       {
         "label": "main",
-        "decorations": false
+        "title": "TDSF Terminal Agent",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 420,
+        "minHeight": 280,
+        "visible": true,
+        "center": true,
+        "dragDropEnabled": true,
+        "devtools": true,
+        "decorations": false,
+        "transparent": true,
+        "additionalBrowserArgs": "--disable-gpu"
       }
     ]
   }
