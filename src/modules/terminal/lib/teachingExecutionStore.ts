@@ -109,7 +109,15 @@ export function matchesVisibleTerminalCommand(
   }
   const requested = normalizeTeachingCommand(request.command);
   const reported = normalizeTeachingCommand(block.command);
-  if (!reported) return false;
+  if (!reported) {
+    // #141：本地 bash 的 PS0 只发一个**不带命令文本**的 `133;C`（zsh / fish /
+    // PowerShell 都带文本），所以这里拿到的块文本恒为空串——按文本相等永远配不上。
+    // 教学单步有本地回落（useAiLiveBridge 取 `sshLeafId ?? tab.activeLeafId`），
+    // 于是学生在本地 bash / WSL 里点「执行这一步」只能等到卡片过期。
+    // 三条信任前提在上面已经判完（同一块终端、晚于本次请求、终端自己把这块归给
+    // agent 输入），这里放弃的只是"文本相等"一项，且仅在对方根本没有文本时。
+    return true;
+  }
   if (requested.startsWith(reported)) {
     // Truncation is not a compound boundary: the emitters cut the reported text
     // at a fixed length, so only accept a prefix that stops exactly there.
