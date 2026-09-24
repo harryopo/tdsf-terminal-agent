@@ -212,3 +212,119 @@ describe("teaching execution ↔ terminal block", () => {
     );
   });
 });
+
+// ============================================================================
+// #129（2026-09-24 真机实测）：Bash 的 DEBUG 钩子报的是**别名展开之后**的命令行
+// ----------------------------------------------------------------------------
+// 现场读数（`grep '[vt-probe]' src-tauri/.tdsf-data/rust.log` + 页面里真实 block）：
+//   uptime → inject_to_settle 7ms、success
+//   grep -c tdsf-no-such-token-evidence /etc/hostname → inject_to_settle 30012ms、
+//     timed_out / visible_terminal_timeout，而 terminalBlocksStore 里躺着
+//     block.command = "grep --color=auto -c tdsf-no-such-token-evidence /etc/hostname"
+// RHEL 系默认 `alias grep='grep --color=auto'`（ls/rm/cp/mv/less 同形状），所以
+// 「注入方知道自己打的原文、块里只有展开后的文本」⇒ 精确等值永远配不上。
+// 下面这些字符串**全部是真机取到的**，不是编的判据。
+// ============================================================================
+describe("#129 别名展开后的命令仍要能关联上", () => {
+  const REQUEST = "grep -c tdsf-no-such-token-evidence /etc/hostname";
+
+  it("argv[0] 之后插入了别名展开的参数：同一 leaf、agent 标记、时序在后 ⇒ 关联上", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: REQUEST, requestedAt: 10_000 },
+        block({
+          sessionId: 4,
+          command: "grep --color=auto -c tdsf-no-such-token-evidence /etc/hostname",
+          exitCode: 1,
+          author: "agent",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("展开插入了多个 token（tail -n 20 那种）也照样关联", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "tail -3 /var/log/messages", requestedAt: 10_000 },
+        block({
+          sessionId: 4,
+          command: "tail -n 20 -3 /var/log/messages",
+          author: "agent",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("负向三件：不是 agent 标记 / argv[0] 不同 / 插入段里含命令分隔符 —— 一律不认", () => {
+    // ① 用户在同一个 leaf 上自己打的命令不许被当成 agent 的结果（沿用既有窄闸）
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: REQUEST, requestedAt: 10_000 },
+        block({
+          sessionId: 4,
+          command: "grep --color=auto -c tdsf-no-such-token-evidence /etc/hostname",
+          author: "user",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(false);
+    // ② 别名换了命令名（ll → ls -l）时无法安全关联，**明确不认**（宁可不结算也不认错）
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "ll -h", requestedAt: 10_000 },
+        block({
+          sessionId: 4,
+          command: "ls -l -h",
+          author: "agent",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(false);
+    // ③ 插入段里带分隔符/重定向 ⇒ 那不是别名展开，是另一条命令
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: "ls -l /tmp", requestedAt: 10_000 },
+        block({
+          sessionId: 4,
+          command: "ls ; rm -rf /tmp/x -l /tmp",
+          author: "agent",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(false);
+    // ④ 时序在前面的 block 不可能是本次注入的结果
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 4, command: REQUEST, requestedAt: 10_000 },
+        block({
+          sessionId: 4,
+          command: "grep --color=auto -c tdsf-no-such-token-evidence /etc/hostname",
+          author: "agent",
+          startedAt: 9_999,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("正向配对：教学卡走同一个判据，别名展开的单步也要结算是 completed", () => {
+    const id = useTeachingExecutionStore.getState().begin({
+      leafId: 4,
+      command: REQUEST,
+      requestedAt: 10_000,
+    });
+    useTerminalBlocksStore.getState().pushBlock(
+      block({
+        sessionId: 4,
+        command: "grep --color=auto -c tdsf-no-such-token-evidence /etc/hostname",
+        exitCode: 1,
+        author: "agent",
+        startedAt: 10_001,
+      }),
+    );
+    expect(useTeachingExecutionStore.getState().executions[id!].status).toBe(
+      "completed",
+    );
+  });
+});
