@@ -112,7 +112,7 @@ import {
 // #117（2026-09-23）：页面重载（dev HMR、设置页「重新加载应用」）不会清 Rust 的
 // SSH 会话注册表，而新页面的 store 是空的 ⇒ 上一代那条远端 shell 从此没人引用，
 // 一直活到进程退出（dev 机上实测攒过 14 条）。启动自动连接前先对一次账。
-import { reapStaleSshSessionsAtBoot } from "@/modules/ssh-explorer/lib/sshGenerationReap";
+import { waitForSshBootReap } from "@/modules/ssh-explorer/lib/sshGenerationReap";
 // TDSF 2026-08-18 (P1-6): 主机审批订阅提升到顶层——
 // SshExplorer 只在 ssh 视图挂载, 其他视图首次连接未知主机时审批事件
 // 无人订阅会永久挂起; 订阅 + HostApprovalDialog 现由 App 顶层常驻。
@@ -791,11 +791,9 @@ export default function App() {
     void (async () => {
       // #117：先把上一代页面留下的连接收干净，再拨这一代的新连接。
       // 顺序不能反 —— 反了连接数会一边涨一边删；失败也不能挡自动连接。
-      try {
-        await reapStaleSshSessionsAtBoot();
-      } catch (e) {
-        console.warn("[App] SSH 启动对账失败（不影响自动连接）:", e);
-      }
+      // #126：回收已在 `main.tsx` 模块顶层触发（渲染挂了也要跑），这里只是**等它**；
+      // 等不到（IPC 挂起）也会放行，代价是宁可留一条僵尸也不能连不上服务器。
+      await waitForSshBootReap();
       await useSshStore.getState().loadSavedConnections();
       if (cancelled) return;
       const list = useSshStore.getState().savedConnections ?? [];

@@ -54,11 +54,21 @@ export function planSshReapAtBoot(input: {
     .sort((a, b) => a - b);
 }
 
+/** #126：等待超时后置真 —— 晚到的清单再也不许执行断开 */
+let abandoned = false;
+/** #126：整页只跑一次（`startSshBootReap` 幂等的凭据） */
+let bootReap: Promise<number[]> | null = null;
+
 /**
  * 页面这一代刚开始时对账一次：把无人认领的 Rust SSH 会话断开。
  *
- * 必须在**任何自动连接之前**跑完，否则回收和新建会撞在一起。
  * 失败一律不抛给调用方 —— 回收是清理，不能因为它失败就不让用户开机连服务器。
+ *
+ * ⚠️ #126（2026-09-24）：**不要直接在 React effect 里调它**。Rust 的会话注册表活在
+ * 应用进程里，而"谁该被收"这件事是**页面这一代**的账 —— 如果渲染挂了（白屏、模块求值期
+ * 抛错），effect 永远不会跑，上一代那条 shell 就一直留在服务器上。实测就是这样漏的：
+ * 我故意把页面搞崩的那一代，boot 回收只收了 id=9，id=10 从此无人引用。
+ * 所以触发点提到 `main.tsx`（模块顶层，渲染之前），这里只留一个幂等的入口。
  *
  * @returns 实际断开的会话号（供日志/探针核对）
  */
@@ -83,6 +93,14 @@ export async function reapStaleSshSessionsAtBoot(): Promise<number[]> {
   });
   const reaped: number[] = [];
   for (const id of doomed) {
+    if (abandoned) {
+      // 见 waitForSshBootReap：等待已经超时放弃了，晚到的清单不许再杀连接
+      // 见 waitForSshBootReap：等待已经超时放弃了，晚到的清单不许再杀连接
+      console.warn(
+        `[ssh] boot reap 已超时放弃 ⇒ 晚到的清单里 ${doomed.length - reaped.length} 条不再断开`,
+      );
+      return reaped;
+    }
     try {
       await sshDisconnect(id);
       reaped.push(id);
@@ -97,4 +115,60 @@ export async function reapStaleSshSessionsAtBoot(): Promise<number[]> {
     );
   }
   return reaped;
+}
+
+/** 等多久就放弃等回收（`ssh_sessions_detail` 在真机挂起过 ⇒ 不能因此连不上服务器） */
+export const SSH_BOOT_REAP_DEADLINE_MS = 5000;
+
+/**
+ * #126：**启动回收的唯一触发点** —— 必须在渲染之前调用（`main.tsx` 模块顶层）。
+ *
+ * 为什么不再挂在 React effect 上：Rust 的会话注册表活在应用进程里，而"谁该被收"是
+ * **页面这一代**的账。渲染挂了（白屏、模块求值期抛错）⇒ effect 永远不跑 ⇒ 上一代那条
+ * shell 一直留在服务器上。实测就是这样漏的：被我故意搞崩的那一代，boot 回收只收了 id=9，
+ * id=10 从此无人引用。
+ *
+ * 幂等：重复调用返回同一个 promise，整页只跑一次（所以 App 那边 await 它不会跑第二遍，
+ * 也就不会杀掉自己刚建的连接 —— #117 那条"别假设清理函数只被调一次"的教训在这里根治）。
+ */
+export function startSshBootReap(): Promise<number[]> {
+  if (!bootReap) {
+    bootReap = reapStaleSshSessionsAtBoot().catch((e) => {
+      console.warn("[ssh] boot reap 失败（不阻塞启动）:", e);
+      return [];
+    });
+  }
+  return bootReap;
+}
+
+/**
+ * #126：自动连接之前等它 —— 但**等不到也必须放行**。
+ *
+ * 顺序是正确性的一部分（先收后拨，连接数才不会一边涨一边删）；可这一步走的是两条 IPC
+ * （`ssh_sessions_detail` / `getAllWebviewWindows`），真机挂起过 ⇒ 死等的代价是用户
+ * **连不上自己的服务器**，那比留一条僵尸 shell 严重得多。
+ *
+ * 所以超时时同时把 `abandoned` 置真：**晚到的清单一律不再执行断开**。必须这样做，
+ * 是因为那时自动连接可能已经拨出新的一条，而它还在飞、没进 store ——
+ * `planSshReapAtBoot` 的"我正在引用"一票否决挡不住一个尚未登记的会话号。
+ *
+ * @returns 实际断开的会话号；超时或失败时为空数组
+ */
+export async function waitForSshBootReap(
+  timeoutMs = SSH_BOOT_REAP_DEADLINE_MS,
+): Promise<number[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  const raced = await Promise.race([startSshBootReap(), deadline]);
+  clearTimeout(timer);
+  if (raced === null) {
+    abandoned = true;
+    console.warn(
+      `[ssh] boot reap ${timeoutMs}ms 没回来 ⇒ 不再等待，先让用户连服务器（晚到的清单不会执行断开）`,
+    );
+    return [];
+  }
+  return raced;
 }

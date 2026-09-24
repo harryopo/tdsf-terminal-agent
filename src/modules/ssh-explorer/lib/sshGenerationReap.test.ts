@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   planSshReapAtBoot,
@@ -117,8 +117,11 @@ describe("接线 —— 对账必须跑在自动连接之前", () => {
    * 顺序就是正确性的一部分：先回收再拨号，连接数才不会一边涨一边删。
    * 这条静态扫描钉住调用点还在、且排在 connectWithSaved 前面
    * （判据同 #116 的 rebind-before-getOrCreateChat）。
+   *
+   * #126 起触发点搬到了 `main.tsx`（见下面那条），App 这里只是**等它**，
+   * 所以扫描认的是 `waitForSshBootReap(`。
    */
-  it("App.tsx 的启动自动连接里，先 reap 后 connect", () => {
+  it("App.tsx 的启动自动连接里，先等回收再 connect", () => {
     const src = readFileSync(join(process.cwd(), "src/app/App.tsx"), "utf8");
     const start = src.indexOf('if (!launchCwdResolved || !spacesHydrated) return;');
     expect(start, "找不到启动自动连接的 effect，门禁失效").toBeGreaterThan(-1);
@@ -126,8 +129,120 @@ describe("接线 —— 对账必须跑在自动连接之前", () => {
     expect(connect, "启动自动连接调用点没了，门禁失效").toBeGreaterThan(-1);
     const segment = src.slice(start, connect);
     expect(
-      segment.includes("reapStaleSshSessionsAtBoot("),
-      "启动时不再回收上一代页面留下的 SSH 会话 —— #117 会复发",
+      segment.includes("waitForSshBootReap("),
+      "启动时不再等回收 ⇒ #117 会复发（回收和新建撞在一起）",
     ).toBe(true);
+  });
+
+  it("#126：触发点在 main.tsx 模块顶层，不在 React effect 里", () => {
+    const main = readFileSync(join(process.cwd(), "src/main.tsx"), "utf8");
+    expect(
+      main.includes("startSshBootReap()"),
+      "启动回收又退回只在挂载后才跑 ⇒ 渲染挂了就不回收，上一代连接会留在服务器上",
+    ).toBe(true);
+    // 必须在 render 之前触发（渲染抛异常时后面的语句才不会被打断）
+    expect(main.indexOf("startSshBootReap()")).toBeLessThan(
+      main.indexOf("ReactDOM.createRoot"),
+      "startSshBootReap() 排在 render 之后 —— 渲染期崩溃时它永远轮不到",
+    );
+    // App 里不许再自己起一遍（幂等虽然有，但两个触发点会让人读不清顺序）
+    const app = readFileSync(join(process.cwd(), "src/app/App.tsx"), "utf8");
+    expect(app.includes("startSshBootReap(")).toBe(false);
+  });
+});
+
+/**
+ * #126（2026-09-24）：**崩掉的页面也必须收一次**。
+ *
+ * 上一版把回收挂在 React effect 里，真机实测漏了一条：被我故意搞崩的那一代页面，
+ * boot 回收只收了 id=9，id=10 一直留在服务器上没人断开（Rust 的注册表活在进程里，
+ * 不跟着页面走）。所以触发点提到 `main.tsx`，并且必须**幂等**（App 还要 await 它）。
+ *
+ * 但"提到启动路径上"带来一个新风险：这一步走两条 IPC，`ssh_sessions_detail` 真挂起过。
+ * 死等 = 用户连不上自己的服务器，那比留一条僵尸严重得多 ⇒ 等待带超时，
+ * 且**超时后晚到的清单一律不再执行断开**（那时新连接可能已经拨出去了，
+ * 而它还没进 store，"我正在引用"那一票否决挡不住一个尚未登记的会话号）。
+ */
+const mocks = vi.hoisted(() => ({
+  detail: vi.fn(),
+  disconnect: vi.fn(),
+  windows: vi.fn(),
+}));
+
+vi.mock("@/lib/ssh-bridge", () => ({
+  sshSessionsDetail: mocks.detail,
+  sshDisconnect: mocks.disconnect,
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({ label: "main" }),
+  getAllWebviewWindows: mocks.windows,
+}));
+vi.mock("@/lib/tauriRuntime", () => ({ isTauriRuntime: () => true }));
+vi.mock("../sshStore", () => ({
+  // 页面这一代的 store 刚起来时什么都不引用 —— 正是"该收上一代"的形状
+  useSshStore: { getState: () => ({ sessions: [] }) },
+}));
+
+/** 每个用例都要一份干净的模块状态（`bootReap` / `abandoned` 是模块级的） */
+async function freshModule() {
+  vi.resetModules();
+  mocks.detail.mockReset();
+  mocks.disconnect.mockReset();
+  mocks.windows.mockReset();
+  mocks.windows.mockResolvedValue([{ label: "main" }]);
+  return import("./sshGenerationReap");
+}
+
+describe("#126 startSshBootReap / waitForSshBootReap —— 幂等 + 超时不拦路", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("正常路径：该收的那条真被断开（正向配对，防「永远不执行」式假绿）", async () => {
+    const mod = await freshModule();
+    mocks.detail.mockResolvedValue([{ sessionId: 7, ownerWindow: "main" }]);
+    mocks.disconnect.mockResolvedValue(undefined);
+    const reaped = await mod.waitForSshBootReap(500);
+    expect(reaped).toEqual([7]);
+    expect(mocks.disconnect).toHaveBeenCalledTimes(1);
+    expect(mocks.disconnect).toHaveBeenCalledWith(7);
+  });
+
+  it("调两次只跑一遍：重复触发不许杀掉自己刚建立的连接", async () => {
+    const mod = await freshModule();
+    mocks.detail.mockResolvedValue([{ sessionId: 7, ownerWindow: "main" }]);
+    mocks.disconnect.mockResolvedValue(undefined);
+    const a = mod.startSshBootReap();
+    const b = mod.startSshBootReap();
+    expect(a).toBe(b);
+    await Promise.all([a, mod.waitForSshBootReap(500)]);
+    expect(mocks.detail).toHaveBeenCalledTimes(1);
+    expect(mocks.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("IPC 挂起时：等待超时放行，且晚到的清单不再执行断开", async () => {
+    const mod = await freshModule();
+    let releaseDetail: (v: { sessionId: number; ownerWindow: string }[]) => void =
+      () => {};
+    mocks.detail.mockReturnValue(
+      new Promise((resolve) => {
+        releaseDetail = resolve;
+      }),
+    );
+    mocks.disconnect.mockResolvedValue(undefined);
+
+    const t0 = Date.now();
+    const waited = await mod.waitForSshBootReap(20);
+    // 不阻塞：等待方拿到空结果就放行（自动连接可以继续）
+    expect(waited).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(2000);
+
+    // 晚到的清单（里面确实有一条"该收"的）—— 必须被丢弃
+    releaseDetail([{ sessionId: 9, ownerWindow: "main" }]);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mocks.disconnect, "超时放弃之后还去断开 ⇒ 可能杀掉刚拨出的新连接").not.toHaveBeenCalled();
   });
 });
