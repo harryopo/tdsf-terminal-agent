@@ -59,3 +59,25 @@ def test_tool_description_does_not_promise_a_visibility_switch():
     registry.process_tools([make_ssh_command_tool(MagicMock())])
     text = registry.registry["ssh_command"].tool_spec["description"]
     assert "visible" not in text
+
+
+# ============================================================================
+# 用户 2026-09-24：「ssh 图标旁边不要显示命令，显示这次调用是干什么用的，
+# 比如 ip a → 查看 ip；展开才看详细命令」。范围他定的是先只做 SSH。
+# explanation 这个入参早就存在（今天三个会话 26/26 都填了），缺的是
+# **说明书没告诉模型它是卡片标题上那句用途** —— 于是它写成整句解释或干脆不写。
+# 这里钉的是模型实际看到的文本（真 registry，同上）。
+# ============================================================================
+def test_explanation_is_described_as_the_card_title_purpose():
+    text = json.dumps(_model_visible_schema(), ensure_ascii=False)
+    assert "折叠" in text and "标题" in text, (
+        "explanation 的说明没告诉模型：这句会显示在工具卡折叠行的标题上"
+    )
+    assert "10 个字" in text, "没有长度约束 ⇒ 模型会写成整段解释，标题放不下"
+    assert "查看 IP" in text, "没有例子 ⇒ 「短动词短语」这个形状说不清"
+
+
+def test_explanation_stays_optional():
+    """把它改成必填是另一个决定，而且是个坏决定：模型漏填会让**整次工具调用**
+    在参数校验阶段失败 —— 宁可标题回落到命令原文，也不能为了界面好看弄挂执行通道。"""
+    assert _model_visible_schema()["required"] == ["command"]

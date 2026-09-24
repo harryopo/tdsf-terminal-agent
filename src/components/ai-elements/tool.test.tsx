@@ -709,3 +709,61 @@ describe("Tool — suggest_command 自动打字只认本次运行的消息", () 
     },
   );
 });
+
+// ============================================================================
+// 用户 2026-09-24：「ssh 工具调用的时候，ssh 图标旁边不是命令显示，而是显示调用
+// 工具的用途……展开工具能看到详细命令使用」。范围他定的是**先只做 SSH 这一条**。
+// explanation 是 ssh_command 早就有的入参（模型填，今天三个会话 26/26 都填了），
+// 之前只喂给审批卡，折叠行仍然显示命令。
+// ============================================================================
+describe("Tool — SSH 卡折叠行显示用途，命令收进展开区", () => {
+  const headerText = (container: HTMLElement) =>
+    container.querySelector("button")?.textContent ?? "";
+
+  it("填了 explanation：标题显示用途，不再显示命令原文", () => {
+    const { container } = render(
+      <Tool
+        toolName="ssh_command"
+        state="input-available"
+        input={{ command: "ip -4 addr show", explanation: "查看 IP" }}
+      />,
+    );
+    const h = headerText(container);
+    expect(h).toContain("查看 IP");
+    expect(h).not.toContain("ip -4 addr show");
+  });
+
+  it("没填 explanation：回落到命令原文，标题不许空着", () => {
+    const { container } = render(
+      <Tool toolName="ssh_command" state="input-available" input={{ command: "df -h" }} />,
+    );
+    expect(headerText(container)).toContain("df -h");
+  });
+
+  it("命令没有丢：点开折叠区仍然看得到原文", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const { container } = render(
+      <Tool
+        toolName="ssh_command"
+        state="input-available"
+        input={{ command: "ip -4 addr show", explanation: "查看 IP" }}
+      />,
+    );
+    expect(container.textContent).not.toContain("ip -4 addr show");
+    fireEvent.click(container.querySelector("button")!);
+    expect(container.textContent).toContain("ip -4 addr show");
+  });
+
+  it("范围守住：bash_run 的标题仍然是命令（他只要先改 SSH）", () => {
+    const { container } = render(
+      <Tool
+        toolName="bash_run"
+        state="input-available"
+        input={{ command: "ls -l", explanation: "不该用在这里" }}
+      />,
+    );
+    const h = headerText(container);
+    expect(h).toContain("ls -l");
+    expect(h).not.toContain("不该用在这里");
+  });
+});
