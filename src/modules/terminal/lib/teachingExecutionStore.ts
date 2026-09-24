@@ -99,11 +99,24 @@ export function matchesVisibleTerminalCommand(
   const reported = normalizeTeachingCommand(block.command);
   if (!reported) return false;
   if (requested.startsWith(reported)) {
+    // Truncation is not a compound boundary: the emitters cut the reported text
+    // at a fixed length, so only accept a prefix that stops exactly there.
+    if (reported.length === REPORTED_COMMAND_CAP_CHARS) return true;
     const suffix = requested.slice(reported.length).trimStart();
     return /^(?:[;&|]|(?:\d*|&)[<>])/.test(suffix);
   }
   return isSelfAliasExpansion(requested, reported);
 }
+
+/**
+ * Local shell integrations truncate the command text they report
+ * (`pty/scripts/profile.ps1`, `zshrc.zsh`, `init.fish`). Anything typed longer
+ * than this arrives as a prefix, so correlation has to recognise that length
+ * as "cut off" rather than "different command". Pinned against the scripts by
+ * `teachingExecutionStore.test.ts` — the two constants live in different
+ * languages and nothing else would notice them drifting apart.
+ */
+export const REPORTED_COMMAND_CAP_CHARS = 256;
 
 /** See rule 2 of {@link matchesVisibleTerminalCommand}. */
 function isSelfAliasExpansion(requested: string, reported: string): boolean {

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { TerminalBlock } from "./terminalBlocks";
 import { useTerminalBlocksStore } from "./terminalBlocksStore";
 import {
@@ -7,6 +9,7 @@ import {
   matchesVisibleTerminalCommand,
   matchesTeachingExecution,
   normalizeTeachingCommand,
+  REPORTED_COMMAND_CAP_CHARS,
   useTeachingExecutionStore,
 } from "./teachingExecutionStore";
 
@@ -326,5 +329,69 @@ describe("#129 别名展开后的命令仍要能关联上", () => {
     expect(useTeachingExecutionStore.getState().executions[id!].status).toBe(
       "completed",
     );
+  });
+});
+
+// ============================================================================
+// #130（2026-09-24 读码定位）：本地三种 shell 的发报脚本把命令文本**截到 256 字符**
+//   src-tauri/src/modules/pty/scripts/profile.ps1:62   Substring(0, 256)
+//   src-tauri/src/modules/pty/scripts/zshrc.zsh:68     ${cmd[1,256]}
+//   src-tauri/src/modules/pty/scripts/init.fish:94     string sub -l 256
+// 而关联判据要求逐字相等 ⇒ 超过 256 字符的命令（多行代码块归一后很容易超）
+// 在本地终端上永远配不上，白等到超时 —— 与 #129 同一形状。
+// ⚠️ 这条是**读两侧源码推出来的**，还没在挂上的本地终端上端到端量过
+//    （见 docs/ROADMAP.md #130 行的"仍欠的测量"）。
+// ============================================================================
+describe("#130 本地发报截断到 256 字符的命令仍要能关联", () => {
+  const LONG = `Write-Output "${"a".repeat(330)}"`; // 346 字符，跨过截断线
+  const TRUNCATED = LONG.slice(0, 256);
+
+  it("报告文本正好是被截断的前缀 ⇒ 关联上", () => {
+    expect(TRUNCATED.length).toBe(REPORTED_COMMAND_CAP_CHARS); // 夹具自证
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 2, command: LONG, requestedAt: 10_000 },
+        block({ sessionId: 2, command: TRUNCATED, author: "agent", startedAt: 10_001 }),
+      ),
+    ).toBe(true);
+  });
+
+  it("负向两件：不是截断长度 / 不是 agent 标记 ⇒ 不认", () => {
+    // ① 差一个字符就不是截断点，不能当"被截断"处理（否则任何前缀都能冒充）
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 2, command: LONG, requestedAt: 10_000 },
+        block({
+          sessionId: 2,
+          command: TRUNCATED.slice(0, 200),
+          author: "agent",
+          startedAt: 10_001,
+        }),
+      ),
+    ).toBe(false);
+    // ② 用户自己打的命令不许冒充
+    expect(
+      matchesVisibleTerminalCommand(
+        { leafId: 2, command: LONG, requestedAt: 10_000 },
+        block({ sessionId: 2, command: TRUNCATED, author: "user", startedAt: 10_001 }),
+      ),
+    ).toBe(false);
+  });
+
+  it("跨语言漂移闸：三个本地发报脚本的截断常数必须和前端认的那个一致", async () => {
+    // 这个常数写在两边（Rust 侧脚本 / TS 侧判据），编译器看不见这种漂移（同 #119 的超时预算）。
+    const scripts: Array<[string, RegExp]> = [
+      ["src-tauri/src/modules/pty/scripts/profile.ps1", /Substring\(0,\s*(\d+)\)/],
+      ["src-tauri/src/modules/pty/scripts/zshrc.zsh", /\$\{cmd\[1,(\d+)\]\}/],
+      ["src-tauri/src/modules/pty/scripts/init.fish", /string sub -l (\d+)/],
+    ];
+    for (const [rel, re] of scripts) {
+      const src = readFileSync(join(process.cwd(), rel), "utf8");
+      const hit = src.match(re);
+      expect(hit, `${rel} 里找不到截断常数的写法，判据已失效`).not.toBeNull();
+      expect(Number(hit![1]), `${rel} 的截断长度改了，前端常量没跟着改`).toBe(
+        REPORTED_COMMAND_CAP_CHARS,
+      );
+    }
   });
 });
