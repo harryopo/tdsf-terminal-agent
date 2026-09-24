@@ -1,20 +1,49 @@
 #!/usr/bin/env python3
 """CDP 最小客户端：连 TDSF dev 实例的 WebView2 探针口。
 
-前置：`pnpm tauri:dev`（dev 配置里带 --remote-debugging-port=9222）。
+前置：`pnpm tauri:dev`（探针端口取自 `src-tauri/tauri.dev.conf.json` 里那条
+`--remote-debugging-port=`，本文件不另存一份数字）。
 依赖 websocket-client，只在 sidecar 的 .venv 里装着，所以入口脚本是
 `src-tauri/sidecar/.venv/Scripts/python.exe`（见 package.json 的 probe:ui）。
 """
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 import urllib.request
+from pathlib import Path
 
 import websocket
 
 CDP_HOST = "127.0.0.1"
-CDP_PORT = 9222
+
+_DEV_CONF = Path(__file__).resolve().parents[2] / "src-tauri" / "tauri.dev.conf.json"
+
+
+def _port_from_dev_conf() -> int:
+    """探针端口必须跟着 dev 配置走，这里不留第二个数字。
+
+    2026-09-24 撞到的现场：本机另一个 Electron 应用（D:\\ai\\zhixing-reader）
+    也在 9222 上开了调试口，我们的 dev 窗绑不上 ⇒ 探针连上的是**别人的窗口**。
+    端口写两处早晚漂移，所以主人只有一个：dev 配置。读不到就直说读不到，
+    拿一个"以前能用"的默认值顶上去 = 又一次悄悄量错东西。
+    """
+    try:
+        text = _DEV_CONF.read_text(encoding="utf-8")
+    except OSError as e:
+        raise SystemExit(f"读不到 dev 配置 {_DEV_CONF}：{e}") from e
+    m = re.search(r"--remote-debugging-port=(\d+)", text)
+    if not m:
+        raise SystemExit(
+            f"{_DEV_CONF.name} 里没有 --remote-debugging-port=<数字> —— "
+            "探针口只在 dev 配置里开，端口也从那里读"
+        )
+    return int(m.group(1))
+
+
+CDP_PORT = int(os.environ.get("TDSF_CDP_PORT") or _port_from_dev_conf())
 
 
 def _next_id(_counter=[0]) -> int:
@@ -139,9 +168,25 @@ def connect(target: dict) -> CdpPage:
     return CdpPage(target["webSocketDebuggerUrl"])
 
 
-#: dev 前端出处（vite.config.ts 的 port 与 tauri.conf.json 的 devUrl 对齐）。
-#: 探针只能量我们自己那个窗，量谁的窗口由这个 origin 说了算。
-DEV_ORIGINS = ("http://127.0.0.1:9300", "http://localhost:9300")
+#: dev 前端出处：读 tauri 基线配置里的 devUrl，这里同样不留第二个数字。
+#: 探针只能量我们自己那个窗，"量的是谁"由这个 origin 说了算。
+_TAURI_CONF = Path(__file__).resolve().parents[2] / "src-tauri" / "tauri.conf.json"
+
+
+def _dev_origin() -> str:
+    conf = _TAURI_CONF.read_text(encoding="utf-8")
+    m = re.search(r'"devUrl"\s*:\s*"(http://[^"]+)"', conf)
+    if not m:
+        raise SystemExit(
+            f"{_TAURI_CONF.name} 里读不到 build.devUrl —— "
+            "探针需要它来认出自己的窗口"
+        )
+    return m.group(1).rstrip("/")
+
+
+DEV_ORIGIN = _dev_origin()
+#: localhost 与 127.0.0.1 是同一个 dev 前端的两种写法，都算我们自己的窗
+DEV_ORIGINS = (DEV_ORIGIN, DEV_ORIGIN.replace("://127.0.0.1", "://localhost"))
 
 
 def is_dev_page(target: dict) -> bool:
@@ -152,8 +197,8 @@ def is_dev_page(target: dict) -> bool:
 def probe_port() -> list[dict]:
     """返回**我们那个 dev 窗**的 page 列表；端口不通或不是我们就报错。
 
-    2026-09-24 实测踩到的坑：9222 上挂着一个毫不相干的页面
-    （`http://127.0.0.1:5500/`，标题「知行读书」）——本机另有程序在用同一个调试端口。
+    2026-09-24 实测踩到的坑：调试端口上挂着一个毫不相干的页面
+    （本机另一个开发预览服务器，标题「知行读书」）——同一个端口被两个程序抢。
     老版本这里只筛 `type == "page"`，于是所有界面探针量的是别人的窗口，
     还照样报"0 违规"。一次"页面活着"的检查就此骗过了我。
     判据不能只是"连得上"，必须连"连的是谁"一起判。
@@ -176,7 +221,8 @@ def probe_port() -> list[dict]:
             f"CDP {CDP_PORT} 上没有任何页面指向 dev 前端（{DEV_ORIGINS[0]}）。\n"
             f"现在挂着的是：{others}\n"
             "两种可能：① dev 实例没在跑（先 pnpm tauri:dev）；"
-            "② 9222 被本机别的程序占了——那就换端口，别拿别人的窗口量我们的界面。"
+            f"② {CDP_PORT} 被本机别的程序占了——那就改 tauri.dev.conf.json 里的"
+            " --remote-debugging-port（探针跟着它，不必改这里），"
+            "别拿别人的窗口量我们的界面。"
         )
     return ours
-
