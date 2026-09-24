@@ -318,9 +318,17 @@ class TestModeAwarePrompt:
                 assert "委派专家" not in prompt
 
     def test_prompt_length_controlled(self):
-        """拼接后 ≤ 原委派版体量（原 main 委派版 ≈ 基础段+委派段+teach 子 prompt）"""
+        """拼接后 ≤ 原委派版体量（原 main 委派版 ≈ 基础段+委派段+teach 子 prompt）
+
+        ⚠️ 2026-09-24 (#140) 实测：observe+teach 这一档现在只剩个位数余量（3996/4000）。
+        往基础段加新口径时**先量再写**，超了就在同一次改动里换掉一句更啰嗦的旧话，
+        不要靠调大这个上限来过关——它的存在就是为了逼着做取舍。
+        """
         longest = self._compose(AgentMode.OBSERVE, teach=True)
-        assert len(longest) < 4000, f"prompt 过长: {len(longest)} 字符"
+        assert len(longest) < 4000, (
+            f"prompt 过长: {len(longest)} 字符（上限 4000）。"
+            "加新指令要同时在同一次改动里省下等量字数，别抬上限。"
+        )
 
 
 if __name__ == "__main__":

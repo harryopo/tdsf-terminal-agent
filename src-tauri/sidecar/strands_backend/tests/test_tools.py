@@ -1923,6 +1923,23 @@ class TestSystemPromptEnvironmentAndFormat(unittest.TestCase):
         self.assertIn("emoji", _DEFAULT_SYSTEM_PROMPT)
         self.assertIn("纯文本或 markdown", _DEFAULT_SYSTEM_PROMPT)
 
+    # ------------------------------------------------------------------
+    # #140 巡检/汇总类回合要给表格（2026-09-24 取证）
+    # 读 .tdsf-data/agent-logs 的 20 次汇报：用户**明说**「请用表格汇总这台服务器
+    # 当前的运行状况：至少 12 行，四列」那一次，模型给的是 ```text 代码块（1/1 没出表格）；
+    # 其余 19 次里只有 1 次自己出了表格。⇒ 不是模型不会，是没人告诉它默认要这样。
+    # ------------------------------------------------------------------
+
+    def test_multi_check_reports_default_to_markdown_table(self):
+        """多项检查的汇报口径要写进 skin：明说要表格都没给，说明默认没有这条。"""
+        self.assertIn("markdown 表格", _DEFAULT_SYSTEM_PROMPT)
+        for column in ("检查项", "当前值", "判定", "依据命令"):
+            self.assertIn(column, _DEFAULT_SYSTEM_PROMPT)
+
+    def test_table_rule_is_stated_once(self):
+        """同一条口径只说一遍 —— skin 有 4000 字符硬预算，重复就是浪费别人的额度。"""
+        self.assertEqual(_DEFAULT_SYSTEM_PROMPT.count("markdown 表格"), 1)
+
 
 # ============================================================================
 # invoke 调度日志测试（2026-08-31 问题5修复：不再向 thinking 流注入"开始处理"）
