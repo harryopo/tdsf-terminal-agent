@@ -181,7 +181,9 @@ export const ContextContentBody = ({
   className,
   ...props
 }: ContextContentBodyProps) => (
-  <div className={cn("w-full p-3", className)} {...props}>
+  // 限高 + 滚动：这个面板的行数会随会话增长（模块占比 5 行 + 最长 6 行用量 + 页脚），
+  // 以前没有 max-h 也没有 overflow，越用越长直到被弹层裁掉。
+  <div className={cn("max-h-72 w-full overflow-y-auto p-3", className)} {...props}>
     {children}
   </div>
 );

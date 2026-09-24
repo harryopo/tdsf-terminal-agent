@@ -328,7 +328,8 @@ export const MessageResponse = memo(
     <ChatStreamingProvider value={streaming}>
       <Streamdown
         className={cn(
-          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          // `ai-md` 是给 globals.css 的表格单元格等宽规则用的钩子（不改 streamdown 自带排版类）
+          "ai-md size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className,
         )}
         components={streamdownComponents}

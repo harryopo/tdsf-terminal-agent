@@ -39,7 +39,7 @@
 }
 
 .cm-history-text {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre;
   overflow: hidden;
@@ -63,7 +63,7 @@
 
 .cm-tooltip-autocomplete > ul {
   max-height: 21rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -152,7 +152,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .bt-clock {
@@ -263,7 +263,7 @@
 
 .bt-sticky-cmd {
   flex: 1;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;

@@ -436,18 +436,18 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
             </div>
           </div>
           <div className="flex items-center justify-between text-muted-foreground">
-            <span>Model</span>
+            <span>模型</span>
             <span className="font-mono text-foreground">{modelLabel}</span>
           </div>
           <div className="mt-1 flex items-center justify-between text-muted-foreground">
-            <span>{lastInput > 0 ? "Last request" : "Estimated context"}</span>
+            <span>{lastInput > 0 ? "本次请求" : "估算上下文"}</span>
             <span className="font-mono text-foreground">
               {formatTokens(used)}
             </span>
           </div>
           {lastCached > 0 && (
             <div className="flex items-center justify-between text-muted-foreground">
-              <span>Of which cached</span>
+              <span>其中命中缓存</span>
               <span className="font-mono text-foreground">
                 {formatTokens(lastCached)}
               </span>
@@ -456,20 +456,20 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
           {reported > 0 && (
             <>
               <div className="mt-1.5 flex items-center justify-between text-muted-foreground">
-                <span>Session input</span>
+                <span>本次会话输入</span>
                 <span className="font-mono text-foreground">
                   {formatTokens(tokens.inputTokens)}
                 </span>
               </div>
               <div className="flex items-center justify-between text-muted-foreground">
-                <span>Session output</span>
+                <span>本次会话输出</span>
                 <span className="font-mono text-foreground">
                   {formatTokens(tokens.outputTokens)}
                 </span>
               </div>
               {tokens.cachedInputTokens > 0 && (
                 <div className="flex items-center justify-between text-muted-foreground">
-                  <span>Cache hit</span>
+                  <span>缓存命中</span>
                   <span className="font-mono text-foreground">
                     {cacheRate}%
                   </span>
@@ -477,7 +477,7 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
               )}
               {cost != null && (
                 <div className="flex items-center justify-between text-muted-foreground">
-                  <span>Session cost</span>
+                  <span>本次会话花费</span>
                   <span className="font-mono text-foreground">
                     ${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}
                   </span>
@@ -486,17 +486,17 @@ function ContextIndicator({ messages }: { messages: UIMessage[] }) {
             </>
           )}
           <div className="flex items-center justify-between text-muted-foreground">
-            <span>Window</span>
+            <span>上下文窗口</span>
             <span className="font-mono text-foreground">
               {formatTokens(max)}
             </span>
           </div>
         </ContextContentBody>
         <ContextContentFooter>
-          <span className="text-[10px] italic text-muted-foreground">
+          <span className="text-[10px] text-muted-foreground">
             {lastInput > 0
-              ? "Last request reflects current context size; session totals are cumulative."
-              : "Token count is approximate (chars / 4)."}
+              ? "「本次请求」是当前上下文大小；会话输入/输出是累计值。"
+              : "Token 数为估算（字符数 ÷ 4）。"}
           </span>
         </ContextContentFooter>
       </ContextContent>
