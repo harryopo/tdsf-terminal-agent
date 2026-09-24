@@ -113,7 +113,7 @@ export function TodoStrip({ sessionId }: Props) {
       ) : null}
       {collapsed ? null : (
         <ScrollArea id={listId} data-testid="todo-strip-list" className="flex-1 min-h-0">
-          <ul className="relative mt-2 flex flex-col gap-0.5 before:absolute before:bottom-3 before:left-[11px] before:top-3 before:w-px before:bg-border/70">
+          <ul className="relative mt-2 flex flex-col gap-0.5 pr-3 before:absolute before:bottom-3 before:left-[11px] before:top-3 before:w-px before:bg-border/70">
             {todos.map((t, index) => (
               <TodoRow key={t.id} todo={t} index={index} />
             ))}
@@ -149,7 +149,7 @@ function TodoRow({ todo, index }: { todo: Todo; index: number }) {
           （方框），变成"圆套方、方再套钩"的三层套娃。 */}
       <span
         className={cn(
-          "absolute left-1 top-1.5 z-10 inline-flex size-4 items-center justify-center rounded-full border bg-background",
+          "absolute left-1 top-1/2 z-10 inline-flex size-4 -translate-y-1/2 items-center justify-center rounded-full border bg-background",
           todo.status === "completed"
             ? "border-emerald-500/60 text-emerald-600 dark:text-emerald-400"
             : isInProgress
