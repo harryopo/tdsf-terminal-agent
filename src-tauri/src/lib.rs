@@ -201,6 +201,22 @@ fn open_main_window(
             return Err(format!("open_main_window({label}) failed: {e}"));
         }
     };
+    // #64 的连带缺陷（2026-09-24 真机实测）：`WebviewWindowBuilder::from_config` 不搬 url
+    // —— tauri 2.11.5 的 `WebviewBuilder::from_config` 只搬属性，所以复制出来的第二扇窗
+    // 停在 `about:blank`（日志实测：建好之后 `window.url()` == "about:blank"）。
+    // 入口地址从**已经加载好的主窗**取：dev 拿到 devUrl、发布拿到内嵌 dist，
+    // 两边都不用写死常量，也不会让新窗和主窗不是同一个 origin。
+    match app
+        .get_webview_window("main")
+        .and_then(|first| first.url().ok())
+    {
+        Some(entry) => {
+            if let Err(e) = window.navigate(entry) {
+                log::warn!("[main-window] '{label}' 导航到入口地址失败: {e}");
+            }
+        }
+        None => log::warn!("[main-window] 取不到主窗入口地址，'{label}' 可能停在空白页"),
+    }
     let _ = window.show();
     let _ = window.set_focus();
     log::info!("[main-window] opened '{label}' dir={opened_dir}");
