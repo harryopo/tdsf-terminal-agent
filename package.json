@@ -17,7 +17,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css,md}\" \"website/**/*.{html,css,js}\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:python": "cd src-tauri/sidecar && .\\.venv\\Scripts\\python.exe -m pytest -v --tb=short",
+    "test:python": "cd src-tauri/sidecar && .\\.venv\\Scripts\\python.exe -B -m pytest -v --tb=short",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium",
