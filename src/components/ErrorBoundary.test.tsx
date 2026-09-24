@@ -9,9 +9,9 @@
  *    —— 这类"实现了但没接上"的缺口编译器永远发现不了，只能靠读源码钉住。
  */
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { fireEvent, render, screen, vi } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { join } from "node:path";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "./ErrorBoundary";
 
 /** 可开关的炸弹：重试之后要能真的恢复正常，否则"能恢复"这条判据无从成立 */
@@ -109,16 +109,18 @@ describe("ErrorBoundary — 一块崩不许带走整窗", () => {
 });
 
 describe("接线（结构门禁）—— 实现了但没接上等于没有", () => {
+  // 路径按本仓既有静态扫描用例的写法（join(process.cwd(), "src/…")）——
+  // `new URL(…, import.meta.url)` 在 happy-dom 下不保证是 file: 协议
   const read = (rel: string) =>
-    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+    readFileSync(join(process.cwd(), "src", rel), "utf8");
 
   it("main.tsx 用 ErrorBoundary 包住 <App />：根节点这一道是最后的兜底", () => {
-    const main = read("../main.tsx");
+    const main = read("main.tsx");
     expect(main).toMatch(/<ErrorBoundary[\s\S]*?<App\s*\/>[\s\S]*?<\/ErrorBoundary>/);
   });
 
   it("App.tsx 有工作区与弹窗两道分区边界，且弹窗那道是 overlay", () => {
-    const app = read("../app/App.tsx");
+    const app = read("app/App.tsx");
     expect(app).toContain('<ErrorBoundary label="工作区">');
     expect(app).toContain('<ErrorBoundary label="弹窗" overlay>');
     // 侧栏那道（2026-07-28 就有）不许被顺手删掉

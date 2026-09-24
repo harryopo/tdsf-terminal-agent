@@ -85,3 +85,20 @@ export function staleSshSpaceIds(
     )
     .map((sp) => sp.id);
 }
+
+/**
+ * 注册表里**此刻真的连着**的 SSH 工作区有几台。
+ *
+ * 欢迎页要用它说一句实话：#61-A 之后重启停在欢迎页，但**启动自动连接照样会拨通服务器**
+ * （#102/#117 那条链）。旧文案把"不自动进入工作区"写成"没有自动连上"，
+ * 2026-09-24 真机量到反例：会话 12 是 connected、窗口标题就是 `root@…:/root`，
+ * 而欢迎页还在说"没有自动连上" —— 那是假事实。
+ *
+ * 只数 SSH：本地/WSL 工作区没有"连上"这回事，算进去会让那句话又开始撒谎。
+ */
+export function connectedSshSpaceCount(
+  spaces: readonly { env: WorkspaceEnv }[],
+  sessions: readonly SshSessionInfo[],
+): number {
+  return spaces.filter((sp) => isSshEnvConnected(sp.env, sessions)).length;
+}

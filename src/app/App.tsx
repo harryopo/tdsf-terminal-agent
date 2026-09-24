@@ -86,6 +86,7 @@ import {
 } from "@/modules/spaces";
 // TDSF #93（2026-09-21）：SSH 身份跨断线留着之后，"算不算已连接"只有一个判据主人。
 import {
+  connectedSshSpaceCount,
   detachSshSession,
   isSshEnvConnected,
   sshEnvIsConnecting,
@@ -302,6 +303,16 @@ export default function App() {
   const spacesHydrated = useSpaces((s) => s.hydrated);
   // TDSF 修复 2026-08-01: 工作区数量（0 = 欢迎界面）
   const spaceCount = useSpaces((s) => s.spaces.length);
+  // TDSF #123 的另一半（2026-09-24 真机量到）：欢迎页以前只按"有没有旧工作区"
+  // 就断言"没有自动连上"，而 #61-A 之后**启动自动连接照样会拨通服务器** ⇒ 那句话
+  // 在连接活着时是假的（实测会话 connected、窗口标题写着 root@…:/root）。
+  // 所以这里订阅**会话表本身**（不是长度），连接状态一变文案立刻跟着改。
+  const sshSessionList = useSshStore((s) => s.sessions);
+  const spaceList = useSpaces((s) => s.spaces);
+  const connectedSpaceCount = useMemo(
+    () => connectedSshSpaceCount(spaceList, sshSessionList),
+    [spaceList, sshSessionList],
+  );
 
   // TDSF 2026-08-28（用户反馈）: 环境切换 pending 态——WSL 首次冷启动
   // 要串行探测 home/login shell/zdotdir（多次 wsl.exe），期间无反馈会显得"卡死"。
@@ -2553,6 +2564,7 @@ export default function App() {
                           setSpaceCreateOpen(true);
                         }}
                         existingCount={spaceCount}
+                        connectedCount={connectedSpaceCount}
                         onOpenExisting={() => setSwitcherOpen(true)}
                       />
                     ) : (
