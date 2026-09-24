@@ -497,7 +497,12 @@ export default function App() {
   // TDSF 2026-09-18 (#61 方案 A)：欢迎页/侧栏空态的判据从"注册过几个工作区"改成
   // "**当前有没有**活跃工作区"。注册表现在跨重启留存，用 spaceCount 判空会让
   // 首屏不再是欢迎页，直接违背 2026-08-07 的钦定。
-  const hasActiveWorkspace = !!activeSpace;
+  // TDSF 2026-09-18 (#62，用户实测"还没建工作区状态栏就显示 Home")：这是**展示层的总闸** ——
+  // useTabs() 开机必定先建一个绑隐式 default 空间的冷终端，其 cwd 落在启动/家目录，
+  // 于是任何吃 cwd / 吃活动 tab 的标签都会把家目录或某台后台服务器当成"当前工作区"。
+  // 原则：**没有活跃工作区时展示层不冒充任何目录、不冒充任何远端**（与 git 面板的
+  // useSourceControlContext 里那道 hasActiveSpace 守卫同一原则）。
+  const hasWorkspace = !!activeSpace;
   const spaceSshSessionId =
     activeSpace?.env.kind === "ssh"
       ? (activeSpace.env.sessionId ?? null)
@@ -530,7 +535,11 @@ export default function App() {
   // #63（用户 2026-09-18 决策）：右下角只认活动 tab 自己绑定的已连接 SSH 会话。
   // 旧实现回退到 Space 的 SSH 会话，导致"SSH 工作区里开本地终端标签"时仍显示
   // user@host，而命令其实跑在本地 —— 与"这里要显示命令实际跑在哪台机器"的口径相反。
-  const activeTerminalAddress = terminalAddressOf(activeTabSshSession);
+  // #127（2026-09-24 真机）：还要过总闸 —— 活动 tab 来自 useTabs，停在欢迎页时它仍然
+  // 指着后台那条已连的 SSH，于是状态栏挂着服务器地址、同一栏又说"未选择工作区"。
+  const activeTerminalAddress = hasWorkspace
+    ? terminalAddressOf(activeTabSshSession)
+    : null;
   // TDSF #89（2026-09-21，用户决策 1）：左侧资源管理器 / 状态栏路径 / 窗口标题
   // 跟随**活动 tab 自己那条会话**，而不是"这个 Space 的那条会话"。
   // 同一工作区里现在可以有多条各连各的 shell，切 tab 却还看着另一个 tab 的目录，
@@ -1152,27 +1161,27 @@ export default function App() {
         `/home/${explorerSshSession.params.user}`)
       : explorerRoot;
 
-  // TDSF 修复 2026-09-18（用户实测：还没建工作区，状态栏已经显示 Home）：
-  // useTabs() 开机必定先建一个绑隐式 default 空间的冷终端，它的 cwd 落在启动/
-  // 家目录，于是 explorerRoot / 状态栏 / 窗口标题就把家目录当成"当前工作区根"。
-  // 终端本身继续在 default 空间里正常运行，但**工作区上下文一律只以活跃 Space
-  // 为准**——没有活跃工作区时展示层不冒充任何目录（与 git 面板的 hasActiveSpace
-  // 守卫同一原则，见 useSourceControlContext）。
-  const hasWorkspace = !!activeSpace;
+  // 展示层的工作区总闸 `hasWorkspace` 定义在上方（#62 那条注释里），这里只是它的一个消费者。
   const displayExplorerRoot = hasWorkspace ? effectiveExplorerRoot : null;
 
   // TDSF 修复 2026-07-29: SSH 连接后, 窗口标题/状态栏路径显示 SSH 远程位置。
   // TDSF 修复 2026-07-31: 顶栏项目名固定显示本地工作区, 不显示 SSH 地址
   //   (地址已在左下角 StatusBar 展示, 避免顶栏重复且拥挤)。
   // 按当前 Space 的 SSH session 生成位置标签，切 Space 时标题同步切换。
+  // #127（2026-09-24 真机）：这条同样必须过总闸 —— 它取的 explorerSsh* 派生自活动 tab，
+  // 停在欢迎页时后台那条 SSH 还活着，窗口标题就会写 `root@…:/root`，
+  // 而屏幕上是欢迎页（实测 `.xterm` 数为 0）。
   const sshLocationLabel =
-    explorerSshConnected && explorerSshSession
+    hasWorkspace && explorerSshConnected && explorerSshSession
       ? `${explorerSshSession.params.user}@${explorerSshSession.params.host}:${explorerCurrentPath ?? "/"}`
       : null;
   // TDSF 修复 2026-08-12 (ROADMAP #9): SSH 位置作为第三参数传入 useWindowTitle，
   // SSH Space 时窗口标题显示 user@host:path（此前混入 explorerRoot 计算导致
   // 标题显示本地目录名、丢主机信息）。
-  useWindowTitle(activeTab, displayExplorerRoot, sshLocationLabel);
+  // #127（同轮补上的第三臂）：`activeTab` 也来自 useTabs，停在欢迎页时它仍指着后台
+  // 那条终端 —— 只堵住上面两臂，标题就从 `root@…:/root` 退化成 `/`，还是在冒充一个目录。
+  const titleTab = hasWorkspace ? activeTab : undefined;
+  useWindowTitle(titleTab, displayExplorerRoot, sshLocationLabel);
 
   useEffect(() => {
     setActiveSearchAddon(
@@ -2399,7 +2408,7 @@ export default function App() {
                       {sidebarView === "explorer" ? (
                         // TDSF 修复 2026-08-01: 无任何工作区时资源管理器显示
                         // "新建工作区"引导（保留侧栏骨架，用户可看清整体功能）
-                        !hasActiveWorkspace ? (
+                        !hasWorkspace ? (
                           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
                             <div className="text-[13px] font-medium text-foreground">
                               {spaceCount === 0 ? "暂无工作区" : "未选择工作区"}
@@ -2548,7 +2557,7 @@ export default function App() {
                   <div className="relative min-h-0 flex-1">
                     {/* TDSF 修复 2026-08-01: 无工作区时终端区域显示欢迎（保留
                         侧栏/顶栏/状态栏，用户可看清整体功能）；否则正常工作区 */}
-                    {!hasActiveWorkspace ? (
+                    {!hasWorkspace ? (
                       <WelcomeScreen
                         onCreateLocal={() => {
                           setSpaceCreateMode("local");
