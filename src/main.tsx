@@ -23,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { initLaunchDir } from "./lib/launchDir";
 import { USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 
@@ -40,8 +41,15 @@ if (USE_CUSTOM_WINDOW_CONTROLS) {
 // 之前用顶层 await 串行等待 invoke + initLaunchDir 完成后才 render，
 // 若 IPC 在 WebView2 冷启动时挂起（不 reject 只 hang），render 永远不执行 = 黑屏。
 // 现在 render 立即同步执行，IPC 初始化在后台异步完成，互不阻塞。
+//
+// 2026-09-24 (#125): 根挂载点必须有边界。此前 ErrorBoundary 只包住了侧栏那一格，
+// 挂在 App 顶层的弹窗一抛错，React 18 直接把整棵树卸载 ⇒ #root 子节点 0、整窗白屏，
+// 用户看到的是"程序卡死"。根这一层是最后一道：任何没被区域边界接住的崩溃，
+// 至少要说清"出错了 + 可以重试/重载"，而不是留一块空白。
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <App />,
+  <ErrorBoundary label="应用">
+    <App />
+  </ErrorBoundary>,
 );
 
 // 异步初始化（不阻塞渲染）：清理上次会话遗留的孤儿 PTY + 解析启动目录。

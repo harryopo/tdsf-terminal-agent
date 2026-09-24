@@ -2529,6 +2529,10 @@ export default function App() {
               </ResizablePanel>
               <ResizableHandle withHandle />
               <ResizablePanel id="workspace" defaultSize="78%" minSize="30%">
+                {/* #125 (2026-09-24): 工作区（欢迎页 / 终端 / 编辑器）单独一道边界。
+                    ErrorBoundary 正常路径不产生 DOM 节点，所以高度链不受影响；
+                    崩的时候顶栏、侧栏、状态栏都还在，只有这一格换成提示。 */}
+                <ErrorBoundary label="工作区">
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="relative min-h-0 flex-1">
                     {/* TDSF 修复 2026-08-01: 无工作区时终端区域显示欢迎（保留
@@ -2601,10 +2605,18 @@ export default function App() {
                     onConnect={() => void openSettingsWindow("models")}
                   />
                 </div>
+                </ErrorBoundary>
               </ResizablePanel>
             </ResizablePanelGroup>
           </main>
 
+          {/* #125 (2026-09-24): 弹窗/浮层这一整段单独一道边界，且用 overlay 样式。
+              今晚这次白屏崩的就是本段里的 SpaceCreateDialog —— 它不在侧栏那道边界内，
+              以前没人接，React 直接把整棵树卸了。
+              ⚠️ 主机审批框也在这段里：它一旦被边界吞成提示，用户就答不了那条审批，
+              Rust 侧 5 分钟超时后连接失败（失败方向是"不连接"，安全）。所以提示必须
+              浮在底部看得见（就地渲染会被壳层的 overflow-hidden 裁掉），不能静默。 */}
+          <ErrorBoundary label="弹窗" overlay>
           {/* TDSF 2026-08-18 (P1-6): 主机审批弹窗常驻顶层——任何视图
               首次连接未知主机都能弹审批框, 不依赖 SshExplorer 挂载 */}
           <HostApprovalDialog
@@ -2734,6 +2746,7 @@ export default function App() {
             onCancelAppClose={cancelAppClose}
             onConfirmAppClose={confirmAppClose}
           />
+          </ErrorBoundary>
         </div>
       </TooltipProvider>
     </ThemeProvider>
