@@ -26,6 +26,14 @@ type Props = {
    * 从哪里进去，否则他只会看到三个「新建」按钮。
    */
   existingCount: number;
+  /**
+   * 此刻**真的连着**的 SSH 工作区数（`connectedSshSpaceCount` 算出来的，不是猜的）。
+   *
+   * 为什么欢迎页需要它：#61-A 之后重启不自动进入工作区，但启动自动连接照样会把服务器
+   * 拨通。文案以前只按 `existingCount` 断言"没有自动连上"，2026-09-24 真机量到这就是假的
+   * （会话连着、窗口标题写着 `root@…:/root`，欢迎页还在说没连上）。
+   */
+  connectedCount: number;
   /** 打开工作区总览（顶栏同一个弹层），供「打开已有工作区」按钮使用 */
   onOpenExisting: () => void;
 };
@@ -35,6 +43,7 @@ export function WelcomeScreen({
   onCreateSsh,
   onCreateWsl,
   existingCount,
+  connectedCount,
   onOpenExisting,
 }: Props) {
   return (
@@ -52,9 +61,11 @@ export function WelcomeScreen({
           TDSF Terminal Agent
         </h1>
         <p className="max-w-sm text-center text-[13px] text-muted-foreground">
-          {existingCount > 0
-            ? "上次的工作区还留着，但没有自动连上——选一个回去，或再建一个新的。"
-            : "终端优先的 Linux 运维工作台。创建一个工作区开始使用——本地终端、WSL 或连接 SSH 服务器。"}
+          {existingCount === 0
+            ? "终端优先的 Linux 运维工作台。创建一个工作区开始使用——本地终端、WSL 或连接 SSH 服务器。"
+            : connectedCount > 0
+              ? "上次的工作区还留着，服务器也已连上——选择一个回去即可继续。"
+              : "上次的工作区还留着，但尚未连上服务器——选择一个回去会自动重连。"}
         </p>
       </div>
 
@@ -105,9 +116,11 @@ export function WelcomeScreen({
       </div>
 
       <p className="text-[11px] text-muted-foreground/70">
-        {existingCount > 0
-          ? "重启后停在欢迎页，不会自动连上上次的工作区；从上面按钮或顶栏「选择工作区」回去"
-          : "全部工作区删除后从此界面重新开始"}
+        {existingCount === 0
+          ? "全部工作区删除后从此界面重新开始"
+          : connectedCount > 0
+            ? "重启后停在欢迎页，不会自动进入上次的工作区；连接已就绪，从上面按钮或顶栏「选择工作区」回去即可使用"
+            : "重启后停在欢迎页，不会自动进入上次的工作区；从上面按钮或顶栏「选择工作区」回去会自动发起重连"}
       </p>
     </div>
   );

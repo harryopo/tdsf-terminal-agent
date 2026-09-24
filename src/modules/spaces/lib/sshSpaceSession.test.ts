@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useSshStore, type SshSessionInfo } from "@/modules/ssh-explorer/sshStore";
 import type { WorkspaceEnv } from "@/modules/workspace";
 import {
+  connectedSshSpaceCount,
   detachSshSession,
   isSshEnvConnected,
   sshEnvIsConnecting,
@@ -198,5 +199,51 @@ describe("sshEnvIsConnecting：只认这台服务器的连接进度", () => {
       ],
     });
     expect(sshEnvIsConnecting(sshEnv)).toBe(true);
+  });
+});
+
+describe("connectedSshSpaceCount：欢迎页那句「连没连上」的唯一来源（#123 另一半）", () => {
+  const localEnv = { kind: "local" } as unknown as WorkspaceEnv;
+  const wslEnv = { kind: "wsl", distro: "Ubuntu" } as unknown as WorkspaceEnv;
+  const detached = { ...sshEnv, sessionId: undefined } as WorkspaceEnv;
+
+  it("只数会话真活着的那台：本地/WSL/身份在但会话没了的都不算", () => {
+    const spaces = [
+      { env: sshEnv }, // 连着
+      { env: detached }, // #93 之后常见：身份在、会话引用被摘
+      { env: localEnv },
+      { env: wslEnv },
+    ];
+    expect(connectedSshSpaceCount(spaces, [session({})])).toBe(1);
+  });
+
+  it("「正在连」不许吹成「已连上」（authenticating 不计）", () => {
+    const busy = session({ state: "authenticating" as never });
+    expect(connectedSshSpaceCount([{ env: sshEnv }], [busy])).toBe(0);
+  });
+
+  it("幽灵 sessionId（会话表里查不到这条）不计", () => {
+    const other = session({ id: "sess-999" });
+    expect(connectedSshSpaceCount([{ env: sshEnv }], [other])).toBe(0);
+  });
+
+  it("正向配对：会话补回来之后必须真的变 1，不是永远返回 0", () => {
+    const spaces = [{ env: sshEnv }];
+    expect(connectedSshSpaceCount(spaces, [])).toBe(0);
+    expect(connectedSshSpaceCount(spaces, [session({})])).toBe(1);
+  });
+
+  it("两台都连着就是 2（计数不许只回布尔）", () => {
+    const second: WorkspaceEnv = {
+      kind: "ssh",
+      host: "10.0.0.9",
+      user: "root",
+      port: 22,
+      sessionId: "sess-2",
+    };
+    const sessions = [session({}), session({ id: "sess-2", rustSessionId: 8 })];
+    expect(connectedSshSpaceCount([{ env: sshEnv }, { env: second }], sessions)).toBe(
+      2,
+    );
   });
 });
