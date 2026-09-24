@@ -411,9 +411,27 @@ impl OsSandbox {
 mod tests {
     use super::*;
 
-    /// 测试前清理全局状态，避免测试间相互影响
-    fn setup_clean_state() {
+    /// 这些用例共用一张**进程全局**的阻断表（`BLOCKED_PIDS`），而 cargo 默认多线程
+    /// 并行跑测试 ⇒ 一个用例开头的 clear 会抹掉另一个用例刚写进去的状态。
+    /// 全量跑时 `test_block_outbound_connections_succeeds` 红、单跑绿，就是这个形状
+    /// （2026-09-24 撞实）。`list_blocked_pids` 那两条更是直接断言"整张表等于我写的这几个"，
+    /// 结构上不可能与别人并行 ⇒ 只能把这批用例串起来。
+    /// 锁在整个用例期间持有；中毒也不管（每个用例开头自己清状态）。
+    static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_global_state() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_STATE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 拿全局锁 + 清全局状态。**调用方必须把返回值绑在一个绑定上**
+    /// （`let _g = setup_clean_state();`）—— 只写 `setup_clean_state();` 会在语句结束时
+    /// 立刻释放锁，等于没锁。
+    fn setup_clean_state() -> std::sync::MutexGuard<'static, ()> {
+        let guard = lock_global_state();
         let _ = OsSandbox::clear_blocked_pids_for_test();
+        guard
     }
 
     // ----------------------------------------------------------
@@ -486,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_block_outbound_connections_succeeds() {
-        setup_clean_state();
+        let _g = setup_clean_state();
         let pid = 12345u32;
         let result = OsSandbox::block_outbound_connections(pid);
         assert!(result.is_ok());
@@ -496,7 +514,7 @@ mod tests {
 
     #[test]
     fn test_block_same_pid_twice_returns_already_blocked() {
-        setup_clean_state();
+        let _g = setup_clean_state();
         let pid = 23456u32;
         OsSandbox::block_outbound_connections(pid).unwrap();
         let result = OsSandbox::block_outbound_connections(pid);
@@ -505,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_unblock_blocked_pid_succeeds() {
-        setup_clean_state();
+        let _g = setup_clean_state();
         let pid = 34567u32;
         OsSandbox::block_outbound_connections(pid).unwrap();
         let result = OsSandbox::unblock_outbound_connections(pid);
@@ -516,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_unblock_unblocked_pid_returns_not_blocked() {
-        setup_clean_state();
+        let _g = setup_clean_state();
         let pid = 45678u32;
         let result = OsSandbox::unblock_outbound_connections(pid);
         assert!(matches!(result, Err(SandboxError::PidNotBlocked(45678))));
@@ -528,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_list_blocked_pids_returns_sorted() {
-        setup_clean_state();
+        let _g = setup_clean_state();
         // 按 3, 1, 2 顺序加入
         OsSandbox::block_outbound_connections(3).unwrap();
         OsSandbox::block_outbound_connections(1).unwrap();
@@ -540,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_clear_blocked_pids_empties_state() {
-        setup_clean_state();
+        let _g = setup_clean_state();
         OsSandbox::block_outbound_connections(100).unwrap();
         OsSandbox::block_outbound_connections(200).unwrap();
         OsSandbox::clear_blocked_pids_for_test().unwrap();
