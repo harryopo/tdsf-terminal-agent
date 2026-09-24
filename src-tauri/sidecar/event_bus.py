@@ -68,6 +68,12 @@ class EventType(str, Enum):
 # 所有合法的事件类型字符串
 VALID_EVENT_TYPES = {e.value for e in EventType}
 
+# 这些类型是流式通道（每个 token 一块），逐条打日志会把 rust.log 刷爆：
+# 实测 2026-09-24 一个 dev 会话的 7288 行里有 7127 行是"event published"，
+# rust.log 因此 2.5 小时轮转 3 次 —— 而它是唯一的现场取证面（#113①/#120 全靠它）。
+# 这类事件的量已经进了 _stats["by_type"]，排障要看的是聚合值不是每条。
+QUIET_EVENT_TYPES = frozenset({EventType.AGENT_MESSAGE.value})
+
 
 # ============================================================================
 # Event 数据结构
@@ -282,11 +288,12 @@ class EventBus:
             except Exception as e:
                 logger.exception(f"rust notifier error: {e}")
 
-        logger.debug(
-            f"event published: type={event.event_type}, "
-            f"session={event.session_id}, delivered={delivered}, "
-            f"source={event.source}"
-        )
+        if event.event_type not in QUIET_EVENT_TYPES:
+            logger.debug(
+                f"event published: type={event.event_type}, "
+                f"session={event.session_id}, delivered={delivered}, "
+                f"source={event.source}"
+            )
         return delivered
 
     def _matches(self, subscriber: Subscriber, event: Event) -> bool:
