@@ -41,6 +41,13 @@ import {
   markSidecarConfigSynced,
   syncSidecarLlmConfig,
 } from "./sidecar-config-sync";
+// #133 无活动预算（等用户的时间不记账）
+import { createActivityBudget } from "./activityBudget";
+import {
+  isAwaitingUser,
+  subscribeAwaitingUser,
+  useNeedsYouWait,
+} from "../store/needsYouWaitStore";
 
 // === 常量 ====================================================================
 
@@ -51,8 +58,16 @@ import {
  * 用户实测：agent 环境探测/诊断任务（多轮 SSH 命令 + 多次 LLM 推理）常
  * 超 60s，触发“Sidecar 调用超时（60s）”请求失败。虽然 token 走事件真流式，
  * 但 agent.invoke 的最终返回仍受这个总时长超时限制。300s 覆盖绝大多数复杂
- * agentic loop，与 needs_you approval_timeout(300s) 对齐、< Python watchdog(600s)。
- * 仍可用 localStorage `tdsf.sidecarTimeoutMs` 覆盖（10s-600s），但默认已足够稳定，无需手动配置。
+ * agentic loop，< Python watchdog(600s)。
+ *
+ * ⚠️ 2026-09-24 (#133)：这段窗口**不含等用户确认的时间**。旧注释写着“与
+ * needs_you approval_timeout(300s) 对齐”——两个数相等正是事故本身：用户多想
+ * 一会儿，审批窗口和无活动窗口在同一秒到点，整轮被判超时还被建议“简化问题描述”。
+ * 现在停在 needs_you 上时这里停表（见 activityBudget.pause），窗口关系由
+ * sidecar/tests/test_approval_budget_ordering.py 钉住。
+ *
+ * 仍可用 localStorage `tdsf.sidecarTimeoutMs` 覆盖（10s-600s）——注意这是
+ * 目前唯一的调整入口，设置界面里**没有**对应控件，别在面向用户的文案里指它。
  */
 const SIDECAR_TIMEOUT_MS = 300_000;
 
@@ -121,12 +136,16 @@ const DEGRADED_REASON_HINTS: Record<string, string> = {
  * @param pythonName 调用的后端 agent 名
  * @param isDegraded 是否来自后端 degraded 标志
  * @param degradedReason 后端 degraded_reason（分档行动建议的数据源）
+ * @param awaitingUserResponse #133 本轮中止时是否正停在"等用户确认"上——
+ *   同一句"超时"背后是两件完全不同的事，混成一句就会把"AI 在等你"说成
+ *   "你问得不好"（旧文案原话是「简化问题描述后重试」）。
  */
 export function buildSidecarErrorHint(
   rawError: string,
   pythonName: string,
   isDegraded = false,
   degradedReason = "",
+  awaitingUserResponse = false,
 ): string {
   if (isDegraded) {
     return [
@@ -142,10 +161,22 @@ export function buildSidecarErrorHint(
 
   const lower = rawError.toLowerCase();
   if (lower.includes("超时") || lower.includes("timeout")) {
+    // 旧文案两句都不能要：「到设置调大 AI 调用超时」指的是一个界面上根本不存在
+    // 的控件（tdsf.sidecarTimeoutMs 只能手改 localStorage，#113④ 那一类假承诺），
+    // 「简化问题描述后重试」把 AI 的等待说成用户问得不好。
+    if (awaitingUserResponse) {
+      return [
+        "AI 在等你确认，但这一轮的时间用完了，已中止。",
+        "",
+        "命令没有被执行。审批卡上的「执行 / 拒绝」还在，回答它即可继续；" +
+          "卡已经不在了就重新发起这一轮。",
+      ].join("\n");
+    }
     return [
       `AI 任务超时未完成：${rawError}`,
       "",
-      "建议：1) 复杂任务可到设置调大 AI 调用超时 2) 简化问题描述后重试",
+      "说明：这段时间里既没有输出、也没有工具调用（等你确认的时间不计算在内）。",
+      "建议：1) 看界面是否有没回答的审批卡或弹窗 2) 重新发起这一轮",
     ].join("\n");
   }
   if (
@@ -1019,36 +1050,43 @@ export async function* runSidecarStream(
     //   事件（token/tool_call）就重置计时器，只有连续 activityTimeoutMs 无任何事件
     //   （真卡死）才超时。避免“总时长超时”误杀有进展的长任务（调研结论：单纯
     //   调大超时是反模式，把清晰错误变静默错误）。与 Python watchdog(600s 无活动) 对齐。
+    //
+    // #133 (2026-09-24) 补一条口径：**等用户回答的那段时间不算无活动**。
+    // 真机日志量到 tool_call 之后静默 300.1s 才回 needs_approval —— 审批窗口
+    // (Python 默认 300s) 与这里的预算 (300s) 正好同长，用户多想一会儿整轮就被
+    // 判超时，而报错写的是「简化问题描述后重试」。计时逻辑抽到 activityBudget.ts
+    // （内联在这条异步生成器里时一条用例都跑不到，病才能躺一个多月）。
     const activityTimeoutMs = getSidecarTimeoutMs();
-    let resetTimeout: () => void = () => {};
+    let noteActivity: () => void = () => {};
+    let applyAwaitingUser: (awaiting: boolean) => void = () => {};
+    let unsubAwaitingUser: () => void = () => {};
     const timeout = new Promise<never>((_, reject) => {
-      let timer: ReturnType<typeof setTimeout>;
-      const arm = () => {
-        timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `Sidecar 调用超时（${activityTimeoutMs / 1000}s 无活动）`,
-              ),
-            ),
-          activityTimeoutMs,
-        );
-      };
-      arm();
-      resetTimeout = () => {
-        clearTimeout(timer);
-        arm();
+      const budget = createActivityBudget(
+        activityTimeoutMs,
+        () =>
+          reject(
+            new Error(`Sidecar 调用超时（${activityTimeoutMs / 1000}s 无活动）`),
+          ),
+      );
+      noteActivity = () => budget.noteActivity();
+      applyAwaitingUser = (awaiting: boolean) => {
+        if (awaiting) budget.pause();
+        else budget.resume();
       };
       const onAbort = () => {
-        clearTimeout(timer);
+        budget.dispose();
         reject(new Error("用户取消"));
       };
       abortSignal?.addEventListener("abort", onAbort, { once: true });
       disposeActivityTimeout = () => {
-        clearTimeout(timer);
+        budget.dispose();
+        unsubAwaitingUser();
         abortSignal?.removeEventListener("abort", onAbort);
       };
     });
+
+    // 本会话有 needs_you 挂着 → 停表；全部结算 → 重新给满一整段预算
+    unsubAwaitingUser = subscribeAwaitingUser(sessionId, applyAwaitingUser);
 
     // TDSF 2026-07-30 (Bug 5): 把 live 上下文通过 state.live 传给 Python agent。
     // Python 端 StrandsAgentAdapter._build_tool_context() 从 state.live 取 sshSessionId
@@ -1115,7 +1153,7 @@ export async function* runSidecarStream(
           break;
         }
         // P0 活动感知超时：收到流式事件 = agent 有进展 → 重置无活动计时器
-        resetTimeout();
+        noteActivity();
         yield result.value.value;
       } else {
         // invoke 完成 → 标记 done，继续 drain queue 剩余 items
@@ -1147,9 +1185,16 @@ export async function* runSidecarStream(
     if (!invokeResult && invokeError) {
       // TDSF P0-3: 移除 mock 降级，直接报错让用户看到真实问题
       // P0-4 (2026-08-01): 结构化错误提示——按错误类型区分文案与行动建议
+      // #133: 中止那一刻是不是正停在"等你确认"上，决定这句"超时"该怎么说
       yield {
         type: "error",
-        error: buildSidecarErrorHint(invokeError, pythonName),
+        error: buildSidecarErrorHint(
+          invokeError,
+          pythonName,
+          false,
+          "",
+          isAwaitingUser(useNeedsYouWait.getState(), sessionId),
+        ),
       };
       return;
     }

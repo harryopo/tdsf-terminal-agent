@@ -24,6 +24,10 @@ import {
 import { invokeRpc, onNeedsYou } from "@/lib/sidecar-bridge";
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
 import { useChatStore } from "../store/chatStore";
+import {
+  isAwaitingUser,
+  useNeedsYouWait,
+} from "../store/needsYouWaitStore";
 
 type NeedsYouCb = (payload: unknown) => void;
 let needsYouCb: NeedsYouCb | null = null;
@@ -116,6 +120,8 @@ beforeEach(() => {
   vi.mocked(invokeRpc).mockReset();
   vi.mocked(onNeedsYou).mockClear();
   needsYouCb = null;
+  // 等待事实是全局 store：不清就会串到下一条用例（组件卸载不撤销记账）
+  useNeedsYouWait.getState().reset();
   useChatStore.setState({
     activeSessionId: "sess-1",
     sessionReadOnlyTrust: false,
@@ -540,3 +546,99 @@ describe("NeedsYouApprovalCards — #59 挂载补水合", () => {
     expect(document.querySelector("[data-needs-you-cards]")).toBeNull();
   });
 });
+
+// ============================================================================
+// #133 审批挂起不再吃掉整轮的无活动预算
+// ----------------------------------------------------------------------------
+// 本组件是「有没有卡在你身上」这件事的唯一知情人（只有它订阅 needs_you），
+// 所以它必须把这个事实记进 needsYouWaitStore —— 无活动计时器和转圈提示都读它。
+// 记漏了的后果是真机量到的那一条：用户多想 5 分钟，整轮被判超时，
+// 报错还写着「简化问题描述后重试」。
+// ============================================================================
+describe("NeedsYouApprovalCards — 等待事实记账（#133）", () => {
+  const awaitingNow = () =>
+    isAwaitingUser(useNeedsYouWait.getState(), "sess-1");
+
+  it("created 到达 → 记为「正在等用户」", async () => {
+    await mount();
+    expect(awaitingNow()).toBe(false);
+    emitNeedsYou(serviceCreated());
+    expect(await screen.findByText("等待你的确认")).toBeTruthy();
+    expect(awaitingNow()).toBe(true);
+  });
+
+  it("timeout 事件（5 分钟没响应被自动拒绝）→ 撤销记账，计时器恢复", async () => {
+    await mount();
+    emitNeedsYou(serviceCreated());
+    await screen.findByText("等待你的确认");
+    expect(awaitingNow()).toBe(true);
+
+    emitNeedsYou({
+      event_type: "needs_you",
+      payload: {
+        needs_type: "approval",
+        event: "timeout",
+        request: { id: "ny-abc123", type: "approval", session_id: "sess-1" },
+      },
+    });
+    await waitFor(() => expect(awaitingNow()).toBe(false));
+  });
+
+  it("点「执行」→ RPC 成功后撤销记账", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
+      if (method === "needs_you.list") return [];
+      return {};
+    });
+    await mount();
+    emitNeedsYou(serviceCreated());
+    const card = await screen.findByText("等待你的确认");
+    expect(card).toBeTruthy();
+    expect(awaitingNow()).toBe(true);
+
+    fireEvent.click(await screen.findByText("执行"));
+    await waitFor(() => expect(awaitingNow()).toBe(false));
+  });
+
+  it("respond RPC 失败 → 保持记账（卡还在，确实还等着用户）", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
+      if (method === "needs_you.list") return [];
+      if (method === "needs_you.respond") throw new Error("sidecar down");
+      return {};
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await mount();
+    emitNeedsYou(serviceCreated());
+    await screen.findByText("等待你的确认");
+
+    fireEvent.click(await screen.findByText("执行"));
+    await waitFor(() =>
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining("needs_you.respond failed"),
+        expect.anything(),
+      ),
+    );
+    expect(awaitingNow()).toBe(true);
+  });
+
+  it("挂载补拉（错过 created 的页面重载）→ 同样记账，否则这一轮永不停表也永不等", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) =>
+      method === "needs_you.list" ? [pendingQuestionRow()] : {},
+    );
+    await mount();
+    expect(await screen.findByText("请选择虚拟机网络模式")).toBeTruthy();
+    expect(awaitingNow()).toBe(true);
+  });
+
+  it("别的会话在等 → 本会话不算在等（不许让别人的审批停我的表）", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method: string) =>
+      method === "needs_you.list"
+        ? [pendingQuestionRow({ id: "ny-other", session_id: "sess-2" })]
+        : {},
+    );
+    await mount();
+    await new Promise<void>((r) => setTimeout(r, 0));
+    expect(isAwaitingUser(useNeedsYouWait.getState(), "sess-1")).toBe(false);
+    expect(isAwaitingUser(useNeedsYouWait.getState(), "sess-2")).toBe(true);
+  });
+});
+

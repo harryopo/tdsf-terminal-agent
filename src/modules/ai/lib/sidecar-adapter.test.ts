@@ -14,6 +14,8 @@
 //   - _setDevModeCheck(() => true/false) 注入 dev/prod 模式，触发降级 mock 或 error 路径
 //     （vitest 4.x 中 vi.stubEnv("DEV", ...) 无法可靠覆盖 import.meta.env.DEV，故用注入）
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // mock 必须在 import 之前
 vi.mock("@tauri-apps/api/core", () => ({
@@ -35,6 +37,7 @@ import {
   toolFailureText,
 } from "./sidecar-adapter";
 import { markSidecarConfigSynced } from "./sidecar-config-sync";
+import { useNeedsYouWait } from "../store/needsYouWaitStore";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -961,5 +964,158 @@ describe("buildSidecarErrorHint — degraded_reason 分档", () => {
     expect(buildSidecarErrorHint("x", "main", true, "weird")).toContain(
       "检查 Strands 依赖安装",
     );
+  });
+});
+
+// ============================================================================
+// #133 无活动计时器与「等用户确认」的联动
+// ----------------------------------------------------------------------------
+// 真机日志量到的原形状（.tdsf-data/agent-logs/s-mufeww1j-g9aiur.jsonl）：
+//   tool_call → 静默 300.1s → tool_result(needs_approval)
+// 审批窗口（Python 默认 300s）与前端无活动窗口（默认 300s）是同一个数，
+// 于是"用户多想一会儿"＝"整轮被判超时"，而报错写着「简化问题描述后重试」。
+// 下面三条钉住新口径：等用户的这段时间不记账；不等了重新给满整段；
+// 文案不许再指向一个界面上根本不存在的设置项。
+// ============================================================================
+describe("runSidecarStream — 审批挂起不吃无活动预算（#133）", () => {
+  // 把默认 300s 窗口压到可测的 10s（localStorage 覆盖是本仓既有配置入口）
+  const WAIT_MS = 10_000;
+
+  beforeEach(() => {
+    localStorage.setItem("tdsf.sidecarTimeoutMs", String(WAIT_MS));
+    useNeedsYouWait.getState().reset();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.removeItem("tdsf.sidecarTimeoutMs");
+    useNeedsYouWait.getState().reset();
+  });
+
+  /** 起一轮"invoke 永远不回"的调用，返回收集 promise + 手动结掉 invoke 的句柄 */
+  function startHangingRound(sessionId = "sess-wait") {
+    let settle: ((v: unknown) => void) | null = null;
+    mockInvoke.mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const collecting = collect(
+      runSidecarStream({
+        agentId: "main",
+        sessionId,
+        messages: makeMessages("查一下"),
+        input: "查一下",
+        live: makeLive(),
+      }),
+    );
+    return {
+      collecting,
+      finish: (result: unknown) => settle?.(result),
+    };
+  }
+
+  it("没有审批挂着一 → 到点仍然报无活动超时（重构没把原行为改掉）", async () => {
+    _setDevModeCheck(() => false);
+    const { collecting } = startHangingRound();
+    await vi.advanceTimersByTimeAsync(WAIT_MS + 50);
+    const parts = await collecting;
+
+    const err = parts.find((p) => p.type === "error") as
+      | { type: "error"; error: string }
+      | undefined;
+    expect(err?.error).toContain("无活动");
+  });
+
+  it("审批挂着 → 超过三个窗口也不掐断整轮（等用户不是卡死）", async () => {
+    _setDevModeCheck(() => false);
+    const { collecting, finish } = startHangingRound();
+
+    useNeedsYouWait.getState().markPending("ny-1", "sess-wait");
+    await vi.advanceTimersByTimeAsync(WAIT_MS * 3);
+    finish({ output: "done" });
+    await vi.advanceTimersByTimeAsync(100);
+    const parts = await collecting;
+
+    expect(parts.some((p) => p.type === "error")).toBe(false);
+    expect(parts.some((p) => p.type === "finish")).toBe(true);
+  });
+
+  it("别的会话的审批不许给本会话停表（否则一条没人认领的请求让整轮永不过期）", async () => {
+    _setDevModeCheck(() => false);
+    const { collecting } = startHangingRound("sess-mine");
+
+    useNeedsYouWait.getState().markPending("ny-other", "sess-other");
+    await vi.advanceTimersByTimeAsync(WAIT_MS + 50);
+    const parts = await collecting;
+
+    expect(parts.some((p) => p.type === "error")).toBe(true);
+  });
+
+  it("用户答完（撤销记账）→ 重新给满一整段后才到点", async () => {
+    _setDevModeCheck(() => false);
+    const { collecting } = startHangingRound();
+    // 每次推进都额外多走 100ms：万一真的报错了，把收尾的 TOOL_DRAIN_MS(30ms)
+    // 也覆盖掉，让 collecting 结算完整，"还在跑"这件事才量得准。
+    const drain = 100;
+
+    // 先让预算烧掉大半，再看恢复后是"重新给满"还是"接着扣剩下的 200ms"
+    await vi.advanceTimersByTimeAsync(WAIT_MS - 200);
+    useNeedsYouWait.getState().markPending("ny-1", "sess-wait");
+    await vi.advanceTimersByTimeAsync(WAIT_MS * 2 + drain);
+    useNeedsYouWait.getState().markSettled("ny-1");
+    await vi.advanceTimersByTimeAsync(WAIT_MS - 500 + drain);
+
+    const early = await Promise.race([
+      collecting.then(() => "done" as const),
+      Promise.resolve("pending" as const),
+    ]);
+    expect(early).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(500 + drain);
+    const parts = await collecting;
+    expect(parts.some((p) => p.type === "error")).toBe(true);
+  });
+});
+
+describe("buildSidecarErrorHint — 超时文案不再指向不存在的设置（#133）", () => {
+  it("正在等用户确认时超时 → 说清是在等他，而不是让他简化问题", () => {
+    const hint = buildSidecarErrorHint("ipc 调用超时", "main", false, "", true);
+    expect(hint).toContain("等你确认");
+    expect(hint).not.toContain("简化问题描述");
+  });
+
+  it("普通无活动超时 → 说明真实含义，且不给界面上没有的入口", () => {
+    const hint = buildSidecarErrorHint(
+      "Sidecar 调用超时（300s 无活动）",
+      "main",
+    );
+    expect(hint).toContain("AI 任务超时未完成");
+    // 「到设置调大 AI 调用超时」这条建议指向的控件在设置里根本不存在
+    // （tdsf.sidecarTimeoutMs 只能手改 localStorage）——不许再这么写
+    expect(hint).not.toContain("到设置");
+    expect(hint).not.toContain("简化问题描述");
+  });
+});
+
+// ============================================================================
+// #133 接线断言：订阅必须随整轮释放
+// ----------------------------------------------------------------------------
+// 行为用例能证明"停表了"，证明不了"这一轮结束后订阅还在不在"。
+// subscribeAwaitingUser 挂在 zustand 全局 store 上，而 runSidecarStream
+// 每发一条消息就跑一遍 —— 漏一次 unsub 就是每轮泄一个监听器，
+// 症状要几百条消息之后才看得见（同 #119 那条"实现了但没接上"只能靠读源码钉）。
+// ============================================================================
+describe("#133 接线：等待订阅随整轮释放", () => {
+  const src = readFileSync(join(__dirname, "sidecar-adapter.ts"), "utf8");
+
+  it("disposeActivityTimeout 里必须 unsubAwaitingUser", () => {
+    // lastIndexOf：`let disposeActivityTimeout = () => {};` 那行声明也含同一串前缀
+    const at = src.lastIndexOf("disposeActivityTimeout = () => {");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, at + 260)).toMatch(/unsubAwaitingUser\(\)/);
+  });
+
+  it("流式事件走 noteActivity（旧的 resetTimeout 不许留在原地装作还在）", () => {
+    expect(src).toMatch(/noteActivity\(\);/);
+    expect(src).not.toMatch(/resetTimeout/);
   });
 });

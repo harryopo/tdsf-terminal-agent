@@ -14,6 +14,7 @@ import { render, screen } from "@testing-library/react";
 
 import { AgentStatusPill } from "./AgentStatusPill";
 import { useChatStore } from "../store/chatStore";
+import { useNeedsYouWait } from "../store/needsYouWaitStore";
 
 afterEach(() => {
   useChatStore.setState({
@@ -75,5 +76,80 @@ describe("AgentStatusPill — 循环进度（T2）", () => {
     });
     render(<AgentStatusPill />);
     expect(screen.queryByTestId("agent-loop-progress")).toBeNull();
+  });
+});
+
+// ============================================================================
+// #133 等用户的时候不许宣称"我在跑"
+// ----------------------------------------------------------------------------
+// 审批挂着时 agentMeta.status 仍是 thinking/streaming（Python 的 mood 就是
+// working），于是顶栏那颗点一直 emerald 闪、循环计数一直挂着"第 N 轮 · 工具 M"
+// —— 和聊天区那行 Thinking… 是同一种谎。循环进度那格改成"等你确认"：
+// 替换而不是追加，顶栏宽度是量过的（#103/#99），新串比旧串短才不会挤。
+// ============================================================================
+describe("AgentStatusPill — 等待事实（#133）", () => {
+  afterEach(() => {
+    useNeedsYouWait.getState().reset();
+  });
+
+  it("本会话审批挂着 → 循环进度那格改成「等你确认」", () => {
+    useChatStore.setState({
+      activeSessionId: "sess-a",
+      agentMeta: {
+        ...useChatStore.getState().agentMeta,
+        status: "streaming",
+        loopProgress: { round: 3, toolCount: 12 },
+      },
+    });
+    useNeedsYouWait.getState().markPending("ny-1", "sess-a");
+    render(<AgentStatusPill />);
+    expect(screen.getByTestId("agent-awaiting-user").textContent).toContain(
+      "等你确认",
+    );
+    expect(screen.queryByTestId("agent-loop-progress")).toBeNull();
+  });
+
+  it("等待时不再显示「运行中」的绿色脉冲（圆点改琥珀）", () => {
+    useChatStore.setState({
+      activeSessionId: "sess-a",
+      agentMeta: {
+        ...useChatStore.getState().agentMeta,
+        status: "streaming",
+      },
+    });
+    useNeedsYouWait.getState().markPending("ny-1", "sess-a");
+    const { container } = render(<AgentStatusPill />);
+    expect(container.innerHTML).not.toContain("animate-ping");
+    expect(container.innerHTML).toContain("bg-amber-500");
+  });
+
+  it("没在等 → 脉冲与循环进度照旧（等待态不许粘住）", () => {
+    useChatStore.setState({
+      activeSessionId: "sess-a",
+      agentMeta: {
+        ...useChatStore.getState().agentMeta,
+        status: "thinking",
+        loopProgress: { round: 2, toolCount: 5 },
+      },
+    });
+    const { container } = render(<AgentStatusPill />);
+    expect(container.innerHTML).toContain("animate-ping");
+    expect(screen.getByTestId("agent-loop-progress")).toBeTruthy();
+    expect(screen.queryByTestId("agent-awaiting-user")).toBeNull();
+  });
+
+  it("别的会话挂着 → 本会话顶栏不受影响", () => {
+    useChatStore.setState({
+      activeSessionId: "sess-a",
+      agentMeta: {
+        ...useChatStore.getState().agentMeta,
+        status: "thinking",
+        loopProgress: { round: 2, toolCount: 5 },
+      },
+    });
+    useNeedsYouWait.getState().markPending("ny-1", "sess-b");
+    render(<AgentStatusPill />);
+    expect(screen.queryByTestId("agent-awaiting-user")).toBeNull();
+    expect(screen.getByTestId("agent-loop-progress")).toBeTruthy();
   });
 });

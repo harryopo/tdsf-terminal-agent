@@ -139,8 +139,25 @@ def connect(target: dict) -> CdpPage:
     return CdpPage(target["webSocketDebuggerUrl"])
 
 
+#: dev 前端出处（vite.config.ts 的 port 与 tauri.conf.json 的 devUrl 对齐）。
+#: 探针只能量我们自己那个窗，量谁的窗口由这个 origin 说了算。
+DEV_ORIGINS = ("http://127.0.0.1:9300", "http://localhost:9300")
+
+
+def is_dev_page(target: dict) -> bool:
+    """这个 page 是不是我们 dev 前端的（按出处判，不按标题判）。"""
+    return (target.get("url") or "").startswith(DEV_ORIGINS)
+
+
 def probe_port() -> list[dict]:
-    """返回可连的 page 列表；端口不通时抛带排查指引的错误。"""
+    """返回**我们那个 dev 窗**的 page 列表；端口不通或不是我们就报错。
+
+    2026-09-24 实测踩到的坑：9222 上挂着一个毫不相干的页面
+    （`http://127.0.0.1:5500/`，标题「知行读书」）——本机另有程序在用同一个调试端口。
+    老版本这里只筛 `type == "page"`，于是所有界面探针量的是别人的窗口，
+    还照样报"0 违规"。一次"页面活着"的检查就此骗过了我。
+    判据不能只是"连得上"，必须连"连的是谁"一起判。
+    """
     try:
         pages = list_pages()
     except Exception as e:  # noqa: BLE001 - 统一换成可读提示
@@ -150,4 +167,16 @@ def probe_port() -> list[dict]:
         ) from e
     if not pages:
         raise SystemExit("CDP 端口在但没有 page target：dev 实例可能刚启动完还没建窗")
-    return pages
+    ours = [p for p in pages if is_dev_page(p)]
+    if not ours:
+        others = ", ".join(
+            sorted({(p.get("url") or "?")[:60] for p in pages})
+        )
+        raise SystemExit(
+            f"CDP {CDP_PORT} 上没有任何页面指向 dev 前端（{DEV_ORIGINS[0]}）。\n"
+            f"现在挂着的是：{others}\n"
+            "两种可能：① dev 实例没在跑（先 pnpm tauri:dev）；"
+            "② 9222 被本机别的程序占了——那就换端口，别拿别人的窗口量我们的界面。"
+        )
+    return ours
+

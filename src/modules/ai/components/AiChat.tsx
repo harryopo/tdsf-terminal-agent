@@ -46,6 +46,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isLiveMessage, LiveMessageProvider } from "../lib/autoTypeProvenance";
 import { sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
+import {
+  isAwaitingUser,
+  useNeedsYouWait,
+} from "../store/needsYouWaitStore";
 // P1-2: 会话证据面板
 import {
   evidenceLabel,
@@ -194,6 +198,12 @@ export function AiChatView({
     .reverse()
     .find((message) => message.role === "assistant")?.id;
   const step = useChatStore((s) => s.agentMeta.step);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  // #133 本会话有 needs_you 挂着 = 整轮停在"等你回答"上，不是 AI 在想事情。
+  // 这一行与 sidecar-adapter 的无活动停表读同一个事实，两边不许分叉。
+  const awaitingUser = useNeedsYouWait((s) =>
+    isAwaitingUser(s, activeSessionId),
+  );
   const hitStepCap = useChatStore((s) => s.agentMeta.hitStepCap);
   const compactionNotice = useChatStore((s) => s.agentMeta.compactionNotice);
   const patchAgentMeta = useChatStore((s) => s.patchAgentMeta);
@@ -250,7 +260,9 @@ export function AiChatView({
         {showSpinner && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Spinner />
-            <span className="truncate">{step ?? "Thinking…"}</span>
+            <span className="truncate">
+              {awaitingUser ? "等待你的确认" : (step ?? "Thinking…")}
+            </span>
           </div>
         )}
         {showContinue && (

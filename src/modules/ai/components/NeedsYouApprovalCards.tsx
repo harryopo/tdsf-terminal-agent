@@ -27,6 +27,10 @@ import {
 import { invokeRpc, onNeedsYou } from "@/lib/sidecar-bridge";
 import { unwrapEventPayload } from "../lib/sidecar-adapter";
 import { useChatStore } from "../store/chatStore";
+import {
+  matchesSession,
+  useNeedsYouWait,
+} from "../store/needsYouWaitStore";
 
 /** `sidecar:needs_you` 事件 payload（Python event_bus.emit_needs_you 扁平结构） */
 type NeedsYouEventPayload = {
@@ -220,6 +224,9 @@ export function NeedsYouApprovalCards() {
       if (eventName === "created") {
         if (resolvedRef.current.has(reqId)) return;
         const item = buildItem(payload, reqId);
+        // #133 等待事实：本组件是 needs_you 的唯一订阅者，"这一轮是不是停在
+        // 等用户"只能由这里记进 store —— 无活动计时器与转圈提示都读它。
+        useNeedsYouWait.getState().markPending(reqId, item.sessionId);
         setItems((cur) => {
           const idx = cur.findIndex((i) => i.reqId === reqId);
           if (idx < 0) return [...cur, item];
@@ -233,8 +240,9 @@ export function NeedsYouApprovalCards() {
         eventName === "timeout" ||
         eventName === "cancelled"
       ) {
-        // 用户已响应 / 5 分钟超时自动拒绝 / Agent 取消 → 移卡
+        // 用户已响应 / 5 分钟超时自动拒绝 / Agent 取消 → 移卡 + 撤销等待记账
         resolvedRef.current.add(reqId);
+        useNeedsYouWait.getState().markSettled(reqId);
         setItems((cur) => cur.filter((i) => i.reqId !== reqId));
       }
     }).then((fn) => {
@@ -278,7 +286,11 @@ export function NeedsYouApprovalCards() {
           const reqId = req?.id;
           if (!reqId || seen.has(reqId)) continue;
           seen.add(reqId);
-          next.push(buildItem({ needs_type: req.type, request: req }, reqId));
+          const item = buildItem({ needs_type: req.type, request: req }, reqId);
+          // 补拉回来的同样要记账：这一轮可能正因为这条没人答而在等，
+          // 只补卡不补账 = 界面写着在思考、计时器却把等待算成卡死。
+          useNeedsYouWait.getState().markPending(reqId, item.sessionId);
+          next.push(item);
         }
         return next;
       });
@@ -314,9 +326,13 @@ export function NeedsYouApprovalCards() {
       response.sessionTrust = true;
     }
     void invokeRpc("needs_you.respond", { req_id: reqId, response })
-      .then(() => setItems((cur) => cur.filter((i) => i.reqId !== reqId)))
+      .then(() => {
+        useNeedsYouWait.getState().markSettled(reqId);
+        setItems((cur) => cur.filter((i) => i.reqId !== reqId));
+      })
       .catch((e: unknown) => {
         // 不静默吞错：打印并恢复可重试（请求保持 pending，Python 300s 超时兜底拒绝）
+        // 等待事实也保持不动——回话没送达，Python 那边确实还挂着。
         console.error(`needs_you.respond failed (req_id=${reqId}):`, e);
         resolvedRef.current.delete(reqId);
       });
@@ -326,20 +342,21 @@ export function NeedsYouApprovalCards() {
     if (resolvedRef.current.has(reqId)) return;
     resolvedRef.current.add(reqId);
     void invokeRpc("needs_you.respond", { req_id: reqId, response: { answer } })
-      .then(() => setItems((cur) => cur.filter((item) => item.reqId !== reqId)))
+      .then(() => {
+        useNeedsYouWait.getState().markSettled(reqId);
+        setItems((cur) => cur.filter((item) => item.reqId !== reqId));
+      })
       .catch((error: unknown) => {
         console.error(`needs_you.respond failed (req_id=${reqId}):`, error);
         resolvedRef.current.delete(reqId);
       });
   };
 
-  // 跨会话隔离：带 session_id 且与当前会话不符的请求不渲染（留给 Python 超时兜底）
+  // 跨会话隔离：带 session_id 且与当前会话不符的请求不渲染（留给 Python 超时兜底）。
+  // 口径与 #133 的等待计时共用 matchesSession——不许出现"卡看得见但没停表"
+  // 或"停着表却没有卡"这种自相矛盾。
   const visible = useMemo(
-    () =>
-      items.filter(
-        (i) =>
-          !i.sessionId || !activeSessionId || i.sessionId === activeSessionId,
-      ),
+    () => items.filter((i) => matchesSession(i.sessionId, activeSessionId)),
     [items, activeSessionId],
   );
 

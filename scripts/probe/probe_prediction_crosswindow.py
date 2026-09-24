@@ -45,11 +45,19 @@ def main() -> int:
     seeded = mp.evaluate(PEEK, True)
     print("播种后主窗真身：", seeded)
 
-    settings = [x for x in cdp.list_pages() if "settings.html" in x["url"]]
+    settings = [
+        x
+        for x in cdp.list_pages()
+        if cdp.is_dev_page(x) and "settings.html" in x["url"]
+    ]
     if not settings:
         mp.click_text("Settings")
         time.sleep(3)
-        settings = [x for x in cdp.list_pages() if "settings.html" in x["url"]]
+        settings = [
+            x
+            for x in cdp.list_pages()
+            if cdp.is_dev_page(x) and "settings.html" in x["url"]
+        ]
     if not settings:
         print("设置窗没开出来")
         mp.close()
