@@ -512,3 +512,72 @@ describe("#131 管道 + 别名 + 重排空格：三条毛病叠在一起也要�
     ).toBe(false);
   });
 });
+
+// ============================================================================
+// #141（2026-09-25）：本地 bash 压根不回报命令文本
+// ----------------------------------------------------------------------------
+// 读码坐实（src-tauri/src/modules/pty/scripts/）：
+//   - bashrc.bash 的 PS0 只发 `\e]133;C\e\` —— **没有命令文本**，全文件也没有 633;E；
+//   - zshrc.zsh 发 `133;C;${cmd[1,256]}`、init.fish / profile.ps1 同样带文本。
+// 所以本地 bash / WSL bash 上，块文本恒为空串，按文本关联**永远不可能成立**。
+// 可达性：agent 的可见终端执行只认 SSH leaf（useAiLiveBridge.ts:768 取 getSshLeafId），
+// 但**教学单步有本地回落**（同文件 :316-321 退回 tab.activeLeafId）⇒
+// 学生在本地 bash 里点"执行这一步"，卡片只能等到过期。
+// 信任前提不许放松：同 leaf + author=agent + startedAt>=requestedAt 三条照旧要满足，
+// 这里放弃的只是"文本相等"这一项 —— 而且**仅在对方根本没有文本时**。
+// ============================================================================
+describe("matchesVisibleTerminalCommand — 本地 bash 无命令文本（#141）", () => {
+  /** 本地块：author 由终端自己按"agent 待命标记"判定，与命令文本无关 */
+  const noTextBlock = (over: Partial<TerminalBlock> = {}) =>
+    block({ command: "", author: "agent", sessionId: 4, startedAt: 10_001, ...over });
+
+  const request = { leafId: 4, command: "df -h /", requestedAt: 10_000 };
+
+  it("空文本 + agent 标记 + 时间窗内 → 关联成立（否则本地 bash 的教学单步永远结不了算）", () => {
+    expect(matchesVisibleTerminalCommand(request, noTextBlock())).toBe(true);
+  });
+
+  it("负向：空文本但不是 agent 打的 → 不许认", () => {
+    expect(
+      matchesVisibleTerminalCommand(request, noTextBlock({ author: "user" })),
+    ).toBe(false);
+  });
+
+  it("负向：空文本但块早于本次请求 → 不许认（那是上一条命令的块）", () => {
+    expect(
+      matchesVisibleTerminalCommand(request, noTextBlock({ startedAt: 9_999 })),
+    ).toBe(false);
+  });
+
+  it("负向：空文本但属于另一块终端 → 不许认", () => {
+    expect(
+      matchesVisibleTerminalCommand(request, noTextBlock({ sessionId: 5 })),
+    ).toBe(false);
+  });
+
+  it("正向配对：带文本的块仍走原文本判据（不许把空文本通道当成万能放行）", () => {
+    expect(
+      matchesVisibleTerminalCommand(
+        request,
+        block({ command: "uptime", sessionId: 4, startedAt: 10_001, author: "agent" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("漂移闸：本地 bash 若不回报命令文本，上面这条通道就有存在理由", () => {
+    // 读我们自己的发报脚本，钉住"为什么需要这条通道"这个事实。
+    // 哪天 bashrc.bash 开始回报文本（例如补上 633;E），这条用例会红 ——
+    // 那时该重新判断：空文本通道还要不要留。
+    const bashrc = readFileSync(
+      join(process.cwd(), "src-tauri/src/modules/pty/scripts/bashrc.bash"),
+      "utf8",
+    );
+    expect(bashrc).not.toMatch(/633;E/);
+    // zsh 是带文本的（对照：证明"没文本"是 bash 特有的形状，不是全部本地壳）
+    const zshrc = readFileSync(
+      join(process.cwd(), "src-tauri/src/modules/pty/scripts/zshrc.zsh"),
+      "utf8",
+    );
+    expect(zshrc).toMatch(/133;C;%s/);
+  });
+});
