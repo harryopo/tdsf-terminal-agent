@@ -164,6 +164,20 @@ export function useAiLiveBridge(params: Params) {
     // 那块 OSC 块）→ `[indeterminate] 可见终端在命令提交后等待超时`。
     // 可见终端不是 SSH（本地壳 / 没有终端标签页）时保持旧行为回落全局会话，
     // 免得把"agent 用不了 SSH"做成这次的副作用。
+    // #128 (2026-09-24)：「命令会落在哪块终端」的 leaf 号 —— 唯一口径，与
+    // getActiveTerminalTarget / 注入路径同源。SSH leaf 优先（App 层按"屏幕上这块终端"
+    // 派生），其次当前终端 tab 的活跃 leaf。
+    // ⚠️ 这只是**注册表口径**：它不保证那块终端真挂着（停在欢迎页时面板整块不渲染，
+    // 实测 sshActiveLeafId 仍有值而 `.xterm` 数为 0）。要回答"能不能往里写"，
+    // 必须再过 `terminalRefs` 这道挂载判据 —— 就是下面 getActiveTerminalSession 做的事。
+    const activeTerminalLeafId = (): number | null => {
+      const sshLeafId = ref.current.getSshLeafId?.();
+      if (sshLeafId !== null && sshLeafId !== undefined) return sshLeafId;
+      const { activeId, tabs } = ref.current;
+      const tab = tabs.find((x) => x.id === activeId);
+      return tab?.kind === "terminal" ? (tab.activeLeafId ?? null) : null;
+    };
+
     const sshRustSessionId = (): number | null => {
       const { activeId, tabs } = ref.current;
       const tab = tabs.find((x) => x.id === activeId);
@@ -577,15 +591,15 @@ export function useAiLiveBridge(params: Params) {
       // 无终端时 transport 据此把 connection_mode 标为 none（而非误报 local）。
       // 判定逻辑与 getTerminalContext 的活跃终端判定保持一致（SSH 优先）。
       getActiveTerminalSession: (): "ssh" | "local" | "wsl" | null => {
-        const sshLeafId = ref.current.getSshLeafId?.();
-        if (sshLeafId !== null && sshLeafId !== undefined) return "ssh";
-        const { activeId, tabs } = ref.current;
-        const t = tabs.find((x) => x.id === activeId);
-        return t?.kind === "terminal"
-          ? ref.current.wslDistro
-            ? "wsl"
-            : "local"
-          : null;
+        // #128：这一项的语义是"屏幕上有一块真能写的终端"，不是"注册表里有条 leaf"。
+        // 停在欢迎页时工作区面板整块不渲染，`terminalRefs` 是空的（实测 `.xterm` 数 0），
+        // 而 leaf 注册表仍指着后台那条 shell —— 只看注册表就会让 agent 以为可以执行，
+        // 命令被 #118 那道闸原样拒回，同一件事连撞三次才汇报失败（2026-09-23 真机：
+        // 三条只读命令 1–6 毫秒全被拒）。判据与注入路径的 `terminalMounted` 同源。
+        const leafId = activeTerminalLeafId();
+        if (leafId === null || !terminalRefs.current.has(leafId)) return null;
+        if (ref.current.getSshLeafId?.() != null) return "ssh";
+        return ref.current.wslDistro ? "wsl" : "local";
       },
       getWslDistro: () => ref.current.wslDistro,
     });

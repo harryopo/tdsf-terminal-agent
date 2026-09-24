@@ -725,9 +725,17 @@ export default function App() {
           workspaceRoot: live.getWorkspaceRoot(),
           activeFile: live.getActiveFile(),
           sshSessionId: live.getSshRustSessionId(),
+          // #128：这两个才是"屏幕上有没有一块能写的终端"，只报会话号会骗人
+          terminalSession: live.getActiveTerminalSession?.() ?? null,
+          visibleTerminal: (live.getActiveTerminalSession?.() ?? null) !== null,
         };
       },
       getEnvBlock: () => {
+        // ⚠️ 这是**近似读数**，不是模型真收到的载荷：真载荷还要经过 chatRuntime 按会话
+        // scope 的覆盖（ssh scope 会把 cwd / workspaceRoot 置 null）与 Python 侧
+        // adapter 的 <live_context>。要取真凭据读 `.tdsf-data/agent-logs/<会话>.jsonl`
+        // 的 `env_inject` 行。#128 这轮就差点被它骗了：这里报着
+        // `active_terminal_cwd: /root`，而模型真收到的只有 `connected_to: root@…` 一行。
         const live = useChatStore.getState().live;
         const lines: string[] = [];
         const workspaceRoot = live.getWorkspaceRoot();
@@ -735,13 +743,16 @@ export default function App() {
         const activeFile = live.getActiveFile();
         const terminalPrivate = live.isActiveTerminalPrivate();
         const sshSessionId = live.getSshRustSessionId();
+        // 与 transport.formatEnvBlock 同一条抑制：没有终端会话时不报"终端 cwd"
+        const hasTerminal = (live.getActiveTerminalSession?.() ?? null) !== null;
         if (workspaceRoot) lines.push(`workspace_root: ${workspaceRoot}`);
-        if (cwd) lines.push(`active_terminal_cwd: ${cwd}`);
+        if (cwd && hasTerminal) lines.push(`active_terminal_cwd: ${cwd}`);
         if (activeFile) lines.push(`active_file: ${activeFile}`);
         if (terminalPrivate) lines.push("active_terminal_mode: private");
-        if (sshSessionId !== null) {
-          lines.push(`ssh_session_id: ${sshSessionId}`);
-        }
+        // 会话号照旧报出来 —— 它是与 rust.log 对账的关联键（#113① 那套读数靠它）。
+        // 但必须同时报"看得见吗"，否则只有会话号就会让人以为模型面前有终端（#128 撞的正是这个）。
+        if (sshSessionId !== null) lines.push(`ssh_session_id: ${sshSessionId}`);
+        lines.push(`visible_terminal: ${hasTerminal ? "true" : "false"}`);
         return lines.length === 0 ? null : `<env>\n${lines.join("\n")}\n</env>`;
       },
     };
