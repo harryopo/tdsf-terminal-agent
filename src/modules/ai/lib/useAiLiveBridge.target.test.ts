@@ -11,6 +11,8 @@
  * 用户看不到回显 + 拿不到结果 → `[indeterminate] 可见终端在命令提交后等待超时`。
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { renderHook } from "@testing-library/react";
 import { setLeafSshSession } from "@/lib/param-complete-client";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
@@ -36,6 +38,11 @@ function publish(params: {
   activeId: number;
   tabs: Tab[];
   getSshLeafId?: () => number | null;
+  /**
+   * #128：此刻**真挂了渲染器**的 leaf 号（= `terminalRefs` 的键）。
+   * 缺省为空 —— 那正是"停在欢迎页"的形状：面板整块不渲染，leaf 注册表还指着后台那条 shell。
+   */
+  mounted?: number[];
 }): Live {
   const captured: { live: Live | null } = { live: null };
   renderHook(() =>
@@ -51,7 +58,14 @@ function publish(params: {
       wslDistro: null,
       openPreviewTab: () => {},
       newAgentTab: () => ({ tabId: 0, leafId: 0 }),
-      terminalRefs: { current: new Map() },
+      terminalRefs: {
+        current: new Map(
+          (params.mounted ?? []).map((id) => [
+            id,
+            {} as never /* TerminalPaneHandle：这里只用到"键存在" */,
+          ]),
+        ),
+      },
       getSshLeafId: params.getSshLeafId,
     }),
   );
@@ -180,5 +194,81 @@ describe("getSshRustSessionId（#107）", () => {
     const editor = { id: 3, kind: "editor", spaceId: "sp-1" } as unknown as Tab;
     expect(publish({ activeId: 3, tabs: [editor] }).getSshRustSessionId()).toBe(8);
     expect(publish({ activeId: 99, tabs: [] }).getSshRustSessionId()).toBe(8);
+  });
+});
+
+/**
+ * #128（2026-09-24 真机）：**「连接活着」和「屏幕上有一块能写的终端」是两件事。**
+ *
+ * 停在欢迎页时工作区面板整块不渲染（实测 `.xterm` 数 0、`terminalRefs` 为空），
+ * 而 leaf 注册表仍指着后台那条已连接的 shell。旧实现只查注册表就说"SSH 终端活跃"，
+ * 于是 agent 被告知可以执行 → 命令被 #118 那道闸原样拒回（安全口径：没写进终端就不执行）
+ * → 同一件事连撞三次才汇报失败（2026-09-23：三条只读命令 1–6 毫秒全被拒）。
+ *
+ * 这里只改"看得见吗"这一格；`getSshRustSessionId()` 照旧报会话号 —— 路由目标没变，
+ * 执行通道也不许被这次改动动到。
+ */
+describe("getActiveTerminalSession 必须按渲染器挂载判（#128）", () => {
+  it("注册表说这块 leaf 活跃、但没挂渲染器（停在欢迎页）→ null", () => {
+    setLeafSshSession(11, 7);
+    const live = publish({
+      activeId: 1,
+      tabs: [termTab()],
+      getSshLeafId: () => 11,
+      mounted: [],
+    });
+    expect(live.getActiveTerminalSession?.()).toBeNull();
+    // 配对：连接事实不许被一起抹掉（否则会顺手把能用 SSH 的场景做成不能用）
+    expect(live.getSshRustSessionId()).toBe(7);
+  });
+
+  it("同一块 SSH leaf 挂上渲染器 → ssh（证明上一条消失的是挂载判据）", () => {
+    setLeafSshSession(11, 7);
+    const live = publish({
+      activeId: 1,
+      tabs: [termTab()],
+      getSshLeafId: () => 11,
+      mounted: [11],
+    });
+    expect(live.getActiveTerminalSession?.()).toBe("ssh");
+  });
+
+  it("屏幕上是一块本地壳 → local，不算 null（别把修复做成「一律说没有终端」）", () => {
+    const live = publish({ activeId: 1, tabs: [termTab()], mounted: [11] });
+    expect(live.getActiveTerminalSession?.()).toBe("local");
+  });
+
+  it("本地壳的渲染器也没挂（无 tab / 编辑器页）→ null", () => {
+    const editor = { id: 3, kind: "editor", spaceId: "sp-1" } as unknown as Tab;
+    expect(publish({ activeId: 3, tabs: [editor] }).getActiveTerminalSession?.()).toBeNull();
+    expect(
+      publish({ activeId: 1, tabs: [termTab()], mounted: [] }).getActiveTerminalSession?.(),
+    ).toBeNull();
+  });
+});
+
+/**
+ * #128 的接线：`chatRuntime` 上报给 agent 的 `terminalSession` 必须用上这个 getter。
+ *
+ * 旧写法是 `terminalSession: connected ? "ssh" : "none"` —— 只看连接，于是渲染器挂没挂
+ * 根本进不到模型那一侧（Python 的 `connection_mode` 又只看会话号，两边一起把"连接活着"
+ * 当成"有终端可用"）。快照构建在 `makeChat()` 闭包里，没法离线调用，所以照 #125 的手法
+ * 读源码钉住这条接线。
+ */
+describe("#128 接线：terminalSession 不许只由 connected 决定", () => {
+  const src = readFileSync(
+    join(process.cwd(), "src", "modules", "ai", "store", "chatRuntime.ts"),
+    "utf8",
+  );
+
+  it("SSH 档的 terminalSession 条件里必须带上活动终端会话判定", () => {
+    const at = src.indexOf("terminalSession:");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const expr = src.slice(at, at + 200);
+    expect(expr).toContain("activeTerminal");
+  });
+
+  it("⚠️ 不许退回「只看 connected」的旧写法", () => {
+    expect(src).not.toMatch(/terminalSession:\s*connected\s*\?\s*"ssh"\s*:\s*"none"/);
   });
 });

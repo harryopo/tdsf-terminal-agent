@@ -141,6 +141,8 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       // B1 (2026-09-01, 用户实测): 欢迎页（无任何终端会话）不得把
       // explorerRoot/launchCwd/home 回退链的默认路径当"本地工作区"上报
       // ——agent 因此误答"当前在本地工作区"而不引导建工作区/连服务器。
+      // #128 (2026-09-24): 这一项现在**按渲染器是否挂载判**（不再只看 leaf 注册表），
+      // 所以停在欢迎页时它是 "none" —— 即便后台那条 SSH 确实连着。
       const activeTerminal = live.getActiveTerminalSession?.() ?? "none";
 
       // === SSH scope：环境只看绑定（工作区或会话）的那台服务器 ===
@@ -184,7 +186,13 @@ function makeChat(sessionId: string): Chat<UIMessage> {
             connected: Boolean(connected),
           },
           terminalOutput,
-          terminalSession: connected ? "ssh" : "none",
+          // #128（2026-09-24）：这一项的语义是"屏幕上有一块真能写的终端"，不是"连接还活着"。
+          // 旧写法 `connected ? "ssh" : "none"` 只看连接 —— 停在欢迎页时后台那条 SSH 确实连着，
+          // 于是 agent 被告知有终端可用，命令被 #118 那道闸拒回来，同一件事连撞三次才汇报失败。
+          // `activeTerminal` 现在按渲染器是否挂载判（与注入路径同一口径），所以两件事终于分开：
+          // **连接是连接、终端是终端**，`sshSessionId` 照旧留着（路由目标没变，不改执行通道）。
+          terminalSession:
+            connected && activeTerminal !== "none" ? "ssh" : "none",
           // 记忆召回过滤维度（同工作区跨对话共享沉淀）
           scopeId: memoryScopeId,
           // TDSF 2026-09-02: 解耦——不再把前端 autoExecuteInTerminal 作为
