@@ -75,6 +75,20 @@ TOOL_DECORATOR_AVAILABLE = _STRANDS_AVAILABLE
 # 2026-09-23 #119 实测 200002ms vs 200007ms。由 tests/test_visible_terminal_budget_ordering.py 钉住。
 VISIBLE_TERMINAL_IPC_OVERHEAD_SECS = 200.0
 
+# 可见终端改道后台时写给模型看的那句话（唯一主人：`execute_via_ssh` 在成功载荷里
+# 挂 `execution_channel_note`）。判据是"用户偏好是可见终端、这一条却跑在后台"，
+# 静默换通道等于教模型撒谎（#118 后半 2026-09-25 / #113③ 同一族）。
+_REROUTE_CHANNEL_NOTES = {
+    "no_visible_terminal": (
+        "本轮没有可见终端（界面停在欢迎页，或当前标签页不是这台服务器的终端），"
+        "只读命令改走后台 SSH 通道执行：结果真实，但这次执行不会出现在终端界面上。"
+    ),
+    "no_shell_integration": (
+        "这台机器的 shell 没有回报终端执行块，只读命令改走后台 SSH 通道重新执行："
+        "结果来自后台通道，终端界面上看不到这次执行。"
+    ),
+}
+
 
 # ============================================================================
 # RustBridge 协议 — Python 调用 Rust 后端的抽象层
@@ -1445,6 +1459,8 @@ def _execute_via_ssh_impl(
             getattr(ctx, "execution_channel", "background") == "visible-terminal"
         )
         execution_channel = "visible-terminal" if visible_terminal else "background"
+        # 只有真发生了"偏好是可见终端、这条却跑在后台"才会有值（见 _REROUTE_CHANNEL_NOTES）
+        channel_change_note = ""
         if visible_terminal:
             # #113①（2026-09-22）探针：Python 这一端只知道"什么时候把请求交给
             # Rust"和"什么时候拿到回执"两个时刻。中间各跳由 Rust 侧 `[vt-probe]`
@@ -1475,37 +1491,64 @@ def _execute_via_ssh_impl(
                 and result.get("status") == "reroute"
                 and result.get("channel") == "background"
             ):
-                # #113③（2026-09-23）：改道重跑的代价按"命令到底有没有进过终端"分两类。
-                # - execution_channel_changed：派发前通道就没了，压根没执行 → 任何风险级都能改道；
+                # 改道后台的代价分两类看：**命令有没有可能已经进过终端**，以及
+                # **换通道是不是用户自己的动作**。
+                # - execution_channel_changed：用户把偏好切成了后台，派发前通道就没了，
+                #   压根没执行 → 照新偏好走，任何风险级都可以；
+                # - no_visible_terminal（#118 后半，2026-09-25 用户拍板）：连接活着但界面上
+                #   没有可写的终端，前端担保命令一个字都没写进去 → 只读/低风险改道拿真结果；
                 # - no_shell_integration：远端 shell 不吐 OSC 块，**命令可能已经跑过一遍**，
-                #   所以只有只读/低风险可以承担"再来一次"；写操作绝不重放（红线9 双重执行家族）。
-                # 认不出的原因一律按"可能已执行"处理 —— 新增原因默认不获得豁免。
+                #   只有只读/低风险可以承担"再来一次"（红线9 双重执行家族）。
+                # 收成一条规矩：写操作（L2 以上）**永不因为应用自己的判断换通道**，
+                # 只有用户亲手换偏好那一类例外；认不出的原因一律不获得豁免。
                 reroute_reason = str(result.get("reason") or "")
-                maybe_already_ran = reroute_reason != "execution_channel_changed"
-                if maybe_already_ran and risk_l >= 2:
-                    _transition_operation("indeterminate", error_code=reroute_reason)
-                    _audit_append(
-                        event="command_indeterminate",
-                        tool=tool_name,
-                        command=command,
-                        session_id=session_id,
-                        agent=ctx.agent_name,
-                        reason=reroute_reason,
-                    )
-                    return _complete_after_execution({
-                        "status": "indeterminate",
-                        "command": command,
-                        "ssh_session_id": session_id,
-                        "reason": reroute_reason,
-                        "message": (
-                            "命令已送进可见终端，但这台机器的 shell 没有回报执行结果，"
-                            "且这是写操作 —— 不重放（重跑可能造成二次改动）。"
-                            "请到终端窗口确认实际结果后再决定是否重试。"
-                        ),
-                    })
-                visible_terminal = False
-                execution_channel = "background"
-                result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
+                if risk_l >= 2 and reroute_reason != "execution_channel_changed":
+                    if reroute_reason == "no_visible_terminal":
+                        # 写操作一寸不松：改回前端那句"先打开终端标签页"的指引，
+                        # 并沿用下面 `status=="unavailable"` 那条既有分支 —— 账本状态、
+                        # 审计口径、文案主人都不另开第二份。
+                        refused: dict = {
+                            "status": "unavailable",
+                            "reason": reroute_reason,
+                        }
+                        if result.get("message"):
+                            refused["message"] = str(result["message"])
+                        result = refused
+                    else:
+                        _transition_operation("indeterminate", error_code=reroute_reason)
+                        _audit_append(
+                            event="command_indeterminate",
+                            tool=tool_name,
+                            command=command,
+                            session_id=session_id,
+                            agent=ctx.agent_name,
+                            reason=reroute_reason,
+                        )
+                        return _complete_after_execution({
+                            "status": "indeterminate",
+                            "command": command,
+                            "ssh_session_id": session_id,
+                            "reason": reroute_reason,
+                            "message": (
+                                "命令已送进可见终端，但这台机器的 shell 没有回报执行结果，"
+                                "且这是写操作 —— 不重放（重跑可能造成二次改动）。"
+                                "请到终端窗口确认实际结果后再决定是否重试。"
+                            ),
+                        })
+                else:
+                    visible_terminal = False
+                    execution_channel = "background"
+                    # 不许静默换通道：用户偏好是可见终端而这一条真跑在后台时，
+                    # 载荷里要写清楚（模型据此决定要不要提醒用户"界面上看不见"）。
+                    # execution_channel_changed 不需要 —— 那是用户自己切的。
+                    if reroute_reason != "execution_channel_changed":
+                        channel_change_note = _REROUTE_CHANNEL_NOTES.get(
+                            reroute_reason
+                        ) or (
+                            f"可见终端这次不可用（原因 {reroute_reason}），"
+                            "命令改走后台 SSH 通道执行：结果真实，但不会出现在终端界面上。"
+                        )
+                    result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
         else:
             result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
     except Exception as e:
@@ -1812,6 +1855,10 @@ def _execute_via_ssh_impl(
         "exit_code": exit_code,
         "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
     }
+    if channel_change_note:
+        # 换了通道就要在载荷里说清（不许静默）：模型据此知道"界面上看不见这一次"，
+        # 也就不会反过来跟用户讲"我已经在终端里跑了"。
+        payload["execution_channel_note"] = channel_change_note
     if exit_code != 0:
         # 不替模型下"失败"结论，但把非 0 的含义讲清楚，防止它把"无匹配"读成"出事"
         payload["note"] = (

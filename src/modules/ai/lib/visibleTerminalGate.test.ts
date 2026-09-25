@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import {
   rejectForVisibleTerminal,
+  rerouteToBackground,
   type VisibleTerminalGateInput,
 } from "./visibleTerminalGate";
 
@@ -84,6 +85,30 @@ describe("可见终端执行门禁：原因必须可分辨", () => {
     );
   });
 
+  /**
+   * #118 后半（2026-09-25 用户拍板）：只读命令在没有可见终端时改走后台。
+   * 这道闸是"有没有可写终端"的唯一主人，所以**由它标注哪一种拒绝等于
+   * "命令一个字都没写进终端"**（后台重派发因此不可能二次执行）；
+   * 风险级不由这里判 —— 写操作要不要改道由 sidecar 决定。
+   */
+  it("no_visible_terminal → 标注可改道后台（连接活着、命令确实没写进去）", () => {
+    expect(
+      rejectForVisibleTerminal(gate({terminalMounted: false}))
+        ?.reroutableToBackground,
+    ).toBe(true);
+  });
+
+  it("另两种拒绝不许标注可改道（负向配正向）", () => {
+    // session_mismatch：那块终端确实存在、只是另一台机器 → 悄悄打到另一台是更糟的
+    // "所见非所跑"；malformed_request：连命令都没有，后台也没法执行。
+    expect(
+      rejectForVisibleTerminal(gate({currentSessionId: 3}))?.reroutableToBackground,
+    ).toBe(false);
+    expect(
+      rejectForVisibleTerminal(gate({hasCommand: false}))?.reroutableToBackground,
+    ).toBe(false);
+  });
+
   it("每条拒绝都要说清'命令未执行'（绝不让人以为已经跑了）", () => {
     const cases: Partial<VisibleTerminalGateInput>[] = [
       {terminalMounted: false},
@@ -123,5 +148,40 @@ describe("useAiLiveBridge 必须走这份判据（接线）", () => {
 
   it("不许再把三种原因糊成一句 visible_terminal_unavailable", () => {
     expect(src).not.toContain("visible_terminal_unavailable");
+  });
+
+  it("桥按门禁给的 reroutableToBackground 标记决定改道，不自己重判原因", () => {
+    // 原因清单的主人只有这一个文件：桥里再写一遍 `reason === "no_visible_terminal"`
+    // 就是同一件事两个主人（#116/#128 一族病：改一处忘改另一处）。
+    const start = src.indexOf("const startVisibleTerminalExecution = ");
+    const body = src.slice(start, start + 4000);
+    expect(
+      body.includes("rejected.reroutableToBackground"),
+      "桥没有读门禁的改道标记 —— 只读命令又会白撞三次",
+    ).toBe(true);
+    expect(
+      body.includes("rerouteToBackground("),
+      "改道回执必须走这份载荷工厂，桥里不许各写一遍键名",
+    ).toBe(true);
+    expect(
+      body.includes('reason === "no_visible_terminal"'),
+      "桥里不许再抄一份原因判据",
+    ).toBe(false);
+  });
+});
+
+/**
+ * 跨语言契约：sidecar 读的字面量是 `status=="reroute" && channel=="background"`
+ * （strands_backend/tools/__init__.py）。写错一个字符不会报错，只会让只读命令
+ * 退回"白撞三次"——所以载荷形状单独钉一条，两边各写一处、值必须逐字对上。
+ */
+describe("改道回执的载荷形状", () => {
+  it("四个键与 sidecar 读的字段名逐字一致", () => {
+    expect(rerouteToBackground("no_visible_terminal", "指引")).toEqual({
+      status: "reroute",
+      channel: "background",
+      reason: "no_visible_terminal",
+      message: "指引",
+    });
   });
 });
