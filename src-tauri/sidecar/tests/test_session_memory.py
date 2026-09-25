@@ -293,5 +293,35 @@ class TestSaveSkillAgentTool(unittest.TestCase):
         self.assertTrue((tmp / "skills" / "tool-made-skill" / "SKILL.md").exists())
 
 
+class TestSummaryPromptForbidsTurnScopedState(unittest.TestCase):
+    """#146：摘要提示词不许把"本轮的即时状态"写进长期记忆。
+
+    真机证据（.tdsf-data/agent-logs/*.jsonl 的 env_inject 原样行）：某一轮处于
+    OBSERVE、执行类工具被 schema 裁掉，助手当时说"当前这一轮我这边可用的工具里没有
+    带 shell 映射的执行类工具……无法生成教学命令卡"。这句话被沉淀成会话记忆后，
+    之后**每一轮**都会通过 <recalled-memory>/<session-memory> 回注给模型，
+    而它用的是**现在时**——于是带着真终端上下文的回合里，模型仍被喂着
+    "ssh_command 等执行类工具已从本轮工具集移除，调用会返回 Unknown tool"。
+    这是 #116「应用对自己的 agent 撒谎」那一族，撒谎的源头是自己的记忆库。
+
+    写侧能挡新增，**挡不住存量条目**（存量靠读侧标题，见 transport 的
+    toolSilentBudget 同族用例），所以这里钉的是"别继续往里写"。
+    """
+
+    def test_prompt_要求排除即时状态断言(self):
+        prompt = session_memory._SUMMARY_PROMPT
+        self.assertIn("本轮", prompt)
+        # 三类最容易被写成现在时的即时状态，必须点名排除
+        for word in ("模式", "工具", "目录"):
+            self.assertIn(word, prompt)
+
+    def test_prompt_排除语句与忠实记录不矛盾(self):
+        """正向配对：不能只靠「删掉即时状态」过关——「命令保留原样」这条还在，
+        否则摘要就不再是可复用的做法记录了。"""
+        prompt = session_memory._SUMMARY_PROMPT
+        self.assertIn("命令保留原样", prompt)
+        self.assertIn("解决命令", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

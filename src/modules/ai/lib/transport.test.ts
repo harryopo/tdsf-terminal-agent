@@ -502,7 +502,6 @@ describe("formatMemoryHintBlock — T4 召回块格式化", () => {
   it("空结果不注入 → null（分区整体省略）", () => {
     expect(formatMemoryHintBlock([], { kind: "recalled", topK: 3 })).toBeNull();
   });
-
   it("与首轮去重：excludeIds 命中即跳过；全命中 → null", () => {
     // 部分命中：只注入未命中的条目
     const r = formatMemoryHintBlock(
@@ -535,6 +534,47 @@ describe("formatMemoryHintBlock — T4 召回块格式化", () => {
     expect(r!.block).toContain(`${"x".repeat(220)}…`);
     expect(r!.block).not.toContain(`${"x".repeat(221)}`);
   });
+});
+
+// ============================================================================
+// #146 记忆块必须声明"这不是本轮状态"
+// ----------------------------------------------------------------------------
+// 真机证据（.tdsf-data/agent-logs 的 env_inject 原样行）：某轮处于 OBSERVE、执行类
+// 工具被 schema 裁掉，助手说"当前这一轮我这边可用的工具里没有带 shell 映射的执行类
+// 工具……无法生成教学命令卡"。这句**现在时**的话被沉淀成会话记忆后，每轮回注；
+// 后面带着真终端上下文的回合里，模型仍读得到"ssh_command 已从工具集移除、
+// 调用会返回 Unknown tool"——于是它照着历史相信自己没有工具（#116 同族）。
+// 旧标题只管**相关性**（"无关请忽略"），没管**时态**，所以挡不住这句话。
+// ============================================================================
+describe("记忆块时态声明 — 历史不描述本轮（#146）", () => {
+  for (const kind of ["recalled", "session"] as const) {
+    it(`<${kind}-memory> 标题必须写明"不描述本轮状态"且"以本轮为准"`, () => {
+      const r = formatMemoryHintBlock([makeEntry()], { kind, topK: 3 });
+      expect(r).not.toBeNull();
+      expect(r!.block).toContain("不描述本轮状态");
+      expect(r!.block).toContain("以本轮为准");
+    });
+
+    it(`<${kind}-memory> 不许只靠"无关请忽略"承担时态责任（正向配负向）`, () => {
+      const r = formatMemoryHintBlock([makeEntry()], { kind, topK: 3 });
+      const block = r!.block;
+      // 旧的免责句可以留着（它管相关性），但它**不是**唯一的一句
+      expect(block).toMatch(/忽略/);
+      const clause = block.indexOf("不描述本轮状态");
+      // ⚠️ 必须先证明这句话在：indexOf 找不到返回 -1，而 -1 小于任何下标，
+      // "排在条目前面"会被"这句话压根没有"满足 —— 判据自己假绿（第一版就这样）。
+      expect(clause).toBeGreaterThan(-1);
+      expect(clause).toBeLessThan(block.indexOf("《案例：nginx 502 排障》"));
+    });
+
+    it(`<${kind}-memory> 点名三类即时状态：模式 / 工具 / 连接与目录`, () => {
+      const block = formatMemoryHintBlock([makeEntry()], { kind, topK: 3 })!
+        .block;
+      for (const word of ["模式", "工具", "目录"]) {
+        expect(block).toContain(word);
+      }
+    });
+  }
 });
 
 describe("fetchRecalledMemory — 检索/超时/去重（mock invoke）", () => {
