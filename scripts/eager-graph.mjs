@@ -46,6 +46,10 @@ const STATIC_IMPORT =
   /(?:^|\n)\s*import\s+(?!type[\s{])(?:[^"';]*?from\s*)?["']([^"']+)["']/g;
 const STATIC_EXPORT_FROM =
   /(?:^|\n)\s*export\s+(?!type[\s{])[^"';]*?from\s*["']([^"']+)["']/g;
+// 懒边界：`import("x")` / `lazy(() => import("x"))`。它们不进 eager 图，
+// 但**必须能查得到指向谁** —— 否则"某片代码不在首屏"这条负向判据，
+// 靠"把那片代码整个删掉"也能全绿（#94 §6-B 立这条正向配对时撞到的）。
+const DYNAMIC_IMPORT = /(?:^|[^.\w])import\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 function staticSpecs(code) {
   const specs = new Set();
@@ -57,15 +61,29 @@ function staticSpecs(code) {
   return [...specs];
 }
 
+function dynamicSpecs(code) {
+  const specs = new Set();
+  DYNAMIC_IMPORT.lastIndex = 0;
+  let m;
+  while ((m = DYNAMIC_IMPORT.exec(code))) specs.add(m[1]);
+  return [...specs];
+}
+
+// Windows 上 `join`/`resolve` 混着给反斜杠，而 `root` 是 fileURLToPath 来的正斜杠 ——
+// 不归一就剥不掉前缀（第一版就因此得到一串绝对路径，"面板不在 eager 图里"当场假绿）。
+const toPosix = (p) => p.split("\\").join("/");
+const rel = (p) => toPosix(p).replace(toPosix(root) + "/", "");
+
 function pkgOf(spec, watch) {
   return watch.find((w) => spec === w || spec.startsWith(w + "/"));
 }
 
-/** @returns {{ moduleCount: number, hits: Map<string, {spec:string, file:string}> }} */
+/** @returns {{ moduleCount: number, files: Set<string>, lazyFiles: Set<string>, hits: Map<string, {spec:string, file:string}> }} */
 export function traceEager(entry, watch = DEFAULT_WATCH) {
   const entryFile = resolve(root, entry);
   const seen = new Set();
   const queue = [entryFile];
+  const lazyFiles = new Set();
   const hits = new Map();
   while (queue.length) {
     const file = queue.shift();
@@ -85,11 +103,20 @@ export function traceEager(entry, watch = DEFAULT_WATCH) {
       }
       const pkg = pkgOf(spec, watch);
       if (pkg && !hits.has(pkg)) {
-        hits.set(pkg, { spec, file: file.replace(root + "/", "") });
+        hits.set(pkg, { spec, file: rel(file) });
       }
     }
+    for (const spec of dynamicSpecs(code)) {
+      const local = resolveLocal(spec, file);
+      if (local) lazyFiles.add(rel(local));
+    }
   }
-  return { moduleCount: seen.size, hits };
+  return {
+    moduleCount: seen.size,
+    files: new Set([...seen].map(rel)),
+    lazyFiles,
+    hits,
+  };
 }
 
 const isCli = process.argv[1] === fileURLToPath(import.meta.url);
