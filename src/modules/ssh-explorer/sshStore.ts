@@ -135,9 +135,6 @@ interface SshExplorerState {
    */
   currentPathBySession: Record<string, string>;
 
-  // === 连接对话框 ===
-  connectDialogOpen: boolean;
-
   // === TDSF: 已保存的连接 (永久密钥 + 自动登录) ===
   /** 已保存的连接列表 (按 lastUsed 倒序, 启动时加载) */
   savedConnections: SshCredentialProfile[];
@@ -149,8 +146,6 @@ interface SshExplorerState {
   remoteCarapaceBySession: Record<string, SshRemoteCarapaceState>;
 
   // === Actions ===
-  openConnectDialog: () => void;
-  closeConnectDialog: () => void;
   /**
    * TDSF 修复 2026-08-31: opts.autoConnect=true 标记开机自动连接——
    * 订阅处理器据此决定"无匹配 SSH Space"时跳过（自动）还是新建（手动）。
@@ -395,16 +390,11 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   activeSessionId: null,
   pendingApprovals: [],
   currentPathBySession: {},
-  connectDialogOpen: false,
   // TDSF: 凭据持久化初始状态
   savedConnections: [],
   savedConnectionsLoading: false,
   // TDSF 2026-08-28: 远端 carapace 检测状态初始（键不存在 = 未检测）
   remoteCarapaceBySession: {},
-
-  // === Actions ===
-  openConnectDialog: () => set({ connectDialogOpen: true }),
-  closeConnectDialog: () => set({ connectDialogOpen: false }),
 
   connect: async (params, opts) => {
     const sessionId = genId();
@@ -435,7 +425,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     set((s) => ({
       sessions: [...s.sessions, session],
       activeSessionId: sessionId,
-      connectDialogOpen: false,
     }));
 
     try {
@@ -638,7 +627,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
    * 测试连接 (不保留会话)
    *
    * 调用 Rust ssh_test 命令, 成功后立即断开。
-   * 用于「新建工作区 → SSH 服务器」与 SshConnectDialog 的"测试连接"按钮。
+   * 用于「新建工作区 → SSH 服务器」表单里的"测试连接"按钮。
    *
    * #111：失败原因在这里统一翻成人话（`describeSshFailureText`），两个调用方都受益 ——
    * Rust 回的是 russh 的 Debug 结构体，用户读不出该做什么。原文放 `raw`，界面拿它做 tooltip。
