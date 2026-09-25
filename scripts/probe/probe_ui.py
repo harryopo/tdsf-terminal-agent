@@ -50,6 +50,22 @@ AUDIT_JS = r"""
     meta: { url: location.href, w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
     rules: {},
   };
+  // **样本量必须随读数一起报**：0 违规有两种——"真的没问题"和"现场压根没东西可量"。
+  // 停在欢迎页时 body 里只有两百来个字符，七条规则全绿量的是一空气
+  // （#130：一个空读数伪装成大缺陷；这里是它反过来骗人）。
+  out.meta.audited = [...document.querySelectorAll('body *')].filter(
+    (el) => !el.closest(SKIP)).length;
+  // 缩放这条轴到底覆盖到谁：只有带 zoom 的那一层的后代元素会随 --app-zoom 变，
+  // 顶栏与侧栏不在里面 ⇒ "横扫缩放"对它们的读数不会多覆盖任何东西。
+  const zoomHost = [...document.querySelectorAll('body *')].find(
+    (el) => { const z = getComputedStyle(el).zoom; return z && z !== '1'; });
+  out.meta.zoomHost = zoomHost
+    ? zoomHost.tagName.toLowerCase() + '.' + String(zoomHost.className || '').trim().split(/\s+/)[0]
+    : null;
+  out.meta.zoomable = zoomHost
+    ? [...document.querySelectorAll('body *')].filter(
+        (el) => !el.closest(SKIP) && zoomHost.contains(el)).length
+    : 0;
   for (const k of ['clippedText', 'inputTextOverflow', 'lowContrast', 'smallHitTarget', 'missingName', 'dividerMisaligned', 'controlOutsideLeftCluster']) {
     out.rules[k] = { count: 0, samples: [] };
   }
@@ -355,7 +371,12 @@ def main() -> int:
             entry = {k: report["rules"][k]["count"] for k in RULES}
             new_entry[key + how] = entry
             m = report["meta"]
-            print(f"[{title} {key}{how}] {m['w']}x{m['h']} dpr={round(m['dpr'], 2)} 违规：{entry}")
+            print(
+                f"[{title} {key}{how}] {m['w']}x{m['h']} dpr={round(m['dpr'], 2)} "
+                f"可量元素 {m.get('audited')}（随 --app-zoom 变的 {m.get('zoomable')}"
+                f"{'' if not m.get('zoomHost') else '，在 ' + str(m['zoomHost'])}）"
+                f"违规：{entry}"
+            )
             prev = baseline.get(args.scenario, {}).get(key + how)
             for k in RULES:
                 if not entry[k]:
