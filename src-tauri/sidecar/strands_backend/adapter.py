@@ -600,6 +600,7 @@ class ToolCallLimitHook:
     - 单次 invoke 总工具调用数超过 max_tool_calls → 熔断（防死循环）
     - 同一工具连续失败 max_failures 次 → 熔断
       （成功调用重置该工具失败计数，与 fix_loop 的 reset 语义一致）
+      #149：indeterminate（结果没取回）既不计失败也不清零，只把真状态报进流水
       仅在 Agent 真正重试时写入 FixLoopTracker；成功后清零；下一次重试前
       创建 needs-you handoff，请用户检查环境或调整策略。
 
@@ -986,15 +987,21 @@ class ToolCallLimitHook:
             getattr(event, "exception", None) is not None
             or (status is not None and status != "success")
         )
-        if failed:
-            self.failures_by_tool[name] = self.failures_by_tool.get(name, 0) + 1
-            error_summary = self._error_summary(event)
-            self.last_error_by_tool[name] = error_summary
-            self._last_failure = (name, error_summary)
-        else:
-            self.failures_by_tool[name] = 0
-            self.last_error_by_tool.pop(name, None)
-            self._reset_fix_loop(name)
+        # #149（2026-09-25 用户拍板）：indeterminate 是"命令可能还在跑、结果没取回"，
+        # 既不是失败也不是成功。计一次失败 ⇒ 三次取不回就停掉整轮工具
+        # （#113② 立这个状态正是为了不把"不知道"写成假事实）；
+        # 当成成功清零 ⇒ error/未知/error 永远熔不断。所以这一档**计数原样不动**。
+        unknown = status == "indeterminate"
+        if not unknown:
+            if failed:
+                self.failures_by_tool[name] = self.failures_by_tool.get(name, 0) + 1
+                error_summary = self._error_summary(event)
+                self.last_error_by_tool[name] = error_summary
+                self._last_failure = (name, error_summary)
+            else:
+                self.failures_by_tool[name] = 0
+                self.last_error_by_tool.pop(name, None)
+                self._reset_fix_loop(name)
         # T7: 工具调用流水（name + input + 成功与否 + duration_ms）——收尾验证判定数据源
         tool_input = self._tool_input(event)
         tool_entry = {
@@ -1009,7 +1016,13 @@ class ToolCallLimitHook:
             tool_entry["duration_ms"] = duration_ms
         self.tool_log.append(tool_entry)
         self._record_evidence(name, tool_input, getattr(event, "result", None), failed)
-        self._report_progress(name, "failed" if failed else "success", duration_ms)
+        # #149：进度流水要说真话 —— "取不回结果"不是"失败"，
+        # 写成 failed 会让排障的人和收尾判定都以为命令出错了（现场：sleep 330 那条）。
+        self._report_progress(
+            name,
+            "indeterminate" if unknown else ("failed" if failed else "success"),
+            duration_ms,
+        )
 
     def _report_progress(self, tool_name: str, status: str, duration_ms: float | None = None) -> None:
         """T2 进度上报：agent_log 落盘 loop_progress + event_bus 推流"""
