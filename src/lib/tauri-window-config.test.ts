@@ -19,8 +19,8 @@
  *    `target/debug/*.exe` 里有（dev 配置文件把整份窗口对象重抄了一遍，所以没踩到这个坑）。
  *
  * 所以这里钉四件事：覆盖文件必须自带完整窗口对象；`--disable-gpu` 必须在每一份里都在；
- * 自绘圆角的平台必须真的 transparent 且不再刷不透明底色；以及**CSS 那侧真的还在画弧**
- * （否则前三条会因为"没人画圆角"而假绿）。
+ * 主窗必须**不透明 + 深色底**，圆角交给系统裁（下面 #148 那段解释了为什么反转口径）；
+ * 以及**CSS 那侧真的不再自绘弧**（两套半径会叠出一道月牙）。
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -52,7 +52,7 @@ const MUST_SURVIVE = [
   "additionalBrowserArgs",
 ] as const;
 
-describe("Tauri 窗口配置 —— 平台覆盖不得丢字段、自绘圆角必须真透明", () => {
+describe("Tauri 窗口配置 —— 平台覆盖不得丢字段、窗口不透明且圆角交给系统", () => {
   it("基线主窗配置存在（这条测试的前提）", () => {
     expect(baseWindow).toBeTruthy();
   });
@@ -79,19 +79,46 @@ describe("Tauri 窗口配置 —— 平台覆盖不得丢字段、自绘圆角�
     }
   });
 
-  it("自绘圆角的平台（Windows/Linux + dev）必须 transparent，且不刷不透明底色", () => {
+  /* ─────────────────────────────────────────────────────────────────────────
+   * #148 口径反转（用户 2026-09-25 实测后拍板「让系统裁圆角」）
+   * 9-24 那版为了修"假圆角"把窗口改成真透明 + CSS 自绘 16px 弧。代价当场没看清：
+   * **弧外那块必然透出后面的东西**。真机读数（屏幕取样 + CDP alpha）：
+   *   · 页面在圆角外 alpha=0（什么都没画）；
+   *   · 那块白的颜色 == 窗口外紧邻像素的颜色 ⇒ 是**透过去的**，不是画上去的。
+   * 他桌面上正开着白色的资源管理器窗口 ⇒ 圆角看着就是"多了一块白"。
+   * 改成：**不透明深底 + 让 DWM 裁圆角**（和微信/VS Code 同一做法），CSS 不再自绘弧
+   * —— 两套半径叠在一起还会多出一道月牙。
+   * ⚠️ 深色 backgroundColor 同时把 2026-08-09 那条"CSS 加载前闪白屏"的防护带回来了。
+   * ───────────────────────────────────────────────────────────────────────── */
+  it("主窗必须不透明且带深色底（弧外不再透出背景，冷启动也不闪白）", () => {
     for (const file of OVERRIDES) {
       const main = (read(file).app?.windows ?? []).find((w) => w.label === "main")!;
-      expect(main.decorations, `${file} 应当无边框`).toBe(false);
-      expect(main.transparent, `${file} 没开 transparent ⇒ CSS 画的弧只是装饰`).toBe(true);
-      const bg = main.backgroundColor as string | undefined;
-      // tao 的 WM_ERASEBKGND 只取 RGB、忽略 alpha，所以"写个带 00 的颜色"不算不刷；
-      // 必须整条不给，弧外才会真的透出桌面。
-      expect(bg, `${file} 还带着 backgroundColor=${bg} ⇒ 四个角会被刷成方色`).toBeUndefined();
+      expect(main.decorations, `${file} 应当无边框（标题栏我们自己画）`).toBe(false);
+      expect(
+        main.transparent ?? false,
+        `${file} 还开着 transparent ⇒ 圆角外必然透出后面的窗口/桌面`,
+      ).toBe(false);
+      expect(
+        main.backgroundColor,
+        `${file} 少了深色 backgroundColor ⇒ 弧外会透出底色、冷启动还会闪白`,
+      ).toBe("#1a1a1a");
     }
   });
 
-  it("macOS 不在覆盖文件里被改成透明无边框（它用原生标题栏 + Overlay）", () => {
+  it("Windows 侧要真的向 DWM 请求裁圆角（不请求就变成方角，等于把圆角删了没补）", () => {
+    const rs = readFileSync(join(process.cwd(), "src-tauri/src/lib.rs"), "utf-8");
+    // 验**调用形状**而不是"名字出现过"（#147 的教训：只留 import 也能骗过存在性断言）
+    expect(rs).toMatch(
+      /DwmSetWindowAttribute\([\s\S]{0,240}DWMWA_WINDOW_CORNER_PREFERENCE/,
+    );
+    expect(rs).toMatch(/DWMWCP_ROUND/);
+    // 必须作用在**主窗**上，不能只给设置窗（他报的就是主窗的角）
+    const at = rs.indexOf("fn apply_dwm_rounded_corners");
+    expect(at).toBeGreaterThan(-1);
+    expect(rs).toMatch(/apply_dwm_rounded_corners\(&main\)/);
+  });
+
+  it("macOS 不在覆盖文件里被改成无边框（它用原生标题栏 + Overlay）", () => {
     const windows = baseWindow ? [baseWindow] : [];
     for (const w of windows) {
       expect(w.transparent, "基线配置（macOS 走这份）不该开 transparent").toBeUndefined();
@@ -99,17 +126,14 @@ describe("Tauri 窗口配置 —— 平台覆盖不得丢字段、自绘圆角�
     }
   });
 
-  // 正向配对：CSS 那侧真的还在"透明 + 画弧"。它一旦被删，上面几条会因为
-  // "再没人指望透明窗"而集体假绿。
-  it("CSS 仍然按『窗口是透明的』这个前提画圆角", () => {
+  // 正向配对：CSS 那侧确实不再自绘弧了。上面几条"不透明"的断言在 CSS 还画着弧时
+  // 会一起成立而看不出月牙，所以这里单独钉半径归零。
+  it("CSS 不再自绘窗口弧（两套半径会叠出一道月牙）", () => {
     const css = readFileSync(join(process.cwd(), "src/styles/globals.css"), "utf-8");
     expect(css).toContain('html[data-chrome="borderless"]');
-    expect(css).toMatch(/html\[data-chrome="borderless"\][^{]*\{[^}]*background:\s*transparent/);
-    // 半径走 --window-radius（用户 2026-09-24 要求对齐 AI 对话面板的 rounded-2xl），
-    // 所以字面值和变量都认 —— 但变量必须真的定义过，删掉定义同样会红。
-    expect(css).toMatch(/--window-radius:\s*\d+px/);
-    expect(css).toMatch(
-      /html\[data-chrome="borderless"\][^{]*#root[^{]*\{[^}]*border-radius:\s*(?:var\(--window-radius\)|\d+px)/,
-    );
+    expect(css).toMatch(/--window-radius:\s*0px/);
+    // 变量还在、规则还在（Linux 没有 DWM，将来要恢复自绘只改这一个数），
+    // 但**当前值必须是 0**，否则弧外又透出背景。
+    expect(css).toMatch(/border-radius:\s*var\(--window-radius\)/);
   });
 });

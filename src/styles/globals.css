@@ -193,11 +193,14 @@
 :root {
   --app-zoom: 1;
   --editor-font-size: 13px;
-  /* 窗口自绘圆角。用户 2026-09-24：「圆角再圆一点点，参考 ai 对话面板」——
-   * AI 小窗用的是 rounded-2xl（16px），所以窗口对齐到同一个值。
-   * 前提是窗口真的透明（tauri.{windows,linux}.conf.json 的 transparent: true），
-   * 否则这道弧只是画在不透明方窗上的装饰（见 src/lib/tauri-window-config.test.ts）。 */
-  --window-radius: 16px;
+  /* 窗口圆角。**当前值 0 = CSS 不画弧**，圆角交给系统裁（Windows 下 DWM，见
+   * src-tauri/src/lib.rs 的 apply_dwm_rounded_corners）。
+   * 用户 2026-09-25 实测后拍板：上一版（窗口真透明 + CSS 自绘 16px）弧外那块必然
+   * 透出后面的东西 —— 他桌面上开着白色资源管理器，看着就是"圆角多了一块白"。
+   * 不透明深底 + 系统裁角（微信/VS Code 同一做法）才不透视。
+   * 变量与下面的规则都留着：Linux 没有 DWM，要恢复自绘只改这一个数。
+   * ⚠️ 别再把它调回非 0 —— 那要求窗口真的 transparent，两套半径还会叠出一道月牙。 */
+  --window-radius: 0px;
 }
 
 html[data-chrome="borderless"] .tdsf-bg-surface {
@@ -210,9 +213,9 @@ html[data-chrome="borderless"] .tdsf-bg-surface {
   zoom: calc(1 / var(--app-zoom));
 }
 
-/* Custom window chrome (Linux/Windows): the OS gives us a transparent
- * borderless window, and we paint the rounded corners + border + shadow
- * ourselves so the app doesn't look naked on GNOME/KDE/Hyprland. */
+/* Custom window chrome (Linux/Windows): the OS gives us a borderless window and
+ * we draw the titlebar ourselves. Corners are NOT painted here any more — see
+ * --window-radius above; Windows clips them via DWM. */
 html[data-chrome="borderless"],
 html[data-chrome="borderless"] body {
   background: transparent !important;
