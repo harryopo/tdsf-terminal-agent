@@ -65,12 +65,12 @@ import {
   SidebarRail,
   useSidebarPanel,
 } from "@/modules/sidebar";
-// TDSF (P4-T4.4): Skill 管理面板
-import { SkillsPanel } from "@/modules/skills";
-// TDSF 2026-08-11 (P2 代码片段管理): 代码片段面板
-import { SnippetsPanel } from "@/modules/snippets";
-// TDSF 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
-import { TunnelPanel } from "@/modules/tunnels";
+// TDSF (P4-T4.4 / P2 片段 / P2 隧道): 三个侧栏面板走懒边界（#94 §6-B，理由见 panelsLazy.tsx）
+import {
+  SkillsPanelLazy,
+  SnippetsPanelLazy,
+  TunnelPanelLazy,
+} from "@/app/panelsLazy";
 import { KnowledgePanelLazy } from "@/modules/ai/components/lazy";
 import {
   SourceControlPanel,
@@ -2533,19 +2533,19 @@ export default function App() {
                         />
                       ) : sidebarView === "skills" ? (
                         // TDSF (P4-T4.4): Skill 管理面板
-                        <SkillsPanel />
+                        <SkillsPanelLazy />
                       ) : sidebarView === "knowledge" ? (
                         // P2-4: 知识库浏览器（搜索/列表/详情弹窗，lazy 加载）
                         <KnowledgePanelLazy />
                       ) : sidebarView === "snippets" ? (
                         // TDSF 2026-08-11 (P2 代码片段管理): 代码片段面板
-                        <SnippetsPanel
+                        <SnippetsPanelLazy
                           onInsertCommand={handleInsertSnippetCommand}
                           currentCwd={activeTerminalCwd ?? undefined}
                         />
                       ) : sidebarView === "tunnels" ? (
                         // TDSF 2026-08-11 (P2 SSH 隧道): SSH 隧道面板
-                        <TunnelPanel />
+                        <TunnelPanelLazy />
                       ) : null}
                     </ErrorBoundary>
                   </div>
