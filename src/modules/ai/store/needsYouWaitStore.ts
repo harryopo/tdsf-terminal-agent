@@ -57,11 +57,21 @@ export function matchesSession(
   return requestSessionId === currentSessionId;
 }
 
+/** 本会话还压着几条没答的请求（无活动停表、运行状态、通知都用这个数） */
+export function pendingNeedsYouCount(
+  state: NeedsYouWaitState,
+  currentSessionId: string | null | undefined,
+): number {
+  return state.pending.filter((p) =>
+    matchesSession(p.sessionId, currentSessionId),
+  ).length;
+}
+
 export function isAwaitingUser(
   state: NeedsYouWaitState,
   currentSessionId: string | null | undefined,
 ): boolean {
-  return state.pending.some((p) => matchesSession(p.sessionId, currentSessionId));
+  return pendingNeedsYouCount(state, currentSessionId) > 0;
 }
 
 /** 供非 React 消费者（sidecar-adapter）订阅本会话的等待翻转 */
