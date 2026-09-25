@@ -63,16 +63,18 @@ export function LocalAgentNotificationsBridge() {
         onActivate: () => useChatStore.getState().openPanel(),
       });
 
+    // 文案跟着界面走中文（#110「报错要说人话」同一口径）：系统通知是**人不看窗口时
+    // 唯一的入口**，一句英文标题等于让他去猜发生了什么。
     if (status === "awaiting-approval") {
       fire(
         "attention",
-        "TDSF needs your approval",
-        "Approve a tool to continue",
+        "TDSF 需要你的确认",
+        "有一条操作在等你批准才能继续",
       );
     } else if (status === "error") {
-      fire("error", "TDSF run failed", error ?? undefined);
+      fire("error", "TDSF 这一轮失败了", error ?? undefined);
     } else if (status === "idle" && isBusy(was)) {
-      fire("finished", "TDSF finished", "Your task is ready");
+      fire("finished", "TDSF 跑完了", "结果已经好了，可以看了");
     }
   }, [status, error]);
 

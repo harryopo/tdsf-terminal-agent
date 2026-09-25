@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   isAwaitingUser,
   matchesSession,
+  pendingNeedsYouCount,
   subscribeAwaitingUser,
   useNeedsYouWait,
 } from "./needsYouWaitStore";
@@ -56,6 +57,29 @@ describe("isAwaitingUser — 有 pending 请求才算在等人", () => {
     useNeedsYouWait.getState().markPending("ny-1", S);
     useNeedsYouWait.getState().markPending("ny-1", S);
     expect(useNeedsYouWait.getState().pending).toHaveLength(1);
+  });
+});
+
+describe("pendingNeedsYouCount — 待答条数（运行状态的输入）", () => {
+  it("与 isAwaitingUser 同源：有就 >0，没有就 0", () => {
+    expect(pendingNeedsYouCount(useNeedsYouWait.getState(), S)).toBe(0);
+    useNeedsYouWait.getState().markPending("ny-1", S);
+    useNeedsYouWait.getState().markPending("ny-2", S);
+    expect(pendingNeedsYouCount(useNeedsYouWait.getState(), S)).toBe(2);
+    expect(isAwaitingUser(useNeedsYouWait.getState(), S)).toBe(
+      pendingNeedsYouCount(useNeedsYouWait.getState(), S) > 0,
+    );
+  });
+
+  it("只数本会话的（别的会话不许算进来）", () => {
+    useNeedsYouWait.getState().markPending("ny-1", "s-other");
+    expect(pendingNeedsYouCount(useNeedsYouWait.getState(), S)).toBe(0);
+    expect(pendingNeedsYouCount(useNeedsYouWait.getState(), "s-other")).toBe(1);
+  });
+
+  it("归属不明的（sidecar 没给 session_id）两边都算 —— 与审批卡显示口径一致", () => {
+    useNeedsYouWait.getState().markPending("ny-1", null);
+    expect(pendingNeedsYouCount(useNeedsYouWait.getState(), S)).toBe(1);
   });
 });
 

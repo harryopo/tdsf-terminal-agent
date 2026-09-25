@@ -10,6 +10,10 @@ import {
   useChatStore,
 } from "../store/chatStore";
 import { resolvePath } from "../tools/tools";
+import {
+  pendingNeedsYouCount,
+  useNeedsYouWait,
+} from "../store/needsYouWaitStore";
 
 /**
  * Headless bridge that mirrors chat lifecycle into the store, so the status
@@ -88,7 +92,7 @@ function Bridge({ sessionId, openAiDiffTab, closeAiDiffTab }: BridgeProps) {
     return () => flushPersist(sessionId);
   }, [sessionId]);
 
-  const approvalsPending = useMemo(() => {
+  const messageApprovals = useMemo(() => {
     let n = 0;
     for (const m of messages) {
       if (m.role !== "assistant") continue;
@@ -98,6 +102,14 @@ function Bridge({ sessionId, openAiDiffTab, closeAiDiffTab }: BridgeProps) {
     }
     return n;
   }, [messages]);
+  // #142：sidecar 的 needs_you 审批**过去不在这个数里**，于是整轮停在等用户确认时
+  // agentMeta.status 仍写着 thinking/streaming —— 通知桥（只在状态**翻转**时发声）
+  // 一声不响，小窗也不弹。人恰好不在窗口前时，"等你答"这件事没有任何出口。
+  // 等待事实的唯一主人是 needsYouWaitStore（#133），这里只是它的第三个消费者。
+  const sidecarApprovals = useNeedsYouWait((s) =>
+    pendingNeedsYouCount(s, sessionId),
+  );
+  const approvalsPending = messageApprovals + sidecarApprovals;
 
   useEffect(() => {
     let runStatus: AgentRunStatus;
