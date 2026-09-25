@@ -32,11 +32,22 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "tdsf.sidebar.collapsed";
  */
 export const SIDEBAR_WIDTH_CSS_VAR = "--tdsf-sidebar-w";
 
+/**
+ * 把视觉像素宽度格式化成 CSS 变量值。**必须保留小数**：`Math.round` 会把
+ * 0.5px 以内的零头抹掉，而顶栏那条竖线就是靠这个数对到侧栏边界上的 ——
+ * 真机量过一次：面板实际 307.85px、发布成 307px，两条线差 1.15px，
+ * 正好越过 `probe:ui` 的 1px 判据（宽度零头由窗口宽/缩放决定，所以表现为
+ * "拖一下侧栏或改窗口大小就随机红一条"）。
+ */
+export function formatSidebarWidthVar(px: number): string {
+  return `${Math.max(0, px)}px`;
+}
+
 /** 把面板**视觉**像素宽度写进根元素；0（折叠）也照写，顶栏据此回退到内容宽 */
 function publishSidebarWidthVar(px: number) {
   document.documentElement.style.setProperty(
     SIDEBAR_WIDTH_CSS_VAR,
-    `${Math.max(0, Math.round(px))}px`,
+    formatSidebarWidthVar(px),
   );
 }
 
