@@ -27,6 +27,21 @@ export type VisibleTerminalGateInput = {
 
 export type VisibleTerminalReject = {reason: string; message: string};
 
+/**
+ * 「界面上没有可写的终端」这一档的拒绝回执。
+ *
+ * 单独导出是因为调用方在判据之后还要做一次**类型收窄**（`leafId` 与 xterm 实例
+ * 在 TS 眼里仍是 optional）：那条兜底分支正常到不了，一旦到了就是判据被改坏，
+ * 必须 fail-closed 回绝 —— 文案必须与这里同源，否则同一个原因会出现两种说法
+ * （#118 立这个模块的唯一理由就是一个原因只有一句话）。
+ */
+export const NO_VISIBLE_TERMINAL_REJECT: VisibleTerminalReject = {
+  reason: "no_visible_terminal",
+  message:
+    "这台服务器已连接，但界面上没有打开的终端可以写（还停在欢迎页／当前标签页是本地壳），" +
+    "命令未执行。请先在顶栏打开这个工作区、切到它的终端标签页，再让我执行。",
+};
+
 export function rejectForVisibleTerminal(
   input: VisibleTerminalGateInput,
 ): VisibleTerminalReject | null {
@@ -44,12 +59,7 @@ export function rejectForVisibleTerminal(
   ) {
     // 顺序很重要：没有可见终端时 currentSessionId 必然也是 null，
     // 先判会话号就会把"界面上没终端"说成"切错标签页"（2026-09-23 真机复现）。
-    return {
-      reason: "no_visible_terminal",
-      message:
-        "这台服务器已连接，但界面上没有打开的终端可以写（还停在欢迎页／当前标签页是本地壳），" +
-        "命令未执行。请先在顶栏打开这个工作区、切到它的终端标签页，再让我执行。",
-    };
+    return NO_VISIBLE_TERMINAL_REJECT;
   }
   if (input.currentSessionId !== input.requestedSessionId) {
     return {

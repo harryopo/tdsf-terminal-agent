@@ -32,7 +32,10 @@ import {
   shouldRerouteForMissingIntegration,
   VISIBLE_INTEGRATION_GRACE_MS,
 } from "./visibleIntegrationGrace";
-import { rejectForVisibleTerminal } from "./visibleTerminalGate";
+import {
+  NO_VISIBLE_TERMINAL_REJECT,
+  rejectForVisibleTerminal,
+} from "./visibleTerminalGate";
 import {
   resultForAbandonedVisibleExecution,
   type AbandonedVisibleExecutionCause,
@@ -765,11 +768,18 @@ export function useAiLiveBridge(params: Params) {
       request: VisibleTerminalRequest,
     ) => {
       const currentSessionId = sshRustSessionId();
-      const leafId = ref.current.getSshLeafId?.();
-      const terminal =
-        leafId === null || leafId === undefined
+      const rawLeafId = ref.current.getSshLeafId?.();
+      const rawTerminal =
+        rawLeafId === null || rawLeafId === undefined
           ? undefined
-          : terminalRefs.current.get(leafId);
+          : terminalRefs.current.get(rawLeafId);
+      // 一个"能往里写字节"的目标要同时满足两件事：有 leaf 号、那块渲染器真的挂载了。
+      // 收成单个非 optional 的对象，后面每个用到它的地方就不用再各自判空
+      // （以前是各处散着判，`pnpm typecheck` 一路报 number | null | undefined）。
+      const target =
+        rawLeafId !== null && rawLeafId !== undefined && rawTerminal
+          ? { leafId: rawLeafId, terminal: rawTerminal }
+          : null;
       const reject = (reason: string, message: string) => {
         void invoke("sidecar_visible_terminal_response", {
           requestId: request.requestId,
@@ -810,13 +820,25 @@ export function useAiLiveBridge(params: Params) {
         hasCommand: Boolean(request.command),
         currentSessionId,
         requestedSessionId: request.sessionId,
-        leafId,
-        terminalMounted: terminal !== undefined,
+        leafId: rawLeafId,
+        terminalMounted: target !== null,
       });
       if (rejected) {
         reject(rejected.reason, rejected.message);
         return;
       }
+      if (!target) {
+        // 上面那道判据已经保证 target 非空，走到这里说明判据被改坏了。
+        // 这一挡是 fail-closed 的类型收窄：宁可回绝也不带着空目标往下写字节，
+        // 文案与判据同源（同一个原因不许有第二种说法 —— #118）。
+        reject(
+          NO_VISIBLE_TERMINAL_REJECT.reason,
+          NO_VISIBLE_TERMINAL_REJECT.message,
+        );
+        return;
+      }
+      // 从这里起 leafId / terminal 都是确定的值，下游不必再各自判空。
+      const { leafId, terminal } = target;
       if (getLeafBlockMode(leafId) !== "prompt") {
         reject(
           "visible_terminal_busy",

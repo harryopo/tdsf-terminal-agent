@@ -18,8 +18,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPersistedSpaces: vi.fn(),
-  loadAll: vi.fn(async () => ({ sessions: [] as unknown[], activeId: null })),
-  saveSessionsList: vi.fn(async () => {}),
+  // 返回类型必须写出来：不写的话 TS 按**第一次** mockResolvedValue 的形状
+  // （activeId: null）把签名钉死，后面任何用例给 activeId 赋字符串都报红。
+  loadAll: vi.fn(
+    async (): Promise<{ sessions: SessionMeta[]; activeId: string | null }> => ({
+      sessions: [],
+      activeId: null,
+    }),
+  ),
+  saveSessionsList: vi.fn(async (_sessions: SessionMeta[]) => {}),
   saveActiveId: vi.fn(async () => {}),
 }));
 
@@ -219,10 +226,11 @@ describe("hydrateSessions 复用占位会话时重算 scope（#116）", () => {
       sessions: [placeholder("s-old", { kind: "local" })],
       activeId: "s-old",
     });
-    const down = {
+    const down: SshSessionInfo = {
       ...connectedSsh("uuid-1", 7, "192.168.45.200"),
-      state: "disconnected",
-    } as SshSessionInfo;
+      // 状态机里没有 "disconnected"，未连接就是 "idle"
+      state: "idle",
+    };
     useSshStore.setState({ sessions: [down], activeSessionId: "uuid-1" });
 
     await useChatStore.getState().hydrateSessions();
