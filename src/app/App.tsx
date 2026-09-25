@@ -2411,8 +2411,8 @@ export default function App() {
                     key={sidebarView}
                     className="min-h-0 flex-1 tdsf-panel-in"
                   >
-                    {/* TDSF 2026-07-28: 包裹 ErrorBoundary, 防止 SshConnectDialog
-                       等组件在 mock 模式抛错时把整个 root 清空. */}
+                    {/* TDSF 2026-07-28: 包裹 ErrorBoundary, 防止侧栏面板里的组件
+                       抛错时把整个 root 清空（#125 四道分区边界之一）。 */}
                     <ErrorBoundary>
                       {sidebarView === "explorer" ? (
                         // TDSF 修复 2026-08-01: 无任何工作区时资源管理器显示

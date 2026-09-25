@@ -9,7 +9,7 @@
 // 不使用 AI 味渐变，遵循项目设计语言 (CSS 变量 + shadcn token)。
 
 import type { SshSessionStateValue } from "@/lib/ssh-bridge";
-import { stateLabel } from "./SshStatusDot";
+import { stateLabel } from "./lib/sshStateLabel";
 import { CloudServerIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Fragment } from "react";
