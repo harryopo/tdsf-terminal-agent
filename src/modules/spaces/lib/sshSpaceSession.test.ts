@@ -240,6 +240,7 @@ describe("connectedSshSpaceCount：欢迎页那句「连没连上」的唯一来
       user: "root",
       port: 22,
       sessionId: "sess-2",
+      label: "root@10.0.0.9",
     };
     const sessions = [session({}), session({ id: "sess-2", rustSessionId: 8 })];
     expect(connectedSshSpaceCount([{ env: sshEnv }, { env: second }], sessions)).toBe(

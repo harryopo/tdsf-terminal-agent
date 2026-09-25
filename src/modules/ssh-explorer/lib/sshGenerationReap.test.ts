@@ -141,10 +141,12 @@ describe("接线 —— 对账必须跑在自动连接之前", () => {
       "启动回收又退回只在挂载后才跑 ⇒ 渲染挂了就不回收，上一代连接会留在服务器上",
     ).toBe(true);
     // 必须在 render 之前触发（渲染抛异常时后面的语句才不会被打断）
-    expect(main.indexOf("startSshBootReap()")).toBeLessThan(
-      main.indexOf("ReactDOM.createRoot"),
+    // 上面已经断言过 startSshBootReap() 存在，所以这里的 indexOf 不会是 -1
+    // （顺序类判据必须先钉锚点存在，否则"排在前面"会被"压根没写"满足）。
+    expect(
+      main.indexOf("startSshBootReap()"),
       "startSshBootReap() 排在 render 之后 —— 渲染期崩溃时它永远轮不到",
-    );
+    ).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
     // App 里不许再自己起一遍（幂等虽然有，但两个触发点会让人读不清顺序）
     const app = readFileSync(join(process.cwd(), "src/app/App.tsx"), "utf8");
     expect(app.includes("startSshBootReap(")).toBe(false);
