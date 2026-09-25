@@ -136,8 +136,15 @@ _SUMMARY_PROMPT = (
 
 
 def _fallback_summary(text: str) -> str:
-    """LLM 不可用时的截断摘要（保证沉淀链路离线可用）"""
-    truncated = text[:_FALLBACK_SUMMARY_CHARS]
+    """LLM 不可用时的截断摘要（保证沉淀链路离线可用）
+
+    ⚠️ 这条路上**没有任何提示词约束可言** —— 原文会被逐字搬进知识库，而知识库里
+    存的是"以后每一轮都要回注给模型的历史"。所以先机械清洗再截断：
+    删掉"本轮没有某某工具/当前处于某某模式"这类**只对当轮成立**的句子（#147）。
+    """
+    from turn_scoped_state import drop_turn_scoped_state
+
+    truncated = drop_turn_scoped_state(text)[:_FALLBACK_SUMMARY_CHARS]
     return f"[会话摘要·截断] {truncated}"
 
 
