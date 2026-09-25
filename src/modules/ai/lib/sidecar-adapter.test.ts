@@ -984,6 +984,8 @@ describe("runSidecarStream — 审批挂起不吃无活动预算（#133）", () 
   beforeEach(() => {
     localStorage.setItem("tdsf.sidecarTimeoutMs", String(WAIT_MS));
     useNeedsYouWait.getState().reset();
+    // #143 的用例会把 listen 换成"注册成功"，逐条复位免得串到别的用例
+    vi.mocked(listen).mockRejectedValue(new Error("not in tauri"));
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -1074,7 +1076,94 @@ describe("runSidecarStream — 审批挂起不吃无活动预算（#133）", () 
     const parts = await collecting;
     expect(parts.some((p) => p.type === "error")).toBe(true);
   });
+
+  // ---------------------------------------------------------------------------
+  // #143 第二条合法等待：工具在跑。
+  // started→completed 之间链路上本来就没有事件（loop_progress 是工具**结束后**才推），
+  // 而一条命令被允许跑多久是模型声明的 timeout 决定的 —— 实测最坏合法静默 500s，
+  // 而窗口只有 300s（真机 79 次配对里最长已经到 259.6s）。
+  // ---------------------------------------------------------------------------
+
+  /** 把 sidecar:tool_call 的回调捞出来（其余事件仍走"listen 失败"的降级路径） */
+  function hookToolCallEvents() {
+    const listeners = new Map<string, (event: unknown) => void>();
+    vi.mocked(listen).mockImplementation(
+      ((event: string, callback: (event: unknown) => void) => {
+        listeners.set(event, callback);
+        return Promise.resolve(() => listeners.delete(event));
+      }) as never,
+    );
+    return (payload: Record<string, unknown>) => {
+      const emit = listeners.get("sidecar:tool_call");
+      if (!emit) throw new Error("sidecar:tool_call 监听器没注册上（用例量的是空气）");
+      emit({
+        payload: {
+          event_type: "tool_call",
+          session_id: "sess-tool",
+          payload,
+        },
+      });
+    };
+  }
+
+  it("工具在飞（started 到了、completed 没回）→ 超过三个窗口也不掐断", async () => {
+    _setDevModeCheck(() => false);
+    const emit = hookToolCallEvents();
+    const { collecting, finish } = startHangingRound("sess-tool");
+    await vi.advanceTimersByTimeAsync(0); // 让监听器注册完
+
+    emit({
+      tool_name: "ssh_command",
+      tool_call_id: "a",
+      status: "started",
+      params: { command: "yum update -y", timeout: 300 },
+    });
+    await vi.advanceTimersByTimeAsync(WAIT_MS * 3);
+    expect(await settleOrPending(collecting)).toBe("pending");
+
+    finish({ output: "done" });
+    await vi.advanceTimersByTimeAsync(100);
+    const parts = await collecting;
+    expect(parts.some((p) => p.type === "error")).toBe(false);
+    expect(parts.some((p) => p.type === "finish")).toBe(true);
+  });
+
+  it("配对要正反都量：工具落地之后重新开始记账，再静默到点仍然报超时", async () => {
+    _setDevModeCheck(() => false);
+    const emit = hookToolCallEvents();
+    const { collecting } = startHangingRound("sess-tool");
+    await vi.advanceTimersByTimeAsync(0);
+
+    emit({
+      tool_name: "ssh_command",
+      tool_call_id: "a",
+      status: "started",
+      params: { command: "uptime", timeout: 30 },
+    });
+    // 先吃掉大半段窗口，证明停表期间旧的账没在偷偷走
+    await vi.advanceTimersByTimeAsync(WAIT_MS - 200);
+    emit({
+      tool_name: "ssh_command",
+      tool_call_id: "a",
+      status: "completed",
+      result: { status: "success", stdout: "up 3 days" },
+    });
+    await vi.advanceTimersByTimeAsync(WAIT_MS - 500);
+    expect(await settleOrPending(collecting)).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(500 + 100);
+    const parts = await collecting;
+    expect(parts.some((p) => p.type === "error")).toBe(true);
+  });
 });
+
+/** 结算了没有？给"还在跑"这件事一个可断言的读数（不靠 sleep 猜） */
+function settleOrPending(collecting: Promise<unknown>) {
+  return Promise.race([
+    collecting.then(() => "done" as const),
+    Promise.resolve("pending" as const),
+  ]);
+}
 
 describe("buildSidecarErrorHint — 超时文案不再指向不存在的设置（#133）", () => {
   it("正在等用户确认时超时 → 说清是在等他，而不是让他简化问题", () => {
