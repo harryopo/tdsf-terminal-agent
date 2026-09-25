@@ -35,6 +35,7 @@ import {
 import {
   NO_VISIBLE_TERMINAL_REJECT,
   rejectForVisibleTerminal,
+  rerouteToBackground,
 } from "./visibleTerminalGate";
 import {
   resultForAbandonedVisibleExecution,
@@ -780,39 +781,37 @@ export function useAiLiveBridge(params: Params) {
         rawLeafId !== null && rawLeafId !== undefined && rawTerminal
           ? { leafId: rawLeafId, terminal: rawTerminal }
           : null;
-      const reject = (reason: string, message: string) => {
+      const respond = (result: Record<string, unknown>) => {
         void invoke("sidecar_visible_terminal_response", {
           requestId: request.requestId,
           result: {
-            status: "unavailable",
-            reason,
-            message,
             command: request.command,
             operationId: request.operationId ?? "",
+            ...result,
           },
         }).catch((e) => {
-          console.warn("[tdsf] visible terminal rejection failed:", e);
+          console.warn("[tdsf] visible terminal response failed:", e);
         });
       };
+      const reject = (reason: string, message: string) =>
+        respond({ status: "unavailable", reason, message });
+      /**
+       * #118 后半（2026-09-25 用户拍板）：改道回执。
+       * 前端只担保"这条命令没写进任何终端，重派发不会二次执行"，
+       * **要不要真的改道由 sidecar 按风险级决定**（写操作在那里仍会被拒）。
+       */
+      const reroute = (reason: string, message: string) =>
+        respond(rerouteToBackground(reason, message));
       if (
         request.requestId &&
         request.command &&
         usePreferencesStore.getState().agentExecutionChannel !==
           "visible-terminal"
       ) {
-        void invoke("sidecar_visible_terminal_response", {
-          requestId: request.requestId,
-          result: {
-            status: "reroute",
-            reason: "execution_channel_changed",
-            channel: "background",
-            message: "执行通道已切换为后台 SSH，命令未写入可见终端。",
-            command: request.command,
-            operationId: request.operationId ?? "",
-          },
-        }).catch((e) => {
-          console.warn("[tdsf] visible terminal reroute failed:", e);
-        });
+        reroute(
+          "execution_channel_changed",
+          "执行通道已切换为后台 SSH，命令未写入可见终端。",
+        );
         return;
       }
       const rejected = rejectForVisibleTerminal({
@@ -824,13 +823,21 @@ export function useAiLiveBridge(params: Params) {
         terminalMounted: target !== null,
       });
       if (rejected) {
-        reject(rejected.reason, rejected.message);
+        if (rejected.reroutableToBackground) {
+          // 只读/低风险会被 sidecar 改到后台执行；写操作那边照旧拒，
+          // 并把这句"先打开终端标签页"的指引原样带回给用户。
+          reroute(rejected.reason, rejected.message);
+        } else {
+          reject(rejected.reason, rejected.message);
+        }
         return;
       }
       if (!target) {
         // 上面那道判据已经保证 target 非空，走到这里说明判据被改坏了。
         // 这一挡是 fail-closed 的类型收窄：宁可回绝也不带着空目标往下写字节，
-        // 文案与判据同源（同一个原因不许有第二种说法 —— #118）。
+        // 文案必须与判据同源（同一个原因不许有第二种说法 —— #118）。
+        // 注意这里**不给改道**：判据自相矛盾时，连"命令没写进终端"这个担保都
+        // 打折扣，更别说换条通道真执行。
         reject(
           NO_VISIBLE_TERMINAL_REJECT.reason,
           NO_VISIBLE_TERMINAL_REJECT.message,

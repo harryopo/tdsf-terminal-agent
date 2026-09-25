@@ -6,8 +6,9 @@
 （`no_visible_terminal`），于是同一条只读命令连着撞三次同一堵墙再汇报失败
 （2026-09-23 真机记录：三条命令 1–6 毫秒全被拒）。
 
-安全口径一个字没动：没写进终端就是不执行，也不悄悄换成后台通道。
-这里只补一句它本来就该知道的事实，并明确要求"别连续重试"。
+安全口径的字面变化只有 2026-09-25 用户拍板的那一处（#118 后半）：**没有可见终端时，
+只读/低风险改走后台通道并写明换了通道；写操作仍然不执行**。所以这一句必须同时说清
+两件事，不能再说成"整类命令都不会执行"——那是把放宽藏起来，模型会拒绝去试只读命令。
 """
 
 from __future__ import annotations
@@ -42,11 +43,16 @@ class TestSshVisibility:
         prompt = _prompt({"sshSessionId": 30, "terminalSession": "none"})
         # 连接是真的，不该抹掉
         assert "connection_mode: ssh" in prompt
-        # 但必须说明没有可写的可见终端，且要求别连续重试
+        # 但必须说明没有可写的可见终端，且要求别对同一件写操作连续重试
         assert VISIBLE_MARK in prompt
         line = next(ln for ln in prompt.splitlines() if VISIBLE_MARK in ln)
         assert "无" in line
         assert "重试" in line
+        # #118 后半（2026-09-25 用户拍板）：这一句必须把"放宽了哪一半"和
+        # "哪一寸没松"同时说清 —— 只说"不会被执行"会让模型连只读都不肯试。
+        assert "后台" in line, "只读命令会自动改走后台通道，这句必须告诉模型"
+        assert "写操作" in line, "不许把放宽说成全放：写操作仍然不执行"
+        assert "命令不会被执行" not in line, "整类命令'不会执行'那句旧口径不许回来"
 
     def test_visible_terminal_present_does_not_discourage(self):
         """正向配对（防"永远不输出"式假绿）：终端真的可见时，不许出现那句劝退。"""
