@@ -156,6 +156,41 @@ fn next_main_label(existing: &[String]) -> String {
     }
 }
 
+/// 让操作系统裁窗口圆角（Windows 11 的 DWM）。
+///
+/// 2026-09-25 口径（用户实测后拍板「让系统裁圆角」）：上一版是「窗口真透明 + CSS 自绘
+/// 16px 弧」，代价是**弧外那一块必然透出后面的东西** —— 他桌面上开着白色资源管理器，
+/// 圆角看着就是"多了一块白"（真机读数：页面在弧外 alpha=0，那块的颜色 == 窗口外紧邻像素）。
+/// 现在窗口不透明、底色取深灰，圆角整个交给 DWM（微信/VS Code 同一做法），
+/// CSS 侧 `--window-radius` 归零：两套半径叠在一起还会多出一道月牙。
+///
+/// 失败只记日志：Win10 上没有这个属性 ⇒ 退化成方角，比弹窗报错合适。
+#[cfg(target_os = "windows")]
+fn apply_dwm_rounded_corners(window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    // tauri 的 hwnd() 返回 `windows` crate 的 HWND（元组结构体），而 windows-sys 那侧
+    // 是同布局的裸指针别名 —— 取 .0 换过去，两个 crate 不必对齐版本。
+    let Ok(hwnd) = window.hwnd() else {
+        log::warn!("[chrome] 取不到 hwnd，圆角交给系统默认");
+        return;
+    };
+    let preference: i32 = DWMWCP_ROUND;
+    // windows-sys 0.61 里 DWMWA_* 是 i32，而该 API 的形参声明成 u32；载荷是 4 字节 i32。
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &preference as *const i32 as *const core::ffi::c_void,
+            core::mem::size_of::<i32>() as u32,
+        )
+    };
+    if hr < 0 {
+        log::warn!("[chrome] DwmSetWindowAttribute(裁圆角) 失败 hr=0x{hr:08X}");
+    }
+}
+
 /// Open another main window in this process. #64: called from the
 /// single-instance handoff with the rejected second launch's argv — the exe is
 /// still the entry point for "new window", it just no longer starts a second
@@ -189,7 +224,7 @@ fn open_main_window(
 
     // Copy the configured main window instead of re-listing options:
     // additionalBrowserArgs has to be byte-identical across webviews that share
-    // one WebView2 user-data folder, and the borderless/transparent titlebar
+    // one WebView2 user-data folder, and the borderless/background-color titlebar
     // flags are the same story.
     let mut conf = base;
     conf.label = label.clone();
@@ -219,6 +254,9 @@ fn open_main_window(
     }
     let _ = window.show();
     let _ = window.set_focus();
+    // 复制出来的窗口也要自己请求一次裁角：DWM 的属性是按 hwnd 记的，不继承。
+    #[cfg(target_os = "windows")]
+    apply_dwm_rounded_corners(&window);
     log::info!("[main-window] opened '{label}' dir={opened_dir}");
     Ok(label)
 }
@@ -335,13 +373,21 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
 
-    // On Linux/Windows we render our own titlebar, so drop native chrome
-    // and make the window transparent.
+    // On Linux/Windows we render our own titlebar, so drop native chrome.
+    // 2026-09-25：这里以前还写 `.transparent(true)` —— 那是"CSS 自绘圆角"的一半，
+    // 结果是弧外透出桌面（用户报"圆角多了一块白"）。现在与主窗同一口径：
+    // 不透明 + 深色底，圆角交给系统（见 apply_dwm_rounded_corners）。
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    let builder = builder.decorations(false).transparent(true);
+    let builder = builder
+        .decorations(false)
+        .transparent(false)
+        .background_color(tauri::window::Color(0x1a, 0x1a, 0x1a, 0xff));
 
-    // Windows 下 window 后续无使用 (Linux/macOS 分支才用), 前缀 _ 避免 unused 告警
+    // macOS 分支后面还要用 window 定位；Linux/Windows 只在这里建一次
     let _window = builder.build().map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    apply_dwm_rounded_corners(&_window);
 
     // Some Linux compositors (GNOME/Mutter with CSD-by-default) ignore the
     // builder-time decorations flag — re-assert it after realize.
@@ -523,6 +569,9 @@ pub fn run() {
             if let Some(main) = _app.get_webview_window("main") {
                 let _ = main.show();
                 let _ = main.set_focus();
+                // 他报的"圆角多了一块白"就是这扇窗的角 —— 主窗必须自己请求一次裁角。
+                #[cfg(target_os = "windows")]
+                apply_dwm_rounded_corners(&main);
             }
 
             // macOS skips parent() for the settings window, so tie its lifecycle

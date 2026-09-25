@@ -17,7 +17,7 @@
         "dragDropEnabled": true,
         "devtools": true,
         "decorations": false,
-        "transparent": true,
+        "backgroundColor": "#1a1a1a",
         "additionalBrowserArgs": "--disable-gpu --remote-debugging-port=9315 --remote-allow-origins=*"
       }
     ]
