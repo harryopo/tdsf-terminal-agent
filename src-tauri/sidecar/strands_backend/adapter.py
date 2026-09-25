@@ -3196,11 +3196,18 @@ class StrandsAgentAdapter:
                     detail_lines.append(
                         f"[{ev.get('tool_name')}] {str(ev.get('detail', ''))[:80]}"
                     )
+            # #147：最终文本是**逐字**进库的，而库里存的是"以后每轮都要回注的历史"。
+            # 一次"我这轮没有执行类工具"的回合特别容易被沉淀下来（触发词表里就有
+            # 「无法」「不行」），以后在工具齐全的回合里模型仍会读到它 ⇒ 照着自己的
+            # 历史相信自己没工具。这里先机械清洗再截断。
+            from turn_scoped_state import drop_turn_scoped_state
+
+            conclusion = drop_turn_scoped_state(observation)[:600]
             content = (
                 f"## 现象\n{user_input[:200]}\n\n"
                 f"## 诊断过程\n"
                 + ("\n".join(detail_lines) if detail_lines else "（无工具记录）")
-                + f"\n\n## 结论\n{observation[:600]}"
+                + f"\n\n## 结论\n{conclusion}"
             )
             rag.add(
                 KnowledgeEntry(
