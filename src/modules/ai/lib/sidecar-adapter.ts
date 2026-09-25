@@ -919,6 +919,10 @@ export async function* runSidecarStream(
 
   // onToolCall 回调：把工具事件转成 tool-input/tool-output part，push 到 queue
   // （TDSF 修复 2026-07-31 P1: 实时流式，不再收集到数组等 invoke 完成）
+  //
+  // #143 停表句柄必须先声明在这里：监听器比下面那块预算早注册，中间到达的
+  // tool_call 若撞上 `let` 的暂时性死区就是一次 ReferenceError。
+  let toolInFlight: (inFlight: boolean) => void = () => {};
   const onToolCall = (p: ToolCallPayload) => {
     console.info("[sidecar-adapter] tool_call", p.tool_name, p.status);
     const name = p.tool_name;
@@ -934,6 +938,8 @@ export async function* runSidecarStream(
       ids.push(toolCallId);
       toolIdsByName.set(name, ids);
       if (eventKey) toolIdsByEventId.set(eventKey, toolCallId);
+      // #143：从这一刻起这条链路上没有事件是"正常"的 —— 工具在跑。
+      toolInFlight(true);
       queue.push({
         type: "tool-input",
         toolCallId,
@@ -970,6 +976,8 @@ export async function* runSidecarStream(
         );
         return;
       }
+      // #143：这条工具落地了 —— 没有别的在飞、也没在等人时计时才重新开始走。
+      toolInFlight(false);
       queue.push({
         type: "tool-output",
         toolCallId,
@@ -1056,6 +1064,14 @@ export async function* runSidecarStream(
     // (Python 默认 300s) 与这里的预算 (300s) 正好同长，用户多想一会儿整轮就被
     // 判超时，而报错写的是「简化问题描述后重试」。计时逻辑抽到 activityBudget.ts
     // （内联在这条异步生成器里时一条用例都跑不到，病才能躺一个多月）。
+    //
+    // #143 (2026-09-25) 补第二条合法等待：**工具正在跑**。tool_call 的 started
+    // 与 completed 之间同样一条事件都不发（loop_progress 是工具结束后才推），
+    // 而一条命令被允许跑多久是模型声明的 timeout 决定的 —— Rust clamp 到 300s，
+    // Python 再等 timeout+200 ⇒ 最坏合法静默 500s，比这里的 300s 长 200 秒。
+    // 真机 79 次配对里最长已经到 259.6s，余量只剩 40 秒。所以工具在飞期间停表，
+    // 上限不由前端猜：Rust 对整条 agent.invoke 有 600s 硬顶（toolSilentBudget.test.ts
+    // 把这两个数的大小关系钉成闸），到点报错的是带着原因的 Rust，不是前端的臆断。
     const activityTimeoutMs = getSidecarTimeoutMs();
     let noteActivity: () => void = () => {};
     let applyAwaitingUser: (awaiting: boolean) => void = () => {};
@@ -1069,6 +1085,11 @@ export async function* runSidecarStream(
           ),
       );
       noteActivity = () => budget.noteActivity();
+      // #143：工具在飞的那段静默是合法等待，停的是计时器而不是把窗口调大——
+      // 一次命令被允许跑多久由模型声明的 timeout 决定（Rust clamp 到 300s，
+      // Python 再给 200s 宽限），固定窗口无论写多大都会在某条长命令上先撒手。
+      toolInFlight = (inFlight) =>
+        inFlight ? budget.beginTool() : budget.endTool();
       applyAwaitingUser = (awaiting: boolean) => {
         if (awaiting) budget.pause();
         else budget.resume();
