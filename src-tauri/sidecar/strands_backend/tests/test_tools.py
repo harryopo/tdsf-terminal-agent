@@ -2401,7 +2401,9 @@ class TestRedactSensitive(unittest.TestCase):
             "-----BEGIN OPENSSH PRIVATE KEY-----\nabc123secret\n-----END OPENSSH PRIVATE KEY-----\n"
         )
         self.assertNotIn("abc123secret", out)
-        self.assertIn("[REDACTED]", out)
+        # #157：PEM 块现在由统一主人 `_redact` 落标记（`<REDACTED:private-key>`），
+        # 本模块那条旧写法的 `[REDACTED]` 会被再包一次。两种都算脱掉，断"有标记"而不是断拼写。
+        self.assertTrue("[REDACTED]" in out or "<REDACTED" in out, out)
 
     def test_password_assignment_redacted(self):
         out = self._redact("mysql -u root -pS3cretPw\nDB_PASSWORD=hunter2\n")
