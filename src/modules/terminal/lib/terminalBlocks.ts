@@ -224,7 +224,7 @@ export function registerBlockOscHandlers(
   });
   const d633 = term.parser.registerOscHandler(633, (data) => {
     collector.handle633(data);
-    return false;
+    return false; // 与 133 同一条规矩：一律放行，别按注册顺序赌（#151）
   });
   return () => {
     d133.dispose();

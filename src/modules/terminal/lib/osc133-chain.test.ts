@@ -10,7 +10,7 @@
  * `execStartedAtByLeaf` 仍全空）。框架裁决的环节必须用真对象测，同 #114 那条约定。
  */
 import { Terminal } from "@xterm/xterm";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { registerBlockOscHandlers, TerminalBlockCollector } from "./terminalBlocks";
@@ -98,6 +98,15 @@ describe("OSC 133 多消费者：块收集器与 prompt tracker 必须都收得�
   });
 });
 
+/** 从源码里抠出 `registerOscHandler(<id>, …)` 各 handler 的函数体 */
+function handlerBodies(src: string, id: number): string[] {
+  const re = new RegExp(
+    `registerOscHandler\\(${id},\\s*\\([^)]*\\)\\s*=>\\s*\\{([\\s\\S]*?)\\n\\s*\\}\\)`,
+    "g",
+  );
+  return [...src.matchAll(re)].map((m) => m[1]);
+}
+
 describe("OSC 133 的消费者一律放行（不拦链）", () => {
   // 真解析器是"后注册的先调用"，所以任何 handler 返回 true 都会让**先注册**的
   // 那些收不到事件 —— 顺序是隐式耦合，只有全部放行才不依赖它。
@@ -110,9 +119,7 @@ describe("OSC 133 的消费者一律放行（不拦链）", () => {
   for (const [rel, expected] of FILES) {
     it(`${rel} 里的 133 handler 数量为 ${expected} 且全部 return false`, () => {
       const src = readFileSync(join(process.cwd(), rel), "utf8");
-      const bodies = [
-        ...src.matchAll(/registerOscHandler\(133,\s*\([^)]*\)\s*=>\s*\{([\s\S]*?)\n\s*\}\)/g),
-      ].map((m) => m[1]);
+      const bodies = handlerBodies(src, 133);
       expect(bodies).toHaveLength(expected);
       for (const body of bodies) {
         expect(body).not.toMatch(/return\s+true/);
@@ -121,3 +128,52 @@ describe("OSC 133 的消费者一律放行（不拦链）", () => {
     });
   }
 });
+
+describe("OSC 633（块收集器的另一半）同一条规矩", () => {
+  // #151 的病形对 633 一样成立：收集器也注册 633（VS Code shell integration 标记）。
+  it("活代码里只有块收集器注册 633，且它放行", () => {
+    const src = readFileSync(
+      join(process.cwd(), "src/modules/terminal/lib/terminalBlocks.ts"),
+      "utf8",
+    );
+    const bodies = handlerBodies(src, 633);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatch(/return\s+false/);
+    expect(bodies[0]).not.toMatch(/return\s+true/);
+  });
+
+  // `src/lib/command-tracker-addon.ts` 也注册 633 且会返回 true（它那份解析逻辑与收集器同源）。
+  // 今天它**零引用**，所以不构成缺陷；但谁接上它就是第二个拦链者 —— 这条先红，
+  // 逼改手当场处理返回语义，而不是事后照着 #151 再查一遍。
+  it("command-tracker-addon.ts 仍是零引用的死文件（要接之前先解决 633 拦链）", () => {
+    // 先证明这套扫描真的找得到东西 —— 否则"零命中"可能只是扫错了（负向必配正向）。
+    const live = referrers("@/modules/terminal/lib/osc-handlers");
+    expect(live.length).toBeGreaterThan(0);
+    const importers = referrers("command-tracker-addon", {
+      skip: "src/lib/command-tracker-addon.ts",
+    });
+    expect(importers).toEqual([]);
+  });
+});
+
+/** src 下（剥掉注释后）提到某个词的文件清单；skip 指定要排除的文件自身 */
+function referrers(term: string, opts?: { skip?: string }): string[] {
+  return sourceFiles()
+    .filter((rel) => rel !== opts?.skip)
+    .filter((rel) => {
+      const code = readFileSync(join(process.cwd(), rel), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      return code.includes(term);
+    });
+}
+
+/** 递归列出 src 下的 .ts/.tsx（跳过测试与快照，判"有没有人用"够了） */
+function sourceFiles(dir = "src", out: string[] = []): string[] {
+  for (const e of readdirSync(join(process.cwd(), dir), { withFileTypes: true })) {
+    const rel = `${dir}/${e.name}`;
+    if (e.isDirectory()) sourceFiles(rel, out);
+    else if (/\.(ts|tsx)$/.test(e.name) && !/\.(test|spec)\.(ts|tsx)$/.test(e.name)) out.push(rel);
+  }
+  return out;
+}
