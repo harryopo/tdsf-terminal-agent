@@ -42,6 +42,9 @@ from needs_you import NeedsYouStatus  # noqa: F401
 # P0-A1/Task 3 (2026-08-29): 三模式信任——ToolContext.mode 供执行链 decide 消费
 # （modes.py 零依赖，无环）
 from strands_backend.modes import AgentMode, parse_mode  # noqa: F401
+# #157（2026-09-26 安全复查）：脱敏规则真源是 `_redact`（与前端 redact.ts 逐条对齐那 14 条）。
+# 本模块的 6 条继续跑（`-p密码`、裸 `pwd=` 是它独有的形状），合并点在 `redact_sensitive`。
+from strands_backend.tools._redact import redact_sensitive_text  # noqa: F401
 
 logger = logging.getLogger("sidecar.strands_backend.tools")
 
@@ -1958,12 +1961,18 @@ def redact_sensitive(text: str) -> str:
 
     用于 ssh_command 等工具结果返回前统一脱敏，防止敏感信息
     进入前端工具行 / LLM 上下文 / 日志。
+
+    #157（2026-09-26 安全复查）：这套只有"key=value"形状的规则，命令输出里
+    孤零零一条 `sk-proj-…`/GitHub/Slack/JWT 会原样进模型。现先跑本模块 6 条
+    （保住既有输出形状，如 `user:***@` 与 `-p***`、裸 `pwd=`），
+    再过唯一规则真源 `_redact.redact_sensitive_text`（与前端 redact.ts 对齐那 14 条）
+    ⇒ 结果集是两者的并，**只收紧不放宽**；内网 IP 仍不脱敏（用户钦定 2026-08-28）。
     """
     if not text:
         return text
     for pattern, repl in _SENSITIVE_PATTERNS:
         text = pattern.sub(repl, text)
-    return text
+    return redact_sensitive_text(text)
 
 
 # ============================================================================
