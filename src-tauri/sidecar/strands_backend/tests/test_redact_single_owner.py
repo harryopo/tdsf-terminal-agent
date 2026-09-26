@@ -21,12 +21,17 @@ import pytest
 
 TOOLS_INIT = Path(__file__).resolve().parents[1] / "tools" / "__init__.py"
 
+# AWS 文档示例的 Access Key ID 后缀。**必须拼出来、不能写成整串字面量**：
+# `ASIA` + 这个后缀的形状完全合法，GitHub 密钥扫描会把它当真凭据报警
+# （2026-09-26 提交 d01cba2 就吃了这张警报；同族的教训是火绒把含危险样本的 .pyc 报成木马）。
+_AWS_KEY_SUFFIX = "IOSFODNN7EXAMPLE"
+
 # ③ 历史上认的形状（这些不许退回去）
 LEGACY_FIXTURES = [
     ("inline mysql password", "mysql -u root -pS3cretPw\n", "S3cretPw"),
     ("password assignment", "DB_PASSWORD=hunter2\n", "hunter2"),
     ("url embedded creds", "git clone https://user:pass123@example.com/repo.git\n", "pass123"),
-    ("aws access key", "AKIAIOSFODNN7EXAMPLE\n", "AKIAIOSFODNN7EXAMPLE"),
+    ("aws access key", f"AKIA{_AWS_KEY_SUFFIX}\n", f"AKIA{_AWS_KEY_SUFFIX}"),
     ("bearer header", "Authorization: Bearer abcdefghijklmnopqrstuvwx\n", "abcdefghijklmnopqrstuvwx"),
     (
         "private key block",
@@ -44,7 +49,7 @@ BARE_TOKEN_FIXTURES = [
     ("google api key", f"AIza{'a' * 35}"),
     ("slack token", f"xoxb-{'1' * 12}"),
     ("stripe live key", f"sk_live_{'a' * 24}"),
-    ("aws secret-style key id", "ASIAIOSFODNN7EXAMPLE"),
+    ("aws temp access key id", f"ASIA{_AWS_KEY_SUFFIX}"),
     ("jwt", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123"),
 ]
 
