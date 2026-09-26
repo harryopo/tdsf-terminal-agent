@@ -101,7 +101,8 @@ export class BlockDecorations {
     this.term.options.cursorInactiveStyle = "none";
     const osc133 = term.parser.registerOscHandler(133, (data) => {
       this.onOsc133(data);
-      return true;
+      // 放行给同一条 133 上的其它消费者（块收集器先注册，被后注册的拦下就拿不到事件）
+      return false;
     });
     const cwd = registerCwdHandler(
       term,

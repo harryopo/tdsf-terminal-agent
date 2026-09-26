@@ -65,7 +65,9 @@ export function registerPromptTracker(
       if (state) state.inCommand = false;
       onCommandState?.(false);
     }
-    return true;
+    // 必须放行：xterm 的 OSC handler 是"后注册的先调用，谁先返回 true 就到此为止"，
+    // 拦下来会让先注册的块收集器收不到 133 ⇒ 本地终端一条块都产不出来（#130 真机）。
+    return false;
   });
   return {
     getMarker: () => (marker && !marker.isDisposed ? marker : null),

@@ -898,8 +898,11 @@ function bindLeafToSlot(leafId: number, s: Session): void {
     rows: s.rows,
     registerOsc: (term) => {
       // TDSF B1 (2026-08-29): block 流水账 collector——本地/SSH 分支共用。
-      // 必须先于 BlockDecorations 注册（其 133 handler 返回 true 会终止
-      // xterm OSC handler 链；先注册者先调用，本 handler 返回 false 放行）。
+      // 133 在 xterm 里是"一个 id 一串 handler，**后注册的先调用**，谁先返回 true
+      // 链就到此为止"（读 OscParser 核对过，不是注释里曾写的"先注册者先调用"）。
+      // 所以本 handler 之外任何人拦链都会把收集器饿掉：#130 真机就是这样——本地终端
+      // 133 的 C/D/A/B 全到了 xterm，`blocksByLeaf` 却整片为空。
+      // 判据 `osc133-chain.test.ts`（真解析器）要求 133 的消费者一律返回 false。
       let execStartMarker: IMarker | null = null;
       const collector = new TerminalBlockCollector({
         sessionId: leafId,

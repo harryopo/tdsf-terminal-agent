@@ -220,7 +220,7 @@ export function registerBlockOscHandlers(
 ): () => void {
   const d133 = term.parser.registerOscHandler(133, (data) => {
     collector.handle133(data);
-    return false; // 不拦截：BlockDecorations 等后续 133 handler 继续收
+    return false; // 放行：同一条 133 上还有 prompt tracker / BlockDecorations 要用
   });
   const d633 = term.parser.registerOscHandler(633, (data) => {
     collector.handle633(data);
