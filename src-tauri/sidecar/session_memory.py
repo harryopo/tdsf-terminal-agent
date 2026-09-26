@@ -53,13 +53,17 @@ def _llm_complete(prompt: str, max_tokens: int = 1024) -> str | None:
     且不做"文本未超长直接返回原文"的短路（会话摘要短也要格式化）。
     """
     try:
-        from core.llm_config import load_config
+        from core.llm_config import _resolve_base_url, load_config
 
         config = load_config()
         if not config.is_configured:
             return None
 
-        url = f"{config.base_url or 'https://api.openai.com/v1'}/chat/completions"
+        # #156：端点只认 _resolve_base_url 这一个主人。旧写法 `config.base_url or
+        # api.openai.com` 在本函数 docstring 里已承诺走主人、代码却没走 ⇒ 配了
+        # zhipu/dashscope/moonshot 而没填 base_url 时，把 api_key 发给了 OpenAI 官方域。
+        resolved = _resolve_base_url(config)
+        url = f"{resolved or 'https://api.openai.com/v1'}/chat/completions"
         payload = json.dumps({
             "model": config.model,
             "messages": [{"role": "user", "content": prompt}],

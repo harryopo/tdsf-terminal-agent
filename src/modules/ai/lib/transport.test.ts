@@ -456,6 +456,40 @@ describe("formatTerminalHistoryBlock — <terminal-history> 分区", () => {
     expect(block).toContain(`${"y".repeat(160)}…`);
     expect(block).not.toContain("y".repeat(200));
   });
+
+  // #154（2026-09-26 安全复查）：<terminal-context> 那一臂早就过 redactSensitive
+  // （useAiLiveBridge 取终端缓冲时），而这一臂直接把用户手打的命令与输出尾部
+  // 拼进 prompt —— 同一份流水账两个臂两个口径，用户在终端里打过一次密码就会
+  // 被反复回灌给模型。判据两条：命令与输出尾部各一条，外加一条"正常文本不许动"。
+  it("#154 命令里的密钥脱敏后才进流水账", () => {
+    const block = formatTerminalHistoryBlock([
+      makeBlock({ command: "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwx' x" }),
+    ])!;
+    expect(block).not.toContain("abcdefghijklmnopqrstuvwx");
+    expect(block).toContain("<REDACTED");
+    // 正向配对：命令名与其余结构照样在（不是整行被吃掉）
+    expect(block).toContain("$ curl -H ");
+    expect(block).toContain("(exit 3,");
+  });
+
+  it("#154 输出尾部里的密钥脱敏后才进流水账", () => {
+    const block = formatTerminalHistoryBlock([
+      makeBlock({ outputTail: "saved DB_PASSWORD=p@ssw0rdlong to file" }),
+    ])!;
+    expect(block).not.toContain("p@ssw0rdlong");
+    expect(block).toContain("DB_PASSWORD");
+    expect(block).toContain("<REDACTED>");
+  });
+
+  it("#154 无密钥的流水账一字不动（脱敏不许改坏正常输出）", () => {
+    const plain = makeBlock({
+      command: "systemctl status nginx",
+      outputTail: "active (running)",
+    });
+    expect(formatTerminalHistoryBlock([plain])).toContain(
+      "- [user] $ systemctl status nginx (exit 3, 12s, cwd=/etc/nginx)\n  输出尾部: active (running)",
+    );
+  });
 });
 
 // ============================================================================

@@ -302,7 +302,7 @@ class LongContextManager:
         发一个简单摘要请求。失败时静默返回 None 让上层回退到 hash。
         """
         try:
-            from core.llm_config import load_config
+            from core.llm_config import _resolve_base_url, load_config
 
             config = load_config()
             if not config.is_configured:
@@ -326,7 +326,10 @@ class LongContextManager:
             import json as _json
             import urllib.request
 
-            url = f"{config.base_url or 'https://api.openai.com/v1'}/chat/completions"
+            # #156：与 session_memory 同一条规矩——端点只认 _resolve_base_url，
+            # 留空才落到 OpenAI 官方域（国产 provider 不许被发到这上面）。
+            resolved = _resolve_base_url(config)
+            url = f"{resolved or 'https://api.openai.com/v1'}/chat/completions"
             payload = _json.dumps({
                 "model": config.model,
                 "messages": [{"role": "user", "content": prompt}],
