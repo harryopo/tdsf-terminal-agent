@@ -219,3 +219,13 @@ src-tauri/sidecar/tdsf-sidecar.exe
 src-tauri/sidecar/tdsf-sidecar/
 
 src-tauri/sidecar/agent-logs/
+
+# 探针与量具的产物目录（75 MB / 400+ 文件：界面转储、日志片段、内网 IP、命令文本）。
+# 之前只靠"约定不提交"，一次 `git add -A` 就会把它整体推上公开仓库 ⇒ 改成机制挡住。
+# 脚本本身要留的话按文件 `git add -f outputs/xxx.py` 显式加。
+outputs/
+
+# 真凭据兜底：这两个文件装的是模型 API key 与 SSH 口令/私钥路径。
+# 正常落在已忽略的数据目录，但哪天写错工作目录也不许进仓库（按文件名挡，与路径无关）。
+llm_config.json
+ssh-credentials.json
