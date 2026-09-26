@@ -289,6 +289,9 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     # mode)，删除/联网/起进程在 auto 档也弹卡。needs_approval 这个标记位仍然
     # False：它描述的是「命令走 RiskChecker 文本规则」，python 源码不走那条链路，
     # 门禁由 python_run 自己实现（改这里不影响执行，别误当成"没审批"）。
+    # #155（2026-09-26 安全复查）：sanitize_output 必须为 True——读文件在
+    # python_risk 里算 L0 免审批，`print(open(任意本机路径).read())` 的输出
+    # 就是不可信文本；这个声明位现在有唯一消费者（adapter._sanitize_tool_result）。
     "python_run": ToolSpec(
         name="python_run",
         factory="strands_backend.tools.python_run:make_python_run_tool",
@@ -296,7 +299,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
             "在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB、"
             "危险动作需审批）"
         ),
-        policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=False),
+        policy=ToolPolicy(readonly=False, needs_approval=False, sanitize_output=True),
     ),
 }
 

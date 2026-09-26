@@ -973,8 +973,53 @@ class ToolCallLimitHook:
         except Exception as exc:  # evidence must never interrupt the agent loop
             logger.debug("evidence record from tool hook failed: %s", exc)
 
+    @staticmethod
+    def _sanitize_tool_result(name: str, result: Any) -> None:
+        """#155：ToolPolicy.sanitize_output 的唯一消费者（就地脱敏）。
+
+        这个声明位从写下那天起全仓没人读过，于是"声明了要脱敏"的 read_remote_file
+        把文件内容原样交给模型，python_run 更狠——读文件在 python_risk 里算 L0
+        免审批，`print(open("~/.ssh/id_rsa").read())` 不打扰任何人地跑掉。
+
+        规则按声明走、不按工具名猜；用 `_redact.redact_sensitive_text`（与前端
+        redact.ts 语义对齐那一套），不用 tools/__init__.py 里另一套正则。
+        只替换密钥串本身，不动结构，所以 JSON 仍能解析、模型仍知道读了哪个文件。
+        """
+        from strands_backend.tools.registry import get_tool_policy
+
+        policy = get_tool_policy(name)
+        if policy is None or not policy.sanitize_output:
+            return
+        if not isinstance(result, dict):
+            return
+
+        from strands_backend.tools._redact import redact_sensitive_text
+
+        def walk(node: Any) -> Any:
+            if isinstance(node, str):
+                return redact_sensitive_text(node)
+            if isinstance(node, dict):
+                return {k: walk(v) for k, v in node.items()}
+            if isinstance(node, list):
+                return [walk(v) for v in node]
+            return node
+
+        content = result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    for key, value in list(block.items()):
+                        block[key] = walk(value)
+        # 少数工具直接返回结构化 json 键（未经 strands 打包）
+        if "json" in result:
+            result["json"] = walk(result["json"])
+
     def _after_tool_call(self, event: Any) -> None:
         name = self._tool_name(event)
+        # #155 接线：脱敏必须在读状态/记证据之前，且这一步改的就是框架
+        # 随后 append 进会话历史的那个对象（strands `_executor.py` 用的是
+        # `after_event.result` 而不是 hook 之前的旧 result —— 已由真对象断言钉住）。
+        self._sanitize_tool_result(name, getattr(event, "result", None))
         # C1 工具级 tracing：计算 duration_ms
         start_time = self._tool_start_times.pop((name, self.total_calls), None)
         duration_ms = None

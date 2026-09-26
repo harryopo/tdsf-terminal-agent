@@ -9,6 +9,7 @@ import { type AgentUsageDelta, runAgentStream } from "./agent";
 import { formatAiError } from "./errors";
 import type { CustomEndpointKeys, ProviderKeys } from "./keyring";
 import { native } from "./native";
+import { redactSensitive } from "./redact";
 import {
   runSidecarStream,
   sidecarStreamToUIMessageStream,
@@ -873,8 +874,12 @@ export function formatTerminalHistoryBlock(
       b.durationMs >= 1000
         ? `${Math.round(b.durationMs / 1000)}s`
         : `${b.durationMs}ms`;
-    const head = `- [${b.author}] $ ${b.command || "(空命令)"} (${exit}, ${secs}, cwd=${b.cwd || "?"})`;
-    const tail = historyOutputTail(b.outputTail);
+    // #154：流水账与 <terminal-context> 喂的是同一份终端现场，那一臂早已脱敏。
+    // 先脱敏再截尾，否则密钥被截成半截反而认不出来。
+    const head = `- [${b.author}] $ ${
+      redactSensitive(b.command || "(空命令)")
+    } (${exit}, ${secs}, cwd=${b.cwd || "?"})`;
+    const tail = historyOutputTail(redactSensitive(b.outputTail));
     const line = tail ? `${head}\n  输出尾部: ${tail}` : head;
     if (total + line.length > TERMINAL_HISTORY_MAX_CHARS && items.length > 0) {
       break;
