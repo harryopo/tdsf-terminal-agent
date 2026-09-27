@@ -87,3 +87,11 @@ void import("./modules/terminal/lib/completionInjection").then((m) => {
 void import("./modules/ai/lib/sidecar-config-sync").then((m) => {
   m.initSidecarConfigSyncOnReady();
 });
+
+// #160（2026-09-27）：自动更新只挂在**主窗入口**上。这不是随手选的位置：
+// updater 权限只发给 main/main-* 窗（capabilities/updater.json），而设置窗是
+// 另一个 JS context 与另一份窗口标签 —— 挂在这儿就等于"检查、下载、安装都在
+// 有权限的那个窗里发生"，不需要跨窗同步那份状态（#72 那类病的根源）。
+void import("./modules/update/checkUpdate").then((m) => {
+  m.initUpdateCheckOnBoot();
+});

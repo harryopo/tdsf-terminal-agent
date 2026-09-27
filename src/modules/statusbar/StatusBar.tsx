@@ -14,6 +14,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
 import { DiagnosticsBadge } from "./DiagnosticsBadge";
 import { RemoteOsBadge, type RemoteOsBadgeInfo } from "./RemoteOsBadge";
+import { UpdateChip } from "./UpdateChip";
 import { WorkspaceEnvSelector } from "./WorkspaceEnvSelector";
 
 type Props = {
@@ -115,6 +116,9 @@ export function StatusBar({
           紧邻 BackendPill(Strands)，对话区不再挂切换器保持干净。
           busy/循环进度反馈仍由顶栏 Header 的 AgentStatusPill 承载。 */}
       <div className="flex shrink-0 items-center gap-1.5">
+        {/* #160 (2026-09-27): 自动更新的状态条。只有"有话说"时才渲染
+            （发现新版 / 下载中 / 待安装 / 失败），平时不占这一格。 */}
+        <UpdateChip />
         <MockLLMWarning />
         <AgentModeSwitcher />
         <BackendPill />

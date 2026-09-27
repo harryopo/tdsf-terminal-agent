@@ -108,5 +108,16 @@
         ]
       }
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGNDBBRTQwNTA0MEVDODEKUldTQjdFQlFRSzVBTDJqWVZVbDZ5dGp5WEpwSmtKSElNZ3NqM295OFRZTS9uWU9LZVlGamxKd2sK",
+      "endpoints": [
+        "https://github.com/harryopo/tdsf-terminal-agent/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

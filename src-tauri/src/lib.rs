@@ -504,6 +504,15 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
+        // #160 (2026-09-27): 自动更新。端点与验签公钥来自 tauri.conf.json 的
+        // plugins.updater；更新产物的签名只在 CI 里做（base 配置的
+        // createUpdaterArtifacts 保持 false，见 tauri.release.conf.json），
+        // 所以本地 pnpm build:win 没有私钥也照样能出包。
+        // Windows 上 install() 会直接 std::process::exit(0) 拉起安装器 ——
+        // React 清理函数与 Rust 析构都不会跑，所以前端必须先完成关停序列
+        // （结审批 / 断 SSH / 关 PTY / 停 sidecar）再调它，判据见
+        // src/modules/update/installUpdate.test.ts。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
@@ -695,6 +704,7 @@ pub fn run() {
             lsp::lsp_spawn,
             lsp::lsp_send,
             lsp::lsp_kill,
+            lsp::lsp_kill_all,
             fs::search::fs_search,
             fs::search::fs_list_files,
             fs::grep::fs_grep,

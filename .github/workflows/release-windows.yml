@@ -62,10 +62,24 @@ jobs:
           pnpm build:sidecar:win
           pnpm test:sidecar:exe
 
+      - name: Require updater signing key
+        shell: pwsh
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          # #160: 没有私钥就出包 = 一份装到用户机器上永远收不到更新的安装包。
+          # 与其让 tauri 在打包中途报"A public key has been found, but no private key"，
+          # 不如在这一步把话说清。
+          if (-not $env:KEY) {
+            throw "Missing GitHub secret TAURI_SIGNING_PRIVATE_KEY - this release could not deliver automatic updates."
+          }
+
       - name: Build NSIS installer and create draft release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "TDSF ${{ github.ref_name }}"
@@ -73,10 +87,14 @@ jobs:
             Windows x64 installer for TDSF Terminal Agent.
 
             Download the NSIS installer and verify it with SHA256SUMS.txt.
-            Automatic updates are not enabled in this release.
+            Installed copies check this release channel automatically;
+            the update package is signed and verified before installation.
           releaseDraft: true
           prerelease: false
-          args: --bundles nsis
+          # tauri.release.conf.json 只把 createUpdaterArtifacts 打开：
+          # 签名产物（.nsis.zip + .sig + latest.json）只在这里生成，
+          # 所以本地 pnpm build:win 不需要私钥。
+          args: --config src-tauri/tauri.release.conf.json --bundles nsis
 
       - name: Upload SHA-256 checksum
         shell: pwsh

@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater-main-only",
+  "description": "自动更新只给主窗：设置窗拿不到检查/下载/安装能力，结构上排除两个窗同时装包。",
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
+  ],
+  "windows": [
+    "main",
+    "main-*"
+  ],
+  "permissions": [
+    "updater:default"
+  ]
+}

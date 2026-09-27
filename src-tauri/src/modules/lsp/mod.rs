@@ -45,6 +45,22 @@ pub fn lsp_host_pid() -> u32 {
     std::process::id()
 }
 
+/// #160 (2026-09-27): 自动更新前显式收掉语言服务器。
+///
+/// 为什么需要一条命令式的出口：`kill_all` 平时挂在 `RunEvent::Exit`，而 Windows 上
+/// updater 装完是 `std::process::exit(0)` —— 那个事件根本不会触发，每次更新都会
+/// 留下一批孤儿 LSP 进程（它们还占着 resources 里的文件，安装器覆盖时可能报错）。
+#[tauri::command]
+pub fn lsp_kill_all(state: tauri::State<'_, LspState>) -> usize {
+    let count = state
+        .sessions
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .len();
+    state.kill_all();
+    count
+}
+
 #[tauri::command]
 pub async fn lsp_detect(command: String) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
