@@ -489,12 +489,15 @@ export function formatMemoryHintBlock(
     .slice(0, opts.topK);
   if (!hints.length) return null;
 
-  const lines = hints.map(
-    (e, i) =>
-      `${i + 1}. 《${e.title}》${e.content.slice(0, MEMORY_HINTS_SNIPPET_CHARS)}${
-        e.content.length > MEMORY_HINTS_SNIPPET_CHARS ? "…" : ""
-      }`,
-  );
+  // #158-②：召回块直接进 prompt，而库里可能存着历史会话粘过的凭据
+  // （写侧现在也脱敏，但存量脏数据只有这一道挡得住）。先脱敏再截断。
+  const lines = hints.map((e, i) => {
+    const redacted = redactSensitive(e.content);
+    const body = redacted.slice(0, MEMORY_HINTS_SNIPPET_CHARS);
+    return `${i + 1}. 《${redactSensitive(e.title)}》${body}${
+      redacted.length > MEMORY_HINTS_SNIPPET_CHARS ? "…" : ""
+    }`;
+  });
   const [tag, header] =
     opts.kind === "session"
       ? [

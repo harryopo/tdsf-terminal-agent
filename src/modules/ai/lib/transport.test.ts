@@ -522,6 +522,32 @@ describe("formatMemoryHintBlock — T4 召回块格式化", () => {
     expect(r!.ids).toEqual(["case-1"]);
   });
 
+  // #158-②（2026-09-26 安全复查）：召回块是"库里存着什么就喂什么"。写侧现在也脱敏，
+  // 但**存量脏数据只有读侧这一道挡得住** —— 历史会话里粘过一次凭据，它会每轮被捞出来
+  // 重新送到模型提供商。两臂（内容 / 标题）各一条，另配正向防过度脱敏。
+  it("#158-② 召回内容里的密钥不进 prompt", () => {
+    const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz012345";
+    const r = formatMemoryHintBlock(
+      [makeEntry({ content: `口令 ${secret} 已重置` })],
+      { kind: "recalled", topK: 3 },
+    );
+    expect(r).not.toBeNull();
+    expect(r!.block).not.toContain(secret);
+    expect(r!.block).toContain("<REDACTED");
+    // 正向配对：记忆本身不许被吃掉
+    expect(r!.block).toContain("已重置");
+  });
+
+  it("#158-② 召回标题里的密钥不进 prompt", () => {
+    const r = formatMemoryHintBlock(
+      [makeEntry({ title: "排障 DB_PASSWORD=hunter2hunter2" })],
+      { kind: "session", topK: 3 },
+    );
+    expect(r!.block).not.toContain("hunter2hunter2");
+    expect(r!.block).toContain("DB_PASSWORD");
+    expect(r!.block).toContain("《");
+  });
+
   it("与首轮 <session-memory> 职责区分：session kind 保持 T14 标签与文案", () => {
     const r = formatMemoryHintBlock([makeEntry()], {
       kind: "session",

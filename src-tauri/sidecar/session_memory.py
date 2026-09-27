@@ -41,6 +41,20 @@ _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}$")
 _FALLBACK_SUMMARY_CHARS = 800
 
 
+def _redact_for_storage(text: Any) -> str:
+    """#158-②：进知识库之前过脱敏（规则真源 `tools/_redact.py`，别在这里另写正则）。
+
+    知识库里的内容会被每轮 recall 重新注入 prompt ⇒ "聊天里粘过一次" 变成
+    "永久留存 + 每一次会话都送到模型提供商"。这与 #155 是同一个洞的剩余半边：
+    #155 管住工具结果进模型，这一条管住聊天内容进长期记忆。
+    """
+    if not text:
+        return ""
+    from strands_backend.tools._redact import redact_sensitive_text
+
+    return redact_sensitive_text(str(text))
+
+
 # ============================================================================
 # LLM 调用（OpenAI 兼容直调）
 # ============================================================================
@@ -203,10 +217,13 @@ def summarize_session(
             "",
         )
         title = f"会话记忆：{first_user[:40]}" + ("…" if len(first_user) > 40 else "")
+    # #158-②：标题与正文都要过（外部传进来的 title 同样不可信）
+    title = _redact_for_storage(title)
 
     summary = _llm_complete(_SUMMARY_PROMPT.format(transcript=text), max_tokens=1024)
     if not summary:
         summary = _fallback_summary(text)
+    summary = _redact_for_storage(summary)
 
     try:
         from knowledge.fts5 import KnowledgeEntry
