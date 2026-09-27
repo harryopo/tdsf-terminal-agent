@@ -20,18 +20,38 @@ describe("#94 §6-B 懒包装仍然渲染得出真面板", () => {
   // 第一版用默认 1 秒，在全量里偶发红（判据自己 flakes 就等于给下一手留了个"可以忽略的红"）。
   const waitFor = { timeout: 5000, interval: 50 };
 
-  it("技能面板：动态 import 之后渲染出来", async () => {
-    render(<SkillsPanelLazy />);
-    expect(await screen.findByTestId("skills-panel", {}, waitFor)).toBeTruthy();
-  });
+  // 单条用例的上限另说：这里等的是 **测试框架现场转译整个面板模块图**，不是用户等网络。
+  // 发布产物里那一格是一个静态 chunk（实测冷开 318ms），走不到这条路径。
+  // 全量套件并发 + 杀毒软件扫描时它实测吃掉 20 秒，撞默认 20s 超时报红 ——
+  // 判据不变，只是不在"量具排队"上误报产品缺陷。
+  const importBudgetMs = 60_000;
 
-  it("片段面板：动态 import 之后渲染出来", async () => {
-    render(<SnippetsPanelLazy onInsertCommand={() => true} />);
-    expect(await screen.findByTestId("snippets-panel", {}, waitFor)).toBeTruthy();
-  });
+  it(
+    "技能面板：动态 import 之后渲染出来",
+    async () => {
+      render(<SkillsPanelLazy />);
+      expect(await screen.findByTestId("skills-panel", {}, waitFor)).toBeTruthy();
+    },
+    importBudgetMs,
+  );
 
-  it("隧道面板：动态 import 之后渲染出来", async () => {
-    render(<TunnelPanelLazy />);
-    expect(await screen.findByTestId("tunnel-panel", {}, waitFor)).toBeTruthy();
-  });
+  it(
+    "片段面板：动态 import 之后渲染出来",
+    async () => {
+      render(<SnippetsPanelLazy onInsertCommand={() => true} />);
+      expect(
+        await screen.findByTestId("snippets-panel", {}, waitFor),
+      ).toBeTruthy();
+    },
+    importBudgetMs,
+  );
+
+  it(
+    "隧道面板：动态 import 之后渲染出来",
+    async () => {
+      render(<TunnelPanelLazy />);
+      expect(await screen.findByTestId("tunnel-panel", {}, waitFor)).toBeTruthy();
+    },
+    importBudgetMs,
+  );
 });

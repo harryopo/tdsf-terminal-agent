@@ -18,9 +18,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:python": "cd src-tauri/sidecar && .\\.venv\\Scripts\\python.exe -B -m pytest -v --tb=short",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:install": "playwright install chromium",
     "tauri": "tauri",
     "dev:seed": "node scripts/dev-seed-store.mjs",
     "probe:ui": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ui.py",
@@ -116,7 +113,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
-    "@playwright/test": "^1.62.0",
     "@tailwindcss/vite": "^4.1.0",
     "@tauri-apps/cli": "^2.1.0",
     "@testing-library/jest-dom": "^7.0.0",

@@ -60,7 +60,6 @@ coverage/
 .nyc_output/
 
 # Test
-playwright-report/
 test-results/
 
 # Local fonts (downloaded to public/fonts at build time)
@@ -133,7 +132,7 @@ diagrams/
 # 根目录 Agent 会话日志测试产物 (sidecar 下同名目录已单独忽略)
 agent-logs/
 
-# 宣传页预览截图产物 (scripts/preview-website.mjs 输出，2026-09-11)
+# 宣传页本地预览截图产物
 .preview/
 
 # ============================================================================
@@ -167,8 +166,6 @@ scripts/*
 !scripts/build-tldr-zh.mjs
 !scripts/fetch-carapace.ps1
 !scripts/make-app-icon.py
-!scripts/preview-website.mjs
-!scripts/verify-demo-video.mjs
 !scripts/eager-graph.mjs
 !scripts/eager-graph.d.mts
 !scripts/dev-seed-store.mjs

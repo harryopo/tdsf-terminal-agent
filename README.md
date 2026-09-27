@@ -4,233 +4,129 @@
 
 # TDSF Terminal Agent
 
-**A terminal-first Linux operations workbench where the AI agent works inside your real shell — visibly, step by step.**
+**终端优先的 Linux 运维工作台 —— AI Agent 直接在你的真实 shell 里干活，每一步都看得见。**
 
-[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Quick start](#quick-start) · [Capabilities](#core-capabilities) · [Architecture](#architecture) · [GitHub](https://github.com/harryopo/tdsf-terminal-agent)
+**中文** · [English](README.en.md)
+
+[宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [下载与安装](#安装windows-x64) · [核心能力](#核心能力) · [工具清单](#工具清单25-个) · [架构](#架构) · [开发指南](#开发指南)
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Shell](https://img.shields.io/badge/shell-Tauri%202%20%2B%20Rust-000)
+![Desktop](https://img.shields.io/badge/desktop-Tauri%202%20%2B%20Rust-000)
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
-![Runtime](https://img.shields.io/badge/runtime-Python%20sidecar%20(Strands)-3776AB)
-![Tests](https://img.shields.io/badge/quality-pytest%20%C2%B7%20vitest%20%C2%B7%20cargo-2EA043)
+![Runtime](https://img.shields.io/badge/agent%20runtime-Python%20sidecar%20(Strands)-3776AB)
 
 </div>
 
 ---
-
-## Demo
 
 <a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">
-  <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent — demo" width="100%" />
+  <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent 演示封面" width="100%" />
 </a>
 
-▶ **Watch the demo** — [promo page demo section](https://harryopo.github.io/tdsf-terminal-agent/#demo) · video file: `website/assets/video/demo.mp4` ([how to add it](website/assets/video/README.md))
-> The demo shows: connecting an SSH workspace, the agent typing a command into the real terminal character by character, the approval card gating the write, and the remote output flowing back into the tool card.
-
-## What it is
-
-TDSF Terminal Agent is a **desktop terminal IDE with an AI operations agent built into the shell path** — not a chat panel bolted onto a terminal.
-
-It is built on top of an open-source terminal IDE and extended with **SSH server management**, a **visible-execution agent runtime**, and a **step-by-step teaching workflow** for Linux operations.
-
-Two properties separate it from "AI in a sidebar":
-
-- **The agent works in the real shell.** In visible mode, commands are typed into a live local PTY / SSH session character by character (Weibull-timed, inspired by `expect send -h`), echoed in blue at the shell prompt, and the terminal output is correlated back into the tool card. Pressing a key hands control back to you instantly.
-- **Every action passes a real safety boundary.** Command impact classification, a hard denylist floor, human approval with per-session FIFO ordering, and an SSH exit-code hard boundary — so "the agent said it succeeded" is never taken on faith.
-
-## Core capabilities
-
-**Agent runtime — one main Strands agent, tool-boundary enforced**
-
-- Single `main` agent over Strands Agents; the tool registry is the single source of truth for implementation, schema and policy.
-- **25 registered tools** (SSH exec, remote file read/write, log analysis, process inspection, network diagnosis, service/package/firewall management, security audit, performance analysis, knowledge search/get-doc, skill invoke, todo, terminal output, config diff, backup/restore, evidence assessment, history search, skill save, python run, session listing, command suggestion) plus a runtime-registered teaching tool in teaching mode.
-- **Observe mode** physically removes write tools from the schema — the model cannot call a tool it never received.
-
-**Four trust modes**
-
-| Mode | What the agent may do | Typical use |
-|------|----------------------|-------------|
-| **Observe** | Read-only analysis; write tools removed from the schema | Production inspection |
-| **Confirm** *(default)* | Full toolset; recognised read-only queries run, anything unknown or state-changing goes through an approval card | Day-to-day operations, human in the loop |
-| **Auto** | Low-risk (L0–L2) runs directly; L3/L4 still require approval | Trusted sandbox |
-| **Teach** | Observe-mode permissions plus the teaching UI; one command card at a time | Classroom / self-paced learning |
-
-**SSH server management**
-
-- Pure-Rust SSH client (russh) with password / public-key auth; credentials live in the OS keyring, never in the repo.
-- **TOFU host-key verification** — unknown host keys raise an approval prompt, changed keys raise a mismatch warning.
-- SFTP browsing and editing, drag-and-drop upload, and a remote tree that follows the current session's `cwd` consistently across servers.
-- Local / remote / dynamic (SOCKS5) port forwarding, and a live server monitor (CPU, memory, disk, network, processes) polled over the SSH channel without involving the agent.
-
-**Safety boundary**
-
-- Active command-impact levels are L0/L2/L3/L4 (L1 is reserved for compatibility); unknown commands fail closed at high risk, and compound commands are assessed segment by segment.
-- Hard denylist for catastrophic operations — blocked outright, not offered for approval.
-- Per-session FIFO: the next approval card is not shown until the previous command returns from SSH.
-- Tool-call cap (50 per turn) plus a 3-consecutive-failure circuit breaker.
-- Output redaction before anything reaches the UI, the model, or the logs.
-- **SSH exit-code hard boundary**: a non-zero or missing exit code is reported as an error, never as success.
-
-**Local knowledge retrieval**
-
-- Indexes the documentation and notes available in the local data directory; the exact entry count depends on what is installed or imported on that machine.
-- Hybrid retrieval runs locally with SQLite **FTS5** keyword search + **sqlite-vec** semantic search, fused with RRF. Agent reasoning still uses the configured model provider unless you select a local model.
-
-**Workspaces, sessions and memory**
-
-- Workspace = the isolation unit. Each workspace keeps its own windows and tabs; the agent sees only the environment of the conversation's own workspace.
-- Conversations are **isolated per workspace**. Session summaries and successful troubleshooting cases can be stored locally with a workspace tag and recalled by later conversations in that workspace.
-
-**Teaching workflow**
-
-- Lesson output in a fixed section contract (concepts & principles, path breakdown, design philosophy, worked examples, pitfalls, exercise).
-- **Single-step command cards**: the frontend sends Teach as observe-mode permissions plus a teaching flag. The runtime emits one card at a time; the command is not executed by the backend, and the lesson continues only after the student runs it in the visible terminal and the real result returns.
-
-**Terminal, editor and workspace tooling**
-
-- Local PTY, WSL and SSH terminals behind a shared xterm.js render pool; split panes; workspaces with independent tab sets.
-- Command prediction: bundled spec index, carapace parameter completion, curated Chinese tldr descriptions and the remote shell's own command set.
-- CodeMirror 6 editor with LSP support, remote file editing, offline selection translation, and snippets.
-
-## Architecture
-
-```
-React 19 frontend   (agent panel, terminals, workspaces, editor)
-      │  Tauri invoke / events
-      ▼
-Rust shell          (PTY · SSH · SFTP · tunnels · human-type engine · sidecar supervisor)
-      │  JSON-RPC over stdio
-      ▼
-Python sidecar      (Strands agent · tool registry · approvals · knowledge · evidence)
-```
-
-| Layer | Stack |
-|-------|-------|
-| Desktop shell | Tauri 2 (Rust) |
-| Frontend | React 19 · TypeScript · Vite · Tailwind v4 · zustand · xterm.js · CodeMirror 6 |
-| SSH / PTY | russh · russh-sftp · portable-pty · keyring |
-| AI runtime | Python sidecar with Strands Agents (OpenAI-compatible providers: DeepSeek, Zhipu, Qwen, Moonshot, Doubao, Ollama, custom endpoints) |
-| Knowledge | SQLite FTS5 + sqlite-vec (512-dim) + RRF |
-
-## Windows installation
-
-The 1.0 competition release is distributed as a **Windows x64 NSIS installer**.
-
-1. Download the installer and `SHA256SUMS.txt` from the matching GitHub Release.
-2. Verify the installer before running it:
-
-   ```powershell
-   Get-FileHash '.\TDSF Terminal Agent_1.0.0_x64-setup.exe' -Algorithm SHA256
-   ```
-
-3. Run the installer. It installs for the current Windows user and downloads
-   the Microsoft WebView2 bootstrapper only when WebView2 is missing.
-4. Open **Settings → Models**, configure a model provider, then create a local,
-   WSL, or SSH workspace.
-
-The competition build may be unsigned, so Windows SmartScreen can show an
-unknown-publisher warning. Verify the SHA-256 checksum before continuing.
-From 1.0.2 installed builds check GitHub Releases for a signed update and ask
-before downloading it; see [PRIVACY.md](PRIVACY.md) for local data and network
-behavior.
-
-## Quick start
-
-**Requirements**: Node.js ≥ 20, pnpm ≥ 9, Rust stable, Python ≥ 3.12
-
-```bash
-pnpm install          # frontend dependencies
-pnpm tauri:dev        # launch the desktop app (first build: 2–5 min)
-```
-
-The Python sidecar environment lives in `src-tauri/sidecar/` (a virtualenv); `启动.bat` on Windows wires it up and launches the app.
-
-Add an API key in **Settings → Models** (DeepSeek, Zhipu, Qwen, Moonshot, Doubao, Ollama or a custom OpenAI-compatible endpoint), then create a workspace — local, WSL or SSH — and start a conversation inside it.
-
-## License and upstream
-
-- Original contributions in this project: **Apache-2.0** — see [`LICENSE`](LICENSE).
-- Built on top of an open-source terminal IDE (Apache-2.0); this project extends it with SSH server management, the visible-execution agent runtime and the Linux teaching workflow.
+演示内容：接入 SSH 工作区 → Agent 把命令逐字符敲进真实终端 → 写操作被审批卡拦下等人确认 → 远端输出回流到工具卡。
+▶ 完整视频在[宣传页的 Demo 区块](https://harryopo.github.io/tdsf-terminal-agent/#demo)。
 
 ---
+
+## 目录
+
+- [这是什么](#这是什么)
+- [核心能力](#核心能力)
+- [四档交互](#四档交互)
+- [工具清单（25 个）](#工具清单25-个)
+- [安全边界](#安全边界)
+- [架构](#架构)
+- [安装（Windows x64）](#安装windows-x64)
+- [自动更新](#自动更新)
+- [开发指南](#开发指南)
+- [仓库结构](#仓库结构)
+- [隐私与数据](#隐私与数据)
+- [许可与来源](#许可与来源)
+
 ---
 
-<div align="center">
+## 这是什么
 
-<img src="assets/logo.svg" width="72" alt="TDSF Terminal Agent logo" />
+TDSF Terminal Agent 是一款桌面终端工作台：本地 PTY、WSL、SSH 会话、编辑器、文件树，加上一个**接进执行链路的 AI 运维 Agent** —— 不是"终端旁边挂一个聊天框"。
 
-# TDSF Terminal Agent（中文）
+项目在开源终端项目的架构基础之上开发完善，新增了三块能力：**SSH 服务器管理**、**可见执行的 Agent 运行时**、面向 Linux 运维教学的**单步确认流程**。
 
-**终端优先的 Linux 运维工作台 —— AI Agent 直接在真实 shell 里干活，而且你看得见每一步。**
+它和"侧边栏 AI"的区别在于两件事：
 
-[宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [快速开始](#快速开始) · [核心能力](#核心能力) · [架构](#架构) · [GitHub](https://github.com/harryopo/tdsf-terminal-agent)
-
-</div>
-
-## 它是什么
-
-TDSF Terminal Agent 是一款**把 AI 运维 Agent 装进 shell 执行链路的桌面终端 IDE**，而不是"终端旁边挂一个聊天框"。
-
-项目在开源终端项目的架构基础之上开发完善，并新增 **SSH 服务器管理**、**可见执行的 Agent 运行时**，以及面向 Linux 运维的**步步确认教学模式**。
-
-两点让它区别于普通的"侧边栏 AI"：
-
-- **Agent 在真实 shell 里工作。** 可视模式下，命令按人味节奏**逐字符**敲进本地 PTY / SSH 会话（Weibull 分布采样，思路取自 `expect send -h`），在命令行处蓝色回显，真实输出回流到工具卡；你敲任意键立刻交还控制权。
-- **每个动作都过真实的安全边界。** 命令影响分级、硬底线黑名单、人工审批（按会话 FIFO）、SSH 退出码硬边界 —— "AI 说它成功了"从来不作为事实。
+1. **命令真的敲进你看得见的那个 shell。** 可见终端模式下，命令按人的节奏逐字符写入本地 PTY 或 SSH 会话，在命令行处以蓝色回显，执行结果从终端回流到工具卡片。你敲下任意键，控制权立刻回到你手里。
+2. **每个动作都要过一道真实的安全边界。** 命令影响分级、灾难性操作硬拦截、人工审批（同会话先进先出）、退出码如实上报 —— "Agent 说它成功了"不会被当成事实。
 
 ## 核心能力
 
-**Agent 运行时：唯一 main Agent，工具边界受控**
+### Agent 运行时
 
-- Strands Agents 驱动的单一 `main` Agent；工具注册表是实现、Schema 与策略的单一真源。
-- **25 个注册工具**（SSH 执行、远程文件读写、日志分析、进程检查、网络诊断、服务/软件包/防火墙管理、安全审计、性能分析、知识检索与整文档读取、技能调用、任务清单、终端输出、配置比对、备份恢复、证据评估、历史案例检索、技能沉淀、Python 执行、SSH 会话枚举、命令建议），教学模式额外在运行时注册教学工具。
-- **观察模式**在 schema 层直接移除写类工具 —— 模型无法调用它从未拿到的工具。
+- 单一 `main` Agent，由 [Strands Agents](https://github.com/strands-agents/sdk-python) 驱动；**工具注册表是实现、Schema 与策略的唯一真源**，模型看到的参数与代码接收的参数由门禁钉住一致。
+- 共 **25 个注册工具**（[完整清单](#工具清单25-个)）。
+- **观察档在 Schema 层移除写类工具**：模型拿不到的工具，也就调不出来。
+- 模型侧退避收敛为一个主人（`retry_policy`），一次 429 不会放大成几十次请求。
 
-**四档信任模式**
+### SSH 服务器管理
+
+- 纯 Rust SSH 客户端（russh），支持密码与公钥认证；**凭据存入 Windows 系统密钥库**，不落仓库。
+- **TOFU 主机密钥校验**：首次连接的新主机弹审批；密钥与已知记录不一致时给中间人告警，并支持"核对后清除本机这一台的旧记录再信任"。
+- 同一个工作区可以开多个终端标签页，**每个标签页各占一条独立连接**，互不串台；关闭标签页时释放它独占的会话。
+- SFTP 浏览与编辑、从资源管理器拖拽上传文件、远程文件树跟随当前会话的工作目录。
+- 本地转发 / 远程转发 / 动态转发（SOCKS5）三类端口转发。
+- 服务器实时监控（CPU、内存、磁盘、网络、进程）直接走 SSH 通道采集，不占用 Agent 的对话。
+
+### 终端、编辑器与效率
+
+- 本地 PTY / WSL / SSH 终端共用一套 xterm.js 渲染池，支持分屏；工作区各自独立的标签页集合。
+- **命令预测**：内置 spec 索引、carapace 参数补全、中文 tldr 释义，外加远端 shell 自身的命令集；带节流的参数补全，不会为每个按键起一个进程。
+- CodeMirror 6 编辑器 + LSP、远程文件编辑、命令片段库；选词翻译默认查内置词典（离线，不联网），点一次「AI 补全释义」才会调用你配置的模型补一条更详细的解释。
+
+### 本地知识检索
+
+- 索引本机数据目录中已有或由你导入的文档，条目数量取决于这台设备实际装了什么。
+- 检索全程在本地完成：SQLite **FTS5** 关键词 + **sqlite-vec** 向量语义（fastembed / BGE-small-zh，512 维），两路结果用 RRF 融合。
+- Agent 的推理仍由你配置的模型服务完成；知识检索本身不外发。
+
+### 工作区、会话与记忆
+
+- **工作区是隔离单元**：Agent 只看到当前对话所属工作区的环境，不会把 A 服务器的命令打进 B。
+- 对话按工作区隔离；会话摘要与成功排障案例可按工作区标签存在本地，供同一工作区之后的对话检索召回。
+
+## 四档交互
+
+界面上有四档。**权限**由 sidecar 的三种模式决定（观察 / 确认 / 自动，缺省为确认），教学档是在观察权限之上叠加一个教学标记：
 
 | 档位 | Agent 能做什么 | 适用场景 |
 |------|---------------|---------|
-| **观察** | 只读分析，写类工具从 schema 移除 | 生产巡检 |
-| **确认**（默认） | 全量工具；已识别的只读查询直接跑，未知与状态变更类逐条走审批卡 | 日常运维，人在回路 |
-| **自动** | 低危（L0–L2）直接执行，L3/L4 仍需审批 | 可信沙箱 |
-| **教学** | 观察模式权限 + 教学界面，一次一张命令卡 | 课堂 / 自学 |
+| **观察** | 只读分析，写类工具不出现在 Schema 里 | 生产巡检 |
+| **确认**（默认） | 全量工具；可识别的只读查询直接执行，未知命令与状态变更逐条走审批卡 | 日常运维，人在回路 |
+| **自动** | 低危（L0–L2）直接执行，L3/L4 仍需审批 | 可信环境 |
+| **教学** | 观察权限 + 教学标记：一次只出一张命令卡，后端不代执行 | 课堂 / 自学 |
 
-**SSH 服务器管理**
+教学档的完整链路：讲解遵循固定板块（概念与原理 → 路径拆解 → 设计哲学 → 操作示例 → 易错点 → 练习），每讲到一个动作就生成一张命令卡；命令由你点 Run 送进可见终端，真实输出回传之后才继续下一步。
 
-- 纯 Rust SSH 客户端（russh），支持密码与公钥认证；凭据存入系统密钥库，不进仓库。
-- **TOFU 主机密钥校验**：未知主机弹审批，密钥变更给出中间人告警。
-- SFTP 浏览与编辑、拖拽上传、跨服务器一致的远程文件树（跟随当前会话 `cwd`）。
-- 本地 / 远程 / 动态（SOCKS5）端口转发；服务器实时监控（CPU、内存、磁盘、网络、进程）走 SSH 通道采集，不占用 Agent。
+## 工具清单（25 个）
 
-**安全边界**
+| 分类 | 工具 |
+|------|------|
+| 执行与观察 | `ssh_command` · `get_terminal_output` · `suggest_command` · `python_run` · `ask_user` |
+| 远程文件 | `read_remote_file` · `write_remote_file` |
+| 运维动作 | `service_manage` · `package_manage` · `firewall_manage` · `security_audit` · `performance_analyze` · `network_diagnose` · `inspect_processes` · `analyze_logs` |
+| 证据与复盘 | `assess_confidence` · `search_history` · `config_diff` · `backup_restore` · `todo_write` |
+| 知识与技能 | `knowledge_search` · `knowledge_get_doc` · `skill_invoke` · `save_skill` |
+| 会话 | `ssh_list_sessions` |
 
-- 当前命令影响分级使用 L0/L2/L3/L4（L1 仅保留兼容）；未识别命令按高危险 fail-closed，复合命令逐段拆解展示。
-- 灾难性操作硬底线黑名单 —— 直接拦截，不提供审批选项。
-- 同会话 FIFO：上一条命令未从 SSH 返回前，不展示下一条审批卡。
-- 单次调用工具上限 50 次 + 连续失败 3 次熔断。
-- 输出脱敏：进入 UI、模型上下文与日志前统一处理。
-- **SSH 退出码硬边界**：非零或缺失退出码一律按错误上报，不谎报成功。
+教学模式不是第 26 个工具：它拦截上述工具调用，返回结构化的单步命令卡，由终端真实执行。
 
-**本地知识检索**
+## 安全边界
 
-- 索引本机数据目录中已有或由用户导入的文档与笔记；条目数量取决于该设备实际安装、导入的数据。
-- 检索过程在本地完成：SQLite **FTS5** 关键词 + **sqlite-vec** 向量语义，RRF 融合。Agent 推理仍依赖已配置的模型服务；选择本地模型时除外。
-
-**工作区、会话与记忆**
-
-- 工作区是隔离单元：每个工作区保存自己的窗口与标签页；Agent 只看到当前对话所属工作区的环境。
-- **对话按工作区隔离**。会话摘要与成功排障案例可按工作区标签保存在本地，并由同一工作区中的后续对话检索召回。
-
-**教学流程**
-
-- 讲解输出遵循固定板块契约（概念与原理、路径拆解、设计哲学、操作示例、易错点、练习）。
-- **单步命令卡**：前端以观察模式权限叠加教学标记发送请求；运行时一次只生成一张卡，后端不代为执行。学生点击 Run 将命令送入可见终端，真实结果返回后才继续下一步。
-
-**终端、编辑器与工作区工具**
-
-- 本地 PTY / WSL / SSH 终端共用 xterm.js 渲染池；支持分屏；工作区各自独立的标签页。
-- 命令预测：内置 spec 索引、carapace 参数补全、中文 tldr 描述与远端 shell 自身命令集。
-- CodeMirror 6 编辑器 + LSP、远程文件编辑、离线选词翻译、命令片段（Snippets）。
+- **影响分级**：当前判定产出 L0 / L2 / L3 / L4（L1 保留兼容）；未识别的命令按高风险处理，复合命令逐段拆开评估。
+- **硬底线黑名单**：灾难性操作直接拦截，不提供"仍要审批"的入口。
+- **凭据读取需要点头**：`cat ~/.ssh/id_rsa`、`head /etc/shadow` 这类读取凭据类文件的命令，无论走 SSH 还是 Python 通道都提到 L3 审批（凭据路径名单只有一份，两条通道共用）。
+- **同会话先进先出**：上一条命令没有从 SSH 返回之前，不会弹出下一条审批卡。
+- **熔断**：单次回合工具调用上限 50 次；同一工具连续失败 3 次熔断。
+- **退出码如实上报**：非零退出码与"没取回退出码"是两种不同状态，都不会被写成成功；只读命令的非零退出会附带 `stderr` 与含义说明，不谎报也不吞信息。
+- **输出脱敏**：进入界面、模型上下文与日志之前统一处理；API Key 不再明文落盘。
+- **不静默换通道**：写操作不会因为"当前没有可见终端"就被应用自己改到后台执行；只有只读命令会改道，且改道事实写进返回载荷。
 
 ## 架构
 
@@ -238,47 +134,97 @@ TDSF Terminal Agent 是一款**把 AI 运维 Agent 装进 shell 执行链路的�
 React 19 前端    （Agent 面板 · 终端 · 工作区 · 编辑器）
       │  Tauri invoke / 事件
       ▼
-Rust 壳          （PTY · SSH · SFTP · 隧道 · 打字机引擎 · sidecar 监管）
+Rust 壳          （PTY · SSH · SFTP · 端口转发 · 打字机引擎 · sidecar 监管）
       │  JSON-RPC over stdio
       ▼
-Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识库 · 证据链）
+Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识检索 · 证据链）
 ```
 
 | 层 | 选型 |
 |----|------|
 | 桌面壳 | Tauri 2（Rust） |
-| 前端 | React 19 · TypeScript · Vite · Tailwind v4 · zustand · xterm.js · CodeMirror 6 |
+| 前端 | React 19 · TypeScript · Vite · Tailwind CSS v4 · zustand · xterm.js · CodeMirror 6 |
 | SSH / PTY | russh · russh-sftp · portable-pty · keyring |
-| AI 运行时 | Python sidecar + Strands Agents（DeepSeek / 智谱 / 通义 / Kimi / 豆包 / Ollama / 自定义 OpenAI 兼容端点） |
-| 知识库 | SQLite FTS5 + sqlite-vec（512 维）+ RRF |
+| Agent 运行时 | Python sidecar + Strands Agents（DeepSeek / 智谱 / 通义 / Kimi / 豆包 / Ollama / 自定义 OpenAI 兼容端点） |
+| 知识检索 | SQLite FTS5 + sqlite-vec（512 维）+ RRF |
 
-## 验证规则
+## 安装（Windows x64）
 
-本项目严格区分**"代码与自动化测试已验证"**与**"仍需原生桌面验收"**。测试数量会随实现变化，不把某次运行的固定数字当成功能指标。
+发布形态是 **Windows x64 NSIS 安装包**（当前用户级安装，不需要管理员权限）。
 
-| 门禁 | 验证范围 |
-|------|----------|
-| `pytest`（sidecar） | Agent、工具、安全策略与知识检索 |
-| `vitest` | 前端状态、交互与渲染契约 |
-| `cargo test` | Tauri、PTY、SSH 与系统边界 |
-| `tsc` / `eslint` | 类型与静态质量 |
+1. 从 [Releases](https://github.com/harryopo/tdsf-terminal-agent/releases) 下载 `TDSF.Terminal.Agent_<版本>_x64-setup.exe` 与 `SHA256SUMS.txt`。
+2. 运行前先核对校验值：
 
-涉及真实终端、SSH、审批卡与教学闭环的能力，还必须在原生桌面端单独验收。
+   ```powershell
+   Get-FileHash '.\TDSF.Terminal.Agent_1.0.2_x64-setup.exe' -Algorithm SHA256
+   ```
 
-## 快速开始
+3. 双击安装。只有在系统缺少 Microsoft WebView2 时，安装器才会去下载它。
+4. 打开 **设置 → 模型**，填入一个模型服务的 API Key，然后新建工作区（本地 / WSL / SSH）开始使用。
 
-**环境要求**：Node.js ≥ 20、pnpm ≥ 9、Rust stable、Python ≥ 3.12
+安装包目前未做 Authenticode 代码签名，Windows SmartScreen 首次运行可能提示"未知发布者"；核对 SHA-256 后再继续即可。
+
+## 自动更新
+
+自 **1.0.2** 起，已安装的正式版会自己发现新版本：
+
+- 启动后约 8 秒检查一次，之后最多每 24 小时一次；检查只是拉取 GitHub Release 的更新清单，不上传任何本机数据。
+- 有新版本时，窗口底部状态栏出现提示；**不会弹模态打断你**。
+- 下载与安装都需要你点一下确认，弹窗会写明包体积（完整安装包，不是增量）。
+- 更新包带 minisign 签名，安装前验签；签名私钥只存在于 CI。
+- 有审批在等你回答、或 Agent 一轮还没跑完时，安装会被拒绝且不改动你的现场；正常安装前会依次收尾：取消本轮任务 → 断开本窗口 SSH → 关闭终端 → 停语言服务器 → 停 sidecar。
+
+1.0.1 及更早版本没有更新客户端，需要手动安装一次 1.0.2。
+
+## 开发指南
+
+**环境要求**：Node.js ≥ 20、pnpm ≥ 9、Rust stable、Python ≥ 3.11（sidecar 的虚拟环境版本由 `src-tauri/sidecar/pyproject.toml` 约束，Agent 运行时版本钉在 `src-tauri/sidecar/STRANDS_RUNTIME_VERSION`）
 
 ```bash
-pnpm install          # 安装前端依赖
-pnpm tauri:dev        # 启动桌面应用（首次编译 2–5 分钟）
+pnpm install              # 前端依赖
+pnpm tauri:dev            # 启动开发版桌面应用（首次编译 2–5 分钟）
 ```
 
-Python sidecar 环境位于 `src-tauri/sidecar/`（虚拟环境）；Windows 下双击 `启动.bat` 即可自动接线并启动。
+Windows 下也可以直接双击仓库根目录的 `启动.bat`。开发版与正式版使用不同的应用标识与数据目录，互不覆盖。
 
-在**设置 → 模型**中填入 API Key（DeepSeek / 智谱 / 通义 / Kimi / 豆包 / Ollama / 自定义 OpenAI 兼容端点），然后新建一个工作区（本地 / WSL / SSH），在工作区内新建对话开始使用。
+| 命令 | 作用 |
+|------|------|
+| `pnpm typecheck` / `pnpm lint` | 类型与静态检查 |
+| `pnpm test` | 前端单元测试（vitest） |
+| `pnpm test:python` | sidecar 测试（pytest：Agent、工具、安全策略、知识检索） |
+| `cargo test`（在 `src-tauri/`） | Rust 侧：PTY / SSH / 文件系统 / 系统边界 |
+| `pnpm probe:ui` | 真机界面门禁：通过 CDP 量已挂载窗口里的控件尺寸、裁切与对齐 |
+| `pnpm probe:dialog` / `probe:ssh` / `probe:ipc` | 弹窗几何、SSH 会话回收、IPC 方法白名单的真机核对 |
+| `pnpm check:release-version` | 校验五处版本号声明一致 |
+| `pnpm build:win` | 版本号校验 → sidecar 打包与冒烟 → NSIS 打包 |
 
-## 许可与上游
+发布流程：推一个 `v*` 标签 → CI 构建带签名的安装包与更新清单，落成**草稿** Release → 验收后手动发布。清单只解析已发布的版本，所以在点"发布"之前，客户端查不到它。
 
-- 本项目原创贡献以 **Apache-2.0** 授权 —— 见 [`LICENSE`](LICENSE)。
-- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、可见执行 Agent 运行时与 Linux 教学流程。
+## 仓库结构
+
+```
+src/                React 前端（modules/ 按功能分区：ai、terminal、ssh、explorer、editor…）
+src-tauri/
+  src/              Rust 壳：pty / ssh / sftp / tunnel / lsp / sidecar 监管
+  sidecar/          Python Agent 运行时（strands_backend/ + tools/ + knowledge/）
+  sidecar/tests/    pytest 套件
+  capabilities/     Tauri 权限清单
+  tauri.*.conf.json 正式 / 开发 / 各平台配置
+scripts/            构建与资源生成脚本；probe/ 下是真机门禁
+website/            宣传页（部署到 GitHub Pages）
+assets/             logo 源文件
+.github/workflows/  CI（前端 / Python / Rust 三平台） · 发布 · Pages
+```
+
+## 隐私与数据
+
+联网只发生在这些用途：调用你配置的模型服务、连接你自己添加的 SSH 主机、检查更新时拉取 GitHub 的更新清单、安装器按需下载 WebView2。
+
+会话记录、工作区配置与知识库都存放在本机数据目录；模型提供方会收到对话内容、被选中的工作区上下文以及回答所需的工具结果 —— 向云端模型发送敏感信息前，请先检查终端输出与附件。细节见 [PRIVACY.md](PRIVACY.md)。
+
+卸载不会自动删除你创建的工作区、技能与应用数据；需要彻底清理时请手动删除对应目录与保存在系统里的凭据。
+
+## 许可与来源
+
+- 本项目原创部分以 **Apache-2.0** 授权，见 [LICENSE](LICENSE)。
+- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、可见执行的 Agent 运行时与 Linux 教学流程。
