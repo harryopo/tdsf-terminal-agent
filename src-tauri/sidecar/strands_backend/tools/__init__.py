@@ -759,6 +759,11 @@ def _factual_approval_explanation(
         return "该命令会创建、移动或改写文件内容。"
     if "network" in categories:
         return "该命令会访问外部网络或远端服务。"
+    if "credential" in categories:
+        return (
+            "该命令会读取凭据类文件（私钥、API key 配置、/etc/shadow 等），"
+            "内容会原样送回模型。确认前不会执行。"
+        )
     return "该命令可能改变系统状态，确认后才会执行。"
 
 

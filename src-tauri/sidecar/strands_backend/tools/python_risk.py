@@ -169,23 +169,10 @@ _WRITE_MODE_MARKS = ("w", "a", "x", "+")
 # 这条链剩下的洞就是"用户没机会拒绝"。L3 落在 auto 档也逐条审批（与 `dangerous_construct`
 # 同级，且**不许被白名单/会话记忆降级**），所以这一条不改 #66 的"纯算东西不打扰"，
 # 只把"读私钥 / 读 API key 配置"从 L0 里拿出来。
-_CREDENTIAL_PATH_MARKS: tuple[str, ...] = (
-    ".ssh",  # ~/.ssh 与 /root/.ssh/id_rsa 与 C:\Users\x\.ssh\ —— 三种分隔符一并认
-    "id_rsa",
-    "id_ecdsa",
-    "id_ed25519",
-    "authorized_keys",
-    "known_hosts",
-    "ssh-credentials.json",
-    "llm_config.json",
-    ".aws",
-    ".gnupg",
-    "/etc/shadow",
-    "/etc/sudoers",
-    ".npmrc",
-    "bash_history",
-    "zsh_history",
-    "histfile",
+# 名单的唯一主人在 `_credential_paths`（#159 同族：命令通道也要用同一份，两份必漂）。
+from ._credential_paths import (  # noqa: E402
+    first_credential_piece,
+    is_credential_path_piece,
 )
 
 # 命中凭据路径时读/写共用一个类别，动作名区分开（审批卡要说清是读还是写）
@@ -208,9 +195,7 @@ def _literal_pieces(node: ast.AST) -> list[str]:
 
 
 def _is_credential_path(pieces: list[str]) -> bool:
-    return any(
-        mark in text.lower() for text in pieces for mark in _CREDENTIAL_PATH_MARKS
-    )
+    return any(is_credential_path_piece(text) for text in pieces)
 
 
 # 这些调用的参数里出现凭据路径就该进审批（读与写都算）
@@ -417,10 +402,7 @@ class _Analyzer(ast.NodeVisitor):
             pieces.extend(_literal_pieces(kw.value))
         if not _is_credential_path(pieces):
             return
-        shown = next(
-            (p for p in pieces if any(m in p.lower() for m in _CREDENTIAL_PATH_MARKS)),
-            canonical,
-        )
+        shown = first_credential_piece(pieces) or canonical
         kind = _CREDENTIAL_WRITE_KIND if writing else _CREDENTIAL_READ_KIND
         self._add(_L3, kind, f"{canonical}({shown!r})", node.lineno)
 

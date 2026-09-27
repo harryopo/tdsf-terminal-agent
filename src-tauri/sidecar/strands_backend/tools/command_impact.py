@@ -18,14 +18,17 @@ strands_backend/tools/command_impact.py — 命令影响预测引擎（Task 4，
   至少 3，且永不自动放行，供 Task 5 白名单消费）。
 
 设计要点：
-1. 纯函数、零内部依赖（不 import strands/tools 其他模块），便于单测与复用。
+1. 纯函数。除 `_credential_paths`（#159 起：凭据名单只允许有一份主人，它本身零依赖）
+   之外不 import strands/tools 其他模块，便于单测与复用。
 2. fail-closed：未知命令 risk_l=3（偏高值），卡面文案「影响未知——请人工审查」。
 3. risk_l 映射（任务 spec）：删除=4、重启服务=3、装包/改配置/网络外联/用户
-   权限/文件写入=2、只读=0、未知=3。
+   权限/文件写入=2、只读=0、未知=3；**路径命中凭据名单 ⇒ 至少 3**（#159）。
 """
 from __future__ import annotations
 
 import re
+
+from ._credential_paths import first_credential_piece
 
 # ============================================================================
 # 类别常量与风险映射
@@ -41,6 +44,8 @@ CATEGORY_NETWORK = "network"        # 网络外联
 CATEGORY_PERM = "perm"              # 用户权限
 CATEGORY_FILE_WRITE = "file_write"  # 文件写入/移动
 CATEGORY_UNKNOWN = "unknown"        # 未知
+# #159：读凭据类文件不再是"只读查看"（名单与 python_run 共用 `_credential_paths` 那一份）
+CATEGORY_CREDENTIAL = "credential"  # 读凭据类文件
 
 # 类别 → 中文标签（审批卡类别徽标，学生友好表述）
 CATEGORY_LABELS: dict[str, str] = {
@@ -52,6 +57,7 @@ CATEGORY_LABELS: dict[str, str] = {
     CATEGORY_NETWORK: "联网访问",
     CATEGORY_PERM: "改权限",
     CATEGORY_FILE_WRITE: "写文件",
+    CATEGORY_CREDENTIAL: "读凭据类文件",
     CATEGORY_UNKNOWN: "未识别命令（保守待确认）",
 }
 
@@ -65,6 +71,7 @@ CATEGORY_RISK: dict[str, int] = {
     CATEGORY_NETWORK: 2,
     CATEGORY_PERM: 2,
     CATEGORY_FILE_WRITE: 2,
+    CATEGORY_CREDENTIAL: 3,
     CATEGORY_UNKNOWN: 3,
 }
 
@@ -570,12 +577,26 @@ def classify_segment(seg: str) -> dict:
         category = CATEGORY_UNKNOWN
 
     objects = _extract_objects(category, base, toks)
+    risk_l = CATEGORY_RISK.get(category, CATEGORY_RISK[CATEGORY_UNKNOWN])
+    # #159：路径命中凭据名单 ⇒ 至少 L3。
+    # 只读命令（`cat /root/.ssh/id_rsa` / `head -20 /etc/shadow`）以前按**命令名**判成
+    # "只读查看 L0"，三档全免审批 —— 这是主通道上比 python_run 更严重的那个洞。
+    # 读要换类别：不改类别只抬 risk_l，审批卡会一边问一边说"仅查询、不会写入"（半假事实）。
+    # 写类（`tee -a authorized_keys`）本来就要弹卡，这里只把级别抬到 L3，类别不动、说法仍准。
+    credential_hit = first_credential_piece(
+        [t for t in toks[1:] if not t.startswith("-")]
+    )
+    if credential_hit is not None:
+        if category == CATEGORY_READONLY:
+            category = CATEGORY_CREDENTIAL
+            objects = [credential_hit]
+        risk_l = max(risk_l, CATEGORY_RISK[CATEGORY_CREDENTIAL])
     return {
         "command": seg,
         "category": category,
         "category_label": CATEGORY_LABELS.get(category, CATEGORY_LABELS[CATEGORY_UNKNOWN]),
         "objects": objects,
-        "risk_l": CATEGORY_RISK.get(category, CATEGORY_RISK[CATEGORY_UNKNOWN]),
+        "risk_l": risk_l,
     }
 
 

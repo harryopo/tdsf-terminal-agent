@@ -326,9 +326,19 @@ class TestAssessCommandOrder:
     def test_session_readonly_trust_allows_low_risk(self, stores):
         """会话只读免审命中：L0 命令放行且标注 trust_source"""
         record_session_trust("s-test", "cat /etc/passwd", 0)
-        result = assess_command(_ctx(), "cat /etc/shadow")
+        # 例子原先是 `cat /etc/shadow` —— #159 之后它是 L3「读凭据类文件」，
+        # 只读免审本就不该放行它（那条断言由 test_session_readonly_trust_not_high_risk 管）。
+        # 这条要测的是"真 L0 命令放行"，所以换一个不含凭据的文件。
+        result = assess_command(_ctx(), "cat /etc/hostname")
         assert result["decision"] == "allow"
         assert result.get("trust_source") == "session_readonly"
+
+    def test_session_readonly_trust_does_not_cheapen_credential_read(self, stores):
+        """凭据读取（#159 起 L3）不许被会话只读信任放进免审通道 —— 名单方向要一致。"""
+        record_session_trust("s-test", "cat /etc/hostname", 0)
+        result = assess_command(_ctx(), "cat /etc/shadow")
+        assert result["decision"] == "confirm"
+        assert "trust_source" not in result
 
     def test_session_readonly_trust_not_high_risk(self, stores):
         """会话只读免审不放大权限：L3 命令仍走模式决策弹卡"""
