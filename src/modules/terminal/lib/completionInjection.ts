@@ -249,6 +249,59 @@ export function getCompletionState(): CompletionState {
 let predictSeq = 0;
 
 /**
+ * 预测请求节流（#152，2026-09-27）。实测事实：连打 271 个字符曾打出 124 次
+ * carapace 起停；单条 `carapace git export` 只要 ~190ms，而 20 条并发时每条
+ * 涨到 474–599ms ⇒ 全部撞在 Rust 侧 500ms 强杀线上。**风暴本身就是超时的原因**，
+ * 所以本地参数预测从来没出过候选。两层节流：
+ *   ① 连打合并（debounce）：一次停顿只发一条；
+ *   ② 同一时刻只允许一条在飞，在飞期间的新请求只留最后一次、回来后补打
+ *      （人速打字 ~100ms/键，光靠 ① 仍会堆并发）。
+ */
+export const PREDICT_DEBOUNCE_MS = 120;
+
+let predictTimer: ReturnType<typeof setTimeout> | null = null;
+let predictInFlight = false;
+let predictQueuedLeaf: number | null = null;
+
+function schedulePredictionUpdate(leafId: number): void {
+  if (predictTimer) clearTimeout(predictTimer);
+  predictTimer = setTimeout(() => {
+    predictTimer = null;
+    void runPredictionUpdate(leafId);
+  }, PREDICT_DEBOUNCE_MS);
+}
+
+async function runPredictionUpdate(leafId: number): Promise<void> {
+  if (predictInFlight) {
+    predictQueuedLeaf = leafId;
+    return;
+  }
+  predictInFlight = true;
+  try {
+    await updatePredictions(leafId);
+  } finally {
+    predictInFlight = false;
+    if (predictQueuedLeaf !== null) {
+      const next = predictQueuedLeaf;
+      predictQueuedLeaf = null;
+      schedulePredictionUpdate(next);
+    }
+  }
+}
+
+/**
+ * 撤掉待跑的更新。缓冲区已经清空或已改写的场合必须取消 —— 否则延迟到达的
+ * 更新会拿旧行去请求参数，甚至把弹窗按一个已经不存在的 prefix 弹出来。
+ */
+function cancelScheduledPredictionUpdate(): void {
+  if (predictTimer) {
+    clearTimeout(predictTimer);
+    predictTimer = null;
+  }
+  predictQueuedLeaf = null;
+}
+
+/**
  * 命令模式候选按远端命令全集过滤（二轮改进：根治假预测）。
  * cmds 为 null（远端命令全集未拉到）→ 原样降级不过滤（无损）；
  * history 来源豁免（历史是真实执行过的，远端没有也可能是容器/临时装过）。
@@ -559,6 +612,9 @@ export function closeCompletion(): void {
 
 function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   if (!writeFn) return;
+  // 接受即改写缓冲区：待跑的更新必须撤掉，否则延迟到达的那次会按接受前的
+  // 半行去请求参数，并把弹窗重新弹回来。
+  cancelScheduledPredictionUpdate();
 
   // ── 参数模式：替换当前 token（-n/--noheadings/子命令/参数值） ──────────
   if (entry.kind === 'arg') {
@@ -635,6 +691,7 @@ export function completionKeyHandler(
   // === Ctrl+C / Ctrl+U → 清空缓冲区 + 关闭弹窗 ===
   if (event.ctrlKey && (event.key === 'c' || event.key === 'C' || event.key === 'u' || event.key === 'U')) {
     clearInputBuffer(leafId);
+    cancelScheduledPredictionUpdate();
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return true;
   }
@@ -692,6 +749,7 @@ export function completionKeyHandler(
     // }
     // Enter → 清空缓冲区（新的一行）
     clearInputBuffer(leafId);
+    cancelScheduledPredictionUpdate();
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return true; // 透传 Enter 让命令执行
   }
@@ -702,7 +760,7 @@ export function completionKeyHandler(
     if (buf.length > 0) {
       setInputBuffer(leafId, buf.slice(0, -1));
     }
-    setTimeout(() => updatePredictions(leafId), 0);
+    schedulePredictionUpdate(leafId);
     return true;
   }
 
@@ -716,6 +774,7 @@ export function completionKeyHandler(
     (event.key === 'v' || event.key === 'V')
   ) {
     clearInputBuffer(leafId);
+    cancelScheduledPredictionUpdate();
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return true;
   }
@@ -724,6 +783,7 @@ export function completionKeyHandler(
     event.key === 'Backspace'
   ) {
     clearInputBuffer(leafId);
+    cancelScheduledPredictionUpdate();
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return true;
   }
@@ -735,6 +795,7 @@ export function completionKeyHandler(
     // 弹窗可见时的 ArrowRight 已在上面"接受预测"分支拦截, 不会落此;
     // 光标移出行尾后缓冲已失配, 清空 + 关闭弹窗。
     clearInputBuffer(leafId);
+    cancelScheduledPredictionUpdate();
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return true;
   }
@@ -743,7 +804,7 @@ export function completionKeyHandler(
   if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
     const buf = getInputBuffer(leafId);
     setInputBuffer(leafId, buf + event.key);
-    setTimeout(() => updatePredictions(leafId), 0);
+    schedulePredictionUpdate(leafId);
     return true;
   }
 

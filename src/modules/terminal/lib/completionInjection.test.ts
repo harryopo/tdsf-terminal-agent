@@ -17,6 +17,7 @@ import {
   initCompletionInjection,
   measureCursorPx,
   POPUP_WIDTH,
+  PREDICT_DEBOUNCE_MS,
   setLeafEnvironment,
 } from "./completionInjection";
 
@@ -187,8 +188,14 @@ function key(k: string): KeyboardEvent {
   } as unknown as KeyboardEvent;
 }
 
-/** 等待 setTimeout(0) 微任务（updatePredictions 在定时器里跑） */
-const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+/**
+ * 等一次预测更新跑完（#152 起按键更新带节流窗口，不再是 setTimeout(0)）。
+ * 多等一个宏任务：updatePredictions 里参数分支还要 await。
+ */
+const tick = async () => {
+  await new Promise<void>((r) => setTimeout(r, PREDICT_DEBOUNCE_MS + 50));
+  await new Promise<void>((r) => setTimeout(r, 0));
+};
 
 describe("acceptPrediction", () => {
   it("输入 ll 弹出词典别名 ll 且不弹 ollama（用户 2026-08-28 反馈场景）", async () => {
