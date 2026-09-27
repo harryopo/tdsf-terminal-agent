@@ -130,8 +130,9 @@ The 1.0 competition release is distributed as a **Windows x64 NSIS installer**.
 
 The competition build may be unsigned, so Windows SmartScreen can show an
 unknown-publisher warning. Verify the SHA-256 checksum before continuing.
-Automatic updates are not enabled in 1.0; install a newer release manually.
-See [PRIVACY.md](PRIVACY.md) for local data and network behavior.
+From 1.0.2 installed builds check GitHub Releases for a signed update and ask
+before downloading it; see [PRIVACY.md](PRIVACY.md) for local data and network
+behavior.
 
 ## Quick start
 

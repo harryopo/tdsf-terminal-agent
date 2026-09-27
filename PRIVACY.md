@@ -18,11 +18,12 @@ product analytics or telemetry to the project maintainers by default.
 
 ## Network connections
 
-The application makes network connections only for features the user enables:
+The application makes network connections only for the following:
 
 - model requests go to the provider or custom endpoint selected in Settings;
 - SSH and SFTP connections go directly to hosts configured by the user;
 - opening project or issue links uses the system browser;
+- the automatic update check requests the release manifest from GitHub Releases;
 - WebView2 may be downloaded by the installer when it is not already present.
 
 The configured model provider can receive the conversation, selected workspace
@@ -31,8 +32,11 @@ and attached files before sending sensitive information to a cloud model.
 
 ## Updates and deletion
 
-Version 1.0 does not perform automatic update checks. New installers are
-published through GitHub Releases. Uninstalling the application does not
+Version 1.0.2 and later check GitHub Releases for a newer signed version after
+start-up and at most once per day. That check retrieves a version manifest and
+sends no conversation, terminal, file or identity data. Downloading and
+installing an update always requires an explicit action in the app, and the
+update package signature is verified before installation. Uninstalling the application does not
 automatically delete user-created workspaces, skills, or application data;
 remove those directories and saved Windows credentials manually if a complete
 local reset is required.
