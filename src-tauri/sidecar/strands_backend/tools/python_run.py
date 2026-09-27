@@ -518,6 +518,8 @@ def make_python_run_tool(ctx: ToolContext):
         - stdout/stderr 各自超过 10KB 会截断（truncated=true）
         - 代码里有危险动作（删文件、联网、起子进程、动态执行）会先弹审批卡，
           用户拒绝或未响应则该代码不执行；纯统计与只读代码不打扰
+        - 读或写凭据类文件（私钥、API key 配置、/etc/shadow 等）无论读还是写都会弹
+          审批卡；需要这类信息时直接说明目的，不要绕过审批去读
 
         Args:
             code (str): 要执行的 Python 源码（一段完整可执行的脚本）。

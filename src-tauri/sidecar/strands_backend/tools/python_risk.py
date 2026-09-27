@@ -13,10 +13,11 @@ strands_backend/tools/python_risk.py — python_run 代码风险分级器（#66�
 
 分级口径（与 ssh_command 的 risk_l 同一把尺子，裁决统一交给 decide）：
 - L4 起子进程 / 动态执行代码 / 动态导入 / 反序列化 / ctypes
-- L3 删除文件或目录、联网访问（用户点名的「删文件 / 联网」）
+- L3 删除文件或目录、联网访问（用户点名的「删文件 / 联网」）、**读写凭据类文件**
+  （私钥 / API key 配置 / /etc/shadow 等 —— 读日志与读私钥不是同一件事，见 #158-④）
 - L2 写入、改名、覆盖、改权限（confirm 档逐条确认，auto 档放行）
 - L1 新建目录 / 空文件等轻副作用
-- L0 只读与纯计算（json / re / csv / 统计 / open(...).read()）
+- L0 只读与纯计算（json / re / csv / 统计 / open(非凭据路径).read()）
 - 语法解析失败 → 保守按 L3（fail-closed：看不清就先当高危）
 
 已知边界（诚实声明，不是全覆盖检测）：
@@ -161,6 +162,75 @@ _BOUND_TYPE_BY_CONSTRUCTOR: dict[str, str] = {
 
 # open(path, mode) 里算「写」的模式字符
 _WRITE_MODE_MARKS = ("w", "a", "x", "+")
+
+# #158-④：读凭据类文件按 **L3**（不是 L0）。
+# 「读文件算 L0 免审批」（#66，2026-09-19 决策 3）说的是读日志、读配置做统计，
+# 而 `print(open("~/.ssh/id_rsa").read())` 与它是同一个 `open` —— #155 补上 stdout 脱敏之后，
+# 这条链剩下的洞就是"用户没机会拒绝"。L3 落在 auto 档也逐条审批（与 `dangerous_construct`
+# 同级，且**不许被白名单/会话记忆降级**），所以这一条不改 #66 的"纯算东西不打扰"，
+# 只把"读私钥 / 读 API key 配置"从 L0 里拿出来。
+_CREDENTIAL_PATH_MARKS: tuple[str, ...] = (
+    ".ssh",  # ~/.ssh 与 /root/.ssh/id_rsa 与 C:\Users\x\.ssh\ —— 三种分隔符一并认
+    "id_rsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "authorized_keys",
+    "known_hosts",
+    "ssh-credentials.json",
+    "llm_config.json",
+    ".aws",
+    ".gnupg",
+    "/etc/shadow",
+    "/etc/sudoers",
+    ".npmrc",
+    "bash_history",
+    "zsh_history",
+    "histfile",
+)
+
+# 命中凭据路径时读/写共用一个类别，动作名区分开（审批卡要说清是读还是写）
+_CREDENTIAL_READ_KIND = "读取凭据类文件"
+_CREDENTIAL_WRITE_KIND = "写入凭据类文件"
+
+
+def _literal_pieces(node: ast.AST) -> list[str]:
+    """收一个表达式里所有**字面**字符串片段。
+
+    覆盖 `a + b`、f-string、`os.path.join(home, ".ssh", "id_rsa")` 这类把路径拼起来的
+    常见写法；变量绑定不追数据流（与模块级"已知边界"一致：目标是把直白写法拉进审批，
+    不是做全覆盖检测）。
+    """
+    return [
+        sub.value
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+    ]
+
+
+def _is_credential_path(pieces: list[str]) -> bool:
+    return any(
+        mark in text.lower() for text in pieces for mark in _CREDENTIAL_PATH_MARKS
+    )
+
+
+# 这些调用的参数里出现凭据路径就该进审批（读与写都算）
+_PATH_CALL_NAMES = frozenset(
+    {
+        "open",
+        "io.open",
+        "codecs.open",
+        "pathlib.Path",
+        "Path",
+        "os.path.expanduser",
+        "os.path.expandvars",
+        "os.listdir",
+        "os.scandir",
+        "shutil.copy",
+        "shutil.copy2",
+        "shutil.copyfile",
+        "fileinput.input",
+    }
+)
 
 
 # 审批卡的事实说明按 category 选文案（与 command_impact 用的类别名对齐）
@@ -323,7 +393,36 @@ class _Analyzer(ast.NodeVisitor):
             if matched is not None:
                 (level, kind), _shown = matched
                 self._add(level, kind, canonical or attr, node.lineno)
+        self._check_credential_path(node, canonical or attr)
         self.generic_visit(node)
+
+    def _check_credential_path(self, node: ast.Call, canonical: str) -> None:
+        """#158-④：路径字面量指向凭据类文件 ⇒ L3（读写都算，动作名分开说）。
+
+        与 `_check_open` 是**叠加**关系不是替换：`open(p, "w")` 原本已经算 L2 写入，
+        这里再叠一条"写的是凭据文件"⇒ 结果按 max 走到 L3。
+        """
+        head = canonical.rsplit(".", 1)[-1] if "." in canonical else canonical
+        if canonical not in _PATH_CALL_NAMES and head not in {"Path", "expanduser", "expandvars"}:
+            return
+        mode = ""
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            mode = str(node.args[1].value)
+        for keyword in node.keywords:
+            if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
+                mode = str(keyword.value.value)
+        writing = bool(mode) and any(mark in mode for mark in _WRITE_MODE_MARKS)
+        pieces = [p for arg in node.args for p in _literal_pieces(arg)]
+        for kw in node.keywords:
+            pieces.extend(_literal_pieces(kw.value))
+        if not _is_credential_path(pieces):
+            return
+        shown = next(
+            (p for p in pieces if any(m in p.lower() for m in _CREDENTIAL_PATH_MARKS)),
+            canonical,
+        )
+        kind = _CREDENTIAL_WRITE_KIND if writing else _CREDENTIAL_READ_KIND
+        self._add(_L3, kind, f"{canonical}({shown!r})", node.lineno)
 
     def _check_open(self, node: ast.Call) -> None:
         """open(path, mode)：写模式算 L2，只读模式不算风险"""
