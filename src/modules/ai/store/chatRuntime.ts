@@ -387,7 +387,8 @@ export async function sendMessage(text: string): Promise<boolean> {
   if (!sessionId) return false;
 
   // TDSF P0-3: 走 Sidecar 路径时跳过 Vercel SDK 的 API Key 检查
-  // 原因: TDSF Sidecar 使用 Python 端自己配置的 LLM（.tdsf-data/llm_config.json），
+  // 原因: TDSF Sidecar 使用 Python 端自己的 LLM 配置（模型身份落 .tdsf-data/llm_config.json，
+  //       API Key 由本模块 agent.configure 推进 sidecar 内存，不落盘），
   //       不依赖前端 Vercel SDK 的 provider key。若不跳过，用户未配置 OpenAI 等
   //       provider key 时 sendMessage 会返回 false，导致 TdsfAgentPanel 走
   //       focusInput 降级路径，用户输入无法到达 Python agent.invoke。

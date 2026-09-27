@@ -149,8 +149,9 @@ _RULES: list[tuple[str, str, re.Pattern[str], str]] = [
         "llm_not_configured",
         "P1",
         re.compile(r"LLM not configured|no API Key|mock_llm_active|MockLLM"),
-        "LLM 未配置（无 API Key）。到 设置 → AI 模型 配置，"
-        "或设 TDSF_LLM_API_KEY 环境变量 / 写 .tdsf-data/llm_config.json。",
+        "LLM 未配置（无 API Key）。到 设置 → AI 模型 配置（应用会自动同步给 sidecar）；"
+        "单独跑脚本时设 TDSF_LLM_API_KEY 环境变量"
+        "（llm_config.json 有意不存 key，别再往里写）。",
     ),
     (
         "invoke_error",

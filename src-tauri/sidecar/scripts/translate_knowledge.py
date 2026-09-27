@@ -235,7 +235,8 @@ def main(argv: list[str] | None = None) -> int:
     if llm_call is None:
         logger.warning(
             "LLM 不可用（未配置 API Key 或创建失败），跳过翻译。"
-            "配置 .tdsf-data/llm_config.json 后重跑本脚本"
+            "设 TDSF_LLM_API_KEY 环境变量后重跑本脚本"
+            "（llm_config.json 只存模型身份，有意不存 key）"
         )
         return 0
 

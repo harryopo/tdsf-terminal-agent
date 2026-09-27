@@ -80,3 +80,10 @@ getCurrentWindow()
 void import("./modules/terminal/lib/completionInjection").then((m) => {
   m.initPredictionClearListener();
 });
+
+// #158-①（2026-09-27）：API Key 不再落盘给 sidecar，所以**sidecar 一就绪就得把 keyring
+// 里的当前模型推过去** —— 不然第一次对话之前 agent 明确没有模型（状态胶囊会红）。
+// 动态 import 同一上例：不为一个监听把整条配置同步链拉进 eager 启动包。
+void import("./modules/ai/lib/sidecar-config-sync").then((m) => {
+  m.initSidecarConfigSyncOnReady();
+});

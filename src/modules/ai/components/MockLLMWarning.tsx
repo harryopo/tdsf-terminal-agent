@@ -6,7 +6,7 @@
 // 触发场景（Python sidecar 发布 mock_llm_active）：
 //   1. 未注入真实 LLM
 //   2. LLM 调用异常
-//   3. 用户在前端清空 .tdsf-data/llm_config.json
+//   3. 用户在 设置 → 模型 清空了 API Key（key 只走 keyring → sidecar 内存，不落盘）
 //
 // 设计要点:
 //   - 一个 useEffect 订阅一次, 卸载时 unlisten
@@ -37,7 +37,7 @@ const REASON_LABELS: Record<string, string> = {
 
 const REASON_DESCRIPTIONS: Record<string, string> = {
   no_llm_config:
-    "当前 Agent 没有注入真实的 LLM 调用函数. 请在 设置 → 模型 中配置 API Key, 或写入 .tdsf-data/llm_config.json.",
+    "当前 Agent 没有注入真实的 LLM 调用函数. 请在 设置 → 模型 中配置 API Key（配好后会自动同步给 Agent 后端）.",
   llm_call_failed:
     "真实 LLM 调用失败, 已自动降级到 mock 响应. 检查 API Key 是否有效 / 网络是否可达.",
 };

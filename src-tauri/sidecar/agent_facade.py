@@ -178,7 +178,7 @@ def configure(
         return {"ok": True, "llm_call_set": _model_is_configured()}
 
     try:
-        from core.llm_config import LLMConfig, save_config
+        from core.llm_config import LLMConfig, save_config, set_runtime_config
         from strands_backend.model_adapter import create_strands_model
 
         llm_config = LLMConfig(
@@ -196,6 +196,9 @@ def configure(
                 "message": "LLM 配置失败：API Key 为空",
             }
 
+        # key 只进进程内缓存（不落盘，#158-①）；先登记再持久化，
+        # 这样 save_config 之后任何 load_config() 拿到的都是这一份。
+        set_runtime_config(llm_config)
         save_config(llm_config)
         adapter = _global_strands_adapter
         if adapter is None:

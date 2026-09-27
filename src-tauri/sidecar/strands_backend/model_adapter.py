@@ -205,7 +205,8 @@ def create_strands_model(config: Any | None = None) -> Any:
         logger.info(
             "create_strands_model: LLM not configured (no API Key), "
             "returning None (adapter will degrade). "
-            "Set TDSF_LLM_API_KEY env or write .tdsf-data/llm_config.json"
+            "在应用里由前端 agent.configure 推进内存；单独跑时设 TDSF_LLM_API_KEY"
+            "（llm_config.json 有意不存 key，见 #158-①）"
         )
         return None
 

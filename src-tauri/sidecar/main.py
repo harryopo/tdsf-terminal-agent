@@ -599,10 +599,13 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
         agent_facade_module = agent_facade
         # LLM 配置加载：同一份 LLMConfig 供启动和 agent.configure 使用。
         # ---------------------------------------------------------------
-        # 从环境变量 / .tdsf-data/llm_config.json 加载 LLMConfig，
+        # 从环境变量 / 进程内缓存 / .tdsf-data/llm_config.json（不含 key）加载 LLMConfig，
         # configure_strands → create_strands_model 构造生产模型。
-        # 未配置时 Strands 会显式报告模型不可用。
-        from core.llm_config import load_config
+        # 顺序不能颠倒（#158-①）：**先抹掉存量文件里的明文 key 再读**，
+        # 否则本次启动仍会拿磁盘上的副本去建模型。抹除前会留 .bak-<ts>。
+        # 未配置时 Strands 会显式报告模型不可用（前端启动同步会把 key 推进来）。
+        from core.llm_config import load_config, strip_stored_secret
+        strip_stored_secret()
         llm_config = load_config()
         if llm_config.is_configured:
             logger.info("LLM configuration loaded for Strands")

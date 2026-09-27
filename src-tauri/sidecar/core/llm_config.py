@@ -10,8 +10,12 @@ core/llm_config.py — LLM 配置与调用封装（TDSF P0-3）
 - 不可用时返回 None，由调用方显式处理
 
 设计要点：
-1. **环境变量优先**：TDSF_LLM_API_KEY / TDSF_LLM_BASE_URL / TDSF_LLM_MODEL
-2. **配置文件回退**：.tdsf-data/llm_config.json（前端通过 IPC 写入）
+1. **不落盘 key**（#158-①，2026-09-27）：API Key 的真源是前端 OS keyring，本模块只在
+   **进程内**持有它。以前 `save_config` 会把 key 明文镜像一份到 llm_config.json，等于
+   在 keyring 之外多养一个可被任意本机进程读取的副本。现在优先级是：
+   环境变量 ``TDSF_LLM_*`` → 进程内运行时缓存 → 配置文件（只剩模型身份）→ 空配置
+2. **配置文件仍持久化模型身份**：provider / base_url / model / temperature / max_tokens
+   照落，sidecar 重启后仍知道"上次用的是哪个模型"，只是 key 要靠前端重新同步
 3. **OpenAI 兼容**：默认使用 官方 openai SDK 的同步客户端，
    通过 base_url 指向任意 OpenAI 兼容端点（DeepSeek / OneAPI / 代理等）
 4. **错误隔离**：LLM 调用失败时抛异常，由调用脚本决定重试或终止
@@ -91,6 +95,10 @@ class LLMConfig:
 # 配置加载
 # ============================================================================
 
+# 进程内 LLM 配置缓存：key 的唯一存放处（不落盘，见模块头 #158-① 说明）
+_RUNTIME_CONFIG: "LLMConfig | None" = None
+
+
 def _get_config_path() -> Path:
     """获取 LLM 配置文件路径（.tdsf-data/llm_config.json）"""
     data_dir = Path(os.environ.get("TDSF_DATA_DIR", "."))
@@ -98,12 +106,14 @@ def _get_config_path() -> Path:
 
 
 def load_config() -> LLMConfig:
-    """加载 LLM 配置（环境变量优先，配置文件回退）
+    """加载 LLM 配置（env → 进程内运行时缓存 → 配置文件 → 空）
 
-    优先级：
-    1. 环境变量 TDSF_LLM_* （启动时设置，便于开发调试）
-    2. 配置文件 .tdsf-data/llm_config.json（前端通过 IPC 写入）
-    3. 默认空配置（is_configured=False，由调用方显式处理）
+    优先级（#158-① 起 key 不再从文件取）：
+    1. 环境变量 ``TDSF_LLM_*``（离线脚本与开发调试的唯一入口）
+    2. 进程内运行时缓存（前端 ``agent.configure`` 推进来的，只活在本进程）
+    3. 配置文件 ``.tdsf-data/llm_config.json`` —— **只取模型身份**，
+       即便文件里还躺着历史明文 key 也不采信（配合启动期 ``strip_stored_secret``）
+    4. 默认空配置（``is_configured=False``，由调用方显式处理，不静默降级）
     """
     # 1. 环境变量
     env_api_key = os.environ.get("TDSF_LLM_API_KEY", "")
@@ -123,44 +133,95 @@ def load_config() -> LLMConfig:
             model=env_model or "gpt-4o-mini",
         )
 
-    # 2. 配置文件
+    # 2. 进程内运行时缓存（key 的唯一来源）
+    if _RUNTIME_CONFIG is not None and _RUNTIME_CONFIG.is_configured:
+        return _RUNTIME_CONFIG
+
+    # 3. 配置文件：只恢复模型身份，不恢复 key
     config_path = _get_config_path()
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
-            if data.get("api_key"):
-                logger.info(
-                    f"LLM config loaded from file: provider={data.get('provider', 'openai')}, "
-                    f"model={data.get('model', 'gpt-4o-mini')}"
-                )
-                return LLMConfig(
-                    provider=data.get("provider", "openai"),
-                    api_key=data["api_key"],
-                    base_url=data.get("base_url", ""),
-                    model=data.get("model", "gpt-4o-mini"),
-                    temperature=data.get("temperature", 0.7),
-                    max_tokens=data.get("max_tokens", 8192),
-                )
+            return LLMConfig(
+                provider=data.get("provider", "openai"),
+                api_key="",
+                base_url=data.get("base_url", ""),
+                model=data.get("model", "gpt-4o-mini"),
+                temperature=data.get("temperature", 0.7),
+                max_tokens=data.get("max_tokens", 8192),
+            )
         except (json.JSONDecodeError, KeyError, OSError) as e:
             logger.warning(f"Failed to load LLM config from {config_path}: {e}")
 
-    # 3. 默认空配置
+    # 4. 默认空配置
     return LLMConfig()
 
 
-def save_config(config: LLMConfig) -> None:
-    """保存 LLM 配置到文件（前端通过 IPC 调用）
+def set_runtime_config(config: LLMConfig | None) -> None:
+    """登记/清空进程内的 LLM 配置（前端 ``agent.configure`` 的唯一落点）
 
-    Args:
-        config: LLM 配置
+    key 只活在这里，不落盘。sidecar 重启后缓存为空 —— 前端会在启动同步时重新推送。
     """
+    global _RUNTIME_CONFIG
+    _RUNTIME_CONFIG = config
+
+
+def _write_config_dict(data: dict[str, Any]) -> None:
     config_path = _get_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
-        json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    logger.info(f"LLM config saved to {config_path}")
+
+
+def save_config(config: LLMConfig) -> None:
+    """持久化 LLM 配置的**非密钥字段**（前端通过 IPC 调用）
+
+    ``api_key`` 一律落成空串 —— 磁盘上不留凭据副本（#158-①）。内存对象不受影响，
+    所以同一份 config 仍可直接用于建模型。
+    """
+    data = config.to_dict()
+    data["api_key"] = ""
+    _write_config_dict(data)
+    logger.info(f"LLM config saved to {_get_config_path()}（不含 api_key）")
+
+
+def strip_stored_secret() -> bool:
+    """一次性抹掉存量文件里的明文 key；返回是否改写过
+
+    存量装机（历史版本写过 key）不会因为"以后不写了"就自己变干净，所以启动时抹一次。
+    **改前先留 ``llm_config.json.bak-<utc>``**：动的是用户机器上的数据文件。
+    文件不存在或本来就没有 key 时**不写不造备份** —— 否则每次启动都动他文件，
+    那是新造的故障不是修复。
+    """
+    config_path = _get_config_path()
+    if not config_path.exists():
+        return False
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"strip_stored_secret: 读不到 {config_path}: {e}")
+        return False
+    if not str(data.get("api_key") or "").strip():
+        return False
+    from datetime import datetime, timezone
+
+    backup = config_path.with_name(
+        f"{config_path.name}.bak-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    try:
+        backup.write_bytes(config_path.read_bytes())
+    except OSError as e:
+        # 备份失败就不动原文件：宁可留着存量 key，也不能把他的配置改坏
+        logger.warning(f"strip_stored_secret: 备份失败，跳过抹除: {e}")
+        return False
+    data["api_key"] = ""
+    _write_config_dict(data)
+    logger.info(
+        f"strip_stored_secret: 已抹掉 {config_path} 里的明文 key（原件备份为 {backup.name}）"
+    )
+    return True
 
 
 # ============================================================================
@@ -333,7 +394,9 @@ def make_llm_call(config: LLMConfig | None = None) -> LLMCallFunction | None:
     if not config.is_configured:
         logger.warning(
             "LLM not configured (no API Key); model calls are unavailable. "
-            "Set TDSF_LLM_API_KEY env or write .tdsf-data/llm_config.json"
+            "在应用里：AI 面板会随启动/首次对话自动同步 keyring 里的配置。"
+            "单独跑本模块或离线脚本：设 TDSF_LLM_API_KEY 环境变量"
+            "（llm_config.json 有意不存 key，见 #158-①）"
         )
         return None
 

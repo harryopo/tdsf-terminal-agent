@@ -5,7 +5,7 @@ scripts/gen_titles_zh.py — 官方文档中文标题+摘要批量生成（TDSF 
 
 用途：遍历 .tdsf-data/rag.db 官方源（*-docs + archwiki）**文件级**条目
 （knowledge.list_files 的 url + title0），调项目现有 LLM 配置
-（core.llm_config，环境变量 / .tdsf-data/llm_config.json）批量生成：
+（core.llm_config，key 走 TDSF_LLM_API_KEY 环境变量；llm_config.json 只存模型身份）批量生成：
 1. 简短中文标题 → doc_titles_zh.zh
 2. 120 字中文内容摘要 → doc_titles_zh.summary_zh（C2 新增；**不是全文
    翻译**——781 页整页 LLM 翻译 token 成本巨大且质量不可控，官方技术
@@ -152,7 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     if llm_call is None:
         logger.warning(
             "LLM 不可用（未配置 API Key 或创建失败），跳过中文标题/摘要生成——"
-            "前端将回退英文原标题。配置 .tdsf-data/llm_config.json 后重跑本脚本"
+            "前端将回退英文原标题。设 TDSF_LLM_API_KEY 环境变量后重跑本脚本"
+            "（llm_config.json 只存模型身份，有意不存 key）"
         )
         return 0
     if not todo:

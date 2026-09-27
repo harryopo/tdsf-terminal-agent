@@ -371,3 +371,58 @@ describe("sidecar config sync flag", () => {
     }
   });
 });
+
+// === #158-① 启动同步 =========================================================
+// key 不再落盘给 sidecar ⇒ "sidecar 一就绪就推一次"从可选变必需。
+// 承重的是**每一次 ready 都真推一遍**：sidecar 重启后进程内缓存是空的。
+describe("initSidecarConfigSyncOnReady（#158-①）", () => {
+  it("ready 才推、每次 ready 都推一遍，并把会话标志立回去", async () => {
+    const handlers: Array<() => void> = [];
+    const subscribeMock = vi
+      .fn()
+      .mockImplementation((_evt: string, cb: () => void) => {
+        handlers.push(cb);
+        return Promise.resolve(() => {});
+      });
+    vi.doMock("@/lib/sidecar-bridge", () => ({ subscribe: subscribeMock }));
+
+    const mod = await import("./sidecar-config-sync?boot-sync-test=" + Date.now());
+    getKeyMock.mockResolvedValue("sk-" + "boot-test-key");
+    invokeMock.mockResolvedValue({ ok: true, llm_call_set: true });
+
+    mod.initSidecarConfigSyncOnReady();
+    expect(subscribeMock).toHaveBeenCalledWith("ready", expect.any(Function));
+    expect(invokeMock).not.toHaveBeenCalled(); // 注册不等于同步：没 ready 就不该打 IPC
+
+    // 先把"会话内已同步"的标志立起来，模拟用户已经聊过一轮
+    await mod.runSidecarConfigSyncNow();
+    const afterChat = invokeMock.mock.calls.length;
+    expect(afterChat).toBeGreaterThan(0);
+
+    handlers[0](); // 第一次 ready（本次启动）
+    await new Promise((r) => setTimeout(r, 0));
+    expect(invokeMock.mock.calls.length).toBe(afterChat + 1);
+
+    handlers[0](); // sidecar 重启后的第二次 ready
+    await new Promise((r) => setTimeout(r, 0));
+    expect(invokeMock.mock.calls.length).toBe(afterChat + 2);
+    const [, params] = invokeMock.mock.calls[invokeMock.mock.calls.length - 1] as [
+      string,
+      { method: string },
+    ];
+    expect(params.method).toBe("agent.configure");
+    // 推完之后标志必须是立着的 —— 它管的是"每条消息别重复打 IPC"
+    expect(mod.isSidecarConfigSynced()).toBe(true);
+  });
+
+  it("注册点在主窗入口（不是某个可能没挂载的组件）", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const main = readFileSync(join(process.cwd(), "src/main.tsx"), "utf8");
+    expect(main).toContain("initSidecarConfigSyncOnReady");
+    // 动态 import：静态引入会把整条同步链拉进 eager 启动包（eager-budget 拦这个）
+    expect(main).toMatch(
+      /import\("\.\/modules\/ai\/lib\/sidecar-config-sync"\)[^\n]*\n[^\n]*initSidecarConfigSyncOnReady/,
+    );
+  });
+});

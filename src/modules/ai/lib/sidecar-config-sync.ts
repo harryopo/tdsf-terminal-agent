@@ -2,10 +2,12 @@
 // =============================================================================
 //
 // 背景：Python sidecar（src-tauri/sidecar/）的 AI 引擎有自己独立的 LLM 配置
-// （core/llm_config.py：{provider, api_key, base_url, model}），持久化在
-// .tdsf-data/llm_config.json，与前端 keyring/偏好 store 相互独立。
-// agent.configure JSON-RPC（agent_facade.configure）负责
-// 运行时重配置 + 落盘（一次 configure 永久生效，sidecar 重启后 load_config 自盘读）。
+// （core/llm_config.py：{provider, api_key, base_url, model}），与前端 keyring/偏好
+// store 相互独立。agent.configure JSON-RPC（agent_facade.configure）负责运行时重配置：
+// **key 只进 sidecar 进程内缓存，不再落盘**（#158-①，2026-09-27 —— 以前会把 keyring
+// 里的 key 明文镜像一份到 .tdsf-data/llm_config.json）；落盘的只剩模型身份。
+// ⇒ 副作用：sidecar 重启后进程内是空的，**必须由本模块在 sidecar:ready 时推一次**
+// （initSidecarConfigSyncOnReady），第一次对话那条路径仍在，退居兜底。
 //
 // 本模块职责：把前端"当前选中的对话模型配置"（chatStore.selectedModelId +
 // preferences + keyring）映射为 sidecar 结构并通过 agent.configure 推送。
@@ -13,7 +15,8 @@
 // 调用通道（与 sidecar-adapter.ts 的 agent.invoke 同构）：
 //   invoke('ipc_invoke', { method: 'agent.configure', params: { config } })
 //     → Rust ipc_invoke (src-tauri/src/modules/ipc.rs) → stdio JSON-RPC
-//     → _rpc_agent_configure(config={...}) → reconfigure → save_config 落盘
+//     → _rpc_agent_configure(config={...}) → set_runtime_config（key 进内存）
+//       + save_config（只落模型身份，**不落 key**）
 //
 // provider 映射结论（实测 sidecar 源码，勿凭猜测）：
 //   - strands_backend/model_adapter.py create_strands_model：openai/未知 provider
@@ -21,10 +24,11 @@
 //   → 因此 anthropic 特判传 "anthropic"，其余一律传前端原 provider 名
 //     （deepseek/qwen/ollama/...），供现役 Strands 配置门面使用
 //
-// 失败策略：静默降级（console.warn 单条）——配置同步失败不阻塞 AI 对话，
-// sidecar 会沿用上次落盘配置；没有可用模型时 Agent 失败关闭。
+// 失败策略：单条 console.warn、不弹窗、不阻塞界面操作。**但不再有"沿用磁盘旧 key"
+// 这条退路**（#158-①）——同步失败就是没模型，状态胶囊的 llm_configured 会诚实地红着。
 
 import { invoke } from "@tauri-apps/api/core";
+import { subscribe } from "@/lib/sidecar-bridge";
 import {
   DEFAULT_MODEL_ID,
   endpointIdFromCompatModel,
@@ -338,6 +342,39 @@ export function scheduleSidecarConfigSync(delayMs = 500): void {
     syncTimer = null;
     void runSidecarConfigSyncNow();
   }, delayMs);
+}
+
+// === 启动同步 ==================================================================
+
+/** 订阅只注册一次 */
+let bootSyncReady = false;
+
+/**
+ * sidecar 就绪即同步一次（#158-① 的配套）：
+ *
+ * API Key 不再落盘（sidecar 只把它留在进程内缓存），所以"重启后沿用磁盘配置"这条
+ * 老路没了 —— 必须由前端在 sidecar 起来的那一刻把 keyring 里的当前模型推进去，
+ * 否则第一次对话之前 agent 明确没有模型（`llm_configured=false`，状态胶囊看得见）。
+ *
+ * 挂在 `sidecar:ready` 而不是"第一次对话"：那是唯一能证明后端已经收 RPC 的时刻，
+ * 在它之前推会失败；而 ready 之后推一次就永久生效（agent.configure 的语义）。
+ */
+export function initSidecarConfigSyncOnReady(): void {
+  if (bootSyncReady || typeof window === "undefined") return;
+  bootSyncReady = true;
+  void subscribe("ready", () => {
+    // 每次 ready 都重推：sidecar 重启后进程内缓存是空的。
+    // 这里不查 _sidecarConfigSynced 标志 —— 那个标志管的是"每条消息别重复打 IPC"，
+    // 不是"整个会话只推一次"；runSidecarConfigSyncNow 自己会把它重新置位。
+    void runSidecarConfigSyncNow();
+  })
+    .then((unlisten) => {
+      // 浏览器预览模式（无 Tauri 事件总线）：留着 unlisten 引用即可，永不触发
+      void unlisten;
+    })
+    .catch(() => {
+      // 无 Tauri 运行时：忽略，第一次对话那条路径仍会同步
+    });
 }
 
 // === 内部：读取运行时状态 ====================================================
