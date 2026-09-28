@@ -88,6 +88,13 @@ void import("./modules/ai/lib/sidecar-config-sync").then((m) => {
   m.initSidecarConfigSyncOnReady();
 });
 
+// #134（2026-09-28）：设置页装了远端补全组件，本窗要立刻知道 —— 检测缓存是**每个窗
+// 各自一份**（param-complete-client 的模块级 Map），不重查的话终端右下角那个图标
+// 会继续喊"还没装"，界面报过期事实（#123/#127 同族）。动态 import 同一上例。
+void import("./modules/ssh-explorer/lib/sshCarapaceSync").then((m) => {
+  m.initCarapaceSyncListener();
+});
+
 // #160（2026-09-27）：自动更新只挂在**主窗入口**上。这不是随手选的位置：
 // updater 权限只发给 main/main-* 窗（capabilities/updater.json），而设置窗是
 // 另一个 JS context 与另一份窗口标签 —— 挂在这儿就等于"检查、下载、安装都在

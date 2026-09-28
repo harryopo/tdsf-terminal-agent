@@ -66,6 +66,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
 import { SettingRow } from "../components/SettingRow";
+import { RemoteCarapaceCard } from "./RemoteCarapaceCard";
 
 const APPEARANCE = [
   { id: "system" as const, label: "跟随系统", icon: ComputerIcon },
@@ -526,14 +527,22 @@ export function GeneralSection() {
           </Select>
         </SettingRow>
         <SettingRow
-          title="SSH 远程参数补全提示"
-          description="远程未安装补全组件时，在 SSH 终端右下角显示安装入口；该组件用于补全 Git 分支、目录和进程等动态参数。"
+          title="在 SSH 终端里提示装补全组件"
+          description="某台服务器还没装这个组件时，在那格终端的右下角显示一个小图标，点开可以一键安装。关掉这里只是不再显示那个图标，下面这块入口照样能装。"
         >
           <Switch
             checked={sshRemoteCarapacePrompt}
             onCheckedChange={(v) => void setSshRemoteCarapacePrompt(v)}
           />
         </SettingRow>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[11px] leading-relaxed text-muted-foreground">
+            远端补全组件：不装也照常提示静态参数（命令词典与参数库）；装上才能提示这台机器上
+            真实存在的分支、文件名与服务名 —— 补全要在命令真正执行的那台机器上跑，
+            本机这份看不到远端。装一次对该服务器上所有终端都有效。
+          </span>
+          <RemoteCarapaceCard />
+        </div>
       </div>
 
       {/* === 服务器监控 === */}
