@@ -982,8 +982,10 @@ mod main_window_tests {
         assert!(is_main_label("main-7"));
     }
 
+    /// 名字只写**真测得到**的部分：旗标过滤在这份夹具里考不到（理由见函数体注释），
+    /// 所以不把 flags 挂进名字里冒充覆盖。
     #[test]
-    fn handoff_argv_skips_exe_path_and_flags() {
+    fn handoff_argv_skips_exe_path_and_classifies_targets() {
         let root = std::env::temp_dir().join(format!("tdsf-launch-{}", std::process::id()));
         let proj = root.join("proj");
         std::fs::create_dir_all(&proj).expect("create temp proj");
@@ -1000,9 +1002,22 @@ mod main_window_tests {
             file.display().to_string(),
         ]);
 
-        // 断言用同一个 to_canon 归一，路径文本才不会被大小写/分隔符差异绊倒。
-        assert_eq!(target.dir.as_deref(), Some(super::fs::to_canon(&proj).as_str()));
-        assert_eq!(target.files, vec![super::fs::to_canon(&file)]);
+        // 被测的是 argv 语义：跳过 args[0]（那是那个进程自己的 exe 路径）、目录与文件分类。
+        // 期望值必须走**同一条** canonicalize → to_canon 链路：实现里对每个候选都 canonicalize，
+        // 而 macOS 的 `env::temp_dir()` 落在 `/var` 之后（`/var` → `/private/var` 是符号链接）、
+        // CI 上的 Windows 临时目录也可能穿过 junction ⇒ 拿原始路径字符串去比，
+        // 在这些机器上会**假红**（Linux 的 /tmp 不是链接，所以只有它绿；mac/windows 同一条都红过）。
+        //
+        // 一条测不到的诚实记账：那条 `!starts_with('-')` 的旗标过滤在这里**考不到** ——
+        // 要考它得给一个"以 `-` 开头且盘上存在"的参数，只有相对路径做得到，
+        // 而相对路径按进程 CWD 解析，测试里动 CWD 会打架。`--flagged` 不存在，
+        // 本来就会被 `canonicalize(...).ok()` 丢掉 ⇒ 把 filter 整段删掉这里照样绿。
+        // 别以为函数名里写了 flags 就测过了。
+        let canon = |p: &std::path::Path| {
+            super::fs::to_canon(std::fs::canonicalize(p).expect("canonicalize temp entry"))
+        };
+        assert_eq!(target.dir.as_deref(), Some(canon(&proj).as_str()));
+        assert_eq!(target.files, vec![canon(&file)]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
