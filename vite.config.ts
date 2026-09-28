@@ -44,5 +44,15 @@ export default defineConfig({
     sourcemap: false,
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      // 多页入口：设置窗是 Rust 用 `WebviewUrl::App("settings.html")` 开的独立窗口。
+      // 只配 index.html 时 dev 看不出问题（Vite 直接按路径给文件），
+      // 但发布构建的 dist 里没有 settings.html ⇒ 设置窗落回 SPA 首页，
+      // 用户点齿轮看到的是欢迎页（2026-09-28 装机实测）。
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        settings: path.resolve(__dirname, 'settings.html'),
+      },
+    },
   },
 });
