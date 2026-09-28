@@ -98,8 +98,26 @@ export type DownloadConfirmCopy = {
 };
 
 /**
+ * 安装前必须说清"会发生什么"（#166 ⑤，用户原话：「点击确认更新，更新的时候注明要
+ * 停下来当前的agent，停下来连接，然后重启更新什么的」）。
+ *
+ * `step` 就是 `installUpdate.ts` 里 `bestEffort("…")` 的那个标签，两边由
+ * `update-install-steps.test.ts` 按顺序 1:1 钉住 —— 界面上列三件事、代码里做六件事，
+ * 比少说更糟（用户会在应用突然消失时以为出了故障）。
+ */
+export const INSTALL_STEPS: ReadonlyArray<{ step: string; text: string }> = [
+  { step: "cancel-turn", text: "停掉正在跑的这轮任务（AI 会被取消）" },
+  { step: "disconnect-ssh", text: "断开本窗口建立的 SSH 连接" },
+  { step: "close-pty", text: "关闭所有本地终端标签页" },
+  { step: "kill-lsp", text: "停掉代码语言服务" },
+  { step: "stop-sidecar", text: "停掉后台引擎（AI 运行时）" },
+  { step: "install", text: "重启应用并安装新版本" },
+];
+
+/**
  * 下载前必须说清三件事：包有多大（全量安装包，NSIS 没有增量）、装完会重启、
  * 重启会断掉 SSH 与终端。少任何一句都会让用户在"应用突然消失"时以为出了故障。
+ * 逐条影响列在弹窗的清单里（INSTALL_STEPS），这里只说体积与要重启这两件。
  */
 export function downloadConfirmCopy(input: {
   version: string;
@@ -111,9 +129,7 @@ export function downloadConfirmCopy(input: {
       : `更新包约 ${formatBytes(input.bytes)}，是完整安装包（不是增量）`;
   return {
     title: `更新到 ${input.version}`,
-    description:
-      `${size}。下载完成后需要重启应用完成安装：` +
-      "当前 SSH 连接会断开，已打开的终端标签页会关闭。",
+    description: `${size}。下载完成后需要重启应用完成安装，下面列的是安装时会发生的事。`,
     confirm: "下载更新",
     cancel: "稍后再说",
   };

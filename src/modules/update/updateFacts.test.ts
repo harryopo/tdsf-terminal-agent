@@ -6,6 +6,7 @@ import {
   describeUpdateFailure,
   downloadConfirmCopy,
   formatBytes,
+  INSTALL_STEPS,
   shouldAutoCheck,
 } from "./updateFacts";
 
@@ -73,10 +74,17 @@ describe("下载前的确认文案", () => {
     expect(copy.description).toContain("不是增量");
   });
 
-  it("必须说清会重启、会断 SSH —— 应用突然消失不该让人以为坏了", () => {
+  /**
+   * #166 ⑤ 之后，"会断 SSH / 会停任务"从这句话搬进了同一扇弹窗里的逐步清单
+   * （INSTALL_STEPS，与代码收尾序列由 update-install-steps.test.ts 钉住）。
+   * 判据跟着改成两层：这句必须仍然说"要重启"，逐条影响必须仍然说得出 SSH 与终端 ——
+   * 只查其中一层会漏掉"句子还在但清单被删了"或反过来。
+   */
+  it("必须说清会重启，并且逐条清单里说得出断连接与关终端", () => {
     expect(copy.description).toContain("重启应用");
-    expect(copy.description).toContain("SSH");
-    expect(copy.description).toContain("终端标签页");
+    const all = INSTALL_STEPS.map((s) => s.text).join(" ");
+    expect(all).toContain("SSH");
+    expect(all).toContain("终端标签页");
   });
 
   it("标题带上版本号", () => {

@@ -51,9 +51,11 @@ export async function runUpdateCheck(
     });
     if (notifiedVersion !== update.version) {
       notifiedVersion = update.version;
+      // Windows 的 toast 点了只会把应用带到前台（插件 2.3.3 桌面端没有点击回调），
+      // 所以这句话必须直接点名"点哪个"，不能说"见状态栏"就完事（#166 ⑤）
       void osNotify(
         "发现新版本",
-        `TDSF Terminal Agent ${update.version} 可更新，见窗口底部状态栏。`,
+        `TDSF Terminal Agent ${update.version} 可更新。点窗口右下角的「可更新 ${update.version}」标记即可查看并更新。`,
       );
     }
   } catch (error) {
