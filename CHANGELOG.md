@@ -3,6 +3,21 @@
 Version numbering: `0.x` builds are pre-stable releases; `1.x` is reserved for the first
 stable release.
 
+## 0.9.1
+
+Fixes from the first installer acceptance round.
+
+- SSH connection failures now open a step-by-step diagnosis: which stage the connection
+  reached (port, protocol handshake, host identity, login), which one stopped it, which
+  authentication methods the server offers, and what to do next. The original error text
+  stays available in the same window.
+- The result of "test connection" belongs to the SSH tab only; it no longer stays on screen
+  after switching to the local or WSL tab.
+- Command prediction on a remote host now knows shell aliases, so candidates such as `ll`
+  are offered again. Static descriptions are unchanged.
+- Update checks report an unavailable published version in the interface language instead of
+  showing the updater's raw message.
+
 ## 0.9.0
 
 Pre-stable Windows x64 build. It carries the capabilities of the earlier internal builds

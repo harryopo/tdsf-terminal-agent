@@ -10,4 +10,4 @@
 与 `check-release-version.ps1`（打包门禁，把这里当第五处比）。
 """
 
-SIDECAR_VERSION = "0.9.0"
+SIDECAR_VERSION = "0.9.1"
