@@ -156,7 +156,7 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识检索 �
 2. 运行前先核对校验值：
 
    ```powershell
-   Get-FileHash '.\TDSF.Terminal.Agent_1.0.2_x64-setup.exe' -Algorithm SHA256
+   Get-FileHash '.\TDSF.Terminal.Agent_<版本>_x64-setup.exe' -Algorithm SHA256
    ```
 
 3. 双击安装。只有在系统缺少 Microsoft WebView2 时，安装器才会去下载它。
@@ -166,15 +166,13 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识检索 �
 
 ## 自动更新
 
-自 **1.0.2** 起，已安装的正式版会自己发现新版本：
+自 **0.9.0** 起，已安装的正式版会自己发现新版本：
 
 - 启动后约 8 秒检查一次，之后最多每 24 小时一次；检查只是拉取 GitHub Release 的更新清单，不上传任何本机数据。
 - 有新版本时，窗口底部状态栏出现提示；**不会弹模态打断你**。
 - 下载与安装都需要你点一下确认，弹窗会写明包体积（完整安装包，不是增量）。
 - 更新包带 minisign 签名，安装前验签；签名私钥只存在于 CI。
 - 有审批在等你回答、或 Agent 一轮还没跑完时，安装会被拒绝且不改动你的现场；正常安装前会依次收尾：取消本轮任务 → 断开本窗口 SSH → 关闭终端 → 停语言服务器 → 停 sidecar。
-
-1.0.1 及更早版本没有更新客户端，需要手动安装一次 1.0.2。
 
 ## 开发指南
 

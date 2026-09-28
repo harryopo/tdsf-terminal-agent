@@ -32,7 +32,7 @@ and attached files before sending sensitive information to a cloud model.
 
 ## Updates and deletion
 
-Version 1.0.2 and later check GitHub Releases for a newer signed version after
+Version 0.9.0 and later check GitHub Releases for a newer signed version after
 start-up and at most once per day. That check retrieves a version manifest and
 sends no conversation, terminal, file or identity data. Downloading and
 installing an update always requires an explicit action in the app, and the

@@ -156,7 +156,7 @@ The shipping artifact is a **Windows x64 NSIS installer** (per-user install, no 
 2. Verify the checksum before running it:
 
    ```powershell
-   Get-FileHash '.\TDSF.Terminal.Agent_1.0.2_x64-setup.exe' -Algorithm SHA256
+   Get-FileHash '.\TDSF.Terminal.Agent_<version>_x64-setup.exe' -Algorithm SHA256
    ```
 
 3. Run the installer. It fetches the Microsoft WebView2 bootstrapper only when WebView2 is missing.
@@ -166,15 +166,13 @@ The installer is not Authenticode-signed yet, so SmartScreen may show an unknown
 
 ## Automatic updates
 
-From **1.0.2** an installed release discovers new versions on its own:
+From **0.9.0** an installed release discovers new versions on its own:
 
 - One check about 8 seconds after start-up, then at most once per day. The check only retrieves the release manifest from GitHub and uploads no local data.
 - When an update exists, a chip appears in the status bar. **No modal dialog interrupts you.**
 - Downloading and installing both need an explicit click, and the dialog states the package size first (it is a full installer, not a delta).
 - Update packages are minisign-signed and verified before installation; the signing key exists only in CI.
 - Installation is refused while an approval is waiting or a turn is still running, and your session is left untouched. A normal install closes things down in order: cancel the turn → disconnect this window's SSH sessions → close terminals → stop language servers → stop the sidecar.
-
-Versions 1.0.1 and earlier have no update client and must be upgraded manually to 1.0.2 once.
 
 ## Development
 

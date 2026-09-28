@@ -6801,7 +6801,7 @@ dependencies = [
 
 [[package]]
 name = "tdsf-terminal-agent"
-version = "1.0.2"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-trait",
