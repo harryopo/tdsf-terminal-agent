@@ -10,6 +10,12 @@ carapace-bin_1.7.3_linux_amd64.tar.gz
   sha256: 35ab52bfe7bdd8296d90c3687660bde80497599badde840ab615d2f421f5f053
   解压为: carapace-linux-amd64 (远端安装用)
 
+解压后实测字节数 (这两个二进制本身不入库，见 .gitignore；界面文案引用的体积数以此处为准):
+  carapace-linux-amd64  81584290 B  (≈ 77.8 MiB)  → 设置页「约 80 MB」判据读这一行
+  carapace.exe          75455488 B  (≈ 72.0 MiB)
+换 carapace 版本时必须重新下载并更新这两行 —— 判据 remoteCarapaceEntry.test.ts 会拿
+本机存在的文件与这里对账，对不上就报红。
+
 调用协议 (实测验证):
   carapace <completer> export <tokens含命令名...> <当前词>
   输出: {"version","messages","noprefix","nospace","usage","values":[{value,display,description,tag}]}

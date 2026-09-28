@@ -11,7 +11,7 @@
  *
  * 读源码用 `join(process.cwd(), ...)`：happy-dom 下 import.meta.url 不是 file:。
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CARAPACE_BINARY_MB } from '@/settings/lib/remoteCarapaceAdmin';
@@ -90,12 +90,27 @@ describe('界面文案不许说假事实', () => {
 });
 
 describe('体积数字与真身对齐', () => {
-  it('carapace 的 Linux 二进制实际大小仍在文案那个数附近', () => {
-    const bytes = readFileSync(
-      join(process.cwd(), 'src-tauri/bin/carapace-linux-amd64'),
-    ).length;
-    const actual = bytes / (1024 * 1024);
-    // 允许 ±10 MB：二进制换版本会小幅浮动，浮动超出这个范围就说明文案该重读了
-    expect(Math.abs(actual - CARAPACE_BINARY_MB)).toBeLessThanOrEqual(10);
+  /**
+   * carapace 的两个二进制**不入库**（`.gitignore:23`，CI 检出里没有它们），
+   * 所以判据的输入必须是入库的东西 —— 体积记在 `src-tauri/bin/CHECKSUMS.txt` 的
+   * 「解压后实测字节数」那一段（它本来就记 sha256 与来源，加尺寸是同一件事）。
+   * 本机若真有这个文件，再拿实际字节数与记录对一次：记录漂了就报红，
+   * 而不是让"约 80 MB"跟着一起说谎。
+   */
+  const RECORD = read('src-tauri/bin/CHECKSUMS.txt');
+
+  it('入库的体积记录还在，且界面那个数与它相差不超过 10 MB', () => {
+    const m = RECORD.match(/carapace-linux-amd64\s+(\d+)\s+B/);
+    expect(m, 'CHECKSUMS.txt 里缺「carapace-linux-amd64 <字节数> B」这一行').toBeTruthy();
+    const recorded = Number(m![1]) / (1024 * 1024);
+    expect(Math.abs(recorded - CARAPACE_BINARY_MB)).toBeLessThanOrEqual(10);
+  });
+
+  it('本机存在这个二进制时，实际字节数必须与记录逐字相等', () => {
+    const p = join(process.cwd(), 'src-tauri/bin/carapace-linux-amd64');
+    if (!existsSync(p)) return; // 没有文件不等于记录错 —— 上一条用例才是要害
+    const actual = readFileSync(p).length;
+    const recorded = Number(RECORD.match(/carapace-linux-amd64\s+(\d+)\s+B/)![1]);
+    expect(actual).toBe(recorded);
   });
 });
