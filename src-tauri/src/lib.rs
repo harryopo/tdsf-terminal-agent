@@ -191,8 +191,9 @@ fn apply_dwm_rounded_corners(window: &tauri::WebviewWindow) {
     }
 }
 
-/// Open another main window in this process. #64: called from the
-/// single-instance handoff with the rejected second launch's argv — the exe is
+/// Open another main window in this process. #64: called for the "Open With"
+/// handoff from a rejected second instance (and, since #166 ②, only for that —
+/// a plain re-launch surfaces the window that is already open). The exe is
 /// still the entry point for "new window", it just no longer starts a second
 /// config-writing process. (An in-app menu entry would need a command wrapper;
 /// deliberately not added, see ROADMAP #85.)
@@ -259,6 +260,54 @@ fn open_main_window(
     apply_dwm_rounded_corners(&window);
     log::info!("[main-window] opened '{label}' dir={opened_dir}");
     Ok(label)
+}
+
+/// Ordering key for the main window family: "main" is #1, "main-N" is N.
+/// `None` for anything that isn't a main window. An absurd digit width (u32
+/// overflow) still counts as a main window — `is_main_label` is the authority —
+/// it just sorts last.
+fn main_label_order(label: &str) -> Option<u32> {
+    if !is_main_label(label) {
+        return None;
+    }
+    if label == "main" {
+        return Some(1);
+    }
+    Some(label["main-".len()..].parse::<u32>().unwrap_or(u32::MAX))
+}
+
+/// The main window a plain re-launch should surface: the base label when it is
+/// still open, else the lowest-numbered extra window, else `None`.
+fn first_main_label(existing: &[String]) -> Option<String> {
+    existing
+        .iter()
+        .filter_map(|label| main_label_order(label).map(|order| (order, label.clone())))
+        .min_by_key(|(order, label)| (*order, label.clone()))
+        .map(|(_, label)| label)
+}
+
+/// What a rejected second launch should do with the argv it handed over.
+///
+/// #166 ② (2026-09-28): double-clicking the shortcut again must not open another
+/// window. Each main window owns its own SSH connections (#89/#117), so extra
+/// windows meant extra live shells the user never asked for. A plain launch —
+/// no "Open With" target in argv — therefore surfaces the window already open.
+/// A launch that *does* carry a target stays on #64's path, because "打开方式"
+/// is a deliberate "open this somewhere" act. Nothing to surface (no main
+/// window open) falls back to building one.
+#[derive(Debug, PartialEq)]
+enum SecondLaunch {
+    Surface(String),
+    Open(LaunchTarget),
+}
+
+fn plan_second_launch(target: LaunchTarget, existing: &[String]) -> SecondLaunch {
+    if target.dir.is_none() && target.files.is_empty() {
+        if let Some(label) = first_main_label(existing) {
+            return SecondLaunch::Surface(label);
+        }
+    }
+    SecondLaunch::Open(target)
 }
 
 /// True for the settings window family: "settings", "settings-1", "settings-2", …
@@ -470,23 +519,45 @@ pub fn run() {
     // 的那个进程，由它开一扇新的主窗。之前 14 个 tdsf-terminal-agent.exe 并存，
     // 每个进程各把内存里整个 spaces 数组覆写回 tdsf-spaces.json，后写者赢，
     // 用户看到的是"工作区自己消失了"。
+    // #166 ② (2026-09-28): 上面那句"由它开一扇新的主窗"只对**带了打开目标**的启动
+    // 成立。纯点快捷方式不再开新窗，改为把已经开着的那扇叫到前台 —— 每扇主窗各自
+    // 持有自己的 SSH 连接（#89/#117），多开等于凭空多出一串没人要的 shell。
     // 放在插件链最前是官方建议的写法：单实例判定要早于其它插件初始化。
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(
-            |app, argv, _cwd| match app.try_state::<LaunchTargets>() {
-                Some(state) => {
-                    let target = launch_target_from_args(&argv);
-                    match open_main_window(app, state.inner(), target) {
-                        Ok(label) => {
-                            log::info!("[single-instance] second launch opened window '{label}'")
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let target = launch_target_from_args(&argv);
+            let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+            match plan_second_launch(target, &labels) {
+                SecondLaunch::Surface(label) => match app.get_webview_window(&label) {
+                    Some(window) => {
+                        // 最小化时 set_focus 不会把它拉回前台；隐藏时（dev 里
+                        // WebView2 建失败过）要先 show。判据按当前状态走，不无条件 show，
+                        // 免得把用户故意摆在后面的窗口抢到他脸前。
+                        if window.is_minimized().unwrap_or(false) {
+                            let _ = window.unminimize();
                         }
-                        Err(e) => log::error!("[single-instance] {e}"),
+                        if !window.is_visible().unwrap_or(true) {
+                            let _ = window.show();
+                        }
+                        let _ = window.set_focus();
+                        log::info!("[single-instance] surface existing window '{label}'")
                     }
-                }
-                None => log::error!("[single-instance] LaunchTargets 未就绪，丢弃 argv {argv:?}"),
-            },
-        ));
+                    None => log::error!(
+                        "[single-instance] '{label}' 还在窗口表里但取不到句柄，忽略这次启动"
+                    ),
+                },
+                SecondLaunch::Open(target) => match app.try_state::<LaunchTargets>() {
+                    Some(state) => match open_main_window(app, state.inner(), target) {
+                        Ok(new_label) => log::info!(
+                            "[single-instance] second launch opened window '{new_label}'"
+                        ),
+                        Err(e) => log::error!("[single-instance] {e}"),
+                    },
+                    None => log::error!("[single-instance] LaunchTargets 未就绪，丢弃 argv {argv:?}"),
+                },
+            }
+        }));
     }
     builder
         .plugin(tauri_plugin_shell::init())
@@ -953,7 +1024,10 @@ mod launch_target_tests {
 
 #[cfg(test)]
 mod main_window_tests {
-    use super::{is_main_label, launch_target_from_args, next_main_label, LaunchTargets};
+    use super::{
+        first_main_label, is_main_label, launch_target_from_args, next_main_label,
+        plan_second_launch, LaunchTarget, LaunchTargets, SecondLaunch,
+    };
 
     #[test]
     fn first_extra_window_is_labelled_main_2() {
@@ -1060,6 +1134,77 @@ mod main_window_tests {
         );
         targets.discard("main-2");
         assert_eq!(targets.take_dir("main-2"), None);
+    }
+
+    // ---- #166 ②：二次启动点快捷方式聚焦已有窗口，不再多开一扇 ----
+
+    /// 正向配对：纯启动（argv 里没有打开目标）时**确实**要指到已有的那扇主窗。
+    /// 下面两条"不该开新窗/该开新窗"的判据全靠这条撑着 —— 要是 `first_main_label`
+    /// 永远返回 None，负向那条会假绿。
+    #[test]
+    fn plain_relaunch_surfaces_the_window_that_is_open() {
+        let existing = vec!["settings".to_string(), "main".to_string()];
+        assert_eq!(
+            plan_second_launch(LaunchTarget::default(), &existing),
+            SecondLaunch::Surface("main".to_string())
+        );
+    }
+
+    #[test]
+    fn relaunch_with_an_open_target_still_gets_its_own_window() {
+        let existing = vec!["main".to_string()];
+        let with_dir = LaunchTarget {
+            dir: Some("/proj".into()),
+            files: vec![],
+        };
+        assert_eq!(
+            plan_second_launch(with_dir.clone(), &existing),
+            SecondLaunch::Open(with_dir)
+        );
+
+        // 只带文件（macOS 上 dir 来自文件的父目录，这里手工构造同一形状）也算目标
+        let with_files = LaunchTarget {
+            dir: None,
+            files: vec!["/proj/a.txt".into()],
+        };
+        assert_eq!(
+            plan_second_launch(with_files.clone(), &existing),
+            SecondLaunch::Open(with_files)
+        );
+    }
+
+    /// 没有主窗可指时（只有设置窗还开着）必须退回"开一扇"，否则这次启动就无声消失。
+    #[test]
+    fn relaunch_with_nothing_to_surface_builds_a_window() {
+        let existing = vec!["settings".to_string()];
+        assert_eq!(
+            plan_second_launch(LaunchTarget::default(), &existing),
+            SecondLaunch::Open(LaunchTarget::default())
+        );
+    }
+
+    #[test]
+    fn surface_target_prefers_base_label_then_lowest_number() {
+        assert_eq!(
+            first_main_label(&["main".to_string(), "main-2".to_string()]).as_deref(),
+            Some("main")
+        );
+        // 基名那扇已经关了（关窗即销毁，进程还在是因为还有别的窗）→ 取编号最小的
+        assert_eq!(
+            first_main_label(&["main-3".to_string(), "main-2".to_string()]).as_deref(),
+            Some("main-2")
+        );
+        assert_eq!(
+            first_main_label(&["settings".to_string(), "main-10".to_string(), "main-9".to_string()])
+                .as_deref(),
+            Some("main-9")
+        );
+        // 不是主窗的名字一律不算（"mainx" 曾经被 next_main_label 那条测试点名过）
+        assert_eq!(
+            first_main_label(&["mainx".to_string(), "settings-2".to_string()]),
+            None
+        );
+        assert_eq!(first_main_label(&[]), None);
     }
 }
 
