@@ -5,18 +5,12 @@ stable release.
 
 ## 0.9.1
 
-Fixes from the first installer acceptance round.
+装机验收后的修复。
 
-- SSH connection failures now open a step-by-step diagnosis: which stage the connection
-  reached (port, protocol handshake, host identity, login), which one stopped it, which
-  authentication methods the server offers, and what to do next. The original error text
-  stays available in the same window.
-- The result of "test connection" belongs to the SSH tab only; it no longer stays on screen
-  after switching to the local or WSL tab.
-- Command prediction on a remote host now knows shell aliases, so candidates such as `ll`
-  are offered again. Static descriptions are unchanged.
-- Update checks report an unavailable published version in the interface language instead of
-  showing the updater's raw message.
+- SSH 连接失败会弹出分步诊断：走到哪一步、卡在哪一步、服务器支持哪些登录方式、下一步怎么办。
+- 「测试连接」的结果只在 SSH 标签页显示，切到本地或 WSL 后不再残留。
+- 远程终端的命令预测认得 shell 别名了，输入 `l` 能预测出 `ll`。
+- 检查更新失败时显示中文说明，不再抛英文原文。
 
 ## 0.9.0
 

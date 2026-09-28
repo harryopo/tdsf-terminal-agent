@@ -74,6 +74,31 @@ jobs:
             throw "Missing GitHub secret TAURI_SIGNING_PRIVATE_KEY - this release could not deliver automatic updates."
           }
 
+      - name: Compose release notes from CHANGELOG
+        id: notes
+        shell: pwsh
+        run: |
+          # 发布说明的唯一主人是 CHANGELOG.md 里对应版本那一节：
+          # 缺这一节就直接失败，不许发一个"说明空着"或临时手写的 Release。
+          $version = "${{ github.ref_name }}".Substring(1)
+          $lines = Get-Content -LiteralPath CHANGELOG.md -Encoding utf8
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^## $([regex]::Escape($version))\s*$") { $start = $i + 1; break }
+          }
+          if ($start -lt 0) { throw "CHANGELOG.md 找不到 ## $version 这一节，发布说明没有来源。" }
+          $end = $lines.Count
+          for ($i = $start; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^## ') { $end = $i; break }
+          }
+          $section = (($lines[$start..($end - 1)]) -join "`n").Trim()
+          if (-not $section) { throw "CHANGELOG.md 的 $version 一节是空的。" }
+          Set-Content -LiteralPath release-notes.md -Value $section -Encoding utf8
+          "body<<BODYEOF" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          $section | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "BODYEOF" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          Write-Host "release notes ($($section.Length) chars) come from CHANGELOG ## $version"
+
       - name: Build NSIS installer and create draft release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -83,12 +108,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "TDSF ${{ github.ref_name }}"
-          releaseBody: |
-            Windows x64 installer for TDSF Terminal Agent.
-
-            Download the NSIS installer and verify it with SHA256SUMS.txt.
-            Installed copies check this release channel automatically;
-            the update package is signed and verified before installation.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           # tauri.release.conf.json 只把 createUpdaterArtifacts 打开：
@@ -96,13 +116,19 @@ jobs:
           # 所以本地 pnpm build:win 不需要私钥。
           args: --config src-tauri/tauri.release.conf.json --bundles nsis
 
-      - name: Upload SHA-256 checksum
+      - name: Append installer checksum to the notes
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 以前这里上传一个 SHA256SUMS.txt，用户反馈"文件太多、而且里面的文件名
+          # 和上传的资产名对不上（打包出来是空格分隔，tauri-action 上传时改成点号）"。
+          # 现在不额外发文件，把校验值并到发布说明里。
           $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer not found" }
           $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $($installer.Name)" | Set-Content -LiteralPath SHA256SUMS.txt -Encoding ascii
-          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
+          $notes = (Get-Content -LiteralPath release-notes.md -Raw -Encoding utf8).TrimEnd()
+          Set-Content -LiteralPath release-notes.md -Value "$notes`n`nSHA-256（$($installer.Name)）：$hash" -Encoding utf8
+          gh release edit "${{ github.ref_name }}" --notes-file release-notes.md
+          Write-Host "installer sha256 = $hash"
+
