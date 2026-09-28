@@ -22,7 +22,13 @@ vi.mock("@/modules/ai/components/AgentStatusPill", () => ({
   AgentStatusPill: () => <span data-testid="header-agent-status-pill" />,
 }));
 vi.mock("@/modules/tabs", () => ({
-  TabBar: () => <div data-testid="tab-bar" />,
+  // 把 hasWorkspace 透出来：Header 只是过一手，判据在 TabBar。这条钉住"没漏接线"
+  TabBar: (props: { hasWorkspace?: boolean }) => (
+    <div
+      data-testid="tab-bar"
+      data-has-workspace={String(props.hasWorkspace)}
+    />
+  ),
 }));
 vi.mock("./SearchInline", () => ({
   SearchInline: () => <div data-testid="search-inline" />,
@@ -37,7 +43,7 @@ vi.mock("@/modules/translate", () => ({
 
 const { Header } = await import("./Header");
 
-function renderHeader() {
+function renderHeader(hasWorkspace = true) {
   const noop = () => {};
   return render(
     <Header
@@ -58,6 +64,7 @@ function renderHeader() {
       spaceSwitcher={<div data-testid="space-switcher" />}
       searchTarget={null}
       searchRef={{ current: null }}
+      hasWorkspace={hasWorkspace}
     />,
   );
 }
@@ -95,5 +102,19 @@ describe("Header — ⌘ 与通知在顶栏左簇的最右侧（用户实测口�
     // 「左簇宽度 = 侧栏宽」这条耦合（style 里的 calc(var(--tdsf-sidebar-w) - 9px)）
     // 在 happy-dom 里读不到：它不认 calc()，直接把这个声明丢掉。所以由真机门禁
     // probe:ui 的 dividerMisaligned + controlOutsideLeftCluster 两条规则量像素。
+  });
+});
+
+// #166 ⑨：开始页不给 + 号。Header 只是把判据透给 TabBar，这条钉"透没透"，
+// 真正"藏没藏"在 TabBar.test.tsx 里测。
+describe("Header — hasWorkspace 透到 TabBar（开始页收 + 号的前提）", () => {
+  it("有工作区时传 true", () => {
+    renderHeader(true);
+    expect(screen.getByTestId("tab-bar").dataset.hasWorkspace).toBe("true");
+  });
+
+  it("开始页传 false", () => {
+    renderHeader(false);
+    expect(screen.getByTestId("tab-bar").dataset.hasWorkspace).toBe("false");
   });
 });

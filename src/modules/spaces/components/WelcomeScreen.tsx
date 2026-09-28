@@ -61,11 +61,13 @@ export function WelcomeScreen({
           TDSF Terminal Agent
         </h1>
         <p className="max-w-sm text-center text-[13px] text-muted-foreground">
+          {/* #166 ⑧（用户实测）：「主页不要写本地终端，直接只保留终端优先的
+              linux 运维 AI 工作台」。原来那句把三个按钮的内容又列了一遍。 */}
           {existingCount === 0
-            ? "终端优先的 Linux 运维工作台。创建一个工作区开始使用——本地终端、WSL 或连接 SSH 服务器。"
+            ? "终端优先的 Linux 运维 AI 工作台"
             : connectedCount > 0
-              ? "上次的工作区还留着，服务器也已连上——选择一个回去即可继续。"
-              : "上次的工作区还留着，但尚未连上服务器——选择一个回去会自动重连。"}
+              ? "服务器已连上，选一个工作区回去即可继续。"
+              : "上次的工作区还留着，选回去会自动重连。"}
         </p>
       </div>
 
@@ -115,13 +117,15 @@ export function WelcomeScreen({
         </Button>
       </div>
 
-      <p className="text-[11px] text-muted-foreground/70">
-        {existingCount === 0
-          ? "全部工作区删除后从此界面重新开始"
-          : connectedCount > 0
-            ? "重启后停在欢迎页，不会自动进入上次的工作区；连接已就绪，从上面按钮或顶栏「选择工作区」回去即可使用"
-            : "重启后停在欢迎页，不会自动进入上次的工作区；从上面按钮或顶栏「选择工作区」回去会自动发起重连"}
-      </p>
+      {/* #166 ⑧：没有旧工作区时不必解释"重启会停在这里"——那时没有东西会丢；
+          有旧工作区才需要那一句（#61-A 的设计：不自动进入，得说清怎么回去）。 */}
+      {existingCount > 0 && (
+        <p className="text-[11px] text-muted-foreground/70">
+          {connectedCount > 0
+            ? "重启后停在这里，不会自动进入工作区；从上面按钮或顶栏「选择工作区」即可回去"
+            : "重启后停在这里，不会自动进入工作区；从上面按钮或顶栏「选择工作区」回去时会自动重连"}
+        </p>
+      )}
     </div>
   );
 }

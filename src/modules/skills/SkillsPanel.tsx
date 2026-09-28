@@ -123,14 +123,16 @@ export function SkillsPanel({ className }: Props) {
           strokeWidth={1.75}
           className="shrink-0 text-primary"
         />
-        <span className="flex-1 truncate text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
-          Skill 管理
+        {/* #166 ⑦：标题中文化（原来 "Skill 管理" 配上 uppercase 会画成 "SKILL 管理"），
+            与代码片段面板同一套：中文标题 + 不加大写转换 */}
+        <span className="flex-1 truncate text-[12px] font-medium tracking-wide text-muted-foreground">
+          技能管理
         </span>
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label="刷新 Skill 列表"
+          aria-label="刷新技能列表"
           title="刷新"
           onClick={handleRetry}
           disabled={loading}
@@ -157,8 +159,11 @@ export function SkillsPanel({ className }: Props) {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索 skill（名称/描述/标签）"
-            className="h-5 border-none bg-transparent p-0 text-[11px] shadow-none focus-visible:ring-0"
+            placeholder="搜索技能（名称/描述/标签）"
+            // 覆盖字号必须带上同样的变体前缀（Input 基类是 text-base md:text-sm）：
+            // 只写 text-[11px] 时 tailwind-merge 两条都保留，≥768px 仍是 14px 赢
+            // —— 这就是用户报"搜索 skill 的字体也是很大"的真因（#166 ⑦）
+            className="h-5 border-none bg-transparent p-0 text-[11px] shadow-none focus-visible:ring-0 md:text-[11px]"
             data-testid="skills-search-input"
           />
         </div>
@@ -257,7 +262,7 @@ function LoadingState() {
         className="animate-spin text-muted-foreground"
       />
       <p className="text-[11px] text-muted-foreground">
-        正在加载 Skill 列表...
+        正在加载技能列表…
       </p>
     </div>
   );

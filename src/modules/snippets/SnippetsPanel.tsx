@@ -18,14 +18,7 @@
 //   - 排序：置顶优先（最后置顶最靠上）→ 创建时间降序；插入不改变位置
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
@@ -45,6 +38,7 @@ import {
   sortSnippets,
   useSnippetsStore,
 } from "./lib/snippetStore";
+import { snippetConfirmation } from "./lib/snippetConfirmation";
 import type { Snippet } from "./types";
 
 // 懒加载 Dialog：仅在用户交互时挂载，避免增大启动 bundle（eager-budget 约束）
@@ -169,8 +163,10 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
           strokeWidth={1.75}
           className="shrink-0 text-primary"
         />
-        <span className="flex-1 truncate text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
-          Snippets
+        {/* #166 ⑦：标题原本写英文 "Snippets" 且带 uppercase —— 侧栏标题一律中文，
+            uppercase 对中文没有作用、只会把夹带的拉丁字母变成大写喊话 */}
+        <span className="flex-1 truncate text-[12px] font-medium tracking-wide text-muted-foreground">
+          代码片段
         </span>
         <Button
           type="button"
@@ -198,7 +194,10 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索片段（名称/命令/标签）"
-            className="h-5 border-none bg-transparent p-0 text-[11px] shadow-none focus-visible:ring-0"
+            // 覆盖字号必须带上同样的变体前缀：Input 基类是 `text-base md:text-sm`，
+            // 只写 text-[11px] 时 tailwind-merge 认为变体不同、两条都保留，
+            // ≥768px 的窗口里仍是 14px 赢（#166 ⑦ 用户报"搜索字体太大"的真因）
+            className="h-5 border-none bg-transparent p-0 text-[11px] shadow-none focus-visible:ring-0 md:text-[11px]"
             data-testid="snippets-search-input"
           />
         </div>
@@ -299,9 +298,9 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
         </Suspense>
       )}
 
-      {/* === 删除确认对话框 === */}
-      <DeleteConfirmDialog
-        snippet={deleting}
+      {/* === 删除确认（全应用同一只弹窗，#166 ③）=== */}
+      <ConfirmDeleteDialog
+        request={deleting ? snippetConfirmation(deleting) : null}
         onOpenChange={(v) => {
           if (!v) setDeleting(null);
         }}
@@ -488,48 +487,5 @@ function EmptyState({
         </Button>
       )}
     </div>
-  );
-}
-
-// === 子组件: 删除确认 =======================================================
-
-function DeleteConfirmDialog({
-  snippet,
-  onOpenChange,
-  onConfirm,
-}: {
-  snippet: Snippet | null;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <Dialog open={snippet !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>删除片段</DialogTitle>
-          <DialogDescription>
-            确定删除片段「{snippet?.name}」吗？该操作不可撤销。
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-          >
-            取消
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={onConfirm}
-          >
-            删除
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

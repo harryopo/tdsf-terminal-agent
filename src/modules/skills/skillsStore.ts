@@ -112,7 +112,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       set({
         loading: false,
         loaded: true,
-        error: `加载 Skill 列表失败: ${msg}`,
+        error: `加载技能列表失败: ${msg}`,
       });
     }
   },

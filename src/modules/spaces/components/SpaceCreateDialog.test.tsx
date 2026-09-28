@@ -294,18 +294,44 @@ describe("SpaceCreateDialog — 已保存的服务器：选中 / 眼睛 / 删除
     expect(sshCredentialsGetSecret).toHaveBeenCalledTimes(2);
   });
 
-  it("删除要二次确认：第一下只出确认条，确认后才调 store", async () => {
+  it("删除走正式确认窗：第一下只开窗，确认后才调 store", async () => {
     renderSshDialog();
     fireEvent.click(screen.getByLabelText(/删除 root@10\.0\.0\.1:22/));
     expect(sshState.deleteSavedConnection).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("删除这条本机凭据");
+    // #166 ③：确认条（列表底部一行红）换成全应用同一只 ConfirmDeleteDialog，
+    // 窗里必须说清删的是哪一台 —— 地址是这条记录的身份，别名可能重名
+    const dialog = screen.getByTestId("confirm-delete-dialog");
+    expect(dialog.textContent).toContain("10.0.0.1:22");
+    expect(dialog.textContent).toContain("删除这台已保存的服务器");
 
-    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByTestId("confirm-delete-action"));
     await vi.waitFor(() =>
       expect(sshState.deleteSavedConnection).toHaveBeenCalledWith(
         "root@10.0.0.1:22",
       ),
     );
+  });
+
+  it("确认窗里点取消不删（正向配对：上一条证明删除键真能删）", () => {
+    renderSshDialog();
+    fireEvent.click(screen.getByLabelText(/删除 root@10\.0\.0\.1:22/));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(sshState.deleteSavedConnection).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-delete-dialog")).toBeNull();
+  });
+
+  it("删掉的这条如果正显示着明文，明文必须跟着清掉（换弹窗不许漏掉这条安全规则）", async () => {
+    renderSshDialog();
+    selectSaved();
+    fireEvent.click(screen.getByLabelText("显示已保存的密码"));
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe("pw"));
+
+    fireEvent.click(screen.getByLabelText(/删除 root@10\.0\.0\.1:22/));
+    fireEvent.click(screen.getByTestId("confirm-delete-action"));
+    await vi.waitFor(() =>
+      expect(sshState.deleteSavedConnection).toHaveBeenCalled(),
+    );
+    await vi.waitFor(() => expect(field("ssh-password").value).toBe(""));
   });
 });
 

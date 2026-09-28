@@ -133,6 +133,8 @@ import {
   useWindowTitle,
   useWorkspaceCwd,
 } from "@/modules/tabs";
+// #166 ⑨：开始页（没有活跃工作区）新建终端/编辑器的闸门
+import { blockedOnStartScreen } from "@/modules/tabs/lib/startScreenGate";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import {
   clearFocusedTerminal,
@@ -684,7 +686,8 @@ export default function App() {
         if (lid == null) return { ok: false, reason: "no ssh leaf" };
         const safeCwd = cwd.replace(/'/g, "'\\''");
         const seq = `printf '\\033]7;file://localhost${safeCwd}\\007'\r`;
-        writeToSession(lid, seq);
+        // 探针读数不许说谎：没写进去就不能报 ok（#166 ⑨ 同族——吞掉返回值=假成功）
+        if (!writeToSession(lid, seq)) return { ok: false, reason: "ssh 会话不可写" };
         return { ok: true, leafId: lid, cwd };
       },
       // TDSF debug (#20): 暴露 rendererPool 内部状态供 CDP 实测诊断
@@ -1504,6 +1507,10 @@ export default function App() {
   );
 
   const openNewTab = useCallback(async () => {
+    // #166 ⑨：开始页（没有活跃工作区）新建的标签页属于 default 空间，
+    // 而主区域此刻画欢迎页 ⇒ 顶栏多一个 chip、屏幕什么都不变，shell 却在后台起了。
+    // 顶栏的 + 已经按同一个判据收掉（TabBar#hasWorkspace），这里挡的是快捷键与命令面板。
+    if (blockedOnStartScreen(hasWorkspace)) return null;
     const env = activeSpace?.env;
     // TDSF #89（用户决策 1）：SSH 工作区里**每个标签页各开一条连接**。
     // 此前新 tab 复用 space.env.sessionId，两条 tab 订阅同一条远端 shell：
@@ -1532,7 +1539,17 @@ export default function App() {
     bindTabToSshSpace,
     activeSpaceId,
     activeSpace,
+    hasWorkspace,
   ]);
+
+  /**
+   * 新建编辑器：与 openNewTab 同一道闸（#166 ⑨）。
+   * 编辑器标签页同样按空间归属，开始页开出来一样没有主人、也看不见。
+   */
+  const openNewEditorTab = useCallback(() => {
+    if (blockedOnStartScreen(hasWorkspace)) return;
+    setNewEditorOpen(true);
+  }, [hasWorkspace]);
 
   const sendCd = useCallback(
     (path: string) => {
@@ -1703,11 +1720,14 @@ export default function App() {
 
   const splitActivePaneInActiveTab = useCallback(
     (dir: "row" | "col") => {
+      // #166 ⑨ 同族：开始页那格 cold 标签页没有主人，拆出来的分屏同样看不见
+      // （主区域此刻画的是欢迎页）。和新建标签页走同一道闸、同一句话。
+      if (blockedOnStartScreen(hasWorkspace)) return;
       const t = tabsRef.current.find((x) => x.id === activeId);
       if (t?.kind !== "terminal") return;
       splitActivePane(activeId, dir);
     },
-    [activeId, splitActivePane],
+    [activeId, splitActivePane, hasWorkspace],
   );
 
   const livePaneBounds = useCallback((tabId: number): PaneBounds[] => {
@@ -1763,7 +1783,7 @@ export default function App() {
       "commandPalette.content": () => openCommandPalette("content"),
       "tab.new": openNewTab,
       // TDSF 2026-08-31（用户钦定）: Blocks/Privacy/Preview 入口整体移除
-      "tab.newEditor": () => setNewEditorOpen(true),
+      "tab.newEditor": openNewEditorTab,
       "tab.close": handleCloseTabOrPane,
       "tab.next": () => stepSwitcher(1),
       "tab.prev": () => stepSwitcher(-1),
@@ -1859,6 +1879,7 @@ export default function App() {
       cycleSpace,
       handleCloseTabOrPane,
       openNewTab,
+      openNewEditorTab,
       activeSpaceId,
       selectByIndex,
       splitActivePaneInActiveTab,
@@ -2253,7 +2274,7 @@ export default function App() {
             explorerRoot,
             home,
             openNewTab,
-            openNewEditor: () => setNewEditorOpen(true),
+            openNewEditor: openNewEditorTab,
             toggleSourceControl,
             closeActiveTabOrPane: handleCloseTabOrPane,
             splitPaneRight: () => splitActivePaneInActiveTab("row"),
@@ -2284,6 +2305,7 @@ export default function App() {
       explorerRoot,
       home,
       openNewTab,
+      openNewEditorTab,
       toggleSourceControl,
       handleCloseTabOrPane,
       splitActivePaneInActiveTab,
@@ -2317,7 +2339,12 @@ export default function App() {
     () =>
       isTerminalTab && activeLeafId !== null
         ? (cmd: string) => {
-            writeToSession(activeLeafId, cmd);
+            // 返回值必须听见：cold 标签页（开始页那一格）没有会话，writeToSession
+            // 会当场说"这条路没人接"，吞掉它就等于"提示成功、屏幕上什么都没发生"（#166 ⑨）
+            if (!writeToSession(activeLeafId, cmd)) {
+              toast.error("当前没有可写入的终端，命令没有送出");
+              return;
+            }
             terminalRefs.current.get(activeLeafId)?.focus();
           }
         : null,
@@ -2325,11 +2352,13 @@ export default function App() {
   );
 
   // TDSF 2026-08-11 (P2 代码片段管理): 片段插入终端回调
-  // 语义与 insertHistoryCommand 一致：写入当前活动终端 + 聚焦；无活动终端返回 false
+  // TDSF #166 ⑨：语义与 insertHistoryCommand 一致 —— 无活动终端返回 false，
+  // 由片段面板弹那句「没有活动的终端，无法插入片段」。以前只看"是不是终端标签页"，
+  // 于是开始页那格 cold 标签会被当成可用，结果什么都不写、也不报错。
   const handleInsertSnippetCommand = useCallback(
     (cmd: string): boolean => {
       if (!isTerminalTab || activeLeafId === null) return false;
-      writeToSession(activeLeafId, cmd);
+      if (!writeToSession(activeLeafId, cmd)) return false;
       terminalRefs.current.get(activeLeafId)?.focus();
       return true;
     },
@@ -2363,7 +2392,7 @@ export default function App() {
               activeId={activeId}
               onSelect={setActiveId}
               onNew={openNewTab}
-              onNewEditor={() => setNewEditorOpen(true)}
+              onNewEditor={openNewEditorTab}
               onClose={handleClose}
               onPin={pinTab}
               onRename={handleRenameTab}
@@ -2377,6 +2406,7 @@ export default function App() {
               searchTarget={searchTarget}
               searchRef={searchInlineRef}
               onOverrideLanguage={setOverrideLanguage}
+              hasWorkspace={hasWorkspace}
             />
           )}
 
@@ -2424,7 +2454,7 @@ export default function App() {
                             </div>
                             <p className="text-[12px] leading-relaxed text-muted-foreground">
                               {spaceCount === 0
-                                ? "点击右侧工作区的「新建本地工作区」或「连接 SSH 服务器」开始使用；也可使用 Skills 面板与 AI 智能体。"
+                                ? "先在右侧开始页创建一个工作区，这里就有内容了。"
                                 : "顶栏「选择工作区」可回到已有工作区；也可从这里新建一个。"}
                             </p>
                             <button

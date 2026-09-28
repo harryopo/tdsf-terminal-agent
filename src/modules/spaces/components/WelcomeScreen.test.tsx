@@ -71,6 +71,26 @@ describe("WelcomeScreen — 已有工作区的回程入口", () => {
     expect(screen.getByTestId("welcome-wsl")).toBeTruthy();
     expect(screen.getByTestId("welcome-ssh")).toBeTruthy();
   });
+
+  // #166 ⑧（2026-09-28 用户实测）：「主页不要写本地终端，直接只保留
+  // 终端优先的 linux 运维 AI 工作台，然后暂无工作区内容也写简单点，保持那种大气的风格」
+  it("首次进入只留一句定位语，不再把三个按钮的内容列一遍", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={0}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("终端优先的 Linux 运维 AI 工作台");
+    // 列举式的那句（"本地终端、WSL 或连接 SSH 服务器"）删掉了：
+    // 按钮已经说了三遍，正文再列一遍既不大气也挡了读
+    expect(text).not.toContain("本地终端、WSL 或连接 SSH 服务器");
+    // 没有旧工作区就没有"重启会不会丢东西"要解释，脚注整条不出现
+    expect(text).not.toContain("不会自动进入工作区");
+  });
 });
 
 describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半）", () => {
@@ -101,9 +121,9 @@ describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半�
       />,
     );
     const text = document.body.textContent ?? "";
-    expect(text).toContain("尚未连上服务器");
     expect(text).toContain("自动重连");
-    expect(text).not.toContain("已连上——");
+    // #166 ⑧ 改的是措辞，不是这条底线：没连着就一个字都不能说成连着
+    expect(text).not.toContain("已连上");
   });
 
   it("两种情况都说清「不自动进入工作区」以及从哪里回去（不许只说没连上就完事）", () => {
@@ -117,7 +137,7 @@ describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半�
         />,
       );
       const text = document.body.textContent ?? "";
-      expect(text).toContain("不会自动进入上次的工作区");
+      expect(text).toContain("不会自动进入工作区");
       expect(text).toContain("顶栏「选择工作区」");
       unmount();
     }

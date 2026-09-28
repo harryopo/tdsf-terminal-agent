@@ -6,6 +6,13 @@
 //   - 编辑器配色方案
 
 import { Slider } from "@/components/ui/slider";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -183,20 +190,26 @@ export function ThemesSection() {
           description="代码编辑器使用的主题。"
         >
           <div className="flex flex-col items-end gap-1">
-            <select
+            {/* #166 ④ 同族：原生 <select> 弹的是系统那套方角列表，与全应用的圆角
+                控件不是一套（"同一个界面两种长相"）。换成同一只 Select。 */}
+            <Select
               value={editorTheme}
-              onChange={(e) =>
-                void setEditorTheme(e.target.value as EditorThemePref)
-              }
-              className="h-7 w-44 rounded-md border border-border/60 bg-card px-2 text-[11.5px]"
+              onValueChange={(v) => void setEditorTheme(v as EditorThemePref)}
             >
-              <option value={EDITOR_THEME_AUTO}>跟随应用主题</option>
-              {EDITOR_THEMES.map((id) => (
-                <option key={id} value={id}>
-                  {EDITOR_THEME_LABELS[id]} ({EDITOR_THEME_MODE[id]})
-                </option>
-              ))}
-            </select>
+              <SelectTrigger size="sm" className="w-44">
+                <SelectValue placeholder="选择配色方案" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={EDITOR_THEME_AUTO}>跟随应用主题</SelectItem>
+                {EDITOR_THEMES.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {EDITOR_THEME_LABELS[id]}
+                    {/* 深浅是给人挑的，写中文；值仍然是内部 id */}
+                    {EDITOR_THEME_MODE[id] === "dark" ? "（深色）" : "（浅色）"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </SettingRow>
       </div>

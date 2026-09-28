@@ -47,7 +47,7 @@ export async function loadSkills(): Promise<SkillMetadata[]> {
       timer = setTimeout(
         () =>
           reject(
-            new Error(`Skill 列表加载超时（${SKILL_LIST_TIMEOUT_MS / 1000}s）`),
+            new Error(`技能列表加载超时（${SKILL_LIST_TIMEOUT_MS / 1000}s）`),
           ),
         SKILL_LIST_TIMEOUT_MS,
       );
