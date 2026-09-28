@@ -166,6 +166,7 @@ scripts/*
 !scripts/build-tldr-zh.mjs
 !scripts/fetch-carapace.ps1
 !scripts/make-app-icon.py
+!scripts/check-readme-links.mjs
 !scripts/eager-graph.mjs
 !scripts/eager-graph.d.mts
 !scripts/dev-seed-store.mjs

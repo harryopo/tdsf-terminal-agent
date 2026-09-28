@@ -31,6 +31,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: README links and anchors
+        run: pnpm check:readme
+
       - name: Type-check
         run: pnpm typecheck
 
