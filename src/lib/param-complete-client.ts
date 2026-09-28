@@ -353,8 +353,42 @@ export async function remoteParamComplete(
 // 历史是真实执行过的）。拉取失败/为空不缓存 → 每次返回 null，调用方照旧
 // 不过滤（降级无损：宁可假预测也不丢真预测）。
 
-/** 远端命令全集拉取命令（compgen 是 bash 内建；stderr 丢弃防污染 stdout） */
-export const REMOTE_COMMANDS_CMD = 'compgen -c 2>/dev/null | sort -u';
+/**
+ * 远端命令全集（一次 exec 两样都拿到）。
+ *
+ * 2026-09-28 用户实测③：「我输入 l，应该预测 ll 的呀」——量出来的因果是
+ * 本机 WSL Ubuntu 24.04 上两种取法各跑一次：
+ * - `bash -ic 'compgen -c'` 里**有** `ll`；
+ * - `bash -c 'compgen -c'`（我们 exec 通道现在的形状，非交互）里**没有** `ll`，
+ *   因为非交互 bash 不读 ~/.bashrc 的 alias 段。
+ * ⇒ 别名是用户真敲得出去的命令，却被这道"防假候选"的过滤当假候选剔掉了。
+ * 所以第二段拿别名清单并进来：`bash -ic 'alias'` 实测 0.238s，行形状
+ * `alias ll='ls -alF'`；没有 bash 的机器退回 zsh（行形状 `ll='ls -l'`，无前缀）。
+ */
+export const REMOTE_COMMANDS_CMD =
+  "compgen -c 2>/dev/null | sort -u; bash -ic 'alias' 2>/dev/null || zsh -ic 'alias' 2>/dev/null";
+
+/**
+ * 把两段输出一起解析成命令名集合。
+ *
+ * 只认两种行：`alias NAME=` / `NAME=`（取名字）与裸命令名。
+ * 其余一律不收——交互式 rc 文件万一 echo 出欢迎语，混进集合就等于给过滤层
+ * 放进一条假命令，而这条过滤存在的意义正是挡假候选。
+ */
+export function parseRemoteCommandLines(output: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of output.split('\n')) {
+    const text = line.trim();
+    if (!text) continue;
+    const alias = /^(?:alias\s+)?([A-Za-z_][A-Za-z0-9_.+-]*)=/.exec(text);
+    if (alias) {
+      names.add(alias[1]);
+      continue;
+    }
+    if (/^[A-Za-z0-9_.+-]+$/.test(text)) names.add(text);
+  }
+  return names;
+}
 
 /** 会话级缓存：rustSessionId → 远端命令全集（连接成功后预取一次） */
 const remoteCommandsCache = new Map<number, Set<string>>();
@@ -383,9 +417,7 @@ export async function fetchRemoteCommands(sessionId: number): Promise<Set<string
     if (!r.ok || r.exitCode !== 0) return null;
     const out = r.output.trim();
     if (!out) return null;
-    const cmds = new Set(
-      out.split('\n').map((line) => line.trim()).filter(Boolean),
-    );
+    const cmds = parseRemoteCommandLines(out);
     if (cmds.size === 0) return null;
     remoteCommandsCache.set(sessionId, cmds);
     return cmds;

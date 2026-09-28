@@ -62,6 +62,12 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SshFailureDiagnoseDialog } from "../../ssh-explorer/SshFailureDiagnoseDialog";
+import { describeSshFailureText } from "../../ssh-explorer/lib/sshErrorText";
+import {
+  diagnoseSshFailure,
+  type SshDiagnosis,
+} from "../../ssh-explorer/lib/sshFailureDiagnosis";
 import { useSshStore } from "../../ssh-explorer/sshStore";
 import type { SpaceMeta } from "../lib/store";
 import { useSpaces } from "../lib/useSpaces";
@@ -119,6 +125,8 @@ export function SpaceCreateDialog({
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<Status>(null);
+  /** 2026-09-28 用户实测⑤：失败时按步骤拆出来的诊断结论（详细窗的内容） */
+  const [diagnosis, setDiagnosis] = useState<SshDiagnosis | null>(null);
 
   // === WSL 表单状态（2026-08-28 用户反馈新增） ===
   const wslDistros = useWorkspaceEnvStore((s) => s.distros);
@@ -155,6 +163,30 @@ export function SpaceCreateDialog({
     return `Space ${spaces.length + 1}`;
   }, [mode, host, user, wslDistro, spaces.length]);
 
+  /**
+   * 2026-09-28 用户实测④：「测试连接」的结果只属于 SSH 那一档。
+   * 旧行为是切到「本地工作区 / WSL」后红字仍然挂在弹窗里，看着像在说本地/WSL 失败了。
+   */
+  const switchMode = (next: Mode) => {
+    if (next !== "ssh") {
+      setStatus(null);
+      setDiagnosis(null);
+    }
+    setMode(next);
+  };
+
+  /** 认得出的失败按四步拆开；关窗/重开不残留（下面的 open 复位 effect 清） */
+  const openDiagnosis = (raw: string) => {
+    const portNum = Number.parseInt(port, 10);
+    setDiagnosis(
+      diagnoseSshFailure(raw, {
+        host: host.trim() || undefined,
+        port: Number.isFinite(portNum) ? portNum : undefined,
+        user: user.trim() || undefined,
+      }),
+    );
+  };
+
   // 打开时重置表单; 打开瞬间应用初始模式 + 加载已保存连接。
   // TDSF 修复 2026-08-07: 原 effect 在 open 期间因依赖变化（defaultName /
   // loadSavedConnections 异步完成）反复执行 setMode(initialMode), 用户点击
@@ -167,6 +199,7 @@ export function SpaceCreateDialog({
       setName("");
       setSubmitting(false);
       setStatus(null);
+      setDiagnosis(null);
       setWslDistro("");
       setHost("");
       setPort("22");
@@ -228,6 +261,7 @@ export function SpaceCreateDialog({
     }
     setTesting(true);
     setStatus(null);
+    setDiagnosis(null);
     try {
       const r = await testConnection(resolved);
       setStatus({
@@ -235,9 +269,13 @@ export function SpaceCreateDialog({
         text: r.ok ? "" : r.message,
         raw: r.raw ?? "",
       });
+      // 2026-09-28 用户实测⑤：测试连接是他主动点的，失败就直接把分步结论摊开，
+      // 不用他再去猜"卡在哪一步"（认不出格式的错误也弹，窗口里写明判不出来 + 原始信息）
+      if (!r.ok) openDiagnosis(r.raw ?? r.message);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setStatus({ kind: "fail", text: msg, raw: msg });
+      openDiagnosis(msg);
     } finally {
       setTesting(false);
     }
@@ -459,7 +497,17 @@ export function SpaceCreateDialog({
       const sessionId = await connectSsh(resolved);
       if (!sessionId) {
         useSpaces.getState().remove(meta.id);
-        setStatus({ kind: "fail", text: "SSH 连接失败, 请检查参数或网络" });
+        // sshStore 的 toast 已经把原因说过一次（#110「一次失败只说一次」），
+        // 这里不再弹详细窗，只把同一条错误落到状态槽 + 备好分步结论，由他决定点不点「查看诊断」。
+        const failure = useSshStore.getState().lastConnectFailure;
+        const raw = failure?.raw ?? "";
+        setStatus({
+          kind: "fail",
+          text: raw
+            ? describeSshFailureText(raw)
+            : "SSH 连接失败，请检查参数或网络",
+          raw,
+        });
         return;
       }
 
@@ -559,7 +607,7 @@ export function SpaceCreateDialog({
             <button
               key={m}
               type="button"
-              onClick={() => setMode(m)}
+              onClick={() => switchMode(m)}
               className={cn(
                 "flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-sm transition-colors",
                 mode === m
@@ -928,15 +976,32 @@ export function SpaceCreateDialog({
               data-testid="space-create-test-result"
               title={status.raw || undefined}
               className={cn(
-                "max-h-28 overflow-y-auto break-words whitespace-normal rounded-md px-3 py-2 text-[11px]",
+                "flex items-start gap-2 rounded-md px-3 py-2 text-[11px]",
                 status.kind === "ok"
                   ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                   : "bg-destructive/10 text-destructive",
               )}
             >
-              {status.kind === "ok"
-                ? "连接成功（点击下方「连接并创建」进入服务器）"
-                : status.text || "连接失败（服务器没有给出原因）"}
+              <span
+                data-testid="space-create-test-result-text"
+                className="max-h-28 min-w-0 flex-1 overflow-y-auto break-words whitespace-normal"
+              >
+                {status.kind === "ok"
+                  ? "连接成功（点击下方「连接并创建」进入服务器）"
+                  : status.text || "连接失败（服务器没有给出原因）"}
+              </span>
+              {status.kind === "fail" && status.raw ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="space-create-diagnose"
+                  onClick={() => openDiagnosis(status.raw ?? "")}
+                  className="h-6 shrink-0 px-2 text-[11px]"
+                >
+                  查看诊断
+                </Button>
+              ) : null}
             </div>
           )}
 
@@ -974,6 +1039,13 @@ export function SpaceCreateDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+      {/* 诊断窗挂在同一个 DialogRoot 里、由 Radix 各自 portal 到 body：
+          放在 DialogContent 内部会被弹窗壳层的 overflow 裁掉（#125 那条"看不见比难看更糟"） */}
+      <SshFailureDiagnoseDialog
+        open={diagnosis !== null}
+        diagnosis={diagnosis}
+        onClose={() => setDiagnosis(null)}
+      />
     </Dialog>
   );
 }

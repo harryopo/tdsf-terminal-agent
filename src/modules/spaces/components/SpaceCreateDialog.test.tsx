@@ -25,6 +25,12 @@ const { sshState, spacesState, workspaceState } = vi.hoisted(() => ({
     deleteSavedConnection: vi.fn().mockResolvedValue(undefined),
     savedConnections: [] as unknown[],
     loadSavedConnections: vi.fn().mockResolvedValue(undefined),
+    lastConnectFailure: null as {
+      raw: string;
+      host: string;
+      port?: number;
+      user: string;
+    } | null,
   },
   spacesState: {
     spaces: [] as unknown[],
@@ -40,9 +46,12 @@ const { sshState, spacesState, workspaceState } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../ssh-explorer/sshStore", () => ({
-  useSshStore: (sel: (s: typeof sshState) => unknown) => sel(sshState),
-}));
+vi.mock("../../ssh-explorer/sshStore", () => {
+  const useSshStore = (sel: (s: typeof sshState) => unknown) => sel(sshState);
+  // 「连接并创建」失败后组件按 `useSshStore.getState()` 读 lastConnectFailure（静态面）
+  useSshStore.getState = () => sshState;
+  return { useSshStore };
+});
 vi.mock("../lib/useSpaces", () => {
   const useSpaces = (sel: (s: typeof spacesState) => unknown) => sel(spacesState);
   // 组件里也按 `useSpaces.getState()` 用（静态面），mock 得一起给
@@ -96,6 +105,7 @@ async function clickTest() {
 beforeEach(() => {
   vi.clearAllMocks();
   sshState.savedConnections = [];
+  sshState.lastConnectFailure = null;
   sshState.loadSavedConnections.mockResolvedValue(undefined);
 });
 
@@ -106,20 +116,25 @@ describe("SpaceCreateDialog — 测试连接的失败呈现", () => {
     fillHostAndUser();
     await clickTest();
 
-    const msg = await vi.waitFor(() => {
+    await vi.waitFor(() => {
       const el = screen.getByTestId("space-create-test-result");
       expect(el.textContent).toContain("服务器不接受密码登录");
-      return el;
     });
 
     // ① 不在按钮那一行内 —— 在里面的话长文本会把整行撑出弹窗
+    // 失败现在会自动弹诊断窗（2026-09-28 实测⑤），窗开着时底层弹窗被 Radix 标成
+    // inert、a11y 树里查不到按钮，所以要量排版的这一条先关窗
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     const buttonRow = screen
       .getByRole("button", { name: /测试连接/ })
       .closest("div") as HTMLElement;
-    expect(buttonRow.contains(msg)).toBe(false);
+    // 2026-09-28：这一行右边多了「查看诊断」按钮，所以断言落在**装文字的那个元素**上，
+    // 而不是外层容器（外层本来就是 flex 行，文字在它里面的 span 里）。
+    const text = screen.getByTestId("space-create-test-result-text");
+    expect(buttonRow.contains(text)).toBe(false);
     // ② 允许换行断词，不靠截断（截断会读不全，"方便检查"就反了）
-    expect(msg.className).toContain("break-words");
-    expect(msg.className).not.toContain("truncate");
+    expect(text.className).toContain("break-words");
+    expect(text.className).not.toContain("truncate");
   });
 
   it("屏幕上只出中文，Rust 原文留在 title 里供排查", async () => {
@@ -290,6 +305,154 @@ describe("SpaceCreateDialog — 已保存的服务器：选中 / 眼睛 / 删除
       expect(sshState.deleteSavedConnection).toHaveBeenCalledWith(
         "root@10.0.0.1:22",
       ),
+    );
+  });
+});
+
+// 2026-09-28 用户实测④：「如果我在 ssh 那里测试连接，失败的内容会显示到本地工作区，wsl」
+describe("SpaceCreateDialog — 测试结果只属于 SSH 那一档", () => {
+  /** 先证明它在 SSH 档确实渲染出来了，否则"切走后没了"会因为"压根没出现过"而假绿 */
+  async function failOnce() {
+    sshState.testConnection.mockResolvedValue({
+      ok: false,
+      message: HUMAN,
+      raw: RAW,
+    });
+    renderSshDialog();
+    fillHostAndUser();
+    await clickTest();
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("space-create-test-result")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("space-create-test-result").textContent).toContain(
+      "服务器不接受密码登录",
+    );
+    // 诊断窗是失败后自动弹的，切档前先关掉，免得把"弹窗还在"混进这条判据
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  }
+
+  it.each([
+    ["本地工作区", "本地工作区"],
+    ["WSL", "WSL"],
+  ])("测试失败后切到「%s」，那条红字不许还挂在弹窗里", async (_label, name) => {
+    await failOnce();
+
+    fireEvent.click(screen.getByRole("button", { name }));
+
+    expect(screen.queryByTestId("space-create-test-result")).toBeNull();
+  });
+});
+
+// 2026-09-28 用户实测⑤：「失败的话弹出来一个详细窗口（就像指纹验证一样），
+// 分析到底是那一步有问题，是服务器没开密码登录，还是什么原因」
+describe("SpaceCreateDialog — 失败的分步诊断窗", () => {
+  /** 他真机 rust.log 16:58:26 那条原文（服务器接受 PublicKey + Password） */
+  const RAW_PWD_REJECTED =
+    "authentication failed for user root: Failure { remaining_methods: MethodSet([PublicKey, Password]), partial_success: false }";
+
+  it("测试连接失败 → 自动弹诊断窗：前三步已通过，第四步卡住", async () => {
+    sshState.testConnection.mockResolvedValue({
+      ok: false,
+      message: HUMAN,
+      raw: RAW_PWD_REJECTED,
+    });
+    renderSshDialog();
+    fillHostAndUser();
+    await clickTest();
+
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("ssh-diagnose-stages")).toBeTruthy(),
+    );
+    for (const key of ["network", "handshake", "hostKey"]) {
+      expect(
+        screen.getByTestId(`ssh-diagnose-stage-${key}`).getAttribute("data-state"),
+      ).toBe("passed");
+    }
+    const auth = screen.getByTestId("ssh-diagnose-stage-auth");
+    expect(auth.getAttribute("data-state")).toBe("failed");
+    expect(auth.textContent).toContain("卡在这里");
+    // 他问的"是不是服务器没开密码登录"就靠这一行回答
+    expect(screen.getByTestId("ssh-diagnose-methods").textContent).toContain(
+      "PublicKey / Password",
+    );
+    expect(screen.getByTestId("ssh-diagnose-raw").textContent).toContain(
+      "MethodSet",
+    );
+  });
+
+  it("关掉后可以从状态行「查看诊断」再打开；成功那一档不许有这个按钮", async () => {
+    sshState.testConnection.mockResolvedValue({
+      ok: false,
+      message: HUMAN,
+      raw: RAW_PWD_REJECTED,
+    });
+    renderSshDialog();
+    fillHostAndUser();
+    await clickTest();
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("ssh-diagnose-stages")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(screen.queryByTestId("ssh-diagnose-stages")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("space-create-diagnose"));
+    expect(screen.getByTestId("ssh-diagnose-stages")).toBeTruthy();
+    // 关窗再点下一次「测试连接」：诊断窗开着时底层被 Radix 标成 inert，查不到按钮
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+
+    // 负向配正向：换成成功，红字那行还在（说明这一档确实渲染了），但诊断入口必须没有
+    sshState.testConnection.mockResolvedValue({ ok: true, message: "ok" });
+    fireEvent.click(screen.getByRole("button", { name: /测试连接/ }));
+    await vi.waitFor(() =>
+      expect(
+        screen.getByTestId("space-create-test-result").textContent,
+      ).toContain("连接成功"),
+    );
+    expect(screen.queryByTestId("space-create-diagnose")).toBeNull();
+  });
+
+  it("本地校验就拦下的失败（没走到网络）不弹诊断窗，也不给入口", async () => {
+    renderSshDialog();
+    fillHostAndUser();
+    const port = document.getElementById("ssh-port") as HTMLInputElement;
+    fireEvent.change(port, { target: { value: "99999" } });
+    fireEvent.click(screen.getByRole("button", { name: /连接并创建/ }));
+
+    await vi.waitFor(() =>
+      expect(
+        screen.getByTestId("space-create-test-result").textContent,
+      ).toContain("端口必须是 1-65535"),
+    );
+    expect(screen.queryByTestId("space-create-diagnose")).toBeNull();
+    expect(screen.queryByTestId("ssh-diagnose-stages")).toBeNull();
+  });
+
+  it("「连接并创建」失败不自动弹（toast 已说过一次），但状态行给入口并写明原因", async () => {
+    sshState.connect.mockResolvedValue(null);
+    sshState.saveConnection.mockResolvedValue(undefined);
+    sshState.lastConnectFailure = {
+      raw: RAW_PWD_REJECTED,
+      host: "192.168.45.128",
+      port: 22,
+      user: "root",
+    };
+    spacesState.create.mockReturnValue({ id: "sp-new" });
+    renderSshDialog();
+    fillHostAndUser();
+    fireEvent.click(screen.getByRole("button", { name: /连接并创建/ }));
+
+    // 旧行为这里只写"SSH 连接失败, 请检查参数或网络"——Rust 明明报了认证失败，界面等于没说
+    await vi.waitFor(() =>
+      expect(
+        screen.getByTestId("space-create-test-result").textContent,
+      ).toContain("用户名或密码不对"),
+    );
+    expect(screen.queryByTestId("ssh-diagnose-stages")).toBeNull();
+    expect(spacesState.remove).toHaveBeenCalledWith("sp-new");
+
+    fireEvent.click(screen.getByTestId("space-create-diagnose"));
+    expect(screen.getByTestId("ssh-diagnose-stage-auth").textContent).toContain(
+      "root",
     );
   });
 });

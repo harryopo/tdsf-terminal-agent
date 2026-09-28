@@ -104,6 +104,25 @@ describe("失败原因要分得开（不许把四种病糊成一句）", () => {
     );
   });
 
+  // 用户 2026-09-28 实测①：装着 0.9.0 点检查更新，界面甩出插件的英文原文
+  // `Could not fetch a valid release JSON from the remote`（当时 v0.9.0 还是草稿）。
+  it("远端解析不出版本（最新发布是草稿）⇒ 说清不是本机的问题", () => {
+    const text = describeUpdateFailure(
+      new Error("Could not fetch a valid release JSON from the remote"),
+    );
+    expect(text).toContain("远端还没有可解析的正式版本");
+    expect(text).toContain("草稿");
+    // 线索不许吞：原文仍然在
+    expect(text).toContain("Could not fetch a valid release JSON");
+  });
+
+  it("这条新增的桶不许把网络故障一起吃掉", () => {
+    // 真断网时插件报的是连接类错误，仍然该指去"检查网络"，而不是"等正式发布"
+    expect(describeUpdateFailure(new Error("connection failed"))).toContain(
+      "连不上更新服务器",
+    );
+  });
+
   it("网络不通", () => {
     expect(
       describeUpdateFailure(new Error("dns error: no records found")),

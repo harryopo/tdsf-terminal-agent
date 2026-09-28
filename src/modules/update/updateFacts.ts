@@ -144,6 +144,13 @@ export function describeUpdateFailure(raw: unknown): string {
   if (low.includes("404") || low.includes("not found")) {
     return `没有找到更新清单：可能还没有正式发布过新版本。原始信息：${text}`;
   }
+  // 用户 2026-09-28 实测①：装着 0.9.0 点检查更新，界面直接甩出插件的英文原文
+  // `Could not fetch a valid release JSON from the remote`。这条的真实含义是
+  // "远端没有可解析的已发布版本"（更新清单只解析已发布的 Release，草稿解析不出东西），
+  // 不是本机坏了 —— 认出来就照这个说，别让用户去查自己的网络。
+  if (low.includes("valid release json") || low.includes("release json")) {
+    return `远端还没有可解析的正式版本：GitHub Releases 里最新的还是草稿，或更新清单没生成。这不是你这台机器的问题，等版本正式发布后再点重试即可。原始信息：${text}`;
+  }
   if (
     low.includes("timed out") ||
     low.includes("timeout") ||

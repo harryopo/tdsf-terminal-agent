@@ -39,6 +39,7 @@ import {
   invalidateRemoteOsInfo,
   mergeCandidates,
   parseCarapaceJson,
+  parseRemoteCommandLines,
   REMOTE_COMMANDS_CMD,
   remoteCarapaceInstalled,
   remoteParamComplete,
@@ -390,6 +391,38 @@ describe('fetchRemoteCommands', () => {
     invalidateRemoteCommands(42);
     await fetchRemoteCommands(42);
     expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
+
+  // 2026-09-28 用户实测③：「我输入 l，应该预测 ll 的呀」
+  // 量过的因果：非交互 bash 的 compgen -c 不含别名（本机 WSL 实测两种取法各一次），
+  // 而 ll 恰恰是 root 默认别名 —— 命令全集漏了别名，过滤层就把真能敲的命令剔掉了。
+  it('同一次 exec 里的 alias 行也并进集合，且仍然只 exec 一次', async () => {
+    mockInvoke.mockResolvedValueOnce(sshResult("ls\nalias ll='ls -alF'\n"));
+    const cmds = await fetchRemoteCommands(42);
+    expect(cmds?.has('ll')).toBe(true);
+    expect(cmds?.has('ls')).toBe(true);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parseRemoteCommandLines', () => {
+  it('bash 的 `alias ll=...` 取名字', () => {
+    expect(parseRemoteCommandLines("alias ll='ls -alF'\n").has('ll')).toBe(true);
+  });
+
+  it('zsh 没有 alias 前缀，`ll=...` 同样取名字', () => {
+    expect(parseRemoteCommandLines("ll='ls -l'\n").has('ll')).toBe(true);
+  });
+
+  it('交互式 rc 万一 echo 出整句欢迎语，一行都不许收进集合', () => {
+    // 正向配对：同一段输出里的真命令名照常收，不是"全都不要"
+    const s = parseRemoteCommandLines('Welcome to the system\nls');
+    expect(s.has('Welcome')).toBe(false);
+    expect([...s]).toEqual(['ls']);
+  });
+
+  it('等号左边不是合法标识符的不收（`foo bar=x` 这类噪音）', () => {
+    expect(parseRemoteCommandLines('foo bar=x').size).toBe(0);
   });
 });
 

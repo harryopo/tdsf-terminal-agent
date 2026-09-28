@@ -340,6 +340,13 @@ describe("filterCommandItems（远端命令全集过滤）", () => {
     expect(out.map((it) => it.command)).toEqual(["ls", "git"]);
   });
 
+  // 2026-09-28 用户实测③：`ll` 预测不出来，根因不在这里而在远端全集没收录名
+  // （非交互 bash 的 compgen -c 不含别名）。这一条钉住"别名一旦进了集合就能被预测"。
+  it("别名（ll）只要在远端集合里就留得住 —— 修的是取数那一头", () => {
+    const out = filterCommandItems([cmdItem("ll", "dictionary")], new Set(["ll", "ls"]));
+    expect(out.map((it) => it.command)).toEqual(["ll"]);
+  });
+
   it("history 来源豁免过滤（历史是真实执行过的）", () => {
     const items = [
       cmdItem("my-custom-tool", "history"), // 远端命令全集里没有

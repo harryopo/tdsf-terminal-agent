@@ -145,6 +145,18 @@ interface SshExplorerState {
   /** 前端会话 id → 检测状态；键不存在 = 未检测（连接成功后静默异步检测） */
   remoteCarapaceBySession: Record<string, SshRemoteCarapaceState>;
 
+  /**
+   * 2026-09-28 用户实测⑤：`connect()` 失败时把 Rust 抛上来的原始文本留一份，
+   * 供「新建工作区」的诊断框按步骤拆解。toast 已经说过一次，这条不是第二条通知，
+   * 而是同一件事的取证入口。null = 本次运行还没失败过。
+   */
+  lastConnectFailure: {
+    raw: string;
+    host: string;
+    port?: number;
+    user: string;
+  } | null;
+
   // === Actions ===
   /**
    * TDSF 修复 2026-08-31: opts.autoConnect=true 标记开机自动连接——
@@ -395,6 +407,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   savedConnectionsLoading: false,
   // TDSF 2026-08-28: 远端 carapace 检测状态初始（键不存在 = 未检测）
   remoteCarapaceBySession: {},
+  lastConnectFailure: null,
 
   connect: async (params, opts) => {
     const sessionId = genId();
@@ -541,6 +554,14 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
       // 原文仍留在 session.error 里（状态点 tooltip / 排查用）。
       const copy = describeSshFailure(msg);
       toast.error(copy.headline, { description: copy.description });
+      set({
+        lastConnectFailure: {
+          raw: msg,
+          host: params.host,
+          port: params.port,
+          user: params.user,
+        },
+      });
       return null;
     }
   },
