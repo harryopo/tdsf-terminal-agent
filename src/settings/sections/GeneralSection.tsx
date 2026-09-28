@@ -536,8 +536,9 @@ export function GeneralSection() {
           />
         </SettingRow>
         <div className="flex flex-col gap-1.5">
+          <Label>远端补全组件</Label>
           <span className="text-[11px] leading-relaxed text-muted-foreground">
-            远端补全组件：不装也照常提示静态参数（命令词典与参数库）；装上才能提示这台机器上
+            不装也照常提示静态参数（命令词典与参数库）；装上才能提示这台机器上
             真实存在的分支、文件名与服务名 —— 补全要在命令真正执行的那台机器上跑，
             本机这份看不到远端。装一次对该服务器上所有终端都有效。
           </span>

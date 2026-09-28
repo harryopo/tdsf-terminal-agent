@@ -77,7 +77,7 @@ Two properties separate it from "AI in a sidebar":
 ### Terminal, editor and everyday tooling
 
 - Local PTY / WSL / SSH terminals share one xterm.js render pool; split panes; per-workspace tab sets.
-- **Command prediction**: bundled spec index, carapace parameter completion, curated Chinese tldr descriptions and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke.
+- **Command prediction**: bundled spec index, carapace parameter completion, curated Chinese tldr descriptions and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke. Static flags work without any install; to suggest branches, files and services that actually exist **on the server**, install the completion component there once from Settings → 通用 (General) → 远端补全组件.
 - CodeMirror 6 editor with LSP and remote file editing, snippets, and selection translation that resolves against the built-in dictionaries offline — the "AI 补全释义" button is what additionally asks your configured model for a richer explanation.
 
 ### Local knowledge retrieval

@@ -74,9 +74,14 @@ describe('界面文案不许说假事实', () => {
     expect(general).not.toContain('SSH 远程参数补全提示');
   });
 
+  it('这块有一个真标题，README 指的界面词在界面上存在', () => {
+    // 红线 6：不许指认界面上不存在的控件 —— 「设置 → 通用 → 远端补全组件」要能对上
+    expect(general).toContain('<Label>远端补全组件</Label>');
+  });
+
   it('界面是纯文本渲染，这段说明里不许留 markdown 反引号', () => {
     // 只量这段用户看得见的正文：整份文件里有模板字符串的反引号，那是代码不是文案
-    const start = general.indexOf('远端补全组件：');
+    const start = general.indexOf('不装也照常提示静态参数');
     expect(start).toBeGreaterThan(-1);
     const prose = general.slice(start, general.indexOf('</span>', start));
     expect(prose).not.toContain('`');
