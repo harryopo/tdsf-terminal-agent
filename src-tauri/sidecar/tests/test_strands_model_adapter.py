@@ -110,7 +110,7 @@ def configured_llm_config() -> LLMConfig:
     """已配置完整 LLMConfig（OpenAI provider，含 base_url）"""
     return LLMConfig(
         provider="openai",
-        api_key="sk-test-key-12345",
+        api_key="sk-test-key-12345",  # secret-scan: fixture-line
         base_url="https://api.deepseek.com/v1",
         model="deepseek-chat",
         temperature=0.5,

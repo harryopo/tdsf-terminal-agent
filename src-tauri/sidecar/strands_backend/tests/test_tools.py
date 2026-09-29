@@ -2,6 +2,9 @@
 strands_backend/tests/test_tools.py — Strands 后端工具 + 适配层单元测试
 =====================================================================
 
+secret-scan: fixture —— 本文件含"长成凭据形状"的假样本（脱敏与拒绝路径要测到它们），
+这行是给 `scripts/check-secrets.mjs` 的豁免声明，不是"这里可以放真凭据"的许可。
+
 覆盖范围：
 1. RiskChecker 高危命令检测（rm -rf / reboot / mkfs / dd / fork bomb 等）
 2. 5 个运维工具的 invoke_*_tool 核心函数（mock RustBridge + mock EventBus）：

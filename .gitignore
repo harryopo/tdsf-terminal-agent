@@ -170,6 +170,9 @@ scripts/*
 !scripts/check-readme-links.mjs
 !scripts/eager-graph.mjs
 !scripts/eager-graph.d.mts
+!scripts/check-secrets.mjs
+!scripts/check-secrets.d.mts
+!scripts/eager-graph.d.mts
 !scripts/dev-seed-store.mjs
 !scripts/dev-seed-store.d.mts
 !scripts/probe/

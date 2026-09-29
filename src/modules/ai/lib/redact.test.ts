@@ -1,3 +1,5 @@
+// secret-scan: fixture —— 本文件的样本必须长成凭据形状（都是拼出来的假串），
+// 这行是给 scripts/check-secrets.mjs 的豁免声明，不是"这里可以放真凭据"的许可。
 import { describe, expect, it } from "vitest";
 import { redactSensitive } from "./redact";
 
