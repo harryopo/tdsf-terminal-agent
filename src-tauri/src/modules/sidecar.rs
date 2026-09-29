@@ -561,7 +561,7 @@ impl SidecarManager {
         //    否则这一步在正常运行期是死代码，Python 卡死就留孤儿进程）
         let pid = { self.state.read().await.pid };
         let route = terminate_sidecar(&self.child, pid).await;
-        if matches!(route, KillRoute::ByPid(false) | KillRoute::Nothing) {
+        if kill_left_process_uncertain(&route) {
             log::error!("[sidecar] stop() cannot guarantee process death: {:?}", route);
         }
         {
@@ -1182,8 +1182,24 @@ pub(crate) enum KillRoute {
     ByHandle,
     /// 句柄已被 `exit_watcher_task` take 走 → 按记录好的 PID 系统级强杀（bool=是否杀到）
     ByPid(bool),
+    /// 按 PID 杀没成功，**但复查过进程已经不在了** ⇒ 关停目标已达成。
+    ///
+    /// 为什么要有这一档：`kill_process` 返回 false 有两种完全不同的解释 ——
+    /// ① 进程还活着而我杀不动（真问题，必须报）；② 它早就正常退出了（正常收尾）。
+    /// 以前两种都落进 `ByPid(false)`，于是用户每次正常关窗，日志里都会出现一条
+    /// `stop() cannot guarantee process death` 的 ERROR —— **在日志里报假事实**
+    /// （同 #113② / #123 那一族：界面/日志说的和证据不一致）。
+    AlreadyDead,
     /// 两条腿都没有（进程本来就不在 / PID 没记上）
     Nothing,
+}
+
+/// 这条关停路由**是否**意味着"可能留下孤儿进程"——只有这两种才配得上 ERROR 日志。
+///
+/// 抽成纯函数是为了能测：`AlreadyDead`（杀不到但复查过进程已退出）是正常收尾，
+/// 把它算成事故就等于每次用户关窗都在日志里说一句假话。
+fn kill_left_process_uncertain(route: &KillRoute) -> bool {
+    matches!(route, KillRoute::ByPid(false) | KillRoute::Nothing)
 }
 
 /// #68: 关停时的强制终止入口。
@@ -1207,12 +1223,26 @@ async fn terminate_sidecar(child_slot: &Mutex<Option<Child>>, pid: Option<u32>) 
     match pid {
         Some(pid_num) => {
             let killed = kill_process(pid_num).await;
+            if killed {
+                log::warn!(
+                    "[sidecar:stop] no child handle (watcher holds it), killed by pid={}",
+                    pid_num
+                );
+                return KillRoute::ByPid(true);
+            }
+            // 杀不到 ≠ 杀不掉。复查一次存活，把"早就退出了"和"还活着但我杀不动"分开：
+            // 前者是正常收尾（用户关窗、Python 收到 shutdown 自己走），后者才是事故。
+            let alive = is_process_alive(pid_num).await;
             log::warn!(
-                "[sidecar:stop] no child handle (watcher holds it), kill by pid={} success={}",
+                "[sidecar:stop] no child handle, kill by pid={} failed (alive={} 1=alive 0=dead 2=unknown)",
                 pid_num,
-                killed
+                alive
             );
-            KillRoute::ByPid(killed)
+            if alive == 0 {
+                KillRoute::AlreadyDead
+            } else {
+                KillRoute::ByPid(false)
+            }
         }
         None => {
             log::warn!("[sidecar:stop] no child handle and no pid recorded — nothing to kill");
@@ -2421,6 +2451,32 @@ mod tests {
             .expect("failed to spawn sleeper")
     }
 
+    /// `AlreadyDead` 不许进 ERROR 分支，`ByPid(false)` / `Nothing` 必须进。
+    /// 反向也要钉住：只断言"已死不报错"的话，把整个判断写成 `false` 也能通过。
+    #[test]
+    fn only_uncertain_kill_routes_are_reported_as_errors() {
+        assert!(
+            kill_left_process_uncertain(&KillRoute::ByPid(false)),
+            "杀不到且没确认死亡，必须报"
+        );
+        assert!(
+            kill_left_process_uncertain(&KillRoute::Nothing),
+            "连 pid 都没记上，必须报"
+        );
+        assert!(
+            !kill_left_process_uncertain(&KillRoute::AlreadyDead),
+            "复查过已退出 = 正常收尾，不许报事故"
+        );
+        assert!(
+            !kill_left_process_uncertain(&KillRoute::ByHandle),
+            "句柄杀成功，不许报事故"
+        );
+        assert!(
+            !kill_left_process_uncertain(&KillRoute::ByPid(true)),
+            "按 pid 杀成功，不许报事故"
+        );
+    }
+
     #[tokio::test]
     async fn stop_kills_process_when_child_handle_was_taken_by_watcher() {
         let child = spawn_sleeper();
@@ -2441,11 +2497,21 @@ mod tests {
 
         reaper.await.expect("reaper task").expect("wait the killed child");
 
-        // 真死了：第二次必须杀不到（Windows OpenProcess 返回 null / unix kill 报 ESRCH）
+        // 真死了：第二次杀不到，但**必须复查存活**——已退出不许再报成"无法保证进程已死"
+        // （以前这里恒落 `ByPid(false)`，于是用户每次正常关窗日志里都有一条 ERROR，
+        //  说的是和证据相反的话：watcher 早已收到 ExitStatus(0)、reader 也报了 alive=0）。
         let again = terminate_sidecar(&slot, Some(pid)).await;
+        #[cfg(target_os = "windows")]
+        assert!(
+            matches!(again, KillRoute::AlreadyDead),
+            "进程已死且复查得到 alive=0，应判 AlreadyDead: {again:?}"
+        );
+        // 非 Windows 的 `is_process_alive` 是占位实现（恒 2=查不到）⇒ 只能保守判
+        // "杀不到且无法确认"，这条不许被当成"已确认死亡"，也不许报成事故之外的东西。
+        #[cfg(not(target_os = "windows"))]
         assert!(
             matches!(again, KillRoute::ByPid(false)),
-            "进程已死，第二次不应报成功"
+            "非 Windows 无法复查存活，应保守报 ByPid(false): {again:?}"
         );
     }
 
