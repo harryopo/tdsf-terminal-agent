@@ -381,7 +381,10 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     let existing: Vec<String> = app.webview_windows().keys().cloned().collect();
     let label = next_settings_label(&existing);
     let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url_path.into()))
-        .title("Settings")
+        // 与 settings.html 的 <title> 必须一字不差（页面加载后 document.title 会盖掉这里，
+        // 两处不一致就是"同一个可见事实两个主人"）。漂移闸：
+        // src/modules/settings/settingsWindowTitle.test.ts
+        .title("TDSF 设置")
         .inner_size(900.0, 700.0)
         .min_inner_size(820.0, 620.0)
         .resizable(true)
