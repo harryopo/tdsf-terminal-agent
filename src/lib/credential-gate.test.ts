@@ -1,3 +1,5 @@
+// secret-scan: fixture —— 本文件的样本必须长成凭据形状（都是拼出来的假串），
+// 这行是给 scripts/check-secrets.mjs 的豁免声明，不是"这里可以放真凭据"的许可。
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -155,6 +157,11 @@ describe("接线：这条闸必须真的挂在门禁与 CI 上（实现了但没
       timeout: 60_000,
     });
     expect(out).toContain("PASS：未发现凭据形状");
+    // 这条断言是 2026-09-29 那次假绿换来的：当时我先跑 --tracked 拿到 PASS，
+    // 再 git add 本文件 —— 而 --tracked 读的是 `git ls-files`，**那一刻它还不跟踪**，
+    // 于是"干净"干净在了一把没扫到自己的尺子上（提交后 CI 当场红）。
+    // ⇒ "PASS" 必须同时证明**带着凭据形状的判据文件自己也在扫描范围里**。
+    expect(out).toContain("[豁免] src/lib/credential-gate.test.ts");
   }, 60_000);
 });
 
@@ -164,6 +171,7 @@ describe("豁免声明的用法边界（横扫：不许有人拿它给生产代�
     "src-tauri/sidecar/strands_backend/tests/test_redact_single_owner.py",
     "src-tauri/sidecar/strands_backend/tests/test_tools.py",
     "src/modules/ai/lib/redact.test.ts",
+    "src/lib/credential-gate.test.ts",
   ];
 
   it.each(DECLARERS)("%s 的声明必须在文件头前 12 行，且写的是整份文件作用域", (rel) => {
