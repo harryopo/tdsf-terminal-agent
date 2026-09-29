@@ -139,11 +139,25 @@ WSL_POPUP_JS = r"""(async () => {
     .find((b) => (b.innerText || '').trim().replace(/\s+/g, ' ') === 'WSL');
   if (!tab) return { step: 'no-wsl-tab' };
   tab.click();
-  await new Promise((r) => setTimeout(r, 500));
-  const scope = [...document.querySelectorAll('[role="dialog"]')].filter(vis).pop() || dlg;
+  // 发行版列表是打开弹窗后才异步拉的（`wsl.exe -l` 冷启动要一两秒），
+  // 而那只下拉**只在列表非空时才挂载**。原先固定等 500ms 于是把"还在探测"
+  // 读成"没有下拉"，报成界面缺陷 —— 量具的锅（同 #124/#130）。改成轮询等挂载。
+  let scope = dlg, trig = null, waited = 0;
+  while (waited < 6000) {
+    scope = [...document.querySelectorAll('[role="dialog"]')].filter(vis).pop() || dlg;
+    trig = [...scope.querySelectorAll('button[data-radix-select-trigger],[role="combobox"]')]
+      .filter(vis)[0] || null;
+    if (trig) break;
+    await new Promise((r) => setTimeout(r, 200));
+    waited += 200;
+  }
   const nativeSelects = [...scope.querySelectorAll('select')].filter(vis).length;
-  const trig = [...scope.querySelectorAll('button[data-radix-select-trigger],[role="combobox"]')].filter(vis)[0];
-  if (!trig) return { step: 'no-trigger', nativeSelects };
+  if (!trig) {
+    // 等满了还没有：把面板此刻自己说的话带回来，好分清"探测中/不可用/真没有"
+    const t = (scope.innerText || '').replace(/\s+/g, ' ');
+    const says = ['正在探测', 'WSL 不可用', '未找到'].find((k) => t.includes(k));
+    return { step: says ? `no-trigger:${says}` : 'no-trigger', nativeSelects, waited };
+  }
   const tr = trig.getBoundingClientRect();
   const fire = (type, buttons) => {
     const x = tr.x + tr.width / 2, y = tr.y + tr.height / 2;
@@ -162,6 +176,7 @@ WSL_POPUP_JS = r"""(async () => {
   const hit = document.elementFromPoint(pr.x + pr.width / 2, pr.y + pr.height / 2);
   const out = {
     step: 'probed',
+    waited,
     nativeSelects,
     items: pop.querySelectorAll('[role="option"]').length,
     onScreen: pr.x >= 0 && pr.y >= 0 && pr.right <= innerWidth && pr.bottom <= innerHeight,
@@ -306,6 +321,7 @@ def main() -> int:
         f"左列底部空洞 {m['trailingHolePx']}px | 两列标签基线差 {m['labelTopDeltaPx']}px | "
         f"已保存 {m['rowCount']} 条、删除入口 {m['hasDeleteBtn']} | "
         f"WSL 下拉原生 select {wsl.get('nativeSelects')} 个、"
+        f"等它挂载 {wsl.get('waited')}ms、"
         f"弹层圆角 {wsl.get('radius')}、命中在弹层内 {wsl.get('hitInside')}"
     )
     print("PROBE_DIALOG PASS")
