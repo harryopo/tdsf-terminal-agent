@@ -260,13 +260,37 @@ function trackedFiles() {
   return git(["ls-files", "-z"]).split("\0").filter(Boolean);
 }
 
+/**
+ * 模式解析：不认识的 `--参数` 一律**报错退出**，不许静默退化成"扫暂存区"。
+ * 实测过的坑：`--traked`（少一个 c）与 `--all` 原来都会落到默认分支，
+ * 打印"读 0 行 / PASS"、rc=0 ⇒ 一个拼错的参数就能把"扫 3000 个跟踪文件"换成"扫 0 行"还说绿。
+ * 这条闸的扫描范围已经因为"外部状态决定"骗过我一次（见 credential-gate.test.ts 那条假绿断言），
+ * 不能再给同一个病留第二个入口。
+ */
+const MODE_FLAGS = ["--tracked", "--range", "--staged"];
+const OTHER_FLAGS = ["--explain"];
+
+export function resolveMode(argv) {
+  const given = argv.filter((arg) => arg.startsWith("--"));
+  const unknown = given.filter((arg) => !MODE_FLAGS.includes(arg) && !OTHER_FLAGS.includes(arg));
+  if (unknown.length > 0) {
+    return {
+      error: `未知参数 ${unknown.join(" ")} —— 这条闸不认识的开关不会被静默忽略。\n` + `可选：不带参数或 --staged（扫暂存区） / --tracked（扫跟踪文件） / --range <base..head>（扫提交区间） / --explain`,
+    };
+  }
+  if (given.includes("--tracked")) return { mode: "tracked" };
+  if (given.includes("--range")) return { mode: "range" };
+  return { mode: "staged" };
+}
+
 function main() {
   const argv = process.argv.slice(2);
-  const mode = argv.includes("--tracked")
-    ? "tracked"
-    : argv.includes("--range")
-      ? "range"
-      : "staged";
+  const resolved = resolveMode(argv);
+  if (resolved.error) {
+    console.error(resolved.error);
+    return 2;
+  }
+  const mode = resolved.mode;
 
   let rows = [];
   let label = "";

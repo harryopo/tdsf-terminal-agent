@@ -1,7 +1,7 @@
 // secret-scan: fixture —— 本文件的样本必须长成凭据形状（都是拼出来的假串），
 // 这行是给 scripts/check-secrets.mjs 的豁免声明，不是"这里可以放真凭据"的许可。
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mask, scanText } from "../../scripts/check-secrets.mjs";
@@ -162,6 +162,39 @@ describe("接线：这条闸必须真的挂在门禁与 CI 上（实现了但没
     // 于是"干净"干净在了一把没扫到自己的尺子上（提交后 CI 当场红）。
     // ⇒ "PASS" 必须同时证明**带着凭据形状的判据文件自己也在扫描范围里**。
     expect(out).toContain("[豁免] src/lib/credential-gate.test.ts");
+  }, 60_000);
+});
+
+describe("参数打错不许静默缩小扫描范围（2026-09-30 实测出来的坑）", () => {
+  // 实测：`node scripts/check-secrets.mjs --traked`（少一个 c）与 `--all` 都**静默退化成"扫暂存区"**，
+  // 打印"读 0 行 / PASS"、rc=0 ⇒ 一个拼错的参数就能把"扫 3000 个文件"换成"扫 0 行"还说绿。
+  // 这条闸的判据本身就有"范围由外部状态决定"的病（见上面那条假绿），不能再给它加一个入口。
+  const run = (args: string[]) =>
+    spawnSync("node", ["scripts/check-secrets.mjs", ...args], { encoding: "utf8", timeout: 60_000 });
+
+  it("未知参数必须报错退出，且不许打印 PASS", () => {
+    for (const arg of ["--traked", "--all", "--stadge"]) {
+      const r = run([arg]);
+      expect(r.status, `${arg} 不该被静默接受`).not.toBe(0);
+      const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+      expect(out, `${arg} 不许打印 PASS`).not.toContain("PASS");
+      // 报错要说人话：点名是哪个参数不对、可选项有哪些
+      expect(out).toContain(arg);
+      expect(out).toContain("--tracked");
+    }
+  });
+
+  it("--staged 是显式支持的模式（读索引），不靠 fallthrough", () => {
+    const r = run(["--staged"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("暂存区");
+  });
+
+  it("正向配对：--tracked 仍然可用（否则上面两条会因为『任何参数都报错』而假绿）", () => {
+    const r = run(["--tracked"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("跟踪文件");
+    expect(r.stdout).toContain("PASS：未发现凭据形状");
   }, 60_000);
 });
 
