@@ -7,9 +7,18 @@ import {
   type Geom,
   type ResizeDir,
   type Viewport,
+  toLayoutExpr,
 } from "./miniWindowGeometry";
 
 const STORE_KEY = "tdsf-ui-mini-window-geom";
+
+/** 几何按视觉像素存，写的时候交给浏览器除（理由见 `toLayoutExpr` 的注释） */
+function writeGeom(el: HTMLElement, g: Geom) {
+  el.style.left = toLayoutExpr(g.x);
+  el.style.top = toLayoutExpr(g.y);
+  el.style.width = toLayoutExpr(g.w);
+  el.style.height = toLayoutExpr(g.h);
+}
 
 const viewport = (): Viewport => ({
   vw: window.innerWidth,
@@ -59,10 +68,7 @@ export function useMiniWindowGeometry() {
     const el = ref.current;
     const g = pending.current;
     if (!el || !g) return;
-    el.style.left = `${g.x}px`;
-    el.style.top = `${g.y}px`;
-    el.style.width = `${g.w}px`;
-    el.style.height = `${g.h}px`;
+    writeGeom(el, g);
   }, []);
 
   const write = useCallback(
@@ -78,12 +84,7 @@ export function useMiniWindowGeometry() {
     const g = clampGeom(loadGeom() ?? defaultGeom(viewport()), viewport());
     geom.current = g;
     const el = ref.current;
-    if (el) {
-      el.style.left = `${g.x}px`;
-      el.style.top = `${g.y}px`;
-      el.style.width = `${g.w}px`;
-      el.style.height = `${g.h}px`;
-    }
+    if (el) writeGeom(el, g);
     // Reclamp into the new viewport; persistence is left to the next gesture
     // since loadGeom re-clamps on startup anyway.
     const onResize = () => write(clampGeom(geom.current, viewport()));

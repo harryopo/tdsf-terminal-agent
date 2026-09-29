@@ -12,6 +12,26 @@ const TOP_GAP = 16;
 const clamp = (v: number, lo: number, hi: number) =>
   v < lo ? lo : v > hi ? hi : v;
 
+/**
+ * 视觉像素 → 写进 style 的表达式。
+ *
+ * 小窗挂在 `.zoom-content` 里（跟着「界面缩放」走），而 CSS `zoom` 会把**它自己的
+ * left/top/width/height 一起乘上系数** —— 2026-09-29 真机量过：
+ * `position:fixed; left:100; width:200; zoom:1.5` 的 rect 是 `x=150, w=300`
+ * （#99 那条"单位放错地方"的同类）。所以几何一律按**视觉像素**存（拖动/缩放拿到的
+ * `clientX` 差值就是视觉像素，视口边界也是），写样式时除回去 —— 换档位时小窗**停在原地**，
+ * 只是里面的字变大，而不是整扇窗被推到屏幕外。
+ *
+ * 除法**交给浏览器**而不是在 JS 里算：`lib/useZoom.ts` 是在被动 effect 里写
+ * `--app-zoom` 的，而子组件的 effect 先于父组件跑 —— 2026-09-29 在 JS 里
+ * `getComputedStyle(el).zoom` 除一次的那版，实测换档位后 style 仍是旧系数除出来的值、
+ * rect 被 1.5/1.05 推走。写成 `calc(… / var(--app-zoom))` 之后档位一变浏览器自己重算，
+ * 不存在"谁先跑"的问题（同一页真机三档 1.05/1.5/0.9 下 rect 恒等）。
+ */
+export function toLayoutExpr(px: number): string {
+  return `calc(${px}px / var(--app-zoom))`;
+}
+
 export function defaultGeom(vp: Viewport): Geom {
   const w = Math.max(MIN_W, Math.min(500, vp.vw - MARGIN_X * 2));
   const h = Math.max(MIN_H, Math.min(600, vp.vh - BOTTOM_GAP - TOP_GAP));

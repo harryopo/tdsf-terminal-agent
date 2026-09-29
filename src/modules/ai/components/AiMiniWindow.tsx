@@ -113,6 +113,9 @@ export function AiMiniWindow({ state }: { state: PresenceState }) {
       data-ai-mini-window
       className={cn(
         "no-scrollbar-deep fixed z-40 flex flex-col overflow-hidden",
+        // #166 续（2026-09-29 用户拍板「AI 小窗也跟随缩放」）：内容随「界面缩放」变大，
+        // 而摆放位置不变 —— 位置/尺寸的换算在 useMiniWindowGeometry 里按视觉像素做。
+        "zoom-content",
         "rounded-2xl border border-border/60 bg-card text-[12px]",
         "shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_24px_48px_-12px_rgba(0,0,0,0.45),0_8px_16px_-8px_rgba(0,0,0,0.3)]",
         "ring-1 ring-black/5 dark:ring-white/5",
