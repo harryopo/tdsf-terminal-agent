@@ -3,9 +3,13 @@
 # 只读资源随包分发（frozen 后 __file__ 指向 _MEIPASS, datas 解压到同目录可读）:
 #   - config/: 模型/功能开关/风险规则 yaml
 #   - knowledge/philosophy/: 随源码分发的通用 Linux 教学语料
+#   - knowledge-bundled/rag_slim.db: 预建好的精简知识库（#166 ⑥，首次启动播种到
+#       可写数据目录；缺文件 PyInstaller 直接报错 = 构建期 fail-closed，
+#       不会再产出一个"知识库是空的"安装包）
 #   - skills/builtin/: 内置 5 个运维技能
 # 可写数据（.tdsf-data/*.db、skills-installed 等）由代码 frozen 分支重定向到
 # exe 同级 .tdsf-data/（见 main.py / self_evolution.py / marketplace.py 等）。
+# 播种逻辑与"已存在就不动"的规则在 knowledge/bundled.py。
 
 
 import pathlib
@@ -34,6 +38,7 @@ a = Analysis(
     datas=[
         ('config', 'config'),
         ('knowledge/philosophy', 'knowledge/philosophy'),
+        ('knowledge-bundled', 'knowledge-bundled'),
         ('skills/builtin', 'skills/builtin'),
     ],
     hiddenimports=_tool_hiddenimports,

@@ -1116,6 +1116,16 @@ def main() -> None:
     except Exception as e:
         logger.exception(f"failed to register business methods: {e}")
 
+    # 2.9 #166 ⑥（2026-09-29）：把随包分发的精简知识库播种到可写数据目录。
+    # 必须排在 ready 通知**之前**：前端知识浏览器与 agent 检索主读精简库，
+    # 早一步就绪就少一个"打开时是空的"的窗口。已存在就一个字都不动（不覆盖用户数据）。
+    try:
+        from knowledge.bundled import seed_bundled_slim_db
+
+        seed_bundled_slim_db()
+    except Exception as e:  # 播种失败不阻断启动（知识库是增强能力）
+        logger.warning(f"bundled knowledge base seeding failed: {e}")
+
     # 3. 发送 ready 通知（Rust 侧阻塞等待此信号判定启动成功）
     send_notification(
         "ready",
