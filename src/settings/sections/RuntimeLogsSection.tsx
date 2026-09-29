@@ -13,6 +13,7 @@ import { RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
+import { LEVEL_FILTER_LABEL, LEVEL_FILTERS } from "../lib/runtimeLogLevels";
 
 // ============================================================================
 // 运行日志面板（B3 2026-09-03 用户钦定：后端日志可视化，方便检查检测与开发）
@@ -44,7 +45,8 @@ const LEVEL_META: Record<string, { badge: string }> = {
   CRITICAL: { badge: "bg-red-600/25 text-red-700 dark:text-red-300" },
 };
 
-const LEVEL_FILTERS = ["ALL", "DEBUG", "INFO", "WARNING+", "ERROR", "CRITICAL"];
+// 协议值与界面标签的唯一主人在 `../lib/runtimeLogLevels.ts`
+// （拆出去有两个原因：值不许被"顺手翻译"、而组件文件导出常量会破 react-refresh 边界）
 
 function formatTs(ts: number | undefined): string {
   if (ts == null) return "--:--:--";
@@ -137,7 +139,7 @@ export function RuntimeLogsSection() {
               <SelectContent>
                 {LEVEL_FILTERS.map((lv) => (
                   <SelectItem key={lv} value={lv}>
-                    {lv}
+                    {LEVEL_FILTER_LABEL[lv] ?? lv}
                   </SelectItem>
                 ))}
               </SelectContent>
