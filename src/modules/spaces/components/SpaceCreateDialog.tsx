@@ -600,7 +600,7 @@ export function SpaceCreateDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* 内容区限高 + 内部滚动：SSH 档字段最多，原先无上限，实测顶到 767px（视口 822） */}
-      <DialogContent className="max-h-[85vh] gap-4 overflow-y-auto sm:max-w-[720px]">
+      <DialogContent className="max-h-[70vh] gap-4 overflow-y-auto sm:max-w-[720px]">
         <DialogHeader className="gap-1.5">
           <DialogTitle>新建工作区</DialogTitle>
           <DialogDescription>
@@ -902,7 +902,7 @@ export function SpaceCreateDialog({
 
               {mode === "wsl" && (
                 <div className="grid gap-1.5">
-                  <Label htmlFor="wsl-distro">WSL 发行版 (Distro)</Label>
+                  <Label htmlFor="wsl-distro">WSL 发行版</Label>
                   {wslDistros.length > 0 ? (
                     // #166 ④：原生 <select> 弹的是操作系统那套方角列表（用户原话
                     // "太生硬"），换成与全应用同一只圆角 Select。

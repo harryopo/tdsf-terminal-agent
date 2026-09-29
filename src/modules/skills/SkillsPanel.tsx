@@ -169,8 +169,12 @@ export function SkillsPanel({ className }: Props) {
         </div>
       </div>
 
-      {/* === 分类 tabs === */}
-      <div className="flex shrink-0 items-center gap-0.5 border-b border-border/40 bg-muted/20 px-1.5 py-1 overflow-x-auto">
+      {/* === 分类 tabs ===
+          #166 真机看图：这行原来是 `overflow-x-auto` 不换行 —— 面板 252px、6 个标签
+          要 355px，103px 的筛选项在屏幕外（屏幕上看得见的是「SSH 1」被切半截），
+          而横向滚动条只占 6px、没有任何提示，用户看不出还有得滚。
+          宁可多占一行，也不让筛选项看不见。 */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-0.5 gap-y-1 border-b border-border/40 bg-muted/20 px-1.5 py-1">
         {FILTER_TABS.map((tab) => {
           const active = tab.id === filterTab;
           const count =

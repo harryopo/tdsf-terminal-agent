@@ -75,9 +75,11 @@ export function WelcomeScreen({
         {existingCount > 0 && (
           // 有历史工作区时把「回去」放在最前面：欢迎页不再自动进入，
           // 不给入口就等于让用户重复新建。
+          // #166 真机看图：主按钮（实心）以前恒给「新建本地工作区」，于是回头客
+          // 一进来看到的是"请再建一个"——主次反了。有东西可回时实心给「回去」。
           <Button
             size="lg"
-            variant="secondary"
+            variant="default"
             className="w-64 gap-2"
             onClick={onOpenExisting}
             data-testid="welcome-open-existing"
@@ -88,6 +90,7 @@ export function WelcomeScreen({
         )}
         <Button
           size="lg"
+          variant={existingCount > 0 ? "outline" : "default"}
           className="w-64 gap-2"
           onClick={onCreateLocal}
           data-testid="welcome-local"
@@ -117,13 +120,12 @@ export function WelcomeScreen({
         </Button>
       </div>
 
-      {/* #166 ⑧：没有旧工作区时不必解释"重启会停在这里"——那时没有东西会丢；
-          有旧工作区才需要那一句（#61-A 的设计：不自动进入，得说清怎么回去）。 */}
+      {/* #166 ⑧（用户：「写简单点，保持那种大气的风格」）：原来两档各一句长脚注，
+          而且"会自动重连"那半句和上面正文重复了 —— 正文已经按连没连上分档说过，
+          脚注只留"为什么停在这里、从哪里回去"这一件别的事。 */}
       {existingCount > 0 && (
         <p className="text-[11px] text-muted-foreground/70">
-          {connectedCount > 0
-            ? "重启后停在这里，不会自动进入工作区；从上面按钮或顶栏「选择工作区」即可回去"
-            : "重启后停在这里，不会自动进入工作区；从上面按钮或顶栏「选择工作区」回去时会自动重连"}
+          重启后不会自动进入工作区，从上面按钮或顶栏「选择工作区」回去。
         </p>
       )}
     </div>

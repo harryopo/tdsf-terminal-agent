@@ -156,3 +156,53 @@ describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半�
     );
   });
 });
+
+describe("#166 真机看图轮 — 主次与「同一句话说两遍」", () => {
+  /** 实心主按钮 = Button 的 default 变体（bg-primary）；描边按钮 = outline。 */
+  const isSolid = (el: HTMLElement) => el.className.includes("bg-primary");
+
+  it("有旧工作区时，实心那颗必须是「打开已有工作区」，不是「新建本地工作区」", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={1}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    // 真机截图上看到的：唯一那颗实心灰按钮写着「新建本地工作区」——
+    // 一个带着已存服务器回来的人，界面却在喊"再建一个"。主次反了。
+    expect(isSolid(screen.getByTestId("welcome-open-existing"))).toBe(true);
+    expect(isSolid(screen.getByTestId("welcome-local"))).toBe(false);
+  });
+
+  it("配对：首次启动（没有旧工作区）时实心仍给「新建本地工作区」", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={0}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    expect(isSolid(screen.getByTestId("welcome-local"))).toBe(true);
+    expect(screen.queryByTestId("welcome-open-existing")).toBeNull();
+  });
+
+  it("脚注不许把正文已经说过的「自动重连」再讲一遍", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={1}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    // 「重连」在整页只许出现一次（正文那句）；同义重复就是漏臂的温床（#127 那条）
+    expect(text.match(/重连/g)?.length).toBe(1);
+    // 但脚注仍然要说清它自己那件事：为什么停在这里 + 从哪里回去
+    expect(text).toContain("不会自动进入工作区");
+    expect(text).toContain("顶栏「选择工作区」");
+  });
+});

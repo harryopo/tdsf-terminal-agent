@@ -64,7 +64,7 @@ export function ConfirmDeleteDialog({
       <AlertDialogContent
         size="sm"
         data-testid="confirm-delete-dialog"
-        className="max-h-[85vh] overflow-y-auto data-[size=sm]:max-w-[26rem]"
+        className="max-h-[70vh] overflow-y-auto data-[size=sm]:max-w-[26rem]"
       >
         <AlertDialogHeader>
           <AlertDialogMedia

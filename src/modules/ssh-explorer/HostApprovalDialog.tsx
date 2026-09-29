@@ -98,7 +98,7 @@ export function HostApprovalDialog({
           `data-[size=default]:sm:max-w-md`，只写 `sm:max-w-lg` 时 tailwind-merge 认为
           两者变体不同、都保留，最后按特异性仍是 448px 赢（实测过）。
           高度同样必须显式设上限：基础类没有 max-h，加了「可能原因」后实测长到 787px。 */}
-      <AlertDialogContent className="max-h-[85vh] overflow-y-auto data-[size=default]:sm:max-w-[42rem]">
+      <AlertDialogContent className="max-h-[70vh] overflow-y-auto data-[size=default]:sm:max-w-[42rem]">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2.5">
             <span

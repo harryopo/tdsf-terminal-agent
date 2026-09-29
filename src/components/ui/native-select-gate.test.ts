@@ -54,4 +54,18 @@ describe("原生 select 已整类换掉", () => {
       /<select[\s>/]/.test('  /<selection\\s+source="(terminal|editor)">/g;'),
     ).toBe(false);
   });
+
+  /**
+   * #166 真机看图：换成圆角 Select 之后，标签还挂着「WSL 发行版 (Distro)」——
+   * 括注里那个英文词就是「发行版」的逐字翻译，不带来任何信息，而用户在意的正是
+   * 界面里夹英文。（对比：设置页「语言服务器 (LSP)」留着是有用的，LSP 是缩写不是翻译。）
+   */
+  it("WSL 发行版的标签不再挂逐字翻译的英文括注", () => {
+    const src = readFileSync(
+      join(process.cwd(), "src/modules/spaces/components/SpaceCreateDialog.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("<Label htmlFor=\"wsl-distro\">WSL 发行版</Label>");
+    expect(src).not.toContain("(Distro)");
+  });
 });

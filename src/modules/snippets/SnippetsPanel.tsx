@@ -203,9 +203,11 @@ export function SnippetsPanel({ className, onInsertCommand, currentCwd }: Props)
         </div>
       </div>
 
-      {/* === 标签 tabs === */}
+      {/* === 标签 tabs ===
+          #166 真机看图：与技能面板同一处病 —— 不换行 + 横向滚，面板 252px 而标签要
+          421px，169px 的标签在屏幕外且没有可滚提示。改成换行，全部看得见。 */}
       {allTags.length > 0 && (
-        <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/20 px-1.5 py-1">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-0.5 gap-y-1 border-b border-border/40 bg-muted/20 px-1.5 py-1">
           <button
             type="button"
             onClick={() => setFilterTag(null)}

@@ -2453,9 +2453,12 @@ export default function App() {
                               {spaceCount === 0 ? "暂无工作区" : "未选择工作区"}
                             </div>
                             <p className="text-[12px] leading-relaxed text-muted-foreground">
+                              {/* #166 ⑧（用户：「暂无工作区内容也写简单点」）：
+                                  原来两句都把下面那颗「新建工作区」按钮的内容又念了一遍。
+                                  按钮自己会说话，这里只说"回去"那条路。 */}
                               {spaceCount === 0
-                                ? "先在右侧开始页创建一个工作区，这里就有内容了。"
-                                : "顶栏「选择工作区」可回到已有工作区；也可从这里新建一个。"}
+                                ? "还没有工作区，建一个就有内容了。"
+                                : "从顶栏「选择工作区」回到已有工作区。"}
                             </p>
                             <button
                               type="button"

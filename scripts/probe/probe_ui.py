@@ -100,7 +100,10 @@ AUDIT_JS = r"""
     if (!clipX && !clipY) continue;
     const cs = getComputedStyle(el);
     if (/(scroll|auto)/.test(cs.overflowX + cs.overflowY)) continue; // 可滚动是有意为之
-    if (cs.textOverflow === 'ellipsis' && el.hasAttribute('data-allow-truncate')) continue;
+    // 这里原来还有一句 `data-allow-truncate` 豁免（"这里的省略号是设计意图"）。
+    // 全仓唯一一处用它的是侧栏底部那一排 —— 而它挡的不是设计意图，是**每个标签
+    // 都被切剩一个字**这个缺陷（#166 真机看图）。豁免口子删掉：宁可报红让人改布局，
+    // 也不许把"看不见"登记成"故意的"。
     bump('clippedText', el, {
       axis: clipX && clipY ? 'xy' : clipX ? 'x' : 'y',
       scroll: clipX ? el.scrollWidth : el.scrollHeight,
