@@ -19,15 +19,32 @@ src-tauri/sidecar/scripts/insert_manual_distill.py      # 人工补写条目
 src-tauri/sidecar/scripts/fill_slim_titles.py           # 中文标题映射与占位块清理
 ```
 
-**内容构成**（当轮从这份 db 里 `group by source` 实测，共 660 条）：
-`philosophy` 108（自撰教学语料）、`archwiki` 141、`redis-docs` 85、`apache-docs` 64、
-`ssh-docs` 38、`iptables-docs` 38、`selinux-docs` 34、`docker-docs` 27、`kubernetes-docs` 26、
-`bash-docs` 24、`firewalld-docs` 22、`git-docs` 19、`dnf-docs` 18、`systemd-docs` 16。
+**内容构成与分发范围**（2026-09-29 逐源核许可后收口的结果）：
 
-> ⚠️ **再分发许可还没核过**：这些上游文档各自的授权不同（例如 Arch Wiki 是 CC BY-SA、
-> Redis 文档是 CC BY-NC-SA 一类的非商业许可），而本仓库以 Apache-2.0 公开分发。
-> 把提炼后的内容随安装包公开分发之前，需要逐源确认署名与许可要求。
-> 这条是**已知未办**，不是"已经合规"。
+这份随包库现在只有 **247 条**，来自 5 个**确认可再分发**的来源 ——
+`philosophy` 108（本项目自撰）、`apache-docs` 64（Apache-2.0）、`docker-docs` 27（Apache-2.0）、
+`kubernetes-docs` 26（文档 CC BY 4.0）、`firewalld-docs` 22（Unlicense）。
+授权义务与出处逐条列在 **`THIRD-PARTY-NOTICES.md`**（同目录，随包一起分发）。
+
+原先的 660 条里有 **413 条被剪掉**，判定与依据的唯一主人是 `knowledge/bundled_scope.py`：
+
+| 被剪掉的来源 | 原因（要点） |
+|---|---|
+| `redis-docs` 85 | 站点条款**明文禁止** republish/redistribute，内容仅限个人/公司内部使用 |
+| `archwiki` 141 | **GNU FDL 1.3+**（先前记成"CC BY-SA"是错的）：衍生作品须同许可 + 附许可全文 |
+| `selinux-docs` 34 | Gentoo Wiki 为 CC BY-SA 4.0 ⇒ SA 与本仓库 Apache-2.0 口径冲突 |
+| `bash-docs` 24 | GNU FDL 1.3（`bashref` 手册） |
+| `git-docs` 19 | Pro Git 全书 CC BY-NC-SA 3.0 ⇒ NC + SA |
+| `ssh-docs` 38 / `iptables-docs` 38 / `systemd-docs` 16 / `dnf-docs` 18 | **找不到覆盖文档文字的许可授予** ⇒ 按"未获授权"处理（fail-closed） |
+
+三条判定口径（改之前先读 `bundled_scope.py` 的 docstring）：
+**"没找到许可"＝未获授权**；**SA/copyleft 一律不随包**；**NC 也不随包**（不依赖"我们暂时不收费"这种前提）。
+被剪掉的内容**用户仍可在本机自行抓取** —— 应用的爬取管线一条都没动，删的只是"我们预先做好分发"这一段。
+
+剪枝连同两张派生表一起做（`scripts/prune_bundled_knowledge.py`，默认演练、`--write` 才替换）：
+`doc_titles_zh` 删无主标题行、`embed_cache` 整表清空（它存着被删正文的向量表示，运行时不需要）。
+随包件因此从 10,788,864 B 降到 **4,079,616 B**。
+
 
 **改这个文件规矩**：不要手工编辑、不要直接覆盖开发机的 `.tdsf-data/rag_slim.db`。
 重新生成后替换本文件，并同步跑 `tests/test_bundled_knowledge_seed.py`

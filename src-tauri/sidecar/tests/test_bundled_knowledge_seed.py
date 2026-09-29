@@ -18,6 +18,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
@@ -26,6 +28,13 @@ from knowledge.bundled import (  # noqa: E402
     BUNDLED_DB_NAME,
     bundled_slim_db_path,
     seed_bundled_slim_db,
+)
+from knowledge.bundled_scope import (  # noqa: E402
+    BUNDLED_SOURCES,
+    allowed_sources,
+    disallowed_sources,
+    is_bundlable,
+    source_policy,
 )
 
 
@@ -116,17 +125,129 @@ def test_shipped_slim_db_is_real_and_not_empty():
 
     判据基准与运行时同一条链路：`knowledge.rag._slim_db_path()` 用的是
     `<TDSF_DATA_DIR>/rag_slim.db`，播种只是把它换个位置，schema 完全同源。
+
+    2026-09-29 许可收口后条数从 660 降到 247（见 `knowledge/bundled_scope.py`），
+    所以"下限"从 600 改成 200 —— 但真正的承重判据换成了下面那条**来源白名单**：
+    条数只能证明"不是空库"，证明不了"带的是可分发的内容"。
     """
     db = bundled_slim_db_path()
     assert db.is_file(), f"随包精简库不存在：{db}"
-    assert db.stat().st_size > 5_000_000, f"随包精简库异常小：{db.stat().st_size} B"
+    assert db.stat().st_size > 1_000_000, f"随包精简库异常小：{db.stat().st_size} B"
 
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     try:
         count = int(conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0])
     finally:
         conn.close()
-    assert count >= 600, f"随包精简库只有 {count} 条，不像提炼完成的库"
+    assert count >= 200, f"随包精简库只有 {count} 条，不像提炼完成的库"
+
+
+def test_shipped_slim_db_contains_only_bundlable_sources():
+    """**许可收口的承重判据**：随包件里每一行的来源都必须是"允许再分发"的那几个。
+
+    为什么不只数条数：随包 db 的价值就在于"别人拿到安装包得到了什么内容"。
+    Redis 站点条款明文禁止再分发、Pro Git 是 CC BY-NC-SA、Arch Wiki 是 GFDL ——
+    只要这些来源的行还在包里，条数与体积的判据全都是绿的。
+    """
+    db = bundled_slim_db_path()
+    conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    try:
+        sources = {str(r[0]) for r in conn.execute("SELECT DISTINCT source FROM entries")}
+        counts = {
+            str(r[0]): int(r[1])
+            for r in conn.execute(
+                "SELECT source, COUNT(*) FROM entries GROUP BY source"
+            )
+        }
+    finally:
+        conn.close()
+
+    keep = allowed_sources()
+    offenders = sorted(sources - keep)
+    assert not offenders, (
+        f"随包件里含不可分发来源 {offenders}（跑 scripts/prune_bundled_knowledge.py --write）"
+    )
+    # 正向配对：允许名单里的来源**确实有内容**（否则上面那条"没有越界来源"
+    # 会因为"整库被清空"而通过 —— 负向断言必须配一条该发生的确实发生了）
+    for source in sorted(keep):
+        assert counts.get(source, 0) > 0, f"允许随包的 {source} 在库里一条都没有"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "redis-docs",
+        "git-docs",
+        "archwiki",
+        "bash-docs",
+        "selinux-docs",
+        "ssh-docs",
+        "iptables-docs",
+        "systemd-docs",
+        "dnf-docs",
+    ],
+)
+def test_each_excluded_source_is_absent_from_the_shipped_db(source: str):
+    """逐个点名"这条不许在包里"。合并成一条集合断言的话，加回一个来源和加回九个
+    报的是同一条红 —— 点名才看得出是哪一个回来了。"""
+    db = bundled_slim_db_path()
+    conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    try:
+        n = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE source = ?", (source,)
+            ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+    assert n == 0, f"{source} 有 {n} 条仍随包分发"
+
+
+def test_shipped_db_has_no_orphan_derived_data():
+    """剪枝只删 `entries` 是不够的：两张派生表也带着被删来源的痕迹。
+
+    - `doc_titles_zh`：无主标题行 = 继续分发被删来源的页面标题；
+    - `embed_cache`：存的是 content→向量，属于被删正文的衍生数据，运行时不需要它。
+    """
+    db = bundled_slim_db_path()
+    conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    try:
+        orphan_titles = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM doc_titles_zh "
+                "WHERE url NOT IN (SELECT url FROM entries)"
+            ).fetchone()[0]
+        )
+        cache = int(conn.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0])
+        # 三表 rowid 对齐（rag.py 那条教训：不对齐的症状是"检索回查为空"）
+        entries = {int(r[0]) for r in conn.execute("SELECT rowid FROM entries")}
+        fts = {int(r[0]) for r in conn.execute("SELECT rowid FROM fts_entries")}
+        vec = {int(r[0]) for r in conn.execute("SELECT rowid FROM vec_entries_rowids")}
+    finally:
+        conn.close()
+    assert orphan_titles == 0, f"doc_titles_zh 残留 {orphan_titles} 条无主标题"
+    assert cache == 0, f"embed_cache 残留 {cache} 条向量缓存"
+    assert fts == entries, "fts_entries 与 entries 的 rowid 不一致（检索会回查为空）"
+    assert vec == entries, "vec_entries 与 entries 的 rowid 不一致（向量检索会命中空行）"
+
+
+def test_notices_document_every_source_in_the_policy():
+    """声明文件与判定表**不许两个主人**：随包/不随包的每个来源都要在
+    `THIRD-PARTY-NOTICES.md` 里点名并带依据链接。
+
+    这是 #158-① 那类病的反面用法：名单改了、给终端用户的声明还写旧内容，
+    编译器与单测都看不见，只有"两处对齐"这条闸看得见。
+    """
+    notices = (
+        SIDECAR_ROOT / "knowledge-bundled" / "THIRD-PARTY-NOTICES.md"
+    ).read_text(encoding="utf-8")
+    for s in BUNDLED_SOURCES:
+        assert f"`{s.source}`" in notices, f"声明文件没点名来源 {s.source}"
+    for s in BUNDLED_SOURCES:
+        if s.evidence_url:
+            assert (
+                s.evidence_url in notices
+            ), f"来源 {s.source} 的判定依据没写进声明文件：{s.evidence_url}"
 
 
 def test_spec_still_ships_the_bundle():
@@ -137,6 +258,7 @@ def test_spec_still_ships_the_bundle():
 
 def test_main_seeds_before_ready_notification():
     """接线：播种必须排在 ready 通知**之前**（ready 一到前端就可能去查知识库）。
+
 
     两条自己撞出来的规矩：
     - 顺序类判据一律走 AST 取真实调用行号 —— `src.index(...)` 会命中注释里的同名文字，
@@ -162,3 +284,44 @@ def test_main_seeds_before_ready_notification():
     assert "seed_bundled_slim_db" in lines, "main() 里没有播种调用"
     assert "send_notification" in lines, "main() 里找不到 ready 通知调用"
     assert lines["seed_bundled_slim_db"] < lines["send_notification"]
+
+
+# ---------------------------------------------------------------------------
+# 分发范围判定表本身（`knowledge/bundled_scope.py` 是唯一主人）
+# ---------------------------------------------------------------------------
+
+
+def test_scope_is_fail_closed_for_unregistered_source():
+    """库里冒出没登记过的来源 ⇒ 一律**不随包**。
+
+    登记表的默认方向必须是"没查过＝不能带"，否则以后加一个爬取源就自动进安装包，
+    而那个人没查过它的许可。正向配对：登记为可分发的来源要认得。
+    """
+    assert is_bundlable("brand-new-crawler") is False
+    assert source_policy("brand-new-crawler") is None
+    assert is_bundlable("philosophy") is True
+
+
+def test_scope_partitions_and_uses_known_verdicts():
+    """每个来源恰好落进"可"或"不可"一边，且判定词只能是那四个（拼错一个词
+    会让它既不算允许也不算剔除，静默地从随包件里消失或出现）。"""
+    known = {"allow", "forbid", "copyleft", "unclear"}
+    all_sources = {s.source for s in BUNDLED_SOURCES}
+    assert all_sources == allowed_sources() | disallowed_sources()
+    assert not (allowed_sources() & disallowed_sources())
+    for s in BUNDLED_SOURCES:
+        assert s.redistribution in known, f"{s.source} 的判定词不在允许的词表里：{s.redistribution}"
+
+
+def test_every_third_party_verdict_carries_evidence():
+    """**不许有无依据的判定**：第三方来源无论结论是"可"还是"不可"，
+    都必须带一条能点开的依据 URL；自撰语料除外（它不需要外部依据）。
+
+    为什么钉这条：这张表是给"能不能公开分发"定口径的，一句"我记得它是 CC"
+    不够 —— 上一版 README 就把 Arch Wiki 记成了 CC BY-SA，实际是 GNU FDL 1.3+。
+    """
+    for s in BUNDLED_SOURCES:
+        if s.source == "philosophy":
+            continue
+        assert s.evidence_url.startswith("https://"), f"{s.source} 缺依据 URL"
+        assert len(s.note) >= 20, f"{s.source} 的判定说明太短，看不出依据是什么"
