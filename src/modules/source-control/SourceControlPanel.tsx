@@ -76,6 +76,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { sourceControlEmptyCopy } from "./lib/sourceControlEmptyState";
 import type { SourceControlSummary } from "./useSourceControl";
 import {
   type CheckState,
@@ -86,6 +87,11 @@ import {
 type Props = {
   open: boolean;
   sourceControl: SourceControlSummary;
+  /**
+   * #166：空态文案要先回答"有没有工作区可谈"。没有活跃工作区时说
+   * "当前工作区不在 Git 仓库内"是假事实（面板那时量的是回退路径）。
+   */
+  hasWorkspace: boolean;
   onOpenGitGraph?: () => void;
   onOpenDiff: (input: {
     path: string;
@@ -344,6 +350,7 @@ function BranchDropdown({
 export const SourceControlPanel = memo(function SourceControlPanel({
   open,
   sourceControl,
+  hasWorkspace,
   onOpenGitGraph,
   onOpenDiff,
   onOpenFile,
@@ -612,6 +619,18 @@ export const SourceControlPanel = memo(function SourceControlPanel({
 
   if (!open) return null;
 
+  // #166：没有活跃工作区时，这一整格只许说"还没有进入工作区"。
+  // 面板此刻量的是回退路径（launchCwd/home），把它的分支名、领先落后、变更列表
+  // 画在开始页上，等于宣称用户打开了一个他没打开的仓库 —— #127 那张"展示层四臂"
+  // 表漏的第五臂（当时只补了状态栏、标题、下拉、环境格）。
+  if (!hasWorkspace) {
+    return (
+      <aside className="flex h-full min-w-0 flex-col bg-card/80 backdrop-blur [contain:layout_style]">
+        <PanelCenter {...sourceControlEmptyCopy(false)} />
+      </aside>
+    );
+  }
+
   const fetchBusy = sourceControl.busyAction === "fetch";
   const pullBusy = sourceControl.busyAction === "pull";
 
@@ -746,10 +765,9 @@ export const SourceControlPanel = memo(function SourceControlPanel({
         ) : null}
 
         {scm.panelState === "no-repo" ? (
-          <PanelCenter
-            title="非 Git 仓库"
-            body="当前工作区不在 Git 仓库内。"
-          />
+          // #166：没有活跃工作区时不许说"当前工作区不在 Git 仓库内"——
+          // 那时面板量的是回退路径，这句话断言了一个不存在的对象（文案见唯一主人）
+          <PanelCenter {...sourceControlEmptyCopy(hasWorkspace)} />
         ) : null}
 
         {scm.panelState === "error" ? (

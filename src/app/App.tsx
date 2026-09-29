@@ -2559,6 +2559,7 @@ export default function App() {
                         <SourceControlPanel
                           open
                           sourceControl={sourceControl}
+                          hasWorkspace={hasWorkspace}
                           onOpenDiff={openGitDiffTab}
                           onOpenGitGraph={openGitGraphFromContext}
                           onOpenFile={handleOpenFile}
@@ -2585,7 +2586,9 @@ export default function App() {
                   <SidebarRail
                     activeView={sidebarView}
                     onSelectView={persistSidebarView}
-                    changedCount={sourceControl.changedCount}
+                    // #166：角标也是展示层的一臂 —— 没有活跃工作区时它数的是回退路径，
+                    // 挂在开始页上等于宣称"你有 N 个变更"而用户根本没打开仓库（同 #127）
+                    changedCount={hasWorkspace ? sourceControl.changedCount : 0}
                   />
                 </div>
               </ResizablePanel>

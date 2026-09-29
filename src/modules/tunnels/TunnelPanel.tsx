@@ -108,8 +108,10 @@ export function TunnelPanel({ className }: Props) {
           strokeWidth={1.75}
           className="shrink-0 text-primary"
         />
-        <span className="flex-1 truncate text-[12px] font-medium uppercase tracking-wide text-muted-foreground">
-          Tunnels
+        {/* #166 看图轮：这里原本写英文 "Tunnels" 且带 uppercase —— 侧栏面板标题一律中文，
+            且与轨道那一格（SidebarRail 的「SSH 隧道」）说同一句话，用户点了才找得到对应关系 */}
+        <span className="flex-1 truncate text-[12px] font-medium tracking-wide text-muted-foreground">
+          SSH 隧道
         </span>
         <Button
           type="button"

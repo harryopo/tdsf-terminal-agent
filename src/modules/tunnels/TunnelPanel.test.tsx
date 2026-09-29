@@ -75,6 +75,18 @@ beforeEach(() => {
   useTunnelsStore.setState({ tunnels: [], loaded: false, busy: false });
 });
 
+describe("TunnelPanel — 工具栏标题", () => {
+  // #166 真机看图轮：这一格原来在面板顶部挂英文 "Tunnels"（还带 uppercase 画成 TUNNELS），
+  // 而左边轨道那一格写的是「SSH 隧道」—— 点进去看到另一个名字。
+  it("顶部说「SSH 隧道」，与轨道那一格同名，屏幕上不留英文分区名", async () => {
+    mockInvoke.mockResolvedValue([]);
+    const { container } = render(<TunnelPanel />);
+    expect(screen.getAllByText("SSH 隧道").length).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/tunnels/i);
+    await waitFor(() => expect(useTunnelsStore.getState().loaded).toBe(true));
+  });
+});
+
 describe("TunnelPanel — 无 SSH 会话", () => {
   it("显示引导提示且新建按钮禁用", async () => {
     mockInvoke.mockResolvedValue([]);
