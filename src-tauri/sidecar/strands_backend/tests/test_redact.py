@@ -1,5 +1,8 @@
 """test_redact.py — B1-G1 Sidecar 侧脱敏测试（TDSF 2026-08-28）
 
+secret-scan: fixture —— 本文件的样本必须长成凭据形状（全是按仓里口径拼出来的假串），
+这行是给 `scripts/check-secrets.mjs` 的豁免声明，不是"这里可以放真凭据"的许可。
+
 与前端 redact.test.ts 关键样本对齐；双侧语义一致是 _redact.py 的存在前提。
 """
 import pytest

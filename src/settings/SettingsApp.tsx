@@ -2,6 +2,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WindowControls } from "@/components/WindowControls";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
+import { useZoom } from "@/lib/useZoom";
 import type { SettingsTab } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
@@ -118,6 +119,11 @@ export function SettingsApp() {
   const [active, setActive] = useState<SettingsTab>(readInitialTab);
   const init = usePreferencesStore((s) => s.init);
   const ActiveSection = TABS.find((t) => t.id === active)?.component;
+  // 「界面缩放」这一格就写在本窗里（通用 → 当前 105%。调整后立即生效），
+  // 而 `--app-zoom` 原先只有主窗读 ⇒ 这句话所在的那一扇窗自己从没缩过。
+  // 复用同一个主人（`lib/useZoom.ts`），不写第二份；下面 `<main>` 挂 `.zoom-content`
+  // 的口径也与主窗一致（顶栏/标签条不缩，内容缩）。
+  useZoom();
 
   useEffect(() => {
     void init();
@@ -175,7 +181,7 @@ export function SettingsApp() {
         {USE_CUSTOM_WINDOW_CONTROLS && <WindowControls closeOnly />}
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-7 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <main className="zoom-content min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-7 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="mx-auto w-full max-w-160">
           {ActiveSection && <ActiveSection />}
         </div>

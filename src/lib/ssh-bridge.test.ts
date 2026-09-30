@@ -24,12 +24,12 @@ describe("__testToRustAuth (camelCase → snake_case 转换)", () => {
     it("正确转换 password 类型", () => {
       const auth: SshAuthMethod = {
         type: "password",
-        password: "secret123",
+        password: "secret123", // secret-scan: fixture-line
       };
       const result = __testToRustAuth(auth);
       expect(result).toEqual({
         type: "password",
-        password: "secret123",
+        password: "secret123", // secret-scan: fixture-line
       });
     });
 

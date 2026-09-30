@@ -68,6 +68,12 @@ type Props = {
   onReorder: (fromId: number, toGapIndex: number) => void;
   onOverrideLanguage?: (id: number, lang: string | null) => void;
   compact?: boolean;
+  /**
+   * #166 ⑨：开始页（没有活跃工作区）不许出现 + 号。
+   * 此刻主区域画的是欢迎页，新建的标签页属于 default 空间、在工作区总览里没有主人，
+   * 点下去只会在顶栏多出一个 chip 而屏幕不变。判据与键盘/命令面板那条闸同一个来源。
+   */
+  hasWorkspace: boolean;
 };
 
 export function TabBar({
@@ -82,6 +88,7 @@ export function TabBar({
   onReorder,
   onOverrideLanguage,
   compact,
+  hasWorkspace,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -535,7 +542,10 @@ export function TabBar({
             })}
           </TabsList>
         </Tabs>
-        <NewTabMenu onNew={onNew} onNewEditor={onNewEditor} />
+        {/* #166 ⑨：开始页没有工作区可归属，+ 号在这里直接不给（判据见 startScreenGate） */}
+        {hasWorkspace ? (
+          <NewTabMenu onNew={onNew} onNewEditor={onNewEditor} />
+        ) : null}
       </div>
     </div>
   );

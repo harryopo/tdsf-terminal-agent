@@ -74,6 +74,8 @@ type Props = {
   spaceSwitcher: ReactNode;
   searchTarget: SearchTarget;
   searchRef: RefObject<SearchInlineHandle | null>;
+  /** 有活跃工作区才给新建标签页的 + 号（#166 ⑨，透给 TabBar） */
+  hasWorkspace: boolean;
 };
 
 const COMPACT_WIDTH = 720;
@@ -98,6 +100,7 @@ export function Header({
   spaceSwitcher,
   searchTarget,
   searchRef,
+  hasWorkspace,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
@@ -245,6 +248,7 @@ export function Header({
           onReorder={onReorder}
           onOverrideLanguage={onOverrideLanguage}
           compact={compact}
+          hasWorkspace={hasWorkspace}
         />
         <div data-tauri-drag-region className="h-full min-w-1 flex-1" />
       </div>

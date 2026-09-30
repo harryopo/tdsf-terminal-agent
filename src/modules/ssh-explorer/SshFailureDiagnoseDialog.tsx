@@ -33,7 +33,7 @@ export function SshFailureDiagnoseDialog({
   return (
     <AlertDialog open={open} onOpenChange={(next) => !next && onClose()}>
       {/* 变体前缀必须和基础类一致，否则覆盖不生效（#122 实测过这条 tailwind-merge 行为） */}
-      <AlertDialogContent className="max-h-[85vh] overflow-y-auto data-[size=default]:sm:max-w-[36rem]">
+      <AlertDialogContent className="max-h-[70vh] overflow-y-auto data-[size=default]:sm:max-w-[36rem]">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2.5">
             <span

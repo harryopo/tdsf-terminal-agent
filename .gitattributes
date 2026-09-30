@@ -1,0 +1,12 @@
+# 二进制资产：永远不许做行尾转换。
+#
+# knowledge-bundled/rag_slim.db 是随安装包分发的精简知识库（SQLite，10.8 MB）。
+# 本机 core.autocrlf=true，git 目前按内容把它识别成二进制所以没转（提交里显示 Bin），
+# 但那是**碰巧认得对**：一旦某次写入让它在检测上像文本，检出的字节就和打包/校验的源
+# 不一致，症状是"装完知识库是空的/打不开"，排查成本极高。这里显式钉死，不留给检测。
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.png binary
+*.jpg binary
+*.ico binary

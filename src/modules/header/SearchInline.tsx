@@ -69,7 +69,10 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
       return tokens.join(KEY_SEP);
     }, [userShortcuts]);
 
-    const baseLabel = target?.kind === "git-history" ? "Git search" : "Search";
+    // #166 真机看图：顶栏是全 app 每一屏都在的位置，占位符却写着英文 "Search"，
+    // 而用户报的 ⑦ 就是"界面里夹英文"。git 档以前写 "Git search" —— 那是提交记录列表，
+    // 说清楚比留个英文词更有用。
+    const baseLabel = target?.kind === "git-history" ? "搜索提交记录" : "搜索";
 
     const placeholder = baseLabel;
 
@@ -184,7 +187,7 @@ export const SearchInline = forwardRef<SearchInlineHandle, Props>(
                   inputRef.current?.focus();
                 }}
                 className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                aria-label="Clear search"
+                aria-label="清空搜索"
               >
                 <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />
               </button>

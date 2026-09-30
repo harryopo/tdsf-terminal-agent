@@ -10,7 +10,11 @@ import {
 import { Download03Icon, Refresh01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
-import { downloadConfirmCopy, formatBytes } from "@/modules/update/updateFacts";
+import {
+  downloadConfirmCopy,
+  formatBytes,
+  INSTALL_STEPS,
+} from "@/modules/update/updateFacts";
 import { useUpdateStore } from "@/modules/update/updateStore";
 
 /** 只在"有话说"的时候占状态栏一格，平时不渲染（避免又一根常驻小尾巴）。 */
@@ -101,10 +105,27 @@ export function UpdateChip() {
                     ? `${formatBytes(received)} / ${formatBytes(bytes)}`
                     : `已下载 ${formatBytes(received)}`
                   : phase === "ready"
-                    ? "安装会重启应用：当前 SSH 连接会断开，已打开的终端标签页会关闭。"
+                    ? "下载已完成，点下面的按钮就会开始这些收尾。"
                     : copy.description}
             </DialogDescription>
           </DialogHeader>
+          {/* #166 ⑤：安装会停掉什么，逐条列出来 —— 顺序与 installUpdate.ts 的收尾
+              序列由判据钉住 1:1，界面说的就是代码做的 */}
+          {phase === "available" || phase === "ready" ? (
+            <ul
+              data-testid="update-impact-list"
+              className="flex flex-col gap-1 rounded-lg bg-muted/50 px-3 py-2.5 text-[12px] text-muted-foreground"
+            >
+              {INSTALL_STEPS.map((s, i) => (
+                <li key={s.step} className="flex gap-2">
+                  <span className="shrink-0 tabular-nums opacity-60">
+                    {i + 1}.
+                  </span>
+                  <span>{s.text}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {blockers.length > 0 ? (
             <ul className="flex flex-col gap-1 text-[12px] text-destructive">
               {blockers.map((b) => (

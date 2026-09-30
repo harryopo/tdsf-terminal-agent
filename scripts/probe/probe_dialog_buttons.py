@@ -131,6 +131,68 @@ def measure(page) -> dict:
     return m
 
 
+WSL_POPUP_JS = r"""(async () => {
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 6 && r.height > 6; };
+  const dlg = [...document.querySelectorAll('[role="dialog"]')].filter(vis).pop();
+  if (!dlg) return { step: 'no-dialog' };
+  const tab = [...dlg.querySelectorAll('button')].filter(vis)
+    .find((b) => (b.innerText || '').trim().replace(/\s+/g, ' ') === 'WSL');
+  if (!tab) return { step: 'no-wsl-tab' };
+  tab.click();
+  // 发行版列表是打开弹窗后才异步拉的（`wsl.exe -l` 冷启动要一两秒），
+  // 而那只下拉**只在列表非空时才挂载**。原先固定等 500ms 于是把"还在探测"
+  // 读成"没有下拉"，报成界面缺陷 —— 量具的锅（同 #124/#130）。改成轮询等挂载。
+  let scope = dlg, trig = null, waited = 0;
+  while (waited < 6000) {
+    scope = [...document.querySelectorAll('[role="dialog"]')].filter(vis).pop() || dlg;
+    trig = [...scope.querySelectorAll('button[data-radix-select-trigger],[role="combobox"]')]
+      .filter(vis)[0] || null;
+    if (trig) break;
+    await new Promise((r) => setTimeout(r, 200));
+    waited += 200;
+  }
+  const nativeSelects = [...scope.querySelectorAll('select')].filter(vis).length;
+  if (!trig) {
+    // 等满了还没有：把面板此刻自己说的话带回来，好分清"探测中/不可用/真没有"
+    const t = (scope.innerText || '').replace(/\s+/g, ' ');
+    const says = ['正在探测', 'WSL 不可用', '未找到'].find((k) => t.includes(k));
+    return { step: says ? `no-trigger:${says}` : 'no-trigger', nativeSelects, waited };
+  }
+  const tr = trig.getBoundingClientRect();
+  const fire = (type, buttons) => {
+    const x = tr.x + tr.width / 2, y = tr.y + tr.height / 2;
+    trig.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+      clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons }));
+    trig.dispatchEvent(new MouseEvent(type === 'pointerdown' ? 'mousedown' : 'mouseup',
+      { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  };
+  fire('pointerdown', 1);
+  fire('pointerup', 0);
+  await new Promise((r) => setTimeout(r, 400));
+  const pop = document.querySelector('[role="listbox"]');
+  if (!pop) return { step: 'popup-not-mounted', nativeSelects };
+  const pr = pop.getBoundingClientRect();
+  const cs = getComputedStyle(pop);
+  const hit = document.elementFromPoint(pr.x + pr.width / 2, pr.y + pr.height / 2);
+  const out = {
+    step: 'probed',
+    waited,
+    nativeSelects,
+    items: pop.querySelectorAll('[role="option"]').length,
+    onScreen: pr.x >= 0 && pr.y >= 0 && pr.right <= innerWidth && pr.bottom <= innerHeight,
+    hitInside: hit ? pop.contains(hit) : false,
+    opacity: cs.opacity,
+    zIndex: cs.zIndex,
+    radius: cs.borderRadius,
+    rect: [Math.round(pr.x), Math.round(pr.y), Math.round(pr.width), Math.round(pr.height)],
+  };
+  // 量完把弹层合上，别把它留给后面的收尾步骤
+  pop.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+  trig.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+  return out;
+})()"""
+
+
 KIND_JS = r"""(() => {
   const d = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter((el) => {
     const r = el.getBoundingClientRect();
@@ -221,6 +283,28 @@ def main() -> int:
         )
 
     print(json.dumps(m, ensure_ascii=False))
+
+    # ── #166 ④：WSL 发行版下拉「打开后真的看得见」───────────────────────
+    # 光量触发器的圆角不够 —— 换掉原生 <select> 之后，弹层是应用自己画的，
+    # 它可能挂在 DOM 里却被弹窗压在下面、或算到屏幕外（#125 那一类：看不见比难看更糟）。
+    # 判据用 #79 那条口径：**不看 rect 有没有尺寸，看 elementFromPoint 真命中谁**。
+    # ⚠️ 这里刻意用页内合成 PointerEvent，不用 Input.dispatchMouseEvent：
+    #    后者开完再截图时弹层总是已经合上（截图路径把它点掉了），量不到真实叠放次序。
+    wsl = page.evaluate(WSL_POPUP_JS, await_promise=True)
+    if not isinstance(wsl, dict) or "step" not in wsl:
+        problems.append(f"WSL 下拉判据拿不到结构（{type(wsl).__name__}: {str(wsl)[:60]}）—— 这是探针自身的故障")
+    elif wsl["step"] != "probed":
+        problems.append(f"WSL 下拉判据没有现场：{wsl['step']}")
+    else:
+        if wsl["nativeSelects"] > 0:
+            problems.append(f"WSL 档里还有 {wsl['nativeSelects']} 个原生 <select>（④ 要求换成圆角 Select）")
+        elif not (wsl["onScreen"] and wsl["hitInside"] and float(wsl["opacity"]) > 0.5):
+            problems.append(
+                "WSL 发行版下拉打开了但用户看不见："
+                f"onScreen={wsl['onScreen']} 命中在弹层内={wsl['hitInside']} opacity={wsl['opacity']} "
+                f"zIndex={wsl['zIndex']} rect={wsl['rect']}"
+            )
+
     # 收尾只关自己打开的那个；万一一轮量完又冒出审批框，同样不碰
     if not dialog_kind(page).get("approval"):
         page.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "windowsVirtualKeyCode": 27})
@@ -235,7 +319,10 @@ def main() -> int:
     print(
         f"判据: 底部按钮高度差 {m['spread']}px | 弹窗高占视口 {ratio:.0%} | "
         f"左列底部空洞 {m['trailingHolePx']}px | 两列标签基线差 {m['labelTopDeltaPx']}px | "
-        f"已保存 {m['rowCount']} 条、删除入口 {m['hasDeleteBtn']}"
+        f"已保存 {m['rowCount']} 条、删除入口 {m['hasDeleteBtn']} | "
+        f"WSL 下拉原生 select {wsl.get('nativeSelects')} 个、"
+        f"等它挂载 {wsl.get('waited')}ms、"
+        f"弹层圆角 {wsl.get('radius')}、命中在弹层内 {wsl.get('hitInside')}"
     )
     print("PROBE_DIALOG PASS")
     return 0

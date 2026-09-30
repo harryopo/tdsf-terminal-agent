@@ -71,6 +71,26 @@ describe("WelcomeScreen — 已有工作区的回程入口", () => {
     expect(screen.getByTestId("welcome-wsl")).toBeTruthy();
     expect(screen.getByTestId("welcome-ssh")).toBeTruthy();
   });
+
+  // #166 ⑧（2026-09-28 用户实测）：「主页不要写本地终端，直接只保留
+  // 终端优先的 linux 运维 AI 工作台，然后暂无工作区内容也写简单点，保持那种大气的风格」
+  it("首次进入只留一句定位语，不再把三个按钮的内容列一遍", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={0}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("终端优先的 Linux 运维 AI 工作台");
+    // 列举式的那句（"本地终端、WSL 或连接 SSH 服务器"）删掉了：
+    // 按钮已经说了三遍，正文再列一遍既不大气也挡了读
+    expect(text).not.toContain("本地终端、WSL 或连接 SSH 服务器");
+    // 没有旧工作区就没有"重启会不会丢东西"要解释，脚注整条不出现
+    expect(text).not.toContain("不会自动进入工作区");
+  });
 });
 
 describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半）", () => {
@@ -101,9 +121,9 @@ describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半�
       />,
     );
     const text = document.body.textContent ?? "";
-    expect(text).toContain("尚未连上服务器");
     expect(text).toContain("自动重连");
-    expect(text).not.toContain("已连上——");
+    // #166 ⑧ 改的是措辞，不是这条底线：没连着就一个字都不能说成连着
+    expect(text).not.toContain("已连上");
   });
 
   it("两种情况都说清「不自动进入工作区」以及从哪里回去（不许只说没连上就完事）", () => {
@@ -117,7 +137,7 @@ describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半�
         />,
       );
       const text = document.body.textContent ?? "";
-      expect(text).toContain("不会自动进入上次的工作区");
+      expect(text).toContain("不会自动进入工作区");
       expect(text).toContain("顶栏「选择工作区」");
       unmount();
     }
@@ -134,5 +154,55 @@ describe("WelcomeScreen — 「连没连上」必须是实话（#123 另一半�
     expect(app).toMatch(
       /useSshStore\(\(s\) => s\.sessions\)[\s\S]{0,240}connectedSshSpaceCount\(/,
     );
+  });
+});
+
+describe("#166 真机看图轮 — 主次与「同一句话说两遍」", () => {
+  /** 实心主按钮 = Button 的 default 变体（bg-primary）；描边按钮 = outline。 */
+  const isSolid = (el: HTMLElement) => el.className.includes("bg-primary");
+
+  it("有旧工作区时，实心那颗必须是「打开已有工作区」，不是「新建本地工作区」", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={1}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    // 真机截图上看到的：唯一那颗实心灰按钮写着「新建本地工作区」——
+    // 一个带着已存服务器回来的人，界面却在喊"再建一个"。主次反了。
+    expect(isSolid(screen.getByTestId("welcome-open-existing"))).toBe(true);
+    expect(isSolid(screen.getByTestId("welcome-local"))).toBe(false);
+  });
+
+  it("配对：首次启动（没有旧工作区）时实心仍给「新建本地工作区」", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={0}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    expect(isSolid(screen.getByTestId("welcome-local"))).toBe(true);
+    expect(screen.queryByTestId("welcome-open-existing")).toBeNull();
+  });
+
+  it("脚注不许把正文已经说过的「自动重连」再讲一遍", () => {
+    render(
+      <WelcomeScreen
+        {...base}
+        existingCount={1}
+        connectedCount={0}
+        onOpenExisting={() => {}}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    // 「重连」在整页只许出现一次（正文那句）；同义重复就是漏臂的温床（#127 那条）
+    expect(text.match(/重连/g)?.length).toBe(1);
+    // 但脚注仍然要说清它自己那件事：为什么停在这里 + 从哪里回去
+    expect(text).toContain("不会自动进入工作区");
+    expect(text).toContain("顶栏「选择工作区」");
   });
 });

@@ -100,7 +100,7 @@ describe("errorExplainStore (B1-G3)", () => {
       blockId: "b1",
       command: "echo",
       exitCode: 1,
-      tail: "password=hunter2hunter2 leaked",
+      tail: "password=hunter2hunter2 leaked", // secret-scan: fixture-line
     });
     const input = calls[0].input;
     expect(input).not.toContain("hunter2hunter2");

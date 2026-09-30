@@ -43,6 +43,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type {
   SshAuthMethod,
   SshConnectParams,
@@ -62,6 +69,12 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
+import {
+  formatLastUsed,
+  savedServerConfirmation,
+} from "../lib/savedServerConfirmation";
 import { SshFailureDiagnoseDialog } from "../../ssh-explorer/SshFailureDiagnoseDialog";
 import { describeSshFailureText } from "../../ssh-explorer/lib/sshErrorText";
 import {
@@ -93,15 +106,6 @@ type Status = { kind: "ok" | "fail"; text: string; raw?: string } | null;
 
 function makeProfileId(host: string, port: number, user: string): string {
   return `${user}@${host}:${port}`;
-}
-
-/** 详情里那行"最后使用"——拿不到就不显示，不编一个时间 */
-function formatLastUsed(ts?: number): string | null {
-  if (!ts) return null;
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return null;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 export function SpaceCreateDialog({
@@ -149,7 +153,12 @@ export function SpaceCreateDialog({
   const [testing, setTesting] = useState(false);
 
   // === 已保存服务器：删除确认 / 明文密码（2026-09-23 用户要求） ===
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // #166 ③：删除确认从列表底部的红色横条改成正式弹窗（全应用同一只 ConfirmDeleteDialog），
+  // 所以这里存的是"哪一条要删"，不再是"哪一条正在行内等第二次点击"。
+  const [deleteTarget, setDeleteTarget] = useState<SshCredentialProfile | null>(
+    null,
+  );
+  const [deleting, setDeleting] = useState(false);
   /** 明文只在点眼睛后存在这里；收起、切档、关窗一律清空（不落任何持久层） */
   const [revealed, setRevealed] = useState<{ id: string; secret: string } | null>(
     null,
@@ -210,7 +219,7 @@ export function SpaceCreateDialog({
       setPassphrase("");
       setSaveKey(true);
       setTesting(false);
-      setConfirmDeleteId(null);
+      setDeleteTarget(null);
       setRevealed(null);
       return;
     }
@@ -353,15 +362,16 @@ export function SpaceCreateDialog({
   };
 
   const handleDelete = async (p: SshCredentialProfile) => {
+    setDeleting(true);
     try {
       await deleteSavedConnection(p.id);
       if (revealed?.id === p.id) setRevealed(null);
-      if (confirmDeleteId === p.id) setConfirmDeleteId(null);
     } catch (e) {
-      setStatus({
-        kind: "fail",
-        text: `删除失败：${e instanceof Error ? e.message : String(e)}`,
-      });
+      // 确认窗会盖住下面的状态行，失败写在状态行等于没说：走 toast（#110 一次失败只说一次）
+      toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -583,10 +593,14 @@ export function SpaceCreateDialog({
     !password.trim();
   const selectedLastUsed = formatLastUsed(selectedProfile?.lastUsed);
 
+  const deleteConfirmation = deleteTarget
+    ? savedServerConfirmation(deleteTarget)
+    : null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* 内容区限高 + 内部滚动：SSH 档字段最多，原先无上限，实测顶到 767px（视口 822） */}
-      <DialogContent className="max-h-[85vh] gap-4 overflow-y-auto sm:max-w-[720px]">
+      <DialogContent className="max-h-[70vh] gap-4 overflow-y-auto sm:max-w-[720px]">
         <DialogHeader className="gap-1.5">
           <DialogTitle>新建工作区</DialogTitle>
           <DialogDescription>
@@ -678,11 +692,7 @@ export function SpaceCreateDialog({
                           </button>
                           <button
                             type="button"
-                            onClick={() =>
-                              setConfirmDeleteId(
-                                confirmDeleteId === p.id ? null : p.id,
-                              )
-                            }
+                            onClick={() => setDeleteTarget(p)}
                             aria-label={`删除 ${p.alias || p.id}`}
                             className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                           >
@@ -697,34 +707,7 @@ export function SpaceCreateDialog({
                     </ul>
                   )}
 
-                  {confirmDeleteId && (
-                    <div className="flex shrink-0 items-center justify-between gap-2 border-t border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
-                      <span>删除这条本机凭据？工作区不受影响。</span>
-                      <div className="flex shrink-0 gap-1">
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => setConfirmDeleteId(null)}
-                        >
-                          取消
-                        </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="destructive"
-                          onClick={() => {
-                            const target = savedConnections.find(
-                              (p) => p.id === confirmDeleteId,
-                            );
-                            if (target) void handleDelete(target);
-                          }}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    </div>
-                  )}
+                  {/* 删除确认改成正式弹窗（#166 ③），挂在 DialogContent 之外，理由同诊断窗 */}
 
                   {/* 说明钉在面板底部：这一格剩下的空间由它认领，而不是留成空白 */}
                   <p className="shrink-0 border-t border-border/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
@@ -919,26 +902,28 @@ export function SpaceCreateDialog({
 
               {mode === "wsl" && (
                 <div className="grid gap-1.5">
-                  <Label htmlFor="wsl-distro">WSL 发行版 (Distro)</Label>
+                  <Label htmlFor="wsl-distro">WSL 发行版</Label>
                   {wslDistros.length > 0 ? (
-                    <select
-                      id="wsl-distro"
+                    // #166 ④：原生 <select> 弹的是操作系统那套方角列表（用户原话
+                    // "太生硬"），换成与全应用同一只圆角 Select。
+                    <Select
                       value={wslDistro}
-                      onChange={(e) => setWslDistro(e.target.value)}
+                      onValueChange={setWslDistro}
                       disabled={submitting}
-                      className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20"
                     >
-                      <option value="" disabled>
-                        选择发行版…
-                      </option>
-                      {wslDistros.map((d) => (
-                        <option key={d.name} value={d.name}>
-                          {d.name}
-                          {d.default ? "（默认）" : ""}
-                          {d.running ? " · running" : ""}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger id="wsl-distro" className="w-full">
+                        <SelectValue placeholder="选择发行版…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {wslDistros.map((d) => (
+                          <SelectItem key={d.name} value={d.name}>
+                            {d.name}
+                            {d.default ? "（默认）" : ""}
+                            {d.running ? " · 运行中" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   ) : (
                     <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-3 py-2 text-[12px] text-muted-foreground">
                       <span>
@@ -1045,6 +1030,16 @@ export function SpaceCreateDialog({
         open={diagnosis !== null}
         diagnosis={diagnosis}
         onClose={() => setDiagnosis(null)}
+      />
+      <ConfirmDeleteDialog
+        request={deleteConfirmation}
+        busy={deleting}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null);
+        }}
+        onConfirm={() => {
+          if (deleteTarget) void handleDelete(deleteTarget);
+        }}
       />
     </Dialog>
   );

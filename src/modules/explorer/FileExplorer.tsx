@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -31,6 +32,7 @@ import {
   useState,
 } from "react";
 import { ExplorerSearch, type ExplorerSearchHandle } from "./ExplorerSearch";
+import { fileConfirmation } from "./lib/fileConfirmation";
 import { InlineInput } from "./InlineInput";
 import {
   copyToClipboard,
@@ -263,7 +265,30 @@ export const FileExplorer = memo(
       name: string;
       isDir: boolean;
     } | null>(null);
-    const [deleteConfirm, setDeleteConfirm] = useState(false);
+    // #166 ③：删除确认从"菜单项文案变成 Click again to confirm"改成正式弹窗。
+    // 旧做法第一次点了不删、菜单还挂着，看起来像没反应，而且从头到尾没说清要删的是哪条路径。
+    const [deleteTarget, setDeleteTarget] = useState<{
+      path: string;
+      name: string;
+      isDir: boolean;
+    } | null>(null);
+    const [deleting, setDeleting] = useState(false);
+
+    /**
+     * 删除走 `tree.deletePath`（本地 fs_delete / 远端 fsb_delete 都是直接删，不进回收站）。
+     * 那条链目前把失败只写进 console，界面听不到 —— 记在 ROADMAP，不在这次顺手改共享 hook。
+     * 这里仍等它落定再关窗：按钮在飞的时候显示「删除中…」，用户知道应用收到了指令。
+     */
+    const confirmFileDelete = async () => {
+      if (!deleteTarget) return;
+      setDeleting(true);
+      try {
+        await tree.deletePath(deleteTarget.path);
+      } finally {
+        setDeleting(false);
+        setDeleteTarget(null);
+      }
+    };
     // Bumped on every right-click so the menu content remounts and the popper
     // re-anchors to the new cursor (floating-ui won't reposition on an anchor
     // change alone, only on scroll/resize).
@@ -597,12 +622,9 @@ export const FileExplorer = memo(
           />
         ) : null}
 
+        {/* 右键菜单不再需要"关菜单时复位二次确认"：删除确认搬进独立弹窗（#166 ③） */}
         {!isSearchActive ? (
-          <ContextMenu
-            onOpenChange={(open) => {
-              if (!open) setDeleteConfirm(false);
-            }}
-          >
+          <ContextMenu>
             <ContextMenuTrigger asChild>
               <div
                 ref={scrollRef}
@@ -627,7 +649,6 @@ export const FileExplorer = memo(
                       ? { path: row.path, name: row.name, isDir: row.isDir }
                       : null,
                   );
-                  setDeleteConfirm(false);
                   setMenuNonce((n) => n + 1);
                 }}
               >
@@ -801,18 +822,9 @@ export const FileExplorer = memo(
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     variant="destructive"
-                    onSelect={(e) => {
-                      if (deleteConfirm) {
-                        void tree.deletePath(menuTarget.path);
-                      } else {
-                        // Keep the menu open on the first click so the user
-                        // can confirm; let it close normally on the second.
-                        e.preventDefault();
-                        setDeleteConfirm(true);
-                      }
-                    }}
+                    onSelect={() => setDeleteTarget(menuTarget)}
                   >
-                    {deleteConfirm ? "Click again to confirm" : "Delete"}
+                    Delete
                   </ContextMenuItem>
                 </>
               ) : (
@@ -877,6 +889,17 @@ export const FileExplorer = memo(
             {dnd.dragLabel}
           </div>
         ) : null}
+
+        {/* 必须挂在 ContextMenu 之外：右键菜单一关就会卸载自己的内容，
+            弹窗若写在里面会在用户点"删除"的那一瞬间跟着消失 */}
+        <ConfirmDeleteDialog
+          request={deleteTarget ? fileConfirmation(deleteTarget) : null}
+          busy={deleting}
+          onOpenChange={(next) => {
+            if (!next) setDeleteTarget(null);
+          }}
+          onConfirm={() => void confirmFileDelete()}
+        />
       </div>
     );
   }),

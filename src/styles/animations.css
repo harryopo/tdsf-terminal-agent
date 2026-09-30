@@ -169,6 +169,24 @@
     transform        var(--duration-fast) var(--ease-out);
 }
 
+/* === 确认弹窗（#166 ②）====================================================== */
+
+/* 详情块在窗体入场之后再浮起一步：先看清"要删的是什么"，再看按钮。
+   `both` 是让延迟期间保持起始态，否则那 60ms 里元素先按正常样式亮一下再跳回 0，比不动更糟。 */
+@keyframes confirm-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* 危险徽章的一次性软环扩散：只说"这一步会删东西"，不循环（循环=装饰，产品界面里禁止） */
+@keyframes confirm-badge-ring {
+  0%   { box-shadow: 0 0 0 0   rgba(239, 68, 68, 0.35); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+
+.animate-confirm-rise  { animation: confirm-rise 200ms cubic-bezier(0.22, 1, 0.36, 1) both 60ms; }
+.animate-confirm-badge { animation: confirm-badge-ring 520ms cubic-bezier(0.22, 1, 0.36, 1); }
+
 /* === prefers-reduced-motion 兼容 ============================================ */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -178,5 +196,11 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* 上面只归零 duration，不清 delay。`both` 填充 + 60ms 延迟 = 内容在减弱动效下
+     仍会先空 60ms 才出现，等于把"降低动效"做成"内容延迟出现"。这里单独清掉。 */
+  .animate-confirm-rise {
+    animation-delay: 0ms !important;
   }
 }

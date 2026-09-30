@@ -34,6 +34,12 @@ jobs:
       - name: README links and anchors
         run: pnpm check:readme
 
+      # #169：2026-09-29 全历史实测发现根提交里带着真 API Key 与一台虚机的明文口令，
+      # 而当时的两道审查（L3 深度审查 = 看提交的代码改动；09-26 安全复查 = 看 HEAD 跟踪内容）
+      # 都结构性看不见这件事。这条扫的是**将要进库的内容本身**，两族形状一起查。
+      - name: Credential shapes in tracked content
+        run: pnpm check:secrets
+
       - name: Type-check
         run: pnpm typecheck
 

@@ -164,6 +164,15 @@
   html {
     @apply font-sans;
     }
+  /* #166 ⑦（用户：「光标选中做的也很丑，有重叠」）：全站以前没有 `::selection`，
+     拖选文字时落在 WebView2 的系统默认高亮上 —— 深色主题里那层半透明蓝压在
+     `bg-primary/10` 的标签与卡片底色上，看着像两块颜色互相叠住。
+     口径：选中态与实心按钮用**同一对 token**（primary / primary-foreground），
+     这对配色在本主题里已被验证可读，不再引入第二种"选中"语言。 */
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    }
 }
 
 :root {
