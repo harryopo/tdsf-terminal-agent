@@ -12,19 +12,26 @@ product analytics or telemetry to the project maintainers by default.
 - Saved SSH passwords and private-key passphrases use Windows Credential
   Manager. Non-secret SSH profile metadata is stored in the application-data
   directory.
-- Model credentials are stored locally and are provided to the Python sidecar
-  when the selected model is used. Protect the Windows account and its local
-  application-data directory accordingly.
+- Model API keys use Windows Credential Manager and are provided to the Python
+  sidecar when the selected model is used. Protect the Windows account and its
+  local application-data directory accordingly.
 
 ## Network connections
 
-The application makes network connections only for the following:
+Network connections include the following, depending on the features used:
 
 - model requests go to the provider or custom endpoint selected in Settings;
 - SSH and SFTP connections go directly to hosts configured by the user;
 - opening project or issue links uses the system browser;
 - the automatic update check requests the release manifest from GitHub Releases;
-- WebView2 may be downloaded by the installer when it is not already present.
+- downloading an update retrieves the signed package from GitHub Releases;
+- WebView2 may be downloaded by the installer when it is not already present;
+- webpage previews and user-initiated knowledge imports or crawling can contact
+  the websites or sources selected by the user.
+
+Local semantic retrieval falls back when its embedding model is not cached; it
+does not initiate a first-use model download on that path. Remote completion
+setup uploads the bundled component over the configured SSH/SFTP connection.
 
 The configured model provider can receive the conversation, selected workspace
 context, and tool results required to answer the request. Review terminal output

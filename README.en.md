@@ -10,12 +10,28 @@
 
 [Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Install](#installation-windows-x64) · [Capabilities](#core-capabilities) · [Tools](#tool-catalog-25) · [Architecture](#architecture) · [Development](#development)
 
-![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+[![Windows download](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
+[![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
+[![Stars](https://img.shields.io/github/stars/harryopo/tdsf-terminal-agent?style=flat&color=eab308)](https://github.com/harryopo/tdsf-terminal-agent/stargazers)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Desktop](https://img.shields.io/badge/desktop-Tauri%202%20%2B%20Rust-000)
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
 ![Runtime](https://img.shields.io/badge/agent%20runtime-Python%20sidecar%20(Strands)-3776AB)
 
 </div>
+
+<p align="center">
+  <a href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest"><strong>Download for Windows</strong></a> ·
+  <a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">Watch the real demo</a> ·
+  <a href="https://github.com/harryopo/tdsf-terminal-agent/issues">Report an issue</a>
+</p>
+
+> This is a **pre-stable 0.x release; installers are Windows x64 only**. Start in a test environment. The installer is not yet Authenticode-signed; see [installation](#installation-windows-x64) for checksum verification.
+
+| Real operations | Controlled collaboration | Learn by doing |
+|---|---|---|
+| Local / WSL / SSH workspaces, SFTP browsing and editing | Visible-terminal or background execution, real output, risk levels and approval cards | One command card per step, predicted output and result-based explanations |
+| Directory following, drag-and-drop uploads, service and network inspection | Expandable reasoning, task progress and evidence | Terminal translation, command prediction, skills and local knowledge retrieval |
 
 ---
 
@@ -41,6 +57,7 @@ The demo shows: connecting an SSH workspace, the agent typing a command into the
 - [Development](#development)
 - [Repository layout](#repository-layout)
 - [Privacy and data](#privacy-and-data)
+- [Star history](#star-history)
 - [License and origin](#license-and-origin)
 
 ---
@@ -119,14 +136,18 @@ Teaching mode is not a 26th tool: it intercepts the tools above and returns a st
 
 ## Safety boundary
 
+The latest remote-file approval, Python risk-classification and SSH forwarding-isolation fixes are not yet included in existing installers. See [unreleased changes](CHANGELOG.md#unreleased).
+
 - **Impact levels**: current classification emits L0 / L2 / L3 / L4 (L1 is kept for compatibility); unknown commands fail closed, and compound commands are assessed segment by segment.
 - **Hard denylist**: catastrophic operations are blocked outright, with no "approve anyway" path.
 - **Reading credentials requires consent**: commands such as `cat ~/.ssh/id_rsa` or `head /etc/shadow` are raised to L3 approval on both the SSH and Python paths — the credential path list has exactly one owner shared by both channels.
 - **Per-session FIFO**: the next approval card is not shown until the previous command has returned from SSH.
 - **Circuit breaker**: up to 50 tool calls per turn; three consecutive failures for one tool trips the breaker.
-- **Exit codes reported honestly**: a non-zero exit code and "no exit code retrieved" are distinct states, and neither is reported as success. Read-only non-zero results carry `stderr` plus an explanation.
-- **Output redaction** before anything reaches the UI, the model context or the logs; the configured API key is no longer written to disk in plaintext.
+- **Exit codes reported honestly**: read-only / low-risk commands may be marked completed with a non-zero code, while retaining the actual `exit_code`, `stderr` and an explanation. State-changing failures remain errors; missing exit codes are indeterminate, not invented successes.
+- **Output redaction** filters known credential patterns before they enter model context and logs; the configured API key is no longer written to disk in plaintext. Redaction is not a confidentiality guarantee: review attachments and output before sending.
 - **No silent channel switches**: a write operation is never moved to the background because "no terminal is visible" — only read-only commands may be rerouted, and the reroute is stated in the payload.
+
+Risk classification and approval are not an OS sandbox. Local `python_run` uses a Python subprocess; setting its working directory does not restrict all filesystem or network access. Execution retains the current account's permissions.
 
 ## Architecture
 
@@ -216,11 +237,17 @@ assets/             logo sources
 
 ## Privacy and data
 
-Network use is limited to: the model service you configure, SSH hosts you add yourself, the GitHub update manifest, and the WebView2 bootstrapper when the installer needs it.
+Network uses include your configured model service, SSH hosts you add, GitHub update checks and downloads, and the WebView2 bootstrapper when needed. Webpage previews and user-initiated knowledge imports or crawling also access selected websites or sources; see [PRIVACY.md](PRIVACY.md).
 
 Conversations, workspace configuration and the knowledge base stay in the local data directory. Your model provider can receive the conversation, the selected workspace context and the tool results needed to answer — review terminal output and attachments before sending sensitive information to a cloud model. See [PRIVACY.md](PRIVACY.md) for details.
 
 Uninstalling does not delete workspaces, skills or application data you created; remove those directories and saved credentials manually when a complete local reset is required.
+
+## Star history
+
+[![TDSF Terminal Agent star history](assets/star-history.svg)](https://www.star-history.com/#harryopo/tdsf-terminal-agent&Date)
+
+A snapshot of dates for existing stars from the GitHub API, observed on **2026-09-30 (UTC)**: **39** stars. It excludes removed stars and is not a live net-growth chart. [See current stargazers](https://github.com/harryopo/tdsf-terminal-agent/stargazers). If the project helps you, consider a star; reproducible issue reports are equally welcome.
 
 ## License and origin
 

@@ -10,12 +10,28 @@
 
 [宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [下载与安装](#安装windows-x64) · [核心能力](#核心能力) · [工具清单](#工具清单25-个) · [架构](#架构) · [开发指南](#开发指南)
 
-![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+[![Windows 下载](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
+[![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
+[![Stars](https://img.shields.io/github/stars/harryopo/tdsf-terminal-agent?style=flat&color=eab308)](https://github.com/harryopo/tdsf-terminal-agent/stargazers)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Desktop](https://img.shields.io/badge/desktop-Tauri%202%20%2B%20Rust-000)
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
 ![Runtime](https://img.shields.io/badge/agent%20runtime-Python%20sidecar%20(Strands)-3776AB)
 
 </div>
+
+<p align="center">
+  <a href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest"><strong>下载 Windows 安装包</strong></a> ·
+  <a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">观看真实演示</a> ·
+  <a href="https://github.com/harryopo/tdsf-terminal-agent/issues">反馈问题</a>
+</p>
+
+> 当前发布为 **0.x 预稳定版，仅提供 Windows x64 安装包**。请先在测试环境使用；安装包尚未进行 Authenticode 发布者签名，校验方式见[安装说明](#安装windows-x64)。
+
+| 运维现场 | 可控协作 | 边做边学 |
+|---|---|---|
+| 本地 / WSL / SSH 工作区，SFTP 文件浏览与编辑 | 可见终端或后台执行，真实回显、风险分级与审批卡 | 一步一张命令卡，预测回显、实际结果与后续讲解 |
+| 目录跟随、拖拽上传、服务与网络巡检 | 深度思考展开、任务进度与证据链 | 终端翻译、命令预测、Skill 与本地知识检索 |
 
 ---
 
@@ -41,6 +57,7 @@
 - [开发指南](#开发指南)
 - [仓库结构](#仓库结构)
 - [隐私与数据](#隐私与数据)
+- [Star 趋势](#star-趋势)
 - [许可与来源](#许可与来源)
 
 ---
@@ -119,14 +136,18 @@ TDSF Terminal Agent 是一款桌面终端工作台：本地 PTY、WSL、SSH 会�
 
 ## 安全边界
 
+最新的远程文件审批、Python 风险识别与 SSH 转发隔离修复尚未打进现有安装包，见 [未发布变更](CHANGELOG.md#unreleased)。
+
 - **影响分级**：当前判定产出 L0 / L2 / L3 / L4（L1 保留兼容）；未识别的命令按高风险处理，复合命令逐段拆开评估。
 - **硬底线黑名单**：灾难性操作直接拦截，不提供"仍要审批"的入口。
 - **凭据读取需要点头**：`cat ~/.ssh/id_rsa`、`head /etc/shadow` 这类读取凭据类文件的命令，无论走 SSH 还是 Python 通道都提到 L3 审批（凭据路径名单只有一份，两条通道共用）。
 - **同会话先进先出**：上一条命令没有从 SSH 返回之前，不会弹出下一条审批卡。
 - **熔断**：单次回合工具调用上限 50 次；同一工具连续失败 3 次熔断。
-- **退出码如实上报**：非零退出码与"没取回退出码"是两种不同状态，都不会被写成成功；只读命令的非零退出会附带 `stderr` 与含义说明，不谎报也不吞信息。
-- **输出脱敏**：进入界面、模型上下文与日志之前统一处理；API Key 不再明文落盘。
+- **退出码如实上报**：只读 / 低风险命令的非零退出可标为调用完成，同时保留实际 `exit_code`、`stderr` 与含义说明；写操作非零仍判失败，未取回退出码判为不确定，不冒充成功。
+- **输出脱敏**：对进入模型上下文和日志的已知凭据形状做过滤；API Key 不再明文落盘。脱敏不是保密保证，请在发送前检查附件与回显。
 - **不静默换通道**：写操作不会因为"当前没有可见终端"就被应用自己改到后台执行；只有只读命令会改道，且改道事实写进返回载荷。
+
+风险识别和审批不是操作系统沙箱。本地 `python_run` 使用 Python 子进程，工作目录设置不限制其全部文件或网络权限；运行权限仍来自当前账户。
 
 ## 架构
 
@@ -162,7 +183,7 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识检索 �
 3. 双击安装。只有在系统缺少 Microsoft WebView2 时，安装器才会去下载它。
 4. 打开 **设置 → 模型**，填入一个模型服务的 API Key，然后新建工作区（本地 / WSL / SSH）开始使用。
 
-安装包目前未做 Authenticode 代码签名，Windows SmartScreen 首次运行可能提示"未知发布者"；核对 SHA-256 后再继续即可。
+安装包目前未做 Authenticode 代码签名，Windows SmartScreen 首次运行可能提示"未知发布者"；核对 SHA-256 后再决定是否继续。
 
 ## 自动更新
 
@@ -216,13 +237,19 @@ assets/             logo 源文件
 
 ## 隐私与数据
 
-联网只发生在这些用途：调用你配置的模型服务、连接你自己添加的 SSH 主机、检查更新时拉取 GitHub 的更新清单、安装器按需下载 WebView2。
+主要联网用途包括调用你配置的模型服务、连接你添加的 SSH 主机、检查与下载 GitHub 更新，以及安装器按需下载 WebView2。网页预览、主动导入或抓取知识还会访问你选择的网站或来源；联网边界见 [PRIVACY.md](PRIVACY.md)。
 
 会话记录、工作区配置与知识库都存放在本机数据目录；模型提供方会收到对话内容、被选中的工作区上下文以及回答所需的工具结果 —— 向云端模型发送敏感信息前，请先检查终端输出与附件。细节见 [PRIVACY.md](PRIVACY.md)。
 
 卸载不会自动删除你创建的工作区、技能与应用数据；需要彻底清理时请手动删除对应目录与保存在系统里的凭据。
 
+## Star 趋势
+
+[![TDSF Terminal Agent Star 趋势](assets/star-history.svg)](https://www.star-history.com/#harryopo/tdsf-terminal-agent&Date)
+
+来自 GitHub API 的现存 Star 日期快照，统计至 **2026-09-30（UTC）**，共 **39** 个；不包含已撤销的 Star，也不是实时净增长曲线。[查看最新关注者](https://github.com/harryopo/tdsf-terminal-agent/stargazers)。如果项目对你有帮助，欢迎 Star；反馈可复现的问题同样有价值。
+
 ## 许可与来源
 
 - 本项目原创部分以 **Apache-2.0** 授权，见 [LICENSE](LICENSE)。
-- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、可见执行的 Agent 运行时与 Linux 教学流程。
+- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、可见执行的 Agent 运行时与 Linux 教学流程等。

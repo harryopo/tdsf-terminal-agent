@@ -3,6 +3,18 @@
 Version numbering: `0.x` builds are pre-stable releases; `1.x` is reserved for the first
 stable release.
 
+## Unreleased
+
+- Remote file overwrites now require approval in both Auto and Confirm modes, while
+  retaining backup, version-hash checks and post-write verification.
+- Python risk classification recognises qualified built-ins, imported aliases and
+  standard file-opening APIs. Static classification is not an OS sandbox.
+- SSH remote-forward targets are isolated by transport generation; one connection
+  cannot use another connection's registered local target or cancel its forwarding.
+- Public repository presentation and history cleanup preserve application code,
+  formal tests and license notices. Existing release installers are not rebuilt by
+  these source changes.
+
 ## 0.9.2
 
 Windows x64 预稳定版，整合已合入主分支的修复与改进。

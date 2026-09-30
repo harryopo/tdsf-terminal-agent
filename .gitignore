@@ -178,10 +178,15 @@ scripts/*
 !scripts/probe/
 !scripts/probe/*
 scripts/probe/__pycache__/
+# Local one-off acceptance probes; keep the shared and CI-referenced probes.
+scripts/probe/probe_prediction_crosswindow.py
+scripts/probe/probe_translate_enrich.py
 
 # 演示视频：未压缩原件不入库（>100MB 超出 GitHub 单文件上限）；
 # 压缩后的成品命名为 demo.mp4 放进同目录即可正常提交
 website/assets/video/宣传视频.mp4
+# Internal video placement/capture instructions, not a public product document.
+website/assets/video/README.md
 
 # 上游开源项目全量源码克隆 (仅本机调研参考, 体积大不入库)
 opensource-reference/
