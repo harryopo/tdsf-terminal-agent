@@ -109,11 +109,14 @@ function getInputBuffer(leafId: number): string {
 }
 
 function setInputBuffer(leafId: number, value: string): void {
+  // Input changes invalidate replies immediately, not after the debounce fires.
+  predictSeq++;
   inputBuffers.set(leafId, value);
+  setState((s) => (s.visible ? { ...s, visible: false } : s));
 }
 
 function clearInputBuffer(leafId: number): void {
-  inputBuffers.set(leafId, '');
+  setInputBuffer(leafId, '');
 }
 
 // ============================================================================
@@ -294,6 +297,7 @@ async function runPredictionUpdate(leafId: number): Promise<void> {
  * 更新会拿旧行去请求参数，甚至把弹窗按一个已经不存在的 prefix 弹出来。
  */
 function cancelScheduledPredictionUpdate(): void {
+  predictSeq++;
   if (predictTimer) {
     clearTimeout(predictTimer);
     predictTimer = null;
@@ -480,9 +484,19 @@ async function loadParamPredictions(
 }
 
 async function updatePredictions(leafId: number): Promise<void> {
-  const seq = ++predictSeq;
+  const seq = predictSeq;
   const env = getLeafEnvironment(leafId);
   const prefix = getInputBuffer(leafId);
+  const sessionId = getLeafSshSession(leafId);
+  const cwd = sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId);
+  const isCurrent = () => {
+    const term = getTermFn?.(leafId);
+    return seq === predictSeq && prefix === getInputBuffer(leafId) &&
+      env === getLeafEnvironment(leafId) && sessionId === getLeafSshSession(leafId) &&
+      cwd === (sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId)) &&
+      (!term?.element || term.element.contains(document.activeElement));
+  };
+  if (!isCurrent()) return;
   if (!prefix || prefix.trim() === '') {
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return;
@@ -501,7 +515,7 @@ async function updatePredictions(leafId: number): Promise<void> {
       return;
     }
     const loaded = await loadParamPredictions(leafId, env, cmd, prefix);
-    if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
+    if (!isCurrent()) return;
     const items = appendAbbrevItems(loaded, cmd, prefix);
     if (items.length === 0) {
       setState((s) => (s.visible ? { ...s, visible: false } : s));
@@ -524,14 +538,12 @@ async function updatePredictions(leafId: number): Promise<void> {
   // 缓存未拉到（null）→ 降级不过滤，照旧取 5（无损）。
   const engine = getSuggestEngine();
   const isLinux = env === 'linux';
+  const cmds = isLinux && sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+  // Seed before querying, including commands absent from the static dictionary.
+  // Current-session filtering below still prevents cross-host candidates.
+  if (cmds) engine.setEnvironmentCommands(cmds, 'linux');
   let items = engine.getSuggestions(prefix, isLinux ? 30 : 5, env);
   if (isLinux) {
-    const sessionId = getLeafSshSession(leafId);
-    const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
-    // 远端命令全集（compgen -c 预取）既是过滤器也是候选来源：只被用来"剔掉假候选"
-    // 时，远端装了但静态字典没收录的工具永远预测不出来（用户反馈"有的命令没法预测"）。
-    // 播种进候选集后，跨主机的污染仍由下面 filterCommandItems 按当前会话剔除。
-    if (cmds) engine.setEnvironmentCommands(cmds, 'linux');
     const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
     items = filterCommandItems(items, cmds, 5, family);
   }
@@ -565,7 +577,6 @@ async function updatePredictions(leafId: number): Promise<void> {
   // 场景）；windows 以引擎词典为准。详见 shouldTriggerTailParams。
   const engineHit =
     items.length > 0 || engine.getSuggestions(token, 1, env).length > 0;
-  const sessionId = getLeafSshSession(leafId);
   const remoteCmds =
     env === 'linux' && sessionId !== null
       ? getCachedRemoteCommands(sessionId)
@@ -587,7 +598,7 @@ async function updatePredictions(leafId: number): Promise<void> {
     // 加尾空格使 buildParamRequest 的 current=''（全量参数候选）；
     // 缩写候选在 appendAbbrevItems 内追加（与参数模式同一套合并逻辑）
     const paramItems = await loadParamPredictions(leafId, env, token, prefix + ' ');
-    if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
+    if (!isCurrent()) return;
     const before = items.length;
     items = mergeCommandWithParamItems(items, appendAbbrevItems(paramItems, token, prefix + ' '));
     if (items.length > before) {
@@ -603,6 +614,7 @@ async function updatePredictions(leafId: number): Promise<void> {
 }
 
 export function closeCompletion(): void {
+  cancelScheduledPredictionUpdate();
   setState((s) => (s.visible ? { ...s, visible: false } : s));
 }
 
@@ -724,13 +736,13 @@ export function completionKeyHandler(
 
   // === Tab = 透传远端原生补全 + 关闭弹窗 ===
   if (event.key === 'Tab') {
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    closeCompletion();
     return true;
   }
 
   // === Escape = 关闭弹窗 ===
-  if (event.key === 'Escape' && isVisible) {
-    setState((s) => ({ ...s, visible: false }));
+  if (event.key === 'Escape') {
+    closeCompletion();
     return true;
   }
 
@@ -755,7 +767,7 @@ export function completionKeyHandler(
   }
 
   // === Backspace → 从缓冲区删除 + 更新预测 ===
-  if (event.key === 'Backspace') {
+  if (event.key === 'Backspace' && !event.ctrlKey && !event.altKey && !event.metaKey) {
     const buf = getInputBuffer(leafId);
     if (buf.length > 0) {
       setInputBuffer(leafId, buf.slice(0, -1));
@@ -789,6 +801,7 @@ export function completionKeyHandler(
   }
   if (
     event.key === 'ArrowLeft' ||
+    event.key === 'ArrowRight' ||
     event.key === 'Home' ||
     event.key === 'End'
   ) {

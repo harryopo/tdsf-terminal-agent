@@ -1,7 +1,7 @@
 /**
  * command-dictionary.ts — Linux 命令中文字典 (TDSF 2026-08-09)
  * -----------------------------------------------------------------------------
- * 180+ 常用 Linux 命令 + 中文翻译。
+ * 常用 Linux 命令 + 中文简述。
  * 用于 SSH 终端实时预测弹窗。
  *
  * 分类：文件操作 / 文本处理 / 系统信息 / 网络 / 包管理 / 服务管理 /
@@ -36,6 +36,14 @@ const COMMAND_ZH: Record<string, string> = {
   chmod: "修改权限",
   chown: "修改所有者",
   chgrp: "修改所属组",
+  lsblk: "列出块设备和挂载信息",
+  blkid: "查看块设备文件系统标识",
+  findmnt: "查看文件系统挂载关系",
+  mountpoint: "检查路径是否为挂载点",
+  fdisk: "管理磁盘分区表并查看分区",
+  parted: "创建和调整磁盘分区",
+  swapon: "启用交换分区或交换文件",
+  swapoff: "停用交换分区或交换文件",
   // 文本处理
   cat: "查看文件内容",
   head: "查看文件头部",
@@ -54,6 +62,15 @@ const COMMAND_ZH: Record<string, string> = {
   diff: "比较文件差异",
   vim: "Vim 编辑器",
   nano: "Nano 编辑器",
+  readlink: "显示符号链接目标或规范路径",
+  realpath: "转换为规范绝对路径",
+  dirname: "提取路径中的目录部分",
+  basename: "提取路径中的文件名部分",
+  xargs: "将标准输入转换为命令参数",
+  jq: "查询和处理 JSON 数据内容",
+  yq: "查询和处理 YAML 数据内容",
+  split: "按大小或行数拆分文件",
+  truncate: "截断文件或调整文件大小",
   // 系统信息
   uname: "查看系统信息",
   hostname: "查看主机名",
@@ -69,6 +86,11 @@ const COMMAND_ZH: Record<string, string> = {
   ps: "查看进程列表",
   kill: "终止进程",
   killall: "按名称终止进程",
+  pkill: "按名称匹配并发送信号",
+  pgrep: "按名称查找正在运行的进程 ID",
+  pstree: "以树状结构显示进程关系",
+  timeout: "限时运行命令并超时终止",
+  watch: "定时重复执行命令并显示结果",
   lsof: "查看打开的文件",
   ulimit: "查看资源限制",
   // 网络
@@ -85,16 +107,27 @@ const COMMAND_ZH: Record<string, string> = {
   dig: "DNS 查询",
   nslookup: "DNS 查询（旧版）",
   traceroute: "路由追踪",
+  nmcli: "查看和配置网络连接及设备",
+  nmtui: "通过文本界面配置网络连接",
+  networkctl: "查看和管理 systemd 网络状态",
+  resolvectl: "查询和管理本机 DNS 解析",
+  hostnamectl: "查看或设置主机名及系统信息",
+  ethtool: "查看和配置网卡链路参数",
+  arping: "通过 ARP 探测同网段主机",
+  tracepath: "跟踪到目标主机的网络路径",
+  mtr: "持续查看路由路径和网络丢包",
+  nc: "建立网络连接并收发数据",
+  nft: "查看和管理防火墙规则集",
   tcpdump: "抓包工具",
   iptables: "防火墙规则",
-  "firewall-cmd": "防火墙管理（CentOS）",
+  "firewall-cmd": "配置 firewalld 防火墙规则",
   ufw: "防火墙管理（Ubuntu）",
   // 包管理
   apt: "包管理（Debian/Ubuntu）",
   "apt-get": "包管理（旧版）",
   dpkg: "包管理底层工具",
   yum: "包管理（CentOS 旧版）",
-  dnf: "包管理（CentOS 新版）",
+  dnf: "管理 RPM 系发行版软件包",
   rpm: "RPM 包管理",
   pip: "Python 包管理",
   npm: "Node.js 包管理",
@@ -103,6 +136,15 @@ const COMMAND_ZH: Record<string, string> = {
   systemctl: "管理 systemd 服务",
   service: "管理服务（旧版）",
   journalctl: "查看系统日志",
+  loginctl: "查看和管理登录会话",
+  timedatectl: "查看和设置系统时间及时区",
+  getenforce: "查看 SELinux 当前执行模式",
+  setenforce: "切换 SELinux 强制或宽容模式",
+  sestatus: "查看 SELinux 运行状态与策略",
+  semanage: "管理 SELinux 策略及安全配置",
+  restorecon: "恢复文件默认 SELinux 安全上下文",
+  setfacl: "设置文件访问控制列表",
+  getfacl: "查看文件访问控制列表",
   docker: "容器管理",
   kubectl: "Kubernetes 管理",
   // 用户权限
@@ -153,6 +195,9 @@ const COMMAND_ZH: Record<string, string> = {
   git: "版本控制",
   make: "编译构建",
   gcc: "C 编译器",
+  fastfetch: "显示系统信息与硬件概况",
+  sftp: "通过 SSH 安全传输文件",
+  podman: "管理容器镜像及运行状态",
 };
 
 /** 按命令名排序的数组（用于二分查找/前缀匹配） */

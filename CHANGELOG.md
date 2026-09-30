@@ -5,6 +5,13 @@ stable release.
 
 ## Unreleased
 
+- Windows builds restore and verify both pinned completion binaries before packaging,
+  and reject NSIS installers that omit them. Archive and extracted-binary checksums
+  are checked separately, so verified local resources are not downloaded again.
+- Command prediction discards stale replies after input changes, cancellation or
+  terminal-target changes, while retaining debouncing and single-flight requests.
+- Dynamic command candidates accumulate without losing earlier batches. Common
+  operations commands gain short Chinese descriptions, reused by history suggestions.
 - Remote file overwrites now require approval in both Auto and Confirm modes, while
   retaining backup, version-hash checks and post-write verification.
 - Python risk classification recognises qualified built-ins, imported aliases and

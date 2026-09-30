@@ -94,7 +94,7 @@ TDSF Terminal Agent 是一款桌面终端工作台：本地 PTY、WSL、SSH 会�
 ### 终端、编辑器与效率
 
 - 本地 PTY / WSL / SSH 终端共用一套 xterm.js 渲染池，支持分屏；工作区各自独立的标签页集合。
-- **命令预测**：内置 spec 索引、carapace 参数补全、中文 tldr 释义，外加远端 shell 自身的命令集；带节流的参数补全，不会为每个按键起一个进程。静态参数不装也有；要提示**服务器上真实存在**的分支、文件名、服务名，需在「设置 → 通用 → 远端补全组件」里往那台服务器装一次组件。
+- **命令预测**：内置 spec 索引、carapace 参数补全、短中文说明与 tldr 兜底释义，外加远端 shell 自身的命令集；带节流的参数补全，不会为每个按键起一个进程。静态参数不装也有；要提示**服务器上真实存在**的分支、文件名、服务名，先连接 SSH，再在「设置 → 通用 → 智能体 → 远端补全组件」里点「刷新」，选择那台服务器安装组件。
 - CodeMirror 6 编辑器 + LSP、远程文件编辑、命令片段库；选词翻译默认查内置词典（离线，不联网），点一次「AI 补全释义」才会调用你配置的模型补一条更详细的解释。
 
 ### 本地知识检索
@@ -210,12 +210,16 @@ Windows 下也可以直接双击仓库根目录的 `启动.bat`。开发版与�
 |------|------|
 | `pnpm typecheck` / `pnpm lint` | 类型与静态检查 |
 | `pnpm test` | 前端单元测试（vitest） |
-| `pnpm test:python` | sidecar 测试（pytest：Agent、工具、安全策略、知识检索） |
+| `pnpm test:carapace` | 补全资源门禁测试（离线小样本） |
+| `pnpm test:python` | sidecar 测试（pytest：Agent、工具、安全策略、知识检索；Windows 测试进程显式 UTF-8） |
 | `cargo test`（在 `src-tauri/`） | Rust 侧：PTY / SSH / 文件系统 / 系统边界 |
 | `pnpm probe:ui` | 真机界面门禁：通过 CDP 量已挂载窗口里的控件尺寸、裁切与对齐 |
 | `pnpm probe:dialog` / `probe:ssh` / `probe:ipc` | 弹窗几何、SSH 会话回收、IPC 方法白名单的真机核对 |
 | `pnpm check:release-version` | 校验五处版本号声明一致 |
-| `pnpm build:win` | 版本号校验 → sidecar 打包与冒烟 → NSIS 打包 |
+| `pnpm fetch:carapace` / `pnpm check:carapace` | 恢复固定版本补全组件 / 校验本地资源大小与 SHA-256 |
+| `pnpm build:win` | 版本校验 → 补全资源恢复与校验 → sidecar 打包与冒烟 → NSIS 打包及包内资源检查 |
+
+直接运行 Tauri 构建前，也需先运行 `pnpm fetch:carapace`。缺失或损坏的资源会阻断构建，不会生成缺组件的安装包。源码中的维护修复列在 [Unreleased](CHANGELOG.md#unreleased)，不会自动改写已发布的安装包。
 
 发布流程：推一个 `v*` 标签 → CI 构建带签名的安装包与更新清单，落成**草稿** Release → 验收后手动发布。清单只解析已发布的版本，所以在点"发布"之前，客户端查不到它。
 

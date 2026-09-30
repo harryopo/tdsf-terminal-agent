@@ -17,7 +17,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css,md}\" \"website/**/*.{html,css,js}\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:python": "cd src-tauri/sidecar && .\\.venv\\Scripts\\python.exe -B -m pytest -v --tb=short",
+    "test:python": "cd src-tauri/sidecar && .\\.venv\\Scripts\\python.exe -B -X utf8 -m pytest -v --tb=short",
     "tauri": "tauri",
     "dev:seed": "node scripts/dev-seed-store.mjs",
     "probe:ui": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe scripts/probe/probe_ui.py",
@@ -29,9 +29,12 @@
     "check:release-version": "pwsh -NoProfile -File scripts/check-release-version.ps1",
     "check:readme": "node scripts/check-readme-links.mjs",
     "check:secrets": "node scripts/check-secrets.mjs --tracked",
+    "fetch:carapace": "pwsh -NoProfile -File scripts/fetch-carapace.ps1",
+    "check:carapace": "node scripts/check-carapace.mjs --resources",
+    "test:carapace": "node --test scripts/check-carapace.test.mjs",
     "build:sidecar:win": "pwsh -NoProfile -File scripts/build-sidecar.ps1 -Python src-tauri/sidecar/.venv/Scripts/python.exe",
     "test:sidecar:exe": "src-tauri\\sidecar\\.venv\\Scripts\\python.exe src-tauri/sidecar/_exe_smoke.py",
-    "build:win": "pnpm check:release-version && pnpm build:sidecar:win && pnpm test:sidecar:exe && tauri build --bundles nsis"
+    "build:win": "pnpm check:release-version && pnpm fetch:carapace && pnpm check:carapace && pnpm build:sidecar:win && pnpm test:sidecar:exe && tauri build --bundles nsis && node scripts/check-carapace.mjs --built-installer"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.21",

@@ -94,7 +94,7 @@ Two properties separate it from "AI in a sidebar":
 ### Terminal, editor and everyday tooling
 
 - Local PTY / WSL / SSH terminals share one xterm.js render pool; split panes; per-workspace tab sets.
-- **Command prediction**: bundled spec index, carapace parameter completion, curated Chinese tldr descriptions and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke. Static flags work without any install; to suggest branches, files and services that actually exist **on the server**, install the completion component there once from Settings → 通用 (General) → 远端补全组件.
+- **Command prediction**: bundled spec index, carapace parameter completion, short Chinese descriptions with tldr fallbacks, and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke. Static flags work without any install; to suggest branches, files and services that actually exist **on the server**, connect SSH first, then open Settings → 通用 (General) → 智能体 (Agent) → 远端补全组件, click 刷新 (Refresh), and install for that server.
 - CodeMirror 6 editor with LSP and remote file editing, snippets, and selection translation that resolves against the built-in dictionaries offline — the "AI 补全释义" button is what additionally asks your configured model for a richer explanation.
 
 ### Local knowledge retrieval
@@ -210,12 +210,16 @@ On Windows you can also double-click `启动.bat` in the repository root. The de
 |---------|---------|
 | `pnpm typecheck` / `pnpm lint` | Type and static checks |
 | `pnpm test` | Frontend unit tests (vitest) |
-| `pnpm test:python` | Sidecar tests (pytest: agent, tools, safety policy, knowledge) |
+| `pnpm test:carapace` | Completion resource gate tests (small offline fixtures) |
+| `pnpm test:python` | Sidecar tests (pytest: agent, tools, safety policy, knowledge; explicit UTF-8 for the Windows test process) |
 | `cargo test` (in `src-tauri/`) | Rust side: PTY / SSH / filesystem / system boundaries |
 | `pnpm probe:ui` | Real-window UI gate: control hit areas, clipping and alignment measured over CDP |
 | `pnpm probe:dialog` / `probe:ssh` / `probe:ipc` | Dialog geometry, SSH session reaping, IPC method allowlist |
 | `pnpm check:release-version` | Verifies the five version declarations match |
-| `pnpm build:win` | Version check → sidecar packaging and smoke test → NSIS installer |
+| `pnpm fetch:carapace` / `pnpm check:carapace` | Restore pinned completion binaries / verify local resource sizes and SHA-256 |
+| `pnpm build:win` | Version check → restore and verify completion resources → sidecar packaging and smoke test → NSIS installer and bundled-resource check |
+
+Before a direct Tauri build, run `pnpm fetch:carapace` as well. Missing or damaged resources block the build instead of producing an installer without the components. Source maintenance fixes are listed under [Unreleased](CHANGELOG.md#unreleased); they do not modify previously published installers.
 
 Release flow: push a `v*` tag → CI builds the signed installer and update manifest into a **draft** release → you verify, then publish. The manifest only resolves published releases, so clients cannot see it before you click publish.
 
