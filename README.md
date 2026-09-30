@@ -152,7 +152,7 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识检索 �
 
 发布形态是 **Windows x64 NSIS 安装包**（当前用户级安装，不需要管理员权限）。
 
-1. 从 [Releases](https://github.com/harryopo/tdsf-terminal-agent/releases) 下载 `TDSF.Terminal.Agent_<版本>_x64-setup.exe` 与 `SHA256SUMS.txt`。
+1. 从 [Releases](https://github.com/harryopo/tdsf-terminal-agent/releases) 下载 `TDSF.Terminal.Agent_<版本>_x64-setup.exe`，并在对应发行说明中查看 SHA-256。
 2. 运行前先核对校验值：
 
    ```powershell
@@ -171,7 +171,7 @@ Python sidecar   （Strands Agent · 工具注册表 · 审批 · 知识检索 �
 - 启动后约 8 秒检查一次，之后最多每 24 小时一次；检查只是拉取 GitHub Release 的更新清单，不上传任何本机数据。
 - 有新版本时，窗口底部状态栏出现提示；**不会弹模态打断你**。
 - 下载与安装都需要你点一下确认，弹窗会写明包体积（完整安装包，不是增量）。
-- 更新包带 minisign 签名，安装前验签；签名私钥只存在于 CI。
+- 更新包带 minisign 签名，安装前验签；签名私钥不随安装包分发。
 - 有审批在等你回答、或 Agent 一轮还没跑完时，安装会被拒绝且不改动你的现场；正常安装前会依次收尾：取消本轮任务 → 断开本窗口 SSH → 关闭终端 → 停语言服务器 → 停 sidecar。
 
 ## 开发指南

@@ -152,7 +152,7 @@ Python sidecar      (Strands agent · tool registry · approvals · knowledge ·
 
 The shipping artifact is a **Windows x64 NSIS installer** (per-user install, no administrator rights required).
 
-1. Download `TDSF.Terminal.Agent_<version>_x64-setup.exe` and `SHA256SUMS.txt` from [Releases](https://github.com/harryopo/tdsf-terminal-agent/releases).
+1. Download `TDSF.Terminal.Agent_<version>_x64-setup.exe` from [Releases](https://github.com/harryopo/tdsf-terminal-agent/releases) and find its SHA-256 in the corresponding release notes.
 2. Verify the checksum before running it:
 
    ```powershell
@@ -171,7 +171,7 @@ From **0.9.0** an installed release discovers new versions on its own:
 - One check about 8 seconds after start-up, then at most once per day. The check only retrieves the release manifest from GitHub and uploads no local data.
 - When an update exists, a chip appears in the status bar. **No modal dialog interrupts you.**
 - Downloading and installing both need an explicit click, and the dialog states the package size first (it is a full installer, not a delta).
-- Update packages are minisign-signed and verified before installation; the signing key exists only in CI.
+- Update packages are minisign-signed and verified before installation; the private signing key is not shipped with the installer.
 - Installation is refused while an approval is waiting or a turn is still running, and your session is left untouched. A normal install closes things down in order: cancel the turn → disconnect this window's SSH sessions → close terminals → stop language servers → stop the sidecar.
 
 ## Development
