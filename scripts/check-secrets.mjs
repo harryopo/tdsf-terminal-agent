@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * scripts/check-secrets.mjs — 凭据进库前的闸（#169）
  *

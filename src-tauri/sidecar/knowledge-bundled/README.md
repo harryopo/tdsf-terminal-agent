@@ -1,6 +1,6 @@
 # 随包分发的精简知识库（`rag_slim.db`）
 
-**这是什么**：一份预建好的 SQLite 库（660 条中文提炼知识点，FTS5 + 向量同库同 schema）。
+**这是什么**：一份预建好的 SQLite 库（247 条中文提炼知识点，FTS5 + 向量同库同 schema）。
 应用首次启动时由 `knowledge/bundled.py:seed_bundled_slim_db()` **复制**到可写数据目录
 （Windows：`%APPDATA%\tdsf-terminal-agent\.tdsf-data\rag_slim.db`），**目标已存在就一个字都不动**。
 
@@ -48,4 +48,4 @@ src-tauri/sidecar/scripts/fill_slim_titles.py           # 中文标题映射与�
 
 **改这个文件规矩**：不要手工编辑、不要直接覆盖开发机的 `.tdsf-data/rag_slim.db`。
 重新生成后替换本文件，并同步跑 `tests/test_bundled_knowledge_seed.py`
-（里面有"打开来数条目"的真件判据，条目数掉下 600 会当场红）。
+（里面有"打开来数条目"的真件判据，条目数掉下 200 会当场红）。

@@ -256,6 +256,17 @@ def test_spec_still_ships_the_bundle():
     assert "('knowledge-bundled', 'knowledge-bundled')" in spec
 
 
+def test_bundle_ships_apache_license_copy():
+    license_copy = SIDECAR_ROOT / "knowledge-bundled" / "LICENSE-APACHE-2.0.txt"
+    source_license = SIDECAR_ROOT.parents[1] / "LICENSE"
+    notices = (
+        SIDECAR_ROOT / "knowledge-bundled" / "THIRD-PARTY-NOTICES.md"
+    ).read_text(encoding="utf-8")
+    assert license_copy.is_file(), f"随包缺少 Apache 许可证全文：{license_copy}"
+    assert license_copy.read_text(encoding="utf-8") == source_license.read_text(encoding="utf-8")
+    assert "LICENSE-APACHE-2.0.txt" in notices
+
+
 def test_main_seeds_before_ready_notification():
     """接线：播种必须排在 ready 通知**之前**（ready 一到前端就可能去查知识库）。
 

@@ -19,6 +19,8 @@
 许可全文与出处：
 
 - Apache License 2.0 全文：https://www.apache.org/licenses/LICENSE-2.0
+  - 随包副本：[LICENSE-APACHE-2.0.txt](LICENSE-APACHE-2.0.txt)
+  - Apache 与 Docker 文档条目为中文提炼/改写，已作修改。
   - Apache HTTP Server 文档：<https://httpd.apache.org/docs/2.4/>（页脚声明 Apache License 2.0）
   - Docker 文档：许可声明见其文档源码仓库 README
     <https://raw.githubusercontent.com/docker/docs/main/README.md>

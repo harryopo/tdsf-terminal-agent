@@ -5,7 +5,7 @@
 
 [project]
 name = "tdsf-python-sidecar"
-version = "0.9.1"
+version = "0.9.2"
 description = "TDSF Terminal Agent Python Sidecar — Strands Agent 引擎"
 readme = "README.md"
 requires-python = ">=3.11"

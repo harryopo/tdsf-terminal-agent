@@ -128,7 +128,7 @@ jobs:
           if (-not $installer) { throw "NSIS installer not found" }
           $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $notes = (Get-Content -LiteralPath release-notes.md -Raw -Encoding utf8).TrimEnd()
-          Set-Content -LiteralPath release-notes.md -Value "$notes`n`nSHA-256（$($installer.Name)）：$hash" -Encoding utf8
+          Set-Content -LiteralPath release-notes.md -Value "$notes`n`nSHA-256（Windows x64 安装包）：$hash" -Encoding utf8
           gh release edit "${{ github.ref_name }}" --notes-file release-notes.md
           Write-Host "installer sha256 = $hash"
 
