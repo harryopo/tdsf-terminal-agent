@@ -45,7 +45,7 @@ from uuid import uuid4
 from typing import Any
 
 from needs_you import NeedsYouStatus
-from strands_backend.modes import AgentMode
+from strands_backend.modes import decide
 from strands_backend.tools import (
     ToolContext,
     complete_approval_execution,
@@ -558,8 +558,16 @@ def invoke_write_remote_file_tool(
             response["operation_id"] = operation_id
         return response
 
-    mode = getattr(ctx.mode, "value", str(ctx.mode))
-    if mode == AgentMode.OBSERVE.value:
+    try:
+        decision = decide(3, ctx.mode)
+    except ValueError:
+        return _finish({
+            "status": "command_blocked",
+            "path": path,
+            "ssh_session_id": session_id,
+            "message": "无法确认执行模式；未写入文件。",
+        })
+    if decision == "deny":
         return _finish({
             "status": "command_blocked",
             "path": path,
@@ -597,7 +605,7 @@ def invoke_write_remote_file_tool(
     def _cancel(error_code: str) -> None:
         _transition("cancelled", error_code=error_code)
 
-    needs_approval = mode == AgentMode.CONFIRM.value
+    needs_approval = decision == "confirm"
     if operation_service is None:
         if getattr(ctx, "require_operation_ledger", False):
             return _finish({

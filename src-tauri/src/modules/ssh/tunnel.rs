@@ -169,8 +169,8 @@ pub struct SshTunnel<R: tauri::Runtime = tauri::Wry> {
     session: Arc<SshSession<R>>,
     /// accept loop task handle (Local/Socks5; stop 时等待退出; Remote 为 None)
     task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    /// Remote 专属: 服务器实际监听端口 (tcpip_forward 返回值; bind_port=0 时由服务器分配)
-    remote_port: std::sync::RwLock<Option<u32>>,
+    /// Remote 专属: 请求所属连接代次与实际端口，stop 不得借用重连后的身份。
+    remote_registration: std::sync::RwLock<Option<(uuid::Uuid, u32)>>,
 }
 
 impl<R: tauri::Runtime> SshTunnel<R> {
@@ -187,7 +187,7 @@ impl<R: tauri::Runtime> SshTunnel<R> {
             created_at: chrono::Utc::now().timestamp_millis(),
             session,
             task: Arc::new(Mutex::new(None)),
-            remote_port: std::sync::RwLock::new(None),
+            remote_registration: std::sync::RwLock::new(None),
         }
     }
 
@@ -246,7 +246,7 @@ impl<R: tauri::Runtime> SshTunnel<R> {
         let requested = self.spec.bind_port.unwrap_or(0) as u32;
         let addr = self.spec.bind_address.clone();
 
-        let actual = self.session.tcpip_forward(&addr, requested).await.map_err(|e| {
+        let (connection_id, actual) = self.session.tcpip_forward(&addr, requested).await.map_err(|e| {
             log::error!(
                 "[tunnel] tcpip_forward failed: id={} addr={}:{} err={}",
                 self.id,
@@ -268,17 +268,17 @@ impl<R: tauri::Runtime> SshTunnel<R> {
                 .unwrap_or("(unset)"),
             self.spec.local_target_port.unwrap_or(0)
         );
-        *self.remote_port.write().unwrap_or_else(|e| e.into_inner()) = Some(actual);
+        *self.remote_registration.write().unwrap_or_else(|e| e.into_inner()) = Some((connection_id, actual));
 
         // 注册本地目标到全局 registry (命令层已校验非空, 这里防御性取默认)
         let target = super::handler::RemoteTarget {
             local_target_host: self.spec.local_target_host.clone().unwrap_or_default(),
             local_target_port: self.spec.local_target_port.unwrap_or(0),
         };
-        if let Err(e) = super::handler::register_remote_target(addr, actual, target) {
+        if let Err(e) = super::handler::register_remote_target(connection_id, addr, actual, target) {
             log::error!("[tunnel] register_remote_target failed: id={} err={}", self.id, e);
             // registry 注册失败 → 回滚服务器转发 (尽力而为)
-            let _ = self.session.cancel_tcpip_forward(&self.spec.bind_address, actual).await;
+            let _ = self.session.cancel_tcpip_forward(connection_id, &self.spec.bind_address, actual).await;
             *self.state.write().unwrap_or_else(|e| e.into_inner()) = TunnelState::Failed;
             return Err(format!("注册远程转发目标失败: {e}"));
         }
@@ -418,10 +418,10 @@ impl<R: tauri::Runtime> SshTunnel<R> {
             TunnelKind::Remote => {
                 let addr = self.spec.bind_address.clone();
                 // 先取实际端口 (锁在取完立即释放, 不跨 await 持锁), 再清注册表 + 请求服务器停止
-                let port = self.remote_port.write().unwrap_or_else(|e| e.into_inner()).take();
-                if let Some(port) = port {
-                    super::handler::unregister_remote_target(&addr, port);
-                    if let Err(e) = self.session.cancel_tcpip_forward(&addr, port).await {
+                let registration = self.remote_registration.write().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some((connection_id, port)) = registration {
+                    super::handler::unregister_remote_target(connection_id, &addr, port);
+                    if let Err(e) = self.session.cancel_tcpip_forward(connection_id, &addr, port).await {
                         // SSH 会话断开后 cancel 必然失败 → 只记 debug (registry 已清)
                         log::debug!(
                             "[tunnel] cancel_tcpip_forward failed (session closed?): id={} addr={}:{} err={}",
@@ -473,7 +473,7 @@ impl<R: tauri::Runtime> SshTunnel<R> {
             remote_host: self.spec.remote_host.clone(),
             remote_port: self.spec.remote_port,
             bind_address: self.spec.bind_address.clone(),
-            bind_port: *self.remote_port.read().unwrap_or_else(|e| e.into_inner()),
+            bind_port: self.remote_registration.read().unwrap_or_else(|e| e.into_inner()).map(|(_, port)| port),
             local_target_host: self.spec.local_target_host.clone(),
             local_target_port: self.spec.local_target_port,
             state: self.state(),

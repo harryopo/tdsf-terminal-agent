@@ -358,10 +358,10 @@ fn reconnect_backoff_delay(attempt: u32) -> std::time::Duration {
 /// 持有 russh Channel 的写半部 + 状态信息。
 /// reader task 在后台独立运行,通过 Channel<Vec<u8>> 推送输出到前端。
 pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
-    /// russh 客户端 Handle (用于 disconnect)
+    /// russh 客户端及连接代次（整体替换，身份不能与 Handle 分离）
     ///
     /// 用 Mutex 保护,close 时持有锁避免并发冲突。
-    handle: Arc<Mutex<Option<Handle<SshClientHandler<R>>>>>,
+    handle: Arc<Mutex<Option<SshClient<R>>>>,
 
     /// russh Channel 写半部
     ///
@@ -459,7 +459,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         user: String,
     ) -> Result<Self, SshSessionError> {
         // 1. 获取 Handle
-        let handle = client.handle();
+        let handle = client.handle_ref();
 
         // 从 handler 提取 host/port/user (用于状态事件)
         // 注意: Handle 内部的 handler 不可直接访问,我们通过参数传递
@@ -475,8 +475,8 @@ impl<R: tauri::Runtime> SshSession<R> {
         //    注入 shell, 让远端 shell 在命令间隙自动发 OSC 7, 前端输入原样透传。
         //    任何一步失败都降级为 request_shell (仅失去 cwd 同步, 绝不篡改输入)。
         let mut launch_cmd: Option<String> = None;
-        match probe_remote_shell(&handle).await {
-            Ok(kind) => match write_shell_integration(&handle, kind).await {
+        match probe_remote_shell(handle).await {
+            Ok(kind) => match write_shell_integration(handle, kind).await {
                 Ok(cmd) => {
                     log::info!("[ssh] shell integration ready: {cmd}");
                     launch_cmd = Some(cmd);
@@ -567,7 +567,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         let _ = on_status.send(SshStatusEvent::connected(&host, port, &user));
 
         Ok(Self {
-            handle: Arc::new(Mutex::new(Some(handle))),
+            handle: Arc::new(Mutex::new(Some(client))),
             channel_write: Arc::new(Mutex::new(Some(channel_write))),
             state: Arc::new(std::sync::RwLock::new(SshSessionState::Connected)),
             exited,
@@ -755,6 +755,7 @@ impl<R: tauri::Runtime> SshSession<R> {
                 // TDSF (#20): disconnect 失败降到 debug 级 (close 本就是要关,
                 // 失败的 send/recv 都是预期内的, 不值得 warn 刷屏)。
                 if let Err(e) = handle
+                    .handle_ref()
                     .disconnect(Disconnect::ByApplication, "user closed", "en")
                     .await
                 {
@@ -965,6 +966,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             let mut guard = self.handle.lock().await;
             if let Some(old) = guard.take() {
                 let _ = old
+                    .handle_ref()
                     .disconnect(Disconnect::ByApplication, "reconnecting", "en")
                     .await;
                 drop(old);
@@ -1087,7 +1089,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         // TDSF 2026-08-04 (Rust-C2): 与 exec_command 一致, channel 建立后立即释放锁,
         // 避免持锁阻塞同会话并发操作
         let handle_guard = self.handle.lock().await;
-        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?.handle_ref();
         let channel = handle.channel_open_session().await?;
         drop(handle_guard);
 
@@ -1129,7 +1131,7 @@ impl<R: tauri::Runtime> SshSession<R> {
 
         // 借用 handle 开 channel (不 take, 保持 SSH 连接; 锁只覆盖开 channel 一个 RTT)
         let handle_guard = self.handle.lock().await;
-        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?.handle_ref();
         let channel = handle
             .channel_open_direct_tcpip(
                 host_to_connect,
@@ -1155,8 +1157,8 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// - `port`: 服务器监听端口; **0 = 由服务器自动分配**, 返回值即实际端口
     ///
     /// # 返回
-    /// 服务器实际监听端口 (port 非 0 时与入参相同)
-    pub async fn tcpip_forward(&self, address: &str, port: u32) -> Result<u32, SshSessionError> {
+    /// 请求所属连接代次与服务器实际监听端口 (port 非 0 时与入参相同)
+    pub async fn tcpip_forward(&self, address: &str, port: u32) -> Result<(uuid::Uuid, u32), SshSessionError> {
         // 与 open_tcpip_channel 一致: 只在连接已断时拒绝
         if self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
@@ -1164,25 +1166,29 @@ impl<R: tauri::Runtime> SshSession<R> {
 
         // 借用 handle 发起全局请求 (锁只覆盖一个 RTT, 不阻塞同会话其他操作)
         let handle_guard = self.handle.lock().await;
-        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
-        let actual_port = handle.tcpip_forward(address, port).await?;
+        let client = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let actual_port = client.handle_ref().tcpip_forward(address, port).await?;
+        let connection_id = client.connection_id();
         drop(handle_guard);
 
-        Ok(actual_port)
+        Ok((connection_id, actual_port))
     }
 
     /// 取消服务器远程端口转发 (RFC 4254 §7.1)
     ///
     /// 与 `tcpip_forward` 对称: 请求服务器停止监听 `address:port`。
     /// SSH 会话断开后调用会失败 (连接已断), 调用方需容错 (只清理本地注册表)。
-    pub async fn cancel_tcpip_forward(&self, address: &str, port: u32) -> Result<(), SshSessionError> {
+    pub async fn cancel_tcpip_forward(&self, connection_id: uuid::Uuid, address: &str, port: u32) -> Result<(), SshSessionError> {
         if self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
         }
 
         let handle_guard = self.handle.lock().await;
-        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
-        handle.cancel_tcpip_forward(address, port).await?;
+        let client = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        if client.connection_id() != connection_id {
+            return Err(SshSessionError::Closed);
+        }
+        client.handle_ref().cancel_tcpip_forward(address, port).await?;
         drop(handle_guard);
 
         Ok(())
@@ -1261,7 +1267,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         //    效果: 同一会话的 close()/其他 exec/open_sftp_channel 最多阻塞一个 RTT,
         //    而非整个命令执行期(最长 30s)。
         let handle_guard = self.handle.lock().await;
-        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?;
+        let handle = handle_guard.as_ref().ok_or(SshSessionError::Closed)?.handle_ref();
         let mut channel = handle.channel_open_session().await?;
         drop(handle_guard);
 

@@ -35,12 +35,14 @@ use russh::*;
 use tauri::ipc::Channel;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // run_on_socket 是 server::Server trait 的方法, 必须导入 trait 才能调用
 use russh::server::Server as _;
 
 use tdsf_terminal_agent_lib::modules::ssh::client::{SshAuthMethod, SshClient, SshConnectParams};
 use tdsf_terminal_agent_lib::modules::ssh::session::SshSession;
+use tdsf_terminal_agent_lib::modules::ssh::tunnel::{SshTunnel, TunnelKind, TunnelSpec};
 
 // === mock SSH server (基于 russh 官方 echoserver 精简) =========================
 
@@ -77,6 +79,8 @@ struct MockSshServer {
     last_data: Arc<Mutex<Vec<u8>>>,
     /// sftp 子系统请求怎么回 (测试中可随时改)
     subsys_mode: Arc<Mutex<SubsysMode>>,
+    connection_handles: Arc<Mutex<Vec<server::Handle>>>,
+    cancellations: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl server::Server for MockSshServer {
@@ -85,12 +89,14 @@ impl server::Server for MockSshServer {
     fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> Self::Handler {
         MockSshHandler {
             server: self.clone(),
+            recorded: false,
         }
     }
 }
 
 struct MockSshHandler {
     server: MockSshServer,
+    recorded: bool,
 }
 
 impl server::Handler for MockSshHandler {
@@ -117,8 +123,24 @@ impl server::Handler for MockSshHandler {
     async fn channel_open_session(
         &mut self,
         _channel: russh::Channel<Msg>,
-        _session: &mut Session,
+        session: &mut Session,
     ) -> Result<bool, Self::Error> {
+        if !self.recorded {
+            self.server.connection_handles.lock().await.push(session.handle());
+            self.recorded = true;
+        }
+        Ok(true)
+    }
+
+    async fn tcpip_forward(&mut self, _address: &str, port: &mut u32, _session: &mut Session) -> Result<bool, Self::Error> {
+        if *port == 0 {
+            *port = 18080;
+        }
+        Ok(true)
+    }
+
+    async fn cancel_tcpip_forward(&mut self, _address: &str, _port: u32, _session: &mut Session) -> Result<bool, Self::Error> {
+        self.server.cancellations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(true)
     }
 
@@ -233,7 +255,7 @@ impl server::Handler for MockSshHandler {
 /// 因此 server future 必须在同一个闭包内创建 (srv/socket 作为闭包局部变量),
 /// 才能满足 `tokio::spawn` 的 `'static` 约束。handle 通过 oneshot 传出。
 async fn start_server_with_known_hosts(
-) -> (u16, server::RunningServerHandle, Arc<Mutex<SubsysMode>>) {
+) -> (u16, server::RunningServerHandle, Arc<Mutex<SubsysMode>>, Arc<Mutex<Vec<server::Handle>>>, Arc<std::sync::atomic::AtomicUsize>) {
     let private_key = russh::keys::PrivateKey::random(
         &mut rand::rng(),
         russh::keys::Algorithm::Ed25519,
@@ -274,11 +296,17 @@ async fn start_server_with_known_hosts(
     let (tx, rx) = tokio::sync::oneshot::channel();
     let subsys_mode = Arc::new(Mutex::new(SubsysMode::Accept));
     let mode_for_server = subsys_mode.clone();
+    let connection_handles = Arc::new(Mutex::new(Vec::new()));
+    let handles_for_server = connection_handles.clone();
+    let cancellations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cancellations_for_server = cancellations.clone();
     tokio::spawn(async move {
         let mut srv = MockSshServer {
             last_exec: Arc::new(Mutex::new(None)),
             last_data: Arc::new(Mutex::new(Vec::new())),
             subsys_mode: mode_for_server,
+            connection_handles: handles_for_server,
+            cancellations: cancellations_for_server,
         };
         let running = srv.run_on_socket(config, &socket);
         let _ = tx.send(running.handle());
@@ -286,7 +314,7 @@ async fn start_server_with_known_hosts(
     });
     let handle = rx.await.expect("mock server task should start");
 
-    (port, handle, subsys_mode)
+    (port, handle, subsys_mode, connection_handles, cancellations)
 }
 
 // === 集成测试 ==================================================================
@@ -296,7 +324,7 @@ async fn start_server_with_known_hosts(
 #[tokio::test]
 async fn ssh_roundtrip_against_mock_server() {
     // 1. 启动 mock server + 预写 known_hosts
-    let (port, server_handle, subsys_mode) = start_server_with_known_hosts().await;
+    let (port, server_handle, subsys_mode, connection_handles, cancellations) = start_server_with_known_hosts().await;
 
     // mock Tauri App (MockRuntime) 作为 AppHandle
     let app = tauri::test::mock_app();
@@ -334,6 +362,7 @@ async fn ssh_roundtrip_against_mock_server() {
     )
     .await
     .expect("open_pty should succeed");
+    let session = Arc::new(session);
 
     // 4. exec_command: 数据回显
     let out = session
@@ -407,6 +436,49 @@ async fn ssh_roundtrip_against_mock_server() {
     );
     *subsys_mode.lock().await = SubsysMode::Accept;
 
+    // Real protocol regression: a second authenticated transport cannot use A's forward.
+    let local_a = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local_b = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let remote_spec = |name: &str, session_id, local: &TcpListener| TunnelSpec {
+        name: name.to_string(), session_id, kind: TunnelKind::Remote,
+        local_host: "127.0.0.1".to_string(), local_port: 0,
+        remote_host: String::new(), remote_port: 0,
+        bind_address: "127.0.0.1".to_string(), bind_port: Some(0),
+        local_target_host: Some("127.0.0.1".to_string()),
+        local_target_port: Some(local.local_addr().unwrap().port()),
+    };
+    let tunnel_a = Arc::new(SshTunnel::new(901, remote_spec("a", 1, &local_a), session.clone()));
+    tunnel_a.start().await.unwrap();
+    assert_eq!(tunnel_a.info().bind_port, Some(18080));
+    let client_b = SshClient::connect(app.handle().clone(), make_params("test-password"), None).await.unwrap();
+    let owner_b = client_b.connection_id();
+    let session_b = Arc::new(SshSession::open_pty(
+        client_b, 80, 24, "xterm".to_string(), Channel::new(|_| Ok(())),
+        Channel::new(|_| Ok(())), Channel::new(|_| Ok(())),
+        "127.0.0.1".to_string(), port, "root".to_string(),
+    ).await.unwrap());
+    let handles = connection_handles.lock().await.clone();
+    assert_eq!(handles.len(), 2);
+    let mut forged = handles[1].channel_open_forwarded_tcpip("127.0.0.1", 18080, "127.0.0.1", 9999).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(msg) = forged.wait().await {
+            if matches!(msg, ChannelMsg::Close) { return; }
+        }
+    }).await.expect("unowned forwarded channel must close");
+    assert!(tokio::time::timeout(Duration::from_millis(100), local_a.accept()).await.is_err());
+    assert!(session.cancel_tcpip_forward(owner_b, "127.0.0.1", 18080).await.is_err());
+    assert_eq!(cancellations.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let tunnel_b = Arc::new(SshTunnel::new(902, remote_spec("b", 2, &local_b), session_b.clone()));
+    tunnel_b.start().await.unwrap();
+    assert_eq!(tunnel_b.info().bind_port, Some(18080));
+    assert_forwarded_roundtrip(&handles[0], &local_a).await;
+    assert_forwarded_roundtrip(&handles[1], &local_b).await;
+    tunnel_a.stop().await;
+    assert_forwarded_roundtrip(&handles[1], &local_b).await;
+    tunnel_b.stop().await;
+    assert_eq!(cancellations.load(std::sync::atomic::Ordering::SeqCst), 2);
+    session_b.close().await.unwrap();
+
     // 6. close: 干净断开
     session
         .close()
@@ -427,4 +499,24 @@ async fn ssh_roundtrip_against_mock_server() {
     // 8. 关停 mock server
     server_handle.shutdown("test finished".to_string());
     tokio::time::sleep(Duration::from_millis(100)).await;
+}
+
+async fn assert_forwarded_roundtrip(handle: &server::Handle, local: &TcpListener) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut channel = handle.channel_open_forwarded_tcpip("127.0.0.1", 18080, "127.0.0.1", 9999).await.unwrap();
+        channel.data(&b"ping"[..]).await.unwrap();
+        let (mut stream, _) = local.accept().await.unwrap();
+        let mut data = [0; 4];
+        stream.read_exact(&mut data).await.unwrap();
+        assert_eq!(&data, b"ping");
+        stream.write_all(b"pong").await.unwrap();
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => { assert_eq!(data.as_ref(), b"pong"); break; }
+                Some(ChannelMsg::Close) | None => panic!("authorized forward closed without data"),
+                _ => {}
+            }
+        }
+        channel.close().await.unwrap();
+    }).await.expect("authorized forward must exchange data");
 }

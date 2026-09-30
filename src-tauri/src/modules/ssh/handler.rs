@@ -62,7 +62,7 @@ static HOST_APPROVAL_NOTIFY: OnceLock<Notify> = OnceLock::new();
 
 /// 远程端口转发 (P3 #24) 的本地目标
 ///
-/// 服务器收到远程转发连接时, Handler 回调按 (address, port) 查到该结构,
+/// 服务器收到远程转发连接时, Handler 回调按 (connection, address, port) 查到该结构,
 /// 连接其中的本地目标后与 SSH channel 桥接。
 #[derive(Debug, Clone)]
 pub struct RemoteTarget {
@@ -74,16 +74,16 @@ pub struct RemoteTarget {
 
 /// 全局远程转发注册表 (P3 #24)
 ///
-/// key: (服务器监听地址, 实际端口) —— 与 `server_channel_open_forwarded_tcpip`
-/// 回调的 `connected_address`/`connected_port` 参数一一对应。
+/// key: (连接代次, 服务器监听地址, 实际端口)。连接代次只由客户端创建，
+/// 不能使用服务器发送的字段或可重连的应用会话 id。
 /// value: 该远程隧道要连的本地目标。
 ///
-/// 多个远程隧道可共存于同一 SSH 会话 (共享同一个 Handler 实例), 因此必须
-/// 全局查表, 而不能把目标塞进 Handler 字段。生命周期与隧道同步:
+/// 同一连接可登记多个目标，不同连接的同名地址/端口互不覆盖。生命周期与隧道同步:
 /// - 注册: `tcpip_forward` 成功后 (tunnel.rs 的 SshTunnel::start)
 /// - 移除: `cancel_tcpip_forward` 或 SSH 会话断开时 (tunnel.rs 的 stop /
 ///   mod.rs 的 stop_tunnels_for_session)
-static REMOTE_TUNNEL_REGISTRY: LazyLock<Mutex<HashMap<(String, u32), RemoteTarget>>> =
+type RemoteTargetKey = (uuid::Uuid, String, u32);
+static REMOTE_TUNNEL_REGISTRY: LazyLock<Mutex<HashMap<RemoteTargetKey, RemoteTarget>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 注册远程转发目标 (P3 #24)
@@ -91,9 +91,9 @@ static REMOTE_TUNNEL_REGISTRY: LazyLock<Mutex<HashMap<(String, u32), RemoteTarge
 /// # 参数
 /// - `address` / `port`: 服务器监听地址与**实际**端口 (tcpip_forward 返回值)
 /// - `target`: 本地目标 (回调收到连接时连接它)
-pub fn register_remote_target(address: String, port: u32, target: RemoteTarget) -> Result<(), String> {
+pub fn register_remote_target(connection_id: uuid::Uuid, address: String, port: u32, target: RemoteTarget) -> Result<(), String> {
     let mut registry = REMOTE_TUNNEL_REGISTRY.lock().map_err(|e| e.to_string())?;
-    if let Some(existing) = registry.insert((address.clone(), port), target) {
+    if let Some(existing) = registry.insert((connection_id, address.clone(), port), target) {
         log::warn!(
             "[ssh] remote target overwritten: {}:{} → {:?}",
             address,
@@ -105,15 +105,20 @@ pub fn register_remote_target(address: String, port: u32, target: RemoteTarget) 
 }
 
 /// 移除远程转发目标 (P3 #24)
-pub fn unregister_remote_target(address: &str, port: u32) -> Option<RemoteTarget> {
+pub fn unregister_remote_target(connection_id: uuid::Uuid, address: &str, port: u32) -> Option<RemoteTarget> {
     let mut registry = REMOTE_TUNNEL_REGISTRY.lock().ok()?;
-    registry.remove(&(address.to_string(), port))
+    registry.remove(&(connection_id, address.to_string(), port))
 }
 
 /// 查询远程转发目标 (P3 #24; Handler 回调用)
-pub fn lookup_remote_target(address: &str, port: u32) -> Option<RemoteTarget> {
+pub fn lookup_remote_target(connection_id: uuid::Uuid, address: &str, port: u32) -> Option<RemoteTarget> {
     let registry = REMOTE_TUNNEL_REGISTRY.lock().ok()?;
-    registry.get(&(address.to_string(), port)).cloned()
+    registry.get(&(connection_id, address.to_string(), port)).cloned()
+}
+
+fn clear_remote_targets(connection_id: uuid::Uuid) {
+    let mut registry = REMOTE_TUNNEL_REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    registry.retain(|(owner, _, _), _| *owner != connection_id);
 }
 
 /// 解析主机审批结果 (供 ssh_approve_host 命令调用)
@@ -143,6 +148,7 @@ pub fn resolve_host_approval(approval_id: &str, approved: bool) -> Result<(), St
 /// - app_handle: 用于推送 Tauri 事件到前端
 /// - known_hosts_manager: 用于 check/learn known_hosts
 pub struct SshClientHandler<R: tauri::Runtime = tauri::Wry> {
+    pub connection_id: uuid::Uuid,
     /// 远程主机名 (用于 known_hosts 检查)
     pub host: String,
     /// 远程端口 (用于 known_hosts 检查)
@@ -155,6 +161,12 @@ pub struct SshClientHandler<R: tauri::Runtime = tauri::Wry> {
     pub app_handle: tauri::AppHandle<R>,
     /// known_hosts 管理器 (TOFU + 持久化)
     pub known_hosts: KnownHostsManager,
+}
+
+impl<R: tauri::Runtime> Drop for SshClientHandler<R> {
+    fn drop(&mut self) {
+        clear_remote_targets(self.connection_id);
+    }
 }
 
 impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
@@ -253,7 +265,7 @@ impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
     /// 服务器在远程转发监听端口收到 TCP 连接时, 经 SSH channel 反推给客户端,
     /// 调用此方法。默认 trait 实现是空操作 (channel 被直接丢弃, 数据流断裂),
     /// 因此必须覆盖:
-    /// 1. 按 (connected_address, connected_port) 查 REMOTE_TUNNEL_REGISTRY 拿本地目标
+    /// 1. 按本连接代次及 (connected_address, connected_port) 查表拿本地目标
     /// 2. spawn 独立 task: 连接本地目标 → 复用 tunnel.rs 的 bridge_connection 双向桥接
     /// 3. 回调立即返回 (不阻塞 handler 主循环)
     ///
@@ -267,7 +279,7 @@ impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
         originator_port: u32,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        match lookup_remote_target(connected_address, connected_port) {
+        match lookup_remote_target(self.connection_id, connected_address, connected_port) {
             Some(target) => {
                 log::info!(
                     "[ssh] remote forward connection: {}:{} → local {}:{} (originator {}:{})",
@@ -479,6 +491,7 @@ mod tests {
 
     #[test]
     fn test_remote_target_register_lookup_unregister() {
+        let owner = uuid::Uuid::new_v4();
         // P3 #24: 远程转发 registry 全生命周期
         let addr = "127.0.0.1";
         let port = 18080u32;
@@ -488,29 +501,31 @@ mod tests {
         };
 
         // 注册成功
-        assert!(register_remote_target(addr.to_string(), port, target.clone()).is_ok());
+        assert!(register_remote_target(owner, addr.to_string(), port, target.clone()).is_ok());
 
         // 查表命中, 值与注册一致
-        let found = lookup_remote_target(addr, port).expect("should find target");
+        let found = lookup_remote_target(owner, addr, port).expect("should find target");
         assert_eq!(found.local_target_host, "127.0.0.1");
         assert_eq!(found.local_target_port, 3000);
 
         // 查表未命中 (不同端口 / 不同地址)
-        assert!(lookup_remote_target(addr, 18081).is_none());
-        assert!(lookup_remote_target("0.0.0.0", port).is_none());
+        assert!(lookup_remote_target(owner, addr, 18081).is_none());
+        assert!(lookup_remote_target(owner, "0.0.0.0", port).is_none());
 
         // 移除成功, 再查为空
-        let removed = unregister_remote_target(addr, port);
+        let removed = unregister_remote_target(owner, addr, port);
         assert!(removed.is_some());
-        assert!(lookup_remote_target(addr, port).is_none());
+        assert!(lookup_remote_target(owner, addr, port).is_none());
     }
 
     #[test]
     fn test_remote_target_register_overwrite() {
+        let owner = uuid::Uuid::new_v4();
         // P3 #24: 同 key 重复注册应覆盖旧值 (视为启动新隧道)
         let addr = "127.0.0.1".to_string();
         let port = 19090u32;
         let _ = register_remote_target(
+            owner,
             addr.clone(),
             port,
             RemoteTarget {
@@ -519,6 +534,7 @@ mod tests {
             },
         );
         let _ = register_remote_target(
+            owner,
             addr.clone(),
             port,
             RemoteTarget {
@@ -526,16 +542,58 @@ mod tests {
                 local_target_port: 2222,
             },
         );
-        let found = lookup_remote_target(&addr, port).expect("should find target");
+        let found = lookup_remote_target(owner, &addr, port).expect("should find target");
         assert_eq!(found.local_target_host, "10.0.0.2");
         assert_eq!(found.local_target_port, 2222);
         // 清理
-        unregister_remote_target(&addr, port);
+        unregister_remote_target(owner, &addr, port);
     }
 
     #[test]
     fn test_remote_target_unregister_missing() {
         // P3 #24: 移除不存在的 key 返回 None (幂等)
-        assert!(unregister_remote_target("127.0.0.1", 1).is_none());
+        assert!(unregister_remote_target(uuid::Uuid::new_v4(), "127.0.0.1", 1).is_none());
+    }
+
+    #[test]
+    fn test_remote_target_connection_and_generation_isolation() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        let addr = "127.0.0.1";
+        let port = 18080;
+        let target = |port| RemoteTarget {
+            local_target_host: addr.to_string(), local_target_port: port,
+        };
+        register_remote_target(a, addr.to_string(), port, target(3000)).unwrap();
+        assert!(lookup_remote_target(b, addr, port).is_none());
+        register_remote_target(b, addr.to_string(), port, target(4000)).unwrap();
+        assert_eq!(lookup_remote_target(a, addr, port).unwrap().local_target_port, 3000);
+        assert_eq!(lookup_remote_target(b, addr, port).unwrap().local_target_port, 4000);
+        unregister_remote_target(a, addr, port);
+        assert!(lookup_remote_target(a, addr, port).is_none());
+        assert_eq!(lookup_remote_target(b, addr, port).unwrap().local_target_port, 4000);
+        let reconnected = uuid::Uuid::new_v4();
+        assert!(lookup_remote_target(reconnected, addr, port).is_none());
+        clear_remote_targets(b);
+        assert!(lookup_remote_target(b, addr, port).is_none());
+    }
+
+    #[test]
+    fn test_remote_target_connection_cleanup_preserves_other_connections() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        for owner in [a, b] {
+            for port in [18080, 18081] {
+                register_remote_target(owner, "127.0.0.1".to_string(), port, RemoteTarget {
+                    local_target_host: "localhost".to_string(), local_target_port: 3000,
+                }).unwrap();
+            }
+        }
+        clear_remote_targets(a);
+        for port in [18080, 18081] {
+            assert!(lookup_remote_target(a, "127.0.0.1", port).is_none());
+            assert!(lookup_remote_target(b, "127.0.0.1", port).is_some());
+        }
+        clear_remote_targets(b);
     }
 }

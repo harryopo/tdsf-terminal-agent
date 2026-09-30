@@ -152,11 +152,16 @@ _FILE_MEMBER_RISK: dict[str, RiskHit] = {
     "truncate": (_L2, "截断文件"),
 }
 
+_FILE_OPEN_CALLS = frozenset({
+    "open", "builtins.open", "__builtins__.open", "io.open", "codecs.open",
+    "pathlib.Path.open",
+})
+
 # 构造结果绑到变量后仍要能判级（p = Path(x); p.unlink()）
 _BOUND_TYPE_BY_CONSTRUCTOR: dict[str, str] = {
     "pathlib.Path": "pathlib.Path",
     "Path": "pathlib.Path",
-    "open": "_file",
+    **dict.fromkeys(_FILE_OPEN_CALLS, "_file"),
     "socket.socket": "socket.socket",
 }
 
@@ -215,7 +220,7 @@ _PATH_CALL_NAMES = frozenset(
         "shutil.copyfile",
         "fileinput.input",
     }
-)
+) | _FILE_OPEN_CALLS
 
 
 # 审批卡的事实说明按 category 选文案（与 command_impact 用的类别名对齐）
@@ -301,15 +306,24 @@ class _Analyzer(ast.NodeVisitor):
             root = cur.id
             parts.append(self._alias.get(root, self._binding.get(root, root)))
         elif isinstance(cur, ast.Call):
-            parts.append(self._dotted(cur.func))
+            if (
+                self._dotted(cur.func) in {"getattr", "builtins.getattr", "__builtins__.getattr"}
+                and len(cur.args) >= 2
+                and isinstance(cur.args[1], ast.Constant)
+                and isinstance(cur.args[1].value, str)
+            ):
+                parts.append(f"{self._dotted(cur.args[0])}.{cur.args[1].value}")
+            else:
+                parts.append(self._dotted(cur.func))
         else:
             return ""
         return ".".join(reversed([p for p in parts if p]))
 
     def _match(self, canonical: str, attr: str) -> tuple[RiskHit, str] | None:
         """按「裸内置名 → 完全限定名 → 模块任意调用 → 无歧义方法名」四级查风险表"""
-        if "." not in canonical:
-            hit = _BARE_CALL_RISK.get(canonical)
+        builtin = canonical.removeprefix("builtins.").removeprefix("__builtins__.")
+        if "." not in builtin:
+            hit = _BARE_CALL_RISK.get(builtin)
             if hit is not None:
                 return hit, canonical
         for key, hit in _QUALIFIED_INDEX:
@@ -319,7 +333,10 @@ class _Analyzer(ast.NodeVisitor):
         wildcard = _MODULE_MEMBERS.get(head, {}).get("*")
         if wildcard is not None:
             return wildcard, canonical
-        if canonical.startswith("_file.") and attr in _FILE_MEMBER_RISK:
+        if (
+            canonical.startswith("_file.")
+            or canonical.rsplit(".", 1)[0] in _FILE_OPEN_CALLS
+        ) and attr in _FILE_MEMBER_RISK:
             return _FILE_MEMBER_RISK[attr], canonical
         # 接收者解析不出来时兜底：表里只有 system / unlink / rmtree 这类无歧义名字
         hit = _MEMBER_NAME_RISK.get(attr)
@@ -363,8 +380,17 @@ class _Analyzer(ast.NodeVisitor):
             attr = ""
         canonical = self._dotted(func)
 
-        if canonical == "open" or (not canonical and attr == "open"):
-            self._check_open(node)
+        if canonical in _FILE_OPEN_CALLS or (not canonical and attr == "open"):
+            bound_path = (
+                canonical == "pathlib.Path.open"
+                and isinstance(func, ast.Attribute)
+                and (
+                    isinstance(func.value, ast.Call)
+                    or isinstance(func.value, ast.Name)
+                    and self._binding.get(func.value.id) == "pathlib.Path"
+                )
+            )
+            self._check_open(node, mode_arg=0 if bound_path else 1)
         elif attr in ("getattr", "__getattribute__"):
             # getattr(os, "system") —— 属性名写在常量里，照样按该属性判级
             if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
@@ -406,11 +432,11 @@ class _Analyzer(ast.NodeVisitor):
         kind = _CREDENTIAL_WRITE_KIND if writing else _CREDENTIAL_READ_KIND
         self._add(_L3, kind, f"{canonical}({shown!r})", node.lineno)
 
-    def _check_open(self, node: ast.Call) -> None:
+    def _check_open(self, node: ast.Call, *, mode_arg: int = 1) -> None:
         """open(path, mode)：写模式算 L2，只读模式不算风险"""
         mode = ""
-        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
-            mode = str(node.args[1].value)
+        if len(node.args) > mode_arg and isinstance(node.args[mode_arg], ast.Constant):
+            mode = str(node.args[mode_arg].value)
         for keyword in node.keywords:
             if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
                 mode = str(keyword.value.value)

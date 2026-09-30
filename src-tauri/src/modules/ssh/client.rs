@@ -76,6 +76,8 @@ pub struct SshConnectParams {
 pub struct SshClient<R: tauri::Runtime = tauri::Wry> {
     /// russh 客户端 Handle (用于 channel_open_session 等)
     handle: Handle<SshClientHandler<R>>,
+    /// Identity of this transport, renewed even when reconnecting the same session.
+    connection_id: uuid::Uuid,
 }
 
 /// SSH 客户端错误
@@ -159,7 +161,9 @@ impl<R: tauri::Runtime> SshClient<R> {
         };
 
         // 3. 创建 Handler (含 known_hosts 管理器)
+        let connection_id = uuid::Uuid::new_v4();
         let handler = SshClientHandler {
+            connection_id,
             host: host.clone(),
             port,
             app_handle: app_handle.clone(),
@@ -231,7 +235,7 @@ impl<R: tauri::Runtime> SshClient<R> {
                 if let Some(ref ch) = on_status {
                     let _ = ch.send(SshStatusEvent::authenticated(&host, port, &user));
                 }
-                Ok(Self { handle })
+                Ok(Self { handle, connection_id })
             }
             other => {
                 let reason = format!("{:?}", other);
@@ -247,12 +251,8 @@ impl<R: tauri::Runtime> SshClient<R> {
         }
     }
 
-    /// 获取 russh Handle (供 SshSession 开 channel)
-    ///
-    /// 注意: Handle 内部是 Sender<Msg> + tokio mpsc,可多次 clone。
-    /// 多 tab 共享 Handle 时,每个 tab 持有自己的 clone。
-    pub fn handle(self) -> Handle<SshClientHandler<R>> {
-        self.handle
+    pub fn connection_id(&self) -> uuid::Uuid {
+        self.connection_id
     }
 
     /// 获取 Handle 引用 (用于 SshSession::open_pty 借用而非消费)

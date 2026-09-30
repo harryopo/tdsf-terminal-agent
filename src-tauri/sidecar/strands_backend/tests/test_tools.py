@@ -1105,8 +1105,10 @@ class TestRemoteFileTool(unittest.TestCase):
         result = tool_fn(path="/etc/hosts")
         self.assertIn("status", result)
 
-    def test_write_auto_backs_up_and_reads_back(self):
-        """自动模式应只在备份与回读都成功后报告成功。"""
+    @patch("strands_backend.tools.remote_file.request_approval_and_wait",
+           return_value=MagicMock(status=NeedsYouStatus.APPROVED))
+    def test_write_auto_backs_up_and_reads_back(self, approval):
+        """自动模式的 L3 写入批准后，仍须备份与回读成功。"""
         before = b"old=value\n"
         after = b"new=value\n"
         bridge = make_mock_rust_bridge()
@@ -1124,6 +1126,7 @@ class TestRemoteFileTool(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "success")
+        approval.assert_called_once()
         self.assertTrue(result["backup_path"].startswith("/etc/example.conf.tdsf-backup-"))
         self.assertEqual(bridge.ipc_invoke.call_count, 4)
         backup_call = bridge.ipc_invoke.call_args_list[1].args
@@ -1133,7 +1136,9 @@ class TestRemoteFileTool(unittest.TestCase):
         self.assertEqual(target_call[1]["path"], "/etc/example.conf")
         self.assertEqual(target_call[1]["content"], list(after))
 
-    def test_write_rejects_stale_source_without_writing(self):
+    @patch("strands_backend.tools.remote_file.request_approval_and_wait",
+           return_value=MagicMock(status=NeedsYouStatus.APPROVED))
+    def test_write_rejects_stale_source_without_writing(self, approval):
         """文件在读取后变化时，绝不能覆盖新的远端版本。"""
         bridge = make_mock_rust_bridge(list(b"newer=value\n"))
         ctx = make_ctx(rust_bridge=bridge)
@@ -1149,6 +1154,7 @@ class TestRemoteFileTool(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "stale_source")
+        approval.assert_called_once()
         bridge.ipc_invoke.assert_called_once_with(
             "sftp_read", {"sessionId": 1, "path": "/etc/example.conf"}
         )
@@ -1176,7 +1182,9 @@ class TestRemoteFileTool(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(approval.call_args.kwargs["tool_name"], "write_remote_file")
 
-    def test_write_records_a_durable_successful_operation(self):
+    @patch("strands_backend.tools.remote_file.request_approval_and_wait",
+           return_value=MagicMock(status=NeedsYouStatus.APPROVED))
+    def test_write_records_a_durable_successful_operation(self, approval):
         """运行时账本开启后，安全写入必须走完整状态机。"""
         from project_service import ProjectService
 
@@ -1201,6 +1209,7 @@ class TestRemoteFileTool(unittest.TestCase):
                     ctx,
                 )
                 self.assertEqual(result["status"], "success")
+                approval.assert_called_once()
                 operation = service.get_operation(result["operation_id"])
                 self.assertEqual(operation["state"], "succeeded")
                 self.assertEqual(operation["metadata"]["tool_name"], "write_remote_file")
