@@ -9,6 +9,10 @@ stable release.
   background SSH output by call identity even while collapsed. Standard output
   and standard error remain separately visible; visible-terminal output is labelled
   as merged. Missing identities are not guessed, and final output is not appended twice.
+- Structured tool outcomes retain stdout, stderr, messages and reported exit codes
+  instead of being flattened into error text. Rejected, cancelled and indeterminate
+  results are distinct from execution failures; missing exit status is not shown
+  as command completion. Backend safety and execution verdicts are unchanged.
 - Windows builds restore and verify both pinned completion binaries before packaging,
   and reject NSIS installers that omit them. Archive and extracted-binary checksums
   are checked separately, so verified local resources are not downloaded again.

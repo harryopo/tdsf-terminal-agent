@@ -7,6 +7,11 @@ import {
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useSshCommandOutputStore } from "@/modules/ai/store/sshCommandOutputStore";
+import {
+  getToolResultStatus,
+  legacyToolResultStatus,
+  toolResultLabel,
+} from "@/modules/ai/lib/tool-result";
 import { cn } from "@/lib/utils";
 import {
   formatTeachingResultForAgent,
@@ -657,17 +662,16 @@ const ToolImpl = ({
   const isError = state === "output-error";
   const showLiveSshOutput =
     (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
-  // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
-  // part 状态停在 output-available → 状态点会谎报 done。内容判失败时同步降级徽标。
-  const innerFailure = state === "output-available" && isFailedOutput(output);
-  const innerFailureStatus =
-    innerFailure && typeof output === "object" && output !== null
-      ? typeof (output as Record<string, unknown>).status === "string"
-        ? (output as Record<string, unknown>).status
-        : ""
-      : "";
-  const innerFailureLabel =
-    innerFailureStatus === "unmatched" ? "未匹配" : "failed";
+  // SDK output-available 仅表示收到结果；业务状态仍由原始结果决定。
+  const resultStatus =
+    state === "output-available"
+      ? getToolResultStatus(output)
+      : isError
+        ? legacyToolResultStatus(errorText)
+        : null;
+  const innerFailure = state === "output-available" && resultStatus !== null;
+  const resultIsFailure = resultStatus === "error" || resultStatus === "failed";
+  const resultLabel = resultStatus ? toolResultLabel(resultStatus) : "failed";
   const open = defaultOpen ?? (isError || showLiveSshOutput);
   const isHeavy = HEAVY_CONTENT_TOOLS.has(toolName);
   const isTeachingCard =
@@ -706,13 +710,17 @@ const ToolImpl = ({
         <span
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            innerFailure ? "bg-orange-500" : STATUS_DOT[state],
+            resultStatus
+              ? resultIsFailure
+                ? "bg-destructive"
+                : "bg-amber-500"
+              : STATUS_DOT[state],
           )}
           aria-label={
-            innerFailure
-              ? innerFailureStatus === "unmatched"
-                ? "unmatched"
-                : "failed"
+            resultStatus
+              ? resultIsFailure
+                ? "failed"
+                : resultStatus
               : STATUS_LABEL[state]
           }
         />
@@ -731,8 +739,15 @@ const ToolImpl = ({
           <span className="flex-1" />
         )}
         {(isError || innerFailure) && (
-          <span className="shrink-0 text-[10px] font-medium text-destructive">
-            {isError ? "failed" : innerFailureLabel}
+          <span
+            className={cn(
+              "shrink-0 text-[10px] font-medium",
+              resultStatus && !resultIsFailure
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-destructive",
+            )}
+          >
+            {resultLabel}
           </span>
         )}
       </CollapsibleTrigger>
@@ -912,10 +927,24 @@ function ToolOutput({
   errorText?: string;
 }) {
   if (errorText) {
+    const status = legacyToolResultStatus(errorText);
+    const warning = status && status !== "error" && status !== "failed";
     return (
       <div className="space-y-1">
-        <div className="text-[10px] font-medium text-destructive">Error</div>
-        <div className="rounded bg-destructive/10 px-2 py-1.5 font-mono text-[11px] text-destructive whitespace-pre-wrap">
+        <div
+          className={cn(
+            "text-[10px] font-medium",
+            warning ? "text-amber-700 dark:text-amber-400" : "text-destructive",
+          )}
+        >
+          {status ?? "Error"}
+        </div>
+        <div
+          className={cn(
+            "rounded px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap",
+            warning ? "bg-amber-500/10 text-foreground" : "bg-destructive/10 text-destructive",
+          )}
+        >
           {errorText}
         </div>
       </div>
@@ -979,6 +1008,34 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
         predictedOutput={predictedOutput}
         toolName={toolName}
       />
+    );
+  }
+
+  const failure = pickToolFailure(o);
+  // 无命令的 unmatched 建议仍交给下方专用卡，保留说明和示例。
+  if (
+    failure &&
+    !(
+      toolName === "suggest_command" &&
+      o.status === "unmatched" &&
+      (typeof o.command !== "string" || !o.command)
+    )
+  ) {
+    const stdout =
+      typeof o.output === "string" ? o.output : typeof o.stdout === "string" ? o.stdout : "";
+    const stderr = typeof o.stderr === "string" ? o.stderr : "";
+    return (
+      <div className="space-y-1">
+        <div className="text-[10px] font-medium text-muted-foreground">{failure.status}</div>
+        {failure.text && failure.text !== stdout && failure.text !== stderr ? (
+          <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+            {failure.text}
+          </div>
+        ) : null}
+        {stdout || stderr || typeof o.exit_code === "number" || failure.status === "indeterminate" ? (
+          <SshCommandOutput data={o} hideReturnedStatus />
+        ) : null}
+      </div>
     );
   }
 
@@ -1065,7 +1122,6 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
   // Tool failure（上方 failure 逻辑保持原有语义）。
   if (
     toolName === "ssh_command" &&
-    !TOOL_FAILURE_STATUSES.has(typeof o.status === "string" ? o.status : "") &&
     (typeof o.output === "string" || typeof o.exit_code === "number")
   ) {
     return <SshCommandOutput data={o} />;
@@ -1282,43 +1338,8 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     );
   }
 
-  // 通用失败兜底（放在所有专用分支之后，避免抢掉定制渲染）：后端工具失败态
-  // 或显式 ok/success=false → 状态徽标 + 中文说明，替代落到 JSON.stringify 的裸 JSON
-  const failure = pickToolFailure(o);
-  if (failure) {
-    return (
-      <div className="space-y-1">
-        <div className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
-          {failure.status}
-        </div>
-        {failure.text ? (
-          <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
-            {failure.text}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   return null;
 }
-
-/**
- * 后端工具失败态词汇（与 Python `ToolCallLimitHook._result_status` 对齐）。
- *
- * 注：`exit_code != 0` **不在**此列——命令非零退出是正常输出信息，把它算失败会
- * 污染熔断计数并削弱 T7「写操作后必须验证」的判定（决策记录见 dev-state §37.103）。
- */
-const TOOL_FAILURE_STATUSES = new Set([
-  "command_blocked",
-  "rejected",
-  "needs_approval",
-  "unavailable",
-  "stale_source",
-  "indeterminate",
-  "unmatched",
-  "error",
-]);
 
 /** 失败说明文本候选字段（按信息量优先级） */
 const TOOL_FAILURE_TEXT_KEYS = ["message", "error", "stderr", "reason"];
@@ -1326,24 +1347,14 @@ const TOOL_FAILURE_TEXT_KEYS = ["message", "error", "stderr", "reason"];
 function pickToolFailure(
   o: Record<string, unknown>,
 ): { status: string; text: string } | null {
-  const status = typeof o.status === "string" ? o.status : "";
-  const explicitFailure = o.ok === false || o.success === false;
-  if (!explicitFailure && !TOOL_FAILURE_STATUSES.has(status)) return null;
+  const status = getToolResultStatus(o);
+  if (!status) return null;
   const raw = TOOL_FAILURE_TEXT_KEYS.map((key) =>
     typeof o[key] === "string" ? (o[key] as string).trim() : "",
   ).find(Boolean);
   // 剥掉 `command_blocked!` / `rejected!` 前缀——那是给 LLM 的双轨反馈关键字
   const text = raw ? raw.replace(/^[a-z_]+!\s*/, "") : "";
   return { status: status || "failed", text };
-}
-
-/** 工具输出内容本身是否表示失败（与 pickToolFailure 同一口径） */
-function isFailedOutput(output: unknown): boolean {
-  return (
-    typeof output === "object" &&
-    output !== null &&
-    pickToolFailure(output as Record<string, unknown>) !== null
-  );
 }
 
 // ============================================================================
@@ -2070,14 +2081,24 @@ function TerminalOutputCard({ data }: { data: Record<string, unknown> }) {
   );
 }
 
-function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
-  const output = typeof data.output === "string" ? data.output : "";
+function SshCommandOutput({
+  data,
+  hideReturnedStatus = false,
+}: {
+  data: Record<string, unknown>;
+  hideReturnedStatus?: boolean;
+}) {
+  const output =
+    typeof data.output === "string" ? data.output : typeof data.stdout === "string" ? data.stdout : "";
   const stderr = typeof data.stderr === "string" ? data.stderr : "";
   const explanation =
     typeof data.explanation === "string" && data.explanation.trim()
       ? data.explanation.trim()
       : null;
-  const exit = typeof data.exit_code === "number" ? data.exit_code : null;
+  const exit =
+    typeof data.exit_code === "number" && Number.isInteger(data.exit_code) && data.exit_code >= 0
+      ? data.exit_code
+      : null;
   const duration = typeof data.duration === "number" ? data.duration : null;
   const durationLabel =
     duration == null
@@ -2089,9 +2110,9 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
-          命令已返回
-        </span>
+        {!hideReturnedStatus && exit != null ? (
+          <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400">命令已返回</span>
+        ) : null}
         {exit != null ? (
           <span
             className={cn(
@@ -2103,7 +2124,9 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
           >
             退出码 {exit}
           </span>
-        ) : null}
+        ) : (
+          <span className="text-[10px] text-amber-700 dark:text-amber-400">退出状态未确认</span>
+        )}
         {durationLabel ? (
           <span className="font-mono text-[10px] text-muted-foreground">
             耗时 {durationLabel}

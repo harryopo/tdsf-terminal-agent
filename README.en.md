@@ -221,7 +221,7 @@ On Windows you can also double-click `启动.bat` in the repository root. The de
 
 Before a direct Tauri build, run `pnpm fetch:carapace` as well. Missing or damaged resources block the build instead of producing an installer without the components. Source maintenance fixes are listed under [Unreleased](CHANGELOG.md#unreleased); they do not modify previously published installers.
 
-The latest source also fixes live SSH output wiring in agent tool cards: collection stays bound to each call while collapsed, background stdout/stderr remain separate, and visible-terminal output is labelled as merged. These changes still require a rebuilt installer and native acceptance; they are not included in the current download.
+The latest source also fixes live SSH output wiring in agent tool cards: collection stays bound to each call while collapsed, background stdout/stderr remain separate, and visible-terminal output is labelled as merged. Structured failure results retain output and exit codes; rejected, cancelled and indeterminate outcomes are shown separately. Missing exit status is not presented as command completion. These changes still require a rebuilt installer and native acceptance; they are not included in the current download.
 
 Release flow: push a `v*` tag → CI builds the signed installer and update manifest into a **draft** release → you verify, then publish. The manifest only resolves published releases, so clients cannot see it before you click publish.
 

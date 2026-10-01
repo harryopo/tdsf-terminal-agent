@@ -32,6 +32,7 @@ import type { UIMessageChunk } from "ai";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import type { SshCommandOutputEvent } from "@/lib/sidecar-bridge";
 import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
+import { getToolResultStatus } from "./tool-result";
 import {
   TDSF_AGENTS,
   type AgentMode,
@@ -1440,7 +1441,9 @@ export function sidecarStreamToUIMessageStream(
           } else if (part.type === "tool-output") {
             closeText();
             closeReasoning();
-            if (part.isError) {
+            // A received business outcome (including unknown/rejected/failed)
+            // must keep its payload. SDK errors have no output field.
+            if (part.isError && getToolResultStatus(part.output) === null) {
               controller.enqueue({
                 type: "tool-output-error",
                 toolCallId: part.toolCallId,
