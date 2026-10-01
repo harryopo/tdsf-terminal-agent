@@ -921,6 +921,7 @@ def execute_via_ssh(
       卡片事件只在这里发一次 —— 上游工具不得再自己 emit_tool_call（会叠成双卡）。
     """
     gate = _ExecutionGate()
+    tool_call_id = str(uuid.uuid4())
     card_params: dict[str, Any] = {
         "command": command,
         "ssh_session_id": ssh_session_id,
@@ -928,7 +929,7 @@ def execute_via_ssh(
     }
     if explanation:
         card_params["explanation"] = explanation
-    emit_tool_call_card(ctx, tool_name, card_params, "started")
+    emit_tool_call_card(ctx, tool_name, card_params, "started", tool_call_id=tool_call_id)
     try:
         result = _execute_via_ssh_impl(
             ctx,
@@ -940,6 +941,7 @@ def execute_via_ssh(
             readonly=readonly,
             skip_approval=skip_approval,
             gate=gate,
+            tool_call_id=tool_call_id,
         )
     except Exception as exc:
         # 只有 started 会让前端留一张永远转圈的卡：孤儿 completed 会被丢弃，
@@ -950,6 +952,7 @@ def execute_via_ssh(
             card_params,
             "error",
             {"status": "error", "command": command, "error": str(exc)},
+            tool_call_id=tool_call_id,
         )
         raise
     finally:
@@ -960,6 +963,7 @@ def execute_via_ssh(
         card_params,
         "completed" if result.get("status") == "success" else "error",
         result,
+        tool_call_id=tool_call_id,
     )
     return result
 
@@ -974,6 +978,7 @@ def _execute_via_ssh_impl(
     readonly: bool = False,
     skip_approval: bool = False,
     gate: _ExecutionGate | None = None,
+    tool_call_id: str | None = None,
 ) -> dict[str, Any]:
     """通过 RustBridge 调用 Rust 后端执行 SSH 命令
 
@@ -1463,6 +1468,9 @@ def _execute_via_ssh_impl(
         }
         if operation_id:
             ssh_params["operationId"] = operation_id
+        background_ssh_params = ssh_params.copy()
+        if tool_call_id:
+            background_ssh_params["toolCallId"] = tool_call_id
         visible_terminal = (
             getattr(ctx, "execution_channel", "background") == "visible-terminal"
         )
@@ -1556,9 +1564,9 @@ def _execute_via_ssh_impl(
                             f"可见终端这次不可用（原因 {reroute_reason}），"
                             "命令改走后台 SSH 通道执行：结果真实，但不会出现在终端界面上。"
                         )
-                    result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
+                    result = ctx.rust_bridge.ipc_invoke("ssh_command", background_ssh_params)
         else:
-            result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
+            result = ctx.rust_bridge.ipc_invoke("ssh_command", background_ssh_params)
     except Exception as e:
         logger.exception(
             f"execute_via_ssh ipc_invoke exception: tool={tool_name}, "
@@ -2084,13 +2092,14 @@ def emit_tool_call_card(
     params: dict[str, Any],
     status: str,
     result: dict[str, Any] | None = None,
+    tool_call_id: str | None = None,
 ) -> None:
     """聊天里那张"工具调用卡"的唯一出口（started / completed / error 成对）。
 
     #114（2026-09-23）：以前每个工具各自手抄一遍 emit_tool_call，结果卡"有有、
     没有没有"——ops_extended 五个工具一个都不发，命令照样进了终端却查不到来源。
     凡往终端写命令的路径都由 execute_via_ssh 走这里；教学链复用同一个出口，
-    因为前端只认这一种事件（sidecar-adapter.ts 按 tool_name FIFO 配对 started/终态）。
+    因为前端只认这一种事件。SSH 调用与原生增量共用调用 ID，旧事件保留 FIFO 兼容。
     """
     if ctx.event_bus is None:
         return
@@ -2102,6 +2111,7 @@ def emit_tool_call_card(
             status=status,
             session_id=ctx.session_id or None,
             source=f"{ctx.agent_name}_agent.strands_tool.{tool_name}",
+            **({"tool_call_id": tool_call_id} if tool_call_id else {}),
         )
     except Exception as exc:  # noqa: BLE001 — UI telemetry must not block execution
         logger.debug("emit_tool_call failed: tool=%s status=%s err=%s", tool_name, status, exc)

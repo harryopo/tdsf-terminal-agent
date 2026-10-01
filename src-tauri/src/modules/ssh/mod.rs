@@ -930,11 +930,13 @@ pub struct SshCommandResult {
     pub operation_id: Option<String>,
 }
 
-/// 后台 exec 的原生输出增量。前端按 operationId 聚合；最终事实仍以
+/// 后台 exec 的原生输出增量。前端按 toolCallId 关联调用及 operationId；最终事实仍以
 /// SshCommandResult.exit_code 为准。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshCommandOutputEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     pub operation_id: Option<String>,
     pub conversation_session_id: Option<String>,
     pub ssh_session_id: u32,
@@ -989,6 +991,7 @@ pub async fn ssh_command(
     operation_id: Option<String>,
     conversation_session_id: Option<String>,
     tool_name: Option<String>,
+    tool_call_id: Option<String>,
 ) -> Result<SshCommandResult, String> {
     let start = std::time::Instant::now();
     log::info!(
@@ -1008,12 +1011,14 @@ pub async fn ssh_command(
     // 2. 每个原生 stdout/stderr chunk 立即推送到前端。开始事件让无首屏输出的
     // 命令也能立刻显示“执行中”，并刷新 Agent 活动计时。
     let event_operation_id = operation_id.clone();
+    let event_tool_call_id = tool_call_id.clone();
     let event_conversation_session_id = conversation_session_id.clone();
     let event_command = command.clone();
     let event_tool_name = tool_name.unwrap_or_else(|| "ssh_command".to_string());
     let _ = app.emit(
         "sidecar:ssh_command_output",
         SshCommandOutputEvent {
+            tool_call_id: tool_call_id.clone(),
             operation_id: operation_id.clone(),
             conversation_session_id: conversation_session_id.clone(),
             ssh_session_id: session_id,
@@ -1030,6 +1035,7 @@ pub async fn ssh_command(
     let output_callback: Arc<dyn Fn(Vec<u8>, bool) + Send + Sync> = Arc::new(
         move |bytes, is_stderr| {
             let event = SshCommandOutputEvent {
+                tool_call_id: event_tool_call_id.clone(),
                 operation_id: event_operation_id.clone(),
                 conversation_session_id: event_conversation_session_id.clone(),
                 ssh_session_id: session_id,
@@ -1067,6 +1073,7 @@ pub async fn ssh_command(
             let _ = app.emit(
                 "sidecar:ssh_command_output",
                 SshCommandOutputEvent {
+                    tool_call_id: tool_call_id.clone(),
                     operation_id: operation_id.clone(),
                     conversation_session_id: conversation_session_id.clone(),
                     ssh_session_id: session_id,
@@ -1101,6 +1108,7 @@ pub async fn ssh_command(
             let _ = app.emit(
                 "sidecar:ssh_command_output",
                 SshCommandOutputEvent {
+                    tool_call_id,
                     operation_id: operation_id.clone(),
                     conversation_session_id,
                     ssh_session_id: session_id,
@@ -1363,6 +1371,7 @@ mod tests {
     #[test]
     fn test_ssh_command_output_event_serialization() {
         let event = SshCommandOutputEvent {
+            tool_call_id: Some("call-1".to_string()),
             operation_id: Some("operation-1".to_string()),
             conversation_session_id: Some("chat-1".to_string()),
             ssh_session_id: 7,
@@ -1375,10 +1384,17 @@ mod tests {
         };
 
         let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"toolCallId\":\"call-1\""));
         assert!(json.contains("\"conversationSessionId\":\"chat-1\""));
         assert!(json.contains("\"sshSessionId\":7"));
         assert!(json.contains("\"toolName\":\"package_manage\""));
         assert!(json.contains("\"chunk\":\"Downloading 10%\\n\""));
+        let legacy_event = SshCommandOutputEvent {
+            tool_call_id: None,
+            ..event
+        };
+        let legacy_json = serde_json::to_value(legacy_event).unwrap();
+        assert!(legacy_json.get("toolCallId").is_none());
     }
 
     #[tokio::test]

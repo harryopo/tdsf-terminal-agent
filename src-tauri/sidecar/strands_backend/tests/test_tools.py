@@ -268,6 +268,7 @@ class TestSshCommandTool(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["command"], "ls -la /tmp")
         self.assertIn("output", result)
+        tool_call_id = ctx.event_bus.emit_tool_call.call_args_list[0].kwargs["tool_call_id"]
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
             {
@@ -276,6 +277,7 @@ class TestSshCommandTool(unittest.TestCase):
                 "timeout": 30,
                 "conversationSessionId": "test-session",
                 "toolName": "ssh_command",
+                "toolCallId": tool_call_id,
             },
         )
 
@@ -2933,6 +2935,7 @@ class TestExtendedOpsTools(unittest.TestCase):
         ctx, bridge = self._ctx()
         r = invoke_service_manage_tool({"action": "status", "service": "nginx"}, ctx)
         self.assertEqual(r["status"], "success")
+        tool_call_id = ctx.event_bus.emit_tool_call.call_args_list[0].kwargs["tool_call_id"]
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
             {
@@ -2941,6 +2944,7 @@ class TestExtendedOpsTools(unittest.TestCase):
                 "timeout": 30,
                 "conversationSessionId": "test-session",
                 "toolName": "service_manage",
+                "toolCallId": tool_call_id,
             },
         )
 
@@ -2964,6 +2968,7 @@ class TestExtendedOpsTools(unittest.TestCase):
         ):
             r = invoke_package_manage_tool({"action": "install", "package": "nginx"}, ctx)
         self.assertEqual(r["status"], "success")
+        tool_call_id = ctx.event_bus.emit_tool_call.call_args_list[0].kwargs["tool_call_id"]
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
             {
@@ -2972,6 +2977,7 @@ class TestExtendedOpsTools(unittest.TestCase):
                 "timeout": 120,
                 "conversationSessionId": "test-session",
                 "toolName": "package_manage",
+                "toolCallId": tool_call_id,
             },
         )
 
@@ -2991,6 +2997,7 @@ class TestExtendedOpsTools(unittest.TestCase):
                 {"action": "install", "package": "nginx", "package_manager": "apt"}, ctx
             )
         self.assertEqual(r["status"], "success")
+        tool_call_id = ctx.event_bus.emit_tool_call.call_args_list[0].kwargs["tool_call_id"]
         bridge.ipc_invoke.assert_called_once_with(
             "ssh_command",
             {
@@ -2999,6 +3006,7 @@ class TestExtendedOpsTools(unittest.TestCase):
                 "timeout": 120,
                 "conversationSessionId": "test-session",
                 "toolName": "package_manage",
+                "toolCallId": tool_call_id,
             },
         )
 

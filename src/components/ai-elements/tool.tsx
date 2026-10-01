@@ -6,10 +6,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import {
-  onSshCommandOutput,
-  type SshCommandOutputEvent,
-} from "@/lib/sidecar-bridge";
+import { useSshCommandOutputStore } from "@/modules/ai/store/sshCommandOutputStore";
 import { cn } from "@/lib/utils";
 import {
   formatTeachingResultForAgent,
@@ -516,6 +513,7 @@ function deriveSummary(toolName: string, input: unknown): string | null {
 
 export type ToolProps = ComponentProps<typeof Collapsible> & {
   toolName: string;
+  toolCallId?: string;
   state: ToolPart["state"];
   input?: unknown;
   output?: unknown;
@@ -538,84 +536,87 @@ const HEAVY_CONTENT_TOOLS = new Set([
   "todo_write",
 ]);
 
-const MAX_LIVE_SSH_OUTPUT = 65_536;
-
-function appendLiveSshOutput(current: string, chunk: string): string {
-  const combined = current + chunk;
-  return combined.length <= MAX_LIVE_SSH_OUTPUT
-    ? combined
-    : combined.slice(-MAX_LIVE_SSH_OUTPUT);
-}
-
-function SshCommandLiveOutput({ command }: { command: string }) {
-  const sessionId = useChatStore((state) => state.activeSessionId);
-  const [live, setLive] = useState<SshCommandOutputEvent | null>(null);
-  const [output, setOutput] = useState("");
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten = () => {};
-
-    void onSshCommandOutput((event) => {
-      if (disposed) return;
-      if (
-        event.conversationSessionId &&
-        event.conversationSessionId !== sessionId
-      ) {
-        return;
-      }
-      if (event.command.trim() !== command.trim()) return;
-
-      setLive(event);
-      setOutput((current) =>
-        event.status === "running" && event.stream === "status"
-          ? event.chunk
-          : appendLiveSshOutput(current, event.chunk),
-      );
-    }).then((dispose) => {
-      if (disposed) dispose();
-      else unlisten = dispose;
-    });
-
-    return () => {
-      disposed = true;
-      unlisten();
-    };
-  }, [command, sessionId]);
-
-  const completed = live?.status === "completed";
-  const failed = live?.status === "failed";
-  const label = completed ? "已完成" : failed ? "执行失败" : "实时回显";
-
+function SshOutputStreams({
+  stdout,
+  stderr,
+  emptyText,
+  merged = false,
+}: {
+  stdout: string;
+  stderr: string;
+  emptyText: string;
+  merged?: boolean;
+}) {
+  const streams = [
+    [merged ? "终端回显（合流）" : "stdout", stdout],
+    ["stderr", stderr],
+  ] as const;
   return (
     <div className="space-y-1.5">
+      {streams.filter(([, content]) => content).map(([stream, content]) => (
+        <div key={stream} className="space-y-1">
+          <div className="text-[10px] font-medium text-muted-foreground">
+            {stream}
+          </div>
+          <pre className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
+            {content}
+          </pre>
+        </div>
+      ))}
+      {!stdout && !stderr ? (
+        <div className="text-[11px] text-muted-foreground">{emptyText}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SshCommandLiveOutput({ toolCallId }: { toolCallId: string }) {
+  const live = useSshCommandOutputStore((state) => state.calls[toolCallId]);
+  if (!live) return null;
+  const completed = live.ended;
+  const unknownExit = live.exitCode == null || live.exitCode < 0;
+  // Native stream termination is not the Python risk/business verdict.
+  const label = completed
+    ? unknownExit
+      ? "退出状态未确认"
+      : "输出已返回"
+    : "实时回显";
+
+  return (
+    <div className="space-y-1.5" aria-live="polite">
       <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
         <span
           aria-hidden="true"
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            completed && "bg-emerald-500",
-            failed && "bg-destructive",
-            !completed && !failed && "animate-pulse bg-sky-500",
+            completed && (unknownExit ? "bg-amber-500" : "bg-emerald-500"),
+            !completed && "animate-pulse bg-sky-500",
           )}
         />
         <span
           className={cn(
             "font-medium",
-            completed && "text-emerald-700 dark:text-emerald-400",
-            failed && "text-destructive",
-            !completed && !failed && "text-sky-700 dark:text-sky-400",
+            completed && (unknownExit
+              ? "text-amber-700 dark:text-amber-400"
+              : "text-emerald-700 dark:text-emerald-400"),
+            !completed && "text-sky-700 dark:text-sky-400",
           )}
         >
           {label}
         </span>
       </div>
-      <pre
-        aria-live="polite"
-        className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words"
-      >
-        {output || (live?.status === "running" ? "等待远端输出…" : "等待命令开始…")}
-      </pre>
+      <SshOutputStreams
+        stdout={live.stdout}
+        stderr={live.stderr}
+        emptyText={completed
+          ? "（未收到可展示的原生输出）"
+          : live.operationId ? "等待远端输出…" : "等待命令开始…"}
+      />
+      {live.truncated ? (
+        <div className="text-[10px] text-muted-foreground">
+          实时回显已截断，仅保留各流最近 65,536 个字符。
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -623,6 +624,7 @@ function SshCommandLiveOutput({ command }: { command: string }) {
 const ToolImpl = ({
   className,
   toolName,
+  toolCallId,
   state,
   input,
   output,
@@ -631,6 +633,9 @@ const ToolImpl = ({
   defaultOpen,
   ...props
 }: ToolProps) => {
+  const hasSshOutputCall = useSshCommandOutputStore(
+    (store) => Boolean(toolCallId && store.calls[toolCallId]),
+  );
   // Task 3.1: 审批等待态 + 提供了响应回调 → 渲染四层审批卡（三按钮）。
   // 未提供回调时保持通用折叠卡渲染（向后兼容，approval 交互由上层处理）。
   if (state === "approval-requested" && onApprovalRespond) {
@@ -650,14 +655,8 @@ const ToolImpl = ({
   const catColor = CATEGORY_META[meta.category].color;
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
-  const sshCommand =
-    toolName === "ssh_command" &&
-    input &&
-    typeof input === "object" &&
-    typeof (input as Record<string, unknown>).command === "string"
-      ? ((input as Record<string, unknown>).command as string)
-      : null;
-  const showLiveSshOutput = state === "input-streaming" && Boolean(sshCommand);
+  const showLiveSshOutput =
+    (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
   // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
   // part 状态停在 output-available → 状态点会谎报 done。内容判失败时同步降级徽标。
   const innerFailure = state === "output-available" && isFailedOutput(output);
@@ -746,8 +745,8 @@ const ToolImpl = ({
             {showInputBody ? (
               <ToolInput toolName={toolName} input={input} />
             ) : null}
-            {showLiveSshOutput && sshCommand ? (
-              <SshCommandLiveOutput command={sshCommand} />
+            {showLiveSshOutput && toolCallId ? (
+              <SshCommandLiveOutput toolCallId={toolCallId} />
             ) : null}
             {showOutputBody || errorText ? (
               <ToolOutput
@@ -768,6 +767,7 @@ const ToolImpl = ({
 // token. We compare the cheap derived summary instead of the input ref.
 export const Tool = memo(ToolImpl, (a, b) => {
   if (a.toolName !== b.toolName || a.state !== b.state) return false;
+  if (a.toolCallId !== b.toolCallId) return false;
   if (a.errorText !== b.errorText) return false;
   if (a.output !== b.output) return false;
   if (a.className !== b.className) return false;
@@ -2079,7 +2079,6 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
       : null;
   const exit = typeof data.exit_code === "number" ? data.exit_code : null;
   const duration = typeof data.duration === "number" ? data.duration : null;
-  const body = output || stderr || "（命令没有产生可展示的输出）";
   const durationLabel =
     duration == null
       ? null
@@ -2118,9 +2117,12 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
         </div>
       ) : null}
       <div className="text-[10px] font-medium text-muted-foreground">终端输出</div>
-      <pre className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-        {body}
-      </pre>
+      <SshOutputStreams
+        stdout={output}
+        stderr={stderr}
+        emptyText="（命令没有产生可展示的输出）"
+        merged={data.execution_channel === "visible-terminal"}
+      />
     </div>
   );
 }

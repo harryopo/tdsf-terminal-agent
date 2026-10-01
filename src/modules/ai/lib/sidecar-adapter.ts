@@ -30,6 +30,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { UIMessageChunk } from "ai";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
+import type { SshCommandOutputEvent } from "@/lib/sidecar-bridge";
+import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
 import {
   TDSF_AGENTS,
   type AgentMode,
@@ -272,6 +274,9 @@ const STREAM_CHUNK_SIZE = 96;
  * （让 React 有机会渲染当前 chunk），但不引入额外延迟。
  */
 const STREAM_CHUNK_DELAY_MS = 0;
+
+// The shared output store must distinguish invokes within one clock tick.
+let streamSeq = 0;
 
 /**
  * invoke 完成后等待 in-flight `sidecar:tool_call` / `sidecar:agent_message`
@@ -525,10 +530,6 @@ interface AgentMessagePayload {
   message_type?: string; // 兼容旧字段名（event_bus 早期使用 message_type）
   agent?: string;
   [k: string]: unknown;
-}
-
-interface SshCommandOutputPayload {
-  conversationSessionId?: string | null;
 }
 
 // === 内部工具函数 ============================================================
@@ -895,7 +896,7 @@ export async function* runSidecarStream(
   }
 
   const pythonName = mapToPythonName(agentId);
-  const streamId = `tdsf-${agentId}-${Date.now()}`;
+  const streamId = `tdsf-${agentId}-${Date.now()}-${++streamSeq}`;
   const thinkingId = `${streamId}-thinking`;
   const outputId = `${streamId}-output`;
   // TDSF: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
@@ -938,6 +939,21 @@ export async function* runSidecarStream(
       ids.push(toolCallId);
       toolIdsByName.set(name, ids);
       if (eventKey) toolIdsByEventId.set(eventKey, toolCallId);
+      const params = p.params && typeof p.params === "object"
+        ? p.params as Record<string, unknown> : null;
+      if (eventCallId && typeof params?.command === "string") {
+        const target = params.ssh_session_id === "" || params.ssh_session_id == null
+          ? live.sshSessionId : Number(params.ssh_session_id);
+        useSshCommandOutputStore.getState().begin({
+          toolCallId,
+          backendToolCallId: eventCallId,
+          conversationSessionId: sessionId ?? null,
+          toolName: name,
+          command: params.command,
+          sshSessionId: target != null && Number.isInteger(target) && target > 0
+            ? target : undefined,
+        });
+      }
       // #143：从这一刻起这条链路上没有事件是"正常"的 —— 工具在跑。
       toolInFlight(true);
       queue.push({
@@ -978,6 +994,7 @@ export async function* runSidecarStream(
       }
       // #143：这条工具落地了 —— 没有别的在飞、也没在等人时计时才重新开始走。
       toolInFlight(false);
+      useSshCommandOutputStore.getState().finish(toolCallId);
       queue.push({
         type: "tool-output",
         toolCallId,
@@ -1028,11 +1045,15 @@ export async function* runSidecarStream(
   );
   let unlistenSshOutput: UnlistenFn = () => {};
   try {
-    unlistenSshOutput = await listen<SshCommandOutputPayload>(
+    unlistenSshOutput = await listen<SshCommandOutputEvent>(
       "sidecar:ssh_command_output",
       (event) => {
         const eventSessionId = event.payload?.conversationSessionId;
         if (eventSessionId && eventSessionId !== sessionId) return;
+        const { toolCallId, toolName } = event.payload;
+        if (toolCallId && toolName && toolIdsByEventId.has(`${toolName}:${toolCallId}`)) {
+          useSshCommandOutputStore.getState().record(event.payload);
+        }
         queue.push({ type: "activity" });
       },
     );
@@ -1303,6 +1324,9 @@ export async function* runSidecarStream(
     queue.close();
     unlisten();
     unlistenSshOutput();
+    for (const ids of toolIdsByName.values()) {
+      for (const id of ids) useSshCommandOutputStore.getState().finish(id);
+    }
   }
 }
 

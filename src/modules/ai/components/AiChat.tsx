@@ -941,6 +941,7 @@ const RenderedTool = memo(function RenderedTool({
     return (
       <Tool
         toolName={toolName}
+        toolCallId={part.toolCallId}
         state={part.state}
         input={part.input}
         onApprovalRespond={handleApprovalRespond}
@@ -951,6 +952,7 @@ const RenderedTool = memo(function RenderedTool({
   return (
     <Tool
       toolName={toolName}
+      toolCallId={part.toolCallId}
       state={part.state}
       input={part.input}
       output={"output" in part ? part.output : undefined}

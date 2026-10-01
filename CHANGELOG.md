@@ -5,6 +5,10 @@ stable release.
 
 ## Unreleased
 
+- Agent tool cards accept the SDK's running `input-available` state and collect
+  background SSH output by call identity even while collapsed. Standard output
+  and standard error remain separately visible; visible-terminal output is labelled
+  as merged. Missing identities are not guessed, and final output is not appended twice.
 - Windows builds restore and verify both pinned completion binaries before packaging,
   and reject NSIS installers that omit them. Archive and extracted-binary checksums
   are checked separately, so verified local resources are not downloaded again.

@@ -1319,6 +1319,18 @@ async fn handle_reverse_request(
                 .get("toolName")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
+            let tool_call_id = match params.get("toolCallId") {
+                Some(value) => {
+                    let value = value
+                        .as_str()
+                        .ok_or("ssh_command: toolCallId must be a string")?;
+                    if value.is_empty() {
+                        return Err("ssh_command: toolCallId must not be empty".into());
+                    }
+                    Some(value.to_string())
+                }
+                None => None,
+            };
 
             let ssh_state = app.state::<crate::ssh::SshState>();
             let result = crate::ssh::ssh_command(
@@ -1330,6 +1342,7 @@ async fn handle_reverse_request(
                 operation_id,
                 conversation_session_id,
                 tool_name,
+                tool_call_id,
             )
             .await?;
 
