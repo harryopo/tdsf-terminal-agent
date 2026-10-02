@@ -482,7 +482,8 @@ type StoreState = {
   /**
    * 会话级只读免审标志（Task 5，方案书 v3.1 §4.5 免确认记忆三级）
    *
-   * ⚡「批准且本会话只读免审」按钮点击时置位；纯内存不落盘（spec：
+   * 审批所属链维护显示标记；needs_you 仅在确认接受且原归属仍为当前聊天时置位。
+   * 纯内存不落盘（spec：
    * 会话级不落盘），切会话/新建会话时重置为 false。Python 侧经
    * needs_you.respond 的 trust 响应同步记录（trust_store.SessionTrustStore），
    * 本字段仅承载前端会话状态（审批卡提示等 UI 消费）。

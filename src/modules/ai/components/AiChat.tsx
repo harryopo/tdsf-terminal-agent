@@ -923,7 +923,7 @@ const RenderedTool = memo(function RenderedTool({
   //   ① AI SDK 审批状态机（part → approval-responded，AgentRunBridge 的
   //      approvalsPending/awaiting-approval 状态随之推进——旧状态机不破坏），
   //      note 作为 reason 原生透传模型；
-  //   ② ⚡会话免审标志兜底置位（幂等，⚡按钮本身已置位）。
+  //   ② 此 SDK 审批父回调维护前端会话免审标志，通用按钮只回传意图。
   const approvalId =
     part.state === "approval-requested" ? part.approval.id : null;
   const handleApprovalRespond = useCallback(

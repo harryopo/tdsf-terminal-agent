@@ -5,6 +5,13 @@ stable release.
 
 ## Unreleased
 
+- Sidecar approval and question cards show response submission and disable repeat
+  actions while awaiting acknowledgement. Invalid acknowledgements retain the
+  card and answer with a visible retry message; retrying responds to the request,
+  not the command. Late RPC failures cannot revive settled requests. The frontend
+  read-only-trust indicator updates only after an accepted approval for the same
+  known, currently active chat. Backend execution and safety rules are unchanged;
+  response acceptance does not mean command completion.
 - Remove the legacy in-memory OSC diagnostic buffer that could retain discarded
   SSH input and directory paths. Terminal input and directory-following behavior
   remain unchanged; this does not erase existing terminal history or saved logs.

@@ -17,7 +17,7 @@
  * error / handoff 类型仍由既有状态提示处理；responded / timeout / cancelled
  * 事件到达时自动移卡。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -144,15 +144,18 @@ function buildItem(
 function NeedsYouQuestionCard({
   item,
   onAnswer,
+  submitting,
 }: {
   item: QuestionItem;
   onAnswer: (answer: string) => void;
+  submitting: boolean;
 }) {
   const [answer, setAnswer] = useState("");
   return (
     <div
       className="rounded-lg border border-border bg-card p-3 shadow-sm"
       data-question-card=""
+      aria-busy={submitting}
     >
       <div className="text-xs font-medium text-foreground">{item.title}</div>
       <div className="mt-1 text-sm leading-relaxed text-foreground">
@@ -166,6 +169,7 @@ function NeedsYouQuestionCard({
               type="button"
               size="sm"
               variant={answer === option ? "default" : "outline"}
+              disabled={submitting}
               onClick={() => setAnswer(option)}
             >
               {option}
@@ -176,18 +180,27 @@ function NeedsYouQuestionCard({
         <Input
           className="mt-2"
           aria-label="回答"
+          disabled={submitting}
           value={answer}
           onChange={(event) => setAnswer(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && answer.trim()) onAnswer(answer.trim());
+            if (event.key === "Enter" && !submitting && answer.trim()) {
+              event.preventDefault();
+              onAnswer(answer.trim());
+            }
           }}
         />
       )}
-      <div className="mt-2 flex justify-end">
+      <div className="mt-2 flex items-center justify-end gap-2">
+        {submitting && (
+          <span role="status" className="text-xs text-muted-foreground">
+            正在提交回答…
+          </span>
+        )}
         <Button
           type="button"
           size="sm"
-          disabled={!answer.trim()}
+          disabled={submitting || !answer.trim()}
           onClick={() => onAnswer(answer.trim())}
         >
           {item.confirmLabel}
@@ -203,9 +216,24 @@ function NeedsYouQuestionCard({
  */
 export function NeedsYouApprovalCards() {
   const [items, setItems] = useState<NeedsYouItem[]>([]);
-  // 已响应/已终结请求集合（防双击重复 respond；responded/timeout 事件同样入集）
+  const [responses, setResponses] = useState<
+    Record<string, { submitting: boolean; error?: string }>
+  >({});
+  // 终态与在飞答复分开：迟到的 RPC 失败不能撤销已收到的终态。
   const resolvedRef = useRef<Set<string>>(new Set());
+  const inFlightRef = useRef<Set<string>>(new Set());
   const activeSessionId = useChatStore((s) => s.activeSessionId);
+
+  const settleRequest = useCallback((reqId: string) => {
+    resolvedRef.current.add(reqId);
+    useNeedsYouWait.getState().markSettled(reqId);
+    setItems((cur) => cur.filter((item) => item.reqId !== reqId));
+    setResponses((cur) => {
+      const next = { ...cur };
+      delete next[reqId];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,9 +269,7 @@ export function NeedsYouApprovalCards() {
         eventName === "cancelled"
       ) {
         // 用户已响应 / 5 分钟超时自动拒绝 / Agent 取消 → 移卡 + 撤销等待记账
-        resolvedRef.current.add(reqId);
-        useNeedsYouWait.getState().markSettled(reqId);
-        setItems((cur) => cur.filter((i) => i.reqId !== reqId));
+        settleRequest(reqId);
       }
     }).then((fn) => {
       if (cancelled) fn();
@@ -253,7 +279,7 @@ export function NeedsYouApprovalCards() {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [settleRequest]);
 
   // #59 补水合：needs_you 的 created 只推一次，页面重载 / 挂载竞态期间错过的
   // 事件不会重放。approval 还有 300s 超时兜底，而 question 的 deadline 恒为
@@ -301,18 +327,65 @@ export function NeedsYouApprovalCards() {
     };
   }, []);
 
+  const submitResponse = async (
+    item: NeedsYouItem,
+    response: Record<string, unknown>,
+    expectedStatus: "approved" | "rejected" | "resolved",
+    sessionTrust = false,
+  ) => {
+    const reqId = item.reqId;
+    if (resolvedRef.current.has(reqId) || inFlightRef.current.has(reqId)) return;
+    inFlightRef.current.add(reqId);
+    setResponses((cur) => ({ ...cur, [reqId]: { submitting: true } }));
+    try {
+      const result = await invokeRpc<unknown>("needs_you.respond", {
+        req_id: reqId,
+        response,
+      });
+      const ack =
+        result && typeof result === "object" && !Array.isArray(result)
+          ? (result as Record<string, unknown>)
+          : null;
+      if (
+        !ack ||
+        ack.id !== reqId ||
+        ack.type !== item.kind ||
+        ack.status !== expectedStatus ||
+        (item.sessionId && ack.session_id !== item.sessionId)
+      ) {
+        throw new Error("needs_you.respond did not acknowledge this response");
+      }
+      // 只更新已知原归属且仍是当前聊天的显示标记，不从回执猜测归属。
+      if (
+        sessionTrust &&
+        expectedStatus === "approved" &&
+        item.sessionId &&
+        useChatStore.getState().activeSessionId === item.sessionId
+      ) {
+        useChatStore.getState().setSessionReadOnlyTrust(true);
+      }
+      settleRequest(reqId);
+    } catch (error: unknown) {
+      // 服务终态可能先于 RPC 回包；绝不删除终态屏障或重新挂起等待。
+      if (!resolvedRef.current.has(reqId)) {
+        console.error(`needs_you.respond failed (req_id=${reqId}):`, error);
+        setResponses((cur) => ({
+          ...cur,
+          [reqId]: {
+            submitting: false,
+            error: "答复提交失败，请重试答复；这里不会重新发送命令。",
+          },
+        }));
+      }
+    } finally {
+      inFlightRef.current.delete(reqId);
+    }
+  };
+
   const handleRespond = (
-    reqId: string,
+    item: ApprovalItem,
     resp: Parameters<ToolApprovalRespond>[0],
   ) => {
-    if (resolvedRef.current.has(reqId)) return; // 防重复点击
-    resolvedRef.current.add(reqId);
-    // ⚡会话免审：置位前端会话标志（幂等——⚡按钮点击时 tool.tsx 已置位，
-    // 此处兜底覆盖其他触发路径）；Python 侧由 needs_you.respond 的 trust
-    // 钩子（_record_trust_maybe → trust_store.record_session_trust）记录
-    if (resp.sessionTrust) {
-      useChatStore.getState().setSessionReadOnlyTrust(true);
-    }
     const response: Record<string, unknown> = { approved: resp.approved };
     if (resp.note) {
       // 拒绝附言：reason 对齐 Python needs_you.reject(reason=...) 消费习惯；
@@ -326,31 +399,16 @@ export function NeedsYouApprovalCards() {
       response.decision = "trust";
       response.sessionTrust = true;
     }
-    void invokeRpc("needs_you.respond", { req_id: reqId, response })
-      .then(() => {
-        useNeedsYouWait.getState().markSettled(reqId);
-        setItems((cur) => cur.filter((i) => i.reqId !== reqId));
-      })
-      .catch((e: unknown) => {
-        // 不静默吞错：打印并恢复可重试（请求保持 pending，Python 300s 超时兜底拒绝）
-        // 等待事实也保持不动——回话没送达，Python 那边确实还挂着。
-        console.error(`needs_you.respond failed (req_id=${reqId}):`, e);
-        resolvedRef.current.delete(reqId);
-      });
+    void submitResponse(
+      item,
+      response,
+      resp.approved ? "approved" : "rejected",
+      resp.sessionTrust,
+    );
   };
 
-  const handleQuestionAnswer = (reqId: string, answer: string) => {
-    if (resolvedRef.current.has(reqId)) return;
-    resolvedRef.current.add(reqId);
-    void invokeRpc("needs_you.respond", { req_id: reqId, response: { answer } })
-      .then(() => {
-        useNeedsYouWait.getState().markSettled(reqId);
-        setItems((cur) => cur.filter((item) => item.reqId !== reqId));
-      })
-      .catch((error: unknown) => {
-        console.error(`needs_you.respond failed (req_id=${reqId}):`, error);
-        resolvedRef.current.delete(reqId);
-      });
+  const handleQuestionAnswer = (item: QuestionItem, answer: string) => {
+    void submitResponse(item, { answer }, "resolved");
   };
 
   // 跨会话隔离：带 session_id 且与当前会话不符的请求不渲染（留给 Python 超时兜底）。
@@ -374,14 +432,21 @@ export function NeedsYouApprovalCards() {
           key={active.reqId}
           toolName={active.toolName}
           input={active.input}
-          onRespond={(resp) => handleRespond(active.reqId, resp)}
+          submitting={responses[active.reqId]?.submitting ?? false}
+          onRespond={(resp) => handleRespond(active, resp)}
         />
       ) : (
         <NeedsYouQuestionCard
           key={active.reqId}
           item={active}
-          onAnswer={(answer) => handleQuestionAnswer(active.reqId, answer)}
+          submitting={responses[active.reqId]?.submitting ?? false}
+          onAnswer={(answer) => handleQuestionAnswer(active, answer)}
         />
+      )}
+      {responses[active.reqId]?.error && (
+        <div role="alert" className="text-xs text-destructive">
+          {responses[active.reqId].error}
+        </div>
       )}
     </div>
   );

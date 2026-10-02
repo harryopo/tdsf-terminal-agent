@@ -118,6 +118,7 @@ type ToolApprovalCardProps = {
   /** 工具调用 input（四层字段：semantic / command / explanation / impact / risk_l） */
   input?: unknown;
   onRespond: ToolApprovalRespond;
+  submitting?: boolean;
   className?: string;
 };
 
@@ -130,6 +131,7 @@ export function ToolApprovalCard({
   toolName,
   input,
   onRespond,
+  submitting = false,
   className,
 }: ToolApprovalCardProps) {
   const [showNote, setShowNote] = useState(false);
@@ -205,6 +207,7 @@ export function ToolApprovalCard({
         className,
       )}
       data-approval-card={toolName}
+      aria-busy={submitting}
     >
       {/* 卡头 */}
       <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-1.5">
@@ -216,10 +219,10 @@ export function ToolApprovalCard({
           className="shrink-0 text-muted-foreground"
         />
         <span className="text-[12px] font-medium text-foreground">
-          等待你的确认
+          {submitting ? "正在提交确认…" : "等待你的确认"}
         </span>
         <span className="ml-auto text-[10px] text-muted-foreground">
-          确认后才会执行
+          {submitting ? "等待后台确认" : "确认后才会执行"}
         </span>
       </div>
 
@@ -256,6 +259,7 @@ export function ToolApprovalCard({
         {showNote && (
           <div className="space-y-1.5">
             <textarea
+              disabled={submitting}
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="附言（可选）：告诉 Agent 为什么拒绝 / 期望的替代方案"
@@ -273,6 +277,7 @@ export function ToolApprovalCard({
             <Button
               size="sm"
               variant="ghost"
+              disabled={submitting}
               onClick={() => setShowNote(false)}
               className="h-7 text-[11px]"
             >
@@ -281,6 +286,7 @@ export function ToolApprovalCard({
             <Button
               size="sm"
               variant="destructive"
+              disabled={submitting}
               onClick={rejectWithNote}
               className="h-7 gap-1.5 text-[11px]"
             >
@@ -292,6 +298,7 @@ export function ToolApprovalCard({
           <Button
             size="sm"
             variant="ghost"
+            disabled={submitting}
             onClick={() => setShowNote(true)}
             className="h-7 gap-1.5 text-[11px] text-destructive hover:text-destructive"
           >
@@ -303,10 +310,9 @@ export function ToolApprovalCard({
           <Button
             size="sm"
             variant="ghost"
+            disabled={submitting}
             onClick={() => {
-              // Task 5: ⚡点击 → 前端会话级免审标志置位（内存不落盘，切会话
-              // 重置）；Python 侧经 needs_you.respond 的 trust 响应同步记录
-              useChatStore.getState().setSessionReadOnlyTrust(true);
+              // 显示标记与业务接受确认由所属审批链处理，通用卡只回传意图。
               onRespond({ approved: true, sessionTrust: true });
             }}
             className="h-7 gap-1.5 text-[11px] text-muted-foreground"
@@ -319,6 +325,7 @@ export function ToolApprovalCard({
         <Button
           size="sm"
           variant="default"
+          disabled={submitting}
           onClick={() => onRespond({ approved: true })}
           className="h-7 gap-1.5 text-[11px]"
         >

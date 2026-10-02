@@ -225,6 +225,8 @@ The latest source also fixes live SSH output wiring in agent tool cards: collect
 
 The source also removes a legacy terminal diagnostic buffer that could retain discarded input and directory paths, and prevents settled approval/question cards from being restored by delayed pending-list snapshots. Normal input, directory following and recovery of pending requests are preserved. These fixes are not yet in the download and do not establish that manual-input jitter is resolved.
 
+Source approval and question cards show response submission and temporarily disable repeated actions. A response is accepted only with a backend acknowledgement matching the request identity and expected status. Failed submissions retain the card and answer for retrying the response, not rerunning the command; late failures cannot revive settled requests. The read-only-trust indicator updates only after an accepted approval whose original owner is still the active chat. This change covers the sidecar `needs_you` response path, is not yet in the download, and does not equate approval acceptance with command completion.
+
 Release flow: push a `v*` tag → CI builds the signed installer and update manifest into a **draft** release → you verify, then publish. The manifest only resolves published releases, so clients cannot see it before you click publish.
 
 ## Repository layout
