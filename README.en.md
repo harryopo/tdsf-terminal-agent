@@ -227,6 +227,8 @@ The source also removes a legacy terminal diagnostic buffer that could retain di
 
 Source approval and question cards show response submission and temporarily disable repeated actions. A response is accepted only with a backend acknowledgement matching the request identity and expected status. Failed submissions retain the card and answer for retrying the response, not rerunning the command; late failures cannot revive settled requests. The read-only-trust indicator updates only after an accepted approval whose original owner is still the active chat. This change covers the sidecar `needs_you` response path, is not yet in the download, and does not equate approval acceptance with command completion.
 
+SSH executor approvals appear in their original tool card when call, chat and target identities match exactly; folding tool details does not hide approval controls. Within their owning chat, unbound requests and questions remain answerable in the fallback area; requests belonging to other chats stay isolated. Rejection notes and submission state survive placement changes. Targets use known session identity without guessing a host. Backend approval and execution rules are unchanged; this change is also not yet in the download.
+
 Release flow: push a `v*` tag → CI builds the signed installer and update manifest into a **draft** release → you verify, then publish. The manifest only resolves published releases, so clients cannot see it before you click publish.
 
 ## Repository layout

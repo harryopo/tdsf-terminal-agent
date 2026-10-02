@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useSshCommandOutputStore } from "@/modules/ai/store/sshCommandOutputStore";
+import { NeedsYouApprovalContext } from "@/modules/ai/lib/needsYouApprovalContext";
 import {
   getToolResultStatus,
   legacyToolResultStatus,
@@ -59,7 +60,7 @@ import { toast } from "sonner";
 import { useTerminalCardTarget } from "@/modules/ai/lib/useTerminalCardTarget";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import type { ComponentProps, ReactNode } from "react";
-import { isValidElement, memo, useEffect, useRef, useState } from "react";
+import { isValidElement, memo, useContext, useEffect, useId, useRef, useState } from "react";
 
 
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
@@ -119,6 +120,8 @@ type ToolApprovalCardProps = {
   input?: unknown;
   onRespond: ToolApprovalRespond;
   submitting?: boolean;
+  draftNote?: string;
+  onDraftNoteChange?: (note: string) => void;
   className?: string;
 };
 
@@ -132,10 +135,13 @@ export function ToolApprovalCard({
   input,
   onRespond,
   submitting = false,
+  draftNote,
+  onDraftNoteChange,
   className,
 }: ToolApprovalCardProps) {
-  const [showNote, setShowNote] = useState(false);
-  const [note, setNote] = useState("");
+  const [showNote, setShowNote] = useState(Boolean(draftNote));
+  const [localNote, setLocalNote] = useState("");
+  const note = draftNote ?? localNote;
   const i = (input ?? {}) as Record<string, unknown>;
   const semantic = typeof i.semantic === "string" ? i.semantic : "";
   const command = typeof i.command === "string" ? i.command : "";
@@ -261,7 +267,7 @@ export function ToolApprovalCard({
             <textarea
               disabled={submitting}
               value={note}
-              onChange={(e) => setNote(e.target.value)}
+              onChange={(e) => (onDraftNoteChange ?? setLocalNote)(e.target.value)}
               placeholder="附言（可选）：告诉 Agent 为什么拒绝 / 期望的替代方案"
               rows={2}
               className="w-full resize-none rounded border border-border bg-background px-2 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -643,8 +649,9 @@ const ToolImpl = ({
   errorText,
   onApprovalRespond,
   defaultOpen,
+  inlineApproval,
   ...props
-}: ToolProps) => {
+}: ToolProps & { inlineApproval?: ReactNode }) => {
   const hasSshOutputCall = useSshCommandOutputStore(
     (store) => Boolean(toolCallId && store.calls[toolCallId]),
   );
@@ -668,7 +675,7 @@ const ToolImpl = ({
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
   const showLiveSshOutput =
-    (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
+    !inlineApproval && (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
   // SDK output-available 仅表示收到结果；业务状态仍由原始结果决定。
   const resultStatus =
     state === "output-available"
@@ -690,7 +697,7 @@ const ToolImpl = ({
   // 教学命令的 JSON 参数会和下方的命令卡重复；无论来自专用工具还是映射工具，
   // 教学界面只保留可执行卡。
   const showInputBody =
-    !isTeachingCard && !isHeavy && Boolean(input);
+    !inlineApproval && !isTeachingCard && !isHeavy && Boolean(input);
   // 重量级工具只在失败时展示输出体：成功路径的结果很小且重复，
   // 但内层 ok/success=false 的失败说明是用户唯一能看到「为什么失败」的地方。
   const showOutputBody =
@@ -721,14 +728,14 @@ const ToolImpl = ({
               ? resultIsFailure
                 ? "bg-destructive"
                 : "bg-amber-500"
-              : STATUS_DOT[state],
+              : STATUS_DOT[inlineApproval ? "approval-requested" : state],
           )}
           aria-label={
             resultStatus
               ? resultIsFailure
                 ? "failed"
                 : resultStatus
-              : STATUS_LABEL[state]
+              : STATUS_LABEL[inlineApproval ? "approval-requested" : state]
           }
         />
         <HugeiconsIcon
@@ -759,6 +766,8 @@ const ToolImpl = ({
         )}
       </CollapsibleTrigger>
 
+      {inlineApproval}
+
       {hasDetails && (
         <CollapsibleContent
           className={cn("tdsf-collapsible-content")}
@@ -787,7 +796,8 @@ const ToolImpl = ({
 // For heavy tools, the only thing that should trigger a re-render is a
 // state transition or the path summary changing — NOT every input-content
 // token. We compare the cheap derived summary instead of the input ref.
-export const Tool = memo(ToolImpl, (a, b) => {
+const ToolBody = memo(ToolImpl, (a, b) => {
+  if (a.inlineApproval !== b.inlineApproval) return false;
   if (a.toolName !== b.toolName || a.state !== b.state) return false;
   if (a.toolCallId !== b.toolCallId) return false;
   if (a.errorText !== b.errorText) return false;
@@ -800,6 +810,21 @@ export const Tool = memo(ToolImpl, (a, b) => {
   }
   return a.input === b.input;
 });
+
+export function Tool(props: ToolProps) {
+  const approvals = useContext(NeedsYouApprovalContext);
+  const registerTool = approvals?.registerTool;
+  const slotId = useId();
+  const { toolCallId, toolName, state } = props;
+  useEffect(() => {
+    if (!toolCallId || (state !== "input-streaming" && state !== "input-available")) return;
+    return registerTool?.(toolCallId, toolName, slotId);
+  }, [registerTool, toolCallId, toolName, state, slotId]);
+  // Context changes must not re-render every historical tool's heavy body.
+  const inlineApproval = approvals?.inline?.slotId === slotId
+    ? approvals.inline.card : null;
+  return <ToolBody {...props} inlineApproval={inlineApproval} />;
+}
 
 function ToolInput({ toolName, input }: { toolName: string; input: unknown }) {
   if (input == null) return null;

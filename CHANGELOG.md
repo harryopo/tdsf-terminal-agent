@@ -5,6 +5,12 @@ stable release.
 
 ## Unreleased
 
+- SSH executor approvals appear in their original tool card only when call,
+  chat and target identities match. Folding tool details does not hide the
+  approval. Within their owning chat, unbound requests and questions remain
+  answerable in the fallback area; response state and rejection notes survive
+  placement changes. This
+  changes presentation only, not backend approval or execution rules.
 - Sidecar approval and question cards show response submission and disable repeat
   actions while awaiting acknowledgement. Invalid acknowledgements retain the
   card and answer with a visible retry message; retrying responds to the request,

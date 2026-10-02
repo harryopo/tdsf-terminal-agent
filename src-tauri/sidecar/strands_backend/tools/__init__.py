@@ -788,6 +788,9 @@ def request_approval_and_wait(
     explanation: str = "",
     impact: dict[str, Any] | None = None,
     risk_l: int | None = None,
+    tool_call_id: str | None = None,
+    operation_id: str | None = None,
+    ssh_session_id: str | None = None,
 ) -> Any | None:
     """发起审批请求并阻塞等待用户响应（P1-1，真实 HITL 闭环）
 
@@ -837,6 +840,16 @@ def request_approval_and_wait(
         desc_lines.append(f"  原因: {risk_result.get('reason', '')}")
     desc_lines.append("  选择「执行」放行、「拒绝」终止（5 分钟无响应按拒绝处理）")
     description = "\n".join(desc_lines)
+    # Presentation identity only; req.id remains the response/execution gate key.
+    call_identity = {
+        key: value
+        for key, value in {
+            "tool_call_id": tool_call_id,
+            "operation_id": operation_id,
+            "ssh_session_id": ssh_session_id,
+        }.items()
+        if value
+    }
     try:
         req = service.request_approval(
             title=title,
@@ -853,6 +866,7 @@ def request_approval_and_wait(
             tool_name=tool_name,
             agent=ctx.agent_name,
             execution_gate=True,
+            **call_identity,
         )
     except Exception as e:
         logger.exception(f"request_approval failed: {e}")
@@ -1174,6 +1188,9 @@ def _execute_via_ssh_impl(
             explanation=explanation,
             impact=impact,
             risk_l=risk_l,
+            tool_call_id=tool_call_id,
+            operation_id=operation_id or None,
+            ssh_session_id=str(session_id) if session_id else None,
         )
         if req is None:
             _cancel_operation("approval_request_failed")

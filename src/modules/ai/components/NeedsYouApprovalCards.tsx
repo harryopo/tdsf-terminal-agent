@@ -17,7 +17,9 @@
  * error / handoff 类型仍由既有状态提示处理；responded / timeout / cancelled
  * 事件到达时自动移卡。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback, useEffect, useMemo, useRef, useState, type ReactNode,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,6 +29,8 @@ import {
 import { invokeRpc, onNeedsYou } from "@/lib/sidecar-bridge";
 import { unwrapEventPayload } from "../lib/sidecar-adapter";
 import { useChatStore } from "../store/chatStore";
+import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
+import { NeedsYouApprovalContext } from "../lib/needsYouApprovalContext";
 import {
   matchesSession,
   useNeedsYouWait,
@@ -65,6 +69,9 @@ type ApprovalItem = {
   reqId: string;
   sessionId: string | null;
   toolName: string;
+  backendToolCallId?: string;
+  operationId?: string;
+  sshSessionId?: number;
   /** ToolApprovalCard 四层卡面 input（semantic/command/explanation/impact/risk_l） */
   input: Record<string, unknown>;
 };
@@ -84,6 +91,12 @@ type NeedsYouItem = ApprovalItem | QuestionItem;
 const asStr = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
 
+const asSshSessionId = (value: unknown): number | undefined => {
+  const id =
+    typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+};
+
 /** 从事件 payload 组装审批卡数据（扁平字段优先，request.extra 兜底） */
 function buildApprovalItem(
   payload: NeedsYouEventPayload,
@@ -96,6 +109,9 @@ function buildApprovalItem(
     reqId,
     sessionId: req.session_id ?? null,
     toolName: asStr(payload.tool_name) ?? asStr(extra.tool_name) ?? "approval",
+    backendToolCallId: asStr(extra.tool_call_id),
+    operationId: asStr(extra.operation_id),
+    sshSessionId: asSshSessionId(extra.ssh_session_id),
     input: {
       semantic: payload.semantic ?? extra.semantic,
       command: payload.command ?? extra.command ?? "",
@@ -214,8 +230,26 @@ function NeedsYouQuestionCard({
  * 当前会话的 pending needs_you approval 请求渲染（四层审批卡 × N）。
  * 无 pending 请求时渲染 null。
  */
-export function NeedsYouApprovalCards() {
+export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
   const [items, setItems] = useState<NeedsYouItem[]>([]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [slots, setSlots] = useState<
+    Record<string, { toolCallId: string; toolName: string }>
+  >({});
+  const calls = useSshCommandOutputStore((s) => s.calls);
+  const registerTool = useCallback(
+    (toolCallId: string, toolName: string, slotId: string) => {
+      setSlots((cur) => ({ ...cur, [slotId]: { toolCallId, toolName } }));
+      return () => {
+        setSlots((cur) => {
+          const next = { ...cur };
+          delete next[slotId];
+          return next;
+        });
+      };
+    },
+    [],
+  );
   const [responses, setResponses] = useState<
     Record<string, { submitting: boolean; error?: string }>
   >({});
@@ -228,6 +262,11 @@ export function NeedsYouApprovalCards() {
     resolvedRef.current.add(reqId);
     useNeedsYouWait.getState().markSettled(reqId);
     setItems((cur) => cur.filter((item) => item.reqId !== reqId));
+    setNotes((cur) => {
+      const next = { ...cur };
+      delete next[reqId];
+      return next;
+    });
     setResponses((cur) => {
       const next = { ...cur };
       delete next[reqId];
@@ -327,7 +366,7 @@ export function NeedsYouApprovalCards() {
     };
   }, []);
 
-  const submitResponse = async (
+  const submitResponse = useCallback(async (
     item: NeedsYouItem,
     response: Record<string, unknown>,
     expectedStatus: "approved" | "rejected" | "resolved",
@@ -380,9 +419,9 @@ export function NeedsYouApprovalCards() {
     } finally {
       inFlightRef.current.delete(reqId);
     }
-  };
+  }, [settleRequest]);
 
-  const handleRespond = (
+  const handleRespond = useCallback((
     item: ApprovalItem,
     resp: Parameters<ToolApprovalRespond>[0],
   ) => {
@@ -405,11 +444,11 @@ export function NeedsYouApprovalCards() {
       resp.approved ? "approved" : "rejected",
       resp.sessionTrust,
     );
-  };
+  }, [submitResponse]);
 
-  const handleQuestionAnswer = (item: QuestionItem, answer: string) => {
+  const handleQuestionAnswer = useCallback((item: QuestionItem, answer: string) => {
     void submitResponse(item, { answer }, "resolved");
-  };
+  }, [submitResponse]);
 
   // 跨会话隔离：带 session_id 且与当前会话不符的请求不渲染（留给 Python 超时兜底）。
   // 口径与 #133 的等待计时共用 matchesSession——不许出现"卡看得见但没停表"
@@ -419,22 +458,58 @@ export function NeedsYouApprovalCards() {
     [items, activeSessionId],
   );
 
-  if (visible.length === 0) return null;
   const active = visible[0];
-  return (
+  const boundSlot = useMemo(() => {
+    if (
+      active?.kind !== "approval" || !active.sessionId ||
+      !active.backendToolCallId || active.sshSessionId === undefined
+    ) return null;
+    const matchingCalls = Object.values(calls).filter((call) =>
+      !call.ended &&
+      call.backendToolCallId === active.backendToolCallId &&
+      call.conversationSessionId === active.sessionId &&
+      call.toolName === active.toolName &&
+      call.sshSessionId === active.sshSessionId &&
+      (!call.operationId || !active.operationId ||
+        call.operationId === active.operationId),
+    );
+    if (matchingCalls.length !== 1) return null;
+    const call = matchingCalls[0];
+    const matchingSlots = Object.entries(slots).filter(([, slot]) =>
+      slot.toolCallId === call.toolCallId && slot.toolName === call.toolName,
+    );
+    // No guessed owner, and never two clickable copies of the same request.
+    return matchingSlots.length === 1
+      ? { slotId: matchingSlots[0][0], toolCallId: call.toolCallId }
+      : null;
+  }, [active, calls, slots]);
+
+  const card = useMemo(() => active ? (
     <div
       className="space-y-2"
       data-needs-you-cards=""
+      data-needs-you-request-id={active.reqId}
       data-queued-approvals={Math.max(0, visible.length - 1)}
     >
       {active.kind === "approval" ? (
-        <ToolApprovalCard
-          key={active.reqId}
-          toolName={active.toolName}
-          input={active.input}
-          submitting={responses[active.reqId]?.submitting ?? false}
-          onRespond={(resp) => handleRespond(active, resp)}
-        />
+        <>
+          <div className="text-[11px] text-muted-foreground">
+            目标：{active.sshSessionId === undefined
+              ? "未提供目标会话"
+              : `SSH 会话 #${active.sshSessionId}（主机待执行前核验）`}
+          </div>
+          <ToolApprovalCard
+            key={active.reqId}
+            toolName={active.toolName}
+            input={active.input}
+            submitting={responses[active.reqId]?.submitting ?? false}
+            draftNote={notes[active.reqId] ?? ""}
+            onDraftNoteChange={(note) => {
+              setNotes((cur) => ({ ...cur, [active.reqId]: note }));
+            }}
+            onRespond={(resp) => handleRespond(active, resp)}
+          />
+        </>
       ) : (
         <NeedsYouQuestionCard
           key={active.reqId}
@@ -449,5 +524,16 @@ export function NeedsYouApprovalCards() {
         </div>
       )}
     </div>
+  ) : null, [active, visible.length, notes, responses, handleRespond, handleQuestionAnswer]);
+
+  const context = useMemo(() => ({
+    registerTool,
+    inline: boundSlot && card ? { ...boundSlot, card } : null,
+    fallback: boundSlot ? null : card,
+  }), [registerTool, boundSlot, card]);
+  return (
+    <NeedsYouApprovalContext.Provider value={context}>
+      {children === undefined ? context.fallback : children}
+    </NeedsYouApprovalContext.Provider>
   );
 }

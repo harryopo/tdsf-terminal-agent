@@ -60,6 +60,7 @@ import {
 } from "../lib/evidence";
 // Task 6.5: sidecar needs_you 审批闭环（approval 类请求渲染四层审批卡）
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
+import { NeedsYouApprovalFallback } from "../lib/needsYouApprovalContext";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
 import { shouldRenderTeachCard, stripTeachOutputMarker } from "./teachParser";
 import { TeachCard } from "./TeachCard";
@@ -220,18 +221,22 @@ export function AiChatView({
 
   if (messages.length === 0) {
     return (
+      <NeedsYouApprovalCards>
       <Conversation>
         <ConversationContent>
           <ConversationEmptyState
             title="Ask TDSF anything"
             description="Explain command output, fix errors, generate snippets, or run a task."
           />
+          <NeedsYouApprovalFallback />
         </ConversationContent>
       </Conversation>
+      </NeedsYouApprovalCards>
     );
   }
 
   return (
+    <NeedsYouApprovalCards>
     <Conversation>
       <ConversationContent className="gap-3 p-3">
         {messages.map((m) => (
@@ -250,7 +255,7 @@ export function AiChatView({
         {/* Task 6.5: sidecar needs_you 审批闭环——approval 类 HITL 请求渲染
             四层审批卡（semantic/command/explanation/impact），三按钮经
             needs_you.respond RPC 回传 Python 唤醒阻塞的工具线程 */}
-        <NeedsYouApprovalCards />
+        <NeedsYouApprovalFallback />
         {compactionNotice && (
           <CompactionNotice
             droppedCount={compactionNotice.droppedCount}
@@ -295,6 +300,7 @@ export function AiChatView({
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
+    </NeedsYouApprovalCards>
   );
 }
 

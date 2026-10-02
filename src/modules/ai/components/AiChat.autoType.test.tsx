@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import type { PropsWithChildren } from "react";
 import type { UIMessage } from "ai";
 
 vi.mock("../store/chatRuntime", () => ({
@@ -21,7 +22,7 @@ vi.mock("../lib/evidence", () => ({
   groupEvidence: () => [],
 }));
 vi.mock("./NeedsYouApprovalCards", () => ({
-  NeedsYouApprovalCards: () => null,
+  NeedsYouApprovalCards: ({ children }: PropsWithChildren) => children ?? null,
 }));
 
 import { __resetAutoTypeLedger } from "../lib/autoTypeLedger";
