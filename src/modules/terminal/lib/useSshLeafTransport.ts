@@ -15,7 +15,7 @@
  *     （SFTP 文件树共用同一条 SSH 连接，断连会废掉 SFTP）
  */
 import { useMemo, useRef } from "react";
-import { getOsc7Log, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import type { TerminalTransport } from "./pty-bridge";
 
 export function useSshLeafTransport(sessionId: string) {
@@ -44,18 +44,10 @@ export function useSshLeafTransport(sessionId: string) {
         // 字符串 id 与本地 PTY 数字 id 区分（日志/诊断用）
         id: sessionId,
         write: (data: string) => {
-          const log = getOsc7Log();
           const handle = handleRef.current;
           // handle 还没到（连接中）或已断开：丢弃写入，避免抛错
           // （用户在 MOTD 之前的输入会进 pendingInput，由 useTerminalSession 在 pty 就绪后 flush）
-          if (!handle) {
-            log?.push({
-              source: "useSshLeafTransport.transport.write",
-              data,
-              matched: false,
-            });
-            return;
-          }
+          if (!handle) return;
           // 输入原样透传（方案 A 后不再做任何行缓冲/命令改写，
           // 远端 shell 的注入钩子负责 OSC 7 cwd 上报）
           return handle.write(data);

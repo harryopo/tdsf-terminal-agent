@@ -39,21 +39,6 @@ import {
 /** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装（键不存在 = 未检测） */
 export type SshRemoteCarapaceState = 'checking' | 'installed' | 'missing';
 
-// TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
-export type Osc7LogEntry = Record<string, unknown>;
-
-declare global {
-  interface Window {
-    __TDSF_OSC7_LOG__?: Osc7LogEntry[];
-  }
-}
-
-export function getOsc7Log(): Osc7LogEntry[] | null {
-  if (typeof window === "undefined") return null;
-  if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
-  return window.__TDSF_OSC7_LOG__;
-}
-
 // --- 内部工具函数 (消除 sshStore 内重复模式) ---
 
 /** 从 Record<sessionId, T> 中移除指定 session 的键 */
@@ -635,8 +620,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   },
 
   setCurrentPath: (sessionId, path) => {
-    const log = getOsc7Log();
-    log?.push({ source: "sshStore.setCurrentPath", sessionId, path });
     set((s) => ({
       currentPathBySession: { ...s.currentPathBySession, [sessionId]: path },
     }));

@@ -223,6 +223,8 @@ Before a direct Tauri build, run `pnpm fetch:carapace` as well. Missing or damag
 
 The latest source also fixes live SSH output wiring in agent tool cards: collection stays bound to each call while collapsed, background stdout/stderr remain separate, and visible-terminal output is labelled as merged. Structured failure results retain output and exit codes; rejected, cancelled and indeterminate outcomes are shown separately. Missing exit status is not presented as command completion. These changes still require a rebuilt installer and native acceptance; they are not included in the current download.
 
+The source also removes a legacy terminal diagnostic buffer that could retain discarded input and directory paths, and prevents settled approval/question cards from being restored by delayed pending-list snapshots. Normal input, directory following and recovery of pending requests are preserved. These fixes are not yet in the download and do not establish that manual-input jitter is resolved.
+
 Release flow: push a `v*` tag → CI builds the signed installer and update manifest into a **draft** release → you verify, then publish. The manifest only resolves published releases, so clients cannot see it before you click publish.
 
 ## Repository layout

@@ -5,6 +5,12 @@ stable release.
 
 ## Unreleased
 
+- Remove the legacy in-memory OSC diagnostic buffer that could retain discarded
+  SSH input and directory paths. Terminal input and directory-following behavior
+  remain unchanged; this does not erase existing terminal history or saved logs.
+- Settled approval and question requests cannot be restored by a delayed pending-list
+  snapshot. Other pending requests are still recovered, without changing backend
+  approval or cancellation rules.
 - Agent tool cards accept the SDK's running `input-available` state and collect
   background SSH output by call identity even while collapsed. Standard output
   and standard error remain separately visible; visible-terminal output is labelled

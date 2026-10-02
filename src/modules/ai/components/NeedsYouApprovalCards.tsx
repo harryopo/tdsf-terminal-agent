@@ -284,7 +284,8 @@ export function NeedsYouApprovalCards() {
         const next = cur.slice();
         for (const req of pending) {
           const reqId = req?.id;
-          if (!reqId || seen.has(reqId)) continue;
+          // 终态事件可能先于列表快照返回；已结算的请求不能被补水重新挂起。
+          if (!reqId || resolvedRef.current.has(reqId) || seen.has(reqId)) continue;
           seen.add(reqId);
           const item = buildItem({ needs_type: req.type, request: req }, reqId);
           // 补拉回来的同样要记账：这一轮可能正因为这条没人答而在等，

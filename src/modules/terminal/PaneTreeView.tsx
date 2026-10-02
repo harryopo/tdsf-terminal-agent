@@ -14,7 +14,7 @@ import {
   type PaneNode,
 } from "./lib/panes";
 import { useSshLeafTransport } from "./lib/useSshLeafTransport";
-import { getOsc7Log, useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { TerminalPane, type TerminalPaneHandle } from "./TerminalPane";
 
 type LeafBundle = {
@@ -168,7 +168,6 @@ function SshLeafPane({
   // "这块 leaf 现在在哪"由 leafCwdOf 联合口径回答（见 lib/leafCwd.ts，#91①）。
   const handleCwd = useCallback(
     (_leafId: number, cwd: string) => {
-      getOsc7Log()?.push({ source: "SshLeafPane.handleCwd", sessionId, cwd });
       useSshStore.getState().setCurrentPath(sessionId, cwd);
     },
     [sessionId],
