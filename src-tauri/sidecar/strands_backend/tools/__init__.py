@@ -2178,10 +2178,13 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 # 收集全部 kwargs 作为参数（工具签名是具名参数如 command=...）
                 params = dict(kwargs)
 
-            emit_tool_call_card(ctx, tool_name, params, "started")
+            import uuid
+
+            call_id = uuid.uuid4().hex
+            emit_tool_call_card(ctx, tool_name, params, "started", tool_call_id=call_id)
 
             def complete(result: dict[str, Any]) -> dict[str, Any]:
-                emit_tool_call_card(ctx, tool_name, params, "completed", result)
+                emit_tool_call_card(ctx, tool_name, params, "completed", result, tool_call_id=call_id)
                 return result
 
             from strands_backend.tools.shell_mapping import resolve_shell_command

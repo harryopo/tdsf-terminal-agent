@@ -5,6 +5,22 @@ stable release.
 
 ## Unreleased
 
+- Correlate remote-file and standalone teaching cards through completion or
+  errors. Bind remote-write approvals to their original call and SSH target;
+  reject SSH output on non-command records. Local Python approvals keep their
+  actionable fallback, and file contents stay out of remote-read UI events.
+- Show the unconfigured-model prompt in Chinese. Remove the extra evidence panel
+  and fixed evidence footnotes from chat while preserving backend evidence,
+  post-write verification and safety approvals. A separate confidence page is
+  still in design, not implemented.
+- Add correlated cards for terminal readback and other tools without an existing
+  event owner. Preserve structured results, cancellations and errors without
+  duplicating SSH cards; pair Python, suggestion and teaching-wrapper events
+  with call IDs. Existing execution and approval policies remain unchanged.
+- Add PowerShell directory-size suggestions with literal paths, recursive file
+  lengths and descending totals. Explain unreadable files and logical-size limits;
+  unmatched suggestions use neutral theme colours and cannot be run.
+
 - SSH executor approvals appear in their original tool card only when call,
   chat and target identities match. Folding tool details does not hide the
   approval. Within their owning chat, unbound requests and questions remain

@@ -942,7 +942,8 @@ export async function* runSidecarStream(
       if (eventKey) toolIdsByEventId.set(eventKey, toolCallId);
       const params = p.params && typeof p.params === "object"
         ? p.params as Record<string, unknown> : null;
-      if (eventCallId && typeof params?.command === "string") {
+      if (eventCallId && params &&
+          (typeof params.command === "string" || name === "write_remote_file")) {
         const target = params.ssh_session_id === "" || params.ssh_session_id == null
           ? live.sshSessionId : Number(params.ssh_session_id);
         useSshCommandOutputStore.getState().begin({
@@ -950,7 +951,7 @@ export async function* runSidecarStream(
           backendToolCallId: eventCallId,
           conversationSessionId: sessionId ?? null,
           toolName: name,
-          command: params.command,
+          command: typeof params.command === "string" ? params.command : "",
           sshSessionId: target != null && Number.isInteger(target) && target > 0
             ? target : undefined,
         });

@@ -84,6 +84,53 @@ describe("SSH command output ownership", () => {
     expect(call().stdout).toBe("owned");
   });
 
+  it("does not attach SSH output to an empty-command remote file lifecycle record", () => {
+    useSshCommandOutputStore.getState().begin({
+      toolCallId: "front-write",
+      backendToolCallId: "backend-write",
+      conversationSessionId: "session-1",
+      toolName: "write_remote_file",
+      command: "",
+      sshSessionId: 42,
+    });
+    const writeCall = () => useSshCommandOutputStore.getState().calls["front-write"];
+    const forged = (fields: Partial<SshCommandOutputEvent> = {}) =>
+      event({
+        toolCallId: "backend-write",
+        toolName: "write_remote_file",
+        command: "",
+        sshSessionId: 42,
+        ...fields,
+      });
+
+    useSshCommandOutputStore.getState().record(forged({
+      stream: "status",
+      status: "running",
+      operationId: "forged-operation",
+    }));
+    useSshCommandOutputStore.getState().record(forged({
+      stream: "stdout",
+      chunk: "forged output",
+      operationId: "forged-operation",
+    }));
+    expect(writeCall().operationId).toBeUndefined();
+    expect(writeCall().stdout).toBe("");
+
+    begin("front-valid", "backend-valid");
+    useSshCommandOutputStore.getState().record(event({
+      toolCallId: "backend-valid",
+      stream: "status",
+      status: "running",
+    }));
+    useSshCommandOutputStore.getState().record(event({
+      toolCallId: "backend-valid",
+      stream: "stdout",
+      chunk: "valid SSH output",
+    }));
+    expect(useSshCommandOutputStore.getState().calls["front-valid"].stdout)
+      .toBe("valid SSH output");
+  });
+
   it("ignores events after completion and explicit finish", () => {
     begin();
     useSshCommandOutputStore.getState().record(event());

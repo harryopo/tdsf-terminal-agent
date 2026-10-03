@@ -400,12 +400,14 @@ const TOOL_META: Record<
   performance_analyze: { label: "性能", icon: TerminalIcon, category: "diagnose" },
   config_diff: { label: "配置对比", icon: FileEditIcon, category: "diagnose" },
   get_terminal_output: { label: "终端输出", icon: TerminalIcon, category: "diagnose" },
+  retrieve_offloaded_content: { label: "回读结果", icon: File01Icon, category: "diagnose" },
   search_history: { label: "历史案例", icon: GlobalSearchIcon, category: "diagnose" },
   ssh_list_sessions: { label: "SSH 会话", icon: TerminalIcon, category: "diagnose" },
   // 规划建议（青）
   suggest_command: { label: "命令建议", icon: SparklesIcon, category: "plan" },
   teach_command: { label: "教学命令", icon: BookOpen01Icon, category: "plan" },
   todo_write: { label: "Todos", icon: CheckListIcon, category: "plan" },
+  ask_user: { label: "询问用户", icon: ToolsIcon, category: "plan" },
   run_subagent: { label: "Subagent", icon: RobotIcon, category: "plan" },
   // TDSF 2026-09-18: 标签不再叫「置信度」——旧的分数算法已被会话证据三态取代，
   // 这是 UI 里最后一处常驻「置信度」字样（任何模式都渲染），保留会误导。
@@ -974,7 +976,7 @@ function ToolOutput({
         <div
           className={cn(
             "rounded px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap",
-            warning ? "bg-amber-500/10 text-foreground" : "bg-destructive/10 text-destructive",
+            warning ? "border border-border bg-card text-foreground" : "bg-destructive/10 text-destructive",
           )}
         >
           {errorText}
@@ -1185,8 +1187,8 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
         ? o.suggestions.filter((item): item is string => typeof item === "string")
         : [];
       return (
-        <div className="space-y-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px]">
-          <div className="font-medium text-amber-700 dark:text-amber-400">
+        <div className="space-y-2 rounded-lg border border-border bg-card px-3 py-2.5 text-[11px] leading-relaxed">
+          <div className="font-medium text-foreground">
             未匹配命令
           </div>
           <div className="text-muted-foreground">{message}</div>
@@ -1195,7 +1197,7 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
               {suggestions.map((item) => (
                 <span
                   key={item}
-                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                  className="rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground"
                 >
                   {item}
                 </span>

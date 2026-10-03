@@ -451,7 +451,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "Decision history:\n"
     "- 排障前先 search_history 检索历史案例，参考类似问题的解法。\n"
     "- 历史案例只作线索，不是执行许可；必须用当前主机、版本、配置和实时工具证据验证适用性。\n"
-    "- 给出建议后调 assess_confidence 评估可信度，让用户了解结论的可靠程度。\n"
+    "- 不附证据尾注；保留验证。仅用户要求调 assess_confidence，分数非正确率。\n"
 )
 
 
@@ -664,6 +664,7 @@ class ToolCallLimitHook:
         # C1 工具级 tracing：记录每个工具调用的开始时间戳（用于计算 duration_ms）
         # key = (tool_name, call_index)，value = time.monotonic() 时间戳
         self._tool_start_times: dict[tuple[str, int], float] = {}
+        self._tool_card_calls: dict[str, str] = {}
 
     def register_hooks(self, registry: Any) -> None:
         """HookProvider 协议：注册 Before/AfterToolCall/BeforeModelCall 回调"""
@@ -693,7 +694,9 @@ class ToolCallLimitHook:
         return {}
 
     def _before_tool_call(self, event: Any) -> None:
+        self._start_tool_card(event)
         if self.cancelled:
+            self._start_tool_card(event, force=True)
             # 用户主动停止：把原因作为取消消息回传给模型，让它据此收尾
             # （护栏熔断走 _trip_breaker，取消消息本身就是熔断文案）。
             event.cancel_tool = self.cancel_reason or True
@@ -731,6 +734,7 @@ class ToolCallLimitHook:
         self.cancelled = True
         message = f"{reason}，已熔断停止任务"
         event.cancel_tool = message
+        self._start_tool_card(event, force=True)
         self._emit_breaker_explanation(reason)
         if notify_fix_loop:
             self._notify_fix_loop_exhausted(event, reason)
@@ -871,6 +875,8 @@ class ToolCallLimitHook:
             else getattr(result, "content", None)
         )
         for block in content if isinstance(content, list) else [content]:
+            if isinstance(block, dict) and isinstance(block.get("json"), dict):
+                return block["json"]
             text = block.get("text") if isinstance(block, dict) else block
             data = cls._json_dict(text)
             if data is not None:
@@ -941,6 +947,69 @@ class ToolCallLimitHook:
         except Exception as exc:  # noqa: BLE001 — 记账归属判断失败不该拖垮 hook
             logger.debug("evidence-owner lookup failed for %s: %s", name, exc)
             return False
+
+    def _tool_card_key(self, event: Any) -> str:
+        tool_use = getattr(event, "tool_use", {})
+        return str(tool_use.get("toolUseId") or self._tool_name(event))
+
+    def _emit_tool_card(self, event: Any, call_id: str, status: str, result: Any = None) -> None:
+        if self.event_bus is None:
+            return
+        from strands_backend.tools._redact import redact_sensitive_text
+
+        def redact(value: Any) -> Any:
+            if isinstance(value, str):
+                return redact_sensitive_text(value)
+            if isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            return value
+
+        try:
+            self.event_bus.emit_tool_call(
+                tool_name=self._tool_name(event),
+                tool_call_id=call_id,
+                params=redact(self._tool_input(event)),
+                result=redact(result),
+                status=status,
+                session_id=self.session_id or None,
+                source=f"{self.agent_name}_agent.strands.hook",
+            )
+        except Exception as exc:  # 展示故障不能改变执行或审批结果
+            logger.debug("tool card event failed: %s", exc)
+
+    def _start_tool_card(self, event: Any, *, force: bool = False) -> None:
+        from strands_backend.tools.registry import TOOL_REGISTRY, CONTEXT_READONLY_TOOL_NAMES
+
+        name = self._tool_name(event)
+        spec = TOOL_REGISTRY.get(name)
+        if spec is None and name not in CONTEXT_READONLY_TOOL_NAMES:
+            return
+        if not force and spec and (spec.emits_tool_events or spec.policy.via_ssh_executor):
+            return
+        import uuid
+
+        key = self._tool_card_key(event)
+        if key in self._tool_card_calls:
+            return
+        call_id = str(getattr(event, "tool_use", {}).get("toolUseId") or uuid.uuid4().hex)
+        self._tool_card_calls[key] = call_id
+        self._emit_tool_card(event, call_id, "started")
+
+    def _finish_tool_card(self, event: Any) -> None:
+        call_id = self._tool_card_calls.pop(self._tool_card_key(event), None)
+        if call_id is None:
+            return
+        raw_result = getattr(event, "result", None)
+        result = self._tool_payload(raw_result) or raw_result
+        exception = getattr(event, "exception", None)
+        cancel_message = getattr(event, "cancel_message", None)
+        if cancel_message:
+            result = {"status": "cancelled", "message": str(cancel_message)}
+        elif exception is not None:
+            result = {"status": "error", "message": str(exception)}
+        self._emit_tool_card(event, call_id, "error" if exception else "completed", result)
 
     def _record_evidence(
         self,
@@ -1020,6 +1089,7 @@ class ToolCallLimitHook:
         # 随后 append 进会话历史的那个对象（strands `_executor.py` 用的是
         # `after_event.result` 而不是 hook 之前的旧 result —— 已由真对象断言钉住）。
         self._sanitize_tool_result(name, getattr(event, "result", None))
+        self._finish_tool_card(event)
         # C1 工具级 tracing：计算 duration_ms
         start_time = self._tool_start_times.pop((name, self.total_calls), None)
         duration_ms = None
@@ -1189,6 +1259,7 @@ class ToolCallLimitHook:
         self.tool_log.clear()
         # C1: 工具开始时间戳同步清空
         self._tool_start_times.clear()
+        self._tool_card_calls.clear()
 
 
 class TdsfStrandsCallbackHandler:

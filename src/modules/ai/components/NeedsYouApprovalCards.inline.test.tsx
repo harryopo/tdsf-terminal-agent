@@ -25,8 +25,9 @@ type CallOwner = {
   conversationSessionId: string | null;
   toolName: string;
   command: string;
-  sshSessionId: number;
+  sshSessionId?: number;
   operationId?: string;
+  toolInput?: Record<string, unknown>;
 };
 
 const primaryCall: CallOwner = {
@@ -44,6 +45,7 @@ function beginCall(call: CallOwner) {
 }
 
 function recordOperation(call: CallOwner, operationId: string) {
+  if (call.sshSessionId === undefined) return;
   useSshCommandOutputStore.getState().record({
     toolCallId: call.backendToolCallId,
     conversationSessionId: call.conversationSessionId,
@@ -151,7 +153,7 @@ function ownerTree(
             state={toolProps.state ?? "input-available"}
             defaultOpen={toolProps.defaultOpen}
             onApprovalRespond={toolProps.onApprovalRespond}
-            input={{ command: call.command }}
+            input={call.toolInput ?? { command: call.command }}
           />
         </div>
       ))}
@@ -227,6 +229,107 @@ describe("NeedsYouApprovalCards inline ownership", () => {
     expect(onNeedsYou).toHaveBeenCalledTimes(1);
     expect(invokeRpc).toHaveBeenCalledTimes(1);
     expect(invokeRpc).toHaveBeenCalledWith("needs_you.list", {});
+  });
+
+  it("embeds an exact-owner write_remote_file approval and keeps it actionable", async () => {
+    const writeCall: CallOwner = {
+      ...primaryCall,
+      toolName: "write_remote_file",
+      command: "",
+      toolInput: { path: "/srv/app.conf", size: 12, backup_path: "/srv/app.conf.bak" },
+    };
+    beginCall(writeCall);
+    vi.mocked(invokeRpc).mockImplementation((method: string) =>
+      method === "needs_you.list"
+        ? Promise.resolve([])
+        : Promise.resolve(ack("ny-inline", "approved")),
+    );
+    await mount([writeCall]);
+    emit(approvalEvent(writeCall));
+
+    await waitFor(() => expect(cardInTool()).not.toBeNull());
+    expect(fallbackCard()).toBeNull();
+    expect(approvalCount()).toBe(1);
+    fireEvent.click(within(screen.getByTestId("tool-0")).getByRole("button", { name: "执行" }));
+    await waitFor(() => expect(approvalCount()).toBe(0));
+    expect(invokeRpc).toHaveBeenCalledWith("needs_you.respond", {
+      req_id: "ny-inline",
+      response: { approved: true },
+    });
+  });
+
+  it.each([
+    {
+      label: "different chat",
+      owner: { conversationSessionId: "chat-b" },
+      request: { sessionId: "chat-a" },
+    },
+    {
+      label: "different SSH target",
+      owner: {},
+      request: { sshSessionId: 43 },
+    },
+    {
+      label: "ended call",
+      owner: {},
+      request: {},
+      ended: true,
+    },
+  ])("keeps a write_remote_file approval answerable in fallback for $label", async (mismatch) => {
+    const writeCall: CallOwner = {
+      ...primaryCall,
+      toolName: "write_remote_file",
+      command: "",
+      toolInput: { path: "/srv/app.conf", size: 12 },
+      ...mismatch.owner,
+    };
+    beginCall(writeCall);
+    if (mismatch.ended === true) useSshCommandOutputStore.getState().finish(writeCall.toolCallId);
+    vi.mocked(invokeRpc).mockImplementation((method: string) =>
+      method === "needs_you.list"
+        ? Promise.resolve([])
+        : Promise.resolve(ack("ny-inline", "approved")),
+    );
+    await mount([writeCall]);
+    emit(approvalEvent(writeCall, mismatch.request));
+
+    await waitFor(() => expect(fallbackCard()).not.toBeNull());
+    expect(cardInTool()).toBeNull();
+    expect(approvalCount()).toBe(1);
+    fireEvent.click(within(screen.getByTestId("fallback-slot")).getByRole("button", { name: "执行" }));
+    await waitFor(() => expect(approvalCount()).toBe(0));
+    expect(invokeRpc).toHaveBeenCalledWith("needs_you.respond", {
+      req_id: "ny-inline",
+      response: { approved: true },
+    });
+  });
+
+  it("keeps an SSH-less Python approval answerable in fallback", async () => {
+    const pythonCall: CallOwner = {
+      ...primaryCall,
+      toolName: "python_run",
+      command: "print('local check')",
+      sshSessionId: undefined,
+      toolInput: { code: "print('local check')" },
+    };
+    beginCall(pythonCall);
+    vi.mocked(invokeRpc).mockImplementation((method: string) =>
+      method === "needs_you.list"
+        ? Promise.resolve([])
+        : Promise.resolve(ack("ny-inline", "approved")),
+    );
+    await mount([pythonCall]);
+    emit(approvalEvent(pythonCall, { sshSessionId: null }));
+
+    await waitFor(() => expect(fallbackCard()).not.toBeNull());
+    expect(cardInTool()).toBeNull();
+    expect(approvalCount()).toBe(1);
+    fireEvent.click(within(screen.getByTestId("fallback-slot")).getByRole("button", { name: "执行" }));
+    await waitFor(() => expect(approvalCount()).toBe(0));
+    expect(invokeRpc).toHaveBeenCalledWith("needs_you.respond", {
+      req_id: "ny-inline",
+      response: { approved: true },
+    });
   });
 
   it("handles request-first, late Tool mount, and Tool unmount back to fallback", async () => {

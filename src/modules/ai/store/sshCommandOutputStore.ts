@@ -66,6 +66,7 @@ export const useSshCommandOutputStore = create<SshCommandOutputState>(
         if (
           !call ||
           call.ended ||
+          !call.command ||
           (event.conversationSessionId ?? null) !==
             call.conversationSessionId ||
           event.toolName !== call.toolName ||

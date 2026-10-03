@@ -31,7 +31,7 @@
 | Real operations | Controlled collaboration | Learn by doing |
 |---|---|---|
 | Local / WSL / SSH workspaces, SFTP browsing and editing | Visible-terminal or background execution, real output, risk levels and approval cards | One command card per step, predicted output and result-based explanations |
-| Directory following, drag-and-drop uploads, service and network inspection | Expandable reasoning, task progress and evidence | Terminal translation, command prediction, skills and local knowledge retrieval |
+| Directory following, drag-and-drop uploads, service and network inspection | Expandable reasoning, task progress and collapsible tool cards | Terminal translation, command prediction, skills and local knowledge retrieval |
 
 ---
 
@@ -133,6 +133,8 @@ In teaching mode, explanations follow a fixed section contract (concepts and pri
 | Sessions | `ssh_list_sessions` |
 
 Teaching mode is not a 26th tool: it intercepts the tools above and returns a structured single-step command card, which the terminal then really executes.
+
+Unreleased source adds cards for terminal readback and other previously unrepresented tools, and removes the extra evidence section and fixed verification footnotes from chat. Backend evidence recording, post-write checks and safety approvals remain intact. A separate confidence page is still in design, not available; algorithm scores are not calibrated correctness probabilities. These changes are not yet included in existing installers.
 
 ## Safety boundary
 

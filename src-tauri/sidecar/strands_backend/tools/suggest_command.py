@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
@@ -256,6 +257,7 @@ _SUGGESTION_RULES: list[tuple[list[str], dict[str, tuple[str, str]]]] = [
 def _match_suggestion(
     intent: str,
     target_os: str,
+    path: str = "",
 ) -> tuple[str, str] | None:
     """根据意图关键词匹配最佳命令建议（按 target_os 取对应变体）
 
@@ -266,6 +268,25 @@ def _match_suggestion(
     """
     text = " ".join(intent.lower().split())
     variant_key = "windows" if target_os == "windows" else "linux"
+    if variant_key == "windows" and (
+        re.search(r"(?:目录|文件夹).*?(?:大小|占用)|(?:directory|folder)\s+size", text)
+        or re.search(r"(?<![a-z0-9_])du(?![a-z0-9_])", text)
+    ):
+        if not path:
+            quoted = re.search(r"[\"']([a-zA-Z]:[\\/][^\"'\r\n]*)[\"']", intent)
+            unquoted = re.search(r"[a-zA-Z]:[\\/][^\s，。,；;（）()\"']*", intent)
+            path = quoted.group(1) if quoted else unquoted.group(0) if unquoted else "."
+        literal_path = path.replace("'", "''")
+        return (
+            f"Get-ChildItem -LiteralPath '{literal_path}' -Directory -Force | ForEach-Object {{ "
+            "$size = (Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Force "
+            "-ErrorAction Continue | Measure-Object -Property Length -Sum).Sum; "
+            "[PSCustomObject]@{Directory=$_.FullName; Bytes=[long]$size} "
+            "} | Sort-Object Bytes -Descending",
+            "递归统计目标下每个子目录的文件总字节数，按 Bytes 从大到小排列。"
+            "空目录为 0；不可读文件会报错并跳过，统计可能不完整。"
+            "这是文件长度合计，不是实际磁盘占用；大目录可能需要等待。",
+        )
     best: tuple[int, int, str, str] | None = None
 
     def match_score(keyword: str) -> int:
@@ -364,6 +385,8 @@ def _predict_output(command: str) -> str:
     粗粒度匹配——不追求精确，只给方向性提示。
     """
     cmd = command.strip()
+    if "[PSCustomObject]@{Directory=" in cmd and "Sort-Object Bytes -Descending" in cmd:
+        return "Directory / Bytes 两列，按总字节数降序；空目录为 0，读取错误会单独显示。"
     first_word = cmd.split()[0] if cmd.split() else ""
 
     prediction = _PREDICTIONS.get(first_word)
@@ -387,6 +410,8 @@ def _predict_output(command: str) -> str:
 def invoke_suggest_command_tool(
     params: dict[str, Any],
     ctx: ToolContext,
+    *,
+    tool_call_id: str | None = None,
 ) -> dict[str, Any]:
     """命令建议工具核心实现
 
@@ -405,7 +430,8 @@ def invoke_suggest_command_tool(
 
     target_os = (params.get("target_os") or "linux").lower()
 
-    matched = _match_suggestion(intent, target_os)
+    path = str(params.get("path") or "").strip()
+    matched = _match_suggestion(intent, target_os, path)
     if matched:
         command, explanation = matched
         result: dict[str, Any] = {
@@ -427,8 +453,8 @@ def invoke_suggest_command_tool(
             "status": "unmatched",
             "command": None,
             "explanation": (
-                f"在 {target_os} 下未匹配到内置命令规则（该系统可能根本没有对应概念，"
-                "例如 Windows 无 SELinux）。请补充对象或目标，例如“查看 nginx 状态”或“检查磁盘空间”。"
+                f"暂未找到适用于 {target_os} 的内置命令建议。"
+                "请说明要检查的对象或路径；也可以让 Agent 直接编写并解释命令。此处不会执行任何命令。"
             ),
             "target_os": target_os,
             "intent": intent,
@@ -445,7 +471,8 @@ def invoke_suggest_command_tool(
         try:
             ctx.event_bus.emit_tool_call(
                 tool_name="suggest_command",
-                params={"intent": intent, "target_os": target_os},
+                tool_call_id=tool_call_id,
+                params={"intent": intent, "target_os": target_os, "path": path},
                 result=result,
                 status="completed",
                 session_id=ctx.session_id or None,
@@ -468,6 +495,7 @@ def make_suggest_command_tool(ctx: ToolContext):
     def suggest_command(
         intent: str,
         target_os: str = "linux",
+        path: str = "",
     ) -> dict:
         """根据用户意图生成一条可执行的命令，并解释每个字段含义。
 
@@ -481,6 +509,7 @@ def make_suggest_command_tool(ctx: ToolContext):
 
         Args:
             intent (str): 用户想做的事情，如"查看系统负载"、"查看端口占用"。
+            path (str): 目录统计的目标路径；留空则从意图提取或使用当前目录。
             target_os (str): **必须与用户当前终端实际所在的系统一致**。
                 本地 Windows 终端（PowerShell / cmd）传 "windows"，返回
                 PowerShell 命令；Linux 或经 SSH 连上的主机传 "linux"（默认）。
@@ -489,12 +518,14 @@ def make_suggest_command_tool(ctx: ToolContext):
         Returns:
             dict: 结构化结果，含 status / command / explanation / target_os。
         """
+        call_id = uuid.uuid4().hex
         # 推送 tool_call 开始事件，让前端实时显示工具调用卡片
         if ctx.event_bus is not None:
             try:
                 ctx.event_bus.emit_tool_call(
                     tool_name="suggest_command",
-                    params={"intent": intent, "target_os": target_os},
+                    tool_call_id=call_id,
+                    params={"intent": intent, "target_os": target_os, "path": path},
                     status="started",
                     session_id=ctx.session_id or None,
                     source=f"{ctx.agent_name}_agent.strands_tool.suggest_command",
@@ -502,10 +533,20 @@ def make_suggest_command_tool(ctx: ToolContext):
             except Exception as e:
                 logger.debug(f"emit_tool_call started failed: {e}")
 
-        return invoke_suggest_command_tool(
-            params={"intent": intent, "target_os": target_os},
-            ctx=ctx,
-        )
+        try:
+            return invoke_suggest_command_tool(
+                params={"intent": intent, "target_os": target_os, "path": path},
+                ctx=ctx,
+                tool_call_id=call_id,
+            )
+        except Exception as exc:
+            from strands_backend.tools import emit_tool_call_card
+
+            emit_tool_call_card(
+                ctx, "suggest_command", {"intent": intent, "target_os": target_os, "path": path},
+                "error", {"status": "error", "message": str(exc)}, tool_call_id=call_id,
+            )
+            raise
 
     suggest_command.__name__ = "suggest_command"
     return suggest_command

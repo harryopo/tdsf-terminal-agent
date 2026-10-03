@@ -260,6 +260,24 @@ it("keeps an unmatched suggest_command on its no-run result card", async () => {
   expect(screen.queryByRole("button", { name: /run|retry/i })).toBeNull();
 });
 
+it("renders an unmatched suggestion with neutral card styling and no Run action", async () => {
+  const output = {
+    status: "unmatched",
+    command: null,
+    explanation: "No matching command was found",
+    suggestions: ["uname -a"],
+  };
+  await renderOutput("suggest_command", output, true);
+
+  const explanation = screen.getByText("No matching command was found");
+  const card = explanation.parentElement;
+  expect(card?.className).toContain("border-border");
+  expect(card?.className).toContain("bg-card");
+  expect(card?.className).not.toMatch(/border-amber|bg-amber/);
+  expect(screen.getByText("uname -a")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /run|retry/i })).toBeNull();
+});
+
 it("keeps a failed suggest_command failed and does not offer Run", async () => {
   const output = {
     status: "failed",
