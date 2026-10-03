@@ -931,13 +931,32 @@ def execute_via_ssh(
 ) -> dict[str, Any]:
     """通过 RustBridge 执行 SSH 命令（带风险决策与真实 HITL 审批）。
 
-    本函数是 _execute_via_ssh_impl 的外壳，兜住两件事：
+    本函数是 _execute_via_ssh_impl 的外壳，统一收口：
     - A3：无论实现体走哪条 return、还是中途抛异常，已批准的 execution_gate 都会被释放；
     - #114（2026-09-23）：命令进了终端，聊天里就必须有一张卡回答"是哪一步敲的"。
       卡片事件只在这里发一次 —— 上游工具不得再自己 emit_tool_call（会叠成双卡）。
+    - 每条返回或异常路径只记录一次证据，保留真实业务结果，不把未知状态记为成功。
     """
     gate = _ExecutionGate()
     tool_call_id = str(uuid.uuid4())
+    evidence_session_id, evidence_agent = ctx.session_id, ctx.agent_name
+
+    def record_result(payload: dict[str, Any]) -> None:
+        status = payload.get("status", "indeterminate")
+        _track_evidence(
+            session_id=evidence_session_id,
+            tool_name=tool_name,
+            status={"success": "completed", "command_blocked": "blocked"}.get(status, status),
+            detail=command,
+            result=payload,
+            agent=evidence_agent,
+            source="strands_tool",
+            tool_call_id=tool_call_id,
+            ssh_session_id=str(payload.get("ssh_session_id") or "") or None,
+            target_endpoint=payload.get("target_endpoint") or None,
+            operation_id=payload.get("operation_id") or None,
+        )
+
     card_params: dict[str, Any] = {
         "command": command,
         "ssh_session_id": ssh_session_id,
@@ -960,6 +979,8 @@ def execute_via_ssh(
             tool_call_id=tool_call_id,
         )
     except Exception as exc:
+        error_result = {"status": "error", "command": command, "error": str(exc)}
+        record_result(error_result)
         # 只有 started 会让前端留一张永远转圈的卡：孤儿 completed 会被丢弃，
         # 反向的孤儿 started 没人收尾。异常路径同样要闭合。
         emit_tool_call_card(
@@ -967,12 +988,13 @@ def execute_via_ssh(
             tool_name,
             card_params,
             "error",
-            {"status": "error", "command": command, "error": str(exc)},
+            error_result,
             tool_call_id=tool_call_id,
         )
         raise
     finally:
         gate.release()
+    record_result(result)
     emit_tool_call_card(
         ctx,
         tool_name,
@@ -1037,7 +1059,6 @@ def _execute_via_ssh_impl(
             error: 错误信息（error 时）
     """
     session_id = ssh_session_id or ctx.ssh_session_id
-    evidence_session_id, evidence_agent = ctx.session_id, ctx.agent_name
 
     # 1. 综合决策（Task 4 影响预测 + Task 3 三模式 decide；denylist 命中
     #    返回 blocked——fail-closed，直接拦截不审批、禁替代方案）
@@ -1059,17 +1080,6 @@ def _execute_via_ssh_impl(
             session_id=session_id,
             agent=ctx.agent_name,
             reason=assessment.get("reason", ""),
-        )
-        _track_evidence(
-            session_id=evidence_session_id,
-            tool_name=tool_name,
-            status="blocked",
-            detail=command,
-            result={"message": message},
-            agent=evidence_agent,
-            source="strands_tool",
-            tool_call_id=tool_call_id,
-            ssh_session_id=str(session_id or ""),
         )
         return {
             "status": "command_blocked",
@@ -1746,19 +1756,6 @@ def _execute_via_ssh_impl(
             reason="missing_or_invalid_exit_code",
             target_endpoint=target_endpoint,
         )
-        _track_evidence(
-            session_id=evidence_session_id,
-            tool_name=tool_name,
-            status="indeterminate",
-            detail=command,
-            result=result,
-            agent=evidence_agent,
-            source="strands_tool",
-            tool_call_id=tool_call_id,
-            ssh_session_id=str(session_id or ""),
-            target_endpoint=target_endpoint or None,
-            operation_id=operation_id or None,
-        )
         return _complete_after_execution({
             "status": "indeterminate",
             "command": command,
@@ -1783,19 +1780,6 @@ def _execute_via_ssh_impl(
             agent=ctx.agent_name,
             reason="exit_code_unavailable",
             target_endpoint=target_endpoint,
-        )
-        _track_evidence(
-            session_id=evidence_session_id,
-            tool_name=tool_name,
-            status="indeterminate",
-            detail=command,
-            result=result,
-            agent=evidence_agent,
-            source="strands_tool",
-            tool_call_id=tool_call_id,
-            ssh_session_id=str(session_id or ""),
-            target_endpoint=target_endpoint or None,
-            operation_id=operation_id or None,
         )
         return _complete_after_execution({
             "status": "indeterminate",
@@ -1825,19 +1809,6 @@ def _execute_via_ssh_impl(
             agent=ctx.agent_name,
             exit_code=exit_code,
             target_endpoint=target_endpoint,
-        )
-        _track_evidence(
-            session_id=evidence_session_id,
-            tool_name=tool_name,
-            status="error",
-            detail=command,
-            result=result,
-            agent=evidence_agent,
-            source="strands_tool",
-            tool_call_id=tool_call_id,
-            ssh_session_id=str(session_id or ""),
-            target_endpoint=target_endpoint or None,
-            operation_id=operation_id or None,
         )
         return _complete_after_execution({
             "status": "error",
@@ -1879,21 +1850,6 @@ def _execute_via_ssh_impl(
         exit_code=exit_code,
         # P2 #42: 多主机场景记录实际目标端点（live 列表校验放行时有值）
         target_endpoint=target_endpoint,
-    )
-    # P1-2: 记录会话证据（前端证据面板展示 AI 依据的真实操作）
-    # 注意：证据归属**对话会话**（ctx.session_id），不是 SSH 会话 id
-    _track_evidence(
-        session_id=evidence_session_id,
-        tool_name=tool_name,
-        status="completed",
-        detail=command,
-        result=result,
-        agent=evidence_agent,
-        source="strands_tool",
-        tool_call_id=tool_call_id,
-        ssh_session_id=str(session_id or ""),
-        target_endpoint=target_endpoint or None,
-        operation_id=operation_id or None,
     )
     payload: dict[str, Any] = {
         "status": "success",
