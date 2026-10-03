@@ -13,6 +13,15 @@ export interface EvidenceItem {
   agent: string;
   timestamp: number;
   source?: string;
+  /** 记录自身的稳定标识，与工具卡/SDK 调用标识独立；旧记录可能缺失。 */
+  evidence_id?: string;
+  /** 仅表示本地长度裁剪；false 不意味着摘要无损或原输出完整。 */
+  detail_truncated?: boolean;
+  summary_truncated?: boolean;
+  /** 工具明确报告的截断状态；缺失表示未采集。 */
+  output_truncated?: boolean;
+  /** 已取得的非负整数退出码；缺失不推定为 0，非零不直接等于失败。 */
+  exit_code?: number;
   tool_call_id?: string;
   sdk_tool_use_id?: string;
   ssh_session_id?: string;

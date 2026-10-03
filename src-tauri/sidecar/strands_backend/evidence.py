@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from typing import Any
 
 logger = logging.getLogger("sidecar.strands_backend.evidence")
@@ -86,11 +87,16 @@ class EvidenceTracker:
         """
         if not session_id:
             return None
+        redacted_detail = _redact_text(detail)
+        summary, summary_truncated = _summarize(result)
         evidence = {
+            "evidence_id": str(uuid.uuid4()),
             "tool_name": tool_name,
             "status": status,
-            "detail": _redact_text(detail)[:_MAX_RESULT_LEN],
-            "result": _summarize(result),
+            "detail": redacted_detail[:_MAX_RESULT_LEN],
+            "detail_truncated": len(redacted_detail) > _MAX_RESULT_LEN,
+            "result": summary,
+            "summary_truncated": summary_truncated,
             "agent": agent,
             "timestamp": time.time(),
             "source": source,
@@ -115,6 +121,11 @@ class EvidenceTracker:
                     evidence[key] = result[field]
             if result.get("success") is False:
                 evidence["result_ok"] = False
+            if isinstance(result.get("truncated"), bool):
+                evidence["output_truncated"] = result["truncated"]
+            exit_code = result.get("exit_code")
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code >= 0:
+                evidence["exit_code"] = exit_code
         with self._lock:
             bucket = self._by_session.setdefault(session_id, [])
             bucket.append(evidence)
@@ -148,10 +159,11 @@ def _redact_text(text: str) -> str:
     return redact_sensitive_text(redact_sensitive(text))
 
 
-def _summarize(result: Any) -> str:
-    """结果摘要：脱敏 + 截断为单行摘要"""
+def _summarize(result: Any) -> tuple[str, bool]:
+    """返回脱敏单行摘要及本地长度裁剪标记；摘要不代表完整输出。"""
     if result is None:
-        return ""
+        return "", False
+    truncated = False
     try:
         if isinstance(result, dict):
             # 优先取人可读字段
@@ -163,7 +175,9 @@ def _summarize(result: Any) -> str:
                 or ""
             )
             if not text:
-                text = str(result)[:200]
+                text = str(result)
+                truncated = len(text) > 200
+                text = text[:200]
         elif isinstance(result, (str, bytes)):
             text = str(result)
         else:
@@ -172,7 +186,7 @@ def _summarize(result: Any) -> str:
         text = str(result)
     text = _redact_text(text)
     text = " ".join(text.split())  # 压成单行
-    return text[:_MAX_RESULT_LEN]
+    return text[:_MAX_RESULT_LEN], truncated or len(text) > _MAX_RESULT_LEN
 
 
 # ============================================================================
