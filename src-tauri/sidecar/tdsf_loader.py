@@ -358,19 +358,21 @@ class TDSFWatcher:
             logger.error(f"TDSFWatcher check failed: {e}", exc_info=True)
 
     def _has_changed(self, current: TDSFContent) -> bool:
-        """检测 TDSF 内容是否变化（基于 mtime）
+        """检测 TDSF 内容或 mtime 是否变化
 
         Args:
             current: 当前加载的 TDSFContent
 
         Returns:
-            True 如果 mtime 变化（文件被修改/创建/删除）
+            True 如果内容或 mtime 变化（文件被修改/创建/删除）
         """
         if self._last_tdsf is None:
             return True
         return (
             current.global_mtime != self._last_tdsf.global_mtime
             or current.project_mtime != self._last_tdsf.project_mtime
+            or current.global_content != self._last_tdsf.global_content
+            or current.project_content != self._last_tdsf.project_content
         )
 
 
