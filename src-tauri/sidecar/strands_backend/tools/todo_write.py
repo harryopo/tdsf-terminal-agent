@@ -195,9 +195,11 @@ def invoke_todo_write_tool(
 def make_todo_write_tool(ctx: ToolContext):
     """构建 todo_write 工具（带 ctx 闭包）"""
 
-    @tool
+    @tool(context="sdk_tool_context")
     def todo_write(
         todos: list[dict[str, Any]],
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """更新当前任务列表。用于多步骤任务规划。
 
@@ -219,6 +221,7 @@ def make_todo_write_tool(ctx: ToolContext):
         return invoke_todo_write_tool(
             params={"todos": todos},
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     todo_write.__name__ = "todo_write"

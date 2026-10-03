@@ -82,8 +82,8 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
 
 def make_knowledge_get_doc_tool(ctx: Any):
     """构建知识库整篇文档读取工具（带 ctx 闭包，Strands @tool 装饰）"""
-    @tool
-    def knowledge_get_doc(url: str) -> dict:
+    @tool(context="sdk_tool_context")
+    def knowledge_get_doc(url: str, *, sdk_tool_context: Any = None) -> dict:
         """按 url 读取知识库完整文档（全部章节按序拼接的 markdown 全文）。
 
         先用 knowledge_search 检索，命中结果的 url 字段传给本工具读取
@@ -97,7 +97,9 @@ def make_knowledge_get_doc_tool(ctx: Any):
             dict: 含 status / url / title / category / content（完整
             markdown，超 30000 字符截断）/ chunks。
         """
-        return invoke_knowledge_get_doc_tool(params={"url": url}, ctx=ctx)
+        return invoke_knowledge_get_doc_tool(
+            params={"url": url}, ctx=ctx, sdk_tool_context=sdk_tool_context,
+        )
 
     knowledge_get_doc.__name__ = "knowledge_get_doc"
     return knowledge_get_doc

@@ -90,8 +90,8 @@ def invoke_knowledge_search_tool(params: dict[str, Any], ctx: Any = None) -> dic
 
 def make_knowledge_search_tool(ctx: Any):
     """构建知识库检索工具（带 ctx 闭包，Strands @tool 装饰）"""
-    @tool
-    def knowledge_search(query: str, limit: int = 5) -> dict:
+    @tool(context="sdk_tool_context")
+    def knowledge_search(query: str, limit: int = 5, *, sdk_tool_context: Any = None) -> dict:
         """检索内置 Linux 教学知识库精简版（中文提炼知识点，RAG 混合检索）。
 
         用户询问 Linux 概念/命令用法/运维知识时调用，返回最相关的知识条目
@@ -109,6 +109,7 @@ def make_knowledge_search_tool(ctx: Any):
         return invoke_knowledge_search_tool(
             params={"query": query, "limit": limit},
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     knowledge_search.__name__ = "knowledge_search"

@@ -9,6 +9,36 @@ from uuid import uuid4
 from strands_backend.tools._redact import redact_sensitive_text
 
 logger = logging.getLogger("sidecar.strands_backend.tools.tool_lifecycle")
+_REFERENCE_CALLS = "_tdsf_reference_tool_calls"
+
+
+def take_reference_tool_call_id(
+    tool_use: Any,
+    invocation_state: Any,
+    *,
+    session_id: str,
+    agent_name: str,
+) -> str | None:
+    """Consume only the card created for this SDK call and frozen owner."""
+    if not isinstance(tool_use, dict) or not isinstance(invocation_state, dict):
+        return None
+    sdk_id = tool_use.get("toolUseId")
+    if not isinstance(sdk_id, str) or not sdk_id.strip():
+        return None
+    calls = invocation_state.get(_REFERENCE_CALLS)
+    if not isinstance(calls, dict):
+        return None
+    call = calls.get(sdk_id)
+    if (
+        not isinstance(call, tuple) or len(call) != 4
+        or call[:3] != (tool_use.get("name"), session_id or None, agent_name)
+        or not isinstance(call[3], str)
+    ):
+        return None
+    del calls[sdk_id]
+    if not calls:
+        invocation_state.pop(_REFERENCE_CALLS, None)
+    return call[3]
 
 
 def _redact(value: Any) -> Any:
@@ -30,12 +60,23 @@ def tool_call_lifecycle(
     """Give a core invocation one ID and close it without altering its result."""
     def decorate(invoke: Callable):
         @wraps(invoke)
-        def wrapped(params: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
+        def wrapped(
+            params: dict[str, Any], ctx: Any = None, *, sdk_tool_context: Any = None,
+        ) -> dict[str, Any]:
             call_id = uuid4().hex
             event_bus = getattr(ctx, "event_bus", None)
             session_id = getattr(ctx, "session_id", "") or None
-            source = f"{getattr(ctx, 'agent_name', 'main')}_agent.strands_tool.{tool_name}"
+            agent_name = getattr(ctx, "agent_name", "main")
+            source = f"{agent_name}_agent.strands_tool.{tool_name}"
             event_params = _redact(params_summary(params) if params_summary else params)
+            tool_use = getattr(sdk_tool_context, "tool_use", None)
+            invocation_state = getattr(sdk_tool_context, "invocation_state", None)
+            if isinstance(tool_use, dict) and isinstance(invocation_state, dict):
+                sdk_id = tool_use.get("toolUseId")
+                if isinstance(sdk_id, str) and sdk_id.strip() and tool_use.get("name") == tool_name:
+                    calls = invocation_state.setdefault(_REFERENCE_CALLS, {})
+                    if isinstance(calls, dict):
+                        calls[sdk_id] = (tool_name, session_id, agent_name, call_id)
 
             def emit(status: str, result: dict[str, Any] | None = None) -> None:
                 if event_bus is None:

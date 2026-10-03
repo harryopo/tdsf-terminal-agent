@@ -58,12 +58,14 @@ try:
 except ImportError:  # Strands 未安装时优雅降级
     _STRANDS_AVAILABLE = False
 
-    def _strands_tool(func):  # type: ignore[misc]
+    def _strands_tool(func=None, *, context=False):  # type: ignore[misc]
         """Strands 不可用时的 passthrough 装饰器
 
         保留函数原签名与可调用性，附加 ``_is_strands_tool=False`` 标记，
         适配层据此判断是否真实 Strands 工具。
         """
+        if func is None:
+            return _strands_tool  # SDK context injection is unavailable in fallback.
         func._is_strands_tool = False  # type: ignore[attr-defined]
         func._tool_description = func.__doc__ or ""  # type: ignore[attr-defined]
         return func

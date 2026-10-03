@@ -1103,8 +1103,16 @@ class ToolCallLimitHook:
         # 随后 append 进会话历史的那个对象（strands `_executor.py` 用的是
         # `after_event.result` 而不是 hook 之前的旧 result —— 已由真对象断言钉住）。
         self._sanitize_tool_result(name, getattr(event, "result", None))
-        # 只取本 hook 确实创建的卡；手工卡的 UUID 不等于 SDK toolUseId。
+        # SDK 与手工 UUID 分开；只消费真实执行上下文里同调用/同 owner 的关联。
+        from strands_backend.tools.tool_lifecycle import take_reference_tool_call_id
+
+        reference_call_id = take_reference_tool_call_id(
+            getattr(event, "tool_use", None), getattr(event, "invocation_state", None),
+            session_id=self.session_id, agent_name=self.agent_name,
+        )
         evidence_call_id = self._tool_card_calls.get(self._tool_card_key(event))
+        if evidence_call_id is None:
+            evidence_call_id = reference_call_id
         self._finish_tool_card(event)
         # C1 工具级 tracing：计算 duration_ms
         start_time = self._tool_start_times.pop((name, self.total_calls), None)

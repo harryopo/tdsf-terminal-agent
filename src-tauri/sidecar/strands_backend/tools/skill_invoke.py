@@ -362,6 +362,8 @@ def make_skill_invoke_tool(ctx: ToolContext):
     def skill_invoke(
         skill_name: str,
         input: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         return invoke_skill_tool(
             params={
@@ -369,12 +371,13 @@ def make_skill_invoke_tool(ctx: ToolContext):
                 "input": input,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     # Strands 从 __name__ 提取工具名、从 __doc__ 提取描述与参数说明
     skill_invoke.__name__ = "skill_invoke"
     skill_invoke.__doc__ = dynamic_doc
-    return tool(skill_invoke)
+    return tool(context="sdk_tool_context")(skill_invoke)
 
 
 __all__ = [
