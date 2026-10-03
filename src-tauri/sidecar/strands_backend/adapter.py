@@ -1017,6 +1017,10 @@ class ToolCallLimitHook:
         tool_input: dict[str, Any],
         result: Any,
         failed: bool,
+        *,
+        tool_call_id: str | None = None,
+        sdk_tool_use_id: str | None = None,
+        cancelled: bool = False,
     ) -> None:
         """Record actual Strands completions for tools that don't record themselves.
 
@@ -1024,20 +1028,30 @@ class ToolCallLimitHook:
         and real hook calls share one event instead of creating duplicates.
         Every other tool, including knowledge retrieval, reaches this hook.
         """
-        if not self.session_id or self._records_own_evidence(name):
+        if not self.session_id or (self._records_own_evidence(name) and not cancelled):
             return
         try:
             from strands_backend.evidence import get_global_tracker
 
             payload = self._tool_payload(result)
+            evidence_status = "cancelled" if cancelled else (
+                "indeterminate" if self._result_status(result) == "indeterminate"
+                else ("error" if failed else "completed")
+            )
+            result = payload or result
             get_global_tracker().record(
                 session_id=self.session_id,
                 tool_name=name,
-                status="error" if failed else "completed",
+                status=evidence_status,
                 detail=self._evidence_detail(name, tool_input),
-                result=payload or result,
+                result=result,
                 agent=self.agent_name,
                 source=f"{self.agent_name}_agent.strands.hook",
+                tool_call_id=tool_call_id,
+                sdk_tool_use_id=sdk_tool_use_id,
+                operation_id=result.get("operation_id") if isinstance(result, dict) else None,
+                ssh_session_id=result.get("ssh_session_id") if isinstance(result, dict) else None,
+                target_endpoint=result.get("target_endpoint") if isinstance(result, dict) else None,
             )
         except Exception as exc:  # evidence must never interrupt the agent loop
             logger.debug("evidence record from tool hook failed: %s", exc)
@@ -1089,6 +1103,8 @@ class ToolCallLimitHook:
         # 随后 append 进会话历史的那个对象（strands `_executor.py` 用的是
         # `after_event.result` 而不是 hook 之前的旧 result —— 已由真对象断言钉住）。
         self._sanitize_tool_result(name, getattr(event, "result", None))
+        # 只取本 hook 确实创建的卡；手工卡的 UUID 不等于 SDK toolUseId。
+        evidence_call_id = self._tool_card_calls.get(self._tool_card_key(event))
         self._finish_tool_card(event)
         # C1 工具级 tracing：计算 duration_ms
         start_time = self._tool_start_times.pop((name, self.total_calls), None)
@@ -1130,7 +1146,12 @@ class ToolCallLimitHook:
         if duration_ms is not None:
             tool_entry["duration_ms"] = duration_ms
         self.tool_log.append(tool_entry)
-        self._record_evidence(name, tool_input, getattr(event, "result", None), failed)
+        self._record_evidence(
+            name, tool_input, getattr(event, "result", None), failed,
+            tool_call_id=evidence_call_id,
+            sdk_tool_use_id=getattr(event, "tool_use", {}).get("toolUseId"),
+            cancelled=bool(getattr(event, "cancel_message", None)),
+        )
         # #149：进度流水要说真话 —— "取不回结果"不是"失败"，
         # 写成 failed 会让排障的人和收尾判定都以为命令出错了（现场：sleep 330 那条）。
         self._report_progress(

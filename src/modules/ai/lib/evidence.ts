@@ -1,9 +1,8 @@
 /**
  * evidence.ts — 会话证据（P1-2）
  * -----------------------------------------------------------------------------
- * AI 结论的证据 = 会话内真实发生的工具调用记录（后端 EvidenceTracker，
- * 经 evidence.list RPC 拉取）。前端在对话流底部展示"证据"折叠区，
- * 让用户核验 AI 依据了哪些真实操作（可观测性/可信度）。
+ * 会话级真实工具记录，经 evidence.list RPC 拉取，供独立证据页的数据准备。
+ * 工具卡 ID 与 SDK 调用 ID 分开，缺失标识不补造；记录不证明模型结论正确。
  */
 
 export interface EvidenceItem {
@@ -14,6 +13,14 @@ export interface EvidenceItem {
   agent: string;
   timestamp: number;
   source?: string;
+  tool_call_id?: string;
+  sdk_tool_use_id?: string;
+  ssh_session_id?: string;
+  target_endpoint?: string;
+  operation_id?: string;
+  result_status?: string;
+  result_ok?: boolean;
+  result_available?: boolean;
 }
 
 /** 拉取会话证据列表（sidecar 不可用/无会话时返回空） */
@@ -67,7 +74,7 @@ export function evidenceTime(ts: number): string {
 // 按"收集（只读探查）→ 执行（写操作）→ 验证（写后只读确认）"分组，与
 // Python 侧 registry.py 的 WRITE_CLASS_TOOL_NAMES / VERIFY_CLASS_TOOL_NAMES
 // 语义对齐（改两侧需同步）。分组是**时序语义**：同为只读工具，写操作之前
-// 的调用算"收集"、之后的算"验证"。
+// 的调用算"收集"、之后的算"验证"。这仅是时序分组，不证明同目标验证完成。
 // ============================================================================
 
 /** 写类工具（与 strands_backend/tools/registry.py WRITE_CLASS_TOOL_NAMES 对齐） */

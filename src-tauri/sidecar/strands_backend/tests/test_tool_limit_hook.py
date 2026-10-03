@@ -49,6 +49,7 @@ def _make_event(name="ssh_command", exception=None):
     event.tool_use = {"name": name}
     event.cancel_tool = False
     event.exception = exception
+    event.cancel_message = None
     return event
 
 

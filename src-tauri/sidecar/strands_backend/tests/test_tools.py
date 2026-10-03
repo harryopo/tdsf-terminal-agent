@@ -312,7 +312,7 @@ class TestSshCommandTool(unittest.TestCase):
 
         self.assertEqual(result["status"], "indeterminate")
         self.assertEqual(result["reason"], "missing_or_invalid_exit_code")
-        self.assertEqual(evidence.call_args.kwargs["status"], "error")
+        self.assertEqual(evidence.call_args.kwargs["status"], "indeterminate")
 
     def test_visible_terminal_uses_foreground_route_without_ssh_exec(self):
         """The selected visible channel has one execution path, not a preview plus exec."""

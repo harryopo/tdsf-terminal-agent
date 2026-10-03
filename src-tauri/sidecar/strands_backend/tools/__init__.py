@@ -1035,6 +1035,7 @@ def _execute_via_ssh_impl(
             error: 错误信息（error 时）
     """
     session_id = ssh_session_id or ctx.ssh_session_id
+    evidence_session_id, evidence_agent = ctx.session_id, ctx.agent_name
 
     # 1. 综合决策（Task 4 影响预测 + Task 3 三模式 decide；denylist 命中
     #    返回 blocked——fail-closed，直接拦截不审批、禁替代方案）
@@ -1058,13 +1059,15 @@ def _execute_via_ssh_impl(
             reason=assessment.get("reason", ""),
         )
         _track_evidence(
-            session_id=ctx.session_id,
+            session_id=evidence_session_id,
             tool_name=tool_name,
             status="blocked",
             detail=command,
             result={"message": message},
-            agent=ctx.agent_name,
+            agent=evidence_agent,
             source="strands_tool",
+            tool_call_id=tool_call_id,
+            ssh_session_id=str(session_id or ""),
         )
         return {
             "status": "command_blocked",
@@ -1742,13 +1745,17 @@ def _execute_via_ssh_impl(
             target_endpoint=target_endpoint,
         )
         _track_evidence(
-            session_id=ctx.session_id,
+            session_id=evidence_session_id,
             tool_name=tool_name,
-            status="error",
+            status="indeterminate",
             detail=command,
             result=result,
-            agent=ctx.agent_name,
+            agent=evidence_agent,
             source="strands_tool",
+            tool_call_id=tool_call_id,
+            ssh_session_id=str(session_id or ""),
+            target_endpoint=target_endpoint or None,
+            operation_id=operation_id or None,
         )
         return _complete_after_execution({
             "status": "indeterminate",
@@ -1776,13 +1783,17 @@ def _execute_via_ssh_impl(
             target_endpoint=target_endpoint,
         )
         _track_evidence(
-            session_id=ctx.session_id,
+            session_id=evidence_session_id,
             tool_name=tool_name,
-            status="error",
+            status="indeterminate",
             detail=command,
             result=result,
-            agent=ctx.agent_name,
+            agent=evidence_agent,
             source="strands_tool",
+            tool_call_id=tool_call_id,
+            ssh_session_id=str(session_id or ""),
+            target_endpoint=target_endpoint or None,
+            operation_id=operation_id or None,
         )
         return _complete_after_execution({
             "status": "indeterminate",
@@ -1814,13 +1825,17 @@ def _execute_via_ssh_impl(
             target_endpoint=target_endpoint,
         )
         _track_evidence(
-            session_id=ctx.session_id,
+            session_id=evidence_session_id,
             tool_name=tool_name,
             status="error",
             detail=command,
             result=result,
-            agent=ctx.agent_name,
+            agent=evidence_agent,
             source="strands_tool",
+            tool_call_id=tool_call_id,
+            ssh_session_id=str(session_id or ""),
+            target_endpoint=target_endpoint or None,
+            operation_id=operation_id or None,
         )
         return _complete_after_execution({
             "status": "error",
@@ -1866,13 +1881,17 @@ def _execute_via_ssh_impl(
     # P1-2: 记录会话证据（前端证据面板展示 AI 依据的真实操作）
     # 注意：证据归属**对话会话**（ctx.session_id），不是 SSH 会话 id
     _track_evidence(
-        session_id=ctx.session_id,
+        session_id=evidence_session_id,
         tool_name=tool_name,
         status="completed",
         detail=command,
         result=result,
-        agent=ctx.agent_name,
+        agent=evidence_agent,
         source="strands_tool",
+        tool_call_id=tool_call_id,
+        ssh_session_id=str(session_id or ""),
+        target_endpoint=target_endpoint or None,
+        operation_id=operation_id or None,
     )
     payload: dict[str, Any] = {
         "status": "success",
@@ -1920,6 +1939,11 @@ def _track_evidence(
     result: Any = None,
     agent: str = "main",
     source: str = "",
+    *,
+    tool_call_id: str | None = None,
+    ssh_session_id: str | None = None,
+    target_endpoint: str | None = None,
+    operation_id: str | None = None,
 ) -> None:
     """记录会话证据（P1-2；失败不影响主流程）"""
     try:
@@ -1933,6 +1957,10 @@ def _track_evidence(
             result=result,
             agent=agent,
             source=source,
+            tool_call_id=tool_call_id,
+            ssh_session_id=ssh_session_id,
+            target_endpoint=target_endpoint,
+            operation_id=operation_id,
         )
     except Exception as e:
         logger.debug(f"evidence record failed: {e}")
