@@ -28,9 +28,9 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any
-from uuid import uuid4
 
 from strands_backend.tools import ToolContext, tool
+from strands_backend.tools.tool_lifecycle import tool_call_lifecycle
 
 logger = logging.getLogger("sidecar.strands_backend.tools.todo_write")
 
@@ -44,30 +44,6 @@ _todos_lock = threading.Lock()
 
 # 未完成状态集合（T3 收尾校验判定口径）
 UNFINISHED_STATUSES = ("pending", "in_progress")
-
-
-def _emit_todo_event(
-    ctx: ToolContext,
-    call_id: str,
-    status: str,
-    params: dict[str, Any],
-    result: dict[str, Any] | None = None,
-) -> None:
-    """Emit one correlated todo_write lifecycle event for the tool UI/log."""
-    if ctx.event_bus is None:
-        return
-    try:
-        ctx.event_bus.emit_tool_call(
-            tool_name="todo_write",
-            tool_call_id=call_id,
-            params=params,
-            result=result,
-            status=status,
-            session_id=ctx.session_id or None,
-            source=f"{ctx.agent_name}_agent.strands_tool.todo_write",
-        )
-    except Exception as e:  # event delivery must not break task state
-        logger.debug("emit_tool_call todo_write failed: %s", e)
 
 
 def get_session_todos(session_id: str) -> list[dict[str, Any]]:
@@ -122,6 +98,13 @@ def _merge_completed_at(
 
 
 
+@tool_call_lifecycle(
+    "todo_write",
+    params_summary=lambda params: {
+        "count": len(params.get("todos", [])) if isinstance(params.get("todos", []), list) else 0,
+    },
+    failed=lambda result: not result.get("ok"),
+)
 def invoke_todo_write_tool(
     params: dict[str, Any],
     ctx: ToolContext,
@@ -138,19 +121,8 @@ def invoke_todo_write_tool(
         dict: {ok: bool, count: int, in_progress: str|null}
     """
     todos_raw = params.get("todos", [])
-    call_id = uuid4().hex
-    event_params = {
-        "count": len(todos_raw) if isinstance(todos_raw, list) else 0,
-    }
-    _emit_todo_event(ctx, call_id, "started", event_params)
-
-    def finish(result: dict[str, Any]) -> dict[str, Any]:
-        status = "completed" if result.get("ok") else "error"
-        _emit_todo_event(ctx, call_id, status, event_params, result)
-        return result
-
     if not isinstance(todos_raw, list):
-        return finish({"ok": False, "error": "todos must be a list"})
+        return {"ok": False, "error": "todos must be a list"}
 
     # T3: 旧列表快照（completedAt 合并基准）——在归一化前取
     session_id = ctx.session_id or ""
@@ -183,14 +155,14 @@ def invoke_todo_write_tool(
         })
 
     if not normalized:
-        return finish({"ok": False, "error": "todo list must contain at least one titled item"})
+        return {"ok": False, "error": "todo list must contain at least one titled item"}
 
     # T3: completed 项填 completedAt（合并旧值——全量替换不重置完成时间）
     _merge_completed_at(normalized, previous)
 
     # 校验：至多一项 in_progress
     if in_progress_count > 1:
-        return finish({"ok": False, "error": "at most one todo can be in_progress"})
+        return {"ok": False, "error": "at most one todo can be in_progress"}
 
     # T3: per-session 镜像（adapter 收尾校验数据源；校验通过才落）
     if session_id:
@@ -213,11 +185,11 @@ def invoke_todo_write_tool(
         None,
     )
 
-    return finish({
+    return {
         "ok": True,
         "count": len(normalized),
         "in_progress": in_progress_title,
-    })
+    }
 
 
 def make_todo_write_tool(ctx: ToolContext):
