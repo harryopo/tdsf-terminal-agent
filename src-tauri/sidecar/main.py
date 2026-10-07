@@ -207,6 +207,58 @@ _slow_methods: frozenset[str] = frozenset({
 _main_executor: ThreadPoolExecutor | None = None
 
 
+def _submit_slow_request(
+    dispatcher: "MethodDispatcher", method: str, params: Any,
+    req_id: Any, is_notification: bool,
+) -> Any:
+    adapter = None
+    session_id = ""
+    if method == "agent.invoke":
+        import agent_facade
+
+        if isinstance(params, dict) and params.keys() == {"name", "state"}:
+            name, state = params["name"], params["state"]
+        elif isinstance(params, list) and len(params) == 2:
+            name, state = params
+        else:
+            name, state = None, None
+        if name == "main" and isinstance(state, dict):
+            session_id = state.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                adapter = agent_facade.get_strands_adapter()
+    if adapter is None:
+        return _main_executor.submit(
+            _dispatch_in_executor, dispatcher, method, params, req_id, is_notification
+        )
+
+    cancelled = adapter._register_invocation(session_id)
+    try:
+        future = _main_executor.submit(
+            _dispatch_queued_agent, dispatcher, method, params, req_id,
+            is_notification, adapter, session_id, cancelled,
+        )
+    except BaseException:
+        adapter._unregister_invocation(session_id, cancelled)
+        raise
+    # shutdown(cancel_futures=True) and explicit Future.cancel skip the worker.
+    future.add_done_callback(
+        lambda done: adapter._unregister_invocation(session_id, cancelled)
+        if done.cancelled() else None
+    )
+    return future
+
+
+def _dispatch_queued_agent(
+    dispatcher: "MethodDispatcher", method: str, params: Any, req_id: Any,
+    is_notification: bool, adapter: Any, session_id: str, cancelled: threading.Event,
+) -> None:
+    try:
+        with adapter._use_queued_invocation(session_id, cancelled):
+            _dispatch_in_executor(dispatcher, method, params, req_id, is_notification)
+    finally:
+        adapter._unregister_invocation(session_id, cancelled)
+
+
 def _dispatch_request(
     dispatcher: "MethodDispatcher", method: str, params: Any, req_id: Any
 ) -> Any:
@@ -1218,14 +1270,7 @@ def main() -> None:
             # 异步执行，主循环立即继续读 stdin，保证 ping 响应不被 LLM 调用阻塞。
             # 快方法（ping / status / agent.list / sidecar.health 等）仍同步派发。
             if _main_executor is not None and method in _slow_methods:
-                _main_executor.submit(
-                    _dispatch_in_executor,
-                    dispatcher,
-                    method,
-                    params,
-                    req_id,
-                    is_notification,
-                )
+                _submit_slow_request(dispatcher, method, params, req_id, is_notification)
                 continue
 
             try:

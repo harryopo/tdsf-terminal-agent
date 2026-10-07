@@ -39,7 +39,8 @@ import os
 import re
 import threading
 import time
-from contextvars import copy_context
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from typing import Any, Callable, Sequence
 
 from strands_backend.modes import AgentMode, parse_mode
@@ -1811,6 +1812,9 @@ class StrandsAgentAdapter:
         # 入口即登记，避免初始化尚无 hook 或排队后的 reset 丢失本轮取消。
         self._cancel_lock = threading.RLock()
         self._invocations: dict[str, set[threading.Event]] = {}
+        self._queued_invocation: ContextVar[tuple[str, threading.Event] | None] = ContextVar(
+            "tdsf_queued_invocation", default=None
+        )
 
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
@@ -1965,6 +1969,38 @@ class StrandsAgentAdapter:
         text = f"{type(error).__name__}: {error}".lower()
         return any(marker in text for marker in _LLM_RATE_LIMIT_MARKERS)
 
+    def _register_invocation(self, session_id: str) -> threading.Event:
+        cancelled = threading.Event()
+        with self._cancel_lock:
+            self._invocations.setdefault(session_id, set()).add(cancelled)
+        return cancelled
+
+    def _unregister_invocation(self, session_id: str, cancelled: threading.Event) -> None:
+        with self._cancel_lock:
+            pending = self._invocations.get(session_id)
+            if pending is not None:
+                pending.discard(cancelled)
+                if not pending:
+                    del self._invocations[session_id]
+
+    @contextmanager
+    def _use_queued_invocation(self, session_id: str, cancelled: threading.Event):
+        token = self._queued_invocation.set((session_id, cancelled))
+        try:
+            yield
+        finally:
+            self._queued_invocation.reset(token)
+
+    def _cancelled_response(self, agent_id: str, session_id: str) -> dict[str, Any]:
+        self._emit_mood("done", agent_id, session_id)
+        return {
+            "observation": "本次任务已停止；已执行过的动作不会自动撤销。",
+            "next_step": "done",
+            "mood": "done",
+            "intermediate_results": [],
+            "tokens": {},
+        }
+
     def invoke(
         self,
         agent_id: str,
@@ -1974,17 +2010,15 @@ class StrandsAgentAdapter:
         """登记本轮取消信号（含初始化/排队），调用结束后释放登记。"""
         state = state or {}
         session_id = state.get("session_id", "") or ""
-        cancelled = threading.Event()
-        with self._cancel_lock:
-            self._invocations.setdefault(session_id, set()).add(cancelled)
+        queued = self._queued_invocation.get()
+        if queued is not None and queued[0] == session_id:
+            # The RPC future owns this registration, including queue cancellation.
+            return self._invoke(agent_id, input, state, queued[1])
+        cancelled = self._register_invocation(session_id)
         try:
             return self._invoke(agent_id, input, state, cancelled)
         finally:
-            with self._cancel_lock:
-                pending = self._invocations[session_id]
-                pending.remove(cancelled)
-                if not pending:
-                    del self._invocations[session_id]
+            self._unregister_invocation(session_id, cancelled)
 
     def _invoke(
         self,
@@ -2017,6 +2051,8 @@ class StrandsAgentAdapter:
         """
         state = state or {}
         session_id = state.get("session_id", "") or ""
+        if cancelled.is_set():
+            return self._cancelled_response(agent_id, session_id)
         start_time = time.time()
 
         # P0-A1: 三模式信任体系传参——live.agentMode（前端模式切换器下发，
@@ -2290,14 +2326,7 @@ class StrandsAgentAdapter:
                 # worker 已失败——抛给下方 except 统一处理（含 T9.2 降级分类）
                 raise outcome["error"]
             if outcome.get("cancelled"):
-                self._emit_mood("done", agent_id, session_id)
-                return {
-                    "observation": "本次任务已停止；已执行过的动作不会自动撤销。",
-                    "next_step": "done",
-                    "mood": "done",
-                    "intermediate_results": [],
-                    "tokens": {},
-                }
+                return self._cancelled_response(agent_id, session_id)
             response = outcome.get("response")
             followup_observation = outcome.get("followup")
             verify_observation = outcome.get("verify")
