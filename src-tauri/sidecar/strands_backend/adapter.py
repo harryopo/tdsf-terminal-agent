@@ -2195,13 +2195,15 @@ class StrandsAgentAdapter:
                 session_id,
             )
             if watchdog_fired:
-                # 超时：不取 worker 结果（仍在后台跑）——友好降级，对话可继续
+                # 不取迟到结果，但必须先阻止后续工具并唤醒挂着的待答请求。
+                # worker/当前模型请求/已派发命令仍可能在运行，取消不是强杀。
+                self.request_cancel(session_id, "AI 调用无活动超时")
                 duration = time.time() - start_time
                 idle_secs, _ = _watchdog_thresholds()
                 msg = (
                     f"AI 调用超时：模型超过 {_format_idle_secs(idle_secs)}"
-                    "没有任何输出，本轮已中止。"
-                    "请检查网络或模型服务状态后重试；会话历史已保留，可直接继续对话。"
+                    "没有任何输出，已停止等待并请求停止后续工具调用。"
+                    "正在执行的命令不会自动撤销；请先查看终端和运行日志，确认状态后再决定下一步。"
                 )
                 logger.error(
                     f"[t9] invoke watchdog timeout: agent={agent_id}, "

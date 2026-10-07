@@ -169,17 +169,17 @@ export function buildSidecarErrorHint(
     // 「简化问题描述后重试」把 AI 的等待说成用户问得不好。
     if (awaitingUserResponse) {
       return [
-        "AI 在等你确认，但这一轮的时间用完了，已中止。",
+        "AI 在等你确认时，本轮调用超时。",
         "",
-        "命令没有被执行。审批卡上的「执行 / 拒绝」还在，回答它即可继续；" +
-          "卡已经不在了就重新发起这一轮。",
+        "超时不能证明命令尚未执行，也不代表远端命令已经停止。" +
+          "请先查看终端和运行日志，确认状态后再决定下一步；不要直接重复状态不明的命令。",
       ].join("\n");
     }
     return [
       `AI 任务超时未完成：${rawError}`,
       "",
-      "说明：这段时间里既没有输出、也没有工具调用（等你确认的时间不计算在内）。",
-      "建议：1) 看界面是否有没回答的审批卡或弹窗 2) 重新发起这一轮",
+      "超时不代表远端命令已经停止。",
+      "请先查看终端和运行日志，确认状态后再决定下一步；不要直接重复状态不明的命令。",
     ].join("\n");
   }
   if (
@@ -813,12 +813,15 @@ async function registerSidecarListeners(
  * 失败必须出声：没送到 = 用户看到的"停了"只是界面停了，后端还在花钱。
  * 非桌面运行时（vitest / 纯浏览器 dev）没有 ipc_invoke，直接跳过。
  */
-export async function cancelSidecarTurn(sessionId: string): Promise<void> {
+export async function cancelSidecarTurn(
+  sessionId: string,
+  reason = "用户点击停止",
+): Promise<void> {
   if (!sessionId) return;
   if (!isTauriRuntime()) return;
   await invoke("ipc_invoke", {
     method: "agent.cancel",
-    params: { session_id: sessionId, reason: "用户点击停止" },
+    params: { session_id: sessionId, reason },
     timeoutMs: 10_000,
   });
 }
@@ -1230,16 +1233,26 @@ export async function* runSidecarStream(
       // TDSF P0-3: 移除 mock 降级，直接报错让用户看到真实问题
       // P0-4 (2026-08-01): 结构化错误提示——按错误类型区分文案与行动建议
       // #133: 中止那一刻是不是正停在"等你确认"上，决定这句"超时"该怎么说
-      yield {
-        type: "error",
-        error: buildSidecarErrorHint(
-          invokeError,
-          pythonName,
-          false,
-          "",
-          isAwaitingUser(useNeedsYouWait.getState(), sessionId),
-        ),
-      };
+      let error = buildSidecarErrorHint(
+        invokeError,
+        pythonName,
+        false,
+        "",
+        isAwaitingUser(useNeedsYouWait.getState(), sessionId),
+      );
+      if (/超时|timeout/i.test(invokeError) && sessionId && isTauriRuntime()) {
+        // 放弃消息流不等于停止后台任务；先通知停止后续工具、结掉待答请求再退场。
+        disposeActivityTimeout();
+        try {
+          await cancelSidecarTurn(sessionId, "AI 任务超时，停止后续工具调用");
+          error += "\n\n已请求停止后续工具调用；正在执行的命令不会自动撤销。";
+        } catch {
+          console.error("[sidecar-adapter] agent.cancel 超时退场请求未获确认");
+          error += "\n\n取消请求未获确认，后台任务可能仍在运行；请先核对终端状态。";
+        }
+        if (abortSignal?.aborted) return;
+      }
+      yield { type: "error", error };
       return;
     }
 
