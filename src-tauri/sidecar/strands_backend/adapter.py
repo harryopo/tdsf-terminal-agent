@@ -1912,6 +1912,8 @@ class StrandsAgentAdapter:
 
         idle_threshold, poll_secs = _watchdog_thresholds()
         needs_you_service = get_global_service()
+        notify_liveness = getattr(self.event_bus, "emit_rpc_liveness", None)
+        sequence = 0
 
         last_seen = get_events()
         last_active = time.monotonic()
@@ -1932,8 +1934,7 @@ class StrandsAgentAdapter:
                 last_seen = events_now
                 last_active = now
                 waiting_for_user = is_waiting
-                continue
-            if now - last_active > idle_threshold:
+            elif now - last_active > idle_threshold:
                 self._stalled_sessions.add((agent_id, session_id))
                 logger.error(
                     f"[t9] watchdog: no callback events for "
@@ -1941,6 +1942,11 @@ class StrandsAgentAdapter:
                     f"abandoning invoke: agent={agent_id}, session={session_id}"
                 )
                 return True
+            if callable(notify_liveness):
+                # Only this live watchdog renews transport waiting; do not
+                # count its own lease as a callback or model progress.
+                sequence += 1
+                notify_liveness(sequence, "waiting_user" if is_waiting else "working")
 
     @staticmethod
     def _is_llm_transport_error(error: Exception) -> bool:

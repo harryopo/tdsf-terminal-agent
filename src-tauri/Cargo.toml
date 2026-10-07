@@ -149,6 +149,7 @@ tauri-plugin-single-instance = "2.4.4"
 tauri-plugin-window-state = "2"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 # SSH 测试用随机数 (russh 0.61 / ssh-key 0.7 依赖 rand_core 0.10)
 # rand 0.10 才兼容 rand_core 0.10
 

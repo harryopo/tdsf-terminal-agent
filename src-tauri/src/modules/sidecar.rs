@@ -35,7 +35,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{oneshot, watch, Mutex, RwLock};
 use tokio::time::timeout;
 
 // ============================================================================
@@ -62,6 +62,107 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 60s 对 Strands agentic loop（多轮工具调用 + LLM 推理，如环境探测/诊断）
 /// 太紧，复杂任务频繁超时；前端可传 timeoutMs 覆盖（见 send_request_with_timeout）。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+
+const AGENT_RPC_LIVENESS: &str = "agent.rpc_liveness";
+
+#[derive(Clone, Copy)]
+struct RpcLiveness {
+    seq: u64,
+    received_at: tokio::time::Instant,
+}
+
+struct PendingRequest {
+    response: oneshot::Sender<Value>,
+    liveness: Option<watch::Sender<RpcLiveness>>,
+    budget: Duration,
+}
+
+// Private transport signal: never forward to the UI or treat as tool success.
+fn handle_rpc_liveness(msg: &Value, pending: &mut HashMap<i64, PendingRequest>) -> bool {
+    if msg.get("method").and_then(Value::as_str) != Some(AGENT_RPC_LIVENESS)
+        || msg.get("id").is_some()
+        || msg.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+    {
+        return false;
+    }
+    let Some(params) = msg.get("params") else {
+        return false;
+    };
+    let Some(id) = params
+        .get("rpc_request_id")
+        .and_then(Value::as_i64)
+        .filter(|id| *id >= 0)
+    else {
+        return false;
+    };
+    let Some(seq) = params
+        .get("seq")
+        .and_then(Value::as_u64)
+        .filter(|seq| *seq > 0)
+    else {
+        return false;
+    };
+    if params.get("schema_version").and_then(Value::as_u64) != Some(1)
+        || !matches!(
+            params.get("phase").and_then(Value::as_str),
+            Some("working" | "waiting_user")
+        )
+    {
+        return false;
+    }
+    let Some(request) = pending.get(&id) else {
+        return false;
+    };
+    let Some(sender) = request.liveness.as_ref() else {
+        return false;
+    };
+    sender.send_if_modified(|last| {
+        let now = tokio::time::Instant::now();
+        if seq <= last.seq || now > last.received_at + request.budget {
+            return false;
+        }
+        *last = RpcLiveness {
+            seq,
+            received_at: now,
+        };
+        true
+    })
+}
+
+async fn wait_for_rpc_response(
+    mut response: oneshot::Receiver<Value>,
+    mut liveness: Option<watch::Receiver<RpcLiveness>>,
+    budget: Duration,
+) -> SidecarResult<Value> {
+    let mut deadline = liveness
+        .as_ref()
+        .map(|receiver| receiver.borrow().received_at)
+        .unwrap_or_else(tokio::time::Instant::now)
+        + budget;
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut response => return result.map_err(|_| SidecarError::NotRunning),
+            changed = async {
+                match liveness.as_mut() {
+                    Some(receiver) => receiver.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if changed.is_err() {
+                    liveness = None;
+                    continue;
+                }
+                let signal = *liveness.as_mut().expect("liveness receiver").borrow_and_update();
+                // Buffered/late signals do not earn a fresh window on consumption.
+                // Ingress validates every lease against its owner's last
+                // receive time, including updates coalesced before this poll.
+                deadline = signal.received_at + budget;
+            }
+            _ = tokio::time::sleep_until(deadline) => return Err(SidecarError::RequestTimeout(budget)),
+        }
+    }
+}
 
 // Reverse visible execution starts before the optional human-typing pump.
 // A short command at the slowest 0.2x setting can spend about 158 seconds
@@ -234,8 +335,8 @@ pub struct SidecarManager {
     /// 子进程句柄（用于 kill）
     child: Arc<Mutex<Option<Child>>>,
 
-    /// 待响应请求表（id → oneshot sender）
-    pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
+    /// 待响应请求表（每个原始 id 独占响应和可选传输存活通道）
+    pending_requests: Arc<Mutex<HashMap<i64, PendingRequest>>>,
 
     /// 下一个请求 ID（自增，Arc 包装以便 Clone）
     next_request_id: Arc<AtomicI64>,
@@ -587,8 +688,8 @@ impl SidecarManager {
         // 7. 清理 pending_requests（所有等待者收到错误响应）
         {
             let mut pending = self.pending_requests.lock().await;
-            for (_, sender) in pending.drain() {
-                let _ = sender.send(json!({"error": "sidecar stopped"}));
+            for (_, request) in pending.drain() {
+                let _ = request.response.send(json!({"error": "sidecar stopped"}));
             }
         }
 
@@ -613,8 +714,8 @@ impl SidecarManager {
 
     /// 发送请求（自定义超时）
     ///
-    /// TDSF 修复 2026-08-01 (P0-3): 前端 agent.invoke 可传 timeoutMs
-    /// （长任务/复杂诊断放宽到 120s+），由 ipc_invoke 解析 params 后调用。
+    /// agent.invoke uses a request-owned transport inactivity budget; only its
+    /// live Python watchdog can renew it. Other methods retain absolute timeouts.
     pub async fn send_request_with_timeout(
         &self,
         method: &str,
@@ -625,9 +726,25 @@ impl SidecarManager {
 
         // 1. 注册 pending request（oneshot channel）
         let (tx, rx) = oneshot::channel::<Value>();
+        let (liveness, activity_rx) = if method == "agent.invoke" {
+            let (tx, rx) = watch::channel(RpcLiveness {
+                seq: 0,
+                received_at: tokio::time::Instant::now(),
+            });
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         {
             let mut pending = self.pending_requests.lock().await;
-            pending.insert(id, tx);
+            pending.insert(
+                id,
+                PendingRequest {
+                    response: tx,
+                    liveness,
+                    budget: timeout_duration,
+                },
+            );
         }
 
         // 2. 发送请求
@@ -637,11 +754,20 @@ impl SidecarManager {
             "params": params,
             "id": id,
         });
-        self.send_raw(serde_json::to_string(&msg)?).await?;
+        let send_result = match serde_json::to_string(&msg) {
+            Ok(line) => self.send_raw(line).await,
+            Err(error) => Err(error.into()),
+        };
+        if let Err(error) = send_result {
+            self.pending_requests.lock().await.remove(&id);
+            return Err(error);
+        }
 
-        // 3. 等待响应（可配置超时）
-        match timeout(timeout_duration, rx).await {
-            Ok(Ok(result)) => {
+        // 3. Both reply and lease share one pending owner and terminal cleanup.
+        let result = wait_for_rpc_response(rx, activity_rx, timeout_duration).await;
+        self.pending_requests.lock().await.remove(&id);
+        match result {
+            Ok(result) => {
                 // 检查响应是否包含 error
                 if let Some(err) = result.get("error") {
                     let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-32000);
@@ -661,18 +787,7 @@ impl SidecarManager {
                 }
                 Ok(result)
             }
-            Ok(Err(_)) => {
-                // sender 被 drop（通常因 sidecar 停止）
-                let mut pending = self.pending_requests.lock().await;
-                pending.remove(&id);
-                Err(SidecarError::NotRunning)
-            }
-            Err(_) => {
-                // 超时
-                let mut pending = self.pending_requests.lock().await;
-                pending.remove(&id);
-                Err(SidecarError::RequestTimeout(timeout_duration))
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -944,7 +1059,7 @@ async fn writer_task(mut stdin: ChildStdin, mut rx: tokio::sync::mpsc::Receiver<
 async fn reader_task(
     stdout: ChildStdout,
     state: Arc<RwLock<SidecarState>>,
-    pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
+    pending_requests: Arc<Mutex<HashMap<i64, PendingRequest>>>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     stdin_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
 ) {
@@ -1062,15 +1177,18 @@ async fn reader_task(
                             }
                         });
                     } else {
-                        // 通知（method 无 id）→ 原逻辑
-                        handle_notification(method, &msg, &state, &app_handle).await;
+                        if method == AGENT_RPC_LIVENESS {
+                            handle_rpc_liveness(&msg, &mut *pending_requests.lock().await);
+                        } else {
+                            handle_notification(method, &msg, &state, &app_handle).await;
+                        }
                     }
                 } else if let Some(id) = msg.get("id") {
                     // 响应（有 id，无 method）→ Rust→Python 请求的响应
                     if let Some(id_num) = id.as_i64() {
                         let mut pending = pending_requests.lock().await;
-                        if let Some(sender) = pending.remove(&id_num) {
-                            let _ = sender.send(msg);
+                        if let Some(request) = pending.remove(&id_num) {
+                            let _ = request.response.send(msg);
                         } else {
                             log::warn!(
                                 "[sidecar:reader] no pending request for id={}",
@@ -1923,7 +2041,7 @@ async fn stderr_reader_task(stderr: tokio::process::ChildStderr) {
 /// health check task: 每 5s 发送 ping，30s 无响应判定死锁
 async fn health_check_task(
     state: Arc<RwLock<SidecarState>>,
-    pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
+    pending_requests: Arc<Mutex<HashMap<i64, PendingRequest>>>,
     stdin_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
     next_request_id: Arc<AtomicI64>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
@@ -2002,7 +2120,14 @@ async fn health_check_task(
         let (tx, rx) = oneshot::channel::<Value>();
         {
             let mut pending = pending_requests.lock().await;
-            pending.insert(id, tx);
+            pending.insert(
+                id,
+                PendingRequest {
+                    response: tx,
+                    liveness: None,
+                    budget: HEARTBEAT_INTERVAL * 2,
+                },
+            );
         }
 
         let msg = json!({
@@ -2309,6 +2434,10 @@ pub async fn sidecar_logs_clear() -> std::result::Result<(), String> {
 // ============================================================================
 // 单元测试
 // ============================================================================
+
+#[cfg(test)]
+#[path = "sidecar_liveness_tests.rs"]
+mod liveness_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1096,8 +1096,8 @@ export async function* runSidecarStream(
     // 而一条命令被允许跑多久是模型声明的 timeout 决定的 —— Rust clamp 到 300s，
     // Python 再等 timeout+200 ⇒ 最坏合法静默 500s，比这里的 300s 长 200 秒。
     // 真机 79 次配对里最长已经到 259.6s，余量只剩 40 秒。所以工具在飞期间停表，
-    // 上限不由前端猜：Rust 对整条 agent.invoke 有 600s 硬顶（toolSilentBudget.test.ts
-    // 把这两个数的大小关系钉成闸），到点报错的是带着原因的 Rust，不是前端的臆断。
+    // 工具自身 deadline 仍由执行层裁定。Rust 的 600s 是请求级传输无存活窗口，
+    // 私有 watchdog 信号只续传输，不计入这里的模型活动预算。
     const activityTimeoutMs = getSidecarTimeoutMs();
     let noteActivity: () => void = () => {};
     let applyAwaitingUser: (awaiting: boolean) => void = () => {};
@@ -1148,9 +1148,8 @@ export async function* runSidecarStream(
               name: pythonName,
               state: { input, messages, live, session_id: sessionId ?? "" },
             },
-            // P0 活动感知(2026-09-03): Rust 侧用总时长硬上限 600s（对齐 Python
-            // watchdog），前端活动感知（默认 300s 无活动）先触发——避免 Rust 总时长
-            // 先于前端活动感知掐断有进展的长任务。
+            // Rust 按原始请求 ID 的私有存活续传输窗口，不再裁整轮总时长；
+            // 此值仍封顶 600s。前端活动/Python空闲/工具与审批各自期限不变。
             timeoutMs: SIDECAR_TIMEOUT_MAX_MS,
           }),
           timeout,
