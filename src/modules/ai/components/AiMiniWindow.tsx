@@ -341,7 +341,7 @@ function Header({
           size="icon"
           variant="ghost"
           onClick={onClose}
-          className="size-5"
+          className="size-7"
           aria-label="关闭"
           title="关闭 (Esc)"
         >

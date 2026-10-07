@@ -282,7 +282,7 @@ export function AiComposerInput() {
               placeholder="向 TDSF 提问   ·   / 调用 Skill，# 调用片段，@ 引用当前工作区文件"
               rows={1}
               className={cn(
-                "max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none",
+                "max-h-40 min-h-7 min-w-0 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none",
                 "placeholder:text-muted-foreground/60",
               )}
             />
