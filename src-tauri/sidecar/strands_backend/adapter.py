@@ -1807,6 +1807,10 @@ class StrandsAgentAdapter:
         # 告诉模型。护栏 hook 每次 invoke 会 reset，所以中断信息必须存在这里。
         self._cancel_notes: dict[str, dict[str, Any]] = {}
 
+        # 入口即登记，避免初始化尚无 hook 或排队后的 reset 丢失本轮取消。
+        self._cancel_lock = threading.RLock()
+        self._invocations: dict[str, set[threading.Event]] = {}
+
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
         # 用户停止+立即重发会导致前后请求竞态崩溃。锁确保排队等待。
@@ -1960,6 +1964,28 @@ class StrandsAgentAdapter:
         input: str,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """登记本轮取消信号（含初始化/排队），调用结束后释放登记。"""
+        state = state or {}
+        session_id = state.get("session_id", "") or ""
+        cancelled = threading.Event()
+        with self._cancel_lock:
+            self._invocations.setdefault(session_id, set()).add(cancelled)
+        try:
+            return self._invoke(agent_id, input, state, cancelled)
+        finally:
+            with self._cancel_lock:
+                pending = self._invocations[session_id]
+                pending.remove(cancelled)
+                if not pending:
+                    del self._invocations[session_id]
+
+    def _invoke(
+        self,
+        agent_id: str,
+        input: str,
+        state: dict[str, Any],
+        cancelled: threading.Event,
+    ) -> dict[str, Any]:
         """Strands Agent 调用主入口
 
         返回稳定的 Agent RPC 结果结构：
@@ -2067,10 +2093,6 @@ class StrandsAgentAdapter:
             lock_key = (agent_id, ctx.session_id, ctx.permission_level)
             agent_lock = self._agent_locks.setdefault(lock_key, threading.RLock())
 
-            # 5. 构建 prompt（注入 live 上下文）
-            prompt = self._build_prompt(input, state)
-            prompt += _teach_turn_gate(teach, teach_intent)
-
             # 会话流水日志（agent_log，2026-08-31）：user_msg + env_inject 落盘
             # ——排障时直接看"用户问了什么 + agent 看到了什么环境注入"。
             # 写失败静默（agent_log 内部降级），绝不影响 invoke 主链路。
@@ -2146,14 +2168,21 @@ class StrandsAgentAdapter:
             def _locked_invoke() -> None:
                 try:
                     with agent_lock, response_wait_scope(wait_owner):
-                        # T2: 单任务护栏——每次 invoke 开始重置计数（总上限 50 /
-                        # 连续失败 3 熔断均按"单次 invoke"口径，不跨对话累计误杀）
-                        limit_hook = self._limit_hooks.get(
-                            (agent_id, ctx.session_id)
-                        )
-                        if limit_hook is not None:
-                            limit_hook.reset()
-                            limit_hook.current_task = input
+                        # check/reset 与取消串行；模型/工具执行不持有此短锁。
+                        with self._cancel_lock:
+                            if cancelled.is_set():
+                                outcome["cancelled"] = True
+                                return
+                            # T2: 每轮重置计数；已取消的排队任务不能再清掉熔断位。
+                            limit_hook = self._limit_hooks.get(
+                                (agent_id, ctx.session_id)
+                            )
+                            if limit_hook is not None:
+                                limit_hook.reset()
+                                limit_hook.current_task = input
+                            # 未取消且真正开始的回合才消费上次中断现场。
+                            prompt = self._build_prompt(input, state)
+                            prompt += _teach_turn_gate(teach, teach_intent)
 
                         # P3: 单回合请求预算与护栏同口径（每次 invoke 从零开始）。
                         # 先记上一回合的实际请求数——预算是否够用要有数，不能靠猜。
@@ -2251,6 +2280,15 @@ class StrandsAgentAdapter:
             if "error" in outcome:
                 # worker 已失败——抛给下方 except 统一处理（含 T9.2 降级分类）
                 raise outcome["error"]
+            if outcome.get("cancelled"):
+                self._emit_mood("done", agent_id, session_id)
+                return {
+                    "observation": "本次任务已停止；已执行过的动作不会自动撤销。",
+                    "next_step": "done",
+                    "mood": "done",
+                    "intermediate_results": [],
+                    "tokens": {},
+                }
             response = outcome.get("response")
             followup_observation = outcome.get("followup")
             verify_observation = outcome.get("verify")
@@ -2724,22 +2762,30 @@ class StrandsAgentAdapter:
         """
         if not session_id:
             return {"session_id": "", "cancelled": False, "hooks": 0, "requests": 0}
-        snapshots = [
-            hook.request_user_stop(reason)
-            for (_agent_id, sid), hook in list(self._limit_hooks.items())
-            if sid == session_id
-        ]
+        with self._cancel_lock:
+            pending = tuple(self._invocations.get(session_id, ()))
+            for cancelled in pending:
+                cancelled.set()
+            snapshots = [
+                hook.request_user_stop(reason)
+                for (_agent_id, sid), hook in list(self._limit_hooks.items())
+                if sid == session_id
+            ]
+            if snapshots or pending:
+                self._cancel_notes[session_id] = (
+                    snapshots[-1] if snapshots else {"reason": reason or "用户已停止本次任务"}
+                )
         requests = self._cancel_pending_needs_you(session_id, reason)
-        if snapshots or requests:
-            note = snapshots[-1] if snapshots else {"reason": reason}
-            self._cancel_notes[session_id] = note
+        if requests and not (snapshots or pending):
+            with self._cancel_lock:
+                self._cancel_notes[session_id] = {"reason": reason}
         logger.info(
             f"[#69] agent.cancel session={session_id} hooks={len(snapshots)} "
             f"needs_you={requests}"
         )
         return {
             "session_id": session_id,
-            "cancelled": bool(snapshots or requests),
+            "cancelled": bool(snapshots or requests or pending),
             "hooks": len(snapshots),
             "requests": requests,
         }
