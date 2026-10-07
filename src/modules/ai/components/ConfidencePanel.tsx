@@ -284,7 +284,7 @@ function PanelBody({
           <Button
             variant="outline"
             size="sm"
-            disabled={!data || loading}
+            disabled={!data || loading || saving}
             onClick={() => {
               if (data) {
                 setExportPreview(

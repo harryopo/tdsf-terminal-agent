@@ -111,8 +111,12 @@ describe("ConfidencePanel real dialog interaction", () => {
 
     fireEvent.click(within(panel()).getByRole("button", { name: "导出日志" }));
     rerender(<ConfidencePanel sessionId="chat-a" messages={messages("updated A")} />);
-    fireEvent.click(within(panel()).getByRole("button", { name: "确认保存 JSON" }));
+    await act(async () => {
+      fireEvent.click(within(panel()).getByRole("button", { name: "确认保存 JSON" }));
+    });
     await waitFor(() => expect(invokeRpc).toHaveBeenCalledWith("debug.export_session_diagnostics", expect.objectContaining({ session_id: "chat-a", snapshot: expect.objectContaining({ session_id: "chat-a", conversation: expect.arrayContaining([expect.objectContaining({ text: "snapshot A" })]) }) })));
+    await waitFor(() => expect(panel().textContent).toContain("已保存：diagnostics/current.json"));
+    expect(panel().querySelector('[aria-label="确认导出日志"]')).toBeNull();
     fireEvent.click(within(panel()).getByRole("button", { name: "关闭置信度面板" }));
     openPanel();
     fireEvent.click(navButton("对话"));
@@ -121,8 +125,12 @@ describe("ConfidencePanel real dialog interaction", () => {
     openPanel();
     await waitFor(() => expect(panel().querySelector("pre")?.textContent).toContain("journal entry"));
     fireEvent.click(within(panel()).getByRole("button", { name: "导出日志" }));
-    rerender(<ConfidencePanel sessionId="chat-b" messages={messages("snapshot B")} />);
+    await act(async () => {
+      rerender(<ConfidencePanel sessionId="chat-b" messages={messages("snapshot B")} />);
+    });
     expect(panel().querySelector('[aria-label="确认导出日志"]')).toBeNull();
+    await waitFor(() => expect(invokeRpc).toHaveBeenCalledWith("debug.agent_log_tail", { session_id: "chat-b", lines: 200 }));
+    await waitFor(() => expect(panel().querySelector("pre")?.textContent).toContain("journal entry"));
   });
 
   it("reports save failures and handles Escape without consuming the parent window key handler", async () => {

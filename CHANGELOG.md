@@ -11,8 +11,14 @@ stable release.
   actionable fallback, and file contents stay out of remote-read UI events.
 - Show the unconfigured-model prompt in Chinese. Remove the extra evidence panel
   and fixed evidence footnotes from chat while preserving backend evidence,
-  post-write verification and safety approvals. A separate confidence page is
-  still in design, not implemented.
+  post-write verification and safety approvals.
+- Add a monochrome session-inspector dialog through the chat's Confidence button:
+  runtime, conversation and tool-evidence views, search, actual call-ID links and
+  confirmed local redacted JSON export. Bounded records are not a complete
+  persistent audit or calibrated correctness probabilities. Existing installers
+  do not yet include this feature.
+- Keep the confirmed diagnostic-export preview unchanged while its save is in
+  progress, and restore export controls after completion or failure.
 - Add correlated cards for terminal readback and other tools without an existing
   event owner. Preserve structured results, cancellations and errors without
   duplicating SSH cards; pair Python, suggestion and teaching-wrapper events

@@ -134,7 +134,7 @@ In teaching mode, explanations follow a fixed section contract (concepts and pri
 
 Teaching mode is not a 26th tool: it intercepts the tools above and returns a structured single-step command card, which the terminal then really executes.
 
-Unreleased source adds cards for terminal readback and other previously unrepresented tools, and removes the extra evidence section and fixed verification footnotes from chat. Backend evidence recording, post-write checks and safety approvals remain intact. A separate confidence page is still in design, not available; algorithm scores are not calibrated correctness probabilities. These changes are not yet included in existing installers.
+Unreleased source adds cards for terminal readback and other previously unrepresented tools, and removes the extra evidence section and fixed verification footnotes from chat. Backend evidence recording, post-write checks and safety approvals remain intact. The "置信度" (Confidence) button at the bottom right of chat opens a session inspector for viewing and searching runtime events, conversation messages and tool evidence, with confirmed, redacted JSON export to this computer. Records are bounded summaries, not a complete persistent audit or calibrated correctness probabilities; review logs before sharing. These changes are not yet included in existing installers.
 
 ## Safety boundary
 
