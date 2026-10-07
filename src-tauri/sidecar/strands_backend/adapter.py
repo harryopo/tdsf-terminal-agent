@@ -1888,6 +1888,8 @@ class StrandsAgentAdapter:
         get_events: Callable[[], int],
         agent_id: str,
         session_id: str,
+        *,
+        wait_owner: object | None = None,
     ) -> bool:
         """watchdog 等待（T9, spec 9.1）：轮询 worker 存活 + 回调事件增量
 
@@ -1895,26 +1897,38 @@ class StrandsAgentAdapter:
             worker: invoke 工作线程（daemon，锁内执行）
             get_events: 读取 callback_handler 已收到事件数（任何增量=有输出）
             agent_id / session_id: stalled 标记 key
+            wait_owner: 本轮调用上下文，仅自己的用户等待暂停空闲时钟
 
         Returns:
             True = 超时触发（已标记 stalled 并上报，调用方应返回降级响应）；
             False = worker 正常结束
         """
+        from needs_you import get_global_service
+
         idle_threshold, poll_secs = _watchdog_thresholds()
+        needs_you_service = get_global_service()
 
         last_seen = get_events()
-        last_active = time.time()
+        last_active = time.monotonic()
+        waiting_for_user = wait_owner is not None and needs_you_service.has_response_waiter(
+            session_id, owner=wait_owner
+        )
         while True:
             worker.join(timeout=poll_secs)
             if not worker.is_alive():
                 return False
             events_now = get_events()
-            if events_now != last_seen:
-                # 有任何回调事件（delta/工具/循环）= 有输出，刷新活跃时钟
+            now = time.monotonic()
+            is_waiting = wait_owner is not None and needs_you_service.has_response_waiter(
+                session_id, owner=wait_owner
+            )
+            if events_now != last_seen or is_waiting or waiting_for_user:
+                # 等用户不是模型卡死；离开等待后也给模型完整空闲窗口。
                 last_seen = events_now
-                last_active = time.time()
+                last_active = now
+                waiting_for_user = is_waiting
                 continue
-            if time.time() - last_active > idle_threshold:
+            if now - last_active > idle_threshold:
                 self._stalled_sessions.add((agent_id, session_id))
                 logger.error(
                     f"[t9] watchdog: no callback events for "
@@ -2125,10 +2139,13 @@ class StrandsAgentAdapter:
                 )
 
             outcome: dict[str, Any] = {}
+            from needs_you import response_wait_scope
+
+            wait_owner = object()
 
             def _locked_invoke() -> None:
                 try:
-                    with agent_lock:
+                    with agent_lock, response_wait_scope(wait_owner):
                         # T2: 单任务护栏——每次 invoke 开始重置计数（总上限 50 /
                         # 连续失败 3 熔断均按"单次 invoke"口径，不跨对话累计误杀）
                         limit_hook = self._limit_hooks.get(
@@ -2193,6 +2210,7 @@ class StrandsAgentAdapter:
                 lambda: handler_stats.get("events_received", 0),
                 agent_id,
                 session_id,
+                wait_owner=wait_owner,
             )
             if watchdog_fired:
                 # 不取迟到结果，但必须先阻止后续工具并唤醒挂着的待答请求。
