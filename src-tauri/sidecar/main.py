@@ -55,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # #84: 自报版本只有一个真源（frozen 下 importlib.metadata 不保证带元数据，
 # 故单独一个常量模块；漂移由 test_sidecar_version_parity + check-release-version.ps1 两头挡）
 from sidecar_version import SIDECAR_VERSION
+from rpc_request_context import agent_request_scope, with_agent_request_id
 
 # TDSF: 数据目录移到 src-tauri/ 之外，避免 Tauri dev watcher 检测到
 # SQLite WAL 文件（.db-shm/.db-wal）变化导致循环重启（窗口反复弹出关闭）
@@ -206,6 +207,13 @@ _slow_methods: frozenset[str] = frozenset({
 _main_executor: ThreadPoolExecutor | None = None
 
 
+def _dispatch_request(
+    dispatcher: "MethodDispatcher", method: str, params: Any, req_id: Any
+) -> Any:
+    with agent_request_scope(req_id if method == "agent.invoke" else None):
+        return dispatcher.dispatch(method, params)
+
+
 def _dispatch_in_executor(
     dispatcher: "MethodDispatcher",
     method: str,
@@ -224,7 +232,9 @@ def _dispatch_in_executor(
     """
     global _shutdown_flag
     try:
-        result = dispatcher.dispatch(method, params)
+        result = _dispatch_request(
+            dispatcher, method, params, None if is_notification else req_id
+        )
         if not is_notification:
             send_response(result, req_id)
     except JSONRPCError as e:
@@ -357,7 +367,7 @@ def send_notification(method: str, params: Any = None) -> None:
     """发送通知（无 id，无响应）"""
     msg: dict[str, Any] = {"jsonrpc": JSONRPC_VERSION, "method": method}
     if params is not None:
-        msg["params"] = params
+        msg["params"] = with_agent_request_id(params) if isinstance(params, dict) else params
     write_message(msg)
 
 
@@ -1219,7 +1229,9 @@ def main() -> None:
                 continue
 
             try:
-                result = dispatcher.dispatch(method, params)
+                result = _dispatch_request(
+                    dispatcher, method, params, None if is_notification else req_id
+                )
                 if not is_notification:
                     send_response(result, req_id)
             except JSONRPCError as e:

@@ -48,6 +48,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from rpc_request_context import with_agent_request_id
+
 logger = logging.getLogger("sidecar.strands_backend.agent_log")
 
 # content 摘要上限（任务书钦定 ≤2000 字符，控体积）
@@ -112,9 +114,12 @@ def log_event(
         from .diagnostics import sanitize_diagnostic
 
         clipped = _clip(content)
-        safe_meta = sanitize_diagnostic(meta or {})
+        metadata = with_agent_request_id(meta or {})
+        safe_meta = sanitize_diagnostic(metadata)
         if len(json.dumps(safe_meta, ensure_ascii=False)) > 8000:
             safe_meta = {"truncated": True}
+            if "rpc_request_id" in metadata:
+                safe_meta["rpc_request_id"] = metadata["rpc_request_id"]
         entry: dict[str, Any] = {
             "event_id": str(uuid.uuid4()),
             "ts": round(time.time(), 3),

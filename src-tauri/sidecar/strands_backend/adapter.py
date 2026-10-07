@@ -39,6 +39,7 @@ import os
 import re
 import threading
 import time
+from contextvars import copy_context
 from typing import Any, Callable, Sequence
 
 from strands_backend.modes import AgentMode, parse_mode
@@ -2227,8 +2228,10 @@ class StrandsAgentAdapter:
                     # worker 自然结束（含异常）→ 解除 stalled 标记，恢复常规链路
                     self._stalled_sessions.discard((agent_id, session_id))
 
+            worker_context = copy_context()
             worker = threading.Thread(
-                target=_locked_invoke,
+                target=worker_context.run,
+                args=(_locked_invoke,),
                 name=f"tdsf-invoke-{session_id or 'x'}",
                 daemon=True,
             )
