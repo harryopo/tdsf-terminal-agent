@@ -803,6 +803,35 @@ async function registerSidecarListeners(
   };
 }
 
+const pendingSidecarCancellations = new Map<string, Promise<void>>();
+const CANCELLATION_PENDING_ERROR =
+  "上一轮停止请求未获确认，本次新任务未启动。后台任务可能仍在运行；请先查看终端和运行日志，确认状态后再重试。";
+
+async function waitForSidecarCancellation(
+  cancellation: Promise<void>,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  if (abortSignal?.aborted) return false;
+  let removeAbortListener = () => {};
+  try {
+    await (abortSignal
+      ? Promise.race([
+          cancellation,
+          new Promise<void>((resolve) => {
+            const onAbort = () => resolve();
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+          }),
+        ])
+      : cancellation);
+    return !abortSignal?.aborted;
+  } catch {
+    return false;
+  } finally {
+    removeAbortListener();
+  }
+}
+
 /**
  * #69: 告诉 sidecar「这一轮别再往下跑了」。
  *
@@ -819,11 +848,23 @@ export async function cancelSidecarTurn(
 ): Promise<void> {
   if (!sessionId) return;
   if (!isTauriRuntime()) return;
-  await invoke("ipc_invoke", {
-    method: "agent.cancel",
-    params: { session_id: sessionId, reason },
-    timeoutMs: 10_000,
-  });
+  const send = () =>
+    invoke<void>("ipc_invoke", {
+      method: "agent.cancel",
+      params: { session_id: sessionId, reason },
+      timeoutMs: 10_000,
+    });
+  const previous = pendingSidecarCancellations.get(sessionId);
+  // Explicit subsequent stops still run after a failure; this is not an automatic retry.
+  const cancellation = previous ? previous.then(send, send) : send();
+  pendingSidecarCancellations.set(sessionId, cancellation);
+  try {
+    await cancellation;
+  } finally {
+    if (pendingSidecarCancellations.get(sessionId) === cancellation) {
+      pendingSidecarCancellations.delete(sessionId);
+    }
+  }
 }
 
 // === 主函数: runSidecarStream ================================================
@@ -884,6 +925,16 @@ export async function* runSidecarStream(
     onUsage,
   } = opts;
 
+  if (abortSignal?.aborted) return;
+
+  while (sessionId) {
+    const cancellation = pendingSidecarCancellations.get(sessionId);
+    if (!cancellation) break;
+    if (!(await waitForSidecarCancellation(cancellation, abortSignal))) {
+      if (!abortSignal?.aborted) yield { type: "error", error: CANCELLATION_PENDING_ERROR };
+      return;
+    }
+  }
   if (abortSignal?.aborted) return;
 
   // TDSF 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
@@ -1072,6 +1123,15 @@ export async function* runSidecarStream(
 
   let disposeActivityTimeout = () => {};
   try {
+    // Recheck after preparation awaits; the last check and dispatch must not yield.
+    while (sessionId) {
+      const cancellation = pendingSidecarCancellations.get(sessionId);
+      if (!cancellation) break;
+      if (!(await waitForSidecarCancellation(cancellation, abortSignal))) {
+        if (!abortSignal?.aborted) yield { type: "error", error: CANCELLATION_PENDING_ERROR };
+        return;
+      }
+    }
     if (abortSignal?.aborted) return;
 
     // 2026-09-03（用户钦定）: 移除 "调用 Sidecar Agent" step——它是内部实现细节，
