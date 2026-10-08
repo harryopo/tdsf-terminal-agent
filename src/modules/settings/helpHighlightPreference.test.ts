@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
-  listeners: new Map<string, Set<(event: { payload: { key: string; value: unknown } }) => void>>(),
 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -13,57 +12,36 @@ vi.mock("@tauri-apps/plugin-store", () => ({
     async get(key: string) { return backend.values.get(key); }
     async set(key: string, value: unknown) { backend.values.set(key, value); }
     async save() {}
-    async onChange() { return () => {}; }
   },
 }));
-vi.mock("@tauri-apps/api/event", () => ({
-  emit: vi.fn(async (name: string, payload: { key: string; value: unknown }) => {
-    for (const listener of backend.listeners.get(name) ?? []) listener({ payload });
-  }),
-  listen: vi.fn(async (name: string, callback: (event: { payload: { key: string; value: unknown } }) => void) => {
-    const listeners = backend.listeners.get(name) ?? new Set();
-    listeners.add(callback);
-    backend.listeners.set(name, listeners);
-    return () => listeners.delete(callback);
-  }),
-}));
 
-import { DEFAULT_PREFERENCES, loadPreferences, setTerminalHelpHighlight } from "./store";
-import { usePreferencesStore } from "./preferences";
+import { DEFAULT_PREFERENCES, loadPreferences } from "./store";
 
 beforeEach(() => {
   backend.values.clear();
-  backend.listeners.clear();
   (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-  usePreferencesStore.setState({ ...DEFAULT_PREFERENCES, hydrated: false });
 });
 
 afterEach(() => {
   delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
-describe("terminal help highlight preference", () => {
-  it("defaults on when no stored value exists", async () => {
-    expect(DEFAULT_PREFERENCES.terminalHelpHighlight).toBe(true);
-    expect((await loadPreferences()).terminalHelpHighlight).toBe(true);
+describe("always-on terminal output highlighting", () => {
+  it("does not expose a help-highlight preference in defaults or stored preferences", async () => {
+    backend.values.set("terminalHelpHighlight", false);
+
+    expect(DEFAULT_PREFERENCES).not.toHaveProperty("terminalHelpHighlight");
+    expect(await loadPreferences()).not.toHaveProperty("terminalHelpHighlight");
   });
 
-  it("persists false and maps the cross-window event into preferences state", async () => {
-    await usePreferencesStore.getState().init();
-    expect(usePreferencesStore.getState().terminalHelpHighlight).toBe(true);
-
-    await setTerminalHelpHighlight(false);
-
-    expect(backend.values.get("terminalHelpHighlight")).toBe(false);
-    expect(usePreferencesStore.getState().terminalHelpHighlight).toBe(false);
-  });
-
-  it("wires the General settings row to the stored preference", () => {
-    const source = readFileSync(
+  it("does not expose a dedicated highlight toggle or setter in General settings", () => {
+    const section = readFileSync(
       join(process.cwd(), "src/settings/sections/GeneralSection.tsx"),
       "utf8",
     );
-    expect(source).toContain("setTerminalHelpHighlight");
-    expect(source).toMatch(/title="帮助参数高亮"[\s\S]*?checked=\{terminalHelpHighlight\}[\s\S]*?setTerminalHelpHighlight\(v\)/);
+    const store = readFileSync(join(process.cwd(), "src/modules/settings/store.ts"), "utf8");
+
+    expect(section).not.toMatch(/帮助参数高亮|terminalHelpHighlight|setTerminalHelpHighlight/);
+    expect(store).not.toMatch(/terminalHelpHighlight|setTerminalHelpHighlight/);
   });
 });

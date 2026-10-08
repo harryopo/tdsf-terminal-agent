@@ -23,6 +23,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { isOsFamily, type OsFamily } from './os-family';
 import { sshCommand, probeCmd, readProbeValue } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
+import { commandContext } from './command-context';
 
 // ============================================================================
 // 类型
@@ -217,18 +218,6 @@ export function buildRemoteCarapaceCommand(
   return cwd ? `cd ${escapeShSingleQuote(cwd)} && ${body}` : body;
 }
 
-/** 与 paramSuggest.ts 的 PREFIX_COMMANDS 对齐（该文件不导出且约束不改动，此处对齐一份） */
-const PREFIX_COMMANDS = new Set([
-  'sudo',
-  'command',
-  'env',
-  'exec',
-  'nohup',
-  'time',
-  'nix',
-  'xargs',
-]);
-
 /**
  * 从输入行构造 param_complete 请求参数。
  *
@@ -241,11 +230,8 @@ export function buildParamRequest(prefix: string): {
   tokens: string[];
   current: string;
 } {
-  const trailingSpace = /\s+$/.test(prefix);
-  const tokens = prefix.trimEnd().split(/\s+/).filter(Boolean);
-  if (tokens.length > 0 && PREFIX_COMMANDS.has(tokens[0])) tokens.shift();
-  const current = trailingSpace ? '' : (tokens[tokens.length - 1] ?? '');
-  return { cmd: tokens[0] ?? '', tokens, current };
+  const { cmd, tokens, current } = commandContext(prefix);
+  return { cmd, tokens, current };
 }
 
 /**

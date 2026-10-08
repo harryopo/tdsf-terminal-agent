@@ -18,7 +18,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { registerHelpOutputHighlight } from "./helpOutputHighlight";
+import { registerOutputHighlight } from "./outputHighlight";
 import {
   BlockDecorations,
   type BlockMatch,
@@ -882,7 +882,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
     cols: s.cols,
     rows: s.rows,
     registerOsc: (term) => {
-      const disposeHelpHighlight = registerHelpOutputHighlight(term);
+      const disposeOutputHighlight = registerOutputHighlight(term);
       // TDSF B1 (2026-08-29): block 流水账 collector——本地/SSH 分支共用。
       // 133 在 xterm 里是"一个 id 一串 handler，**后注册的先调用**，谁先返回 true
       // 链就到此为止"（读 OscParser 核对过，不是注释里曾写的"先注册者先调用"）。
@@ -947,7 +947,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         term.textarea?.addEventListener("focus", onGridFocus);
         return [
           () => {
-            disposeHelpHighlight();
+            disposeOutputHighlight();
             s.blockDecorations = null;
             osc52();
             deco.dispose();
@@ -961,7 +961,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
       // sequence right after `cd` commands from the transport seam. Use the
       // cwd handler without the in-command guard so our injected OSC 7 is
       // honored, and skip the local teach trigger for remote shells.
-      const disposers: (() => void)[] = [disposeBlockHandlers, disposeHelpHighlight];
+      const disposers: (() => void)[] = [disposeBlockHandlers, disposeOutputHighlight];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
         // flips it on OSC 133 B/C/D/A; the cwd handler reads it to ignore OSC

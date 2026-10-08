@@ -1,159 +1,106 @@
-/**
- * paramSuggest.ts — 命令参数预测 (TDSF 2026-08-15)
- * -----------------------------------------------------------------------------
- * 基于 Fig spec（开源数据）解析当前命令行，预测可用的：
- *   - options：-n / --noheadings（用户场景：-y、-n 等）
- *   - subcommands：apt install / systemctl status 等
- *   - args.suggestions：静态参数值（--format json|yaml 等）
- *
- * 支持层级：`cmd [sub] [arg|option...]`（1 层子命令；sudo/command/env 等
- * 前缀命令自动跳过）。动态 generators（需执行远端 shell）不在静态预测范围。
- */
+/** Static Fig candidates share the same command context as dynamic completion. */
 import type { FigArg, FigOption, FigSpec } from "./types";
 import type { SuggestionResult } from "@/lib/suggest-engine";
+import { commandContext } from "@/lib/command-context";
+import { tldrOptionZh } from "./tldr-params";
 
-/** 前置命令（真正命令在其后，如 `sudo lsblk`） */
-const PREFIX_COMMANDS = new Set([
-  "sudo",
-  "command",
-  "env",
-  "exec",
-  "nohup",
-  "time",
-  "nix",
-  "xargs",
-]);
-
-/** 解析结果：命令/子命令/当前正在输入的 token */
 export interface ParsedLine {
-  /** 命令名（已跳过 sudo 等前缀），undefined = 空行/仅前缀 */
   cmd?: string;
-  /** 子命令（可选，如 install） */
   sub?: string;
-  /** 当前光标处的 token（可能为空串，即刚打完空格） */
   current: string;
 }
 
 export function parseCommandLine(line: string): ParsedLine {
-  // 保留行尾空格信息：末尾是空格 = 刚打完空格、正在输入新 token（current 为空串）
-  const trailingSpace = /\s+$/.test(line);
-  const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return { current: "" };
-  let base = 0;
-  if (PREFIX_COMMANDS.has(tokens[0])) base = 1;
-  const cmd = tokens[base];
+  const { cmd, tokens, current } = commandContext(line);
   if (!cmd) return { current: "" };
-  const current = trailingSpace ? "" : (tokens[tokens.length - 1] ?? "");
-  const sub = tokens.length >= base + 2 ? tokens[base + 1] : undefined;
-  return { cmd, sub, current };
+  return { cmd, sub: tokens[1]?.startsWith("-") ? undefined : tokens[1], current };
 }
 
-function toNameList(name: string | string[] | undefined): string[] {
-  if (!name) return [];
-  return Array.isArray(name) ? name : [name];
+function names(name: string | string[] | undefined): string[] {
+  return name === undefined ? [] : Array.isArray(name) ? name : [name];
 }
 
-function toArgList(args: FigArg | FigArg[] | undefined): FigArg[] {
-  if (!args) return [];
-  return Array.isArray(args) ? args : [args];
+function args(value: FigArg | FigArg[] | undefined): FigArg[] {
+  return value === undefined ? [] : Array.isArray(value) ? value : [value];
 }
 
-/** 静态参数值建议（字符串化） */
-function argSuggestions(arg: FigArg): string[] {
-  const out: string[] = [];
-  for (const sug of arg.suggestions ?? []) {
-    if (typeof sug === "string") out.push(sug);
-    else if (sug && typeof sug.name === "string") out.push(sug.name);
+function values(arg: FigArg, prefix: string, limit: number, description?: string): SuggestionResult[] {
+  const result: SuggestionResult[] = [];
+  for (const entry of arg.suggestions ?? []) {
+    for (const name of names(typeof entry === "string" ? entry : entry.name)) {
+      if (!name.startsWith(prefix) || result.some((item) => item.command === name) || result.length >= limit) continue;
+      result.push({ command: name, kind: "arg", source: "arg", description: (typeof entry === "string" ? undefined : entry.description) ?? arg.description ?? description });
+    }
   }
-  return out;
+  return result;
 }
 
-function specNode(spec: FigSpec, sub: string | undefined): FigSpec {
-  return sub && !sub.startsWith("-")
-    ? (spec.subcommands ?? []).find((node) => toNameList(node.name).includes(sub)) ?? spec
-    : spec;
+function specContext(spec: FigSpec, line: string) {
+  const context = commandContext(line);
+  const completed = context.tokens.slice(1, context.currentFrom < line.length ? -1 : undefined);
+  const ancestors = [spec];
+  let node = spec;
+  let positional = 0;
+  let literal = false;
+  let pending: FigArg | undefined;
+  let pendingOption: FigOption | undefined;
+  const options = () => [...node.options ?? [], ...ancestors.slice(0, -1).reverse().flatMap((parent) => parent.options ?? [])];
+  for (let index = 0; index < completed.length; index++) {
+    const token = completed[index];
+    if (!literal && token === "--") { literal = true; continue; }
+    const option = !literal ? options().find((opt) => names(opt.name).includes(token.split("=")[0])) : undefined;
+    if (option) {
+      const optionArgs = args(option.args);
+      for (let argIndex = token.includes("=") ? 1 : 0; argIndex < optionArgs.length; argIndex++) {
+        if (index + 1 >= completed.length) { pending = optionArgs[argIndex]; pendingOption = option; break; }
+        if (optionArgs[argIndex].isOptional && completed[index + 1].startsWith("-")) break;
+        index++;
+      }
+      continue;
+    }
+    if (!literal && token.startsWith("-")) continue;
+    const sub = !literal && positional === 0 ? node.subcommands?.find((item) => names(item.name).includes(token)) : undefined;
+    if (sub) { node = sub; ancestors.push(sub); positional = 0; }
+    else positional++;
+  }
+  const attached = !literal ? /^(-[^=]+)=(.*)$/.exec(context.current) : null;
+  if (attached) {
+    pendingOption = options().find((opt) => names(opt.name).includes(attached[1]));
+    pending = args(pendingOption?.args)[0];
+  }
+  const valueDescription = pendingOption ? names(pendingOption.name).map((name) => tldrOptionZh(context.cmd, name)).find(Boolean)
+    ?? `参数值（${names(pendingOption.name)[0]}）${pendingOption.description ? `：${pendingOption.description}` : ""}` : undefined;
+  return { context, node, options: options(), positional, literal, pending, valueDescription, valuePrefix: attached?.[2] ?? context.current };
 }
 
-/** null means this is not an option-value slot; [] means no known value matches. */
+/** null is not a value slot; [] is a known value slot without matching data. */
 export function suggestOptionValues(spec: FigSpec, line: string, limit = 8): SuggestionResult[] | null {
-  const { cmd, sub, current } = parseCommandLine(line);
-  if (!cmd || current.startsWith("-")) return null;
-  const node = specNode(spec, sub);
-  const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
-  const prevToken = current === "" ? tokens[tokens.length - 1] : tokens[tokens.length - 2];
-  const option = [...(node.options ?? []), ...(spec.options ?? [])]
-    .find((opt) => opt.args && toNameList(opt.name).includes(prevToken ?? ""));
-  if (!option) return null;
-  const results: SuggestionResult[] = [];
-  const seen = new Set<string>();
-  for (const arg of toArgList(option.args)) {
-    for (const value of argSuggestions(arg)) {
-      if (!value.startsWith(current) || seen.has(value) || results.length >= limit) continue;
-      seen.add(value);
-      results.push({ command: value, source: "arg", kind: "arg", description: arg.description });
-    }
-  }
-  return results;
+  const { context, pending, valuePrefix, valueDescription } = specContext(spec, line);
+  return context.cmd && pending ? values(pending, valuePrefix, limit, valueDescription) : null;
 }
 
-/**
- * 生成参数建议（含子命令级解析）
- * @param spec 命令的 Fig spec（loadSpecs 后取）
- * @param line 当前输入整行（如 "apt install -"）
- * @param limit 最大条数
- */
-export function suggestParams(
-  spec: FigSpec,
-  line: string,
-  limit = 8,
-): SuggestionResult[] {
-  const { cmd, sub, current } = parseCommandLine(line);
-  if (!cmd) return []; // 空行/仅前缀命令 → 无建议
-
-  // 定位子命令节点（sub 为普通名字才查找；-o 这类 option 不是子命令）
-  const node = specNode(spec, sub);
-  const values = suggestOptionValues(spec, line, limit);
-  if (values !== null) return values;
-
-  const isOptionToken = current.startsWith("-");
-  const results: SuggestionResult[] = [];
-  const seen = new Set<string>();
-  const push = (text: string, description?: string) => {
-    if (!text || seen.has(text) || results.length >= limit) return;
-    seen.add(text);
-    results.push({
-      command: text,
-      source: "arg",
-      kind: "arg",
-      description,
-    });
+export function suggestParams(spec: FigSpec, line: string, limit = 8): SuggestionResult[] {
+  const { context, node, options, positional, literal, pending, valuePrefix, valueDescription } = specContext(spec, line);
+  if (!context.cmd) return [];
+  if (pending) return values(pending, valuePrefix, limit, valueDescription);
+  const result: SuggestionResult[] = [];
+  const add = (name: string, description?: string) => {
+    if (result.length < limit && !result.some((item) => item.command === name)) result.push({ command: name, description, kind: "arg", source: "arg" });
   };
-
-  // options：当前层 + 顶层（--help/-v 等通用选项）
-  const options: FigOption[] = [...(node.options ?? []), ...(spec.options ?? [])];
-  if (!isOptionToken) {
-    // 子命令（apt install / systemctl status）
-    for (const sc of node.subcommands ?? []) {
-      for (const nm of toNameList(sc.name)) {
-        if (current === "" || nm.startsWith(current)) push(nm, sc.description);
+  if (!context.current.startsWith("-") || literal) {
+    if (!literal && positional === 0) {
+      for (const sub of node.subcommands ?? []) {
+        for (const name of names(sub.name)) if (name.startsWith(context.current)) add(name, sub.description);
       }
     }
-    // 静态参数值（--format json）
-    for (const arg of toArgList(node.args)) {
-      for (const sug of argSuggestions(arg)) {
-        if (current === "" || sug.startsWith(current)) push(sug, arg.description);
-      }
+    const positionalArgs = args(node.args);
+    const arg = positionalArgs[positional] ?? (positionalArgs.at(-1)?.isVariadic ? positionalArgs.at(-1) : undefined);
+    if (arg) for (const item of values(arg, context.current, limit)) add(item.command, item.description);
+  }
+  if (!literal && (context.current === "" || context.current.startsWith("-"))) {
+    for (const option of options) {
+      for (const name of names(option.name)) if (name.startsWith(context.current)) add(name, option.description);
     }
   }
-
-  // An empty argument slot prefers subcommands/values over generic flags.
-  for (const opt of options) {
-    for (const nm of toNameList(opt.name)) {
-      if ((isOptionToken && nm.startsWith(current)) || current === "") {
-        push(nm, opt.description);
-      }
-    }
-  }
-
-  return results;
+  return result;
 }
