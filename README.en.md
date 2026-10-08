@@ -94,6 +94,7 @@ Two properties separate it from "AI in a sidebar":
 ### Terminal, editor and everyday tooling
 
 - Local PTY / WSL / SSH terminals share one xterm.js render pool; split panes; per-workspace tab sets.
+- **Help parameter highlighting**: colors options and argument placeholders in aligned `--help` tables without changing terminal text or overriding native ANSI colors. Disable it in Settings → General → Terminal → 帮助参数高亮.
 - **Command prediction**: bundled spec index, carapace parameter completion, short Chinese descriptions with tldr fallbacks, and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke. Static flags work without any install; to suggest branches, files and services that actually exist **on the server**, connect SSH first, then open Settings → 通用 (General) → 智能体 (Agent) → 远端补全组件, click 刷新 (Refresh), and install for that server.
 - CodeMirror 6 editor with LSP and remote file editing, snippets, and selection translation that resolves against the built-in dictionaries offline — the "AI 补全释义" button is what additionally asks your configured model for a richer explanation.
 

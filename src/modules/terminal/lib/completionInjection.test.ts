@@ -472,8 +472,7 @@ describe("appendAbbrevItems（参数模式追加子命令缩写）", () => {
     expect(commands).toEqual(["address", "link", "route", "neighbour", "stats"]);
   });
 
-  it("systemctl + prefix 'systemctl s' → tldr 选项在前，缩写 status/start/stop 追加", () => {
-    // tldr systemctl 先占 4 条（--failed/-t/--type/--state），缩写补足剩余空位
+  it("systemctl + prefix 'systemctl s' → 中文 status/start/stop 优先，保留 tldr 选项", () => {
     const tldrItems = [
       argItem("--failed"),
       argItem("-t"),
@@ -483,16 +482,16 @@ describe("appendAbbrevItems（参数模式追加子命令缩写）", () => {
     const out = appendAbbrevItems(tldrItems, "systemctl", "systemctl s");
     expect(out).toHaveLength(7); // 4 tldr + 3 缩写（s→status/start/stop）
     const commands = out.map((it) => it.command);
-    expect(commands.slice(0, 4)).toEqual(["--failed", "-t", "--type", "--state"]);
-    expect(commands.slice(4)).toEqual(["status", "start", "stop"]);
+    expect(commands).toEqual(["status", "start", "stop", "--failed", "-t", "--type", "--state"]);
     // 缩写条目（'s' 缩写的 status）描述带"= 缩写"教学后缀
     const status = out.find((it) => it.command === "status");
     expect(status?.description).toContain("（= s 缩写）");
   });
 
-  it("已有 8 条满 → 原样截 8 不追加", () => {
+  it("已有 8 条满 → 子命令优先，整体仍限 8", () => {
     const full = Array.from({ length: 8 }, (_, i) => argItem(`-opt${i}`));
     expect(appendAbbrevItems(full, "ip", "ip a")).toHaveLength(8);
-    expect(appendAbbrevItems(full, "ip", "ip a")[0]?.command).toBe("-opt0");
+    expect(appendAbbrevItems(full, "ip", "ip a").map((item) => item.command))
+      .toEqual(["address", "-opt0", "-opt1", "-opt2", "-opt3", "-opt4", "-opt5", "-opt6"]);
   });
 });

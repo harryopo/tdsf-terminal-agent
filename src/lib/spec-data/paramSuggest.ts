@@ -68,6 +68,34 @@ function argSuggestions(arg: FigArg): string[] {
   return out;
 }
 
+function specNode(spec: FigSpec, sub: string | undefined): FigSpec {
+  return sub && !sub.startsWith("-")
+    ? (spec.subcommands ?? []).find((node) => toNameList(node.name).includes(sub)) ?? spec
+    : spec;
+}
+
+/** null means this is not an option-value slot; [] means no known value matches. */
+export function suggestOptionValues(spec: FigSpec, line: string, limit = 8): SuggestionResult[] | null {
+  const { cmd, sub, current } = parseCommandLine(line);
+  if (!cmd || current.startsWith("-")) return null;
+  const node = specNode(spec, sub);
+  const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
+  const prevToken = current === "" ? tokens[tokens.length - 1] : tokens[tokens.length - 2];
+  const option = [...(node.options ?? []), ...(spec.options ?? [])]
+    .find((opt) => opt.args && toNameList(opt.name).includes(prevToken ?? ""));
+  if (!option) return null;
+  const results: SuggestionResult[] = [];
+  const seen = new Set<string>();
+  for (const arg of toArgList(option.args)) {
+    for (const value of argSuggestions(arg)) {
+      if (!value.startsWith(current) || seen.has(value) || results.length >= limit) continue;
+      seen.add(value);
+      results.push({ command: value, source: "arg", kind: "arg", description: arg.description });
+    }
+  }
+  return results;
+}
+
 /**
  * 生成参数建议（含子命令级解析）
  * @param spec 命令的 Fig spec（loadSpecs 后取）
@@ -83,13 +111,9 @@ export function suggestParams(
   if (!cmd) return []; // 空行/仅前缀命令 → 无建议
 
   // 定位子命令节点（sub 为普通名字才查找；-o 这类 option 不是子命令）
-  let node: FigSpec = spec;
-  if (sub && !sub.startsWith("-")) {
-    const hit = (spec.subcommands ?? []).find((s) =>
-      toNameList(s.name).includes(sub),
-    );
-    if (hit) node = hit;
-  }
+  const node = specNode(spec, sub);
+  const values = suggestOptionValues(spec, line, limit);
+  if (values !== null) return values;
 
   const isOptionToken = current.startsWith("-");
   const results: SuggestionResult[] = [];
@@ -107,42 +131,7 @@ export function suggestParams(
 
   // options：当前层 + 顶层（--help/-v 等通用选项）
   const options: FigOption[] = [...(node.options ?? []), ...(spec.options ?? [])];
-  for (const opt of options) {
-    for (const nm of toNameList(opt.name)) {
-      if (isOptionToken) {
-        // 正在输 "-x" → 匹配以它开头的选项名
-        if (nm.startsWith(current)) push(nm, opt.description);
-      } else if (current === "") {
-        // 刚打完空格 → 全量展示（由 limit 截断）
-        push(nm, opt.description);
-      }
-    }
-  }
-
   if (!isOptionToken) {
-    // 前一个 token 是带 args 的 option（如 `lsblk -o `）→ 只建议该 option 的
-    // 参数值（NAME/SIZE/TYPE...），避免混入无关 options
-    const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
-    // P2-11 修复 (2026-08-18): 取"前一个已完成"的 token——末尾有空格时
-    // current 为空, tokens 最后一个就是前一个 token; 正在输入时 current
-    // 就是 tokens 最后一个, 前一个应是倒数第二个 (原实现取最后一个,
-    // `lsblk -o N` 时误把当前输入 N 当成 option, 参数建议全部失效)。
-    const prevToken =
-      current === ""
-        ? tokens[tokens.length - 1] ?? ""
-        : tokens[tokens.length - 2] ?? "";
-    for (const opt of options) {
-      if (!toNameList(opt.name).includes(prevToken)) continue;
-      for (const arg of toArgList(opt.args)) {
-        for (const sug of argSuggestions(arg)) {
-          if (current === "" || sug.startsWith(current)) {
-            push(sug, arg.description);
-          }
-        }
-      }
-    }
-    if (results.length > 0) return results;
-
     // 子命令（apt install / systemctl status）
     for (const sc of node.subcommands ?? []) {
       for (const nm of toNameList(sc.name)) {
@@ -153,6 +142,15 @@ export function suggestParams(
     for (const arg of toArgList(node.args)) {
       for (const sug of argSuggestions(arg)) {
         if (current === "" || sug.startsWith(current)) push(sug, arg.description);
+      }
+    }
+  }
+
+  // An empty argument slot prefers subcommands/values over generic flags.
+  for (const opt of options) {
+    for (const nm of toNameList(opt.name)) {
+      if ((isOptionToken && nm.startsWith(current)) || current === "") {
+        push(nm, opt.description);
       }
     }
   }

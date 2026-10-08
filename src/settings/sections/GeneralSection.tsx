@@ -51,6 +51,7 @@ import {
   setTerminalScrollback,
   setTerminalShell,
   setTerminalWebglEnabled,
+  setTerminalHelpHighlight,
   setTheme,
   setVimMode,
   setZoomLevel,
@@ -143,6 +144,7 @@ export function GeneralSection() {
   const terminalWebglEnabled = usePreferencesStore(
     (s) => s.terminalWebglEnabled,
   );
+  const terminalHelpHighlight = usePreferencesStore((s) => s.terminalHelpHighlight);
   const autostart = usePreferencesStore((s) => s.autostart);
   const restoreWindowState = usePreferencesStore((s) => s.restoreWindowState);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
@@ -435,6 +437,15 @@ export function GeneralSection() {
           <Switch
             checked={terminalWebglEnabled}
             onCheckedChange={(v) => void setTerminalWebglEnabled(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="帮助参数高亮"
+          description="为 --help 参数列表中的选项与占位值着色，保留服务器原生颜色及复制原文。"
+        >
+          <Switch
+            checked={terminalHelpHighlight}
+            onCheckedChange={(v) => void setTerminalHelpHighlight(v)}
           />
         </SettingRow>
         <SettingRow

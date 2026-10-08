@@ -46,12 +46,13 @@ import {
   tldrParamSuggestions,
 } from '@/lib/spec-data/tldr-params';
 import { getCommandSpec } from '@/lib/spec-data/loader';
-import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
+import { parseCommandLine, suggestOptionValues, suggestParams } from '@/lib/spec-data/paramSuggest';
 import {
+  clearLeafEnvironment as clearEnvironment,
   getLeafEnvironment,
 } from './executionHistory';
 
-export { clearLeafEnvironment, setLeafEnvironment } from './executionHistory';
+export { setLeafEnvironment } from './executionHistory';
 
 // ============================================================================
 // 类型
@@ -99,6 +100,13 @@ let getTermFn: ((leafId: number) => XTerm | null) | null = null;
 
 /** 每个终端的输入缓冲区 */
 const inputBuffers = new Map<number, string>();
+const unknownInputLines = new Set<number>();
+
+export function clearLeafEnvironment(leafId: number): void {
+  clearEnvironment(leafId);
+  inputBuffers.delete(leafId);
+  unknownInputLines.delete(leafId);
+}
 
 /** 每个终端的环境（windows=本地 pwsh/cmd，linux=SSH 远程）。
  * TDSF 2026-08-28：命令预测必须区分环境——本地终端预测 Windows 命令，
@@ -116,7 +124,14 @@ function setInputBuffer(leafId: number, value: string): void {
 }
 
 function clearInputBuffer(leafId: number): void {
+  unknownInputLines.delete(leafId);
   setInputBuffer(leafId, '');
+}
+
+function invalidateInputLine(leafId: number): void {
+  setInputBuffer(leafId, '');
+  unknownInputLines.add(leafId);
+  closeCompletion();
 }
 
 // ============================================================================
@@ -370,20 +385,21 @@ export function mergeCommandWithParamItems(
 
 /**
  * 参数模式候选追加子命令缩写（二轮改进：ip a → address 等教学高频缩写）。
- * 缩写排在 carapace/tldr/Fig specs 之后（真实数据优先），整体限 8。
+ * 子命令位置优先保留四条常用中文候选，不被满表选项挤掉，整体限 8。
  */
 export function appendAbbrevItems(
   items: readonly SuggestionResult[],
   cmd: string,
   prefix: string,
 ): SuggestionResult[] {
-  if (items.length >= 8) return items.slice(0, 8);
-  const { current } = parseCommandLine(prefix);
-  const abbrevs = findAbbrevSuggestions(cmd, current);
+  const { tokens, current } = buildParamRequest(prefix);
+  const bare = tokens.length === 1;
+  if (!bare && (tokens.length !== 2 || current === '')) return items.slice(0, 8);
+  const abbrevs = findAbbrevSuggestions(cmd, bare ? '' : current);
   if (abbrevs.length === 0) return items.slice(0, 8);
-  const seen = new Set(items.map((it) => it.command));
-  const out = [...items.slice(0, 8)];
-  for (const it of abbrevs) {
+  const seen = new Set<string>();
+  const out: SuggestionResult[] = [];
+  for (const it of [...abbrevs.slice(0, 4), ...items, ...abbrevs.slice(4)]) {
     if (out.length >= 8) break;
     if (seen.has(it.command)) continue;
     seen.add(it.command);
@@ -471,19 +487,25 @@ async function loadParamPredictions(
     if (remote !== null) push(remote);
   }
 
+  // A known option-value slot must not be filled with unrelated tldr flags.
+  const spec = remoteGate ? await getCommandSpec(cmd) : null;
+  const values = spec ? suggestOptionValues(spec, prefix, 8) : null;
+  if (values !== null) {
+    push(values);
+    return merged;
+  }
+
   // 源 2：tldr 选项级中文（键序稳定输出，高频示例在前）——受远端门禁约束
   if (remoteGate) push(tldrParamSuggestions(cmd, current));
 
   // 源 3：Fig specs 静态层兜底（首次触发全量 spec 懒加载，~11MB 独立 chunk）
   // —— 同受远端门禁约束（specs 里的 ag/adb 等远端没装就不弹参数）
-  if (remoteGate && merged.length < 8) {
-    const spec = await getCommandSpec(cmd);
-    if (spec) push(suggestParams(spec, prefix, 8));
-  }
+  if (spec && merged.length < 8) push(suggestParams(spec, prefix, 8));
   return merged;
 }
 
 async function updatePredictions(leafId: number): Promise<void> {
+  if (unknownInputLines.has(leafId)) return;
   const seq = predictSeq;
   const env = getLeafEnvironment(leafId);
   const prefix = getInputBuffer(leafId);
@@ -631,7 +653,11 @@ function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   // ── 参数模式：替换当前 token（-n/--noheadings/子命令/参数值） ──────────
   if (entry.kind === 'arg') {
     const line = getInputBuffer(leafId);
-    if (/\s+$/.test(line)) {
+    if (!/\s+$/.test(line) && buildParamRequest(line).tokens.length === 1) {
+      // Bare command (including sudo): append an argument, never erase the command.
+      writeFn(leafId, ' ' + entry.command + ' ');
+      setInputBuffer(leafId, line + ' ' + entry.command + ' ');
+    } else if (/\s+$/.test(line)) {
       // 刚打完空格（如 `lsblk -o ` 选 NAME）：直接追加建议文本 + 空格
       writeFn(leafId, entry.command + ' ');
       setInputBuffer(leafId, line + entry.command + ' ');
@@ -736,7 +762,7 @@ export function completionKeyHandler(
 
   // === Tab = 透传远端原生补全 + 关闭弹窗 ===
   if (event.key === 'Tab') {
-    closeCompletion();
+    invalidateInputLine(leafId);
     return true;
   }
 
@@ -768,6 +794,7 @@ export function completionKeyHandler(
 
   // === Backspace → 从缓冲区删除 + 更新预测 ===
   if (event.key === 'Backspace' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    if (unknownInputLines.has(leafId)) return true;
     const buf = getInputBuffer(leafId);
     if (buf.length > 0) {
       setInputBuffer(leafId, buf.slice(0, -1));
@@ -785,36 +812,35 @@ export function completionKeyHandler(
     (event.ctrlKey || event.metaKey) &&
     (event.key === 'v' || event.key === 'V')
   ) {
-    clearInputBuffer(leafId);
-    cancelScheduledPredictionUpdate();
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
   if (
     (event.ctrlKey || event.altKey || event.metaKey) &&
     event.key === 'Backspace'
   ) {
-    clearInputBuffer(leafId);
-    cancelScheduledPredictionUpdate();
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
   if (
     event.key === 'ArrowLeft' ||
     event.key === 'ArrowRight' ||
+    event.key === 'ArrowUp' ||
+    event.key === 'ArrowDown' ||
     event.key === 'Home' ||
-    event.key === 'End'
+    event.key === 'End' ||
+    (event.ctrlKey && /^[aekwrdhy]$/i.test(event.key)) ||
+    (event.altKey && /^[bfd]$/i.test(event.key))
   ) {
     // 弹窗可见时的 ArrowRight 已在上面"接受预测"分支拦截, 不会落此;
     // 光标移出行尾后缓冲已失配, 清空 + 关闭弹窗。
-    clearInputBuffer(leafId);
-    cancelScheduledPredictionUpdate();
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
 
   // === 可打印字符 → 追加到缓冲区 + 更新预测 ===
   if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (unknownInputLines.has(leafId)) return true;
     const buf = getInputBuffer(leafId);
     setInputBuffer(leafId, buf + event.key);
     schedulePredictionUpdate(leafId);

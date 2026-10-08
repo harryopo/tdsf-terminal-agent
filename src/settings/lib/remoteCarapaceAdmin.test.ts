@@ -53,7 +53,7 @@ vi.mock('@tauri-apps/api/core', () => ({
         state.calls.push('mkdir');
         return Promise.resolve({
           ok: true,
-          output: '__TDSF_HOME__/root',
+          output: `${PROBE_MARK}\n/root\n`,
           stderr: '',
           exitCode: 0,
           duration: 0.1,
@@ -101,6 +101,7 @@ import {
   invalidateRemoteCarapaceCache,
   remoteCarapaceInstalled,
 } from '@/lib/param-complete-client';
+import { PROBE_MARK } from '@/lib/ssh-bridge';
 import { CARAPACE_CHANGED_EVENT } from '@/lib/sshCarapaceEvents';
 import {
   installCarapaceTarget,

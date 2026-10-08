@@ -503,6 +503,7 @@ export async function installRemoteCarapace(
   onProgress?: (stage: CarapaceInstallStage) => void,
   onError?: CarapaceInstallError,
 ): Promise<boolean> {
+  let step = '创建远端目录';
   try {
     // 步骤 1：远端建目录 + 拿 $HOME（SFTP 需要绝对路径，~ 不会被 sftp 协议展开）
     onProgress?.('preparing');
@@ -512,18 +513,22 @@ export async function installRemoteCarapace(
       return false;
     }
     const home = readProbeValue(mkdir.output) ?? '';
-    // home 取不到时退回 ~ 路径（Rust 侧 sftp_upload_file 可能支持展开，T7 对齐点）
-    const remotePath = home
-      ? `${home}/.local/bin/carapace`
-      : CARAPACE_REMOTE_PATH;
+    if (!home.startsWith('/') || Array.from(home).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) {
+      onError?.('无法确认远端 HOME 绝对路径，请检查连接后重试；尚未上传补全组件。');
+      return false;
+    }
+    const remotePath = `${home.replace(/\/$/, '')}/.local/bin/carapace`;
 
     // 步骤 2：上传本地 linux 二进制（param_complete.rs / sftp_upload_file，并行开发中）
     onProgress?.('uploading');
+    step = '获取随包补全组件';
     const localPath = await carapaceLinuxPath();
+    step = '上传补全组件';
     await invoke('sftp_upload_file', { sessionId, localPath, remotePath });
 
     // 步骤 3：chmod + 验证（--version 成功退出才算装好）
     onProgress?.('configuring');
+    step = '设置可执行权限或验证';
     const verify = await sshCommand(sessionId, CARAPACE_CONFIGURE_CMD, 15);
     if (!verify.ok || verify.exitCode !== 0) {
       onError?.(sshInstallError('设置可执行权限或验证', verify));
@@ -536,7 +541,7 @@ export async function installRemoteCarapace(
     return true;
   } catch (e) {
     // 后端命令未就绪 / 会话已断开 / 上传失败——静默降级，调用方按 false 渲染
-    onError?.(installExceptionMessage(e));
+    onError?.(installExceptionMessage(step, e));
     console.warn('[param-complete] installRemoteCarapace failed:', e);
     return false;
   }
@@ -553,7 +558,7 @@ function sshInstallError(
     : `${stage}失败（退出码 ${code}）`;
 }
 
-function installExceptionMessage(error: unknown): string {
+function installExceptionMessage(step: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
-  return detail ? `上传安装包失败：${detail}` : '上传安装包失败';
+  return detail ? `${step}失败：${detail}` : `${step}失败`;
 }

@@ -42,6 +42,7 @@ import {
   type FileExplorerHandle,
 } from "@/modules/explorer";
 import { explorerSshGate } from "@/modules/explorer/lib/explorerSshGate";
+import { explorerSessionIdForTab } from "@/modules/explorer/lib/explorerSession";
 import { useWorkspaceFsStore } from "@/modules/explorer/lib/workspaceFsStore";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
@@ -547,10 +548,12 @@ export default function App() {
   // 同一工作区里现在可以有多条各连各的 shell，切 tab 却还看着另一个 tab 的目录，
   // 就是用户报的"我在 tab2 cd，tab1 的资源管理器也跟着变"的另一半。
   // 活动 tab 是终端 → 完全以它为准（它开的是本地壳时这里就是 null，不再借用
-  // Space 的远端会话）；活动 tab 是编辑器/预览 → 回退 Space 级会话。
-  const explorerSshSessionId = activeTerminalTab
-    ? activeTabSshSessionId
-    : spaceSshSessionId;
+  // Space 的远端会话）；远端编辑器继续使用文件来源会话，不能退回 Space 主会话。
+  const explorerSshSessionId = explorerSessionIdForTab(
+    activeTab,
+    activeTabSshSessionId,
+    spaceSshSessionId,
+  );
   const explorerSshSession = useSshStore((s) =>
     selectSessionById(s, explorerSshSessionId),
   );
