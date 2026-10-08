@@ -7,12 +7,14 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 
 @dataclass(frozen=True)
 class _AgentRequest:
     request_id: int
     active: threading.Event
+    stream_id: str | None = None
 
 
 _current_request: ContextVar[_AgentRequest | None] = ContextVar(
@@ -21,13 +23,20 @@ _current_request: ContextVar[_AgentRequest | None] = ContextVar(
 
 
 @contextmanager
-def agent_request_scope(request_id: object) -> Iterator[None]:
+def agent_request_scope(request_id: object, stream_id: object = None) -> Iterator[None]:
     """Bind a wire integer ID, masking unknown or unrelated dispatches."""
     request = None
     if type(request_id) is int and 0 <= request_id <= (1 << 63) - 1:
+        canonical_stream_id = None
+        if isinstance(stream_id, str) and len(stream_id) == 36:
+            try:
+                if str(UUID(stream_id)) == stream_id:
+                    canonical_stream_id = stream_id
+            except ValueError:
+                pass
         active = threading.Event()
         active.set()
-        request = _AgentRequest(request_id, active)
+        request = _AgentRequest(request_id, active, canonical_stream_id)
     token = _current_request.set(request)
     try:
         yield
@@ -50,7 +59,10 @@ def with_agent_request_id(meta: dict[str, Any]) -> dict[str, Any]:
     """Copy metadata; only the current dispatch may supply this reserved ID."""
     result = dict(meta)
     result.pop("rpc_request_id", None)
-    request_id = current_agent_request_id()
-    if request_id is not None:
-        result["rpc_request_id"] = request_id
+    result.pop("rpc_stream_id", None)
+    request = _current_request.get()
+    if request is not None and request.active.is_set():
+        result["rpc_request_id"] = request.request_id
+        if request.stream_id is not None:
+            result["rpc_stream_id"] = request.stream_id
     return result

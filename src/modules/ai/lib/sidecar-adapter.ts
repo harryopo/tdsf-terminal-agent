@@ -701,14 +701,27 @@ async function registerSidecarListeners(
   onToolCall?: (payload: ToolCallPayload) => void,
   onAgentMessage?: (payload: AgentMessagePayload) => void,
   onLoopProgress?: (progress: { round: number; toolCount: number }) => void,
+  requestStreamId?: string,
+  isActive: () => boolean = () => true,
 ): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [];
+  let rpcRequestId: number | undefined;
 
-  const belongsToSession = (payload: unknown): boolean => {
-    if (!sessionId) return true;
+  const belongsToInvocation = (payload: unknown): boolean => {
+    if (!isActive()) return false;
+    if (!sessionId && !requestStreamId) return true;
     if (payload == null || typeof payload !== "object") return false;
     const outer = payload as Record<string, unknown>;
-    return outer.session_id === sessionId;
+    if (sessionId && outer.session_id !== sessionId) return false;
+    if (requestStreamId) {
+      const id = outer.rpc_request_id;
+      if (outer.rpc_stream_id !== requestStreamId || typeof id !== "number" ||
+          !Number.isSafeInteger(id) || id < 0) return false;
+      // Bind only after the dispatch has echoed this invocation's private tag.
+      if (rpcRequestId === undefined) rpcRequestId = id;
+      if (rpcRequestId !== id) return false;
+    }
+    return true;
   };
 
   // mood 变化事件
@@ -716,7 +729,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_MOOD_CHANGE, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<{ mood?: string }>(e.payload);
           const mood = p?.mood;
           if (mood) onMood(mood);
@@ -732,7 +745,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_LOOP_PROGRESS, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<{
             round?: number;
             tool_count?: number;
@@ -754,7 +767,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_TOOL_CALL, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<ToolCallPayload>(e.payload);
           if (!p) return;
           const name = p.tool_name;
@@ -776,7 +789,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_AGENT_MESSAGE, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<AgentMessagePayload>(e.payload);
           if (!p) return;
           onAgentMessage(p);
@@ -956,6 +969,7 @@ export async function* runSidecarStream(
 
   const pythonName = mapToPythonName(agentId);
   const streamId = `tdsf-${agentId}-${Date.now()}-${++streamSeq}`;
+  const requestStreamId = isTauriRuntime() ? crypto.randomUUID() : undefined;
   const thinkingId = `${streamId}-thinking`;
   const outputId = `${streamId}-output`;
   // TDSF: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
@@ -963,6 +977,8 @@ export async function* runSidecarStream(
 
   // === AsyncQueue：生产者（事件监听器）push part，消费者（主流程）yield ===
   const queue = createAsyncQueue<SidecarStreamPart>();
+  let acceptingEvents = true;
+  const isActive = () => acceptingEvents && !abortSignal?.aborted;
 
   // 跟踪 event 推送的 thinking/output（用于 invoke 完成后去重，避免与 result 重复）
   let streamedThinking = "";
@@ -1102,19 +1118,22 @@ export async function* runSidecarStream(
     onToolCall,
     onAgentMessage,
     opts.onLoopProgress,
+    requestStreamId,
+    isActive,
   );
   let unlistenSshOutput: UnlistenFn = () => {};
   try {
     unlistenSshOutput = await listen<SshCommandOutputEvent>(
       "sidecar:ssh_command_output",
       (event) => {
+        if (!isActive()) return;
         const eventSessionId = event.payload?.conversationSessionId;
         if (eventSessionId && eventSessionId !== sessionId) return;
         const { toolCallId, toolName } = event.payload;
         if (toolCallId && toolName && toolIdsByEventId.has(`${toolName}:${toolCallId}`)) {
           useSshCommandOutputStore.getState().record(event.payload);
+          queue.push({ type: "activity" });
         }
-        queue.push({ type: "activity" });
       },
     );
   } catch {
@@ -1212,7 +1231,10 @@ export async function* runSidecarStream(
             method: "agent.invoke",
             params: {
               name: pythonName,
-              state: { input, messages, live, session_id: sessionId ?? "" },
+              state: {
+                input, messages, live, session_id: sessionId ?? "",
+                ...(requestStreamId ? { _rpc_stream_id: requestStreamId } : {}),
+              },
             },
             // Rust 按原始请求 ID 的私有存活续传输窗口，不再裁整轮总时长；
             // 此值仍封顶 600s。前端活动/Python空闲/工具与审批各自期限不变。
@@ -1399,6 +1421,7 @@ export async function* runSidecarStream(
     onStep?.(null);
     yield { type: "finish", id: streamId };
   } finally {
+    acceptingEvents = false;
     // 无论成功失败，都取消事件监听 + close queue，避免内存泄漏
     disposeActivityTimeout();
     queue.close();

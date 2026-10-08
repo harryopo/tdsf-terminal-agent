@@ -262,7 +262,14 @@ def _dispatch_queued_agent(
 def _dispatch_request(
     dispatcher: "MethodDispatcher", method: str, params: Any, req_id: Any
 ) -> Any:
-    with agent_request_scope(req_id if method == "agent.invoke" else None):
+    stream_id = None
+    if method == "agent.invoke" and isinstance(params, dict):
+        state = params.get("state")
+        if isinstance(state, dict) and "_rpc_stream_id" in state:
+            state = dict(state)
+            stream_id = state.pop("_rpc_stream_id")
+            params = {**params, "state": state}
+    with agent_request_scope(req_id if method == "agent.invoke" else None, stream_id):
         return dispatcher.dispatch(method, params)
 
 
