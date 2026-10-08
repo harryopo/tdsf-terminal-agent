@@ -884,6 +884,8 @@ export async function* runSidecarStream(
     onUsage,
   } = opts;
 
+  if (abortSignal?.aborted) return;
+
   // TDSF 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
   // （agent.configure 一次 configure 永久生效）。失败不阻塞对话——sidecar
   // 沿用上次落盘配置；置位标志防止每条消息重复打 IPC，配置变更时由
@@ -898,6 +900,8 @@ export async function* runSidecarStream(
       );
     }
   }
+
+  if (abortSignal?.aborted) return;
 
   const pythonName = mapToPythonName(agentId);
   const streamId = `tdsf-${agentId}-${Date.now()}-${++streamSeq}`;
@@ -1068,6 +1072,8 @@ export async function* runSidecarStream(
 
   let disposeActivityTimeout = () => {};
   try {
+    if (abortSignal?.aborted) return;
+
     // 2026-09-03（用户钦定）: 移除 "调用 Sidecar Agent" step——它是内部实现细节，
     // 显示在 Header 与输入区重叠；step 从后续 Thinking / 工具调用开始即可。
 
