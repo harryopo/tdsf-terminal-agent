@@ -231,7 +231,7 @@ def _submit_slow_request(
             _dispatch_in_executor, dispatcher, method, params, req_id, is_notification
         )
 
-    cancelled = adapter._register_invocation(session_id)
+    cancelled = adapter._register_invocation(session_id, state, state.get("_rpc_stream_id"))
     try:
         future = _main_executor.submit(
             _dispatch_queued_agent, dispatcher, method, params, req_id,

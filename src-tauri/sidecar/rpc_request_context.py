@@ -55,6 +55,13 @@ def current_agent_request_id() -> int | None:
     return None
 
 
+def current_agent_stream_id() -> str | None:
+    request = _current_request.get()
+    if request is not None and request.active.is_set():
+        return request.stream_id
+    return None
+
+
 def with_agent_request_id(meta: dict[str, Any]) -> dict[str, Any]:
     """Copy metadata; only the current dispatch may supply this reserved ID."""
     result = dict(meta)

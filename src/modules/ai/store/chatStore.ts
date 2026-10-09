@@ -1,6 +1,7 @@
 import type { Chat, UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { canSwitchRunningMode } from "../lib/live-mode-sync";
 import { create } from "zustand";
 import {
   DEFAULT_MODEL_ID,
@@ -774,6 +775,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
   // 切回其他档自动 teach=false，保证两者永远一致。
   agentMode: DEFAULT_AGENT_MODE,
   setAgentMode: (mode) => {
+    if (!canSwitchRunningMode(get().activeSessionId, mode)) {
+      toast.info("请先停止当前任务，再切换观察或教学模式。确认与自动模式可在运行中切换。");
+      return;
+    }
     set({ agentMode: mode, teach: mode === "teach" });
     persistModeToActiveSession(get(), {
       agentMode: mode,

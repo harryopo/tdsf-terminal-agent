@@ -33,10 +33,12 @@ import { isTauriRuntime } from "@/lib/tauriRuntime";
 import type { SshCommandOutputEvent } from "@/lib/sidecar-bridge";
 import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
 import { getToolResultStatus } from "./tool-result";
+import { syncRunningMode, type AgentModeSource } from "./live-mode-sync";
 import {
   TDSF_AGENTS,
   type AgentMode,
   type TdsfAgentId,
+  toSidecarMode,
 } from "../agents/registry";
 // TDSF 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
 import {
@@ -346,6 +348,7 @@ const EVENT_LOOP_PROGRESS = "sidecar:loop_progress";
 
 /** `runSidecarStream` 调用参数 */
 export interface SidecarStreamOptions {
+  modeSource?: AgentModeSource;
   /** TDSF agent id（前端业务 id，会被映射到 Python AGENT_REGISTRY key） */
   agentId: TdsfAgentId;
   /**
@@ -1141,6 +1144,7 @@ export async function* runSidecarStream(
   }
 
   let disposeActivityTimeout = () => {};
+  let disposeModeSync = () => {};
   try {
     // Recheck after preparation awaits; the last check and dispatch must not yield.
     while (sessionId) {
@@ -1152,6 +1156,20 @@ export async function* runSidecarStream(
       }
     }
     if (abortSignal?.aborted) return;
+
+    const currentMode = opts.modeSource?.get();
+    const invocationLive = currentMode ? { ...live, ...toSidecarMode(currentMode) } : live;
+    if (requestStreamId && sessionId && currentMode && opts.modeSource) {
+      disposeModeSync = syncRunningMode({
+        sessionId, streamId: requestStreamId, initialMode: currentMode,
+        source: opts.modeSource,
+        onError: (error) => {
+          if (!isActive()) return;
+          queue.push({ type: "error", error });
+          void cancelSidecarTurn(sessionId, "运行模式同步失败");
+        },
+      });
+    }
 
     // 2026-09-03（用户钦定）: 移除 "调用 Sidecar Agent" step——它是内部实现细节，
     // 显示在 Header 与输入区重叠；step 从后续 Thinking / 工具调用开始即可。
@@ -1232,7 +1250,7 @@ export async function* runSidecarStream(
             params: {
               name: pythonName,
               state: {
-                input, messages, live, session_id: sessionId ?? "",
+                input, messages, live: invocationLive, session_id: sessionId ?? "",
                 ...(requestStreamId ? { _rpc_stream_id: requestStreamId } : {}),
               },
             },
@@ -1424,6 +1442,7 @@ export async function* runSidecarStream(
     acceptingEvents = false;
     // 无论成功失败，都取消事件监听 + close queue，避免内存泄漏
     disposeActivityTimeout();
+    disposeModeSync();
     queue.close();
     unlisten();
     unlistenSshOutput();

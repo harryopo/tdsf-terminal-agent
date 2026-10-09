@@ -41,7 +41,9 @@ import threading
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from dataclasses import dataclass
 from typing import Any, Callable, Sequence
+from uuid import UUID
 
 from strands_backend.modes import AgentMode, parse_mode
 # P3 (2026-09-19): 模型请求退避的唯一主人（尝试数 + 单回合请求预算）
@@ -90,6 +92,16 @@ MAX_TOKEN_CONTINUATIONS = 3
 # 继续。轮询间隔为 worker 存活检查粒度。测试可用环境变量覆盖阈值。
 INVOKE_WATCHDOG_IDLE_SECS = 600
 INVOKE_WATCHDOG_POLL_SECS = 5
+
+
+@dataclass
+class _InvocationMode:
+    session_id: str
+    stream_id: str
+    mode: AgentMode
+    teach: bool
+    revision: int = 0
+    ctx: ToolContext | None = None
 
 
 def _context_management_kwargs() -> dict[str, Any]:
@@ -642,6 +654,7 @@ class ToolCallLimitHook:
         self.agent_name = agent_name
         self.event_bus = event_bus
         self.session_id = session_id
+        self.refresh_mode: Callable[[], None] | None = None
         self.current_task = ""
         self.total_calls = 0
         self.failures_by_tool: dict[str, int] = {}
@@ -678,6 +691,8 @@ class ToolCallLimitHook:
 
     def _before_model_call(self, event: Any) -> None:
         """LLM 调用前 → 轮次 +1（一轮推理可发多个工具调用）"""
+        if self.refresh_mode is not None:
+            self.refresh_mode()
         self.round += 1
 
     def _tool_name(self, event: Any) -> str:
@@ -1812,6 +1827,7 @@ class StrandsAgentAdapter:
         # 入口即登记，避免初始化尚无 hook 或排队后的 reset 丢失本轮取消。
         self._cancel_lock = threading.RLock()
         self._invocations: dict[str, set[threading.Event]] = {}
+        self._invocation_modes: dict[threading.Event, _InvocationMode] = {}
         self._queued_invocation: ContextVar[tuple[str, threading.Event] | None] = ContextVar(
             "tdsf_queued_invocation", default=None
         )
@@ -1969,19 +1985,65 @@ class StrandsAgentAdapter:
         text = f"{type(error).__name__}: {error}".lower()
         return any(marker in text for marker in _LLM_RATE_LIMIT_MARKERS)
 
-    def _register_invocation(self, session_id: str) -> threading.Event:
+    def _register_invocation(
+        self, session_id: str, state: dict[str, Any] | None = None,
+        stream_id: str | None = None,
+    ) -> threading.Event:
         cancelled = threading.Event()
+        canonical = None
+        if isinstance(stream_id, str) and len(stream_id) == 36:
+            try:
+                if str(UUID(stream_id)) == stream_id:
+                    canonical = stream_id
+            except ValueError:
+                pass
         with self._cancel_lock:
+            if canonical and session_id:
+                if any(row.stream_id == canonical for row in self._invocation_modes.values()):
+                    raise ValueError("duplicate active invocation stream")
+                live = (state or {}).get("live") or {}
+                self._invocation_modes[cancelled] = _InvocationMode(
+                    session_id, canonical,
+                    parse_mode(live.get("agentMode") or (state or {}).get("mode")),
+                    bool(live.get("teach") or (state or {}).get("teach")),
+                )
             self._invocations.setdefault(session_id, set()).add(cancelled)
         return cancelled
 
     def _unregister_invocation(self, session_id: str, cancelled: threading.Event) -> None:
         with self._cancel_lock:
+            self._invocation_modes.pop(cancelled, None)
             pending = self._invocations.get(session_id)
             if pending is not None:
                 pending.discard(cancelled)
                 if not pending:
                     del self._invocations[session_id]
+
+    def set_mode(
+        self, session_id: str, stream_id: str, mode: str, revision: int,
+    ) -> dict[str, Any]:
+        """Update future decisions only; never resolve or replay an approval."""
+        if mode not in ("observe", "confirm", "auto", "teach"):
+            raise ValueError("invalid mode")
+        if type(revision) is not int or revision <= 0:
+            raise ValueError("invalid mode revision")
+        with self._cancel_lock:
+            control = next((
+                row for cancelled, row in self._invocation_modes.items()
+                if row.session_id == session_id and row.stream_id == stream_id
+                and not cancelled.is_set()
+            ), None)
+            if control is None:
+                return {"ok": False, "reason": "not_active"}
+            if control.teach or control.mode == AgentMode.OBSERVE or mode not in ("confirm", "auto"):
+                return {"ok": False, "reason": "requires_new_turn"}
+            if revision < control.revision or (revision == control.revision and mode != control.mode.value):
+                return {"ok": False, "reason": "stale_revision"}
+            control.mode = AgentMode(mode)
+            control.revision = revision
+            if control.ctx is not None:
+                control.ctx.mode = control.mode
+            return {"ok": True, "mode": mode, "revision": revision}
 
     @contextmanager
     def _use_queued_invocation(self, session_id: str, cancelled: threading.Event):
@@ -2014,7 +2076,9 @@ class StrandsAgentAdapter:
         if queued is not None and queued[0] == session_id:
             # The RPC future owns this registration, including queue cancellation.
             return self._invoke(agent_id, input, state, queued[1])
-        cancelled = self._register_invocation(session_id)
+        from rpc_request_context import current_agent_stream_id
+
+        cancelled = self._register_invocation(session_id, state, current_agent_stream_id())
         try:
             return self._invoke(agent_id, input, state, cancelled)
         finally:
@@ -2126,9 +2190,14 @@ class StrandsAgentAdapter:
             #    供执行链 decide(risk_l, mode) 消费）
             # A3 (2026-09-04): 传入 teach 开关，工具拦截层据此走 teach_command 路径
             ctx = self._build_tool_context(agent_id, session_id, state, mode=mode, teach=teach)
+            with self._cancel_lock:
+                mode_control = self._invocation_modes.get(cancelled)
+                if mode_control is not None:
+                    mode_control.ctx = ctx
+                    ctx.mode = mode_control.mode
 
             # 4. 获取或创建 Strands Agent + per-agent 锁
-            strands_agent = self._get_or_create_agent(agent_id, ctx, mode=mode, teach=teach)
+            strands_agent = self._get_or_create_agent(agent_id, ctx, mode=ctx.mode, teach=teach)
             # TDSF 修复 2026-08-09: 防并发崩溃——Strands Agent 有内部状态，
             # 同一实例被并发调用会抛 "already processing a request"。
             # 用 per-(agent, session, perm) RLock 确保排队等待。
@@ -2209,6 +2278,8 @@ class StrandsAgentAdapter:
             wait_owner = object()
 
             def _locked_invoke() -> None:
+                limit_hook = None
+                refresh_mode = None
                 try:
                     with agent_lock, response_wait_scope(wait_owner):
                         # check/reset 与取消串行；模型/工具执行不持有此短锁。
@@ -2223,6 +2294,16 @@ class StrandsAgentAdapter:
                             if limit_hook is not None:
                                 limit_hook.reset()
                                 limit_hook.current_task = input
+                                # Model schemas for confirm/auto are identical;
+                                # prompt changes happen only before a model call.
+                                def refresh_mode() -> None:
+                                    with self._cancel_lock:
+                                        strands_agent.system_prompt = _compose_system_prompt(
+                                            ctx.mode, teach, base=self.system_prompt,
+                                        )
+
+                                limit_hook.refresh_mode = refresh_mode
+                                refresh_mode()
                             # 未取消且真正开始的回合才消费上次中断现场。
                             prompt = self._build_prompt(input, state)
                             prompt += _teach_turn_gate(teach, teach_intent)
@@ -2267,6 +2348,8 @@ class StrandsAgentAdapter:
                 except Exception as e:  # noqa: BLE001 — 交给调用方统一处理
                     outcome["error"] = e
                 finally:
+                    if limit_hook is not None and limit_hook.refresh_mode is refresh_mode:
+                        limit_hook.refresh_mode = None
                     # worker 自然结束（含异常）→ 解除 stalled 标记，恢复常规链路
                     self._stalled_sessions.discard((agent_id, session_id))
 

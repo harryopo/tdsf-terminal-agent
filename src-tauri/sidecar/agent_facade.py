@@ -102,6 +102,7 @@ def register_methods(dispatcher: Any) -> None:
     """Register the stable Agent JSON-RPC surface."""
     dispatcher.register("agent.invoke", _rpc_agent_invoke)
     dispatcher.register("agent.cancel", _rpc_agent_cancel)
+    dispatcher.register("agent.set_mode", _rpc_agent_set_mode)
     dispatcher.register("agent.list", _rpc_agent_list)
     dispatcher.register("agent.info", _rpc_agent_info)
     dispatcher.register("agent.configure", configure)
@@ -128,6 +129,14 @@ def _rpc_agent_invoke(name: str, state: dict[str, Any]) -> dict[str, Any]:
 
 def _rpc_agent_cancel(session_id: str, reason: str = "") -> dict[str, Any]:
     return cancel_agent_session(session_id, reason)
+
+
+def _rpc_agent_set_mode(
+    session_id: str, stream_id: str, mode: str, revision: int,
+) -> dict[str, Any]:
+    if _global_strands_adapter is None:
+        return {"ok": False, "reason": "not_active"}
+    return _global_strands_adapter.set_mode(session_id, stream_id, mode, revision)
 
 
 def _rpc_agent_list() -> dict[str, Any]:
