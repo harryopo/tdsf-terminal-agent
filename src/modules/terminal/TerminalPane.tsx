@@ -47,6 +47,7 @@ type Props = {
   initialCwd?: string;
   /** Enable command-block decorations (OSC 133) for this terminal. */
   blocks?: boolean;
+  transportKey?: string;
   // TDSF (#17): SSH 传输注入 seam —— 由 SshTerminalHost 提供。
   // 若提供，useTerminalSession 走 SSH 分支，复用 rendererPool 渲染。
   openTransport?: (
@@ -67,6 +68,7 @@ export const TerminalPane = memo(
       focused = true,
       initialCwd,
       blocks = false,
+      transportKey,
       openTransport,
       remote = false,
       onSearchReady,
@@ -105,6 +107,7 @@ export const TerminalPane = memo(
       focused,
       initialCwd,
       blocks,
+      transportKey,
       // TDSF (#17): 透传 SSH 传输注入与 remote 护栏。
       openTransport,
       remote,

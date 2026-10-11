@@ -88,6 +88,7 @@ type Session = {
   // 本地路径 s.pty 是 PtySession（结构子类型，id 是 number）；
   // SSH 路径 s.pty 是 SSH transport（id 是 sessionId 字符串）。
   pty: TerminalTransport | null;
+  transportKey?: string;
   // TDSF (#16): SSH 传输注入 seam。若提供，openPtyForSession 走 SSH 分支，
   // 跳过 terminalShell/ConPTY/resize-warmup 等本地专属逻辑。
   openTransport?: (
@@ -787,8 +788,11 @@ async function openPtyForSession(
   // close 只 unsubscribe 前端订阅，不断底层 SSH 连接（SFTP 共用）。
   if (s.openTransport) {
     const transport = await s.openTransport({
-      onData: (bytes) => deliverPtyBytes(leafId, bytes),
+      onData: (bytes) => {
+        if (!s.disposed) deliverPtyBytes(leafId, bytes);
+      },
       onExit: (code) => {
+        if (s.disposed) return;
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
@@ -807,15 +811,18 @@ async function openPtyForSession(
     }
     return transport;
   }
-  // 本地 PTY 路径（原逻辑，零改动）
+  // 本地 PTY 路径，同样隔离退场会话的回调。
   const startCols = s.cols > 0 ? s.cols : 80;
   const startRows = s.rows > 0 ? s.rows : 24;
   const pty = await openPty(
     startCols,
     startRows,
     {
-      onData: (bytes) => deliverPtyBytes(leafId, bytes),
+      onData: (bytes) => {
+        if (!s.disposed) deliverPtyBytes(leafId, bytes);
+      },
       onExit: (code) => {
+        if (s.disposed) return;
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
@@ -1159,9 +1166,7 @@ export async function leafHasForegroundProcess(
   }
 }
 
-export function disposeSession(leafId: number): void {
-  const s = sessions.get(leafId);
-  if (!s) return;
+function retireSession(leafId: number, s: Session): void {
   s.disposed = true;
   cancelHiddenRelease(s);
   disposeLeafSlot(leafId);
@@ -1171,8 +1176,6 @@ export function disposeSession(leafId: number): void {
   s.pty = null;
   s.pendingInput = "";
   sessions.delete(leafId);
-  blockViewportListeners.delete(leafId);
-  pendingRiskListeners.delete(leafId);
   searchAddons.delete(leafId);
   // TDSF B1 (2026-08-29): 同步清理 block 流水账 store（防泄漏）
   useTerminalBlocksStore.getState().clearLeaf(leafId);
@@ -1187,6 +1190,14 @@ export function disposeSession(leafId: number): void {
   }
 }
 
+export function disposeSession(leafId: number): void {
+  const s = sessions.get(leafId);
+  if (!s) return;
+  retireSession(leafId, s);
+  blockViewportListeners.delete(leafId);
+  pendingRiskListeners.delete(leafId);
+}
+
 type Options = {
   leafId: number;
   container: React.RefObject<HTMLDivElement | null>;
@@ -1194,6 +1205,8 @@ type Options = {
   focused?: boolean;
   initialCwd?: string;
   blocks?: boolean;
+  /** Stable connection identity, independent of transport factory references. */
+  transportKey?: string;
   // TDSF (#16): SSH 传输注入 seam。若提供，useTerminalSession 走 SSH 分支，
   // 由 SshTerminalHost 提供 subscribeTerminalData + handle.write/resize。
   openTransport?: (
@@ -1213,6 +1226,7 @@ export function useTerminalSession({
   focused = true,
   initialCwd,
   blocks = false,
+  transportKey,
   openTransport,
   remote = false,
   onSearchReady,
@@ -1228,20 +1242,23 @@ export function useTerminalSession({
   const initialCwdRef = useRef(initialCwd);
   initialCwdRef.current = initialCwd;
 
-  // TDSF (#16): openTransport/remote 同样不能是 effect dep（每次 render 引用变化
-  // 会重订阅），用 ref 同步到 session，与 initialCwd 同模式。
+  // Factory references may change on render; only connection identity and
+  // transport kind should replace the retained session.
   const openTransportRef = useRef(openTransport);
   openTransportRef.current = openTransport;
-  const remoteRef = useRef(remote);
-  remoteRef.current = remote;
 
   useEffect(() => {
     let cancelled = false;
+    const previous = sessions.get(leafId);
+    if (previous && (previous.transportKey !== transportKey || previous.remote !== remote)) {
+      retireSession(leafId, previous);
+      notifyPendingRiskListeners(leafId);
+    }
     const s = ensureSession(leafId, initialCwdRef.current, blocks);
-    // TDSF (#16): 同步传输注入与护栏标志到 session。
-    // 不放进 deps，防止每次 render 重订阅 effect。
+    s.transportKey = transportKey;
+    // Factory updates alone do not restart a connection.
     s.openTransport = openTransportRef.current;
-    s.remote = remoteRef.current;
+    s.remote = remote;
     // TDSF 2026-08-28: 命令预测按环境分流——本地终端预测 Windows 命令，
     // SSH 终端预测 Linux 命令（远程 remote=true → linux 命令集）。
     // TDSF 2026-08-28（用户反馈）: WSL Space 的本地 PTY 实际运行 Linux，
@@ -1270,7 +1287,7 @@ export function useTerminalSession({
       clearLeafEnvironment(leafId);
       detachSession(leafId);
     };
-  }, [leafId, container, blocks]);
+  }, [leafId, container, blocks, transportKey, remote]);
 
   const [blockMode, setBlockMode] = useState<BlockMode>("prompt");
   useEffect(() => {
@@ -1282,7 +1299,7 @@ export function useTerminalSession({
     return () => {
       s.blockListeners.delete(cb);
     };
-  }, [leafId, blocks]);
+  }, [leafId, blocks, transportKey, remote]);
 
   const { fontFamily, fontWeight, fontSize } = useTerminalFont();
   const zoomLevel = usePreferencesStore((p) => p.zoomLevel);
@@ -1342,7 +1359,7 @@ export function useTerminalSession({
         void releaseIfIdle(leafId, s);
       }
     }
-  }, [leafId, visible, focused, blocks]);
+  }, [leafId, visible, focused, blocks, transportKey, remote]);
 
   const write = useCallback(
     (data: string) => {

@@ -181,6 +181,7 @@ function SshLeafPane({
         // 远端 shell 不一定有 OSC 133 shell integration，关闭 block 装饰
         blocks={false}
         openTransport={openTransport}
+        transportKey={sessionId}
         remote
         onCwd={handleCwd}
       />
