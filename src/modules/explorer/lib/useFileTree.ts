@@ -148,6 +148,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   const expandedRef = useRef(expanded);
   const nodesRef = useRef(nodes);
   const watchedRef = useRef<Set<string>>(new Set());
+  const listingRequests = useRef(new Map<string, object>());
 
   useEffect(() => {
     showHiddenRef.current = showHidden;
@@ -178,6 +179,10 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   }, []);
 
   const fetchChildren = useCallback(async (path: string) => {
+    // A root/source change invalidates all tokens; refreshes replace only their
+    // own path so unrelated expanded directories can still load in parallel.
+    const request = {};
+    listingRequests.current.set(path, request);
     if (nodesRef.current[path]?.status !== "loaded") {
       setNodes((s) => ({ ...s, [path]: { status: "loading" } }));
     }
@@ -203,6 +208,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         });
       }
 
+      if (listingRequests.current.get(path) !== request) return;
       const prev = nodesRef.current[path];
       if (prev?.status === "loaded" && sameDirListing(prev.entries, entries)) {
         return;
@@ -249,22 +255,30 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         watchRemove(toUnwatch);
       }
     } catch (e) {
+      if (listingRequests.current.get(path) !== request) return;
       setNodes((s) => ({
         ...s,
         [path]: { status: "error", message: String(e) },
       }));
+    } finally {
+      if (listingRequests.current.get(path) === request) {
+        listingRequests.current.delete(path);
+      }
     }
   }, []);
 
   // Root change → restore the cached expansion for this root, re-scope watches,
   // and persist the outgoing root's expansion on the way out.
   useEffect(() => {
+    const requests = listingRequests.current;
+    requests.clear();
     if (!rootPath) {
+      nodesRef.current = {};
       setNodes({});
       setExpanded(new Set());
       setPendingCreate(null);
       setRenaming(null);
-      return;
+      return () => requests.clear();
     }
     setPendingCreate(null);
     setRenaming(null);
@@ -289,6 +303,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     }
 
     return () => {
+      requests.clear();
       rememberExpansion(expansionKey, expandedRef.current);
       if (watchedRef.current.size > 0) {
         watchRemove([...watchedRef.current]);
