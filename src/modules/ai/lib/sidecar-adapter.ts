@@ -1447,7 +1447,7 @@ export async function* runSidecarStream(
     unlisten();
     unlistenSshOutput();
     for (const ids of toolIdsByName.values()) {
-      for (const id of ids) useSshCommandOutputStore.getState().finish(id);
+      for (const id of ids) useSshCommandOutputStore.getState().finish(id, true);
     }
   }
 }

@@ -19,6 +19,7 @@ export type SshOutputRecord = CallOwner & {
   stderr: string;
   truncated: boolean;
   ended: boolean;
+  resultMissing?: boolean;
   exitCode?: number | null;
 };
 
@@ -26,7 +27,7 @@ type SshCommandOutputState = {
   calls: Record<string, SshOutputRecord>;
   begin: (owner: CallOwner) => void;
   record: (event: SshCommandOutputEvent) => void;
-  finish: (toolCallId: string) => void;
+  finish: (toolCallId: string, resultMissing?: boolean) => void;
 };
 
 function tail(text: string): string {
@@ -118,12 +119,19 @@ export const useSshCommandOutputStore = create<SshCommandOutputState>(
           },
         };
       }),
-    finish: (toolCallId) =>
+    finish: (toolCallId, resultMissing = false) =>
       set((state) => {
         const call = state.calls[toolCallId];
-        if (!call || call.ended) return state;
+        if (!call || (call.ended && (!resultMissing || call.resultMissing))) return state;
         return {
-          calls: { ...state.calls, [toolCallId]: { ...call, ended: true } },
+          calls: {
+            ...state.calls,
+            [toolCallId]: {
+              ...call,
+              ended: true,
+              ...(resultMissing ? { resultMissing: true } : {}),
+            },
+          },
         };
       }),
   }),

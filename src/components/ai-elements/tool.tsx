@@ -596,11 +596,13 @@ function SshCommandLiveOutput({ toolCallId }: { toolCallId: string }) {
   const completed = live.ended;
   const unknownExit = live.exitCode == null || live.exitCode < 0;
   // Native stream termination is not the Python risk/business verdict.
-  const label = completed
-    ? unknownExit
-      ? "退出状态未确认"
-      : "输出已返回"
-    : "实时回显";
+  const label = live.resultMissing
+    ? "工具结果未收到"
+    : completed
+      ? unknownExit
+        ? "退出状态未确认"
+        : "输出已返回"
+      : "实时回显";
 
   return (
     <div className="space-y-1.5" aria-live="polite">
@@ -609,14 +611,14 @@ function SshCommandLiveOutput({ toolCallId }: { toolCallId: string }) {
           aria-hidden="true"
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            completed && (unknownExit ? "bg-amber-500" : "bg-emerald-500"),
+            completed && (unknownExit || live.resultMissing ? "bg-amber-500" : "bg-emerald-500"),
             !completed && "animate-pulse bg-sky-500",
           )}
         />
         <span
           className={cn(
             "font-medium",
-            completed && (unknownExit
+            completed && (unknownExit || live.resultMissing
               ? "text-amber-700 dark:text-amber-400"
               : "text-emerald-700 dark:text-emerald-400"),
             !completed && "text-sky-700 dark:text-sky-400",
@@ -624,6 +626,7 @@ function SshCommandLiveOutput({ toolCallId }: { toolCallId: string }) {
         >
           {label}
         </span>
+        {!unknownExit ? <span>退出码 {live.exitCode}</span> : null}
       </div>
       <SshOutputStreams
         stdout={live.stdout}
@@ -632,6 +635,13 @@ function SshCommandLiveOutput({ toolCallId }: { toolCallId: string }) {
           ? "（未收到可展示的原生输出）"
           : live.operationId ? "等待远端输出…" : "等待命令开始…"}
       />
+      {live.resultMissing ? (
+        <div className="text-[10px] text-muted-foreground">
+          {unknownExit
+            ? "本轮已结束，未收到工具结果；不代表远端命令已经停止，请核对终端。"
+            : "已收到原生退出状态，但未收到工具结果；不据此判定操作成功。"}
+        </div>
+      ) : null}
       {live.truncated ? (
         <div className="text-[10px] text-muted-foreground">
           实时回显已截断，仅保留各流最近 65,536 个字符。
@@ -657,6 +667,9 @@ const ToolImpl = ({
   const hasSshOutputCall = useSshCommandOutputStore(
     (store) => Boolean(toolCallId && store.calls[toolCallId]),
   );
+  const sshResultMissing = useSshCommandOutputStore(
+    (store) => Boolean(toolCallId && store.calls[toolCallId]?.resultMissing),
+  );
   // Task 3.1: 审批等待态 + 提供了响应回调 → 渲染四层审批卡（三按钮）。
   // 未提供回调时保持通用折叠卡渲染（向后兼容，approval 交互由上层处理）。
   if (state === "approval-requested" && onApprovalRespond) {
@@ -678,13 +691,16 @@ const ToolImpl = ({
   const isError = state === "output-error";
   const showLiveSshOutput =
     !inlineApproval && (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
+  const missingSshResult = showLiveSshOutput && sshResultMissing;
   // SDK output-available 仅表示收到结果；业务状态仍由原始结果决定。
   const resultStatus =
     state === "output-available"
       ? getToolResultStatus(output)
       : isError
         ? legacyToolResultStatus(errorText)
-        : null;
+        : missingSshResult
+          ? "indeterminate"
+          : null;
   const innerFailure = state === "output-available" && resultStatus !== null;
   const resultIsFailure = resultStatus === "error" || resultStatus === "failed";
   const resultLabel = resultStatus ? toolResultLabel(resultStatus) : "failed";
@@ -754,7 +770,7 @@ const ToolImpl = ({
         ) : (
           <span className="flex-1" />
         )}
-        {(isError || innerFailure) && (
+        {(isError || innerFailure || missingSshResult) && (
           <span
             className={cn(
               "shrink-0 text-[10px] font-medium",
