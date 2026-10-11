@@ -1014,18 +1014,25 @@ class ToolCallLimitHook:
         self._tool_card_calls[key] = call_id
         self._emit_tool_card(event, call_id, "started")
 
+    @staticmethod
+    def _diagnostic_tool_result(event: Any) -> Any:
+        # SDK cancellation uses an error wrapper; diagnostic records must agree
+        # with the card without changing the SDK result or execution guardrails.
+        cancel_message = getattr(event, "cancel_message", None)
+        if isinstance(cancel_message, str) and cancel_message:
+            return {"status": "cancelled", "message": str(cancel_message)}
+        exception = getattr(event, "exception", None)
+        if exception is not None:
+            return {"status": "error", "message": str(exception)}
+        return getattr(event, "result", None)
+
     def _finish_tool_card(self, event: Any) -> None:
         call_id = self._tool_card_calls.pop(self._tool_card_key(event), None)
         if call_id is None:
             return
-        raw_result = getattr(event, "result", None)
+        raw_result = self._diagnostic_tool_result(event)
         result = self._tool_payload(raw_result) or raw_result
         exception = getattr(event, "exception", None)
-        cancel_message = getattr(event, "cancel_message", None)
-        if cancel_message:
-            result = {"status": "cancelled", "message": str(cancel_message)}
-        elif exception is not None:
-            result = {"status": "error", "message": str(exception)}
         self._emit_tool_card(event, call_id, "error" if exception else "completed", result)
 
     def _record_evidence(
@@ -1138,7 +1145,8 @@ class ToolCallLimitHook:
             duration_ms = round((time.monotonic() - start_time) * 1000, 2)
         # 失败判定：工具抛异常，或结果状态存在且非 success
         # （error / command_blocked / rejected / needs_approval / unavailable）
-        status = self._result_status(getattr(event, "result", None))
+        diagnostic_result = self._diagnostic_tool_result(event)
+        status = self._result_status(diagnostic_result)
         failed = (
             getattr(event, "exception", None) is not None
             or (status is not None and status != "success")
@@ -1170,18 +1178,24 @@ class ToolCallLimitHook:
             tool_entry["error"] = self._error_summary(event)
         if duration_ms is not None:
             tool_entry["duration_ms"] = duration_ms
+        sdk_tool_use_id = getattr(event, "tool_use", {}).get("toolUseId")
+        for key, value in (("tool_call_id", evidence_call_id), ("sdk_tool_use_id", sdk_tool_use_id)):
+            if isinstance(value, str) and value.strip():
+                tool_entry[key] = value
         self.tool_log.append(tool_entry)
         self._record_evidence(
-            name, tool_input, getattr(event, "result", None), failed,
+            name, tool_input, diagnostic_result, failed,
             tool_call_id=evidence_call_id,
-            sdk_tool_use_id=getattr(event, "tool_use", {}).get("toolUseId"),
+            sdk_tool_use_id=sdk_tool_use_id,
             cancelled=bool(getattr(event, "cancel_message", None)),
         )
         # #149：进度流水要说真话 —— "取不回结果"不是"失败"，
         # 写成 failed 会让排障的人和收尾判定都以为命令出错了（现场：sleep 330 那条）。
         self._report_progress(
             name,
-            "indeterminate" if unknown else ("failed" if failed else "success"),
+            "cancelled" if status == "cancelled" else (
+                "indeterminate" if unknown else ("failed" if failed else "success")
+            ),
             duration_ms,
         )
 
@@ -1196,6 +1210,12 @@ class ToolCallLimitHook:
         # C1 工具级 tracing：duration_ms 字段（如果可用）
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
+        # Only retained logs gain identity; the frontend event contract is unchanged.
+        # The sequential executor reports immediately after appending this call.
+        if self.tool_log:
+            for key in ("tool_call_id", "sdk_tool_use_id"):
+                if key in self.tool_log[-1]:
+                    payload[key] = self.tool_log[-1][key]
         # agent_log 落盘（写失败静默——流水是排障加分项，绝不影响主链路；
         # 空 session_id 跳过——匿名调用无会话归属，写 default 无排障价值）
         if self.session_id:
