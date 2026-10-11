@@ -486,9 +486,14 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         } catch (e) {
           console.warn('[sshStore] resolve $HOME failed, fallback /:', e);
         }
-        // 会话可能在解析期间已断开 —— 断开时 currentPathBySession 已清理,
-        // 再写会留下孤儿键; 守卫: 仅当会话仍存在时写入。
-        if (!get().sessions.some((s) => s.id === sessionId)) return;
+        // HOME is only an initial fallback: a terminal cwd reported while the
+        // probe was pending is newer, and an ended connection cannot be seeded.
+        const state = get();
+        const current = state.sessions.find((sess) => sess.id === sessionId);
+        if (!current || current.rustSessionId !== handle.id ||
+            current.state === 'closed' || current.state === 'failed' ||
+            current.state === 'reconnecting' ||
+            state.currentPathBySession[sessionId] !== undefined) return;
         get().setCurrentPath(sessionId, initial);
       })().catch((e) => {
         console.warn('[sshStore] initial $HOME seed failed:', e);
