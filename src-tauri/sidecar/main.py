@@ -203,6 +203,8 @@ _slow_methods: frozenset[str] = frozenset({
     "long_context.summarize",
     "knowledge.search",
     "knowledge.rebuild",
+    # Reverse RPC needs the stdin loop free to consume its response.
+    "system.probe_env",
 })
 _main_executor: ThreadPoolExecutor | None = None
 
@@ -626,7 +628,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     try:
         import env_probe
 
-        env_probe.register_methods(dispatcher)
+        env_probe.register_methods(dispatcher, rust_bridge=_rust_bridge)
         logger.info("env_probe methods registered (system.probe_env)")
     except Exception as e:
         logger.exception(f"failed to register env_probe: {e}")
