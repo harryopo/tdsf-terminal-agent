@@ -101,12 +101,13 @@ describe("terminal session cwd path-style wiring", () => {
     expect(localCalls[0].arguments[2].getText(source)).toBe("shellState");
 
     expect(remoteCalls).toHaveLength(1);
-    expect(remoteCalls[0].arguments).toHaveLength(4);
+    expect(remoteCalls[0].arguments).toHaveLength(5);
     expect(remoteCalls[0].arguments[2].kind).toBe(ts.SyntaxKind.Identifier);
     expect(remoteCalls[0].arguments[2].getText(source)).toBe("shellState");
     expect(remoteCalls[0].arguments[3].kind).toBe(
       ts.SyntaxKind.StringLiteral,
     );
     expect(remoteCalls[0].arguments[3].getText(source)).toBe('"posix"');
+    expect(remoteCalls[0].arguments[4].getText(source)).toBe("acceptFrame");
   });
 });

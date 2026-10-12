@@ -46,7 +46,8 @@ import {
   registerOsc52ClipboardHandler,
   registerPromptTracker,
 } from "./osc-handlers";
-import { openPty, type TerminalTransport } from "./pty-bridge";
+import { openPty, type TerminalTransport, type TerminalTransportHandlers } from "./pty-bridge";
+import { RemoteShellIntegration, type SshTerminalContext } from "./remoteShellIntegration";
 import { clearLeafEnvironment, setLeafEnvironment } from "./completionInjection";
 // carapace 参数补全的 cwd 注册表（动态候选按当前目录取数据，见 param-complete-client）
 import { setLeafCwd } from "@/lib/param-complete-client";
@@ -92,11 +93,17 @@ type Session = {
   // TDSF (#16): SSH 传输注入 seam。若提供，openPtyForSession 走 SSH 分支，
   // 跳过 terminalShell/ConPTY/resize-warmup 等本地专属逻辑。
   openTransport?: (
-    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+    h: TerminalTransportHandlers,
   ) => Promise<TerminalTransport>;
   // TDSF (#16): remote 护栏标志。控制 leafHasForegroundJob/Process、
   // kickPty、respawnSession 等 PTY 专属调用对 SSH 不生效。
   remote: boolean;
+  remoteContext: SshTerminalContext | null;
+  remoteIntegration: RemoteShellIntegration | null;
+  remoteConsumers: {
+    onCwd: (cwd: string) => void;
+    onContextChange: () => void;
+  } | null;
   ptyOpening: boolean;
   initialCwd: string | undefined;
   lastCwd: string | null;
@@ -688,6 +695,9 @@ function ensureSession(
     // TDSF (#16): SSH 传输注入字段初始化（默认本地路径，由 hook 同步覆盖）。
     openTransport: undefined,
     remote: false,
+    remoteContext: null,
+    remoteIntegration: null,
+    remoteConsumers: null,
     ptyOpening: false,
     initialCwd,
     lastCwd: null,
@@ -788,6 +798,11 @@ async function openPtyForSession(
   // close 只 unsubscribe 前端订阅，不断底层 SSH 连接（SFTP 共用）。
   if (s.openTransport) {
     const transport = await s.openTransport({
+      onIntegrationContext: (context) => {
+        if (s.disposed) return;
+        s.remoteContext = context;
+        s.remoteIntegration?.setConnection(context);
+      },
       onData: (bytes) => {
         if (!s.disposed) deliverPtyBytes(leafId, bytes);
       },
@@ -928,7 +943,37 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           useTerminalBlocksStore.getState().pushBlock(block);
         },
       });
-      const disposeBlockHandlers = registerBlockOscHandlers(term, collector);
+      const remoteShellState = s.remote ? createShellIntegrationState() : null;
+      if (s.remote) {
+        if (s.lastCwd) collector.setCwd(s.lastCwd);
+        const consumers = {
+          onCwd: (next: string) => {
+            collector.setCwd(next);
+            markSessionReady(leafId);
+            if (s.lastCwd === next) return;
+            s.lastCwd = next;
+            setLeafCwd(leafId, next);
+            s.callbacks.onCwd?.(next);
+          },
+          onContextChange: () => {
+            collector.switchContext();
+            execStartMarker?.dispose();
+            execStartMarker = null;
+            if (remoteShellState) remoteShellState.inCommand = false;
+            onLeafCommandState(leafId, false);
+          },
+        };
+        s.remoteConsumers = consumers;
+        // Retain source association across renderer parking, not the collector
+        // or marker of a detached renderer. Transport changes replace Session.
+        s.remoteIntegration ??= new RemoteShellIntegration({
+          onCwd: (next) => s.remoteConsumers?.onCwd(next),
+          onContextChange: () => s.remoteConsumers?.onContextChange(),
+        });
+        s.remoteIntegration.setConnection(s.remoteContext);
+      }
+      const acceptFrame = s.remote ? s.remoteIntegration?.acceptFrame : undefined;
+      const disposeBlockHandlers = registerBlockOscHandlers(term, collector, acceptFrame);
       if (s.blocks) {
         const osc52 = registerOsc52ClipboardHandler(term);
         const deco = new BlockDecorations(term, {
@@ -963,8 +1008,6 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           },
         ];
       }
-      // POSIX paths do not authenticate the source. Marked remote shells share
-      // the command-output guard; unmarked shells retain the legacy fallback.
       const disposers: (() => void)[] = [disposeBlockHandlers, disposeOutputHighlight];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
@@ -990,9 +1033,10 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         );
         disposers.push(cwd);
       } else {
-        const shellState = createShellIntegrationState();
+        const shellState = remoteShellState!;
         const prompt = registerPromptTracker(term, shellState, (running) =>
           onLeafCommandState(leafId, running),
+          acceptFrame,
         );
         disposers.push(prompt.dispose);
         const cwd = registerCwdHandler(
@@ -1008,8 +1052,13 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           },
           shellState,
           "posix",
+          acceptFrame,
         );
         disposers.push(cwd);
+        const consumers = s.remoteConsumers;
+        disposers.push(() => {
+          if (s.remoteConsumers === consumers) s.remoteConsumers = null;
+        });
       }
       const osc52 = registerOsc52ClipboardHandler(term);
       disposers.push(osc52);
@@ -1213,7 +1262,7 @@ type Options = {
   // TDSF (#16): SSH 传输注入 seam。若提供，useTerminalSession 走 SSH 分支，
   // 由 SshTerminalHost 提供 subscribeTerminalData + handle.write/resize。
   openTransport?: (
-    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+    h: TerminalTransportHandlers,
   ) => Promise<TerminalTransport>;
   // TDSF (#16): remote 护栏标志。true 时跳过 PTY 专属 invoke。
   remote?: boolean;

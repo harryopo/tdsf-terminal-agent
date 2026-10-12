@@ -27,7 +27,7 @@ import { TerminalSearchBar } from "./TerminalSearchBar";
 import { useTerminalSearchStore } from "./terminal-search-store";
 import { useErrorExplainStore } from "./block/errorExplainStore";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import type { TerminalTransport } from "./lib/pty-bridge";
+import type { TerminalTransport, TerminalTransportHandlers } from "./lib/pty-bridge";
 import type { RiskRpcAssessment } from "@/lib/risk-engine/riskClient";
 
 export type TerminalPaneHandle = {
@@ -51,7 +51,7 @@ type Props = {
   // TDSF (#17): SSH 传输注入 seam —— 由 SshTerminalHost 提供。
   // 若提供，useTerminalSession 走 SSH 分支，复用 rendererPool 渲染。
   openTransport?: (
-    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+    h: TerminalTransportHandlers,
   ) => Promise<TerminalTransport>;
   // TDSF (#17): remote 护栏标志，透传给 useTerminalSession。
   remote?: boolean;

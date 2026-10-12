@@ -15,8 +15,10 @@
  *     （SFTP 文件树共用同一条 SSH 连接，断连会废掉 SFTP）
  */
 import { useMemo, useRef } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { sshSessionsDetail } from "@/lib/ssh-bridge";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
-import type { TerminalTransport } from "./pty-bridge";
+import type { TerminalTransport, TerminalTransportHandlers } from "./pty-bridge";
 
 export function useSshLeafTransport(sessionId: string) {
   // 订阅 SSH 会话状态（handle 由 sshStore.connect 成功后填充，可能晚于挂载）
@@ -32,10 +34,58 @@ export function useSshLeafTransport(sessionId: string) {
 
   // openTransport 工厂：仅依赖 sessionId + subscribeTerminalData（稳定引用），不重创建
   const openTransport = useMemo(() => {
-    return (h: {
-      onData: (b: Uint8Array) => void;
-      onExit: (c: number) => void;
-    }): Promise<TerminalTransport> => {
+    return (h: TerminalTransportHandlers): Promise<TerminalTransport> => {
+      let retired = false;
+      let epoch = 0;
+      let unsubscribeContext = () => {};
+      if (h.onIntegrationContext) {
+        const onContext = h.onIntegrationContext;
+        const readSession = () => useSshStore.getState().sessions.find(
+          (it) => it.id === sessionId,
+        );
+        const boundary = () => {
+          const current = readSession();
+          return {
+            state: current?.state,
+            id: current?.rustSessionId,
+            handle: current?.handle,
+            host: current?.params.host,
+            port: current?.params.port,
+            user: current?.params.user,
+          };
+        };
+        let previous = boundary();
+        const refresh = () => {
+          const request = ++epoch;
+          onContext(null);
+          const current = readSession();
+          if (current?.state !== "connected" || current.rustSessionId == null ||
+              current.handle?.id !== current.rustSessionId) return;
+          const { rustSessionId, params } = current;
+          // Never await this on the input/output path; stale replies are inert.
+          void Promise.resolve().then(async () => {
+            const owner = getCurrentWebviewWindow().label;
+            const rows = await sshSessionsDetail();
+            if (retired || epoch !== request) return;
+            const detail = rows.find((row) => row.sessionId === rustSessionId);
+            if (detail?.state !== "connected" || detail.ownerWindow !== owner ||
+                detail.host !== params.host || detail.port !== params.port ||
+                detail.user !== params.user) return;
+            onContext(detail.terminalContext ?? null);
+          }).catch(() => {
+            // Source remains unknown; raw terminal traffic still flows normally.
+          });
+        };
+        unsubscribeContext = useSshStore.subscribe(() => {
+          const next = boundary();
+          if (next.state === previous.state && next.id === previous.id &&
+              next.handle === previous.handle && next.host === previous.host &&
+              next.port === previous.port && next.user === previous.user) return;
+          previous = next;
+          refresh();
+        });
+        refresh();
+      }
       // 订阅 PTY 输出：sshStore 的 fan-out + 先到数据缓冲
       // （挂载即 flush 缓冲，修复"连接就绪早于组件挂载导致前 N 字节丢失"竞态）
       const unsubscribe = subscribeTerminalData(sessionId, h.onData);
@@ -60,6 +110,9 @@ export function useSshLeafTransport(sessionId: string) {
         close: () => {
           // 关键：只 unsubscribe 前端订阅，不调 handle.close()
           // SFTP 文件树共用同一条 SSH 连接，断连会废掉 SFTP
+          retired = true;
+          epoch += 1;
+          unsubscribeContext();
           unsubscribe();
         },
       };

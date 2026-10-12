@@ -1,5 +1,6 @@
 import { IS_WINDOWS } from "@/lib/platform";
 import type { IMarker, Terminal } from "@xterm/xterm";
+import type { RemoteOscGate } from "./remoteShellIntegration";
 
 const MAX_OSC52_CLIPBOARD_BYTES = 1024 * 1024;
 
@@ -23,8 +24,10 @@ export function registerCwdHandler(
   onCwd: (cwd: string) => void,
   state?: ShellIntegrationState,
   pathStyle: "native" | "posix" = "native",
+  acceptFrame?: RemoteOscGate,
 ): () => void {
   const d = term.parser.registerOscHandler(7, (data) => {
+    if (acceptFrame && !acceptFrame(7, data)) return true;
     // Command stdout/stderr can contain attacker-controlled OSC 7 bytes.
     if (state?.inCommand) return true;
     const cwd = parseOsc7(data, pathStyle);
@@ -45,6 +48,7 @@ export function registerPromptTracker(
   // Fires on C (process executing) and A/D (back at prompt). Distinct from
   // inCommand, which is already true from B while the user merely types.
   onCommandState?: (running: boolean) => void,
+  acceptFrame?: RemoteOscGate,
 ): PromptTracker {
   let marker: IMarker | null = null;
   const updatePrompt = (data: string) => {
@@ -68,12 +72,14 @@ export function registerPromptTracker(
     }
   };
   const d = term.parser.registerOscHandler(133, (data) => {
+    if (acceptFrame && !acceptFrame(133, data)) return false;
     updatePrompt(data);
     // 必须放行：xterm 的 OSC handler 是"后注册的先调用，谁先返回 true 就到此为止"，
     // 拦下来会让先注册的块收集器收不到 133 ⇒ 本地终端一条块都产不出来（#130 真机）。
     return false;
   });
   const d633 = term.parser.registerOscHandler(633, (data) => {
+    if (acceptFrame && !acceptFrame(633, data)) return false;
     if (data.startsWith("E;")) updatePrompt("C");
     else if (/^[ABCD](?:;|$)/.test(data)) updatePrompt(data);
     return false;

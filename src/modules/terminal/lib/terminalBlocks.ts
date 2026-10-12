@@ -21,6 +21,7 @@
  *   - 空命令周期：有 A/B 但从未收到 C/E → 丢弃（不产生空 block）
  */
 import type { IMarker, Terminal } from "@xterm/xterm";
+import type { RemoteOscGate } from "./remoteShellIntegration";
 
 export type TerminalBlockAuthor = "user" | "agent";
 
@@ -90,6 +91,12 @@ export class TerminalBlockCollector {
   /** cwd 变化（来自现有 OSC 7 handler 的回调，避免注册第三个 handler） */
   setCwd(cwd: string): void {
     if (cwd) this.cwd = cwd;
+  }
+
+  /** Another shell's prompt is not this command's exit status or output. */
+  switchContext(): void {
+    this.settleOrDrop(null, false);
+    this.cwd = "";
   }
 
   /** OSC 133 payload（"A" | "B" | "C;cmd" | "D;<exit>"） */
@@ -188,12 +195,12 @@ export class TerminalBlockCollector {
   }
 
   /** 结算或丢弃 pending（exitCode=null 表示未知退出码的孤儿自愈） */
-  private settleOrDrop(exitCode: number | null): void {
+  private settleOrDrop(exitCode: number | null, captureOutput = true): void {
     const p = this.pending;
     if (!p) return; // 孤儿 D：忽略
     this.pending = null;
     if (!p.execStarted) return; // 空命令周期（只有 A/B 回车空跑）：丢弃
-    const captured = this.onOutputCapture?.() ?? "";
+    const captured = captureOutput ? this.onOutputCapture?.() ?? "" : "";
     const outputTail = typeof captured === "string" ? captured : captured.text;
     const outputTruncated =
       typeof captured === "string" ? false : captured.truncated;
@@ -217,12 +224,15 @@ export class TerminalBlockCollector {
 export function registerBlockOscHandlers(
   term: Terminal,
   collector: TerminalBlockCollector,
+  acceptFrame?: RemoteOscGate,
 ): () => void {
   const d133 = term.parser.registerOscHandler(133, (data) => {
+    if (acceptFrame && !acceptFrame(133, data)) return false;
     collector.handle133(data);
     return false; // 放行：同一条 133 上还有 prompt tracker / BlockDecorations 要用
   });
   const d633 = term.parser.registerOscHandler(633, (data) => {
+    if (acceptFrame && !acceptFrame(633, data)) return false;
     collector.handle633(data);
     return false; // 与 133 同一条规矩：一律放行，别按注册顺序赌（#151）
   });
