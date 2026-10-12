@@ -19,8 +19,8 @@ import { CARAPACE_BINARY_MB } from '@/settings/lib/remoteCarapaceAdmin';
 const read = (rel: string) => readFileSync(join(process.cwd(), rel), 'utf8');
 
 describe('设置页入口的接线', () => {
-  it('GeneralSection 真的挂了那张卡片（不是只写了组件）', () => {
-    const src = read('src/settings/sections/GeneralSection.tsx');
+  it('PredictionHistorySection 真的挂了那张卡片（不是只写了组件）', () => {
+    const src = read('src/settings/sections/PredictionHistorySection.tsx');
     expect(src).toContain('import { RemoteCarapaceCard } from "./RemoteCarapaceCard"');
     expect(src).toContain('<RemoteCarapaceCard />');
   });
@@ -59,7 +59,7 @@ describe('设置页入口的接线', () => {
 });
 
 describe('界面文案不许说假事实', () => {
-  const general = read('src/settings/sections/GeneralSection.tsx');
+  const general = read('src/settings/sections/PredictionHistorySection.tsx');
 
   it('要说清"不装也有静态参数提示"（否则用户以为不装就完全没补全）', () => {
     expect(general).toContain('不装也照常提示静态参数');
@@ -75,7 +75,7 @@ describe('界面文案不许说假事实', () => {
   });
 
   it('这块有一个真标题，README 指的界面词在界面上存在', () => {
-    // 红线 6：不许指认界面上不存在的控件 —— 「设置 → 通用 → 远端补全组件」要能对上
+    // README 的「设置 → 终端预测 → 远端补全组件」必须与界面对应。
     expect(general).toContain('<Label>远端补全组件</Label>');
   });
 
