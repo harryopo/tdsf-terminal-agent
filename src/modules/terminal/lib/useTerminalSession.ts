@@ -963,11 +963,9 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           },
         ];
       }
-      // For remote transports (SSH) the remote shell may not emit OSC 133
-      // integration markers, and SshTerminalHost injects a trusted OSC 7
-      // sequence right after `cd` commands from the transport seam. Use the
-      // cwd handler without the in-command guard so our injected OSC 7 is
-      // honored, and skip the local teach trigger for remote shells.
+      // Remote shells may lack OSC 133 markers, so this branch still has no
+      // in-command guard. Preserve their POSIX paths independently of the
+      // client's OS; path style does not authenticate the reporting host.
       const disposers: (() => void)[] = [disposeBlockHandlers, disposeOutputHighlight];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
@@ -1005,6 +1003,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             s.callbacks.onCwd?.(next);
           },
           undefined,
+          "posix",
         );
         disposers.push(cwd);
       }

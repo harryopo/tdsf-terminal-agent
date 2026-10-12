@@ -22,11 +22,12 @@ export function registerCwdHandler(
   term: Terminal,
   onCwd: (cwd: string) => void,
   state?: ShellIntegrationState,
+  pathStyle: "native" | "posix" = "native",
 ): () => void {
   const d = term.parser.registerOscHandler(7, (data) => {
     // Command stdout/stderr can contain attacker-controlled OSC 7 bytes.
     if (state?.inCommand) return true;
-    const cwd = parseOsc7(data);
+    const cwd = parseOsc7(data, pathStyle);
     if (cwd) onCwd(cwd);
     return true;
   });
@@ -98,13 +99,14 @@ export function registerOsc52ClipboardHandler(
   return () => d.dispose();
 }
 
-function parseOsc7(data: string): string | null {
+function parseOsc7(data: string, pathStyle: "native" | "posix"): string | null {
   const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
   if (!m) return null;
   let path = m[1];
   try {
     path = decodeURIComponent(path);
   } catch {}
+  if (pathStyle === "posix") return path;
   // /C:/Users/foo -> C:/Users/foo so it is a valid Windows path.
   if (/^\/[A-Za-z]:/.test(path)) {
     path = path.slice(1);
