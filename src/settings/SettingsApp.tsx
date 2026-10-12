@@ -1,4 +1,4 @@
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WindowControls } from "@/components/WindowControls";
 import { IS_MAC, USE_CUSTOM_WINDOW_CONTROLS } from "@/lib/platform";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
@@ -18,7 +18,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type JSX, useEffect, useState } from "react";
+import { type JSX, Fragment, useEffect, useState } from "react";
 import { AboutSection } from "./sections/AboutReleaseSection";
 import { AgentHistorySection } from "./sections/AgentHistorySection";
 import { AgentsSection } from "./sections/AgentsSection";
@@ -33,65 +33,76 @@ import { ThemesSection } from "./sections/ThemesSection";
 const TABS: {
   id: SettingsTab;
   label: string;
+  group: string;
   icon: typeof Settings01Icon;
   component: () => JSX.Element;
 }[] = [
   {
     id: "general",
+    group: "工作台",
     label: "通用",
     icon: Settings01Icon,
     component: GeneralSection,
   },
   {
     id: "editor",
+    group: "工作台",
     label: "编辑器",
     icon: SourceCodeIcon,
     component: EditorSection,
   },
   {
     id: "prediction",
+    group: "工作台",
     label: "终端预测",
     icon: SourceCodeIcon,
     component: PredictionHistorySection,
   },
   {
     id: "themes",
+    group: "工作台",
     label: "主题",
     icon: PaintBoardIcon,
     component: ThemesSection,
   },
   {
     id: "shortcuts",
+    group: "工作台",
     label: "快捷键",
     icon: KeyboardIcon,
     component: ShortcutsSection,
   },
   {
     id: "models",
+    group: "AI 与诊断",
     label: "AI 模型",
     icon: AiScanIcon,
     component: ModelsSection,
   },
   {
     id: "agents",
+    group: "AI 与诊断",
     label: "智能体",
     icon: UserMultiple02Icon,
     component: AgentsSection,
   },
   {
     id: "history",
+    group: "AI 与诊断",
     label: "对话历史",
     icon: HistoryIcon,
     component: AgentHistorySection,
   },
   {
     id: "logs",
+    group: "AI 与诊断",
     label: "运行日志",
     icon: TerminalIcon,
     component: RuntimeLogsSection,
   },
   {
     id: "about",
+    group: "应用",
     label: "关于",
     icon: InformationCircleIcon,
     component: AboutSection,
@@ -154,38 +165,56 @@ export function SettingsApp() {
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground select-none">
       <header
         data-tauri-drag-region
-        className={`flex h-11 shrink-0 items-center border-b border-border/60 bg-card/60 ${
-          IS_MAC ? "pr-3 pl-22" : "pr-0 pl-3"
-        }`}
+        className={`flex h-11 shrink-0 items-center border-b border-border/60 bg-card ${IS_MAC ? "pr-3 pl-22" : "pr-0 pl-4"}`}
       >
-        <Tabs
-          value={active}
-          onValueChange={(v) => setActive(v as SettingsTab)}
-          orientation="horizontal"
-          className="flex-1 items-center"
-          data-tauri-drag-region
-        >
-          <TabsList className="mx-auto h-7 bg-muted/40 px-2">
-            {TABS.map((t) => (
-              <TabsTrigger
-                key={t.id}
-                value={t.id}
-                className="h-6 gap-1.5 px-2.5 text-[11.5px]"
-              >
-                <HugeiconsIcon icon={t.icon} size={12} strokeWidth={1.75} />
-                <span>{t.label}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        <span data-tauri-drag-region className="flex-1 text-[13px] font-medium">
+          设置
+        </span>
         {USE_CUSTOM_WINDOW_CONTROLS && <WindowControls closeOnly />}
       </header>
-
-      <main className="zoom-content min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-7 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="mx-auto w-full max-w-160">
-          {ActiveSection && <ActiveSection />}
-        </div>
-      </main>
+      <Tabs
+        value={active}
+        onValueChange={(v) => setActive(v as SettingsTab)}
+        orientation="vertical"
+        className="min-h-0 flex-1 gap-0"
+      >
+        <aside
+          aria-label="设置分组"
+          className="w-36 shrink-0 overflow-y-auto border-r border-border/60 bg-card/40 p-3 sm:w-44"
+        >
+          <TabsList
+            aria-label="设置页面"
+            className="w-full items-stretch rounded-none bg-transparent p-0 group-data-vertical/tabs:rounded-none"
+          >
+            {TABS.map((t, i) => (
+              <Fragment key={t.id}>
+                {(i === 0 || TABS[i - 1].group !== t.group) && (
+                  <div
+                    className={`px-2 pb-2 text-[10px] font-medium text-muted-foreground ${i === 0 ? "pt-1" : "pt-5"}`}
+                  >
+                    {t.group}
+                  </div>
+                )}
+                <TabsTrigger
+                  value={t.id}
+                  className="h-8 flex-none gap-2 text-[12px] transition-colors group-data-vertical/tabs:rounded-md"
+                >
+                  <HugeiconsIcon icon={t.icon} size={14} strokeWidth={1.75} />
+                  <span>{t.label}</span>
+                </TabsTrigger>
+              </Fragment>
+            ))}
+          </TabsList>
+        </aside>
+        <main className="zoom-content min-h-0 min-w-0 flex-1 overflow-auto px-4 py-6 sm:px-7">
+          <TabsContent
+            value={active}
+            className={`mx-auto w-full ${active === "history" || active === "logs" ? "max-w-240" : "max-w-160"}`}
+          >
+            {ActiveSection && <ActiveSection />}
+          </TabsContent>
+        </main>
+      </Tabs>
     </div>
   );
 }
