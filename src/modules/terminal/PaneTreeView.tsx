@@ -7,6 +7,7 @@ import type { SearchAddon } from "@xterm/addon-search";
 import { Fragment, useCallback, useEffect, type Ref } from "react";
 import { setLeafSshSession } from "@/lib/param-complete-client";
 import { SshCarapaceBadge } from "@/modules/ssh-explorer/SshCarapaceBadge";
+import { SshIntegrationBadge } from "@/modules/ssh-explorer/SshIntegrationBadge";
 import { useTerminalDropStore } from "./lib/dropStore";
 import {
   effectiveLeafSsh,
@@ -186,6 +187,11 @@ function SshLeafPane({
         onCwd={handleCwd}
       />
       <SshCarapaceBadge sessionId={sessionId} />
+      <SshIntegrationBadge
+        sessionId={sessionId}
+        leafId={leafId}
+        active={paneProps.visible && paneProps.focused}
+      />
     </div>
   );
 }

@@ -48,6 +48,9 @@ import {
 } from "./osc-handlers";
 import { openPty, type TerminalTransport, type TerminalTransportHandlers } from "./pty-bridge";
 import { RemoteShellIntegration, type SshTerminalContext } from "./remoteShellIntegration";
+import type { ShellReceipt } from "./remoteShellIntegration";
+import { restoreShellIntegration } from "./restoreShellIntegration";
+import { isUserLineDirty } from "./terminalInputState";
 import { clearLeafEnvironment, setLeafEnvironment } from "./completionInjection";
 // carapace 参数补全的 cwd 注册表（动态候选按当前目录取数据，见 param-complete-client）
 import { setLeafCwd } from "@/lib/param-complete-client";
@@ -99,6 +102,7 @@ type Session = {
   // kickPty、respawnSession 等 PTY 专属调用对 SSH 不生效。
   remote: boolean;
   remoteContext: SshTerminalContext | null;
+  restoreCancel: (() => void) | null;
   remoteIntegration: RemoteShellIntegration | null;
   remoteConsumers: {
     onCwd: (cwd: string) => void;
@@ -251,6 +255,47 @@ export function writeToSession(leafId: number, data: string): boolean {
   }
   queuePendingInput(s, data);
   return true;
+}
+
+export function getSshIntegrationContext(leafId: number): SshTerminalContext | null {
+  const s = sessions.get(leafId);
+  return s?.remote && !s.disposed ? s.remoteContext : null;
+}
+
+export function restoreSshIntegration(
+  leafId: number,
+  expectedConnectionId: string,
+  signal: AbortSignal,
+): Promise<ShellReceipt> {
+  const s = sessions.get(leafId);
+  const slot = getLiveSlotForLeaf(leafId);
+  const context = s?.remoteContext;
+  if (!s || !slot || !context || s.restoreCancel) {
+    return Promise.reject(new Error("当前终端尚未就绪或正在等待恢复回执。"));
+  }
+  const isCurrent = () => sessions.get(leafId) === s && !s.disposed && s.remote &&
+    s.visibleNow && s.focusedNow && !!s.pty && !s.shellExited &&
+    getLiveSlotForLeaf(leafId) === slot && slot.term.buffer.active.type === "normal" &&
+    !s.pendingInput && !s.inputDraft && !s.inputActive && !getPendingRiskCommand(leafId) &&
+    !isUserLineDirty(leafId) && s.remoteContext?.connectionId === expectedConnectionId;
+  if (!isCurrent()) {
+    return Promise.reject(new Error("请回到原终端，退出全屏程序并处理未提交输入，再确认空闲 Bash 提示符。"));
+  }
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) controller.abort();
+  s.restoreCancel = cancel;
+  return restoreShellIntegration({
+    term: slot.term,
+    context,
+    write: (data) => isCurrent() ? s.pty!.write(data) : false,
+    isCurrent,
+    signal: controller.signal,
+  }).finally(() => {
+    signal.removeEventListener("abort", cancel);
+    if (s.restoreCancel === cancel) s.restoreCancel = null;
+  });
 }
 
 /** Mark the next matching terminal echo as an Agent command, display-only. */
@@ -696,6 +741,7 @@ function ensureSession(
     openTransport: undefined,
     remote: false,
     remoteContext: null,
+    restoreCancel: null,
     remoteIntegration: null,
     remoteConsumers: null,
     ptyOpening: false,
@@ -800,6 +846,7 @@ async function openPtyForSession(
     const transport = await s.openTransport({
       onIntegrationContext: (context) => {
         if (s.disposed) return;
+        if (s.remoteContext?.connectionId !== context?.connectionId) s.restoreCancel?.();
         s.remoteContext = context;
         s.remoteIntegration?.setConnection(context);
       },
@@ -1219,6 +1266,7 @@ export async function leafHasForegroundProcess(
 }
 
 function retireSession(leafId: number, s: Session): void {
+  s.restoreCancel?.();
   s.disposed = true;
   cancelHiddenRelease(s);
   disposeLeafSlot(leafId);
@@ -1395,6 +1443,7 @@ export function useTerminalSession({
     if (!s) return;
     s.visibleNow = visible;
     s.focusedNow = focused;
+    if (!visible || !focused) s.restoreCancel?.();
     if (visible) {
       cancelHiddenRelease(s);
       if (s.container && !s.hasSlot) bindLeafToSlot(leafId, s);

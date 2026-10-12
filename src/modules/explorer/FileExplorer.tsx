@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { SshFileIdentity } from "@/modules/ssh-explorer/SshFileIdentity";
 import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import {
   ContextMenu,
@@ -608,6 +609,8 @@ export const FileExplorer = memo(
             <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
           </Button>
         </div>
+
+        {fsSource?.kind === "sftp" ? <SshFileIdentity sessionId={fsSource.sessionId} /> : null}
 
         {!isRemote ? (
           <ExplorerSearch

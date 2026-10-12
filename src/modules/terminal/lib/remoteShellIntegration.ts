@@ -3,15 +3,17 @@ import type { SshSessionDetail } from "@/lib/ssh-bridge";
 export type SshTerminalContext = NonNullable<SshSessionDetail["terminalContext"]>;
 export type RemoteOscGate = (code: 7 | 133 | 633, data: string) => boolean;
 
-type ShellReceipt = {
+export type ShellReceipt = {
   connectionId: string;
   shell: string;
+  user: string;
   cwd: string;
 };
 
 const CONTEXT_PREFIX = "P;TdsfContext=";
 
-function parseReceipt(data: string): ShellReceipt | null {
+export function parseShellReceipt(data: string): ShellReceipt | null {
+  if (!data.startsWith(CONTEXT_PREFIX)) return null;
   const fields = data.slice(CONTEXT_PREFIX.length).split(";");
   if (fields.length !== 4 || !/^[0-9a-f]{32}$/.test(fields[0]) ||
       !/^\d+-\d+-\d+$/.test(fields[1])) return null;
@@ -19,7 +21,7 @@ function parseReceipt(data: string): ShellReceipt | null {
     const user = decodeURIComponent(fields[2]);
     const cwd = decodeURIComponent(fields[3]);
     if (!user || !cwd.startsWith("/") || cwd.includes("\0")) return null;
-    return { connectionId: fields[0], shell: fields[1], cwd };
+    return { connectionId: fields[0], shell: fields[1], user, cwd };
   } catch {
     return null;
   }
@@ -70,7 +72,7 @@ export class RemoteShellIntegration {
   acceptFrame: RemoteOscGate = (code, data) => {
     if (this.connection?.bashHooksPath === null) return true;
     if (code === 633 && data.startsWith(CONTEXT_PREFIX)) {
-      const receipt = parseReceipt(data);
+      const receipt = parseShellReceipt(data);
       if (!this.connection) {
         this.candidate = receipt;
         this.candidateAtPrompt = false;
