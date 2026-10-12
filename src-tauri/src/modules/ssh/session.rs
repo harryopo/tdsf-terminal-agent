@@ -1467,7 +1467,7 @@ impl RemoteShellKind {
     }
 }
 
-/// 远端 bash 注入脚本: 恢复用户 .bashrc + OSC 7/133/633 钩子
+/// 远端 Bash 纯 hooks；用户 rc 与父连接文件清理由启动入口负责。
 ///
 /// 时序 (每个命令周期): `... 133;D;<exit> → OSC7 → 633;P;Cwd → 133;A → 133;B`
 /// → (用户敲命令) `633;E;<cmd>;<nonce> → 133;C` → (输出) → 下一个 precmd。
@@ -1475,8 +1475,6 @@ impl RemoteShellKind {
 /// 会被前端状态机忽略, 已发 C 未闭合的周期由 D 正常闭合。
 const BASH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH terminal integration (bash) — OSC 7 + 133 A/B/C/D + 633;E/P
 if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
-  __TDSF_OSC133_GUARD=1
-  [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
   # 健壮性②: 仅交互 shell 注入 (iTerm2/VS Code 同款检查)
   case $- in
     *i*) ;;
@@ -1484,9 +1482,13 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   esac
   # 健壮性③: dumb 终端 (编辑器内嵌/CI) 不注入
   if [ "${TERM:-}" = "dumb" ]; then return 0 2>/dev/null || exit 0; fi
-  # bash-preexec 同款: extdebug 开启时 DEBUG trap 被占用, 拒装 (仅失去 633;E)
-  __TDSF_NO_TRAP=0
-  shopt -q extdebug 2>/dev/null && __TDSF_NO_TRAP=1
+  __TDSF_OSC133_GUARD=1
+  # source 内会隐藏调用者 DEBUG；只有入口明确报告未占用才安装。
+  # 未提供该参数的 source 保守保留原 trap，仍安装 prompt/CWD hooks。
+  __TDSF_NO_TRAP=1
+  if [ "${1:-}" = "--tdsf-debug-unclaimed" ] && ! shopt -q extdebug 2>/dev/null; then
+    __TDSF_NO_TRAP=0
+  fi
   # OSC 633;E 的命令字段随后跟 nonce，分号必须转义；反斜杠也必须双写。
   # 前端 decodeOscText 与 VS Code shell integration 使用同一 \xHH/\\ 协议。
   _tdsf_escape_osc_value() {
@@ -1516,9 +1518,9 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
     printf '\033]133;A\007'
     printf '\033]133;B\007'
     __TDSF_CMD_REPORTED=0
-    trap - DEBUG
+    if [ "$__TDSF_NO_TRAP" = "0" ]; then trap - DEBUG; fi
     if [ -n "${__TDSF_ORIG_PC:-}" ]; then eval "$__TDSF_ORIG_PC"; fi
-    trap '_tdsf_preexec' DEBUG
+    if [ "$__TDSF_NO_TRAP" = "0" ]; then trap '_tdsf_preexec' DEBUG; fi
   }
   if [ "$(declare -p PROMPT_COMMAND 2>/dev/null | head -c 11)" = "declare -a" ]; then
     PROMPT_COMMAND=("_tdsf_precmd" "${PROMPT_COMMAND[@]}")
@@ -1700,11 +1702,20 @@ fn build_integration_commands(
 ) -> Result<(String, String), SshSessionError> {
     match kind {
         RemoteShellKind::Bash => {
-            // EXIT trap 清理 rcfile (交互 bash 退出时执行)。
-            // 清理行必须在 heredoc 内容里 (写入 .bash 文件本身), 不能放在
-            // 写命令层 —— 否则只存在于瞬态 exec shell, 永远不会触发。
+            // hooks 无用户 rc/EXIT 清理，子登录 source 时不重复初始化或删父文件。
+            // 文件无凭据；hooks 可供同机子用户读，只有父入口注册精确退出清理。
             let script = format!(
-                "cat > {tmp}.bash <<'TDSF_OSC7'\ntrap 'rm -f {tmp}.bash' EXIT\n{BASH_INTEGRATION_SCRIPT}TDSF_OSC7"
+                "(umask 077; set -C\n\
+                 cat > {tmp}.hooks.bash <<'TDSF_HOOKS' &&\n{BASH_INTEGRATION_SCRIPT}TDSF_HOOKS\n\
+                 chmod 0444 {tmp}.hooks.bash &&\n\
+                 cat > {tmp}.bash <<'TDSF_OSC7'\n\
+                 trap 'rm -f {tmp}.bash {tmp}.hooks.bash' EXIT\n\
+                 [ -f \"$HOME/.bashrc\" ] && source \"$HOME/.bashrc\"\n\
+                 if [ -z \"$(trap -p DEBUG)\" ]; then\n\
+                   source {tmp}.hooks.bash --tdsf-debug-unclaimed\n\
+                 else\n\
+                   source {tmp}.hooks.bash\n\
+                 fi\nTDSF_OSC7\n)"
             );
             let launch = format!("exec bash --rcfile {tmp}.bash -i");
             Ok((script, launch))
@@ -1765,6 +1776,10 @@ impl<R: tauri::Runtime> Drop for SshSession<R> {
         self.connection_closed.store(true, Ordering::Release);
     }
 }
+
+#[cfg(test)]
+#[path = "bash_integration_tests.rs"]
+mod bash_integration_tests;
 
 #[cfg(test)]
 // make_test_session 为 pub(crate), 供 tunnel.rs / mod.rs 测试复用
@@ -2122,8 +2137,10 @@ pub(crate) mod tests {
         assert!(s.contains("trap - DEBUG"), "bash 用户 PC 期间关 trap 缺失");
         // extdebug 拒装 (bash-preexec 同款)
         assert!(s.contains("extdebug"), "bash extdebug 检查缺失");
-        // ⑦ 脚本先 source 用户 rc (放 rc 末尾语义)
-        assert!(s.contains("source \"$HOME/.bashrc\""), "bash 未恢复用户 rc");
+        // ⑦ 用户 rc 只在首次启动入口恢复，纯 hooks 可重复 source。
+        let (entry, _) = build_integration_commands(RemoteShellKind::Bash, "/tmp/tdsf-test").unwrap();
+        assert!(entry.contains("source \"$HOME/.bashrc\""), "bash 启动未恢复用户 rc");
+        assert!(!s.contains("source \"$HOME/.bashrc\""), "纯 hooks 不得重复加载 rc");
         // 633;E 发送前清洗控制字符 (BEL/ESC 会截断 OSC 序列)
         assert!(s.contains("${c//$'\\a'/}"), "bash 633;E 控制字符清洗缺失");
         // 与 VS Code 633 协议一致：命令字段里的分号/反斜杠不可与 nonce 分隔符混淆。
@@ -2188,15 +2205,14 @@ pub(crate) mod tests {
 
     #[test]
     fn test_integration_cleanup_line_prepended_bash() {
-        // 清理行必须在 heredoc 内、且位于注入脚本 const 之前 ——
-        // 覆盖 const 内 early-return 路径 (非交互/TERM=dumb), 保证 trap 已注册
+        // 清理只属于父入口，必须在 source hooks 前注册，覆盖 early-return。
         let (write_cmd, launch) =
             build_integration_commands(RemoteShellKind::Bash, "/tmp/tdsf-osc7-abc123").unwrap();
         let cleanup_idx = write_cmd
-            .find("trap 'rm -f /tmp/tdsf-osc7-abc123.bash' EXIT")
+            .find("trap 'rm -f /tmp/tdsf-osc7-abc123.bash /tmp/tdsf-osc7-abc123.hooks.bash' EXIT")
             .expect("bash 清理行缺失");
         let heredoc_idx = write_cmd.find("<<'TDSF_OSC7'").unwrap();
-        let script_idx = write_cmd.find(BASH_INTEGRATION_SCRIPT).unwrap();
+        let script_idx = write_cmd.find("source /tmp/tdsf-osc7-abc123.hooks.bash").unwrap();
         assert!(
             heredoc_idx < cleanup_idx && cleanup_idx < script_idx,
             "bash 清理行必须位于 heredoc 内且先于注入脚本"
