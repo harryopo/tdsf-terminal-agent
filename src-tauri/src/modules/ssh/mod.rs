@@ -617,6 +617,7 @@ pub struct SshSessionDetail {
     pub state: SshSessionState,
     /// 建立这条连接的 webview 窗口 label (#117)；认不出出身时为 None
     pub owner_window: Option<String>,
+    pub terminal_context: Option<session::SshTerminalContext>,
 }
 
 /// 列出全部会话详情 (按 session_id 升序)
@@ -635,6 +636,7 @@ pub async fn sessions_detail(state: &SshState) -> Vec<SshSessionDetail> {
             user: s.user().to_string(),
             state: s.state(),
             owner_window: owners.get(id).cloned(),
+            terminal_context: s.terminal_context(),
         })
         .collect();
     result.sort_by_key(|d| d.session_id);

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use russh::server::{self, Msg, Session};
 use russh::*;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -41,7 +41,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use russh::server::Server as _;
 
 use tdsf_terminal_agent_lib::modules::ssh::client::{SshAuthMethod, SshClient, SshConnectParams};
-use tdsf_terminal_agent_lib::modules::ssh::session::SshSession;
+use tdsf_terminal_agent_lib::modules::ssh::session::{SshReconnectConfig, SshSession};
 use tdsf_terminal_agent_lib::modules::ssh::tunnel::{SshTunnel, TunnelKind, TunnelSpec};
 
 // === mock SSH server (基于 russh 官方 echoserver 精简) =========================
@@ -75,11 +75,14 @@ enum SubsysMode {
 struct MockSshServer {
     /// 最近一次 exec 请求的命令 (供断言)
     last_exec: Arc<Mutex<Option<String>>>,
+    /// 全部 exec 请求 (用于断言真实 PTY 注入命令)
+    exec_commands: Arc<Mutex<Vec<String>>>,
     /// 最近一次 data 请求的字节 (供断言)
     last_data: Arc<Mutex<Vec<u8>>>,
     /// sftp 子系统请求怎么回 (测试中可随时改)
     subsys_mode: Arc<Mutex<SubsysMode>>,
     connection_handles: Arc<Mutex<Vec<server::Handle>>>,
+    pty_channels: Arc<Mutex<Vec<(server::Handle, ChannelId)>>>,
     cancellations: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -204,6 +207,7 @@ impl server::Handler for MockSshHandler {
     ) -> Result<(), Self::Error> {
         let cmd = String::from_utf8_lossy(data).to_string();
         *self.server.last_exec.lock().await = Some(cmd.clone());
+        self.server.exec_commands.lock().await.push(cmd.clone());
 
         // 1. 先确认命令已接受 (客户端 channel.exec(want_reply=true) 等这个确认)
         session.channel_success(channel)?;
@@ -223,6 +227,11 @@ impl server::Handler for MockSshHandler {
         } else if cmd.starts_with("exec ") {
             // 注入 shell 启动: 保持 channel 打开, 不回 eof (交互式)
             // (open_pty 的 reader task 将在此挂起等待数据)
+            self.server
+                .pty_channels
+                .lock()
+                .await
+                .push((session.handle(), channel));
         } else {
             // 普通 exec 命令 (exec_command): 回显 + exit 0 + eof + close
             let reply = format!("mock-exec-echo: {cmd}\n").into_bytes();
@@ -255,7 +264,7 @@ impl server::Handler for MockSshHandler {
 /// 因此 server future 必须在同一个闭包内创建 (srv/socket 作为闭包局部变量),
 /// 才能满足 `tokio::spawn` 的 `'static` 约束。handle 通过 oneshot 传出。
 async fn start_server_with_known_hosts(
-) -> (u16, server::RunningServerHandle, Arc<Mutex<SubsysMode>>, Arc<Mutex<Vec<server::Handle>>>, Arc<std::sync::atomic::AtomicUsize>) {
+) -> (u16, server::RunningServerHandle, Arc<Mutex<SubsysMode>>, Arc<Mutex<Vec<server::Handle>>>, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<(server::Handle, ChannelId)>>>) {
     let private_key = russh::keys::PrivateKey::random(
         &mut rand::rng(),
         russh::keys::Algorithm::Ed25519,
@@ -298,14 +307,20 @@ async fn start_server_with_known_hosts(
     let mode_for_server = subsys_mode.clone();
     let connection_handles = Arc::new(Mutex::new(Vec::new()));
     let handles_for_server = connection_handles.clone();
+    let pty_channels = Arc::new(Mutex::new(Vec::new()));
+    let pty_channels_for_server = pty_channels.clone();
     let cancellations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let cancellations_for_server = cancellations.clone();
+    let exec_commands = Arc::new(Mutex::new(Vec::new()));
+    let exec_commands_for_server = exec_commands.clone();
     tokio::spawn(async move {
         let mut srv = MockSshServer {
             last_exec: Arc::new(Mutex::new(None)),
+            exec_commands: exec_commands_for_server,
             last_data: Arc::new(Mutex::new(Vec::new())),
             subsys_mode: mode_for_server,
             connection_handles: handles_for_server,
+            pty_channels: pty_channels_for_server,
             cancellations: cancellations_for_server,
         };
         let running = srv.run_on_socket(config, &socket);
@@ -314,7 +329,7 @@ async fn start_server_with_known_hosts(
     });
     let handle = rx.await.expect("mock server task should start");
 
-    (port, handle, subsys_mode, connection_handles, cancellations)
+    (port, handle, subsys_mode, connection_handles, cancellations, exec_commands, pty_channels)
 }
 
 // === 集成测试 ==================================================================
@@ -324,7 +339,7 @@ async fn start_server_with_known_hosts(
 #[tokio::test]
 async fn ssh_roundtrip_against_mock_server() {
     // 1. 启动 mock server + 预写 known_hosts
-    let (port, server_handle, subsys_mode, connection_handles, cancellations) = start_server_with_known_hosts().await;
+    let (port, server_handle, subsys_mode, connection_handles, cancellations, exec_commands, pty_channels) = start_server_with_known_hosts().await;
 
     // mock Tauri App (MockRuntime) 作为 AppHandle
     let app = tauri::test::mock_app();
@@ -342,6 +357,7 @@ async fn ssh_roundtrip_against_mock_server() {
     let client = SshClient::connect(app.handle().clone(), make_params("test-password"), None)
         .await
         .expect("ssh connect + auth should succeed");
+    let expected_connection_id = client.connection_id().simple().to_string();
 
     // 3. open_pty (含远端 shell 探测 + 注入 + exec) —— mock 完整支持
     let on_data = Channel::new(|_| Ok(()));
@@ -363,6 +379,40 @@ async fn ssh_roundtrip_against_mock_server() {
     .await
     .expect("open_pty should succeed");
     let session = Arc::new(session);
+
+    let context = session
+        .terminal_context()
+        .expect("connected PTY should expose its transport context");
+    assert_eq!(context.connection_id, expected_connection_id);
+    let expected_hooks_path = format!("/tmp/tdsf-osc7-{expected_connection_id}.hooks.bash");
+    assert_eq!(context.bash_hooks_path.as_deref(), Some(expected_hooks_path.as_str()));
+    let serialized_context = serde_json::to_value(&context).expect("terminal context should serialize");
+    assert_eq!(serialized_context["connectionId"], expected_connection_id);
+    assert_eq!(serialized_context["bashHooksPath"], expected_hooks_path);
+    let commands = exec_commands.lock().await;
+    assert!(
+        commands.iter().any(|cmd| cmd.contains(&format!("cat > {expected_hooks_path}"))),
+        "the exposed hooks path must match the actual remote injection command"
+    );
+    drop(commands);
+    let expected_launch_command = format!("exec bash --rcfile /tmp/tdsf-osc7-{expected_connection_id}.bash -i");
+    let launch_received = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if exec_commands.lock().await.iter().any(|cmd| cmd == &expected_launch_command) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let commands = exec_commands.lock().await;
+    assert!(launch_received, "mock server did not receive the expected first PTY launch command; got: {commands:?}");
+    assert!(
+        commands.iter().any(|cmd| cmd == &expected_launch_command),
+        "the PTY launch command must use the same connection-scoped integration path; got: {commands:?}"
+    );
+    drop(commands);
 
     // 4. exec_command: 数据回显
     let out = session
@@ -452,11 +502,43 @@ async fn ssh_roundtrip_against_mock_server() {
     assert_eq!(tunnel_a.info().bind_port, Some(18080));
     let client_b = SshClient::connect(app.handle().clone(), make_params("test-password"), None).await.unwrap();
     let owner_b = client_b.connection_id();
+    let expected_connection_id_b = owner_b.simple().to_string();
     let session_b = Arc::new(SshSession::open_pty(
         client_b, 80, 24, "xterm".to_string(), Channel::new(|_| Ok(())),
         Channel::new(|_| Ok(())), Channel::new(|_| Ok(())),
         "127.0.0.1".to_string(), port, "root".to_string(),
     ).await.unwrap());
+    let context_b = session_b
+        .terminal_context()
+        .expect("second connected PTY should expose its transport context");
+    assert_eq!(context_b.connection_id, expected_connection_id_b);
+    assert_ne!(context_b.connection_id, context.connection_id);
+    let expected_hooks_path_b = format!("/tmp/tdsf-osc7-{expected_connection_id_b}.hooks.bash");
+    assert_eq!(context_b.bash_hooks_path.as_deref(), Some(expected_hooks_path_b.as_str()));
+    let commands = exec_commands.lock().await;
+    assert!(
+        commands.iter().any(|cmd| cmd.contains(&format!("cat > {expected_hooks_path_b}"))),
+        "the second transport's exposed hooks path must match its actual injection command"
+    );
+    drop(commands);
+    let expected_launch_command_b = format!("exec bash --rcfile /tmp/tdsf-osc7-{expected_connection_id_b}.bash -i");
+    let launch_received_b = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if exec_commands.lock().await.iter().any(|cmd| cmd == &expected_launch_command_b) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let commands = exec_commands.lock().await;
+    assert!(launch_received_b, "mock server did not receive the expected second PTY launch command; got: {commands:?}");
+    assert!(
+        commands.iter().any(|cmd| cmd == &expected_launch_command_b),
+        "the second PTY launch command must use its own integration path; got: {commands:?}"
+    );
+    drop(commands);
     let handles = connection_handles.lock().await.clone();
     assert_eq!(handles.len(), 2);
     let mut forged = handles[1].channel_open_forwarded_tcpip("127.0.0.1", 18080, "127.0.0.1", 9999).await.unwrap();
@@ -478,12 +560,197 @@ async fn ssh_roundtrip_against_mock_server() {
     tunnel_b.stop().await;
     assert_eq!(cancellations.load(std::sync::atomic::Ordering::SeqCst), 2);
     session_b.close().await.unwrap();
+    assert!(session_b.terminal_context().is_none(), "closed transport must not expose stale context");
 
     // 6. close: 干净断开
     session
         .close()
         .await
         .expect("close should succeed");
+    assert!(session.terminal_context().is_none(), "closed transport must not expose stale context");
+
+    // Real reconnect regression: a reused SshSession must publish its new transport context
+    // before its final `connected` event, and must never expose the previous transport there.
+    let observed_contexts = Arc::new(std::sync::Mutex::new(Vec::<Option<String>>::new()));
+    let observed_contexts_for_status = observed_contexts.clone();
+    let session_ref: Arc<
+        std::sync::Mutex<Option<std::sync::Weak<SshSession<tauri::test::MockRuntime>>>>,
+    > = Arc::new(std::sync::Mutex::new(None));
+    let session_ref_for_status = session_ref.clone();
+    let reconnect_status = Channel::new(move |body: InvokeResponseBody| {
+        let event = match body {
+            InvokeResponseBody::Json(json) => serde_json::from_str::<serde_json::Value>(&json).ok(),
+            InvokeResponseBody::Raw(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).ok(),
+        };
+        if event.as_ref().and_then(|event| event.get("state")).and_then(serde_json::Value::as_str)
+            == Some("connected")
+        {
+            let context_id = session_ref_for_status
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .and_then(|session| session.terminal_context().map(|context| context.connection_id));
+            observed_contexts_for_status.lock().unwrap().push(context_id);
+        }
+        Ok(())
+    });
+    let reconnect_data = Channel::new(|_| Ok(()));
+    let reconnect_exit = Channel::new(|_| Ok(()));
+    let client_c = SshClient::connect(app.handle().clone(), make_params("test-password"), None)
+        .await
+        .expect("third SSH transport should authenticate");
+    let original_reconnect_id = client_c.connection_id().simple().to_string();
+    let reconnect_session = Arc::new(
+        SshSession::open_pty(
+            client_c,
+            80,
+            24,
+            "xterm".to_string(),
+            reconnect_data.clone(),
+            reconnect_status.clone(),
+            reconnect_exit.clone(),
+            "127.0.0.1".to_string(),
+            port,
+            "root".to_string(),
+        )
+        .await
+        .expect("third PTY should open"),
+    );
+    *session_ref.lock().unwrap() = Some(Arc::downgrade(&reconnect_session));
+    observed_contexts.lock().unwrap().clear();
+    let original_context = reconnect_session
+        .terminal_context()
+        .expect("initial reconnect-test PTY should have a context");
+    assert_eq!(original_context.connection_id, original_reconnect_id);
+    let expected_original_launch = format!("exec bash --rcfile /tmp/tdsf-osc7-{original_reconnect_id}.bash -i");
+    let original_pty_received = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let launch_received = exec_commands
+                .lock()
+                .await
+                .iter()
+                .any(|cmd| cmd == &expected_original_launch);
+            let pty_count = pty_channels.lock().await.len();
+            if launch_received && pty_count == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let commands = exec_commands.lock().await;
+    assert!(
+        original_pty_received,
+        "mock server did not receive the third PTY launch; commands: {commands:?}"
+    );
+    assert!(
+        commands.iter().any(|cmd| cmd == &expected_original_launch),
+        "third PTY launch command must match its original transport; commands: {commands:?}"
+    );
+    drop(commands);
+    let observed_pty_count = pty_channels.lock().await.len();
+    assert_eq!(
+        observed_pty_count, 3,
+        "mock server should have recorded the original third PTY; observed {observed_pty_count}"
+    );
+    reconnect_session
+        .enable_reconnect(SshReconnectConfig {
+            app_handle: app.handle().clone(),
+            params: make_params("test-password"),
+            cols: 80,
+            rows: 24,
+            term: "xterm".to_string(),
+            on_data: reconnect_data,
+            on_status: reconnect_status,
+            on_exit: reconnect_exit,
+            on_reconnected: None,
+        })
+        .await;
+    let reconnect_supervisor_session = reconnect_session.clone();
+    tokio::spawn(async move {
+        SshSession::reconnect_supervisor(reconnect_supervisor_session).await;
+    });
+    let server_handles = connection_handles.lock().await.clone();
+    assert_eq!(server_handles.len(), 3);
+    server_handles[2]
+        .disconnect(Disconnect::ByApplication, "force reconnect".to_string(), "en".to_string())
+        .await
+        .expect("mock server should disconnect the original transport");
+    let final_context_id = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(Some(context_id)) = observed_contexts.lock().unwrap().last().cloned() {
+                return context_id;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("auto-reconnect should report a connected transport");
+    assert_ne!(final_context_id, original_reconnect_id);
+    assert_eq!(
+        *observed_contexts.lock().unwrap(),
+        vec![Some(final_context_id.clone())],
+        "connected callbacks must not observe the old or unavailable terminal context"
+    );
+    let reconnect_context = reconnect_session
+        .terminal_context()
+        .expect("reconnected PTY should publish its new context");
+    assert_eq!(reconnect_context.connection_id, final_context_id);
+    let expected_reconnect_hooks = format!("/tmp/tdsf-osc7-{final_context_id}.hooks.bash");
+    assert_eq!(
+        reconnect_context.bash_hooks_path.as_deref(),
+        Some(expected_reconnect_hooks.as_str())
+    );
+    let commands = exec_commands.lock().await;
+    assert!(
+        commands.iter().any(|cmd| cmd.contains(&format!("cat > {expected_reconnect_hooks}"))),
+        "the reconnected context's hooks path must match its actual injection command"
+    );
+    drop(commands);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if pty_channels.lock().await.len() == 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("mock server should record the reconnected fourth PTY channel");
+    assert_eq!(pty_channels.lock().await.len(), 4);
+    let (reconnected_pty_handle, reconnected_pty_channel) = pty_channels
+        .lock()
+        .await
+        .last()
+        .cloned()
+        .expect("mock server should retain the reconnected PTY channel");
+    reconnected_pty_handle
+        .exit_status_request(reconnected_pty_channel, 0)
+        .await
+        .expect("mock server should send a normal shell exit status");
+    reconnected_pty_handle
+        .eof(reconnected_pty_channel)
+        .await
+        .expect("mock server should send PTY EOF");
+    reconnected_pty_handle
+        .close(reconnected_pty_channel)
+        .await
+        .expect("mock server should close the reconnected PTY channel");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while reconnect_session.terminal_context().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("reader should clear terminal context after the server closes the PTY");
+    assert!(
+        reconnect_session.terminal_context().is_none(),
+        "server-side normal PTY exit must invalidate the reconnected context"
+    );
+    reconnect_session.close().await.expect("reconnect test session should close");
+    assert!(reconnect_session.terminal_context().is_none());
 
     // 7. 认证失败路径: 错误密码 → AuthFailed
     //    (SshClient 未实现 Debug, 不能用 expect_err; 用 .err() + unwrap 断言)

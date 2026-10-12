@@ -353,6 +353,16 @@ fn reconnect_backoff_delay(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// 当前连接的只读终端集成资料，不代表认证或派发权限。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTerminalContext {
+    pub connection_id: String,
+    pub bash_hooks_path: Option<String>,
+}
+
+type TerminalContextState = Arc<std::sync::RwLock<Option<SshTerminalContext>>>;
+
 /// SSH PTY 会话
 ///
 /// 持有 russh Channel 的写半部 + 状态信息。
@@ -372,6 +382,9 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
 
     /// 当前状态 (原子读,无需锁)
     state: Arc<std::sync::RwLock<SshSessionState>>,
+
+    /// 随 reader 失效，重连时换成新 reader 的快照；不争用 exec 的 handle 锁。
+    terminal_context: std::sync::RwLock<TerminalContextState>,
 
     /// PTY channel 是否已退出 (原子标志,reader task 设置)
     ///
@@ -431,6 +444,22 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
 }
 
 impl<R: tauri::Runtime> SshSession<R> {
+    /// 只读关联元信息，不代表认证或恢复派发权限。
+    pub fn terminal_context(&self) -> Option<SshTerminalContext> {
+        if self.state() != SshSessionState::Connected
+            || self.connection_closed.load(Ordering::Acquire)
+            || self.user_closed.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let current = self
+            .terminal_context
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let context = current.read().unwrap_or_else(|e| e.into_inner());
+        context.clone()
+    }
+
     /// 打开 PTY 会话
     ///
     /// 流程:
@@ -460,6 +489,7 @@ impl<R: tauri::Runtime> SshSession<R> {
     ) -> Result<Self, SshSessionError> {
         // 1. 获取 Handle
         let handle = client.handle_ref();
+        let connection_id = client.connection_id().simple().to_string();
 
         // 从 handler 提取 host/port/user (用于状态事件)
         // 注意: Handle 内部的 handler 不可直接访问,我们通过参数传递
@@ -475,9 +505,13 @@ impl<R: tauri::Runtime> SshSession<R> {
         //    注入 shell, 让远端 shell 在命令间隙自动发 OSC 7, 前端输入原样透传。
         //    任何一步失败都降级为 request_shell (仅失去 cwd 同步, 绝不篡改输入)。
         let mut launch_cmd: Option<String> = None;
+        let mut bash_hooks_path = None;
         match probe_remote_shell(handle).await {
-            Ok(kind) => match write_shell_integration(handle, kind).await {
+            Ok(kind) => match write_shell_integration(handle, kind, &connection_id).await {
                 Ok(cmd) => {
+                    if matches!(kind, RemoteShellKind::Bash) {
+                        bash_hooks_path = Some(format!("/tmp/tdsf-osc7-{connection_id}.hooks.bash"));
+                    }
                     log::info!("[ssh] shell integration ready: {cmd}");
                     launch_cmd = Some(cmd);
                 }
@@ -550,6 +584,11 @@ impl<R: tauri::Runtime> SshSession<R> {
         let on_exit_clone = on_exit.clone();
         let exited_notify = Arc::new(Mutex::new(Arc::new(tokio::sync::Notify::new())));
         let notify_for_reader = exited_notify.lock().await.clone();
+        let terminal_context = Arc::new(std::sync::RwLock::new(Some(SshTerminalContext {
+            connection_id,
+            bash_hooks_path,
+        })));
+        let context_for_reader = terminal_context.clone();
 
         tokio::spawn(async move {
             Self::reader_task(
@@ -559,6 +598,7 @@ impl<R: tauri::Runtime> SshSession<R> {
                 exited_clone,
                 received_exit_clone,
                 notify_for_reader,
+                context_for_reader,
             )
             .await;
         });
@@ -570,6 +610,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             handle: Arc::new(Mutex::new(Some(client))),
             channel_write: Arc::new(Mutex::new(Some(channel_write))),
             state: Arc::new(std::sync::RwLock::new(SshSessionState::Connected)),
+            terminal_context: std::sync::RwLock::new(terminal_context),
             exited,
             // TDSF (#20): 连接刚建立,未关闭
             connection_closed: Arc::new(AtomicBool::new(false)),
@@ -596,6 +637,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         exited: Arc<AtomicBool>,
         received_exit: Arc<AtomicBool>,
         exited_notify: Arc<tokio::sync::Notify>,
+        terminal_context: TerminalContextState,
     ) {
         log::info!("[ssh] reader task started");
         let mut exit_code: Option<i32> = None;
@@ -659,6 +701,9 @@ impl<R: tauri::Runtime> SshSession<R> {
                 }
             }
         }
+
+        // 先失效本 reader 的资料，旧 reader 不持有重连后的快照。
+        *terminal_context.write().unwrap_or_else(|e| e.into_inner()) = None;
 
         // 推送 exit code
         let code = exit_code.unwrap_or(-1);
@@ -943,7 +988,8 @@ impl<R: tauri::Runtime> SshSession<R> {
             config.rows,
             config.term.clone(),
             config.on_data.clone(),
-            config.on_status.clone(),
+            // 临时会话不能在资源交接前对外广播 connected。
+            Channel::new(|_| Ok(())),
             config.on_exit.clone(),
             // 重连也用真实参数 (2026-08-18 与首次连接一致)
             config.params.host.clone(),
@@ -977,6 +1023,14 @@ impl<R: tauri::Runtime> SshSession<R> {
         *self.handle.lock().await = new_session.handle.lock().await.take();
         *self.exited_notify.lock().await = new_session.exited_notify.lock().await.clone();
         *self.received_exit.lock().await = new_session.received_exit.lock().await.clone();
+        *self
+            .terminal_context
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = new_session
+            .terminal_context
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         // 3.4 重置标志 (新 reader task 已 spawn)
         self.exited.store(false, Ordering::Release);
@@ -1489,6 +1543,22 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   if [ "${1:-}" = "--tdsf-debug-unclaimed" ] && ! shopt -q extdebug 2>/dev/null; then
     __TDSF_NO_TRAP=0
   fi
+  __TDSF_CONNECTION_CONTEXT="${BASH_SOURCE[0]##*/}"
+  __TDSF_CONNECTION_CONTEXT="${__TDSF_CONNECTION_CONTEXT#tdsf-osc7-}"
+  __TDSF_CONNECTION_CONTEXT="${__TDSF_CONNECTION_CONTEXT%.hooks.bash}"
+  __TDSF_SHELL_INSTANCE="${BASHPID:-$$}-$RANDOM-$RANDOM"
+  # 按 UTF-8 字节编码，分号、控制字符和百分号不能破坏 OSC 字段。
+  _tdsf_uri_encode() {
+    local LC_ALL=C v="$1" c i
+    for ((i=0; i<${#v}; i++)); do
+      c="${v:i:1}"
+      case "$c" in
+        [a-zA-Z0-9/._~-]) printf '%s' "$c" ;;
+        *) printf '%%%02X' "'$c" ;;
+      esac
+    done
+  }
+  __TDSF_REPORT_USER="$(_tdsf_uri_encode "$(id -un)")"
   # OSC 633;E 的命令字段随后跟 nonce，分号必须转义；反斜杠也必须双写。
   # 前端 decodeOscText 与 VS Code shell integration 使用同一 \xHH/\\ 协议。
   _tdsf_escape_osc_value() {
@@ -1512,9 +1582,16 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   # 再保序执行用户原 PROMPT_COMMAND (健壮性④: 包装式 prepend, 用户钩子不丢)
   _tdsf_precmd() {
     local ec=$?
+    # 哨兵保留目录名尾部的换行，只去掉 pwd 自己输出的一个换行。
+    local cwd="$(pwd -P; printf '.')"
+    cwd="${cwd%.}"
+    cwd="${cwd%$'\n'}"
+    printf '\033]633;P;TdsfContext=%s;%s;%s;%s\007' \
+      "$__TDSF_CONNECTION_CONTEXT" "$__TDSF_SHELL_INSTANCE" \
+      "$__TDSF_REPORT_USER" "$(_tdsf_uri_encode "$cwd")"
     printf '\033]133;D;%s\007' "$ec"
-    printf '\033]7;file://localhost%s\007' "$(pwd -P)"
-    printf '\033]633;P;Cwd=%s\007' "$(pwd -P)"
+    printf '\033]7;file://localhost%s\007' "$cwd"
+    printf '\033]633;P;Cwd=%s\007' "$cwd"
     printf '\033]133;A\007'
     printf '\033]133;B\007'
     __TDSF_CMD_REPORTED=0
@@ -1677,10 +1754,9 @@ async fn probe_remote_shell<R: tauri::Runtime>(
 async fn write_shell_integration<R: tauri::Runtime>(
     handle: &Handle<SshClientHandler<R>>,
     kind: RemoteShellKind,
+    connection_id: &str,
 ) -> Result<String, SshSessionError> {
-    // uuid simple (32 hex 无连字符), 避免并发连接共享同名临时文件
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let tmp = format!("/tmp/tdsf-osc7-{id}");
+    let tmp = format!("/tmp/tdsf-osc7-{connection_id}");
 
     let (write_cmd, launch_cmd) = build_integration_commands(kind, &tmp)?;
 
@@ -1865,6 +1941,7 @@ pub(crate) mod tests {
             } else {
                 SshSessionState::Connected
             })),
+            terminal_context: std::sync::RwLock::new(Arc::new(std::sync::RwLock::new(None))),
             exited: Arc::new(AtomicBool::new(exited)),
             connection_closed: Arc::new(AtomicBool::new(connection_closed)),
             user_closed: Arc::new(AtomicBool::new(connection_closed)),
@@ -1896,6 +1973,30 @@ pub(crate) mod tests {
     }
 
     // === P3 #20 自动重连测试 ====================================================
+
+    #[tokio::test]
+    async fn terminal_context_uses_a_short_snapshot_and_hides_unusable_connections() {
+        let session = make_test_session::<tauri::test::MockRuntime>(false, false);
+        let snapshot = session.terminal_context.read().unwrap().clone();
+        *snapshot.write().unwrap() = Some(SshTerminalContext {
+            connection_id: "current-connection".to_string(),
+            bash_hooks_path: None,
+        });
+        let _held_exec_lock = session.handle.lock().await;
+        assert_eq!(
+            session.terminal_context().unwrap().connection_id,
+            "current-connection"
+        );
+        assert!(session.terminal_context().unwrap().bash_hooks_path.is_none());
+        *session.state.write().unwrap() = SshSessionState::Reconnecting;
+        assert!(session.terminal_context().is_none());
+        *session.state.write().unwrap() = SshSessionState::Connected;
+        session.user_closed.store(true, Ordering::Release);
+        assert!(session.terminal_context().is_none());
+        session.user_closed.store(false, Ordering::Release);
+        session.connection_closed.store(true, Ordering::Release);
+        assert!(session.terminal_context().is_none());
+    }
 
     #[test]
     fn test_reconnect_backoff_delay_progression() {

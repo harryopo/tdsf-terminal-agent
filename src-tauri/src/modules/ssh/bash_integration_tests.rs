@@ -112,6 +112,53 @@ fn shell_file(base: &str, suffix: &str) -> String {
     format!("{base}.{suffix}")
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ContextReceipt {
+    connection: String,
+    shell: String,
+    user: String,
+    cwd: String,
+}
+
+fn decode_uri_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            assert!(
+                index + 2 < bytes.len(),
+                "incomplete URI percent escape: {value:?}"
+            );
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).expect("ASCII percent hex");
+            let byte = u8::from_str_radix(hex, 16).expect("valid URI percent escape");
+            decoded.push(byte);
+            index += 3;
+            continue;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).expect("URI component should decode as UTF-8")
+}
+
+fn context_receipts(output: &[u8]) -> Vec<ContextReceipt> {
+    let text = String::from_utf8_lossy(output);
+    let prefix = "\u{1b}]633;P;TdsfContext=";
+    text.split(prefix)
+        .skip(1)
+        .filter_map(|frame| {
+            let fields = frame.split_once('\u{7}')?.0.split(';').collect::<Vec<_>>();
+            (fields.len() == 4).then(|| ContextReceipt {
+                connection: fields[0].to_owned(),
+                shell: fields[1].to_owned(),
+                user: decode_uri_component(fields[2]),
+                cwd: decode_uri_component(fields[3]),
+            })
+        })
+        .collect()
+}
+
 #[test]
 fn builder_writes_hooks_as_a_separate_sourceable_file() {
     let dir = tempfile::tempdir().expect("temporary HOME");
@@ -436,4 +483,139 @@ fn child_source_and_exit_preserves_parent_files_then_parent_exit_removes_only_th
     assert!(!Path::new(&entry).exists(), "parent EXIT left startup file");
     assert!(!Path::new(&hooks).exists(), "parent EXIT left hooks file");
     assert!(sibling.exists(), "cleanup removed a neighboring file");
+}
+
+#[test]
+fn context_receipt_is_stable_and_uri_decodes_user_and_special_cwd() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    let special_component = if cfg!(windows) {
+        "目录%分号;换行"
+    } else {
+        "目录%分号;换行\n反斜杠\\目录\n"
+    };
+    let special_dir = dir.path().join(special_component);
+    std::fs::create_dir(&special_dir).expect("create special working directory");
+    let user_file = dir.path().join("receipt-user");
+    let cwd_file = dir.path().join("receipt-cwd");
+    let special_dir = if cfg!(windows) {
+        shell_path(&special_dir)
+    } else {
+        special_dir.to_string_lossy().into_owned()
+    };
+    let user_file = shell_path(&user_file);
+    let cwd_file = shell_path(&cwd_file);
+
+    let output = run_interactive(
+        &launch_cmd,
+        &dir,
+        &format!(
+            "cd '{special_dir}'\nprintf '%s' \"$(id -un)\" > '{user_file}'\npwd -P > '{cwd_file}'; printf X >> '{cwd_file}'\nexit\n"
+        ),
+    );
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let receipts = context_receipts(&output.stdout);
+    assert!(
+        !receipts.is_empty(),
+        "missing TdsfContext receipt: {:?}",
+        output.stdout
+    );
+    let output_text = String::from_utf8_lossy(&output.stdout);
+    let receipt_position = output_text
+        .find("\u{1b}]633;P;TdsfContext=")
+        .expect("first context receipt");
+    let done_position = output_text
+        .find("\u{1b}]133;D;")
+        .expect("first command completion marker");
+    assert!(
+        receipt_position < done_position,
+        "context receipt must precede the first command completion marker"
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.connection == "tdsf-test"),
+        "connection context changed within one Bash instance: {receipts:?}"
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.shell == receipts[0].shell),
+        "shell instance changed within one Bash instance: {receipts:?}"
+    );
+    let expected_user = std::fs::read_to_string(user_file).expect("Bash user");
+    let expected_cwd = std::fs::read_to_string(cwd_file)
+        .expect("physical Bash cwd")
+        .strip_suffix("\nX")
+        .expect("cwd sentinel")
+        .to_owned();
+    assert!(
+        receipts
+            .iter()
+            .any(|receipt| receipt.user == expected_user && receipt.cwd == expected_cwd),
+        "decoded receipt did not preserve user and special cwd {expected_cwd:?}: {receipts:?}"
+    );
+}
+
+#[test]
+fn uri_encoder_preserves_newline_and_backslash_as_encoded_bytes() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (base, _, launch_cmd) = create_files(&dir);
+    let output = run_interactive(
+        &launch_cmd,
+        &dir,
+        &format!(
+            r#"source "{base}.hooks.bash" || exit 93
+value=$'line\nback\\slash'
+printf 'ENCODED=%s\n' "$(_tdsf_uri_encode "$value")"
+exit 0
+"#
+        ),
+    );
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("ENCODED=line%0Aback%5Cslash"),
+        "newline or backslash was not percent-encoded: {:?}",
+        output.stdout
+    );
+}
+
+#[test]
+fn interactive_child_gets_its_own_context_and_parent_receipt_returns_after_exit() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (base, _, launch_cmd) = create_files(&dir);
+    let hooks = shell_file(&base, "hooks.bash");
+    let output = run_interactive(
+        &launch_cmd,
+        &dir,
+        &format!(
+            "bash --noprofile --norc -i -c 'source \"{hooks}\" || exit 93; _tdsf_precmd; exit 0'\nprintf parent-returned\nexit\n"
+        ),
+    );
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let receipts = context_receipts(&output.stdout);
+    assert!(
+        receipts.len() >= 3,
+        "missing parent/child receipts: {receipts:?}"
+    );
+    let parent_shell = &receipts[0].shell;
+    let child_index = receipts
+        .iter()
+        .position(|receipt| receipt.shell != *parent_shell)
+        .expect("interactive child should have a distinct shell instance");
+    assert!(
+        receipts[child_index + 1..]
+            .iter()
+            .any(|receipt| receipt.shell == *parent_shell),
+        "parent shell identity did not resume after child exit: {receipts:?}"
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.connection == "tdsf-test"),
+        "connection identity changed across nested shells: {receipts:?}"
+    );
 }
