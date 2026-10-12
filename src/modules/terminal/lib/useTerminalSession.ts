@@ -963,9 +963,8 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           },
         ];
       }
-      // Remote shells may lack OSC 133 markers, so this branch still has no
-      // in-command guard. Preserve their POSIX paths independently of the
-      // client's OS; path style does not authenticate the reporting host.
+      // POSIX paths do not authenticate the source. Marked remote shells share
+      // the command-output guard; unmarked shells retain the legacy fallback.
       const disposers: (() => void)[] = [disposeBlockHandlers, disposeOutputHighlight];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
@@ -991,6 +990,11 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         );
         disposers.push(cwd);
       } else {
+        const shellState = createShellIntegrationState();
+        const prompt = registerPromptTracker(term, shellState, (running) =>
+          onLeafCommandState(leafId, running),
+        );
+        disposers.push(prompt.dispose);
         const cwd = registerCwdHandler(
           term,
           (next) => {
@@ -1002,7 +1006,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             setLeafCwd(leafId, next);
             s.callbacks.onCwd?.(next);
           },
-          undefined,
+          shellState,
           "posix",
         );
         disposers.push(cwd);

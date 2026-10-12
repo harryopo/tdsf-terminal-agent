@@ -152,7 +152,7 @@ export class TerminalBlockCollector {
       case "P": {
         // P;<Property>=<Value> — 目前只消费 Cwd（633;P;Cwd 与 OSC 7 等价）
         const eq = args.indexOf("=");
-        if (eq > 0 && args.slice(0, eq) === "Cwd") {
+        if (eq > 0 && args.slice(0, eq) === "Cwd" && !this.pending?.execStarted) {
           this.setCwd(decodeOscText(args.slice(eq + 1)));
         }
         break;

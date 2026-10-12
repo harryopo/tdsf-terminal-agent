@@ -4,9 +4,9 @@ import type { IMarker, Terminal } from "@xterm/xterm";
 const MAX_OSC52_CLIPBOARD_BYTES = 1024 * 1024;
 
 /**
- * Cross-handler state shared between the OSC 7 cwd handler and the OSC 133
+ * Cross-handler state shared between the OSC 7 cwd handler and the OSC 133/633
  * prompt-marker handler. Tracks whether we are currently inside a running
- * command (between OSC 133 B and the next OSC 133 D / A), so the cwd handler
+ * command (between B and the next D / A), so the cwd handler
  * can ignore OSC 7 updates emitted by command output. Only OSC 7 issued by
  * the local shell between commands should be honored.
  */
@@ -47,7 +47,7 @@ export function registerPromptTracker(
   onCommandState?: (running: boolean) => void,
 ): PromptTracker {
   let marker: IMarker | null = null;
-  const d = term.parser.registerOscHandler(133, (data) => {
+  const updatePrompt = (data: string) => {
     // OSC 133 A: start of a new prompt (between commands).
     if (data.startsWith("A")) {
       if (state) state.inCommand = false;
@@ -66,14 +66,23 @@ export function registerPromptTracker(
       if (state) state.inCommand = false;
       onCommandState?.(false);
     }
+  };
+  const d = term.parser.registerOscHandler(133, (data) => {
+    updatePrompt(data);
     // 必须放行：xterm 的 OSC handler 是"后注册的先调用，谁先返回 true 就到此为止"，
     // 拦下来会让先注册的块收集器收不到 133 ⇒ 本地终端一条块都产不出来（#130 真机）。
+    return false;
+  });
+  const d633 = term.parser.registerOscHandler(633, (data) => {
+    if (data.startsWith("E;")) updatePrompt("C");
+    else if (/^[ABCD](?:;|$)/.test(data)) updatePrompt(data);
     return false;
   });
   return {
     getMarker: () => (marker && !marker.isDisposed ? marker : null),
     dispose: () => {
       d.dispose();
+      d633.dispose();
       marker?.dispose();
       marker = null;
     },

@@ -103,7 +103,7 @@ describe("terminal session cwd path-style wiring", () => {
     expect(remoteCalls).toHaveLength(1);
     expect(remoteCalls[0].arguments).toHaveLength(4);
     expect(remoteCalls[0].arguments[2].kind).toBe(ts.SyntaxKind.Identifier);
-    expect(remoteCalls[0].arguments[2].getText(source)).toBe("undefined");
+    expect(remoteCalls[0].arguments[2].getText(source)).toBe("shellState");
     expect(remoteCalls[0].arguments[3].kind).toBe(
       ts.SyntaxKind.StringLiteral,
     );
