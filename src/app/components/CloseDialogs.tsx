@@ -28,17 +28,14 @@ type Props = {
 };
 
 function appCloseMessage(blocker: AppCloseBlocker): string {
-  const dirty =
-    blocker.dirtyEditors === 1
-      ? "1 file has unsaved changes"
-      : `${blocker.dirtyEditors} files have unsaved changes`;
+  const dirty = `${blocker.dirtyEditors} 个文件有未保存的更改`;
   if (blocker.dirtyEditors > 0 && blocker.busyTerminal) {
-    return `A process is still running and ${dirty}. Quitting will terminate it and discard the changes.`;
+    return `终端中仍有进程运行，且${dirty}。退出将终止进程并放弃这些更改。`;
   }
   if (blocker.dirtyEditors > 0) {
-    return `${dirty.charAt(0).toUpperCase()}${dirty.slice(1)}. Quitting will discard them.`;
+    return `${dirty}。退出将放弃这些更改。`;
   }
-  return "A process is still running in a terminal. Quitting will terminate it.";
+  return "终端中仍有进程运行。退出将终止该进程。";
 }
 
 /** Confirmation dialogs for closing dirty editors and terminals with live processes. */
@@ -65,21 +62,21 @@ export function CloseDialogs({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
+            <AlertDialogTitle>有未保存的更改</AlertDialogTitle>
             <AlertDialogDescription>
               {tabs.find((t) => t.id === pendingCloseTab)?.title
-                ? `"${
+                ? `“${
                     tabs.find((t) => t.id === pendingCloseTab)?.title
-                  }" has unsaved changes. Close anyway?`
-                : "This file has unsaved changes. Close anyway?"}
+                  }”有未保存的更改。关闭将放弃这些更改，仍要关闭吗？`
+                : "此文件有未保存的更改。关闭将放弃这些更改，仍要关闭吗？"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={onCancelClose}>
-              Cancel
+              取消
             </AlertDialogCancel>
             <AlertDialogAction onClick={onConfirmClose}>
-              Close Anyway
+              放弃更改并关闭
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -91,17 +88,17 @@ export function CloseDialogs({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Close Terminal?</AlertDialogTitle>
+            <AlertDialogTitle>关闭终端？</AlertDialogTitle>
             <AlertDialogDescription>
-              A process is running. Closing this tab will terminate it.
+              终端中仍有进程运行。关闭此标签页将终止该进程。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={onCancelTerminalClose}>
-              Cancel
+              取消
             </AlertDialogCancel>
             <AlertDialogAction onClick={onConfirmTerminalClose}>
-              Close Anyway
+              仍然关闭
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -113,7 +110,7 @@ export function CloseDialogs({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
+            <AlertDialogTitle>有未保存的更改</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingDeleteTabs?.length === 1
                 ? (() => {
@@ -121,18 +118,18 @@ export function CloseDialogs({
                       (t) => t.id === pendingDeleteTabs[0],
                     )?.title;
                     return title
-                      ? `"${title}" has unsaved changes. The file has been deleted. Close anyway?`
-                      : "This file has unsaved changes. The file has been deleted. Close anyway?";
+                      ? `“${title}”有未保存的更改，原文件已被删除。仍要放弃更改并关闭吗？`
+                      : "此文件有未保存的更改，原文件已被删除。仍要放弃更改并关闭吗？";
                   })()
-                : `${pendingDeleteTabs?.length ?? 0} files have unsaved changes. They have been deleted. Close all anyway?`}
+                : `${pendingDeleteTabs?.length ?? 0} 个文件有未保存的更改，原文件已被删除。仍要放弃更改并全部关闭吗？`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={onCancelDeleteClose}>
-              Cancel
+              取消
             </AlertDialogCancel>
             <AlertDialogAction onClick={onConfirmDeleteClose}>
-              Close Anyway
+              放弃更改并关闭
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -144,17 +141,17 @@ export function CloseDialogs({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Quit TDSF?</AlertDialogTitle>
+            <AlertDialogTitle>退出 TDSF？</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingAppClose ? appCloseMessage(pendingAppClose) : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={onCancelAppClose}>
-              Cancel
+              取消
             </AlertDialogCancel>
             <AlertDialogAction onClick={onConfirmAppClose}>
-              Quit Anyway
+              仍然退出
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
