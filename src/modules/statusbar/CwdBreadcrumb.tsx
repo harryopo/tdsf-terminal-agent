@@ -54,7 +54,7 @@ export function CwdBreadcrumb({ cwd, filePath, home, onCd }: Props) {
     const middle = segments.slice(1);
     return (
       <Breadcrumb>
-        <BreadcrumbList className="gap-1 text-xs sm:gap-1.5">
+        <BreadcrumbList className="gap-1 py-0.5 text-xs sm:gap-1.5">
           {first ? (
             <BreadcrumbSegment
               label={first.label}
@@ -96,7 +96,7 @@ export function CwdBreadcrumb({ cwd, filePath, home, onCd }: Props) {
   const middleParents = parents.slice(1);
   return (
     <Breadcrumb>
-      <BreadcrumbList className="gap-1 text-xs sm:gap-1.5">
+      <BreadcrumbList className="gap-1 py-0.5 text-xs sm:gap-1.5">
         {firstParent ? (
           <BreadcrumbSegment
             label={firstParent.label}
@@ -141,7 +141,12 @@ function BreadcrumbSegment({
     <>
       <BreadcrumbItem>
         <BreadcrumbLink asChild>
-          <button type="button" onClick={onClick} className="cursor-pointer">
+          <button
+            type="button"
+            onClick={onClick}
+            aria-label={isHome ? "家目录" : label === "/" ? "根目录 /" : label}
+            className="relative flex min-h-6 min-w-6 cursor-pointer items-center justify-center rounded-sm after:absolute after:-inset-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <Badge
               variant="outline"
               className="gap-1 text-muted-foreground hover:text-foreground"
@@ -199,7 +204,12 @@ function CurrentSegmentDropdown({
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <BreadcrumbPage className="flex cursor-pointer items-center gap-1 rounded-sm px-1 py-0.5 text-foreground hover:bg-accent">
+        <button
+          type="button"
+          aria-current="page"
+          aria-label={`浏览子目录：${path}`}
+          className="relative flex min-h-6 min-w-6 cursor-pointer items-center gap-1 rounded-sm px-1 py-0.5 text-foreground hover:bg-accent after:absolute after:-inset-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {label === "~" ? (
             <>
               <HugeiconsIcon
@@ -217,7 +227,7 @@ function CurrentSegmentDropdown({
             className="size-3 opacity-70"
             strokeWidth={2}
           />
-        </BreadcrumbPage>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
         {children === null ? (
@@ -264,8 +274,9 @@ function CollapsedSegments({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              title="Show hidden folders"
-              className="flex items-center rounded-sm px-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="显示隐藏目录"
+              aria-label="显示隐藏目录"
+              className="relative flex min-h-6 min-w-6 items-center justify-center rounded-sm px-1 text-muted-foreground hover:bg-accent hover:text-foreground after:absolute after:-inset-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <HugeiconsIcon
                 icon={MoreHorizontalIcon}
