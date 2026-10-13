@@ -23,6 +23,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  type CSSProperties,
   forwardRef,
   memo,
   useCallback,
@@ -219,6 +220,8 @@ export const FileExplorer = memo(
       source: fsSource,
     });
     const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
+    const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
+    const rowHeight = Math.max(ROW_HEIGHT, Math.ceil(ROW_HEIGHT / zoomLevel));
     const { lookup: lookupGitStatus } = useGitStatus(
       isRemote ? null : rootPath,
       gitDecorations && !isRemote ? gitStatus : null,
@@ -344,7 +347,7 @@ export const FileExplorer = memo(
     const virtualizer = useVirtualizer({
       count: rows.length,
       getScrollElement: () => scrollRef.current,
-      estimateSize: () => ROW_HEIGHT,
+      estimateSize: () => rowHeight,
       overscan: OVERSCAN,
       getItemKey: (index) => rows[index]?.key ?? index,
     });
@@ -549,11 +552,15 @@ export const FileExplorer = memo(
       <div
         ref={containerRef}
         className="flex h-full flex-col outline-none"
+        style={{ "--explorer-control-size": `${rowHeight}px` } as CSSProperties}
         onKeyDown={handleKeyDown}
       >
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+        <div
+          className="flex min-h-8 shrink-0 flex-wrap items-center gap-1 border-b border-border/60 px-2"
+          style={{ minHeight: rowHeight + 8 }}
+        >
           <span
-            className="flex flex-1 items-center truncate text-xs font-medium text-foreground/80"
+            className="flex min-w-0 flex-1 items-center truncate text-xs font-medium text-foreground/80"
             title={rootPath ?? undefined}
             data-root-path={rootPath ?? ""}
             data-is-remote={String(isRemote)}
@@ -572,7 +579,7 @@ export const FileExplorer = memo(
             <Button
               variant="ghost"
               size="icon"
-              className="size-6 text-muted-foreground hover:text-foreground"
+              className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
               onClick={() => setIsSearchOpen((v) => !v)}
               title="Search files"
               aria-label="Search files"
@@ -584,7 +591,7 @@ export const FileExplorer = memo(
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
             onClick={() => rootPath && tree.beginCreate(rootPath, "file")}
             title="New file"
           >
@@ -593,7 +600,7 @@ export const FileExplorer = memo(
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
             onClick={() => rootPath && tree.beginCreate(rootPath, "dir")}
             title="New folder"
           >
@@ -602,7 +609,7 @@ export const FileExplorer = memo(
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
             onClick={() => rootPath && tree.refresh(rootPath)}
             title="Refresh"
           >
@@ -667,7 +674,7 @@ export const FileExplorer = memo(
                 ) : null}
                 {pendingAtRoot ? (
                   <div
-                    className="flex h-6 w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
+                    className="flex h-[var(--explorer-control-size)] w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
                     style={{ paddingLeft: 6 }}
                   >
                     <span className="size-3.5 shrink-0" />
