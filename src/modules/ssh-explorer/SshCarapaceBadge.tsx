@@ -53,6 +53,8 @@ export function SshCarapaceBadge({ sessionId }: Props) {
   );
   const carapaceState = useSshStore((s) => s.remoteCarapaceBySession[sessionId]);
   const promptEnabled = usePreferencesStore((s) => s.sshRemoteCarapacePrompt);
+  const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
+  const badgeSize = Math.max(24, Math.ceil(24 / zoomLevel));
 
   const [open, setOpen] = useState(false);
   const [stage, setStage] = useState<CarapaceInstallStage | 'error' | null>(null);
@@ -93,11 +95,14 @@ export function SshCarapaceBadge({ sessionId }: Props) {
         <button
           type="button"
           title="启用远端动态补全"
-          className="absolute bottom-2 right-2 z-10 grid size-6 place-items-center rounded-full border border-border/50 bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-accent hover:text-foreground"
+          style={{ width: badgeSize, height: badgeSize }}
+          className="group absolute bottom-2 right-2 z-10 grid place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <HugeiconsIcon icon={SparklesIcon} size={13} strokeWidth={2} />
+          <span className="grid size-full place-items-center rounded-full border border-border/50 bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors group-hover:bg-accent group-hover:text-foreground">
+            <HugeiconsIcon icon={SparklesIcon} size={13} strokeWidth={2} />
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent

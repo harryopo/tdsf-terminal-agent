@@ -4,6 +4,7 @@ import { Refresh01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { getSshIntegrationContext, restoreSshIntegration } from "@/modules/terminal/lib/useTerminalSession";
 import type { ShellReceipt } from "@/modules/terminal/lib/remoteShellIntegration";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useSshStore } from "./sshStore";
 
 export function SshIntegrationBadge({ leafId, sessionId, active }: {
@@ -12,6 +13,8 @@ export function SshIntegrationBadge({ leafId, sessionId, active }: {
   active: boolean;
 }) {
   const session = useSshStore((s) => s.sessions.find((item) => item.id === sessionId));
+  const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
+  const badgeSize = Math.max(24, Math.ceil(24 / zoomLevel));
   const [open, setOpen] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -66,9 +69,12 @@ export function SshIntegrationBadge({ leafId, sessionId, active }: {
     <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <button type="button" title="终端集成" aria-label="终端集成"
-          className="absolute bottom-2 right-10 z-10 grid size-6 place-items-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          style={{ width: badgeSize, height: badgeSize, right: badgeSize + 16 }}
+          className="group absolute bottom-2 z-10 grid place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onMouseDown={(event) => event.stopPropagation()}>
-          <HugeiconsIcon icon={Refresh01Icon} size={13} strokeWidth={1.75} />
+          <span className="grid size-full place-items-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors group-hover:bg-accent group-hover:text-foreground">
+            <HugeiconsIcon icon={Refresh01Icon} size={13} strokeWidth={1.75} />
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-[min(360px,calc(100vw-24px))] gap-3 rounded-2xl p-4 text-xs motion-reduce:animate-none">
