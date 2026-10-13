@@ -28,6 +28,7 @@ import {
   useAgentActivityStore,
 } from "@/modules/terminal";
 import {
+  ArrowDown01Icon,
   Cancel01Icon,
   CheckmarkCircle01Icon,
   Clock01Icon,
@@ -49,7 +50,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { labelFor } from "./lib/tabLabel";
+import { isStartTab, labelFor } from "./lib/tabLabel";
 import type { EditorTab, Tab } from "./lib/useTabs";
 import { NewTabMenu } from "./NewTabMenu";
 
@@ -90,12 +91,15 @@ export function TabBar({
   compact,
   hasWorkspace,
 }: Props) {
+  const barRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropGap, setDropGap] = useState<number | null>(null);
   const [showAllLanguages, setShowAllLanguages] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const drag = useRef<{
     pointerId: number;
     startX: number;
@@ -132,9 +136,45 @@ export function TabBar({
     setPill(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
   }, []);
 
+  const revealActiveTab = useCallback(() => {
+    const viewport = scrollRef.current;
+    const active = listRef.current?.querySelector<HTMLElement>(
+      '[data-tab-active="true"]',
+    );
+    if (!viewport || !active || viewport.clientWidth === 0) return;
+    const left = active.offsetLeft;
+    const right = left + active.offsetWidth;
+    if (left < viewport.scrollLeft) {
+      viewport.scrollLeft = left;
+    } else if (right > viewport.scrollLeft + viewport.clientWidth) {
+      viewport.scrollLeft = right - viewport.clientWidth;
+    }
+  }, []);
+
   useLayoutEffect(() => {
     measurePill();
-  }, [measurePill]);
+  }, [measurePill, activeId, tabs]);
+
+  useLayoutEffect(() => {
+    const viewport = scrollRef.current;
+    const list = listRef.current;
+    const bar = barRef.current;
+    if (!viewport || !list || !bar) return;
+    const measure = () => {
+      // Below one ordinary tab plus the two controls, use the menu instead of
+      // displaying a sliver. Measure the bar so a hidden viewport stays stable.
+      const fold = bar.clientWidth > 0 && bar.clientWidth < 144;
+      setCollapsed(fold);
+      setOverflowing(fold || (viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth + 1));
+      if (!fold) revealActiveTab();
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    observer.observe(viewport);
+    observer.observe(list);
+    measure();
+    return () => observer.disconnect();
+  }, [revealActiveTab]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -188,19 +228,21 @@ export function TabBar({
   }, []);
 
   // Keep the active tab visible after selection / open.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const active = el.querySelector<HTMLElement>(`[data-tab-id="${activeId}"]`);
-    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeId]);
+  useLayoutEffect(revealActiveTab, [activeId, revealActiveTab]);
 
   return (
     <div
-      ref={scrollRef}
+      ref={barRef}
+      data-testid="tab-bar"
       data-tauri-drag-region
-      className="min-w-0 shrink overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="flex min-w-0 flex-1 items-center gap-0.5"
     >
+      <div
+        ref={scrollRef}
+        data-testid="tab-scroll-viewport"
+        data-tauri-drag-region
+        className={cn("min-w-0 flex-1 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", collapsed && "hidden")}
+      >
       <div className="flex w-max items-center gap-0.5">
         <Tabs
           value={String(activeId)}
@@ -542,11 +584,35 @@ export function TabBar({
             })}
           </TabsList>
         </Tabs>
+      </div>
+      </div>
+      {overflowing ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" aria-label="更多标签页" title={`更多标签页（${tabs.length}）`}
+              className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <HugeiconsIcon icon={ArrowDown01Icon} size={14} strokeWidth={1.75} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="max-h-80 w-64 overflow-y-auto rounded-xl">
+            {tabs.map((tab) => (
+              <DropdownMenuItem key={tab.id} data-tab-menu-id={tab.id}
+                aria-current={tab.id === activeId ? "page" : undefined}
+                title={labelFor(tab)} onSelect={() => onSelect(tab.id)}
+                className="gap-2 rounded-md text-xs">
+                <TabIcon tab={tab} />
+                <span className="min-w-0 flex-1 truncate">{labelFor(tab)}</span>
+                {tab.kind === "editor" && tab.dirty ? <span aria-label="未保存" className="size-1.5 shrink-0 rounded-full bg-foreground/70" /> : null}
+                {tab.id === activeId ? <HugeiconsIcon icon={Tick02Icon} size={13} strokeWidth={1.75} /> : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
         {/* #166 ⑨：开始页没有工作区可归属，+ 号在这里直接不给（判据见 startScreenGate） */}
         {hasWorkspace ? (
           <NewTabMenu onNew={onNew} onNewEditor={onNewEditor} />
         ) : null}
-      </div>
     </div>
   );
 }
@@ -625,8 +691,8 @@ export function TabIcon({ tab }: { tab: Tab }) {
       />
     );
   }
-  // cold 终端 tab = 欢迎引导页（shell 未启动），用「开始」图标而非终端图标
-  if (tab.kind === "terminal" && tab.cold) {
+  // Deferred workspace terminals still use terminal icons.
+  if (isStartTab(tab)) {
     return (
       <HugeiconsIcon
         icon={HomeIcon}
