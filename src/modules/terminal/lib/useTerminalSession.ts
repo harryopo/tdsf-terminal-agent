@@ -108,6 +108,11 @@ type Session = {
     onCwd: (cwd: string) => void;
     onContextChange: () => void;
   } | null;
+  blockCollector: TerminalBlockCollector | null;
+  blockRenderer: {
+    onExecStart: () => void;
+    captureOutput: () => { text: string; truncated: boolean };
+  } | null;
   ptyOpening: boolean;
   initialCwd: string | undefined;
   lastCwd: string | null;
@@ -744,6 +749,8 @@ function ensureSession(
     restoreCancel: null,
     remoteIntegration: null,
     remoteConsumers: null,
+    blockCollector: null,
+    blockRenderer: null,
     ptyOpening: false,
     initialCwd,
     lastCwd: null,
@@ -959,17 +966,16 @@ function bindLeafToSlot(leafId: number, s: Session): void {
       // 133 的 C/D/A/B 全到了 xterm，`blocksByLeaf` 却整片为空。
       // 判据 `osc133-chain.test.ts`（真解析器）要求 133 的消费者一律返回 false。
       let execStartMarker: IMarker | null = null;
-      const collector = new TerminalBlockCollector({
-        sessionId: leafId,
-        resolveAuthor: (command) =>
-          useTerminalBlocksStore.getState().resolveAuthor(leafId, command),
+      const renderer = {
         onExecStart: () => {
-          // #113③：把"这台 shell 会回报执行标记"这件事记到 leaf 上，
-          // 可见终端执行据此区分"没集成"与"命令还在跑"。
-          useTerminalBlocksStore.getState().noteExecStarted(leafId);
+          execStartMarker?.dispose();
           execStartMarker = term.registerMarker(0);
         },
-        onOutputCapture: () => {
+        captureOutput: () => {
+          // 旧 renderer 的 marker 不能关联新屏幕的滚屏内容。
+          if (!execStartMarker || execStartMarker.isDisposed) {
+            return { text: "", truncated: true };
+          }
           const endMarker = term.registerMarker(0);
           try {
             const captured = captureBlockOutputWithMeta(
@@ -982,14 +988,32 @@ function bindLeafToSlot(leafId: number, s: Session): void {
               truncated: captured.truncated,
             };
           } finally {
+            execStartMarker.dispose();
             execStartMarker = null;
             endMarker?.dispose();
           }
         },
+      };
+      s.blockRenderer = renderer;
+      // 执行周期与编号属于会话，不随绘制槽位被回收或重绑而重建。
+      const collector = s.blockCollector ??= new TerminalBlockCollector({
+        sessionId: leafId,
+        resolveAuthor: (command) =>
+          useTerminalBlocksStore.getState().resolveAuthor(leafId, command),
+        onExecStart: () => {
+          useTerminalBlocksStore.getState().noteExecStarted(leafId);
+          s.blockRenderer?.onExecStart();
+        },
+        onOutputCapture: () => s.blockRenderer?.captureOutput() ?? { text: "", truncated: true },
         onBlock: (block) => {
           useTerminalBlocksStore.getState().pushBlock(block);
         },
       });
+      const disposeBlockRenderer = () => {
+        if (s.blockRenderer === renderer) s.blockRenderer = null;
+        execStartMarker?.dispose();
+        execStartMarker = null;
+      };
       const remoteShellState = s.remote ? createShellIntegrationState() : null;
       if (s.remote) {
         if (s.lastCwd) collector.setCwd(s.lastCwd);
@@ -1011,8 +1035,8 @@ function bindLeafToSlot(leafId: number, s: Session): void {
           },
         };
         s.remoteConsumers = consumers;
-        // Retain source association across renderer parking, not the collector
-        // or marker of a detached renderer. Transport changes replace Session.
+        // Retain source association and command state across renderer parking;
+        // detached markers are disposed. Transport changes replace Session.
         s.remoteIntegration ??= new RemoteShellIntegration({
           onCwd: (next) => s.remoteConsumers?.onCwd(next),
           onContextChange: () => s.remoteConsumers?.onContextChange(),
@@ -1051,11 +1075,12 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             osc52();
             deco.dispose();
             disposeBlockHandlers();
+            disposeBlockRenderer();
             term.textarea?.removeEventListener("focus", onGridFocus);
           },
         ];
       }
-      const disposers: (() => void)[] = [disposeBlockHandlers, disposeOutputHighlight];
+      const disposers: (() => void)[] = [disposeBlockHandlers, disposeBlockRenderer, disposeOutputHighlight];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
         // flips it on OSC 133 B/C/D/A; the cwd handler reads it to ignore OSC
@@ -1201,6 +1226,7 @@ export async function respawnSession(
   }
   s.pty?.close();
   s.pty = null;
+  s.blockCollector?.switchContext();
   s.snapshot = null;
   s.dormantRing = new DormantRing();
   s.shellExited = false;
