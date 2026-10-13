@@ -715,9 +715,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         // 标记已退出
         exited.store(true, Ordering::Release);
         // P3 #20: 唤醒自动重连 supervisor (若有)。
-        // notify_waiters 不存储 permit: 唤醒当前 waiter 后, 新注册的
-        // notified() 需等下一次 notify (重连成功后的新 reader task 结束时会
-        // 再次 notify, 因为 open_pty 内部把同一个 Arc<Notify> 传给了新 reader)。
+        // 通知只唤醒已创建的 waiter；退出旗标保留提前退出供 supervisor 复核。
         exited_notify.notify_waiters();
         log::info!("[ssh] reader task done, exit_code={}", code);
     }
@@ -881,7 +879,11 @@ impl<R: tauri::Runtime> SshSession<R> {
         loop {
             // 1. 等待 PTY 断开 (notify_waiters 不存储 permit, 无忙轮询)
             let notify = session.exited_notify.lock().await.clone();
-            notify.notified().await;
+            let notified = notify.notified();
+            // 先创建 waiter，再检查旗标，覆盖提前退出与检查后的退出。
+            if !session.is_pty_exited() {
+                notified.await;
+            }
 
             // 2. 主动关闭 (close / ssh_disconnect) → 退出 supervisor
             // 检查 user_closed (永不重置) 而非 connection_closed (重连成功后清零),
@@ -1876,6 +1878,10 @@ mod bash_integration_tests;
 #[cfg(test)]
 #[path = "reader_exit_lifecycle_tests.rs"]
 mod reader_exit_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "reconnect_notify_tests.rs"]
+mod reconnect_notify_tests;
 
 #[cfg(test)]
 // make_test_session 为 pub(crate), 供 tunnel.rs / mod.rs 测试复用
