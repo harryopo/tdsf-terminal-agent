@@ -409,6 +409,9 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// 僵尸会话复活并进入无限重连。此标志只增不减,是重连/复活的最终闸门。
     user_closed: Arc<AtomicBool>,
 
+    /// Lifetime-wide close notification, independent of reader generations.
+    closed_notify: tokio::sync::Notify,
+
     /// 主机信息 (用于状态事件 + P2-04 多标签会话标识)
     /// 注: 经 host()/port()/user() 访问器对外暴露 (P2 #42 会话枚举也用)
     host: String,
@@ -616,6 +619,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             // TDSF (#20): 连接刚建立,未关闭
             connection_closed: Arc::new(AtomicBool::new(false)),
             user_closed: Arc::new(AtomicBool::new(false)),
+            closed_notify: tokio::sync::Notify::new(),
             host,
             port,
             user,
@@ -781,53 +785,52 @@ impl<R: tauri::Runtime> SshSession<R> {
     pub async fn close(&self) -> Result<(), SshSessionError> {
         log::info!("[ssh] closing session: host={}", self.host);
 
-        // 1. 关闭 channel 写半部
-        {
-            let mut guard = self.channel_write.lock().await;
-            if let Some(channel_write) = guard.take() {
-                // drop channel_write 会触发 channel close
-                // russh 内部会发送 EOF + close 消息
-                drop(channel_write);
-            }
-        }
-
-        // 2. 断开 SSH 连接
-        {
-            let mut guard = self.handle.lock().await;
-            if let Some(handle) = guard.take() {
-                // Disconnect::ByApplication 表示客户端主动断开
-                // TDSF (#20): disconnect 失败降到 debug 级 (close 本就是要关,
-                // 失败的 send/recv 都是预期内的, 不值得 warn 刷屏)。
-                if let Err(e) = handle
-                    .handle_ref()
-                    .disconnect(Disconnect::ByApplication, "user closed", "en")
-                    .await
-                {
-                    log::debug!("[ssh] disconnect failed (expected during close): {}", e);
-                    // 即使 disconnect 失败,drop handle 也会清理资源
-                }
-                drop(handle);
-            }
-        }
-
-        // 3. 更新状态
+        // Publish intent before waiting for resources used by an in-flight reconnect.
         {
             let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            self.user_closed.store(true, Ordering::Release);
+            self.connection_closed.store(true, Ordering::Release);
+            self.exited
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .store(true, Ordering::Release);
             *state = SshSessionState::Closed;
         }
+        self.closed_notify.notify_waiters();
 
-        // TDSF (#20): close 同时设两个标志 — 整个连接都关了,
-        // PTY 也跟着死 (write_data/resize 会因 connection_closed 直接返回 Closed)。
-        self.exited
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .store(true, Ordering::Release);
-        self.connection_closed.store(true, Ordering::Release);
-        // user_closed 只增不减: 即使与 perform_reconnect 竞态 (重连成功后
-        // 清零 connection_closed),用户意图也不会被覆盖 → 僵尸会话无法复活。
-        self.user_closed.store(true, Ordering::Release);
+        // 1. 关闭 channel 写半部
+        // Use the same lock order as adoption; take both resources before releasing.
+        let (channel_write, handle) = {
+            let mut writer = self.channel_write.lock().await;
+            let mut client = self.handle.lock().await;
+            (writer.take(), client.take())
+        };
+        drop(channel_write);
+
+        // 2. 断开 SSH 连接
+        if let Some(handle) = handle {
+            // Disconnect::ByApplication 表示客户端主动断开
+            // TDSF (#20): disconnect 失败降到 debug 级 (close 本就是要关,
+            // 失败的 send/recv 都是预期内的, 不值得 warn 刷屏)。
+            if let Err(e) = handle
+                .handle_ref()
+                .disconnect(Disconnect::ByApplication, "user closed", "en")
+                .await
+            {
+                log::debug!("[ssh] disconnect failed (expected during close): {}", e);
+                // 即使 disconnect 失败,drop handle 也会清理资源
+            }
+            drop(handle);
+        }
         log::info!("[ssh] session closed: host={}", self.host);
         Ok(())
+    }
+
+    async fn wait_for_close(&self) {
+        let closed = self.closed_notify.notified();
+        if !self.user_closed.load(Ordering::Acquire) {
+            closed.await;
+        }
     }
 
     // ========================================================================
@@ -882,7 +885,11 @@ impl<R: tauri::Runtime> SshSession<R> {
             let notified = notify.notified();
             // 先创建 waiter，再检查旗标，覆盖提前退出与检查后的退出。
             if !session.is_pty_exited() {
-                notified.await;
+                tokio::select! {
+                    biased;
+                    _ = session.wait_for_close() => return,
+                    _ = notified => {},
+                }
             }
 
             // 2. 主动关闭 (close / ssh_disconnect) → 退出 supervisor
@@ -940,7 +947,11 @@ impl<R: tauri::Runtime> SshSession<R> {
                     RECONNECT_MAX_ATTEMPTS,
                     delay.as_secs()
                 );
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    biased;
+                    _ = session.wait_for_close() => return,
+                    _ = tokio::time::sleep(delay) => {},
+                }
                 // 退避期间用户主动断开 → 取消重连 (user_closed 永不重置,无竞态)
                 if session.user_closed.load(Ordering::Acquire) {
                     log::info!("[ssh] reconnect cancelled (user disconnected during backoff)");
@@ -949,6 +960,9 @@ impl<R: tauri::Runtime> SshSession<R> {
                 if session.perform_reconnect(&config).await.is_ok() {
                     ok = true;
                     break;
+                }
+                if session.user_closed.load(Ordering::Acquire) {
+                    return;
                 }
             }
 
@@ -979,16 +993,19 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 成功时: 状态 → Connected + 推送状态事件; 失败时返回错误字符串。
     async fn perform_reconnect(&self, config: &SshReconnectConfig<R>) -> Result<(), String> {
         // 1. 重新建立 SSH 连接 (含 TOFU + 认证, 凭据来自 config)
-        let client = SshClient::connect(
+        let connecting = SshClient::connect(
             config.app_handle.clone(),
             config.params.clone(),
             Some(config.on_status.clone()),
-        )
-        .await
-        .map_err(|e| format!("SSH reconnect connect failed: {e}"))?;
+        );
+        let client = tokio::select! {
+            biased;
+            _ = self.wait_for_close() => return Err("SSH reconnect cancelled".into()),
+            result = connecting => result.map_err(|e| format!("SSH reconnect connect failed: {e}"))?,
+        };
 
         // 2. 重新开 PTY (含远端 shell 静默注入 + 新 reader task)
-        let new_session = SshSession::open_pty(
+        let opening = SshSession::open_pty(
             client,
             config.cols,
             config.rows,
@@ -1001,54 +1018,70 @@ impl<R: tauri::Runtime> SshSession<R> {
             config.params.host.clone(),
             config.params.port,
             config.params.user.clone(),
-        )
-        .await
-        .map_err(|e| format!("SSH reconnect open_pty failed: {e}"))?;
+        );
+        let new_session = tokio::select! {
+            biased;
+            _ = self.wait_for_close() => return Err("SSH reconnect cancelled".into()),
+            result = opening => result.map_err(|e| format!("SSH reconnect open_pty failed: {e}"))?,
+        };
 
-        // 3. 热替换内部资源
-        // 3.1 关闭旧 channel_write (drop 触发 channel close)
-        {
-            let mut guard = self.channel_write.lock().await;
-            if let Some(old) = guard.take() {
-                drop(old);
-            }
-        }
-        // 3.2 关闭旧 handle (主动断开, 释放连接资源)
-        {
-            let mut guard = self.handle.lock().await;
-            if let Some(old) = guard.take() {
-                let _ = old
-                    .handle_ref()
-                    .disconnect(Disconnect::ByApplication, "reconnecting", "en")
-                    .await;
-                drop(old);
-            }
-        }
-        // 3.3 替换为新的 (handle / channel_write / notify / received_exit)
-        *self.channel_write.lock().await = new_session.channel_write.lock().await.take();
-        *self.handle.lock().await = new_session.handle.lock().await.take();
-        *self.exited_notify.lock().await = new_session.exited_notify.lock().await.clone();
-        *self.received_exit.lock().await = new_session.received_exit.lock().await.clone();
-        *self
-            .terminal_context
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = new_session
+        self.adopt_reconnected_session(new_session, config).await
+    }
+
+    async fn adopt_reconnected_session(
+        &self,
+        new_session: Self,
+        config: &SshReconnectConfig<R>,
+    ) -> Result<(), String> {
+
+        let new_writer = new_session.channel_write.lock().await.take();
+        let new_client = new_session.handle.lock().await.take();
+        let new_notify = new_session.exited_notify.lock().await.clone();
+        let new_exit = new_session.received_exit.lock().await.clone();
+        let new_context = new_session
             .terminal_context
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
 
-        // Keep the new reader's actual flag, including an exit during handoff.
-        // Swapping leaves the old flag with the temporary session's Drop.
-        self.swap_reader_exit_flag(&new_session);
-        // 仅在用户未主动断开时清零 connection_closed: 若 close() 与本函数竞态
-        // (close 在 connect/open_pty 检查点之后执行),此处清零会让已从 SshState
-        // take 走的僵尸会话"复活"并无限重连。user_closed 是最终闸门。
-        if !self.user_closed.load(Ordering::Acquire) {
-            self.connection_closed.store(false, Ordering::Release);
-        } else {
-            log::info!("[ssh] reconnect finished but user closed during reconnect, marking closed");
-            self.connection_closed.store(true, Ordering::Release);
+        let mut writer = self.channel_write.lock().await;
+        let mut client = self.handle.lock().await;
+        let mut notify = self.exited_notify.lock().await;
+        let mut exit = self.received_exit.lock().await;
+        // No network or callback awaits under the state lock. Close uses it to
+        // publish intent, so the whole resource swap is before or after close.
+        let old_resources = {
+            let _state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            if self.user_closed.load(Ordering::Acquire) {
+                None
+            } else {
+                let old = (writer.take(), client.take());
+                *writer = new_writer;
+                *client = new_client;
+                *notify = new_notify;
+                *exit = new_exit;
+                *self
+                    .terminal_context
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = new_context;
+                self.swap_reader_exit_flag(&new_session);
+                self.connection_closed.store(false, Ordering::Release);
+                Some(old)
+            }
+        };
+        drop(exit);
+        drop(notify);
+        drop(client);
+        drop(writer);
+        let Some((old_writer, old_client)) = old_resources else {
+            return Err("SSH reconnect cancelled before resource adoption".into());
+        };
+        drop(old_writer);
+        if let Some(old) = old_client {
+            let _ = old
+                .handle_ref()
+                .disconnect(Disconnect::ByApplication, "reconnecting", "en")
+                .await;
         }
 
         // 3.45 P1 §37.90 (2026-09-01): 失效旧连接上的外部资源 (SFTP 缓存/隧道)。
@@ -1058,11 +1091,26 @@ impl<R: tauri::Runtime> SshSession<R> {
         // 时序约束: 必须在 3.5 的 "connected" 状态广播前完成, 保证前端收到
         // connected 后发起的 SFTP 请求不会命中失效缓存。
         if let Some(cb) = &config.on_reconnected {
-            cb().await;
+            tokio::select! {
+                biased;
+                _ = self.wait_for_close() => return Err("SSH reconnect cancelled during resource invalidation".into()),
+                _ = cb() => {},
+            }
         }
 
         // 3.5 状态 → Connected + 推送状态事件 (前端状态栏恢复 "已连接")
-        *self.state.write().unwrap_or_else(|e| e.into_inner()) = SshSessionState::Connected;
+        {
+            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            if self.user_closed.load(Ordering::Acquire) {
+                return Err("SSH reconnect cancelled before publishing connected".into());
+            }
+            *state = SshSessionState::Connected;
+        }
+        // Channel consumers may read state/context synchronously; never call
+        // them under the state lock. A concurrent close retains Closed state.
+        if self.user_closed.load(Ordering::Acquire) {
+            return Err("SSH reconnect cancelled before publishing connected".into());
+        }
         let _ = config.on_status.send(SshStatusEvent::connected(
             &config.params.host,
             config.params.port,
@@ -1884,6 +1932,10 @@ mod reader_exit_lifecycle_tests;
 mod reconnect_notify_tests;
 
 #[cfg(test)]
+#[path = "reconnect_cancel_tests.rs"]
+mod reconnect_cancel_tests;
+
+#[cfg(test)]
 // make_test_session 为 pub(crate), 供 tunnel.rs / mod.rs 测试复用
 pub(crate) mod tests {
     use super::*;
@@ -1971,6 +2023,7 @@ pub(crate) mod tests {
             exited: std::sync::RwLock::new(Arc::new(AtomicBool::new(exited))),
             connection_closed: Arc::new(AtomicBool::new(connection_closed)),
             user_closed: Arc::new(AtomicBool::new(connection_closed)),
+            closed_notify: tokio::sync::Notify::new(),
             host: String::new(),
             port: 0,
             user: String::new(),
