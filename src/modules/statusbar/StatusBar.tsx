@@ -9,6 +9,7 @@ import { AiStatusBarControls } from "@/modules/ai/components/AiStatusBarControls
 import { MockLLMWarning } from "@/modules/ai/components/MockLLMWarning";
 import { LspStatusPill } from "@/modules/lsp";
 import type { WorkspaceEnv } from "@/modules/workspace";
+import type { FileTreeSource } from "@/modules/explorer/lib/useFileTree";
 import { IncognitoIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
@@ -22,6 +23,8 @@ type Props = {
   filePath?: string | null;
   home: string | null;
   onCd: (path: string) => void;
+  directorySource?: FileTreeSource | null;
+  canNavigateDirectories?: boolean;
   onWorkspaceChange: (env: WorkspaceEnv) => void;
   /** TDSF 2026-08-28: 环境选择器 SSH 选项 → 打开新建 SSH 工作区对话框 */
   onWorkspaceSshClick?: () => void;
@@ -48,6 +51,8 @@ export function StatusBar({
   filePath,
   home,
   onCd,
+  directorySource,
+  canNavigateDirectories,
   onWorkspaceChange,
   onWorkspaceSshClick,
   workspaceSwitching,
@@ -82,6 +87,8 @@ export function StatusBar({
             filePath={filePath}
             home={home}
             onCd={onCd}
+            source={directorySource}
+            canNavigate={canNavigateDirectories}
           />
         ) : (
           <span
@@ -105,8 +112,8 @@ export function StatusBar({
               side="top"
               className="max-w-64 text-[11px] leading-relaxed"
             >
-              AI can&apos;t see this terminal&apos;s output. Use it for secrets, SSH, or
-              anything you don&apos;t want sent to the model.
+              AI can&apos;t see this terminal&apos;s output. Use it for secrets,
+              SSH, or anything you don&apos;t want sent to the model.
             </TooltipContent>
           </Tooltip>
         ) : null}

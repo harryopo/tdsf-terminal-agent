@@ -9,6 +9,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
 import { quoteShellArg } from "@/lib/shellQuote";
+import { getLeafSshSession } from "@/lib/param-complete-client";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { usePresence } from "@/lib/usePresence";
 import { useZoom } from "@/lib/useZoom";
@@ -44,6 +45,7 @@ import {
 import { explorerSshGate } from "@/modules/explorer/lib/explorerSshGate";
 import { explorerSessionIdForTab } from "@/modules/explorer/lib/explorerSession";
 import { useWorkspaceFsStore } from "@/modules/explorer/lib/workspaceFsStore";
+import type { FileTreeSource } from "@/modules/explorer/lib/useFileTree";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
   Header,
@@ -157,7 +159,14 @@ import { leafCwdOf } from "@/modules/terminal/lib/leafCwd";
 import {
   getRendererPoolDebug,
   getSlotTerm,
+  isLeafAltScreen,
 } from "@/modules/terminal/lib/rendererPool";
+import {
+  getLeafDraft,
+  getPendingRiskCommand,
+  isLeafBusy,
+} from "@/modules/terminal/lib/useTerminalSession";
+import { isUserLineDirty } from "@/modules/terminal/lib/terminalInputState";
 // TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
@@ -559,6 +568,20 @@ export default function App() {
   );
   const explorerSshConnected =
     !!explorerSshSession && isSessionConnected(explorerSshSession);
+  const directorySource: FileTreeSource | null = explorerSshSessionId
+    ? explorerSshConnected && explorerSshSession?.rustSessionId != null
+      ? { kind: "sftp", sessionId: explorerSshSession.rustSessionId, root: "/" }
+      : null
+    : activeSpace?.env.kind === "ssh" &&
+        activeTab?.kind !== "editor" &&
+        !(
+          activeTerminalTab && activeLeafId !== null &&
+          effectiveLeafSsh(
+            activeTerminalTab.paneTree, activeLeafId, activeTerminalTab.sshSessionId,
+          ) === null
+        )
+      ? null
+      : { kind: "local" };
   const explorerCurrentPath = useSshStore((s) =>
     selectSessionCurrentPath(s, explorerSshSessionId),
   );
@@ -1556,19 +1579,54 @@ export default function App() {
 
   const sendCd = useCallback(
     (path: string) => {
-      // TDSF 修复 2026-07-29: SSH 模式下状态栏路径显示远程位置,
-      // 但本地 terminalRefs 对应的是隐藏的本地终端, 点击 breadcrumb 不应
-      // 把 cd 命令写入错误终端。SSH 目录切换由用户在 SSH 终端内操作。
-      // TDSF 修复 2026-07-31: 按当前 Space 判定，避免本地 Space 仍受全局 SSH 连接影响。
-      // TDSF #89：判据跟随活动 tab —— 这个 tab 自己连的是远端就不该写本地终端。
-      if (explorerSshConnected) return;
       if (activeLeafId === null) return;
+      const tab = tabsRef.current.find(
+        (item) => item.id === activeIdRef.current,
+      );
+      if (
+        tab?.kind !== "terminal" ||
+        tab.id !== activeTerminalTab?.id ||
+        tab.activeLeafId !== activeLeafId ||
+        tab.cold
+      ) {
+        toast.info("终端已切换，请在当前终端重新选择目录");
+        return;
+      }
       const term = terminalRefs.current.get(activeLeafId);
-      if (!term) return;
-      term.write(`cd ${quoteShellArg(path)}\r`);
+      if (
+        !term ||
+        !getSlotTerm(activeLeafId) ||
+        isLeafAltScreen(activeLeafId) ||
+        isLeafBusy(activeLeafId) ||
+        isUserLineDirty(activeLeafId) ||
+        getLeafDraft(activeLeafId) ||
+        getPendingRiskCommand(activeLeafId)
+      ) {
+        toast.info("请先结束当前操作并清空输入行，再切换目录");
+        return;
+      }
+      if (activeTabSshSessionId) {
+        const session = useSshStore
+          .getState()
+          .sessions.find((item) => item.id === activeTabSshSessionId);
+        if (
+          !session ||
+          !isSessionConnected(session) ||
+          getLeafSshSession(activeLeafId) !== session.rustSessionId
+        ) {
+          toast.info("当前 SSH 终端未连接或连接已变化，请重新连接后切换目录");
+          return;
+        }
+      } else if (getLeafSshSession(activeLeafId) !== null) {
+        toast.info("终端连接已变化，请在当前终端重新选择目录");
+        return;
+      }
+      term.write(
+        `cd ${quoteShellArg(path, activeTabSshSessionId ? false : undefined)}\r`,
+      );
       term.focus();
     },
-    [activeLeafId, explorerSshConnected],
+    [activeLeafId, activeTerminalTab, activeTabSshSessionId],
   );
 
   const cdInNewTab = useCallback(
@@ -2700,6 +2758,8 @@ export default function App() {
               filePath={activeFilePath}
               home={home}
               onCd={sendCd}
+              directorySource={directorySource}
+              canNavigateDirectories={activeLeafId !== null && !activeTerminalTab?.cold}
               onWorkspaceChange={handleWorkspaceChange}
               onWorkspaceSshClick={handleWorkspaceSshClick}
               workspaceSwitching={workspaceSwitching}
