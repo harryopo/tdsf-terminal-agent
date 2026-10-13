@@ -391,7 +391,8 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// 仅表示 PTY 通道生命周期: reader task 拿到 ExitStatus/Eof/Close/None
     /// 时设置。PTY 死亡不一定意味着 SSH 连接断开 (例如用户在远端敲 `exit`
     /// 退出 shell,但 SFTP 仍可继续用)。
-    exited: Arc<AtomicBool>,
+    // Reconnect replaces the reader; guards must follow that reader's flag.
+    exited: std::sync::RwLock<Arc<AtomicBool>>,
 
     /// SSH 连接是否已关闭 (原子标志,close()/Drop 设置)
     ///
@@ -611,7 +612,7 @@ impl<R: tauri::Runtime> SshSession<R> {
             channel_write: Arc::new(Mutex::new(Some(channel_write))),
             state: Arc::new(std::sync::RwLock::new(SshSessionState::Connected)),
             terminal_context: std::sync::RwLock::new(terminal_context),
-            exited,
+            exited: std::sync::RwLock::new(exited),
             // TDSF (#20): 连接刚建立,未关闭
             connection_closed: Arc::new(AtomicBool::new(false)),
             user_closed: Arc::new(AtomicBool::new(false)),
@@ -725,7 +726,11 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// （exited / user_input_seq / typing_active；供 ssh_write_human 编排）。
     pub fn human_typing_guard(&self) -> crate::modules::human_type::HumanTypingGuard {
         crate::modules::human_type::HumanTypingGuard {
-            exited: self.exited.clone(),
+            exited: self
+                .exited
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
             user_seq: self.user_input_seq.clone(),
             typing_active: self.typing_active.clone(),
         }
@@ -734,9 +739,7 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 写入数据 (前端按键)
     pub async fn write_data(&self, data: &[u8]) -> Result<(), SshSessionError> {
         // TDSF (#20): PTY 死亡或连接断开都不能写 PTY
-        if self.exited.load(Ordering::Acquire)
-            || self.connection_closed.load(Ordering::Acquire)
-        {
+        if self.is_pty_exited() || self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
         }
 
@@ -755,9 +758,7 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 调整窗口大小 (window_change)
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), SshSessionError> {
         // TDSF (#20): PTY 死亡或连接断开都不能 resize
-        if self.exited.load(Ordering::Acquire)
-            || self.connection_closed.load(Ordering::Acquire)
-        {
+        if self.is_pty_exited() || self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
         }
 
@@ -819,7 +820,10 @@ impl<R: tauri::Runtime> SshSession<R> {
 
         // TDSF (#20): close 同时设两个标志 — 整个连接都关了,
         // PTY 也跟着死 (write_data/resize 会因 connection_closed 直接返回 Closed)。
-        self.exited.store(true, Ordering::Release);
+        self.exited
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .store(true, Ordering::Release);
         self.connection_closed.store(true, Ordering::Release);
         // user_closed 只增不减: 即使与 perform_reconnect 竞态 (重连成功后
         // 清零 connection_closed),用户意图也不会被覆盖 → 僵尸会话无法复活。
@@ -1032,8 +1036,9 @@ impl<R: tauri::Runtime> SshSession<R> {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
 
-        // 3.4 重置标志 (新 reader task 已 spawn)
-        self.exited.store(false, Ordering::Release);
+        // Keep the new reader's actual flag, including an exit during handoff.
+        // Swapping leaves the old flag with the temporary session's Drop.
+        self.swap_reader_exit_flag(&new_session);
         // 仅在用户未主动断开时清零 connection_closed: 若 close() 与本函数竞态
         // (close 在 connect/open_pty 检查点之后执行),此处清零会让已从 SshState
         // take 走的僵尸会话"复活"并无限重连。user_closed 是最终闸门。
@@ -1096,13 +1101,21 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 保留旧接口契约: 任何一边死了都返回 true。
     /// 调用方若要区分 PTY 死 vs 连接死, 用 `is_pty_exited` / `is_connection_closed`。
     pub fn is_exited(&self) -> bool {
-        self.exited.load(Ordering::Acquire)
-            || self.connection_closed.load(Ordering::Acquire)
+        self.is_pty_exited() || self.connection_closed.load(Ordering::Acquire)
     }
 
     /// PTY 通道是否已退出 (reader task 拿到 ExitStatus/Eof/Close/None)
     pub fn is_pty_exited(&self) -> bool {
-        self.exited.load(Ordering::Acquire)
+        self.exited
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .load(Ordering::Acquire)
+    }
+
+    fn swap_reader_exit_flag(&self, new_session: &Self) {
+        let mut current = self.exited.write().unwrap_or_else(|e| e.into_inner());
+        let mut next = new_session.exited.write().unwrap_or_else(|e| e.into_inner());
+        std::mem::swap(&mut *current, &mut *next);
     }
 
     /// SSH 连接是否已关闭 (close()/Drop/服务器主动 disconnect)
@@ -1846,8 +1859,11 @@ impl<R: tauri::Runtime> Drop for SshSession<R> {
         // 会触发底层 disconnect, 后续 open_sftp_channel 会因 connection_closed
         // 立即拒绝, 避免 "Channel send error" 之类下游 panic)。
         // PTY exited 也设上 (整连接都死了, PTY 自然也死)。
-        if !self.exited.load(Ordering::Acquire) {
-            self.exited.store(true, Ordering::Release);
+        if !self.is_pty_exited() {
+            self.exited
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .store(true, Ordering::Release);
         }
         self.connection_closed.store(true, Ordering::Release);
     }
@@ -1856,6 +1872,10 @@ impl<R: tauri::Runtime> Drop for SshSession<R> {
 #[cfg(test)]
 #[path = "bash_integration_tests.rs"]
 mod bash_integration_tests;
+
+#[cfg(test)]
+#[path = "reader_exit_lifecycle_tests.rs"]
+mod reader_exit_lifecycle_tests;
 
 #[cfg(test)]
 // make_test_session 为 pub(crate), 供 tunnel.rs / mod.rs 测试复用
@@ -1942,7 +1962,7 @@ pub(crate) mod tests {
                 SshSessionState::Connected
             })),
             terminal_context: std::sync::RwLock::new(Arc::new(std::sync::RwLock::new(None))),
-            exited: Arc::new(AtomicBool::new(exited)),
+            exited: std::sync::RwLock::new(Arc::new(AtomicBool::new(exited))),
             connection_closed: Arc::new(AtomicBool::new(connection_closed)),
             user_closed: Arc::new(AtomicBool::new(connection_closed)),
             host: String::new(),

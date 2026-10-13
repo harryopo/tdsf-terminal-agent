@@ -190,7 +190,8 @@ export async function sshConnect(
   onStatus.onmessage = (event) => handlers.onStatus?.(event);
   onExit.onmessage = (code) => {
     handlers.onExit?.(code);
-    releaseHandlers();
+    // Unknown exit status can be followed by reconnect on these same channels.
+    if (code !== -1) releaseHandlers();
   };
 
   // 调用 Rust ssh_connect 命令

@@ -435,7 +435,10 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         onStatus: (event) => {
           get().updateSessionStatus(sessionId, event);
         },
-        onExit: () => {
+        onExit: (code) => {
+          // Missing remote exit status belongs to the reconnect supervisor.
+          // Closing here would cancel reconnect before its status event arrives.
+          if (code === -1) return;
           // TDSF: 远端 shell 退出时, 标记为 closed 并主动调用 handle.close()
           // 触发 Rust 端 SshState.take() 清理 session + SFTP 缓存, 避免资源泄漏
           const sess = get().sessions.find((s) => s.id === sessionId);
