@@ -15,6 +15,8 @@ export type WorkspaceEnv =
       label: string;
     };
 
+export type LocalWorkspaceEnv = Exclude<WorkspaceEnv, { kind: "ssh" }>;
+
 export type WslDistro = {
   name: string;
   default: boolean;
@@ -30,7 +32,7 @@ type State = {
   refreshDistros: () => Promise<WslDistro[]>;
 };
 
-export const LOCAL_WORKSPACE: WorkspaceEnv = { kind: "local" };
+export const LOCAL_WORKSPACE: LocalWorkspaceEnv = { kind: "local" };
 
 export const useWorkspaceEnvStore = create<State>((set) => ({
   env: LOCAL_WORKSPACE,
@@ -73,7 +75,7 @@ export function currentWorkspaceEnv(): WorkspaceEnv {
  * 需要**身份**的地方（scope key、"这是不是远端"的判断）请继续用 `currentWorkspaceEnv()`，
  * 别拿本函数当"当前环境"。
  */
-export function ipcWorkspaceEnv(): WorkspaceEnv {
+export function ipcWorkspaceEnv(): LocalWorkspaceEnv {
   const env = currentWorkspaceEnv();
   return env.kind === "ssh" ? LOCAL_WORKSPACE : env;
 }

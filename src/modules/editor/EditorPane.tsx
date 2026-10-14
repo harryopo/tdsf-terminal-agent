@@ -3,6 +3,7 @@ import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { onKeysChanged } from "@/modules/settings/store";
+import type { LocalWorkspaceEnv } from "@/modules/workspace";
 import { acceptCompletion, startCompletion } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import {
@@ -89,6 +90,7 @@ type Props = {
    * TDSF 2026-07-30: 远程文件标记，跳过 LSP/外部 formatter/convertFileSrc 媒体预览。
    */
   remote?: { sessionId: string } | null;
+  workspace?: LocalWorkspaceEnv | null;
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
@@ -108,12 +110,13 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, remote, onDirtyChange, onSaved, onClose } = props;
+    const { path, overrideLanguage, remote, workspace, onDirtyChange, onSaved, onClose } = props;
 
-    const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
+    const { doc, onChange, save, reload, adoptDiskText, openAnyway, workspace: documentWorkspace } =
       useDocument({
         path,
         remote,
+        workspace,
         onDirtyChange,
       });
     const reloadRef = useRef(reload);
@@ -183,8 +186,11 @@ export const EditorPane = memo(
     const lspActiveRef = useRef(false);
     const warnedNoLspRef = useRef(false);
     const warnedNoFormatRef = useRef(false);
+    const workspaceRef = useRef(documentWorkspace);
+    workspaceRef.current = documentWorkspace;
 
     const performSave = useCallback(async () => {
+      const savePath = pathRef.current;
       const view = cmRef.current?.view;
       const prefs = usePreferencesStore.getState();
       const formatter = resolveFormatter(languageRef.current, prefs);
@@ -218,19 +224,20 @@ export const EditorPane = memo(
       // must not be clobbered by the disk read-back.
       const docAtSave = view?.state.doc;
       const saved = await saveRef.current();
-      if (!saved) return;
+      if (!saved || pathRef.current !== savePath || workspaceRef.current !== documentWorkspace) return;
       // TDSF 2026-07-30: 远程文件跳过外部格式化。
       if (prefs.editorFormatOnSave && formatter !== "lsp" && !remote) {
         const error = await runExternalFormatter(
           formatter,
-          pathRef.current,
+          savePath,
           prefs.editorCustomFormatCommand,
+          documentWorkspace ?? undefined,
         );
         if (error) {
           toast.error(`${formatter} format failed`, { description: error });
         } else {
-          const readBack = await readFileText(pathRef.current);
-          if (readBack !== null && view && view.state.doc === docAtSave) {
+          const readBack = await readFileText(savePath, documentWorkspace ?? undefined);
+          if (readBack !== null && view && view.state.doc === docAtSave && pathRef.current === savePath && workspaceRef.current === documentWorkspace) {
             applyFormattedContent(
               view,
               adoptDiskTextRef.current(readBack.text, readBack.mtime),
@@ -239,7 +246,7 @@ export const EditorPane = memo(
         }
       }
       onSavedRef.current?.();
-    }, [remote]);
+    }, [remote, documentWorkspace]);
     const performSaveRef = useRef(performSave);
     performSaveRef.current = performSave;
 

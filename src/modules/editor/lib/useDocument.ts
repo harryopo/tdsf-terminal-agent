@@ -2,7 +2,7 @@ import { decodeUtf8, encodeUtf8, sftpRead, sftpStat, sftpWrite } from "@/lib/sft
 import { notifyDocumentSaved } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useSshStore } from "@/modules/ssh-explorer";
-import { ipcWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv, type LocalWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -32,10 +32,13 @@ type Options = {
    * undefined / null 走本地 fs_read_file/fs_write_file/fs_stat。
    */
   remote?: { sessionId: string } | null;
+  workspace?: LocalWorkspaceEnv | null;
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-export function useDocument({ path, remote, onDirtyChange }: Options) {
+export function useDocument({ path, remote, workspace, onDirtyChange }: Options) {
+  const [mountWorkspace] = useState(() => ({ ...ipcWorkspaceEnv() }));
+  const documentWorkspace = workspace === undefined ? mountWorkspace : workspace;
   const [doc, setDoc] = useState<DocumentState>({ status: "loading" });
   const [dirty, setDirty] = useState(false);
 
@@ -95,10 +98,11 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
       notifyDocumentSaved(path);
       return;
     }
+    if (!documentWorkspace) throw new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。");
     const mtime = await invoke<number>("fs_write_file", {
       path,
       content: restoreEol(content, eolRef.current),
-      workspace: ipcWorkspaceEnv(),
+      workspace: documentWorkspace,
       source: "editor",
     });
     diskMtimeRef.current = mtime;
@@ -106,7 +110,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
     // Edits typed while the write was in flight must stay dirty.
     setDirty(bufferRef.current !== content);
     notifyDocumentSaved(path);
-  }, [path, remote, getRustSessionId]);
+  }, [path, remote, getRustSessionId, documentWorkspace]);
 
   // False when the write was withheld because the file changed on disk
   // since load; overwriting is an explicit user action from the toast.
@@ -121,9 +125,10 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
         const attrs = await sftpStat(sid, path).catch(() => null);
         mtime = attrs ? attrs.modified * 1000 : null;
       } else {
+        if (!documentWorkspace) throw new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。");
         const stat = await invoke<FileStat>("fs_stat", {
           path,
-          workspace: ipcWorkspaceEnv(),
+          workspace: documentWorkspace,
         }).catch(() => null);
         mtime = stat?.mtime ?? null;
       }
@@ -139,7 +144,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
     }
     await writeToDisk();
     return true;
-  }, [path, remote, writeToDisk, getRustSessionId]);
+  }, [path, remote, writeToDisk, getRustSessionId, documentWorkspace]);
 
   // Notify parent of dirty transitions.
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -212,13 +217,14 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
           );
         });
       }
+      if (!documentWorkspace) return Promise.reject(new Error("无法确认文件所属环境，请从原工作区重新打开文件。"));
       return invoke<ReadResult>("fs_read_file", {
         path,
-        workspace: ipcWorkspaceEnv(),
+        workspace: documentWorkspace,
         force,
       });
     },
-    [path, remote, getRustSessionId],
+    [path, remote, getRustSessionId, documentWorkspace],
   );
 
   // Load on path change.
@@ -321,7 +327,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
   );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: path is the trigger that runs the auto-save timer cleanup when the active document changes.
-  useEffect(() => clearAutoSaveTimer, [path, clearAutoSaveTimer]);
+  useEffect(() => clearAutoSaveTimer, [path, documentWorkspace, clearAutoSaveTimer]);
 
-  return { doc, dirty, onChange, save, reload, adoptDiskText, openAnyway };
+  return { doc, dirty, onChange, save, reload, adoptDiskText, openAnyway, workspace: documentWorkspace };
 }

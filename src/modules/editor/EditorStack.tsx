@@ -1,6 +1,7 @@
 import { cn, isMarkdownPath } from "@/lib/utils";
 import { MarkdownViewToggle } from "@/modules/markdown";
 import type { EditorTab, Tab } from "@/modules/tabs";
+import { editorWorkspace } from "@/modules/tabs/lib/editorWorkspace";
 import { useEffect, useRef } from "react";
 import { EditorPane, type EditorPaneHandle } from "./EditorPane";
 
@@ -116,6 +117,7 @@ export function EditorStack({
                 path={t.path}
                 overrideLanguage={t.overrideLanguage}
                 remote={t.remote ?? null}
+                workspace={editorWorkspace(t)}
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
               />

@@ -23,6 +23,8 @@ import { disposeSession } from "@/modules/terminal/lib/useTerminalSession";
 // TDSF 修复 2026-08-01: newTab/newTabInSpace 需要读目标 Space 的 env 来绑定
 // SSH 会话。useSpaces 本体不依赖 tabs（依赖方只有 App 层 hook），无循环依赖。
 import { useSpaces } from "@/modules/spaces";
+import { ipcWorkspaceEnv, type LocalWorkspaceEnv, workspaceScopeKey } from "@/modules/workspace";
+import { editorWorkspace } from "./editorWorkspace";
 import { isSessionConnected, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -176,6 +178,8 @@ export type EditorTab = TabBase & {
    */
   preview: boolean;
   overrideLanguage?: string | null;
+  /** File IO identity remains fixed even when the tab moves to another space. */
+  workspace?: LocalWorkspaceEnv | null;
   /**
    * TDSF 2026-07-30: 远程文件标记。
    * - undefined / null: 本地文件，走 fs_read_file/fs_write_file/fs_stat + 本地 watch + LSP。
@@ -584,9 +588,12 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const curr = tabsRef.current;
       const tab = curr.find((t) => t.id === tabId);
       if (!tab || tab.spaceId === targetSpaceId) return false;
+      const workspace = tab.kind === "editor" && !tab.remote ? editorWorkspace(tab) : undefined;
       setTabs((prev) =>
         prev.map((t) =>
-          t.id === tabId ? ({ ...t, spaceId: targetSpaceId } as Tab) : t,
+          t.id === tabId ? ({ ...t, spaceId: targetSpaceId,
+            ...(workspace !== undefined ? { workspace } : {}),
+          } as Tab) : t,
         ),
       );
       if (activeIdRef.current !== tabId) return false;
@@ -797,14 +804,19 @@ export function useTabs(initial?: Partial<TerminalTab>) {
    */
   const openFileTab = useCallback(
     (path: string, pin = true, remote?: { sessionId: string }) => {
+      const spaceId = activeSpaceIdRef.current;
+      const workspace = remote ? undefined : { ...ipcWorkspaceEnv() };
       let targetId: number | null = null;
       setTabs((curr) => {
         // TDSF 2026-07-30: 去重 key 改为 path + remote?.sessionId，
         // 避免本地/远程同名文件（如 /etc/hosts）撞车导致打开错误 tab。
-        const matchRemote = (t: Tab): boolean =>
-          t.kind === "editor" &&
-          t.path === path &&
-          (remote ? t.remote?.sessionId === remote.sessionId : !t.remote);
+        const matchRemote = (t: Tab): boolean => {
+          if (t.kind !== "editor" || t.spaceId !== spaceId || t.path !== path) return false;
+          if (remote) return t.remote?.sessionId === remote.sessionId;
+          const source = editorWorkspace(t);
+          return !t.remote && source !== null && workspace !== undefined &&
+            workspaceScopeKey(source) === workspaceScopeKey(workspace);
+        };
         if (pin) {
           // Persistent open: find any existing editor tab, pin it if needed.
           const existing = curr.find(matchRemote);
@@ -824,12 +836,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             {
               id,
               kind: "editor",
-              spaceId: activeSpaceIdRef.current,
+              spaceId,
               title: basename(path),
               path,
               dirty: false,
               preview: false,
               remote: remote ?? null,
+              workspace,
             } satisfies EditorTab,
           ];
         } else {
@@ -851,19 +864,20 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           }
           // Replace the current preview slot, or append a new one.
           const previewIdx = curr.findIndex(
-            (t) => t.kind === "editor" && (t as EditorTab).preview,
+            (t) => t.kind === "editor" && t.spaceId === spaceId && t.preview && !t.dirty,
           );
           const id = nextIdRef.current++;
           targetId = id;
           const tab: EditorTab = {
             id,
             kind: "editor",
-            spaceId: activeSpaceIdRef.current,
+            spaceId,
             title: basename(path),
             path,
             dirty: false,
             preview: true,
             remote: remote ?? null,
+            workspace,
           };
           if (previewIdx === -1) return [...curr, tab];
           const next = [...curr];
