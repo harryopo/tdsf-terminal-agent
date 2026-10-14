@@ -52,6 +52,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   const liveIdentityRef = useRef({ path, sourceKey });
   liveIdentityRef.current = { path, sourceKey };
   const saveGenerationRef = useRef(0);
+  const documentReadyRef = useRef(false);
   const saveTailRef = useRef<Promise<boolean> | null>(null);
   const conflictRef = useRef<SaveConflict | null>(null);
   const conflictId = useId();
@@ -60,7 +61,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     conflictRef.current = null;
   }, []);
   const ownsSave = useCallback((snapshot: SaveSnapshot) => (
-    snapshot.generation === saveGenerationRef.current &&
+    documentReadyRef.current && snapshot.generation === saveGenerationRef.current &&
     snapshot.path === liveIdentityRef.current.path &&
     snapshot.sourceKey === liveIdentityRef.current.sourceKey
   ), []);
@@ -144,6 +145,10 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   // False when the write was withheld because the file changed on disk
   // since load; overwriting is an explicit user action from the toast.
   const saveNow = useCallback((overwrite?: SaveConflict): Promise<boolean> => {
+    if (!remote && !documentWorkspace) {
+      return Promise.reject(new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。"));
+    }
+    if (!documentReadyRef.current) return Promise.resolve(false);
     const snapshot: SaveSnapshot = {
       generation: saveGenerationRef.current, path, sourceKey,
       content: bufferRef.current, eol: eolRef.current,
@@ -224,6 +229,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   // the re-render when disk already matches the buffer (self-save / duplicate
   // watcher event); initial loads must always publish a state.
   const adoptRead = useCallback((res: ReadResult, skipIfUnchanged = false) => {
+    documentReadyRef.current = res.kind === "text";
     clearSaveConflict();
     ++saveGenerationRef.current;
     if (res.kind === "text") {
@@ -302,6 +308,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     clearAutoSaveTimer();
     if (relocation?.from === previous.path && relocation.to === path &&
       sourceKey !== null && previous.sourceKey === sourceKey && docRef.current.status === "ready") {
+      documentReadyRef.current = true;
       setDoc({ ...docRef.current, content: bufferRef.current, size: encodeUtf8(bufferRef.current).length });
       const prefs = autoSaveRef.current;
       if (dirtyRef.current && prefs.autoSave) {
@@ -309,10 +316,11 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
           saveNow().catch((e) => console.error("[autosave]", e));
         }, prefs.autoSaveDelay);
       }
-      return () => { ++readRequests.current; ++saveGeneration.current; clearSaveConflict(); };
+      return () => { ++readRequests.current; ++saveGeneration.current; documentReadyRef.current = false; clearSaveConflict(); };
     }
     // "Open anyway" is a per-file decision; a new path starts unforced.
     forceRef.current = false;
+    documentReadyRef.current = false;
     setDoc({ status: "loading" });
     dirtyRef.current = false;
     setDirty(false);
@@ -330,11 +338,14 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     return () => {
       ++readRequests.current;
       ++saveGeneration.current;
+      documentReadyRef.current = false;
       clearSaveConflict();
     };
   }, [readFromDisk, adoptRead, path, sourceKey, relocation, clearAutoSaveTimer, saveNow, clearSaveConflict]);
 
   const openAnyway = useCallback(() => {
+    documentReadyRef.current = false;
+    clearSaveConflict();
     const request = ++readRequestRef.current;
     forceRef.current = true;
     setDoc({ status: "loading" });
@@ -347,7 +358,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
           setDoc({ status: "error", message: String(e) });
         }
       });
-  }, [readFromDisk, adoptRead]);
+  }, [readFromDisk, adoptRead, clearSaveConflict]);
 
   // Skipped while dirty: never clobber unsaved edits. Re-checked when the
   // read resolves, since typing can start while it is in flight.

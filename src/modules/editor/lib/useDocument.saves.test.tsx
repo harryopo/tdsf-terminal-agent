@@ -73,6 +73,46 @@ afterEach(() => {
 });
 
 describe("useDocument save lifecycle", () => {
+  it("does not save the previous buffer while the replacement document is still loading", async () => {
+    const readB = deferred<ReturnType<typeof text>>();
+    invokeMock.mockImplementation((command: string, args: { path: string }) => {
+      if (command === "fs_read_file") return args.path === "/a.txt" ? Promise.resolve(text("original A")) : readB.promise;
+      if (command === "fs_stat") return Promise.resolve(stat(10));
+      return Promise.resolve(11);
+    });
+    const { result, rerender } = renderHook(({ path }) => useDocument({ path }), { initialProps: { path: "/a.txt" } });
+    await waitFor(() => expect(result.current.doc).toMatchObject({ content: "original A" }));
+    act(() => result.current.onChange("draft A"));
+    rerender({ path: "/b.txt" });
+    expect(result.current.doc.status).toBe("loading");
+    await act(async () => expect(await result.current.save()).toBe(false));
+    expect(invokeMock).not.toHaveBeenCalledWith("fs_write_file", expect.anything());
+    await act(async () => readB.resolve(text("original B")));
+    act(() => result.current.onChange("draft B"));
+    await act(async () => expect(await result.current.save()).toBe(true));
+    expect(invokeMock).toHaveBeenCalledWith("fs_write_file", expect.objectContaining({ path: "/b.txt", content: "draft B" }));
+  });
+
+  it("withholds saving during openAnyway even before the loading state renders", async () => {
+    const forcedRead = deferred<ReturnType<typeof text>>();
+    let reads = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "fs_read_file") return reads++ === 0 ? Promise.resolve(text("original")) : forcedRead.promise;
+      if (command === "fs_stat") return Promise.resolve(stat(10));
+      return Promise.resolve(11);
+    });
+    const { result } = renderHook(() => useDocument({ path: "/a.txt" }));
+    await waitFor(() => expect(result.current.doc).toMatchObject({ content: "original" }));
+    act(() => result.current.onChange("draft"));
+    await act(async () => {
+      result.current.openAnyway();
+      expect(await result.current.save()).toBe(false);
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("fs_write_file", expect.anything());
+    await act(async () => forcedRead.resolve(text("reopened")));
+    expect(result.current.doc).toMatchObject({ content: "reopened" });
+  });
+
   it("withholds a local save whose stat resolves after the path is replaced", async () => {
     const oldStat = deferred<ReturnType<typeof stat>>();
     invokeMock.mockImplementation((command: string, args: { path: string }) => {
