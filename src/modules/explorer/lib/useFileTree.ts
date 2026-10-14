@@ -79,6 +79,7 @@ function sameDirListing(a: DirEntry[], b: DirEntry[]): boolean {
 }
 
 type Options = {
+  onBeforePathRenamed?: (from: string, to: string, source: FileSource | null) => Promise<(committed: boolean) => void>;
   onPathRenamed?: (from: string, to: string, source: FileSource | null) => void;
   onPathDeleted?: (path: string, source: FileSource | null) => void;
   /**
@@ -494,7 +495,10 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       }
       const to = joinPath(parent, trimmed);
       const scope = captureMutation(), token = editToken.current;
+      let finish: ((committed: boolean) => void) | undefined;
+      let committed = false;
       try {
+        if (options?.onBeforePathRenamed) finish = await options.onBeforePathRenamed(renaming, to, scope.owner);
         const sftp = scope.sftp;
         if (sftp) {
           await invoke("fsb_rename", { ...sftp, from: renaming, to });
@@ -505,11 +509,14 @@ export function useFileTree(rootPath: string | null, options?: Options) {
             workspace: scope.workspace,
           });
         }
+        committed = true;
         options?.onPathRenamed?.(renaming, to, scope.owner);
         if (scope.isCurrent()) await fetchChildren(parent);
       } catch (e) {
         console.error("rename failed:", e);
+        toast.error(`重命名失败：${String(e)}`);
       } finally {
+        finish?.(committed);
         if (scope.isCurrent() && editToken.current === token) setRenaming(null);
       }
     },
@@ -549,7 +556,10 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         console.warn(`move skipped: "${name}" already exists in ${toDir}`);
         return;
       }
+      let finish: ((committed: boolean) => void) | undefined;
+      let committed = false;
       try {
+        if (options?.onBeforePathRenamed) finish = await options.onBeforePathRenamed(from, to, scope.owner);
         const sftp = scope.sftp;
         if (sftp) {
           await invoke("fsb_rename", { ...sftp, from, to });
@@ -560,10 +570,14 @@ export function useFileTree(rootPath: string | null, options?: Options) {
             workspace: scope.workspace,
           });
         }
+        committed = true;
         options?.onPathRenamed?.(from, to, scope.owner);
         if (scope.isCurrent()) await Promise.all([fetchChildren(dirname(from)), fetchChildren(toDir)]);
       } catch (e) {
         console.error("move failed:", e);
+        toast.error(`移动失败：${String(e)}`);
+      } finally {
+        finish?.(committed);
       }
     },
     [fetchChildren, options, captureMutation],

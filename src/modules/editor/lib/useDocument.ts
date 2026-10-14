@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { detectEol, type Eol, normalizeToLf, restoreEol } from "./eol";
+import { trackFileSave } from "./pendingFileSaves";
 
 type ReadResult =
   | { kind: "text"; content: string; size: number; mtime: number }
@@ -17,6 +18,7 @@ type ReadResult =
 type FileStat = { size: number; mtime: number; kind: string };
 type SaveSnapshot = { generation: number; path: string; sourceKey: string | null; content: string; eol: Eol };
 type SaveConflict = { id: string };
+export type DocumentRelocation = { ready: Promise<void>; cancel: () => void };
 
 /// Mirrors FORCE_MAX_READ_BYTES in src-tauri fs/file.rs.
 export const FORCE_READ_LIMIT = 50 * 1024 * 1024;
@@ -54,6 +56,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   const saveGenerationRef = useRef(0);
   const documentReadyRef = useRef(false);
   const saveTailRef = useRef<Promise<boolean> | null>(null);
+  const relocationRef = useRef<{ from: string; to: string; sourceKey: string | null } | null>(null);
   const conflictRef = useRef<SaveConflict | null>(null);
   const conflictId = useId();
   const clearSaveConflict = useCallback(() => {
@@ -148,7 +151,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     if (!remote && !documentWorkspace) {
       return Promise.reject(new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。"));
     }
-    if (!documentReadyRef.current) return Promise.resolve(false);
+    if (!documentReadyRef.current || relocationRef.current) return Promise.resolve(false);
     const snapshot: SaveSnapshot = {
       generation: saveGenerationRef.current, path, sourceKey,
       content: bufferRef.current, eol: eolRef.current,
@@ -205,12 +208,35 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     const previous = saveTailRef.current;
     const pending = previous ? previous.catch(() => false).then(run) : run();
     saveTailRef.current = pending;
+    trackFileSave(sourceKey, path, pending);
     const release = () => {
       if (saveTailRef.current === pending) saveTailRef.current = null;
     };
     void pending.then(release, release);
     return pending;
   }, [path, sourceKey, remote, writeToDisk, getRustSessionId, documentWorkspace, ownsSave, clearSaveConflict, conflictId]);
+
+  const beginRelocation = useCallback((to: string): DocumentRelocation => {
+    if (relocationRef.current) throw new Error("文件正在迁移，请等待本次重命名或移动完成。");
+    const ticket = { from: path, to, sourceKey };
+    relocationRef.current = ticket;
+    clearAutoSaveTimer();
+    clearSaveConflict();
+    return {
+      ready: (saveTailRef.current ?? Promise.resolve()).then(() => {}),
+      cancel: () => {
+        if (relocationRef.current !== ticket) return;
+        relocationRef.current = null;
+        const prefs = autoSaveRef.current;
+        if (dirtyRef.current && prefs.autoSave && documentReadyRef.current) {
+          timeoutRef.current = setTimeout(() => {
+            saveNow().catch((e) => console.error("[autosave]", e));
+          }, prefs.autoSaveDelay);
+        }
+      },
+    };
+  }, [path, sourceKey, clearAutoSaveTimer, clearSaveConflict, saveNow]);
+  const isRelocating = useCallback(() => relocationRef.current !== null, []);
 
   // Notify parent of dirty transitions.
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -305,6 +331,10 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     const request = ++readRequests.current;
     const previous = identityRef.current;
     identityRef.current = { path, sourceKey };
+    const moving = relocationRef.current;
+    if (moving && (sourceKey !== moving.sourceKey || path !== moving.from)) {
+      relocationRef.current = null;
+    }
     clearAutoSaveTimer();
     if (relocation?.from === previous.path && relocation.to === path &&
       sourceKey !== null && previous.sourceKey === sourceKey && docRef.current.status === "ready") {
@@ -344,6 +374,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   }, [readFromDisk, adoptRead, path, sourceKey, relocation, clearAutoSaveTimer, saveNow, clearSaveConflict]);
 
   const openAnyway = useCallback(() => {
+    if (relocationRef.current) return;
     documentReadyRef.current = false;
     clearSaveConflict();
     const request = ++readRequestRef.current;
@@ -363,7 +394,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   // Skipped while dirty: never clobber unsaved edits. Re-checked when the
   // read resolves, since typing can start while it is in flight.
   const reload = useCallback((): boolean => {
-    if (dirtyRef.current) return false;
+    if (dirtyRef.current || relocationRef.current) return false;
     const request = ++readRequestRef.current;
     void readFromDisk(forceRef.current)
       .then((res) => {
@@ -410,7 +441,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
       clearAutoSaveTimer();
 
       const { autoSave: active, autoSaveDelay: delay } = autoSaveRef.current;
-      if (active && isDirty) {
+      if (active && isDirty && !relocationRef.current) {
         timeoutRef.current = setTimeout(() => {
           saveNow().catch((e) => console.error("[autosave]", e));
         }, delay);
@@ -422,5 +453,5 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   // biome-ignore lint/correctness/useExhaustiveDependencies: path is the trigger that runs the auto-save timer cleanup when the active document changes.
   useEffect(() => clearAutoSaveTimer, [path, documentWorkspace, clearAutoSaveTimer]);
 
-  return { doc, dirty, onChange, save, reload, adoptDiskText, openAnyway, workspace: documentWorkspace };
+  return { doc, dirty, onChange, save, reload, adoptDiskText, openAnyway, beginRelocation, isRelocating, workspace: documentWorkspace };
 }

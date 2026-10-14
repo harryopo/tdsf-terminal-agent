@@ -171,9 +171,10 @@ import { isUserLineDirty } from "@/modules/terminal/lib/terminalInputState";
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
-import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
-import type { FileSource } from "@/modules/workspace/fileSource";
+import { ipcWorkspaceEnv, useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
+import { fileSourceKey, type FileSource } from "@/modules/workspace/fileSource";
 import { editorMatchesSource } from "@/modules/tabs/lib/editorWorkspace";
+import { pendingFileSaves } from "@/modules/editor/lib/pendingFileSaves";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -272,6 +273,7 @@ export default function App() {
   // captureActiveSelection 需要优先用这个 leafId 查 terminalRefs）
   const sshActiveLeafIdRef = useRef<number | null>(null);
   const editorRefs = useRef<Map<number, EditorPaneHandle>>(new Map());
+  const fileRelocationsRef = useRef<{ from: string; to: string; sourceKey: string }[]>([]);
   const previewRefs = useRef<Map<number, PreviewPaneHandle>>(new Map());
   const [activeEditorHandle, setActiveEditorHandle] =
     useState<EditorPaneHandle | null>(null);
@@ -1646,15 +1648,57 @@ export default function App() {
     [newTab],
   );
 
+  const isFileRelocating = useCallback((path: string, source: FileSource | null) => {
+    const sourceKey = fileSourceKey(source);
+    return fileRelocationsRef.current.some(moving => moving.sourceKey === sourceKey &&
+      [moving.from, moving.to].some(root => path === root || path.startsWith(`${root}/`)));
+  }, []);
+
+  const handleBeforePathRenamed = useCallback(async (from: string, to: string, source: FileSource | null) => {
+    const sourceKey = fileSourceKey(source);
+    if (!sourceKey) throw new Error("无法确认文件所属连接，请刷新文件列表后重试。");
+    const roots = [from, to];
+    if (fileRelocationsRef.current.some(moving => moving.sourceKey === sourceKey &&
+      [moving.from, moving.to].some(old => roots.some(root => old === root || old.startsWith(`${root}/`) || root.startsWith(`${old}/`))))) {
+      throw new Error("相关文件正在迁移，请等待本次重命名或移动完成。");
+    }
+    const scope = { from, to, sourceKey };
+    fileRelocationsRef.current.push(scope);
+    const holds: ReturnType<EditorPaneHandle["beginRelocation"]>[] = [];
+    const finish = (committed: boolean) => {
+      if (!fileRelocationsRef.current.includes(scope)) return;
+      fileRelocationsRef.current = fileRelocationsRef.current.filter(item => item !== scope);
+      if (!committed) for (const hold of holds) hold.cancel();
+    };
+    try {
+      for (const tab of tabsRef.current) {
+        if (tab.kind !== "editor" || !editorMatchesSource(tab, source) ||
+          !(tab.path === from || tab.path.startsWith(`${from}/`))) continue;
+        const handle = editorRefs.current.get(tab.id);
+        if (handle) holds.push(handle.beginRelocation(`${to}${tab.path.slice(from.length)}`));
+      }
+      await Promise.all([...holds.map(hold => hold.ready), ...pendingFileSaves(sourceKey, from)]);
+      return finish;
+    } catch (e) {
+      await Promise.allSettled(holds.map(hold => hold.ready));
+      finish(false);
+      throw e;
+    }
+  }, []);
+
   const handleOpenFile = useCallback(
     (path: string, pin?: boolean) => {
+      if (isFileRelocating(path, ipcWorkspaceEnv())) {
+        toast.info("文件正在迁移，请稍后再打开。");
+        return;
+      }
       // Markdown opens in its rendered view by default; a per-tab toggle flips
       // it to the raw editor. Other files default to preview (pin=false);
       // explicit actions like context-menu "Open" pass pin=true to persist.
       if (isMarkdownPath(path)) newMarkdownTab(path);
       else openFileTab(path, pin ?? false);
     },
-    [openFileTab, newMarkdownTab],
+    [openFileTab, newMarkdownTab, isFileRelocating],
   );
 
   // TDSF 2026-07-30: 远程文件点击改走主区 EditorStack（多 tab 并行），
@@ -1666,9 +1710,13 @@ export default function App() {
       // 切 Space 后点击远程文件不会串到其它 session。
       const sessionId = explorerSshSessionId ?? spaceSshSessionId ?? activeSshSessionId;
       if (!sessionId) return;
+      if (isFileRelocating(path, { kind: "ssh", sessionId })) {
+        toast.info("文件正在迁移，请稍后再打开。");
+        return;
+      }
       openFileTab(path, false, { sessionId });
     },
-    [explorerSshSessionId, spaceSshSessionId, activeSshSessionId, openFileTab],
+    [explorerSshSessionId, spaceSshSessionId, activeSshSessionId, openFileTab, isFileRelocating],
   );
 
   // "Open With" files arrive via the event (warm start) and get_launch_files
@@ -2589,6 +2637,7 @@ export default function App() {
                                     ? handleOpenRemoteFile
                                     : handleOpenFile
                                 }
+                                onBeforePathRenamed={handleBeforePathRenamed}
                                 onPathRenamed={handlePathRenamed}
                                 onPathDeleted={handlePathDeleted}
                                 onRevealInTerminal={

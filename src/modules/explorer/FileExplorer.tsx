@@ -62,6 +62,7 @@ type Props = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
+  onBeforePathRenamed?: (from: string, to: string, source: FileSource | null) => Promise<(committed: boolean) => void>;
   onPathRenamed?: (from: string, to: string, source: FileSource | null) => void;
   onPathDeleted?: (path: string, source: FileSource | null) => void;
   onRevealInTerminal?: (path: string) => void;
@@ -202,6 +203,7 @@ export const FileExplorer = memo(
       rootPath,
       activeFilePath,
       onOpenFile,
+      onBeforePathRenamed,
       onPathRenamed,
       onPathDeleted,
       onRevealInTerminal,
@@ -217,6 +219,7 @@ export const FileExplorer = memo(
     const explorerScopeKey = `${fileTreeSourceKey(fsSource)}:${rootPath ?? ""}`;
     const fatalError = useWorkspaceFsStore((s) => s.fatalError);
     const tree = useFileTree(rootPath, {
+      onBeforePathRenamed,
       onPathRenamed,
       onPathDeleted,
       source: fsSource,
