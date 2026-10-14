@@ -91,6 +91,7 @@ type Props = {
    */
   remote?: { sessionId: string } | null;
   workspace?: LocalWorkspaceEnv | null;
+  relocation?: { from: string; to: string };
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
@@ -110,13 +111,14 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, remote, workspace, onDirtyChange, onSaved, onClose } = props;
+    const { path, overrideLanguage, remote, workspace, relocation, onDirtyChange, onSaved, onClose } = props;
 
     const { doc, onChange, save, reload, adoptDiskText, openAnyway, workspace: documentWorkspace } =
       useDocument({
         path,
         remote,
         workspace,
+        relocation,
         onDirtyChange,
       });
     const reloadRef = useRef(reload);

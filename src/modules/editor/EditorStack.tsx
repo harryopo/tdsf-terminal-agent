@@ -118,6 +118,7 @@ export function EditorStack({
                 overrideLanguage={t.overrideLanguage}
                 remote={t.remote ?? null}
                 workspace={editorWorkspace(t)}
+                relocation={t.relocation}
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
               />

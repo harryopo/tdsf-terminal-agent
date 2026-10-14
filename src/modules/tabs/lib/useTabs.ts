@@ -180,6 +180,8 @@ export type EditorTab = TabBase & {
   overrideLanguage?: string | null;
   /** File IO identity remains fixed even when the tab moves to another space. */
   workspace?: LocalWorkspaceEnv | null;
+  /** A successful rename of this same document, not a replacement file. */
+  relocation?: { from: string; to: string };
   /**
    * TDSF 2026-07-30: 远程文件标记。
    * - undefined / null: 本地文件，走 fs_read_file/fs_write_file/fs_stat + 本地 watch + LSP。
@@ -269,6 +271,7 @@ export type TabPatch = Partial<{
   /** Empty string resets a terminal tab to its cwd-derived name. */
   customTitle: string;
   overrideLanguage: string | null;
+  relocation: { from: string; to: string };
   /**
    * TDSF 2026-07-30: 绑定/解绑 terminal tab 到 SSH 会话。
    * - string: 绑定到该 SSH 会话（前端 UUID），工作区渲染 SshTerminalHost
@@ -1269,6 +1272,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           ...(patch.title !== undefined && { title: patch.title }),
           ...(patch.dirty !== undefined && { dirty: patch.dirty }),
           ...(patch.path !== undefined && { path: patch.path }),
+          ...(patch.relocation !== undefined && { relocation: patch.relocation }),
           ...(patch.overrideLanguage !== undefined && {
             overrideLanguage: patch.overrideLanguage,
           }),

@@ -13,6 +13,7 @@ import type { GitStatusSnapshot } from "@/modules/ai/lib/native";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
 import type { TerminalPathDropTarget } from "@/modules/terminal";
+import type { FileSource } from "@/modules/workspace/fileSource";
 import {
   FileAddIcon,
   Folder01Icon,
@@ -46,7 +47,7 @@ import { fileIconUrl, folderIconUrl } from "./lib/iconResolver";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
-import { type FileTreeSource, useFileTree } from "./lib/useFileTree";
+import { fileTreeSourceKey, type FileTreeSource, useFileTree } from "./lib/useFileTree";
 import { useWorkspaceFsStore } from "./lib/workspaceFsStore";
 import { useGitStatus } from "./lib/useGitStatus";
 import { EntryRow, PendingRow, type RowActions, StatusRow } from "./TreeRow";
@@ -61,8 +62,8 @@ type Props = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
-  onPathRenamed?: (from: string, to: string) => void;
-  onPathDeleted?: (path: string) => void;
+  onPathRenamed?: (from: string, to: string, source: FileSource | null) => void;
+  onPathDeleted?: (path: string, source: FileSource | null) => void;
   onRevealInTerminal?: (path: string) => void;
   onAttachToAgent?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
@@ -213,6 +214,7 @@ export const FileExplorer = memo(
   ) {
     // WorkspaceFs P2-3: 单一数据源 —— 一套树 + 后端原子切换, 无双轨中间态
     const isRemote = fsSource?.kind === "sftp";
+    const explorerScopeKey = `${fileTreeSourceKey(fsSource)}:${rootPath ?? ""}`;
     const fatalError = useWorkspaceFsStore((s) => s.fatalError);
     const tree = useFileTree(rootPath, {
       onPathRenamed,
@@ -268,6 +270,7 @@ export const FileExplorer = memo(
       path: string;
       name: string;
       isDir: boolean;
+      scopeKey: string;
     } | null>(null);
     // #166 ③：删除确认从"菜单项文案变成 Click again to confirm"改成正式弹窗。
     // 旧做法第一次点了不删、菜单还挂着，看起来像没反应，而且从头到尾没说清要删的是哪条路径。
@@ -275,8 +278,16 @@ export const FileExplorer = memo(
       path: string;
       name: string;
       isDir: boolean;
+      scopeKey: string;
     } | null>(null);
     const [deleting, setDeleting] = useState(false);
+    const deleteTokenRef = useRef({});
+    useEffect(() => {
+      deleteTokenRef.current = {};
+      setMenuTarget(null);
+      setDeleteTarget(null);
+      setDeleting(false);
+    }, [explorerScopeKey]);
 
     /**
      * 删除走 `tree.deletePath`（本地 fs_delete / 远端 fsb_delete 都是直接删，不进回收站）。
@@ -284,13 +295,17 @@ export const FileExplorer = memo(
      * 这里仍等它落定再关窗：按钮在飞的时候显示「删除中…」，用户知道应用收到了指令。
      */
     const confirmFileDelete = async () => {
-      if (!deleteTarget) return;
+      if (!deleteTarget || deleteTarget.scopeKey !== explorerScopeKey) return;
+      const target = deleteTarget, token = {};
+      deleteTokenRef.current = token;
       setDeleting(true);
       try {
-        await tree.deletePath(deleteTarget.path);
+        await tree.deletePath(target.path);
       } finally {
-        setDeleting(false);
-        setDeleteTarget(null);
+        if (deleteTokenRef.current === token) {
+          setDeleting(false);
+          setDeleteTarget(current => current === target ? null : current);
+        }
       }
     };
     // Bumped on every right-click so the menu content remounts and the popper
@@ -656,7 +671,7 @@ export const FileExplorer = memo(
                   const row = idx !== undefined ? rows[idx] : undefined;
                   setMenuTarget(
                     row && row.kind === "entry"
-                      ? { path: row.path, name: row.name, isDir: row.isDir }
+                      ? { path: row.path, name: row.name, isDir: row.isDir, scopeKey: explorerScopeKey }
                       : null,
                   );
                   setMenuNonce((n) => n + 1);
@@ -832,7 +847,7 @@ export const FileExplorer = memo(
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     variant="destructive"
-                    onSelect={() => setDeleteTarget(menuTarget)}
+                    onSelect={() => menuTarget.scopeKey === explorerScopeKey && setDeleteTarget(menuTarget)}
                   >
                     Delete
                   </ContextMenuItem>

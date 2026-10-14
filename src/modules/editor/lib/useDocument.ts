@@ -3,6 +3,7 @@ import { notifyDocumentSaved } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useSshStore } from "@/modules/ssh-explorer";
 import { ipcWorkspaceEnv, type LocalWorkspaceEnv } from "@/modules/workspace";
+import { fileSourceKey } from "@/modules/workspace/fileSource";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -33,14 +34,19 @@ type Options = {
    */
   remote?: { sessionId: string } | null;
   workspace?: LocalWorkspaceEnv | null;
+  relocation?: { from: string; to: string };
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-export function useDocument({ path, remote, workspace, onDirtyChange }: Options) {
+export function useDocument({ path, remote, workspace, relocation, onDirtyChange }: Options) {
   const [mountWorkspace] = useState(() => ({ ...ipcWorkspaceEnv() }));
   const documentWorkspace = workspace === undefined ? mountWorkspace : workspace;
   const [doc, setDoc] = useState<DocumentState>({ status: "loading" });
   const [dirty, setDirty] = useState(false);
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const sourceKey = fileSourceKey(remote ? { kind: "ssh", sessionId: remote.sessionId } : documentWorkspace);
+  const identityRef = useRef({ path, sourceKey });
 
   const autoSave = usePreferencesStore((s) => s.editorAutoSave);
   const autoSaveDelay = usePreferencesStore((s) => s.editorAutoSaveDelay);
@@ -231,6 +237,20 @@ export function useDocument({ path, remote, workspace, onDirtyChange }: Options)
   useEffect(() => {
     const readRequests = readRequestRef;
     const request = ++readRequests.current;
+    const previous = identityRef.current;
+    identityRef.current = { path, sourceKey };
+    clearAutoSaveTimer();
+    if (relocation?.from === previous.path && relocation.to === path &&
+      sourceKey !== null && previous.sourceKey === sourceKey && docRef.current.status === "ready") {
+      setDoc({ ...docRef.current, content: bufferRef.current, size: encodeUtf8(bufferRef.current).length });
+      const prefs = autoSaveRef.current;
+      if (dirtyRef.current && prefs.autoSave) {
+        timeoutRef.current = setTimeout(() => {
+          saveNow().catch((e) => console.error("[autosave]", e));
+        }, prefs.autoSaveDelay);
+      }
+      return () => { ++readRequests.current; };
+    }
     // "Open anyway" is a per-file decision; a new path starts unforced.
     forceRef.current = false;
     setDoc({ status: "loading" });
@@ -250,7 +270,7 @@ export function useDocument({ path, remote, workspace, onDirtyChange }: Options)
     return () => {
       ++readRequests.current;
     };
-  }, [readFromDisk, adoptRead]);
+  }, [readFromDisk, adoptRead, path, sourceKey, relocation, clearAutoSaveTimer, saveNow]);
 
   const openAnyway = useCallback(() => {
     const request = ++readRequestRef.current;

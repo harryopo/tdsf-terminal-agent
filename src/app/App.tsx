@@ -172,6 +172,8 @@ import { isUserLineDirty } from "@/modules/terminal/lib/terminalInputState";
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
+import type { FileSource } from "@/modules/workspace/fileSource";
+import { editorMatchesSource } from "@/modules/tabs/lib/editorWorkspace";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -1687,12 +1689,13 @@ export default function App() {
   }, [handleOpenFile]);
 
   const handlePathRenamed = useCallback(
-    (from: string, to: string) => {
-      for (const t of tabs) {
+    (from: string, to: string, source: FileSource | null) => {
+      for (const t of tabsRef.current) {
         if (t.kind !== "editor") continue;
+        if (!editorMatchesSource(t, source)) continue;
         if (t.path === from) {
           const i = to.lastIndexOf("/");
-          updateTab(t.id, { path: to, title: i === -1 ? to : to.slice(i + 1) });
+          updateTab(t.id, { path: to, title: i === -1 ? to : to.slice(i + 1), relocation: { from: t.path, to } });
         } else if (t.path.startsWith(`${from}/`)) {
           const suffix = t.path.slice(from.length);
           const newPath = `${to}${suffix}`;
@@ -1700,11 +1703,12 @@ export default function App() {
           updateTab(t.id, {
             path: newPath,
             title: i === -1 ? newPath : newPath.slice(i + 1),
+            relocation: { from: t.path, to: newPath },
           });
         }
       }
     },
-    [tabs, updateTab],
+    [updateTab],
   );
 
   const activeTerminalLeafCwd =
@@ -2565,8 +2569,9 @@ export default function App() {
                                         sessionId:
                                           explorerSshSession.rustSessionId,
                                         root: explorerCurrentPath ?? "/",
+                                        frontendSessionId: explorerSshSession.id,
                                       }
-                                    : { kind: "local" }
+                                    : { kind: "local", workspace: workspaceEnv.kind === "wsl" ? workspaceEnv : { kind: "local" } }
                                 }
                                 gitStatus={
                                   explorerSource === "local" &&
@@ -2584,16 +2589,8 @@ export default function App() {
                                     ? handleOpenRemoteFile
                                     : handleOpenFile
                                 }
-                                onPathRenamed={
-                                  explorerSource === "ssh"
-                                    ? undefined
-                                    : handlePathRenamed
-                                }
-                                onPathDeleted={
-                                  explorerSource === "ssh"
-                                    ? undefined
-                                    : handlePathDeleted
-                                }
+                                onPathRenamed={handlePathRenamed}
+                                onPathDeleted={handlePathDeleted}
                                 onRevealInTerminal={
                                   explorerSource === "ssh"
                                     ? undefined
