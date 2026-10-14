@@ -430,7 +430,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           if (pendingCreate.kind === "dir") {
             await invoke("fsb_mkdir", { ...sftp, path });
           } else {
-            await invoke("fsb_write", { ...sftp, path, data: [] });
+            await invoke("fsb_write", { ...sftp, path, data: [], createNew: true });
           }
         } else {
           const cmd =

@@ -129,10 +129,10 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
       }
       if (mtime !== null && mtime !== known) {
         const name = path.split(/[\\/]/).pop() ?? path;
-        toast.warning("File changed on disk", {
+        toast.warning("文件已被外部修改", {
           id: `save-conflict:${path}`,
-          description: `${name} was modified by another program while you had unsaved changes. Overwrite to keep your version.`,
-          action: { label: "Overwrite", onClick: () => void writeToDisk() },
+          description: `“${name}”在存在未保存更改时被其他程序修改。仅在确认保留当前版本时选择覆盖保存。`,
+          action: { label: "覆盖保存", onClick: () => void writeToDisk() },
         });
         return false;
       }
@@ -151,6 +151,8 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
   }, [dirty]);
 
   const forceRef = useRef(false);
+  // All read entry points share ownership, including refreshes after rename.
+  const readRequestRef = useRef(0);
 
   // Adopts a read result as the new saved baseline. `skipIfUnchanged` avoids
   // the re-render when disk already matches the buffer (self-save / duplicate
@@ -163,6 +165,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
       if (skipIfUnchanged && content === savedRef.current) return;
       savedRef.current = content;
       bufferRef.current = content;
+      dirtyRef.current = false;
       setDirty(false);
       setDoc({ status: "ready", content, size: res.size });
     } else if (res.kind === "binary") {
@@ -220,40 +223,54 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
 
   // Load on path change.
   useEffect(() => {
-    let cancelled = false;
+    const readRequests = readRequestRef;
+    const request = ++readRequests.current;
     // "Open anyway" is a per-file decision; a new path starts unforced.
     forceRef.current = false;
     setDoc({ status: "loading" });
+    dirtyRef.current = false;
     setDirty(false);
 
     readFromDisk(forceRef.current)
       .then((res) => {
-        if (!cancelled) adoptRead(res);
+        if (request === readRequests.current) adoptRead(res);
       })
       .catch((e) => {
-        if (!cancelled) setDoc({ status: "error", message: String(e) });
+        if (request === readRequests.current) {
+          setDoc({ status: "error", message: String(e) });
+        }
       });
 
     return () => {
-      cancelled = true;
+      ++readRequests.current;
     };
   }, [readFromDisk, adoptRead]);
 
   const openAnyway = useCallback(() => {
+    const request = ++readRequestRef.current;
     forceRef.current = true;
     setDoc({ status: "loading" });
     readFromDisk(true)
-      .then(adoptRead)
-      .catch((e) => setDoc({ status: "error", message: String(e) }));
+      .then((res) => {
+        if (request === readRequestRef.current) adoptRead(res);
+      })
+      .catch((e) => {
+        if (request === readRequestRef.current) {
+          setDoc({ status: "error", message: String(e) });
+        }
+      });
   }, [readFromDisk, adoptRead]);
 
   // Skipped while dirty: never clobber unsaved edits. Re-checked when the
   // read resolves, since typing can start while it is in flight.
   const reload = useCallback((): boolean => {
     if (dirtyRef.current) return false;
+    const request = ++readRequestRef.current;
     void readFromDisk(forceRef.current)
       .then((res) => {
-        if (!dirtyRef.current) adoptRead(res, true);
+        if (request === readRequestRef.current && !dirtyRef.current) {
+          adoptRead(res, true);
+        }
       })
       // Transient failures (e.g. ENOENT mid atomic-rename) must not replace
       // a healthy buffer with an error screen.
@@ -288,6 +305,7 @@ export function useDocument({ path, remote, onDirtyChange }: Options) {
     (next: string) => {
       bufferRef.current = next;
       const isDirty = next !== savedRef.current;
+      dirtyRef.current = isDirty;
       setDirty(isDirty);
 
       clearAutoSaveTimer();
