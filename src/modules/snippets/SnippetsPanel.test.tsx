@@ -10,7 +10,7 @@
  *   6. 置顶 / 取消置顶
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useSnippetsStore } from "./lib/snippetStore";
 import { snippetConfirmation } from "./lib/snippetConfirmation";
 import { SnippetsPanel } from "./SnippetsPanel";
@@ -99,8 +99,11 @@ describe("SnippetsPanel — 插入行为", () => {
       hydrated: true,
     });
     render(<SnippetsPanel onInsertCommand={onInsertCommand} />);
-    fireEvent.click(screen.getByTestId("snippet-row-按模式搜索"));
-    // 懒加载 Dialog 异步挂载
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("snippet-row-按模式搜索"));
+      await vi.dynamicImportSettled();
+    });
+    // Wait for the lazy module before asserting the rendered dialog.
     expect(await screen.findByText("即将插入的命令")).toBeTruthy();
     expect(onInsertCommand).not.toHaveBeenCalled();
   });
