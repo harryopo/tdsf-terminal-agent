@@ -1667,3 +1667,14 @@ if (import.meta.env?.DEV && typeof window !== "undefined") {
   (window as unknown as { __tdsfTerm?: unknown }).__tdsfTerm =
     terminalDebugStats;
 }
+
+if (import.meta.hot) {
+  import.meta.hot.accept(() => window.location.reload());
+  import.meta.hot.dispose(() => {
+    for (const { leafId } of terminalDebugStats().sessions) disposeSession(leafId);
+    if (typeof window !== "undefined") {
+      const debugWindow = window as unknown as { __tdsfTerm?: unknown };
+      if (debugWindow.__tdsfTerm === terminalDebugStats) delete debugWindow.__tdsfTerm;
+    }
+  });
+}
