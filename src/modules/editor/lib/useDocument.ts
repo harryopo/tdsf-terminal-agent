@@ -5,7 +5,7 @@ import { useSshStore } from "@/modules/ssh-explorer";
 import { ipcWorkspaceEnv, type LocalWorkspaceEnv } from "@/modules/workspace";
 import { fileSourceKey } from "@/modules/workspace/fileSource";
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { detectEol, type Eol, normalizeToLf, restoreEol } from "./eol";
 
@@ -15,6 +15,8 @@ type ReadResult =
   | { kind: "toolarge"; size: number; limit: number };
 
 type FileStat = { size: number; mtime: number; kind: string };
+type SaveSnapshot = { generation: number; path: string; sourceKey: string | null; content: string; eol: Eol };
+type SaveConflict = { id: string };
 
 /// Mirrors FORCE_MAX_READ_BYTES in src-tauri fs/file.rs.
 export const FORCE_READ_LIMIT = 50 * 1024 * 1024;
@@ -47,6 +49,21 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   docRef.current = doc;
   const sourceKey = fileSourceKey(remote ? { kind: "ssh", sessionId: remote.sessionId } : documentWorkspace);
   const identityRef = useRef({ path, sourceKey });
+  const liveIdentityRef = useRef({ path, sourceKey });
+  liveIdentityRef.current = { path, sourceKey };
+  const saveGenerationRef = useRef(0);
+  const saveTailRef = useRef<Promise<boolean> | null>(null);
+  const conflictRef = useRef<SaveConflict | null>(null);
+  const conflictId = useId();
+  const clearSaveConflict = useCallback(() => {
+    if (conflictRef.current) toast.dismiss(conflictRef.current.id);
+    conflictRef.current = null;
+  }, []);
+  const ownsSave = useCallback((snapshot: SaveSnapshot) => (
+    snapshot.generation === saveGenerationRef.current &&
+    snapshot.path === liveIdentityRef.current.path &&
+    snapshot.sourceKey === liveIdentityRef.current.sourceKey
+  ), []);
 
   const autoSave = usePreferencesStore((s) => s.editorAutoSave);
   const autoSaveDelay = usePreferencesStore((s) => s.editorAutoSaveDelay);
@@ -84,73 +101,111 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     return s?.rustSessionId ?? null;
   }, [remote]);
 
-  const writeToDisk = useCallback(async () => {
-    const content = bufferRef.current;
+  const writeToDisk = useCallback(async (snapshot: SaveSnapshot, sid: number | null): Promise<boolean> => {
+    if (!ownsSave(snapshot)) return false;
+    const { content, eol } = snapshot;
     // TDSF 2026-07-30: 远程文件分流到 sftpWrite。
     // sftpWrite 不返回 mtime，需额外 sftpStat 补，作为下次冲突检测的 baseline。
     if (remote) {
-      const sid = getRustSessionId();
       if (sid === null) throw new Error("SSH session not connected");
       await sftpWrite(
         sid,
         path,
-        encodeUtf8(restoreEol(content, eolRef.current)),
+        encodeUtf8(restoreEol(content, eol)),
       );
+      if (!ownsSave(snapshot)) return false;
       const attrs = await sftpStat(sid, path);
+      if (!ownsSave(snapshot)) return false;
       // SftpAttrs.modified 秒级 → 毫秒（与 FileStat.mtime 对齐）。
       diskMtimeRef.current = attrs.modified * 1000;
       savedRef.current = content;
-      setDirty(bufferRef.current !== content);
+      dirtyRef.current = bufferRef.current !== content;
+      setDirty(dirtyRef.current);
       notifyDocumentSaved(path);
-      return;
+      return true;
     }
     if (!documentWorkspace) throw new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。");
     const mtime = await invoke<number>("fs_write_file", {
       path,
-      content: restoreEol(content, eolRef.current),
+      content: restoreEol(content, eol),
       workspace: documentWorkspace,
       source: "editor",
     });
+    if (!ownsSave(snapshot)) return false;
     diskMtimeRef.current = mtime;
     savedRef.current = content;
     // Edits typed while the write was in flight must stay dirty.
-    setDirty(bufferRef.current !== content);
+    dirtyRef.current = bufferRef.current !== content;
+    setDirty(dirtyRef.current);
     notifyDocumentSaved(path);
-  }, [path, remote, getRustSessionId, documentWorkspace]);
+    return true;
+  }, [path, remote, documentWorkspace, ownsSave]);
 
   // False when the write was withheld because the file changed on disk
   // since load; overwriting is an explicit user action from the toast.
-  const saveNow = useCallback(async (): Promise<boolean> => {
-    const known = diskMtimeRef.current;
-    if (known !== null) {
-      // TDSF 2026-07-30: 远程用 sftpStat，mtime 秒级 *1000 转毫秒。
-      let mtime: number | null = null;
-      if (remote) {
-        const sid = getRustSessionId();
-        if (sid === null) throw new Error("SSH session not connected");
-        const attrs = await sftpStat(sid, path).catch(() => null);
-        mtime = attrs ? attrs.modified * 1000 : null;
-      } else {
-        if (!documentWorkspace) throw new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。");
-        const stat = await invoke<FileStat>("fs_stat", {
-          path,
-          workspace: documentWorkspace,
-        }).catch(() => null);
-        mtime = stat?.mtime ?? null;
+  const saveNow = useCallback((overwrite?: SaveConflict): Promise<boolean> => {
+    const snapshot: SaveSnapshot = {
+      generation: saveGenerationRef.current, path, sourceKey,
+      content: bufferRef.current, eol: eolRef.current,
+    };
+    const run = async (): Promise<boolean> => {
+      if (!ownsSave(snapshot) || (overwrite && conflictRef.current !== overwrite)) return false;
+      if (snapshot.content === savedRef.current) {
+        clearSaveConflict();
+        return true;
       }
-      if (mtime !== null && mtime !== known) {
-        const name = path.split(/[\\/]/).pop() ?? path;
-        toast.warning("文件已被外部修改", {
-          id: `save-conflict:${path}`,
-          description: `“${name}”在存在未保存更改时被其他程序修改。仅在确认保留当前版本时选择覆盖保存。`,
-          action: { label: "覆盖保存", onClick: () => void writeToDisk() },
-        });
-        return false;
+      const sid = remote ? getRustSessionId() : null;
+      const known = diskMtimeRef.current;
+      if (!overwrite && known !== null) {
+        // SFTP mtime is seconds; the editor baseline uses milliseconds.
+        let mtime: number | null = null;
+        if (remote) {
+          if (sid === null) throw new Error("SSH session not connected");
+          const attrs = await sftpStat(sid, path).catch(() => null);
+          mtime = attrs ? attrs.modified * 1000 : null;
+        } else {
+          if (!documentWorkspace) throw new Error("无法确认文件所属环境，未执行保存；请保留草稿并重新打开文件。");
+          const stat = await invoke<FileStat>("fs_stat", {
+            path,
+            workspace: documentWorkspace,
+          }).catch(() => null);
+          mtime = stat?.mtime ?? null;
+        }
+        if (!ownsSave(snapshot)) return false;
+        if (mtime !== null && mtime !== known) {
+          const name = path.split(/[\\/]/).pop() ?? path;
+          clearSaveConflict();
+          const conflict = { id: `save-conflict:${conflictId}` };
+          conflictRef.current = conflict;
+          toast.warning("文件已被外部修改", {
+            id: conflict.id,
+            description: `“${name}”在存在未保存更改时被其他程序修改。仅在确认保留当前版本时选择覆盖保存。`,
+            action: {
+              label: "覆盖保存",
+              onClick: () => {
+                if (!ownsSave(snapshot) || conflictRef.current !== conflict) return;
+                void saveNow(conflict).catch((e) => {
+                  if (ownsSave(snapshot)) toast.error("覆盖保存失败", { description: String(e) });
+                });
+              },
+            },
+          });
+          return false;
+        }
       }
-    }
-    await writeToDisk();
-    return true;
-  }, [path, remote, writeToDisk, getRustSessionId, documentWorkspace]);
+      clearSaveConflict();
+      return writeToDisk(snapshot, sid);
+    };
+    // Snapshot at enqueue, but compare against the baseline of the last ACK.
+    const previous = saveTailRef.current;
+    const pending = previous ? previous.catch(() => false).then(run) : run();
+    saveTailRef.current = pending;
+    const release = () => {
+      if (saveTailRef.current === pending) saveTailRef.current = null;
+    };
+    void pending.then(release, release);
+    return pending;
+  }, [path, sourceKey, remote, writeToDisk, getRustSessionId, documentWorkspace, ownsSave, clearSaveConflict, conflictId]);
 
   // Notify parent of dirty transitions.
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -169,6 +224,8 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   // the re-render when disk already matches the buffer (self-save / duplicate
   // watcher event); initial loads must always publish a state.
   const adoptRead = useCallback((res: ReadResult, skipIfUnchanged = false) => {
+    clearSaveConflict();
+    ++saveGenerationRef.current;
     if (res.kind === "text") {
       eolRef.current = detectEol(res.content);
       diskMtimeRef.current = res.mtime;
@@ -184,7 +241,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
     } else if (res.kind === "toolarge") {
       setDoc({ status: "toolarge", size: res.size, limit: res.limit });
     }
-  }, []);
+  }, [clearSaveConflict]);
 
   const readFromDisk = useCallback(
     (force: boolean): Promise<ReadResult> => {
@@ -236,6 +293,9 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
   // Load on path change.
   useEffect(() => {
     const readRequests = readRequestRef;
+    const saveGeneration = saveGenerationRef;
+    ++saveGeneration.current;
+    clearSaveConflict();
     const request = ++readRequests.current;
     const previous = identityRef.current;
     identityRef.current = { path, sourceKey };
@@ -249,7 +309,7 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
           saveNow().catch((e) => console.error("[autosave]", e));
         }, prefs.autoSaveDelay);
       }
-      return () => { ++readRequests.current; };
+      return () => { ++readRequests.current; ++saveGeneration.current; clearSaveConflict(); };
     }
     // "Open anyway" is a per-file decision; a new path starts unforced.
     forceRef.current = false;
@@ -269,8 +329,10 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
 
     return () => {
       ++readRequests.current;
+      ++saveGeneration.current;
+      clearSaveConflict();
     };
-  }, [readFromDisk, adoptRead, path, sourceKey, relocation, clearAutoSaveTimer, saveNow]);
+  }, [readFromDisk, adoptRead, path, sourceKey, relocation, clearAutoSaveTimer, saveNow, clearSaveConflict]);
 
   const openAnyway = useCallback(() => {
     const request = ++readRequestRef.current;
@@ -306,7 +368,6 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
 
   const save = useCallback(async (): Promise<boolean> => {
     clearAutoSaveTimer();
-    if (bufferRef.current === savedRef.current) return true;
     return saveNow();
   }, [clearAutoSaveTimer, saveNow]);
 
@@ -321,7 +382,8 @@ export function useDocument({ path, remote, workspace, relocation, onDirtyChange
       diskMtimeRef.current = mtime;
       const content = normalizeToLf(diskText);
       savedRef.current = content;
-      setDirty(bufferRef.current !== content);
+      dirtyRef.current = bufferRef.current !== content;
+      setDirty(dirtyRef.current);
       return content;
     },
     [],

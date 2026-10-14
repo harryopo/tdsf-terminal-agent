@@ -12,7 +12,7 @@ const { invokeMock, toastWarning } = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@/modules/lsp", () => ({ notifyDocumentSaved: vi.fn() }));
 vi.mock("sonner", () => ({
-  toast: { warning: toastWarning, error: vi.fn(), success: vi.fn() },
+  toast: { warning: toastWarning, error: vi.fn(), success: vi.fn(), dismiss: vi.fn() },
 }));
 
 const workspaceA = { kind: "wsl", distro: "A" } as const;

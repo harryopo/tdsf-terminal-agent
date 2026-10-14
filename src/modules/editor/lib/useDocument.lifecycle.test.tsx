@@ -25,7 +25,7 @@ vi.mock("@/lib/sftp-bridge", async (importOriginal) => {
 });
 vi.mock("@/modules/lsp", () => ({ notifyDocumentSaved: vi.fn() }));
 vi.mock("sonner", () => ({
-  toast: { warning: toastWarning, error: vi.fn(), success: vi.fn() },
+  toast: { warning: toastWarning, error: vi.fn(), success: vi.fn(), dismiss: vi.fn() },
 }));
 
 function deferred<T>() {

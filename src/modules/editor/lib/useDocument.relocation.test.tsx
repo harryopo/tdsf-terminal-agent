@@ -17,7 +17,7 @@ vi.mock("@/lib/sftp-bridge", async (importOriginal) => {
   return { ...actual, sftpRead: sftpReadMock, sftpStat: sftpStatMock, sftpWrite: sftpWriteMock };
 });
 vi.mock("@/modules/lsp", () => ({ notifyDocumentSaved: vi.fn() }));
-vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn(), dismiss: vi.fn() } }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
