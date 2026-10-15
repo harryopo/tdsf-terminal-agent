@@ -992,10 +992,10 @@ pub async fn ssh_command(
 ) -> Result<SshCommandResult, String> {
     let start = std::time::Instant::now();
     log::info!(
-        "[ssh] exec command: id={} operation_id={:?} cmd={:?} timeout={:?}s",
+        "[ssh] exec command: id={} operation_id={:?} cmd_chars={} timeout={:?}s",
         session_id,
         operation_id,
-        command,
+        command.chars().count(),
         timeout.unwrap_or(30)
     );
 
@@ -1092,9 +1092,9 @@ pub async fn ssh_command(
             // 返回 ok=false 而非 Err,让 Python 端走 "error" 状态分支
             let err_msg = format!("{e}");
             log::error!(
-                "[ssh] exec command failed: id={} cmd={:?} err={} duration={:.3}s",
+                "[ssh] exec command failed: id={} cmd_chars={} err={} duration={:.3}s",
                 session_id,
-                command,
+                command.chars().count(),
                 err_msg,
                 duration
             );

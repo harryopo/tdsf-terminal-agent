@@ -1272,8 +1272,8 @@ impl<R: tauri::Runtime> SshSession<R> {
         drop(handle_guard);
 
         log::info!(
-            "[ssh] exec_command start: cmd={:?}, timeout={:?}s",
-            command,
+            "[ssh] exec_command start: cmd_chars={}, timeout={:?}s",
+            command.chars().count(),
             timeout_secs.unwrap_or(30)
         );
 
@@ -1288,9 +1288,9 @@ impl<R: tauri::Runtime> SshSession<R> {
             Self::collect_exec_output(&mut channel, command, timeout_secs, on_output).await?;
         if timed_out {
             log::warn!(
-                "[ssh] exec_command timeout after {}s: cmd={:?}",
+                "[ssh] exec_command timeout after {}s: cmd_chars={}",
                 timeout_secs,
-                command
+                command.chars().count()
             );
             stderr.extend_from_slice(
                 format!(
@@ -1302,8 +1302,8 @@ impl<R: tauri::Runtime> SshSession<R> {
         }
 
         log::info!(
-            "[ssh] exec_command done: cmd={:?} exit={} stdout={}B stderr={}B",
-            command,
+            "[ssh] exec_command done: cmd_chars={} exit={} stdout={}B stderr={}B",
+            command.chars().count(),
             exit_code,
             stdout.len(),
             stderr.len()
@@ -1373,9 +1373,9 @@ impl<R: tauri::Runtime> SshSession<R> {
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     exit_code = exit_status as i32;
                     log::debug!(
-                        "[ssh] exec exit_status={} cmd={:?}",
+                        "[ssh] exec exit_status={} cmd_chars={}",
                         exit_code,
-                        command
+                        command.chars().count()
                     );
                     // 不立即 break，继续读剩余输出直到 EOF/Close
                 }
@@ -1394,8 +1394,8 @@ impl<R: tauri::Runtime> SshSession<R> {
                 Some(ChannelMsg::Failure) => {
                     // 服务器拒绝 exec 请求（罕见，权限/策略禁止）
                     log::warn!(
-                        "[ssh] exec request Failure (REJECTED by server) cmd={:?}",
-                        command
+                        "[ssh] exec request Failure (REJECTED by server) cmd_chars={}",
+                        command.chars().count()
                     );
                     // TDSF 修复 2026-08-01 (P1-NEW-v2-7): 服务器拒绝 exec 后
                     // 不会再发 ExitStatus/数据，继续等会挂到超时（默认 30s）
