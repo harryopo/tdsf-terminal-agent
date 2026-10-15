@@ -146,7 +146,6 @@ AGENTS.md
 CLAUDE.md
 CONTRIBUTING.md
 CODE_OF_CONDUCT.md
-SECURITY.md
 .coderabbit.yaml
 nix/
 flake.nix

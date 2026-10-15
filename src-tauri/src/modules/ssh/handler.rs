@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
-use russh::client::{Handler, Msg, Session};
-use russh::keys::PublicKey;
+use russh::client::{ChannelOpenHandle, Handler, Msg, Session};
+use russh::keys::{PublicKey, PublicKeyOrCertificate};
 use russh::Channel;
 use tauri::Emitter;
 use tokio::net::TcpStream;
@@ -187,8 +187,12 @@ impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
     ///    - 否则返回 Ok(false)
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // Certificate trust needs CA/principal validation, not raw-key TOFU.
+        let PublicKeyOrCertificate::PublicKey { key: server_public_key, .. } = server_key else {
+            return Err(rust_error("当前不支持主机证书验证；请使用普通 SSH 主机公钥。"));
+        };
         log::info!(
             "[ssh] check_server_key: host={} port={}",
             self.host,
@@ -277,10 +281,12 @@ impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
         connected_port: u32,
         originator_address: &str,
         originator_port: u32,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         match lookup_remote_target(self.connection_id, connected_address, connected_port) {
             Some(target) => {
+                reply.accept().await;
                 log::info!(
                     "[ssh] remote forward connection: {}:{} → local {}:{} (originator {}:{})",
                     connected_address,
@@ -319,7 +325,7 @@ impl<R: tauri::Runtime> Handler for SshClientHandler<R> {
                     originator_address,
                     originator_port
                 );
-                let _ = channel.close().await;
+                reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
                 Ok(())
             }
         }
@@ -450,6 +456,10 @@ impl<R: tauri::Runtime> SshClientHandler<R> {
         Ok(approved)
     }
 }
+
+#[cfg(test)]
+#[path = "host_key_upgrade_tests.rs"]
+mod host_key_upgrade_tests;
 
 #[cfg(test)]
 mod tests {

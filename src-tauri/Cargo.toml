@@ -6,9 +6,8 @@ authors = ["TDSF Team"]
 license = "Apache-2.0"
 repository = "https://github.com/harryopo/tdsf-terminal-agent"
 edition = "2021"
-# 升级到 1.85 以支持 russh 0.61（async fn in trait 稳定 + 新版 tokio）
-# Rust 1.96.0 已实际安装,远超此最低要求
-rust-version = "1.85"
+# russh 0.64 requires Rust 1.89 or later.
+rust-version = "1.89"
 
 # Tauri 2 标准入口 (二进制 = 产品名)
 [[bin]]
@@ -81,11 +80,11 @@ anyhow = "1.0"
 thiserror = "1.0"
 
 # SSH 客户端 (P2-B T-P2-03)
-# russh 0.61: 纯 Rust + tokio 异步,与 Tauri 2 完美契合
+# russh: pure Rust SSH; patched protocol and agent parsers.
 # - 原生 keepalive / inactivity_timeout / known_hosts / agent forwarding
 # - ring feature: 预编译 crypto backend,Windows 零系统依赖
 # - 禁用默认 aws-lc-rs (Windows MSVC 编译失败,需 NASM + alignas 支持)
-russh = { version = "0.61", default-features = false, features = ["ring"] }
+russh = { version = "0.64.1", default-features = false, features = ["ring"] }
 # russh 内置 keys 模块 (0.50+ 已合并 russh-keys),无需单独 crate
 # 指纹计算: russh::keys::ssh_key::HashAlg::Sha256 (russh 重新导出 ssh-key crate)
 # 测试随机数: russh::keys::ssh_key::rand_core::OsRng (无需额外 rand 依赖)

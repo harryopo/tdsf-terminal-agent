@@ -123,13 +123,15 @@ impl server::Handler for MockSshHandler {
     async fn channel_open_session(
         &mut self,
         _channel: russh::Channel<Msg>,
+        reply: server::ChannelOpenHandle,
         session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         if !self.recorded {
             self.server.connection_handles.lock().await.push(session.handle());
             self.recorded = true;
         }
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
 
     async fn tcpip_forward(&mut self, _address: &str, port: &mut u32, _session: &mut Session) -> Result<bool, Self::Error> {
@@ -459,12 +461,12 @@ async fn ssh_roundtrip_against_mock_server() {
     ).await.unwrap());
     let handles = connection_handles.lock().await.clone();
     assert_eq!(handles.len(), 2);
-    let mut forged = handles[1].channel_open_forwarded_tcpip("127.0.0.1", 18080, "127.0.0.1", 9999).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(msg) = forged.wait().await {
-            if matches!(msg, ChannelMsg::Close) { return; }
-        }
-    }).await.expect("unowned forwarded channel must close");
+    let forged = tokio::time::timeout(Duration::from_secs(5),
+        handles[1].channel_open_forwarded_tcpip("127.0.0.1", 18080, "127.0.0.1", 9999),
+    ).await.expect("unowned forwarded channel must receive a reply");
+    assert!(matches!(forged, Err(russh::Error::ChannelOpenFailure(
+        ChannelOpenFailure::AdministrativelyProhibited,
+    ))));
     assert!(tokio::time::timeout(Duration::from_millis(100), local_a.accept()).await.is_err());
     assert!(session.cancel_tcpip_forward(owner_b, "127.0.0.1", 18080).await.is_err());
     assert_eq!(cancellations.load(std::sync::atomic::Ordering::SeqCst), 0);

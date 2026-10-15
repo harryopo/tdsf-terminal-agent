@@ -436,8 +436,8 @@ pub fn decode_command_output(bytes: &[u8]) -> String {
             0
         };
         let units: Vec<u16> = bytes[start..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>().0.iter().copied()
+            .map(u16::from_le_bytes)
             .collect();
         String::from_utf16_lossy(&units)
     } else {
@@ -447,12 +447,32 @@ pub fn decode_command_output(bytes: &[u8]) -> String {
 
 #[cfg(windows)]
 fn looks_utf16le(bytes: &[u8]) -> bool {
-    // 注意: 不用 `is_multiple_of` (MSRV 1.87 > 项目 1.85), 用取模兼容
-    if bytes.len() < 4 || bytes.len() % 2 != 0 {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
         return false;
     }
     let nul_odd = bytes.iter().skip(1).step_by(2).filter(|b| **b == 0).count();
     nul_odd * 2 >= bytes.len() / 2
+}
+
+#[cfg(all(test, windows))]
+mod output_decode_tests {
+    use super::decode_command_output;
+
+    #[test]
+    fn preserves_utf8_utf16_and_incomplete_unit_decoding() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"plain UTF-8", "plain UTF-8"),
+            ("中文".as_bytes(), "中文"),
+            (&[0x41, 0, 0x42, 0], "AB"),
+            (&[0xff, 0xfe, 0x2d, 0x4e, 0x87, 0x65], "中文"),
+            (&[0xff, 0xfe, 0x2d, 0x4e, 0], "中"),
+            (&[0xff, 0xfe], ""),
+            (&[0xff], "\u{fffd}"),
+        ];
+        for (bytes, expected) in cases {
+            assert_eq!(decode_command_output(bytes), *expected, "{bytes:?}");
+        }
+    }
 }
 
 #[cfg(windows)]
