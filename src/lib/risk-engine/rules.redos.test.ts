@@ -8,20 +8,28 @@ const rootPatterns = RISK_RULES.find((rule) => rule.name === "rm_root_wildcard")
 
 async function matchesInWorker(pattern: RegExp, input: string): Promise<boolean> {
   const worker = new Worker(
-    `const { parentPort, workerData } = require("node:worker_threads");
-     parentPort.postMessage(new RegExp(workerData.source, workerData.flags).test(workerData.input));`,
-    { eval: true, workerData: { source: pattern.source, flags: pattern.flags, input } },
+    `const { parentPort } = require("node:worker_threads");
+     parentPort.once("message", ({ source, flags, input }) => {
+       parentPort.postMessage({ matches: new RegExp(source, flags).test(input) });
+     });
+     parentPort.postMessage({ ready: true });`,
+    { eval: true },
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await new Promise<void>((resolve, reject) => {
-      worker.once("online", resolve);
-      worker.once("error", reject);
-    });
     return await new Promise<boolean>((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error("Regex worker timed out after 1500ms")), 1500);
-      worker.once("message", resolve);
+      timer = setTimeout(() => reject(new Error("Regex worker startup timed out after 1500ms")), 1500);
+      worker.on("message", (message: { ready?: boolean; matches?: boolean }) => {
+        if (message.ready) {
+          clearTimeout(timer);
+          timer = setTimeout(() => reject(new Error("Regex worker timed out after 1500ms")), 1500);
+          worker.postMessage({ source: pattern.source, flags: pattern.flags, input });
+        } else {
+          resolve(message.matches!);
+        }
+      });
       worker.once("error", reject);
+      worker.once("exit", (code) => reject(new Error(`Regex worker exited before returning: ${code}`)));
     });
   } finally {
     if (timer) clearTimeout(timer);
@@ -53,7 +61,7 @@ describe("risk-engine root wildcard regexes", () => {
     [1, "rm -R -F /*", true],
     [1, "rm -rf /tmp", false],
     [1, "rm -rf /", false],
-  ])("pattern %i preserves matching behavior for %s", async (index, input, expected) => {
-    await expect(matchesInWorker(rootPatterns[index], input)).resolves.toBe(expected);
+  ])("pattern %i preserves matching behavior for %s", (index, input, expected) => {
+    expect(rootPatterns[index].test(input)).toBe(expected);
   });
 });
