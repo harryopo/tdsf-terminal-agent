@@ -26,6 +26,8 @@ verifyDepsBeforeRun: false
 # Mermaid/Streamdown transitive sanitizer security patch.
 overrides:
   dompurify: 3.4.16
+  # Mermaid's public MathML renderer needs the prototype-inheritance security fix.
+  'mermaid>katex': 0.18.2
 
 minimumReleaseAgeExclude:
   - fuzzysort@4.0.0
