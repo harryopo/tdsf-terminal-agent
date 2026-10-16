@@ -273,9 +273,9 @@ class EventBus:
                 subscriber.callback(event)
                 delivered += 1
             except Exception as e:
-                logger.exception(
+                logger.error(
                     f"subscriber callback error: id={subscriber.id}, "
-                    f"name={subscriber.name}, error={e}"
+                    f"name={subscriber.name}, error_type={type(e).__name__}"
                 )
 
         with self._lock:
@@ -286,7 +286,7 @@ class EventBus:
             try:
                 self._rust_notifier(event.event_type, event.to_dict())
             except Exception as e:
-                logger.exception(f"rust notifier error: {e}")
+                logger.error("rust notifier error: event_type=%s error_type=%s", event.event_type, type(e).__name__)
 
         if event.event_type not in QUIET_EVENT_TYPES:
             logger.debug(

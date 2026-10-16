@@ -175,7 +175,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 }
             logger.info(
                 f"multiline command approved by user: {len(confirm_lines)} confirm lines, "
-                f"command={command[:80]}"
+                f"command_chars={len(command)}"
             )
             multiline_approved = True
             multiline_approval_req = req
