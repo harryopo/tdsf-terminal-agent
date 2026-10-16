@@ -887,7 +887,7 @@ class NeedsYouService:
             # 队列项 waiter 可能仍在等 activation，因此两个事件都要唤醒。
             req._activated_event.set()
             req._event.set()
-            logger.info(f"needs_you cancelled: id={req_id}, reason={reason}")
+            logger.info(f"needs_you cancelled: id={req_id}, has_reason={bool(reason)}")
             self._emit_event(event_name="cancelled", req=req)
             if promoted is not None:
                 self._emit_event(
@@ -1135,7 +1135,7 @@ class NeedsYouService:
                     source="needs_you_service",
                 ))
         except Exception as e:
-            logger.exception(f"needs_you event publish failed: {e}")
+            logger.error("needs_you event publish failed: event=%s request_id=%s error_type=%s", event_name, req.id, type(e).__name__)
 
 
 # ============================================================================

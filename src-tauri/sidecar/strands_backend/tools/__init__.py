@@ -191,7 +191,9 @@ class DefaultRustBridge:
                 return self._send_request(method, params)
             return self._send_request(method, params, effective_timeout)
         except Exception as e:
-            logger.exception(f"rust_bridge ipc_invoke failed: method={method}, error={e}")
+            # Transport errors may contain command text; keep it out of runtime logs,
+            # including exception tracebacks. The structured caller response is unchanged.
+            logger.error("rust_bridge ipc_invoke failed: method=%s error_type=%s", method, type(e).__name__)
             return {
                 "status": "error",
                 "reason": "ipc_invoke_exception",
@@ -215,7 +217,7 @@ class DefaultRustBridge:
             self._send_notification(method, params)
         except Exception as e:
             # 通知失败不应中断工具主流程，但必须可见（warning 而非 debug）
-            logger.warning(f"rust_bridge send_notification failed: method={method}, error={e}")
+            logger.warning("rust_bridge send_notification failed: method=%s error_type=%s", method, type(e).__name__)
 
 
 # ============================================================================
@@ -459,7 +461,7 @@ class RiskChecker:
         if event_bus is None:
             logger.warning(
                 f"RiskChecker.emit_needs_you skipped (no event_bus): "
-                f"command={command[:80]}, agent={agent_name}"
+                f"command_chars={len(command)}, agent={agent_name}"
             )
             return
         try:
@@ -482,7 +484,7 @@ class RiskChecker:
                 tool_name=tool_name,
             )
         except Exception as e:
-            logger.exception(f"RiskChecker.emit_needs_you failed: {e}")
+            logger.error("RiskChecker.emit_needs_you failed: error_type=%s", type(e).__name__)
 
 
 # ============================================================================
@@ -541,7 +543,7 @@ def assess_command(
 
         impact = analyze_impact(command)
     except Exception as e:  # noqa: BLE001 — 预测失败不阻塞，风险兜底走 RiskChecker
-        logger.warning(f"command impact analyze failed, fallback to RiskChecker only: {e}")
+        logger.warning("command impact analyze failed, fallback to RiskChecker only: error_type=%s", type(e).__name__)
 
     # 2. RiskChecker 高危检测（legacy 信号，与影响预测取 max）
     risk = RiskChecker.check(command)
@@ -598,7 +600,7 @@ def assess_command(
         wl_decision = get_global_whitelist().match_command(command)
         if wl_decision == DECISION_DENY:
             logger.info(
-                f"assess_command whitelist deny hit: command={command[:80]}"
+                f"assess_command whitelist deny hit: command_chars={len(command)}"
             )
             return {
                 "decision": "blocked",
@@ -615,7 +617,7 @@ def assess_command(
         observe = mode_value == "observe"
         if wl_decision == "allow" and not dangerous and not observe and risk_l <= 2:
             logger.info(
-                f"assess_command whitelist allow hit: command={command[:80]}"
+                f"assess_command whitelist allow hit: command_chars={len(command)}"
             )
             return {
                 "decision": "allow",
@@ -632,7 +634,7 @@ def assess_command(
             if risk_l <= 1 and trust.is_session_trusted(sid):
                 logger.info(
                     f"assess_command session readonly-trust hit: "
-                    f"session={sid}, command={command[:80]}"
+                    f"session={sid}, command_chars={len(command)}"
                 )
                 return {
                     "decision": "allow",
@@ -645,7 +647,7 @@ def assess_command(
             if risk_l <= 2 and trust.is_prefix_allowed(sid, command):
                 logger.info(
                     f"assess_command session prefix-trust hit: "
-                    f"session={sid}, command={command[:80]}"
+                    f"session={sid}, command_chars={len(command)}"
                 )
                 return {
                     "decision": "allow",
@@ -656,7 +658,7 @@ def assess_command(
                     "trust_source": "session_prefix",
                 }
     except Exception as e:  # noqa: BLE001 — 记忆体系不可用时退回纯模式决策
-        logger.warning(f"trust evaluation unavailable, fallback to decide: {e}")
+        logger.warning("trust evaluation unavailable, fallback to decide: error_type=%s", type(e).__name__)
         force_confirm = False
 
     # 4. 三模式决策（Task 3）——ValueError fail-closed 按 deny
@@ -855,13 +857,13 @@ def request_approval_and_wait(
             execution_gate=True,
         )
     except Exception as e:
-        logger.exception(f"request_approval failed: {e}")
+        logger.error("request_approval failed: error_type=%s", type(e).__name__)
         return None
 
     # 只有 needs_you 服务能在队首激活时发 created；工具层不得为排队项补发事件。
     logger.info(
         f"approval requested: id={req.id}, session={ctx.session_id}, "
-        f"tool={tool_name}, risk_l={risk_l}, command={command[:80]}"
+        f"tool={tool_name}, risk_l={risk_l}, command_chars={len(command)}"
     )
     return service.wait_for_response(req.id)
 
@@ -1059,7 +1061,7 @@ def _execute_via_ssh_impl(
     if decision == "blocked":
         logger.warning(
             f"execute_via_ssh denylist hit: tool={tool_name}, "
-            f"command={command[:80]}, reason={assessment.get('reason', '')}"
+            f"command_chars={len(command)}, has_reason={bool(assessment.get('reason'))}"
         )
         return _blocked(
             f"command_blocked! 只读模式或安全规则禁止执行："
@@ -1069,7 +1071,7 @@ def _execute_via_ssh_impl(
     if decision == "deny":
         logger.warning(
             f"execute_via_ssh denied by mode: tool={tool_name}, mode={ctx.mode}, "
-            f"risk_l={risk_l}, command={command[:80]}"
+            f"risk_l={risk_l}, command_chars={len(command)}"
         )
         return _blocked(
             f"command_blocked! 只读模式或安全规则禁止执行：{assessment['reason']}。"
@@ -1186,7 +1188,7 @@ def _execute_via_ssh_impl(
         if req.status == NeedsYouStatus.APPROVED:
             logger.info(
                 f"execute_via_ssh approved by user: tool={tool_name}, "
-                f"command={command[:80]}"
+                f"command_chars={len(command)}"
             )
             gate.adopt(req)
             if not _transition_operation("approved"):
@@ -1206,7 +1208,7 @@ def _execute_via_ssh_impl(
                 reason = str(req.response.get("reason", "") or "")
             logger.warning(
                 f"execute_via_ssh rejected by user: tool={tool_name}, "
-                f"command={command[:80]}, reason={reason}"
+                f"command_chars={len(command)}, reason_chars={len(reason)}"
             )
             _audit_append(
                 event="approval",
@@ -1235,7 +1237,7 @@ def _execute_via_ssh_impl(
             # 回话必须说"被停止"而不是"超时"，否则模型会以为再等一次就能接着跑。
             logger.info(
                 f"execute_via_ssh approval cancelled: tool={tool_name}, "
-                f"command={command[:80]}"
+                f"command_chars={len(command)}"
             )
             _audit_append(
                 event="approval",
@@ -1261,7 +1263,7 @@ def _execute_via_ssh_impl(
         else:  # TIMEOUT / 未知 —— fail-closed 按拒绝处理
             logger.warning(
                 f"execute_via_ssh approval not answered: "
-                f"status={req.status.value}, tool={tool_name}, command={command[:80]}"
+                f"status={req.status.value}, tool={tool_name}, command_chars={len(command)}"
             )
             _audit_append(
                 event="approval",
@@ -1395,7 +1397,7 @@ def _execute_via_ssh_impl(
     if ctx.rust_bridge is None:
         logger.warning(
             f"execute_via_ssh unavailable (no rust_bridge): tool={tool_name}, "
-            f"command={command[:80]}"
+            f"command_chars={len(command)}"
         )
         _cancel_operation("rust_bridge_not_injected")
         return _complete_after_execution({
@@ -1431,7 +1433,7 @@ def _execute_via_ssh_impl(
     if session_id_int <= 0:
         logger.warning(
             f"execute_via_ssh no active ssh session: tool={tool_name}, "
-            f"command={command[:80]}"
+            f"command_chars={len(command)}"
         )
         _cancel_operation("no_ssh_session")
         return _complete_after_execution({
@@ -1560,9 +1562,9 @@ def _execute_via_ssh_impl(
         else:
             result = ctx.rust_bridge.ipc_invoke("ssh_command", ssh_params)
     except Exception as e:
-        logger.exception(
+        logger.error(
             f"execute_via_ssh ipc_invoke exception: tool={tool_name}, "
-            f"command={command[:80]}, error={e}"
+            f"command_chars={len(command)}, error_type={type(e).__name__}"
         )
         _transition_operation("indeterminate", error_code="ipc_invoke_exception")
         return _complete_after_execution({
@@ -1884,7 +1886,7 @@ def _audit_append(**entry: Any) -> None:
         entry["command"] = redact_sensitive(str(entry.get("command", "")))
         get_global_chain().append(entry)
     except Exception as e:
-        logger.debug(f"audit append failed: {e}")
+        logger.debug("audit append failed: error_type=%s", type(e).__name__)
 
 
 def _track_evidence(
@@ -1910,7 +1912,7 @@ def _track_evidence(
             source=source,
         )
     except Exception as e:
-        logger.debug(f"evidence record failed: {e}")
+        logger.debug("evidence record failed: error_type=%s", type(e).__name__)
 
 
 # ============================================================================
@@ -2104,7 +2106,7 @@ def emit_tool_call_card(
             source=f"{ctx.agent_name}_agent.strands_tool.{tool_name}",
         )
     except Exception as exc:  # noqa: BLE001 — UI telemetry must not block execution
-        logger.debug("emit_tool_call failed: tool=%s status=%s err=%s", tool_name, status, exc)
+        logger.debug("emit_tool_call failed: tool=%s status=%s error_type=%s", tool_name, status, type(exc).__name__)
 
 
 def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
@@ -2181,7 +2183,7 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
             ctx.teach_step_emitted = True
             logger.info(
                 f"teach_mode intercept: tool={tool_name}, "
-                f"command={command[:80]}"
+                f"command_chars={len(command)}"
             )
             return complete({
                 "status": "teach_command",
