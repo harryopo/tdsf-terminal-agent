@@ -10,6 +10,14 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -348,16 +356,21 @@ function PanelBody({
             </button>
           ))}
         </nav>
-        <select
-          aria-label="读取记录范围"
-          value={limit}
-          onChange={(event) => setLimit(Number(event.target.value))}
-          className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+        <Select
+          value={String(limit)}
+          onValueChange={(value) => setLimit(Number(value))}
         >
-          <option value={50}>最近 50 条</option>
-          <option value={200}>最近 200 条</option>
-          <option value={500}>最近 500 条</option>
-        </select>
+          <SelectTrigger size="sm" aria-label="读取记录范围">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="50">最近 50 条</SelectItem>
+              <SelectItem value="200">最近 200 条</SelectItem>
+              <SelectItem value="500">最近 500 条</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         <Button
           size="sm"
           variant="ghost"

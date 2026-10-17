@@ -6,8 +6,8 @@
  * 懒边界最容易坏的地方恰恰是运行时那一下 —— 动态 import 的导出名写错、
  * 面板默认导出/具名导出对不上，静态图全都看不出来。
  */
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import {
   SkillsPanelLazy,
   SnippetsPanelLazy,
@@ -30,6 +30,7 @@ describe("#94 §6-B 懒包装仍然渲染得出真面板", () => {
     "技能面板：动态 import 之后渲染出来",
     async () => {
       render(<SkillsPanelLazy />);
+      await act(async () => { await vi.dynamicImportSettled(); });
       expect(await screen.findByTestId("skills-panel", {}, waitFor)).toBeTruthy();
     },
     importBudgetMs,
@@ -39,6 +40,7 @@ describe("#94 §6-B 懒包装仍然渲染得出真面板", () => {
     "片段面板：动态 import 之后渲染出来",
     async () => {
       render(<SnippetsPanelLazy onInsertCommand={() => true} />);
+      await act(async () => { await vi.dynamicImportSettled(); });
       expect(
         await screen.findByTestId("snippets-panel", {}, waitFor),
       ).toBeTruthy();
@@ -50,6 +52,7 @@ describe("#94 §6-B 懒包装仍然渲染得出真面板", () => {
     "隧道面板：动态 import 之后渲染出来",
     async () => {
       render(<TunnelPanelLazy />);
+      await act(async () => { await vi.dynamicImportSettled(); });
       expect(await screen.findByTestId("tunnel-panel", {}, waitFor)).toBeTruthy();
     },
     importBudgetMs,

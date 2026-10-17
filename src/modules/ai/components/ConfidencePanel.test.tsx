@@ -27,6 +27,57 @@ beforeEach(() => {
 });
 
 describe("ConfidencePanel real dialog interaction", () => {
+  it("uses the shared range selector and reloads only the current chat", async () => {
+    const pointerCaptureMethods = [
+      "hasPointerCapture",
+      "setPointerCapture",
+      "releasePointerCapture",
+    ] as const;
+    const originalDescriptors = pointerCaptureMethods.map((name) => [
+      name,
+      Object.getOwnPropertyDescriptor(HTMLElement.prototype, name),
+    ] as const);
+    Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", {
+      configurable: true,
+      value: () => false,
+    });
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      value: () => undefined,
+    });
+    Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", {
+      configurable: true,
+      value: () => undefined,
+    });
+
+    try {
+      render(<ConfidencePanel sessionId="range-chat" messages={[]} />);
+      openPanel();
+      await waitFor(() => expect(invokeRpc).toHaveBeenCalledWith(
+        "debug.agent_log_tail", { session_id: "range-chat", lines: 200 },
+      ));
+      const trigger = within(panel()).getByRole("combobox", { name: "读取记录范围" });
+      expect(trigger.tagName).toBe("BUTTON");
+      for (const size of [50, 500, 200]) {
+        const callsBefore = invokeRpc.mock.calls.length;
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+        const option = await screen.findByRole("option", { name: `最近 ${size} 条` });
+        act(() => { option.focus(); fireEvent.keyDown(option, { key: "Enter" }); });
+        await waitFor(() => expect(invokeRpc.mock.calls.slice(callsBefore)).toContainEqual([
+          "debug.agent_log_tail", { session_id: "range-chat", lines: size },
+        ]));
+        expect(trigger.textContent).toContain(`最近 ${size} 条`);
+      }
+      expect(document.querySelector("[data-confidence-panel]")).not.toBeNull();
+      expect(invokeRpc.mock.calls.every(([, params]) => params.session_id === "range-chat")).toBe(true);
+    } finally {
+      for (const [name, descriptor] of originalDescriptors) {
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+        else Reflect.deleteProperty(HTMLElement.prototype, name);
+      }
+    }
+  });
+
   it("opens, switches views, searches, and shows selected detail", async () => {
     render(<ConfidencePanel sessionId="chat-a" messages={messages("needle conversation")} />);
     openPanel();
