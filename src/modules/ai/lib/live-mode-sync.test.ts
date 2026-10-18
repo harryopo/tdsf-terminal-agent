@@ -152,6 +152,127 @@ describe("running agent mode synchronization", () => {
     dispose();
   });
 
+  it("replaces a not_active request immediately with the latest pending mode", async () => {
+    vi.useFakeTimers();
+    const oldReply = deferred<unknown>();
+    const latestReply = deferred<unknown>();
+    invokeMock.mockReturnValueOnce(oldReply.promise).mockReturnValueOnce(latestReply.promise);
+    const state = makeSource("confirm");
+    const onError = vi.fn();
+    const dispose = syncRunningMode({
+      sessionId: "chat-a",
+      streamId: "stream-a",
+      initialMode: "confirm",
+      source: state.source,
+      onError,
+    });
+
+    state.set("auto");
+    await flushMicrotasks();
+    state.set("confirm");
+    state.set("auto");
+    state.set("confirm");
+    await flushMicrotasks();
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    oldReply.resolve({ ok: false, reason: "not_active" });
+    await flushMicrotasks();
+
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock.mock.calls[1]?.[0]).toBe("ipc_invoke");
+    expect(invokeMock.mock.calls[1]?.[1]).toEqual({
+      method: "agent.set_mode",
+      params: {
+        session_id: "chat-a",
+        stream_id: "stream-a",
+        mode: "confirm",
+        revision: 4,
+      },
+      timeoutMs: 3000,
+    });
+
+    latestReply.resolve({ ok: true, mode: "confirm", revision: 4 });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("uses the latest mode when a not_active backoff expires", async () => {
+    vi.useFakeTimers();
+    const oldReply = deferred<unknown>();
+    const latestReply = deferred<unknown>();
+    invokeMock.mockReturnValueOnce(oldReply.promise).mockReturnValueOnce(latestReply.promise);
+    const state = makeSource("confirm");
+    const onError = vi.fn();
+    const dispose = syncRunningMode({
+      sessionId: "chat-a",
+      streamId: "stream-a",
+      initialMode: "confirm",
+      source: state.source,
+      onError,
+    });
+
+    state.set("auto");
+    await flushMicrotasks();
+    oldReply.resolve({ ok: false, reason: "not_active" });
+    await flushMicrotasks();
+    state.set("confirm");
+    await vi.advanceTimersByTimeAsync(100);
+
+    try {
+      expect(invokeMock).toHaveBeenCalledTimes(2);
+      expect(invokeMock.mock.calls[1]?.[0]).toBe("ipc_invoke");
+      expect(invokeMock.mock.calls[1]?.[1]).toEqual({
+        method: "agent.set_mode",
+        params: {
+          session_id: "chat-a",
+          stream_id: "stream-a",
+          mode: "confirm",
+          revision: 2,
+        },
+        timeoutMs: 3000,
+      });
+
+      latestReply.resolve({ ok: true, mode: "confirm", revision: 2 });
+      await flushMicrotasks();
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+    }
+  });
+
+  it("stops after a transport failure without sending a pending mode", async () => {
+    vi.useFakeTimers();
+    const first = deferred<unknown>();
+    invokeMock.mockReturnValueOnce(first.promise);
+    const state = makeSource("confirm");
+    const onError = vi.fn();
+    const dispose = syncRunningMode({
+      sessionId: "chat-a",
+      streamId: "stream-a",
+      initialMode: "confirm",
+      source: state.source,
+      onError,
+    });
+
+    state.set("auto");
+    await flushMicrotasks();
+    state.set("confirm");
+    state.set("auto");
+    state.set("confirm");
+    first.reject(new Error("offline"));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(expect.any(String));
+    dispose();
+  });
+
   it("reports an RPC failure through onError", async () => {
     invokeMock.mockRejectedValueOnce(new Error("offline"));
     const state = makeSource("confirm");

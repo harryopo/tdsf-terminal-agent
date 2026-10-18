@@ -59,8 +59,11 @@ export function syncRunningMode(opts: {
           if (ack.ok && ack.mode === update.mode && ack.revision === update.revision) break;
           // Rust dispatches IPC calls asynchronously; the control may arrive
           // just before agent.invoke has registered its queued invocation.
+          // A confirmed non-application need not retry a superseded choice.
+          if (ack.reason === "not_active" && pending) break;
           if (ack.reason === "not_active" && attempt < 19) {
             await new Promise((resolve) => setTimeout(resolve, 100));
+            if (pending) break;
             continue;
           }
           throw new Error(ack.reason || "invalid mode acknowledgement");
