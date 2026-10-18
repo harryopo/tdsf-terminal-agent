@@ -2635,7 +2635,7 @@ class StrandsAgentAdapter:
         reason_messages = {
             "feature_flag_disabled": "Strands 后端未启用",
             "strands_not_installed": "strands-agents 包未安装，请 pip install strands-agents",
-            "strands_model_not_injected": "Strands Model 对象未注入（需 P0 阶段实现 model_adapter.py）",
+            "strands_model_not_injected": "当前没有可用的 AI 模型。请在「设置 → AI 模型」中配置并连接模型；若已配置，请检查连接后重试。",
         }
         message = reason_messages.get(reason, f"未知降级原因: {reason}")
 
