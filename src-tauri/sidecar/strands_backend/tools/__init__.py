@@ -1069,6 +1069,9 @@ def _execute_via_ssh_impl(
     risk = assessment["risk"]
     impact = assessment["impact"]
     risk_l = assessment["risk_l"]
+    trust_source = assessment.get("trust_source") or (
+        "preapproved" if skip_approval else "mode"
+    )
 
     def _blocked(message: str) -> dict[str, Any]:
         # Task 3.2 双轨反馈之「引擎拦截」轨：tool_result 含 command_blocked!
@@ -1228,6 +1231,19 @@ def _execute_via_ssh_impl(
                 f"command_chars={len(command)}"
             )
             gate.adopt(req)
+            trust_source = "approval"
+            _audit_append(
+                event="approval",
+                decision="approved",
+                tool=tool_name,
+                command=command,
+                session_id=session_id,
+                agent=ctx.agent_name,
+                risk_l=risk_l,
+                trust_source=trust_source,
+                operation_id=operation_id or None,
+                tool_call_id=tool_call_id,
+            )
             if not _transition_operation("approved"):
                 return _with_operation({
                     "status": "error",
@@ -1757,6 +1773,10 @@ def _execute_via_ssh_impl(
             agent=ctx.agent_name,
             reason="missing_or_invalid_exit_code",
             target_endpoint=target_endpoint,
+            risk_l=risk_l,
+            trust_source=trust_source,
+            operation_id=operation_id or None,
+            tool_call_id=tool_call_id,
         )
         return _complete_after_execution({
             "status": "indeterminate",
@@ -1782,6 +1802,10 @@ def _execute_via_ssh_impl(
             agent=ctx.agent_name,
             reason="exit_code_unavailable",
             target_endpoint=target_endpoint,
+            risk_l=risk_l,
+            trust_source=trust_source,
+            operation_id=operation_id or None,
+            tool_call_id=tool_call_id,
         )
         return _complete_after_execution({
             "status": "indeterminate",
@@ -1811,6 +1835,10 @@ def _execute_via_ssh_impl(
             agent=ctx.agent_name,
             exit_code=exit_code,
             target_endpoint=target_endpoint,
+            risk_l=risk_l,
+            trust_source=trust_source,
+            operation_id=operation_id or None,
+            tool_call_id=tool_call_id,
         )
         return _complete_after_execution({
             "status": "error",
@@ -1852,6 +1880,10 @@ def _execute_via_ssh_impl(
         exit_code=exit_code,
         # P2 #42: 多主机场景记录实际目标端点（live 列表校验放行时有值）
         target_endpoint=target_endpoint,
+        risk_l=risk_l,
+        trust_source=trust_source,
+        operation_id=operation_id or None,
+        tool_call_id=tool_call_id,
     )
     payload: dict[str, Any] = {
         "status": "success",
