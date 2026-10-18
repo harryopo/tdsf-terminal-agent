@@ -139,6 +139,11 @@ async function beginCall(options: {
     });
   }
 
+  // These cases retire an already visible card, not an event still in transit.
+  await vi.waitFor(() => {
+    expect(toolPart?.state).toBe("input-available");
+  });
+
   const settle = async () => {
     await consumed;
     expect(listeners.size).toBe(0);

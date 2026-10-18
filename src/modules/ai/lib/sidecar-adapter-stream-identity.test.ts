@@ -304,6 +304,122 @@ describe("sidecar event stream identity", () => {
     expect.soft(second.some((part) => part.type === "finish")).toBe(true);
   });
 
+  it("does not yield an event chunk when abort happens as the waiting queue item arrives", async () => {
+    const controller = new AbortController();
+    const next = nextInvoke();
+    const iterator = runSidecarStream(
+      makeOptions({ abortSignal: controller.signal }),
+    )[Symbol.asyncIterator]();
+    const pending = iterator.next();
+
+    try {
+      const args = await next.started;
+      emit("sidecar:agent_message", "chat-identity", 1201, streamTag(args), "agent_message", {
+        type: "output", content: "must not escape after abort",
+      });
+      controller.abort();
+      next.result.resolve({ observation: "fallback must not run" });
+
+      await expect(pending).resolves.toMatchObject({ done: true });
+    } finally {
+      controller.abort();
+      next.result.resolve({ observation: "fixture cleanup" });
+      await iterator.return?.();
+    }
+  });
+
+  it("does not drain a queued event after abort during the invoke completion window", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const next = nextInvoke();
+    const iterator = runSidecarStream(
+      makeOptions({ abortSignal: controller.signal }),
+    )[Symbol.asyncIterator]();
+    const firstPending = iterator.next();
+
+    try {
+      const args = await next.started;
+      const tag = streamTag(args);
+      emit("sidecar:agent_message", "chat-identity", 1202, tag, "agent_message", {
+        type: "output", content: "first queued chunk",
+      });
+      const first = await firstPending;
+      expect.soft(first.value).toMatchObject({ type: "text-delta", delta: "first queued chunk" });
+
+      emit("sidecar:agent_message", "chat-identity", 1202, tag, "agent_message", {
+        type: "output", content: "second queued chunk",
+      });
+      next.result.resolve({ observation: "fallback must not run" });
+      await vi.advanceTimersByTimeAsync(0);
+      const draining = iterator.next();
+      await vi.advanceTimersByTimeAsync(29);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(draining).resolves.toMatchObject({ done: true });
+      await expect(iterator.next()).resolves.toMatchObject({ done: true });
+    } finally {
+      controller.abort();
+      next.result.resolve({ observation: "fixture cleanup" });
+      await vi.runOnlyPendingTimersAsync();
+      await iterator.return?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { label: "fallback output", result: { observation: "x".repeat(512) }, initialStep: "Streaming" },
+    { label: "fallback thinking", result: { thinking: "y".repeat(512) }, initialStep: "Thinking" },
+    {
+      label: "friendly degraded note",
+      result: { degraded: true, degraded_reason: "invoke_stalled", observation: "z".repeat(512) },
+      initialStep: null,
+    },
+  ])("stops $label fallback chunks after abort", async ({ result, initialStep }) => {
+    const controller = new AbortController();
+    const next = nextInvoke();
+    const steps: (string | null)[] = [];
+    const iterator = runSidecarStream(makeOptions({
+      abortSignal: controller.signal,
+      onStep: (step: string | null) => steps.push(step),
+    }))[Symbol.asyncIterator]();
+    const firstPending = iterator.next();
+
+    try {
+      await next.started;
+      next.result.resolve(result);
+      const first = await firstPending;
+      expect.soft(first.done).toBe(false);
+      expect.soft(first.value?.type).toMatch(/^(text|reasoning)-delta$/);
+      if (initialStep) expect.soft(steps).toEqual([initialStep]);
+      else expect.soft(steps).toEqual([]);
+
+      controller.abort();
+      const remaining: SidecarStreamPart[] = [];
+      for await (const part of { [Symbol.asyncIterator]: () => iterator }) remaining.push(part);
+      expect.soft(remaining).toEqual([]);
+      expect.soft(steps).toEqual(initialStep ? [initialStep] : []);
+    } finally {
+      controller.abort();
+      next.result.resolve({ observation: "fixture cleanup" });
+      await iterator.return?.();
+    }
+  });
+
+  it("preserves normal multi-chunk fallback output when not aborted", async () => {
+    const next = nextInvoke();
+    const text = "normal fallback output ".repeat(24);
+    const partsPromise = collect(runSidecarStream(makeOptions()));
+    await next.started;
+    next.result.resolve({ observation: text });
+    const parts = await partsPromise;
+
+    const deltas = parts.filter((part) => part.type === "text-delta");
+    expect.soft(deltas.length).toBeGreaterThan(1);
+    expect.soft(deltas.map((part) => part.delta).join("")).toBe(text);
+    expect.soft(parts.some((part) => part.type === "finish")).toBe(true);
+  });
+
   it("does not let an unmatched SSH callback renew the activity budget", async () => {
     vi.useFakeTimers();
     localStorage.setItem("tdsf.sidecarTimeoutMs", "10000");

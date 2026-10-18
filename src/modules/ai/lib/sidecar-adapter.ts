@@ -671,9 +671,11 @@ async function* streamText(
   text: string,
   id: string,
   kind: "text" | "reasoning" = "text",
+  abortSignal?: AbortSignal,
 ): AsyncIterable<SidecarStreamPart> {
   if (!text) return;
   for (let i = 0; i < text.length; i += STREAM_CHUNK_SIZE) {
+    if (abortSignal?.aborted) return;
     const delta = text.slice(i, i + STREAM_CHUNK_SIZE);
     yield kind === "reasoning"
       ? { type: "reasoning-delta", id, delta }
@@ -1298,6 +1300,7 @@ export async function* runSidecarStream(
         invokePromise.then((r) => ({ kind: "invoke" as const, value: r })),
         queueNext.then((r) => ({ kind: "queue" as const, value: r })),
       ]);
+      if (abortSignal?.aborted) return;
       if (result.kind === "queue") {
         // queue 有 item → yield
         if (result.value.done) {
@@ -1321,6 +1324,7 @@ export async function* runSidecarStream(
     // drain queue 剩余 items（invoke 完成前 push 但未被消费的 part）
     while (true) {
       const next = await queue.next();
+      if (abortSignal?.aborted) return;
       if (next.done) break;
       yield next.value;
     }
@@ -1332,6 +1336,7 @@ export async function* runSidecarStream(
 
     // 6. 获取 invoke 结果
     const invokeResult = await invokePromise;
+    if (abortSignal?.aborted) return;
 
     // 7. 错误处理: sidecar 不可用
     if (!invokeResult && invokeError) {
@@ -1383,9 +1388,10 @@ export async function* runSidecarStream(
             // 本轮已有正文流出 → 降级说明接在正文末尾，不另起文本段
             yield { type: "text-delta", id: outputId, delta: `\n\n${note}` };
           } else {
-            yield* streamText(note, outputId);
+            yield* streamText(note, outputId, "text", abortSignal);
           }
         }
+        if (abortSignal?.aborted) return;
         onStep?.(null);
         yield { type: "finish", id: streamId };
         return;
@@ -1422,16 +1428,18 @@ export async function* runSidecarStream(
     // 10. 处理 thinking：event 未推送时走兜底切片，已推送时跳过避免重复。
     if (!streamedThinking && invokeResult.thinking) {
       onStep?.("Thinking");
-      yield* streamText(invokeResult.thinking, thinkingId, "reasoning");
+      yield* streamText(invokeResult.thinking, thinkingId, "reasoning", abortSignal);
     }
+    if (abortSignal?.aborted) return;
 
     // 11. 处理 output：event 未推送时走兜底切片，已推送时跳过避免重复。
     //     Strands 返回 `observation` 字段；回退到 `output` 兼容测试桩。
     const outputText = invokeResult.observation ?? invokeResult.output ?? "";
     if (!streamedOutput && outputText) {
       onStep?.("Streaming");
-      yield* streamText(outputText, outputId);
+      yield* streamText(outputText, outputId, "text", abortSignal);
     }
+    if (abortSignal?.aborted) return;
 
     // 教学模式走 observation 与 TeachCard 工具事件，不另产 teaching_content。
 
