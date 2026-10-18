@@ -278,6 +278,7 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     void onNeedsYou((raw) => {
+      if (cancelled) return;
       const payload = unwrapEventPayload<NeedsYouEventPayload>(raw);
       if (!payload || typeof payload !== "object") return;
       if (
