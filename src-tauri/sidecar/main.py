@@ -63,7 +63,10 @@ from rpc_request_context import agent_request_scope, with_agent_request_id
 # （frozen 时 __file__ 指向 _MEIPASS 临时解压目录, 进程退出即删, 不能作为数据根;
 #   数据放 %APPDATA%/tdsf-terminal-agent/, 不随安装目录/临时目录清理）
 # 各模块通过 os.environ["TDSF_DATA_DIR"] 读取此路径，回退到原 sidecar/data/
-if getattr(sys, "frozen", False):
+_configured_data_dir = os.environ.get("TDSF_DATA_DIR")
+if _configured_data_dir:
+    _TDSF_DATA_DIR = Path(_configured_data_dir)
+elif getattr(sys, "frozen", False):
     if os.name == "nt":
         _TDSF_DATA_DIR = (
             Path(os.environ.get("APPDATA", str(Path(sys.executable).resolve().parent)))
@@ -79,7 +82,7 @@ if getattr(sys, "frozen", False):
 else:
     _TDSF_DATA_DIR = Path(__file__).resolve().parent.parent.parent / ".tdsf-data"
 _TDSF_DATA_DIR.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("TDSF_DATA_DIR", str(_TDSF_DATA_DIR))
+os.environ["TDSF_DATA_DIR"] = str(_TDSF_DATA_DIR)
 
 # 2026-07-31 根因修复: 强制 stdio 为 UTF-8（Windows 中文系统默认 gbk）。
 # JSON-RPC 线协议按行传给 Rust 侧，Rust 用 UTF-8 解析；若 Python 以 gbk 编码写出
