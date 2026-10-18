@@ -14,12 +14,38 @@ MAX_EXPORT_BYTES = 2 * 1024 * 1024
 _SECRET_KEY = re.compile(
     r"password|passwd|passphrase|secret|api[_-]?key|access[_-]?token|"
     r"refresh[_-]?token|auth[_-]?token|private[_-]?key|"
-    r"^(?:token|authorization|cookie|set-cookie|credential)$", re.I
+    r"(?:pwd|id[_-]?token|token|authorization|cookie)$|"
+    r"^(?:credential)$", re.I
 )
+_JSON_FIELD = re.compile(r'("(?:[^"\\]|\\.)*")\s*:\s*')
 _QUOTED_SECRET = re.compile(
     r'''(["'](?:[^"']*(?:password|passwd|passphrase|secret|api[_-]?key|private[_-]?key|token)|authorization|cookie)["']\s*:\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''',
     re.I,
 )
+
+
+def _redact_json_fields(text: str) -> str:
+    """Redact embedded JSON values using the standard decoder's boundaries."""
+    decoder = json.JSONDecoder()
+    parts: list[str] = []
+    cursor = 0
+    for match in _JSON_FIELD.finditer(text):
+        if match.start() < cursor:
+            continue
+        try:
+            key = json.loads(match.group(1))
+        except ValueError:
+            continue
+        if not _SECRET_KEY.search(key):
+            continue
+        try:
+            _, end = decoder.raw_decode(text, match.end())
+        except (ValueError, RecursionError):
+            end = len(text)
+        parts.extend((text[cursor:match.end()], '"<REDACTED>"'))
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 
 def sanitize_diagnostic(value: Any, _depth: int = 0) -> Any:
@@ -28,20 +54,22 @@ def sanitize_diagnostic(value: Any, _depth: int = 0) -> Any:
         return "<OMITTED:depth-limit>"
     if isinstance(value, dict):
         return {
-            str(k): "<REDACTED>" if _SECRET_KEY.search(str(k)) else
-            sanitize_diagnostic(v, _depth + 1)
+            sanitize_diagnostic(str(k), _depth + 1): "<REDACTED>"
+            if _SECRET_KEY.search(str(k)) else sanitize_diagnostic(v, _depth + 1)
             for k, v in value.items()
         }
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [sanitize_diagnostic(v, _depth + 1) for v in value]
     if not isinstance(value, str):
         return value
-    if value.lstrip().startswith(("{", "[")):
+    if value.lstrip().startswith(("{", "[", '"')):
         try:
             parsed = json.loads(value)
-            return json.dumps(sanitize_diagnostic(parsed, _depth + 1), ensure_ascii=False)
+            if isinstance(parsed, (dict, list, str)):
+                return json.dumps(sanitize_diagnostic(parsed, _depth + 1), ensure_ascii=False)
         except (ValueError, RecursionError):
             pass
+    value = _redact_json_fields(value)
     value = _QUOTED_SECRET.sub(lambda m: m[1] + '"<REDACTED>"', value)
     value = re.sub(
         r'''(?i)(\b(?:[\w-]*[_-])?(?:password|passwd|passphrase|token|secret|api[_-]?key|private[_-]?key)\s*(?:=|:|\s)\s*)("(?:\\.|[^"\\])*"|'(?:''|\\.|[^'\\])*'|[^\s;|&]+)''',

@@ -141,7 +141,7 @@ function makeTransport(id: string | number) {
     id,
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),
-    close: vi.fn(),
+    close: vi.fn<TerminalTransport["close"]>(),
   } satisfies TerminalTransport & {
     write: ReturnType<typeof vi.fn>;
     resize: ReturnType<typeof vi.fn>;

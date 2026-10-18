@@ -50,8 +50,8 @@ export const RISK_RULES: RiskRule[] = [
     description: "rm -rf / 或 /*（擦除系统）",
     // 匹配 rm -rf /、rm -rf /*、rm -rf ~/ 等
     patterns: [
-      /\brm\s+(?:-[\w]*[rR][\w]*\s+)*-[\w]*[fF][\w]*\s+\/(?:\s|$|\*)/,
-      /\brm\s+(?:-[\w]*[rR][\w]*\s+)*-[\w]*[fF][\w]*\s+\/\*/,
+      /\brm\s+(?:-(?=\w*[rR])\w+\s+)*-(?=\w*[fF])\w+\s+\/(?:\s|$|\*)/,
+      /\brm\s+(?:-(?=\w*[rR])\w+\s+)*-(?=\w*[fF])\w+\s+\/\*/,
       /\brm\s+-rf\s+--no-preserve-root\s+\//,
     ],
     level: "deny",

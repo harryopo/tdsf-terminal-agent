@@ -260,11 +260,15 @@ assets/             logo 源文件
 
 ## Star 趋势
 
-[![TDSF Terminal Agent Star 趋势](assets/star-history.svg)](https://www.star-history.com/#harryopo/tdsf-terminal-agent&Date)
-
-来自 GitHub API 的现存 Star 日期快照，统计至 **2026-09-30（UTC）**，共 **39** 个；不包含已撤销的 Star，也不是实时净增长曲线。[查看最新关注者](https://github.com/harryopo/tdsf-terminal-agent/stargazers)。如果项目对你有帮助，欢迎 Star；反馈可复现的问题同样有价值。
+<a href="https://www.star-history.com/?repos=harryopo%2Ftdsf-terminal-agent&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harryopo/tdsf-terminal-agent&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harryopo/tdsf-terminal-agent&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=harryopo/tdsf-terminal-agent&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## 许可与来源
 
 - 本项目原创部分以 **Apache-2.0** 授权，见 [LICENSE](LICENSE)。
-- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、可见执行的 Agent 运行时与 Linux 教学流程等。
+- 在开源终端项目的架构基础之上开发完善（Apache-2.0），并新增 SSH 服务器管理、终端翻译、可见执行的 Agent 运行时与 Linux 教学流程等多种运维实用功能。

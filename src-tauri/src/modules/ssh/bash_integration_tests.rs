@@ -259,7 +259,7 @@ fn string_prompt_command_runs_in_its_original_order() {
         "incomplete prompt-command pair: {lines:?}"
     );
     assert!(
-        lines.chunks_exact(2).all(|pair| pair == ["one", "two"]),
+        lines.as_chunks::<2>().0.iter().all(|pair| pair.as_slice() == ["one", "two"]),
         "{lines:?}"
     );
 }
@@ -291,7 +291,7 @@ fn array_prompt_command_runs_in_its_original_order() {
         "incomplete prompt-command pair: {lines:?}"
     );
     assert!(
-        lines.chunks_exact(2).all(|pair| pair == ["one", "two"]),
+        lines.as_chunks::<2>().0.iter().all(|pair| pair.as_slice() == ["one", "two"]),
         "{lines:?}"
     );
 }

@@ -131,8 +131,8 @@ function expectFresh(parts: SidecarStreamPart[]) {
 }
 
 function abortListenerWasRemoved(
-  addSpy: ReturnType<typeof vi.spyOn>,
-  removeSpy: ReturnType<typeof vi.spyOn>,
+  addSpy: { mock: { calls: readonly (readonly unknown[])[] } },
+  removeSpy: { mock: { calls: readonly (readonly unknown[])[] } },
 ) {
   const added = addSpy.mock.calls.find(([type]) => type === "abort")?.[1];
   return (

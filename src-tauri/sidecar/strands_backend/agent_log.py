@@ -78,7 +78,7 @@ def logs_dir() -> Path:
     try:
         d.mkdir(parents=True, exist_ok=True)
     except Exception as e:  # noqa: BLE001 — 目录创建失败在 write 时再报
-        logger.debug(f"agent-logs mkdir failed: {e}")
+        logger.debug("agent-logs mkdir failed: error_type=%s", type(e).__name__)
     return d
 
 
@@ -104,7 +104,7 @@ def log_event(
         session_id: 会话 ID（空串写入 default.jsonl——env 分区等仍有排查价值）
         event_type: user_msg / env_inject / assistant_msg / reasoning /
                     tool_call / tool_result / loop_progress / todo_followup
-        content: 事件内容（任意类型，str() 后截断 ≤2000 字符）
+        content: 事件内容（文本或 JSON 数据，脱敏后截断 ≤2000 字符）
         meta: 附加元数据（mode/teach/agent_id/tool_name/status 等，可选）
 
     Returns:
@@ -115,6 +115,7 @@ def log_event(
 
         clipped = _clip(content)
         metadata = with_agent_request_id(meta or {})
+        json.dumps(metadata, ensure_ascii=False)
         safe_meta = sanitize_diagnostic(metadata)
         if len(json.dumps(safe_meta, ensure_ascii=False)) > 8000:
             safe_meta = {"truncated": True}
@@ -140,9 +141,11 @@ def log_event(
             _stats["write_errors"] += 1
         # 首次失败 warning 提示，之后 debug 防刷屏（红线：不静默吞错）
         if _stats["write_errors"] == 1:
-            logger.warning(f"agent_log write failed (fallback: silent, {e})")
+            logger.warning(
+                "agent_log write failed (fallback: silent): error_type=%s", type(e).__name__
+            )
         else:
-            logger.debug(f"agent_log write failed: {e}")
+            logger.debug("agent_log write failed: error_type=%s", type(e).__name__)
         return False
 
 
@@ -150,21 +153,23 @@ def _clip(content: Any) -> str:
     """内容 → 脱敏摘要字符串（≤2000 字符）"""
     if content is None:
         return ""
-    if not isinstance(content, str):
-        try:
-            content = json.dumps(content, ensure_ascii=False)
-        except Exception:  # noqa: BLE001
-            content = str(content)
-    text = str(content)
     # 日志默认落盘且包含用户输入、环境片段和工具参数；与送入 LLM 的终端
     # 回读使用同一套脱敏规则，避免命令里的 token/密码永久写进 JSONL。
     try:
         from .diagnostics import sanitize_diagnostic
 
-        text = sanitize_diagnostic(text)
+        # Reject cyclic/unsupported log values without falling back to raw repr.
+        if not isinstance(content, str):
+            json.dumps(content, ensure_ascii=False)
+        safe_content = sanitize_diagnostic(content)
+        text = (
+            safe_content if isinstance(safe_content, str)
+            else json.dumps(safe_content, ensure_ascii=False)
+        )
     except Exception as e:  # noqa: BLE001 — 脱敏通路异常时不影响 agent 主链路
         logger.warning(
-            "agent_log redaction unavailable; dropping sensitive log entry: %s", e
+            "agent_log redaction unavailable; dropping sensitive log entry: error_type=%s",
+            type(e).__name__,
         )
         return "<REDACTION_UNAVAILABLE>"
     return text if len(text) <= _MAX_CONTENT_LEN else text[:_MAX_CONTENT_LEN] + "…"
@@ -181,7 +186,7 @@ def _rotate_if_needed(path: Path) -> None:
             _stats["rotated"] += 1
             logger.info(f"agent_log rotated: {path.name} → {backup.name}")
     except Exception as e:  # noqa: BLE001 — 轮转失败不阻塞写入
-        logger.debug(f"agent_log rotate failed: {e}")
+        logger.debug("agent_log rotate failed: error_type=%s", type(e).__name__)
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -202,7 +207,7 @@ def list_sessions() -> list[dict[str, Any]]:
                 }
             )
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"agent_log list_sessions failed: {e}")
+        logger.debug("agent_log list_sessions failed: error_type=%s", type(e).__name__)
     return result
 
 
@@ -357,7 +362,7 @@ def _handle_bus_event(event: Any) -> None:
                 meta=meta,
             )
     except Exception as e:  # noqa: BLE001 — 桥接失败静默（不影响事件总线）
-        logger.debug(f"agent_log bus event handle failed: {e}")
+        logger.debug("agent_log bus event handle failed: error_type=%s", type(e).__name__)
 
 
 def _subscribe_bus() -> None:
@@ -376,7 +381,9 @@ def _subscribe_bus() -> None:
         _bus_subscribed = True
         logger.info("agent_log subscribed to event_bus tool_call events")
     except Exception as e:  # noqa: BLE001 — 订阅失败仅损失工具流水，不阻塞
-        logger.warning(f"agent_log event_bus subscribe failed (fallback: {e})")
+        logger.warning(
+            "agent_log event_bus subscribe failed (fallback): error_type=%s", type(e).__name__
+        )
 
 
 def reset_for_test() -> None:
