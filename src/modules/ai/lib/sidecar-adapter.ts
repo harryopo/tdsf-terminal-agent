@@ -1283,6 +1283,7 @@ export async function* runSidecarStream(
     // 先 settle 取 invoke 分支，被 shift 的 item（如工具 completed 的
     // tool-output）永久丢失（drain 阶段只剩空 queue）。
     let invokeDone = false;
+    let pendingQueueNext: ReturnType<typeof queue.next> | undefined;
     while (!invokeDone) {
       if (abortSignal?.aborted) {
         queue.close();
@@ -1296,12 +1297,14 @@ export async function* runSidecarStream(
       }
       // 等待 queue 有 item 或 invoke 完成
       const queueNext = queue.next();
+      pendingQueueNext = queueNext;
       const result = await Promise.race([
         invokePromise.then((r) => ({ kind: "invoke" as const, value: r })),
         queueNext.then((r) => ({ kind: "queue" as const, value: r })),
       ]);
       if (abortSignal?.aborted) return;
       if (result.kind === "queue") {
+        pendingQueueNext = undefined;
         // queue 有 item → yield
         if (result.value.done) {
           // queue 被 close（不应发生在 invoke 完成前，防御性 break）
@@ -1323,7 +1326,9 @@ export async function* runSidecarStream(
 
     // drain queue 剩余 items（invoke 完成前 push 但未被消费的 part）
     while (true) {
-      const next = await queue.next();
+      // An invoke winner leaves a waiter that can already own the last event.
+      const next = await (pendingQueueNext ?? queue.next());
+      pendingQueueNext = undefined;
       if (abortSignal?.aborted) return;
       if (next.done) break;
       yield next.value;

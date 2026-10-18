@@ -304,6 +304,75 @@ describe("sidecar event stream identity", () => {
     expect.soft(second.some((part) => part.type === "finish")).toBe(true);
   });
 
+  it.each([
+    { label: "completed arrives during invoke drain", late: true },
+    { label: "completed arrives before invoke resolves", late: false },
+  ])("keeps tool outcomes when $label", async ({ late }) => {
+    vi.useFakeTimers();
+    const next = nextInvoke();
+    const iterator = runSidecarStream(makeOptions())[Symbol.asyncIterator]();
+    const firstPending = iterator.next();
+    const completedResult = {
+      status: "error",
+      message: "business failure remains structured",
+      exit_code: 23,
+      details: { source: "fixture" },
+    };
+
+    try {
+      const args = await next.started;
+      const tag = streamTag(args);
+      emit("sidecar:tool_call", "chat-identity", 1301, tag, "tool_call", {
+        tool_name: "ssh_command",
+        tool_call_id: "backend-tail-tool",
+        status: "started",
+        params: { command: "fixture-command" },
+      });
+      const first = await firstPending;
+      expect.soft(first.value).toMatchObject({
+        type: "tool-input",
+        toolName: "ssh_command",
+      });
+      if (first.value?.type !== "tool-input") return;
+
+      const waitingForTail = iterator.next();
+      if (late) {
+        next.result.resolve({ observation: "" });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      emit("sidecar:tool_call", "chat-identity", 1301, tag, "tool_call", {
+        tool_name: "ssh_command",
+        tool_call_id: "backend-tail-tool",
+        status: "error",
+        result: completedResult,
+      });
+      if (!late) next.result.resolve({ observation: "" });
+      await vi.advanceTimersByTimeAsync(30);
+      const tail = await waitingForTail;
+      const remaining = collect({ [Symbol.asyncIterator]: () => iterator });
+      await vi.advanceTimersByTimeAsync(30);
+      const parts = [first.value, ...(tail.done ? [] : [tail.value]), ...await remaining];
+      const inputs = parts.filter((part) => part.type === "tool-input");
+      const outputs = parts.filter((part) => part.type === "tool-output");
+
+      expect.soft(inputs).toHaveLength(1);
+      expect.soft(outputs).toHaveLength(1);
+      expect.soft(outputs[0]).toMatchObject({
+        type: "tool-output",
+        toolCallId: first.value.toolCallId,
+        toolName: "ssh_command",
+        output: completedResult,
+        isError: true,
+      });
+      expect.soft(parts.some((part) => part.type === "finish")).toBe(true);
+    } finally {
+      next.result.resolve({ observation: "fixture cleanup" });
+      await vi.runOnlyPendingTimersAsync();
+      await iterator.return?.();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not yield an event chunk when abort happens as the waiting queue item arrives", async () => {
     const controller = new AbortController();
     const next = nextInvoke();

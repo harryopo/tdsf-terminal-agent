@@ -272,6 +272,37 @@ it("retires on abort without claiming the remote command stopped", async () => {
   expect(call.errors).toEqual([]);
 });
 
+it.each([
+  { status: "completed", result: { status: "success", output: "diagnostic", exit_code: 7 } },
+  { status: "completed", result: { status: "indeterminate", output: "may have run", exit_code: -1 } },
+  { status: "error", result: { status: "failed", output: "write failed", exit_code: 2 } },
+])("keeps a $result.status tool result arriving just after invoke completion", async ({ status, result }) => {
+  vi.useFakeTimers();
+  let completion: Promise<Record<string, unknown>> | undefined;
+  try {
+    const call = await beginCall();
+    completion = call.finish({ observation: "" });
+    await vi.advanceTimersByTimeAsync(0);
+    call.emitTool({
+      tool_name: "ssh_command",
+      tool_call_id: backendToolCallId,
+      status,
+      result,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    const part = await completion;
+
+    expect(part.state).toBe("output-available");
+    expect(part.output).toEqual(result);
+    expect(part.input).toEqual({ command });
+    expect(call.errors).toEqual([]);
+  } finally {
+    await vi.runOnlyPendingTimersAsync();
+    await completion;
+    vi.useRealTimers();
+  }
+});
+
 it("rejects an old output callback after finish while a new call still receives output", async () => {
   const oldCall = await beginCall({ backendId: "backend-old" });
   const oldPart = await oldCall.finish({ observation: "old turn complete" });
