@@ -535,6 +535,8 @@ export type ToolProps = ComponentProps<typeof Collapsible> & {
   toolName: string;
   toolCallId?: string;
   state: ToolPart["state"];
+  /** The displayed turn ended; this is not proof that the operation stopped. */
+  turnEnded?: boolean;
   input?: unknown;
   output?: unknown;
   errorText?: string;
@@ -662,6 +664,7 @@ const ToolImpl = ({
   onApprovalRespond,
   defaultOpen,
   inlineApproval,
+  turnEnded = false,
   ...props
 }: ToolProps & { inlineApproval?: ReactNode }) => {
   const hasSshOutputCall = useSshCommandOutputStore(
@@ -692,13 +695,16 @@ const ToolImpl = ({
   const showLiveSshOutput =
     !inlineApproval && (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
   const missingSshResult = showLiveSshOutput && sshResultMissing;
+  const missingResult = !inlineApproval &&
+    (state === "input-streaming" || state === "input-available") &&
+    (turnEnded || missingSshResult);
   // SDK output-available 仅表示收到结果；业务状态仍由原始结果决定。
   const resultStatus =
     state === "output-available"
       ? getToolResultStatus(output)
       : isError
         ? legacyToolResultStatus(errorText)
-        : missingSshResult
+        : missingResult
           ? "indeterminate"
           : null;
   const innerFailure = state === "output-available" && resultStatus !== null;
@@ -722,7 +728,7 @@ const ToolImpl = ({
     output !== undefined &&
     (!isHeavy || innerFailure || isError || toolName === "write_remote_file");
   const hasDetails =
-    showInputBody || showOutputBody || Boolean(errorText) || showLiveSshOutput;
+    showInputBody || showOutputBody || Boolean(errorText) || showLiveSshOutput || missingResult;
 
   return (
     <Collapsible
@@ -770,7 +776,7 @@ const ToolImpl = ({
         ) : (
           <span className="flex-1" />
         )}
-        {(isError || innerFailure || missingSshResult) && (
+        {(isError || innerFailure || missingResult) && (
           <span
             className={cn(
               "shrink-0 text-[10px] font-medium",
@@ -791,6 +797,11 @@ const ToolImpl = ({
           className={cn("tdsf-collapsible-content")}
         >
           <div className="ml-3 mt-1 space-y-2 border-l border-border/60 pl-3 pb-1">
+            {missingResult && !showLiveSshOutput ? (
+              <div className="text-[10px] text-muted-foreground">
+                本轮对话已结束，未收到工具最终结果；不代表操作已停止，请核对运行日志或目标环境。
+              </div>
+            ) : null}
             {showInputBody ? (
               <ToolInput toolName={toolName} input={input} />
             ) : null}
@@ -815,6 +826,7 @@ const ToolImpl = ({
 // state transition or the path summary changing — NOT every input-content
 // token. We compare the cheap derived summary instead of the input ref.
 const ToolBody = memo(ToolImpl, (a, b) => {
+  if (a.turnEnded !== b.turnEnded) return false;
   if (a.inlineApproval !== b.inlineApproval) return false;
   if (a.toolName !== b.toolName || a.state !== b.state) return false;
   if (a.toolCallId !== b.toolCallId) return false;

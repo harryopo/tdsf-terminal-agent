@@ -406,6 +406,7 @@ const RenderedMessage = memo(function RenderedMessage({
                   part={g.part}
                   onApproval={onApproval}
                   streaming={streaming && g.idx === lastTextIdx}
+                  turnEnded={!streaming}
                 />
               </PartAppear>
             );
@@ -599,10 +600,12 @@ const RenderedPart = memo(function RenderedPart({
   part,
   onApproval,
   streaming,
+  turnEnded,
 }: {
   part: AnyPart;
   onApproval: (id: string, approved: boolean, reason?: string) => void;
   streaming: boolean;
+  turnEnded: boolean;
 }) {
   if (part.type === "text") {
     const text = (part as unknown as { text: string }).text;
@@ -660,6 +663,7 @@ const RenderedPart = memo(function RenderedPart({
       <RenderedTool
         part={part as unknown as AnyToolPart}
         onApproval={onApproval}
+        turnEnded={turnEnded}
       />
     );
   }
@@ -670,9 +674,11 @@ const RenderedPart = memo(function RenderedPart({
 const RenderedTool = memo(function RenderedTool({
   part,
   onApproval,
+  turnEnded,
 }: {
   part: AnyToolPart;
   onApproval: (id: string, approved: boolean, reason?: string) => void;
+  turnEnded: boolean;
 }) {
   const toolName =
     part.type === "dynamic-tool"
@@ -704,6 +710,7 @@ const RenderedTool = memo(function RenderedTool({
         toolName={toolName}
         toolCallId={part.toolCallId}
         state={part.state}
+        turnEnded={turnEnded}
         input={part.input}
         onApprovalRespond={handleApprovalRespond}
       />
@@ -715,6 +722,7 @@ const RenderedTool = memo(function RenderedTool({
       toolName={toolName}
       toolCallId={part.toolCallId}
       state={part.state}
+      turnEnded={turnEnded}
       input={part.input}
       output={"output" in part ? part.output : undefined}
       errorText={"errorText" in part ? part.errorText : undefined}
