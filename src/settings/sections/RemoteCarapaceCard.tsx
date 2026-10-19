@@ -8,7 +8,7 @@
  *
  * 逻辑全在 `remoteCarapaceAdmin`（可离线测），本文件只管渲染。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { CarapaceInstallStage } from "@/lib/param-complete-client";
 import {
@@ -59,14 +59,30 @@ export function RemoteCarapaceCard() {
   const [rows, setRows] = useState<Record<number, RowState>>({});
   const [listError, setListError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [queried, setQueried] = useState(false);
+  const generation = useRef(0);
+  const refreshing = useRef(false);
+  const installing = useRef(new Set<number>());
 
-  const patch = (id: number, next: Partial<RowState>) =>
-    setRows((prev) => ({ ...prev, [id]: { ...nextRow(prev, id), ...next } }));
+  useEffect(() => () => { generation.current += 1; }, []);
+
+  const patch = (id: number, next: Partial<RowState>, version: number) => {
+    if (version !== generation.current) return;
+    setRows((prev) => version === generation.current
+      ? { ...prev, [id]: { ...nextRow(prev, id), ...next } }
+      : prev);
+  };
 
   const refresh = async () => {
+    if (refreshing.current || installing.current.size > 0) return;
+    refreshing.current = true;
+    const version = ++generation.current;
     setLoading(true);
     setListError(null);
     const { targets: found, error } = await listCarapaceTargets();
+    if (version !== generation.current) return;
+    refreshing.current = false;
+    setQueried(true);
     setListError(error ?? null);
     setTargets(found);
     // 先铺一行"检测中"，再逐台问服务器 —— 不铺会出现"点了没反应"的空档
@@ -77,33 +93,38 @@ export function RemoteCarapaceCard() {
     await Promise.all(
       found.map(async (t) => {
         const probe = await probeCarapaceTarget(t.sessionId);
-        patch(t.sessionId, { probe });
+        patch(t.sessionId, { probe }, version);
       }),
     );
   };
 
   const install = async (t: CarapaceTarget) => {
-    patch(t.sessionId, { installing: true, stage: null, error: null });
+    if (refreshing.current || installing.current.has(t.sessionId)) return;
+    installing.current.add(t.sessionId);
+    const version = generation.current;
+    patch(t.sessionId, { installing: true, stage: null, error: null, message: null }, version);
     const { ok, message } = await installCarapaceTarget(t.sessionId, (stage) =>
-      patch(t.sessionId, { stage }),
+      patch(t.sessionId, { stage }, version),
     );
+    installing.current.delete(t.sessionId);
+    if (version !== generation.current) return;
     if (ok) {
       patch(t.sessionId, {
         installing: false,
         stage: null,
         message: message ?? "已装好",
         probe: { state: "installed" },
-      });
+      }, version);
     } else {
       patch(t.sessionId, {
         installing: false,
         stage: null,
         error: message ?? "安装失败（没有拿到具体原因）",
         probe: null,
-      });
+      }, version);
       // 失败后服务器状态未知，重问一次而不是留着上一次的读数
       const probe = await probeCarapaceTarget(t.sessionId);
-      patch(t.sessionId, { probe });
+      patch(t.sessionId, { probe }, version);
     }
   };
 
@@ -121,7 +142,7 @@ export function RemoteCarapaceCard() {
           size="sm"
           className="h-7 w-fit text-[11.5px]"
           onClick={() => void refresh()}
-          disabled={loading}
+          disabled={loading || Object.values(rows).some((row) => row.installing)}
         >
           {loading ? "查询中…" : "刷新"}
         </Button>
@@ -133,7 +154,13 @@ export function RemoteCarapaceCard() {
         </p>
       ) : null}
 
-      {!loading && targets.length === 0 && !listError ? (
+      {!queried && !loading ? (
+        <p data-testid="carapace-idle" className="text-[11px] leading-relaxed text-muted-foreground">
+          点击刷新，查询已连接的服务器及补全组件状态。
+        </p>
+      ) : null}
+
+      {queried && !loading && targets.length === 0 && !listError ? (
         <p data-testid="carapace-empty" className="text-[11px] leading-relaxed text-muted-foreground">
           现在没有正连着的服务器。先连上一台（「新建工作区」里选 SSH），再回来点刷新。
         </p>
@@ -178,7 +205,7 @@ export function RemoteCarapaceCard() {
               variant={installed ? "outline" : "default"}
               size="sm"
               className="h-7 w-fit shrink-0 text-[11.5px]"
-              disabled={row.installing || row.probe === null || installed}
+              disabled={loading || row.installing || row.probe === null || installed}
               onClick={() => void install(t)}
             >
               {installed ? "已装好" : "装到这台服务器"}

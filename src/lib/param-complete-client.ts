@@ -21,7 +21,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { isOsFamily, type OsFamily } from './os-family';
-import { sshCommand, probeCmd, readProbeValue } from './ssh-bridge';
+import { sshCommand, probeCmd, readProbeValue, type SshCommandResult } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
 import { commandContext } from './command-context';
 
@@ -58,11 +58,21 @@ export type CarapaceInstallError = (message: string) => void;
 /** 远端 carapace 固定安装路径（spec 安全红线：仅上传官方 release 二进制到此路径） */
 export const CARAPACE_REMOTE_PATH = '~/.local/bin/carapace';
 
-/** 远端存在性检测：command -v 带路径参数检查该路径可执行文件是否存在 */
-export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null 2>&1 && echo __TDSF_CARAPACE_YES__`;
-
 /** 检测命令成功时的输出标记 */
 export const CARAPACE_YES_MARK = '__TDSF_CARAPACE_YES__';
+
+/** 先换行，避免不带换行的登录横幅与检测标记粘连。 */
+export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null 2>&1 && printf '\\n%s\\n' '${CARAPACE_YES_MARK}'`;
+
+/** 设置入口与静默补全共用结果判据；未知结果不能冒充未安装。 */
+export function classifyCarapaceProbe(
+  result: Pick<SshCommandResult, 'ok' | 'exitCode' | 'output'>,
+): 'installed' | 'missing' | 'error' {
+  const marked = result.output.split(/\r?\n/).some((line) => line.trim() === CARAPACE_YES_MARK);
+  if (result.ok && result.exitCode === 0 && marked) return 'installed';
+  if (result.ok && result.exitCode === 1 && !marked) return 'missing';
+  return 'error';
+}
 
 /**
  * 安装第 1 步：建目录 + 顺便带回 $HOME（SFTP 上传需要绝对路径，~ 不会被 sftp 展开）
@@ -280,15 +290,16 @@ export function invalidateRemoteCarapaceCache(sessionId: number): void {
 
 /**
  * 检测远端 ~/.local/bin/carapace 是否存在（exec 通道，2s 超时）。
- * 结果缓存到会话级 Map；invoke 本身抛错（会话异常）不缓存，下次重试。
+ * 只缓存确认已装/未装的结果；超时或未知状态不缓存，下次请求可重试。
  */
 export async function remoteCarapaceInstalled(sessionId: number): Promise<boolean> {
   const cached = remoteInstalledCache.get(sessionId);
   if (cached !== undefined) return cached;
   try {
     const r = await sshCommand(sessionId, CARAPACE_CHECK_CMD, 2);
-    const installed = r.ok && r.output.includes(CARAPACE_YES_MARK);
-    remoteInstalledCache.set(sessionId, installed);
+    const state = classifyCarapaceProbe(r);
+    const installed = state === 'installed';
+    if (state !== 'error') remoteInstalledCache.set(sessionId, installed);
     return installed;
   } catch (e) {
     console.warn('[param-complete] remoteCarapaceInstalled failed:', e);

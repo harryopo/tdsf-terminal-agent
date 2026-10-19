@@ -8,7 +8,7 @@
  *
  * 三条口径：
  *   - 数据源只有一个：会话列表走 `ssh_sessions_detail`（Rust 的权威账），
- *     存在性检测复用 `CARAPACE_CHECK_CMD` 与 `CARAPACE_YES_MARK`（不另抄一份路径），
+ *     存在性检测复用 `CARAPACE_CHECK_CMD` 与共享判据（不另抄一份路径），
  *     安装复用 `installRemoteCarapace`（同一条四步链，不再写第二遍）。
  *   - `ssh_sessions_detail` 在真机挂起过（#126 记着）⇒ 一切 IPC 读取都带截止时间，
  *     超时返回错误状态而不是让界面永远转圈。
@@ -18,7 +18,7 @@
 import { emit } from '@tauri-apps/api/event';
 import {
   CARAPACE_CHECK_CMD,
-  CARAPACE_YES_MARK,
+  classifyCarapaceProbe,
   installRemoteCarapace,
   type CarapaceInstallStage,
 } from '@/lib/param-complete-client';
@@ -144,12 +144,14 @@ export async function probeCarapaceTarget(sessionId: number): Promise<CarapacePr
   } catch (e) {
     return { state: 'error', detail: e instanceof Error ? e.message : String(e) };
   }
-  if (r.output.includes(CARAPACE_YES_MARK)) return { state: 'installed' };
-  // 链路正常且拿到了退出码才敢说"未安装"；-1（没收到退出状态）归 error
-  if (r.ok && r.exitCode !== -1) return { state: 'missing' };
+  const state = classifyCarapaceProbe(r);
+  if (state !== 'error') return { state };
+  const reason = Number.isInteger(r.exitCode) && r.exitCode >= 0
+    ? `检测命令未返回有效安装状态（退出码 ${r.exitCode}）`
+    : '未取得命令退出状态，请检查连接后刷新';
   return {
     state: 'error',
-    detail: (r.stderr || r.output || '命令没有返回结果').trim(),
+    detail: r.stderr.trim() || (r.output.trim() ? `${reason}：${r.output.trim()}` : reason),
   };
 }
 

@@ -5,6 +5,9 @@ stable release.
 
 ## Unreleased
 
+- Keep failed remote-completion probes retryable, reject unconfirmed install
+  status, and prevent refresh or late probes from overwriting installation state.
+  Show refresh guidance before querying connected servers.
 - Correlate remote-file and standalone teaching cards through completion or
   errors. Bind remote-write approvals to their original call and SSH target;
   reject SSH output on non-command records. Local Python approvals keep their
