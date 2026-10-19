@@ -113,6 +113,16 @@ function questionCardCount() {
   return document.querySelectorAll("[data-question-card]").length;
 }
 
+function loggedContent(value: unknown, seen = new Set<object>()): string[] {
+  if (value instanceof Error) {
+    return [value.name, value.message, value.stack ?? "", ...loggedContent(value.cause, seen)];
+  }
+  if (typeof value === "string") return [value];
+  if (!value || typeof value !== "object" || seen.has(value)) return [];
+  seen.add(value);
+  return Object.entries(value).flatMap(([key, item]) => [key, ...loggedContent(item, seen)]);
+}
+
 beforeEach(() => {
   vi.mocked(invokeRpc).mockReset();
   vi.mocked(invokeRpc).mockImplementation((method: string) =>
@@ -443,5 +453,99 @@ describe("NeedsYouApprovalCards response state", () => {
     expect(await screen.findByText("只读诊断 ny-list-fresh")).toBeTruthy();
     expect(isPending(stale.id)).toBe(false);
     expect(isPending(fresh.id)).toBe(true);
+  });
+
+  it.each([
+    ["Error", (marker: string) => new Error(marker)],
+    ["string", (marker: string) => marker],
+    ["object", (marker: string) => ({ detail: marker, nested: { secret: marker } })],
+  ])("does not expose a rejected %s transport value in diagnostics", async (_label, makeReason) => {
+    const marker = "synthetic-private-marker-response";
+    const reason = makeReason(marker);
+    const response = deferred<unknown>();
+    vi.mocked(invokeRpc).mockImplementation((method: string) =>
+      method === "needs_you.list" ? Promise.resolve([]) : response.promise,
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await mount();
+      const req = approval(`ny-private-${_label}`);
+      emit(created(req));
+      fireEvent.click(await screen.findByRole("button", { name: "执行" }));
+      await waitFor(() => expect(invokeRpc).toHaveBeenCalledWith("needs_you.respond", expect.anything()));
+      await act(async () => {
+        response.reject(reason);
+        await response.promise.catch(() => undefined);
+      });
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      expect(approvalCardCount()).toBe(1);
+      expect(isPending(req.id)).toBe(true);
+      expect((screen.getByRole("button", { name: "执行" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(vi.mocked(invokeRpc).mock.calls.filter(([method]) => method === "needs_you.respond")).toHaveLength(1);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0][0]).toContain(`needs_you.respond failed (req_id=${req.id})`);
+      expect(error.mock.calls[0][1]).toBeInstanceOf(Error);
+      expect(error.mock.calls[0][1]).not.toBe(reason);
+      expect(error.mock.calls.flatMap((call) => call.flatMap((arg) => loggedContent(arg))).join(" ")).not.toContain(marker);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      response.promise.catch(() => undefined);
+      error.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it("does not log when a valid acknowledgement settles the approval", async () => {
+    const req = approval("ny-valid-ack-no-diagnostic");
+    vi.mocked(invokeRpc).mockImplementation((method: string) =>
+      method === "needs_you.list" ? Promise.resolve([]) : Promise.resolve(ack(req, "approved")),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await mount();
+      emit(created(req));
+      fireEvent.click(await screen.findByRole("button", { name: "执行" }));
+      await waitFor(() => expect(approvalCardCount()).toBe(0));
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it("does not log a late rejection after a terminal event already settled the approval", async () => {
+    const req = approval("ny-terminal-no-diagnostic");
+    const response = deferred<unknown>();
+    vi.mocked(invokeRpc).mockImplementation((method: string) =>
+      method === "needs_you.list" ? Promise.resolve([]) : response.promise,
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await mount();
+      emit(created(req));
+      fireEvent.click(await screen.findByRole("button", { name: "执行" }));
+      emit(terminal(req, "responded"));
+      await act(async () => {
+        response.reject(new Error("synthetic-private-marker-late"));
+        await response.promise.catch(() => undefined);
+      });
+
+      expect(approvalCardCount()).toBe(0);
+      expect(isPending(req.id)).toBe(false);
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      response.promise.catch(() => undefined);
+      error.mockRestore();
+      warn.mockRestore();
+    }
   });
 });

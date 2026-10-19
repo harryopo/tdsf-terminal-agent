@@ -201,4 +201,60 @@ describe("NeedsYouApprovalCards waits for subscription readiness", () => {
     );
     expect(useNeedsYouWait.getState().pending).toEqual([]);
   });
+
+  it("warns once when the active subscription rejects and keeps restored pending cards usable", async () => {
+    const marker = "synthetic-private-marker-subscription";
+    const req = request("approval", "ny-registration-rejected-private");
+    backendRows.push(req);
+    vi.mocked(onNeedsYou).mockRejectedValueOnce(new Error(marker));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      render(<NeedsYouApprovalCards />);
+      await waitFor(() =>
+        expect(document.querySelector(`[data-needs-you-request-id="${req.id}"]`)).not.toBeNull(),
+      );
+      await waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+
+      expect(document.querySelector(`[data-needs-you-request-id="${req.id}"]`)).not.toBeNull();
+      expect(useNeedsYouWait.getState().pending).toContainEqual({
+        reqId: req.id,
+        sessionId: req.session_id,
+      });
+      expect(warn.mock.calls.flat().join(" ")).not.toContain(marker);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("does not log a subscription rejection after its owner has retired", async () => {
+    let rejectSubscription!: (reason?: unknown) => void;
+    const subscription = new Promise<() => void>((_resolve, reject) => {
+      rejectSubscription = reject;
+    });
+    vi.mocked(onNeedsYou).mockImplementationOnce(() => subscription);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const view = render(<NeedsYouApprovalCards />);
+      await waitFor(() => expect(onNeedsYou).toHaveBeenCalledTimes(1));
+      view.unmount();
+      await act(async () => {
+        rejectSubscription(new Error("synthetic-private-marker-retired"));
+        await subscription.catch(() => undefined);
+      });
+      await act(async () => Promise.resolve());
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(vi.mocked(invokeRpc).mock.calls.filter(([method]) => method === "needs_you.list")).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
 });

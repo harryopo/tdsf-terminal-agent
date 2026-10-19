@@ -316,6 +316,9 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
       else unlisten = fn;
     }, () => {
       // 事件订阅失败时仍补拉既有请求，保留可回答的卡片。
+      if (!cancelled) {
+        console.warn("needs_you.subscribe failed: 审批事件通道未建立，仅尝试恢复已有待处理请求；请重新打开对话检查连接状态。");
+      }
     });
 
     // #59：先等订阅就绪，再补拉一次，避免列表快照与监听注册之间漏掉请求。
@@ -409,10 +412,13 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
         useChatStore.getState().setSessionReadOnlyTrust(true);
       }
       settleRequest(reqId);
-    } catch (error: unknown) {
+    } catch {
       // 服务终态可能先于 RPC 回包；绝不删除终态屏障或重新挂起等待。
       if (!resolvedRef.current.has(reqId)) {
-        console.error(`needs_you.respond failed (req_id=${reqId}):`, error);
+        console.error(
+          `needs_you.respond failed (req_id=${reqId}):`,
+          new Error("答复回执未获确认；请重试答复，不会重新发送命令。"),
+        );
         setResponses((cur) => ({
           ...cur,
           [reqId]: {
