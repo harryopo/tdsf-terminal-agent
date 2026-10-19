@@ -191,6 +191,7 @@ describe("KnowledgePanel — 浏览模式", () => {
     expect(invokeRpc).toHaveBeenCalledWith("knowledge.list", {
       limit: 50,
       offset: 0,
+      library: "slim",
     });
   });
 
@@ -201,7 +202,7 @@ describe("KnowledgePanel — 浏览模式", () => {
       if (method === "knowledge.list_files") {
         // 6+1 分类分组：list_files 按 {group: category} 拉取（未分类 group=""）
         if (params.group === "") {
-          expect(params).toEqual({ group: "" });
+          expect(params).toEqual({ group: "", library: "slim" });
           return { files: [DOC_FILE], total: 1 };
         }
         return { files: [], total: 0 };
@@ -258,6 +259,7 @@ describe("KnowledgePanel — 浏览模式", () => {
     expect(await screen.findByText("chmod 完整讲解，覆盖数字法与符号法。")).toBeTruthy();
     expect(invokeRpc).toHaveBeenCalledWith("knowledge.get_doc", {
       url: "linux-basics.md",
+      library: "slim",
     });
     expect(screen.getByText(/共 3 块 · 约 1234 字/)).toBeTruthy();
     // 弹窗标题=filename（面板文件行文本重复，用 DialogTitle 的 heading 角色定位）
@@ -408,7 +410,7 @@ describe("KnowledgePanel — 条目详情与空态", () => {
     fireEvent.click(await screen.findByText("ls — 列出目录内容"));
 
     expect(await screen.findByText("ls 的详细讲解……")).toBeTruthy();
-    expect(invokeRpc).toHaveBeenCalledWith("knowledge.get", { id: "cmd-ls" });
+    expect(invokeRpc).toHaveBeenCalledWith("knowledge.get", { id: "cmd-ls", library: "slim" });
   });
 
   it("详情弹窗返回按钮回到列表", async () => {
@@ -621,7 +623,7 @@ describe("KnowledgePanel — 导入 md", () => {
     expect(listCalls).toBe(2); // 挂载 + 导入后刷新
     // 浏览缓存被清理后随刷新重建（新文件进入缓存，旧缓存条目不存在；
     // 缓存 key = category 分组 key，导入文档无分类 → ""）
-    expect(filesCache.get("")?.[0]?.filename).toBe("my-notes.md");
+    expect(filesCache.get("full:")?.[0]?.filename).toBe("my-notes.md");
     expect(docCache.size).toBe(0);
   });
 
@@ -704,6 +706,7 @@ describe("KnowledgePanel — 中文预览标题", () => {
     expect(screen.getAllByText("Kubernetes 官方文档").length).toBe(2);
     expect(invokeRpc).toHaveBeenCalledWith("knowledge.titles_zh", {
       source: "kubernetes-docs",
+      library: "slim",
     });
   });
 

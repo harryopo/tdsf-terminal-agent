@@ -604,7 +604,7 @@ class RagIndex:
             return results
 
     def list_entries(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-        """列出条目（按入库时间倒序，浏览模式用）"""
+        """列出条目（按稳定 ID rowid 逆序分页，不代表入库时间）"""
         with self._lock:
             conn = self._conn
             assert conn is not None
@@ -805,6 +805,25 @@ class RagIndex:
                 n += 1
             conn.commit()
         return n
+
+    def browse_groups(self) -> list[dict[str, Any]]:
+        """完整分类/来源统计，不受当前浏览页大小限制。"""
+        with self._lock:
+            conn = self._conn
+            assert conn is not None
+            rows = conn.execute(
+                """SELECT COALESCE(category, '') AS category, source,
+                          COUNT(*) AS entries,
+                          COUNT(DISTINCT NULLIF(url, '')) AS files
+                   FROM entries
+                   GROUP BY COALESCE(category, ''), source
+                   ORDER BY category, source"""
+            ).fetchall()
+        return [
+            {"category": str(r["category"]), "source": str(r["source"]),
+             "entries": int(r["entries"]), "files": int(r["files"])}
+            for r in rows
+        ]
 
     def stats_by_source(self) -> list[dict[str, Any]]:
         """按 source 统计（文件数/块数/总字符数，重建脚本与前端统计用）"""

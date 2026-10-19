@@ -10,7 +10,8 @@
  *     （knowledge.get_doc 拼接全部分块）。无 url 的条目（case-* 会话沉淀、
  *     philosophy 卡片）保持原条目式展示。
  *
- *   搜索模式：输入搜索词走 knowledge.search（按块命中，语义不变），
+ *   内置/个人知识独立浏览，读取携带 library，分类统计覆盖全库，条目分页加载。
+ *   搜索模式：内置走 knowledge.search，个人走 knowledge.search_full（按块命中），
  *     命中条目显示 source 中文名副行 + 所属文件名（从 hit.url 提取）；
  *     点击优先打开完整文档（get_doc），并提示「来自搜索命中，第 N 块」
  *     （N 从分块 id 尾部序号提取，id 形如 doc-<hash>-<seq>，seq 从 0 起）；
@@ -19,10 +20,10 @@
  *   导入 md（TDSF 2026-08-30）：内置教学语料剔除（个人语料不随应用
  *     分发），头部「导入 md」按钮 → HTML input 多选 .md（WebView 下读
  *     内容传后端）→ knowledge.import_docs（fail-closed 仅 .md）→
- *     清缓存 + 重载列表。
+ *     清缓存 + 重载个人知识列表；用户已切换视图时不抢回当前入口。
  *
  * 数据链路：
- *   knowledge.list(limit)              → 浏览模式分类清单 + 无 url 条目
+ *   knowledge.list(limit, offset, library) → 完整分类统计 + 分页条目
  *   knowledge.list_files({group})      → 组内文件级列表（懒加载，per category 缓存）
  *   knowledge.get_doc({url})           → 完整文档 md（per url 缓存，弹窗重开不重复请求）
  *   knowledge.search(query, limit)     → 搜索（按块命中，语义不变）
@@ -38,6 +39,7 @@ import type { ChangeEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -53,9 +55,12 @@ import {
   clearKnowledgeCaches,
   docCache,
   filesCache,
+  knowledgeCacheKey,
   titlesZhCache,
   type KnowledgeDoc,
   type KnowledgeFile,
+  type KnowledgeGroupSummary,
+  type KnowledgeLibrary,
 } from "@/modules/ai/lib/knowledge-cache";
 import {
   categoryGroupLabel,
@@ -95,6 +100,7 @@ interface KnowledgeHit {
 
 /** 详情弹窗打开目标：docUrl 优先走 get_doc 完整文档；entryId 走 get 条目详情 */
 type DetailTarget = {
+  library?: KnowledgeLibrary;
   /** 无 url 条目（会话案例沉淀）：走 knowledge.get(id) */
   entryId?: string;
   /** 文档 url：走 knowledge.get_doc(url) 取完整文档 */
@@ -168,8 +174,25 @@ type KnowledgeGroup = {
 };
 
 /** 按 category 分组（6+1 固定顺序，未分类沉底；作用于当前搜索/过滤结果） */
-function groupKnowledgeHits(hits: KnowledgeHit[]): KnowledgeGroup[] {
+function groupKnowledgeHits(
+  hits: KnowledgeHit[],
+  summaries: KnowledgeGroupSummary[] = [],
+): KnowledgeGroup[] {
   const groups = new Map<string, KnowledgeGroup>();
+  for (const summary of summaries) {
+    if (summary.entries <= 0) continue;
+    const cat = summary.category;
+    const group: KnowledgeGroup = groups.get(cat) ?? {
+      category: cat,
+      label: categoryGroupLabel(cat),
+      sources: [],
+      entries: [],
+      hasFiles: false,
+    };
+    if (!group.sources.includes(summary.source)) group.sources.push(summary.source);
+    group.hasFiles ||= summary.files > 0;
+    groups.set(cat, group);
+  }
   for (const hit of hits) {
     const cat = hit.category ?? "";
     let group = groups.get(cat);
@@ -203,68 +226,65 @@ function groupKnowledgeHits(hits: KnowledgeHit[]): KnowledgeGroup[] {
 
 async function searchKnowledge(
   query: string,
+  library: KnowledgeLibrary,
   limit = 30,
 ): Promise<KnowledgeHit[]> {
-  try {
-    const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
-      "knowledge.search",
-      { query, limit, method: "hybrid" },
-    );
-    return res?.results ?? [];
-  } catch {
-    return [];
-  }
+  const res = await invokeRpc<{ results?: KnowledgeHit[] }>(
+    library === "slim" ? "knowledge.search" : "knowledge.search_full",
+    library === "slim" ? { query, limit, method: "hybrid" } : { query, limit },
+  );
+  return res.results ?? [];
 }
 
-async function getKnowledge(id: string): Promise<KnowledgeHit | null> {
-  try {
-    const res = await invokeRpc<{ entry?: KnowledgeHit } | null>(
-      "knowledge.get",
-      { id },
-    );
-    return res?.entry ?? null;
-  } catch {
-    return null;
-  }
+async function getKnowledge(
+  id: string,
+  library: KnowledgeLibrary,
+): Promise<KnowledgeHit | null> {
+  const res = await invokeRpc<{ entry?: KnowledgeHit }>("knowledge.get", {
+    id, library,
+  });
+  return res.entry ?? null;
 }
 
-async function listKnowledge(limit = 50): Promise<KnowledgeHit[]> {
-  try {
-    const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
-      "knowledge.list",
-      { limit, offset: 0 },
-    );
-    return res?.results ?? [];
-  } catch {
-    return [];
-  }
+async function listKnowledge(library: KnowledgeLibrary, offset = 0) {
+  const res = await invokeRpc<{
+    results: KnowledgeHit[];
+    total?: number;
+    groups?: KnowledgeGroupSummary[];
+  }>("knowledge.list", { limit: 50, offset, library });
+  return {
+    results: res.results,
+    total: res.total ?? res.results.length,
+    groups: res.groups ?? [],
+  };
 }
 
 /** 组内文件级列表（按 category 过滤；不吞错：RPC 失败上抛，由调用方置
  *  error 态，不伪装成空列表） */
 async function listKnowledgeFiles(
   group: string,
+  library: KnowledgeLibrary,
   source?: string,
 ): Promise<KnowledgeFile[]> {
   const res = await invokeRpc<{ files?: KnowledgeFile[] } | null>(
     "knowledge.list_files",
-    source ? { group, source } : { group },
+    source ? { group, source, library } : { group, library },
   );
   return res?.files ?? [];
 }
 
 /** 完整文档（不吞错：RPC 异常上抛，由弹窗统一显示错误态，fail-closed） */
-async function getKnowledgeDoc(url: string): Promise<KnowledgeDoc> {
-  return invokeRpc<KnowledgeDoc>("knowledge.get_doc", { url });
+async function getKnowledgeDoc(url: string, library: KnowledgeLibrary): Promise<KnowledgeDoc> {
+  return invokeRpc<KnowledgeDoc>("knowledge.get_doc", { url, library });
 }
 
 /** 中文标题映射（knowledge.titles_zh，gen_titles_zh.py 离线 LLM 生成）：
  *  url → 中文标题。吞错返回空 Map——无映射时前端回退英文原标题，不报错 */
-async function listTitlesZh(source: string): Promise<Map<string, string>> {
+async function listTitlesZh(source: string, library: KnowledgeLibrary): Promise<Map<string, string>> {
   try {
     const res = await invokeRpc<{
       titles?: { url: string; zh: string }[];
-    } | null>("knowledge.titles_zh", { source });
+    } | null>("knowledge.titles_zh", { source, library });
     const map = new Map<string, string>();
     for (const t of res?.titles ?? []) {
       if (t.url && t.zh) map.set(t.url, t.zh);
@@ -372,10 +392,22 @@ function SourceFileList({
 // ============================================================================
 
 export function KnowledgePanel() {
+  const [library, setLibrary] = useState<KnowledgeLibrary>("slim");
   const [query, setQuery] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [revision, setRevision] = useState(0);
   const [results, setResults] = useState<KnowledgeHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [summaries, setSummaries] = useState<KnowledgeGroupSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const searched = searchTerm.length > 0;
+  const viewVersion = useRef(0);
+  const viewReady = useRef(false);
+  const paging = useRef<number | null>(null);
+  const mounted = useRef(true);
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   // TDSF 2026-08-30: 可折叠分组（记录已折叠组的 category key）
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
@@ -394,7 +426,79 @@ export function KnowledgePanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 分组作用于当前搜索/过滤结果（6+1 固定顺序，未分类沉底）
-  const groups = useMemo(() => groupKnowledgeHits(results), [results]);
+  const groups = useMemo(
+    () => groupKnowledgeHits(results, searched ? [] : summaries),
+    [results, searched, summaries],
+  );
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    const owner = ++viewVersion.current;
+    viewReady.current = false;
+    paging.current = null;
+    setLoading(true);
+    setLoadingMore(false);
+    setLoadError(false);
+    setResults([]);
+    setSummaries([]);
+    setTotal(0);
+    setOffset(0);
+    setDetail(null);
+    setFilesByCategory(new Map());
+    setTitlesByCategory(new Map());
+    setCollapsedCategories(new Set());
+    const request = searchTerm
+      ? searchKnowledge(searchTerm, library).then((hits) => ({
+          results: hits, total: hits.length, groups: [],
+        }))
+      : listKnowledge(library);
+    void request.then((page) => {
+      if (owner !== viewVersion.current) return;
+      setResults(page.results);
+      setSummaries(page.groups);
+      setTotal(page.total);
+      setOffset(page.results.length);
+      viewReady.current = true;
+    }).catch(() => {
+      if (owner === viewVersion.current) setLoadError(true);
+    }).finally(() => {
+      if (owner === viewVersion.current) setLoading(false);
+    });
+    return () => { viewVersion.current = owner + 1; };
+  }, [library, searchTerm, revision]);
+
+  const loadMore = useCallback(async () => {
+    const owner = viewVersion.current;
+    if (loading || searched || paging.current === owner) return;
+    paging.current = owner;
+    setLoadingMore(true);
+    setLoadError(false);
+    try {
+      const page = await listKnowledge(library, offset);
+      if (owner !== viewVersion.current) return;
+      if (page.results.length === 0 && offset < page.total) {
+        setLoadError(true);
+        return;
+      }
+      setResults((previous) => {
+        const byId = new Map(previous.map((hit) => [hit.id, hit]));
+        for (const hit of page.results) byId.set(hit.id, hit);
+        return [...byId.values()];
+      });
+      setOffset(offset + page.results.length);
+      setTotal(page.total);
+      setSummaries(page.groups);
+    } catch {
+      if (owner === viewVersion.current) setLoadError(true);
+    } finally {
+      if (owner === viewVersion.current) setLoadingMore(false);
+      if (paging.current === owner) paging.current = null;
+    }
+  }, [library, loading, offset, searched]);
 
   /** 导入 md：HTML input 多选（WebView 下 File 无绝对路径，读内容传后端，
    *  与 composer 附件/主题导入同款机制）→ knowledge.import_docs
@@ -413,6 +517,7 @@ export function KnowledgePanel() {
         toast.error("仅支持导入 .md 文件");
         return;
       }
+      const owner = viewVersion.current;
       setImporting(true);
       try {
         const payload = await Promise.all(
@@ -427,11 +532,12 @@ export function KnowledgePanel() {
         const rejected = res?.rejected ?? [];
         // 成功后刷新：清浏览缓存 + 组内文件态 + 中文标题态 + 重载列表（回落浏览模式）
         clearKnowledgeCaches();
-        setFilesByCategory(new Map());
-        setTitlesByCategory(new Map());
-        const hits = await listKnowledge(50);
-        setResults(hits);
-        setSearched(false);
+        if (mounted.current && owner === viewVersion.current) {
+          setLibrary("full");
+          setQuery("");
+          setSearchTerm("");
+          setRevision((value) => value + 1);
+        }
         if (rejectedNames.length > 0 || rejected.length > 0) {
           const names = [
             ...new Set([...rejectedNames, ...rejected.map((r) => r.name)]),
@@ -445,7 +551,7 @@ export function KnowledgePanel() {
       } catch {
         toast.error("导入失败：知识库服务暂不可用，请稍后重试");
       } finally {
-        setImporting(false);
+        if (mounted.current) setImporting(false);
       }
     },
     [],
@@ -461,7 +567,9 @@ export function KnowledgePanel() {
   }, []);
 
   const loadFiles = useCallback((category: string) => {
-    const cached = filesCache.get(category);
+    const owner = viewVersion.current;
+    const cacheKey = knowledgeCacheKey(library, category);
+    const cached = filesCache.get(cacheKey);
     if (cached) {
       setFilesByCategory((prev) =>
         new Map(prev).set(category, { status: "ready", files: cached }),
@@ -471,82 +579,67 @@ export function KnowledgePanel() {
     setFilesByCategory((prev) =>
       new Map(prev).set(category, { status: "loading" }),
     );
-    listKnowledgeFiles(category)
+    listKnowledgeFiles(category, library)
       .then((files) => {
-        filesCache.set(category, files);
+        if (owner !== viewVersion.current) return;
+        filesCache.set(cacheKey, files);
         setFilesByCategory((prev) =>
           new Map(prev).set(category, { status: "ready", files }),
         );
       })
       .catch(() => {
+        if (owner !== viewVersion.current) return;
         setFilesByCategory((prev) =>
           new Map(prev).set(category, { status: "error" }),
         );
       });
-  }, []);
+  }, [library]);
 
   // 浏览模式下为「已展开且含文档」的组懒加载 list_files（缓存 per category，
   // 跳过已加载组）
   useEffect(() => {
-    if (searched) return;
+    if (searched || loading || !viewReady.current) return;
     for (const group of groups) {
       if (!group.hasFiles) continue;
       if (collapsedCategories.has(group.category)) continue;
       if (filesByCategory.has(group.category)) continue;
       loadFiles(group.category);
     }
-  }, [searched, groups, collapsedCategories, filesByCategory, loadFiles]);
+  }, [searched, loading, groups, collapsedCategories, filesByCategory, loadFiles]);
 
   /** 中文标题映射懒加载（组级：对组内每个 source 拉 titles_zh 后合并；
    *  底层缓存 per source，组级合并结果缓存 per category，失败缓存空 Map） */
   const loadTitlesForGroup = useCallback((group: KnowledgeGroup) => {
-    const cached = titlesZhCache.get(group.category);
+    const owner = viewVersion.current;
+    const cacheKey = knowledgeCacheKey(library, group.category);
+    const cached = titlesZhCache.get(cacheKey);
     if (cached) {
       setTitlesByCategory((prev) => new Map(prev).set(group.category, cached));
       return;
     }
-    Promise.all(group.sources.map((s) => listTitlesZh(s))).then((maps) => {
+    Promise.all(group.sources.map((s) => listTitlesZh(s, library))).then((maps) => {
+      if (owner !== viewVersion.current) return;
       const merged = new Map<string, string>();
       for (const m of maps) {
         for (const [url, zh] of m) merged.set(url, zh);
       }
-      titlesZhCache.set(group.category, merged);
+      titlesZhCache.set(cacheKey, merged);
       setTitlesByCategory((prev) => new Map(prev).set(group.category, merged));
     });
-  }, []);
+  }, [library]);
 
   // 出现的组即预取中文标题（浏览/搜索两模式共用；缓存命中跳过，不阻塞列表渲染）
   useEffect(() => {
+    if (loading || !viewReady.current) return;
     for (const group of groups) {
       if (titlesByCategory.has(group.category)) continue;
       loadTitlesForGroup(group);
     }
-  }, [groups, titlesByCategory, loadTitlesForGroup]);
+  }, [loading, groups, titlesByCategory, loadTitlesForGroup]);
 
-  const search = useCallback(async (q: string) => {
-    const keyword = q.trim();
-    if (!keyword) {
-      // 空查询 → 回到浏览模式（列出全部）
-      setLoading(true);
-      const hits = await listKnowledge(50);
-      setResults(hits);
-      setSearched(false);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setSearched(true);
-    const hits = await searchKnowledge(keyword);
-    setResults(hits);
-    setLoading(false);
-  }, []);
-
-  // 打开即浏览（来源分组 → 组内文件/条目）
-  useEffect(() => {
-    void listKnowledge(50).then((hits) => {
-      setResults(hits);
-      setLoading(false);
-    });
+  const search = useCallback((q: string) => {
+    setSearchTerm(q.trim());
+    setRevision((value) => value + 1);
   }, []);
 
   // 条目样式：搜索命中条目与无 url 条目（案例）复用；
@@ -560,7 +653,7 @@ export function KnowledgePanel() {
         key={hit.id}
         type="button"
         onClick={() =>
-          setDetail(hit.url ? { docUrl: hit.url, hit } : { entryId: hit.id, hit })
+          setDetail(hit.url ? { docUrl: hit.url, hit, library } : { entryId: hit.id, hit, library })
         }
         className={cn(
           "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
@@ -606,7 +699,11 @@ export function KnowledgePanel() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <Tabs
+      value={library}
+      onValueChange={(value) => setLibrary(value as KnowledgeLibrary)}
+      className="flex h-full min-h-0 flex-col gap-0"
+    >
       {/* 隐藏的 md 文件选择 input（多选，仅 .md；WebView 下读内容传后端） */}
       <input
         ref={fileInputRef}
@@ -641,6 +738,11 @@ export function KnowledgePanel() {
         </Button>
       </div>
 
+      <TabsList aria-label="知识库来源" className="mx-2.5 mt-2 grid w-auto shrink-0 grid-cols-2 rounded-lg">
+        <TabsTrigger value="slim" className="rounded-md text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground">内置知识</TabsTrigger>
+        <TabsTrigger value="full" className="rounded-md text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground">我的知识</TabsTrigger>
+      </TabsList>
+
       {/* 搜索区 */}
       <div className="flex items-center gap-1.5 border-b border-border/50 px-2.5 py-2">
         <div className="flex flex-1 items-center gap-1.5 rounded-md border border-border/60 bg-muted/20 px-2">
@@ -665,7 +767,7 @@ export function KnowledgePanel() {
           size="icon"
           className="size-6.5 shrink-0"
           onClick={() => void search(query)}
-          disabled={loading || !query.trim()}
+          disabled={loading || (!query.trim() && !searched)}
           aria-label="检索"
         >
           <HugeiconsIcon icon={SparklesIcon} size={12} strokeWidth={1.75} />
@@ -673,21 +775,29 @@ export function KnowledgePanel() {
       </div>
 
       {/* 列表区：浏览模式 = 来源分组 → 文件/条目；搜索模式 = 来源分组 → 命中条目 */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <TabsContent value={library} className="min-h-0 flex-1 overflow-y-auto p-2">
         {loading && (
           <div className="flex items-center justify-center gap-2 py-6 text-[11px] text-muted-foreground">
             <Spinner className="size-3.5" />
             检索中…
           </div>
         )}
-        {!loading && searched && results.length === 0 && (
+        {!loading && loadError && (
+          <div role="status" className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-[11px] text-muted-foreground">
+            <p>加载失败，知识库服务暂不可用，请重试。</p>
+            {results.length === 0 && (
+              <Button variant="outline" size="sm" onClick={() => setRevision((value) => value + 1)}>重试</Button>
+            )}
+          </div>
+        )}
+        {!loading && !loadError && searched && results.length === 0 && (
           <div className="py-6 text-center text-[11px] leading-relaxed text-muted-foreground">
             未找到相关条目。
             <br />
             可导入文档或沉淀案例扩充知识库。
           </div>
         )}
-        {!loading && !searched && results.length === 0 && (
+        {!loading && !loadError && !searched && total === 0 && (
           <div className="py-6 text-center text-[11px] leading-relaxed text-muted-foreground">
             知识库为空。
             <br />
@@ -734,11 +844,9 @@ export function KnowledgePanel() {
                     variant="secondary"
                     className="ml-auto shrink-0 px-1 py-px text-[9px] tabular-nums"
                   >
-                    {/* 计数口径统一（TDSF 2026-08-31 用户反馈"有的数字有的N块
-                        看不懂"）：仅搜索模式显示"N 条"（命中条目数）；浏览模式
-                        不显示——组头 list 采样计数与组内文件卡块数不同源，数字
-                        对不上反而误导，文件卡块数与详情弹窗"共 N 块"同口径 */}
-                    {searched ? `${group.entries.length} 条` : null}
+                    {searched
+                      ? `${group.entries.length} 条`
+                      : `${summaries.filter((row) => row.category === group.category).reduce((count, row) => count + row.entries, 0) || group.entries.length} 块/条`}
                   </Badge>
                 </button>
                 {!isCollapsed && (
@@ -759,13 +867,16 @@ export function KnowledgePanel() {
                             titles={
                               titlesByCategory.get(group.category) ?? new Map()
                             }
-                            onOpenDoc={(url) => setDetail({ docUrl: url })}
+                            onOpenDoc={(url) => setDetail({ docUrl: url, library })}
                           />
                         )}
                         {/* 浏览模式：无 url 条目（案例）保持条目式 */}
                         {group.entries
                           .filter((e) => !e.url)
                           .map(renderEntry)}
+                        {!group.hasFiles && group.entries.length === 0 && (
+                          <p className="pl-5 text-[10px] text-muted-foreground">该分类条目尚未载入，请使用下方“加载更多”。</p>
+                        )}
                       </>
                     )}
                   </div>
@@ -774,11 +885,21 @@ export function KnowledgePanel() {
             );
           })}
         </div>
-      </div>
+        {!loading && !searched && total > 0 && (
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/50 px-1 pt-2 text-[10px] text-muted-foreground">
+            <span>已载入 {results.length} / {total} 块/条</span>
+            {offset < total && (
+              <Button variant="outline" size="sm" className="h-7 text-[11px]" disabled={loadingMore} onClick={() => void loadMore()}>
+                {loadingMore ? "加载中…" : "加载更多"}
+              </Button>
+            )}
+          </div>
+        )}
+      </TabsContent>
 
       {/* 详情弹窗 */}
       <KnowledgeDetailDialog target={detail} onClose={() => setDetail(null)} />
-    </div>
+    </Tabs>
   );
 }
 
@@ -803,38 +924,47 @@ export function KnowledgeDetailDialog({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setDoc(null);
     setEntry(null);
     setError(null);
+    setLoading(false);
     if (!target) return;
     if (target.docUrl) {
       const url = target.docUrl;
-      const cached = docCache.get(url);
+      const library = target.library ?? "slim";
+      const cacheKey = knowledgeCacheKey(library, url);
+      const cached = docCache.get(cacheKey);
       if (cached) {
         setDoc(cached);
         return;
       }
       setLoading(true);
-      getKnowledgeDoc(url)
+      getKnowledgeDoc(url, library)
         .then((res) => {
+          if (cancelled) return;
           if (res?.ok && typeof res.content === "string") {
-            docCache.set(url, res);
+            docCache.set(cacheKey, res);
             setDoc(res);
           } else {
             setError(res?.error ?? "未知错误");
           }
         })
-        .catch(() => setError("知识库服务暂不可用，请稍后重试"))
-        .finally(() => setLoading(false));
-      return;
+        .catch(() => { if (!cancelled) setError("知识库服务暂不可用，请稍后重试"); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+      return () => { cancelled = true; };
     }
     if (target.entryId) {
       setLoading(true);
-      void getKnowledge(target.entryId).then((e) => {
-        setEntry(e);
-        setLoading(false);
+      void getKnowledge(target.entryId, target.library ?? "full").then((e) => {
+        if (!cancelled) setEntry(e);
+      }).catch(() => {
+        if (!cancelled) setError("知识库服务暂不可用，请稍后重试");
+      }).finally(() => {
+        if (!cancelled) setLoading(false);
       });
     }
+    return () => { cancelled = true; };
   }, [target]);
 
   const isDocMode = !!target?.docUrl;

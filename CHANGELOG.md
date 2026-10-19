@@ -5,6 +5,10 @@ stable release.
 
 ## Unreleased
 
+- Separate built-in and personal knowledge browsing, keep file lists, titles,
+  search and details in the selected library, and expose complete category
+  counts with entry pagination. Ignore stale responses after changing views,
+  show retryable loading errors, and keep imports in personal knowledge.
 - Keep failed remote-completion probes retryable, reject unconfirmed install
   status, and prevent refresh or late probes from overwriting installation state.
   Show refresh guidance before querying connected servers.

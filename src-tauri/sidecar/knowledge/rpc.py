@@ -17,18 +17,18 @@ knowledge/rpc.py — 知识库 JSON-RPC 方法注册（T-P3-08）
 - knowledge.add:       {entry: KnowledgeEntry} → {id}（写全量库——爬取/
                        导入/沉淀管线源头）
 - knowledge.rebuild:   {} → {ok, count}（重建全量库）
-- knowledge.get:       {id} → {entry | null}（读全量库——服务浏览模式
+- knowledge.get:       {id, library?} → {entry | null}（默认全量库——服务浏览模式
                        会话沉淀卡片详情）
 - knowledge.count:     {} → {count}（读精简库）
-- knowledge.list:      {limit?, offset?} → {results, total, ...}（读全量库）
+- knowledge.list:      {limit?, offset?, library?} → {results, total, groups, ...}（默认全量库）
 - knowledge.import_docs: {files, source?} → {imported, skipped, errors, rejected}
 - knowledge.add_case:    {title, content, tags?} → {ok, id}
 - knowledge.crawl:       {source, url?} → {added, entries, error?}
 - knowledge.stats:       {} → {total_entries, embed_model_loaded}
-- knowledge.list_files:  {source?, group?} → {files: [...], total}（读精简库）
-- knowledge.get_doc:     {url} → {ok, url, filename, source, title,
-                         content, chunks, total_chars}（读精简库）
-- knowledge.titles_zh:   {source?} → {titles: [{url, zh}], total}（读精简库）
+- knowledge.list_files:  {source?, group?, library?} → {files: [...], total}（默认精简库）
+- knowledge.get_doc:     {url, library?} → {ok, url, filename, source, title,
+                         content, chunks, total_chars}（默认精简库）
+- knowledge.titles_zh:   {source?, library?} → {titles: [{url, zh}], total}（默认精简库）
 
 method 参数支持：
 - "fts5":    仅 FTS5 检索
@@ -52,6 +52,15 @@ from knowledge.vector import generate_embedding, get_global_vector
 from knowledge.rag import get_global_rag, get_slim_rag
 
 logger = logging.getLogger("sidecar.knowledge.rpc")
+
+
+def _library_rag(library: str):
+    """浏览入口显式选择库；旧调用方保持各方法原有默认值。"""
+    if library == "slim":
+        return get_slim_rag()
+    if library == "full":
+        return get_global_rag()
+    raise ValueError("library must be 'slim' or 'full'")
 
 
 # ============================================================================
@@ -205,10 +214,10 @@ def register_methods(dispatcher: Any) -> None:
             logger.exception(f"knowledge.rebuild failed: {e}")
             return {"ok": False, "error": str(e)}
 
-    def _get(id: str) -> dict[str, Any]:
+    def _get(id: str, library: str = "full") -> dict[str, Any]:
         """按 ID 获取单条知识
 
-        ⚠️ 必须与 list/search 同源（rag.db）。历史实现读旧 FTS5Index 的
+        ⚠️ 必须与当前浏览列表的 library 同源；省略时仍为 rag.db。历史实现读旧 FTS5Index 的
         knowledge.db（knowledge_entries 表），与列表/搜索（rag.db）割裂，
         导致列表有数据而详情永远为空（2026-08-15 修复）。
 
@@ -218,8 +227,8 @@ def register_methods(dispatcher: Any) -> None:
         Returns:
             {ok: bool, entry: dict | null}
         """
+        rag = _library_rag(library)
         try:
-            rag = get_global_rag()
             entry = rag.get(id)
             if entry is None:
                 return {"ok": False, "error": f"entry not found: {id}"}
@@ -272,15 +281,14 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.search_full", _search_full)
 
     # P2-4: 浏览模式（打开即列出，不依赖搜索词）
-    def _list(limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """列出知识条目（按入库时间倒序，供浏览模式）"""
-        from knowledge.rag import get_global_rag
-
-        rag = get_global_rag()
+    def _list(limit: int = 50, offset: int = 0, library: str = "full") -> dict[str, Any]:
+        """同库分页与完整分类统计；省略 library 保留全量库默认。"""
+        rag = _library_rag(library)
         limit = max(1, min(int(limit), 100))
         offset = max(0, int(offset))
         rows = rag.list_entries(limit=limit, offset=offset)
-        return {"results": rows, "total": rag.count(), "limit": limit, "offset": offset}
+        return {"results": rows, "total": rag.count(), "limit": limit, "offset": offset,
+                "groups": rag.browse_groups()}
 
     dispatcher.register("knowledge.list", _list)
 
@@ -331,6 +339,7 @@ def register_methods(dispatcher: Any) -> None:
     def _list_files(
         source: str | None = None,
         group: str | None = None,
+        library: str = "slim",
     ) -> dict[str, Any]:
         """按 url 聚合列出文档文件
 
@@ -346,12 +355,11 @@ def register_methods(dispatcher: Any) -> None:
             {files: [{url, filename, title0, chunks, total_chars, source,
              category}], total}
         """
-        # TDSF 2026-08-31: 主读精简库（中文提炼文档，与 search 同源）
-        rag = get_slim_rag()
+        rag = _library_rag(library)
         files = rag.list_files(source=(source or None), group=(group or None))
         return {"files": files, "total": len(files)}
 
-    def _get_doc(url: str) -> dict[str, Any]:
+    def _get_doc(url: str, library: str = "slim") -> dict[str, Any]:
         """按 url 取完整文档（全部块按序号排序，content 以空行拼接）
 
         Args:
@@ -362,10 +370,10 @@ def register_methods(dispatcher: Any) -> None:
              total_chars, title_zh, summary_zh}（中文字段来自 doc_titles_zh，
              无映射为空串）或 {ok: False, error}
         """
+        rag = _library_rag(library)
         if not url or not str(url).strip():
             return {"ok": False, "error": "url is required"}
-        # TDSF 2026-08-31: 主读精简库（中文提炼文档，与 search/list_files 同源）
-        doc = get_slim_rag().get_doc(str(url).strip())
+        doc = rag.get_doc(str(url).strip())
         if doc is None:
             return {"ok": False, "error": f"document not found: {url}"}
         return {"ok": True, **doc}
@@ -378,7 +386,7 @@ def register_methods(dispatcher: Any) -> None:
     dispatcher.register("knowledge.get_doc", _get_doc)
 
     # 中文标题映射（前端知识浏览器：中文主行 + 英文原名副行）
-    def _titles_zh(source: str | None = None) -> dict[str, Any]:
+    def _titles_zh(source: str | None = None, library: str = "slim") -> dict[str, Any]:
         """返回 url → 中文标题 映射（doc_titles_zh 表，gen_titles_zh.py 生成）
 
         Args:
@@ -387,9 +395,7 @@ def register_methods(dispatcher: Any) -> None:
         Returns:
             {titles: [{url, zh}, ...], total}
         """
-        # TDSF 2026-08-31: 主读精简库（映射与文档同源；slim 库映射由
-        # scripts/fill_slim_titles.py 离线生成）
-        titles = get_slim_rag().titles_zh(source=(source or None))
+        titles = _library_rag(library).titles_zh(source=(source or None))
         return {"titles": titles, "total": len(titles)}
 
     dispatcher.register("knowledge.titles_zh", _titles_zh)

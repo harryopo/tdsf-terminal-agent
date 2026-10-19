@@ -101,6 +101,7 @@ Two properties separate it from "AI in a sidebar":
 ### Local knowledge retrieval
 
 - Indexes documents already present in the local data directory or imported by you; the entry count depends on the machine.
+- The browser separates built-in and personal knowledge, with complete category counts and paginated entries. Imports go only to personal knowledge, without merging or overwriting the built-in library.
 - Retrieval runs entirely locally: SQLite **FTS5** keyword search plus **sqlite-vec** semantic search (fastembed / BGE-small-zh, 512 dimensions), fused with RRF.
 - Reasoning still uses the model provider you configure; knowledge retrieval itself sends nothing out.
 
