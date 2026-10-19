@@ -84,6 +84,33 @@ describe("KnowledgePanel library ownership", () => {
     expect(screen.getByText(/56.*56/)).toBeTruthy();
   });
 
+  it("filters categorized files out of the empty-category all-files response", async () => {
+    const classified = { ...hit("classified-hit", "classified entry", "classified.md"), category: "services" };
+    const unclassified = { ...hit("unclassified-hit", "unclassified entry", "uncategorized.md"), category: "" };
+    const classifiedFile = { url: "classified.md", filename: "classified.md", title0: "classified", chunks: 1, total_chars: 8, source: "sample", category: "services" };
+    const unclassifiedFile = { url: "uncategorized.md", filename: "uncategorized.md", title0: "uncategorized", chunks: 1, total_chars: 8, source: "sample", category: "" };
+    mockRpc((method, params) => {
+      if (method === "knowledge.list") return {
+        ...page([classified, unclassified], [
+          { category: "services", source: "sample", entries: 1, files: 1 },
+          { category: "", source: "sample", entries: 1, files: 1 },
+        ]),
+        total: 2,
+      };
+      if (method === "knowledge.list_files") return params.group === ""
+        ? { files: [classifiedFile, unclassifiedFile], total: 2 }
+        : { files: [classifiedFile], total: 1 };
+      if (method === "knowledge.titles_zh") return { titles: [] };
+      return {};
+    });
+    render(<KnowledgePanel />);
+    expect(await screen.findByText("uncategorized.md")).toBeTruthy();
+    expect(screen.getByText("服务部署")).toBeTruthy();
+    expect(screen.getAllByText("classified.md")).toHaveLength(1);
+    expect(screen.getAllByText("uncategorized.md")).toHaveLength(1);
+    expect(invokeRpc).toHaveBeenCalledWith("knowledge.list_files", { group: "", library: "slim" });
+  });
+
   it("shows load-more failure and can retry the same offset", async () => {
     let attempts = 0;
     mockRpc((method, params) => {

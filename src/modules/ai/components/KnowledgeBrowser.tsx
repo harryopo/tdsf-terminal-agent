@@ -270,7 +270,9 @@ async function listKnowledgeFiles(
     "knowledge.list_files",
     source ? { group, source, library } : { group, library },
   );
-  return res?.files ?? [];
+  const files = res?.files ?? [];
+  // 旧 RPC 的空 group 表示全部；“其他”分类仅展示真正未分类的文件。
+  return group ? files : files.filter((file) => !file.category);
 }
 
 /** 完整文档（不吞错：RPC 异常上抛，由弹窗统一显示错误态，fail-closed） */
