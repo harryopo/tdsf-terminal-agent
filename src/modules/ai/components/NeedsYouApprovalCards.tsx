@@ -277,7 +277,7 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void onNeedsYou((raw) => {
+    const subscription = onNeedsYou((raw) => {
       if (cancelled) return;
       const payload = unwrapEventPayload<NeedsYouEventPayload>(raw);
       if (!payload || typeof payload !== "object") return;
@@ -314,22 +314,16 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
+    }, () => {
+      // 事件订阅失败时仍补拉既有请求，保留可回答的卡片。
     });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [settleRequest]);
 
-  // #59 补水合：needs_you 的 created 只推一次，页面重载 / 挂载竞态期间错过的
-  // 事件不会重放。approval 还有 300s 超时兜底，而 question 的 deadline 恒为
-  // None（needs_you.py 只给 approval 设超时），Python 侧 wait_for_response 会
-  // 无限阻塞工具线程 —— 少这一次补拉就是"agent 卡死且界面上没有任何可点的东西"。
-  // 故挂载时按 needs_you.list 拉一次 pending 请求，把错过的卡片补齐。
-  useEffect(() => {
-    let cancelled = false;
+    // #59：先等订阅就绪，再补拉一次，避免列表快照与监听注册之间漏掉请求。
+    // question 无审批超时兜底，漏卡会让工具线程一直等不到用户回答。
     const previousPending = useNeedsYouWait.getState().pending;
     void (async () => {
+      await subscription;
+      if (cancelled) return;
       // sidecar 未起 / 浏览器模式下这个 RPC 会 reject：属正常启动时序，静默跳过，
       // 事件订阅通道仍在（created 后续到达照样出卡）。
       let rows: NeedsYouEventPayload["request"][] | null = null;
@@ -373,6 +367,7 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
     })();
     return () => {
       cancelled = true;
+      unlisten?.();
     };
   }, [settleRequest]);
 
