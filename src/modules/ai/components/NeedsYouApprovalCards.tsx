@@ -328,6 +328,7 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
   // 故挂载时按 needs_you.list 拉一次 pending 请求，把错过的卡片补齐。
   useEffect(() => {
     let cancelled = false;
+    const previousPending = useNeedsYouWait.getState().pending;
     void (async () => {
       // sidecar 未起 / 浏览器模式下这个 RPC 会 reject：属正常启动时序，静默跳过，
       // 事件订阅通道仍在（created 后续到达照样出卡）。
@@ -344,6 +345,14 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
       const pending = rows.filter(
         (req) => req?.type === "approval" || req?.type === "question",
       );
+      const pendingIds = new Set(pending.map((req) => req?.id));
+      const waitingIds = new Set(
+        useNeedsYouWait.getState().pending.map((item) => item.reqId),
+      );
+      // 只核对补拉前已知的等待：不清新事件，也不复活补拉期间已确认的答复。
+      for (const { reqId } of previousPending) {
+        if (!pendingIds.has(reqId) || !waitingIds.has(reqId)) settleRequest(reqId);
+      }
       if (pending.length === 0) return;
       setItems((cur) => {
         const seen = new Set(cur.map((i) => i.reqId));
@@ -365,7 +374,7 @@ export function NeedsYouApprovalCards({ children }: { children?: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [settleRequest]);
 
   const submitResponse = useCallback(async (
     item: NeedsYouItem,
