@@ -70,7 +70,7 @@ def test_powershell_command_reports_temp_tree_sizes_in_descending_order() -> Non
         pytest.skip("PowerShell execution is available only on Windows hosts with PowerShell")
 
     with tempfile.TemporaryDirectory(prefix="codex dir size ") as temp_root:
-        root = Path(temp_root) / "root with ' quote"
+        root = Path(temp_root) / "中文 root with ' quote"
         large = root / "big folder"
         small = root / "small's folder"
         empty = root / "empty folder"
@@ -85,9 +85,12 @@ def test_powershell_command_reports_temp_tree_sizes_in_descending_order() -> Non
         command = suggested["command"]
         assert "-LiteralPath '" + str(root).replace("'", "''") + "'" in command
         completed = subprocess.run(
-            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", f"{command} | ConvertTo-Json -Compress"],
+            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+             "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+             f"{command} | ConvertTo-Json -Compress"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
         )
 
