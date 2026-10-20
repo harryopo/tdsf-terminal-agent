@@ -168,6 +168,7 @@ const blockViewportListeners = new Map<number, Set<() => void>>();
 
 // TDSF: 待风险确认命令的 listeners，UI 层订阅以弹出 RiskGuardDialog
 const pendingRiskListeners = new Map<number, Set<() => void>>();
+const integrationContextListeners = new Map<number, Set<() => void>>();
 
 // TDSF 2026-08-28 (B1-G2 防伪造): 最近被用户拒绝/取消的高危命令记录。
 // deny/取消时 RiskGuard 静默不执行，sidecar 侧 LLM 无从感知，可能编造"已执行"。
@@ -265,6 +266,32 @@ export function writeToSession(leafId: number, data: string): boolean {
 export function getSshIntegrationContext(leafId: number): SshTerminalContext | null {
   const s = sessions.get(leafId);
   return s?.remote && !s.disposed ? s.remoteContext : null;
+}
+
+export function subscribeSshIntegrationContext(leafId: number, cb: () => void): () => void {
+  let listeners = integrationContextListeners.get(leafId);
+  if (!listeners) {
+    listeners = new Set();
+    integrationContextListeners.set(leafId, listeners);
+  }
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+    if (!listeners.size) integrationContextListeners.delete(leafId);
+  };
+}
+
+function notifyIntegrationContext(leafId: number): void {
+  for (const cb of integrationContextListeners.get(leafId) ?? []) cb();
+}
+
+export async function refreshSshIntegrationContext(leafId: number): Promise<SshTerminalContext | null> {
+  const s = sessions.get(leafId);
+  const transport = s?.pty;
+  if (!s?.remote || s.disposed || !transport?.refreshIntegrationContext) return null;
+  await transport.refreshIntegrationContext();
+  return sessions.get(leafId) === s && !s.disposed && s.pty === transport
+    ? s.remoteContext : null;
 }
 
 export function restoreSshIntegration(
@@ -856,6 +883,7 @@ async function openPtyForSession(
         if (s.remoteContext?.connectionId !== context?.connectionId) s.restoreCancel?.();
         s.remoteContext = context;
         s.remoteIntegration?.setConnection(context);
+        notifyIntegrationContext(leafId);
       },
       onData: (bytes) => {
         if (!s.disposed) deliverPtyBytes(leafId, bytes);
@@ -1302,6 +1330,7 @@ function retireSession(leafId: number, s: Session): void {
   s.pty = null;
   s.pendingInput = "";
   sessions.delete(leafId);
+  notifyIntegrationContext(leafId);
   searchAddons.delete(leafId);
   // TDSF B1 (2026-08-29): 同步清理 block 流水账 store（防泄漏）
   useTerminalBlocksStore.getState().clearLeaf(leafId);

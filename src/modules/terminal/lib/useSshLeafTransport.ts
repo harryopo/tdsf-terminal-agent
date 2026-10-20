@@ -38,6 +38,7 @@ export function useSshLeafTransport(sessionId: string) {
       let retired = false;
       let epoch = 0;
       let unsubscribeContext = () => {};
+      let refreshIntegrationContext: (() => Promise<void>) | undefined;
       if (h.onIntegrationContext) {
         const onContext = h.onIntegrationContext;
         const readSession = () => useSshStore.getState().sessions.find(
@@ -55,7 +56,8 @@ export function useSshLeafTransport(sessionId: string) {
           };
         };
         let previous = boundary();
-        const refresh = () => {
+        const refresh = async () => {
+          if (retired) return;
           const request = ++epoch;
           onContext(null);
           const current = readSession();
@@ -63,10 +65,11 @@ export function useSshLeafTransport(sessionId: string) {
               current.handle?.id !== current.rustSessionId) return;
           const { rustSessionId, params } = current;
           // Never await this on the input/output path; stale replies are inert.
-          void Promise.resolve().then(async () => {
+          await Promise.resolve().then(async () => {
+            if (retired || epoch !== request) return;
             const owner = getCurrentWebviewWindow().label;
             const rows = await sshSessionsDetail();
-            if (retired || epoch !== request) return;
+            if (retired || epoch !== request || getCurrentWebviewWindow().label !== owner) return;
             const detail = rows.find((row) => row.sessionId === rustSessionId);
             if (detail?.state !== "connected" || detail.ownerWindow !== owner ||
                 detail.host !== params.host || detail.port !== params.port ||
@@ -76,15 +79,16 @@ export function useSshLeafTransport(sessionId: string) {
             // Source remains unknown; raw terminal traffic still flows normally.
           });
         };
+        refreshIntegrationContext = refresh;
         unsubscribeContext = useSshStore.subscribe(() => {
           const next = boundary();
           if (next.state === previous.state && next.id === previous.id &&
               next.handle === previous.handle && next.host === previous.host &&
               next.port === previous.port && next.user === previous.user) return;
           previous = next;
-          refresh();
+          void refresh();
         });
-        refresh();
+        void refresh();
       }
       // 订阅 PTY 输出：sshStore 的 fan-out + 先到数据缓冲
       // （挂载即 flush 缓冲，修复"连接就绪早于组件挂载导致前 N 字节丢失"竞态）
@@ -93,6 +97,7 @@ export function useSshLeafTransport(sessionId: string) {
       const transport: TerminalTransport = {
         // 字符串 id 与本地 PTY 数字 id 区分（日志/诊断用）
         id: sessionId,
+        refreshIntegrationContext,
         write: (data: string) => {
           const handle = handleRef.current;
           // handle 还没到（连接中）或已断开：丢弃写入，避免抛错

@@ -37,6 +37,7 @@ export interface TerminalTransport {
   write(data: string): Promise<void> | void;
   resize(cols: number, rows: number): Promise<void> | void;
   close(): Promise<void> | void;
+  refreshIntegrationContext?: () => Promise<void>;
 }
 
 export type PtySession = {

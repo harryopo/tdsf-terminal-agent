@@ -26,6 +26,7 @@ const seams = vi.hoisted(() => ({
 
 vi.mock("@/modules/terminal/lib/useTerminalSession", () => ({
   getSshIntegrationContext: seams.getContext,
+  subscribeSshIntegrationContext: () => () => {},
   restoreSshIntegration: seams.restore,
 }));
 
