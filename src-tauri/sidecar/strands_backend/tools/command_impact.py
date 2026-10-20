@@ -27,6 +27,7 @@ strands_backend/tools/command_impact.py — 命令影响预测引擎（Task 4，
 from __future__ import annotations
 
 import re
+import shlex
 
 from ._credential_paths import first_credential_piece
 
@@ -384,6 +385,61 @@ _SERVICE_READONLY_ACTIONS = {
     "cat", "help", "show-environment", "get-default",
 }
 
+_SYSTEMCTL_FLAG_OPTIONS = {
+    "-a", "--all", "-l", "--full", "-q", "--quiet", "-r", "--recursive",
+    "--user", "--system", "--global", "--runtime", "--no-pager", "--no-legend",
+    "--plain", "--failed", "--no-ask-password", "--reverse", "--with-dependencies",
+    "--value", "--show-types",
+}
+_SYSTEMCTL_VALUE_OPTIONS = {
+    "-H", "--host", "-M", "--machine", "-p", "-P", "--property", "-t", "--type",
+    "--state", "-n", "--lines", "-o", "--output", "--root", "--image",
+}
+
+
+def _service_query_is_readonly(seg: str, base: str) -> bool:
+    """Read the action position; unit names and option values cannot lower risk."""
+    try:
+        args = _normalize_tokens(shlex.split(seg))[1:]
+    except ValueError:
+        return False
+    if base == "service":
+        return args == ["--status-all"] or (
+            len(args) == 2 and not args[0].startswith("-") and args[1] == "status"
+        )
+    if base == "chkconfig":
+        query_args = args[1:] if args[:1] == ["--list"] else args
+        return len(query_args) <= 1 and (
+            not query_args or not query_args[0].startswith("-")
+        )
+
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            index += 1
+            break
+        if not arg.startswith("-"):
+            break
+        option, separator, value = arg.partition("=")
+        if len(arg) > 2 and not arg.startswith("--") and arg[:2] in _SYSTEMCTL_VALUE_OPTIONS:
+            option, separator, value = arg[:2], "=", arg[2:]
+        if option in _SYSTEMCTL_VALUE_OPTIONS:
+            if not separator:
+                index += 1
+                if index >= len(args):
+                    return False
+                value = args[index]
+            if not value and option not in {"-p", "-P", "--property"}:
+                return False
+        elif arg not in _SYSTEMCTL_FLAG_OPTIONS:
+            if arg.startswith("--") or len(arg) == 1 or any(
+                f"-{flag}" not in _SYSTEMCTL_FLAG_OPTIONS for flag in arg[1:]
+            ):
+                return False
+        index += 1
+    return index < len(args) and args[index] in _SERVICE_READONLY_ACTIONS
+
 # C2 (2026-09-01, 用户实测: `docker ps` 被判"未知操作"抬到 L3 审批):
 # 容器/编排工具按子命令细分——只读子命令放行，其余（run/exec/cp/rm 等有
 # 副作用的）fail-closed 走 unknown L3。管理组 token（image/container 等）
@@ -495,14 +551,7 @@ def classify_segment(seg: str) -> dict:
     if command_query:
         category = CATEGORY_READONLY
     elif base in ("systemctl", "service", "chkconfig"):
-        actions = {t.lower() for t in toks[1:]}
-        if base == "chkconfig":
-            category = CATEGORY_READONLY if (not actions or "list" in actions) else CATEGORY_SERVICE
-        elif actions & _SERVICE_READONLY_ACTIONS:
-            category = CATEGORY_READONLY
-        else:
-            # 未知 action 也按写操作处理（fail-closed）
-            category = CATEGORY_SERVICE
+        category = CATEGORY_READONLY if _service_query_is_readonly(seg, base) else CATEGORY_SERVICE
     # --- 装包 ---
     elif base in {"yum", "dnf"} and any(
         token.lower() in _PACKAGE_READONLY_ACTIONS for token in toks[1:]

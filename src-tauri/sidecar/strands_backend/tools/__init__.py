@@ -630,7 +630,7 @@ def assess_command(
                 "trust_source": "whitelist",
             }
 
-        if not dangerous and not observe:
+        if not dangerous and not observe and not force_confirm:
             trust = get_global_trust_store()
             sid = ctx.session_id
             if risk_l <= 1 and trust.is_session_trusted(sid):
