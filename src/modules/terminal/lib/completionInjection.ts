@@ -88,6 +88,8 @@ let activeState: CompletionState = {
   cursor: null,
 };
 
+let activePredictionIsCurrent: (() => boolean) | null = null;
+
 const subscribers = new Set<(state: CompletionState) => void>();
 
 let writeFn: ((leafId: number, data: string) => void) | null = null;
@@ -107,6 +109,7 @@ export function clearLeafEnvironment(leafId: number): void {
   clearEnvironment(leafId);
   inputBuffers.delete(leafId);
   unknownInputLines.delete(leafId);
+  if (activeState.visible && activeState.leafId === leafId) closeCompletion();
 }
 
 /** 每个终端的环境（windows=本地 pwsh/cmd，linux=SSH 远程）。
@@ -246,6 +249,7 @@ type SetStateArg = CompletionState | ((prev: CompletionState) => CompletionState
 function setState(arg: SetStateArg): void {
   const next = typeof arg === 'function' ? arg(activeState) : arg;
   if (next === activeState) return;
+  if (!next.visible) activePredictionIsCurrent = null;
   activeState = next;
   for (const sub of subscribers) sub(next);
 }
@@ -479,11 +483,12 @@ async function updatePredictions(leafId: number): Promise<void> {
   const prefix = getInputBuffer(leafId);
   const sessionId = getLeafSshSession(leafId);
   const cwd = sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId);
+  const isContextCurrent = () => seq === predictSeq && prefix === getInputBuffer(leafId) &&
+    env === getLeafEnvironment(leafId) && sessionId === getLeafSshSession(leafId) &&
+    cwd === (sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId));
   const isCurrent = () => {
     const term = getTermFn?.(leafId);
-    return seq === predictSeq && prefix === getInputBuffer(leafId) &&
-      env === getLeafEnvironment(leafId) && sessionId === getLeafSshSession(leafId) &&
-      cwd === (sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId)) &&
+    return isContextCurrent() &&
       (!term?.element || term.element.contains(document.activeElement));
   };
   if (!isCurrent()) return;
@@ -512,6 +517,7 @@ async function updatePredictions(leafId: number): Promise<void> {
         setState((s) => (s.visible ? { ...s, visible: false } : s));
         return;
       }
+      activePredictionIsCurrent = isContextCurrent;
       setState({
         visible: true,
         items,
@@ -544,6 +550,7 @@ async function updatePredictions(leafId: number): Promise<void> {
 
   // P2 #13 的弹窗展示统一入口（光标像素坐标在按键后 xterm 已刷新）
   const show = (list: readonly SuggestionResult[]) => {
+    activePredictionIsCurrent = isContextCurrent;
     setState({
       visible: true,
       items: [...list],
@@ -622,8 +629,13 @@ export function closeCompletion(): void {
 // 接受预测
 // ============================================================================
 
-function acceptPrediction(leafId: number, entry: SuggestionResult): void {
-  if (!writeFn || /[\x00-\x1f\x7f]/.test(entry.command)) return;
+function acceptPrediction(leafId: number, entry: SuggestionResult): boolean {
+  if (!writeFn || /[\x00-\x1f\x7f]/.test(entry.command)) return false;
+  // 鼠标点击会把焦点移到弹窗；接受时只复核候选所属行、环境、连接和目录。
+  if (!activePredictionIsCurrent?.()) {
+    closeCompletion();
+    return false;
+  }
   // 接受即改写缓冲区：待跑的更新必须撤掉，否则延迟到达的那次会按接受前的
   // 半行去请求参数，并把弹窗重新弹回来。
   cancelScheduledPredictionUpdate();
@@ -639,6 +651,7 @@ function acceptPrediction(leafId: number, entry: SuggestionResult): void {
   // windows 环境保留启动时 shell history 文件注入（PSReadLine 只写执行过的）。
   // getSuggestEngine().addHistory(entry.command, getLeafEnvironment(leafId));
   setState((s) => ({ ...s, visible: false }));
+  return true;
 }
 
 export function selectCompletionByIndex(index: number): void {
@@ -676,8 +689,7 @@ export function completionKeyHandler(
 
   // === 右箭头 = 接受第一条预测（只在弹窗可见时） ===
   if (event.key === 'ArrowRight' && isVisible && current.items.length > 0) {
-    acceptPrediction(leafId, current.items[current.selectedIndex]);
-    return false; // 拦截
+    if (acceptPrediction(leafId, current.items[current.selectedIndex])) return false;
   }
 
   // === 向下箭头 = 选择下一条预测 ===
