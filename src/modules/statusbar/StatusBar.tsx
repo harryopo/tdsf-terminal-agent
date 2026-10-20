@@ -44,6 +44,7 @@ type Props = {
    *  「未选择工作区」——开机那个隐式 default 空间的冷终端 cwd 落在家目录，
    *  直接渲染会让人觉得"还没建工作区就已经在工作区里了"。 */
   hasWorkspace: boolean;
+  getUnsavedEditors: () => number;
 };
 
 export function StatusBar({
@@ -61,6 +62,7 @@ export function StatusBar({
   remoteOsInfo = null,
   terminalAddress = null,
   hasWorkspace,
+  getUnsavedEditors,
 }: Props) {
   return (
     <footer
@@ -125,7 +127,7 @@ export function StatusBar({
       <div className="flex shrink-0 items-center gap-1.5">
         {/* #160 (2026-09-27): 自动更新的状态条。只有"有话说"时才渲染
             （发现新版 / 下载中 / 待安装 / 失败），平时不占这一格。 */}
-        <UpdateChip />
+        <UpdateChip getUnsavedEditors={getUnsavedEditors} />
         <MockLLMWarning />
         <AgentModeSwitcher />
         <BackendPill />

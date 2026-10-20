@@ -2800,6 +2800,9 @@ export default function App() {
 
           {!zenMode && (
             <StatusBar
+              getUnsavedEditors={() =>
+                tabsRef.current.filter((t) => t.kind === "editor" && t.dirty).length
+              }
               cwd={statusBarCwd}
               filePath={activeFilePath}
               home={home}
