@@ -40,12 +40,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import posixpath
 import re
 from uuid import uuid4
 from typing import Any
 
 from needs_you import NeedsYouStatus
 from strands_backend.modes import decide
+from strands_backend.tools._credential_paths import is_credential_path_piece
 from strands_backend.tools._redact import redact_sensitive_text
 from strands_backend.tools import (
     ToolContext,
@@ -292,6 +294,56 @@ def invoke_remote_file_tool(
             "message": "无活跃 SSH 会话，请先连接 SSH 再读取远程文件",
         })
 
+    approved_request = None
+    # Classify lexical aliases too, but keep the approved and dispatched path unchanged.
+    if is_credential_path_piece(path) or is_credential_path_piece(posixpath.normpath(path)):
+        try:
+            decision = decide(3, ctx.mode)
+        except ValueError:
+            decision = "deny"
+        if decision == "deny":
+            return _finish({
+                "status": "command_blocked",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "当前模式不允许读取凭据类文件；未读取远程文件。",
+            })
+        descriptor = f"读取远程文件 {path}"
+        request = request_approval_and_wait(
+            ctx,
+            descriptor,
+            {
+                "level": "L3",
+                "high_risk": False,
+                "write": False,
+                "matched_rules": ["credential_read"],
+                "reason": "文件可能包含凭据，读取内容将返回模型。",
+            },
+            tool_name="read_remote_file",
+            impact={
+                "max_risk_l": 3,
+                "summary": f"读取 {path} 的内容并返回模型。",
+                "segments": [{
+                    "command": descriptor,
+                    "category": "credential",
+                    "category_label": "读取凭据类文件",
+                    "objects": [path],
+                    "risk_l": 3,
+                }],
+            },
+            risk_l=3,
+            tool_call_id=call_id,
+            ssh_session_id=session_id,
+        )
+        if request is None or request.status != NeedsYouStatus.APPROVED:
+            return _finish({
+                "status": "rejected" if request is not None and request.status == NeedsYouStatus.REJECTED else "needs_approval",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "审批未获通过；未读取远程文件。",
+            })
+        approved_request = request
+
     try:
         result = ctx.rust_bridge.ipc_invoke("sftp_read", {
             "sessionId": session_id_int,
@@ -308,6 +360,9 @@ def invoke_remote_file_tool(
             "ssh_session_id": session_id,
             "error": f"ipc_invoke 异常: {e}",
         })
+    finally:
+        if approved_request is not None:
+            complete_approval_execution(approved_request)
 
     # RustBridge 未配置返回 unavailable
     if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
@@ -812,6 +867,7 @@ def make_remote_file_tool(ctx: ToolContext):
 
         通过 SFTP 读取远程文件，自动检测二进制文件（含 NUL 字节）并返回
         binary 状态。大文件自动截断（默认 1MB），避免响应过大。
+        凭据类路径需要用户批准；只读模式下不读取凭据类文件。
 
         Args:
             path (str): 远程文件绝对路径。
@@ -821,7 +877,8 @@ def make_remote_file_tool(ctx: ToolContext):
 
         Returns:
             dict: 结构化结果，含 status / path / content / size / truncated 等字段。
-                status 取值: success | binary | unavailable | error
+                status 取值: success | binary | unavailable | error |
+                    command_blocked | needs_approval | rejected
         """
         call_id = str(uuid4())
         try:
