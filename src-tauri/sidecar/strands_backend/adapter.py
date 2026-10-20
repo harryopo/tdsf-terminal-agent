@@ -1058,8 +1058,11 @@ class ToolCallLimitHook:
             from strands_backend.evidence import get_global_tracker
 
             payload = self._tool_payload(result)
-            evidence_status = "cancelled" if cancelled else (
-                "indeterminate" if self._result_status(result) == "indeterminate"
+            status = self._result_status(result)
+            # Tools can report cancellation after starting, without an SDK
+            # cancel_message. Keep the SDK flag's ownership gate above unchanged.
+            evidence_status = "cancelled" if cancelled or status == "cancelled" else (
+                "indeterminate" if status == "indeterminate"
                 else ("error" if failed else "completed")
             )
             result = payload or result
