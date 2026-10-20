@@ -798,9 +798,12 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     get().setRemoteCarapaceState(sessionId, 'checking');
     // remoteCarapaceInstalled 自带会话级缓存 + 失败静默（返回 false）
     const installed = await remoteCarapaceInstalled(sess.rustSessionId);
-    // 检测期间会话可能已断开（disconnect 清空了状态）→ 不复活旧会话的状态
-    if (!get().sessions.some((s) => s.id === sessionId)) return;
-    get().setRemoteCarapaceState(sessionId, installed ? 'installed' : 'missing');
+    // 不覆盖已完成的安装/刷新，也不把旧连接的检测结果写入新连接。
+    const latest = get();
+    const current = latest.sessions.find((s) => s.id === sessionId);
+    if (current?.rustSessionId !== sess.rustSessionId ||
+        latest.remoteCarapaceBySession[sessionId] !== 'checking') return;
+    latest.setRemoteCarapaceState(sessionId, installed ? 'installed' : 'missing');
   },
 
   // === TDSF: SSH 终端数据订阅 (修复黑屏) ===

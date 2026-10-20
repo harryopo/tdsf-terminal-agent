@@ -282,10 +282,12 @@ export function mergeCandidates(
 
 /** 会话级缓存：rustSessionId → 是否已安装远端 carapace（避免每次按键都 exec） */
 const remoteInstalledCache = new Map<number, boolean>();
+const remoteInstalledRequests = new Map<number, symbol>();
 
 /** 使缓存失效（安装成功后 / 调试时调用，下次检测重新 exec） */
 export function invalidateRemoteCarapaceCache(sessionId: number): void {
   remoteInstalledCache.delete(sessionId);
+  remoteInstalledRequests.delete(sessionId);
 }
 
 /**
@@ -295,15 +297,22 @@ export function invalidateRemoteCarapaceCache(sessionId: number): void {
 export async function remoteCarapaceInstalled(sessionId: number): Promise<boolean> {
   const cached = remoteInstalledCache.get(sessionId);
   if (cached !== undefined) return cached;
+  const request = Symbol();
+  remoteInstalledRequests.set(sessionId, request);
   try {
     const r = await sshCommand(sessionId, CARAPACE_CHECK_CMD, 2);
     const state = classifyCarapaceProbe(r);
     const installed = state === 'installed';
-    if (state !== 'error') remoteInstalledCache.set(sessionId, installed);
+    // Installation or a newer probe may have superseded this reply.
+    if (state !== 'error' && remoteInstalledRequests.get(sessionId) === request) {
+      remoteInstalledCache.set(sessionId, installed);
+    }
     return installed;
   } catch (e) {
     console.warn('[param-complete] remoteCarapaceInstalled failed:', e);
     return false;
+  } finally {
+    if (remoteInstalledRequests.get(sessionId) === request) remoteInstalledRequests.delete(sessionId);
   }
 }
 
