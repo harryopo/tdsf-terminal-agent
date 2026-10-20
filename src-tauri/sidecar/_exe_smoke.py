@@ -152,7 +152,17 @@ try:
         print(f"  shutdown req failed (may already exit): {e}")
     p.wait(timeout=30)
     print(f"  exit code: {p.returncode}")
+    if p.returncode != 0:
+        raise RuntimeError(f"sidecar exited with code {p.returncode}")
     print("ALL CHECKS PASSED")
 except Exception as e:
     print(f"FAILED: {e}")
     sys.exit(1)
+finally:
+    if p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait(timeout=5)

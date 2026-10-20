@@ -63,14 +63,19 @@ jobs:
           # 显式指到那里，并且会核对里面的 strands 版本 == STRANDS_RUNTIME_VERSION。
           # 装在 PATH python 里等于没装（#77 的成因就是"谁在 PATH 上算谁"）。
           python -m venv src-tauri/sidecar/.venv
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar virtual environment creation failed" }
           src-tauri/sidecar/.venv/Scripts/python.exe -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar pip upgrade failed" }
           src-tauri/sidecar/.venv/Scripts/python.exe -m pip install -r src-tauri/sidecar/requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar build dependency installation failed" }
 
       - name: Build and smoke-test bundled sidecar
         shell: pwsh
         run: |
           pnpm build:sidecar:win
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar build failed" }
           pnpm test:sidecar:exe
+          if ($LASTEXITCODE -ne 0) { throw "Bundled sidecar smoke test failed" }
 
       - name: Require updater signing key
         shell: pwsh
