@@ -24,8 +24,8 @@
 //   → 因此 anthropic 特判传 "anthropic"，其余一律传前端原 provider 名
 //     （deepseek/qwen/ollama/...），供现役 Strands 配置门面使用
 //
-// 失败策略：单条 console.warn、不弹窗、不阻塞界面操作。**但不再有"沿用磁盘旧 key"
-// 这条退路**（#158-①）——同步失败就是没模型，状态胶囊的 llm_configured 会诚实地红着。
+// 失败策略：后台单条 console.warn，不阻塞界面操作；对话入口等待当前同步结果，
+// 失败则停止本条发送并中文提示，不沿用此前模型。配置和密钥不删除、不自动换模型。
 
 import { invoke } from "@tauri-apps/api/core";
 import { subscribe } from "@/lib/sidecar-bridge";
@@ -229,6 +229,15 @@ export function buildSidecarLlmConfig(input: {
  */
 let _sidecarConfigSynced = false;
 let syncGeneration = 0;
+let lastSyncResult: SidecarSyncResult | null = null;
+let pendingSync: {
+  promise: Promise<SidecarSyncResult>;
+  cancel: () => void;
+} | null = null;
+const STALE_SYNC_RESULT: SidecarSyncResult = {
+  ok: false,
+  detail: "模型配置已变更，已跳过过期同步",
+};
 
 export function isSidecarConfigSynced(): boolean {
   return _sidecarConfigSynced;
@@ -237,12 +246,16 @@ export function isSidecarConfigSynced(): boolean {
 /** 置为已同步（失败也置位：本次会话不重复打，避免每条消息都多一次 IPC） */
 export function markSidecarConfigSynced(): void {
   _sidecarConfigSynced = true;
+  lastSyncResult = { ok: true };
 }
 
 /** 配置变更时重置标志（下次 runSidecarStream 会重新同步） */
 export function resetSidecarConfigSyncFlag(): void {
   _sidecarConfigSynced = false;
   syncGeneration += 1;
+  lastSyncResult = null;
+  pendingSync?.cancel();
+  pendingSync = null;
 }
 
 // === 主流程：syncSidecarLlmConfig ============================================
@@ -258,8 +271,26 @@ export function resetSidecarConfigSyncFlag(): void {
  *
  * 失败一律返回 {ok:false} 静默（调用方 console.warn 单条），不抛异常。
  */
-export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
+export function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
   const generation = ++syncGeneration;
+  pendingSync?.cancel();
+  lastSyncResult = null;
+  let settle!: (result: SidecarSyncResult) => void;
+  const promise = new Promise<SidecarSyncResult>((resolve) => {
+    settle = resolve;
+  });
+  // 只结束旧调用方的等待；不声称取消已派发的 IPC 或密钥读取。
+  const attempt = { promise, cancel: () => settle(STALE_SYNC_RESULT) };
+  pendingSync = attempt;
+  void performSidecarLlmConfigSync(generation).then((result) => {
+    if (generation === syncGeneration) lastSyncResult = result;
+    if (pendingSync === attempt) pendingSync = null;
+    settle(result);
+  });
+  return promise;
+}
+
+async function performSidecarLlmConfigSync(generation: number): Promise<SidecarSyncResult> {
   // 首轮对话可能先于防连击定时器同步，避免稍后再次重建同一模型。
   if (syncTimer) {
     clearTimeout(syncTimer);
@@ -285,7 +316,7 @@ export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
         : null;
 
     if (generation !== syncGeneration) {
-      return { ok: false, detail: "模型配置已变更，已跳过过期同步" };
+      return STALE_SYNC_RESULT;
     }
 
     // 本地 keyless provider（ollama/lmstudio/mlx）→ 占位 key：
@@ -319,7 +350,7 @@ export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
       detail: res?.message || "sidecar 返回配置失败（检查 API Key 与模型名）",
     };
   } catch (e) {
-    // sidecar 未运行 / IPC 失败：静默降级，不影响前端对话主流程
+    // sidecar 未运行 / IPC 失败：返回失败，由对话入口阻止发送。
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -338,6 +369,18 @@ export async function runSidecarConfigSyncNow(): Promise<SidecarSyncResult> {
     console.warn("[sidecar-config-sync] sidecar LLM 配置同步失败:", r.detail);
   }
   return r;
+}
+
+/** 首条消息复用在飞同步或已完成结果；失败不按每条消息自动重试。 */
+export function ensureSidecarConfigReady(): Promise<SidecarSyncResult> {
+  if (pendingSync) return pendingSync.promise;
+  if (_sidecarConfigSynced) return Promise.resolve(lastSyncResult ?? { ok: true });
+  return runSidecarConfigSyncNow();
+}
+
+/** 派发前同步复核同一份结果，不能跨等待静默换模型。 */
+export function isSidecarConfigResultCurrent(result: SidecarSyncResult): boolean {
+  return _sidecarConfigSynced && pendingSync === null && lastSyncResult === result;
 }
 
 // === 防连击 debounce =========================================================

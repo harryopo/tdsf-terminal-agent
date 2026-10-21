@@ -42,9 +42,8 @@ import {
 } from "../agents/registry";
 // TDSF 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
 import {
-  isSidecarConfigSynced,
-  markSidecarConfigSynced,
-  syncSidecarLlmConfig,
+  ensureSidecarConfigReady,
+  isSidecarConfigResultCurrent,
 } from "./sidecar-config-sync";
 // #133 无活动预算（等用户的时间不记账）
 import { createActivityBudget } from "./activityBudget";
@@ -824,9 +823,11 @@ async function registerSidecarListeners(
 const pendingSidecarCancellations = new Map<string, Promise<void>>();
 const CANCELLATION_PENDING_ERROR =
   "上一轮停止请求未获确认，本次新任务未启动。后台任务可能仍在运行；请先查看终端和运行日志，确认状态后再重试。";
+const MODEL_CONFIG_NOT_READY_ERROR =
+  "当前模型配置未就绪，本条消息未发送。请在「设置 → AI 模型」中检查并重新连接后重试。";
 
-async function waitForSidecarCancellation(
-  cancellation: Promise<void>,
+async function waitForSidecarPreparation(
+  completion: Promise<unknown>,
   abortSignal?: AbortSignal,
 ): Promise<boolean> {
   if (abortSignal?.aborted) return false;
@@ -834,14 +835,14 @@ async function waitForSidecarCancellation(
   try {
     await (abortSignal
       ? Promise.race([
-          cancellation,
+          completion,
           new Promise<void>((resolve) => {
             const onAbort = () => resolve();
             abortSignal.addEventListener("abort", onAbort, { once: true });
             removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
           }),
         ])
-      : cancellation);
+      : completion);
     return !abortSignal?.aborted;
   } catch {
     return false;
@@ -948,26 +949,21 @@ export async function* runSidecarStream(
   while (sessionId) {
     const cancellation = pendingSidecarCancellations.get(sessionId);
     if (!cancellation) break;
-    if (!(await waitForSidecarCancellation(cancellation, abortSignal))) {
+    if (!(await waitForSidecarPreparation(cancellation, abortSignal))) {
       if (!abortSignal?.aborted) yield { type: "error", error: CANCELLATION_PENDING_ERROR };
       return;
     }
   }
   if (abortSignal?.aborted) return;
 
-  // TDSF 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
-  // （agent.configure 一次 configure 永久生效）。失败不阻塞对话——sidecar
-  // 沿用上次落盘配置；置位标志防止每条消息重复打 IPC，配置变更时由
-  // ModelsSection 重置标志（scheduleSidecarConfigSync）。
-  if (!isSidecarConfigSynced()) {
-    markSidecarConfigSynced();
-    const sync = await syncSidecarLlmConfig();
-    if (!sync.ok) {
-      console.warn(
-        "[sidecar-adapter] sidecar LLM 配置未同步（不影响本次对话）:",
-        sync.detail,
-      );
-    }
+  // 等待当前配置完成；停止只退出本条等待，不取消共享同步。
+  const configSync = ensureSidecarConfigReady();
+  const configPrepared = await waitForSidecarPreparation(configSync, abortSignal);
+  if (abortSignal?.aborted) return;
+  const configResult = configPrepared ? await configSync : null;
+  if (!configResult?.ok) {
+    yield { type: "error", error: MODEL_CONFIG_NOT_READY_ERROR };
+    return;
   }
 
   if (abortSignal?.aborted) return;
@@ -1152,12 +1148,17 @@ export async function* runSidecarStream(
     while (sessionId) {
       const cancellation = pendingSidecarCancellations.get(sessionId);
       if (!cancellation) break;
-      if (!(await waitForSidecarCancellation(cancellation, abortSignal))) {
+      if (!(await waitForSidecarPreparation(cancellation, abortSignal))) {
         if (!abortSignal?.aborted) yield { type: "error", error: CANCELLATION_PENDING_ERROR };
         return;
       }
     }
     if (abortSignal?.aborted) return;
+
+    if (!isSidecarConfigResultCurrent(configResult)) {
+      yield { type: "error", error: MODEL_CONFIG_NOT_READY_ERROR };
+      return;
+    }
 
     const currentMode = opts.modeSource?.get();
     const invocationLive = currentMode ? { ...live, ...toSidecarMode(currentMode) } : live;

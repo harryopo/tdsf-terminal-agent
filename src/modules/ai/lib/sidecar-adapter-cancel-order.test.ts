@@ -51,17 +51,28 @@ vi.mock("@/lib/tauriRuntime", () => ({
   isTauriRuntime: () => harness.tauriRuntime,
 }));
 
-vi.mock("./sidecar-config-sync", () => ({
-  isSidecarConfigSynced: () => harness.configSynced,
-  markSidecarConfigSynced: vi.fn(() => {
-    harness.configSynced = true;
-  }),
-  syncSidecarLlmConfig: vi.fn(() => {
-    harness.order.push("sync");
-    harness.syncStarted?.();
-    return harness.syncPromise ?? Promise.resolve({ ok: true });
-  }),
-}));
+vi.mock("./sidecar-config-sync", () => {
+  const sync = {
+    isSidecarConfigSynced: () => harness.configSynced,
+    markSidecarConfigSynced: vi.fn(() => {
+      harness.configSynced = true;
+    }),
+    syncSidecarLlmConfig: vi.fn(() => {
+      harness.order.push("sync");
+      harness.syncStarted?.();
+      return harness.syncPromise ?? Promise.resolve({ ok: true });
+    }),
+  };
+  return {
+    ...sync,
+    isSidecarConfigResultCurrent: () => true,
+    ensureSidecarConfigReady: () => {
+      if (sync.isSidecarConfigSynced()) return Promise.resolve({ ok: true });
+      sync.markSidecarConfigSynced();
+      return sync.syncSidecarLlmConfig();
+    },
+  };
+});
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
