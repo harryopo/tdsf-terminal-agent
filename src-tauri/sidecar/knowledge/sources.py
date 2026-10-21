@@ -461,9 +461,9 @@ def knowledge_stats() -> dict[str, Any]:
 
 def _embed_loaded() -> bool:
     try:
-        from knowledge.rag import _load_embed_model
+        from knowledge.rag import _embed_model
 
-        return _load_embed_model() is not None
+        return _embed_model is not None
     except Exception:
         return False
 
