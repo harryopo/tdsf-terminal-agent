@@ -257,6 +257,11 @@ export function resetSidecarConfigSyncFlag(): void {
  * 失败一律返回 {ok:false} 静默（调用方 console.warn 单条），不抛异常。
  */
 export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
+  // 首轮对话可能先于防连击定时器同步，避免稍后再次重建同一模型。
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+  }
   try {
     const modelId = await getCurrentChatModelId();
     const prefs = await getPrefsSnapshot();
@@ -337,6 +342,7 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null;
  * （如连续修改 endpoint 字段），只让最后一次变更真正同步。
  */
 export function scheduleSidecarConfigSync(delayMs = 500): void {
+  resetSidecarConfigSyncFlag();
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
     syncTimer = null;
