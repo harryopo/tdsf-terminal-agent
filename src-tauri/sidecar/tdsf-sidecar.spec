@@ -60,6 +60,7 @@ exe = EXE(
     a.datas,
     [],
     name='tdsf-sidecar',
+    exclude_binaries=True,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

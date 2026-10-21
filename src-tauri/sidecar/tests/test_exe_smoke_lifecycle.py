@@ -54,7 +54,13 @@ class FakeProcess:
 
 
 def install_fake_process(
-    monkeypatch, tmp_path, *, exit_code=0, alive=True, terminate_wait_times_out=False
+    monkeypatch,
+    tmp_path,
+    *,
+    exit_code=0,
+    alive=True,
+    health=None,
+    terminate_wait_times_out=False,
 ):
     monkeypatch.syspath_prepend(str(SIDECAR_ROOT))
     from sidecar_version import SIDECAR_VERSION
@@ -67,6 +73,12 @@ def install_fake_process(
 
     methods = ["sidecar.health", "agent.invoke", "agent.list", "skill.list"]
     methods.extend(f"test.method.{index}" for index in range(100))
+    if health is None:
+        health = {
+            "backend_type": "strands",
+            "strands_available": True,
+            "backend_activated": True,
+        }
     output = [
         {"jsonrpc": "2.0", "method": "ready", "params": {"version": SIDECAR_VERSION}},
         {"jsonrpc": "2.0", "id": 2, "result": {"alive": alive}},
@@ -75,6 +87,7 @@ def install_fake_process(
             "id": 3,
             "result": {"version": SIDECAR_VERSION, "methods": methods},
         },
+        {"jsonrpc": "2.0", "id": 5, "result": health},
         {"jsonrpc": "2.0", "id": 4, "result": {"shutdown": True}},
     ]
     process = FakeProcess(
@@ -98,7 +111,7 @@ def test_exe_smoke_accepts_ready_status_methods_shutdown_and_zero_exit(
     runpy.run_path(str(SMOKE_SCRIPT), run_name="__main__")
 
     output = capsys.readouterr().out
-    assert process.stdin.requests == ["ping", "status", "shutdown"]
+    assert process.stdin.requests == ["ping", "status", "sidecar.health", "shutdown"]
     assert process.wait_calls == 1
     assert process.returncode == 0
     assert "methods registered: 104" in output
@@ -149,3 +162,51 @@ def test_exe_smoke_kills_and_rewaits_when_terminate_wait_times_out(
 
     assert error.value.code == 1
     assert process.terminated and process.killed and process.wait_calls == 2
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        pytest.param(
+            {
+                "backend_type": "strands",
+                "strands_available": True,
+                "backend_activated": False,
+            },
+            id="backend-not-activated",
+        ),
+        pytest.param(
+            {
+                "backend_type": "strands",
+                "strands_available": False,
+                "backend_activated": True,
+            },
+            id="backend-unavailable",
+        ),
+        pytest.param(
+            {
+                "backend_type": "other",
+                "strands_available": True,
+                "backend_activated": True,
+            },
+            id="unexpected-backend-type",
+        ),
+        pytest.param({}, id="empty-health"),
+    ],
+)
+def test_exe_smoke_rejects_unhealthy_backend_health(
+    monkeypatch, tmp_path, capsys, health
+):
+    install_fake_process(monkeypatch, tmp_path, health=health)
+
+    try:
+        runpy.run_path(str(SMOKE_SCRIPT), run_name="__main__")
+    except SystemExit as error:
+        exit_code = error.code
+    else:
+        exit_code = 0
+    output = capsys.readouterr().out
+
+    assert exit_code != 0 and "ALL CHECKS PASSED" not in output, (
+        f"smoke accepted unhealthy backend health {health!r}; output was {output!r}"
+    )

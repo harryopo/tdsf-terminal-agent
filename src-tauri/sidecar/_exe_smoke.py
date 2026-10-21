@@ -4,9 +4,10 @@
 1. exe 启动 → ready 通知 (stdout 首行)
 2. ping 请求 → 响应 {"alive": true}
 3. status 请求 → 响应 (版本/python 信息)
-4. 数据目录: %APPDATA%/tdsf-terminal-agent/.tdsf-data 被创建 (frozen 适配关键验证)
-5. shutdown 优雅退出
-6. 自报版本 (ready + sidecar.status) == sidecar_version.SIDECAR_VERSION —— #84:
+4. sidecar.health 确认 Strands 可用且真实激活（不调用模型）
+5. 数据目录: %APPDATA%/tdsf-terminal-agent/.tdsf-data 被创建 (frozen 适配关键验证)
+6. shutdown 优雅退出
+7. 自报版本 (ready + sidecar.status) == sidecar_version.SIDECAR_VERSION —— #84:
    版本号此前在 main.py 里写死成 "1.0.0"，用户诊断里拿到的永远是假的那一个
 """
 import json
@@ -137,14 +138,22 @@ try:
     for critical in ("sidecar.health", "agent.invoke", "agent.list", "skill.list"):
         assert critical in methods, f"关键方法未注册: {critical}"
 
-    # 4. 数据目录 (frozen 适配: %APPDATA%/tdsf-terminal-agent/.tdsf-data/)
-    print("== 4. data dir ==")
+    # 注册方法不等于后端成功激活：诊断态也保留全部 RPC。
+    print("== 4. backend health ==")
+    health = send("sidecar.health", rid=5).get("result", {})
+    assert health.get("backend_type") == "strands", "unexpected Agent backend"
+    assert health.get("strands_available") is True, "Strands SDK unavailable"
+    assert health.get("backend_activated") is True, "Strands backend not activated"
+    print("  Strands SDK available, backend activated")
+
+    # 5. 数据目录 (frozen 适配: %APPDATA%/tdsf-terminal-agent/.tdsf-data/)
+    print("== 5. data dir ==")
     assert DATA_DIR.is_dir(), f".tdsf-data not created at {DATA_DIR}"
     sidecar_log = DATA_DIR / "sidecar.log"
     print(f"  data dir: {DATA_DIR} (exists={DATA_DIR.is_dir()}, log={sidecar_log.exists()})")
 
-    # 5. shutdown
-    print("== 5. shutdown ==")
+    # 6. shutdown
+    print("== 6. shutdown ==")
     try:
         r = send("shutdown", rid=4)
         print(f"  shutdown resp: {json.dumps(r, ensure_ascii=False)[:120]}")
