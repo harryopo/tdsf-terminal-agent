@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import fnmatch
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,6 +86,42 @@ class TestSidecarPackagingMode(unittest.TestCase):
         required_modules = set(registry_factory_modules().values())
         self.assertTrue(TOOL_REGISTRY, "the real tool registry must not be empty")
         self.assertFalse(required_modules - set(hiddenimports))
+
+    def test_spec_loads_the_sidecar_pyinstaller_hooks(self):
+        hook_dir = SIDECAR_ROOT / "pyinstaller-hooks"
+        hookspath = self.calls["analysis"]["kwargs"]["hookspath"]
+        self.assertIn(str(hook_dir), hookspath)
+        self.assertTrue(hook_dir.is_dir())
+
+    def test_sqlite_vec_hook_collects_platform_dynamic_libraries(self):
+        hook_path = SIDECAR_ROOT / "pyinstaller-hooks" / "hook-sqlite_vec.py"
+        self.assertTrue(hook_path.is_file())
+        hook_tree = ast.parse(hook_path.read_text(encoding="utf-8"))
+        patterns = None
+        for node in ast.walk(hook_tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == "binaries" for target in node.targets):
+                continue
+            call = node.value
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                continue
+            if call.func.id != "collect_dynamic_libs":
+                continue
+            if not call.args or not isinstance(call.args[0], ast.Constant) or call.args[0].value != "sqlite_vec":
+                continue
+            pattern_arg = next((kw.value for kw in call.keywords if kw.arg == "search_patterns"), None)
+            if pattern_arg is not None:
+                patterns = ast.literal_eval(pattern_arg)
+                break
+
+        self.assertIsNotNone(patterns, "binaries must collect sqlite_vec dynamic libraries with search_patterns")
+        self.assertIsInstance(patterns, list)
+        for library_name in ("vec0.dll", "vec0.so", "vec0.dylib"):
+            self.assertTrue(
+                any(fnmatch.fnmatchcase(library_name, pattern) for pattern in patterns),
+                f"search_patterns must cover {library_name}",
+            )
 
 
 if __name__ == "__main__":
