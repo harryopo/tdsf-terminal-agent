@@ -182,7 +182,7 @@ def _model_is_configured() -> bool:
 def configure(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist configuration and hot-reload only the active Strands model."""
+    """Create the model before publishing configuration and hot-reloading."""
     if not config:
         return {"ok": True, "llm_call_set": _model_is_configured()}
 
@@ -205,10 +205,6 @@ def configure(
                 "message": "LLM 配置失败：API Key 为空",
             }
 
-        # key 只进进程内缓存（不落盘，#158-①）；先登记再持久化，
-        # 这样 save_config 之后任何 load_config() 拿到的都是这一份。
-        set_runtime_config(llm_config)
-        save_config(llm_config)
         adapter = _global_strands_adapter
         if adapter is None:
             return {
@@ -225,6 +221,10 @@ def configure(
                 "message": "Strands 模型创建失败，请检查 API Key、模型和端点",
             }
 
+        # 模型构造通过后才发布配置；保存失败不替换当前运行时。
+        # key 仍只进进程内缓存（不落盘，#158-①）。
+        save_config(llm_config)
+        set_runtime_config(llm_config)
         adapter.update_model(new_model)
         return {
             "ok": True,

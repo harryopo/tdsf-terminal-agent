@@ -135,7 +135,7 @@ def test_configure_rejects_empty_api_key(monkeypatch: pytest.MonkeyPatch) -> Non
     create.assert_not_called()
 
 
-def test_configure_saves_creates_and_updates_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_creates_saves_and_updates_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[object] = []
     model = object()
     adapter = MagicMock()
@@ -157,7 +157,7 @@ def test_configure_saves_creates_and_updates_in_order(monkeypatch: pytest.Monkey
     )
     assert result["ok"] is True
     assert result["llm_call_set"] is True
-    assert [entry[0] for entry in events] == ["save", "create", "update"]
+    assert [entry[0] for entry in events] == ["create", "save", "update"]
     assert events[0][1] is events[1][1]
     assert events[2][1] is model
     adapter.update_model.assert_called_once_with(model)
