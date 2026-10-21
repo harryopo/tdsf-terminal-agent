@@ -1807,6 +1807,8 @@ class StrandsAgentAdapter:
         # 不再触发实例重建；切模式/教学开关 = 历史零丢失。perm 保留（权限影响
         # 工具集合法性，重建合理），重建时从 _session_messages 迁移历史。
         self._agent_cache: dict[tuple[str, str, int], Any] = {}
+        # 模型替换与实例获取原子化；不持有此锁等待模型或工具执行。
+        self._model_lock = threading.RLock()
 
         # T1: per-session 消息历史（(agent_id, session_id) -> messages 快照）。
         # messages 与 Agent 实例解耦的单一真源：每次 invoke 后从当前实例
@@ -2204,9 +2206,9 @@ class StrandsAgentAdapter:
         # 2. 推送 mood=thinking（前端 AgentStatusPill 显示"思考中"）
         self._emit_mood("thinking", agent_id, session_id)
 
-        # T1: 提前初始化——异常发生在 _get_or_create_agent 之前时，
-        # except 分支的 best-effort 历史同步仍可安全引用（None 直接跳过）。
         strands_agent: Any = None
+        handler: Any = None
+        handler_stats: dict[str, Any] = {}
 
         try:
             # 3. 构建工具上下文（Task 3: 传入 invoke 已解析的三模式，
@@ -2219,8 +2221,7 @@ class StrandsAgentAdapter:
                     mode_control.ctx = ctx
                     ctx.mode = mode_control.mode
 
-            # 4. 获取或创建 Strands Agent + per-agent 锁
-            strands_agent = self._get_or_create_agent(agent_id, ctx, mode=ctx.mode, teach=teach)
+            # 4. 先取排队锁，实例与运行时上下文只能在持锁后获取/刷新。
             # TDSF 修复 2026-08-09: 防并发崩溃——Strands Agent 有内部状态，
             # 同一实例被并发调用会抛 "already processing a request"。
             # 用 per-(agent, session, perm) RLock 确保排队等待。
@@ -2278,101 +2279,112 @@ class StrandsAgentAdapter:
             # 回调事件）时放弃等待并上报超时报告，会话可继续（不崩进程、不占
             # RPC 线程池）。stalled 标记让后续 invoke 快速降级；worker 自然
             # 结束时自动解除标记、恢复常规链路。
-            handler = getattr(strands_agent, "callback_handler", None)
-            if handler is not None and hasattr(handler, "begin_turn"):
-                handler.begin_turn(
-                    teach=teach,
-                    allow_teach_output=teach_intent,
-                )
-            handler_stats = getattr(handler, "_stats", None) or {}
-            if not isinstance(handler_stats.get("events_received"), int):
-                # 活跃信号读不到（handler 结构变更 / 未挂 callback）→ watchdog
-                # 会把"健康但无事件"误判为挂起。仍保留有界超时兜底（优于无限
-                # 阻塞），但留一条 WARNING：将来重构掉 _stats 时能被看见。
-                logger.warning(
-                    f"[t9] watchdog activity signal unavailable "
-                    f"(handler={type(handler).__name__}), timeout will fire on "
-                    f"silence: agent={agent_id}, session={session_id}"
-                )
-
             outcome: dict[str, Any] = {}
             from needs_you import response_wait_scope
 
             wait_owner = object()
 
             def _locked_invoke() -> None:
+                nonlocal strands_agent, handler, handler_stats
                 limit_hook = None
                 refresh_mode = None
                 try:
                     with agent_lock, response_wait_scope(wait_owner):
-                        # check/reset 与取消串行；模型/工具执行不持有此短锁。
-                        with self._cancel_lock:
+                        try:
                             if cancelled.is_set():
                                 outcome["cancelled"] = True
                                 return
-                            # T2: 每轮重置计数；已取消的排队任务不能再清掉熔断位。
-                            limit_hook = self._limit_hooks.get(
-                                (agent_id, ctx.session_id)
+                            with self._model_lock:
+                                # 排队期间可能已换模或移除模型；不复用排队前的实例。
+                                reason = self._check_degraded()
+                                if reason:
+                                    outcome["degraded_reason"] = reason
+                                    return
+                                strands_agent = self._get_or_create_agent(
+                                    agent_id, ctx, mode=ctx.mode, teach=teach,
+                                )
+                                # 策略绑定本轮实例，换模清缓存不能换掉在跑回合的预算。
+                                retry_policy = self._retry_policies.get(lock_key)
+
+                            handler = getattr(strands_agent, "callback_handler", None)
+                            if handler is not None and hasattr(handler, "begin_turn"):
+                                handler.begin_turn(
+                                    teach=teach,
+                                    allow_teach_output=teach_intent,
+                                )
+                            handler_stats = getattr(handler, "_stats", None) or {}
+                            if not isinstance(handler_stats.get("events_received"), int):
+                                logger.warning(
+                                    f"[t9] watchdog activity signal unavailable "
+                                    f"(handler={type(handler).__name__}), timeout will fire on "
+                                    f"silence: agent={agent_id}, session={session_id}"
+                                )
+
+                            # check/reset 与取消串行；模型/工具执行不持有此短锁。
+                            with self._cancel_lock:
+                                if cancelled.is_set():
+                                    outcome["cancelled"] = True
+                                    return
+                                # 已取消的排队任务不能再清掉熔断位。
+                                limit_hook = self._limit_hooks.get(
+                                    (agent_id, ctx.session_id)
+                                )
+                                if limit_hook is not None:
+                                    limit_hook.reset()
+                                    limit_hook.current_task = input
+                                    # Model schemas for confirm/auto are identical;
+                                    # prompt changes happen only before a model call.
+                                    def refresh_mode() -> None:
+                                        with self._cancel_lock:
+                                            strands_agent.system_prompt = _compose_system_prompt(
+                                                ctx.mode, teach, base=self.system_prompt,
+                                            )
+
+                                    limit_hook.refresh_mode = refresh_mode
+                                    refresh_mode()
+                                # 未取消且真正开始的回合才消费上次中断现场。
+                                prompt = self._build_prompt(input, state)
+                                prompt += _teach_turn_gate(teach, teach_intent)
+
+                            # P3: 单回合请求预算与护栏同口径。
+                            if retry_policy is not None:
+                                logger.info(
+                                    f"[p3] previous turn model_calls="
+                                    f"{retry_policy.turn_model_calls}"
+                                )
+                                retry_policy.reset_turn_budget()
+
+                            # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
+                            response = self._invoke_with_token_continuation(
+                                strands_agent, prompt, agent_id, session_id
                             )
-                            if limit_hook is not None:
-                                limit_hook.reset()
-                                limit_hook.current_task = input
-                                # Model schemas for confirm/auto are identical;
-                                # prompt changes happen only before a model call.
-                                def refresh_mode() -> None:
-                                    with self._cancel_lock:
-                                        strands_agent.system_prompt = _compose_system_prompt(
-                                            ctx.mode, teach, base=self.system_prompt,
-                                        )
 
-                                limit_hook.refresh_mode = refresh_mode
-                                refresh_mode()
-                            # 未取消且真正开始的回合才消费上次中断现场。
-                            prompt = self._build_prompt(input, state)
-                            prompt += _teach_turn_gate(teach, teach_intent)
-
-                        # P3: 单回合请求预算与护栏同口径（每次 invoke 从零开始）。
-                        # 先记上一回合的实际请求数——预算是否够用要有数，不能靠猜。
-                        retry_policy = self._retry_policies.get(
-                            (agent_id, ctx.session_id, ctx.permission_level)
-                        )
-                        if retry_policy is not None:
-                            logger.info(
-                                f"[p3] previous turn model_calls="
-                                f"{retry_policy.turn_model_calls}"
+                            # T3: todo 未完成项追加一轮（锁内调用，限一次）。
+                            followup_observation = self._maybe_todo_followup(
+                                strands_agent,
+                                agent_id,
+                                session_id,
+                                limit_hook.tool_log if limit_hook is not None else [],
                             )
-                            retry_policy.reset_turn_budget()
 
-                        # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
-                        response = self._invoke_with_token_continuation(
-                            strands_agent, prompt, agent_id, session_id
-                        )
-
-                        # T3 (2026-08-31): 收尾校验——todo 未完成项追加一轮
-                        # 续做提示（锁内调用，限一次防死循环）
-                        followup_observation = self._maybe_todo_followup(
-                            strands_agent,
-                            agent_id,
-                            session_id,
-                            limit_hook.tool_log if limit_hook is not None else [],
-                        )
-
-                        # T7 (2026-08-31): 执行后验证回环——写类调用后无只读
-                        # 验证时追加一轮补验证（与 T3 追加轮独立计数）
-                        verify_observation = self._maybe_verify_followup(
-                            strands_agent,
-                            agent_id,
-                            session_id,
-                            limit_hook.tool_log if limit_hook is not None else [],
-                        )
+                            # T7: 写类调用后无只读验证时追加一轮补验证。
+                            verify_observation = self._maybe_verify_followup(
+                                strands_agent,
+                                agent_id,
+                                session_id,
+                                limit_hook.tool_log if limit_hook is not None else [],
+                            )
+                        finally:
+                            # 成功/异常历史均在解锁前提交，下一回合才可迁移最新快照。
+                            self._sync_session_messages(agent_id, session_id, strands_agent)
+                            if limit_hook is not None and limit_hook.refresh_mode is refresh_mode:
+                                limit_hook.refresh_mode = None
                     outcome["response"] = response
                     outcome["followup"] = followup_observation
                     outcome["verify"] = verify_observation
                 except Exception as e:  # noqa: BLE001 — 交给调用方统一处理
                     outcome["error"] = e
                 finally:
-                    if limit_hook is not None and limit_hook.refresh_mode is refresh_mode:
-                        limit_hook.refresh_mode = None
                     # worker 自然结束（含异常）→ 解除 stalled 标记，恢复常规链路
                     self._stalled_sessions.discard((agent_id, session_id))
 
@@ -2433,16 +2445,17 @@ class StrandsAgentAdapter:
                 raise outcome["error"]
             if outcome.get("cancelled"):
                 return self._cancelled_response(agent_id, session_id)
+            if outcome.get("degraded_reason"):
+                return self._degraded_response(
+                    agent_id=agent_id,
+                    input=input,
+                    session_id=session_id,
+                    reason=outcome["degraded_reason"],
+                    start_time=start_time,
+                )
             response = outcome.get("response")
             followup_observation = outcome.get("followup")
             verify_observation = outcome.get("verify")
-
-            # T1 (2026-08-31): 同步 per-session 消息历史——messages 与实例解耦的
-            # 单一真源。放在锁释放后（invoke 已完成，messages 处于稳定态）。
-            # 注：conversation_manager="auto" 的压缩发生在 strands_agent(prompt)
-            # 内部（SummarizingConversationManager 直接改写 agent.messages），
-            # 此处同步的即压缩后状态——长对话历史按压缩结果迁移，正是期望行为。
-            self._sync_session_messages(agent_id, session_id, strands_agent)
 
             # 8. 提取最终输出（T3/T7 追加轮有输出则覆盖主轮——追加轮是主轮的
             # "继续"，其最终答复才是用户应看到的收尾结果；空输出沿用主轮。
@@ -2537,11 +2550,6 @@ class StrandsAgentAdapter:
                 f"error={e}, duration={duration:.3f}s"
             )
             self._emit_mood("error", agent_id, session_id)
-            # T1: 异常轮次 best-effort 同步历史——用户消息/已完成的工具轮
-            # 已进 agent.messages，同步后 perm 变化重建实例时仍保留本轮上下文
-            # （失败同步只降级为丢本轮，不影响主流程错误上报）。
-            self._sync_session_messages(agent_id, session_id, strands_agent)
-
             # P3 (2026-09-19): 限流单独一档——退避收口后这是最常见的显式失败，
             # 措辞必须说"限流/额度"，不能套下面那句"网络连接失败或超时"。
             if self._is_llm_rate_limit_error(e):
@@ -3606,13 +3614,12 @@ class StrandsAgentAdapter:
         _session_messages——历史与实例解耦后，重建实例从历史装载，
         换模型/清缓存不再丢对话上下文（方案书 v4.0 T1 断点修复）。
         """
-        count = len(self._agent_cache)
-        self._agent_cache.clear()
-        # TDSF 修复 2026-08-09: 一并清空锁字典
-        self._agent_locks.clear()
-        # P3: 退避策略绑在实例上（构造时交给 Agent），实例清了策略也要清——
-        # 留着会让新实例复用旧策略的尝试计数。
-        self._retry_policies.clear()
+        with self._model_lock:
+            count = len(self._agent_cache)
+            self._agent_cache.clear()
+            # 活动/排队回合仍持有会话锁；换模只换实例，不改变排队身份。
+            # 策略绑在实例上，新实例不可复用旧计数；活动回合持有自己的引用。
+            self._retry_policies.clear()
         # P0-A1: 子 agent 工具缓存已随委派机制删除（原 _sub_agent_cache）
         logger.info(f"Strands Agent cache cleared: {count} entries")
 
@@ -3629,11 +3636,12 @@ class StrandsAgentAdapter:
             new_model: 新的 Strands Model 实例 (OpenAIModel/AnthropicModel/LiteLLMModel);
                        None 时表示降级 (走 mock_llm_active 路径)
         """
-        old_available = self._model_available
-        self.strands_model = new_model
-        self._model_available = new_model is not None
-        # 必须清缓存: 旧 Agent 实例闭包绑定旧 model, 不清会用旧 model
-        self.clear_cache()
+        with self._model_lock:
+            old_available = self._model_available
+            self.strands_model = new_model
+            self._model_available = new_model is not None
+            # 必须清缓存: 旧 Agent 实例闭包绑定旧 model, 不清会用旧 model
+            self.clear_cache()
         logger.info(
             f"Strands model updated: "
             f"old_available={old_available}, "
