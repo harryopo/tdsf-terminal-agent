@@ -40,6 +40,14 @@ function configuredModels(): string[] {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 describe("chat model selection sidecar synchronization", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -104,5 +112,47 @@ describe("chat model selection sidecar synchronization", () => {
 
     expect(mocks.invoke).not.toHaveBeenCalled();
     expect(isSidecarConfigSynced()).toBe(true);
+  });
+
+  it("does not let an older pending key lookup overwrite a newer immediate sync", async () => {
+    const keyReadStarted = deferred<void>();
+    const oldKey = deferred<string>();
+    mocks.getKey.mockImplementationOnce(async () => {
+      keyReadStarted.resolve();
+      return oldKey.promise;
+    });
+
+    const oldSync = runSidecarConfigSyncNow();
+    await keyReadStarted.promise;
+
+    useChatStore.getState().setSelectedModelId("claude-sonnet-5");
+    const newResult = await runSidecarConfigSyncNow();
+    expect(newResult.ok).toBe(true);
+
+    oldKey.resolve("synthetic-stale-key");
+    await oldSync;
+
+    expect(configuredModels()).toEqual(["claude-sonnet-5"]);
+  });
+
+  it("does not dispatch an older pending key lookup before the new selection debounce", async () => {
+    const keyReadStarted = deferred<void>();
+    const oldKey = deferred<string>();
+    mocks.getKey.mockImplementationOnce(async () => {
+      keyReadStarted.resolve();
+      return oldKey.promise;
+    });
+
+    const oldSync = runSidecarConfigSyncNow();
+    await keyReadStarted.promise;
+
+    useChatStore.getState().setSelectedModelId("claude-sonnet-5");
+    oldKey.resolve("synthetic-stale-key");
+    await oldSync;
+
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(configuredModels()).toEqual(["claude-sonnet-5"]);
   });
 });

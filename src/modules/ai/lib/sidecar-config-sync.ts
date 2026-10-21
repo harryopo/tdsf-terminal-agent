@@ -228,6 +228,7 @@ export function buildSidecarLlmConfig(input: {
  * 配置变更（ModelsSection 保存）会重置标志触发重新同步。
  */
 let _sidecarConfigSynced = false;
+let syncGeneration = 0;
 
 export function isSidecarConfigSynced(): boolean {
   return _sidecarConfigSynced;
@@ -241,6 +242,7 @@ export function markSidecarConfigSynced(): void {
 /** 配置变更时重置标志（下次 runSidecarStream 会重新同步） */
 export function resetSidecarConfigSyncFlag(): void {
   _sidecarConfigSynced = false;
+  syncGeneration += 1;
 }
 
 // === 主流程：syncSidecarLlmConfig ============================================
@@ -257,6 +259,7 @@ export function resetSidecarConfigSyncFlag(): void {
  * 失败一律返回 {ok:false} 静默（调用方 console.warn 单条），不抛异常。
  */
 export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
+  const generation = ++syncGeneration;
   // 首轮对话可能先于防连击定时器同步，避免稍后再次重建同一模型。
   if (syncTimer) {
     clearTimeout(syncTimer);
@@ -280,6 +283,10 @@ export async function syncSidecarLlmConfig(): Promise<SidecarSyncResult> {
       : providerNeedsKey(target.provider)
         ? await getKey(target.provider)
         : null;
+
+    if (generation !== syncGeneration) {
+      return { ok: false, detail: "模型配置已变更，已跳过过期同步" };
+    }
 
     // 本地 keyless provider（ollama/lmstudio/mlx）→ 占位 key：
     // 它们的 OpenAI 兼容端点不校验 key，但 sidecar llm_config.py 的
