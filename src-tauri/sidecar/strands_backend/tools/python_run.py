@@ -47,11 +47,12 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
 
 已知限制（无沙箱版，进程级受控边界）：
 - 只 kill 直接子进程，代码内 spawn 的孙进程不追踪（沙箱版再收口）。
-- 代码以 sidecar 同款解释器（``sys.executable``）执行。
+- 源码运行使用同款解释器；冻结版使用随包运行时的独立 Python worker 入口。
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -59,6 +60,7 @@ import time
 from typing import Any
 
 from needs_you import NeedsYouStatus
+from python_worker import WORKER_ARG
 from strands_backend.modes import decide
 from strands_backend.tools import (
     ToolContext,
@@ -232,7 +234,7 @@ def _execute_python(
     """真正跑 subprocess 的一段（已通过 fail-closed 与审批门）"""
     start = time.perf_counter()
     try:
-        command = [sys.executable, "-c", code]
+        command = [sys.executable, WORKER_ARG if getattr(sys, "frozen", False) else "-c", code]
         cwd = workspace
         if wsl_distro:
             command = [
@@ -246,6 +248,9 @@ def _execute_python(
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             timeout=timeout_s,
             cwd=cwd,
         )

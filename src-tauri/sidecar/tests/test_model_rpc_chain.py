@@ -131,7 +131,7 @@ class _ModelServer:
 
 
 class _Sidecar:
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, *, command: list[str] | None = None) -> None:
         data = tmp_path / "data"
         logs = tmp_path / "logs"
         home = tmp_path / "home"
@@ -172,7 +172,7 @@ class _Sidecar:
         })
         try:
             self.process = subprocess.Popen(
-                [sys.executable, "-u", "-B", str(MAIN)],
+                command if command is not None else [sys.executable, "-u", "-B", str(MAIN)],
                 cwd=SIDECAR,
                 env=env,
                 stdin=subprocess.PIPE,

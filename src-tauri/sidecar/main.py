@@ -52,6 +52,11 @@ from typing import Any, Callable
 # 将 sidecar 根目录加入 sys.path，确保 import sidecar_modules.* 可用
 sys.path.insert(0, str(Path(__file__).parent))
 
+from python_worker import WORKER_ARG, run_worker
+
+if __name__ == "__main__" and sys.argv[1:2] == [WORKER_ARG]:
+    raise SystemExit(run_worker(sys.argv[2:]))
+
 # #84: 自报版本只有一个真源（frozen 下 importlib.metadata 不保证带元数据，
 # 故单独一个常量模块；漂移由 test_sidecar_version_parity + check-release-version.ps1 两头挡）
 from sidecar_version import SIDECAR_VERSION
