@@ -12,6 +12,27 @@ logger = logging.getLogger("sidecar.strands_backend.tools.tool_lifecycle")
 _REFERENCE_CALLS = "_tdsf_reference_tool_calls"
 
 
+def bind_tool_call_id(
+    sdk_tool_context: Any,
+    *,
+    tool_name: str,
+    tool_call_id: str,
+    session_id: str | None,
+    agent_name: str,
+) -> None:
+    """Associate a tool-owned card with its SDK invocation and frozen owner."""
+    tool_use = getattr(sdk_tool_context, "tool_use", None)
+    invocation_state = getattr(sdk_tool_context, "invocation_state", None)
+    if not isinstance(tool_use, dict) or not isinstance(invocation_state, dict):
+        return
+    sdk_id = tool_use.get("toolUseId")
+    if not isinstance(sdk_id, str) or not sdk_id.strip() or tool_use.get("name") != tool_name:
+        return
+    calls = invocation_state.setdefault(_REFERENCE_CALLS, {})
+    if isinstance(calls, dict):
+        calls[sdk_id] = (tool_name, session_id or None, agent_name, tool_call_id)
+
+
 def take_reference_tool_call_id(
     tool_use: Any,
     invocation_state: Any,
@@ -69,14 +90,10 @@ def tool_call_lifecycle(
             agent_name = getattr(ctx, "agent_name", "main")
             source = f"{agent_name}_agent.strands_tool.{tool_name}"
             event_params = _redact(params_summary(params) if params_summary else params)
-            tool_use = getattr(sdk_tool_context, "tool_use", None)
-            invocation_state = getattr(sdk_tool_context, "invocation_state", None)
-            if isinstance(tool_use, dict) and isinstance(invocation_state, dict):
-                sdk_id = tool_use.get("toolUseId")
-                if isinstance(sdk_id, str) and sdk_id.strip() and tool_use.get("name") == tool_name:
-                    calls = invocation_state.setdefault(_REFERENCE_CALLS, {})
-                    if isinstance(calls, dict):
-                        calls[sdk_id] = (tool_name, session_id, agent_name, call_id)
+            bind_tool_call_id(
+                sdk_tool_context, tool_name=tool_name, tool_call_id=call_id,
+                session_id=session_id, agent_name=agent_name,
+            )
 
             def emit(status: str, result: dict[str, Any] | None = None) -> None:
                 if event_bus is None:

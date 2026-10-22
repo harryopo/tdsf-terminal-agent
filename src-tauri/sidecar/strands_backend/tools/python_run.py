@@ -36,8 +36,8 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
               truncated, message}（stdout/stderr 为 kill 前已捕获的部分输出）
     fail-closed: {status:"error", exit_code:None, stdout:"", stderr:"",
               duration_ms:0, truncated:False, message}（参数/环境拒绝，未执行）
-    审批未过: {status:"rejected" | "needs_approval", exit_code:None, ...,
-              risk_l:<级>, message}（用户拒绝 / 审批未建立或超时，未执行）
+    审批未过: {status:"rejected" | "cancelled" | "needs_approval", exit_code:None, ...,
+              risk_l:<级>, message}（用户拒绝 / 取消 / 审批未建立或超时，未执行）
     只读拦截: {status:"command_blocked", ...}（observe 档，message 带
               "command_blocked!" 前缀——给 LLM 的双轨契约，勿改）
 
@@ -67,6 +67,7 @@ from strands_backend.tools import (
     request_approval_and_wait,
     tool,
 )
+from strands_backend.tools.tool_lifecycle import bind_tool_call_id
 
 logger = logging.getLogger("sidecar.strands_backend.tools.python_run")
 
@@ -241,6 +242,8 @@ def _execute_python(
             cwd = None
         completed = subprocess.run(  # noqa: S603 — executable is fixed
             command,
+            # This non-interactive tool must not inherit the JSON-RPC input pipe.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout_s,
@@ -456,7 +459,19 @@ def _approval_gate(
             ),
         }, None
 
-    # TIMEOUT / CANCELLED / 未知 —— fail-closed 按拒绝处理
+    if req.status == NeedsYouStatus.CANCELLED:
+        return {
+            "status": "cancelled",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 0,
+            "truncated": False,
+            "risk_l": risk_l,
+            "message": "审批已取消，未执行任何代码。",
+        }, None
+
+    # TIMEOUT / 未知 —— fail-closed 按拒绝处理
     logger.warning(
         f"python_run approval not answered: status={req.status}, "
         f"risk_l={risk_l}, code_len={len(code)}"
@@ -509,8 +524,8 @@ def _emit_tool_call_completed(
 def make_python_run_tool(ctx: ToolContext):
     """构建 Python 代码执行工具（带 ctx 闭包）"""
 
-    @tool
-    def python_run(code: str) -> dict:
+    @tool(context="sdk_tool_context")
+    def python_run(code: str, *, sdk_tool_context: Any = None) -> dict:
         """在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）。
 
         使用场景（写一段 Python 一次完成，优于逐工具往返）：
@@ -535,12 +550,17 @@ def make_python_run_tool(ctx: ToolContext):
             dict: {status, exit_code, stdout, stderr, duration_ms, truncated}。
             status: success（退出码 0）/ error（脚本失败或参数/环境被拒，
             fail-closed 未执行）/ timeout（超时被终止）/ rejected（用户拒绝，
-            未执行）/ needs_approval（等待审批或审批未建立，未执行）/
+            未执行）/ cancelled（审批已取消，未执行）/
+            needs_approval（等待审批或审批未建立，未执行）/
             command_blocked（只读模式禁止，未执行）。
         """
         import uuid
 
         call_id = uuid.uuid4().hex
+        bind_tool_call_id(
+            sdk_tool_context, tool_name="python_run", tool_call_id=call_id,
+            session_id=ctx.session_id or None, agent_name=ctx.agent_name,
+        )
         # 推送 tool_call 开始事件，让前端实时显示工具调用卡片
         if ctx.event_bus is not None:
             try:
