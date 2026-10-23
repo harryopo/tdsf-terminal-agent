@@ -931,6 +931,8 @@ def execute_via_ssh(
     readonly: bool = False,
     skip_approval: bool = False,
     check_lines: bool = False,
+    *,
+    sdk_tool_context: Any = None,
 ) -> dict[str, Any]:
     """通过 RustBridge 执行 SSH 命令（带风险决策与真实 HITL 审批）。
 
@@ -943,6 +945,12 @@ def execute_via_ssh(
     gate = _ExecutionGate()
     tool_call_id = str(uuid.uuid4())
     evidence_session_id, evidence_agent = ctx.session_id, ctx.agent_name
+    from strands_backend.tools.tool_lifecycle import bind_tool_call_id
+
+    sdk_tool_use_id = bind_tool_call_id(
+        sdk_tool_context, tool_name=tool_name, tool_call_id=tool_call_id,
+        session_id=evidence_session_id, agent_name=evidence_agent,
+    )
 
     def record_result(payload: dict[str, Any]) -> None:
         status = payload.get("status", "indeterminate")
@@ -955,6 +963,7 @@ def execute_via_ssh(
             agent=evidence_agent,
             source="strands_tool",
             tool_call_id=tool_call_id,
+            sdk_tool_use_id=sdk_tool_use_id,
             ssh_session_id=str(payload.get("ssh_session_id") or "") or None,
             target_endpoint=payload.get("target_endpoint") or None,
             operation_id=payload.get("operation_id") or None,
@@ -1951,6 +1960,7 @@ def _track_evidence(
     source: str = "",
     *,
     tool_call_id: str | None = None,
+    sdk_tool_use_id: str | None = None,
     ssh_session_id: str | None = None,
     target_endpoint: str | None = None,
     operation_id: str | None = None,
@@ -1968,6 +1978,7 @@ def _track_evidence(
             agent=agent,
             source=source,
             tool_call_id=tool_call_id,
+            sdk_tool_use_id=sdk_tool_use_id,
             ssh_session_id=ssh_session_id,
             target_endpoint=target_endpoint,
             operation_id=operation_id,
@@ -2214,7 +2225,9 @@ def wrap_tool_for_teach_mode(tool_fn: Any, ctx: ToolContext) -> Any:
                 params = kwargs["params"]
             else:
                 # 收集全部 kwargs 作为参数（工具签名是具名参数如 command=...）
-                params = dict(kwargs)
+                params = {
+                    key: value for key, value in kwargs.items() if key != "sdk_tool_context"
+                }
 
             import uuid
 

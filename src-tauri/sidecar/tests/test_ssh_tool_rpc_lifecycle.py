@@ -212,6 +212,7 @@ def test_ssh_command_rpc_outcomes(tmp_path: Path, command: str, outcome: str,
             matching = [item for item in evidence if item.get("tool_name") == "ssh_command"]
             assert len(matching) == 1
             assert matching[0].get("tool_call_id") == ui_id
+            assert matching[0].get("sdk_tool_use_id") == "qa-sdk-call-ssh_command"
             assert matching[0].get("operation_id") == operation_id
             assert matching[0].get("result_status") == business.get("status")
             assert matching[0].get("status") == ("completed" if business["status"] == "success"
@@ -229,6 +230,7 @@ def test_ssh_command_rpc_outcomes(tmp_path: Path, command: str, outcome: str,
                 assert meta.get("rpc_stream_id") == stream
                 if entry.get("type") == "loop_progress":
                     assert meta.get("sdk_tool_use_id") == "qa-sdk-call-ssh_command"
+                    assert meta.get("tool_call_id") == ui_id
             captured.update({"response": response, "reverse_requests": sidecar.reverse_requests,
                              "cards": cards, "evidence": matching, "trace": trace,
                              "model_requests": server.snapshot()})

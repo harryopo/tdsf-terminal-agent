@@ -61,7 +61,9 @@ from strands_backend.tools import (
 # 核心实现（无 Strands 依赖，便于单测）
 # ============================================================================
 
-def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_ssh_command_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     """SSH 命令执行工具核心实现
 
     Args:
@@ -111,6 +113,7 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         tool_name=tool_name,
         explanation=explanation,
         check_lines=True,
+        sdk_tool_context=sdk_tool_context,
     )
 
     # 补充 explanation 字段
@@ -132,12 +135,14 @@ def make_ssh_command_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数（Strands 不可用时为 passthrough 装饰）
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def ssh_command(
         command: str,
         ssh_session_id: str = "",
         explanation: str = "",
         timeout: int = 30,
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """在 SSH 会话上执行 shell 命令。
 
@@ -169,6 +174,7 @@ def make_ssh_command_tool(ctx: ToolContext):
                 "timeout": timeout,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     # Strands 从 __name__ 提取工具名，保持原名

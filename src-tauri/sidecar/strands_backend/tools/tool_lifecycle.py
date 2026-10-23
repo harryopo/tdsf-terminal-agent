@@ -19,8 +19,8 @@ def bind_tool_call_id(
     tool_call_id: str,
     session_id: str | None,
     agent_name: str,
-) -> None:
-    """Associate a tool-owned card with its SDK invocation and frozen owner."""
+) -> str | None:
+    """Bind a card to its invocation and frozen owner; return the actual SDK ID."""
     tool_use = getattr(sdk_tool_context, "tool_use", None)
     invocation_state = getattr(sdk_tool_context, "invocation_state", None)
     if not isinstance(tool_use, dict) or not isinstance(invocation_state, dict):
@@ -31,6 +31,7 @@ def bind_tool_call_id(
     calls = invocation_state.setdefault(_REFERENCE_CALLS, {})
     if isinstance(calls, dict):
         calls[sdk_id] = (tool_name, session_id or None, agent_name, tool_call_id)
+        return sdk_id
 
 
 def take_reference_tool_call_id(
