@@ -49,6 +49,7 @@ from needs_you import NeedsYouStatus
 from strands_backend.modes import decide
 from strands_backend.tools._credential_paths import is_credential_path_piece
 from strands_backend.tools._redact import redact_sensitive_text
+from strands_backend.tools.tool_lifecycle import bind_tool_call_id
 from strands_backend.tools import (
     ToolContext,
     complete_approval_execution,
@@ -335,6 +336,13 @@ def invoke_remote_file_tool(
             tool_call_id=call_id,
             ssh_session_id=session_id,
         )
+        if request is not None and request.status == NeedsYouStatus.CANCELLED:
+            return _finish({
+                "status": "cancelled",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "审批已取消；未读取远程文件。",
+            })
         if request is None or request.status != NeedsYouStatus.APPROVED:
             return _finish({
                 "status": "rejected" if request is not None and request.status == NeedsYouStatus.REJECTED else "needs_approval",
@@ -705,6 +713,14 @@ def invoke_write_remote_file_tool(
                 "ssh_session_id": session_id,
                 "message": "审批请求创建失败；未写入文件。",
             })
+        if request.status == NeedsYouStatus.CANCELLED:
+            _cancel("approval_cancelled")
+            return _finish({
+                "status": "cancelled",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "审批已取消；未写入文件。",
+            })
         if request.status != NeedsYouStatus.APPROVED:
             _cancel(
                 "approval_rejected"
@@ -880,9 +896,13 @@ def make_remote_file_tool(ctx: ToolContext):
         Returns:
             dict: 结构化结果，含 status / path / content / size / truncated 等字段。
                 status 取值: success | binary | unavailable | error |
-                    command_blocked | needs_approval | rejected
+                    command_blocked | needs_approval | rejected | cancelled
         """
         call_id = str(uuid4())
+        bind_tool_call_id(
+            sdk_tool_context, tool_name="read_remote_file", tool_call_id=call_id,
+            session_id=ctx.session_id or None, agent_name=ctx.agent_name,
+        )
         try:
             result = invoke_remote_file_tool(
                 params={
@@ -915,12 +935,14 @@ def make_remote_file_tool(ctx: ToolContext):
 
 def make_write_remote_file_tool(ctx: ToolContext):
     """Build the confirmed remote text-file overwrite tool."""
-    @tool
+    @tool(context="sdk_tool_context")
     def write_remote_file(
         path: str,
         content: str,
         expected_sha256: str,
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """覆盖已有远程 UTF-8 文本文件。
 
@@ -928,6 +950,10 @@ def make_write_remote_file_tool(ctx: ToolContext):
         自动在同目录生成备份，写后回读校验；任何不确定状态都不会假报成功。
         """
         call_id = str(uuid4())
+        bind_tool_call_id(
+            sdk_tool_context, tool_name="write_remote_file", tool_call_id=call_id,
+            session_id=ctx.session_id or None, agent_name=ctx.agent_name,
+        )
         try:
             return invoke_write_remote_file_tool(
                 {

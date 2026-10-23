@@ -137,7 +137,7 @@ def test_credential_reads_are_gated_by_approval_and_bind_the_read(monkeypatch, m
     [
         (NeedsYouStatus.REJECTED, "rejected"),
         (NeedsYouStatus.TIMEOUT, "needs_approval"),
-        (NeedsYouStatus.CANCELLED, "needs_approval"),
+        (NeedsYouStatus.CANCELLED, "cancelled"),
         (NeedsYouStatus.PENDING, "needs_approval"),
         ("OTHER", "needs_approval"),
     ],
