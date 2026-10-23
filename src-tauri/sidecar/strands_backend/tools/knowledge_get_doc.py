@@ -97,9 +97,13 @@ def make_knowledge_get_doc_tool(ctx: Any):
             dict: 含 status / url / title / category / content（完整
             markdown，超 30000 字符截断）/ chunks。
         """
-        return invoke_knowledge_get_doc_tool(
+        result = invoke_knowledge_get_doc_tool(
             params={"url": url}, ctx=ctx, sdk_tool_context=sdk_tool_context,
         )
+        if sdk_tool_context is None:
+            return result
+        # Keep business status/content inside a valid SDK content block.
+        return {"status": "success", "content": [{"json": result}]}
 
     knowledge_get_doc.__name__ = "knowledge_get_doc"
     return knowledge_get_doc

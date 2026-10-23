@@ -856,12 +856,14 @@ def make_remote_file_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def read_remote_file(
         path: str,
         ssh_session_id: str = "",
         max_size: int = _DEFAULT_MAX_SIZE,
         encoding: str = "utf-8",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """读取 SSH 会话上的远程文件内容。
 
@@ -882,7 +884,7 @@ def make_remote_file_tool(ctx: ToolContext):
         """
         call_id = str(uuid4())
         try:
-            return invoke_remote_file_tool(
+            result = invoke_remote_file_tool(
                 params={
                     "path": path,
                     "ssh_session_id": ssh_session_id,
@@ -901,6 +903,11 @@ def make_remote_file_tool(ctx: ToolContext):
                 tool_call_id=call_id,
             )
             raise
+
+        if sdk_tool_context is None:
+            return result
+        # Keep business status/content inside a valid SDK content block.
+        return {"status": "success", "content": [{"json": result}]}
 
     read_remote_file.__name__ = "read_remote_file"
     return read_remote_file

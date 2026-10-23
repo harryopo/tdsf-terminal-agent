@@ -365,7 +365,7 @@ def make_skill_invoke_tool(ctx: ToolContext):
         *,
         sdk_tool_context: Any = None,
     ) -> dict:
-        return invoke_skill_tool(
+        result = invoke_skill_tool(
             params={
                 "skill_name": skill_name,
                 "input": input,
@@ -373,6 +373,10 @@ def make_skill_invoke_tool(ctx: ToolContext):
             ctx=ctx,
             sdk_tool_context=sdk_tool_context,
         )
+        if sdk_tool_context is None:
+            return result
+        # Keep business status/content inside a valid SDK content block.
+        return {"status": "success", "content": [{"json": result}]}
 
     # Strands 从 __name__ 提取工具名、从 __doc__ 提取描述与参数说明
     skill_invoke.__name__ = "skill_invoke"

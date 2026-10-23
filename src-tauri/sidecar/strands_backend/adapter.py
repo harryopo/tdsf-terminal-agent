@@ -686,7 +686,8 @@ class ToolCallLimitHook:
         if not _STRANDS_HOOKS_AVAILABLE:
             return
         registry.add_callback(BeforeToolCallEvent, self._before_tool_call)
-        registry.add_callback(AfterToolCallEvent, self._after_tool_call)
+        # Apply output policy before default-priority plugins can cache results.
+        registry.add_callback(AfterToolCallEvent, self._after_tool_call, order=-1)
         registry.add_callback(BeforeModelCallEvent, self._before_model_call)
 
     def _before_model_call(self, event: Any) -> None:

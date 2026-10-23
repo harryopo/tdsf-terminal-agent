@@ -5,7 +5,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import pytest
@@ -20,9 +20,11 @@ from test_model_rpc_chain import (
 
 
 class _ToolModelServer:
-    def __init__(self, tool_name: str, arguments: dict[str, Any]) -> None:
+    def __init__(self, tool_name: str, arguments: dict[str, Any], *,
+                 follow_up: Callable[[dict], tuple[str, dict] | None] | None = None) -> None:
         self.tool_name = tool_name
         self.arguments = arguments
+        self.follow_up = follow_up
         self.requests: list[dict[str, Any]] = []
         self.lock = threading.Lock()
         owner = self
@@ -54,13 +56,18 @@ class _ToolModelServer:
                 self.close_connection = True
 
                 if len(owner.snapshot()) == 1:
+                    next_tool = (owner.tool_name, owner.arguments)
+                else:
+                    next_tool = owner.follow_up(body) if owner.follow_up else None
+                if next_tool is not None:
+                    name, arguments = next_tool
                     delta = {"tool_calls": [{
                         "index": 0,
-                        "id": "qa-sdk-call-" + owner.tool_name,
+                        "id": "qa-sdk-call-" + name,
                         "type": "function",
                         "function": {
-                            "name": owner.tool_name,
-                            "arguments": json.dumps(owner.arguments, ensure_ascii=False),
+                            "name": name,
+                            "arguments": json.dumps(arguments, ensure_ascii=False),
                         },
                     }]}
                     finish = "tool_calls"
