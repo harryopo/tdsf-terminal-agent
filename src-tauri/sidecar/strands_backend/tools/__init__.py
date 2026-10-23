@@ -930,6 +930,7 @@ def execute_via_ssh(
     explanation: str = "",
     readonly: bool = False,
     skip_approval: bool = False,
+    check_lines: bool = False,
 ) -> dict[str, Any]:
     """通过 RustBridge 执行 SSH 命令（带风险决策与真实 HITL 审批）。
 
@@ -977,6 +978,7 @@ def execute_via_ssh(
             explanation=explanation,
             readonly=readonly,
             skip_approval=skip_approval,
+            check_lines=check_lines,
             gate=gate,
             tool_call_id=tool_call_id,
         )
@@ -1019,6 +1021,7 @@ def _execute_via_ssh_impl(
     skip_approval: bool = False,
     gate: _ExecutionGate | None = None,
     tool_call_id: str | None = None,
+    check_lines: bool = False,
 ) -> dict[str, Any]:
     """通过 RustBridge 调用 Rust 后端执行 SSH 命令
 
@@ -1044,8 +1047,9 @@ def _execute_via_ssh_impl(
         explanation: LLM 用途解释（审批卡第 3 层透传，可空）
         readonly: 调用工具是否只读（registry policy.readonly=True 的工具传
             True）——observe 模式下 L0-L1 只读命令短路放行
-        skip_approval: 跳过 confirm 审批（多行命令已整条审批通过时由
-            ssh_command 传 True；denylist/observe 拦截不受此参数影响）
+        skip_approval: 已审批的内部调用可跳过 confirm 审批；denylist/observe
+            拦截不受此参数影响。
+        check_lines: 保留 ssh_command 的逐行安全评估，审批与记录仍由本函数统一处理。
 
     Returns:
         dict:
@@ -1065,6 +1069,18 @@ def _execute_via_ssh_impl(
     # 1. 综合决策（Task 4 影响预测 + Task 3 三模式 decide；denylist 命中
     #    返回 blocked——fail-closed，直接拦截不审批、禁替代方案）
     assessment = assess_command(ctx, command, readonly=readonly)
+    assessment_line = ""
+    if check_lines and "\n" in command.strip():
+        # 整段分析不拆换行；后续行的 ask/deny 和写入风险不能被首行掩盖。
+        decision_order = {"allow": 0, "confirm": 1, "deny": 2, "blocked": 3}
+        for line in command.strip().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                checked = assess_command(ctx, line, readonly=readonly)
+                if (decision_order[checked["decision"]], checked["risk_l"]) >= (
+                    decision_order[assessment["decision"]], assessment["risk_l"]
+                ):
+                    assessment, assessment_line = checked, line
     decision = assessment["decision"]
     risk = assessment["risk"]
     impact = assessment["impact"]
@@ -1077,6 +1093,8 @@ def _execute_via_ssh_impl(
         # Task 3.2 双轨反馈之「引擎拦截」轨：tool_result 含 command_blocked!
         # 关键字，系统提示词（adapter 模式指令段）已有如实报告约束——
         # 拦截类反馈禁替代方案（agent 只能如实报告未执行）。
+        if assessment_line:
+            message = f"多行命令中 '{redact_sensitive(assessment_line)[:60]}'：{message}"
         _audit_append(
             event="command_blocked",
             decision=decision,
