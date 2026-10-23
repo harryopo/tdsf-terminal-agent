@@ -96,7 +96,7 @@ def _assert_one_closed_evidence(bus: RecordingEventBus, expected_status: str) ->
     ("approval_status", "business_status", "evidence_status"),
     [
         (NeedsYouStatus.REJECTED, "rejected", "rejected"),
-        (NeedsYouStatus.CANCELLED, "rejected", "rejected"),
+        (NeedsYouStatus.CANCELLED, "cancelled", "cancelled"),
         (NeedsYouStatus.TIMEOUT, "needs_approval", "needs_approval"),
         (None, "needs_approval", "needs_approval"),
     ],

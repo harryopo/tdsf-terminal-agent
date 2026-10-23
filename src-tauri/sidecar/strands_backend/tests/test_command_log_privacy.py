@@ -70,7 +70,7 @@ def test_real_approval_request_keeps_command_payload_out_of_logs(caplog):
     [
         ("confirm", NeedsYouStatus.APPROVED, True, "success"),
         ("confirm", NeedsYouStatus.REJECTED, True, "rejected"),
-        ("confirm", NeedsYouStatus.CANCELLED, True, "rejected"),
+        ("confirm", NeedsYouStatus.CANCELLED, True, "cancelled"),
         ("confirm", NeedsYouStatus.TIMEOUT, True, "needs_approval"),
         ("deny", None, True, "command_blocked"),
         ("blocked", None, True, "command_blocked"),

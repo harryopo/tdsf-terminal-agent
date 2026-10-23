@@ -251,7 +251,7 @@ def make_ssh_command_tool(ctx: ToolContext):
             dict: 结构化结果，含 status / command / output / exit_code / risk /
                 impact 等字段。
                 status 取值: success | command_blocked | rejected |
-                needs_approval | unavailable | indeterminate | error
+                cancelled | needs_approval | unavailable | indeterminate | error
         """
         return invoke_ssh_command_tool(
             params={

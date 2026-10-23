@@ -1050,7 +1050,7 @@ def _execute_via_ssh_impl(
     Returns:
         dict:
             status: "success" | "command_blocked" | "rejected" |
-                    "needs_approval" | "unavailable" | "error"
+                    "cancelled" | "needs_approval" | "unavailable" | "error"
             command: 原命令
             ssh_session_id: 使用的会话 ID
             output: 命令输出（success 时）
@@ -1303,7 +1303,7 @@ def _execute_via_ssh_impl(
             _cancel_operation("approval_cancelled")
             return {
                 "operation_id": operation_id,
-                "status": "rejected",
+                "status": "cancelled",
                 "command": command,
                 "ssh_session_id": session_id,
                 "risk": risk,
