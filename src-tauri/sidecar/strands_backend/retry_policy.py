@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+from functools import cache
 from typing import Any
 
 logger = logging.getLogger("sidecar.strands_backend.retry_policy")
@@ -94,6 +95,7 @@ except ImportError:  # pragma: no cover
     _RETRY_API_AVAILABLE = False
 
 
+@cache
 def _sdk_exception_types(module_name: str, attrs: tuple[str, ...]) -> tuple[type, ...]:
     """取 provider SDK 的异常类型；SDK 未安装就返回空元组（不报错）。
 
@@ -106,17 +108,6 @@ def _sdk_exception_types(module_name: str, attrs: tuple[str, ...]) -> tuple[type
         return ()
     found = [t for t in (getattr(module, a, None) for a in attrs) if isinstance(t, type)]
     return tuple(found)
-
-
-# ``APIConnectionError`` 是 ``APITimeoutError`` 的父类，一次覆盖"连不上/超时"两类。
-# 这类错误失败得很快（不是 300s 超时），重试一次的代价远低于直接报给用户。
-_CONNECTION_ERRORS: tuple[type, ...] = _sdk_exception_types(
-    "openai", ("APIConnectionError",)
-) + _sdk_exception_types("anthropic", ("APIConnectionError",))
-
-_STATUS_ERRORS: tuple[type, ...] = _sdk_exception_types(
-    "openai", ("APIStatusError",)
-) + _sdk_exception_types("anthropic", ("APIStatusError",))
 
 
 class TdsfRetryPolicy(_ModelRetryStrategy):  # type: ignore[misc, valid-type]
@@ -173,10 +164,12 @@ class TdsfRetryPolicy(_ModelRetryStrategy):  # type: ignore[misc, valid-type]
     def is_retryable(self, exception: Exception) -> bool:
         if _RETRY_API_AVAILABLE and isinstance(exception, _ModelThrottledException):
             return True
-        if _CONNECTION_ERRORS and isinstance(exception, _CONNECTION_ERRORS):
-            return True
-        if _STATUS_ERRORS and isinstance(exception, _STATUS_ERRORS):
-            return getattr(exception, "status_code", None) in RETRYABLE_STATUS_CODES
+        # 只在异常分类时加载 SDK 类型；连接错误基类也覆盖 APITimeoutError。
+        for provider in ("openai", "anthropic"):
+            if isinstance(exception, _sdk_exception_types(provider, ("APIConnectionError",))):
+                return True
+            if isinstance(exception, _sdk_exception_types(provider, ("APIStatusError",))):
+                return getattr(exception, "status_code", None) in RETRYABLE_STATUS_CODES
         return False
 
 
