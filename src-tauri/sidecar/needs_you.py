@@ -854,6 +854,9 @@ class NeedsYouService:
                 # 不依赖扫描线程恰好先运行；竞态由 transition lock 线性化。
                 self._scan_timeouts()
                 continue
+            # 等待可提前返回；调用方预算未耗尽时，重新核对两个 deadline。
+            if wait_deadline is None or time.monotonic() < wait_deadline:
+                continue
             with self._lock:
                 return self._requests.get(req_id)
 
