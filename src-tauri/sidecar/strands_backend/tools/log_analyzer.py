@@ -124,7 +124,9 @@ def _summarize(raw_output: str, mode: str, pattern: str) -> dict[str, Any]:
     }
 
 
-def invoke_log_analyzer_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_log_analyzer_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     """日志分析工具核心实现
 
     Args:
@@ -165,6 +167,7 @@ def invoke_log_analyzer_tool(params: dict[str, Any], ctx: ToolContext) -> dict[s
         timeout=30,
         tool_name="analyze_logs",
         readonly=True,
+        sdk_tool_context=sdk_tool_context,
     )
 
     # 失败 / 不可用 / 待审批 → 直接返回，附加元数据
@@ -211,13 +214,15 @@ def make_log_analyzer_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def analyze_logs(
         log_path: str,
         mode: str = "tail",
         lines: int = 100,
         pattern: str = "",
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """分析 SSH 会话上的远程日志文件。
 
@@ -246,6 +251,7 @@ def make_log_analyzer_tool(ctx: ToolContext):
                 "ssh_session_id": ssh_session_id,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     analyze_logs.__name__ = "analyze_logs"
