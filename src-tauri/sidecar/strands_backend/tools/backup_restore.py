@@ -48,6 +48,8 @@ def _action_result(
 def invoke_backup_restore(
     params: dict[str, Any],
     ctx: ToolContext,
+    *,
+    sdk_tool_context: Any = None,
 ) -> dict[str, Any]:
     """备份或恢复配置文件
 
@@ -92,6 +94,7 @@ def invoke_backup_restore(
                 "tool_name": "backup_restore",
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
         return _action_result(result, action, file_path, backup_path)
     else:
@@ -109,6 +112,7 @@ def invoke_backup_restore(
                     "tool_name": "backup_restore",
                 },
                 ctx=ctx,
+                sdk_tool_context=sdk_tool_context,
             )
             if not _cp_ok(result_find):
                 return _action_result(result_find, action, file_path, backup_path)
@@ -132,6 +136,7 @@ def invoke_backup_restore(
                 "tool_name": "backup_restore",
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
         return _action_result(result, action, file_path, backup_path)
 
@@ -139,12 +144,14 @@ def invoke_backup_restore(
 def make_backup_restore_tool(ctx: ToolContext):
     """构建 backup_restore 工具"""
 
-    @tool
+    @tool(context="sdk_tool_context")
     def backup_restore(
         action: str,
         file_path: str,
         backup_path: str = "",
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """备份或恢复配置文件（在 SSH 远端执行 cp）。
 
@@ -170,6 +177,7 @@ def make_backup_restore_tool(ctx: ToolContext):
                 "ssh_session_id": ssh_session_id,
             },
             ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     backup_restore.__name__ = "backup_restore"

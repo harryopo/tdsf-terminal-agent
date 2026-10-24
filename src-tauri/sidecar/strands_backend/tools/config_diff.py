@@ -18,6 +18,8 @@ logger = logging.getLogger("sidecar.strands_backend.tools.config_diff")
 def invoke_config_diff(
     params: dict[str, Any],
     ctx: ToolContext,
+    *,
+    sdk_tool_context: Any = None,
 ) -> dict[str, Any]:
     """对比两个配置文件的差异
 
@@ -54,6 +56,7 @@ def invoke_config_diff(
             "tool_name": "config_diff",
         },
         ctx=ctx,
+        sdk_tool_context=sdk_tool_context,
     )
 
     exit_code = result.get("exit_code")
@@ -75,11 +78,13 @@ def invoke_config_diff(
 def make_config_diff_tool(ctx: ToolContext):
     """构建 config_diff 工具"""
 
-    @tool
+    @tool(context="sdk_tool_context")
     def config_diff(
         file_a: str,
         file_b: str,
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """对比两个配置文件的差异（在 SSH 远端执行 diff -u）。
 
@@ -96,6 +101,7 @@ def make_config_diff_tool(ctx: ToolContext):
         return invoke_config_diff(
             {"file_a": file_a, "file_b": file_b, "ssh_session_id": ssh_session_id},
             ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     config_diff.__name__ = "config_diff"

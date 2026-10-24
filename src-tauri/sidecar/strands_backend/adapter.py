@@ -1132,15 +1132,15 @@ class ToolCallLimitHook:
         # `after_event.result` 而不是 hook 之前的旧 result —— 已由真对象断言钉住）。
         self._sanitize_tool_result(name, getattr(event, "result", None))
         # SDK 与手工 UUID 分开；只消费真实执行上下文里同调用/同 owner 的关联。
-        from strands_backend.tools.tool_lifecycle import take_reference_tool_call_id
+        from strands_backend.tools.tool_lifecycle import take_reference_tool_call_ids
 
-        reference_call_id = take_reference_tool_call_id(
+        reference_call_ids = take_reference_tool_call_ids(
             getattr(event, "tool_use", None), getattr(event, "invocation_state", None),
             session_id=self.session_id, agent_name=self.agent_name,
         )
         evidence_call_id = self._tool_card_calls.get(self._tool_card_key(event))
-        if evidence_call_id is None:
-            evidence_call_id = reference_call_id
+        if evidence_call_id is None and len(reference_call_ids) == 1:
+            evidence_call_id = reference_call_ids[0]
         self._finish_tool_card(event)
         # C1 工具级 tracing：计算 duration_ms
         start_time = self._tool_start_times.pop((name, self.total_calls), None)
@@ -1186,6 +1186,8 @@ class ToolCallLimitHook:
         for key, value in (("tool_call_id", evidence_call_id), ("sdk_tool_use_id", sdk_tool_use_id)):
             if isinstance(value, str) and value.strip():
                 tool_entry[key] = value
+        if len(reference_call_ids) > 1:
+            tool_entry["tool_call_ids"] = list(reference_call_ids)
         self.tool_log.append(tool_entry)
         self._record_evidence(
             name, tool_input, diagnostic_result, failed,
@@ -1217,7 +1219,7 @@ class ToolCallLimitHook:
         # Only retained logs gain identity; the frontend event contract is unchanged.
         # The sequential executor reports immediately after appending this call.
         if self.tool_log:
-            for key in ("tool_call_id", "sdk_tool_use_id"):
+            for key in ("tool_call_id", "tool_call_ids", "sdk_tool_use_id"):
                 if key in self.tool_log[-1]:
                     payload[key] = self.tool_log[-1][key]
         # agent_log 落盘（写失败静默——流水是排障加分项，绝不影响主链路；

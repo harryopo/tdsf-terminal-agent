@@ -30,8 +30,46 @@ def bind_tool_call_id(
         return
     calls = invocation_state.setdefault(_REFERENCE_CALLS, {})
     if isinstance(calls, dict):
-        calls[sdk_id] = (tool_name, session_id or None, agent_name, tool_call_id)
+        owner = (tool_name, session_id or None, agent_name)
+        previous = calls.get(sdk_id)
+        if previous is not None and (
+            not isinstance(previous, tuple) or len(previous) != 4
+            or previous[:3] != owner or not isinstance(previous[3], tuple)
+        ):
+            return
+        child_ids = previous[3] if previous is not None else ()
+        calls[sdk_id] = (*owner, (*child_ids, tool_call_id))
         return sdk_id
+
+
+def take_reference_tool_call_ids(
+    tool_use: Any,
+    invocation_state: Any,
+    *,
+    session_id: str,
+    agent_name: str,
+) -> tuple[str, ...]:
+    """Consume this SDK call's ordered child cards, only for their frozen owner."""
+    if not isinstance(tool_use, dict) or not isinstance(invocation_state, dict):
+        return ()
+    sdk_id = tool_use.get("toolUseId")
+    if not isinstance(sdk_id, str) or not sdk_id.strip():
+        return ()
+    calls = invocation_state.get(_REFERENCE_CALLS)
+    if not isinstance(calls, dict):
+        return ()
+    call = calls.get(sdk_id)
+    if (
+        not isinstance(call, tuple) or len(call) != 4
+        or call[:3] != (tool_use.get("name"), session_id or None, agent_name)
+        or not isinstance(call[3], tuple) or not call[3]
+        or not all(isinstance(item, str) and item.strip() for item in call[3])
+    ):
+        return ()
+    del calls[sdk_id]
+    if not calls:
+        invocation_state.pop(_REFERENCE_CALLS, None)
+    return call[3]
 
 
 def take_reference_tool_call_id(
@@ -41,26 +79,11 @@ def take_reference_tool_call_id(
     session_id: str,
     agent_name: str,
 ) -> str | None:
-    """Consume only the card created for this SDK call and frozen owner."""
-    if not isinstance(tool_use, dict) or not isinstance(invocation_state, dict):
-        return None
-    sdk_id = tool_use.get("toolUseId")
-    if not isinstance(sdk_id, str) or not sdk_id.strip():
-        return None
-    calls = invocation_state.get(_REFERENCE_CALLS)
-    if not isinstance(calls, dict):
-        return None
-    call = calls.get(sdk_id)
-    if (
-        not isinstance(call, tuple) or len(call) != 4
-        or call[:3] != (tool_use.get("name"), session_id or None, agent_name)
-        or not isinstance(call[3], str)
-    ):
-        return None
-    del calls[sdk_id]
-    if not calls:
-        invocation_state.pop(_REFERENCE_CALLS, None)
-    return call[3]
+    """Consume a single-card link; never present one child as an entire group."""
+    child_ids = take_reference_tool_call_ids(
+        tool_use, invocation_state, session_id=session_id, agent_name=agent_name,
+    )
+    return child_ids[0] if len(child_ids) == 1 else None
 
 
 def _redact(value: Any) -> Any:
