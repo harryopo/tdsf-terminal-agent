@@ -29,12 +29,12 @@ def invoke_config_diff(
         ctx: ToolContext
 
     Returns:
-        dict: {diff: str, identical: bool, exit_code: int}
+        dict: {status: str, diff: str, identical: bool | None, exit_code: int | None}
     """
     file_a = str(params.get("file_a", "")).strip()
     file_b = str(params.get("file_b", "")).strip()
     if not file_a or not file_b:
-        return {"diff": "", "identical": False, "exit_code": 1,
+        return {"status": "error", "diff": "", "identical": None, "exit_code": None,
                 "error": "file_a and file_b are required"}
 
     # 构建 diff 命令（shlex.quote 转义路径, 防止含引号的路径拼接成任意命令）
@@ -56,15 +56,16 @@ def invoke_config_diff(
         ctx=ctx,
     )
 
-    output = result.get("output", "")
-    exit_code = result.get("exit_code", 1)
-    # diff 返回 0=相同，1=有差异，2=错误
-    # 防御: 若执行层未回传 exit_code (缺失时上面兜底 1), 再用输出空判定
-    identical = (exit_code == 0) if result.get("exit_code") is not None else (output.strip() == "")
+    exit_code = result.get("exit_code")
+    status = result["status"]
+    # 空输出不是相同的证据；只有已完成的 diff 0/1 才能判断相同或不同。
+    verified = status == "success" and type(exit_code) is int and exit_code in (0, 1)
 
     return {
-        "diff": output,
-        "identical": identical,
+        **result,
+        "status": "error" if status == "success" and not verified else status,
+        "diff": result.get("output", ""),
+        "identical": exit_code == 0 if verified else None,
         "exit_code": exit_code,
         "file_a": file_a,
         "file_b": file_b,

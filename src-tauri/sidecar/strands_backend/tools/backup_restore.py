@@ -27,6 +27,24 @@ def _cp_ok(result: dict[str, Any]) -> bool:
     return result.get("status") == "success" and result.get("exit_code", 1) == 0
 
 
+def _action_result(
+    result: dict[str, Any], action: str, file_path: str, backup_path: str,
+) -> dict[str, Any]:
+    """保留中心结果与诊断，不把拒绝、取消或未知结果重新包装成成功。"""
+    ok = _cp_ok(result)
+    status = result["status"]
+    return {
+        **result,
+        "status": "error" if status == "success" and not ok else status,
+        "ok": ok,
+        "action": action,
+        "file_path": file_path,
+        "backup_path": backup_path,
+        "message": (result.get("message") or result.get("output")
+                    or result.get("stderr") or result.get("error") or ""),
+    }
+
+
 def invoke_backup_restore(
     params: dict[str, Any],
     ctx: ToolContext,
@@ -42,15 +60,15 @@ def invoke_backup_restore(
         ctx: ToolContext
 
     Returns:
-        dict: {ok: bool, action: str, file_path: str, backup_path: str, message: str}
+        dict: {status: str, ok: bool, action: str, file_path: str, backup_path: str, message: str}
     """
     action = str(params.get("action", "backup")).strip().lower()
     file_path = str(params.get("file_path", "")).strip()
     if not file_path:
-        return {"ok": False, "action": action, "message": "file_path is required"}
+        return {"status": "error", "ok": False, "action": action, "message": "file_path is required"}
 
     if action not in ("backup", "restore"):
-        return {"ok": False, "action": action, "message": "action must be 'backup' or 'restore'"}
+        return {"status": "error", "ok": False, "action": action, "message": "action must be 'backup' or 'restore'"}
 
     backup_path = str(params.get("backup_path", "")).strip()
 
@@ -75,14 +93,7 @@ def invoke_backup_restore(
             },
             ctx=ctx,
         )
-        ok = _cp_ok(result)
-        return {
-            "ok": ok,
-            "action": "backup",
-            "file_path": file_path,
-            "backup_path": backup_path,
-            "message": result.get("output", ""),
-        }
+        return _action_result(result, action, file_path, backup_path)
     else:
         # 恢复: cp backup_path file_path
         if not backup_path:
@@ -99,9 +110,13 @@ def invoke_backup_restore(
                 },
                 ctx=ctx,
             )
+            if not _cp_ok(result_find):
+                return _action_result(result_find, action, file_path, backup_path)
             backup_path = result_find.get("output", "").strip().split("\n")[0].strip()
             if not backup_path:
                 return {
+                    **result_find,
+                    "status": "error",
                     "ok": False,
                     "action": "restore",
                     "file_path": file_path,
@@ -118,14 +133,7 @@ def invoke_backup_restore(
             },
             ctx=ctx,
         )
-        ok = _cp_ok(result)
-        return {
-            "ok": ok,
-            "action": "restore",
-            "file_path": file_path,
-            "backup_path": backup_path,
-            "message": result.get("output", ""),
-        }
+        return _action_result(result, action, file_path, backup_path)
 
 
 def make_backup_restore_tool(ctx: ToolContext):
