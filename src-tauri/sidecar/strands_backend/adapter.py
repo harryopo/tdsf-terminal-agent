@@ -1219,7 +1219,7 @@ class ToolCallLimitHook:
         # Only retained logs gain identity; the frontend event contract is unchanged.
         # The sequential executor reports immediately after appending this call.
         if self.tool_log:
-            for key in ("tool_call_id", "tool_call_ids", "sdk_tool_use_id"):
+            for key in ("tool_call_id", "tool_call_ids", "sdk_tool_use_id", "error"):
                 if key in self.tool_log[-1]:
                     payload[key] = self.tool_log[-1][key]
         # agent_log 落盘（写失败静默——流水是排障加分项，绝不影响主链路；
