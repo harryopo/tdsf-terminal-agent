@@ -288,7 +288,7 @@ def invoke_network_diagnostic_tool(
         summary["resolved"] = bool(raw_output.strip())
 
     return {
-        "status": "success",
+        **exec_result,
         "mode": mode,
         "target": target,
         "command": command,

@@ -184,7 +184,7 @@ def invoke_log_analyzer_tool(
     summary = _summarize(raw_output, mode, pattern)
 
     return {
-        "status": "success",
+        **exec_result,
         "log_path": log_path,
         "mode": mode,
         "lines": lines,
@@ -192,7 +192,6 @@ def invoke_log_analyzer_tool(
         "command": command,
         "ssh_session_id": exec_result.get("ssh_session_id", ""),
         "raw_output": raw_output,
-        "exit_code": exec_result.get("exit_code", 0),
         "summary": summary,
         "message": (
             f"日志分析完成（模式={mode}，共 {summary['total_lines']} 行，"

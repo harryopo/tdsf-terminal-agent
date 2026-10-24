@@ -235,7 +235,7 @@ def invoke_process_inspector_tool(
     }
 
     return {
-        "status": "success",
+        **exec_result,
         "mode": mode,
         "command": command,
         "ssh_session_id": exec_result.get("ssh_session_id", ""),
