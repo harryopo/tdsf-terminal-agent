@@ -16,7 +16,7 @@
  *   2. sshStore.remoteCarapaceBySession[sessionId] === 'missing'（静默检测完成）
  *   3. preferences.sshRemoteCarapacePrompt === true
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Popover,
   PopoverContent,
@@ -48,9 +48,10 @@ type Props = {
 
 export function SshCarapaceBadge({ sessionId }: Props) {
   // 值类型 selector（rustSessionId: number | null）——不返回新引用，符合红线 6
-  const rustSessionId = useSshStore(
-    (s) => s.sessions.find((it) => it.id === sessionId)?.rustSessionId ?? null,
-  );
+  const rustSessionId = useSshStore((s) => {
+    const session = s.sessions.find((it) => it.id === sessionId);
+    return session?.state === 'connected' ? session.rustSessionId : null;
+  });
   const carapaceState = useSshStore((s) => s.remoteCarapaceBySession[sessionId]);
   const promptEnabled = usePreferencesStore((s) => s.sshRemoteCarapacePrompt);
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
@@ -60,6 +61,16 @@ export function SshCarapaceBadge({ sessionId }: Props) {
   const [stage, setStage] = useState<CarapaceInstallStage | 'error' | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const pendingInstall = useRef<symbol | null>(null);
+
+  useEffect(() => {
+    pendingInstall.current = null;
+    setOpen(false);
+    setStage(null);
+    setErrorMessage(null);
+    setInstalling(false);
+    return () => { pendingInstall.current = null; };
+  }, [sessionId, rustSessionId]);
 
   // 未连接 / 已安装 / 检测未完成 / 用户已永久关闭 → 不渲染（无任何占位）
   if (rustSessionId === null || carapaceState !== 'missing' || !promptEnabled) {
@@ -67,16 +78,29 @@ export function SshCarapaceBadge({ sessionId }: Props) {
   }
 
   const handleInstall = () => {
-    if (installing || rustSessionId === null) return;
+    if (installing || pendingInstall.current !== null || rustSessionId === null) return;
+    const request = Symbol();
+    pendingInstall.current = request;
+    const isCurrent = () => {
+      const session = useSshStore.getState().sessions.find((it) => it.id === sessionId);
+      return pendingInstall.current === request && session?.state === 'connected' &&
+        session.rustSessionId === rustSessionId;
+    };
+    if (!isCurrent()) { pendingInstall.current = null; return; }
     setInstalling(true);
     setStage('preparing');
     setErrorMessage(null);
-    void installRemoteCarapace(rustSessionId, setStage, setErrorMessage).then((ok) => {
+    void installRemoteCarapace(rustSessionId,
+      (next) => { if (isCurrent()) setStage(next); },
+      (message) => { if (isCurrent()) setErrorMessage(message); },
+    ).then((ok) => {
+      if (!isCurrent()) return;
+      pendingInstall.current = null;
       setInstalling(false);
       if (ok) {
         // 安装成功 → 更新 store 状态，badge 随显隐条件消失
         useSshStore.getState().setRemoteCarapaceState(sessionId, 'installed');
-        setTimeout(() => setOpen(false), 1200);
+        setOpen(false);
       } else {
         setStage('error');
       }
