@@ -31,13 +31,14 @@ import {
 import {
   fetchRemoteCommands,
   fetchRemoteOsInfo,
-  remoteCarapaceInstalled,
+  probeRemoteCarapace,
+  type RemoteCarapaceProbeState,
   type RemoteOsInfo,
 } from '@/lib/param-complete-client';
 
 // TDSF 2026-08-28: SSH 会话的远端 carapace 检测状态（无弹窗设计，仅驱动小图标显隐）
-/** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装（键不存在 = 未检测） */
-export type SshRemoteCarapaceState = 'checking' | 'installed' | 'missing';
+/** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装 / 'error' 未能确认（无键 = 未检测） */
+export type SshRemoteCarapaceState = 'checking' | RemoteCarapaceProbeState;
 
 // --- 内部工具函数 (消除 sshStore 内重复模式) ---
 
@@ -791,19 +792,18 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     } catch (e) {
       console.warn('[sshStore] read carapace prompt preference failed:', e);
     }
-    // 已有结果（checking/installed/missing）→ 不重复检测
+    // 已有检测状态 → 不自动重复检测
     if (get().remoteCarapaceBySession[sessionId]) return;
     const sess = get().sessions.find((s) => s.id === sessionId);
     if (!sess?.rustSessionId) return;
     get().setRemoteCarapaceState(sessionId, 'checking');
-    // remoteCarapaceInstalled 自带会话级缓存 + 失败静默（返回 false）
-    const installed = await remoteCarapaceInstalled(sess.rustSessionId);
+    const state = await probeRemoteCarapace(sess.rustSessionId);
     // 不覆盖已完成的安装/刷新，也不把旧连接的检测结果写入新连接。
     const latest = get();
     const current = latest.sessions.find((s) => s.id === sessionId);
     if (current?.rustSessionId !== sess.rustSessionId ||
         latest.remoteCarapaceBySession[sessionId] !== 'checking') return;
-    latest.setRemoteCarapaceState(sessionId, installed ? 'installed' : 'missing');
+    latest.setRemoteCarapaceState(sessionId, state);
   },
 
   // === TDSF: SSH 终端数据订阅 (修复黑屏) ===

@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   sshCommand: vi.fn(),
   fetchRemoteCommands: vi.fn(),
   fetchRemoteOsInfo: vi.fn(),
-  remoteCarapaceInstalled: vi.fn(),
+  probeRemoteCarapace: vi.fn(),
 }));
 
 vi.mock("@/lib/ssh-bridge", async (importOriginal) => {
@@ -20,7 +20,7 @@ vi.mock("@/lib/ssh-bridge", async (importOriginal) => {
 vi.mock("@/lib/param-complete-client", () => ({
   fetchRemoteCommands: mocks.fetchRemoteCommands,
   fetchRemoteOsInfo: mocks.fetchRemoteOsInfo,
-  remoteCarapaceInstalled: mocks.remoteCarapaceInstalled,
+  probeRemoteCarapace: mocks.probeRemoteCarapace,
 }));
 vi.mock("@/modules/settings/preferences", () => ({
   usePreferencesStore: { getState: () => ({ sshRemoteCarapacePrompt: false }) },
@@ -102,7 +102,7 @@ beforeEach(() => {
   } satisfies SshCommandResult);
   mocks.fetchRemoteCommands.mockResolvedValue(undefined);
   mocks.fetchRemoteOsInfo.mockResolvedValue(null);
-  mocks.remoteCarapaceInstalled.mockResolvedValue(false);
+  mocks.probeRemoteCarapace.mockResolvedValue('missing');
 });
 
 describe("sshStore reconnect lifecycle", () => {

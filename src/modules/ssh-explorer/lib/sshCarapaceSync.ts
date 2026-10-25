@@ -11,7 +11,7 @@
 import { listen } from '@tauri-apps/api/event';
 import {
   invalidateRemoteCarapaceCache,
-  remoteCarapaceInstalled,
+  probeRemoteCarapace,
 } from '@/lib/param-complete-client';
 import {
   CARAPACE_CHANGED_EVENT,
@@ -37,12 +37,12 @@ export async function applyCarapaceChanged(
   invalidateRemoteCarapaceCache(payload.sessionId);
   store.setRemoteCarapaceState(sess.id, 'checking');
   try {
-    const installed = await remoteCarapaceInstalled(payload.sessionId);
+    const state = await probeRemoteCarapace(payload.sessionId);
     const latest = useSshStore.getState();
     const current = latest.sessions.find((s) => s.id === sess.id);
     if (syncRequests.get(sess.id) !== request || current?.rustSessionId !== payload.sessionId ||
         latest.remoteCarapaceBySession[sess.id] !== 'checking') return true;
-    latest.setRemoteCarapaceState(sess.id, installed ? 'installed' : 'missing');
+    latest.setRemoteCarapaceState(sess.id, state);
     return true;
   } finally {
     if (syncRequests.get(sess.id) === request) syncRequests.delete(sess.id);

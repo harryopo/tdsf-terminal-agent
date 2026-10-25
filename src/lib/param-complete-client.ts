@@ -74,6 +74,8 @@ export function classifyCarapaceProbe(
   return 'error';
 }
 
+export type RemoteCarapaceProbeState = ReturnType<typeof classifyCarapaceProbe>;
+
 /**
  * 安装第 1 步：建目录 + 顺便带回 $HOME（SFTP 上传需要绝对路径，~ 不会被 sftp 展开）
  * 走哨兵协议：部分服务器连非交互 exec 也先吐一段欢迎横幅，整段 trim 会把横幅当路径用。
@@ -294,9 +296,9 @@ export function invalidateRemoteCarapaceCache(sessionId: number): void {
  * 检测远端 ~/.local/bin/carapace 是否存在（exec 通道，2s 超时）。
  * 只缓存确认已装/未装的结果；超时或未知状态不缓存，下次请求可重试。
  */
-export async function remoteCarapaceInstalled(sessionId: number): Promise<boolean> {
+export async function probeRemoteCarapace(sessionId: number): Promise<RemoteCarapaceProbeState> {
   const cached = remoteInstalledCache.get(sessionId);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) return cached ? 'installed' : 'missing';
   const request = Symbol();
   remoteInstalledRequests.set(sessionId, request);
   try {
@@ -307,13 +309,18 @@ export async function remoteCarapaceInstalled(sessionId: number): Promise<boolea
     if (state !== 'error' && remoteInstalledRequests.get(sessionId) === request) {
       remoteInstalledCache.set(sessionId, installed);
     }
-    return installed;
+    return state;
   } catch (e) {
-    console.warn('[param-complete] remoteCarapaceInstalled failed:', e);
-    return false;
+    console.warn('[param-complete] probeRemoteCarapace failed:', e);
+    return 'error';
   } finally {
     if (remoteInstalledRequests.get(sessionId) === request) remoteInstalledRequests.delete(sessionId);
   }
+}
+
+/** 预测链路的布尔接口：未能确认时静默回退，不把 error 写入安装状态或缓存。 */
+export async function remoteCarapaceInstalled(sessionId: number): Promise<boolean> {
+  return await probeRemoteCarapace(sessionId) === 'installed';
 }
 
 /**
