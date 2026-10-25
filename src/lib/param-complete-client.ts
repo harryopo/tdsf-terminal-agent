@@ -20,6 +20,8 @@
  * 输入流——参数预测是锦上添花，宁可无预测也不给错误预测或报错弹窗。
  */
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
+import { CARAPACE_CHANGED_EVENT } from './sshCarapaceEvents';
 import { isOsFamily, type OsFamily } from './os-family';
 import { sshCommand, probeCmd, readProbeValue, type SshCommandResult } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
@@ -551,6 +553,13 @@ export async function installRemoteCarapace(
     // 步骤 4：失效缓存 + 完成
     invalidateRemoteCarapaceCache(sessionId);
     onProgress?.('done');
+    // 设置页与终端角标共用通知入口；接收方仍按各自会话重查，不直接信任事件。
+    try {
+      await emit(CARAPACE_CHANGED_EVENT, { sessionId });
+    } catch (e) {
+      // 通知失败不改变已经验证成功的远端安装结果。
+      console.warn('[param-complete] 补全安装通知发送失败:', e);
+    }
     return true;
   } catch (e) {
     // 后端命令未就绪 / 会话已断开 / 上传失败——静默降级，调用方按 false 渲染

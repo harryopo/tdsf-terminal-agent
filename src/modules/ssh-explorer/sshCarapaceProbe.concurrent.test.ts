@@ -177,8 +177,10 @@ describe('concurrent initial and refreshed remote carapace probes', () => {
     expect(ipc.calls).toHaveLength(1);
   });
 
-  it('keeps another session initial probe independent of a refresh for session A', async () => {
-    resetFixture([session(sessionA, rustA), session(sessionB, rustB)]);
+  it('keeps another account initial probe independent of a refresh for session A', async () => {
+    const otherAccount = session(sessionB, rustB);
+    otherAccount.params.user = 'other-user';
+    resetFixture([session(sessionA, rustA), otherAccount]);
     const initialA = await startInitial(sessionA);
     const initialB = await startInitial(sessionB);
     const refreshA = await startRefresh(rustA);

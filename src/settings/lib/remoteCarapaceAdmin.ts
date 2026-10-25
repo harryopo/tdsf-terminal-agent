@@ -15,14 +15,12 @@
  *   - 装完必须让**主窗**那一侧知道：设置窗与主窗是两个 JS context，各自一份
  *     `remoteInstalledCache`，不发消息的话主窗角标会一直挂着"未安装"。
  */
-import { emit } from '@tauri-apps/api/event';
 import {
   CARAPACE_CHECK_CMD,
   classifyCarapaceProbe,
   installRemoteCarapace,
   type CarapaceInstallStage,
 } from '@/lib/param-complete-client';
-import { CARAPACE_CHANGED_EVENT } from '@/lib/sshCarapaceEvents';
 import {
   sshCommand,
   sshSessionsDetail,
@@ -157,7 +155,7 @@ export async function probeCarapaceTarget(sessionId: number): Promise<CarapacePr
 
 /**
  * 装到一台服务器：走既有的四步链（建目录 → 传二进制 → chmod + 验证 → 失效缓存）。
- * 成功后发跨窗事件，并清掉本窗这份缓存，让下一次检测问服务器而不是问内存。
+ * 缓存失效与成功通知由共享安装入口负责，本层只转换设置页的进度与结果。
  */
 export async function installCarapaceTarget(
   sessionId: number,
@@ -175,15 +173,5 @@ export async function installCarapaceTarget(
     },
   );
   if (!ok) return { ok: false, message: message || '安装失败（没有拿到具体原因）' };
-  // 缓存失效由 installRemoteCarapace 的第 4 步负责（实测过：摘掉那行才会红，
-  // 在这里再调一次是重复劳动）—— 本层只负责把"装好了"这件事通知别的窗。
-  try {
-    // 用全局 emit 而不是 emitTo("main")：工作台窗可能不止一扇（#64 允许多开），
-    // 每扇都注册了同一个监听；设置窗自己不监听，收到也不会多干一遍。
-    await emit(CARAPACE_CHANGED_EVENT, { sessionId });
-  } catch (e) {
-    // 发不出去只是主窗那一侧暂时不知道，服务器上确实装好了 —— 说清但不算失败
-    console.warn('[carapace-admin] 跨窗通知发送失败:', e);
-  }
   return { ok: true, message };
 }

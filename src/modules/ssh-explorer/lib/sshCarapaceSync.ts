@@ -28,25 +28,32 @@ export async function applyCarapaceChanged(
   payload: CarapaceChangedPayload,
 ): Promise<boolean> {
   const store = useSshStore.getState();
-  const sess = store.sessions.find((s) => s.rustSessionId === payload.sessionId);
-  if (!sess) return false;
-  const request = Symbol();
-  syncRequests.set(sess.id, request);
-  // 清掉本窗缓存，让下一次读真去问服务器（受 preferences 开关控制的那个
-  // detectRemoteCarapace 这里不走：它"已有结果就不重查"，而我们要的正是重查）
-  invalidateRemoteCarapaceCache(payload.sessionId);
-  store.setRemoteCarapaceState(sess.id, 'checking');
-  try {
-    const state = await probeRemoteCarapace(payload.sessionId);
-    const latest = useSshStore.getState();
-    const current = latest.sessions.find((s) => s.id === sess.id);
-    if (syncRequests.get(sess.id) !== request || current?.rustSessionId !== payload.sessionId ||
-        latest.remoteCarapaceBySession[sess.id] !== 'checking') return true;
-    latest.setRemoteCarapaceState(sess.id, state);
-    return true;
-  } finally {
-    if (syncRequests.get(sess.id) === request) syncRequests.delete(sess.id);
-  }
+  const source = store.sessions.find((s) => s.rustSessionId === payload.sessionId);
+  if (!source) return false;
+  // 组件按服务器账号安装，但状态和预测缓存按连接保存；同身份会话各自重查。
+  const targets = store.sessions.filter((s) => s.id === source.id || (
+    s.state === 'connected' && s.params.host === source.params.host &&
+    s.params.user === source.params.user && s.params.port === source.params.port
+  ));
+  await Promise.all(targets.map(async (sess) => {
+    const rustSessionId = sess.rustSessionId;
+    if (rustSessionId === null) return;
+    const request = Symbol();
+    syncRequests.set(sess.id, request);
+    invalidateRemoteCarapaceCache(rustSessionId);
+    store.setRemoteCarapaceState(sess.id, 'checking');
+    try {
+      const state = await probeRemoteCarapace(rustSessionId);
+      const latest = useSshStore.getState();
+      const current = latest.sessions.find((s) => s.id === sess.id);
+      if (syncRequests.get(sess.id) !== request || current?.rustSessionId !== rustSessionId ||
+          latest.remoteCarapaceBySession[sess.id] !== 'checking') return;
+      latest.setRemoteCarapaceState(sess.id, state);
+    } finally {
+      if (syncRequests.get(sess.id) === request) syncRequests.delete(sess.id);
+    }
+  }));
+  return true;
 }
 
 /** 注册监听（浏览器预览下没有 Tauri 运行时，listen 会 reject —— 静默降级） */

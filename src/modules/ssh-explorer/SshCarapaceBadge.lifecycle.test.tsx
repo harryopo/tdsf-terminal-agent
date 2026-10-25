@@ -3,8 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePreferencesStore } from '@/modules/settings/preferences';
 import { CARAPACE_CONFIGURE_CMD, CARAPACE_MKDIR_CMD } from '@/lib/param-complete-client';
 import { PROBE_MARK } from '@/lib/ssh-bridge';
+import { CARAPACE_CHANGED_EVENT } from '@/lib/sshCarapaceEvents';
 import { useSshStore, type SshSessionInfo } from './sshStore';
 import { SshCarapaceBadge } from './SshCarapaceBadge';
+
+vi.mock('@tauri-apps/api/event', async () => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return { emit: (event: string, payload: unknown) => invoke('plugin:event|emit', { event, payload }) };
+});
 
 const ipc = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -66,6 +72,7 @@ beforeEach(() => {
   ipc.uploads.clear();
   ipc.invoke.mockReset().mockImplementation((command: string, args?: Record<string, unknown>) => {
     ipc.calls.push({ command, args });
+    if (command === 'plugin:event|emit') return Promise.resolve(undefined);
     if (command === 'ssh_command' && args?.command === CARAPACE_MKDIR_CMD) {
       return Promise.resolve({ ok: true, exitCode: 0, stderr: '', output: `${PROBE_MARK}\n/home/fixture\n` });
     }
@@ -113,7 +120,11 @@ describe('SshCarapaceBadge installation ownership', () => {
     expect(screen.queryByTitle('启用远端动态补全')).toBeNull();
     expect(ipc.calls.map(({ command }) => command)).toEqual([
       'ssh_command', 'carapace_linux_path', 'sftp_upload_file', 'ssh_command',
+      'plugin:event|emit',
     ]);
+    expect(ipc.calls.at(-1)?.args).toEqual({
+      event: CARAPACE_CHANGED_EVENT, payload: { sessionId: 7 },
+    });
     expect(ipc.calls.filter((call) => call.command === 'ssh_command').map((call) => call.args?.command))
       .toEqual([CARAPACE_MKDIR_CMD, CARAPACE_CONFIGURE_CMD]);
     expect(ipc.calls.find((call) => call.command === 'sftp_upload_file')?.args).toEqual({

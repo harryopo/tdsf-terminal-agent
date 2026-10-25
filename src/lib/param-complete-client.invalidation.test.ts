@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@tauri-apps/api/event', async () => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return { emit: (event: string, payload: unknown) => invoke('plugin:event|emit', { event, payload }) };
+});
+
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), Channel: class {} }));
 
 import { invoke } from '@tauri-apps/api/core';
@@ -38,6 +43,7 @@ describe('remoteCarapaceInstalled invalidation lifecycle', () => {
     mockInvoke.mockImplementation((async (command: string, args?: { command?: string }) => {
       if (command === 'carapace_linux_path') return 'pkg/carapace';
       if (command === 'sftp_upload_file') return undefined;
+      if (command === 'plugin:event|emit') return undefined;
       if (command !== 'ssh_command') throw new Error(`unexpected invoke: ${command}`);
       if (args?.command === CARAPACE_CHECK_CMD && checks++ === 0) return oldProbe.promise;
       if (args?.command === CARAPACE_MKDIR_CMD) return sshResult(`${PROBE_MARK}\n/home/tester\n`);

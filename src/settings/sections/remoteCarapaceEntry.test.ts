@@ -43,10 +43,12 @@ describe('设置页入口的接线', () => {
     );
   });
 
-  it('设置侧发、主窗侧收，同一个事件名常量（字面量全仓只许出现一次）', () => {
-    const emitter = read('src/settings/lib/remoteCarapaceAdmin.ts');
+  it('共享安装入口发、主窗侧收，同一个事件名常量', () => {
+    const emitter = read('src/lib/param-complete-client.ts');
     const listener = read('src/modules/ssh-explorer/lib/sshCarapaceSync.ts');
-    expect(emitter).toContain("from '@/lib/sshCarapaceEvents'");
+    expect(emitter).toContain("from './sshCarapaceEvents'");
+    expect(emitter).toContain('emit(CARAPACE_CHANGED_EVENT, { sessionId })');
+    expect(read('src/settings/lib/remoteCarapaceAdmin.ts')).not.toContain('emit(');
     expect(listener).toContain("from '@/lib/sshCarapaceEvents'");
     const owner = read('src/lib/sshCarapaceEvents.ts');
     expect(owner.match(/tdsf:ssh-carapace-changed/g)?.length).toBe(1);

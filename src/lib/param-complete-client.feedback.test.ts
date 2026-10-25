@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@tauri-apps/api/event', async () => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return { emit: (event: string, payload: unknown) => invoke('plugin:event|emit', { event, payload }) };
+});
+
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), Channel: class {} }));
 
 import { invoke } from '@tauri-apps/api/core';
 import { installRemoteCarapace } from './param-complete-client';
 import { PROBE_MARK } from './ssh-bridge';
+import { CARAPACE_CHANGED_EVENT } from './sshCarapaceEvents';
 
 const mockInvoke = vi.mocked(invoke);
 const sshResult = (output: string, exitCode = 0) => ({
@@ -15,6 +21,7 @@ function mockInstall(homeOutput: string, uploadError?: Error, resourceError?: Er
   const calls: string[] = [];
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
     calls.push(cmd);
+    if (cmd === 'plugin:event|emit') return undefined;
     if (cmd === 'ssh_command') {
       const command = (args as { command: string }).command;
       return command.includes('mkdir -p')
@@ -42,7 +49,10 @@ describe('installRemoteCarapace — validate probed HOME before SFTP', () => {
   it('uploads only when the sentinel is followed by an absolute Linux HOME', async () => {
     const calls = mockInstall(`${PROBE_MARK}\n/home/ops\n`);
     await expect(installRemoteCarapace(42)).resolves.toBe(true);
-    expect(calls).toEqual(['ssh_command', 'carapace_linux_path', 'sftp_upload_file', 'ssh_command']);
+    expect(calls).toEqual(['ssh_command', 'carapace_linux_path', 'sftp_upload_file', 'ssh_command', 'plugin:event|emit']);
+    expect(mockInvoke).toHaveBeenCalledWith('plugin:event|emit', {
+      event: CARAPACE_CHANGED_EVENT, payload: { sessionId: 42 },
+    });
     expect(mockInvoke).toHaveBeenCalledWith('sftp_upload_file', {
       sessionId: 42,
       localPath: 'C:/pkg/carapace-linux-amd64',
