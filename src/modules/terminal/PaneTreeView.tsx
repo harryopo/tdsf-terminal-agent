@@ -15,7 +15,7 @@ import {
   type PaneNode,
 } from "./lib/panes";
 import { useSshLeafTransport } from "./lib/useSshLeafTransport";
-import { useSshStore } from "@/modules/ssh-explorer/sshStore";
+import { isSessionConnecting, useSshStore } from "@/modules/ssh-explorer/sshStore";
 import { TerminalPane, type TerminalPaneHandle } from "./TerminalPane";
 
 type LeafBundle = {
@@ -116,24 +116,26 @@ type PaneProps = {
 };
 
 /**
- * TDSF (2026-08-11): leaf 内容分发 —— 有效 SSH 会话且会话仍 connected
- * 时渲染 SSH 叶子（复用 useSshLeafTransport 注入 openTransport），否则渲染本地
- * TerminalPane。拆成子组件是为了满足 hook 规则：useSshStore 每次渲染都调用，
+ * leaf 内容分发：已连接或持有匹配 handle 的重连阶段保留 SSH 叶子，
+ * 避免短暂状态变化替换传输并清掉远端补全绑定；未建立/已结束仍走本地路径。
+ * 拆成子组件是为了满足 hook 规则：useSshStore 每次渲染都调用，
  * 条件渲染的是子组件而非 hook。
  */
 function TerminalPaneContent({
   effectiveSsh,
   ...paneProps
 }: PaneProps & { effectiveSsh: string | null }) {
-  // 响应式查询该会话是否仍 connected（连接状态变化时重渲染，断开自动回退本地）
-  const sshConnected = useSshStore((s) =>
-    effectiveSsh
-      ? s.sessions.some(
-          (it) => it.id === effectiveSsh && it.state === "connected",
-        )
-      : false,
-  );
-  if (effectiveSsh && sshConnected) {
+  const renderSshPane = useSshStore((s) => {
+    const session = effectiveSsh
+      ? s.sessions.find((it) => it.id === effectiveSsh)
+      : undefined;
+    return !!session && (
+      session.state === "connected" ||
+      (isSessionConnecting(session) && session.rustSessionId != null &&
+        session.handle?.id === session.rustSessionId)
+    );
+  });
+  if (effectiveSsh && renderSshPane) {
     return <SshLeafPane sessionId={effectiveSsh} {...paneProps} />;
   }
   return <TerminalPane {...paneProps} />;
