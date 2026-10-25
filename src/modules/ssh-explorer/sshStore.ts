@@ -382,6 +382,8 @@ function clearTerminalSubscribers(sessionId: string): void {
 
 // === Store 实现 ==============================================================
 
+const carapaceDetectionRequests = new Map<string, symbol>();
+
 export const useSshStore = create<SshExplorerState>((set, get) => ({
   // === 初始状态 ===
   sessions: [],
@@ -777,6 +779,8 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   // === TDSF 2026-08-28: 远端 carapace 静默检测（无弹窗设计） ====================
 
   setRemoteCarapaceState: (sessionId, state) => {
+    // A newer publication, even another checking pass, supersedes the initial probe.
+    carapaceDetectionRequests.delete(sessionId);
     set((s) => ({
       remoteCarapaceBySession: { ...s.remoteCarapaceBySession, [sessionId]: state },
     }));
@@ -797,13 +801,20 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     const sess = get().sessions.find((s) => s.id === sessionId);
     if (!sess?.rustSessionId) return;
     get().setRemoteCarapaceState(sessionId, 'checking');
-    const state = await probeRemoteCarapace(sess.rustSessionId);
-    // 不覆盖已完成的安装/刷新，也不把旧连接的检测结果写入新连接。
-    const latest = get();
-    const current = latest.sessions.find((s) => s.id === sessionId);
-    if (current?.rustSessionId !== sess.rustSessionId ||
-        latest.remoteCarapaceBySession[sessionId] !== 'checking') return;
-    latest.setRemoteCarapaceState(sessionId, state);
+    const request = Symbol();
+    carapaceDetectionRequests.set(sessionId, request);
+    try {
+      const state = await probeRemoteCarapace(sess.rustSessionId);
+      // 不覆盖已完成的安装/刷新，也不把旧连接的检测结果写入新连接。
+      const latest = get();
+      const current = latest.sessions.find((s) => s.id === sessionId);
+      if (carapaceDetectionRequests.get(sessionId) !== request ||
+          current?.rustSessionId !== sess.rustSessionId ||
+          latest.remoteCarapaceBySession[sessionId] !== 'checking') return;
+      latest.setRemoteCarapaceState(sessionId, state);
+    } finally {
+      if (carapaceDetectionRequests.get(sessionId) === request) carapaceDetectionRequests.delete(sessionId);
+    }
   },
 
   // === TDSF: SSH 终端数据订阅 (修复黑屏) ===
