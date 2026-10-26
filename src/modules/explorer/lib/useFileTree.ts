@@ -356,10 +356,11 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodes is intentionally omitted so ordinary tree edits don't refetch every expanded directory; showHidden/gitDecorations are the triggers that force a refresh when prefs change.
   useEffect(() => {
     if (!rootPath || source?.kind === "sftp") return;
-    const loadedPaths = Object.entries(nodes)
-      .filter(([, state]) => state.status === "loaded")
+    // Root/source effects may have reset the current tree since this render.
+    const refreshPaths = Object.entries(nodesRef.current)
+      .filter(([, state]) => state.status === "loaded" || state.status === "loading")
       .map(([path]) => path);
-    for (const path of loadedPaths) void fetchChildren(path);
+    for (const path of refreshPaths) void fetchChildren(path);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   }, [showHidden, gitDecorations, rootPath, sourceKey, fetchChildren]);
 
