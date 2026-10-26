@@ -150,6 +150,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   const expandedRef = useRef(expanded);
   const nodesRef = useRef(nodes);
   const watchedRef = useRef<Set<string>>(new Set());
+  const watchWorkspaceRef = useRef<LocalWorkspaceEnv | undefined>(undefined);
   const listingRequests = useRef(new Map<string, object>());
   const mutationGeneration = useRef({});
   const editToken = useRef({});
@@ -183,12 +184,12 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     if (sourceRef.current?.kind === "sftp") return;
     if (watchedRef.current.has(path)) return;
     watchedRef.current.add(path);
-    watchAdd([path]);
+    watchAdd([path], watchWorkspaceRef.current);
   }, []);
 
   const removeWatch = useCallback((path: string) => {
     if (!watchedRef.current.delete(path)) return;
-    watchRemove([path]);
+    watchRemove([path], watchWorkspaceRef.current);
   }, []);
 
   const fetchChildren = useCallback(async (path: string) => {
@@ -270,7 +271,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         const toUnwatch: string[] = [];
         for (const d of dead)
           if (watchedRef.current.delete(d)) toUnwatch.push(d);
-        watchRemove(toUnwatch);
+        watchRemove(toUnwatch, watchWorkspaceRef.current);
       }
     } catch (e) {
       if (listingRequests.current.get(path) !== request) return;
@@ -293,6 +294,11 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     editToken.current = {};
     const requests = listingRequests.current;
     requests.clear();
+    // Release watches against their original workspace, not the active one.
+    const workspace = sourceRef.current?.kind === "local"
+      ? sourceRef.current.workspace ?? ipcWorkspaceEnv()
+      : ipcWorkspaceEnv();
+    watchWorkspaceRef.current = workspace;
     if (!rootPath) {
       nodesRef.current = {};
       setNodes({});
@@ -320,7 +326,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     if (source?.kind !== "sftp") {
       const toWatch = [rootPath, ...restored];
       for (const p of toWatch) watchedRef.current.add(p);
-      watchAdd(toWatch);
+      watchAdd(toWatch, workspace);
     }
 
     return () => {
@@ -328,7 +334,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       requests.clear();
       rememberExpansion(expansionKey, expandedRef.current);
       if (watchedRef.current.size > 0) {
-        watchRemove([...watchedRef.current]);
+        watchRemove([...watchedRef.current], workspace);
         // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
         watchedRef.current.clear();
       }

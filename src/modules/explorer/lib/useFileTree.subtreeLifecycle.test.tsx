@@ -102,7 +102,7 @@ async function removeTree(
   expect(parentRefresh).toBeDefined();
   await resolveRequest(parentRefresh!, retainedEntries);
   expect(result.current.nodes[child]).toBeUndefined();
-  expect(watchRemoveMock).toHaveBeenCalledWith([child]);
+  expect(watchRemoveMock).toHaveBeenCalledWith([child], { kind: "local" });
 }
 
 describe("useFileTree removed subtree listing lifecycle", () => {
@@ -340,7 +340,7 @@ describe("useFileTree removed subtree listing lifecycle", () => {
     const { result, unmount } = renderHook(() => useFileTree(root));
     await resolveRequest(requests[0], [dir("child")]);
     expect(result.current.nodes[root]).toMatchObject({ status: "loaded" });
-    expect(watchAddMock).toHaveBeenCalledWith([root]);
+    expect(watchAddMock).toHaveBeenCalledWith([root], { kind: "local" });
 
     act(() => result.current.refresh(root));
     await resolveRequest(requests[1], []);
