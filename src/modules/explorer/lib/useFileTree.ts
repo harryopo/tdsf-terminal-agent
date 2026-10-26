@@ -232,19 +232,24 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           .filter((e) => e.kind === "dir")
           .map((e) => joinPath(path, e.name)),
       );
+      // Pending paths may not have reached nodesRef yet in this render turn.
+      const knownPaths = new Set([...Object.keys(nodesRef.current), ...listingRequests.current.keys()]);
       const removedRoots: string[] = [];
-      for (const key of Object.keys(nodesRef.current)) {
-        if (dirname(key) === path && !liveDirs.has(key)) removedRoots.push(key);
+      for (const key of knownPaths) {
+        if (key !== path && dirname(key) === path && !liveDirs.has(key)) removedRoots.push(key);
       }
       const dead = new Set<string>();
       if (removedRoots.length > 0) {
         const candidates = new Set<string>([
-          ...Object.keys(nodesRef.current),
+          ...knownPaths,
           ...expandedRef.current,
           ...watchedRef.current,
         ]);
         for (const k of candidates) {
-          if (removedRoots.some((r) => isUnder(k, r))) dead.add(k);
+          if (removedRoots.some((r) => isUnder(k, r))) {
+            dead.add(k);
+            listingRequests.current.delete(k);
+          }
         }
       }
 
