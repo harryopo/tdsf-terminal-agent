@@ -1085,17 +1085,22 @@ export async function onPreferencesChange(
     const mapped = map[key];
     if (mapped) cb(mapped, value);
   });
-  const unsubEvent = await listen<{ key: string; value: unknown }>(
-    PREFS_CHANGED_EVENT,
-    (e) => {
-      const mapped = map[e.payload.key];
-      if (mapped) cb(mapped, e.payload.value);
-    },
-  );
-  return () => {
+  try {
+    const unsubEvent = await listen<{ key: string; value: unknown }>(
+      PREFS_CHANGED_EVENT,
+      (e) => {
+        const mapped = map[e.payload.key];
+        if (mapped) cb(mapped, e.payload.value);
+      },
+    );
+    return () => {
+      unsubLocal();
+      unsubEvent();
+    };
+  } catch (e) {
     unsubLocal();
-    unsubEvent();
-  };
+    throw e;
+  }
 }
 
 // API key changes are stored in OS keychain (not the prefs store),
