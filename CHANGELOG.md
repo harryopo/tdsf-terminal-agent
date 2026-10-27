@@ -1,9 +1,15 @@
 # Changelog
 
-Version numbering: `0.x` builds are pre-stable releases; `1.x` is reserved for the first
-stable release.
+Version numbering: `0.x` builds and `-rc.N` release candidates are pre-stable;
+`1.x` without a prerelease suffix is reserved for stable releases.
 
 ## Unreleased
+
+## 1.0.0-rc.1 — 2026-10-27
+
+Windows x64 release candidate, not the stable 1.0 release. Native core-flow,
+installation and upgrade acceptance remain pending; automated checks alone do
+not establish those results.
 
 - Separate built-in and personal knowledge browsing, keep file lists, titles,
   search and details in the selected library, and expose complete category
@@ -22,8 +28,8 @@ stable release.
 - Add a monochrome session-inspector dialog through the chat's Confidence button:
   runtime, conversation and tool-evidence views, search, actual call-ID links and
   confirmed local redacted JSON export. Bounded records are not a complete
-  persistent audit or calibrated correctness probabilities. Existing installers
-  do not yet include this feature.
+  persistent audit or calibrated correctness probabilities. Earlier 0.9.2
+  installers do not include this feature.
 - Keep the confirmed diagnostic-export preview unchanged while its save is in
   progress, and restore export controls after completion or failure.
 - Add correlated cards for terminal readback and other tools without an existing
@@ -77,6 +83,14 @@ stable release.
 - Public repository presentation and history cleanup preserve application code,
   formal tests and license notices. Existing release installers are not rebuilt by
   these source changes.
+- Fix late completion-probe results and synchronize successful installation
+  notifications across connected sessions with the same SSH identity. Keep
+  failed or unconfirmed installs retryable rather than reporting success.
+- Preserve live settings changes while loading startup preferences. Keep file
+  tree and editor watches bound to their original local or WSL workspace, retire
+  removed-directory requests, and release watches when their owner unmounts.
+- Update the Vitest development toolchain to 4.1.12 for the Windows mocker
+  advisory; production dependency versions remain unchanged by this candidate.
 
 ## 0.9.2
 

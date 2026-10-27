@@ -1,5 +1,5 @@
 use super::{build_integration_commands, RemoteShellKind, BASH_INTEGRATION_SCRIPT};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
@@ -58,20 +58,54 @@ fn run_write_command(write_cmd: &str, dir: &TempDir) -> Output {
 
 fn finish_with_deadline(mut child: Child) -> Output {
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if child.try_wait().expect("poll bash process").is_some() {
-            return child.wait_with_output().expect("collect bash output");
+    let collect_pipe = |mut pipe: Box<dyn Read + Send>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).expect("read bash output");
+            bytes
+        })
+    };
+    let stdout = collect_pipe(Box::new(child.stdout.take().expect("bash stdout")));
+    let stderr = collect_pipe(Box::new(child.stderr.take().expect("bash stderr")));
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().expect("poll bash process") {
+            break (status, false);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            let output = child.wait_with_output().expect("reap timed out bash");
-            panic!(
-                "bash did not exit before deadline; stdout={:?}, stderr={:?}",
-                output.stdout, output.stderr
-            );
+            break (child.wait().expect("reap timed out bash"), true);
         }
         thread::sleep(Duration::from_millis(10));
-    }
+    };
+    let output = Output {
+        status,
+        stdout: stdout.join().expect("collect bash stdout"),
+        stderr: stderr.join().expect("collect bash stderr"),
+    };
+    assert!(
+        !timed_out,
+        "bash did not exit before deadline; stdout={:?}, stderr={:?}",
+        output.stdout, output.stderr
+    );
+    output
+}
+
+#[test]
+fn command_output_larger_than_pipes_does_not_block_exit() {
+    let mut command = Command::new(bash_program());
+    command.args([
+        "--noprofile",
+        "--norc",
+        "-c",
+        "printf '%70000s' x; printf '%70000s' y >&2",
+    ]);
+    let output = run_command_with_deadline(&mut command);
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), 70_000);
+    assert_eq!(output.stderr.len(), 70_000);
+    assert_eq!(output.stdout.last(), Some(&b'x'));
+    assert_eq!(output.stderr.last(), Some(&b'y'));
 }
 
 fn run_interactive(launch_cmd: &str, dir: &TempDir, input: &str) -> Output {
