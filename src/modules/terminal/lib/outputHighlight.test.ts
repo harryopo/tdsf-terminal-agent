@@ -1,12 +1,14 @@
 import { Terminal, type IDecorationOptions } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readTerminalTokens } from "@/styles/tokens";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { outputHighlightSpans } from "./outputSyntaxHighlight";
 import { registerOutputHighlight } from "./outputHighlight";
 
 let frames = new Map<number, FrameRequestCallback>();
 let nextFrame = 0;
 const terminals: Terminal[] = [];
+let originalPreferences: ReturnType<typeof usePreferencesStore.getState>;
 
 function createTerminal(
   rows = 10,
@@ -51,6 +53,8 @@ function spanFor(text: string, token: string, kind: string) {
 beforeEach(() => {
   frames = new Map();
   nextFrame = 0;
+  originalPreferences = usePreferencesStore.getState();
+  usePreferencesStore.setState({ terminalOutputHighlightEnabled: true });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     const id = ++nextFrame;
     frames.set(id, callback);
@@ -61,6 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
   terminals.splice(0).forEach((term) => term.dispose());
+  usePreferencesStore.setState(originalPreferences, true);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -109,6 +114,42 @@ describe("outputHighlightSpans", () => {
 });
 
 describe("registerOutputHighlight with real xterm", () => {
+  it("removes decorations while disabled and restores them on the same terminal when re-enabled", async () => {
+    const term = createTerminal();
+    const decorate = vi.spyOn(term, "registerDecoration");
+    const dispose = registerOutputHighlight(term);
+    await write(term, '{"state":"connected"}\r\n');
+    await flushFrame();
+    expect(decorate).toHaveBeenCalled();
+    expect(activeMarkers(term).length).toBeGreaterThan(0);
+    const initialCalls = decorate.mock.calls.length;
+
+    usePreferencesStore.setState({ terminalOutputHighlightEnabled: false });
+    await flushFrame();
+    expect(activeMarkers(term)).toHaveLength(0);
+    expect(decorate).toHaveBeenCalledTimes(initialCalls);
+
+    await write(term, '{"state":"disabled"}\r\n');
+    await flushFrame();
+    expect(decorate).toHaveBeenCalledTimes(initialCalls);
+    expect(activeMarkers(term)).toHaveLength(0);
+
+    usePreferencesStore.setState({ terminalOutputHighlightEnabled: true });
+    await flushFrame();
+    expect(decorate.mock.calls.length).toBeGreaterThan(initialCalls);
+    expect(activeMarkers(term).length).toBeGreaterThan(0);
+
+    dispose();
+    expect(frames.size).toBe(0);
+    const callsAtDispose = decorate.mock.calls.length;
+    usePreferencesStore.setState({ terminalOutputHighlightEnabled: false });
+    expect(frames.size).toBe(0);
+    await write(term, '{"state":"after dispose"}\r\n');
+    await flushFrame();
+    expect(frames.size).toBe(0);
+    expect(decorate).toHaveBeenCalledTimes(callsAtDispose);
+  });
+
   it("decorates output without changing ANSI cells, selection, or copied terminal text", async () => {
     const term = createTerminal();
     const host = document.createElement("div");

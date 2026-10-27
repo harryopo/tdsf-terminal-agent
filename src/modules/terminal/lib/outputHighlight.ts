@@ -1,13 +1,15 @@
 import type { IDecoration, IMarker, Terminal } from "@xterm/xterm";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { Kind, OutputSpan } from "./outputSyntaxHighlight";
 
-/** Always enabled, viewport bounded, and never mutates PTY bytes or buffer cells. */
+/** Viewport bounded; never mutates PTY bytes, ANSI colors, or buffer cells. */
 export function registerOutputHighlight(term: Terminal): () => void {
   const entries = new Map<number, { key: string; marker: IMarker; decorations: IDecoration[] }>();
   let cache = new Map<string, OutputSpan[]>();
   let classify: ((text: string) => OutputSpan[]) | null = null;
   let raf: number | null = null;
   let disposed = false;
+  let enabled = usePreferencesStore.getState().terminalOutputHighlightEnabled;
   const remove = (index: number) => {
     const entry = entries.get(index);
     if (!entry) return;
@@ -19,8 +21,9 @@ export function registerOutputHighlight(term: Terminal): () => void {
     raf = null;
     if (disposed) return;
     const buffer = term.buffer.active;
-    if (buffer.type !== "normal") {
+    if (!enabled || buffer.type !== "normal") {
       [...entries.keys()].forEach(remove);
+      cache.clear();
       return;
     }
     const first = buffer.viewportY;
@@ -71,6 +74,11 @@ export function registerOutputHighlight(term: Terminal): () => void {
     cache = nextCache;
   };
   const schedule = () => { if (!disposed && raf === null) raf = requestAnimationFrame(refresh); };
+  const unsubscribe = usePreferencesStore.subscribe((state) => {
+    if (state.terminalOutputHighlightEnabled === enabled) return;
+    enabled = state.terminalOutputHighlightEnabled;
+    schedule();
+  });
   const listeners = [term.onWriteParsed(schedule), term.onScroll(schedule), term.onRender(schedule), term.onResize(schedule)];
   void import("./outputSyntaxHighlight").then((module) => {
     if (disposed) return;
@@ -81,6 +89,7 @@ export function registerOutputHighlight(term: Terminal): () => void {
   schedule();
   return () => {
     disposed = true;
+    unsubscribe();
     if (raf !== null) cancelAnimationFrame(raf);
     listeners.forEach((listener) => listener.dispose());
     [...entries.keys()].forEach(remove);

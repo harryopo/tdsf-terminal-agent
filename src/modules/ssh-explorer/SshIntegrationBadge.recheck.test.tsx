@@ -37,7 +37,7 @@ function deferred<T>() {
 
 function openBadge() {
   render(<SshIntegrationBadge leafId={4} sessionId="session-a" active />);
-  fireEvent.click(screen.getByRole("button", { name: "终端集成" }));
+  fireEvent.click(screen.getByRole("button", { name: "恢复目录跟随" }));
 }
 function publish(context: typeof seam.context) {
   seam.context = context;
@@ -58,7 +58,7 @@ describe("SshIntegrationBadge manual metadata recheck", () => {
     let finishRefresh!: (context: typeof contextA | null) => void;
     seam.refresh.mockReturnValue(new Promise((resolve) => { finishRefresh = resolve; }));
     openBadge();
-    expect(screen.getByText(/尚未/)).toBeTruthy();
+    expect(screen.getByText("尚未获取有效连接信息")).toBeTruthy();
     const refresh = screen.getByRole("button", { name: "重新检测连接信息" });
     fireEvent.click(refresh);
     expect(seam.refresh).toHaveBeenCalledWith(4);
@@ -66,12 +66,10 @@ describe("SshIntegrationBadge manual metadata recheck", () => {
     publish(contextA);
     await act(async () => { finishRefresh(contextA); });
     expect(screen.queryByText(contextA.bashHooksPath!)).toBeNull();
-    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
-    const restore = screen.getByRole("button", { name: "恢复当前终端集成" }) as HTMLButtonElement;
-    expect(restore.disabled).toBe(true);
-    fireEvent.click(checkbox);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    const restore = screen.getByRole("button", { name: "已登录，恢复目录跟随" }) as HTMLButtonElement;
     expect(restore.disabled).toBe(false);
+    expect(seam.restore).not.toHaveBeenCalled();
   });
 
   it("allows one check at a time and permits another after the four-second wait expires", async () => {
@@ -118,7 +116,7 @@ describe("SshIntegrationBadge manual metadata recheck", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新检测连接信息" }));
     fireEvent.keyDown(document, { key: "Escape" });
     await act(async () => { await Promise.resolve(); });
-    fireEvent.click(screen.getByRole("button", { name: "终端集成" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复目录跟随" }));
     await act(async () => { oldCheck.resolve(contextA); await oldCheck.promise; await Promise.resolve(); });
 
     expect(screen.getByText("尚未获取有效连接信息")).toBeTruthy();
@@ -137,11 +135,11 @@ describe("SshIntegrationBadge manual metadata recheck", () => {
     };
     useSshStore.setState({ sessions: [connected, otherSession], activeSessionId: "session-a" });
     const view = render(<SshIntegrationBadge leafId={4} sessionId="session-a" active />);
-    fireEvent.click(screen.getByRole("button", { name: "终端集成" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复目录跟随" }));
     fireEvent.click(screen.getByRole("button", { name: "重新检测连接信息" }));
 
     view.rerender(<SshIntegrationBadge leafId={5} sessionId="session-b" active />);
-    fireEvent.click(screen.getByRole("button", { name: "终端集成" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复目录跟随" }));
     fireEvent.click(screen.getByRole("button", { name: "重新检测连接信息" }));
     expect(seam.refresh).toHaveBeenNthCalledWith(1, 4);
     expect(seam.refresh).toHaveBeenNthCalledWith(2, 5);
@@ -155,9 +153,8 @@ describe("SshIntegrationBadge manual metadata recheck", () => {
     publish({ connectionId: "e".repeat(32), bashHooksPath: null });
     openBadge();
     expect(screen.getByText("当前连接不提供 Bash 集成文件")).toBeTruthy();
-    const checkbox = screen.getByRole("checkbox", { name: /我已完成登录/ }) as HTMLInputElement;
-    fireEvent.click(checkbox);
-    expect((screen.getByRole("button", { name: "恢复当前终端集成" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect((screen.getByRole("button", { name: "已登录，恢复目录跟随" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("does not display the raw error detail when a metadata check is rejected", async () => {
@@ -174,11 +171,10 @@ describe("SshIntegrationBadge manual metadata recheck", () => {
     let finish!: (value: typeof receiptA) => void;
     seam.restore.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     openBadge();
-    fireEvent.click(screen.getByRole("checkbox", { name: /我已完成登录/ }));
-    fireEvent.click(screen.getByRole("button", { name: "恢复当前终端集成" }));
+    fireEvent.click(screen.getByRole("button", { name: "已登录，恢复目录跟随" }));
     publish(contextB);
 
-    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByRole("checkbox")).toBeNull();
     await act(async () => { finish(receiptA); await Promise.resolve(); });
     expect(screen.queryByText(/最近确认的 shell 用户/)).toBeNull();
     expect(seam.restore).toHaveBeenCalledWith(4, contextA.connectionId, expect.any(AbortSignal));

@@ -29,6 +29,7 @@ import { ModelsSection } from "./sections/ModelsSection";
 import { RuntimeLogsSection } from "./sections/RuntimeLogsSection";
 import { ShortcutsSection } from "./sections/ShortcutsSection";
 import { ThemesSection } from "./sections/ThemesSection";
+import { UtilitiesSection } from "./sections/UtilitiesSection";
 
 const TABS: {
   id: SettingsTab;
@@ -43,6 +44,13 @@ const TABS: {
     label: "通用",
     icon: Settings01Icon,
     component: GeneralSection,
+  },
+  {
+    id: "utilities",
+    group: "工作台",
+    label: "实用功能",
+    icon: TerminalIcon,
+    component: UtilitiesSection,
   },
   {
     id: "editor",

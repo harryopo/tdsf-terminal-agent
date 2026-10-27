@@ -13,8 +13,11 @@ vi.mock("@/lib/useZoom", () => ({ useZoom: () => undefined }));
 vi.mock("@/lib/tauriRuntime", () => ({ isTauriRuntime: () => false }));
 vi.mock("@/modules/settings/preferences", () => ({
   usePreferencesStore: (
-    select: (s: { init: () => Promise<void> }) => unknown,
-  ) => select({ init: async () => undefined }),
+    select: (s: {
+      init: () => Promise<void>;
+      terminalOutputHighlightEnabled: boolean;
+    }) => unknown,
+  ) => select({ init: async () => undefined, terminalOutputHighlightEnabled: true }),
 }));
 vi.mock("./sections/GeneralSection", () => ({
   GeneralSection: () => <h1>通用内容</h1>,
@@ -57,6 +60,7 @@ describe("settings navigation", () => {
     ["prediction", "终端预测"],
     ["history", "对话历史"],
     ["logs", "运行日志"],
+    ["utilities", "实用功能"],
     ["ai", "AI 模型"],
     ["connections", "AI 模型"],
     ["not-a-tab", "通用"],
@@ -66,7 +70,7 @@ describe("settings navigation", () => {
     expect(
       screen.getByRole("tab", { name: label }).getAttribute("aria-selected"),
     ).toBe("true");
-    expect(screen.getAllByRole("tab")).toHaveLength(10);
+    expect(screen.getAllByRole("tab")).toHaveLength(11);
   });
 
   it("groups settings and keeps a labeled, keyboard-navigable panel", async () => {

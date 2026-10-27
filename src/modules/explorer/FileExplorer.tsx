@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { GitStatusSnapshot } from "@/modules/ai/lib/native";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { setShowHidden } from "@/modules/settings/store";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
 import type { TerminalPathDropTarget } from "@/modules/terminal";
 import type { FileSource } from "@/modules/workspace/fileSource";
@@ -225,6 +226,7 @@ export const FileExplorer = memo(
       source: fsSource,
     });
     const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
+    const showHidden = usePreferencesStore((s) => s.showHidden);
     const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
     const rowHeight = Math.max(ROW_HEIGHT, Math.ceil(ROW_HEIGHT / zoomLevel));
     const { lookup: lookupGitStatus } = useGitStatus(
@@ -235,6 +237,15 @@ export const FileExplorer = memo(
     const [selectedPath, setSelectedPath] = useState<string | null>(null);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [isSearchActive, setIsSearchActive] = useState(false);
+    const [hiddenFilesError, setHiddenFilesError] = useState<string | null>(null);
+    const showHiddenFiles = async () => {
+      setHiddenFilesError(null);
+      try {
+        await setShowHidden(true);
+      } catch {
+        setHiddenFilesError("无法保存隐藏文件设置，请重试。");
+      }
+    };
     const searchRef = useRef<ExplorerSearchHandle>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -636,6 +647,9 @@ export const FileExplorer = memo(
         </div>
 
         {fsSource?.kind === "sftp" ? <SshFileIdentity sessionId={fsSource.sessionId} /> : null}
+        {hiddenFilesError ? (
+          <div role="alert" className="px-3 py-2 text-xs text-destructive">{hiddenFilesError}</div>
+        ) : null}
 
         {!isRemote ? (
           <ExplorerSearch
@@ -717,7 +731,7 @@ export const FileExplorer = memo(
                 ) : null}
                 {root?.status === "loading" && (
                   <div className="px-3 py-2 text-[11px] text-muted-foreground">
-                    Loading…
+                    正在加载目录…
                   </div>
                 )}
                 {root?.status === "error" && (
@@ -756,6 +770,21 @@ export const FileExplorer = memo(
                         </div>
                       );
                     })}
+                  </div>
+                ) : null}
+                {root?.status === "loaded" && root.entries.length === 0 && !pendingAtRoot ? (
+                  <div role="status" className="flex flex-col items-start gap-2 px-4 py-6 text-xs leading-relaxed text-muted-foreground">
+                    <span className="font-medium text-foreground/80">
+                      {showHidden ? "此目录为空" : "当前目录没有可见文件"}
+                    </span>
+                    {!showHidden ? (
+                      <>
+                        <span>隐藏文件可能被过滤，可开启显示后查看。</span>
+                        <Button variant="outline" size="sm" onClick={() => void showHiddenFiles()}>
+                          显示隐藏文件
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

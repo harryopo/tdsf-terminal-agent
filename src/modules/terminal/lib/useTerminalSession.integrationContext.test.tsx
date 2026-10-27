@@ -85,16 +85,15 @@ describe("terminal session SSH integration context", () => {
       handle: { id: 31, write: vi.fn(), resize: vi.fn(), close: vi.fn() },
     }] });
     render(<SshIntegrationBadge leafId={leafId} sessionId="session-a" active />);
-    fireEvent.click(screen.getByRole("button", { name: "终端集成" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复目录跟随" }));
     let finishRefresh!: () => void;
     fixture.refreshIntegrationContext.mockImplementationOnce(() => new Promise<void>((resolve) => { finishRefresh = resolve; }));
     fireEvent.click(screen.getByRole("button", { name: "重新检测连接信息" }));
     act(() => fixture.publish({ connectionId: "d".repeat(32), bashHooksPath: "/tmp/live-hooks" }));
     expect(screen.queryByText("/tmp/live-hooks")).toBeNull();
     await act(async () => { finishRefresh(); });
-    const checkbox = screen.getByRole("checkbox", { name: /我已完成登录/ }) as HTMLInputElement;
-    fireEvent.click(checkbox);
-    expect((screen.getByRole("button", { name: "恢复当前终端集成" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect((screen.getByRole("button", { name: "已登录，恢复目录跟随" }) as HTMLButtonElement).disabled).toBe(false);
 
     unsubscribe();
     listener.mockClear();

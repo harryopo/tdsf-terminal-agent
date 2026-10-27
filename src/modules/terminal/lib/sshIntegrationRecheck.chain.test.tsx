@@ -68,7 +68,7 @@ async function mounted(sessionId = "session-a") {
   await flush();
   return view;
 }
-function openBadge() { fireEvent.click(screen.getByRole("button", { name: "终端集成" })); }
+function openBadge() { fireEvent.click(screen.getByRole("button", { name: "恢复目录跟随" })); }
 
 beforeEach(() => Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } }));
 afterEach(() => {
@@ -101,12 +101,10 @@ describe("SSH integration recheck across the real leaf, transport, session, stor
     const context = detail(31).terminalContext;
     expect(getSshIntegrationContext(leafId)).toEqual(context);
     expect(screen.getByText("连接信息已确认")).toBeTruthy();
-    const checkbox = screen.getByRole("checkbox", { name: /我已完成登录/ }) as HTMLInputElement;
-    const restore = screen.getByRole("button", { name: "恢复当前终端集成" }) as HTMLButtonElement;
-    expect(checkbox.checked).toBe(false);
-    expect(restore.disabled).toBe(true);
-    fireEvent.click(checkbox);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    const restore = screen.getByRole("button", { name: "已登录，恢复目录跟随" }) as HTMLButtonElement;
     expect(restore.disabled).toBe(false);
+    expect(screen.queryByText("等待终端回执…")).toBeNull();
     expect(update).toHaveBeenCalled();
     expect(handle.write).not.toHaveBeenCalled();
     expect(handle.close).not.toHaveBeenCalled();

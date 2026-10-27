@@ -98,7 +98,7 @@ function buttons() {
     </div>,
   );
   return {
-    integration: screen.getByRole("button", { name: "终端集成" }),
+    integration: screen.getByRole("button", { name: "恢复目录跟随" }),
     carapace: screen.getByTitle("启用远端动态补全"),
   };
 }
@@ -152,15 +152,15 @@ describe("SSH badge zoom hit targets", () => {
     const { rerender } = render(
       <SshIntegrationBadge leafId={4} sessionId={sessionId} active={false} />,
     );
-    expect(screen.queryByRole("button", { name: "终端集成" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "恢复目录跟随" })).toBeNull();
     act(() =>
       useSshStore.setState({ sessions: [{ ...session, state: "closed" }] }),
     );
     rerender(<SshIntegrationBadge leafId={4} sessionId={sessionId} active />);
-    expect(screen.queryByRole("button", { name: "终端集成" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "恢复目录跟随" })).toBeNull();
     act(() => useSshStore.setState({ sessions: [session] }));
     rerender(<SshIntegrationBadge leafId={4} sessionId={sessionId} active />);
-    expect(screen.getByRole("button", { name: "终端集成" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "恢复目录跟随" })).toBeTruthy();
 
     const { unmount } = render(<SshCarapaceBadge sessionId={sessionId} />);
     expect(screen.getByTitle("启用远端动态补全")).toBeTruthy();
@@ -191,11 +191,9 @@ describe("SSH badge zoom hit targets", () => {
     expect(
       screen.getByText(/文件与后台工具仍使用原 SSH 认证身份/),
     ).toBeTruthy();
-    expect(
-      screen
-        .getByRole("button", { name: "恢复当前终端集成" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    const restore = screen.getByRole("button", { name: "已登录，恢复目录跟随" });
+    expect(restore.hasAttribute("disabled")).toBe(false);
     expect(seams.getContext).toHaveBeenCalledWith(4);
     expect(seams.restore).not.toHaveBeenCalled();
 
