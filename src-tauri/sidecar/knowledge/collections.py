@@ -85,6 +85,8 @@ def list_documents(
             full_doc = get_document(str(doc["url"]), library)
             if full_doc:
                 doc["title0"] = full_doc["title"]
+                if full_doc.get("processing"):
+                    doc["processing"] = full_doc["processing"]
         title = titles.get(doc["url"])
         doc.update(
             library=library, title_zh=str(title["zh"] or "") if title else "",
@@ -114,6 +116,10 @@ def get_document(url: str, library: str) -> dict[str, Any] | None:
                 "SELECT MAX(LENGTH(content) = 12000), SUM(CASE WHEN TRIM(COALESCE(content_zh, '')) != '' THEN 1 ELSE 0 END) "
                 "FROM entries WHERE url = ?", (url,),
             ).fetchone()
+            if library == "personal" and conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_provenance'").fetchone():
+                provenance = conn.execute("SELECT processing FROM document_provenance WHERE url = ?", (url,)).fetchone()
+                if provenance:
+                    doc["processing"] = str(provenance[0])
         doc["possibly_truncated"] = library == "reference" and bool(stats[0])
         doc["translated_chunks"] = int(stats[1] or 0)
         doc["translation_complete"] = doc["translated_chunks"] == doc["chunks"]

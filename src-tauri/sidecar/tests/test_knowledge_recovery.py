@@ -71,6 +71,17 @@ def test_snapshot_binding_ignores_subsequent_source_edits(recovery_setup):
     assert source.get("old-0")["content"] == "预览后被改动"
 
 
+def test_recovered_provenance_is_projected_into_document_views(recovery_setup):
+    recovery, source, _, _ = recovery_setup
+    from knowledge.collections import get_document, list_documents
+
+    add(source)
+    preview = recovery.preview_recovery(str(source.db_path))
+    recovery.apply_recovery(preview["token"], ["old.md"])
+    assert get_document("old.md", "personal")["processing"] == "recovered"
+    assert list_documents("personal")["documents"][0]["processing"] == "recovered"
+
+
 def test_recovery_is_idempotent_and_conflicting_document_is_not_overwritten(recovery_setup):
     recovery, source, target, _ = recovery_setup
     add(source)
