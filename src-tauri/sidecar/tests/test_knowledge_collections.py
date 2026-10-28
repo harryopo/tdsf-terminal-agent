@@ -1,0 +1,192 @@
+"""Knowledge views preserve storage provenance without migrating user databases."""
+
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from knowledge.fts5 import KnowledgeEntry
+from knowledge.rag import RagIndex
+
+
+def entry(entry_id, *, url="guide.md", source="bash-docs", content="服务管理 systemctl", title="服务管理", category="sys-admin"):
+    return KnowledgeEntry(id=entry_id, url=url, source=source, content=content, title=title, category=category)
+
+
+@pytest.fixture
+def libraries(tmp_path, monkeypatch):
+    import knowledge.bundled as bundled
+    import knowledge.rag as rag
+
+    monkeypatch.setenv("TDSF_DATA_DIR", str(tmp_path / "user"))
+    monkeypatch.setattr(rag, "_load_embed_model", lambda: None)
+    bundle_path = tmp_path / "bundle.db"
+    bundle = RagIndex(bundle_path)
+    bundle.add(entry("bundle-0", content="内置参考 systemctl"))
+    bundle.close()
+    monkeypatch.setattr(bundled, "bundled_slim_db_path", lambda: bundle_path)
+    full = rag.reset_global_rag(tmp_path / "user" / "rag.db")
+    slim = rag.reset_slim_rag(tmp_path / "user" / "rag_slim.db")
+    from knowledge import collections
+
+    monkeypatch.setattr(collections, "_indexes", {})
+    yield collections, full, slim, bundle_path
+    for index in collections._indexes.values():
+        index.close()
+    full.close()
+    slim.close()
+    rag._global_rag = None
+    rag._global_slim_rag = None
+
+
+def test_readonly_index_does_not_migrate_or_write(tmp_path, monkeypatch):
+    import knowledge.rag as rag
+
+    monkeypatch.setattr(rag, "_load_embed_model", lambda: None)
+    path = tmp_path / "bundle.db"
+    index = RagIndex(path)
+    index.add(entry("bundle-0"))
+    index.close()
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    readonly = RagIndex(path, read_only=True)
+    try:
+        assert readonly.count() == 1
+        assert readonly.hybrid_search("systemctl")[0]["id"] == "bundle-0"
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            readonly.add(entry("never-written", content="unique new content"))
+    finally:
+        readonly.close()
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+    missing = tmp_path / "not-created" / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        RagIndex(missing, read_only=True)
+    assert not missing.parent.exists()
+
+
+def test_empty_legacy_slim_does_not_hide_builtin(libraries):
+    collections, full, slim, bundle = libraries
+    full.add(entry("raw-0", content="Raw cache systemctl"))
+    assert slim.count() == 0
+    assert collections.get_library("builtin").count() == 1
+    assert collections.get_library("personal").count() == 0
+    assert collections.get_library("reference") is full
+    assert collections.get_library("full") is full
+    assert collections.get_library("slim") is slim
+    assert collections.get_library("builtin").db_path == bundle
+
+
+def test_document_pagination_is_by_identity_not_chunk_or_basename(libraries):
+    collections, _, _, _ = libraries
+    personal = collections.get_library("personal")
+    personal.add(entry("a-0", url="v1/index.html", title="服务 · 开始"))
+    personal.add(entry("a-1", url="v1/index.html", title="服务 · 验证", content="验证服务"))
+    personal.add(entry("b-0", url="v2/index.html", title="第二版", content="另一版本"))
+    personal.upsert_titles_zh({"v1/index.html": "服务管理精华"}, {"v1/index.html": "已有中文摘要"})
+    page = collections.list_documents("personal", limit=1, offset=0)
+    assert page["total"] == 2
+    assert len(page["documents"]) == 1
+    first = page["documents"][0]
+    assert first["url"] == "v1/index.html"
+    assert first["title_zh"] == "服务管理精华"
+    assert first["summary_zh"] == "已有中文摘要"
+    assert first["chunks"] == 2
+    assert first["library"] == "personal"
+    assert sum(group["files"] for group in page["groups"]) == 2
+    next_page = collections.list_documents("personal", limit=1, offset=1)
+    assert next_page["documents"][0]["url"] == "v2/index.html"
+    assert collections.list_documents("personal", offset=2)["documents"] == []
+    assert collections.list_documents("personal", category="services")["total"] == 0
+
+
+def test_raw_reference_never_exposes_private_memory(libraries):
+    collections, full, _, _ = libraries
+    full.add(entry("raw-0", content="raw systemctl"))
+    full.add(entry("private-0", source="session-memory", url="memory://private", content="private systemctl"))
+    page = collections.list_documents("reference")
+    assert page["total"] == 1
+    assert page["documents"][0]["id"] == "raw-0"
+    assert collections.get_document("memory://private", "reference") is None
+    assert collections.search_collection("systemctl", "reference", 10)[0]["id"] == "raw-0"
+    assert all(row["id"] != "private-0" for row in collections.search_collection("systemctl", "reference", 10))
+
+
+def test_curated_search_keeps_origin_and_same_named_versions(libraries):
+    collections, full, slim, _ = libraries
+    personal = collections.get_library("personal")
+    personal.add(entry("same-0", content="个人精华 systemctl", url="v2/guide.md"))
+    slim.add(entry("same-0", content="旧中文 systemctl", url="v1/guide.md"))
+    full.add(entry("secret", source="session-memory", content="secret systemctl"))
+    rows = collections.search_curated("systemctl", 10)
+    assert {row["library"] for row in rows} == {"builtin", "personal", "slim"}
+    assert {row["url"] for row in rows} == {"guide.md", "v1/guide.md", "v2/guide.md"}
+    assert not any(row["id"] == "secret" for row in rows)
+    for row in rows:
+        assert row["content"] in collections.get_document(row["url"], row["library"])["content"]
+
+
+def test_rpc_new_views_and_legacy_defaults_are_separate(libraries):
+    _, full, slim, _ = libraries
+    from knowledge.rpc import register_methods
+
+    class Dispatcher:
+        def __init__(self):
+            self.methods = {}
+
+        def register(self, name, fn):
+            self.methods[name] = fn
+
+    full.add(entry("legacy-full", content="Full systemctl"))
+    slim.add(entry("legacy-slim", content="Slim systemctl"))
+    dispatcher = Dispatcher()
+    register_methods(dispatcher)
+    call = dispatcher.methods
+    assert call["knowledge.list"]()["results"][0]["id"] == "legacy-full"
+    assert call["knowledge.get_doc"]("guide.md")["content"] == "Slim systemctl"
+    assert call["knowledge.search"]("systemctl")["results"][0]["id"] == "legacy-slim"
+    assert call["knowledge.documents"](library="builtin")["documents"][0]["id"] == "bundle-0"
+    assert call["knowledge.search"]("systemctl", library="builtin")["results"][0]["id"] == "bundle-0"
+    assert call["knowledge.get_doc"]("guide.md", library="builtin")["content"] == "内置参考 systemctl"
+    assert call["knowledge.get"]("bundle-0", library="builtin")["entry"]["content"] == "内置参考 systemctl"
+
+
+def test_agent_reference_binds_same_url_to_personal_library_without_new_schema(libraries):
+    collections, _, slim, _ = libraries
+    from strands.tools.registry import ToolRegistry
+    from strands_backend.tools.knowledge_search import make_knowledge_search_tool
+    from strands_backend.tools.knowledge_get_doc import make_knowledge_get_doc_tool
+
+    personal = collections.get_library("personal")
+    personal.add(entry("personal-0", content="个人独有测试词", url="same.md"))
+    slim.add(entry("legacy-0", content="别的旧版本", url="same.md"))
+    search = make_knowledge_search_tool(None)
+    read = make_knowledge_get_doc_tool(None)
+    registry = ToolRegistry()
+    registry.process_tools([search, read])
+    assert set(registry.registry["knowledge_search"].tool_spec["inputSchema"]["json"]["properties"]) == {"query", "limit"}
+    assert set(registry.registry["knowledge_get_doc"].tool_spec["inputSchema"]["json"]["properties"]) == {"url"}
+    result = search(query="个人独有测试词")
+    hit = result["results"][0]
+    assert hit["library"] == "personal" and hit["source_url"] == "same.md"
+    assert hit["url"].startswith("tdsf-kb://personal/")
+    doc = read(url=hit["url"])
+    assert doc["content"] == "个人独有测试词"
+    assert doc["url"] == hit["url"]
+    assert doc["source_url"] == "same.md"
+
+
+def test_private_hits_cannot_exhaust_reference_candidates(libraries):
+    collections, full, _, _ = libraries
+    full.add(entry("raw-0", title="Reference guide", content="context " * 100 + "needle"))
+    for number in range(20):
+        full.add(entry(f"private-{number}", source="session-memory", title="needle", content=f"needle {number}", url=f"memory://{number}"), dedupe=False)
+    unfiltered = full.hybrid_search("needle", top_k=40)
+    assert len(unfiltered) == 20
+    assert all(row["source"] == "session-memory" for row in unfiltered)
+    rows = collections.search_collection("needle", "reference", 5)
+    assert [row["id"] for row in rows] == ["raw-0"]

@@ -5,8 +5,7 @@ strands_backend/tools/knowledge_get_doc.py — 知识库整篇文档读取工具
 与 knowledge_search 配套：检索命中后，按 url 读取该文档全部块按序拼接的
 完整 markdown（知识浏览器「完整文档」同数据源）。
 
-- 读精简库（rag_slim.db，中文提炼版）——双库方案 TDSF 2026-08-31，
-  与 knowledge_search 同源（knowledge.rag.get_slim_rag().get_doc）
+- 旧 url 默认读精简库；本地引用绑定内置/个人来源，不抓取外部网页。
 - fail-closed：url 缺失 → error；查无文档 → not_found
 - 内容上限 30000 字符截断（防单篇超长文档撑爆 LLM 上下文）
 
@@ -49,8 +48,16 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
     try:
         from knowledge.rag import get_slim_rag
 
-        # TDSF 2026-08-31: 与 knowledge_search 同源读精简库（中文提炼版）
-        doc = get_slim_rag().get_doc(url)
+        if url.startswith("tdsf-kb:"):
+            from urllib.parse import unquote, urlsplit
+            from knowledge.collections import get_document
+
+            reference = urlsplit(url)
+            if reference.scheme != "tdsf-kb" or reference.netloc not in {"builtin", "personal"} or reference.query or reference.fragment:
+                raise ValueError("知识引用无效，请重新检索")
+            doc = get_document(unquote(reference.path.removeprefix("/")), reference.netloc)
+        else:
+            doc = get_slim_rag().get_doc(url)
     except Exception as e:
         logger.exception(f"knowledge_get_doc failed: url={url[:80]}, error={e}")
         result = {"status": "error", "url": url, "message": f"知识库读取异常: {e}"}
@@ -76,6 +83,7 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
         "content": content,
         "chunks": int(doc.get("chunks") or 0),
         "truncated": truncated,
+        "source_url": str(doc.get("url") or url),
     }
     return result
 
@@ -86,7 +94,7 @@ def make_knowledge_get_doc_tool(ctx: Any):
     def knowledge_get_doc(url: str, *, sdk_tool_context: Any = None) -> dict:
         """按 url 读取知识库完整文档（全部章节按序拼接的 markdown 全文）。
 
-        先用 knowledge_search 检索，命中结果的 url 字段传给本工具读取
+        先用 knowledge_search 检索，将命中结果的 url 字段原样传给本工具读取
         该文档完整内容（适用于需要系统讲解某主题/引用完整配置示例时）。
 
         Args:

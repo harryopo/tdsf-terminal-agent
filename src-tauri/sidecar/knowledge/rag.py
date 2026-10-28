@@ -157,7 +157,7 @@ _RESULT_TOP = 8
 class RagIndex:
     """统一混合检索索引（sqlite-vec + FTS5 + RRF）"""
 
-    def __init__(self, db_path: Path | str | None = None) -> None:
+    def __init__(self, db_path: Path | str | None = None, *, read_only: bool = False) -> None:
         if db_path is None:
             db_path = Path(
                 os.environ.get(
@@ -168,7 +168,16 @@ class RagIndex:
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
         self._vec_available = False
-        self._init_db()
+        if read_only:
+            # 随包资料不迁移、不建表；不存在时也不能创建一个空库遮住错误。
+            self._conn = sqlite3.connect(
+                self.db_path.resolve().as_uri() + "?mode=ro", uri=True,
+                check_same_thread=False,
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA query_only=ON")
+        else:
+            self._init_db()
 
     # ------------------------------------------------------------------
     # 初始化
@@ -323,72 +332,43 @@ class RagIndex:
                         f"add skipped (duplicate of {dup['id']}): {entry.title[:40]}"
                     )
                     return ""
-            rowid = _rowid_for(entry.id)
-            tags_json = _json_dumps(entry.tags)
-            # 三表统一用确定性 rowid（md5(entry_id)），保证 hybrid_search
-            # 回查元数据时 rowid 一一对应（教训：普通表自增 rowid 与
-            # FTS5/vec0 的指定 rowid 不一致会导致检索回查为空）
-            conn.execute(
-                "INSERT OR REPLACE INTO entries "
-                "(rowid, id, source, title, content, url, tags, created_at, "
-                "category, content_zh) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    rowid,
-                    entry.id,
-                    entry.source,
-                    entry.title,
-                    entry.content,
-                    entry.url,
-                    tags_json,
-                    entry.created_at,
-                    entry.category,
-                    entry.content_zh,
-                ),
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO fts_entries "
-                "(rowid, title, content, content_tokens, content_zh_tokens) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    rowid,
-                    entry.title,
-                    entry.content,
-                    tokenize(f"{entry.title} {entry.content}"),
-                    # 译文进 FTS：中文 query 直接命中译文（空译文=空 token）
-                    tokenize(entry.content_zh) if entry.content_zh else "",
-                ),
-            )
-            if self._vec_available:
-                # 嵌入缓存：同 content hash 直接复用向量（启动幂等重建零推理）
-                chash = _content_hash(f"{entry.title}\n{entry.content}")
-                cached = conn.execute(
-                    "SELECT embedding FROM embed_cache WHERE content_hash = ?",
-                    (chash,),
-                ).fetchone()
-                if cached is not None:
-                    vec_bytes = cached["embedding"]
-                else:
-                    vec = embed_text(f"{entry.title}\n{entry.content}")
-                    if vec is None:
-                        vec = hash_embedding(f"{entry.title}\n{entry.content}")
-                    vec_bytes = _pack_vec(vec)
-                    conn.execute(
-                        "INSERT OR REPLACE INTO embed_cache (content_hash, embedding) "
-                        "VALUES (?, ?)",
-                        (chash, vec_bytes),
-                    )
-                # vec0 虚拟表不支持 INSERT OR REPLACE（无 conflict 语义），
-                # 幂等覆盖须 DELETE + INSERT（同 rowid 双写/重建安全）
-                conn.execute(
-                    "DELETE FROM vec_entries WHERE rowid = ?", (rowid,)
-                )
-                conn.execute(
-                    "INSERT INTO vec_entries (rowid, embedding) VALUES (?, ?)",
-                    (rowid, vec_bytes),
-                )
+            self._write_entry(entry)
             conn.commit()
         return entry.id
+
+    def _write_entry(self, entry: KnowledgeEntry) -> None:
+        """Write the existing three-index representation; caller owns lock/transaction."""
+        conn = self._conn
+        assert conn is not None
+        rowid = _rowid_for(entry.id)
+        # All indexes must retain the same deterministic rowid.
+        conn.execute(
+            "INSERT OR REPLACE INTO entries "
+            "(rowid, id, source, title, content, url, tags, created_at, category, content_zh) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rowid, entry.id, entry.source, entry.title, entry.content, entry.url,
+             _json_dumps(entry.tags), entry.created_at, entry.category, entry.content_zh),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO fts_entries "
+            "(rowid, title, content, content_tokens, content_zh_tokens) VALUES (?, ?, ?, ?, ?)",
+            (rowid, entry.title, entry.content, tokenize(f"{entry.title} {entry.content}"),
+             tokenize(entry.content_zh) if entry.content_zh else ""),
+        )
+        if self._vec_available:
+            chash = _content_hash(f"{entry.title}\n{entry.content}")
+            cached = conn.execute("SELECT embedding FROM embed_cache WHERE content_hash = ?", (chash,)).fetchone()
+            if cached is not None:
+                vec_bytes = cached["embedding"]
+            else:
+                vec = embed_text(f"{entry.title}\n{entry.content}")
+                if vec is None:
+                    vec = hash_embedding(f"{entry.title}\n{entry.content}")
+                vec_bytes = _pack_vec(vec)
+                conn.execute("INSERT OR REPLACE INTO embed_cache (content_hash, embedding) VALUES (?, ?)", (chash, vec_bytes))
+            # vec0 has no INSERT OR REPLACE conflict semantics.
+            conn.execute("DELETE FROM vec_entries WHERE rowid = ?", (rowid,))
+            conn.execute("INSERT INTO vec_entries (rowid, embedding) VALUES (?, ?)", (rowid, vec_bytes))
 
     def delete(self, entry_id: str) -> bool:
         with self._lock:

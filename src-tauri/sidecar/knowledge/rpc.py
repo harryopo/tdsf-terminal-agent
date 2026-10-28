@@ -56,11 +56,9 @@ logger = logging.getLogger("sidecar.knowledge.rpc")
 
 def _library_rag(library: str):
     """浏览入口显式选择库；旧调用方保持各方法原有默认值。"""
-    if library == "slim":
-        return get_slim_rag()
-    if library == "full":
-        return get_global_rag()
-    raise ValueError("library must be 'slim' or 'full'")
+    from knowledge.collections import get_library
+
+    return get_library(library)
 
 
 # ============================================================================
@@ -144,6 +142,7 @@ def register_methods(dispatcher: Any) -> None:
         query: str,
         limit: int = 10,
         method: str = "hybrid",
+        library: str | None = None,
     ) -> dict[str, Any]:
         """检索知识库
 
@@ -159,7 +158,11 @@ def register_methods(dispatcher: Any) -> None:
             return {"results": [], "total": 0, "query": query, "method": method}
 
         method_lower = method.lower()
-        if method_lower == "fts5":
+        if library is not None:
+            from knowledge.collections import search_collection
+
+            results = search_collection(query, library, limit)
+        elif method_lower == "fts5":
             results = _search_fts5(query, limit=limit)
         elif method_lower == "vector":
             results = _search_vector(query, limit=limit)
@@ -230,6 +233,11 @@ def register_methods(dispatcher: Any) -> None:
         rag = _library_rag(library)
         try:
             entry = rag.get(id)
+            if library == "reference" and entry is not None:
+                from knowledge.collections import _reference_allowed
+
+                if not _reference_allowed(str(entry["source"])):
+                    entry = None
             if entry is None:
                 return {"ok": False, "error": f"entry not found: {id}"}
             return {"ok": True, "entry": entry}
@@ -248,6 +256,35 @@ def register_methods(dispatcher: Any) -> None:
             return {"count": 0, "error": str(e)}
 
     dispatcher.register("knowledge.search", _search)
+
+    def _documents(library: str = "builtin", limit: int = 30, offset: int = 0, category: str | None = None):
+        from knowledge.collections import list_documents
+
+        return list_documents(library, limit=limit, offset=offset, category=category)
+
+    dispatcher.register("knowledge.documents", _documents)
+
+    def _recovery_preview(source_path: str):
+        from knowledge.recovery import preview_recovery
+
+        if not isinstance(source_path, str):
+            raise ValueError("请选择知识库文件的绝对路径")
+        return preview_recovery(source_path)
+
+    def _recovery_apply(token: str, urls: list[str]):
+        from knowledge.recovery import apply_recovery
+
+        return apply_recovery(token, urls)
+
+    def _recovery_discard(token: str):
+        from knowledge.recovery import discard_recovery
+
+        discard_recovery(token)
+        return {"ok": True}
+
+    dispatcher.register("knowledge.recovery_preview", _recovery_preview)
+    dispatcher.register("knowledge.recovery_apply", _recovery_apply)
+    dispatcher.register("knowledge.recovery_discard", _recovery_discard)
     dispatcher.register("knowledge.add", _add)
     dispatcher.register("knowledge.rebuild", _rebuild)
     dispatcher.register("knowledge.get", _get)
@@ -283,6 +320,8 @@ def register_methods(dispatcher: Any) -> None:
     # P2-4: 浏览模式（打开即列出，不依赖搜索词）
     def _list(limit: int = 50, offset: int = 0, library: str = "full") -> dict[str, Any]:
         """同库分页与完整分类统计；省略 library 保留全量库默认。"""
+        if library == "reference":
+            raise ValueError("Use knowledge.documents for reference browsing")
         rag = _library_rag(library)
         limit = max(1, min(int(limit), 100))
         offset = max(0, int(offset))
@@ -296,6 +335,7 @@ def register_methods(dispatcher: Any) -> None:
     def _import_docs(
         files: list[dict[str, str]],
         source: str = "imported-docs",
+        library: str = "full",
     ) -> dict[str, Any]:
         """文档导入：前端读好的 {name, content} 列表分块入库
 
@@ -314,6 +354,12 @@ def register_methods(dispatcher: Any) -> None:
                 "rejected": [],
                 "error": "files must be a list of {name, content} objects",
             }
+        if library == "personal":
+            from knowledge.recovery import import_personal_docs
+
+            return import_personal_docs(files)
+        if library != "full":
+            raise ValueError("Documents can only be imported into personal or legacy full knowledge")
         return import_docs(files, source)
 
     def _add_case(title: str, content: str, tags: list[str] | None = None) -> dict[str, Any]:
@@ -357,6 +403,10 @@ def register_methods(dispatcher: Any) -> None:
         """
         rag = _library_rag(library)
         files = rag.list_files(source=(source or None), group=(group or None))
+        if library == "reference":
+            from knowledge.collections import get_document
+
+            files = [file for file in files if get_document(file["url"], library) is not None]
         return {"files": files, "total": len(files)}
 
     def _get_doc(url: str, library: str = "slim") -> dict[str, Any]:
@@ -370,10 +420,12 @@ def register_methods(dispatcher: Any) -> None:
              total_chars, title_zh, summary_zh}（中文字段来自 doc_titles_zh，
              无映射为空串）或 {ok: False, error}
         """
-        rag = _library_rag(library)
+        _library_rag(library)  # Validate even when url is empty, preserving the old contract.
         if not url or not str(url).strip():
             return {"ok": False, "error": "url is required"}
-        doc = rag.get_doc(str(url).strip())
+        from knowledge.collections import get_document
+
+        doc = get_document(str(url).strip(), library)
         if doc is None:
             return {"ok": False, "error": f"document not found: {url}"}
         return {"ok": True, **doc}
@@ -396,6 +448,10 @@ def register_methods(dispatcher: Any) -> None:
             {titles: [{url, zh}, ...], total}
         """
         titles = _library_rag(library).titles_zh(source=(source or None))
+        if library == "reference":
+            from knowledge.collections import get_document
+
+            titles = [title for title in titles if get_document(title["url"], library) is not None]
         return {"titles": titles, "total": len(titles)}
 
     dispatcher.register("knowledge.titles_zh", _titles_zh)
@@ -426,4 +482,4 @@ def register_methods(dispatcher: Any) -> None:
         }
 
     dispatcher.register("knowledge.search_slim", _search_slim)
-    logger.info("knowledge.* methods registered (15 methods, slim-first dual-db)")
+    logger.info("knowledge.* methods registered (explicit collections, legacy defaults preserved)")
