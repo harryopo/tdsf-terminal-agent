@@ -6,7 +6,22 @@
  * 缓存清理函数供测试用例隔离状态。
  */
 
-export type KnowledgeLibrary = "slim" | "full";
+export type KnowledgeLibrary = "slim" | "full" | "builtin" | "personal" | "reference";
+
+export interface KnowledgeDocument {
+  id: string;
+  url: string;
+  title0: string;
+  title_zh?: string;
+  summary_zh?: string;
+  source: string;
+  category: string;
+  chunks: number;
+  total_chars: number;
+  library: KnowledgeLibrary;
+  possibly_truncated?: boolean;
+  processing?: string;
+}
 
 export interface KnowledgeGroupSummary {
   category: string;
@@ -40,6 +55,12 @@ export interface KnowledgeDoc {
   source?: string;
   title?: string;
   content?: string;
+  content_zh?: string;
+  translation_complete?: boolean;
+  translated_chunks?: number;
+  possibly_truncated?: boolean;
+  processing?: string;
+  library?: KnowledgeLibrary;
   chunks?: number;
   total_chars?: number;
   /** 中文标题（doc_titles_zh 映射，无映射为空串，TDSF 2026-08-30） */
