@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from knowledge.rag import RagIndex, _escape_fts_query
 
 _indexes: dict[tuple[str, str], RagIndex] = {}
 _lock = threading.Lock()
+logger = logging.getLogger("sidecar.knowledge.collections")
 # Raw browsing is not an alternate route into private session/case records.
 _REFERENCE_SQL = "(source = 'archwiki' OR (source LIKE '%-docs' AND source != 'imported-docs'))"
 
@@ -151,8 +154,21 @@ def search_collection(query: str, library: str, limit: int = 10) -> list[dict[st
     return [{**row, "library": library} for row in rag.hybrid_search(query, top_k=limit)]
 
 
-def curated_candidates(query: str, limit: int) -> list[dict[str, Any]]:
-    return [row for library in ("personal", "slim", "builtin") for row in search_collection(query, library, limit)]
+def curated_candidates(
+    query: str, limit: int, *, unavailable_libraries: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    rows = []
+    for library in ("personal", "slim", "builtin"):
+        try:
+            rows.extend(search_collection(query, library, limit))
+        except (sqlite3.DatabaseError, OSError) as error:
+            # Legacy callers still fail as before; opt-in callers must disclose
+            # missing sources. Programming errors are never partial retrievals.
+            if unavailable_libraries is None or isinstance(error, sqlite3.ProgrammingError):
+                raise
+            logger.warning("Knowledge source unavailable: %s (%s)", library, type(error).__name__)
+            unavailable_libraries.append(library)
+    return rows
 
 
 def merge_curated(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

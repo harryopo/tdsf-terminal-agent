@@ -190,3 +190,93 @@ def test_private_hits_cannot_exhaust_reference_candidates(libraries):
     assert all(row["source"] == "session-memory" for row in unfiltered)
     rows = collections.search_collection("needle", "reference", 5)
     assert [row["id"] for row in rows] == ["raw-0"]
+
+
+def unavailable_library(monkeypatch, collections, path, library):
+    original = collections.get_library
+
+    def get_library(name):
+        if library is None or name == library:
+            return RagIndex(path, read_only=True)
+        return original(name)
+
+    monkeypatch.setattr(collections, "get_library", get_library)
+
+
+@pytest.mark.parametrize("library", ["personal", "slim", "builtin"])
+def test_degradation_one_library_failure_retains_healthy_hits(libraries, monkeypatch, tmp_path, library):
+    collections, _, slim, _ = libraries
+    collections.get_library("personal").add(entry("personal-0", content="个人 systemctl", url="personal.md"))
+    slim.add(entry("slim-0", content="已有中文 systemctl", url="slim.md"))
+    unavailable_library(monkeypatch, collections, tmp_path / "unavailable.db", library)
+    from strands_backend.tools.knowledge_search import make_knowledge_search_tool
+    from strands_backend.tools.knowledge_get_doc import make_knowledge_get_doc_tool
+
+    result = make_knowledge_search_tool(None)(query="systemctl")
+    assert result["status"] == "success"
+    assert result["partial"] is True
+    assert result["unavailable_libraries"] == [library]
+    assert "不完整" in result["message"]
+    assert {hit["library"] for hit in result["results"]} == {"personal", "slim", "builtin"} - {library}
+    read = make_knowledge_get_doc_tool(None)
+    for hit in result["results"]:
+        doc = read(url=hit["url"])
+        assert doc["status"] == "success"
+        assert hit["content"] in doc["content"]
+    assert not (tmp_path / "unavailable.db").exists()
+
+
+def test_degradation_unavailable_library_without_hits_is_not_empty(libraries, monkeypatch, tmp_path):
+    collections, _, _, _ = libraries
+    unavailable_library(monkeypatch, collections, tmp_path / "unavailable.db", "builtin")
+    from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+    result = invoke_knowledge_search_tool({"query": "no-matching-document"})
+    assert result["status"] == "error"
+    assert result["unavailable_libraries"] == ["builtin"]
+    assert "检索未完成" in result["message"]
+    assert "暂无相关内容" not in result["message"]
+
+
+def test_degradation_all_libraries_unavailable_stays_error(libraries, monkeypatch, tmp_path):
+    collections, _, _, _ = libraries
+    unavailable_library(monkeypatch, collections, tmp_path / "unavailable.db", None)
+    from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+    result = invoke_knowledge_search_tool({"query": "systemctl"})
+    assert result["status"] == "error"
+    assert result["unavailable_libraries"] == ["personal", "slim", "builtin"]
+    assert "检索未完成" in result["message"]
+
+
+def test_degradation_default_collection_call_still_raises(libraries, monkeypatch, tmp_path):
+    collections, _, _, _ = libraries
+    unavailable_library(monkeypatch, collections, tmp_path / "unavailable.db", "builtin")
+    with pytest.raises(sqlite3.OperationalError):
+        collections.search_curated("systemctl")
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, sqlite3.ProgrammingError, sqlite3.InterfaceError])
+def test_degradation_nonstorage_bug_remains_error(libraries, monkeypatch, failure):
+    collections, _, _, _ = libraries
+
+    def fail(*_args, **_kwargs):
+        raise failure("unexpected knowledge implementation failure")
+
+    monkeypatch.setattr(collections, "search_collection", fail)
+    from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+    result = invoke_knowledge_search_tool({"query": "systemctl"})
+    assert result["status"] == "error"
+    assert not result.get("partial")
+    assert not result.get("unavailable_libraries")
+    assert "unexpected knowledge implementation failure" in result["message"]
+
+
+def test_degradation_healthy_empty_remains_empty(libraries):
+    from strands_backend.tools.knowledge_search import invoke_knowledge_search_tool
+
+    result = invoke_knowledge_search_tool({"query": "no-matching-document"})
+    assert result["status"] == "empty"
+    assert not result.get("partial")
+    assert not result.get("unavailable_libraries")
