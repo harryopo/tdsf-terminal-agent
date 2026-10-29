@@ -142,6 +142,33 @@ afterEach(() => {
 });
 
 describe("completion prediction context feedback", () => {
+  it.each(["Enter", "Backspace", "Ctrl+C"] as const)("recovers full-command and partial-argument prediction after discarding a typo with %s", async (reset) => {
+    harness.specs.set("systemctl", {
+      name: "systemctl",
+      subcommands: [{ name: "status", description: "查看服务状态" }, { name: "start", description: "启动服务" }],
+    });
+    const writes: string[] = [];
+    const leafId = init((_leafId, text) => writes.push(text));
+
+    await typeText(leafId, "s");
+    expect(completionKeyHandler(leafId, reset === "Ctrl+C" ? key("c", { ctrlKey: true }) : key(reset))).toBe(true);
+    await typeText(leafId, "systemctl");
+    const fullCommand = getCompletionState();
+
+    expect(fullCommand).toMatchObject({ visible: true, leafId, prefix: "systemctl" });
+    expect(fullCommand.items).toContainEqual(expect.objectContaining({ command: "status", description: expect.stringMatching(/[\u4e00-\u9fff]/) }));
+    expect(writes).toEqual([]);
+
+    await typeText(leafId, " st");
+    const partialArgument = getCompletionState();
+    expect(partialArgument).toMatchObject({ visible: true, leafId, prefix: "systemctl st" });
+    const index = partialArgument.items.findIndex((item) => item.command === "status");
+    expect(index).toBeGreaterThanOrEqual(0);
+    selectCompletionByIndex(index);
+
+    expect(writes).toEqual(["\b\bstatus"]);
+  });
+
   it("shows static candidates and refreshes the newest prefix while remote installation is pending", async () => {
     harness.specs.set("tool", {
       name: "tool",
