@@ -53,6 +53,96 @@ describe("fetchSessionDiagnostics", () => {
 });
 
 describe("diagnostic projection and export", () => {
+  const returnedThought = "returned thought fixture";
+  const returnedMessages = () => [{
+    id: "returned-message", role: "assistant", parts: [
+      { type: "reasoning", text: returnedThought, providerMetadata: { vendor: { signature: "opaque signature fixture" } } },
+      { type: "text", text: "returned answer fixture" },
+      { type: "dynamic-tool", toolName: "ssh_command", toolCallId: "returned-call", state: "output-available",
+        input: { command: "pwd", password: "input credential fixture" }, // secret-scan: fixture-line
+        output: { status: "indeterminate", stdout: "/srv", exit_code: null }, providerMetadata: { hidden: "hidden SDK fixture" } },
+      { type: "file", mediaType: "text/plain", url: "attachment private fixture" },
+    ],
+  }] as unknown as UIMessage[];
+
+  it("shows recorded reasoning locally while still omitting injected context", async () => {
+    vi.mocked(invokeRpc).mockImplementation(async (method) => method === "debug.agent_log_tail"
+      ? log("chat-a", [
+        { ts: 1, type: "reasoning", content: returnedThought },
+        { ts: 2, type: "env_inject", content: "environment private fixture" },
+      ]) : evidence);
+    const result = await fetchSessionDiagnostics("chat-a");
+    expect(result.journal.status).toBe("ready");
+    if (result.journal.status !== "ready") throw new Error("Fixture journal failed");
+    expect(result.journal.data.lines[0].content).toBe(returnedThought);
+    expect(JSON.stringify(result)).not.toContain("environment private fixture");
+  });
+
+  it("projects only returned thought and public tool fields when details are requested", () => {
+    const original = returnedMessages();
+    const originalJson = JSON.stringify(original);
+    const detailed = conversationSnapshot(original, 200, true);
+    expect(detailed[0].text).toBe("returned answer fixture");
+    expect(detailed[0].parts?.map((part) => part.kind)).toEqual(["reasoning", "tool"]);
+    expect(detailed[0].parts?.[0].text).toBe(returnedThought);
+    expect(JSON.parse(detailed[0].parts?.[1].text ?? "null")).toMatchObject({
+      tool_name: "ssh_command", tool_call_id: "returned-call", state: "output-available",
+      output: { status: "indeterminate", stdout: "/srv", exit_code: null },
+    });
+    const serialized = JSON.stringify(detailed);
+    for (const hidden of ["opaque signature fixture", "hidden SDK fixture", "attachment private fixture", "input credential fixture"])
+      expect(serialized).not.toContain(hidden);
+    expect(serialized).toContain("<REDACTED>");
+    expect(JSON.stringify(original)).toBe(originalJson);
+  });
+
+  it("keeps static tool inputs distinct from an output that never arrived", () => {
+    const projected = conversationSnapshot([{
+      id: "input-only", role: "assistant", parts: [{ type: "tool-ssh_command", toolCallId: "input-call", state: "input-available", input: { command: "pwd" } }],
+    }] as unknown as UIMessage[], 200, true);
+    const tool = JSON.parse(projected[0].parts?.[0].text ?? "null");
+    expect(tool).toMatchObject({ tool_name: "ssh_command", tool_call_id: "input-call", state: "input-available" });
+    expect(tool).not.toHaveProperty("output");
+  });
+
+  it("marks clipped returned content without splitting a UTF-16 surrogate pair", () => {
+    const projected = conversationSnapshot([{
+      id: "bounded", role: "assistant", parts: [
+        { type: "reasoning", text: `${"a".repeat(7999)}🙂` },
+        { type: "dynamic-tool", toolName: "reader", toolCallId: "long-call", state: "output-available", input: {}, output: "x".repeat(9000) },
+      ],
+    }] as unknown as UIMessage[], 200, true);
+    expect(projected[0].parts).toHaveLength(2);
+    for (const part of projected[0].parts ?? []) {
+      expect(part.text_truncated).toBe(true);
+      expect(part.text.length).toBeLessThanOrEqual(8000);
+      const last = part.text.charCodeAt(part.text.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    }
+  });
+
+  it("requires explicit reasoning export even for a detailed frozen snapshot", async () => {
+    const data = { sessionId: "chat-a", fetchedAt: "now", journal: { status: "ready", data: log("chat-a", [
+      { ts: 1, type: "reasoning", content: returnedThought },
+      { ts: 2, type: "env_inject", content: "environment private fixture" },
+    ]) } as const, evidence: { status: "ready", data: evidence } as const };
+    const frozen = buildDiagnosticSnapshot(data, returnedMessages(), 200, true);
+    expect(JSON.stringify(frozen.conversation)).toContain(returnedThought);
+    vi.mocked(invokeRpc).mockResolvedValue({ ok: true, path: "diagnostics/returned.json" });
+    await exportDiagnosticSnapshot(frozen);
+    const defaultExport = vi.mocked(invokeRpc).mock.calls.at(-1)?.[1];
+    expect(defaultExport).toMatchObject({ snapshot: { sources: { export_policy: { include_returned_reasoning: false } } } });
+    expect(JSON.stringify(defaultExport)).not.toContain(returnedThought);
+    expect(JSON.stringify(defaultExport)).toContain("returned-call");
+    await exportDiagnosticSnapshot(frozen, true);
+    const explicitExport = vi.mocked(invokeRpc).mock.calls.at(-1)?.[1];
+    expect(explicitExport).toMatchObject({ snapshot: { sources: { export_policy: { include_returned_reasoning: true } } } });
+    expect(JSON.stringify(explicitExport)).toContain(returnedThought);
+    for (const hidden of ["environment private fixture", "opaque signature fixture", "input credential fixture"])
+      expect(JSON.stringify(explicitExport)).not.toContain(hidden);
+    expect(JSON.stringify(frozen.conversation)).toContain(returnedThought);
+  });
+
   it("redacts nested JSON credentials and token strings", async () => {
     vi.mocked(invokeRpc).mockImplementation(async (method) => method === "debug.agent_log_tail"
       ? log("chat-a", [{ ts: 1, type: "tool_result", content: JSON.stringify({ nested: { access_token: "secret-token", ok: "yes" } }) }])

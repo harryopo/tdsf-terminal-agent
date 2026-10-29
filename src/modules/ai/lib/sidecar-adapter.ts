@@ -1085,13 +1085,12 @@ export async function* runSidecarStream(
   // onAgentMessage 回调：把 agent_message 事件转成 reasoning-delta/text-delta part
   // （TDSF 修复 2026-07-31 P1: 实现深度思考 UI + LLM 文本真正流式）
   const onAgentMessage = (p: AgentMessagePayload) => {
-    // TDSF debug 2026-07-31: 记录 agent_message 事件到 console，便于 CDP 排障
-    // 生产环境日志量极小（每条消息一次），不影响性能
+    // Debug metadata only; returned content stays in the scoped response stream.
     const msgType = p.type ?? p.message_type ?? "output";
     console.info(
       "[sidecar-adapter] agent_message",
       msgType,
-      p.content?.slice(0, 80),
+      { contentChars: p.content?.length ?? 0 },
     );
     const content = p.content;
     if (!content) return;

@@ -135,6 +135,26 @@ afterEach(() => {
 });
 
 describe("sidecar event stream identity", () => {
+  it.each(["thinking", "output"])("logs only metadata for returned %s while preserving its real stream delta", async (type) => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const next = nextInvoke();
+    const content = "returned body must stay out of global debug logs";
+    const partsPromise = collect(runSidecarStream(makeOptions()));
+    try {
+      const args = await next.started;
+      emit("sidecar:agent_message", "chat-identity", 1101, streamTag(args), "agent_message", { type, content });
+      next.result.resolve({ observation: "fallback" });
+      const parts = await partsPromise;
+      expect(parts).toContainEqual(expect.objectContaining({ type: type === "thinking" ? "reasoning-delta" : "text-delta", delta: content }));
+      expect(JSON.stringify(info.mock.calls)).not.toContain(content);
+      expect(info).toHaveBeenCalledWith("[sidecar-adapter] agent_message", type, { contentChars: content.length });
+    } finally {
+      next.result.resolve({ observation: "fixture cleanup" });
+      await partsPromise.catch(() => []);
+      info.mockRestore();
+    }
+  });
+
   it("drops a previous stream event arriving while current listeners are still preparing", async () => {
     const next = nextInvoke();
     const sshListenStarted = deferred<void>();

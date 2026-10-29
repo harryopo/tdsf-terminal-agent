@@ -306,3 +306,35 @@ def test_real_bus_logs_needs_you_safely_and_subscribes_once(_isolated_logs, monk
     assert "Confirm deploy" in events[0]["content"]
     assert "Review deployment request" in events[0]["content"]
     assert "response-secret" not in json.dumps(events[0])
+
+
+def test_returned_content_snapshot_roundtrips_through_existing_exporter(_isolated_logs):
+    from strands_backend.diagnostics import export_snapshot
+
+    snapshot = {
+        "schema_version": 1,
+        "session_id": "returned-chat",
+        "sources": {"export_policy": {"include_returned_reasoning": True}},
+        "conversation": [{
+            "id": "returned-message", "role": "assistant", "text": "已返回正文",
+            "parts": [
+                {
+                    "kind": "reasoning", "label": "已返回的思考",
+                    "text": "已返回过程文本", "text_truncated": False,
+                },
+                {
+                    "kind": "tool", "label": "工具 · ssh_command",
+                    "text": json.dumps({
+                        "tool_call_id": "returned-call", "state": "output-available",
+                        "output": {"status": "indeterminate"},
+                    }),
+                    "text_truncated": False,
+                },
+            ],
+        }],
+    }
+    result = export_snapshot("returned-chat", snapshot)
+    path = Path(result["path"])
+    assert path.parent == _isolated_logs / "diagnostics"
+    assert json.loads(path.read_text(encoding="utf-8")) == snapshot
+    assert len(list(path.parent.glob("*.json"))) == 1

@@ -27,6 +27,60 @@ beforeEach(() => {
 });
 
 describe("ConfidencePanel real dialog interaction", () => {
+  const returnedMessages = (thought = "returned thought before preview", answer = "returned answer before preview") => [{
+    id: "returned-message", role: "assistant", parts: [
+      { type: "reasoning", text: thought, providerMetadata: { vendor: { signature: "opaque signature fixture" } } },
+      { type: "text", text: answer },
+      { type: "dynamic-tool", toolName: "ssh_command", toolCallId: "returned-call", state: "output-available", input: { command: "pwd" }, output: { status: "indeterminate", stdout: "returned tool output fixture" } },
+    ],
+  }] as unknown as UIMessage[];
+
+  it("shows returned thought and tool content without hidden SDK fields", async () => {
+    render(<ConfidencePanel sessionId="chat-a" messages={returnedMessages()} />);
+    openPanel();
+    await settleFetch();
+    fireEvent.click(navButton("对话"));
+    await waitFor(() => expect(panel().textContent).toContain("returned thought before preview"));
+    expect(within(panel()).getByText("已返回的思考")).toBeTruthy();
+    expect(panel().textContent).toContain("returned tool output fixture");
+    expect(panel().textContent).toContain("returned-call");
+    expect(panel().textContent).toContain("indeterminate");
+    expect(panel().textContent).not.toContain("opaque signature fixture");
+  });
+
+  it.each([false, true])("exports a frozen preview with explicit reasoning choice=%s", async (includeThought) => {
+    const { rerender } = render(<ConfidencePanel sessionId="chat-a" messages={returnedMessages()} />);
+    openPanel();
+    await waitFor(() => expect(panel().querySelector("pre")?.textContent).toContain("journal entry"));
+    fireEvent.click(within(panel()).getByRole("button", { name: "导出日志" }));
+    const checkbox = within(panel()).getByRole("checkbox", { name: "包含已返回的思考文本" });
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    if (includeThought) fireEvent.click(checkbox);
+    rerender(<ConfidencePanel sessionId="chat-a" messages={returnedMessages("later thought must not replace preview", "later answer must not replace preview")} />);
+    await act(async () => { fireEvent.click(within(panel()).getByRole("button", { name: "确认保存 JSON" })); });
+    await waitFor(() => expect(invokeRpc.mock.calls.some(([method]) => method === "debug.export_session_diagnostics")).toBe(true));
+    const exported = invokeRpc.mock.calls.find(([method]) => method === "debug.export_session_diagnostics")?.[1];
+    const serialized = JSON.stringify(exported);
+    expect(serialized.includes("returned thought before preview")).toBe(includeThought);
+    expect(serialized).toContain("returned answer before preview");
+    expect(serialized).toContain("returned tool output fixture");
+    expect(serialized).not.toContain("later thought must not replace preview");
+    expect(serialized).not.toContain("later answer must not replace preview");
+    expect(serialized).not.toContain("opaque signature fixture");
+  });
+
+  it("never carries reasoning consent into a new export preview", async () => {
+    render(<ConfidencePanel sessionId="chat-a" messages={returnedMessages()} />);
+    openPanel();
+    await waitFor(() => expect(panel().querySelector("pre")?.textContent).toContain("journal entry"));
+    fireEvent.click(within(panel()).getByRole("button", { name: "导出日志" }));
+    fireEvent.click(within(panel()).getByRole("checkbox", { name: "包含已返回的思考文本" }));
+    expect(within(panel()).getByRole("checkbox", { name: "包含已返回的思考文本" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(within(panel()).getByRole("button", { name: "取消" }));
+    fireEvent.click(within(panel()).getByRole("button", { name: "导出日志" }));
+    expect(within(panel()).getByRole("checkbox", { name: "包含已返回的思考文本" }).getAttribute("aria-checked")).toBe("false");
+  });
+
   it("uses the shared range selector and reloads only the current chat", async () => {
     const pointerCaptureMethods = [
       "hasPointerCapture",

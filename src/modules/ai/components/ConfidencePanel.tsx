@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { UIMessage } from "ai";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -9,6 +9,7 @@ import {
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -34,6 +35,7 @@ import {
   exportDiagnosticSnapshot,
   fetchSessionDiagnostics,
   RUN_EVENT_LABELS,
+  type DiagnosticConversationPart,
   type SessionDiagnostics,
 } from "../lib/sessionDiagnostics";
 
@@ -48,6 +50,7 @@ type Row = {
   fields?: [string, unknown][];
   callId?: string;
   note?: string;
+  parts?: DiagnosticConversationPart[];
 };
 
 /** An inspection surface, independent of Agent execution and approval controls. */
@@ -131,6 +134,8 @@ function PanelBody({
     typeof buildDiagnosticSnapshot
   > | null>(null);
   const [saving, setSaving] = useState(false);
+  const [includeReturnedReasoning, setIncludeReturnedReasoning] = useState(false);
+  const reasoningOptionId = useId();
   const [savedPath, setSavedPath] = useState("");
   const [exportError, setExportError] = useState("");
 
@@ -169,7 +174,7 @@ function PanelBody({
   }, [sessionId, limit, revision, autoRefresh]);
 
   const conversation = useMemo(
-    () => conversationSnapshot(messages, limit),
+    () => conversationSnapshot(messages, limit, true),
     [messages, limit],
   );
   const logs = data?.journal.status === "ready" ? data.journal.data : null;
@@ -208,8 +213,9 @@ function PanelBody({
         ? conversation.map((entry) => ({
             id: entry.id,
             title: entry.role === "user" ? "你的消息" : "Agent 回答",
-            summary: entry.text || "仅有工具或附件，无对话正文",
+            summary: entry.text || entry.parts?.map((part) => part.label).join(" · ") || "仅有附件，无可查看的响应内容",
             body: entry.text,
+            parts: entry.parts,
             details: entry,
             note: entry.text_truncated
               ? "正文超过 8000 字，快照已截断"
@@ -262,7 +268,7 @@ function PanelBody({
     setSaving(true);
     setExportError("");
     try {
-      setSavedPath(await exportDiagnosticSnapshot(exportPreview));
+      setSavedPath(await exportDiagnosticSnapshot(exportPreview, includeReturnedReasoning));
       setExportPreview(null);
     } catch (error) {
       setExportError(
@@ -295,8 +301,9 @@ function PanelBody({
             disabled={!data || loading || saving}
             onClick={() => {
               if (data) {
+                setIncludeReturnedReasoning(false);
                 setExportPreview(
-                  buildDiagnosticSnapshot(data, messages, limit),
+                  buildDiagnosticSnapshot(data, messages, limit, true),
                 );
                 setExportError("");
                 setSavedPath("");
@@ -520,21 +527,37 @@ function PanelBody({
                   </pre>
                 </div>
               )}
-              <h4 className="mb-2 text-[10px] font-medium tracking-wider text-muted-foreground">
-                {view === "conversation"
-                  ? "消息正文"
-                  : view === "evidence"
-                    ? "结果摘要"
-                    : "事件内容"}
-              </h4>
-              <pre
-                className={cn(
-                  "rounded-xl border border-border bg-muted/30 p-4 text-xs leading-6 break-words whitespace-pre-wrap",
-                  view === "conversation" ? "font-sans" : "font-mono",
-                )}
-              >
-                {active.body || "此记录没有正文"}
-              </pre>
+              {(active.body || !active.parts?.length) && (
+                <>
+                  <h4 className="mb-2 text-[10px] font-medium tracking-wider text-muted-foreground">
+                    {view === "conversation"
+                      ? "消息正文"
+                      : view === "evidence"
+                        ? "结果摘要"
+                        : "事件内容"}
+                  </h4>
+                  <pre
+                    className={cn(
+                      "rounded-xl border border-border bg-muted/30 p-4 text-xs leading-6 break-words whitespace-pre-wrap",
+                      view === "conversation" ? "font-sans" : "font-mono",
+                    )}
+                  >
+                    {active.body || "此记录没有正文"}
+                  </pre>
+                </>
+              )}
+              {active.parts?.map((part, index) => (
+                <details key={`${part.kind}-${index}`} className="mt-4 rounded-xl border border-border bg-background p-4">
+                  <summary className="cursor-pointer text-xs font-medium text-foreground">
+                    {part.label}
+                    {part.text_truncated && <span className="ml-2 text-[10px] font-normal text-muted-foreground">已截断 · 最多 8000 字符</span>}
+                  </summary>
+                  {part.kind === "tool" && <p className="mt-2 text-[11px] text-muted-foreground">记录真实输入与返回状态；已返回不等于执行成功。</p>}
+                  <pre className={cn("mt-3 text-xs leading-6 break-words whitespace-pre-wrap", part.kind === "tool" ? "font-mono" : "font-sans")}>
+                    {part.text || "此段没有返回正文"}
+                  </pre>
+                </details>
+              ))}
               <details className="mt-5 text-[11px] text-muted-foreground">
                 <summary className="cursor-pointer py-2">查看诊断字段</summary>
                 <pre className="mt-2 break-words whitespace-pre-wrap">
@@ -561,6 +584,17 @@ function PanelBody({
             仅导出打开预览时的当前会话快照，保存到本机 diagnostics
             目录。已按规则脱敏，但可能含主机、路径和业务正文，分享前请检查。
           </p>
+          <label htmlFor={reasoningOptionId} className="mt-3 flex items-center gap-2 text-xs">
+            <Checkbox
+              id={reasoningOptionId}
+              aria-label="包含已返回的思考文本"
+              checked={includeReturnedReasoning}
+              disabled={saving}
+              onCheckedChange={(checked) => setIncludeReturnedReasoning(checked === true)}
+            />
+            包含已返回的思考文本
+            <span className="text-[11px] text-muted-foreground">仅本次导出，可能含业务信息</span>
+          </label>
           <div className="mt-2 flex items-center justify-end gap-2">
             <Button
               size="sm"

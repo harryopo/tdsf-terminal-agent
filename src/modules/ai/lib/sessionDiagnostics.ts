@@ -29,6 +29,34 @@ export type SessionDiagnostics = {
   evidence: DiagnosticSource<EvidenceItem[]>;
 };
 
+export type DiagnosticConversationPart = {
+  kind: "reasoning" | "tool";
+  label: string;
+  text: string;
+  text_truncated: boolean;
+};
+type DiagnosticConversationMessage = {
+  id: string;
+  role: UIMessage["role"];
+  text: string;
+  text_truncated: boolean;
+  parts?: DiagnosticConversationPart[];
+};
+type DiagnosticSnapshot = {
+  schema_version: number;
+  app_version: string;
+  session_id: string;
+  exported_at: string;
+  sources: {
+    fetched_at: string;
+    export_policy?: { include_returned_reasoning: boolean };
+    journal: DiagnosticSource<RunLog>;
+    evidence: DiagnosticSource<EvidenceItem[]>;
+  };
+  conversation: DiagnosticConversationMessage[];
+  limitations: string[];
+};
+
 const SECRET_KEY =
   /password|passwd|passphrase|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|private[_-]?key|^(?:token|authorization|cookie|set-cookie|credential)$/i;
 
@@ -133,8 +161,8 @@ export async function fetchSessionDiagnostics(
         ...result,
         lines: result.lines.map((e) => ({
           ...e,
-          content: ["env_inject", "reasoning"].includes(e.type)
-            ? "此事件已记录；上下文与思考正文不纳入诊断快照。"
+          content: e.type === "env_inject"
+            ? "此事件已记录；环境上下文不纳入诊断快照。"
             : diagnosticText(e.content),
           meta: redactDiagnostic(e.meta) as RunEvent["meta"],
         })),
@@ -165,7 +193,20 @@ export async function fetchSessionDiagnostics(
   return { sessionId, fetchedAt: new Date().toISOString(), journal, evidence };
 }
 
-export function conversationSnapshot(messages: UIMessage[], limit = 200) {
+function stripContextAttachments(text: string): string {
+  return text.replace(
+    /<(env|environment|terminal-context|terminal-selection|live_context|selection|file)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    "[上下文附件已省略]",
+  );
+}
+
+function clipConversationContent(value: unknown) {
+  const safe = diagnosticText(value);
+  const text = safe.slice(0, 8000).replace(/[\uD800-\uDBFF]$/u, "");
+  return { text, text_truncated: text.length < safe.length };
+}
+
+export function conversationSnapshot(messages: UIMessage[], limit = 200, details = false): DiagnosticConversationMessage[] {
   return messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .slice(-limit)
@@ -173,29 +214,67 @@ export function conversationSnapshot(messages: UIMessage[], limit = 200) {
       const raw = m.parts
         .filter((p) => p.type === "text")
         .map((p) => p.text)
-        .join("\n")
-        .replace(
-          /<(env|environment|terminal-context|terminal-selection|live_context|selection|file)\b[^>]*>[\s\S]*?<\/\1>/gi,
-          "[上下文附件已省略]",
-        );
-      const safe = diagnosticText(raw);
-      // Do not export a lone UTF-16 surrogate when a long message ends at an emoji.
-      const text = safe.slice(0, 8000).replace(/[\uD800-\uDBFF]$/u, "");
-      return {
-        id: m.id,
-        role: m.role,
-        text,
-        text_truncated: text.length < safe.length,
+        .join("\n");
+      const entry: DiagnosticConversationMessage = {
+        id: m.id, role: m.role, ...clipConversationContent(stripContextAttachments(raw)),
       };
+      if (details) {
+        entry.parts = [];
+        const reasoning = m.parts.filter((p) => p.type === "reasoning").map((p) => p.text).join("\n");
+        if (reasoning) entry.parts.push({ kind: "reasoning", label: "已返回的思考", ...clipConversationContent(stripContextAttachments(reasoning)) });
+        for (const part of m.parts) {
+          if (!(part.type === "dynamic-tool" || part.type.startsWith("tool-")) || !("toolCallId" in part)) continue;
+          const toolName = part.type === "dynamic-tool" ? part.toolName : part.type.slice(5);
+          entry.parts.push({
+            kind: "tool", label: `工具 · ${diagnosticText(toolName)}`,
+            ...clipConversationContent({
+              tool_name: toolName, tool_call_id: part.toolCallId, state: part.state, input: part.input,
+              ...("output" in part ? { output: part.output } : {}),
+              ...("errorText" in part ? { error: part.errorText } : {}),
+            }),
+          });
+        }
+      }
+      return entry;
     });
+}
+
+function projectDiagnosticExport(snapshot: DiagnosticSnapshot, includeReturnedReasoning: boolean): DiagnosticSnapshot {
+  const journal = snapshot.sources.journal;
+  return redactDiagnostic({
+    ...snapshot,
+    sources: {
+      ...snapshot.sources,
+      export_policy: { include_returned_reasoning: includeReturnedReasoning },
+      journal: journal.status === "ready" ? {
+        ...journal,
+        data: {
+          ...journal.data,
+          lines: journal.data.lines.map((entry) => ({
+            ...entry,
+            content: entry.type === "env_inject"
+              ? "此事件已记录；环境上下文不纳入诊断快照。"
+              : entry.type === "reasoning" && !includeReturnedReasoning
+                ? "此事件已记录；思考正文未选择导出。"
+                : entry.content,
+          })),
+        },
+      } : journal,
+    },
+    conversation: snapshot.conversation.map((entry) => ({
+      ...entry,
+      ...(entry.parts ? { parts: entry.parts.filter((part) => includeReturnedReasoning || part.kind !== "reasoning") } : {}),
+    })),
+  }) as DiagnosticSnapshot;
 }
 
 export function buildDiagnosticSnapshot(
   data: SessionDiagnostics,
   messages: UIMessage[],
   limit = 200,
-) {
-  return {
+  includeReturnedReasoning = false,
+): DiagnosticSnapshot {
+  return projectDiagnosticExport({
     schema_version: 1,
     app_version: appVersion,
     session_id: data.sessionId,
@@ -205,25 +284,26 @@ export function buildDiagnosticSnapshot(
       journal: data.journal,
       evidence: data.evidence,
     },
-    conversation: conversationSnapshot(messages, limit),
+    conversation: conversationSnapshot(messages, limit, true),
     limitations: [
-      `当前会话最近 ${limit} 条流水和消息；消息正文最多 8000 字，JSONL 摘要最多 2000 字。`,
+      `当前会话最近 ${limit} 条流水和消息；正文及各段返回内容最多 8000 字符，JSONL 摘要最多 2000 字符。`,
       "工具证据为进程内最近 200 条，重启可能丢失；旧记录缺失字段不补造。",
       "时间先后不证明因果或结论正确；未计算经过校准的正确概率。",
-      "不包含全局系统日志、上下文附件、思考正文或隐藏 SDK 字段。",
+      "思考正文仅在显式勾选后导出；不包含全局系统日志、上下文附件或隐藏 SDK 字段。",
       "已作规则脱敏，主机、路径和业务正文可能仍敏感，请人工复核后分享。",
     ],
-  };
+  }, includeReturnedReasoning);
 }
 
 export async function exportDiagnosticSnapshot(
   snapshot: ReturnType<typeof buildDiagnosticSnapshot>,
+  includeReturnedReasoning = false,
 ): Promise<string> {
   const result = await invokeRpc<{ ok: boolean; path: string }>(
     "debug.export_session_diagnostics",
     {
       session_id: snapshot.session_id,
-      snapshot,
+      snapshot: projectDiagnosticExport(snapshot, includeReturnedReasoning),
     },
   );
   if (!result?.ok || !result.path) throw new Error("诊断日志未保存成功");
