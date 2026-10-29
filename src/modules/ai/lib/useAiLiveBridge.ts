@@ -158,6 +158,7 @@ export function useAiLiveBridge(params: Params) {
   ref.current = params;
 
   useEffect(() => {
+    let disposed = false;
     // TDSF B1 (2026-08-29): SSH Rust session_id 查询提为局部函数，
     // 供 getSshRustSessionId（setLive）与 getEnvironmentProbe 共用。
     // #107 (2026-09-22): 取值口径改成"先问命令会打进哪块终端，再问它绑的会话"，
@@ -768,6 +769,7 @@ export function useAiLiveBridge(params: Params) {
     const startVisibleTerminalExecution = (
       request: VisibleTerminalRequest,
     ) => {
+      if (disposed) return;
       const currentSessionId = sshRustSessionId();
       const rawLeafId = ref.current.getSshLeafId?.();
       const rawTerminal =
@@ -929,6 +931,7 @@ export function useAiLiveBridge(params: Params) {
     let unlistenHumanTyping: (() => void) | null = null;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
+      if (disposed) return;
       // The typing-complete listener must exist before accepting a visible
       // request. Registering both in parallel can lose the end event for a
       // short typewriter command and leave its SSH result waiting forever.
@@ -936,7 +939,7 @@ export function useAiLiveBridge(params: Params) {
         "terminal:human_typing",
         (event) => {
           const typing = event.payload;
-          if (typing.phase !== "end" || typing.target !== "ssh") return;
+          if (disposed || typing.phase !== "end" || typing.target !== "ssh") return;
           for (const pending of pendingVisibleExecutions.values()) {
             if (
               pending.phase !== "typing" ||
@@ -957,10 +960,19 @@ export function useAiLiveBridge(params: Params) {
           }
         },
       );
+      if (disposed) {
+        unlistenHumanTyping();
+        unlistenHumanTyping = null;
+        return;
+      }
       unlistenVisibleExecution = await listen<VisibleTerminalRequest>(
         "sidecar:visible-terminal-execute",
         (event) => startVisibleTerminalExecution(event.payload),
       );
+      if (disposed) {
+        unlistenVisibleExecution();
+        unlistenVisibleExecution = null;
+      }
     })().catch((e) => {
       console.warn("[tdsf] visible terminal listeners failed:", e);
     });
@@ -975,6 +987,7 @@ export function useAiLiveBridge(params: Params) {
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
       const { useTodosStore } = await import("../store/todoStore");
+      if (disposed) return;
       unlistenTodos = await listen<{
         sessionId: string;
         // T3 (2026-08-31): completedAt 完成时间由 Python todo_write 自动维护
@@ -986,10 +999,15 @@ export function useAiLiveBridge(params: Params) {
           completedAt?: string | null;
         }>;
       }>("sidecar:update_todos", (event) => {
+        if (disposed) return;
         const { sessionId, todos } = event.payload;
         if (!sessionId || !Array.isArray(todos)) return;
         useTodosStore.getState().setTodos(sessionId, todos as never);
       });
+      if (disposed) {
+        unlistenTodos();
+        unlistenTodos = null;
+      }
     })().catch((e) => {
       console.warn("[tdsf] update_todos listen failed:", e);
     });
@@ -1002,10 +1020,12 @@ export function useAiLiveBridge(params: Params) {
     let unlistenScrollback: (() => void) | null = null;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
+      if (disposed) return;
       unlistenScrollback = await listen<{
         requestId: string;
         lines: number;
       }>("sidecar:get-terminal-scrollback", (event) => {
+        if (disposed) return;
         const { requestId, lines } = event.payload;
         if (!requestId) return;
         const live = useChatStore.getState().live;
@@ -1019,6 +1039,10 @@ export function useAiLiveBridge(params: Params) {
           console.warn("[tdsf] scrollback response failed:", e);
         });
       });
+      if (disposed) {
+        unlistenScrollback();
+        unlistenScrollback = null;
+      }
     })().catch((e) => {
       console.warn("[tdsf] scrollback listen failed:", e);
     });
@@ -1029,6 +1053,7 @@ export function useAiLiveBridge(params: Params) {
     window.addEventListener("pagehide", onPageHide);
 
     return () => {
+      disposed = true;
       unlistenVisibleBlocks();
       unlistenVisibleExecution?.();
       unlistenHumanTyping?.();

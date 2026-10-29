@@ -1657,13 +1657,18 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
     printf '\033]633;P;Cwd=%s\007' "$cwd"
     printf '\033]133;A\007'
     printf '\033]133;B\007'
-    __TDSF_CMD_REPORTED=0
+    # Array prompt hooks run after this function; do not label them as user input.
+    __TDSF_CMD_REPORTED="$__TDSF_PROMPT_ARRAY"
     if [ "$__TDSF_NO_TRAP" = "0" ]; then trap - DEBUG; fi
     if [ -n "${__TDSF_ORIG_PC:-}" ]; then eval "$__TDSF_ORIG_PC"; fi
     if [ "$__TDSF_NO_TRAP" = "0" ]; then trap '_tdsf_preexec' DEBUG; fi
   }
-  if [ "$(declare -p PROMPT_COMMAND 2>/dev/null | head -c 11)" = "declare -a" ]; then
-    PROMPT_COMMAND=("_tdsf_precmd" "${PROMPT_COMMAND[@]}")
+  __TDSF_PROMPT_ARRAY=0
+  # Older Bash versions execute only the first element, so keep their scalar hook.
+  if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) &&
+     [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+    __TDSF_PROMPT_ARRAY=1
+    PROMPT_COMMAND=("_tdsf_precmd" "${PROMPT_COMMAND[@]}" "__TDSF_CMD_REPORTED=0")
   else
     __TDSF_ORIG_PC="${PROMPT_COMMAND:-}"
     PROMPT_COMMAND="_tdsf_precmd"

@@ -331,6 +331,24 @@ fn array_prompt_command_runs_in_its_original_order() {
 }
 
 #[test]
+fn array_prompt_commands_do_not_claim_user_command_markers() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "PROMPT_COMMAND=(':' ':')\n")
+        .expect("write user prompt array");
+    let output = run_interactive(&launch_cmd, &dir, "printf TDSF_FIRST\nfalse\nexit\n");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("TDSF_FIRST"), "the user command did not run");
+    let commands: Vec<_> = text
+        .split("\u{1b}]633;E;")
+        .skip(1)
+        .map(|frame| frame.split_once(';').expect("command nonce").0)
+        .collect();
+    assert_eq!(commands, ["printf TDSF_FIRST", "false", "exit"]);
+    assert!(text.contains("\u{1b}]133;D;1\u{7}"), "nonzero status was lost");
+}
+
+#[test]
 fn existing_debug_trap_survives_hooks_and_extdebug_prompt_cycles() {
     let dir = tempfile::tempdir().expect("temporary HOME");
     let (_, _, launch_cmd) = create_files(&dir);
