@@ -211,6 +211,17 @@ _slow_methods: frozenset[str] = frozenset({
     "long_context.summarize",
     "knowledge.search",
     "knowledge.rebuild",
+    # Recovery holds the personal RAG lock during backups/transactions. Readers
+    # sharing it must also stay off the stdin loop so control RPCs remain live.
+    "knowledge.documents",
+    "knowledge.recovery_preview",
+    "knowledge.recovery_apply",
+    "knowledge.import_docs",
+    "knowledge.get",
+    "knowledge.get_doc",
+    "knowledge.list",
+    "knowledge.list_files",
+    "knowledge.titles_zh",
     # Reverse RPC needs the stdin loop free to consume its response.
     "system.probe_env",
 })
