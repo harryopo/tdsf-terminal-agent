@@ -11,6 +11,8 @@ import { captureBlockOutputWithMeta, registerBlockOscHandlers, TerminalBlockColl
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
 import { RemoteShellIntegration } from "@/modules/terminal/lib/remoteShellIntegration";
 import * as terminalSessions from "@/modules/terminal/lib/useTerminalSession";
+import * as rendererPool from "@/modules/terminal/lib/rendererPool";
+import { clearUserLine, isUserLineDirty, noteUserInput } from "@/modules/terminal/lib/terminalInputState";
 import { useAiLiveBridge } from "./useAiLiveBridge";
 
 const ipc = vi.fn<(name: string, args?: InvokeArgs) => unknown>();
@@ -126,6 +128,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearUserLine(11);
   disposers.splice(0).forEach((dispose) => dispose());
   setLeafSshSession(11, null);
   listeners.clear();
@@ -135,6 +138,70 @@ afterEach(() => {
 });
 
 describe("visible SSH result receipts through the live bridge and real parser", () => {
+  it.each(["before-output", "after-output"])("keeps compound output attributed to the request with typing end %s", async (order) => {
+    const h = mountBridge();
+    await h.ready();
+    await h.output(context + osc(133, "A"));
+    const compound = { ...request, command: "cat /etc/os-release; echo ---; uname -a" };
+    await emit("sidecar:visible-terminal-execute", compound);
+    const args = ipc.mock.calls.find(([method]) => method === "ssh_write_human")?.[1] as Record<string, unknown>;
+    // Native's legacy Ctrl+C/Enter preparation can report the previous command
+    // with exit 130 before the requested command's real frames arrive.
+    if (args.clearInput !== false) {
+      await h.output(osc(633, "E;pwd;40") + osc(133, "C") + context + osc(133, "D;130") + osc(133, "A"));
+    }
+    const ended = () => emit("terminal:human_typing", { phase: "end", target: "ssh", id: 7, mode: "human", stopped: false });
+    if (order === "before-output") await ended();
+    await h.output(osc(633, "E;cat /etc/os-release;41") + osc(133, "C") + "NAME=openEuler\r\n---\r\nLinux\r\n" + context + osc(133, "D;0") + osc(133, "A"));
+    if (order === "after-output") await ended();
+    const block = useTerminalBlocksStore.getState().getRecent(11, 1)[0];
+    expect(block.author).toBe("agent");
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ requestId: compound.requestId, result: { status: "success", exitCode: 0, output: "NAME=openEuler\n---\nLinux" } });
+    expect(args.clearInput).toBe(false);
+  });
+
+  it("does not accept a stale exit-130 block when the same command is requested again", async () => {
+    const h = mountBridge();
+    await h.ready();
+    await h.output(context + osc(133, "A"));
+    await emit("sidecar:visible-terminal-execute", request);
+    const args = ipc.mock.calls.find(([method]) => method === "ssh_write_human")?.[1] as Record<string, unknown>;
+    if (args.clearInput !== false) {
+      await h.output(osc(633, "E;printf TDSF_DONE;40") + osc(133, "C") + context + osc(133, "D;130") + osc(133, "A"));
+    }
+    await emit("terminal:human_typing", { phase: "end", target: "ssh", id: 7, mode: "human", stopped: false });
+    expect(responses()).toHaveLength(0);
+    await h.output(osc(633, "E;printf TDSF_DONE;41") + osc(133, "C") + "TDSF_DONE\r\n" + context + osc(133, "D;0") + osc(133, "A"));
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ result: { status: "success", exitCode: 0, output: "TDSF_DONE" } });
+  });
+
+  it.each(["human", "instant"] as const)("preserves unsubmitted user input in %s mode", async (mode) => {
+    usePreferencesStore.setState({ agentTypingMode: mode });
+    noteUserInput(11, "unfinished user input");
+    const h = mountBridge();
+    await h.ready();
+    await emit("sidecar:visible-terminal-execute", request);
+    expect(ipc.mock.calls.filter(([method]) => method === "ssh_write_human")).toHaveLength(0);
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ result: { status: "unavailable", reason: "visible_terminal_dirty_input" } });
+    expect(isUserLineDirty(11)).toBe(true);
+    expect(useTerminalBlocksStore.getState().agentPending[11]).toBeUndefined();
+  });
+
+  it.each(["busy", "alternate-screen"])("does not write to a %s terminal", async (state) => {
+    if (state === "busy") vi.spyOn(terminalSessions, "isLeafBusy").mockReturnValue(true);
+    else vi.spyOn(rendererPool, "isLeafAltScreen").mockReturnValue(true);
+    const h = mountBridge();
+    await h.ready();
+    await emit("sidecar:visible-terminal-execute", request);
+    expect(ipc.mock.calls.filter(([method]) => method === "ssh_write_human")).toHaveLength(0);
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ result: { status: "unavailable", reason: "visible_terminal_busy" } });
+    expect(useTerminalBlocksStore.getState().agentPending[11]).toBeUndefined();
+  });
+
   it("does not rearm timers when a fallback reply arrives after bridge cleanup", async () => {
     const reply = pendingWrite();
     humanReply.mockReturnValueOnce(reply.promise);

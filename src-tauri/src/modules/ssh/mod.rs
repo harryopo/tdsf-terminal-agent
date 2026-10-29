@@ -53,7 +53,7 @@ use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 // TDSF B2 (2026-08-29): 可视教学打字机（human_type pump 编排）
-use crate::modules::human_type::{write_human_common, HumanTypeReport};
+use crate::modules::human_type::{write_human_common, HumanTypeReport, HumanTypingInput};
 
 /// SSH 会话注册表 (全局,通过 Tauri State 注入)
 ///
@@ -522,6 +522,7 @@ pub async fn ssh_write_human(
     session_id: u32,
     text: String,
     speed: f64,
+    clear_input: Option<bool>,
 ) -> Result<HumanTypeReport, String> {
     let session = state
         .get(session_id)
@@ -541,8 +542,15 @@ pub async fn ssh_write_human(
         }
     };
 
-    write_human_common(&app, "ssh", session_id, session.human_typing_guard(), write, text, speed)
-        .await
+    write_human_common(
+        &app,
+        "ssh",
+        session_id,
+        session.human_typing_guard(),
+        write,
+        HumanTypingInput { text, speed, clear_input: clear_input.unwrap_or(true) },
+    )
+    .await
 }
 
 /// ssh_resize 命令: 调整 SSH PTY 窗口大小

@@ -849,10 +849,17 @@ export function useAiLiveBridge(params: Params) {
       }
       // 从这里起 leafId / terminal 都是确定的值，下游不必再各自判空。
       const { leafId, terminal } = target;
-      if (getLeafBlockMode(leafId) !== "prompt") {
+      if (getLeafBlockMode(leafId) !== "prompt" || isLeafBusy(leafId) || isLeafAltScreen(leafId)) {
         reject(
           "visible_terminal_busy",
           "可见终端当前不在提示符，命令未写入，以免打断正在运行的任务。",
+        );
+        return;
+      }
+      if (isUserLineDirty(leafId)) {
+        reject(
+          "visible_terminal_dirty_input",
+          "可见终端有尚未提交的输入，命令未写入；请先完成或取消当前输入。",
         );
         return;
       }
@@ -904,6 +911,9 @@ export function useAiLiveBridge(params: Params) {
         sessionId: request.sessionId,
         text,
         speed: prefs.agentTypingSpeed,
+        // The gates above establish a clean, idle prompt. Extra Ctrl+C/Enter
+        // can settle the previous command and consume this request's author.
+        clearInput: false,
       })
         .then((report) => {
           if (disposed || pendingVisibleExecutions.get(pending.requestId) !== pending) return;
