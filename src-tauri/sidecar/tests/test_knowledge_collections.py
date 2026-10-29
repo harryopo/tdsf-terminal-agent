@@ -280,3 +280,101 @@ def test_degradation_healthy_empty_remains_empty(libraries):
     assert result["status"] == "empty"
     assert not result.get("partial")
     assert not result.get("unavailable_libraries")
+
+
+@pytest.mark.parametrize("library", ["personal", "reference", "builtin"])
+def test_listing_avoids_materializing_bodies(libraries, library):
+    collections, _, _, bundle_path = libraries
+    writer = RagIndex(bundle_path) if library == "builtin" else collections.get_library(library)
+    bodies = {}
+    translations = {}
+    for sequence in (10, 2):
+        bodies[sequence] = f"chapter-{sequence} " * 4000
+        translations[sequence] = f"已有译文{sequence} " * 4000
+        item = entry(f"listing-{sequence}", url="a-guide.md", title=f"章节 {sequence}", content=bodies[sequence])
+        item.content_zh = translations[sequence]
+        writer.add(item, dedupe=False)
+    writer.upsert_titles_zh({"a-guide.md": "已有中文标题"}, {"a-guide.md": "已有中文摘要"})
+    if library == "builtin":
+        writer.close()
+    index = collections.get_library(library)
+    conn = index._conn
+    original_factory = conn.row_factory
+    body_characters = 0
+
+    def measured_row(cursor, values):
+        nonlocal body_characters
+        body_characters += sum(
+            len(value) for column, value in zip(cursor.description, values)
+            if column[0] in {"content", "content_zh"} and isinstance(value, str)
+        )
+        return original_factory(cursor, values)
+
+    conn.row_factory = measured_row
+    try:
+        page = collections.list_documents(library, limit=1)
+        listing_characters = body_characters
+        document = collections.get_document("a-guide.md", library)
+        # A real full read must exercise the same meter; a broken meter cannot pass.
+        assert body_characters - listing_characters == sum(map(len, bodies.values())) + sum(map(len, translations.values()))
+        assert document["content"] == "\n\n".join(bodies[number] for number in (2, 10))
+        assert document["content_zh"] == "\n\n".join(translations[number] for number in (2, 10))
+    finally:
+        conn.row_factory = original_factory
+    row = page["documents"][0]
+    assert row["url"] == "a-guide.md"
+    assert row["title0"] == document["title"] == "章节 2"
+    assert row["title_zh"] == "已有中文标题"
+    assert row["summary_zh"] == "已有中文摘要"
+    assert row["chunks"] == 2
+    assert row["total_chars"] == sum(map(len, bodies.values()))
+    assert row["library"] == library
+    assert "content" not in row and "content_zh" not in row
+    print(f"listing_body_characters[{library}]={listing_characters}")
+    assert listing_characters == 0
+
+
+def test_listing_title_ties_use_the_existing_rowid_order(libraries):
+    collections, _, _, _ = libraries
+    index = collections.get_library("personal")
+    for identity, title in (("same-0", "同序号甲"), ("no-suffix", "同序号乙")):
+        index.add(entry(identity, title=title, content=identity), dedupe=False)
+    expected = index._conn.execute("SELECT title FROM entries WHERE url = ? ORDER BY rowid LIMIT 1", ("guide.md",)).fetchone()[0]
+    assert collections.get_document("guide.md", "personal")["title"] == expected
+    assert collections.list_documents("personal")["documents"][0]["title0"] == expected
+
+
+@pytest.mark.parametrize("processing", ["imported", "recovered"])
+def test_listing_preserves_personal_processing_metadata(libraries, processing):
+    collections, _, _, _ = libraries
+    index = collections.get_library("personal")
+    index.add(entry("processing-0"))
+    index._conn.execute("CREATE TABLE document_provenance (url TEXT PRIMARY KEY, processing TEXT NOT NULL, content_hash TEXT NOT NULL)")
+    index._conn.execute("INSERT INTO document_provenance VALUES (?, ?, ?)", ("guide.md", processing, "temporary-fixture"))
+    index._conn.commit()
+    assert collections.list_documents("personal")["documents"][0]["processing"] == processing
+    assert collections.get_document("guide.md", "personal")["processing"] == processing
+
+
+def test_listing_empty_url_notes_remain_separate(libraries):
+    collections, _, _, _ = libraries
+    index = collections.get_library("personal")
+    index.add(entry("note-a", url="", source="user-note", title="笔记甲", content="甲"))
+    index.add(entry("note-b", url="", source="user-note", title="笔记乙", content="乙"))
+    page = collections.list_documents("personal", limit=1)
+    next_page = collections.list_documents("personal", limit=1, offset=1)
+    assert page["total"] == next_page["total"] == 2
+    assert {page["documents"][0]["id"], next_page["documents"][0]["id"]} == {"note-a", "note-b"}
+    assert {page["documents"][0]["title0"], next_page["documents"][0]["title0"]} == {"笔记甲", "笔记乙"}
+
+
+def test_listing_reference_still_excludes_mixed_private_documents(libraries):
+    collections, full, _, _ = libraries
+    full.add(entry("public-0", url="mixed.md", title="公开章节", content="公开内容"))
+    full.add(entry("private-1", url="mixed.md", source="session-memory", title="私人章节", content="私人内容"))
+    full.add(entry("allowed-0", url="allowed.md", title="可见文档", content="可见内容"))
+    page = collections.list_documents("reference")
+    assert page["total"] == 1
+    assert [row["url"] for row in page["documents"]] == ["allowed.md"]
+    assert page["documents"][0]["title0"] == "可见文档"
+    assert collections.get_document("mixed.md", "reference") is None

@@ -12,7 +12,7 @@ from typing import Any
 
 from knowledge import rag as rag_module
 from knowledge.fts5 import tokenize
-from knowledge.rag import RagIndex, _escape_fts_query
+from knowledge.rag import RagIndex, _chunk_seq, _escape_fts_query
 
 _indexes: dict[tuple[str, str], RagIndex] = {}
 _lock = threading.Lock()
@@ -85,11 +85,18 @@ def list_documents(
         doc.pop("doc_key")
         # Chunk suffixes are numeric, not lexical (10 must not precede 2).
         if doc["url"]:
-            full_doc = get_document(str(doc["url"]), library)
-            if full_doc:
-                doc["title0"] = full_doc["title"]
-                if full_doc.get("processing"):
-                    doc["processing"] = full_doc["processing"]
+            # A listing needs the first title, not the document's full bodies.
+            with rag._lock:
+                headers = conn.execute(
+                    "SELECT id, rowid, title, source FROM entries WHERE url = ?", (doc["url"],),
+                ).fetchall()
+                if headers and (library != "reference" or all(_reference_allowed(str(row["source"])) for row in headers)):
+                    first = min(headers, key=lambda row: (_chunk_seq(str(row["id"])), int(row["rowid"])))
+                    doc["title0"] = str(first["title"])
+                    if library == "personal" and conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_provenance'").fetchone():
+                        provenance = conn.execute("SELECT processing FROM document_provenance WHERE url = ?", (doc["url"],)).fetchone()
+                        if provenance and str(provenance[0]):
+                            doc["processing"] = str(provenance[0])
         title = titles.get(doc["url"])
         doc.update(
             library=library, title_zh=str(title["zh"] or "") if title else "",
