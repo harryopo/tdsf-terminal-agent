@@ -89,10 +89,11 @@ type PendingVisibleTerminalExecution = VisibleTerminalRequest & {
   leafId: number;
   requestedAt: number;
   phase: "typing" | "running";
+  inputDispatched: boolean;
   timeoutHandle: number | null;
   /**
    * #113①（2026-09-22）探针：命令真正写进终端的那一刻（整段 write 返回 /
-   * 打字机 end 事件）。null = 还没注入。回执时随 `_probe` 带回 Rust，
+   * 打字机 end 事件）。null = 尚未确认输入完成，请求可能已经派发。回执时随 `_probe` 带回 Rust，
    * 用来把"等了很久"钉死在排队、注入、等块闭合中的某一段。
    */
   injectedAt: number | null;
@@ -659,7 +660,7 @@ export function useAiLiveBridge(params: Params) {
       for (const pending of [...pendingVisibleExecutions.values()]) {
         settleVisibleExecution(
           pending,
-          resultForAbandonedVisibleExecution({phase: pending.phase, cause}),
+          resultForAbandonedVisibleExecution({phase: pending.phase, inputDispatched: pending.inputDispatched, cause}),
         );
       }
     };
@@ -872,6 +873,7 @@ export function useAiLiveBridge(params: Params) {
         leafId,
         requestedAt: Date.now(),
         phase: "typing",
+        inputDispatched: false,
         timeoutHandle: null,
         injectedAt: null,
         graceHandle: null,
@@ -887,6 +889,7 @@ export function useAiLiveBridge(params: Params) {
         markVisibleExecutionRunning(pending);
         useTerminalBlocksStore.getState().markAgentPending(leafId);
         armAgentCommandEcho(leafId, text);
+        pending.inputDispatched = true;
         terminal.write(text);
         terminal.focus();
         // The timer starts only after the final Enter has been submitted.
@@ -896,20 +899,23 @@ export function useAiLiveBridge(params: Params) {
 
       useTerminalBlocksStore.getState().markAgentPending(leafId);
       armAgentCommandEcho(leafId, text, { progressive: true });
+      pending.inputDispatched = true;
       void invoke<HumanTypeReport>("ssh_write_human", {
         sessionId: request.sessionId,
         text,
         speed: prefs.agentTypingSpeed,
       })
         .then((report) => {
+          if (disposed || pendingVisibleExecutions.get(pending.requestId) !== pending) return;
           if (report.mode === "fallback") {
             markVisibleExecutionRunning(pending);
             startVisibleExecutionTimer(pending);
           }
         })
         .catch((e) => {
-          clearAgentCommandEcho(leafId);
           console.warn("[tdsf] visible terminal typing failed:", e);
+          if (disposed || pendingVisibleExecutions.get(pending.requestId) !== pending) return;
+          clearAgentCommandEcho(leafId);
           settleVisibleExecution(pending, {
             status: "unavailable",
             reason: "visible_terminal_injection_failed",

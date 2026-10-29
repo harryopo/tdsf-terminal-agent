@@ -10,9 +10,11 @@ import type { TerminalPaneHandle } from "@/modules/terminal";
 import { captureBlockOutputWithMeta, registerBlockOscHandlers, TerminalBlockCollector } from "@/modules/terminal/lib/terminalBlocks";
 import { useTerminalBlocksStore } from "@/modules/terminal/lib/terminalBlocksStore";
 import { RemoteShellIntegration } from "@/modules/terminal/lib/remoteShellIntegration";
+import * as terminalSessions from "@/modules/terminal/lib/useTerminalSession";
 import { useAiLiveBridge } from "./useAiLiveBridge";
 
 const ipc = vi.fn<(name: string, args?: InvokeArgs) => unknown>();
+const humanReply = vi.fn<() => unknown>();
 const listeners = new Map<string, Set<number>>();
 const disposers: (() => void)[] = [];
 const request = { requestId: "vt-receipt", sessionId: 7, command: "printf TDSF_DONE", timeoutMs: 30000 };
@@ -23,6 +25,14 @@ function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+function pendingWrite() {
+  type Report = { mode: "human" | "fallback"; stopped: boolean; warning: string | null };
+  let resolve!: (report: Report) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<Report>((accept, deny) => { resolve = accept; reject = deny; });
+  return { promise, resolve, reject };
 }
 
 function registerListeners(pause?: ReturnType<typeof deferred>, pausedName = "terminal:human_typing") {
@@ -45,7 +55,7 @@ function registerListeners(pause?: ReturnType<typeof deferred>, pausedName = "te
       listeners.get(String(args?.event))?.delete(Number(args?.eventId));
       return;
     }
-    if (method === "ssh_write_human") return { mode: "human", stopped: false };
+    if (method === "ssh_write_human") return humanReply();
     if (method === "sidecar_visible_terminal_response") return;
     throw new Error(`Unexpected native method: ${method}`);
   });
@@ -106,6 +116,7 @@ function mountBridge() {
 beforeEach(() => {
   listeners.clear();
   ipc.mockReset();
+  humanReply.mockReset().mockReturnValue({ mode: "human", stopped: false, warning: null });
   registerListeners();
   setLeafSshSession(11, 7);
   useSshStore.setState({ sessions: [{ id: "receipt-session", rustSessionId: 7, state: "connected", params: { host: "192.0.2.7", port: 22, user: "root" } }] as never, activeSessionId: "receipt-session" });
@@ -119,9 +130,67 @@ afterEach(() => {
   setLeafSshSession(11, null);
   listeners.clear();
   clearMocks();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("visible SSH result receipts through the live bridge and real parser", () => {
+  it("does not rearm timers when a fallback reply arrives after bridge cleanup", async () => {
+    const reply = pendingWrite();
+    humanReply.mockReturnValueOnce(reply.promise);
+    const h = mountBridge();
+    await h.ready();
+    await emit("sidecar:visible-terminal-execute", request);
+    h.unmount();
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ result: { status: "indeterminate" } });
+    vi.useFakeTimers();
+    try {
+      await act(async () => { reply.resolve({ mode: "fallback", stopped: false, warning: null }); await reply.promise; });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(responses()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clear the next command echo when a settled request rejects late", async () => {
+    // Observe the real function; do not replace its implementation.
+    const clearEcho = vi.spyOn(terminalSessions, "clearAgentCommandEcho");
+    const reply = pendingWrite();
+    humanReply.mockReturnValueOnce(reply.promise);
+    const h = mountBridge();
+    await h.ready();
+    await h.output(context + osc(133, "A"));
+    await emit("sidecar:visible-terminal-execute", request);
+    await emit("terminal:human_typing", { phase: "end", target: "ssh", id: 7, mode: "human", stopped: false });
+    await h.output(osc(633, "E;printf TDSF_DONE;42") + osc(133, "C") + "TDSF_DONE\r\n" + context + osc(133, "D;0") + osc(133, "A"));
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ result: { status: "success", output: "TDSF_DONE" } });
+    const next = { ...request, requestId: "vt-next", command: "printf TDSF_NEXT" };
+    await emit("sidecar:visible-terminal-execute", next);
+    expect(ipc.mock.calls.filter(([name]) => name === "ssh_write_human")).toHaveLength(2);
+    await act(async () => { reply.reject(new Error("late reply fixture")); await reply.promise.catch(() => undefined); });
+    expect(clearEcho).not.toHaveBeenCalled();
+    expect(responses()).toHaveLength(1);
+    await emit("terminal:human_typing", { phase: "end", target: "ssh", id: 7, mode: "human", stopped: false });
+    await h.output(osc(633, "E;printf TDSF_NEXT;43") + osc(133, "C") + "TDSF_NEXT\r\n" + context + osc(133, "D;0") + osc(133, "A"));
+    expect(responses()).toHaveLength(2);
+    expect(responses()[1][1]).toMatchObject({ requestId: next.requestId, result: { status: "success", exitCode: 0, output: "TDSF_NEXT" } });
+  });
+
+  it("still reports an active injection failure and clears its own echo", async () => {
+    const clearEcho = vi.spyOn(terminalSessions, "clearAgentCommandEcho");
+    humanReply.mockImplementationOnce(() => Promise.reject(new Error("active reply fixture")));
+    const h = mountBridge();
+    await h.ready();
+    await emit("sidecar:visible-terminal-execute", request);
+    expect(clearEcho).toHaveBeenCalledTimes(1);
+    expect(clearEcho).toHaveBeenCalledWith(11);
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ requestId: request.requestId, result: { status: "unavailable", reason: "visible_terminal_injection_failed" } });
+  });
+
   it.each(["before-output", "after-output"])("settles a fast command when typing end arrives %s", async (order) => {
     const h = mountBridge();
     await h.ready();
