@@ -283,3 +283,85 @@ describe("completion modifier arrows", () => {
     expect(completion.getCompletionState().visible).toBe(false);
   });
 });
+
+describe("completion clipboard input boundaries", () => {
+  beforeEach(async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Windows NT 10.0");
+    await boot();
+    fixtures.specs.set("git", {
+      name: "git",
+      subcommands: [{ name: "checkout", description: "切换分支" }],
+    });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["linux", 7, "C"],
+    ["windows", null, "c"],
+  ] as const)("preserves the %s command prefix after terminal copy", async (env, session, letter) => {
+    const leaf = makeLeaf(env, session);
+    const writes: string[] = [];
+    completion.initCompletionInjection(() => null, (_id, data) => writes.push(data));
+    await typeAndShow(leaf, "git c");
+    const copy = new KeyboardEvent("keydown", {
+      key: letter, code: "KeyC", ctrlKey: true, shiftKey: true, cancelable: true,
+    });
+
+    expect(completion.completionKeyHandler(leaf, copy)).toBe(true);
+    expect(copy.defaultPrevented).toBe(false);
+    expect(completion.getCompletionState()).toMatchObject({ visible: true, prefix: "git c" });
+    expect(writes).toEqual([]);
+    const state = await typeAndShow(leaf, "h");
+    expect(state.prefix).toBe("git ch");
+    completion.selectCompletionByIndex(state.items.findIndex((item) => item.command === "checkout"));
+    expect(writes).toEqual(["\b\bcheckout"]);
+  });
+
+  it("keeps Ctrl+Shift+C as a terminal control on macOS", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh");
+    await boot();
+    const leaf = makeLeaf("linux", 7);
+    await typeAndShow(leaf, "git c");
+    const control = new KeyboardEvent("keydown", { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
+    expect(completion.completionKeyHandler(leaf, control)).toBe(true);
+    expect(completion.getCompletionState().visible).toBe(false);
+    const state = await typeAndShow(leaf, "git c");
+    expect(state.prefix).toBe("git c");
+  });
+
+  it.each(["c", "u"])("keeps Ctrl+%s clearing the input prefix", async (letter) => {
+    const leaf = makeLeaf("linux", 7);
+    await typeAndShow(leaf, "git c");
+    const control = new KeyboardEvent("keydown", { key: letter, ctrlKey: true });
+    expect(completion.completionKeyHandler(leaf, control)).toBe(true);
+    const state = await typeAndShow(leaf, "git c");
+    expect(state.prefix).toBe("git c");
+  });
+
+  it("invalidates a pasted line on Shift+Insert until the next command", async () => {
+    const leaf = makeLeaf("linux", 7);
+    const writes: string[] = [];
+    completion.initCompletionInjection(() => null, (_id, data) => writes.push(data));
+    await typeAndShow(leaf, "git c");
+    const paste = new KeyboardEvent("keydown", { key: "Insert", code: "Insert", shiftKey: true, cancelable: true });
+    expect(completion.completionKeyHandler(leaf, paste)).toBe(true);
+    expect(paste.defaultPrevented).toBe(false);
+    expect(completion.getCompletionState().visible).toBe(false);
+    for (const char of "heck") completion.completionKeyHandler(leaf, key(char));
+    await vi.advanceTimersByTimeAsync(completion.PREDICT_DEBOUNCE_MS + 1);
+    await drain();
+    expect(completion.getCompletionState().visible).toBe(false);
+    expect(writes).toEqual([]);
+    expect(completion.completionKeyHandler(leaf, key("Enter"))).toBe(true);
+    const state = await typeAndShow(leaf, "git c");
+    expect(state.prefix).toBe("git c");
+  });
+
+  it("does not treat an unmodified Insert key as paste", async () => {
+    const leaf = makeLeaf("linux", 7);
+    await typeAndShow(leaf, "git c");
+    expect(completion.completionKeyHandler(leaf, new KeyboardEvent("keydown", { key: "Insert" }))).toBe(true);
+    expect(completion.getCompletionState()).toMatchObject({ visible: true, prefix: "git c" });
+  });
+});

@@ -19,6 +19,7 @@
  * -----------------------------------------------------------------------------
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
+import { IS_MAC, isTerminalCopy } from './keymap';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PREDICTION_CLEAR_EVENT } from '@/lib/predictionEvents';
@@ -676,6 +677,9 @@ export function completionKeyHandler(
   // IME 组合输入不处理
   if (event.isComposing || event.keyCode === 229) return true;
 
+  // Copy never changes the shell's input line.
+  if (isTerminalCopy(event, { isMac: IS_MAC })) return true;
+
   const current = activeState;
   const isVisible = current.visible && current.leafId === leafId;
   // Modified arrows belong to the terminal's readline/xterm handling.
@@ -763,8 +767,9 @@ export function completionKeyHandler(
   // 预测会给出错误补全破坏命令 (P1-10, 2026-08-18)。失配即失效:
   // 清空缓冲 + 关闭弹窗, 宁可无预测也不给错误预测。
   if (
-    (event.ctrlKey || event.metaKey) &&
-    (event.key === 'v' || event.key === 'V')
+    ((event.ctrlKey || event.metaKey) &&
+      (event.key === 'v' || event.key === 'V')) ||
+    (event.shiftKey && event.key === 'Insert')
   ) {
     invalidateInputLine(leafId);
     return true;

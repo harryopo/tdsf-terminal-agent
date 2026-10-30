@@ -10,7 +10,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { type FontWeight, Terminal } from "@xterm/xterm";
 import { shouldCursorBlink } from "./cursorBlink";
 import { completionKeyHandler, initCompletionInjection, loadHistoryIfNeeded } from "./completionInjection";
-import { terminalReadlineSequence } from "./keymap";
+import { IS_MAC, isTerminalCopy, terminalReadlineSequence } from "./keymap";
 import {
   readTerminalClipboard,
   writeTerminalClipboard,
@@ -342,7 +342,7 @@ function createSlot(): Slot {
       if (event.type === "keydown") bridge.writeToPty("\x1b\r");
       return false;
     }
-    if (isTerminalCopy(event)) {
+    if (isTerminalCopy(event, { isMac: IS_MAC })) {
       if (event.type === "keydown" && slot.term.hasSelection()) {
         const sel = slot.term.getSelection();
         if (sel) void writeTerminalClipboard(sel);
@@ -1120,21 +1120,6 @@ export function getLiveSlotForLeaf(leafId: number): Slot | null {
     slots.find(
       (s) => s.currentLeafId === leafId || s.retainedLeafId === leafId,
     ) ?? null
-  );
-}
-
-const IS_MAC =
-  typeof navigator !== "undefined" &&
-  /Mac|iPhone|iPad/.test(navigator.userAgent);
-
-function isTerminalCopy(e: KeyboardEvent): boolean {
-  return (
-    !IS_MAC &&
-    e.ctrlKey &&
-    e.shiftKey &&
-    !e.altKey &&
-    !e.metaKey &&
-    (e.code === "KeyC" || e.key === "c" || e.key === "C")
   );
 }
 
