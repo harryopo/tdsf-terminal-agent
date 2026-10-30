@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TDSF Terminal Agent — a terminal-first Linux operations workbench</title>
+<meta name="description" content="An AI agent that works inside your real terminal: commands typed character by character, writes gated by approval, exit codes reported honestly. Local, WSL and SSH workspaces with 25 built-in operations tools." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="TDSF Terminal Agent — a terminal-first Linux operations workbench" />
+<meta property="og:description" content="An AI agent inside your real terminal: commands typed character by character, writes gated by approval, exit codes reported honestly." />
+<meta property="og:image" content="https://harryopo.github.io/tdsf-terminal-agent/assets/product-hero.png" />
+<meta name="theme-color" content="#080808" />
+<link rel="canonical" href="https://harryopo.github.io/tdsf-terminal-agent/en/" />
+<link rel="alternate" hreflang="zh-CN" href="https://harryopo.github.io/tdsf-terminal-agent/" />
+<link rel="alternate" hreflang="en" href="https://harryopo.github.io/tdsf-terminal-agent/en/" />
+<link rel="icon" type="image/svg+xml" href="../assets/logo.svg" />
+<link rel="preload" as="image" href="../assets/product-hero.png" fetchpriority="high" />
+<link rel="stylesheet" href="../style.css" />
+<noscript><style>.reveal{opacity:1;transform:none}</style></noscript>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" role="banner">
+  <div class="nav-inner">
+    <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="26" height="26" /><span>TDSF Terminal Agent</span></a>
+    <nav class="nav-links" aria-label="Main navigation">
+      <a href="#loop">Loop</a>
+      <a href="#capabilities">Capabilities</a>
+      <a href="#safety">Safety</a>
+      <a href="#demo">Demo</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#start">Get started</a>
+      <a class="nav-cta" href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest" target="_blank" rel="noopener">Download</a>
+    </nav>
+    <span class="lang"><a href="../" hreflang="zh-CN" lang="zh-CN">中文</a></span>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-label="Open navigation"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ================================ hero ============================= -->
+  <section class="hero" id="top" data-section-id="hero">
+    <!-- hero video slot (enable when the footage exists): add video.hero-bg with muted / loop / playsinline,
+         source at assets/video/hero-loop.mp4, poster at assets/video/poster.png. Styles are already in place. -->
+    <div class="hero-media" aria-hidden="true"></div>
+    <div class="shell hero-inner">
+      <p class="hero-eyebrow">Terminal · SSH · AI Agent</p>
+      <h1>The AI works in<br />your <em>real terminal</em></h1>
+      <p class="hero-lead">
+        Commands are typed into your real shell character by character and echoed at the prompt.
+        Writes are classified, gated by an approval card, and reported with their real exit code.
+        Local, WSL and SSH — one window.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest" target="_blank" rel="noopener">Download for Windows</a>
+        <a class="btn btn-ghost" href="#demo">Watch the demo</a>
+        <a class="btn btn-ghost" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">Source</a>
+      </div>
+
+      <div class="hero-shot">
+        <div class="hero-shot-inner">
+          <img src="../assets/product-hero.png" width="2178" height="1340" alt="The TDSF Terminal Agent window: remote file tree on the left, a live SSH terminal in the middle, the AI operations assistant on the right" fetchpriority="high" />
+        </div>
+        <p class="hero-caption"><span>Remote file tree · real terminal · AI operations assistant</span><span>Windows x64 · Tauri 2 + Rust · Strands Agent</span></p>
+      </div>
+
+      <div class="stats">
+        <div class="stats-inner">
+          <div class="stat"><b>25</b><span>built-in operations tools</span></div>
+          <div class="stat"><b>8</b><span>Linux operations skills</span></div>
+          <div class="stat"><b>15</b><span>terminal themes</span></div>
+          <div class="stat"><b>3</b><span>processes, one job each</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== loop ============================== -->
+  <section class="section" id="loop" data-section-id="loop">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Execution Loop</p>
+        <h2>From one sentence to one real command — no black box in between</h2>
+        <p>The agent does not hand you a command to copy. It writes into the PTY / SSH channel of the current session, lets the remote shell echo it, then ties the real output back to the tool card that produced it.</p>
+      </div>
+      <div class="beats reveal">
+        <article class="beat"><div class="beat-index">01 / Perceive</div><h3>Read the environment</h3><p>Workspace, connected host, distribution family, recent terminal output and command blocks enter context before each turn.</p></article>
+        <article class="beat"><div class="beat-index">02 / Plan</div><h3>Planning is visible</h3><p>Multi-step work starts as a task list synced to the top of the conversation; the loop shows "turn N · M tools used".</p></article>
+        <article class="beat beat-accent"><div class="beat-index">03 / Act</div><h3>Typed into the real shell</h3><p>In visible mode the command is written character by character and echoed at the prompt; a background SSH channel is also available.</p></article>
+        <article class="beat"><div class="beat-index">04 / Verify</div><h3>Writes are re-checked</h3><p>Every write asks for a read-only verification; output, exit code and duration join the evidence chain, and a non-zero exit is always a failure.</p></article>
+        <article class="beat"><div class="beat-index">05 / Remember</div><h3>Kept in the workspace</h3><p>Conversations in one workspace share long-term memory: session summaries and successful troubleshooting cases are stored and recalled later.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================== capabilities ========================= -->
+  <section class="section" id="capabilities" data-section-id="capabilities">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Capabilities</p>
+        <h2>Everything operations needs, in the same window</h2>
+        <p>Terminal, remote hosts, AI assistant, knowledge base and teaching flow share one environment context — no copying facts between tools.</p>
+      </div>
+      <div class="caps reveal">
+        <article class="cap">
+          <div class="cap-head"><span class="cap-num">01</span><h3>Agent runtime</h3></div>
+          <ul>
+            <li>A single <strong>main agent</strong> driven by Strands Agents; the tool registry is the single source of truth for implementation, schema and policy</li>
+            <li><strong>25 built-in tools</strong>: SSH execution, remote file read/write, log analysis, process inspection, network diagnostics, service / package / firewall management, security audit, performance analysis, knowledge search, config diff, backup and restore, Python execution</li>
+            <li>At most 50 tool calls per turn, with a circuit breaker after 3 consecutive failures</li>
+            <li>Falls back to a read-only notice when the model is unavailable; 10 minutes without output aborts the turn, the session stays alive</li>
+          </ul>
+        </article>
+        <article class="cap">
+          <div class="cap-head"><span class="cap-num">02</span><h3>SSH management</h3></div>
+          <ul>
+            <li>Pure-Rust SSH client (russh); password and public-key authentication, credentials in the OS key store</li>
+            <li><strong>TOFU host-key verification</strong>: unknown hosts raise an approval prompt, a changed key raises an alarm</li>
+            <li>SFTP browsing and editing, drag-and-drop upload, a remote tree that follows <code>cwd</code></li>
+            <li>Local / remote / dynamic (SOCKS5) port forwarding; live server monitor for CPU, memory, disk, network and processes</li>
+          </ul>
+        </article>
+        <article class="cap">
+          <div class="cap-head"><span class="cap-num">03</span><h3>Safety boundary</h3></div>
+          <ul>
+            <li>Impact levels currently <strong>L0 / L2 / L3 / L4</strong> (L1 kept for compatibility); unrecognised commands fail closed</li>
+            <li>A hard denylist for catastrophic operations — blocked outright, with no "approve anyway" path</li>
+            <li>Per-session approval <strong>FIFO</strong>: the next card is not shown until the previous command has returned</li>
+            <li>Output is redacted before it reaches the UI, model context and logs; the SSH exit code is the hard result boundary</li>
+          </ul>
+        </article>
+        <article class="cap">
+          <div class="cap-head"><span class="cap-num">04</span><h3>Local knowledge</h3></div>
+          <ul>
+            <li>Indexes documents and notes already on this machine or imported by you; content volume depends on the device</li>
+            <li>Session summaries and successful troubleshooting cases can be stored per workspace tag and recalled later</li>
+            <li><strong>FTS5</strong> keyword search plus <strong>sqlite-vec</strong> semantic search, fused with RRF</li>
+            <li>Retrieval runs locally; model reasoning still uses the provider you configure (local models excepted)</li>
+          </ul>
+        </article>
+        <article class="cap">
+          <div class="cap-head"><span class="cap-num">05</span><h3>Workspaces and sessions</h3></div>
+          <ul>
+            <li>A workspace is the isolation unit: it keeps its own windows, tabs and environment (local / WSL / SSH)</li>
+            <li>The agent is <strong>isolated per workspace</strong>: a conversation only sees its own workspace and host</li>
+            <li>Local memory is tagged per workspace; later conversations can recall stored summaries and successes</li>
+            <li>The agent does not run outside a workspace — create one, then start the conversation</li>
+          </ul>
+        </article>
+        <article class="cap">
+          <div class="cap-head"><span class="cap-num">06</span><h3>Terminal and editor</h3></div>
+          <ul>
+            <li>Local PTY / WSL / SSH terminals share one xterm.js render pool, with split panes and multiple tabs</li>
+            <li>Command prediction: bundled spec index, carapace completion, Chinese tldr descriptions, the remote shell's own command set</li>
+            <li>CodeMirror 6 editor with LSP and remote file editing</li>
+            <li>Offline selection translation, command snippets, 15 built-in themes</li>
+          </ul>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============================== modes ============================ -->
+  <section class="section" id="modes" data-section-id="modes">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Trust Modes</p>
+        <h2>One switch decides how far the agent may go</h2>
+        <p>Modes are not prompt-level suggestions: observe mode removes write-capable tools from the schema, so the model cannot call a tool it never received.</p>
+      </div>
+      <div class="table-wrap reveal">
+        <table class="spec">
+          <thead><tr><th scope="col">Mode</th><th scope="col">What the agent may do</th><th scope="col">Where it fits</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mode-name is-observe">Observe</span></td><td>Read-only analysis; write-capable tools removed from the toolset</td><td>Production inspection</td></tr>
+            <tr><td><span class="mode-name">Confirm</span><span class="mode-tag">default</span></td><td>Full toolset; recognised read-only queries run directly, unknown and state-changing calls raise an approval card each</td><td>Day-to-day operations, human in the loop</td></tr>
+            <tr><td><span class="mode-name">Auto</span></td><td>Low-risk (L0–L2) runs directly; L3/L4 still need approval and the hard rules cannot be bypassed</td><td>Trusted sandbox</td></tr>
+            <tr><td><span class="mode-name">Teach</span></td><td>Observe permissions plus the teaching UI; one single-step command card at a time, continuing after the real result returns</td><td>Classroom and self-study</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============================== safety =========================== -->
+  <section class="section" id="safety" data-section-id="safety">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Safety Model</p>
+        <h2>"The AI said it worked" is not evidence</h2>
+        <p>Blocking, approval, circuit breaking and redaction are four independent lines of defence. None of them relies on the model's good intentions.</p>
+      </div>
+      <ul class="safety reveal">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span><strong>Hard rules come first</strong>: a denylist hit is blocked, and rewriting the command does not help.</span></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span><strong>Confirm is the default</strong>: each write waits for approval, and the card shows the real command, its purpose and its impact level.</span></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span><strong>Exit codes are the fact</strong>: a non-zero or missing exit code is reported as failure, never dressed up as success.</span></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span><strong>Evidence can be checked</strong>: tool calls are grouped as collect → act → verify, and the evidence comes from real tool events.</span></li>
+      </ul>
+      <p class="safety-note reveal">Risk classification and approval are not an operating-system sandbox: the local Python tool runs in a subprocess, and setting its working directory does not restrict all of its filesystem or network access.</p>
+    </div>
+  </section>
+
+  <!-- ================================ demo ============================ -->
+  <section class="section" id="demo" data-section-id="demo">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">In Action</p>
+        <h2>The whole chain, end to end</h2>
+        <p>Connect a server → the agent types the command into the real terminal → the approval card gates it → real output returns to the tool card → teaching mode runs it one step at a time.</p>
+      </div>
+      <div class="video-frame reveal">
+        <video id="demo-video" controls preload="none" playsinline hidden poster="../assets/video/poster.png">
+          <source src="../assets/video/demo.mp4" type="video/mp4" />
+        </video>
+        <button class="video-poster" id="demo-poster" type="button" aria-label="Play the demo video">
+          <img src="../assets/video/poster.png" width="1920" height="1080" loading="lazy" alt="Demo: the agent types a command into a real terminal and an approval card holds the write" />
+          <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+          <span class="video-meta">Real screen recording</span>
+        </button>
+        <p class="video-note" id="demo-note" hidden>The demo video could not load. Please refresh and try again.</p>
+      </div>
+      <ol class="shots reveal">
+        <li>Create an SSH workspace and connect to the server</li>
+        <li>Ask the agent to troubleshoot; the command is typed into the real terminal</li>
+        <li>An approval card appears → confirm</li>
+        <li>Remote output flows back into the tool card</li>
+        <li>The file tree follows <code>cwd</code>; drag a file to upload</li>
+        <li>Switch to teaching mode and run one command card at a time</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============================= architecture ======================= -->
+  <section class="section" id="architecture" data-section-id="architecture">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Architecture</p>
+        <h2>Three processes, one job each</h2>
+        <p>System capability stays in Rust, interaction stays in the frontend, and AI reasoning plus knowledge retrieval live in a Python process that can be restarted on its own.</p>
+      </div>
+      <div class="arch reveal">
+        <div class="arch-layer"><span class="layer-name">React 19</span><span class="layer-desc">Agent panel · terminal · workspaces · editor (TypeScript · Vite · Tailwind v4 · zustand)</span><span class="layer-metric">interaction</span></div>
+        <div class="arch-arrow">│ Tauri invoke / events</div>
+        <div class="arch-layer"><span class="layer-name">Rust (Tauri 2)</span><span class="layer-desc">PTY · SSH / SFTP · port forwarding · human-typing engine · sidecar supervision</span><span class="layer-metric">the only system surface</span></div>
+        <div class="arch-arrow">│ JSON-RPC over stdio</div>
+        <div class="arch-layer"><span class="layer-name">Python sidecar</span><span class="layer-desc">Strands agent · tool registry · approvals · knowledge · evidence chain</span><span class="layer-metric">restartable on its own</span></div>
+      </div>
+      <div class="stack-tags reveal">
+        <span class="tag">Tauri 2</span><span class="tag">React 19</span><span class="tag">TypeScript</span><span class="tag">xterm.js</span><span class="tag">CodeMirror 6</span><span class="tag">russh</span><span class="tag">russh-sftp</span><span class="tag">portable-pty</span><span class="tag">keyring</span><span class="tag">Strands Agents</span><span class="tag">SQLite FTS5</span><span class="tag">sqlite-vec</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= verification ======================= -->
+  <section class="section" id="verification" data-section-id="verification">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Verification</p>
+        <h2>Automated gates and native acceptance stay separate</h2>
+        <p>Test counts move with the implementation, so no single run's numbers are treated as a feature claim.</p>
+      </div>
+      <div class="table-wrap reveal">
+        <table class="spec">
+          <thead><tr><th scope="col">Gate</th><th scope="col">Scope</th><th scope="col">Release requirement</th></tr></thead>
+          <tbody>
+            <tr><td>pytest</td><td>Python sidecar (agent, tools, approvals, knowledge)</td><td>Full suite passes</td></tr>
+            <tr><td>vitest</td><td>Frontend state, interaction and render contracts</td><td>Full suite passes</td></tr>
+            <tr><td>cargo test</td><td>Rust shell (PTY, SSH, typing engine, tunnels)</td><td>Full suite passes</td></tr>
+            <tr><td>tsc / eslint</td><td>Types and static checks</td><td>Zero errors, zero warnings</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note reveal"><strong>Pending native desktop acceptance</strong> (requires a real SSH server and saved connection profiles): connect and history restore, per-session approval FIFO, the teaching command closed loop across success / non-zero exit / timeout / parallel cards, and distribution-aware completion.</p>
+    </div>
+  </section>
+
+  <!-- ================================ start =========================== -->
+  <section class="section" id="start" data-section-id="start">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Get Started</p>
+        <h2>Run it from source</h2>
+        <p>Requirements: Node.js ≥ 20, pnpm ≥ 9, stable Rust, Python ≥ 3.12.</p>
+      </div>
+      <div class="quick reveal">
+        <pre class="code-block"><span class="c"># 1. install frontend dependencies</span>
+pnpm install
+
+<span class="c"># 2. start the desktop app (first build takes 2–5 min)</span>
+pnpm tauri:dev
+
+<span class="c"># on Windows you can also double-click</span>
+<span class="k">启动.bat</span></pre>
+        <ol class="steps">
+          <li><span><strong>Configure a model</strong>: Settings → Models, add an API key (DeepSeek, Zhipu, Qwen, Kimi, Doubao, Ollama or a custom OpenAI-compatible endpoint).</span></li>
+          <li><span><strong>Create a workspace</strong>: local, WSL or an SSH server; SSH credentials go to the OS key store.</span></li>
+          <li><span><strong>Start a conversation inside it</strong>: the agent only sees that workspace, and conversations in the same workspace share memory.</span></li>
+        </ol>
+      </div>
+      <p class="note reveal">Runs from source today, with a Windows installer available. The installer is not Authenticode-signed yet, so SmartScreen may warn on first run — verify the SHA-256 first. See <a href="https://github.com/harryopo/tdsf-terminal-agent/releases" target="_blank" rel="noopener">Releases</a> for the latest build.</p>
+    </div>
+  </section>
+
+  <!-- ================================ docs ============================ -->
+  <section class="section" id="docs" data-section-id="docs">
+    <div class="shell">
+      <div class="section-head reveal">
+        <p class="eyebrow">Documentation</p>
+        <h2>From first run to architecture</h2>
+      </div>
+      <div class="docs-grid reveal">
+        <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/README.en.md" target="_blank" rel="noopener"><span class="doc-name">README</span><span class="doc-desc">Overview, capability list, quick start</span></a>
+        <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener"><span class="doc-name">Source</span><span class="doc-desc">Full source, history and branches</span></a>
+        <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/issues" target="_blank" rel="noopener"><span class="doc-name">Issues</span><span class="doc-desc">Bug reports and feature requests</span></a>
+        <a class="doc-link" href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/LICENSE" target="_blank" rel="noopener"><span class="doc-name">License</span><span class="doc-desc">Apache-2.0</span></a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell footer-inner">
+    <div class="footer-brand"><img src="../assets/logo.svg" alt="" width="24" height="24" /><span>TDSF Terminal Agent</span></div>
+    <nav class="footer-links" aria-label="Footer navigation">
+      <a href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/README.en.md" target="_blank" rel="noopener">Docs</a>
+      <a href="https://github.com/harryopo/tdsf-terminal-agent/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a>
+      <a href="../" hreflang="zh-CN" lang="zh-CN">中文</a>
+    </nav>
+    <p>Built on top of an open-source terminal project and extended with SSH server management, a visible-execution agent and a Linux teaching workflow. © <span id="year">2026</span> TDSF Terminal Agent.</p>
+  </div>
+</footer>
+
+<script src="../script.js"></script>
+</body>
+</html>
