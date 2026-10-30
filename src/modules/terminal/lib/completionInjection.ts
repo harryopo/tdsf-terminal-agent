@@ -678,6 +678,8 @@ export function completionKeyHandler(
 
   const current = activeState;
   const isVisible = current.visible && current.leafId === leafId;
+  // Modified arrows belong to the terminal's readline/xterm handling.
+  const hasModifiers = event.ctrlKey || event.altKey || event.metaKey || event.shiftKey;
 
   // === Ctrl+C / Ctrl+U → 清空缓冲区 + 关闭弹窗 ===
   if (event.ctrlKey && (event.key === 'c' || event.key === 'C' || event.key === 'u' || event.key === 'U')) {
@@ -688,12 +690,12 @@ export function completionKeyHandler(
   }
 
   // === 右箭头 = 接受第一条预测（只在弹窗可见时） ===
-  if (event.key === 'ArrowRight' && isVisible && current.items.length > 0) {
+  if (event.key === 'ArrowRight' && !hasModifiers && isVisible && current.items.length > 0) {
     if (acceptPrediction(leafId, current.items[current.selectedIndex])) return false;
   }
 
   // === 向下箭头 = 选择下一条预测 ===
-  if (event.key === 'ArrowDown' && isVisible && current.items.length > 1) {
+  if (event.key === 'ArrowDown' && !hasModifiers && isVisible && current.items.length > 1) {
     event.preventDefault();
     setState((s) => ({
       ...s,
@@ -703,7 +705,7 @@ export function completionKeyHandler(
   }
 
   // === 向上箭头 = 选择上一条预测 ===
-  if (event.key === 'ArrowUp' && isVisible && current.items.length > 1) {
+  if (event.key === 'ArrowUp' && !hasModifiers && isVisible && current.items.length > 1) {
     event.preventDefault();
     setState((s) => ({
       ...s,

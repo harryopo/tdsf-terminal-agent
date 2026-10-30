@@ -220,3 +220,66 @@ describe("completion acceptance context", () => {
     expect(writes).toEqual(["\bcheckout"]);
   });
 });
+
+describe("completion modifier arrows", () => {
+  beforeEach(() => {
+    fixtures.specs.set("git", {
+      name: "git",
+      subcommands: [
+        { name: "checkout", description: "切换分支" },
+        { name: "cherry-pick", description: "拣选提交" },
+      ],
+    });
+  });
+
+  it.each(
+    (["ctrlKey", "altKey", "metaKey", "shiftKey"] as const).flatMap((modifier) =>
+      (["ArrowRight", "ArrowUp", "ArrowDown"] as const).map((arrow) => [modifier, arrow] as const),
+    ),
+  )("passes %s + %s through without accepting or selecting a prediction", async (modifier, arrow) => {
+    const leaf = makeLeaf("linux", 7);
+    const writes: string[] = [];
+    completion.initCompletionInjection(() => null, (_id, data) => writes.push(data));
+    const state = await typeAndShow(leaf, "git c");
+    expect(state.items.length).toBeGreaterThan(1);
+    const event = new KeyboardEvent("keydown", {
+      key: arrow,
+      code: arrow,
+      keyCode: { ArrowRight: 39, ArrowUp: 38, ArrowDown: 40 }[arrow],
+      cancelable: true,
+      [modifier]: true,
+    });
+    expect(event[modifier]).toBe(true);
+
+    expect(completion.completionKeyHandler(leaf, event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(writes).toEqual([]);
+    expect(completion.getCompletionState().visible).toBe(false);
+
+    for (const char of "heck") completion.completionKeyHandler(leaf, key(char));
+    await vi.advanceTimersByTimeAsync(completion.PREDICT_DEBOUNCE_MS + 1);
+    await drain();
+    expect(completion.getCompletionState().visible).toBe(false);
+    expect(writes).toEqual([]);
+    expect(completion.completionKeyHandler(leaf, key("Enter"))).toBe(true);
+    await typeAndShow(leaf, "git c");
+  });
+
+  it("keeps ordinary arrows selecting and accepting the current prediction", async () => {
+    const leaf = makeLeaf("linux", 7);
+    const writes: string[] = [];
+    completion.initCompletionInjection(() => null, (_id, data) => writes.push(data));
+    const state = await typeAndShow(leaf, "git c");
+    expect(state.items.length).toBeGreaterThan(1);
+    expect(state.items[0].command).toBe("checkout");
+
+    expect(completion.completionKeyHandler(leaf, key("ArrowDown"))).toBe(false);
+    expect(completion.getCompletionState().selectedIndex).toBe(1);
+    expect(completion.completionKeyHandler(leaf, key("ArrowUp"))).toBe(false);
+    expect(completion.getCompletionState().selectedIndex).toBe(0);
+    expect(writes).toEqual([]);
+    expect(completion.completionKeyHandler(leaf, key("ArrowRight"))).toBe(false);
+    expect(writes).toEqual(["\bcheckout"]);
+    expect(completion.getCompletionState().visible).toBe(false);
+  });
+});
