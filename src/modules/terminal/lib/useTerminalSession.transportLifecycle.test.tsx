@@ -101,6 +101,7 @@ vi.mock("./useTerminalFont", () => ({
 }));
 
 import {
+  armAgentCommandEcho,
   confirmPendingRiskCommand,
   disposeSession,
   getPendingRiskCommand,
@@ -109,6 +110,7 @@ import {
   terminalDebugStats,
   useTerminalSession,
 } from "./useTerminalSession";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { TerminalTransport } from "./pty-bridge";
 
 type OpenHandlers = {
@@ -195,6 +197,32 @@ afterEach(() => {
 });
 
 describe("useTerminalSession transport identity lifecycle", () => {
+  it("读取当前命令颜色并固定到本条回显，下一条使用新颜色且不向SSH写颜色", async () => {
+    const leafId = 93120;
+    const output = vi.fn();
+    mocks.slots.set(leafId, { term: { write: output } });
+    const transport = makeTransport("color-fixture");
+    let handlers!: OpenHandlers;
+    const openTransport = vi.fn(async (value: OpenHandlers) => { handlers = value; return transport; });
+    mount({ leafId, transportKey: "color-fixture", openTransport, remote: true });
+    await waitFor(() => expect(openTransport).toHaveBeenCalledTimes(1));
+    const prefs = usePreferencesStore.getState();
+    const previous = prefs.agentCommandColor;
+    try {
+      prefs.agentCommandColor = "#22aa77";
+      armAgentCommandEcho(leafId, "pwd\n", { progressive: true, promptReady: true });
+      prefs.agentCommandColor = "#ffaa00";
+      act(() => handlers.onData(new TextEncoder().encode("pwd\r\n/tmp\r\n[root]# ")));
+      expect(new TextDecoder().decode(output.mock.calls[0][0])).toBe("\x1b[38;2;34;170;119mpwd\x1b[0m\r\n/tmp\r\n[root]# ");
+      armAgentCommandEcho(leafId, "pwd\n", { progressive: true, promptReady: true });
+      act(() => handlers.onData(new TextEncoder().encode("pwd\r\n/tmp\r\n[root]# ")));
+      expect(new TextDecoder().decode(output.mock.calls[1][0])).toBe("\x1b[38;2;255;170;0mpwd\x1b[0m\r\n/tmp\r\n[root]# ");
+      expect(transport.write).not.toHaveBeenCalled();
+    } finally {
+      prefs.agentCommandColor = previous;
+    }
+  });
+
   it("retires a pending old transport on key change and ignores its late resolve, data, exit, and queued input", async () => {
     const leafId = 93101;
     const output = vi.fn();

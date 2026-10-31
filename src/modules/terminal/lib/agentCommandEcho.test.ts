@@ -189,3 +189,33 @@ describe("AgentCommandEcho — 通用护栏", () => {
     }
   });
 });
+
+describe("AgentCommandEcho — 既有提示符与命令颜色", () => {
+  it("在已确认空闲的提示符后，第一字节立即着色且不等待新的提示符", () => {
+    const options = { progressive: true, promptReady: true };
+    const echo = new AgentCommandEcho("pwd\n", options);
+    const first = decode(echo.transform(encode("p")));
+    expect(first).toBe(BLUE + "p");
+    const rest = run(echo, ["w", "d\r\n/tmp\r\n[root]# "]);
+    expect(first + rest.output).toBe(BLUE + "pwd" + RESET + "\r\n/tmp\r\n[root]# ");
+    assertLossless(["pwd\r\n/tmp\r\n[root]# "], { ...rest, output: first + rest.output });
+    expect(echo.isComplete()).toBe(true);
+  });
+
+  it.each([false, true])("自选颜色只作用于命令回显（progressive=%s）", (progressive) => {
+    const color = "\x1b[38;2;34;170;119m";
+    const options = { progressive, color: "#22aa77" };
+    const echo = new AgentCommandEcho("pwd\n", options);
+    const stream = run(echo, ["[root]# ", "p", "wd\r\n/tmp\r\n[root]# "]);
+    expect(stream.output).toBe("[root]# " + color + "pwd" + RESET + "\r\n/tmp\r\n[root]# ");
+    expect(stream.output.replace(color, "").replace(RESET, "")).toBe("[root]# pwd\r\n/tmp\r\n[root]# ");
+    expect(echo.discard()).toHaveLength(0);
+  });
+
+  it("无效颜色回退默认蓝色，不把配置内容作为终端控制序列输出", () => {
+    const options = { progressive: true, promptReady: true, color: "\x1b]0;invalid\x07" };
+    const stream = run(new AgentCommandEcho("pwd\n", options), ["pwd\r\n"]);
+    expect(stream.output).toBe(BLUE + "pwd" + RESET + "\r\n");
+    assertLossless(["pwd\r\n"], stream);
+  });
+});

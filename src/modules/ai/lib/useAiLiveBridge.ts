@@ -905,7 +905,7 @@ export function useAiLiveBridge(params: Params) {
       }
 
       useTerminalBlocksStore.getState().markAgentPending(leafId);
-      armAgentCommandEcho(leafId, text, { progressive: true });
+      armAgentCommandEcho(leafId, text, { progressive: true, promptReady: true });
       pending.inputDispatched = true;
       void invoke<HumanTypeReport>("ssh_write_human", {
         sessionId: request.sessionId,

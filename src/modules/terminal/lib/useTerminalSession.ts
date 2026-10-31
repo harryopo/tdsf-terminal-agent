@@ -337,7 +337,10 @@ export function armAgentCommandEcho(
   options?: AgentCommandEchoOptions,
 ): void {
   const s = sessions.get(leafId);
-  if (s) s.agentCommandEcho = new AgentCommandEcho(command, options);
+  if (s) s.agentCommandEcho = new AgentCommandEcho(command, {
+    ...options,
+    color: usePreferencesStore.getState().agentCommandColor,
+  });
 }
 
 /**

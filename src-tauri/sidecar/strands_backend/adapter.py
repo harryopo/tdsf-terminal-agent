@@ -695,6 +695,9 @@ class ToolCallLimitHook:
         if self.refresh_mode is not None:
             self.refresh_mode()
         self.round += 1
+        handler = getattr(getattr(event, "agent", None), "callback_handler", None)
+        if isinstance(handler, TdsfStrandsCallbackHandler):
+            handler.begin_model_call(self.round)
 
     def _tool_name(self, event: Any) -> str:
         tool_use = getattr(event, "tool_use", None)
@@ -1371,6 +1374,8 @@ class TdsfStrandsCallbackHandler:
         # 会话流水日志：reasoning 增量聚合缓冲（正文 data 到来 / 循环边界时落盘，
         # 防止逐 token 写日志爆体积——agent_log.content 上限 2000 字符）
         self._reasoning_buf: list[str] = []
+        self._model_started_at: float | None = None
+        self._model_round = 0
         # Per-invoke output gate.  The handler is cached with the Strands
         # agent, so this state is reset at the beginning of every turn.
         self._teach_gate_enabled = False
@@ -1389,6 +1394,23 @@ class TdsfStrandsCallbackHandler:
             "reasoning_logged": 0,
         }
 
+    def begin_model_call(self, round_number: int) -> None:
+        self._model_started_at = time.monotonic()
+        self._model_round = round_number
+        self._log_model_timing("request")
+
+    def _log_model_timing(self, phase: str, **fields: Any) -> None:
+        if not self.session_id:
+            return
+        try:
+            from strands_backend.agent_log import log_event
+
+            log_event(self.session_id, "model_timing", "", meta={
+                "phase": phase, "round": self._model_round, **fields,
+            })
+        except Exception as exc:  # Diagnostics must not interrupt the stream.
+            logger.debug("model timing unavailable: error_type=%s", type(exc).__name__)
+
     def begin_turn(self, *, teach: bool, allow_teach_output: bool) -> None:
         """Reset the marker gate before a new invoke starts.
 
@@ -1396,6 +1418,8 @@ class TdsfStrandsCallbackHandler:
         from the current user message, so a previous lesson in the same
         session cannot make a knowledge lookup look like a new lesson.
         """
+        self._model_started_at = None
+        self._model_round = 0
         self._teach_gate_enabled = bool(teach)
         self._teach_output_allowed = bool(teach and allow_teach_output)
         self._teach_prefix_decided = (
@@ -1416,6 +1440,24 @@ class TdsfStrandsCallbackHandler:
 
     def _handle_event(self, event: dict) -> None:
         """处理单个 Strands 事件（main 事件流）"""
+        # Record the first actual content, not a lifecycle event or the later
+        # reasoning-buffer flush. Keep all returned content out of this timing.
+        first_response: dict[str, Any] | None = None
+        if self._model_started_at is not None:
+            response_type = None
+            for key, kind in (("reasoningText", "reasoning"), ("data", "text")):
+                if isinstance(event.get(key), str) and event[key]:
+                    response_type = kind
+                    break
+            tool_use = event.get("current_tool_use")
+            if response_type is None and isinstance(tool_use, dict) and tool_use.get("name"):
+                response_type = "tool"
+            if response_type is not None:
+                first_response = {
+                    "response_type": response_type,
+                    "elapsed_ms": round((time.monotonic() - self._model_started_at) * 1000, 2),
+                }
+                self._model_started_at = None
         # 深度思考流（模型 reasoningContent 增量）→ thinking 消息 + 流水聚合
         reasoning_text = event.get("reasoningText")
         if reasoning_text and isinstance(reasoning_text, str):
@@ -1448,6 +1490,10 @@ class TdsfStrandsCallbackHandler:
                 f"strands force_stop: agent={self.agent_name}, "
                 f"reason={event.get('force_stop_reason', 'unknown')}"
             )
+
+        # Forward deltas first; diagnostics do not add a queue or a wait window.
+        if first_response is not None:
+            self._log_model_timing("first_response", **first_response)
 
     def _flush_reasoning(self) -> None:
         """聚合缓冲的 reasoning 增量 → agent_log 落盘（一条 reasoning 事件）"""

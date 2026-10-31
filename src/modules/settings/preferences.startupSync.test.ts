@@ -144,6 +144,44 @@ describe("preferences startup synchronization", () => {
     }
   });
 
+  it("默认命令蓝色随偏好初始化，不增加原生读取", async () => {
+    const { preferences } = await loadPreferencesModule();
+    await startInit(preferences);
+    expect(preferences.usePreferencesStore.getState()).toMatchObject({ agentCommandColor: "#5b8cff" });
+    expect(harness.entriesCalls).toBe(1);
+  });
+
+  it("规范化已保存颜色，无效配置回退默认蓝色", async () => {
+    harness.entries = async () => [["agentCommandColor", "#AAbbCC"]];
+    const { store } = await loadPreferencesModule();
+    expect(await store.loadPreferences()).toMatchObject({ agentCommandColor: "#aabbcc" });
+    harness.entries = async () => [["agentCommandColor", "\x1b[31m"]];
+    expect(await store.loadPreferences()).toMatchObject({ agentCommandColor: "#5b8cff" });
+  });
+
+  it("命令颜色持久化并跨窗口同步，初始化旧快照不覆盖新选择", async () => {
+    const snapshot = deferred<[string, unknown][]>([]);
+    harness.entries = () => snapshot.promise;
+    const { preferences, store } = await loadPreferencesModule();
+    const init = startInit(preferences);
+    await vi.waitFor(() => expect(harness.entriesCalls).toBe(1));
+    expect(store).toHaveProperty("setAgentCommandColor", expect.any(Function));
+    const setColor = (store as unknown as { setAgentCommandColor: (color: string) => Promise<void> }).setAgentCommandColor;
+    await setColor("#22AA77");
+    snapshot.resolve([["agentCommandColor", "#aabbcc"]]);
+    await init;
+    expect(preferences.usePreferencesStore.getState()).toMatchObject({ agentCommandColor: "#22aa77" });
+    harness.entries = undefined;
+    expect(await store.loadPreferences()).toMatchObject({ agentCommandColor: "#22aa77" });
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("tdsf://prefs-changed", { key: "agentCommandColor", value: "#AABBCC" });
+    expect(preferences.usePreferencesStore.getState()).toMatchObject({ agentCommandColor: "#aabbcc" });
+    await emit("tdsf://prefs-changed", { key: "agentCommandColor", value: "invalid" });
+    expect(preferences.usePreferencesStore.getState()).toMatchObject({ agentCommandColor: "#5b8cff" });
+    await setColor("invalid");
+    expect(await store.loadPreferences()).toMatchObject({ agentCommandColor: "#5b8cff" });
+  });
+
   it("waits for cross-window subscription before reporting hydration", async () => {
     const subscription = deferred<() => void>(() => {});
     harness.listenImpl = async (callback) => {

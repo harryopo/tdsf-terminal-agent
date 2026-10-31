@@ -138,6 +138,22 @@ afterEach(() => {
 });
 
 describe("visible SSH result receipts through the live bridge and real parser", () => {
+  it("从既有空闲提示符立即开始命令着色，保留无清行输入和真实回显结算", async () => {
+    const armEcho = vi.spyOn(terminalSessions, "armAgentCommandEcho");
+    const h = mountBridge();
+    await h.ready();
+    await h.output(context + osc(133, "A"));
+    await emit("sidecar:visible-terminal-execute", request);
+    expect(armEcho).toHaveBeenCalledWith(11, `${request.command}\n`, expect.objectContaining({ progressive: true, promptReady: true }));
+    const args = ipc.mock.calls.find(([method]) => method === "ssh_write_human")?.[1] as Record<string, unknown>;
+    expect(args.clearInput).toBe(false);
+    expect(responses()).toHaveLength(0);
+    await emit("terminal:human_typing", { phase: "end", target: "ssh", id: 7, mode: "human", stopped: false });
+    await h.output(osc(633, "E;printf TDSF_DONE;41") + osc(133, "C") + "TDSF_DONE\r\n" + context + osc(133, "D;0") + osc(133, "A"));
+    expect(responses()).toHaveLength(1);
+    expect(responses()[0][1]).toMatchObject({ requestId: request.requestId, result: { status: "success", exitCode: 0, output: "TDSF_DONE" } });
+  });
+
   it.each(["before-output", "after-output"])("keeps compound output attributed to the request with typing end %s", async (order) => {
     const h = mountBridge();
     await h.ready();
