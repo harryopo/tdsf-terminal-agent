@@ -45,33 +45,50 @@
     <!-- 首屏视频位（视频到位后启用）：在此放 video.hero-bg，属性 muted / loop / playsinline，
          源文件放 assets/video/hero-loop.mp4，poster 用 assets/video/poster.png。样式已就绪（.hero-bg）。 -->
     <div class="hero-media" aria-hidden="true"></div>
-    <div class="shell hero-inner">
-      <p class="hero-eyebrow">Terminal · SSH · AI Agent</p>
-      <h1>终端里的事，<br />交给 AI 也<em>不失手</em></h1>
-      <p class="hero-lead">
-        命令逐字写进真实 shell，在提示符处回显；写操作按风险分级拦截，人工确认后才执行；
-        退出码与 stderr 如实上报。本地 / WSL / SSH 三种工作区，一个窗口。
-      </p>
-      <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest" target="_blank" rel="noopener">下载 Windows 版</a>
-        <a class="btn btn-ghost" href="#demo">观看演示</a>
-        <a class="btn btn-ghost" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">源码仓库</a>
+    <div class="shell hero-grid">
+      <div class="hero-copy">
+        <p class="hero-eyebrow">Terminal · SSH · AI Agent</p>
+        <h1>终端里的事，<br />交给 AI 也<em>不失手</em></h1>
+        <p class="hero-lead">
+          命令逐字写进真实 shell，在提示符处回显；写操作按风险分级拦截，人工确认后才执行；
+          退出码与 stderr 如实上报。本地 / WSL / SSH 三种工作区，一个窗口。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest" target="_blank" rel="noopener">下载 Windows 版</a>
+          <a class="btn btn-ghost" href="#demo">观看演示</a>
+          <a class="btn btn-ghost" href="https://github.com/harryopo/tdsf-terminal-agent" target="_blank" rel="noopener">源码仓库</a>
+        </div>
+        <dl class="hero-stats">
+          <div><dt>25</dt><dd>内置运维工具</dd></div>
+          <div><dt>8</dt><dd>Linux 运维技能</dd></div>
+          <div><dt>15</dt><dd>终端主题</dd></div>
+          <div><dt>3</dt><dd>独立进程</dd></div>
+        </dl>
       </div>
 
-      <div class="hero-shot">
+      <div class="hero-visual">
         <div class="hero-shot-inner">
           <img src="assets/product-hero.png" width="2178" height="1340" alt="TDSF Terminal Agent 主界面：左侧远程文件树、中间 SSH 终端、右侧 AI 运维助手" fetchpriority="high" />
         </div>
         <p class="hero-caption"><span>左侧远程文件树 · 中间真实终端 · 右侧 AI 运维助手</span><span>Windows x64 · Tauri 2 + Rust · Strands Agent</span></p>
       </div>
-
-      <div class="stats">
-        <div class="stats-inner">
-          <div class="stat"><b>25</b><span>内置运维工具</span></div>
-          <div class="stat"><b>8</b><span>Linux 运维技能</span></div>
-          <div class="stat"><b>15</b><span>终端主题</span></div>
-          <div class="stat"><b>3</b><span>独立进程，各管一层</span></div>
-        </div>
+    </div>
+    <div class="marquee" aria-hidden="true">
+      <div class="marquee-track">
+        <span>25 BUILT-IN TOOLS</span>
+        <span>8 LINUX SKILLS</span>
+        <span>15 TERMINAL THEMES</span>
+        <span>SSH / SFTP / TUNNELS</span>
+        <span>LOCAL KNOWLEDGE (FTS5 + VEC)</span>
+        <span>VISIBLE EXECUTION</span>
+        <span>APPROVAL FIFO</span>
+        <span>25 BUILT-IN TOOLS</span>
+        <span>8 LINUX SKILLS</span>
+        <span>15 TERMINAL THEMES</span>
+        <span>SSH / SFTP / TUNNELS</span>
+        <span>LOCAL KNOWLEDGE (FTS5 + VEC)</span>
+        <span>VISIBLE EXECUTION</span>
+        <span>APPROVAL FIFO</span>
       </div>
     </div>
   </section>
