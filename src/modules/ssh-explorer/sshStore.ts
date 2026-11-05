@@ -57,6 +57,12 @@ function omitSessionKey<T>(record: Record<string, T>, sessionId: string): Record
  */
 export type SshSessionOrigin = 'space' | 'tab';
 
+type SshConnectOptions = {
+  autoConnect?: boolean;
+  origin?: SshSessionOrigin;
+  onFailure?: (message: string) => void;
+};
+
 /** SSH 会话信息 (前端管理) */
 export interface SshSessionInfo {  /** 前端唯一 id (crypto.randomUUID) */
   id: string;
@@ -150,7 +156,7 @@ interface SshExplorerState {
    */
   connect: (
     params: SshConnectParams,
-    opts?: { autoConnect?: boolean; origin?: SshSessionOrigin },
+    opts?: SshConnectOptions,
   ) => Promise<string | null>;
   disconnect: (sessionId: string) => Promise<void>;
   setActiveSession: (id: string) => void;
@@ -190,7 +196,7 @@ interface SshExplorerState {
   /** 用已保存的连接配置自动登录 (从 keyring 取敏感字段后调用 connect) */
   connectWithSaved: (
     profile: SshCredentialProfile,
-    opts?: { autoConnect?: boolean; origin?: SshSessionOrigin },
+    opts?: SshConnectOptions,
   ) => Promise<string | null>;
 
   // === TDSF 2026-08-28: 远端 carapace 检测 (无弹窗设计) ===
@@ -558,6 +564,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           user: params.user,
         },
       });
+      opts?.onFailure?.(msg);
       return null;
     }
   },
@@ -753,10 +760,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
 
       // 3. 调用 connect（透传 autoConnect 标记，订阅处理器据此决定
       //    "无匹配 SSH Space"时跳过（开机自动）还是新建（对话框手动））
-      const sessionId = await get().connect(params, {
-        autoConnect: opts?.autoConnect,
-        origin: opts?.origin,
-      });
+      const sessionId = await get().connect(params, opts);
 
       // 4. 连接成功后更新 lastUsed
       if (sessionId) {

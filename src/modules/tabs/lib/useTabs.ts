@@ -163,6 +163,8 @@ export type TerminalTab = TabBase & {
    * 现在按 tab 维度绑定，每个 terminal tab 明确自己是本地还是 SSH。
    */
   sshSessionId?: string | null;
+  /** SSH workspace placeholder. Wait for a bound session before mounting a terminal. */
+  sshPending?: boolean;
 };
 
 export type EditorTab = TabBase & {
@@ -421,14 +423,17 @@ function coldTerminalTab(
   leafId: number,
   spaceId: string,
   cwd?: string,
+  sshSessionId?: string | null,
 ): TerminalTab {
   return {
     id: tabId,
     kind: "terminal",
     spaceId,
     cold: true,
-    title: cwd ? basename(cwd) : "shell",
+    title: sshSessionId === null ? "等待连接" : cwd ? basename(cwd) : "shell",
     cwd,
+    ...(sshSessionId !== undefined && { sshSessionId }),
+    ...(sshSessionId === null && { sshPending: true }),
     paneTree: { kind: "leaf", id: leafId, cwd },
     activeLeafId: leafId,
   };
@@ -437,6 +442,7 @@ function coldTerminalTab(
 // Plans the removal of a deleted space's tabs while keeping the invariant that
 // the now-active `fallbackSpaceId` always has at least one tab (a cold one is
 // spawned when it would be left empty). Returns null when nothing to remove.
+// A null fallback session means the SSH workspace is waiting for a connection.
 export function planSpaceRemoval(
   tabs: Tab[],
   currentActiveId: number,
@@ -444,6 +450,7 @@ export function planSpaceRemoval(
   fallbackSpaceId: string,
   fallbackCwd: string | undefined,
   allocId: () => number,
+  fallbackSshSessionId?: string | null,
 ): { tabs: Tab[]; disposeLeafIds: number[]; activeId: number } | null {
   const removed = tabs.filter((t) => t.spaceId === spaceId);
   if (removed.length === 0) return null;
@@ -456,7 +463,13 @@ export function planSpaceRemoval(
     const tabId = allocId();
     next = [
       ...next,
-      coldTerminalTab(tabId, allocId(), fallbackSpaceId, fallbackCwd),
+      coldTerminalTab(
+        tabId,
+        allocId(),
+        fallbackSpaceId,
+        fallbackCwd,
+        fallbackSshSessionId,
+      ),
     ];
     activeId = tabId;
   } else if (!next.some((t) => t.id === currentActiveId)) {
@@ -464,6 +477,10 @@ export function planSpaceRemoval(
     activeId = inFallback[inFallback.length - 1].id;
   }
   return { tabs: next, disposeLeafIds, activeId };
+}
+
+function shouldWarmTab(tab: Tab | undefined): boolean {
+  return !!tab?.cold && !(tab.kind === "terminal" && tab.sshPending);
 }
 
 export function useTabs(initial?: Partial<TerminalTab>) {
@@ -519,7 +536,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     if (activeId === 1 || activeId === bootActiveIdRef.current) return;
     setTabs((curr) => {
       const t = curr.find((x) => x.id === activeId);
-      if (!t?.cold) return curr;
+      if (!shouldWarmTab(t)) return curr;
       return curr.map((x) => (x.id === activeId ? { ...x, cold: false } : x));
     });
   }, [activeId, booted]);
@@ -534,7 +551,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   // 此时 activeId 没变, useEffect 不会自动执行, 所以需要显式方法.
   const warmUpTab = useCallback((tabId: number) => {
     setTabs((curr) =>
-      curr.map((t) => (t.id === tabId ? { ...t, cold: false } : t)),
+      curr.map((t) =>
+        t.id === tabId && shouldWarmTab(t) ? { ...t, cold: false } : t,
+      ),
     );
   }, []);
 
@@ -558,11 +577,14 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     (
       spaceId: string,
       cwd?: string,
-      opts?: { sshSessionId?: string | null },
+      opts?: { sshSessionId?: string | null; sshPending?: boolean },
     ) => {
       const tabId = nextIdRef.current++;
       const leafId = nextIdRef.current++;
-      const sshSessionId = resolveNewTabSshSession(spaceId, opts?.sshSessionId);
+      const sshPending = opts?.sshPending === true;
+      const sshSessionId = sshPending
+        ? null
+        : resolveNewTabSshSession(spaceId, opts?.sshSessionId);
       setTabs((curr) => [
         ...curr,
         {
@@ -570,11 +592,14 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           kind: "terminal",
           spaceId,
           cold: true,
-          title: cwd
-            ? basename(cwd)
-            : terminalTitleForSpace(spaceId, sshSessionId),
+          title: sshPending
+            ? "等待连接"
+            : cwd
+              ? basename(cwd)
+              : terminalTitleForSpace(spaceId, sshSessionId),
           cwd,
           sshSessionId,
+          ...(sshPending && { sshPending }),
           paneTree: { kind: "leaf", id: leafId, cwd },
           activeLeafId: leafId,
         },
@@ -591,6 +616,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const curr = tabsRef.current;
       const tab = curr.find((t) => t.id === tabId);
       if (!tab || tab.spaceId === targetSpaceId) return false;
+      if (tab.kind === "terminal" && tab.sshPending) return false;
       const workspace = tab.kind === "editor" && !tab.remote ? editorWorkspace(tab) : undefined;
       setTabs((prev) =>
         prev.map((t) =>
@@ -645,6 +671,11 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
   const removeTabsForSpace = useCallback(
     (spaceId: string, fallbackSpaceId: string, fallbackCwd?: string) => {
+      const fallback = useSpaces.getState().spaces.find((s) => s.id === fallbackSpaceId);
+      const fallbackSshSessionId =
+        fallback?.env.kind === "ssh"
+          ? (sshSessionIdForSpace(fallbackSpaceId) ?? null)
+          : undefined;
       let toDispose: number[] = [];
       setTabs((curr) => {
         const plan = planSpaceRemoval(
@@ -654,6 +685,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           fallbackSpaceId,
           fallbackCwd,
           () => nextIdRef.current++,
+          fallbackSshSessionId,
         );
         if (!plan) return curr;
         toDispose = plan.disposeLeafIds;
@@ -1242,6 +1274,10 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             // TDSF 2026-07-30: SSH 会话绑定（显式 null 也能解绑）
             ...(patch.sshSessionId !== undefined && {
               sshSessionId: patch.sshSessionId,
+            }),
+            ...(x.sshPending && patch.sshSessionId && {
+              sshPending: undefined,
+              cold: false,
             }),
           };
         }

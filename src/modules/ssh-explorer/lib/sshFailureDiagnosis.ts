@@ -36,6 +36,11 @@ export interface SshDiagnosis {
   serverMethods: string[] | null;
   headline: string;
   description: string;
+  /**
+   * 卡在这一步时的常见原因（给用户自查用）。
+   * 只列"这一步真的可能失败的原因"，不把认证阶段的原因混到网络阶段。
+   */
+  commonCauses: string[];
   /** 原始信息，界面折叠展示，不吞线索 */
   raw: string;
 }
@@ -71,6 +76,42 @@ const HANDSHAKE =
 
 /** 认证阶段（含服务端拒绝与本地私钥读不到） */
 const AUTH = /authentication failed|auth.*fail|permission denied|password|passphrase|private key|no authentication methods/i;
+
+/**
+ * 每一步的常见原因清单（2026-10-30 用户要求："连不上要报错，并列举常见问题原因"）。
+ *
+ * 只写**这一步**的成因：网络阶段不要说"密码错了"，认证阶段也不要再提防火墙。
+ * 文案面向普通运维用户：先说现象（关机/换 IP/防火墙），再给可执行动作的入口。
+ */
+const COMMON_CAUSES: Record<SshStageKey | "unknown", string[]> = {
+  network: [
+    "服务器已关机、正在重启，或网线/电源被断开",
+    "地址或端口变了：DHCP 换了 IP、NAT/容器端口映射调整",
+    "服务器防火墙或云安全组没放行该端口",
+    "本机网络不通：VPN 未连、代理拦截、跨网段不可达",
+    "sshd 没启动，或监听在别的端口（检查 sshd_config 的 Port）",
+  ],
+  handshake: [
+    "服务器 SSH 版本太老，双方算法不兼容",
+    "连接被堡垒机 / 防火墙 / 负载均衡提前断开",
+    "服务器负载过高或连接数已满，握手超时",
+  ],
+  hostKey: [
+    "刚才弹出主机指纹时点了拒绝",
+    "这台机器重装过系统或换过主机密钥",
+    "同一个 IP 上的密钥与本机记录不一致（先核对指纹，再清除旧记录）",
+  ],
+  auth: [
+    "用户名或密码错误",
+    "服务器只允许公钥登录（PasswordAuthentication no）",
+    "本地私钥没有加载，或私钥口令错误",
+    "账户被锁定 / 禁止登录（nologin、AllowUsers、Fail2ban）",
+  ],
+  unknown: [
+    "网络、认证任一步都可能失败，建议先用「测试连接」逐步排查",
+    "检查服务器 sshd 日志（/var/log/secure 或 journalctl -u sshd）",
+  ],
+};
 
 const LABELS: Record<SshStageKey, string> = {
   network: "① 连上服务器端口",
@@ -154,6 +195,7 @@ export function diagnoseSshFailure(
     stages: buildStages(stuckAt, ctx, methods),
     stuckAt,
     serverMethods: methods,
+    commonCauses: COMMON_CAUSES[stuckAt ?? "unknown"],
     headline: copy.headline,
     // 卡在网络/握手/主机身份时，#110 的文案已经指到该做的动作；认证那一档它写的
     // 就是"重填密码或换认证方式"，与本模块的分步结论一致，不再拼第二份。

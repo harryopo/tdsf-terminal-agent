@@ -124,6 +124,8 @@ import {
   subscribeHostVerify,
 } from "@/lib/ssh-bridge";
 import { HostApprovalDialog } from "@/modules/ssh-explorer/HostApprovalDialog";
+import { SshFailureDiagnoseDialog } from "@/modules/ssh-explorer/SshFailureDiagnoseDialog";
+import type { SshDiagnosis } from "@/modules/ssh-explorer/lib/sshFailureDiagnosis";
 // TDSF 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
 // TDSF 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
 // 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
@@ -316,6 +318,20 @@ export default function App() {
   });
 
   const activeSpaceId = useSpaces((s) => s.activeId);
+  const [sshReconnectFailure, setSshReconnectFailure] = useState<{
+    spaceId: string;
+    env: Extract<WorkspaceEnv, { kind: "ssh" }>;
+    diagnosis: SshDiagnosis;
+  } | null>(null);
+  const reconnectWorkspace = useCallback(
+    (spaceId: string, env: Extract<WorkspaceEnv, { kind: "ssh" }>) => {
+      setSshReconnectFailure(null);
+      return reconnectSshSpace(spaceId, env, (diagnosis) =>
+        setSshReconnectFailure({ spaceId, env, diagnosis }),
+      );
+    },
+    [],
+  );
   const spacesHydrated = useSpaces((s) => s.hydrated);
   // TDSF 修复 2026-08-01: 工作区数量（0 = 欢迎界面）
   const spaceCount = useSpaces((s) => s.spaces.length);
@@ -394,17 +410,21 @@ export default function App() {
     // 生命周期没了，而启动自动连接只覆盖"最近使用的那一台"。进这种工作区若不重连，
     // 界面按 SSH 渲染、左侧文件树拿着失效的会话号去开 SFTP，握手 10 秒后整块面板
     // 报 `[fsb] sftp session error: SFTP error: Timeout`（用户实测那条）。
-    if (meta && meta.env.kind === "ssh" && !isSshEnvConnected(meta.env)) {
-      void reconnectSshSpace(meta.id, meta.env);
+    const env = meta?.env;
+    const sshPending = env?.kind === "ssh" && !isSshEnvConnected(env);
+    if (sshPending) {
+      void reconnectWorkspace(activeSpaceId, env);
     }
-    if (meta) void adoptWorkspaceEnv(meta.env);
+    if (env) void adoptWorkspaceEnv(env);
     const inSpace = tabsRef.current.filter((t) => t.spaceId === activeSpaceId);
     if (inSpace.length === 0) {
       // TDSF 修复 2026-09-18（深度体检 F3）：#61-A 之后"从欢迎页点进一个还没标签的
       // 工作区"是常规路径。原先这里直接 return —— activeId 仍指着**别的空间**的冷
       // 标签，于是顶栏标签条整条空白、点「+」继承外来 cwd、资源管理器根目录错位，
       // 2026-08-01 的"按 Space 隔离"被绕过。就地给这个空间补一个终端标签并激活。
-      const tabId = newTabInSpace(activeSpaceId, meta?.root ?? undefined);
+      const tabId = newTabInSpace(activeSpaceId, meta?.root ?? undefined, {
+        sshPending,
+      });
       setActiveId(tabId);
       return;
     }
@@ -420,6 +440,7 @@ export default function App() {
     setActiveId,
     newTabInSpace,
     adoptWorkspaceEnv,
+    reconnectWorkspace,
   ]);
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -621,6 +642,26 @@ export default function App() {
       ? sshEnvIsConnecting(activeSpace.env, s.sessions)
       : false,
   );
+  const offlineSshPanel = offlineSshSpace ? (
+    <SshExplorerOffline
+      key={offlineSshSpace.id}
+      host={offlineSshSpace.env.host}
+      port={offlineSshSpace.env.port}
+      user={offlineSshSpace.env.user}
+      connecting={explorerSshReconnecting}
+      onReconnect={() =>
+        reconnectWorkspace(offlineSshSpace.id, offlineSshSpace.env)
+      }
+    />
+  ) : null;
+  const currentReconnectDiagnosis =
+    offlineSshSpace &&
+    sshReconnectFailure?.spaceId === offlineSshSpace.id &&
+    sshReconnectFailure.env.host === offlineSshSpace.env.host &&
+    sshReconnectFailure.env.user === offlineSshSpace.env.user &&
+    sshReconnectFailure.env.port === offlineSshSpace.env.port
+      ? sshReconnectFailure.diagnosis
+      : null;
   const isDefaultColdTab =
     !!activeTab &&
     activeTab.kind === "terminal" &&
@@ -2585,20 +2626,9 @@ export default function App() {
                             </button>
                           </div>
                         ) : offlineSshSpace ? (
-                          // TDSF #102 收尾：服务器工作区断话 → 说清是哪台 + 就地重连，
+                          // TDSF #102 收尾：服务器工作区断开 → 说清是哪台 + 就地重连，
                           // 不拿本地文件树冒充远端。
-                          <SshExplorerOffline
-                            host={offlineSshSpace.env.host}
-                            port={offlineSshSpace.env.port}
-                            user={offlineSshSpace.env.user}
-                            connecting={explorerSshReconnecting}
-                            onReconnect={() =>
-                              reconnectSshSpace(
-                                offlineSshSpace.id,
-                                offlineSshSpace.env,
-                              )
-                            }
-                          />
+                          offlineSshPanel
                         ) : (
                           <div className="flex h-full min-h-0 flex-col">
                             <div className="min-h-0 flex-1">
@@ -2750,6 +2780,11 @@ export default function App() {
                         onSetMarkdownView={setMarkdownView}
                         // TDSF 2026-07-28 (P1-A): 空状态页
                         showNoTerminalEmptyState={showNoTerminalEmptyState}
+                        sshOfflineTerminal={
+                          activeTab?.spaceId === offlineSshSpace?.id
+                            ? offlineSshPanel
+                            : null
+                        }
                         onWarmUpColdTab={warmUpTab}
                         onOpenAgentFromEmptyState={togglePanelAndFocus}
                         onSwitchToSshFromEmptyState={() => {
@@ -2796,6 +2831,11 @@ export default function App() {
             request={pendingApproval}
             onApprove={() => resolveApproval(true)}
             onReject={() => resolveApproval(false)}
+          />
+          <SshFailureDiagnoseDialog
+            open={currentReconnectDiagnosis !== null}
+            diagnosis={currentReconnectDiagnosis}
+            onClose={() => setSshReconnectFailure(null)}
           />
 
           {!zenMode && (

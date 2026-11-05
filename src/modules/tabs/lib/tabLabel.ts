@@ -20,6 +20,7 @@ export function labelFor(t: Tab): string {
   if (t.kind === "git-commit-file") return t.title;
   // Only the unowned cold placeholder is a start page; workspace shells can
   // remain cold until selected without changing their labels or spawning early.
+  if (t.sshPending) return t.title;
   if (isStartTab(t)) return "开始";
   if (t.customTitle) return t.customTitle;
   if (!t.cwd) return t.title;
