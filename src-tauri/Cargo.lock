@@ -6866,6 +6866,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bollard",
  "bytes",
  "chrono",
@@ -6881,6 +6882,7 @@ dependencies = [
  "keyring",
  "libc",
  "log",
+ "minisign-verify",
  "notify",
  "nucleo-matcher",
  "objc2",

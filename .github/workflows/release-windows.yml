@@ -106,6 +106,7 @@ jobs:
           for ($i = $start; $i -lt $lines.Count; $i++) {
             if ($lines[$i] -match '^## ') { $end = $i; break }
           }
+          if ($end -le $start) { throw "CHANGELOG.md 的 $version 一节是空的。" }
           $section = (($lines[$start..($end - 1)]) -join "`n").Trim()
           if (-not $section) { throw "CHANGELOG.md 的 $version 一节是空的。" }
           Set-Content -LiteralPath release-notes.md -Value $section -Encoding utf8
@@ -130,6 +131,14 @@ jobs:
           # 更新使用原始 NSIS 安装器；.exe.sig 和 latest.json 只在发布流程中生成。
           # 所以本地 pnpm build:win 不需要私钥。
           args: --config src-tauri/tauri.release.conf.json --bundles nsis
+
+      - name: Verify installer against the configured updater public key
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe")
+          if ($installers.Count -ne 1) { throw "Expected exactly one NSIS installer for signature verification" }
+          cargo run --release --locked --manifest-path src-tauri/Cargo.toml --example verify_updater_signature -- $installers[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Updater signature verification failed; keep release unpublished" }
 
       - name: Append installer checksum to the notes
         shell: pwsh
