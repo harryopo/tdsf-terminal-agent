@@ -235,6 +235,22 @@ assets/             logo 源文件
 .github/workflows/  CI（前端 / Python / Rust 三平台） · 发布 · Pages
 ```
 
+## 宣传页维护
+
+线上地址：<https://harryopo.github.io/tdsf-terminal-agent/>（英文版在 [/en/](https://harryopo.github.io/tdsf-terminal-agent/en/)）。
+
+- **源码位置**：仓库根目录 `website/`，就是本仓库里的目录，与 `src/`、`src-tauri/` 无关。
+  - `index.html`：中文首页（`/`）
+  - `en/index.html`：英文首页（`/en/`）
+  - `style.css`、`script.js`：两页共用
+  - `assets/`：logo、首屏产品图 `product-hero.png`、演示视频 `video/demo.mp4` 与封面 `video/poster.png`
+- **部署方式**：`.github/workflows/pages.yml` 在 **push 到 `main` 且改动 `website/**`** 时，把整个 `website/` 目录原样上传到 GitHub Pages，**没有构建步骤**；仓库 Settings → Pages 的 Source 需为 "GitHub Actions"。线上生效通常 1–3 分钟（CDN 缓存）。
+- **本地预览**：直接打开 `website/index.html`（相对路径可用），或 `npx serve website` 后访问 `/` 与 `/en/`。
+- **改哪里生效**：只有 `website/` 下的改动会触发部署；改 `src/`、`src-tauri/` 不会影响宣传页。
+- **素材规格**：首屏产品图约 2178×1340；演示视频必须是 `-movflags +faststart`（否则浏览器要下载完整个文件才开始播放），封面按 16:9 裁切。
+- **中英同步**：两页结构同构，改文案时两页一起改，避免中英内容漂移。
+- **注意**：如果你本地有多个工作树或分支，其中的 `website/` 未必是线上版本；以 `main` 为准，可用 `git show origin/main:website/index.html` 核对。
+
 ## 隐私与数据
 
 主要联网用途包括调用你配置的模型服务、连接你添加的 SSH 主机、检查与下载 GitHub 更新，以及安装器按需下载 WebView2。网页预览、主动导入或抓取知识还会访问你选择的网站或来源；联网边界见 [PRIVACY.md](PRIVACY.md)。

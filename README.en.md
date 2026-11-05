@@ -235,6 +235,22 @@ assets/             logo sources
 .github/workflows/  CI (frontend / Python / Rust on three platforms) · release · Pages
 ```
 
+## Promo site maintenance
+
+Live: <https://harryopo.github.io/tdsf-terminal-agent/> (English: [/en/](https://harryopo.github.io/tdsf-terminal-agent/en/)).
+
+- **Source location**: the `website/` directory at the repository root — part of this repository, unrelated to `src/` or `src-tauri/`.
+  - `index.html` — Chinese home page (`/`)
+  - `en/index.html` — English home page (`/en/`)
+  - `style.css`, `script.js` — shared by both pages
+  - `assets/` — logo, hero product shot `product-hero.png`, demo video `video/demo.mp4` and its poster `video/poster.png`
+- **Deployment**: `.github/workflows/pages.yml` uploads the whole `website/` directory to GitHub Pages on **a push to `main` that touches `website/**`** — there is **no build step**. The repository's Settings → Pages source must be "GitHub Actions". Changes usually go live within 1–3 minutes (CDN cache).
+- **Local preview**: open `website/index.html` directly (relative paths work), or run `npx serve website` and visit `/` and `/en/`.
+- **What triggers a deploy**: only files under `website/`. Changes to `src/` or `src-tauri/` never affect the promo page.
+- **Asset requirements**: hero shot around 2178×1340; the demo video must be encoded with `-movflags +faststart` (otherwise browsers wait for the whole file before playing); crop the poster to 16:9.
+- **Keep both languages in sync**: the two pages are structurally identical — update them together.
+- **Note**: if you have several worktrees or branches, the `website/` inside them may not be what is live. Trust `main`; verify with `git show origin/main:website/index.html`.
+
 ## Privacy and data
 
 Network uses include your configured model service, SSH hosts you add, GitHub update checks and downloads, and the WebView2 bootstrapper when needed. Webpage previews and user-initiated knowledge imports or crawling also access selected websites or sources; see [PRIVACY.md](PRIVACY.md).
