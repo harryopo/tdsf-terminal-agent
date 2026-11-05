@@ -64,7 +64,7 @@ export const CARAPACE_REMOTE_PATH = '~/.local/bin/carapace';
 export const CARAPACE_YES_MARK = '__TDSF_CARAPACE_YES__';
 
 /** 先换行，避免不带换行的登录横幅与检测标记粘连。 */
-export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null 2>&1 && printf '\\n%s\\n' '${CARAPACE_YES_MARK}'`;
+export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null 2>&1 || exit 1; ${CARAPACE_REMOTE_PATH} --version >/dev/null || exit 2; printf '\\n%s\\n' '${CARAPACE_YES_MARK}'`;
 
 /** 设置入口与静默补全共用结果判据；未知结果不能冒充未安装。 */
 export function classifyCarapaceProbe(
@@ -378,10 +378,11 @@ export async function remoteParamComplete(
  *   因为非交互 bash 不读 ~/.bashrc 的 alias 段。
  * ⇒ 别名是用户真敲得出去的命令，却被这道"防假候选"的过滤当假候选剔掉了。
  * 所以第二段拿别名清单并进来：`bash -ic 'alias'` 实测 0.238s，行形状
- * `alias ll='ls -alF'`；没有 bash 的机器退回 zsh（行形状 `ll='ls -l'`，无前缀）。
+ * `alias ll='ls -alF'`；别名读取失败时再试 zsh。Bash 命令枚举失败则整次降级，
+ * 不把只含别名的结果缓存为全集。
  */
 export const REMOTE_COMMANDS_CMD =
-  "compgen -c 2>/dev/null | sort -u; bash -ic 'alias' 2>/dev/null || zsh -ic 'alias' 2>/dev/null";
+  "bash -c 'compgen -c' 2>/dev/null || exit 1; bash -ic 'alias' 2>/dev/null || zsh -ic 'alias' 2>/dev/null || :";
 
 /**
  * 把两段输出一起解析成命令名集合。
@@ -428,7 +429,7 @@ export async function fetchRemoteCommands(sessionId: number): Promise<Set<string
   if (cached) return cached;
   try {
     const r = await sshCommand(sessionId, REMOTE_COMMANDS_CMD, 15);
-    // compgen 不存在（dash/sh）时 sort 仍成功退出但输出为空 → 走空判定不缓存
+    // Bash 枚举失败必须退出，不能把后续非空 alias 清单当作完整命令集。
     if (!r.ok || r.exitCode !== 0) return null;
     const out = r.output.trim();
     if (!out) return null;

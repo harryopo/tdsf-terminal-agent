@@ -534,18 +534,20 @@ async function updatePredictions(leafId: number): Promise<void> {
   }
 
   // ── 命令模式：history → 索引 startsWith → fuzzy（fish 三层，按环境分流）──
-  // TDSF 2026-08-28(二)：linux 环境先取 30 条，再按远端命令全集（compgen -c
-  // 预取缓存）过滤假候选后截 5——词典/fuzzy 层会弹远端根本没装的命令。
-  // 缓存未拉到（null）→ 降级不过滤，照旧取 5（无损）。
+  // 可用性先参与候选选择，避免不存在的别名占满截断窗口。
+  // 缓存未拉到时只应用已知发行版边界，历史候选继续保留。
   const engine = getSuggestEngine();
   const isLinux = env === 'linux';
   const cmds = isLinux && sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
   // Seed before querying, including commands absent from the static dictionary.
   // Current-session filtering below still prevents cross-host candidates.
   if (cmds) engine.setEnvironmentCommands(cmds, 'linux');
-  let items = engine.getSuggestions(context.cmd, isLinux ? 30 : 5, env);
+  const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
+  const acceptCommand = isLinux
+    ? (command: string) => commandSupportsFamily(command, family) && (cmds === null || cmds.has(command))
+    : undefined;
+  let items = engine.getSuggestions(context.cmd, 5, env, acceptCommand);
   if (isLinux) {
-    const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
     items = filterCommandItems(items, cmds, 5, family);
   }
 
@@ -583,10 +585,6 @@ async function updatePredictions(leafId: number): Promise<void> {
     env === 'linux' && sessionId !== null
       ? getCachedRemoteCommands(sessionId)
       : null;
-  const family =
-    env === 'linux' && sessionId !== null
-      ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown'
-      : 'unknown';
   const hasParamSource = shouldTriggerTailParams(
     env,
     token,

@@ -188,17 +188,20 @@ export class SuggestEngine {
    * @param input 当前输入前缀
    * @param limit 返回最大条数（默认 5）
    * @param env 终端环境（决定命令集与历史，默认 linux）
+   * @param acceptCommand 当前会话的命令可用性过滤，先于排序截断；历史仍保留
    */
   getSuggestions(
     input: string,
     limit = 5,
     env: TerminalEnv = "linux",
+    acceptCommand?: (command: string) => boolean,
   ): SuggestionResult[] {
     if (!input || input.length < 1) return [];
     if (input.includes(" ")) return []; // 含空格 = 在输参数，不预测命令名
 
-    const commands =
+    const dictionary =
       env === "windows" ? this.windowsCommands : this.linuxCommands;
+    const commands = acceptCommand ? dictionary.filter((c) => acceptCommand(c.name)) : dictionary;
     const history = this.history[env];
 
     const results: SuggestionResult[] = [];
@@ -249,7 +252,7 @@ export class SuggestEngine {
       if (seen.has(cmd)) continue;
       seen.add(cmd);
       const firstCommand = cmd.trim().split(/\s+/)[0];
-      const known = commands.find((c) => c.name === firstCommand);
+      const known = dictionary.find((c) => c.name === firstCommand);
       results.push({ command: cmd, source: "history", zh: known?.zh ?? "历史命令", description: known?.description });
     }
 

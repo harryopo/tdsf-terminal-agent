@@ -90,6 +90,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   completion.closeCompletion();
+  paramClient.invalidateRemoteCommands(7);
   for (const id of leafIds) {
     completion.clearLeafEnvironment(id);
     paramClient.setLeafSshSession(id, null);
@@ -101,6 +102,24 @@ afterEach(() => {
 });
 
 describe("completion acceptance context", () => {
+  it.each(["g", "gr"])("keeps available remote commands for the short prefix %s", async (prefix) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockResolvedValueOnce({
+      ok: true, exitCode: 0, output: "git\ngrep\ngzz-env-only-superlong\n", stderr: "",
+    });
+    await paramClient.fetchRemoteCommands(7);
+    const leaf = makeLeaf("linux", 7);
+    const writes: string[] = [];
+    completion.initCompletionInjection(() => null, (_id, data) => writes.push(data));
+
+    const state = await typeAndShow(leaf, prefix);
+    const commands = state.items.map((item) => item.command);
+    expect(commands).toContain("grep");
+    if (prefix === "g") expect(commands).toContain("gzz-env-only-superlong");
+    expect(commands.every((command) => ["git", "grep", "gzz-env-only-superlong"].includes(command))).toBe(true);
+    expect(writes).toEqual([]);
+  });
+
   it.each([
     ["remote cwd", (id: number, client: ParamClient) => {
       let cwd = "/srv/repo";
