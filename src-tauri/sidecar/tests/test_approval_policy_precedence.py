@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -10,7 +11,8 @@ import pytest
 import strands_backend.trust_store as trust_store_mod
 from strands_backend.modes import AgentMode
 from strands_backend.tools import ToolContext, assess_command
-from strands_backend.tools.command_impact import classify_segment
+from strands_backend.tools.command_impact import classify_segment, split_compound
+from strands_backend.tools.ssh_command import invoke_ssh_command_tool
 from strands_backend.trust_store import (
     WhitelistStore,
     record_session_trust,
@@ -141,3 +143,100 @@ def test_observe_still_denies_even_when_ask_matches(stores):
     stores.get_global_whitelist().add_rule("systemctl status nginx", "ask")
     result = assess_command(_ctx(AgentMode.OBSERVE), "systemctl status nginx")
     assert result["decision"] == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "git push origin main",
+    "git -C repo push --force origin main",
+    "git push origin +HEAD:refs/heads/main",
+    "git push origin :refs/heads/main",
+    "git reset --hard HEAD",
+    "git clean -fd",
+    "git checkout -- .",
+    "git branch -D topic",
+    "git tag -d release",
+    "git stash drop",
+    "git -c alias.publish=push publish origin",
+    "git diff --output=report.txt",
+    "git log --output=report.txt",
+    "git clean -fd > report.txt",
+    "> report.txt git reset --hard HEAD",
+    "git.exe clean -fd > report.txt",
+    "env GIT_DIR=repo git clean -fd",
+    "/usr/bin/env git clean -fd",
+    '"/path with space/git" "clean" -fd',
+    r"g\it clean -fd",
+    "git status && git reset --hard HEAD",
+    "git status & git clean -fd",
+    "echo ready & git clean -fd",
+    "echo ready\ngit clean -fd",
+    r"printf '%s' $'it\'s'; git clean -fd",
+    "cat <(git clean -fd)",
+    "tee >(git clean -fd)",
+    "find . -maxdepth 0 '-exec' git clean -fd ';'",
+    r"find . -maxdepth 0 -ex\ec git clean -fd \;",
+])
+def test_git_writes_require_confirmation_even_in_auto_with_allow(stores, command):
+    stores.get_global_whitelist().add_rule("*", "allow")
+    result = assess_command(_ctx(AgentMode.AUTO), command)
+    assert result["decision"] == "confirm"
+    assert result["risk_l"] >= 3
+    assert "trust_source" not in result
+
+
+@pytest.mark.parametrize("mode", [AgentMode.CONFIRM, AgentMode.AUTO])
+def test_trusting_git_status_does_not_authorize_git_clean(stores, mode):
+    ctx = _ctx(mode)
+    risk_l = assess_command(ctx, "git status")["risk_l"]
+    record_session_trust(ctx.session_id, "git status", risk_l)
+    assert assess_command(ctx, "git status")["trust_source"] == "session_prefix"
+    assert assess_command(ctx, "git clean -fd")["decision"] == "confirm"
+
+
+@pytest.mark.parametrize("command", [
+    "git --version", "git status", "git status --short",
+    "git status --porcelain=v1", "git log --oneline -5", "git diff --stat",
+    "git --no-pager diff --cached --name-only",
+    "git branch --show-current", "git rev-parse --show-toplevel",
+    "git status -sb", "git log -n 5", "git diff -- file.txt",
+])
+def test_common_git_queries_keep_existing_mode_behavior(command):
+    confirm = assess_command(_ctx(AgentMode.CONFIRM), command)
+    assert (confirm["decision"], confirm["risk_l"]) == ("confirm", 2)
+    assert assess_command(_ctx(AgentMode.AUTO), command)["decision"] == "allow"
+
+
+def test_git_hard_deny_survives_allow_and_observe_rejects_writes(stores):
+    stores.get_global_whitelist().add_rule("*", "allow")
+    assert assess_command(_ctx(AgentMode.AUTO), "git push --force origin main")["decision"] == "blocked"
+    assert assess_command(_ctx(AgentMode.OBSERVE), "git clean -fd", readonly=True)["decision"] == "deny"
+
+
+def test_compound_controls_preserve_quoted_text_and_redirects():
+    command = 'echo "a&b\nc" 2>&1 & echo done &>/dev/null'
+    assert split_compound(command) == ['echo "a&b\nc" 2>&1', "echo done &>/dev/null"]
+    assert assess_command(_ctx(AgentMode.AUTO), r"echo \>& git clean -fd")["decision"] == "confirm"
+    assert classify_segment("echo done > report.txt")["category"] == "file_write"
+    assert classify_segment("docker ps > report.txt")["risk_l"] == 2
+    assert classify_segment("find . -maxdepth 1 -name '*.md'")["risk_l"] == 0
+
+
+@pytest.mark.parametrize("command", [
+    "git reset --hard HEAD",
+    r"printf '%s' $'it\'s'; git clean -fd",
+    "cat <(git clean -fd)",
+    "find . -maxdepth 0 '-exec' git clean -fd ';'",
+])
+def test_git_ssh_tool_stops_before_dispatch_without_approval(stores, monkeypatch, command):
+    ctx = _ctx(AgentMode.AUTO)
+    ctx.rust_bridge = Mock()
+    ctx.ssh_session_id = "123"
+    record_session_trust(ctx.session_id, "git status", 2)
+    approval = Mock(return_value=None)
+    monkeypatch.setattr("strands_backend.tools.request_approval_and_wait", approval)
+
+    result = invoke_ssh_command_tool({"command": command}, ctx)
+
+    approval.assert_called_once()
+    ctx.rust_bridge.ipc_invoke.assert_not_called()
+    assert result["status"] == "needs_approval"

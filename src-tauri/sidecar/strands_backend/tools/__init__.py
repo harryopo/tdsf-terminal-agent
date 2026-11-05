@@ -1080,7 +1080,7 @@ def _execute_via_ssh_impl(
     assessment = assess_command(ctx, command, readonly=readonly)
     assessment_line = ""
     if check_lines and "\n" in command.strip():
-        # 整段分析不拆换行；后续行的 ask/deny 和写入风险不能被首行掩盖。
+        # 保留逐行复核，以便标注触发审批的原始行。
         decision_order = {"allow": 0, "confirm": 1, "deny": 2, "blocked": 3}
         for line in command.strip().splitlines():
             line = line.strip()
