@@ -4,27 +4,34 @@
 
 # TDSF Terminal Agent
 
-**终端优先的 Linux 运维工作台 —— 集成多种运维工具，AI Agent 在真实的 shell 里执行，可观测可追溯。**
+**终端优先的 Linux 运维工作台 —— AI Agent 直接在你的真实 shell 里干活，每一步都看得见。**
 
 **中文** · [English](README.en.md)
 
 [宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [下载与安装](#安装windows-x64) · [核心能力](#核心能力) · [工具清单](#工具清单25-个) · [架构](#架构) · [开发指南](#开发指南)
 
 [![Windows 下载](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
+[![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
 [![Stars](https://img.shields.io/github/stars/harryopo/tdsf-terminal-agent?style=flat&color=eab308)](https://github.com/harryopo/tdsf-terminal-agent/stargazers)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Desktop](https://img.shields.io/badge/desktop-Tauri%202%20%2B%20Rust-000)
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
+![Runtime](https://img.shields.io/badge/agent%20runtime-Python%20sidecar%20(Strands)-3776AB)
 
+</div>
 
-
+<p align="center">
+  <a href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest"><strong>下载 Windows 安装包</strong></a> ·
+  <a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">观看真实演示</a> ·
+  <a href="https://github.com/harryopo/tdsf-terminal-agent/issues">反馈问题</a>
+</p>
 
 > 当前发布为 **0.x 预稳定版，仅提供 Windows x64 安装包**。请先在测试环境使用；安装包尚未进行 Authenticode 发布者签名，校验方式见[安装说明](#安装windows-x64)。
 
 | 运维现场 | 可控协作 | 边做边学 |
 |---|---|---|
 | 本地 / WSL / SSH 工作区，SFTP 文件浏览与编辑 | 可见终端或后台执行，真实回显、风险分级与审批卡 | 一步一张命令卡，预测回显、实际结果与后续讲解 |
-| 目录跟随、拖拽上传、服务与网络巡检 | 深度思考展开、任务进度与证据链 | 终端翻译、命令预测、Skill 与本地知识检索 |
+| 目录跟随、拖拽上传、服务与网络巡检 | 深度思考展开、任务进度与折叠工具卡 | 终端翻译、命令预测、Skill 与本地知识检索 |
 
 ---
 
@@ -32,6 +39,7 @@
   <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent 演示封面" width="100%" />
 </a>
 
+演示内容：接入 SSH 工作区 → Agent 把命令逐字符敲进真实终端 → 写操作被审批卡拦下等人确认 → 远端输出回流到工具卡。
 ▶ 完整视频在[宣传页的 Demo 区块](https://harryopo.github.io/tdsf-terminal-agent/#demo)。
 
 ---
@@ -86,12 +94,14 @@ TDSF Terminal Agent 是一款桌面终端工作台：本地 PTY、WSL、SSH 会�
 ### 终端、编辑器与效率
 
 - 本地 PTY / WSL / SSH 终端共用一套 xterm.js 渲染池，支持分屏；工作区各自独立的标签页集合。
-- **命令预测**：内置 spec 索引、carapace 参数补全、中文 tldr 释义，外加远端 shell 自身的命令集；带节流的参数补全，不会为每个按键起一个进程。静态参数不装也有；要提示**服务器上真实存在**的分支、文件名、服务名，需在「设置 → 通用 → 远端补全组件」里往那台服务器装一次组件。
+- **终端输出高亮**：默认增强可识别的代码、配置、参数列表与诊断输出，保留原生 ANSI 颜色和复制文本，不对活动输入行或全屏终端程序着色。
+- **命令预测**：内置 spec 索引、carapace 参数补全、短中文说明与 tldr 兜底释义，外加远端 shell 自身的命令集；带节流的参数补全，不会为每个按键起一个进程。静态参数不装也有；要提示**服务器上真实存在**的分支、文件名、服务名，先连接 SSH，再在「设置 → 终端预测 → 远端补全组件」里点「刷新」，选择那台服务器安装组件。检测异常不会缓存为“未安装”，安装期间该卡片的刷新按钮暂时禁用。
 - CodeMirror 6 编辑器 + LSP、远程文件编辑、命令片段库；选词翻译默认查内置词典（离线，不联网），点一次「AI 补全释义」才会调用你配置的模型补一条更详细的解释。
 
 ### 本地知识检索
 
 - 索引本机数据目录中已有或由你导入的文档，条目数量取决于这台设备实际装了什么。
+- 浏览面板分为「内置知识」与「我的知识」，分类统计覆盖所选库全部条目，并支持分页加载；文档导入只写入「我的知识」，不合并或覆盖内置库。
 - 检索全程在本地完成：SQLite **FTS5** 关键词 + **sqlite-vec** 向量语义（fastembed / BGE-small-zh，512 维），两路结果用 RRF 融合。
 - Agent 的推理仍由你配置的模型服务完成；知识检索本身不外发。
 
@@ -125,6 +135,8 @@ TDSF Terminal Agent 是一款桌面终端工作台：本地 PTY、WSL、SSH 会�
 | 会话 | `ssh_list_sessions` |
 
 教学模式不是第 26 个工具：它拦截上述工具调用，返回结构化的单步命令卡，由终端真实执行。
+
+未发布源码已补齐终端回读等工具的调用卡，并移除聊天里的附加证据区与固定核验尾注；后台取证、写后验证和安全审批保留。对话框右下角的「置信度」按钮打开运行记录浮窗，可查看、搜索当前会话的运行流程、对话与工具证据，并经确认导出脱敏 JSON 到本机。记录为有界摘要，不是完整持久审计，也不提供经过校准的正确概率；分享日志前仍须人工检查。上述调整尚未进入现有安装包。
 
 ## 安全边界
 
@@ -202,12 +214,24 @@ Windows 下也可以直接双击仓库根目录的 `启动.bat`。开发版与�
 |------|------|
 | `pnpm typecheck` / `pnpm lint` | 类型与静态检查 |
 | `pnpm test` | 前端单元测试（vitest） |
-| `pnpm test:python` | sidecar 测试（pytest：Agent、工具、安全策略、知识检索） |
+| `pnpm test:carapace` | 补全资源门禁测试（离线小样本） |
+| `pnpm test:python` | sidecar 测试（pytest：Agent、工具、安全策略、知识检索；Windows 测试进程显式 UTF-8） |
 | `cargo test`（在 `src-tauri/`） | Rust 侧：PTY / SSH / 文件系统 / 系统边界 |
 | `pnpm probe:ui` | 真机界面门禁：通过 CDP 量已挂载窗口里的控件尺寸、裁切与对齐 |
 | `pnpm probe:dialog` / `probe:ssh` / `probe:ipc` | 弹窗几何、SSH 会话回收、IPC 方法白名单的真机核对 |
 | `pnpm check:release-version` | 校验五处版本号声明一致 |
-| `pnpm build:win` | 版本号校验 → sidecar 打包与冒烟 → NSIS 打包 |
+| `pnpm fetch:carapace` / `pnpm check:carapace` | 恢复固定版本补全组件 / 校验本地资源大小与 SHA-256 |
+| `pnpm build:win` | 版本校验 → 补全资源恢复与校验 → sidecar 打包与冒烟 → NSIS 打包及包内资源检查 |
+
+直接运行 Tauri 构建前，也需先运行 `pnpm fetch:carapace`。缺失或损坏的资源会阻断构建，不会生成缺组件的安装包。源码中的维护修复列在 [Unreleased](CHANGELOG.md#unreleased)，不会自动改写已发布的安装包。
+
+最新源码还修复了 Agent 工具卡的实时 SSH 回显接线：折叠时继续按调用身份收集，后台 stdout/stderr 分别显示，可见终端标为合流。结构化失败结果保留回显和退出码，已拒绝、已取消与结果未确认分别标示；未取得退出状态不冒充完成。这些改动尚待重建安装包与原生验收，不表示当前下载版已包含。
+
+源码已移除可能留存丢弃输入和目录路径的旧终端调试缓冲，并防止已结束的审批/提问被迟到列表快照重新显示；正常输入、目录跟随和待办恢复保持不变。这两项也尚未打入下载版，不代表手动输入抖动已经修复。
+
+源码中的审批与提问卡会显示答复提交中并暂时禁用重复操作；只有身份与预期状态匹配的后端回执才算答复被接受。提交失败会保留卡片与原回答，允许重试答复而不重发命令；迟到失败不能恢复已结束的请求。会话免审显示标记也只在批准被接受且原归属仍为当前聊天时更新。此处改动仅针对 sidecar `needs_you` 答复链，尚未打入下载版；审批被接受不等于命令执行完成。
+
+中心 SSH 执行器的审批在调用、聊天和目标身份精确匹配时显示在原工具卡中，折叠工具详情不会隐藏审批按钮。当前聊天内未能关联工具的请求以及提问仍保留可答复的兜底区域，其他聊天的请求继续隔离；卡片位置变化不会丢失拒绝附言或提交状态。目标仅显示已知会话，不猜主机；后台审批与执行规则不变，此项也尚未打入下载版。
 
 发布流程：推一个 `v*` 标签 → CI 构建带签名的安装包与更新清单，落成**草稿** Release → 验收后手动发布。清单只解析已发布的版本，所以在点"发布"之前，客户端查不到它。
 
@@ -226,22 +250,6 @@ website/            宣传页（部署到 GitHub Pages）
 assets/             logo 源文件
 .github/workflows/  CI（前端 / Python / Rust 三平台） · 发布 · Pages
 ```
-
-## 宣传页维护
-
-线上地址：<https://harryopo.github.io/tdsf-terminal-agent/>（英文版在 [/en/](https://harryopo.github.io/tdsf-terminal-agent/en/)）。
-
-- **源码位置**：仓库根目录 `website/`，就是本仓库里的目录，与 `src/`、`src-tauri/` 无关。
-  - `index.html`：中文首页（`/`）
-  - `en/index.html`：英文首页（`/en/`）
-  - `style.css`、`script.js`：两页共用
-  - `assets/`：logo、首屏产品图 `product-hero.png`、演示视频 `video/demo.mp4` 与封面 `video/poster.png`
-- **部署方式**：`.github/workflows/pages.yml` 在 **push 到 `main` 且改动 `website/**`** 时，把整个 `website/` 目录原样上传到 GitHub Pages，**没有构建步骤**；仓库 Settings → Pages 的 Source 需为 "GitHub Actions"。线上生效通常 1–3 分钟（CDN 缓存）。
-- **本地预览**：直接打开 `website/index.html`（相对路径可用），或 `npx serve website` 后访问 `/` 与 `/en/`。
-- **改哪里生效**：只有 `website/` 下的改动会触发部署；改 `src/`、`src-tauri/` 不会影响宣传页。
-- **素材规格**：首屏产品图约 2178×1340；演示视频必须是 `-movflags +faststart`（否则浏览器要下载完整个文件才开始播放），封面按 16:9 裁切。
-- **中英同步**：两页结构同构，改文案时两页一起改，避免中英内容漂移。
-- **注意**：如果你本地有多个工作树或分支，其中的 `website/` 未必是线上版本；以 `main` 为准，可用 `git show origin/main:website/index.html` 核对。
 
 ## 隐私与数据
 
