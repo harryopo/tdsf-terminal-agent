@@ -38,7 +38,6 @@
   <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent 演示封面" width="100%" />
 </a>
 
-演示内容：接入 SSH 工作区 → Agent 把命令逐字符敲进真实终端 → 写操作被审批卡拦下等人确认 → 远端输出回流到工具卡。
 ▶ 完整视频在[宣传页的 Demo 区块](https://harryopo.github.io/tdsf-terminal-agent/#demo)。
 
 ---
