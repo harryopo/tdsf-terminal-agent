@@ -17,13 +17,7 @@
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
 
 
-</div>
 
-<p align="center">
-  <a href="https://github.com/harryopo/tdsf-terminal-agent/releases/latest"><strong>下载 Windows 安装包</strong></a> ·
-  <a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">观看真实演示</a> ·
-  <a href="https://github.com/harryopo/tdsf-terminal-agent/issues">反馈问题</a>
-</p>
 
 > 当前发布为 **0.x 预稳定版，仅提供 Windows x64 安装包**。请先在测试环境使用；安装包尚未进行 Authenticode 发布者签名，校验方式见[安装说明](#安装windows-x64)。
 
