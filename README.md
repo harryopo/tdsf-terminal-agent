@@ -4,19 +4,18 @@
 
 # TDSF Terminal Agent
 
-**终端优先的 Linux 运维工作台 —— AI Agent 直接在你的真实 shell 里干活，每一步都看得见。**
+**终端优先的 Linux 运维工作台 —— 集成多种运维工具，AI Agent 在真实的 shell 里执行，可观测可追溯。**
 
 **中文** · [English](README.en.md)
 
 [宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [下载与安装](#安装windows-x64) · [核心能力](#核心能力) · [工具清单](#工具清单25-个) · [架构](#架构) · [开发指南](#开发指南)
 
 [![Windows 下载](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
-[![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
 [![Stars](https://img.shields.io/github/stars/harryopo/tdsf-terminal-agent?style=flat&color=eab308)](https://github.com/harryopo/tdsf-terminal-agent/stargazers)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Desktop](https://img.shields.io/badge/desktop-Tauri%202%20%2B%20Rust-000)
 ![Frontend](https://img.shields.io/badge/frontend-React%2019%20%2B%20TypeScript-149ECA)
-![Runtime](https://img.shields.io/badge/agent%20runtime-Python%20sidecar%20(Strands)-3776AB)
+
 
 </div>
 
