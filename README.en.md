@@ -8,7 +8,7 @@
 
 [中文](README.md) · **English**
 
-[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Install](#installation-windows-x64) · [Capabilities](#core-capabilities) · [Tools](#tool-catalog-25) · [Architecture](#architecture) · [Development](#development)
+[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Install](#installation-windows-x64) · [Capabilities](#core-capabilities) · [Tools](#tool-catalog-25) · [Architecture](#architecture) · [Development](#development) · [Developer docs (Chinese)](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
 [![Windows download](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
 [![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
@@ -247,6 +247,8 @@ src-tauri/
   tauri.*.conf.json release / dev / per-platform configuration
 scripts/            build and data-generation scripts; probe/ holds the real-window gates
 website/            promo page (deployed to GitHub Pages)
+docs/               architecture, collaboration, plans and project status
+competitions/       event-specific material indexes; private proof stays local
 assets/             logo sources
 .github/workflows/  CI (frontend / Python / Rust on three platforms) · release · Pages
 ```

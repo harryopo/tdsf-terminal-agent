@@ -1,0 +1,32 @@
+name: 缺陷反馈
+description: 提供可以复现的问题与环境
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: 安全问题请按 SECURITY.md 私下报告。截图与日志先去掉凭据、主机和个人敏感信息。
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本与来源
+      description: 安装包版本，或源码提交/分支与是否有本地修改。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: 操作系统、连接类型和 shell；不要填写服务器密码或密钥。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 操作步骤、预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏截图或最小日志
+      description: 注明频率及是否在其它客户端对照，不粘贴完整私人会话。

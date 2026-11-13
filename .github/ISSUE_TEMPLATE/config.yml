@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 私密安全报告
+    url: https://github.com/harryopo/tdsf-terminal-agent/security/advisories/new
+    about: 请按 SECURITY.md 私下报告安全问题，不上传凭据或未脱敏日志。

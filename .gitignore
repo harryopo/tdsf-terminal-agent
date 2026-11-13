@@ -1,4 +1,37 @@
 # Dependencies
+.local/
+.screenshots/
+.learnings/
+/probe-venv.tmp
+# Machine-specific output path; do not rely on a developer's .git/info/exclude.
+/src-tauri/.cargo/config.toml
+
+# Experiment handoff/raw evidence stays private across fresh clones as well.
+experiments/prediction-replay/evidence/
+experiments/prediction-replay/handoff.md
+experiments/prediction-replay/result.json
+experiments/model-client/evidence/
+experiments/model-client/handoff.md
+experiments/model-client/result.json
+experiments/model-client/__pycache__/
+
+# Competition working material is private by default. Only reviewed landing pages
+# are shared; raw proof, registration details and generated packages stay local.
+competitions/**
+!competitions/README.md
+!competitions/2026-huawei-agent/
+competitions/2026-huawei-agent/**
+!competitions/2026-huawei-agent/README.md
+!competitions/2026-huawei-agent/03-方案书/
+!competitions/2026-huawei-agent/03-方案书/README.md
+!competitions/2026-huawei-agent/03-方案书/2026-11-13-v1.0-协作备赛计划.md
+!competitions/2026-huawei-agent/03-方案书/2026-11-13-v1.1-审查优先与成员分工.md
+!competitions/2026-huawei-agent/04-AI协作与交接/
+!competitions/2026-huawei-agent/04-AI协作与交接/README.md
+!competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-13-EchoSinklair-首轮审查任务.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-13-Yan-0914-首轮审查任务.md
+
 node_modules/
 .pnp
 .pnp.js
@@ -138,22 +171,38 @@ agent-logs/
 # ============================================================================
 # 仓库精简：以下为开发过程资料，仅保留在本地工作区，不入库（2026-09-11）
 # ============================================================================
-docs/
+docs/**
+!docs/README.md
+!docs/STATUS.md
+!docs/architecture/
+!docs/architecture/*.md
+!docs/development/
+!docs/development/*.md
+!docs/guides/
+!docs/guides/README.md
+!docs/api/
+!docs/api/README.md
+!docs/research/
+!docs/research/README.md
+!docs/decisions/
+!docs/decisions/README.md
+!docs/decisions/*.md
+!docs/updates/
+!docs/updates/*.md
+!docs/plans/
+!docs/plans/README.md
+!docs/plans/*/
+!docs/plans/*/README.md
+!docs/plans/project-organization/2026-11-13-v1.0-目录与文档治理.md
+!docs/plans/terminal-prediction/2026-11-13-v1.0-输入与建议边界.md
 .ai/
 .trae/
 knowledge-slim-preview/
-AGENTS.md
-CLAUDE.md
-CONTRIBUTING.md
-CODE_OF_CONDUCT.md
 .coderabbit.yaml
 nix/
 flake.nix
 flake.lock
 启动-日志版.bat
-.github/CODEOWNERS
-.github/ISSUE_TEMPLATE/
-.github/PULL_REQUEST_TEMPLATE.md
 .github/dependabot.yml
 .github/workflows/signpath-test.yml
 .github/workflows/update-nix-sources.yml
@@ -241,3 +290,7 @@ ssh-credentials.json
 # 2026-09-28：用户把发布版安装到仓库目录里做验收（326 MB，含应用自带的 .tdsf-data 真数据）。
 # 这一整个目录都不许进仓库 —— 一次  就会把安装产物和他机器上的会话数据一起推上去。
 测试安装/
+
+# Protected, read-only reference trees awaiting a filesystem-level move; no
+# task output or third-party clone in a dated root is public source by default.
+/2026-*/
