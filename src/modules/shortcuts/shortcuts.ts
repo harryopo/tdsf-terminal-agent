@@ -452,6 +452,33 @@ export function matchBinding(
 }
 
 /**
+ * 预抢占拦截器（2026-11-13）
+ * -----------------------------------------------------------------------------
+ * 在全局快捷键匹配之前运行。终端“下一步建议 / 当前行纠错”这类显式组合键必须
+ * 先于 view.zoomIn / pane.split* 生效；返回 true 表示事件已被消费，
+ * useGlobalShortcuts 不再匹配任何快捷键。
+ */
+export type ShortcutInterceptor = (event: KeyboardEvent) => boolean;
+
+const shortcutInterceptors = new Set<ShortcutInterceptor>();
+
+export function registerShortcutInterceptor(
+  fn: ShortcutInterceptor,
+): () => void {
+  shortcutInterceptors.add(fn);
+  return () => {
+    shortcutInterceptors.delete(fn);
+  };
+}
+
+export function runShortcutInterceptors(event: KeyboardEvent): boolean {
+  for (const fn of shortcutInterceptors) {
+    if (fn(event)) return true;
+  }
+  return false;
+}
+
+/**
  * Display helpers
  */
 export function getBindingTokens(binding?: KeyBinding): string[] {
