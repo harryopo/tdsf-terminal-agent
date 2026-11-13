@@ -31,28 +31,14 @@ import {
 import {
   fetchRemoteCommands,
   fetchRemoteOsInfo,
-  remoteCarapaceInstalled,
+  probeRemoteCarapace,
+  type RemoteCarapaceProbeState,
   type RemoteOsInfo,
 } from '@/lib/param-complete-client';
 
 // TDSF 2026-08-28: SSH 会话的远端 carapace 检测状态（无弹窗设计，仅驱动小图标显隐）
-/** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装（键不存在 = 未检测） */
-export type SshRemoteCarapaceState = 'checking' | 'installed' | 'missing';
-
-// TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
-export type Osc7LogEntry = Record<string, unknown>;
-
-declare global {
-  interface Window {
-    __TDSF_OSC7_LOG__?: Osc7LogEntry[];
-  }
-}
-
-export function getOsc7Log(): Osc7LogEntry[] | null {
-  if (typeof window === "undefined") return null;
-  if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
-  return window.__TDSF_OSC7_LOG__;
-}
+/** 'checking' 检测中 / 'installed' 已装 / 'missing' 未装 / 'error' 未能确认（无键 = 未检测） */
+export type SshRemoteCarapaceState = 'checking' | RemoteCarapaceProbeState;
 
 // --- 内部工具函数 (消除 sshStore 内重复模式) ---
 
@@ -70,6 +56,12 @@ function omitSessionKey<T>(record: Record<string, T>, sessionId: string): Record
  * 让会话对象与决策函数共用一个定义。
  */
 export type SshSessionOrigin = 'space' | 'tab';
+
+type SshConnectOptions = {
+  autoConnect?: boolean;
+  origin?: SshSessionOrigin;
+  onFailure?: (message: string) => void;
+};
 
 /** SSH 会话信息 (前端管理) */
 export interface SshSessionInfo {  /** 前端唯一 id (crypto.randomUUID) */
@@ -164,7 +156,7 @@ interface SshExplorerState {
    */
   connect: (
     params: SshConnectParams,
-    opts?: { autoConnect?: boolean; origin?: SshSessionOrigin },
+    opts?: SshConnectOptions,
   ) => Promise<string | null>;
   disconnect: (sessionId: string) => Promise<void>;
   setActiveSession: (id: string) => void;
@@ -204,7 +196,7 @@ interface SshExplorerState {
   /** 用已保存的连接配置自动登录 (从 keyring 取敏感字段后调用 connect) */
   connectWithSaved: (
     profile: SshCredentialProfile,
-    opts?: { autoConnect?: boolean; origin?: SshSessionOrigin },
+    opts?: SshConnectOptions,
   ) => Promise<string | null>;
 
   // === TDSF 2026-08-28: 远端 carapace 检测 (无弹窗设计) ===
@@ -396,6 +388,8 @@ function clearTerminalSubscribers(sessionId: string): void {
 
 // === Store 实现 ==============================================================
 
+const carapaceDetectionRequests = new Map<string, symbol>();
+
 export const useSshStore = create<SshExplorerState>((set, get) => ({
   // === 初始状态 ===
   sessions: [],
@@ -450,7 +444,10 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         onStatus: (event) => {
           get().updateSessionStatus(sessionId, event);
         },
-        onExit: () => {
+        onExit: (code) => {
+          // Missing remote exit status belongs to the reconnect supervisor.
+          // Closing here would cancel reconnect before its status event arrives.
+          if (code === -1) return;
           // TDSF: 远端 shell 退出时, 标记为 closed 并主动调用 handle.close()
           // 触发 Rust 端 SshState.take() 清理 session + SFTP 缓存, 避免资源泄漏
           const sess = get().sessions.find((s) => s.id === sessionId);
@@ -501,9 +498,14 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
         } catch (e) {
           console.warn('[sshStore] resolve $HOME failed, fallback /:', e);
         }
-        // 会话可能在解析期间已断开 —— 断开时 currentPathBySession 已清理,
-        // 再写会留下孤儿键; 守卫: 仅当会话仍存在时写入。
-        if (!get().sessions.some((s) => s.id === sessionId)) return;
+        // HOME is only an initial fallback: a terminal cwd reported while the
+        // probe was pending is newer, and an ended connection cannot be seeded.
+        const state = get();
+        const current = state.sessions.find((sess) => sess.id === sessionId);
+        if (!current || current.rustSessionId !== handle.id ||
+            current.state === 'closed' || current.state === 'failed' ||
+            current.state === 'reconnecting' ||
+            state.currentPathBySession[sessionId] !== undefined) return;
         get().setCurrentPath(sessionId, initial);
       })().catch((e) => {
         console.warn('[sshStore] initial $HOME seed failed:', e);
@@ -562,6 +564,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
           user: params.user,
         },
       });
+      opts?.onFailure?.(msg);
       return null;
     }
   },
@@ -635,8 +638,6 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   },
 
   setCurrentPath: (sessionId, path) => {
-    const log = getOsc7Log();
-    log?.push({ source: "sshStore.setCurrentPath", sessionId, path });
     set((s) => ({
       currentPathBySession: { ...s.currentPathBySession, [sessionId]: path },
     }));
@@ -759,10 +760,7 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
 
       // 3. 调用 connect（透传 autoConnect 标记，订阅处理器据此决定
       //    "无匹配 SSH Space"时跳过（开机自动）还是新建（对话框手动））
-      const sessionId = await get().connect(params, {
-        autoConnect: opts?.autoConnect,
-        origin: opts?.origin,
-      });
+      const sessionId = await get().connect(params, opts);
 
       // 4. 连接成功后更新 lastUsed
       if (sessionId) {
@@ -785,6 +783,8 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
   // === TDSF 2026-08-28: 远端 carapace 静默检测（无弹窗设计） ====================
 
   setRemoteCarapaceState: (sessionId, state) => {
+    // A newer publication, even another checking pass, supersedes the initial probe.
+    carapaceDetectionRequests.delete(sessionId);
     set((s) => ({
       remoteCarapaceBySession: { ...s.remoteCarapaceBySession, [sessionId]: state },
     }));
@@ -800,16 +800,25 @@ export const useSshStore = create<SshExplorerState>((set, get) => ({
     } catch (e) {
       console.warn('[sshStore] read carapace prompt preference failed:', e);
     }
-    // 已有结果（checking/installed/missing）→ 不重复检测
+    // 已有检测状态 → 不自动重复检测
     if (get().remoteCarapaceBySession[sessionId]) return;
     const sess = get().sessions.find((s) => s.id === sessionId);
     if (!sess?.rustSessionId) return;
     get().setRemoteCarapaceState(sessionId, 'checking');
-    // remoteCarapaceInstalled 自带会话级缓存 + 失败静默（返回 false）
-    const installed = await remoteCarapaceInstalled(sess.rustSessionId);
-    // 检测期间会话可能已断开（disconnect 清空了状态）→ 不复活旧会话的状态
-    if (!get().sessions.some((s) => s.id === sessionId)) return;
-    get().setRemoteCarapaceState(sessionId, installed ? 'installed' : 'missing');
+    const request = Symbol();
+    carapaceDetectionRequests.set(sessionId, request);
+    try {
+      const state = await probeRemoteCarapace(sess.rustSessionId);
+      // 不覆盖已完成的安装/刷新，也不把旧连接的检测结果写入新连接。
+      const latest = get();
+      const current = latest.sessions.find((s) => s.id === sessionId);
+      if (carapaceDetectionRequests.get(sessionId) !== request ||
+          current?.rustSessionId !== sess.rustSessionId ||
+          latest.remoteCarapaceBySession[sessionId] !== 'checking') return;
+      latest.setRemoteCarapaceState(sessionId, state);
+    } finally {
+      if (carapaceDetectionRequests.get(sessionId) === request) carapaceDetectionRequests.delete(sessionId);
+    }
   },
 
   // === TDSF: SSH 终端数据订阅 (修复黑屏) ===

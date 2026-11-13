@@ -87,3 +87,47 @@ describe("HostApprovalDialog — 用户 2026-09-23 要的两件事", () => {
     );
   });
 });
+
+describe("HostApprovalDialog — 窄视口布局", () => {
+  it("把标题和详情放在同一滚动区，并让审批按钮留在滚动区外", () => {
+    renderDialog();
+
+    const content = document.querySelector<HTMLElement>(
+      '[data-slot="alert-dialog-content"]',
+    );
+    const header = screen
+      .getByRole("heading", { name: "首次连接该主机" })
+      .closest('[data-slot="alert-dialog-header"]');
+    const details = screen.getByTestId("ssh-host-randomart");
+    const footer = screen
+      .getByRole("button", { name: "信任并连接" })
+      .closest('[data-slot="alert-dialog-footer"]');
+
+    expect.soft(content).not.toBeNull();
+    expect.soft(header).not.toBeNull();
+    expect.soft(footer).not.toBeNull();
+    expect
+      .soft(content?.className.split(/\s+/))
+      .toEqual(
+        expect.arrayContaining([
+          "flex",
+          "flex-col",
+          "overflow-hidden",
+          "max-h-[70vh]",
+          "data-[size=default]:sm:max-w-[42rem]",
+        ]),
+      );
+
+    const scrollOwner = header?.parentElement;
+    expect.soft(scrollOwner).toBeTruthy();
+    expect
+      .soft(scrollOwner?.className.split(/\s+/))
+      .toEqual(
+        expect.arrayContaining(["min-h-0", "overflow-y-auto", "space-y-4"]),
+      );
+    expect.soft(scrollOwner?.contains(header ?? null)).toBe(true);
+    expect.soft(scrollOwner?.contains(details)).toBe(true);
+    expect.soft(scrollOwner?.contains(footer ?? null)).toBe(false);
+    expect.soft(footer?.className.split(/\s+/)).toContain("shrink-0");
+  });
+});

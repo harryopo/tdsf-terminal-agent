@@ -40,12 +40,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import posixpath
 import re
 from uuid import uuid4
 from typing import Any
 
 from needs_you import NeedsYouStatus
 from strands_backend.modes import decide
+from strands_backend.tools._credential_paths import is_credential_path_piece
+from strands_backend.tools._redact import redact_sensitive_text
+from strands_backend.tools.tool_lifecycle import bind_tool_call_id
 from strands_backend.tools import (
     ToolContext,
     complete_approval_execution,
@@ -66,6 +70,8 @@ def _emit_tool_call(
     params: dict[str, Any],
     status: str,
     result: dict[str, Any] | None = None,
+    *,
+    tool_call_id: str | None = None,
 ) -> None:
     """Emit one terminal state transition; event failures never change I/O."""
     if ctx.event_bus is None:
@@ -73,9 +79,16 @@ def _emit_tool_call(
     try:
         ctx.event_bus.emit_tool_call(
             tool_name=tool_name,
-            params=params,
-            result=result,
+            params={
+                key: redact_sensitive_text(value) if isinstance(value, str) else value
+                for key, value in params.items()
+            },
+            result={
+                key: redact_sensitive_text(value) if isinstance(value, str) else value
+                for key, value in result.items()
+            } if result is not None else None,
             status=status,
+            tool_call_id=tool_call_id,
             session_id=ctx.session_id or None,
             source=f"{ctx.agent_name}_agent.strands_tool.remote_file",
         )
@@ -196,7 +209,9 @@ def _write_sftp_bytes(
 # 核心实现（无 Strands 依赖，便于单测）
 # ============================================================================
 
-def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_remote_file_tool(
+    params: dict[str, Any], ctx: ToolContext, *, tool_call_id: str | None = None,
+) -> dict[str, Any]:
     """远程文件读取工具核心实现
 
     Args:
@@ -222,32 +237,32 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     encoding = params.get("encoding", "utf-8") or "utf-8"
 
     session_id = ssh_session_id or ctx.ssh_session_id
+    call_id = tool_call_id or str(uuid4())
+    event_params = {"path": path, "ssh_session_id": session_id, "max_size": max_size}
+    _emit_tool_call(ctx, "read_remote_file", event_params, "started", tool_call_id=call_id)
 
-    # 推送 tool_call 开始事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="read_remote_file",
-                params={"path": path, "ssh_session_id": session_id, "max_size": max_size},
-                status="started",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.remote_file",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call started failed: {e}")
+    def _finish(response: dict[str, Any]) -> dict[str, Any]:
+        # File text remains in the tool result, not in UI event telemetry.
+        _emit_tool_call(
+            ctx, "read_remote_file", event_params,
+            "error" if response.get("status") == "error" else "completed",
+            {key: value for key, value in response.items() if key != "content"},
+            tool_call_id=call_id,
+        )
+        return response
 
     # 检查 RustBridge 配置
     if ctx.rust_bridge is None:
         logger.warning(
             f"remote_file unavailable (no rust_bridge): path={path}"
         )
-        return {
+        return _finish({
             "status": "unavailable",
             "path": path,
             "ssh_session_id": session_id,
             "reason": "rust_bridge_not_injected",
             "message": "RustBridge 未注入，工具无法调用 Rust 后端",
-        }
+        })
 
     # 通过 RustBridge 调 Rust 后端 sftp_read
     # TDSF 2026-07-30 P0-C4 修复:
@@ -261,24 +276,81 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         logger.error(
             f"remote_file invalid session_id: id={session_id!r}, error={e}"
         )
-        return {
+        return _finish({
             "status": "error",
             "path": path,
             "ssh_session_id": session_id,
             "error": f"invalid session_id (expect int-convertible): {session_id!r}",
-        }
+        })
 
     if session_id_int <= 0:
         logger.warning(
             f"remote_file no active ssh session: path={path}"
         )
-        return {
+        return _finish({
             "status": "unavailable",
             "path": path,
             "ssh_session_id": session_id,
             "reason": "no_ssh_session",
             "message": "无活跃 SSH 会话，请先连接 SSH 再读取远程文件",
-        }
+        })
+
+    approved_request = None
+    # Classify lexical aliases too, but keep the approved and dispatched path unchanged.
+    if is_credential_path_piece(path) or is_credential_path_piece(posixpath.normpath(path)):
+        try:
+            decision = decide(3, ctx.mode)
+        except ValueError:
+            decision = "deny"
+        if decision == "deny":
+            return _finish({
+                "status": "command_blocked",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "当前模式不允许读取凭据类文件；未读取远程文件。",
+            })
+        descriptor = f"读取远程文件 {path}"
+        request = request_approval_and_wait(
+            ctx,
+            descriptor,
+            {
+                "level": "L3",
+                "high_risk": False,
+                "write": False,
+                "matched_rules": ["credential_read"],
+                "reason": "文件可能包含凭据，读取内容将返回模型。",
+            },
+            tool_name="read_remote_file",
+            impact={
+                "max_risk_l": 3,
+                "summary": f"读取 {path} 的内容并返回模型。",
+                "segments": [{
+                    "command": descriptor,
+                    "category": "credential",
+                    "category_label": "读取凭据类文件",
+                    "objects": [path],
+                    "risk_l": 3,
+                }],
+            },
+            risk_l=3,
+            tool_call_id=call_id,
+            ssh_session_id=session_id,
+        )
+        if request is not None and request.status == NeedsYouStatus.CANCELLED:
+            return _finish({
+                "status": "cancelled",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "审批已取消；未读取远程文件。",
+            })
+        if request is None or request.status != NeedsYouStatus.APPROVED:
+            return _finish({
+                "status": "rejected" if request is not None and request.status == NeedsYouStatus.REJECTED else "needs_approval",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "审批未获通过；未读取远程文件。",
+            })
+        approved_request = request
 
     try:
         result = ctx.rust_bridge.ipc_invoke("sftp_read", {
@@ -290,22 +362,25 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         })
     except Exception as e:
         logger.exception(f"remote_file ipc_invoke exception: path={path}, error={e}")
-        return {
+        return _finish({
             "status": "error",
             "path": path,
             "ssh_session_id": session_id,
             "error": f"ipc_invoke 异常: {e}",
-        }
+        })
+    finally:
+        if approved_request is not None:
+            complete_approval_execution(approved_request)
 
     # RustBridge 未配置返回 unavailable
     if isinstance(result, dict) and result.get("status") in ("unavailable", "error"):
-        return {
+        return _finish({
             "status": result.get("status", "error"),
             "path": path,
             "ssh_session_id": session_id,
             "reason": result.get("reason", ""),
             "error": result.get("error", result.get("message", "")),
-        }
+        })
 
     # TDSF 2026-07-30 P0-C4: 适配 Rust sftp_read 实际返回值
     # Rust sftp_read 签名: (app, state, session_id, path) -> Result<Vec<u8>, String>
@@ -323,14 +398,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             "reason": "remote_file_content_missing",
             "error": "sftp_read returned an invalid byte array",
         }
-        _emit_tool_call(
-            ctx,
-            "read_remote_file",
-            {"path": path, "ssh_session_id": session_id, "max_size": max_size},
-            "error",
-            response,
-        )
-        return response
+        return _finish(response)
     if not isinstance(result, (list, bytes, bytearray, str, dict)):
         response = {
             "status": "error",
@@ -339,14 +407,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
             "reason": "remote_file_content_missing",
             "error": "sftp_read returned an unsupported response type",
         }
-        _emit_tool_call(
-            ctx,
-            "read_remote_file",
-            {"path": path, "ssh_session_id": session_id, "max_size": max_size},
-            "error",
-            response,
-        )
-        return response
+        return _finish(response)
     if isinstance(result, dict) and "content" not in result:
         extracted, _, _ = _extract_content(result)
         if extracted is None:
@@ -357,14 +418,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 "reason": "remote_file_content_missing",
                 "error": "sftp_read returned no decodable file content",
             }
-            _emit_tool_call(
-                ctx,
-                "read_remote_file",
-                {"path": path, "ssh_session_id": session_id, "max_size": max_size},
-                "error",
-                response,
-            )
-            return response
+            return _finish(response)
         result = {**result, "content": extracted}
 
     truncated = False
@@ -386,14 +440,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 "reason": "remote_file_content_missing",
                 "error": "sftp_read returned invalid file content",
             }
-            _emit_tool_call(
-                ctx,
-                "read_remote_file",
-                {"path": path, "ssh_session_id": session_id, "max_size": max_size},
-                "error",
-                response,
-            )
-            return response
+            return _finish(response)
         size = int(result.get("size", 0))
         truncated = bool(result.get("truncated", False))
         if size > 0 and len(content_raw) == 0:
@@ -404,14 +451,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
                 "reason": "remote_file_content_missing",
                 "error": "sftp_read reported a non-empty file but returned no content",
             }
-            _emit_tool_call(
-                ctx,
-                "read_remote_file",
-                {"path": path, "ssh_session_id": session_id, "max_size": max_size},
-                "error",
-                response,
-            )
-            return response
+            return _finish(response)
     else:
         # 兜底：转字符串
         content_raw = str(result)
@@ -437,13 +477,13 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
 
     if is_binary:
         logger.info(f"remote_file binary detected: path={path}, size={size}")
-        return {
+        return _finish({
             "status": "binary",
             "path": path,
             "ssh_session_id": session_id,
             "size": size,
             "message": "文件为二进制格式，不返回内容（如需查看请用 ssh_command + xxd/head）",
-        }
+        })
 
     # 文本文件
     try:
@@ -463,26 +503,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     )
     content_sha256 = hashlib.sha256(content_bytes).hexdigest()
 
-    # 推送 tool_call 完成事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="read_remote_file",
-                params={"path": path, "ssh_session_id": session_id, "max_size": max_size},
-                result={
-                    "status": "success",
-                    "size": size,
-                    "truncated": truncated,
-                    "sha256": content_sha256,
-                },
-                status="completed",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.remote_file",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call completed failed: {e}")
-
-    return {
+    return _finish({
         "status": "success",
         "path": path,
         "ssh_session_id": session_id,
@@ -494,7 +515,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
         "message": (
             f"文件已读取（{size} 字节" + ("，已截断" if truncated else "") + "）"
         ),
-    }
+    })
 
 
 # ============================================================================
@@ -502,7 +523,7 @@ def invoke_remote_file_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
 # ============================================================================
 
 def invoke_write_remote_file_tool(
-    params: dict[str, Any], ctx: ToolContext
+    params: dict[str, Any], ctx: ToolContext, *, tool_call_id: str | None = None,
 ) -> dict[str, Any]:
     """Safely overwrite one existing remote UTF-8 text file.
 
@@ -539,23 +560,25 @@ def invoke_write_remote_file_tool(
         "expected_sha256": expected_sha256,
         "backup_path": backup_path,
     }
-    _emit_tool_call(ctx, "write_remote_file", event_params, "started")
+    call_id = tool_call_id or str(uuid4())
+    _emit_tool_call(ctx, "write_remote_file", event_params, "started", tool_call_id=call_id)
     operation_id = ""
     approved_request: Any | None = None
 
     def _finish(response: dict[str, Any]) -> dict[str, Any]:
         is_success = response.get("status") == "success"
+        if operation_id:
+            response["operation_id"] = operation_id
         _emit_tool_call(
             ctx,
             "write_remote_file",
             event_params,
             "completed" if is_success else "error",
             response,
+            tool_call_id=call_id,
         )
         if approved_request is not None:
             complete_approval_execution(approved_request)
-        if operation_id:
-            response["operation_id"] = operation_id
         return response
 
     try:
@@ -678,6 +701,9 @@ def invoke_write_remote_file_tool(
             explanation="按已读取的版本覆盖指定远程文本文件。",
             impact=impact,
             risk_l=3,
+            tool_call_id=call_id,
+            operation_id=operation_id or None,
+            ssh_session_id=session_id,
         )
         if request is None:
             _cancel("approval_request_failed")
@@ -686,6 +712,14 @@ def invoke_write_remote_file_tool(
                 "path": path,
                 "ssh_session_id": session_id,
                 "message": "审批请求创建失败；未写入文件。",
+            })
+        if request.status == NeedsYouStatus.CANCELLED:
+            _cancel("approval_cancelled")
+            return _finish({
+                "status": "cancelled",
+                "path": path,
+                "ssh_session_id": session_id,
+                "message": "审批已取消；未写入文件。",
             })
         if request.status != NeedsYouStatus.APPROVED:
             _cancel(
@@ -838,17 +872,20 @@ def make_remote_file_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def read_remote_file(
         path: str,
         ssh_session_id: str = "",
         max_size: int = _DEFAULT_MAX_SIZE,
         encoding: str = "utf-8",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """读取 SSH 会话上的远程文件内容。
 
         通过 SFTP 读取远程文件，自动检测二进制文件（含 NUL 字节）并返回
         binary 状态。大文件自动截断（默认 1MB），避免响应过大。
+        凭据类路径需要用户批准；只读模式下不读取凭据类文件。
 
         Args:
             path (str): 远程文件绝对路径。
@@ -858,17 +895,39 @@ def make_remote_file_tool(ctx: ToolContext):
 
         Returns:
             dict: 结构化结果，含 status / path / content / size / truncated 等字段。
-                status 取值: success | binary | unavailable | error
+                status 取值: success | binary | unavailable | error |
+                    command_blocked | needs_approval | rejected | cancelled
         """
-        return invoke_remote_file_tool(
-            params={
-                "path": path,
-                "ssh_session_id": ssh_session_id,
-                "max_size": max_size,
-                "encoding": encoding,
-            },
-            ctx=ctx,
+        call_id = str(uuid4())
+        bind_tool_call_id(
+            sdk_tool_context, tool_name="read_remote_file", tool_call_id=call_id,
+            session_id=ctx.session_id or None, agent_name=ctx.agent_name,
         )
+        try:
+            result = invoke_remote_file_tool(
+                params={
+                    "path": path,
+                    "ssh_session_id": ssh_session_id,
+                    "max_size": max_size,
+                    "encoding": encoding,
+                },
+                ctx=ctx,
+                tool_call_id=call_id,
+            )
+        except Exception as exc:
+            _emit_tool_call(
+                ctx, "read_remote_file",
+                {"path": path, "ssh_session_id": ssh_session_id or ctx.ssh_session_id,
+                 "max_size": max_size},
+                "error", {"status": "error", "message": str(exc)},
+                tool_call_id=call_id,
+            )
+            raise
+
+        if sdk_tool_context is None:
+            return result
+        # Keep business status/content inside a valid SDK content block.
+        return {"status": "success", "content": [{"json": result}]}
 
     read_remote_file.__name__ = "read_remote_file"
     return read_remote_file
@@ -876,27 +935,44 @@ def make_remote_file_tool(ctx: ToolContext):
 
 def make_write_remote_file_tool(ctx: ToolContext):
     """Build the confirmed remote text-file overwrite tool."""
-    @tool
+    @tool(context="sdk_tool_context")
     def write_remote_file(
         path: str,
         content: str,
         expected_sha256: str,
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """覆盖已有远程 UTF-8 文本文件。
 
         先用 read_remote_file 获取 sha256；确认模式下需用户逐条批准。写入前
         自动在同目录生成备份，写后回读校验；任何不确定状态都不会假报成功。
         """
-        return invoke_write_remote_file_tool(
-            {
-                "path": path,
-                "content": content,
-                "expected_sha256": expected_sha256,
-                "ssh_session_id": ssh_session_id,
-            },
-            ctx,
+        call_id = str(uuid4())
+        bind_tool_call_id(
+            sdk_tool_context, tool_name="write_remote_file", tool_call_id=call_id,
+            session_id=ctx.session_id or None, agent_name=ctx.agent_name,
         )
+        try:
+            return invoke_write_remote_file_tool(
+                {
+                    "path": path,
+                    "content": content,
+                    "expected_sha256": expected_sha256,
+                    "ssh_session_id": ssh_session_id,
+                },
+                ctx,
+                tool_call_id=call_id,
+            )
+        except Exception as exc:
+            _emit_tool_call(
+                ctx, "write_remote_file",
+                {"path": path, "ssh_session_id": ssh_session_id or ctx.ssh_session_id},
+                "error", {"status": "error", "message": str(exc)},
+                tool_call_id=call_id,
+            )
+            raise
 
     write_remote_file.__name__ = "write_remote_file"
     return write_remote_file

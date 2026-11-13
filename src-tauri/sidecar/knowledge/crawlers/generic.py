@@ -10,9 +10,8 @@ iptables/ssh/bash/python/rust/git）提供通用实现。
 - 从 base_url 出发广度优先抓取同域页面：<a href> 过滤（同域名、去锚点、
   去资源文件后缀、去查询串 URL、去语言变体、去 Wiki 命名空间/meta 页、
   visited 去重）
-- 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文合并，
-  截断 ~12000 字；TDSF 2026-08-30 用户钦定「一条知识库弄多一些」：
-  整页合并一条而非碎片）
+- 每页产出 1 条 KnowledgeEntry（title=页面标题，content=完整提取正文，
+  整页合并一条而非在任意字符处截断代码或安全说明）
 - 页间 sleep(delay) 限速（离线缓存模式不 sleep）；单页失败（超时 10s/
   非 200/解析空）记 warning 跳过继续；整体 try/except 不向上抛出
 - 单页缓存能力沿用 BaseCrawler._fetch_single（联网成功写缓存、失败读
@@ -37,6 +36,7 @@ nginx 专用爬虫通过 crawl_site() 共享同一 BFS 实现。
 from __future__ import annotations
 
 import logging
+import posixpath
 import re
 import time
 from collections import deque
@@ -63,7 +63,6 @@ from knowledge.fts5 import KnowledgeEntry
 
 logger = logging.getLogger("sidecar.knowledge.crawlers.generic")
 
-_PAGE_MAX_CHARS = 12000  # 单页正文截断上限（整页合并一条，TDSF 2026-08-30）
 _PAGE_MIN_CHARS = 500  # 质量门槛：低于此长度的页面视为导航/meta 残页丢弃
 
 # 视为资源文件的 URL 后缀（不作为文档页抓取）
@@ -112,6 +111,10 @@ class GenericCrawler(BaseCrawler):
             offline=offline,
             default_tags=self.default_tags,
         )
+
+    def _validate_response_url(self, url: str) -> None:
+        if not _in_document_scope(url, self.base_url):
+            raise ValueError("redirected response is outside the configured document scope")
 
     def parse(self, html: str) -> list[dict[str, Any]]:
         """通用 HTML 解析：提取章节标题 + 正文"""
@@ -237,8 +240,7 @@ def crawl_site(
 ) -> CrawlerResult:
     """从 crawler.base_url 出发 BFS 抓取同域页面
 
-    - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=整页正文
-      GFM markdown，截断 12000 字）
+    - 每页产出 1 条 KnowledgeEntry（title=页面标题，content=完整正文 GFM markdown）
     - 页面治理（_filter_reason 统一判定，各类分别计数）：垃圾标题 /
       导航索引页（链接墙）/ 正文 < 500 字残页 / 繁体内容 → 丢弃
     - Wiki 命名空间标题丢弃（重定向导致 URL 干净但标题为 Help:X 等）
@@ -529,12 +531,24 @@ def _is_chinese_variant(url: str) -> bool:
     return False
 
 
+def _in_document_scope(url: str, base_url: str) -> bool:
+    parsed, base = urlparse(url), urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != base.netloc.lower() or parsed.query:
+        return False
+    # Debian hosts manuals for many unrelated packages and distribution versions.
+    # A Bash manual must not absorb Emacs/coreutils or another release's pages.
+    package = re.match(r"^/([^/]+)/bash/", base.path) if base.hostname == "manpages.debian.org" else None
+    if package:
+        path = posixpath.normpath(unquote(parsed.path).replace("\\", "/"))
+        return path.startswith(f"/{package[1]}/bash/")
+    return True
+
+
 def _extract_links(
     soup: BeautifulSoup, current_url: str, base_url: str
 ) -> list[str]:
     """提取同域文档链接（同域名、去锚点、去资源文件、去查询串、
     去语言变体、去 Wiki 命名空间/meta 页、规范化绝对 URL）"""
-    base_netloc = urlparse(base_url).netloc
     links: list[str] = []
     for a in soup.find_all("a", href=True):
         href = str(a["href"]).strip()
@@ -542,10 +556,8 @@ def _extract_links(
             continue
         absolute = urljoin(current_url, href)
         parsed = urlparse(absolute)
-        if parsed.scheme not in ("http", "https"):
+        if not _in_document_scope(absolute, base_url):
             continue
-        if parsed.netloc != base_netloc:
-            continue  # 外域过滤
         if parsed.path.lower().endswith(_RESOURCE_EXTS):
             continue  # 资源文件
         if parsed.query:
@@ -628,8 +640,6 @@ def _extract_page(
                 f"binary-looking content ({ctrl}/{len(content)} ctrl chars), skip: {url}"
             )
             content = ""
-    if len(content) > _PAGE_MAX_CHARS:
-        content = content[:_PAGE_MAX_CHARS]
     return {"title": title, "content": content, "tags": list(tags), "url": url, "_md": True}
 
 

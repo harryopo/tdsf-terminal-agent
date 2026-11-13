@@ -10,7 +10,7 @@ import {
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from "ai";
 import { getModel, type ModelId, providerNeedsKey } from "../config";
-import { toSidecarMode } from "../agents/registry";
+import { DEFAULT_AGENT_MODE, toSidecarMode } from "../agents/registry";
 import { BUILTIN_AGENTS } from "../lib/agents";
 import { resolveScopedSshSession } from "../lib/sshScopeTarget";
 import { createContextAwareTransport } from "../lib/transport";
@@ -81,7 +81,19 @@ function makeChat(sessionId: string): Chat<UIMessage> {
     getSessionId: () => sessionId,
   };
 
+  const getAgentMode = () => {
+    const state = useChatStore.getState();
+    const meta = state.sessions.find((s) => s.id === sessionId);
+    const mode = meta?.agentMode ?? DEFAULT_AGENT_MODE;
+    // The active store is restored in a separate write on chat switches.
+    // Only this chat's persisted fields represent an explicit mode change.
+    return mode === "observe" && meta?.teach ? "teach" : mode;
+  };
   const transport = createContextAwareTransport({
+    modeSource: {
+      get: getAgentMode,
+      subscribe: (listener) => useChatStore.subscribe(listener),
+    },
     getKeys: () => useChatStore.getState().apiKeys,
     toolContext,
     getModelId: () => useChatStore.getState().selectedModelId,
@@ -99,9 +111,9 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       // 解析环境，不再全局跟随"当前活跃终端"——类比 AI 编程 agent 的工作
       // 目录隔离。本地对话不再看到 SSH 服务器；绑定 A 服务器的对话切到
       // B 服务器终端后上下文不串。老会话（scope 缺省）保持原全局行为。
-      const { activeSessionId, sessions } = useChatStore.getState();
+      const { sessions } = useChatStore.getState();
       const scope =
-        sessions.find((s) => s.id === activeSessionId)?.scope ?? null;
+        sessions.find((s) => s.id === sessionId)?.scope ?? null;
       // 记忆隔离维度：workspace scope → spaceId（写入打标签 + recall 过滤）
       const memoryScopeId = scope?.kind === "workspace" ? scope.spaceId : null;
 
@@ -203,7 +215,7 @@ function makeChat(sessionId: string): Chat<UIMessage> {
           executionChannel:
             usePreferencesStore.getState().agentExecutionChannel,
           autoExecuteInTerminal: false,
-          ...toSidecarMode(useChatStore.getState().agentMode),
+          ...toSidecarMode(getAgentMode()),
         };
       }
 
@@ -284,10 +296,10 @@ function makeChat(sessionId: string): Chat<UIMessage> {
         autoExecuteInTerminal: false,
         // v3.1 三模式信任体系 + 教学皮肤：随每轮 invoke 的 state.live 下发
         // sidecar（adapter.py 读 state.live.agentMode / state.live.teach，
-        // 缺省 confirm）。模式即时生效：切换后下一条消息即用新模式。
+        // 缺省 confirm）。确认/自动通过modeSource同步本轮后续决策。
         // v3.1.3 四档化：teach 是前端第四档（= observe + teach 预置组合），
         // toSidecarMode 展开为 sidecar 认识的三模式 + teach 布尔。
-        ...toSidecarMode(useChatStore.getState().agentMode),
+        ...toSidecarMode(getAgentMode()),
       };
     },
     getPlanMode: () => usePlanStore.getState().active,

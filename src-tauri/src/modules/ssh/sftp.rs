@@ -26,6 +26,8 @@ use std::sync::Arc;
 
 use russh_sftp::client::error::Error as SftpProtocolError;
 use russh_sftp::client::SftpSession as RawSftpSession;
+use russh_sftp::protocol::OpenFlags;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 /// SFTP 目录项 (前端序列化用)
@@ -286,14 +288,46 @@ impl SftpSession {
     ///
     /// SFTP write 会创建文件(若不存在)或截断(若存在),然后写入数据。
     pub async fn write_file(&self, path: &str, content: &[u8]) -> Result<(), String> {
+        self.write_with_flags(
+            path,
+            content,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+    }
+
+    /// Create a new file without replacing an existing path.
+    pub async fn create_file(&self, path: &str, content: &[u8]) -> Result<(), String> {
+        self.write_with_flags(
+            path,
+            content,
+            OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+        )
+        .await
+    }
+
+    async fn write_with_flags(
+        &self,
+        path: &str,
+        content: &[u8],
+        flags: OpenFlags,
+    ) -> Result<(), String> {
         log::info!("[sftp] write_file: {} ({} bytes)", path, content.len());
         let guard = self.inner.lock().await;
         let session = guard.as_ref().ok_or("SFTP session closed")?;
 
-        session
-            .write(path.to_string(), content)
+        let mut file = session
+            .open_with_flags(path.to_string(), flags)
             .await
             .map_err(|e| self.fail(e))?;
+        file.write_all(content)
+            .await
+            .map_err(|e| self.fail(e.into()))?;
+        // The library queues writes; shutdown drains their acknowledgements
+        // and waits for CLOSE before we report success.
+        file.shutdown()
+            .await
+            .map_err(|e| self.fail(e.into()))?;
         log::info!("[sftp] write_file success");
         Ok(())
     }
@@ -407,6 +441,10 @@ fn mode_to_permission_string(mode: u32) -> String {
     }
     s
 }
+
+#[cfg(test)]
+#[path = "sftp_write_tests.rs"]
+mod write_regressions;
 
 #[cfg(test)]
 mod tests {

@@ -5,6 +5,24 @@ export type TerminalKeyEvent = Pick<
 
 export type PlatformOpts = { isMac: boolean };
 
+export const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /Mac|iPhone|iPad/.test(navigator.userAgent);
+
+export function isTerminalCopy(
+  event: TerminalKeyEvent & Pick<KeyboardEvent, "shiftKey">,
+  opts: PlatformOpts,
+): boolean {
+  return (
+    !opts.isMac &&
+    event.ctrlKey &&
+    event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    (event.code === "KeyC" || event.key === "c" || event.key === "C")
+  );
+}
+
 export function terminalWordNavigationSequence(
   event: TerminalKeyEvent,
 ): string | null {

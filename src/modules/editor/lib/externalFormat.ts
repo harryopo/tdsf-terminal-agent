@@ -1,6 +1,6 @@
 import { quoteShellArg } from "@/lib/shellQuote";
 import type { EditorFormatter } from "@/modules/settings/store";
-import { ipcWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv, type LocalWorkspaceEnv } from "@/modules/workspace";
 import type { EditorView } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -119,6 +119,7 @@ export async function runExternalFormatter(
   formatter: ExternalFormatter,
   path: string,
   customTemplate = "",
+  workspace: LocalWorkspaceEnv = ipcWorkspaceEnv(),
 ): Promise<string | null> {
   const command = buildCommand(formatter, path, customTemplate);
   if (!command) {
@@ -129,7 +130,7 @@ export async function runExternalFormatter(
       command,
       cwd: dirname(path),
       timeoutSecs: 20,
-      workspace: ipcWorkspaceEnv(),
+      workspace,
     });
     if (out.timed_out) return `${formatter} timed out`;
     if (out.exit_code !== 0) {
@@ -143,10 +144,11 @@ export async function runExternalFormatter(
 
 export async function readFileText(
   path: string,
+  workspace: LocalWorkspaceEnv = ipcWorkspaceEnv(),
 ): Promise<{ text: string; mtime: number } | null> {
   const res = await invoke<ReadResult>("fs_read_file", {
     path,
-    workspace: ipcWorkspaceEnv(),
+    workspace,
   }).catch(() => null);
   if (res?.kind !== "text" || res.content == null) return null;
   return { text: res.content, mtime: res.mtime ?? 0 };

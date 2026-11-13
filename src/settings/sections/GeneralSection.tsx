@@ -6,7 +6,6 @@
 //   - 资源管理器 (显示隐藏文件 / Git 装饰)
 //   - 终端 (字体/光标/滚动/WebGL/字符间距/字体粗细/shell)
 //   - 启动 (开机自启 / 恢复窗口)
-//   - 智能体通知
 //
 // 每个 SettingRow 的 title/description 全部中文; 控件用 Switch/Select/Slider/Input 组件.
 
@@ -23,24 +22,9 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
-  AUTO_SAVE_DELAY_MAX,
-  AUTO_SAVE_DELAY_MIN,
-  type AutocompleteTrigger,
-  type EditorFormatter,
-  setAgentNotifications,
-  setAutocompleteTrigger,
   setAutostart,
-  setEditorAutoSave,
-  setEditorAutoSaveDelay,
-  setEditorCustomFormatCommand,
-  setEditorFontSize,
-  setEditorFormatOnSave,
-  setEditorFormatter,
-  setEditorWordWrap,
   setExplorerGitDecorations,
-  setRestoreWindowState,
   setServerMonitorInterval,
-  setSshRemoteCarapacePrompt,
   SERVER_MONITOR_INTERVAL_PRESETS,
   setShowHidden,
   setTerminalCursorBlink,
@@ -52,7 +36,6 @@ import {
   setTerminalShell,
   setTerminalWebglEnabled,
   setTheme,
-  setVimMode,
   setZoomLevel,
   TERMINAL_FONT_SIZES,
   TERMINAL_SCROLLBACK_PRESETS,
@@ -66,7 +49,6 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
 import { SettingRow } from "../components/SettingRow";
-import { RemoteCarapaceCard } from "./RemoteCarapaceCard";
 
 const APPEARANCE = [
   { id: "system" as const, label: "跟随系统", icon: ComputerIcon },
@@ -92,14 +74,6 @@ const SHELL_OPTIONS: { value: string; label: string; note?: string }[] = [
   { value: "/bin/bash", label: "Bash (Linux)" },
 ];
 
-const AUTOCOMPLETE_TRIGGER_OPTIONS: {
-  value: AutocompleteTrigger;
-  label: string;
-}[] = [
-  { value: "auto", label: "自动 (边输入边建议)" },
-  { value: "manual", label: "手动 (按快捷键触发)" },
-];
-
 const SERVER_MONITOR_INTERVAL_OPTIONS = SERVER_MONITOR_INTERVAL_PRESETS.map(
   (ms) => ({
     value: ms,
@@ -110,19 +84,6 @@ const SERVER_MONITOR_INTERVAL_OPTIONS = SERVER_MONITOR_INTERVAL_PRESETS.map(
       "10 秒 (省电)",
   }),
 );
-
-const FORMATTER_OPTIONS: { value: EditorFormatter; label: string }[] = [
-  { value: "lsp", label: "LSP 服务器" },
-  { value: "biome", label: "Biome" },
-  { value: "prettier", label: "Prettier" },
-  { value: "ruff", label: "Ruff (Python)" },
-  { value: "rustfmt", label: "rustfmt (Rust)" },
-  { value: "gofmt", label: "gofmt (Go)" },
-  { value: "clang-format", label: "clang-format (C/C++)" },
-  { value: "shfmt", label: "shfmt (Shell)" },
-  { value: "zigfmt", label: "zigfmt (Zig)" },
-  { value: "custom", label: "自定义命令" },
-];
 
 export function GeneralSection() {
   const theme = usePreferencesStore((s) => s.theme);
@@ -144,25 +105,9 @@ export function GeneralSection() {
     (s) => s.terminalWebglEnabled,
   );
   const autostart = usePreferencesStore((s) => s.autostart);
-  const restoreWindowState = usePreferencesStore((s) => s.restoreWindowState);
-  const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
-  const sshRemoteCarapacePrompt = usePreferencesStore(
-    (s) => s.sshRemoteCarapacePrompt,
-  );
   const serverMonitorInterval = usePreferencesStore(
     (s) => s.serverMonitorInterval,
   );
-  const vimMode = usePreferencesStore((s) => s.vimMode);
-  const editorFontSize = usePreferencesStore((s) => s.editorFontSize);
-  const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
-  const editorAutoSave = usePreferencesStore((s) => s.editorAutoSave);
-  const editorAutoSaveDelay = usePreferencesStore((s) => s.editorAutoSaveDelay);
-  const editorFormatOnSave = usePreferencesStore((s) => s.editorFormatOnSave);
-  const editorFormatter = usePreferencesStore((s) => s.editorFormatter);
-  const editorCustomFormatCommand = usePreferencesStore(
-    (s) => s.editorCustomFormatCommand,
-  );
-  const autocompleteTrigger = usePreferencesStore((s) => s.autocompleteTrigger);
 
   const [shellDraft, setShellDraft] = useState(terminalShell);
 
@@ -170,7 +115,7 @@ export function GeneralSection() {
     <div className="flex flex-col gap-6">
       <SectionHeader
         title="通用"
-        description="主题模式、终端行为、编辑器与启动选项。"
+        description="外观、资源管理器、终端与启动选项。"
       />
 
       {/* === 外观 === */}
@@ -239,116 +184,6 @@ export function GeneralSection() {
             onCheckedChange={(v) => void setExplorerGitDecorations(v)}
           />
         </SettingRow>
-      </div>
-
-      {/* === 编辑器 === */}
-      <div className="flex flex-col gap-2">
-        <Label>编辑器</Label>
-        <SettingRow
-          title="字体大小"
-          description={`当前 ${editorFontSize}px。范围 8-32。`}
-        >
-          <Select
-            value={String(editorFontSize)}
-            onValueChange={(v) => void setEditorFontSize(Number(v))}
-          >
-            <SelectTrigger className="h-7 w-24 text-[11.5px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TERMINAL_FONT_SIZES.map((s) => (
-                <SelectItem key={s} value={String(s)}>
-                  {s}px
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
-        <SettingRow
-          title="自动换行"
-          description="编辑器内文本超过视区宽度时自动换行。"
-        >
-          <Switch
-            checked={editorWordWrap}
-            onCheckedChange={(v) => void setEditorWordWrap(v)}
-          />
-        </SettingRow>
-        <SettingRow
-          title="Vim 模式"
-          description="启用 Vim 按键绑定（hjkl/操作符/寄存器等）。"
-        >
-          <Switch
-            checked={vimMode}
-            onCheckedChange={(v) => void setVimMode(v)}
-          />
-        </SettingRow>
-        <SettingRow
-          title="自动保存"
-          description="停止输入后自动保存（默认 1 秒）。关闭此开关后需要 Ctrl/Cmd+S 手动保存。"
-        >
-          <div className="flex items-center gap-3">
-            <Switch
-              checked={editorAutoSave}
-              onCheckedChange={(v) => void setEditorAutoSave(v)}
-            />
-            {editorAutoSave && (
-              <Input
-                type="number"
-                min={AUTO_SAVE_DELAY_MIN}
-                max={AUTO_SAVE_DELAY_MAX}
-                value={editorAutoSaveDelay}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  if (Number.isFinite(n)) void setEditorAutoSaveDelay(n);
-                }}
-                className="h-7 w-20 text-[11.5px]"
-              />
-            )}
-          </div>
-        </SettingRow>
-        <SettingRow
-          title="保存时格式化"
-          description="保存文件时自动调用所选格式化工具。"
-        >
-          <div className="flex items-center gap-3">
-            <Switch
-              checked={editorFormatOnSave}
-              onCheckedChange={(v) => void setEditorFormatOnSave(v)}
-            />
-            <Select
-              value={editorFormatter}
-              onValueChange={(v) =>
-                void setEditorFormatter(v as EditorFormatter)
-              }
-            >
-              <SelectTrigger className="h-7 w-36 text-[11.5px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {FORMATTER_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </SettingRow>
-        {editorFormatter === "custom" && (
-          <SettingRow
-            title="自定义格式化命令"
-            description="Shell 命令模板,使用 {file} 表示带引号的文件路径。例如: prettier --write {file}"
-          >
-            <Input
-              value={editorCustomFormatCommand}
-              onChange={(e) =>
-                void setEditorCustomFormatCommand(e.target.value)
-              }
-              placeholder="prettier --write {file}"
-              className="h-7 w-72 font-mono text-[11.5px]"
-            />
-          </SettingRow>
-        )}
       </div>
 
       {/* === 终端 === */}
@@ -492,60 +327,6 @@ export function GeneralSection() {
         </SettingRow>
       </div>
 
-      {/* === 智能体与代码补全 === */}
-      <div className="flex flex-col gap-2">
-        <Label>智能体</Label>
-        <SettingRow
-          title="智能体通知"
-          description="智能体完成后弹系统通知（即使窗口不在前台）。"
-        >
-          <Switch
-            checked={agentNotifications}
-            onCheckedChange={(v) => void setAgentNotifications(v)}
-          />
-        </SettingRow>
-        <SettingRow
-          title="代码补全触发方式"
-          description="代码补全（AI 智能联想）的触发模式。"
-        >
-          <Select
-            value={autocompleteTrigger}
-            onValueChange={(v) =>
-              void setAutocompleteTrigger(v as AutocompleteTrigger)
-            }
-          >
-            <SelectTrigger className="h-7 w-56 text-[11.5px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {AUTOCOMPLETE_TRIGGER_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
-        <SettingRow
-          title="在 SSH 终端里提示装补全组件"
-          description="某台服务器还没装这个组件时，在那格终端的右下角显示一个小图标，点开可以一键安装。关掉这里只是不再显示那个图标，下面这块入口照样能装。"
-        >
-          <Switch
-            checked={sshRemoteCarapacePrompt}
-            onCheckedChange={(v) => void setSshRemoteCarapacePrompt(v)}
-          />
-        </SettingRow>
-        <div className="flex flex-col gap-1.5">
-          <Label>远端补全组件</Label>
-          <span className="text-[11px] leading-relaxed text-muted-foreground">
-            不装也照常提示静态参数（命令词典与参数库）；装上才能提示这台机器上
-            真实存在的分支、文件名与服务名 —— 补全要在命令真正执行的那台机器上跑，
-            本机这份看不到远端。装一次对该服务器上所有终端都有效。
-          </span>
-          <RemoteCarapaceCard />
-        </div>
-      </div>
-
       {/* === 服务器监控 === */}
       <div className="flex flex-col gap-2">
         <Label>服务器监控</Label>
@@ -581,15 +362,6 @@ export function GeneralSection() {
           <Switch
             checked={autostart}
             onCheckedChange={(v) => void setAutostart(v)}
-          />
-        </SettingRow>
-        <SettingRow
-          title="恢复窗口状态"
-          description="重新启动时恢复上次的窗口大小、位置与已打开标签页。"
-        >
-          <Switch
-            checked={restoreWindowState}
-            onCheckedChange={(v) => void setRestoreWindowState(v)}
           />
         </SettingRow>
       </div>

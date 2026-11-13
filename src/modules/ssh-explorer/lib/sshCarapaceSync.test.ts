@@ -30,6 +30,7 @@ vi.mock('../sshStore', () => ({
   useSshStore: {
     getState: () => ({
       sessions: m.sessions,
+      remoteCarapaceBySession: m.states,
       setRemoteCarapaceState: (id: string, state: string) => {
         m.states[id] = state;
       },

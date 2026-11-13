@@ -60,6 +60,7 @@ import { WorkspaceGate } from "./WorkspaceGate";
 import { AiChatView } from "./AiChat";
 import { PlanDiffReview } from "./PlanDiffReview";
 import { TodoStrip } from "./TodoStrip";
+import { ConfidencePanel } from "./ConfidencePanel";
 
 const SUGGESTIONS = [
   {
@@ -96,6 +97,7 @@ export function AiMiniWindow({ state }: { state: PresenceState }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (e.defaultPrevented || document.querySelector('[data-confidence-panel][data-state="open"]')) return;
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -244,6 +246,7 @@ function Body({
           保持可点击打开工作区总览（agent 按工作区隔离运行）。 */}
       <div className="flex shrink-0 items-center gap-1.5 border-t border-border/40 px-3 py-1">
         <WorkspaceChip />
+        <ConfidencePanel key={sessionId} sessionId={sessionId} messages={helpers.messages} />
       </div>
     </>
   );
@@ -338,7 +341,7 @@ function Header({
           size="icon"
           variant="ghost"
           onClick={onClose}
-          className="size-5"
+          className="size-7"
           aria-label="关闭"
           title="关闭 (Esc)"
         >

@@ -89,10 +89,11 @@ type PendingVisibleTerminalExecution = VisibleTerminalRequest & {
   leafId: number;
   requestedAt: number;
   phase: "typing" | "running";
+  inputDispatched: boolean;
   timeoutHandle: number | null;
   /**
    * #113①（2026-09-22）探针：命令真正写进终端的那一刻（整段 write 返回 /
-   * 打字机 end 事件）。null = 还没注入。回执时随 `_probe` 带回 Rust，
+   * 打字机 end 事件）。null = 尚未确认输入完成，请求可能已经派发。回执时随 `_probe` 带回 Rust，
    * 用来把"等了很久"钉死在排队、注入、等块闭合中的某一段。
    */
   injectedAt: number | null;
@@ -158,6 +159,7 @@ export function useAiLiveBridge(params: Params) {
   ref.current = params;
 
   useEffect(() => {
+    let disposed = false;
     // TDSF B1 (2026-08-29): SSH Rust session_id 查询提为局部函数，
     // 供 getSshRustSessionId（setLive）与 getEnvironmentProbe 共用。
     // #107 (2026-09-22): 取值口径改成"先问命令会打进哪块终端，再问它绑的会话"，
@@ -658,7 +660,7 @@ export function useAiLiveBridge(params: Params) {
       for (const pending of [...pendingVisibleExecutions.values()]) {
         settleVisibleExecution(
           pending,
-          resultForAbandonedVisibleExecution({phase: pending.phase, cause}),
+          resultForAbandonedVisibleExecution({phase: pending.phase, inputDispatched: pending.inputDispatched, cause}),
         );
       }
     };
@@ -768,6 +770,7 @@ export function useAiLiveBridge(params: Params) {
     const startVisibleTerminalExecution = (
       request: VisibleTerminalRequest,
     ) => {
+      if (disposed) return;
       const currentSessionId = sshRustSessionId();
       const rawLeafId = ref.current.getSshLeafId?.();
       const rawTerminal =
@@ -846,10 +849,17 @@ export function useAiLiveBridge(params: Params) {
       }
       // 从这里起 leafId / terminal 都是确定的值，下游不必再各自判空。
       const { leafId, terminal } = target;
-      if (getLeafBlockMode(leafId) !== "prompt") {
+      if (getLeafBlockMode(leafId) !== "prompt" || isLeafBusy(leafId) || isLeafAltScreen(leafId)) {
         reject(
           "visible_terminal_busy",
           "可见终端当前不在提示符，命令未写入，以免打断正在运行的任务。",
+        );
+        return;
+      }
+      if (isUserLineDirty(leafId)) {
+        reject(
+          "visible_terminal_dirty_input",
+          "可见终端有尚未提交的输入，命令未写入；请先完成或取消当前输入。",
         );
         return;
       }
@@ -870,6 +880,7 @@ export function useAiLiveBridge(params: Params) {
         leafId,
         requestedAt: Date.now(),
         phase: "typing",
+        inputDispatched: false,
         timeoutHandle: null,
         injectedAt: null,
         graceHandle: null,
@@ -885,6 +896,7 @@ export function useAiLiveBridge(params: Params) {
         markVisibleExecutionRunning(pending);
         useTerminalBlocksStore.getState().markAgentPending(leafId);
         armAgentCommandEcho(leafId, text);
+        pending.inputDispatched = true;
         terminal.write(text);
         terminal.focus();
         // The timer starts only after the final Enter has been submitted.
@@ -893,21 +905,27 @@ export function useAiLiveBridge(params: Params) {
       }
 
       useTerminalBlocksStore.getState().markAgentPending(leafId);
-      armAgentCommandEcho(leafId, text, { progressive: true });
+      armAgentCommandEcho(leafId, text, { progressive: true, promptReady: true });
+      pending.inputDispatched = true;
       void invoke<HumanTypeReport>("ssh_write_human", {
         sessionId: request.sessionId,
         text,
         speed: prefs.agentTypingSpeed,
+        // The gates above establish a clean, idle prompt. Extra Ctrl+C/Enter
+        // can settle the previous command and consume this request's author.
+        clearInput: false,
       })
         .then((report) => {
+          if (disposed || pendingVisibleExecutions.get(pending.requestId) !== pending) return;
           if (report.mode === "fallback") {
             markVisibleExecutionRunning(pending);
             startVisibleExecutionTimer(pending);
           }
         })
         .catch((e) => {
-          clearAgentCommandEcho(leafId);
           console.warn("[tdsf] visible terminal typing failed:", e);
+          if (disposed || pendingVisibleExecutions.get(pending.requestId) !== pending) return;
+          clearAgentCommandEcho(leafId);
           settleVisibleExecution(pending, {
             status: "unavailable",
             reason: "visible_terminal_injection_failed",
@@ -929,6 +947,7 @@ export function useAiLiveBridge(params: Params) {
     let unlistenHumanTyping: (() => void) | null = null;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
+      if (disposed) return;
       // The typing-complete listener must exist before accepting a visible
       // request. Registering both in parallel can lose the end event for a
       // short typewriter command and leave its SSH result waiting forever.
@@ -936,7 +955,7 @@ export function useAiLiveBridge(params: Params) {
         "terminal:human_typing",
         (event) => {
           const typing = event.payload;
-          if (typing.phase !== "end" || typing.target !== "ssh") return;
+          if (disposed || typing.phase !== "end" || typing.target !== "ssh") return;
           for (const pending of pendingVisibleExecutions.values()) {
             if (
               pending.phase !== "typing" ||
@@ -957,10 +976,19 @@ export function useAiLiveBridge(params: Params) {
           }
         },
       );
+      if (disposed) {
+        unlistenHumanTyping();
+        unlistenHumanTyping = null;
+        return;
+      }
       unlistenVisibleExecution = await listen<VisibleTerminalRequest>(
         "sidecar:visible-terminal-execute",
         (event) => startVisibleTerminalExecution(event.payload),
       );
+      if (disposed) {
+        unlistenVisibleExecution();
+        unlistenVisibleExecution = null;
+      }
     })().catch((e) => {
       console.warn("[tdsf] visible terminal listeners failed:", e);
     });
@@ -975,6 +1003,7 @@ export function useAiLiveBridge(params: Params) {
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
       const { useTodosStore } = await import("../store/todoStore");
+      if (disposed) return;
       unlistenTodos = await listen<{
         sessionId: string;
         // T3 (2026-08-31): completedAt 完成时间由 Python todo_write 自动维护
@@ -986,10 +1015,15 @@ export function useAiLiveBridge(params: Params) {
           completedAt?: string | null;
         }>;
       }>("sidecar:update_todos", (event) => {
+        if (disposed) return;
         const { sessionId, todos } = event.payload;
         if (!sessionId || !Array.isArray(todos)) return;
         useTodosStore.getState().setTodos(sessionId, todos as never);
       });
+      if (disposed) {
+        unlistenTodos();
+        unlistenTodos = null;
+      }
     })().catch((e) => {
       console.warn("[tdsf] update_todos listen failed:", e);
     });
@@ -1002,10 +1036,12 @@ export function useAiLiveBridge(params: Params) {
     let unlistenScrollback: (() => void) | null = null;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
+      if (disposed) return;
       unlistenScrollback = await listen<{
         requestId: string;
         lines: number;
       }>("sidecar:get-terminal-scrollback", (event) => {
+        if (disposed) return;
         const { requestId, lines } = event.payload;
         if (!requestId) return;
         const live = useChatStore.getState().live;
@@ -1019,6 +1055,10 @@ export function useAiLiveBridge(params: Params) {
           console.warn("[tdsf] scrollback response failed:", e);
         });
       });
+      if (disposed) {
+        unlistenScrollback();
+        unlistenScrollback = null;
+      }
     })().catch((e) => {
       console.warn("[tdsf] scrollback listen failed:", e);
     });
@@ -1029,6 +1069,7 @@ export function useAiLiveBridge(params: Params) {
     window.addEventListener("pagehide", onPageHide);
 
     return () => {
+      disposed = true;
       unlistenVisibleBlocks();
       unlistenVisibleExecution?.();
       unlistenHumanTyping?.();

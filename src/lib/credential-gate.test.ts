@@ -2,8 +2,9 @@
 // 这行是给 scripts/check-secrets.mjs 的豁免声明，不是"这里可以放真凭据"的许可。
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, readFileSync, rmdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { mask, scanText } from "../../scripts/check-secrets.mjs";
 
 /**
@@ -212,5 +213,42 @@ describe("豁免声明的用法边界（横扫：不许有人拿它给生产代�
     expect(head).toMatch(/secret-scan:\s*fixture(?!-line)/);
     // 并且理由要说清"这不是许可"
     expect(head).toMatch(/不是|许可/);
+  });
+});
+
+describe("真实 CLI：Git 失败不能被凭据闸吞成 PASS", () => {
+  const repo = process.cwd();
+  const script = resolve(repo, "scripts/check-secrets.mjs");
+  const run = (args: string[], cwd = repo) =>
+    spawnSync("node", [script, ...args], { cwd, encoding: "utf8", timeout: 60_000 });
+  const output = (r: ReturnType<typeof run>) => `${r.stdout ?? ""}${r.stderr ?? ""}`;
+
+  it("不存在的 Git 引用必须非零退出且不打印 PASS", () => {
+    const r = run(["--range", "refs/heads/qa-nonexistent-public-candidate-20261021..HEAD"]);
+    expect(r.error).toBeUndefined();
+    expect(typeof r.status).toBe("number");
+    expect(r.status).not.toBe(0);
+    expect(output(r)).not.toContain("PASS");
+  });
+
+  it("在非 Git 目录运行 --tracked 必须非零退出且不打印 PASS", () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "credential-gate-not-git-"));
+    try {
+      const r = run(["--tracked"], emptyDir);
+      expect(r.error).toBeUndefined();
+      expect(typeof r.status).toBe("number");
+      expect(r.status).not.toBe(0);
+      expect(output(r)).not.toContain("PASS");
+    } finally {
+      rmdirSync(emptyDir);
+    }
+  });
+
+  it("合法的 HEAD..HEAD 空差异仍然 PASS", () => {
+    const r = run(["--range", "HEAD..HEAD"]);
+    expect(r.error).toBeUndefined();
+    expect(typeof r.status).toBe("number");
+    expect(r.status).toBe(0);
+    expect(output(r)).toContain("PASS：未发现凭据形状");
   });
 });

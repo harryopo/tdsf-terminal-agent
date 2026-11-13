@@ -219,7 +219,7 @@ class TestEvidenceAssessment(unittest.TestCase):
         self.assertEqual(assessment["tier"], "grounded")
         self.assertEqual(assessment["sources"][0]["tool_name"], "knowledge_get_doc")
 
-    def test_only_post_write_read_verification_is_verified(self):
+    def test_post_write_read_is_grounded_without_claim_verification(self):
         tracker = get_global_tracker()
         tracker.record(
             session_id="confidence-s3",
@@ -242,7 +242,7 @@ class TestEvidenceAssessment(unittest.TestCase):
 
         assessment = assess_session_evidence("confidence-s3")
 
-        self.assertEqual(assessment["tier"], "verified")
+        self.assertEqual(assessment["tier"], "grounded")
         self.assertEqual(assessment["evidence_count"], 2)
         self.assertEqual(
             [source["tool_name"] for source in assessment["sources"]],

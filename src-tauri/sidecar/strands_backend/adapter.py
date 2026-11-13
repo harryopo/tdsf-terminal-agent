@@ -39,7 +39,11 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass
 from typing import Any, Callable, Sequence
+from uuid import UUID
 
 from strands_backend.modes import AgentMode, parse_mode
 # P3 (2026-09-19): 模型请求退避的唯一主人（尝试数 + 单回合请求预算）
@@ -88,6 +92,16 @@ MAX_TOKEN_CONTINUATIONS = 3
 # 继续。轮询间隔为 worker 存活检查粒度。测试可用环境变量覆盖阈值。
 INVOKE_WATCHDOG_IDLE_SECS = 600
 INVOKE_WATCHDOG_POLL_SECS = 5
+
+
+@dataclass
+class _InvocationMode:
+    session_id: str
+    stream_id: str
+    mode: AgentMode
+    teach: bool
+    revision: int = 0
+    ctx: ToolContext | None = None
 
 
 def _context_management_kwargs() -> dict[str, Any]:
@@ -451,7 +465,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "Decision history:\n"
     "- 排障前先 search_history 检索历史案例，参考类似问题的解法。\n"
     "- 历史案例只作线索，不是执行许可；必须用当前主机、版本、配置和实时工具证据验证适用性。\n"
-    "- 给出建议后调 assess_confidence 评估可信度，让用户了解结论的可靠程度。\n"
+    "- 不附证据尾注；保留验证。仅用户要求调 assess_confidence，分数非正确率。\n"
 )
 
 
@@ -640,6 +654,7 @@ class ToolCallLimitHook:
         self.agent_name = agent_name
         self.event_bus = event_bus
         self.session_id = session_id
+        self.refresh_mode: Callable[[], None] | None = None
         self.current_task = ""
         self.total_calls = 0
         self.failures_by_tool: dict[str, int] = {}
@@ -664,18 +679,25 @@ class ToolCallLimitHook:
         # C1 工具级 tracing：记录每个工具调用的开始时间戳（用于计算 duration_ms）
         # key = (tool_name, call_index)，value = time.monotonic() 时间戳
         self._tool_start_times: dict[tuple[str, int], float] = {}
+        self._tool_card_calls: dict[str, str] = {}
 
     def register_hooks(self, registry: Any) -> None:
         """HookProvider 协议：注册 Before/AfterToolCall/BeforeModelCall 回调"""
         if not _STRANDS_HOOKS_AVAILABLE:
             return
         registry.add_callback(BeforeToolCallEvent, self._before_tool_call)
-        registry.add_callback(AfterToolCallEvent, self._after_tool_call)
+        # Apply output policy before default-priority plugins can cache results.
+        registry.add_callback(AfterToolCallEvent, self._after_tool_call, order=-1)
         registry.add_callback(BeforeModelCallEvent, self._before_model_call)
 
     def _before_model_call(self, event: Any) -> None:
         """LLM 调用前 → 轮次 +1（一轮推理可发多个工具调用）"""
+        if self.refresh_mode is not None:
+            self.refresh_mode()
         self.round += 1
+        handler = getattr(getattr(event, "agent", None), "callback_handler", None)
+        if isinstance(handler, TdsfStrandsCallbackHandler):
+            handler.begin_model_call(self.round)
 
     def _tool_name(self, event: Any) -> str:
         tool_use = getattr(event, "tool_use", None)
@@ -693,7 +715,9 @@ class ToolCallLimitHook:
         return {}
 
     def _before_tool_call(self, event: Any) -> None:
+        self._start_tool_card(event)
         if self.cancelled:
+            self._start_tool_card(event, force=True)
             # 用户主动停止：把原因作为取消消息回传给模型，让它据此收尾
             # （护栏熔断走 _trip_breaker，取消消息本身就是熔断文案）。
             event.cancel_tool = self.cancel_reason or True
@@ -731,6 +755,7 @@ class ToolCallLimitHook:
         self.cancelled = True
         message = f"{reason}，已熔断停止任务"
         event.cancel_tool = message
+        self._start_tool_card(event, force=True)
         self._emit_breaker_explanation(reason)
         if notify_fix_loop:
             self._notify_fix_loop_exhausted(event, reason)
@@ -871,6 +896,8 @@ class ToolCallLimitHook:
             else getattr(result, "content", None)
         )
         for block in content if isinstance(content, list) else [content]:
+            if isinstance(block, dict) and isinstance(block.get("json"), dict):
+                return block["json"]
             text = block.get("text") if isinstance(block, dict) else block
             data = cls._json_dict(text)
             if data is not None:
@@ -942,12 +969,86 @@ class ToolCallLimitHook:
             logger.debug("evidence-owner lookup failed for %s: %s", name, exc)
             return False
 
+    def _tool_card_key(self, event: Any) -> str:
+        tool_use = getattr(event, "tool_use", {})
+        return str(tool_use.get("toolUseId") or self._tool_name(event))
+
+    def _emit_tool_card(self, event: Any, call_id: str, status: str, result: Any = None) -> None:
+        if self.event_bus is None:
+            return
+        from strands_backend.tools._redact import redact_sensitive_text
+
+        def redact(value: Any) -> Any:
+            if isinstance(value, str):
+                return redact_sensitive_text(value)
+            if isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            return value
+
+        try:
+            self.event_bus.emit_tool_call(
+                tool_name=self._tool_name(event),
+                tool_call_id=call_id,
+                params=redact(self._tool_input(event)),
+                result=redact(result),
+                status=status,
+                session_id=self.session_id or None,
+                source=f"{self.agent_name}_agent.strands.hook",
+            )
+        except Exception as exc:  # 展示故障不能改变执行或审批结果
+            logger.debug("tool card event failed: %s", exc)
+
+    def _start_tool_card(self, event: Any, *, force: bool = False) -> None:
+        from strands_backend.tools.registry import TOOL_REGISTRY, CONTEXT_READONLY_TOOL_NAMES
+
+        name = self._tool_name(event)
+        spec = TOOL_REGISTRY.get(name)
+        if spec is None and name not in CONTEXT_READONLY_TOOL_NAMES:
+            return
+        if not force and spec and (spec.emits_tool_events or spec.policy.via_ssh_executor):
+            return
+        import uuid
+
+        key = self._tool_card_key(event)
+        if key in self._tool_card_calls:
+            return
+        call_id = str(getattr(event, "tool_use", {}).get("toolUseId") or uuid.uuid4().hex)
+        self._tool_card_calls[key] = call_id
+        self._emit_tool_card(event, call_id, "started")
+
+    @staticmethod
+    def _diagnostic_tool_result(event: Any) -> Any:
+        # SDK cancellation uses an error wrapper; diagnostic records must agree
+        # with the card without changing the SDK result or execution guardrails.
+        cancel_message = getattr(event, "cancel_message", None)
+        if isinstance(cancel_message, str) and cancel_message:
+            return {"status": "cancelled", "message": str(cancel_message)}
+        exception = getattr(event, "exception", None)
+        if exception is not None:
+            return {"status": "error", "message": str(exception)}
+        return getattr(event, "result", None)
+
+    def _finish_tool_card(self, event: Any) -> None:
+        call_id = self._tool_card_calls.pop(self._tool_card_key(event), None)
+        if call_id is None:
+            return
+        raw_result = self._diagnostic_tool_result(event)
+        result = self._tool_payload(raw_result) or raw_result
+        exception = getattr(event, "exception", None)
+        self._emit_tool_card(event, call_id, "error" if exception else "completed", result)
+
     def _record_evidence(
         self,
         name: str,
         tool_input: dict[str, Any],
         result: Any,
         failed: bool,
+        *,
+        tool_call_id: str | None = None,
+        sdk_tool_use_id: str | None = None,
+        cancelled: bool = False,
     ) -> None:
         """Record actual Strands completions for tools that don't record themselves.
 
@@ -955,20 +1056,33 @@ class ToolCallLimitHook:
         and real hook calls share one event instead of creating duplicates.
         Every other tool, including knowledge retrieval, reaches this hook.
         """
-        if not self.session_id or self._records_own_evidence(name):
+        if not self.session_id or (self._records_own_evidence(name) and not cancelled):
             return
         try:
             from strands_backend.evidence import get_global_tracker
 
             payload = self._tool_payload(result)
+            status = self._result_status(result)
+            # Tools can report cancellation after starting, without an SDK
+            # cancel_message. Keep the SDK flag's ownership gate above unchanged.
+            evidence_status = "cancelled" if cancelled or status == "cancelled" else (
+                "indeterminate" if status == "indeterminate"
+                else ("error" if failed else "completed")
+            )
+            result = payload or result
             get_global_tracker().record(
                 session_id=self.session_id,
                 tool_name=name,
-                status="error" if failed else "completed",
+                status=evidence_status,
                 detail=self._evidence_detail(name, tool_input),
-                result=payload or result,
+                result=result,
                 agent=self.agent_name,
                 source=f"{self.agent_name}_agent.strands.hook",
+                tool_call_id=tool_call_id,
+                sdk_tool_use_id=sdk_tool_use_id,
+                operation_id=result.get("operation_id") if isinstance(result, dict) else None,
+                ssh_session_id=result.get("ssh_session_id") if isinstance(result, dict) else None,
+                target_endpoint=result.get("target_endpoint") if isinstance(result, dict) else None,
             )
         except Exception as exc:  # evidence must never interrupt the agent loop
             logger.debug("evidence record from tool hook failed: %s", exc)
@@ -1020,6 +1134,17 @@ class ToolCallLimitHook:
         # 随后 append 进会话历史的那个对象（strands `_executor.py` 用的是
         # `after_event.result` 而不是 hook 之前的旧 result —— 已由真对象断言钉住）。
         self._sanitize_tool_result(name, getattr(event, "result", None))
+        # SDK 与手工 UUID 分开；只消费真实执行上下文里同调用/同 owner 的关联。
+        from strands_backend.tools.tool_lifecycle import take_reference_tool_call_ids
+
+        reference_call_ids = take_reference_tool_call_ids(
+            getattr(event, "tool_use", None), getattr(event, "invocation_state", None),
+            session_id=self.session_id, agent_name=self.agent_name,
+        )
+        evidence_call_id = self._tool_card_calls.get(self._tool_card_key(event))
+        if evidence_call_id is None and len(reference_call_ids) == 1:
+            evidence_call_id = reference_call_ids[0]
+        self._finish_tool_card(event)
         # C1 工具级 tracing：计算 duration_ms
         start_time = self._tool_start_times.pop((name, self.total_calls), None)
         duration_ms = None
@@ -1027,7 +1152,8 @@ class ToolCallLimitHook:
             duration_ms = round((time.monotonic() - start_time) * 1000, 2)
         # 失败判定：工具抛异常，或结果状态存在且非 success
         # （error / command_blocked / rejected / needs_approval / unavailable）
-        status = self._result_status(getattr(event, "result", None))
+        diagnostic_result = self._diagnostic_tool_result(event)
+        status = self._result_status(diagnostic_result)
         failed = (
             getattr(event, "exception", None) is not None
             or (status is not None and status != "success")
@@ -1059,13 +1185,26 @@ class ToolCallLimitHook:
             tool_entry["error"] = self._error_summary(event)
         if duration_ms is not None:
             tool_entry["duration_ms"] = duration_ms
+        sdk_tool_use_id = getattr(event, "tool_use", {}).get("toolUseId")
+        for key, value in (("tool_call_id", evidence_call_id), ("sdk_tool_use_id", sdk_tool_use_id)):
+            if isinstance(value, str) and value.strip():
+                tool_entry[key] = value
+        if len(reference_call_ids) > 1:
+            tool_entry["tool_call_ids"] = list(reference_call_ids)
         self.tool_log.append(tool_entry)
-        self._record_evidence(name, tool_input, getattr(event, "result", None), failed)
+        self._record_evidence(
+            name, tool_input, diagnostic_result, failed,
+            tool_call_id=evidence_call_id,
+            sdk_tool_use_id=sdk_tool_use_id,
+            cancelled=bool(getattr(event, "cancel_message", None)),
+        )
         # #149：进度流水要说真话 —— "取不回结果"不是"失败"，
         # 写成 failed 会让排障的人和收尾判定都以为命令出错了（现场：sleep 330 那条）。
         self._report_progress(
             name,
-            "indeterminate" if unknown else ("failed" if failed else "success"),
+            "cancelled" if status == "cancelled" else (
+                "indeterminate" if unknown else ("failed" if failed else "success")
+            ),
             duration_ms,
         )
 
@@ -1080,6 +1219,12 @@ class ToolCallLimitHook:
         # C1 工具级 tracing：duration_ms 字段（如果可用）
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
+        # Only retained logs gain identity; the frontend event contract is unchanged.
+        # The sequential executor reports immediately after appending this call.
+        if self.tool_log:
+            for key in ("tool_call_id", "tool_call_ids", "sdk_tool_use_id", "error"):
+                if key in self.tool_log[-1]:
+                    payload[key] = self.tool_log[-1][key]
         # agent_log 落盘（写失败静默——流水是排障加分项，绝不影响主链路；
         # 空 session_id 跳过——匿名调用无会话归属，写 default 无排障价值）
         if self.session_id:
@@ -1189,6 +1334,7 @@ class ToolCallLimitHook:
         self.tool_log.clear()
         # C1: 工具开始时间戳同步清空
         self._tool_start_times.clear()
+        self._tool_card_calls.clear()
 
 
 class TdsfStrandsCallbackHandler:
@@ -1228,6 +1374,8 @@ class TdsfStrandsCallbackHandler:
         # 会话流水日志：reasoning 增量聚合缓冲（正文 data 到来 / 循环边界时落盘，
         # 防止逐 token 写日志爆体积——agent_log.content 上限 2000 字符）
         self._reasoning_buf: list[str] = []
+        self._model_started_at: float | None = None
+        self._model_round = 0
         # Per-invoke output gate.  The handler is cached with the Strands
         # agent, so this state is reset at the beginning of every turn.
         self._teach_gate_enabled = False
@@ -1246,6 +1394,23 @@ class TdsfStrandsCallbackHandler:
             "reasoning_logged": 0,
         }
 
+    def begin_model_call(self, round_number: int) -> None:
+        self._model_started_at = time.monotonic()
+        self._model_round = round_number
+        self._log_model_timing("request")
+
+    def _log_model_timing(self, phase: str, **fields: Any) -> None:
+        if not self.session_id:
+            return
+        try:
+            from strands_backend.agent_log import log_event
+
+            log_event(self.session_id, "model_timing", "", meta={
+                "phase": phase, "round": self._model_round, **fields,
+            })
+        except Exception as exc:  # Diagnostics must not interrupt the stream.
+            logger.debug("model timing unavailable: error_type=%s", type(exc).__name__)
+
     def begin_turn(self, *, teach: bool, allow_teach_output: bool) -> None:
         """Reset the marker gate before a new invoke starts.
 
@@ -1253,6 +1418,8 @@ class TdsfStrandsCallbackHandler:
         from the current user message, so a previous lesson in the same
         session cannot make a knowledge lookup look like a new lesson.
         """
+        self._model_started_at = None
+        self._model_round = 0
         self._teach_gate_enabled = bool(teach)
         self._teach_output_allowed = bool(teach and allow_teach_output)
         self._teach_prefix_decided = (
@@ -1273,6 +1440,24 @@ class TdsfStrandsCallbackHandler:
 
     def _handle_event(self, event: dict) -> None:
         """处理单个 Strands 事件（main 事件流）"""
+        # Record the first actual content, not a lifecycle event or the later
+        # reasoning-buffer flush. Keep all returned content out of this timing.
+        first_response: dict[str, Any] | None = None
+        if self._model_started_at is not None:
+            response_type = None
+            for key, kind in (("reasoningText", "reasoning"), ("data", "text")):
+                if isinstance(event.get(key), str) and event[key]:
+                    response_type = kind
+                    break
+            tool_use = event.get("current_tool_use")
+            if response_type is None and isinstance(tool_use, dict) and tool_use.get("name"):
+                response_type = "tool"
+            if response_type is not None:
+                first_response = {
+                    "response_type": response_type,
+                    "elapsed_ms": round((time.monotonic() - self._model_started_at) * 1000, 2),
+                }
+                self._model_started_at = None
         # 深度思考流（模型 reasoningContent 增量）→ thinking 消息 + 流水聚合
         reasoning_text = event.get("reasoningText")
         if reasoning_text and isinstance(reasoning_text, str):
@@ -1305,6 +1490,10 @@ class TdsfStrandsCallbackHandler:
                 f"strands force_stop: agent={self.agent_name}, "
                 f"reason={event.get('force_stop_reason', 'unknown')}"
             )
+
+        # Forward deltas first; diagnostics do not add a queue or a wait window.
+        if first_response is not None:
+            self._log_model_timing("first_response", **first_response)
 
     def _flush_reasoning(self) -> None:
         """聚合缓冲的 reasoning 增量 → agent_log 落盘（一条 reasoning 事件）"""
@@ -1667,6 +1856,8 @@ class StrandsAgentAdapter:
         # 不再触发实例重建；切模式/教学开关 = 历史零丢失。perm 保留（权限影响
         # 工具集合法性，重建合理），重建时从 _session_messages 迁移历史。
         self._agent_cache: dict[tuple[str, str, int], Any] = {}
+        # 模型替换与实例获取原子化；不持有此锁等待模型或工具执行。
+        self._model_lock = threading.RLock()
 
         # T1: per-session 消息历史（(agent_id, session_id) -> messages 快照）。
         # messages 与 Agent 实例解耦的单一真源：每次 invoke 后从当前实例
@@ -1706,6 +1897,14 @@ class StrandsAgentAdapter:
         # 下一轮 _build_prompt 取用一次即消费，用来把"上次是被打断的、不是做完了"
         # 告诉模型。护栏 hook 每次 invoke 会 reset，所以中断信息必须存在这里。
         self._cancel_notes: dict[str, dict[str, Any]] = {}
+
+        # 入口即登记，避免初始化尚无 hook 或排队后的 reset 丢失本轮取消。
+        self._cancel_lock = threading.RLock()
+        self._invocations: dict[str, set[threading.Event]] = {}
+        self._invocation_modes: dict[threading.Event, _InvocationMode] = {}
+        self._queued_invocation: ContextVar[tuple[str, threading.Event] | None] = ContextVar(
+            "tdsf_queued_invocation", default=None
+        )
 
         # TDSF 修复 2026-08-09: per-agent 锁——防止同一 Agent 实例被并发调用。
         # Strands Agent 有内部状态（"already processing a request"），
@@ -1788,6 +1987,8 @@ class StrandsAgentAdapter:
         get_events: Callable[[], int],
         agent_id: str,
         session_id: str,
+        *,
+        wait_owner: object | None = None,
     ) -> bool:
         """watchdog 等待（T9, spec 9.1）：轮询 worker 存活 + 回调事件增量
 
@@ -1795,26 +1996,39 @@ class StrandsAgentAdapter:
             worker: invoke 工作线程（daemon，锁内执行）
             get_events: 读取 callback_handler 已收到事件数（任何增量=有输出）
             agent_id / session_id: stalled 标记 key
+            wait_owner: 本轮调用上下文，仅自己的用户等待暂停空闲时钟
 
         Returns:
             True = 超时触发（已标记 stalled 并上报，调用方应返回降级响应）；
             False = worker 正常结束
         """
+        from needs_you import get_global_service
+
         idle_threshold, poll_secs = _watchdog_thresholds()
+        needs_you_service = get_global_service()
+        notify_liveness = getattr(self.event_bus, "emit_rpc_liveness", None)
+        sequence = 0
 
         last_seen = get_events()
-        last_active = time.time()
+        last_active = time.monotonic()
+        waiting_for_user = wait_owner is not None and needs_you_service.has_response_waiter(
+            session_id, owner=wait_owner
+        )
         while True:
             worker.join(timeout=poll_secs)
             if not worker.is_alive():
                 return False
             events_now = get_events()
-            if events_now != last_seen:
-                # 有任何回调事件（delta/工具/循环）= 有输出，刷新活跃时钟
+            now = time.monotonic()
+            is_waiting = wait_owner is not None and needs_you_service.has_response_waiter(
+                session_id, owner=wait_owner
+            )
+            if events_now != last_seen or is_waiting or waiting_for_user:
+                # 等用户不是模型卡死；离开等待后也给模型完整空闲窗口。
                 last_seen = events_now
-                last_active = time.time()
-                continue
-            if time.time() - last_active > idle_threshold:
+                last_active = now
+                waiting_for_user = is_waiting
+            elif now - last_active > idle_threshold:
                 self._stalled_sessions.add((agent_id, session_id))
                 logger.error(
                     f"[t9] watchdog: no callback events for "
@@ -1822,6 +2036,11 @@ class StrandsAgentAdapter:
                     f"abandoning invoke: agent={agent_id}, session={session_id}"
                 )
                 return True
+            if callable(notify_liveness):
+                # Only this live watchdog renews transport waiting; do not
+                # count its own lease as a callback or model progress.
+                sequence += 1
+                notify_liveness(sequence, "waiting_user" if is_waiting else "working")
 
     @staticmethod
     def _is_llm_transport_error(error: Exception) -> bool:
@@ -1840,11 +2059,111 @@ class StrandsAgentAdapter:
         text = f"{type(error).__name__}: {error}".lower()
         return any(marker in text for marker in _LLM_RATE_LIMIT_MARKERS)
 
+    def _register_invocation(
+        self, session_id: str, state: dict[str, Any] | None = None,
+        stream_id: str | None = None,
+    ) -> threading.Event:
+        cancelled = threading.Event()
+        canonical = None
+        if isinstance(stream_id, str) and len(stream_id) == 36:
+            try:
+                if str(UUID(stream_id)) == stream_id:
+                    canonical = stream_id
+            except ValueError:
+                pass
+        with self._cancel_lock:
+            if canonical and session_id:
+                if any(row.stream_id == canonical for row in self._invocation_modes.values()):
+                    raise ValueError("duplicate active invocation stream")
+                live = (state or {}).get("live") or {}
+                self._invocation_modes[cancelled] = _InvocationMode(
+                    session_id, canonical,
+                    parse_mode(live.get("agentMode") or (state or {}).get("mode")),
+                    bool(live.get("teach") or (state or {}).get("teach")),
+                )
+            self._invocations.setdefault(session_id, set()).add(cancelled)
+        return cancelled
+
+    def _unregister_invocation(self, session_id: str, cancelled: threading.Event) -> None:
+        with self._cancel_lock:
+            self._invocation_modes.pop(cancelled, None)
+            pending = self._invocations.get(session_id)
+            if pending is not None:
+                pending.discard(cancelled)
+                if not pending:
+                    del self._invocations[session_id]
+
+    def set_mode(
+        self, session_id: str, stream_id: str, mode: str, revision: int,
+    ) -> dict[str, Any]:
+        """Update future decisions only; never resolve or replay an approval."""
+        if mode not in ("observe", "confirm", "auto", "teach"):
+            raise ValueError("invalid mode")
+        if type(revision) is not int or revision <= 0:
+            raise ValueError("invalid mode revision")
+        with self._cancel_lock:
+            control = next((
+                row for cancelled, row in self._invocation_modes.items()
+                if row.session_id == session_id and row.stream_id == stream_id
+                and not cancelled.is_set()
+            ), None)
+            if control is None:
+                return {"ok": False, "reason": "not_active"}
+            if control.teach or control.mode == AgentMode.OBSERVE or mode not in ("confirm", "auto"):
+                return {"ok": False, "reason": "requires_new_turn"}
+            if revision < control.revision or (revision == control.revision and mode != control.mode.value):
+                return {"ok": False, "reason": "stale_revision"}
+            control.mode = AgentMode(mode)
+            control.revision = revision
+            if control.ctx is not None:
+                control.ctx.mode = control.mode
+            return {"ok": True, "mode": mode, "revision": revision}
+
+    @contextmanager
+    def _use_queued_invocation(self, session_id: str, cancelled: threading.Event):
+        token = self._queued_invocation.set((session_id, cancelled))
+        try:
+            yield
+        finally:
+            self._queued_invocation.reset(token)
+
+    def _cancelled_response(self, agent_id: str, session_id: str) -> dict[str, Any]:
+        self._emit_mood("done", agent_id, session_id)
+        return {
+            "observation": "本次任务已停止；已执行过的动作不会自动撤销。",
+            "next_step": "done",
+            "mood": "done",
+            "intermediate_results": [],
+            "tokens": {},
+        }
+
     def invoke(
         self,
         agent_id: str,
         input: str,
         state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """登记本轮取消信号（含初始化/排队），调用结束后释放登记。"""
+        state = state or {}
+        session_id = state.get("session_id", "") or ""
+        queued = self._queued_invocation.get()
+        if queued is not None and queued[0] == session_id:
+            # The RPC future owns this registration, including queue cancellation.
+            return self._invoke(agent_id, input, state, queued[1])
+        from rpc_request_context import current_agent_stream_id
+
+        cancelled = self._register_invocation(session_id, state, current_agent_stream_id())
+        try:
+            return self._invoke(agent_id, input, state, cancelled)
+        finally:
+            self._unregister_invocation(session_id, cancelled)
+
+    def _invoke(
+        self,
+        agent_id: str,
+        input: str,
+        state: dict[str, Any],
+        cancelled: threading.Event,
     ) -> dict[str, Any]:
         """Strands Agent 调用主入口
 
@@ -1870,6 +2189,8 @@ class StrandsAgentAdapter:
         """
         state = state or {}
         session_id = state.get("session_id", "") or ""
+        if cancelled.is_set():
+            return self._cancelled_response(agent_id, session_id)
         start_time = time.time()
 
         # P0-A1: 三模式信任体系传参——live.agentMode（前端模式切换器下发，
@@ -1934,28 +2255,28 @@ class StrandsAgentAdapter:
         # 2. 推送 mood=thinking（前端 AgentStatusPill 显示"思考中"）
         self._emit_mood("thinking", agent_id, session_id)
 
-        # T1: 提前初始化——异常发生在 _get_or_create_agent 之前时，
-        # except 分支的 best-effort 历史同步仍可安全引用（None 直接跳过）。
         strands_agent: Any = None
+        handler: Any = None
+        handler_stats: dict[str, Any] = {}
 
         try:
             # 3. 构建工具上下文（Task 3: 传入 invoke 已解析的三模式，
             #    供执行链 decide(risk_l, mode) 消费）
             # A3 (2026-09-04): 传入 teach 开关，工具拦截层据此走 teach_command 路径
             ctx = self._build_tool_context(agent_id, session_id, state, mode=mode, teach=teach)
+            with self._cancel_lock:
+                mode_control = self._invocation_modes.get(cancelled)
+                if mode_control is not None:
+                    mode_control.ctx = ctx
+                    ctx.mode = mode_control.mode
 
-            # 4. 获取或创建 Strands Agent + per-agent 锁
-            strands_agent = self._get_or_create_agent(agent_id, ctx, mode=mode, teach=teach)
+            # 4. 先取排队锁，实例与运行时上下文只能在持锁后获取/刷新。
             # TDSF 修复 2026-08-09: 防并发崩溃——Strands Agent 有内部状态，
             # 同一实例被并发调用会抛 "already processing a request"。
             # 用 per-(agent, session, perm) RLock 确保排队等待。
             # T1: mode/teach 移出锁 key——不再是实例身份的一部分（动态刷新）。
             lock_key = (agent_id, ctx.session_id, ctx.permission_level)
             agent_lock = self._agent_locks.setdefault(lock_key, threading.RLock())
-
-            # 5. 构建 prompt（注入 live 上下文）
-            prompt = self._build_prompt(input, state)
-            prompt += _teach_turn_gate(teach, teach_intent)
 
             # 会话流水日志（agent_log，2026-08-31）：user_msg + env_inject 落盘
             # ——排障时直接看"用户问了什么 + agent 看到了什么环境注入"。
@@ -2007,71 +2328,106 @@ class StrandsAgentAdapter:
             # 回调事件）时放弃等待并上报超时报告，会话可继续（不崩进程、不占
             # RPC 线程池）。stalled 标记让后续 invoke 快速降级；worker 自然
             # 结束时自动解除标记、恢复常规链路。
-            handler = getattr(strands_agent, "callback_handler", None)
-            if handler is not None and hasattr(handler, "begin_turn"):
-                handler.begin_turn(
-                    teach=teach,
-                    allow_teach_output=teach_intent,
-                )
-            handler_stats = getattr(handler, "_stats", None) or {}
-            if not isinstance(handler_stats.get("events_received"), int):
-                # 活跃信号读不到（handler 结构变更 / 未挂 callback）→ watchdog
-                # 会把"健康但无事件"误判为挂起。仍保留有界超时兜底（优于无限
-                # 阻塞），但留一条 WARNING：将来重构掉 _stats 时能被看见。
-                logger.warning(
-                    f"[t9] watchdog activity signal unavailable "
-                    f"(handler={type(handler).__name__}), timeout will fire on "
-                    f"silence: agent={agent_id}, session={session_id}"
-                )
-
             outcome: dict[str, Any] = {}
+            from needs_you import response_wait_scope
+
+            wait_owner = object()
 
             def _locked_invoke() -> None:
+                nonlocal strands_agent, handler, handler_stats
+                limit_hook = None
+                refresh_mode = None
                 try:
-                    with agent_lock:
-                        # T2: 单任务护栏——每次 invoke 开始重置计数（总上限 50 /
-                        # 连续失败 3 熔断均按"单次 invoke"口径，不跨对话累计误杀）
-                        limit_hook = self._limit_hooks.get(
-                            (agent_id, ctx.session_id)
-                        )
-                        if limit_hook is not None:
-                            limit_hook.reset()
-                            limit_hook.current_task = input
+                    with agent_lock, response_wait_scope(wait_owner):
+                        try:
+                            if cancelled.is_set():
+                                outcome["cancelled"] = True
+                                return
+                            with self._model_lock:
+                                # 排队期间可能已换模或移除模型；不复用排队前的实例。
+                                reason = self._check_degraded()
+                                if reason:
+                                    outcome["degraded_reason"] = reason
+                                    return
+                                strands_agent = self._get_or_create_agent(
+                                    agent_id, ctx, mode=ctx.mode, teach=teach,
+                                )
+                                # 策略绑定本轮实例，换模清缓存不能换掉在跑回合的预算。
+                                retry_policy = self._retry_policies.get(lock_key)
 
-                        # P3: 单回合请求预算与护栏同口径（每次 invoke 从零开始）。
-                        # 先记上一回合的实际请求数——预算是否够用要有数，不能靠猜。
-                        retry_policy = self._retry_policies.get(
-                            (agent_id, ctx.session_id, ctx.permission_level)
-                        )
-                        if retry_policy is not None:
-                            logger.info(
-                                f"[p3] previous turn model_calls="
-                                f"{retry_policy.turn_model_calls}"
+                            handler = getattr(strands_agent, "callback_handler", None)
+                            if handler is not None and hasattr(handler, "begin_turn"):
+                                handler.begin_turn(
+                                    teach=teach,
+                                    allow_teach_output=teach_intent,
+                                )
+                            handler_stats = getattr(handler, "_stats", None) or {}
+                            if not isinstance(handler_stats.get("events_received"), int):
+                                logger.warning(
+                                    f"[t9] watchdog activity signal unavailable "
+                                    f"(handler={type(handler).__name__}), timeout will fire on "
+                                    f"silence: agent={agent_id}, session={session_id}"
+                                )
+
+                            # check/reset 与取消串行；模型/工具执行不持有此短锁。
+                            with self._cancel_lock:
+                                if cancelled.is_set():
+                                    outcome["cancelled"] = True
+                                    return
+                                # 已取消的排队任务不能再清掉熔断位。
+                                limit_hook = self._limit_hooks.get(
+                                    (agent_id, ctx.session_id)
+                                )
+                                if limit_hook is not None:
+                                    limit_hook.reset()
+                                    limit_hook.current_task = input
+                                    # Model schemas for confirm/auto are identical;
+                                    # prompt changes happen only before a model call.
+                                    def refresh_mode() -> None:
+                                        with self._cancel_lock:
+                                            strands_agent.system_prompt = _compose_system_prompt(
+                                                ctx.mode, teach, base=self.system_prompt,
+                                            )
+
+                                    limit_hook.refresh_mode = refresh_mode
+                                    refresh_mode()
+                                # 未取消且真正开始的回合才消费上次中断现场。
+                                prompt = self._build_prompt(input, state)
+                                prompt += _teach_turn_gate(teach, teach_intent)
+
+                            # P3: 单回合请求预算与护栏同口径。
+                            if retry_policy is not None:
+                                logger.info(
+                                    f"[p3] previous turn model_calls="
+                                    f"{retry_policy.turn_model_calls}"
+                                )
+                                retry_policy.reset_turn_budget()
+
+                            # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
+                            response = self._invoke_with_token_continuation(
+                                strands_agent, prompt, agent_id, session_id
                             )
-                            retry_policy.reset_turn_budget()
 
-                        # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
-                        response = self._invoke_with_token_continuation(
-                            strands_agent, prompt, agent_id, session_id
-                        )
+                            # T3: todo 未完成项追加一轮（锁内调用，限一次）。
+                            followup_observation = self._maybe_todo_followup(
+                                strands_agent,
+                                agent_id,
+                                session_id,
+                                limit_hook.tool_log if limit_hook is not None else [],
+                            )
 
-                        # T3 (2026-08-31): 收尾校验——todo 未完成项追加一轮
-                        # 续做提示（锁内调用，限一次防死循环）
-                        followup_observation = self._maybe_todo_followup(
-                            strands_agent,
-                            agent_id,
-                            session_id,
-                            limit_hook.tool_log if limit_hook is not None else [],
-                        )
-
-                        # T7 (2026-08-31): 执行后验证回环——写类调用后无只读
-                        # 验证时追加一轮补验证（与 T3 追加轮独立计数）
-                        verify_observation = self._maybe_verify_followup(
-                            strands_agent,
-                            agent_id,
-                            session_id,
-                            limit_hook.tool_log if limit_hook is not None else [],
-                        )
+                            # T7: 写类调用后无只读验证时追加一轮补验证。
+                            verify_observation = self._maybe_verify_followup(
+                                strands_agent,
+                                agent_id,
+                                session_id,
+                                limit_hook.tool_log if limit_hook is not None else [],
+                            )
+                        finally:
+                            # 成功/异常历史均在解锁前提交，下一回合才可迁移最新快照。
+                            self._sync_session_messages(agent_id, session_id, strands_agent)
+                            if limit_hook is not None and limit_hook.refresh_mode is refresh_mode:
+                                limit_hook.refresh_mode = None
                     outcome["response"] = response
                     outcome["followup"] = followup_observation
                     outcome["verify"] = verify_observation
@@ -2081,8 +2437,10 @@ class StrandsAgentAdapter:
                     # worker 自然结束（含异常）→ 解除 stalled 标记，恢复常规链路
                     self._stalled_sessions.discard((agent_id, session_id))
 
+            worker_context = copy_context()
             worker = threading.Thread(
-                target=_locked_invoke,
+                target=worker_context.run,
+                args=(_locked_invoke,),
                 name=f"tdsf-invoke-{session_id or 'x'}",
                 daemon=True,
             )
@@ -2093,15 +2451,18 @@ class StrandsAgentAdapter:
                 lambda: handler_stats.get("events_received", 0),
                 agent_id,
                 session_id,
+                wait_owner=wait_owner,
             )
             if watchdog_fired:
-                # 超时：不取 worker 结果（仍在后台跑）——友好降级，对话可继续
+                # 不取迟到结果，但必须先阻止后续工具并唤醒挂着的待答请求。
+                # worker/当前模型请求/已派发命令仍可能在运行，取消不是强杀。
+                self.request_cancel(session_id, "AI 调用无活动超时")
                 duration = time.time() - start_time
                 idle_secs, _ = _watchdog_thresholds()
                 msg = (
                     f"AI 调用超时：模型超过 {_format_idle_secs(idle_secs)}"
-                    "没有任何输出，本轮已中止。"
-                    "请检查网络或模型服务状态后重试；会话历史已保留，可直接继续对话。"
+                    "没有任何输出，已停止等待并请求停止后续工具调用。"
+                    "正在执行的命令不会自动撤销；请先查看终端和运行日志，确认状态后再决定下一步。"
                 )
                 logger.error(
                     f"[t9] invoke watchdog timeout: agent={agent_id}, "
@@ -2131,16 +2492,19 @@ class StrandsAgentAdapter:
             if "error" in outcome:
                 # worker 已失败——抛给下方 except 统一处理（含 T9.2 降级分类）
                 raise outcome["error"]
+            if outcome.get("cancelled"):
+                return self._cancelled_response(agent_id, session_id)
+            if outcome.get("degraded_reason"):
+                return self._degraded_response(
+                    agent_id=agent_id,
+                    input=input,
+                    session_id=session_id,
+                    reason=outcome["degraded_reason"],
+                    start_time=start_time,
+                )
             response = outcome.get("response")
             followup_observation = outcome.get("followup")
             verify_observation = outcome.get("verify")
-
-            # T1 (2026-08-31): 同步 per-session 消息历史——messages 与实例解耦的
-            # 单一真源。放在锁释放后（invoke 已完成，messages 处于稳定态）。
-            # 注：conversation_manager="auto" 的压缩发生在 strands_agent(prompt)
-            # 内部（SummarizingConversationManager 直接改写 agent.messages），
-            # 此处同步的即压缩后状态——长对话历史按压缩结果迁移，正是期望行为。
-            self._sync_session_messages(agent_id, session_id, strands_agent)
 
             # 8. 提取最终输出（T3/T7 追加轮有输出则覆盖主轮——追加轮是主轮的
             # "继续"，其最终答复才是用户应看到的收尾结果；空输出沿用主轮。
@@ -2235,11 +2599,6 @@ class StrandsAgentAdapter:
                 f"error={e}, duration={duration:.3f}s"
             )
             self._emit_mood("error", agent_id, session_id)
-            # T1: 异常轮次 best-effort 同步历史——用户消息/已完成的工具轮
-            # 已进 agent.messages，同步后 perm 变化重建实例时仍保留本轮上下文
-            # （失败同步只降级为丢本轮，不影响主流程错误上报）。
-            self._sync_session_messages(agent_id, session_id, strands_agent)
-
             # P3 (2026-09-19): 限流单独一档——退避收口后这是最常见的显式失败，
             # 措辞必须说"限流/额度"，不能套下面那句"网络连接失败或超时"。
             if self._is_llm_rate_limit_error(e):
@@ -2336,7 +2695,7 @@ class StrandsAgentAdapter:
         reason_messages = {
             "feature_flag_disabled": "Strands 后端未启用",
             "strands_not_installed": "strands-agents 包未安装，请 pip install strands-agents",
-            "strands_model_not_injected": "Strands Model 对象未注入（需 P0 阶段实现 model_adapter.py）",
+            "strands_model_not_injected": "当前没有可用的 AI 模型。请在「设置 → AI 模型」中配置并连接模型；若已配置，请检查连接后重试。",
         }
         message = reason_messages.get(reason, f"未知降级原因: {reason}")
 
@@ -2604,22 +2963,30 @@ class StrandsAgentAdapter:
         """
         if not session_id:
             return {"session_id": "", "cancelled": False, "hooks": 0, "requests": 0}
-        snapshots = [
-            hook.request_user_stop(reason)
-            for (_agent_id, sid), hook in list(self._limit_hooks.items())
-            if sid == session_id
-        ]
+        with self._cancel_lock:
+            pending = tuple(self._invocations.get(session_id, ()))
+            for cancelled in pending:
+                cancelled.set()
+            snapshots = [
+                hook.request_user_stop(reason)
+                for (_agent_id, sid), hook in list(self._limit_hooks.items())
+                if sid == session_id
+            ]
+            if snapshots or pending:
+                self._cancel_notes[session_id] = (
+                    snapshots[-1] if snapshots else {"reason": reason or "用户已停止本次任务"}
+                )
         requests = self._cancel_pending_needs_you(session_id, reason)
-        if snapshots or requests:
-            note = snapshots[-1] if snapshots else {"reason": reason}
-            self._cancel_notes[session_id] = note
+        if requests and not (snapshots or pending):
+            with self._cancel_lock:
+                self._cancel_notes[session_id] = {"reason": reason}
         logger.info(
             f"[#69] agent.cancel session={session_id} hooks={len(snapshots)} "
             f"needs_you={requests}"
         )
         return {
             "session_id": session_id,
-            "cancelled": bool(snapshots or requests),
+            "cancelled": bool(snapshots or requests or pending),
             "hooks": len(snapshots),
             "requests": requests,
         }
@@ -3296,13 +3663,12 @@ class StrandsAgentAdapter:
         _session_messages——历史与实例解耦后，重建实例从历史装载，
         换模型/清缓存不再丢对话上下文（方案书 v4.0 T1 断点修复）。
         """
-        count = len(self._agent_cache)
-        self._agent_cache.clear()
-        # TDSF 修复 2026-08-09: 一并清空锁字典
-        self._agent_locks.clear()
-        # P3: 退避策略绑在实例上（构造时交给 Agent），实例清了策略也要清——
-        # 留着会让新实例复用旧策略的尝试计数。
-        self._retry_policies.clear()
+        with self._model_lock:
+            count = len(self._agent_cache)
+            self._agent_cache.clear()
+            # 活动/排队回合仍持有会话锁；换模只换实例，不改变排队身份。
+            # 策略绑在实例上，新实例不可复用旧计数；活动回合持有自己的引用。
+            self._retry_policies.clear()
         # P0-A1: 子 agent 工具缓存已随委派机制删除（原 _sub_agent_cache）
         logger.info(f"Strands Agent cache cleared: {count} entries")
 
@@ -3319,11 +3685,12 @@ class StrandsAgentAdapter:
             new_model: 新的 Strands Model 实例 (OpenAIModel/AnthropicModel/LiteLLMModel);
                        None 时表示降级 (走 mock_llm_active 路径)
         """
-        old_available = self._model_available
-        self.strands_model = new_model
-        self._model_available = new_model is not None
-        # 必须清缓存: 旧 Agent 实例闭包绑定旧 model, 不清会用旧 model
-        self.clear_cache()
+        with self._model_lock:
+            old_available = self._model_available
+            self.strands_model = new_model
+            self._model_available = new_model is not None
+            # 必须清缓存: 旧 Agent 实例闭包绑定旧 model, 不清会用旧 model
+            self.clear_cache()
         logger.info(
             f"Strands model updated: "
             f"old_available={old_available}, "

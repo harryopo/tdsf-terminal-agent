@@ -3,7 +3,7 @@ strands_backend/tools/command_impact.py — 命令影响预测引擎（Task 4，
 =====================================================================================
 
 职责（审批卡四层卡面的第 4 层「影响预测」的数据来源）：
-- ``split_compound(cmd)``：按 ``;`` / ``&&`` / ``||`` / ``|`` 拆分复合命令。
+- ``split_compound(cmd)``：按 shell 控制符和换行拆分复合命令。
   字符串状态机实现（单/双引号 + 反斜杠转义内不拆），不做完整 shell AST。
 - ``classify_segment(seg)``：单段命令 → {category, objects, risk_l}。
   类别 = 装包 / 改配置 / 操作服务 / 删除 / 网络外联 / 用户权限 / 文件写入 /
@@ -27,6 +27,7 @@ strands_backend/tools/command_impact.py — 命令影响预测引擎（Task 4，
 from __future__ import annotations
 
 import re
+import shlex
 
 from ._credential_paths import first_credential_piece
 
@@ -159,10 +160,12 @@ _REDIRECT_WRITE_RE = re.compile(r"(?:^|[\s;|&])>>?\s*(?!/dev/null\b)\S")
 
 
 def detect_dangerous_construct(cmd: str) -> bool:
-    """检测危险构造：$()、反引号、eval、重定向系统文件、管道到 shell"""
+    """Detect shell evaluation, ambiguous quoting, and sensitive redirects."""
     if not cmd:
         return False
-    if "$(" in cmd or "`" in cmd:
+    # Bash process substitution executes a command. ANSI-C quoting can change
+    # which separators are quoted, so the lightweight splitter cannot clear it.
+    if any(marker in cmd for marker in ("$(", "`", "<(", ">(", "$'")):
         return True
     if _CRITICAL_REDIRECT_RE.search(cmd):
         return True
@@ -179,9 +182,9 @@ def detect_dangerous_construct(cmd: str) -> bool:
 # ============================================================================
 
 def split_compound(cmd: str) -> list[str]:
-    """按 ``;`` / ``&&`` / ``||`` / ``|`` 拆分复合命令
+    """按 ``;`` / ``&`` / ``&&`` / ``||`` / ``|`` 和换行拆分复合命令
 
-    引号（单/双）与反斜杠转义内的分隔符不拆；不处理子 shell ``(...)``。
+    引号、反斜杠转义和重定向内的控制符不拆；不处理子 shell ``(...)``。
     返回去除首尾空白后的非空段列表。
     """
     segments: list[str] = []
@@ -213,15 +216,15 @@ def split_compound(cmd: str) -> list[str]:
             buf.append(cmd[i + 1])
             i += 2
             continue
-        if ch == ";":
-            segments.append("".join(buf))
-            buf = []
-            i += 1
-            continue
-        if ch == "&" and i + 1 < n and cmd[i + 1] == "&":
-            segments.append("".join(buf))
-            buf = []
+        next_ch = cmd[i + 1 : i + 2]
+        if (ch in "<>" and next_ch == "&") or (ch == "&" and next_ch == ">"):
+            buf.extend((ch, next_ch))
             i += 2
+            continue
+        if ch in ";&\n":
+            segments.append("".join(buf))
+            buf = []
+            i += 2 if ch == "&" and next_ch == "&" else 1
             continue
         if ch == "|":
             # || 与 | 都作为分隔（shell 管道不影响风险面拆分）
@@ -319,7 +322,18 @@ _PACKAGE_READONLY_ACTIONS = {
 }
 _DELETE_CMDS = {"rm", "rmdir", "shred", "unlink"}
 _NETWORK_CMDS = {"curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat",
-                 "netcat", "telnet", "ftp", "lftp", "git", "ping6"}
+                 "netcat", "telnet", "ftp", "lftp", "ping6"}
+# Preserve the existing L2 decision for familiar Git queries. Match the whole
+# shell segment so aliases, repository/config overrides, or output options
+# cannot borrow that risk level from a query-looking word.
+_GIT_QUERY_RE = re.compile(
+    r"git[ \t]+(?:--version|version"
+    r"|branch[ \t]+--show-current|rev-parse[ \t]+--show-toplevel"
+    r"|status(?:[ \t]+(?:-s|-sb|--short|--branch|--porcelain(?:=v[12])?))*"
+    r"|(?:--no-pager[ \t]+)?(?:log(?:[ \t]+(?:--oneline|-[0-9]+|-n[ \t]+[0-9]+))*"
+    r"|diff(?:[ \t]+(?:--stat|--name-only|--cached|--staged))*"
+    r"(?:[ \t]+--(?:[ \t]+[A-Za-z0-9_./@-]+)+)?))"
+)
 _PERM_CMDS = {"chmod", "chown", "chgrp", "umask", "setfacl", "getfacl",
               "useradd", "userdel", "usermod", "groupadd", "groupdel",
               "groupmod", "passwd", "gpasswd", "visudo", "su"}
@@ -383,6 +397,61 @@ _SERVICE_READONLY_ACTIONS = {
     "list-unit-files", "list-dependencies", "list-sockets", "list-timers",
     "cat", "help", "show-environment", "get-default",
 }
+
+_SYSTEMCTL_FLAG_OPTIONS = {
+    "-a", "--all", "-l", "--full", "-q", "--quiet", "-r", "--recursive",
+    "--user", "--system", "--global", "--runtime", "--no-pager", "--no-legend",
+    "--plain", "--failed", "--no-ask-password", "--reverse", "--with-dependencies",
+    "--value", "--show-types",
+}
+_SYSTEMCTL_VALUE_OPTIONS = {
+    "-H", "--host", "-M", "--machine", "-p", "-P", "--property", "-t", "--type",
+    "--state", "-n", "--lines", "-o", "--output", "--root", "--image",
+}
+
+
+def _service_query_is_readonly(seg: str, base: str) -> bool:
+    """Read the action position; unit names and option values cannot lower risk."""
+    try:
+        args = _normalize_tokens(shlex.split(seg))[1:]
+    except ValueError:
+        return False
+    if base == "service":
+        return args == ["--status-all"] or (
+            len(args) == 2 and not args[0].startswith("-") and args[1] == "status"
+        )
+    if base == "chkconfig":
+        query_args = args[1:] if args[:1] == ["--list"] else args
+        return len(query_args) <= 1 and (
+            not query_args or not query_args[0].startswith("-")
+        )
+
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            index += 1
+            break
+        if not arg.startswith("-"):
+            break
+        option, separator, value = arg.partition("=")
+        if len(arg) > 2 and not arg.startswith("--") and arg[:2] in _SYSTEMCTL_VALUE_OPTIONS:
+            option, separator, value = arg[:2], "=", arg[2:]
+        if option in _SYSTEMCTL_VALUE_OPTIONS:
+            if not separator:
+                index += 1
+                if index >= len(args):
+                    return False
+                value = args[index]
+            if not value and option not in {"-p", "-P", "--property"}:
+                return False
+        elif arg not in _SYSTEMCTL_FLAG_OPTIONS:
+            if arg.startswith("--") or len(arg) == 1 or any(
+                f"-{flag}" not in _SYSTEMCTL_FLAG_OPTIONS for flag in arg[1:]
+            ):
+                return False
+        index += 1
+    return index < len(args) and args[index] in _SERVICE_READONLY_ACTIONS
 
 # C2 (2026-09-01, 用户实测: `docker ps` 被判"未知操作"抬到 L3 审批):
 # 容器/编排工具按子命令细分——只读子命令放行，其余（run/exec/cp/rm 等有
@@ -495,14 +564,7 @@ def classify_segment(seg: str) -> dict:
     if command_query:
         category = CATEGORY_READONLY
     elif base in ("systemctl", "service", "chkconfig"):
-        actions = {t.lower() for t in toks[1:]}
-        if base == "chkconfig":
-            category = CATEGORY_READONLY if (not actions or "list" in actions) else CATEGORY_SERVICE
-        elif actions & _SERVICE_READONLY_ACTIONS:
-            category = CATEGORY_READONLY
-        else:
-            # 未知 action 也按写操作处理（fail-closed）
-            category = CATEGORY_SERVICE
+        category = CATEGORY_READONLY if _service_query_is_readonly(seg, base) else CATEGORY_SERVICE
     # --- 装包 ---
     elif base in {"yum", "dnf"} and any(
         token.lower() in _PACKAGE_READONLY_ACTIONS for token in toks[1:]
@@ -521,20 +583,14 @@ def classify_segment(seg: str) -> dict:
     # --- 配置编辑 ---
     elif base in _CONFIG_CMDS:
         category = CATEGORY_CONFIG
-    # --- 网络外联（git clone/push/fetch 也算外联）---
-    elif base in _NETWORK_CMDS:
+    # Ordinary Git queries retain L2. Other Git forms reach the L3 fallback.
+    elif base in _NETWORK_CMDS or (base == "git" and _GIT_QUERY_RE.fullmatch(seg)):
         category = CATEGORY_NETWORK
     # --- 用户/权限 ---
     elif base in _PERM_CMDS:
         category = CATEGORY_PERM
     # --- 文件写入 ---
     elif base in _FILE_WRITE_FIRST or base in _FILE_WRITE_LAST:
-        category = CATEGORY_FILE_WRITE
-    # --- 重定向写文件（echo x > file / cat a > b 等）---
-    # 注意排除无害流重定向：2>/dev/null、2>&1、>/dev/null（fd 数字前缀
-    # 紧贴 > 时不匹配；目标是 /dev/null 时排除——否则网络诊断类工具的
-    # "nslookup x 2>/dev/null" 会被误判为文件写 L2 触发审批）
-    elif _REDIRECT_WRITE_RE.search(seg):
         category = CATEGORY_FILE_WRITE
     # --- 容器/编排工具按子命令细分（C2: docker ps 只读，docker run 写）---
     # 无参数/仅 flags（docker --version）视为只读；子命令不在只读集 → unknown
@@ -576,6 +632,10 @@ def classify_segment(seg: str) -> dict:
     else:
         category = CATEGORY_UNKNOWN
 
+    # A file redirect adds an effect. It must not lower the command's own risk.
+    if category == CATEGORY_READONLY and _REDIRECT_WRITE_RE.search(seg):
+        category = CATEGORY_FILE_WRITE
+
     objects = _extract_objects(category, base, toks)
     risk_l = CATEGORY_RISK.get(category, CATEGORY_RISK[CATEGORY_UNKNOWN])
     # #159：路径命中凭据名单 ⇒ 至少 L3。
@@ -608,9 +668,20 @@ def _readonly_veto_hit(base: str, seg: str) -> bool:
     confirm 模式下 `find / -delete`、`awk BEGIN{system("id")}`、
     `sort -o /etc/shadow /dev/null` 全部返回 `allow`，零审批直接执行。
     """
+    if base == "env":
+        # A path-qualified env can launch a command and must not be a read query.
+        return len(seg.split()) > 1
     if base == "find":
         # -delete 直接删；-exec/-execdir/-ok/-okdir 起任意子进程
-        return bool(re.search(r"\s-(?:delete|exec|execdir|ok|okdir)\b", seg))
+        if re.search(r"\s-(?:delete|exec|execdir|ok|okdir)\b", seg):
+            return True
+        try:
+            return any(
+                arg in {"-delete", "-exec", "-execdir", "-ok", "-okdir"}
+                for arg in shlex.split(seg)
+            )
+        except ValueError:
+            return True
     if base in {"awk", "gawk", "mawk", "busybox"}:
         # system()/gensub 执行命令、getline 从管道或命令读、> 重定向写文件
         return bool(re.search(r"\b(?:system|gensub)\s*\(|\bgetline\b", seg)) or _has_file_redirect(seg)

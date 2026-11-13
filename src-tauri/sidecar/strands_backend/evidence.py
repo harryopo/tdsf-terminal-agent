@@ -2,10 +2,9 @@
 strands_backend/evidence.py — 会话证据追踪器（P1-2）
 =====================================================
 
-AI 结论的证据 = 会话内真实发生的工具调用记录（不依赖 LLM 输出格式）：
-- 每次工具调用（started/completed）记录一条证据：工具名、命令/路径、
-  状态、结果摘要、时间
-- 前端证据面板展示"本次对话 AI 依据了哪些真实操作"
+会话证据 = 真实工具调用记录，不等于模型结论已验证：
+- 保存工具名、命令/路径、状态、有界摘要，以及可用的调用/目标标识
+- 缺失标识不补造；SDK 调用标识与工具卡标识分别保存
 - 与审计链（audit_chain）的区别：审计链是防篡改落盘日志（安全视角）；
   证据表是会话级内存结构（可观测视角），按 session 隔离、可清空
 
@@ -20,6 +19,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from typing import Any
 
 logger = logging.getLogger("sidecar.strands_backend.evidence")
@@ -42,27 +42,6 @@ _SOURCE_TOOL_NAMES = frozenset({
     "ssh_command",
 })
 
-_WRITE_TOOL_NAMES = frozenset({
-    "ssh_command",
-    "python_run",
-    "service_manage",
-    "package_manage",
-    "firewall_manage",
-    "backup_restore",
-    "save_skill",
-})
-
-_VERIFY_TOOL_NAMES = frozenset({
-    "read_remote_file",
-    "config_diff",
-    "analyze_logs",
-    "inspect_processes",
-    "network_diagnose",
-    "get_terminal_output",
-    "knowledge_search",
-    "knowledge_get_doc",
-})
-
 
 class EvidenceTracker:
     """会话级证据追踪器（内存，按 session 隔离）"""
@@ -80,43 +59,84 @@ class EvidenceTracker:
         result: Any = None,
         agent: str = "main",
         source: str = "",
+        *,
+        tool_call_id: str | None = None,
+        sdk_tool_use_id: str | None = None,
+        ssh_session_id: str | None = None,
+        target_endpoint: str | None = None,
+        operation_id: str | None = None,
     ) -> dict[str, Any] | None:
         """记录一条工具调用证据
 
         Args:
             session_id: 会话 ID（空则跳过——无法归属到对话）
             tool_name: 工具名（如 ssh_command / read_remote_file / agent:teach）
-            status: started / completed / error / rejected
-            detail: 关键参数摘要（命令文本 / 文件路径，已脱敏）
+            status: completed / error / blocked / rejected / cancelled / indeterminate
+            detail: 关键参数摘要（命令文本 / 文件路径，入口脱敏）
             result: 工具结果（自动截断 + 脱敏）
             agent: 执行 agent 名
             source: 来源标记（调试用）
+            tool_call_id: 实际工具卡标识；未知时省略，不按工具名猜配
+            sdk_tool_use_id: SDK 调用标识，不能冒充工具卡标识
+            ssh_session_id: 执行器解析出的目标 SSH 会话
+            target_endpoint: 已取得的目标端点，不回退到当前活动主机
+            operation_id: 已有操作账本标识
 
         Returns:
             证据 dict；session_id 为空返回 None
         """
         if not session_id:
             return None
+        redacted_detail = _redact_text(detail)
+        summary, summary_truncated = _summarize(result)
         evidence = {
+            "evidence_id": str(uuid.uuid4()),
             "tool_name": tool_name,
             "status": status,
-            "detail": detail[:_MAX_RESULT_LEN],
-            "result": _summarize(result),
+            "detail": redacted_detail[:_MAX_RESULT_LEN],
+            "detail_truncated": len(redacted_detail) > _MAX_RESULT_LEN,
+            "result": summary,
+            "summary_truncated": summary_truncated,
             "agent": agent,
             "timestamp": time.time(),
             "source": source,
         }
+        for key, value in (
+            ("tool_call_id", tool_call_id),
+            ("sdk_tool_use_id", sdk_tool_use_id),
+            ("ssh_session_id", ssh_session_id),
+            ("target_endpoint", target_endpoint),
+            ("operation_id", operation_id),
+        ):
+            # 不截断或替换身份：这会把不同调用/目标变成同一个标识。
+            if isinstance(value, str) and value.strip() and len(value) <= _MAX_RESULT_LEN:
+                if _redact_text(value) == value:
+                    evidence[key] = value
+        if isinstance(result, dict):
+            outcome = result.get("status")
+            if isinstance(outcome, str):
+                evidence["result_status"] = _redact_text(outcome)[:_MAX_RESULT_LEN]
+            for key, field in (("result_ok", "ok"), ("result_available", "available")):
+                if isinstance(result.get(field), bool):
+                    evidence[key] = result[field]
+            if result.get("success") is False:
+                evidence["result_ok"] = False
+            if isinstance(result.get("truncated"), bool):
+                evidence["output_truncated"] = result["truncated"]
+            exit_code = result.get("exit_code")
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code >= 0:
+                evidence["exit_code"] = exit_code
         with self._lock:
             bucket = self._by_session.setdefault(session_id, [])
             bucket.append(evidence)
             # 防单会话无限增长（长对话几十轮工具调用）
             if len(bucket) > _MAX_EVIDENCE_PER_SESSION:
                 del bucket[: len(bucket) - _MAX_EVIDENCE_PER_SESSION]
-        return evidence
+        return dict(evidence)
 
     def list(self, session_id: str) -> list[dict[str, Any]]:
         with self._lock:
-            return list(self._by_session.get(session_id, []))
+            return [dict(item) for item in self._by_session.get(session_id, [])]
 
     def clear(self, session_id: str) -> int:
         with self._lock:
@@ -132,12 +152,18 @@ class EvidenceTracker:
             }
 
 
-def _summarize(result: Any) -> str:
-    """结果摘要：脱敏 + 截断为单行摘要"""
-    if result is None:
-        return ""
+def _redact_text(text: str) -> str:
     from strands_backend.tools import redact_sensitive
+    from strands_backend.tools._redact import redact_sensitive_text
 
+    return redact_sensitive_text(redact_sensitive(text))
+
+
+def _summarize(result: Any) -> tuple[str, bool]:
+    """返回脱敏单行摘要及本地长度裁剪标记；摘要不代表完整输出。"""
+    if result is None:
+        return "", False
+    truncated = False
     try:
         if isinstance(result, dict):
             # 优先取人可读字段
@@ -149,16 +175,18 @@ def _summarize(result: Any) -> str:
                 or ""
             )
             if not text:
-                text = str(result)[:200]
+                text = str(result)
+                truncated = len(text) > 200
+                text = text[:200]
         elif isinstance(result, (str, bytes)):
             text = str(result)
         else:
             text = str(result)
     except Exception:
         text = str(result)
-    text = redact_sensitive(text)
+    text = _redact_text(text)
     text = " ".join(text.split())  # 压成单行
-    return text[:_MAX_RESULT_LEN]
+    return text[:_MAX_RESULT_LEN], truncated or len(text) > _MAX_RESULT_LEN
 
 
 # ============================================================================
@@ -184,53 +212,21 @@ def reset_global_tracker() -> EvidenceTracker:
         return _global_tracker
 
 
-def _is_write_evidence(item: dict[str, Any]) -> bool:
-    """Return whether a completed evidence item changed state.
-
-    ``ssh_command`` is command-sensitive: a successful ``cat`` is evidence,
-    not an operation.  If the classifier is unavailable, fail closed for the
-    highest tier rather than falsely calling a read an operation.
-    """
-    tool_name = str(item.get("tool_name") or "")
-    if tool_name not in _WRITE_TOOL_NAMES:
-        return False
-    if tool_name != "ssh_command":
-        return True
-    try:
-        from strands_backend.tools import RiskChecker
-
-        return bool(RiskChecker.check(str(item.get("detail") or "")).get("write"))
-    except Exception:
-        return False
-
-
-def _is_verify_evidence(item: dict[str, Any]) -> bool:
-    """Return whether a completed item is a read-only verification result."""
-    tool_name = str(item.get("tool_name") or "")
-    if tool_name in _VERIFY_TOOL_NAMES:
-        return True
-    if tool_name != "ssh_command":
-        return False
-    try:
-        from strands_backend.tools import RiskChecker
-
-        return not bool(RiskChecker.check(str(item.get("detail") or "")).get("write"))
-    except Exception:
-        return False
-
-
 def assess_session_evidence(session_id: str) -> dict[str, Any]:
     """Summarize recorded tool evidence without scoring model prose.
 
     This is deliberately a *session evidence state*, not a probability that an
     arbitrary assistant sentence is true.  There is no response-to-citation
-    binding in the current protocol, so reporting a textual confidence score
-    would overclaim what the system knows.
+    binding or explicit verification conditions in the current protocol.
+    A later read, even of the same target, cannot promote a session to verified.
     """
     completed = [
         item
         for item in get_global_tracker().list(session_id)
         if item.get("status") == "completed"
+        and item.get("result_status") in (None, "success")
+        and item.get("result_ok") is not False
+        and item.get("result_available") is not False
     ]
     sources = [
         {
@@ -242,23 +238,12 @@ def assess_session_evidence(session_id: str) -> dict[str, Any]:
         if str(item.get("tool_name") or "") in _SOURCE_TOOL_NAMES
     ]
 
-    last_write_index = -1
-    for index, item in enumerate(completed):
-        if _is_write_evidence(item):
-            last_write_index = index
-    has_post_write_verification = last_write_index >= 0 and any(
-        _is_verify_evidence(item) for item in completed[last_write_index + 1 :]
-    )
-
-    if has_post_write_verification:
-        tier = "verified"
-        reason = "成功操作后已记录只读验证结果。"
-    elif sources:
+    if sources:
         tier = "grounded"
-        reason = f"已记录 {len(sources)} 项真实工具结果。"
+        reason = f"已记录 {len(sources)} 项可用工具结果；未绑定具体结论或验证条件。"
     else:
         tier = "unverified"
-        reason = "本会话未记录已完成的检索、读取或验证结果。"
+        reason = "本会话未记录可用的已完成检索或读取结果。"
 
     return {
         "tier": tier,

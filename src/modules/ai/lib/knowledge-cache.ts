@@ -1,12 +1,38 @@
 /**
  * knowledge-cache.ts — 知识库浏览器模块级浏览缓存（TDSF 2026-08-29）
  * -----------------------------------------------------------------------------
- * list_files per source / get_doc per url 的浏览缓存：弹窗重复打开、分组
- * 折叠展开、面板视图切换均不重复请求。导入新文档后需重开面板才刷新，
- * 属可接受的浏览缓存（搜索/详情 RPC 语义不受影响）。
+ * 按知识库隔离文件、文档和标题缓存；导入后统一失效。
  * 独立成文件是为了让 KnowledgeBrowser.tsx 只导出组件（react-refresh 约束），
  * 缓存清理函数供测试用例隔离状态。
  */
+
+export type KnowledgeLibrary = "slim" | "full" | "builtin" | "personal" | "reference";
+
+export interface KnowledgeDocument {
+  id: string;
+  url: string;
+  title0: string;
+  title_zh?: string;
+  summary_zh?: string;
+  source: string;
+  category: string;
+  chunks: number;
+  total_chars: number;
+  library: KnowledgeLibrary;
+  possibly_truncated?: boolean;
+  processing?: string;
+}
+
+export interface KnowledgeGroupSummary {
+  category: string;
+  source: string;
+  entries: number;
+  files: number;
+}
+
+export function knowledgeCacheKey(library: KnowledgeLibrary, key: string): string {
+  return `${library}:${key}`;
+}
 
 /** knowledge.list_files 返回的文件级条目（同 url 分块聚合） */
 export interface KnowledgeFile {
@@ -29,6 +55,12 @@ export interface KnowledgeDoc {
   source?: string;
   title?: string;
   content?: string;
+  content_zh?: string;
+  translation_complete?: boolean;
+  translated_chunks?: number;
+  possibly_truncated?: boolean;
+  processing?: string;
+  library?: KnowledgeLibrary;
   chunks?: number;
   total_chars?: number;
   /** 中文标题（doc_titles_zh 映射，无映射为空串，TDSF 2026-08-30） */
@@ -38,18 +70,18 @@ export interface KnowledgeDoc {
   error?: string;
 }
 
-/** 组内文件级列表缓存：category（分组 key）→ files */
+/** 组内文件级列表缓存：library:category → files */
 export const filesCache = new Map<string, KnowledgeFile[]>();
 
-/** 完整文档缓存：url → doc（仅存 ok=true 的结果，失败不缓存以便重试） */
+/** 完整文档缓存：library:url → doc（仅存 ok=true 的结果） */
 export const docCache = new Map<string, KnowledgeDoc>();
 
-/** 中文标题映射缓存：category（分组 key）→ (url → 中文标题)。
+/** 中文标题映射缓存：library:category → (url → 中文标题)。
  *  TDSF 2026-08-30: 6+1 分类分组后按组缓存（组内多 source 的 titles_zh
  *  合并结果）；底层请求仍 per source（knowledge.titles_zh） */
 export const titlesZhCache = new Map<string, Map<string, string>>();
 
-/** 测试专用：清空模块级浏览缓存（每个用例前调用，避免跨用例串扰） */
+/** 导入后失效；测试也用它隔离每个用例。 */
 export function clearKnowledgeCaches(): void {
   filesCache.clear();
   docCache.clear();

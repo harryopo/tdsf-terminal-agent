@@ -52,9 +52,15 @@ from typing import Any, Callable
 # 将 sidecar 根目录加入 sys.path，确保 import sidecar_modules.* 可用
 sys.path.insert(0, str(Path(__file__).parent))
 
+from python_worker import WORKER_ARG, run_worker
+
+if __name__ == "__main__" and sys.argv[1:2] == [WORKER_ARG]:
+    raise SystemExit(run_worker(sys.argv[2:]))
+
 # #84: 自报版本只有一个真源（frozen 下 importlib.metadata 不保证带元数据，
 # 故单独一个常量模块；漂移由 test_sidecar_version_parity + check-release-version.ps1 两头挡）
 from sidecar_version import SIDECAR_VERSION
+from rpc_request_context import agent_request_scope, with_agent_request_id
 
 # TDSF: 数据目录移到 src-tauri/ 之外，避免 Tauri dev watcher 检测到
 # SQLite WAL 文件（.db-shm/.db-wal）变化导致循环重启（窗口反复弹出关闭）
@@ -62,7 +68,10 @@ from sidecar_version import SIDECAR_VERSION
 # （frozen 时 __file__ 指向 _MEIPASS 临时解压目录, 进程退出即删, 不能作为数据根;
 #   数据放 %APPDATA%/tdsf-terminal-agent/, 不随安装目录/临时目录清理）
 # 各模块通过 os.environ["TDSF_DATA_DIR"] 读取此路径，回退到原 sidecar/data/
-if getattr(sys, "frozen", False):
+_configured_data_dir = os.environ.get("TDSF_DATA_DIR")
+if _configured_data_dir:
+    _TDSF_DATA_DIR = Path(_configured_data_dir)
+elif getattr(sys, "frozen", False):
     if os.name == "nt":
         _TDSF_DATA_DIR = (
             Path(os.environ.get("APPDATA", str(Path(sys.executable).resolve().parent)))
@@ -78,7 +87,7 @@ if getattr(sys, "frozen", False):
 else:
     _TDSF_DATA_DIR = Path(__file__).resolve().parent.parent.parent / ".tdsf-data"
 _TDSF_DATA_DIR.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("TDSF_DATA_DIR", str(_TDSF_DATA_DIR))
+os.environ["TDSF_DATA_DIR"] = str(_TDSF_DATA_DIR)
 
 # 2026-07-31 根因修复: 强制 stdio 为 UTF-8（Windows 中文系统默认 gbk）。
 # JSON-RPC 线协议按行传给 Rust 侧，Rust 用 UTF-8 解析；若 Python 以 gbk 编码写出
@@ -202,8 +211,87 @@ _slow_methods: frozenset[str] = frozenset({
     "long_context.summarize",
     "knowledge.search",
     "knowledge.rebuild",
+    # Recovery holds the personal RAG lock during backups/transactions. Readers
+    # sharing it must also stay off the stdin loop so control RPCs remain live.
+    "knowledge.documents",
+    "knowledge.recovery_preview",
+    "knowledge.recovery_apply",
+    "knowledge.import_docs",
+    "knowledge.get",
+    "knowledge.get_doc",
+    "knowledge.list",
+    "knowledge.list_files",
+    "knowledge.titles_zh",
+    # Reverse RPC needs the stdin loop free to consume its response.
+    "system.probe_env",
 })
 _main_executor: ThreadPoolExecutor | None = None
+
+
+def _submit_slow_request(
+    dispatcher: "MethodDispatcher", method: str, params: Any,
+    req_id: Any, is_notification: bool,
+) -> Any:
+    adapter = None
+    session_id = ""
+    if method == "agent.invoke":
+        import agent_facade
+
+        if isinstance(params, dict) and params.keys() == {"name", "state"}:
+            name, state = params["name"], params["state"]
+        elif isinstance(params, list) and len(params) == 2:
+            name, state = params
+        else:
+            name, state = None, None
+        if name == "main" and isinstance(state, dict):
+            session_id = state.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                adapter = agent_facade.get_strands_adapter()
+    if adapter is None:
+        return _main_executor.submit(
+            _dispatch_in_executor, dispatcher, method, params, req_id, is_notification
+        )
+
+    cancelled = adapter._register_invocation(session_id, state, state.get("_rpc_stream_id"))
+    try:
+        future = _main_executor.submit(
+            _dispatch_queued_agent, dispatcher, method, params, req_id,
+            is_notification, adapter, session_id, cancelled,
+        )
+    except BaseException:
+        adapter._unregister_invocation(session_id, cancelled)
+        raise
+    # shutdown(cancel_futures=True) and explicit Future.cancel skip the worker.
+    future.add_done_callback(
+        lambda done: adapter._unregister_invocation(session_id, cancelled)
+        if done.cancelled() else None
+    )
+    return future
+
+
+def _dispatch_queued_agent(
+    dispatcher: "MethodDispatcher", method: str, params: Any, req_id: Any,
+    is_notification: bool, adapter: Any, session_id: str, cancelled: threading.Event,
+) -> None:
+    try:
+        with adapter._use_queued_invocation(session_id, cancelled):
+            _dispatch_in_executor(dispatcher, method, params, req_id, is_notification)
+    finally:
+        adapter._unregister_invocation(session_id, cancelled)
+
+
+def _dispatch_request(
+    dispatcher: "MethodDispatcher", method: str, params: Any, req_id: Any
+) -> Any:
+    stream_id = None
+    if method == "agent.invoke" and isinstance(params, dict):
+        state = params.get("state")
+        if isinstance(state, dict) and "_rpc_stream_id" in state:
+            state = dict(state)
+            stream_id = state.pop("_rpc_stream_id")
+            params = {**params, "state": state}
+    with agent_request_scope(req_id if method == "agent.invoke" else None, stream_id):
+        return dispatcher.dispatch(method, params)
 
 
 def _dispatch_in_executor(
@@ -224,7 +312,9 @@ def _dispatch_in_executor(
     """
     global _shutdown_flag
     try:
-        result = dispatcher.dispatch(method, params)
+        result = _dispatch_request(
+            dispatcher, method, params, None if is_notification else req_id
+        )
         if not is_notification:
             send_response(result, req_id)
     except JSONRPCError as e:
@@ -357,7 +447,7 @@ def send_notification(method: str, params: Any = None) -> None:
     """发送通知（无 id，无响应）"""
     msg: dict[str, Any] = {"jsonrpc": JSONRPC_VERSION, "method": method}
     if params is not None:
-        msg["params"] = params
+        msg["params"] = with_agent_request_id(params) if isinstance(params, dict) else params
     write_message(msg)
 
 
@@ -557,7 +647,7 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     try:
         import env_probe
 
-        env_probe.register_methods(dispatcher)
+        env_probe.register_methods(dispatcher, rust_bridge=_rust_bridge)
         logger.info("env_probe methods registered (system.probe_env)")
     except Exception as e:
         logger.exception(f"failed to register env_probe: {e}")
@@ -1208,18 +1298,13 @@ def main() -> None:
             # 异步执行，主循环立即继续读 stdin，保证 ping 响应不被 LLM 调用阻塞。
             # 快方法（ping / status / agent.list / sidecar.health 等）仍同步派发。
             if _main_executor is not None and method in _slow_methods:
-                _main_executor.submit(
-                    _dispatch_in_executor,
-                    dispatcher,
-                    method,
-                    params,
-                    req_id,
-                    is_notification,
-                )
+                _submit_slow_request(dispatcher, method, params, req_id, is_notification)
                 continue
 
             try:
-                result = dispatcher.dispatch(method, params)
+                result = _dispatch_request(
+                    dispatcher, method, params, None if is_notification else req_id
+                )
                 if not is_notification:
                     send_response(result, req_id)
             except JSONRPCError as e:

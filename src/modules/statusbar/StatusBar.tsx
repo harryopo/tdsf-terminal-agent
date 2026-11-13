@@ -9,6 +9,7 @@ import { AiStatusBarControls } from "@/modules/ai/components/AiStatusBarControls
 import { MockLLMWarning } from "@/modules/ai/components/MockLLMWarning";
 import { LspStatusPill } from "@/modules/lsp";
 import type { WorkspaceEnv } from "@/modules/workspace";
+import type { FileTreeSource } from "@/modules/explorer/lib/useFileTree";
 import { IncognitoIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
@@ -22,6 +23,8 @@ type Props = {
   filePath?: string | null;
   home: string | null;
   onCd: (path: string) => void;
+  directorySource?: FileTreeSource | null;
+  canNavigateDirectories?: boolean;
   onWorkspaceChange: (env: WorkspaceEnv) => void;
   /** TDSF 2026-08-28: 环境选择器 SSH 选项 → 打开新建 SSH 工作区对话框 */
   onWorkspaceSshClick?: () => void;
@@ -41,6 +44,7 @@ type Props = {
    *  「未选择工作区」——开机那个隐式 default 空间的冷终端 cwd 落在家目录，
    *  直接渲染会让人觉得"还没建工作区就已经在工作区里了"。 */
   hasWorkspace: boolean;
+  getUnsavedEditors: () => number;
 };
 
 export function StatusBar({
@@ -48,6 +52,8 @@ export function StatusBar({
   filePath,
   home,
   onCd,
+  directorySource,
+  canNavigateDirectories,
   onWorkspaceChange,
   onWorkspaceSshClick,
   workspaceSwitching,
@@ -56,6 +62,7 @@ export function StatusBar({
   remoteOsInfo = null,
   terminalAddress = null,
   hasWorkspace,
+  getUnsavedEditors,
 }: Props) {
   return (
     <footer
@@ -82,6 +89,8 @@ export function StatusBar({
             filePath={filePath}
             home={home}
             onCd={onCd}
+            source={directorySource}
+            canNavigate={canNavigateDirectories}
           />
         ) : (
           <span
@@ -105,8 +114,8 @@ export function StatusBar({
               side="top"
               className="max-w-64 text-[11px] leading-relaxed"
             >
-              AI can&apos;t see this terminal&apos;s output. Use it for secrets, SSH, or
-              anything you don&apos;t want sent to the model.
+              AI can&apos;t see this terminal&apos;s output. Use it for secrets,
+              SSH, or anything you don&apos;t want sent to the model.
             </TooltipContent>
           </Tooltip>
         ) : null}
@@ -118,7 +127,7 @@ export function StatusBar({
       <div className="flex shrink-0 items-center gap-1.5">
         {/* #160 (2026-09-27): 自动更新的状态条。只有"有话说"时才渲染
             （发现新版 / 下载中 / 待安装 / 失败），平时不占这一格。 */}
-        <UpdateChip />
+        <UpdateChip getUnsavedEditors={getUnsavedEditors} />
         <MockLLMWarning />
         <AgentModeSwitcher />
         <BackendPill />

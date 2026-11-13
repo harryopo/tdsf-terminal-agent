@@ -39,6 +39,7 @@ function updateFixture(over: Record<string, unknown> = {}) {
     version: "1.0.2",
     body: "修了两条命令",
     date: undefined,
+    close: vi.fn(async () => undefined),
     download: vi.fn(async (onEvent?: (e: unknown) => void) => {
       onEvent?.({ event: "Started", data: { contentLength: 219_060_856 } });
       onEvent?.({ event: "Progress", data: { chunkLength: 1_048_576 } });

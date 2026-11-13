@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   checkMark: true,
   checkExit: 0,
   checkThrows: false,
+  versionExit: 0,
   chmodExit: 0,
   hangDetail: false,
   detailThrows: false,
@@ -41,6 +42,9 @@ vi.mock('@tauri-apps/api/core', () => ({
       state.calls.push(`ssh_command::${command}`);
       if (command.includes('command -v')) {
         if (state.checkThrows) return Promise.reject(new Error('会话已断开'));
+        if (state.checkMark && command.includes('--version') && state.versionExit !== 0) {
+          return Promise.resolve({ ok: true, output: '', stderr: 'Exec format error', exitCode: 2, duration: 0.1 });
+        }
         return Promise.resolve({
           ok: true,
           output: state.checkMark ? '__TDSF_CARAPACE_YES__\n' : '',
@@ -53,7 +57,7 @@ vi.mock('@tauri-apps/api/core', () => ({
         state.calls.push('mkdir');
         return Promise.resolve({
           ok: true,
-          output: '__TDSF_HOME__/root',
+          output: `${PROBE_MARK}\n/root\n`,
           stderr: '',
           exitCode: 0,
           duration: 0.1,
@@ -101,6 +105,7 @@ import {
   invalidateRemoteCarapaceCache,
   remoteCarapaceInstalled,
 } from '@/lib/param-complete-client';
+import { PROBE_MARK } from '@/lib/ssh-bridge';
 import { CARAPACE_CHANGED_EVENT } from '@/lib/sshCarapaceEvents';
 import {
   installCarapaceTarget,
@@ -125,6 +130,7 @@ beforeEach(() => {
   state.checkMark = true;
   state.checkExit = 0;
   state.checkThrows = false;
+  state.versionExit = 0;
   state.chmodExit = 0;
   state.hangDetail = false;
   state.detailThrows = false;
@@ -202,6 +208,16 @@ describe('listCarapaceTargets', () => {
 });
 
 describe('probeCarapaceTarget', () => {
+  it('does not mark a failed install as usable just because its executable exists', async () => {
+    state.chmodExit = 126;
+    state.versionExit = 126;
+    expect((await installCarapaceTarget(7)).ok).toBe(false);
+    const probe = await probeCarapaceTarget(7);
+    expect(probe.state).toBe('error');
+    expect(probe.detail).toContain('Exec format error');
+    expect(await remoteCarapaceInstalled(7)).toBe(false);
+  });
+
   it('有标记 = 已安装', async () => {
     state.checkMark = true;
     expect(await probeCarapaceTarget(7)).toEqual({ state: 'installed' });

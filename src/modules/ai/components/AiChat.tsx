@@ -21,11 +21,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
-// 教学模式的会话证据状态（不是按模型文本猜测的置信度分数）。
-import {
-  assessSessionEvidence,
-  type EvidenceAssessment,
-} from "@/lib/confidence/client";
 import { cn } from "@/lib/utils";
 import {
   ArrowRight01Icon,
@@ -42,7 +37,7 @@ import type {
   UIMessage,
   UIMessagePart,
 } from "ai";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { isLiveMessage, LiveMessageProvider } from "../lib/autoTypeProvenance";
 import { sendMessage } from "../store/chatRuntime";
 import { useChatStore } from "../store/chatStore";
@@ -50,16 +45,9 @@ import {
   isAwaitingUser,
   useNeedsYouWait,
 } from "../store/needsYouWaitStore";
-// P1-2: 会话证据面板
-import {
-  evidenceLabel,
-  evidenceTime,
-  fetchEvidence,
-  groupEvidence,
-  type EvidenceItem,
-} from "../lib/evidence";
 // Task 6.5: sidecar needs_you 审批闭环（approval 类请求渲染四层审批卡）
 import { NeedsYouApprovalCards } from "./NeedsYouApprovalCards";
+import { NeedsYouApprovalFallback } from "../lib/needsYouApprovalContext";
 // P2-1: teach 教学卡片（6 大板块分区渲染）
 import { shouldRenderTeachCard, stripTeachOutputMarker } from "./teachParser";
 import { TeachCard } from "./TeachCard";
@@ -194,9 +182,6 @@ export function AiChatView({
     status === "streaming" && lastMessage?.role === "assistant"
       ? lastMessage.id
       : null;
-  const lastAssistantMessageId = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant")?.id;
   const step = useChatStore((s) => s.agentMeta.step);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   // #133 本会话有 needs_you 挂着 = 整轮停在"等你回答"上，不是 AI 在想事情。
@@ -220,18 +205,22 @@ export function AiChatView({
 
   if (messages.length === 0) {
     return (
+      <NeedsYouApprovalCards>
       <Conversation>
         <ConversationContent>
           <ConversationEmptyState
             title="Ask TDSF anything"
             description="Explain command output, fix errors, generate snippets, or run a task."
           />
+          <NeedsYouApprovalFallback />
         </ConversationContent>
       </Conversation>
+      </NeedsYouApprovalCards>
     );
   }
 
   return (
+    <NeedsYouApprovalCards>
     <Conversation>
       <ConversationContent className="gap-3 p-3">
         {messages.map((m) => (
@@ -243,14 +232,13 @@ export function AiChatView({
               message={m}
               onApproval={onApproval}
               streaming={m.id === streamingMessageId}
-              showEvidence={m.id === lastAssistantMessageId}
             />
           </LiveMessageProvider>
         ))}
         {/* Task 6.5: sidecar needs_you 审批闭环——approval 类 HITL 请求渲染
             四层审批卡（semantic/command/explanation/impact），三按钮经
             needs_you.respond RPC 回传 Python 唤醒阻塞的工具线程 */}
-        <NeedsYouApprovalCards />
+        <NeedsYouApprovalFallback />
         {compactionNotice && (
           <CompactionNotice
             droppedCount={compactionNotice.droppedCount}
@@ -290,153 +278,12 @@ export function AiChatView({
             </button>
           </div>
         )}
-        {/* P1-2: 会话证据面板（AI 依据的真实工具调用，可核验） */}
-        <EvidencePanel />
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
+    </NeedsYouApprovalCards>
   );
 }
-
-// ============================================================================
-// EvidencePanel — 会话证据折叠区（P1-2）
-// ============================================================================
-// TDSF 2026-08-31 (问题4修复): 用户实测反馈"证据区展开只有一句
-// 『本次会话暂无工具调用记录（纯问答无需工具）』很鸡肋"。改为：
-// 无工具调用记录时证据区整体不渲染（不再显示空说明）。
-// 数据获取时机：
-//   1. mount / 会话切换 → 拉取一次（原先点开才拉，无法判断是否该渲染）
-//   2. agent 一轮结束（agentMeta.status 进入 idle/error）→ 重拉，
-//      捕获本轮新产生的工具调用（新调用出现后证据区重新出现）
-
-const EvidencePanel = memo(function EvidencePanel() {
-  const sessionId = useChatStore((s) => s.activeSessionId);
-  const agentStatus = useChatStore((s) => s.agentMeta.status);
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<EvidenceItem[]>([]);
-  const [fetched, setFetched] = useState(false);
-  const prevStatusRef = useRef(agentStatus);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    let cancelled = false;
-    void fetchEvidence(sessionId).then((evs) => {
-      if (!cancelled) {
-        setItems(evs);
-        setFetched(true);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
-
-  // agent 一轮结束 → 重拉（流式/审批中证据仍在增长，结束时才完整）
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = agentStatus;
-    if (!sessionId || prev === agentStatus) return;
-    if (agentStatus === "idle" || agentStatus === "error") {
-      void fetchEvidence(sessionId).then((evs) => {
-        setItems(evs);
-        setFetched(true);
-      });
-    }
-  }, [agentStatus, sessionId]);
-
-  // 无会话 / 首拉未完成 / 无工具调用 → 整体不渲染（问题4修复核心）
-  if (!sessionId || !fetched || items.length === 0) return null;
-
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="not-prose"
-    >
-      <CollapsibleTrigger
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md border border-border/40",
-          "bg-card/40 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground",
-          "transition-colors hover:bg-muted/40",
-        )}
-      >
-        <span className="size-1.5 shrink-0 rounded-full bg-sky-500/70" />
-        <span className="font-medium">证据</span>
-        {!open && (
-          <span className="tabular-nums">（{items.length} 条工具调用）</span>
-        )}
-        <span className="ml-auto">{open ? "收起" : "展开"}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-1 space-y-1">
-        {/* T10.2 (2026-09-01): 三段分组——收集→执行→验证（空组隐藏，
-            组标题轻量小灰字，条目渲染保持原样） */}
-        {(() => {
-          const groups = groupEvidence(items);
-          const sections: { key: string; label: string; rows: typeof items }[] =
-            [
-              { key: "collect", label: "收集 · 只读探查", rows: groups.collect },
-              { key: "execute", label: "执行 · 写操作", rows: groups.execute },
-              { key: "verify", label: "验证 · 写后确认", rows: groups.verify },
-            ];
-          return sections
-            .filter((sec) => sec.rows.length > 0)
-            .map((sec) => (
-              <div key={sec.key} className="space-y-1">
-                <div className="px-2.5 text-[10px] font-medium tracking-wide text-muted-foreground/60">
-                  {sec.label}
-                </div>
-                {sec.rows.map((ev, i) => (
-                  <div
-                    key={`${ev.timestamp}-${sec.key}-${i}`}
-                    className="rounded-md border border-border/30 bg-muted/20 px-2.5 py-1.5"
-                  >
-                    <div className="flex items-center gap-1.5 text-[10.5px]">
-                      <span
-                        className={cn(
-                          "size-1 rounded-full",
-                          ev.status === "error" || ev.status === "rejected"
-                            ? "bg-destructive"
-                            : ev.status === "started"
-                              ? "bg-amber-500"
-                              : "bg-emerald-500",
-                        )}
-                      />
-                      <span className="font-medium text-foreground">
-                        {evidenceLabel(ev.tool_name)}
-                      </span>
-                      {ev.status !== "completed" && (
-                        <span className="text-muted-foreground/70">
-                          {ev.status}
-                        </span>
-                      )}
-                      {ev.agent && ev.agent !== "main" && (
-                        <span className="rounded bg-muted px-1 py-px text-[9.5px] text-muted-foreground">
-                          {ev.agent}
-                        </span>
-                      )}
-                      <span className="ml-auto tabular-nums text-muted-foreground/60">
-                        {evidenceTime(ev.timestamp)}
-                      </span>
-                    </div>
-                    {ev.detail && (
-                      <code className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
-                        {ev.detail}
-                      </code>
-                    )}
-                    {ev.result && (
-                      <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground/80">
-                        {ev.result}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ));
-        })()}
-      </CollapsibleContent>
-    </Collapsible>
-  );
-});
 
 const CompactionNotice = memo(function CompactionNotice({
   droppedCount,
@@ -484,93 +331,14 @@ const ContinueRow = memo(function ContinueRow({
   );
 });
 
-// 教学模式与确认模式展示最新助手消息的会话证据状态；它不把历史工具结果伪装成
-// 当前段落逐句引用，也不按模型文本关键词推断“置信度”。
-const ConfidenceMarker = memo(function ConfidenceMarker({
-  message,
-  streaming,
-  showEvidence,
-  children,
-}: {
-  message: UIMessage;
-  streaming: boolean;
-  showEvidence: boolean;
-  children: React.ReactNode;
-}) {
-  const [result, setResult] = useState<EvidenceAssessment | null>(null);
-  // 仅教学/确认模式显示：教学要给学生依据、确认要在审批前看到依据；
-  // observe/auto 不增加证据状态噪声（用户 2026-09-18 钦定）。
-  const agentMode = useChatStore((s) => s.agentMode);
-  const sessionId = useChatStore((s) => s.activeSessionId);
-
-  useEffect(() => {
-    if (streaming) {
-      setResult(null);
-      return;
-    }
-    if (
-      message.role !== "assistant" ||
-      (agentMode !== "teach" && agentMode !== "confirm") ||
-      !showEvidence
-    ) {
-      setResult(null);
-      return;
-    }
-    let cancelled = false;
-    void assessSessionEvidence(sessionId).then((r) => {
-      if (!cancelled) setResult(r);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [streaming, message.role, agentMode, sessionId, showEvidence]);
-
-  const evidenceSourceNames = result
-    ? [...new Set(result.sources.map((source) => evidenceLabel(source.toolName)))].join("、")
-    : "";
-  const evidenceLabelText =
-    result?.tier === "verified"
-      ? `操作已验证${evidenceSourceNames ? ` · 来源：${evidenceSourceNames}` : ""}`
-      : result?.tier === "grounded"
-        ? `已有依据${evidenceSourceNames ? ` · 来源：${evidenceSourceNames}` : ""}`
-        : result
-          ? `待核验 · ${result.reason}`
-          : null;
-  const evidenceTone = result?.tier === "verified"
-    ? "text-emerald-700 dark:text-emerald-400"
-    : result?.tier === "grounded"
-      ? "text-muted-foreground"
-      : "text-amber-700 dark:text-amber-400";
-  const evidenceTitle = `会话证据状态：${result?.reason ?? ""}；不代表这段回答逐句已被证明。`;
-
-  return (
-    <div>
-      {children}
-      {evidenceLabelText ? (
-        <div
-          className={cn(
-            "mt-1.5 text-[10px] font-medium",
-            evidenceTone,
-          )}
-          title={evidenceTitle}
-        >
-          {evidenceLabelText}
-        </div>
-      ) : null}
-    </div>
-  );
-});
-
 const RenderedMessage = memo(function RenderedMessage({
   message,
   onApproval,
   streaming,
-  showEvidence,
 }: {
   message: UIMessage;
   onApproval: (id: string, approved: boolean, reason?: string) => void;
   streaming: boolean;
-  showEvidence: boolean;
 }) {
   // Index of the trailing text part — only that one is "live" mid-stream.
   // Earlier text parts (separated by tool calls) are already finalized.
@@ -612,44 +380,38 @@ const RenderedMessage = memo(function RenderedMessage({
   return (
     <Message from={message.role}>
       <MessageContent>
-        {/* TDSF: ConfidenceMarker 包裹 assistant 消息，流式结束后显示置信度标记 (T2.3) */}
-        <ConfidenceMarker
-          message={message}
-          streaming={streaming}
-          showEvidence={showEvidence}
-        >
-          <div className="flex flex-col gap-2">
-            {groups.map((g) => {
-              if (g.kind === "reads") {
-                return (
-                  <PartAppear key={`${message.id}-${g.key}`}>
-                    <ReadGroup parts={g.parts} />
-                  </PartAppear>
-                );
-              }
-              const isReadSingle =
-                partType(g.part) === "tool-read_file" &&
-                ((g.part as { state?: string }).state ?? "") !==
-                  "approval-requested";
-              if (isReadSingle) {
-                return (
-                  <PartAppear key={`${message.id}-${g.key}`}>
-                    <ReadRow part={g.part} />
-                  </PartAppear>
-                );
-              }
+        <div className="flex flex-col gap-2">
+          {groups.map((g) => {
+            if (g.kind === "reads") {
               return (
                 <PartAppear key={`${message.id}-${g.key}`}>
-                  <RenderedPart
-                    part={g.part}
-                    onApproval={onApproval}
-                    streaming={streaming && g.idx === lastTextIdx}
-                  />
+                  <ReadGroup parts={g.parts} />
                 </PartAppear>
               );
-            })}
-          </div>
-        </ConfidenceMarker>
+            }
+            const isReadSingle =
+              partType(g.part) === "tool-read_file" &&
+              ((g.part as { state?: string }).state ?? "") !==
+                "approval-requested";
+            if (isReadSingle) {
+              return (
+                <PartAppear key={`${message.id}-${g.key}`}>
+                  <ReadRow part={g.part} />
+                </PartAppear>
+              );
+            }
+            return (
+              <PartAppear key={`${message.id}-${g.key}`}>
+                <RenderedPart
+                  part={g.part}
+                  onApproval={onApproval}
+                  streaming={streaming && g.idx === lastTextIdx}
+                  turnEnded={!streaming}
+                />
+              </PartAppear>
+            );
+          })}
+        </div>
       </MessageContent>
     </Message>
   );
@@ -838,10 +600,12 @@ const RenderedPart = memo(function RenderedPart({
   part,
   onApproval,
   streaming,
+  turnEnded,
 }: {
   part: AnyPart;
   onApproval: (id: string, approved: boolean, reason?: string) => void;
   streaming: boolean;
+  turnEnded: boolean;
 }) {
   if (part.type === "text") {
     const text = (part as unknown as { text: string }).text;
@@ -899,6 +663,7 @@ const RenderedPart = memo(function RenderedPart({
       <RenderedTool
         part={part as unknown as AnyToolPart}
         onApproval={onApproval}
+        turnEnded={turnEnded}
       />
     );
   }
@@ -909,9 +674,11 @@ const RenderedPart = memo(function RenderedPart({
 const RenderedTool = memo(function RenderedTool({
   part,
   onApproval,
+  turnEnded,
 }: {
   part: AnyToolPart;
   onApproval: (id: string, approved: boolean, reason?: string) => void;
+  turnEnded: boolean;
 }) {
   const toolName =
     part.type === "dynamic-tool"
@@ -923,7 +690,7 @@ const RenderedTool = memo(function RenderedTool({
   //   ① AI SDK 审批状态机（part → approval-responded，AgentRunBridge 的
   //      approvalsPending/awaiting-approval 状态随之推进——旧状态机不破坏），
   //      note 作为 reason 原生透传模型；
-  //   ② ⚡会话免审标志兜底置位（幂等，⚡按钮本身已置位）。
+  //   ② 此 SDK 审批父回调维护前端会话免审标志，通用按钮只回传意图。
   const approvalId =
     part.state === "approval-requested" ? part.approval.id : null;
   const handleApprovalRespond = useCallback(
@@ -941,7 +708,9 @@ const RenderedTool = memo(function RenderedTool({
     return (
       <Tool
         toolName={toolName}
+        toolCallId={part.toolCallId}
         state={part.state}
+        turnEnded={turnEnded}
         input={part.input}
         onApprovalRespond={handleApprovalRespond}
       />
@@ -951,7 +720,9 @@ const RenderedTool = memo(function RenderedTool({
   return (
     <Tool
       toolName={toolName}
+      toolCallId={part.toolCallId}
       state={part.state}
+      turnEnded={turnEnded}
       input={part.input}
       output={"output" in part ? part.output : undefined}
       errorText={"errorText" in part ? part.errorText : undefined}

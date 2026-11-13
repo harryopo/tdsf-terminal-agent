@@ -49,6 +49,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Completion resource gate tests (offline fixtures)
+        run: pnpm test:carapace
+
       - name: React Compiler healthcheck (advisory)
         run: pnpm exec react-compiler-healthcheck
         continue-on-error: true
@@ -142,6 +145,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install Bash with PROMPT_COMMAND array support
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix)/bin/bash" --version
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: swatinem/rust-cache@v2
@@ -151,6 +163,17 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+
+      - name: Keep Windows updater ZIP support disabled
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $zipGraph = cargo tree --locked --target x86_64-pc-windows-msvc --edges normal,build --prefix none --color never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($zipGraph -match '^tdsf-terminal-agent v')) { throw 'Dependency graph is missing the app root' }
+          if ($zipGraph -match '^zip v') { throw 'Windows updater ZIP dependency unexpectedly enabled' }
+          Write-Output 'Windows normal/build graph excludes zip'
 
       # 与 rust 任务同理：ci 不构建 PyInstaller sidecar，放占位目录满足打包资源校验
       - name: Stub bundled sidecar resource (not built in CI)

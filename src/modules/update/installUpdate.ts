@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window";
 import { stop as stopSidecar } from "@/lib/sidecar-bridge";
 import { stopGeneration, useChatStore } from "@/modules/ai/store/chatStore";
 import { useNeedsYouWait } from "@/modules/ai/store/needsYouWaitStore";
@@ -13,7 +14,7 @@ import {
 import { useUpdateStore } from "./updateStore";
 
 export type InstallDeps = {
-  blockers: () => InstallBlocker[];
+  blockers: () => InstallBlocker[] | Promise<InstallBlocker[]>;
   cancelTurn: () => void;
   disconnectSsh: () => Promise<void>;
   closePty: () => Promise<void>;
@@ -41,9 +42,33 @@ function countPendingExecutions(): number {
  * 每一步都 best-effort：一条 SSH 断不开不该让安装整件事失败。
  */
 export const liveInstallDeps: InstallDeps = {
-  blockers: () => {
+  blockers: async () => {
+    let windowBlocker: InstallBlocker | undefined;
+    try {
+      const currentLabel = getCurrentWindow().label;
+      const windows = await getAllWindows();
+      if (!windows.some((window) => window.label === currentLabel)) {
+        throw new Error("current-window-missing");
+      }
+      if (
+        windows.some(
+          (window) =>
+            window.label !== currentLabel && /^main(?:-\d+)?$/.test(window.label),
+        )
+      ) {
+        windowBlocker = {
+          key: "other-windows",
+          text: "安装更新会退出整个应用，请先保存并关闭其他主窗口，再回到本窗口安装。",
+        };
+      }
+    } catch {
+      windowBlocker = {
+        key: "window-state",
+        text: "无法确认其他窗口的编辑状态，暂不安装更新。请稍后重试。",
+      };
+    }
     const meta = useChatStore.getState().agentMeta;
-    return collectInstallBlockers({
+    const blockers = collectInstallBlockers({
       sidecarApprovals: useNeedsYouWait.getState().pending.length,
       hostApprovals: useSshStore.getState().pendingApprovals.length,
       agentRunning:
@@ -52,6 +77,8 @@ export const liveInstallDeps: InstallDeps = {
         meta.status === "awaiting-approval",
       pendingExecutions: countPendingExecutions(),
     });
+    if (windowBlocker) blockers.push(windowBlocker);
+    return blockers;
   },
   cancelTurn: () => stopGeneration(useChatStore.getState().activeSessionId),
   disconnectSsh: async () => {
@@ -89,23 +116,44 @@ export async function installHeldUpdate(
   deps: InstallDeps = liveInstallDeps,
 ): Promise<InstallOutcome> {
   const store = useUpdateStore.getState();
-  const blockers = deps.blockers();
-  if (blockers.length > 0) {
-    store.refuseInstall(blockers);
-    return { ok: false, reason: "blocked", blockers };
+  if (store.phase !== "ready") {
+    return {
+      ok: false,
+      reason: "failed",
+      message:
+        store.phase === "installing"
+          ? "更新正在安装，请勿重复操作。"
+          : "更新尚未下载完成，请等待下载完成后再安装。",
+    };
   }
-  if (!getHeldUpdate()) {
+  const update = getHeldUpdate();
+  if (!update) {
     const message = "手上没有待安装的更新，请先检查更新。";
     store.markError(message);
     return { ok: false, reason: "failed", message };
   }
   store.markInstalling();
-  await bestEffort("cancel-turn", deps.cancelTurn);
-  await bestEffort("disconnect-ssh", deps.disconnectSsh);
-  await bestEffort("close-pty", deps.closePty);
-  await bestEffort("kill-lsp", deps.killLsp);
-  await bestEffort("stop-sidecar", deps.stopSidecar);
   try {
+    const blockers = await deps.blockers();
+    if (blockers.length > 0) {
+      store.refuseInstall(blockers);
+      return { ok: false, reason: "blocked", blockers };
+    }
+    await bestEffort("cancel-turn", deps.cancelTurn);
+    await bestEffort("disconnect-ssh", deps.disconnectSsh);
+    await bestEffort("close-pty", deps.closePty);
+    await bestEffort("kill-lsp", deps.killLsp);
+    await bestEffort("stop-sidecar", deps.stopSidecar);
+    const finalBlockers = await deps.blockers();
+    if (finalBlockers.length > 0) {
+      useUpdateStore.getState().refuseInstall(finalBlockers);
+      return { ok: false, reason: "blocked", blockers: finalBlockers };
+    }
+    if (getHeldUpdate() !== update) {
+      const message = "待安装的更新已变化，请重新检查并下载更新。";
+      useUpdateStore.getState().markError(message);
+      return { ok: false, reason: "failed", message };
+    }
     await deps.install();
     // Windows 走不到这里（进程已退出）；macOS/Linux 装完还要 relaunch
     releaseHeldUpdate();

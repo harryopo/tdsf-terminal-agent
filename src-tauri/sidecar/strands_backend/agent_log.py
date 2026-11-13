@@ -44,8 +44,11 @@ import os
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+from rpc_request_context import with_agent_request_id
 
 logger = logging.getLogger("sidecar.strands_backend.agent_log")
 
@@ -57,14 +60,7 @@ ROTATE_BYTES = 10 * 1024 * 1024
 _DEFAULT_TAIL_LINES = 200
 # tail 单行 content 上限（读侧再截一次，防历史超大行刷爆 RPC 响应）
 _TAIL_CONTENT_LEN = 2000
-
-# 仅用于落盘的结构化字段；文本凭据规则仍由 tools/_redact.py 维护。
-_CREDENTIAL_FIELD = re.compile(
-    r"(?:password|passwd|pwd|secret|secretkey|secretaccesskey|apikey|accesstoken|authtoken|"
-    r"refreshtoken|idtoken|token|privatekey|authorization|cookie)$",
-    re.IGNORECASE,
-)
-_JSON_FIELD = re.compile(r'("(?:[^"\\]|\\.)*")\s*:\s*')
+_TAIL_MAX_BYTES = 2 * 1024 * 1024
 
 # 全局锁（写 + 轮转 + 统计）
 _lock = threading.Lock()
@@ -115,11 +111,23 @@ def log_event(
         True=写入成功；False=静默失败（计数器 +1）
     """
     try:
+        from .diagnostics import sanitize_diagnostic
+
+        clipped = _clip(content)
+        metadata = with_agent_request_id(meta or {})
+        json.dumps(metadata, ensure_ascii=False)
+        safe_meta = sanitize_diagnostic(metadata)
+        if len(json.dumps(safe_meta, ensure_ascii=False)) > 8000:
+            safe_meta = {"truncated": True}
+            if "rpc_request_id" in metadata:
+                safe_meta["rpc_request_id"] = metadata["rpc_request_id"]
         entry: dict[str, Any] = {
+            "event_id": str(uuid.uuid4()),
             "ts": round(time.time(), 3),
             "type": event_type,
-            "content": _clip(content),
-            "meta": _redact_log_value(meta or {}),
+            "content": clipped,
+            "content_truncated": len(clipped) > _MAX_CONTENT_LEN,
+            "meta": safe_meta,
         }
         path = _log_file(session_id)
         with _lock:
@@ -141,56 +149,6 @@ def log_event(
         return False
 
 
-def _redact_log_value(value: Any) -> Any:
-    """脱敏独立日志副本，保留事件总线与实际工具参数/结果不变。"""
-    from strands_backend.tools._redact import redact_sensitive_text
-
-    if isinstance(value, dict):
-        return {
-            (redact_sensitive_text(key) if isinstance(key, str) else key): "<REDACTED>"
-            if isinstance(key, str) and _CREDENTIAL_FIELD.search(re.sub(r"[-_]", "", key))
-            else _redact_log_value(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_redact_log_value(item) for item in value]
-    if isinstance(value, str):
-        # started 工具参数在桥接处已序列化，不能只处理 dict/list。
-        try:
-            decoded = json.loads(value)
-        except (ValueError, RecursionError):
-            decoded = None
-        if isinstance(decoded, (dict, list, str)):
-            return json.dumps(_redact_log_value(decoded), ensure_ascii=False)
-        return redact_sensitive_text(_redact_json_fields(value))
-    return value
-
-
-def _redact_json_fields(text: str) -> str:
-    """处理命令/Markdown/JSONL 中的 JSON 字段，值边界由标准 JSON 解码器判定。"""
-    decoder = json.JSONDecoder()
-    parts: list[str] = []
-    cursor = 0
-    for match in _JSON_FIELD.finditer(text):
-        if match.start() < cursor:
-            continue
-        try:
-            key = json.loads(match.group(1))
-        except ValueError:
-            continue
-        if not _CREDENTIAL_FIELD.search(re.sub(r"[-_]", "", key)):
-            continue
-        try:
-            _, end = decoder.raw_decode(text, match.end())
-        except (ValueError, RecursionError):
-            # 已识别凭据字段却无法确定值尾端，舍弃尾部而非留下凭据片段。
-            end = len(text)
-        parts.extend((text[cursor:match.end()], '"<REDACTED>"'))
-        cursor = end
-    parts.append(text[cursor:])
-    return "".join(parts)
-
-
 def _clip(content: Any) -> str:
     """内容 → 脱敏摘要字符串（≤2000 字符）"""
     if content is None:
@@ -198,7 +156,12 @@ def _clip(content: Any) -> str:
     # 日志默认落盘且包含用户输入、环境片段和工具参数；与送入 LLM 的终端
     # 回读使用同一套脱敏规则，避免命令里的 token/密码永久写进 JSONL。
     try:
-        safe_content = _redact_log_value(content)
+        from .diagnostics import sanitize_diagnostic
+
+        # Reject cyclic/unsupported log values without falling back to raw repr.
+        if not isinstance(content, str):
+            json.dumps(content, ensure_ascii=False)
+        safe_content = sanitize_diagnostic(content)
         text = (
             safe_content if isinstance(safe_content, str)
             else json.dumps(safe_content, ensure_ascii=False)
@@ -264,7 +227,7 @@ def tail(
         session_id 给定: {ok, session_id, lines, returned, ...stats}
         session_id 缺省: {ok, files: [...], lines: <最新会话 tail>}
     """
-    n = lines if lines and lines > 0 else _DEFAULT_TAIL_LINES
+    n = min(lines if isinstance(lines, int) and lines > 0 else _DEFAULT_TAIL_LINES, 1000)
     if not session_id:
         files = list_sessions()
         latest = files[0]["session_id"] if files else None
@@ -287,14 +250,28 @@ def _tail_one(
     """单会话 tail（从文件尾部回读 lines 行，倒序过滤后正序返回）"""
     path = _log_file(session_id)
     if not path.exists():
-        return {"lines": [], "returned": 0}
+        return {"lines": [], "returned": 0, "window_limited": False,
+                "archive_available": False, "invalid_lines": 0}
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            all_lines = f.readlines()
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            start = max(0, size - _TAIL_MAX_BYTES)
+            f.seek(start)
+            data = f.read(_TAIL_MAX_BYTES)
+        # A byte window may begin inside UTF-8 or JSON; discard that fragment.
+        if start:
+            data = data.partition(b"\n")[2]
+        partial_tail = bool(data) and not data.endswith(b"\n")
+        if partial_tail:
+            data = data.rpartition(b"\n")[0]
+        all_lines = data.decode("utf-8", errors="replace").splitlines()
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e), "lines": [], "returned": 0}
 
     picked: list[dict[str, Any]] = []
+    invalid_lines = 0
+    from .diagnostics import sanitize_diagnostic
+
     for raw in reversed(all_lines):
         if len(picked) >= lines:
             break
@@ -303,20 +280,28 @@ def _tail_one(
             continue
         try:
             entry = json.loads(raw)
+            if not isinstance(entry, dict):
+                raise ValueError("not an event")
         except Exception:  # noqa: BLE001 — 坏行跳过（半行写入等）
+            invalid_lines += 1
             continue
         if event_type and entry.get("type") != event_type:
             continue
+        entry = sanitize_diagnostic(entry)
         if isinstance(entry.get("content"), str):
             c = entry["content"]
             if len(c) > _TAIL_CONTENT_LEN:
                 entry["content"] = c[:_TAIL_CONTENT_LEN] + "…"
+                entry["content_truncated"] = True
         picked.append(entry)
     picked.reverse()
     return {
         "lines": picked,
         "returned": len(picked),
-        "total_in_file": len(all_lines),
+        "total_in_file": len(all_lines) if not start and not partial_tail else None,
+        "window_limited": bool(start) or partial_tail or len(all_lines) > len(picked),
+        "archive_available": path.with_name(path.name + ".1").exists(),
+        "invalid_lines": invalid_lines,
         **{k: v for k, v in _stats_snapshot().items() if k != "written"},
     }
 
@@ -337,9 +322,21 @@ def _handle_bus_event(event: Any) -> None:
         {tool_name, params, status: started|completed|error, result?}
     """
     try:
-        if getattr(event, "event_type", None) != "tool_call":
+        event_type = getattr(event, "event_type", None)
+        if event_type not in ("tool_call", "needs_you"):
             return
         payload = getattr(event, "payload", None) or {}
+        if event_type == "needs_you":
+            request = payload.get("request") or {}
+            log_event(
+                str(getattr(event, "session_id", "") or ""), "needs_you",
+                {"title": request.get("title", payload.get("title", "")),
+                 "description": request.get("description", payload.get("description", ""))},
+                meta={"request_id": request.get("id"),
+                      "needs_type": request.get("type", payload.get("needs_type")),
+                      "event": payload.get("event"), "status": request.get("status")},
+            )
+            return
         tool_name = str(payload.get("tool_name", "?"))
         status = str(payload.get("status", ""))
         session_id = str(getattr(event, "session_id", "") or "")
@@ -378,7 +375,7 @@ def _subscribe_bus() -> None:
 
         _bus_unsub = get_global_bus().subscribe(
             _handle_bus_event,
-            event_type="tool_call",
+            event_type=None,
             name="agent_log",
         )
         _bus_subscribed = True
@@ -425,6 +422,9 @@ def register_methods(dispatcher: Any) -> None:
         return tail(session_id=session_id, lines=lines, event_type=type)
 
     dispatcher.register("debug.agent_log_tail", _agent_log_tail)
+    from .diagnostics import export_snapshot
+
+    dispatcher.register("debug.export_session_diagnostics", export_snapshot)
     _subscribe_bus()
     logger.info("debug.* methods registered (agent_log_tail) + tool_call 桥接")
 

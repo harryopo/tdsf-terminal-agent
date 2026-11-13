@@ -71,7 +71,7 @@ def test_set_backend_unavailable_is_fail_closed() -> None:
         facade.invoke_agent("main", {"input": "hello"})
 
 
-def test_registers_five_rpcs_and_dispatches_list_info_invoke() -> None:
+def test_registers_six_rpcs_and_dispatches_list_info_invoke() -> None:
     dispatcher = FakeDispatcher()
     facade.set_backend(lambda agent_id, input, state: {"agent": agent_id, "input": input})
     facade.register_methods(dispatcher)
@@ -82,6 +82,7 @@ def test_registers_five_rpcs_and_dispatches_list_info_invoke() -> None:
         "agent.list",
         "agent.info",
         "agent.configure",
+        "agent.set_mode",
     }
     listed = dispatcher.dispatch("agent.list")
     assert listed["agents"] == [{"name": "main", "class": "StrandsAgentAdapter"}]
@@ -89,6 +90,16 @@ def test_registers_five_rpcs_and_dispatches_list_info_invoke() -> None:
     assert info["name"] == "main"
     invoked = dispatcher.dispatch("agent.invoke", {"name": "main", "state": {"input": "pwd"}})
     assert invoked == {"agent": "main", "input": "pwd"}
+    mode_result = dispatcher.dispatch(
+        "agent.set_mode",
+        {
+            "session_id": "s1",
+            "stream_id": "00000000-0000-4000-8000-000000000001",
+            "mode": "auto",
+            "revision": 1,
+        },
+    )
+    assert mode_result == {"ok": False, "reason": "not_active"}
     # #69: 停止 RPC 在 set_backend 注入的裸 callable（非真 adapter）下 fail-soft，
     # 不能抛错——否则前端点停止会看到 IPC 失败而不是"没东西可停"。
     cancelled = dispatcher.dispatch("agent.cancel", {"session_id": "s1", "reason": "用户点击停止"})
@@ -124,7 +135,7 @@ def test_configure_rejects_empty_api_key(monkeypatch: pytest.MonkeyPatch) -> Non
     create.assert_not_called()
 
 
-def test_configure_saves_creates_and_updates_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_creates_saves_and_updates_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[object] = []
     model = object()
     adapter = MagicMock()
@@ -146,7 +157,7 @@ def test_configure_saves_creates_and_updates_in_order(monkeypatch: pytest.Monkey
     )
     assert result["ok"] is True
     assert result["llm_call_set"] is True
-    assert [entry[0] for entry in events] == ["save", "create", "update"]
+    assert [entry[0] for entry in events] == ["create", "save", "update"]
     assert events[0][1] is events[1][1]
     assert events[2][1] is model
     adapter.update_model.assert_called_once_with(model)

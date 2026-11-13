@@ -33,6 +33,7 @@ type Candidate = { value: string; description?: string; tag?: string };
 
 /** param_complete 的回复内容（按测试设定） */
 let paramReply: Candidate[] = [];
+let writes: string[] = [];
 /** gateMode=true 时请求挂在闸门上，由测试手动放行（用来验"不并发"） */
 let gateMode = false;
 let gates: Array<() => void> = [];
@@ -67,10 +68,6 @@ function key(k: string, over: Partial<KeyboardEvent> = {}): KeyboardEvent {
 }
 
 /** 同步连打（同一宏任务内）——只用来构造"缓冲区已成形"的前置状态 */
-function type(text: string, leafId = 1): void {
-  for (const ch of text) completionKeyHandler(leafId, key(ch));
-}
-
 /** 人速打字：每键之间留 gapMs（小于节流窗口 ⇒ 应当合并成一条请求） */
 async function typeHuman(text: string, gapMs = 40, leafId = 1): Promise<void> {
   for (const ch of text) {
@@ -87,6 +84,7 @@ beforeEach(async () => {
   paramReply = [];
   gateMode = false;
   gates = [];
+  writes = [];
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(((method: string) => {
     if (method !== "param_complete") return Promise.resolve([]);
@@ -97,7 +95,7 @@ beforeEach(async () => {
     }
     return Promise.resolve(paramReply);
   }) as typeof invoke);
-  initCompletionInjection(() => null, () => {});
+  initCompletionInjection(() => null, (_leafId, text) => writes.push(text));
   setLeafEnvironment(1, "windows");
   completionKeyHandler(1, key("Enter"));
   await settle();
@@ -138,18 +136,21 @@ describe("#152 参数预测节流", () => {
     expect(paramCalls()[1].current).toBe("checkout"); // 补打用的是最新输入
   });
 
-  it("接受预测之后不再为这半行去问参数（缓冲区已被改写，旧的那次必须撤掉）", async () => {
+  it("接受当前可见参数建议后保留写入且不重新请求或弹回", async () => {
     paramReply = [{ value: "--force", description: "强制", tag: "flag" }];
-    await typeHuman("git che");
+    await typeHuman("git checkout ");
     await settle();
     expect(getCompletionState().visible).toBe(true);
+    expect(getCompletionState().items.some((item) => item.command === "--force")).toBe(true);
     const before = paramCalls().length;
+    expect(before).toBeGreaterThan(0);
 
-    type("ckout"); // 排上一次待跑更新
-    selectCompletionByIndex(0); // 接受 --force：当前 token 被整段改写
+    selectCompletionByIndex(0);
     await settle();
 
-    expect(paramCalls().length).toBe(before); // 没有拿改写中的半行再去请求
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("--force");
+    expect(paramCalls()).toHaveLength(before);
     expect(getCompletionState().visible).toBe(false);
   });
 

@@ -26,6 +26,10 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: m.invoke }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getAllWindows: async () => [{ label: "main" }],
+  getCurrentWindow: () => ({ label: "main" }),
+}));
 vi.mock("@/lib/sidecar-bridge", () => ({ stop: m.sidecarStop }));
 vi.mock("./checkUpdate", () => ({
   getHeldUpdate: m.getHeldUpdate,
@@ -152,12 +156,12 @@ describe("该拒装的四类现场", () => {
     expect(useUpdateStore.getState().phase).toBe("ready");
   });
 
-  it("liveInstallDeps 真的读那四个来源（少一个就会漏判一种现场）", () => {
+  it("liveInstallDeps 真的读那四个来源（少一个就会漏判一种现场）", async () => {
     m.needsYou.pending = [{ reqId: "r1", sessionId: null }];
     m.sshState.pendingApprovals = [{ approvalId: "a1" }];
     m.chatState.agentMeta = { status: "thinking" };
     m.blocksState.agentPending = { 7: 1234 };
-    const keys = liveInstallDeps.blockers().map((b) => b.key);
+    const keys = (await liveInstallDeps.blockers()).map((b) => b.key);
     expect(keys).toEqual([
       "sidecar-approvals",
       "host-approvals",
@@ -166,8 +170,8 @@ describe("该拒装的四类现场", () => {
     ]);
   });
 
-  it("四个来源都空 ⇒ 一条都不报（否则每次安装都会被自己拦住）", () => {
-    expect(liveInstallDeps.blockers()).toEqual([]);
+  it("四个来源都空 ⇒ 一条都不报（否则每次安装都会被自己拦住）", async () => {
+    expect(await liveInstallDeps.blockers()).toEqual([]);
   });
 });
 

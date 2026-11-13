@@ -68,7 +68,7 @@ export function SshExplorerOffline({
         {user}@{host}:{port}
       </div>
       <p className="text-[12px] leading-relaxed text-muted-foreground">
-        文件树需要这条 SSH 连接。这里不显示本地目录，是为了不让人误以为在看服务器。
+        重新连接后可使用远程终端和文件树。
       </p>
       {inFlight ? (
         <div
@@ -98,8 +98,7 @@ export function SshExplorerOffline({
           data-testid="explorer-ssh-offline-failed"
           className="text-[11px] leading-relaxed text-destructive"
         >
-          重连失败：这台服务器拒绝了保存的凭据。可再点一次「重新连接」，或在「新建工作区 →
-          SSH 服务器」里重填密码 / 改用私钥（服务器若只允许密钥登录，密码是连不上的）。
+          重连失败。请查看连接提示后重试。如需更换地址或凭据，请打开「新建工作区 → SSH 服务器」。
         </div>
       ) : null}
     </div>

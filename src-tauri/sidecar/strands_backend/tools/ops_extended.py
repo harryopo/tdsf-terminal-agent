@@ -38,7 +38,9 @@ _SERVICE_ACTIONS: dict[str, str] = {
     "disable": "systemctl disable {svc}",
 }
 
-def invoke_service_manage_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_service_manage_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     action = (params.get("action") or "").strip().lower()
     service = (params.get("service") or "").strip()
     if action not in _SERVICE_ACTIONS:
@@ -55,11 +57,15 @@ def invoke_service_manage_tool(params: dict[str, Any], ctx: ToolContext) -> dict
         ssh_session_id=params.get("ssh_session_id", "") or "",
         timeout=int(params.get("timeout", 30)),
         tool_name="service_manage",
+        sdk_tool_context=sdk_tool_context,
     )
 
 def make_service_manage_tool(ctx: ToolContext):
-    @tool
-    def service_manage(action: str, service: str, ssh_session_id: str = "", timeout: int = 30) -> dict:
+    @tool(context="sdk_tool_context")
+    def service_manage(
+        action: str, service: str, ssh_session_id: str = "", timeout: int = 30,
+        *, sdk_tool_context: Any = None,
+    ) -> dict:
         """管理 systemd 服务（状态/启停/重载/开机自启）。
 
         写操作（start/stop/restart/enable/disable）按权限级别触发审批。
@@ -82,6 +88,7 @@ def make_service_manage_tool(ctx: ToolContext):
                 "timeout": timeout,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     service_manage.__name__ = "service_manage"
@@ -100,7 +107,9 @@ _PACKAGE_ACTIONS: dict[str, str] = {
     "list_installed": "{pm} list installed",
 }
 
-def invoke_package_manage_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_package_manage_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     action = (params.get("action") or "").strip().lower()
     package = (params.get("package") or "").strip()
     pm = (params.get("package_manager") or "").strip().lower() or "dnf"
@@ -118,11 +127,15 @@ def invoke_package_manage_tool(params: dict[str, Any], ctx: ToolContext) -> dict
         ssh_session_id=params.get("ssh_session_id", "") or "",
         timeout=int(params.get("timeout", 120)),
         tool_name="package_manage",
+        sdk_tool_context=sdk_tool_context,
     )
 
 def make_package_manage_tool(ctx: ToolContext):
-    @tool
-    def package_manage(action: str, package: str = "", package_manager: str = "dnf", ssh_session_id: str = "", timeout: int = 120) -> dict:
+    @tool(context="sdk_tool_context")
+    def package_manage(
+        action: str, package: str = "", package_manager: str = "dnf", ssh_session_id: str = "", timeout: int = 120,
+        *, sdk_tool_context: Any = None,
+    ) -> dict:
         """管理软件包（安装/卸载/搜索/更新）。
 
         安装/卸载为写操作，按权限级别触发审批。适合"安装 nginx""查看
@@ -147,6 +160,7 @@ def make_package_manage_tool(ctx: ToolContext):
                 "timeout": timeout,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     package_manage.__name__ = "package_manage"
@@ -166,7 +180,9 @@ _FIREWALL_ACTIONS: dict[str, str] = {
     "remove_service": "firewall-cmd --permanent --remove-service={svc} && firewall-cmd --reload",
 }
 
-def invoke_firewall_manage_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_firewall_manage_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     action = (params.get("action") or "").strip().lower()
     port = (params.get("port") or "").strip()
     service = (params.get("service") or "").strip()
@@ -190,11 +206,15 @@ def invoke_firewall_manage_tool(params: dict[str, Any], ctx: ToolContext) -> dic
         ssh_session_id=params.get("ssh_session_id", "") or "",
         timeout=int(params.get("timeout", 30)),
         tool_name="firewall_manage",
+        sdk_tool_context=sdk_tool_context,
     )
 
 def make_firewall_manage_tool(ctx: ToolContext):
-    @tool
-    def firewall_manage(action: str, port: str = "", service: str = "", ssh_session_id: str = "", timeout: int = 30) -> dict:
+    @tool(context="sdk_tool_context")
+    def firewall_manage(
+        action: str, port: str = "", service: str = "", ssh_session_id: str = "", timeout: int = 30,
+        *, sdk_tool_context: Any = None,
+    ) -> dict:
         """管理 firewalld 防火墙（状态/规则/放行端口与服务）。
 
         增删规则为写操作，按权限级别触发审批。适合"放行 8080 端口"
@@ -219,6 +239,7 @@ def make_firewall_manage_tool(ctx: ToolContext):
                 "timeout": timeout,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     firewall_manage.__name__ = "firewall_manage"
@@ -237,7 +258,9 @@ _SECURITY_CHECKS: dict[str, str] = {
     "quick": "ss -tlnp | awk 'NR>1 {print $4, $6}' | head -10; grep -E 'PermitRootLogin|PasswordAuthentication' /etc/ssh/sshd_config 2>/dev/null | grep -v '^#'",
 }
 
-def invoke_security_audit_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_security_audit_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     scope = (params.get("scope") or "").strip().lower() or "quick"
     if scope not in _SECURITY_CHECKS:
         return {
@@ -252,11 +275,15 @@ def invoke_security_audit_tool(params: dict[str, Any], ctx: ToolContext) -> dict
         tool_name="security_audit",
         # readonly=True：registry 只读工具——observe 模式 L0-L1 短路放行
         readonly=True,
+        sdk_tool_context=sdk_tool_context,
     )
 
 def make_security_audit_tool(ctx: ToolContext):
-    @tool
-    def security_audit(scope: str = "quick", ssh_session_id: str = "", timeout: int = 30) -> dict:
+    @tool(context="sdk_tool_context")
+    def security_audit(
+        scope: str = "quick", ssh_session_id: str = "", timeout: int = 30,
+        *, sdk_tool_context: Any = None,
+    ) -> dict:
         """只读安全审计（SSH 配置/开放端口/全局可写文件/用户）。
 
         纯只读命令，不触发审批。适合"检查服务器安全配置""看开放了哪些
@@ -273,6 +300,7 @@ def make_security_audit_tool(ctx: ToolContext):
         return invoke_security_audit_tool(
             params={"scope": scope, "ssh_session_id": ssh_session_id, "timeout": timeout},
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     security_audit.__name__ = "security_audit"
@@ -301,7 +329,9 @@ _PERF_CHECKS: dict[str, str] = {
     "top_processes": "ps aux --sort=-%cpu | head -8",
 }
 
-def invoke_performance_analyze_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_performance_analyze_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     metric = (params.get("metric") or "").strip().lower() or "load"
     if metric not in _PERF_CHECKS:
         return {
@@ -316,11 +346,15 @@ def invoke_performance_analyze_tool(params: dict[str, Any], ctx: ToolContext) ->
         tool_name="performance_analyze",
         # readonly=True：registry 只读工具——observe 模式 L0-L1 短路放行
         readonly=True,
+        sdk_tool_context=sdk_tool_context,
     )
 
 def make_performance_analyze_tool(ctx: ToolContext):
-    @tool
-    def performance_analyze(metric: str = "load", ssh_session_id: str = "", timeout: int = 30) -> dict:
+    @tool(context="sdk_tool_context")
+    def performance_analyze(
+        metric: str = "load", ssh_session_id: str = "", timeout: int = 30,
+        *, sdk_tool_context: Any = None,
+    ) -> dict:
         """只读性能分析（CPU/内存/磁盘/负载/TOP 进程）。
 
         纯只读命令，不触发审批。适合"查看系统负载""内存占用"等请求。
@@ -336,6 +370,7 @@ def make_performance_analyze_tool(ctx: ToolContext):
         return invoke_performance_analyze_tool(
             params={"metric": metric, "ssh_session_id": ssh_session_id, "timeout": timeout},
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     performance_analyze.__name__ = "performance_analyze"

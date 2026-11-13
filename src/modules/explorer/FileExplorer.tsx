@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { SshFileIdentity } from "@/modules/ssh-explorer/SshFileIdentity";
 import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog";
 import {
   ContextMenu,
@@ -10,8 +11,10 @@ import {
 import { cn } from "@/lib/utils";
 import type { GitStatusSnapshot } from "@/modules/ai/lib/native";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { setShowHidden } from "@/modules/settings/store";
 import { useGlobalShortcuts } from "@/modules/shortcuts";
 import type { TerminalPathDropTarget } from "@/modules/terminal";
+import type { FileSource } from "@/modules/workspace/fileSource";
 import {
   FileAddIcon,
   Folder01Icon,
@@ -22,6 +25,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  type CSSProperties,
   forwardRef,
   memo,
   useCallback,
@@ -44,7 +48,7 @@ import { fileIconUrl, folderIconUrl } from "./lib/iconResolver";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
-import { type FileTreeSource, useFileTree } from "./lib/useFileTree";
+import { fileTreeSourceKey, type FileTreeSource, useFileTree } from "./lib/useFileTree";
 import { useWorkspaceFsStore } from "./lib/workspaceFsStore";
 import { useGitStatus } from "./lib/useGitStatus";
 import { EntryRow, PendingRow, type RowActions, StatusRow } from "./TreeRow";
@@ -59,8 +63,9 @@ type Props = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
-  onPathRenamed?: (from: string, to: string) => void;
-  onPathDeleted?: (path: string) => void;
+  onBeforePathRenamed?: (from: string, to: string, source: FileSource | null) => Promise<(committed: boolean) => void>;
+  onPathRenamed?: (from: string, to: string, source: FileSource | null) => void;
+  onPathDeleted?: (path: string, source: FileSource | null) => void;
   onRevealInTerminal?: (path: string) => void;
   onAttachToAgent?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
@@ -199,6 +204,7 @@ export const FileExplorer = memo(
       rootPath,
       activeFilePath,
       onOpenFile,
+      onBeforePathRenamed,
       onPathRenamed,
       onPathDeleted,
       onRevealInTerminal,
@@ -211,13 +217,18 @@ export const FileExplorer = memo(
   ) {
     // WorkspaceFs P2-3: 单一数据源 —— 一套树 + 后端原子切换, 无双轨中间态
     const isRemote = fsSource?.kind === "sftp";
+    const explorerScopeKey = `${fileTreeSourceKey(fsSource)}:${rootPath ?? ""}`;
     const fatalError = useWorkspaceFsStore((s) => s.fatalError);
     const tree = useFileTree(rootPath, {
+      onBeforePathRenamed,
       onPathRenamed,
       onPathDeleted,
       source: fsSource,
     });
     const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
+    const showHidden = usePreferencesStore((s) => s.showHidden);
+    const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
+    const rowHeight = Math.max(ROW_HEIGHT, Math.ceil(ROW_HEIGHT / zoomLevel));
     const { lookup: lookupGitStatus } = useGitStatus(
       isRemote ? null : rootPath,
       gitDecorations && !isRemote ? gitStatus : null,
@@ -226,6 +237,15 @@ export const FileExplorer = memo(
     const [selectedPath, setSelectedPath] = useState<string | null>(null);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [isSearchActive, setIsSearchActive] = useState(false);
+    const [hiddenFilesError, setHiddenFilesError] = useState<string | null>(null);
+    const showHiddenFiles = async () => {
+      setHiddenFilesError(null);
+      try {
+        await setShowHidden(true);
+      } catch {
+        setHiddenFilesError("无法保存隐藏文件设置，请重试。");
+      }
+    };
     const searchRef = useRef<ExplorerSearchHandle>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -264,6 +284,7 @@ export const FileExplorer = memo(
       path: string;
       name: string;
       isDir: boolean;
+      scopeKey: string;
     } | null>(null);
     // #166 ③：删除确认从"菜单项文案变成 Click again to confirm"改成正式弹窗。
     // 旧做法第一次点了不删、菜单还挂着，看起来像没反应，而且从头到尾没说清要删的是哪条路径。
@@ -271,8 +292,16 @@ export const FileExplorer = memo(
       path: string;
       name: string;
       isDir: boolean;
+      scopeKey: string;
     } | null>(null);
     const [deleting, setDeleting] = useState(false);
+    const deleteTokenRef = useRef({});
+    useEffect(() => {
+      deleteTokenRef.current = {};
+      setMenuTarget(null);
+      setDeleteTarget(null);
+      setDeleting(false);
+    }, [explorerScopeKey]);
 
     /**
      * 删除走 `tree.deletePath`（本地 fs_delete / 远端 fsb_delete 都是直接删，不进回收站）。
@@ -280,13 +309,17 @@ export const FileExplorer = memo(
      * 这里仍等它落定再关窗：按钮在飞的时候显示「删除中…」，用户知道应用收到了指令。
      */
     const confirmFileDelete = async () => {
-      if (!deleteTarget) return;
+      if (!deleteTarget || deleteTarget.scopeKey !== explorerScopeKey) return;
+      const target = deleteTarget, token = {};
+      deleteTokenRef.current = token;
       setDeleting(true);
       try {
-        await tree.deletePath(deleteTarget.path);
+        await tree.deletePath(target.path);
       } finally {
-        setDeleting(false);
-        setDeleteTarget(null);
+        if (deleteTokenRef.current === token) {
+          setDeleting(false);
+          setDeleteTarget(current => current === target ? null : current);
+        }
       }
     };
     // Bumped on every right-click so the menu content remounts and the popper
@@ -343,7 +376,7 @@ export const FileExplorer = memo(
     const virtualizer = useVirtualizer({
       count: rows.length,
       getScrollElement: () => scrollRef.current,
-      estimateSize: () => ROW_HEIGHT,
+      estimateSize: () => rowHeight,
       overscan: OVERSCAN,
       getItemKey: (index) => rows[index]?.key ?? index,
     });
@@ -548,11 +581,15 @@ export const FileExplorer = memo(
       <div
         ref={containerRef}
         className="flex h-full flex-col outline-none"
+        style={{ "--explorer-control-size": `${rowHeight}px` } as CSSProperties}
         onKeyDown={handleKeyDown}
       >
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+        <div
+          className="flex min-h-8 shrink-0 flex-wrap items-center gap-1 border-b border-border/60 px-2"
+          style={{ minHeight: rowHeight + 8 }}
+        >
           <span
-            className="flex flex-1 items-center truncate text-xs font-medium text-foreground/80"
+            className="flex min-w-0 flex-1 items-center truncate text-xs font-medium text-foreground/80"
             title={rootPath ?? undefined}
             data-root-path={rootPath ?? ""}
             data-is-remote={String(isRemote)}
@@ -571,7 +608,7 @@ export const FileExplorer = memo(
             <Button
               variant="ghost"
               size="icon"
-              className="size-6 text-muted-foreground hover:text-foreground"
+              className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
               onClick={() => setIsSearchOpen((v) => !v)}
               title="Search files"
               aria-label="Search files"
@@ -583,7 +620,7 @@ export const FileExplorer = memo(
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
             onClick={() => rootPath && tree.beginCreate(rootPath, "file")}
             title="New file"
           >
@@ -592,7 +629,7 @@ export const FileExplorer = memo(
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
             onClick={() => rootPath && tree.beginCreate(rootPath, "dir")}
             title="New folder"
           >
@@ -601,13 +638,18 @@ export const FileExplorer = memo(
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-[var(--explorer-control-size)] text-muted-foreground hover:text-foreground"
             onClick={() => rootPath && tree.refresh(rootPath)}
             title="Refresh"
           >
             <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
           </Button>
         </div>
+
+        {fsSource?.kind === "sftp" ? <SshFileIdentity sessionId={fsSource.sessionId} /> : null}
+        {hiddenFilesError ? (
+          <div role="alert" className="px-3 py-2 text-xs text-destructive">{hiddenFilesError}</div>
+        ) : null}
 
         {!isRemote ? (
           <ExplorerSearch
@@ -646,7 +688,7 @@ export const FileExplorer = memo(
                   const row = idx !== undefined ? rows[idx] : undefined;
                   setMenuTarget(
                     row && row.kind === "entry"
-                      ? { path: row.path, name: row.name, isDir: row.isDir }
+                      ? { path: row.path, name: row.name, isDir: row.isDir, scopeKey: explorerScopeKey }
                       : null,
                   );
                   setMenuNonce((n) => n + 1);
@@ -664,7 +706,7 @@ export const FileExplorer = memo(
                 ) : null}
                 {pendingAtRoot ? (
                   <div
-                    className="flex h-6 w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
+                    className="flex h-[var(--explorer-control-size)] w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
                     style={{ paddingLeft: 6 }}
                   >
                     <span className="size-3.5 shrink-0" />
@@ -689,7 +731,7 @@ export const FileExplorer = memo(
                 ) : null}
                 {root?.status === "loading" && (
                   <div className="px-3 py-2 text-[11px] text-muted-foreground">
-                    Loading…
+                    正在加载目录…
                   </div>
                 )}
                 {root?.status === "error" && (
@@ -728,6 +770,21 @@ export const FileExplorer = memo(
                         </div>
                       );
                     })}
+                  </div>
+                ) : null}
+                {root?.status === "loaded" && root.entries.length === 0 && !pendingAtRoot ? (
+                  <div role="status" className="flex flex-col items-start gap-2 px-4 py-6 text-xs leading-relaxed text-muted-foreground">
+                    <span className="font-medium text-foreground/80">
+                      {showHidden ? "此目录为空" : "当前目录没有可见文件"}
+                    </span>
+                    {!showHidden ? (
+                      <>
+                        <span>隐藏文件可能被过滤，可开启显示后查看。</span>
+                        <Button variant="outline" size="sm" onClick={() => void showHiddenFiles()}>
+                          显示隐藏文件
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -822,7 +879,7 @@ export const FileExplorer = memo(
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     variant="destructive"
-                    onSelect={() => setDeleteTarget(menuTarget)}
+                    onSelect={() => menuTarget.scopeKey === explorerScopeKey && setDeleteTarget(menuTarget)}
                   >
                     Delete
                   </ContextMenuItem>

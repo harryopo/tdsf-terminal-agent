@@ -98,6 +98,10 @@ _SUDO_PREFIX_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# Prefix rules cannot prove a complete shell expression is read-only.
+# Even quoted constructs fall back to confirmation; this is not a shell parser.
+_LOW_RULE_SHELL_SYNTAX_RE = re.compile(r"[;&|<>$`(){}\r\n\\]")
+
 
 class RiskEngine:
     """4 层风险控制引擎。
@@ -438,6 +442,8 @@ class RiskEngine:
         for level_key, risk_level in _LEVEL_ORDER:
             rule = self._match_command(normalized_cmd, self._rules.get(level_key, []))
             if rule is not None:
+                if risk_level == RiskLevel.LOW and _LOW_RULE_SHELL_SYNTAX_RE.search(command):
+                    return (RiskLevel.MEDIUM, "", None)
                 return (risk_level, rule.name, rule)
 
         # 未匹配任何规则：默认中风险（安全优先）

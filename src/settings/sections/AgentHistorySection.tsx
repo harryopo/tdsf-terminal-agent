@@ -11,7 +11,9 @@ import { invokeRpc } from "@/lib/sidecar-bridge";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { diagnosticText } from "@/modules/ai/lib/sessionDiagnostics";
+import { LogRecord } from "../components/LogRecord";
 import { SectionHeader } from "../components/SectionHeader";
 
 // ============================================================================
@@ -21,6 +23,7 @@ import { SectionHeader } from "../components/SectionHeader";
 // 后端已就绪（agent_log.py list_sessions/tail），本组件是缺失的前端界面。
 
 type LogLine = {
+  event_id?: string;
   ts?: string | number;
   type?: string;
   content?: unknown;
@@ -36,6 +39,7 @@ type SessionFile = {
 
 type TailResponse = {
   ok?: boolean;
+  session_id?: string;
   files?: SessionFile[];
   latest_session_id?: string;
   lines?: LogLine[];
@@ -44,22 +48,22 @@ type TailResponse = {
   error?: string;
 };
 
-/** 事件类型 → 中文标签 + 徽标配色（10 类，见 agent_log.py 类型全集） */
-const EVENT_TYPE_META: Record<string, { label: string; badge: string }> = {
-  user_msg: { label: "用户", badge: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
-  env_inject: { label: "环境注入", badge: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400" },
-  assistant_msg: { label: "回答", badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
-  reasoning: { label: "思考", badge: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
-  tool_call: { label: "工具调用", badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  tool_result: { label: "工具结果", badge: "bg-amber-500/10 text-amber-700/80 dark:text-amber-400/80" },
-  loop_progress: { label: "回合", badge: "bg-muted text-muted-foreground" },
-  todo_followup: { label: "待办追踪", badge: "bg-muted text-muted-foreground" },
-  verify_followup: { label: "写后验证", badge: "bg-emerald-500/10 text-emerald-700/80 dark:text-emerald-400/80" },
-  watchdog_timeout: { label: "超时熔断", badge: "bg-red-500/15 text-red-600 dark:text-red-400" },
+/** Journal labels; diagnostic outcomes are not inferred from event types. */
+const EVENT_TYPE_META: Record<string, string> = {
+  user_msg: "用户",
+  env_inject: "环境注入",
+  assistant_msg: "回答",
+  reasoning: "思考",
+  tool_call: "工具调用",
+  tool_result: "工具结果",
+  loop_progress: "回合",
+  todo_followup: "待办追踪",
+  verify_followup: "写后验证",
+  watchdog_timeout: "超时熔断",
 };
 
 const TYPE_FILTERS: { value: string; label: string }[] = [
-  { value: "", label: "全部事件" },
+  { value: "__all", label: "全部事件" },
   { value: "user_msg", label: "用户输入" },
   { value: "assistant_msg", label: "AI 回答" },
   { value: "reasoning", label: "思考" },
@@ -76,80 +80,137 @@ function formatTs(ts: string | number | undefined): string {
   return d.toTimeString().slice(0, 8);
 }
 
-function contentToText(content: unknown): string {
-  if (content == null) return "";
-  if (typeof content === "string") return content;
-  try {
-    return JSON.stringify(content, null, 0);
-  } catch {
-    return String(content);
-  }
-}
-
 export function AgentHistorySection() {
   const [sessions, setSessions] = useState<SessionFile[]>([]);
   const [activeSession, setActiveSession] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("__all");
   const [lines, setLines] = useState<LogLine[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [lineLoading, setLineLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [lineError, setLineError] = useState<string | null>(null);
+  const listVersion = useRef(0);
+  const lineVersion = useRef(0);
+  const pendingLines = useRef<string | null>(null);
+  const displayedKey = useRef("");
+  const mounted = useRef(true);
+  const selection = useRef("");
+  const key = JSON.stringify([activeSession, typeFilter]);
+  selection.current = key;
+  const loading = listLoading || lineLoading;
+  const error = listError || lineError;
 
   const loadSessions = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    const version = ++listVersion.current;
+    setListLoading(true);
+    setListError(null);
     try {
       const res = await invokeRpc<TailResponse>("debug.agent_log_tail", {
         lines: 1,
       });
-      setSessions(res.files ?? []);
-      setActiveSession((prev) => prev || res.latest_session_id || "");
+      if (!mounted.current || version !== listVersion.current) return;
+      if (res.ok !== true || !Array.isArray(res.files))
+        throw new Error(res.error || "读取会话列表失败");
+      const files = res.files;
+      setSessions(files);
+      setActiveSession((prev) =>
+        files.some((f) => f.session_id === prev)
+          ? prev
+          : files.find((f) => f.session_id === res.latest_session_id)
+              ?.session_id ||
+            files[0]?.session_id ||
+            "",
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mounted.current && version === listVersion.current)
+        setListError(
+          diagnosticText(e instanceof Error ? e.message : String(e)),
+        );
     } finally {
-      setLoading(false);
+      if (mounted.current && version === listVersion.current)
+        setListLoading(false);
     }
   }, []);
 
   const loadLines = useCallback(async () => {
+    if (selection.current !== key || pendingLines.current === key) return;
+    const version = ++lineVersion.current;
     if (!activeSession) {
+      pendingLines.current = null;
       setLines([]);
       setTotal(0);
+      setLineLoading(false);
+      setLineError(null);
       return;
     }
-    setLoading(true);
-    setError(null);
+    pendingLines.current = key;
+    if (displayedKey.current !== key) {
+      setLines([]);
+      setTotal(0);
+    }
+    displayedKey.current = key;
+    setLineLoading(true);
+    setLineError(null);
+    const current = () =>
+      mounted.current &&
+      selection.current === key &&
+      version === lineVersion.current;
     try {
       const params: Record<string, unknown> = {
         session_id: activeSession,
         lines: 200,
       };
-      if (typeFilter) params.type = typeFilter;
+      if (typeFilter !== "__all") params.type = typeFilter;
       const res = await invokeRpc<TailResponse>("debug.agent_log_tail", params);
-      setLines(res.lines ?? []);
+      if (!current()) return;
+      if (
+        res.ok !== true ||
+        !Array.isArray(res.lines) ||
+        (res.session_id !== undefined && res.session_id !== activeSession)
+      )
+        throw new Error(res.error || "流水读取失败或会话不匹配");
+      setLines(res.lines);
       setTotal(res.total_in_file ?? 0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current()) {
+        setLineError(
+          diagnosticText(e instanceof Error ? e.message : String(e)),
+        );
+        setLines([]);
+        setTotal(0);
+      }
     } finally {
-      setLoading(false);
+      if (current()) {
+        pendingLines.current = null;
+        setLineLoading(false);
+      }
     }
-  }, [activeSession, typeFilter]);
+  }, [activeSession, typeFilter, key]);
 
   useEffect(() => {
-    if (!isTauriRuntime()) return;
-    void loadSessions();
+    const listCounter = listVersion;
+    const lineCounter = lineVersion;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      listCounter.current++;
+      lineCounter.current++;
+      pendingLines.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    if (isTauriRuntime()) void loadSessions();
   }, [loadSessions]);
-
   useEffect(() => {
-    if (!isTauriRuntime()) return;
-    void loadLines();
+    if (isTauriRuntime()) void loadLines();
   }, [loadLines]);
 
   return (
     <div className="flex flex-col gap-4">
       <SectionHeader
         title="对话历史"
-        description="后端 Agent 流水（用户输入 / 环境注入 / 思考 / 工具调用 / 回答），便于追溯每一轮对话的完整链路。数据源 agent-logs/*.jsonl。"
+        description="按会话追溯输入、回答与工具调用。每次读取最近 200 条流水，详情已脱敏；不代表完整归档。"
       />
 
       {!isTauriRuntime() ? (
@@ -159,9 +220,12 @@ export function AgentHistorySection() {
       ) : (
         <>
           {/* 控制栏：会话选择 + 事件过滤 + 刷新 */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card p-3">
             <Select value={activeSession} onValueChange={setActiveSession}>
-              <SelectTrigger className="h-8 w-56 text-[12px]">
+              <SelectTrigger
+                aria-label="选择会话"
+                className="h-8 max-w-full w-56 text-[12px]"
+              >
                 <SelectValue placeholder="选择会话" />
               </SelectTrigger>
               <SelectContent>
@@ -172,7 +236,8 @@ export function AgentHistorySection() {
                 ) : (
                   sessions.map((s) => (
                     <SelectItem key={s.session_id} value={s.session_id}>
-                      {s.session_id.slice(0, 12)}…（{Math.round(s.size / 1024)}KB）
+                      {s.session_id.slice(0, 12)}…（{Math.round(s.size / 1024)}
+                      KB）
                     </SelectItem>
                   ))
                 )}
@@ -180,7 +245,10 @@ export function AgentHistorySection() {
             </Select>
 
             <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="h-8 w-32 text-[12px]">
+              <SelectTrigger
+                aria-label="事件类型"
+                className="h-8 w-32 text-[12px]"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -217,57 +285,45 @@ export function AgentHistorySection() {
           </div>
 
           {error ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 font-mono text-[11px] break-all text-destructive/90">
+            <div
+              role="alert"
+              className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 font-mono text-[11px] break-all text-destructive/90"
+            >
               {error}
             </div>
           ) : null}
 
           {/* 时间线 */}
-          <div className="flex flex-col rounded-xl border border-border/60 bg-card/40">
+          <div className="flex flex-col rounded-xl border border-border/60 bg-card p-3">
             {lines.length === 0 ? (
               <div className="p-6 text-center text-[12px] text-muted-foreground">
                 {loading ? "加载中…" : "暂无流水记录"}
               </div>
             ) : (
               <div className="max-h-[52vh] overflow-y-auto">
-                {lines.map((line, i) => {
-                  const meta = EVENT_TYPE_META[line.type ?? ""] ?? {
-                    label: line.type ?? "?",
-                    badge: "bg-muted text-muted-foreground",
-                  };
-                  const toolName =
-                    line.meta && typeof line.meta.tool_name === "string"
-                      ? line.meta.tool_name
-                      : null;
-                  return (
-                    <div
-                      key={i}
-                      className="flex items-start gap-2 border-b border-border/40 px-3 py-1.5 last:border-b-0"
-                    >
-                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
-                        {formatTs(line.ts)}
-                      </span>
-                      <span
-                        className={cn(
-                          "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
-                          meta.badge,
-                        )}
-                      >
-                        {meta.label}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[12px] break-words whitespace-pre-wrap text-foreground">
-                          {contentToText(line.content) || "（空）"}
-                        </div>
-                        {toolName ? (
-                          <div className="font-mono text-[10px] text-muted-foreground">
-                            {toolName}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
+                {lines.map((line, i) => (
+                  <LogRecord
+                    key={line.event_id || i}
+                    time={formatTs(line.ts)}
+                    label={
+                      EVENT_TYPE_META[line.type ?? ""] ||
+                      line.type ||
+                      "未知事件"
+                    }
+                    source={
+                      typeof line.meta?.tool_name === "string"
+                        ? diagnosticText(line.meta.tool_name)
+                        : undefined
+                    }
+                    text={diagnosticText(line.content)}
+                    detail={
+                      line.meta && Object.keys(line.meta).length
+                        ? diagnosticText(line.meta)
+                        : undefined
+                    }
+                    critical={line.type === "watchdog_timeout"}
+                  />
+                ))}
               </div>
             )}
           </div>

@@ -48,26 +48,22 @@ TDSF 2026-07-30 P0-C4:
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from strands_backend.tools import (
     ToolContext,
-    assess_command,
-    complete_approval_execution,
     execute_via_ssh,
-    request_approval_and_wait,
     tool,
 )
-
-logger = logging.getLogger("sidecar.strands_backend.tools.ssh_command")
 
 
 # ============================================================================
 # 核心实现（无 Strands 依赖，便于单测）
 # ============================================================================
 
-def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_ssh_command_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     """SSH 命令执行工具核心实现
 
     Args:
@@ -98,88 +94,6 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     # 否则审批卡、审计、聊天卡一律显示成 ssh_command（#114 用户报的"混用"）。
     tool_name = str(params.get("tool_name") or "ssh_command")
 
-    # 多行命令拆分检测（Task 3 / Task 4 接入：每行走 assess_command 综合决策）
-    # P1-1 (2026-08-01): 命中确认 → 真实等待用户响应，批准后整条执行
-    # （execute_via_ssh 传 skip_approval=True 防止二次审批卡）
-    multiline_approved = False
-    multiline_approval_req: Any | None = None
-    if "\n" in command.strip():
-        confirm_lines: list[tuple[str, dict[str, Any]]] = []
-        blocked: dict[str, Any] | None = None
-        for line in command.strip().splitlines():
-            line_stripped = line.strip()
-            if not line_stripped or line_stripped.startswith("#"):
-                continue
-            assessment = assess_command(ctx, line_stripped)
-            if assessment["decision"] in ("blocked", "deny"):
-                # denylist 硬底线 / observe deny → 直接拦截（不审批）；
-                # 拦截类反馈禁替代方案（Task 3.2）
-                blocked = {
-                    "status": "command_blocked",
-                    "command": command,
-                    "ssh_session_id": ssh_session_id or ctx.ssh_session_id,
-                    "risk": assessment["risk"],
-                    "impact": assessment["impact"],
-                    "explanation": explanation,
-                    "message": (
-                        f"command_blocked! 只读模式或安全规则禁止执行："
-                        f"多行命令中 '{line_stripped[:60]}' "
-                        f"{assessment.get('reason') or '命中硬底线黑名单'}。"
-                        f"该命令未执行"
-                        + ("，也不提供替代方案。" if assessment["decision"] == "blocked" else "。")
-                    ),
-                }
-                break
-            if assessment["decision"] == "confirm":
-                confirm_lines.append((line_stripped, assessment))
-        if blocked is not None:
-            return blocked
-        if confirm_lines:
-            from strands_backend.tools import (
-                NeedsYouStatus,
-                request_approval_and_wait,
-            )
-
-            first_line, first_assessment = confirm_lines[0]
-            req = request_approval_and_wait(
-                ctx,
-                command,
-                first_assessment["risk"],
-                tool_name=tool_name,
-                explanation=explanation,
-                impact=first_assessment["impact"],
-                risk_l=first_assessment["risk_l"],
-            )
-            if req is None or req.status != NeedsYouStatus.APPROVED:
-                reason = ""
-                if req is not None and isinstance(req.response, dict):
-                    reason = str(req.response.get("reason", "") or "")
-                # Task 3.2 双轨反馈：拒绝轨附用户附言（可给替代方案）；
-                # 超时轨 fail-closed 按拒绝处理（5 分钟无响应）
-                message = (
-                    f"多行命令中第 '{first_line[:60]}' 需要用户审批，已发起审批"
-                    + (
-                        "，用户已拒绝，未执行" + (f"（用户附言：{reason}）" if reason else "")
-                        if req is not None and req.status == NeedsYouStatus.REJECTED
-                        else "，审批超时（5 分钟无响应），按拒绝处理，未执行"
-                    )
-                )
-                return {
-                    "status": "rejected" if req is not None and req.status == NeedsYouStatus.REJECTED else "needs_approval",
-                    "command": command,
-                    "ssh_session_id": ssh_session_id or ctx.ssh_session_id,
-                    "risk": first_assessment["risk"],
-                    "impact": first_assessment["impact"],
-                    "explanation": explanation,
-                    "message": message,
-                }
-            logger.info(
-                f"multiline command approved by user: {len(confirm_lines)} confirm lines, "
-                f"command_chars={len(command)}"
-            )
-            multiline_approved = True
-            multiline_approval_req = req
-
     # TDSF 2026-09-23（#114）：这里原先手写一对 emit_tool_call（started / completed），
     # 现在由 execute_via_ssh 统一发——工具名跟着上游走，且拦截/审批/异常路径也会闭合。
     # 这里再发一遍就会双卡（test_terminal_tool_call_events.py 钉住"恰好一对"）。
@@ -190,20 +104,17 @@ def invoke_ssh_command_tool(params: dict[str, Any], ctx: ToolContext) -> dict[st
     # sidecar:visible-terminal-execute），由 Rust PTY 真实执行并回读 OSC 块，
     # 不存在"通知注入 + 后台 exec"两条腿同时跑的双重执行路径。
 
-    # 执行（Task 3/4 接入后内部含影响预测 + 三模式决策 + denylist 拦截 +
-    # host 校验 + 审批链；多行命令已在上方整条审批通过时传 skip_approval）
-    try:
-        result = execute_via_ssh(
-            ctx=ctx,
-            command=command,
-            ssh_session_id=ssh_session_id,
-            timeout=timeout,
-            tool_name=tool_name,
-            explanation=explanation,
-            skip_approval=bool(multiline_approved),
-        )
-    finally:
-        complete_approval_execution(multiline_approval_req)
+    # 逐行检查与整段命令共用中心审批/卡/证据/账本，不在外层提前等待或返回。
+    result = execute_via_ssh(
+        ctx=ctx,
+        command=command,
+        ssh_session_id=ssh_session_id,
+        timeout=timeout,
+        tool_name=tool_name,
+        explanation=explanation,
+        check_lines=True,
+        sdk_tool_context=sdk_tool_context,
+    )
 
     # 补充 explanation 字段
     result["explanation"] = explanation
@@ -224,12 +135,14 @@ def make_ssh_command_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数（Strands 不可用时为 passthrough 装饰）
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def ssh_command(
         command: str,
         ssh_session_id: str = "",
         explanation: str = "",
         timeout: int = 30,
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """在 SSH 会话上执行 shell 命令。
 
@@ -251,7 +164,7 @@ def make_ssh_command_tool(ctx: ToolContext):
             dict: 结构化结果，含 status / command / output / exit_code / risk /
                 impact 等字段。
                 status 取值: success | command_blocked | rejected |
-                needs_approval | unavailable | indeterminate | error
+                cancelled | needs_approval | unavailable | indeterminate | error
         """
         return invoke_ssh_command_tool(
             params={
@@ -261,6 +174,7 @@ def make_ssh_command_tool(ctx: ToolContext):
                 "timeout": timeout,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     # Strands 从 __name__ 提取工具名，保持原名

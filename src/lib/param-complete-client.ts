@@ -20,9 +20,12 @@
  * 输入流——参数预测是锦上添花，宁可无预测也不给错误预测或报错弹窗。
  */
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
+import { CARAPACE_CHANGED_EVENT } from './sshCarapaceEvents';
 import { isOsFamily, type OsFamily } from './os-family';
-import { sshCommand, probeCmd, readProbeValue } from './ssh-bridge';
+import { sshCommand, probeCmd, readProbeValue, type SshCommandResult } from './ssh-bridge';
 import type { SuggestionResult } from './suggest-engine';
+import { commandContext } from './command-context';
 
 // ============================================================================
 // 类型
@@ -57,11 +60,23 @@ export type CarapaceInstallError = (message: string) => void;
 /** 远端 carapace 固定安装路径（spec 安全红线：仅上传官方 release 二进制到此路径） */
 export const CARAPACE_REMOTE_PATH = '~/.local/bin/carapace';
 
-/** 远端存在性检测：command -v 带路径参数检查该路径可执行文件是否存在 */
-export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null 2>&1 && echo __TDSF_CARAPACE_YES__`;
-
 /** 检测命令成功时的输出标记 */
 export const CARAPACE_YES_MARK = '__TDSF_CARAPACE_YES__';
+
+/** 先换行，避免不带换行的登录横幅与检测标记粘连。 */
+export const CARAPACE_CHECK_CMD = `command -v ${CARAPACE_REMOTE_PATH} >/dev/null 2>&1 || exit 1; ${CARAPACE_REMOTE_PATH} --version >/dev/null || exit 2; printf '\\n%s\\n' '${CARAPACE_YES_MARK}'`;
+
+/** 设置入口与静默补全共用结果判据；未知结果不能冒充未安装。 */
+export function classifyCarapaceProbe(
+  result: Pick<SshCommandResult, 'ok' | 'exitCode' | 'output'>,
+): 'installed' | 'missing' | 'error' {
+  const marked = result.output.split(/\r?\n/).some((line) => line.trim() === CARAPACE_YES_MARK);
+  if (result.ok && result.exitCode === 0 && marked) return 'installed';
+  if (result.ok && result.exitCode === 1 && !marked) return 'missing';
+  return 'error';
+}
+
+export type RemoteCarapaceProbeState = ReturnType<typeof classifyCarapaceProbe>;
 
 /**
  * 安装第 1 步：建目录 + 顺便带回 $HOME（SFTP 上传需要绝对路径，~ 不会被 sftp 展开）
@@ -217,18 +232,6 @@ export function buildRemoteCarapaceCommand(
   return cwd ? `cd ${escapeShSingleQuote(cwd)} && ${body}` : body;
 }
 
-/** 与 paramSuggest.ts 的 PREFIX_COMMANDS 对齐（该文件不导出且约束不改动，此处对齐一份） */
-const PREFIX_COMMANDS = new Set([
-  'sudo',
-  'command',
-  'env',
-  'exec',
-  'nohup',
-  'time',
-  'nix',
-  'xargs',
-]);
-
 /**
  * 从输入行构造 param_complete 请求参数。
  *
@@ -241,11 +244,8 @@ export function buildParamRequest(prefix: string): {
   tokens: string[];
   current: string;
 } {
-  const trailingSpace = /\s+$/.test(prefix);
-  const tokens = prefix.trimEnd().split(/\s+/).filter(Boolean);
-  if (tokens.length > 0 && PREFIX_COMMANDS.has(tokens[0])) tokens.shift();
-  const current = trailingSpace ? '' : (tokens[tokens.length - 1] ?? '');
-  return { cmd: tokens[0] ?? '', tokens, current };
+  const { cmd, tokens, current } = commandContext(prefix);
+  return { cmd, tokens, current };
 }
 
 /**
@@ -286,28 +286,43 @@ export function mergeCandidates(
 
 /** 会话级缓存：rustSessionId → 是否已安装远端 carapace（避免每次按键都 exec） */
 const remoteInstalledCache = new Map<number, boolean>();
+const remoteInstalledRequests = new Map<number, symbol>();
 
 /** 使缓存失效（安装成功后 / 调试时调用，下次检测重新 exec） */
 export function invalidateRemoteCarapaceCache(sessionId: number): void {
   remoteInstalledCache.delete(sessionId);
+  remoteInstalledRequests.delete(sessionId);
 }
 
 /**
  * 检测远端 ~/.local/bin/carapace 是否存在（exec 通道，2s 超时）。
- * 结果缓存到会话级 Map；invoke 本身抛错（会话异常）不缓存，下次重试。
+ * 只缓存确认已装/未装的结果；超时或未知状态不缓存，下次请求可重试。
  */
-export async function remoteCarapaceInstalled(sessionId: number): Promise<boolean> {
+export async function probeRemoteCarapace(sessionId: number): Promise<RemoteCarapaceProbeState> {
   const cached = remoteInstalledCache.get(sessionId);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) return cached ? 'installed' : 'missing';
+  const request = Symbol();
+  remoteInstalledRequests.set(sessionId, request);
   try {
     const r = await sshCommand(sessionId, CARAPACE_CHECK_CMD, 2);
-    const installed = r.ok && r.output.includes(CARAPACE_YES_MARK);
-    remoteInstalledCache.set(sessionId, installed);
-    return installed;
+    const state = classifyCarapaceProbe(r);
+    const installed = state === 'installed';
+    // Installation or a newer probe may have superseded this reply.
+    if (state !== 'error' && remoteInstalledRequests.get(sessionId) === request) {
+      remoteInstalledCache.set(sessionId, installed);
+    }
+    return state;
   } catch (e) {
-    console.warn('[param-complete] remoteCarapaceInstalled failed:', e);
-    return false;
+    console.warn('[param-complete] probeRemoteCarapace failed:', e);
+    return 'error';
+  } finally {
+    if (remoteInstalledRequests.get(sessionId) === request) remoteInstalledRequests.delete(sessionId);
   }
+}
+
+/** 预测链路的布尔接口：未能确认时静默回退，不把 error 写入安装状态或缓存。 */
+export async function remoteCarapaceInstalled(sessionId: number): Promise<boolean> {
+  return await probeRemoteCarapace(sessionId) === 'installed';
 }
 
 /**
@@ -363,10 +378,11 @@ export async function remoteParamComplete(
  *   因为非交互 bash 不读 ~/.bashrc 的 alias 段。
  * ⇒ 别名是用户真敲得出去的命令，却被这道"防假候选"的过滤当假候选剔掉了。
  * 所以第二段拿别名清单并进来：`bash -ic 'alias'` 实测 0.238s，行形状
- * `alias ll='ls -alF'`；没有 bash 的机器退回 zsh（行形状 `ll='ls -l'`，无前缀）。
+ * `alias ll='ls -alF'`；别名读取失败时再试 zsh。Bash 命令枚举失败则整次降级，
+ * 不把只含别名的结果缓存为全集。
  */
 export const REMOTE_COMMANDS_CMD =
-  "compgen -c 2>/dev/null | sort -u; bash -ic 'alias' 2>/dev/null || zsh -ic 'alias' 2>/dev/null";
+  "bash -c 'compgen -c' 2>/dev/null || exit 1; bash -ic 'alias' 2>/dev/null || zsh -ic 'alias' 2>/dev/null || :";
 
 /**
  * 把两段输出一起解析成命令名集合。
@@ -413,7 +429,7 @@ export async function fetchRemoteCommands(sessionId: number): Promise<Set<string
   if (cached) return cached;
   try {
     const r = await sshCommand(sessionId, REMOTE_COMMANDS_CMD, 15);
-    // compgen 不存在（dash/sh）时 sort 仍成功退出但输出为空 → 走空判定不缓存
+    // Bash 枚举失败必须退出，不能把后续非空 alias 清单当作完整命令集。
     if (!r.ok || r.exitCode !== 0) return null;
     const out = r.output.trim();
     if (!out) return null;
@@ -503,6 +519,7 @@ export async function installRemoteCarapace(
   onProgress?: (stage: CarapaceInstallStage) => void,
   onError?: CarapaceInstallError,
 ): Promise<boolean> {
+  let step = '创建远端目录';
   try {
     // 步骤 1：远端建目录 + 拿 $HOME（SFTP 需要绝对路径，~ 不会被 sftp 协议展开）
     onProgress?.('preparing');
@@ -512,18 +529,22 @@ export async function installRemoteCarapace(
       return false;
     }
     const home = readProbeValue(mkdir.output) ?? '';
-    // home 取不到时退回 ~ 路径（Rust 侧 sftp_upload_file 可能支持展开，T7 对齐点）
-    const remotePath = home
-      ? `${home}/.local/bin/carapace`
-      : CARAPACE_REMOTE_PATH;
+    if (!home.startsWith('/') || Array.from(home).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) {
+      onError?.('无法确认远端 HOME 绝对路径，请检查连接后重试；尚未上传补全组件。');
+      return false;
+    }
+    const remotePath = `${home.replace(/\/$/, '')}/.local/bin/carapace`;
 
     // 步骤 2：上传本地 linux 二进制（param_complete.rs / sftp_upload_file，并行开发中）
     onProgress?.('uploading');
+    step = '获取随包补全组件';
     const localPath = await carapaceLinuxPath();
+    step = '上传补全组件';
     await invoke('sftp_upload_file', { sessionId, localPath, remotePath });
 
     // 步骤 3：chmod + 验证（--version 成功退出才算装好）
     onProgress?.('configuring');
+    step = '设置可执行权限或验证';
     const verify = await sshCommand(sessionId, CARAPACE_CONFIGURE_CMD, 15);
     if (!verify.ok || verify.exitCode !== 0) {
       onError?.(sshInstallError('设置可执行权限或验证', verify));
@@ -533,10 +554,17 @@ export async function installRemoteCarapace(
     // 步骤 4：失效缓存 + 完成
     invalidateRemoteCarapaceCache(sessionId);
     onProgress?.('done');
+    // 设置页与终端角标共用通知入口；接收方仍按各自会话重查，不直接信任事件。
+    try {
+      await emit(CARAPACE_CHANGED_EVENT, { sessionId });
+    } catch (e) {
+      // 通知失败不改变已经验证成功的远端安装结果。
+      console.warn('[param-complete] 补全安装通知发送失败:', e);
+    }
     return true;
   } catch (e) {
     // 后端命令未就绪 / 会话已断开 / 上传失败——静默降级，调用方按 false 渲染
-    onError?.(installExceptionMessage(e));
+    onError?.(installExceptionMessage(step, e));
     console.warn('[param-complete] installRemoteCarapace failed:', e);
     return false;
   }
@@ -553,7 +581,7 @@ function sshInstallError(
     : `${stage}失败（退出码 ${code}）`;
 }
 
-function installExceptionMessage(error: unknown): string {
+function installExceptionMessage(step: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
-  return detail ? `上传安装包失败：${detail}` : '上传安装包失败';
+  return detail ? `${step}失败：${detail}` : `${step}失败`;
 }

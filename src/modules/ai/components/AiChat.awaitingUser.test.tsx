@@ -10,6 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
+import type { PropsWithChildren } from "react";
 import type { UIMessage } from "ai";
 
 vi.mock("../store/chatRuntime", () => ({
@@ -23,7 +24,7 @@ vi.mock("../lib/evidence", () => ({
 }));
 // 审批卡本体由 NeedsYouApprovalCards.test.tsx 覆盖；这里只验转圈那行的措辞
 vi.mock("./NeedsYouApprovalCards", () => ({
-  NeedsYouApprovalCards: () => null,
+  NeedsYouApprovalCards: ({ children }: PropsWithChildren) => children ?? null,
 }));
 
 import { useChatStore } from "../store/chatStore";

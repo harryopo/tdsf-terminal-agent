@@ -353,6 +353,16 @@ fn reconnect_backoff_delay(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// 当前连接的只读终端集成资料，不代表认证或派发权限。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTerminalContext {
+    pub connection_id: String,
+    pub bash_hooks_path: Option<String>,
+}
+
+type TerminalContextState = Arc<std::sync::RwLock<Option<SshTerminalContext>>>;
+
 /// SSH PTY 会话
 ///
 /// 持有 russh Channel 的写半部 + 状态信息。
@@ -373,12 +383,16 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// 当前状态 (原子读,无需锁)
     state: Arc<std::sync::RwLock<SshSessionState>>,
 
+    /// 随 reader 失效，重连时换成新 reader 的快照；不争用 exec 的 handle 锁。
+    terminal_context: std::sync::RwLock<TerminalContextState>,
+
     /// PTY channel 是否已退出 (原子标志,reader task 设置)
     ///
     /// 仅表示 PTY 通道生命周期: reader task 拿到 ExitStatus/Eof/Close/None
     /// 时设置。PTY 死亡不一定意味着 SSH 连接断开 (例如用户在远端敲 `exit`
     /// 退出 shell,但 SFTP 仍可继续用)。
-    exited: Arc<AtomicBool>,
+    // Reconnect replaces the reader; guards must follow that reader's flag.
+    exited: std::sync::RwLock<Arc<AtomicBool>>,
 
     /// SSH 连接是否已关闭 (原子标志,close()/Drop 设置)
     ///
@@ -394,6 +408,9 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
     /// 若用户在 perform_reconnect 执行中调用 close(),清零会让无人持有的
     /// 僵尸会话复活并进入无限重连。此标志只增不减,是重连/复活的最终闸门。
     user_closed: Arc<AtomicBool>,
+
+    /// Lifetime-wide close notification, independent of reader generations.
+    closed_notify: tokio::sync::Notify,
 
     /// 主机信息 (用于状态事件 + P2-04 多标签会话标识)
     /// 注: 经 host()/port()/user() 访问器对外暴露 (P2 #42 会话枚举也用)
@@ -431,6 +448,22 @@ pub struct SshSession<R: tauri::Runtime = tauri::Wry> {
 }
 
 impl<R: tauri::Runtime> SshSession<R> {
+    /// 只读关联元信息，不代表认证或恢复派发权限。
+    pub fn terminal_context(&self) -> Option<SshTerminalContext> {
+        if self.state() != SshSessionState::Connected
+            || self.connection_closed.load(Ordering::Acquire)
+            || self.user_closed.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let current = self
+            .terminal_context
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let context = current.read().unwrap_or_else(|e| e.into_inner());
+        context.clone()
+    }
+
     /// 打开 PTY 会话
     ///
     /// 流程:
@@ -460,6 +493,7 @@ impl<R: tauri::Runtime> SshSession<R> {
     ) -> Result<Self, SshSessionError> {
         // 1. 获取 Handle
         let handle = client.handle_ref();
+        let connection_id = client.connection_id().simple().to_string();
 
         // 从 handler 提取 host/port/user (用于状态事件)
         // 注意: Handle 内部的 handler 不可直接访问,我们通过参数传递
@@ -475,9 +509,13 @@ impl<R: tauri::Runtime> SshSession<R> {
         //    注入 shell, 让远端 shell 在命令间隙自动发 OSC 7, 前端输入原样透传。
         //    任何一步失败都降级为 request_shell (仅失去 cwd 同步, 绝不篡改输入)。
         let mut launch_cmd: Option<String> = None;
+        let mut bash_hooks_path = None;
         match probe_remote_shell(handle).await {
-            Ok(kind) => match write_shell_integration(handle, kind).await {
+            Ok(kind) => match write_shell_integration(handle, kind, &connection_id).await {
                 Ok(cmd) => {
+                    if matches!(kind, RemoteShellKind::Bash) {
+                        bash_hooks_path = Some(format!("/tmp/tdsf-osc7-{connection_id}.hooks.bash"));
+                    }
                     log::info!("[ssh] shell integration ready: {cmd}");
                     launch_cmd = Some(cmd);
                 }
@@ -550,6 +588,11 @@ impl<R: tauri::Runtime> SshSession<R> {
         let on_exit_clone = on_exit.clone();
         let exited_notify = Arc::new(Mutex::new(Arc::new(tokio::sync::Notify::new())));
         let notify_for_reader = exited_notify.lock().await.clone();
+        let terminal_context = Arc::new(std::sync::RwLock::new(Some(SshTerminalContext {
+            connection_id,
+            bash_hooks_path,
+        })));
+        let context_for_reader = terminal_context.clone();
 
         tokio::spawn(async move {
             Self::reader_task(
@@ -559,6 +602,7 @@ impl<R: tauri::Runtime> SshSession<R> {
                 exited_clone,
                 received_exit_clone,
                 notify_for_reader,
+                context_for_reader,
             )
             .await;
         });
@@ -570,10 +614,12 @@ impl<R: tauri::Runtime> SshSession<R> {
             handle: Arc::new(Mutex::new(Some(client))),
             channel_write: Arc::new(Mutex::new(Some(channel_write))),
             state: Arc::new(std::sync::RwLock::new(SshSessionState::Connected)),
-            exited,
+            terminal_context: std::sync::RwLock::new(terminal_context),
+            exited: std::sync::RwLock::new(exited),
             // TDSF (#20): 连接刚建立,未关闭
             connection_closed: Arc::new(AtomicBool::new(false)),
             user_closed: Arc::new(AtomicBool::new(false)),
+            closed_notify: tokio::sync::Notify::new(),
             host,
             port,
             user,
@@ -596,6 +642,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         exited: Arc<AtomicBool>,
         received_exit: Arc<AtomicBool>,
         exited_notify: Arc<tokio::sync::Notify>,
+        terminal_context: TerminalContextState,
     ) {
         log::info!("[ssh] reader task started");
         let mut exit_code: Option<i32> = None;
@@ -660,6 +707,9 @@ impl<R: tauri::Runtime> SshSession<R> {
             }
         }
 
+        // 先失效本 reader 的资料，旧 reader 不持有重连后的快照。
+        *terminal_context.write().unwrap_or_else(|e| e.into_inner()) = None;
+
         // 推送 exit code
         let code = exit_code.unwrap_or(-1);
         if let Err(e) = on_exit.send(code) {
@@ -669,9 +719,7 @@ impl<R: tauri::Runtime> SshSession<R> {
         // 标记已退出
         exited.store(true, Ordering::Release);
         // P3 #20: 唤醒自动重连 supervisor (若有)。
-        // notify_waiters 不存储 permit: 唤醒当前 waiter 后, 新注册的
-        // notified() 需等下一次 notify (重连成功后的新 reader task 结束时会
-        // 再次 notify, 因为 open_pty 内部把同一个 Arc<Notify> 传给了新 reader)。
+        // 通知只唤醒已创建的 waiter；退出旗标保留提前退出供 supervisor 复核。
         exited_notify.notify_waiters();
         log::info!("[ssh] reader task done, exit_code={}", code);
     }
@@ -680,7 +728,11 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// （exited / user_input_seq / typing_active；供 ssh_write_human 编排）。
     pub fn human_typing_guard(&self) -> crate::modules::human_type::HumanTypingGuard {
         crate::modules::human_type::HumanTypingGuard {
-            exited: self.exited.clone(),
+            exited: self
+                .exited
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
             user_seq: self.user_input_seq.clone(),
             typing_active: self.typing_active.clone(),
         }
@@ -689,9 +741,7 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 写入数据 (前端按键)
     pub async fn write_data(&self, data: &[u8]) -> Result<(), SshSessionError> {
         // TDSF (#20): PTY 死亡或连接断开都不能写 PTY
-        if self.exited.load(Ordering::Acquire)
-            || self.connection_closed.load(Ordering::Acquire)
-        {
+        if self.is_pty_exited() || self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
         }
 
@@ -710,9 +760,7 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 调整窗口大小 (window_change)
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), SshSessionError> {
         // TDSF (#20): PTY 死亡或连接断开都不能 resize
-        if self.exited.load(Ordering::Acquire)
-            || self.connection_closed.load(Ordering::Acquire)
-        {
+        if self.is_pty_exited() || self.connection_closed.load(Ordering::Acquire) {
             return Err(SshSessionError::Closed);
         }
 
@@ -737,50 +785,52 @@ impl<R: tauri::Runtime> SshSession<R> {
     pub async fn close(&self) -> Result<(), SshSessionError> {
         log::info!("[ssh] closing session: host={}", self.host);
 
-        // 1. 关闭 channel 写半部
-        {
-            let mut guard = self.channel_write.lock().await;
-            if let Some(channel_write) = guard.take() {
-                // drop channel_write 会触发 channel close
-                // russh 内部会发送 EOF + close 消息
-                drop(channel_write);
-            }
-        }
-
-        // 2. 断开 SSH 连接
-        {
-            let mut guard = self.handle.lock().await;
-            if let Some(handle) = guard.take() {
-                // Disconnect::ByApplication 表示客户端主动断开
-                // TDSF (#20): disconnect 失败降到 debug 级 (close 本就是要关,
-                // 失败的 send/recv 都是预期内的, 不值得 warn 刷屏)。
-                if let Err(e) = handle
-                    .handle_ref()
-                    .disconnect(Disconnect::ByApplication, "user closed", "en")
-                    .await
-                {
-                    log::debug!("[ssh] disconnect failed (expected during close): {}", e);
-                    // 即使 disconnect 失败,drop handle 也会清理资源
-                }
-                drop(handle);
-            }
-        }
-
-        // 3. 更新状态
+        // Publish intent before waiting for resources used by an in-flight reconnect.
         {
             let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            self.user_closed.store(true, Ordering::Release);
+            self.connection_closed.store(true, Ordering::Release);
+            self.exited
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .store(true, Ordering::Release);
             *state = SshSessionState::Closed;
         }
+        self.closed_notify.notify_waiters();
 
-        // TDSF (#20): close 同时设两个标志 — 整个连接都关了,
-        // PTY 也跟着死 (write_data/resize 会因 connection_closed 直接返回 Closed)。
-        self.exited.store(true, Ordering::Release);
-        self.connection_closed.store(true, Ordering::Release);
-        // user_closed 只增不减: 即使与 perform_reconnect 竞态 (重连成功后
-        // 清零 connection_closed),用户意图也不会被覆盖 → 僵尸会话无法复活。
-        self.user_closed.store(true, Ordering::Release);
+        // 1. 关闭 channel 写半部
+        // Use the same lock order as adoption; take both resources before releasing.
+        let (channel_write, handle) = {
+            let mut writer = self.channel_write.lock().await;
+            let mut client = self.handle.lock().await;
+            (writer.take(), client.take())
+        };
+        drop(channel_write);
+
+        // 2. 断开 SSH 连接
+        if let Some(handle) = handle {
+            // Disconnect::ByApplication 表示客户端主动断开
+            // TDSF (#20): disconnect 失败降到 debug 级 (close 本就是要关,
+            // 失败的 send/recv 都是预期内的, 不值得 warn 刷屏)。
+            if let Err(e) = handle
+                .handle_ref()
+                .disconnect(Disconnect::ByApplication, "user closed", "en")
+                .await
+            {
+                log::debug!("[ssh] disconnect failed (expected during close): {}", e);
+                // 即使 disconnect 失败,drop handle 也会清理资源
+            }
+            drop(handle);
+        }
         log::info!("[ssh] session closed: host={}", self.host);
         Ok(())
+    }
+
+    async fn wait_for_close(&self) {
+        let closed = self.closed_notify.notified();
+        if !self.user_closed.load(Ordering::Acquire) {
+            closed.await;
+        }
     }
 
     // ========================================================================
@@ -832,7 +882,15 @@ impl<R: tauri::Runtime> SshSession<R> {
         loop {
             // 1. 等待 PTY 断开 (notify_waiters 不存储 permit, 无忙轮询)
             let notify = session.exited_notify.lock().await.clone();
-            notify.notified().await;
+            let notified = notify.notified();
+            // 先创建 waiter，再检查旗标，覆盖提前退出与检查后的退出。
+            if !session.is_pty_exited() {
+                tokio::select! {
+                    biased;
+                    _ = session.wait_for_close() => return,
+                    _ = notified => {},
+                }
+            }
 
             // 2. 主动关闭 (close / ssh_disconnect) → 退出 supervisor
             // 检查 user_closed (永不重置) 而非 connection_closed (重连成功后清零),
@@ -889,7 +947,11 @@ impl<R: tauri::Runtime> SshSession<R> {
                     RECONNECT_MAX_ATTEMPTS,
                     delay.as_secs()
                 );
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    biased;
+                    _ = session.wait_for_close() => return,
+                    _ = tokio::time::sleep(delay) => {},
+                }
                 // 退避期间用户主动断开 → 取消重连 (user_closed 永不重置,无竞态)
                 if session.user_closed.load(Ordering::Acquire) {
                     log::info!("[ssh] reconnect cancelled (user disconnected during backoff)");
@@ -898,6 +960,9 @@ impl<R: tauri::Runtime> SshSession<R> {
                 if session.perform_reconnect(&config).await.is_ok() {
                     ok = true;
                     break;
+                }
+                if session.user_closed.load(Ordering::Acquire) {
+                    return;
                 }
             }
 
@@ -928,66 +993,95 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 成功时: 状态 → Connected + 推送状态事件; 失败时返回错误字符串。
     async fn perform_reconnect(&self, config: &SshReconnectConfig<R>) -> Result<(), String> {
         // 1. 重新建立 SSH 连接 (含 TOFU + 认证, 凭据来自 config)
-        let client = SshClient::connect(
+        let connecting = SshClient::connect(
             config.app_handle.clone(),
             config.params.clone(),
             Some(config.on_status.clone()),
-        )
-        .await
-        .map_err(|e| format!("SSH reconnect connect failed: {e}"))?;
+        );
+        let client = tokio::select! {
+            biased;
+            _ = self.wait_for_close() => return Err("SSH reconnect cancelled".into()),
+            result = connecting => result.map_err(|e| format!("SSH reconnect connect failed: {e}"))?,
+        };
 
         // 2. 重新开 PTY (含远端 shell 静默注入 + 新 reader task)
-        let new_session = SshSession::open_pty(
+        let opening = SshSession::open_pty(
             client,
             config.cols,
             config.rows,
             config.term.clone(),
             config.on_data.clone(),
-            config.on_status.clone(),
+            // 临时会话不能在资源交接前对外广播 connected。
+            Channel::new(|_| Ok(())),
             config.on_exit.clone(),
             // 重连也用真实参数 (2026-08-18 与首次连接一致)
             config.params.host.clone(),
             config.params.port,
             config.params.user.clone(),
-        )
-        .await
-        .map_err(|e| format!("SSH reconnect open_pty failed: {e}"))?;
+        );
+        let new_session = tokio::select! {
+            biased;
+            _ = self.wait_for_close() => return Err("SSH reconnect cancelled".into()),
+            result = opening => result.map_err(|e| format!("SSH reconnect open_pty failed: {e}"))?,
+        };
 
-        // 3. 热替换内部资源
-        // 3.1 关闭旧 channel_write (drop 触发 channel close)
-        {
-            let mut guard = self.channel_write.lock().await;
-            if let Some(old) = guard.take() {
-                drop(old);
-            }
-        }
-        // 3.2 关闭旧 handle (主动断开, 释放连接资源)
-        {
-            let mut guard = self.handle.lock().await;
-            if let Some(old) = guard.take() {
-                let _ = old
-                    .handle_ref()
-                    .disconnect(Disconnect::ByApplication, "reconnecting", "en")
-                    .await;
-                drop(old);
-            }
-        }
-        // 3.3 替换为新的 (handle / channel_write / notify / received_exit)
-        *self.channel_write.lock().await = new_session.channel_write.lock().await.take();
-        *self.handle.lock().await = new_session.handle.lock().await.take();
-        *self.exited_notify.lock().await = new_session.exited_notify.lock().await.clone();
-        *self.received_exit.lock().await = new_session.received_exit.lock().await.clone();
+        self.adopt_reconnected_session(new_session, config).await
+    }
 
-        // 3.4 重置标志 (新 reader task 已 spawn)
-        self.exited.store(false, Ordering::Release);
-        // 仅在用户未主动断开时清零 connection_closed: 若 close() 与本函数竞态
-        // (close 在 connect/open_pty 检查点之后执行),此处清零会让已从 SshState
-        // take 走的僵尸会话"复活"并无限重连。user_closed 是最终闸门。
-        if !self.user_closed.load(Ordering::Acquire) {
-            self.connection_closed.store(false, Ordering::Release);
-        } else {
-            log::info!("[ssh] reconnect finished but user closed during reconnect, marking closed");
-            self.connection_closed.store(true, Ordering::Release);
+    async fn adopt_reconnected_session(
+        &self,
+        new_session: Self,
+        config: &SshReconnectConfig<R>,
+    ) -> Result<(), String> {
+
+        let new_writer = new_session.channel_write.lock().await.take();
+        let new_client = new_session.handle.lock().await.take();
+        let new_notify = new_session.exited_notify.lock().await.clone();
+        let new_exit = new_session.received_exit.lock().await.clone();
+        let new_context = new_session
+            .terminal_context
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+
+        let mut writer = self.channel_write.lock().await;
+        let mut client = self.handle.lock().await;
+        let mut notify = self.exited_notify.lock().await;
+        let mut exit = self.received_exit.lock().await;
+        // No network or callback awaits under the state lock. Close uses it to
+        // publish intent, so the whole resource swap is before or after close.
+        let old_resources = {
+            let _state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            if self.user_closed.load(Ordering::Acquire) {
+                None
+            } else {
+                let old = (writer.take(), client.take());
+                *writer = new_writer;
+                *client = new_client;
+                *notify = new_notify;
+                *exit = new_exit;
+                *self
+                    .terminal_context
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = new_context;
+                self.swap_reader_exit_flag(&new_session);
+                self.connection_closed.store(false, Ordering::Release);
+                Some(old)
+            }
+        };
+        drop(exit);
+        drop(notify);
+        drop(client);
+        drop(writer);
+        let Some((old_writer, old_client)) = old_resources else {
+            return Err("SSH reconnect cancelled before resource adoption".into());
+        };
+        drop(old_writer);
+        if let Some(old) = old_client {
+            let _ = old
+                .handle_ref()
+                .disconnect(Disconnect::ByApplication, "reconnecting", "en")
+                .await;
         }
 
         // 3.45 P1 §37.90 (2026-09-01): 失效旧连接上的外部资源 (SFTP 缓存/隧道)。
@@ -997,11 +1091,26 @@ impl<R: tauri::Runtime> SshSession<R> {
         // 时序约束: 必须在 3.5 的 "connected" 状态广播前完成, 保证前端收到
         // connected 后发起的 SFTP 请求不会命中失效缓存。
         if let Some(cb) = &config.on_reconnected {
-            cb().await;
+            tokio::select! {
+                biased;
+                _ = self.wait_for_close() => return Err("SSH reconnect cancelled during resource invalidation".into()),
+                _ = cb() => {},
+            }
         }
 
         // 3.5 状态 → Connected + 推送状态事件 (前端状态栏恢复 "已连接")
-        *self.state.write().unwrap_or_else(|e| e.into_inner()) = SshSessionState::Connected;
+        {
+            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            if self.user_closed.load(Ordering::Acquire) {
+                return Err("SSH reconnect cancelled before publishing connected".into());
+            }
+            *state = SshSessionState::Connected;
+        }
+        // Channel consumers may read state/context synchronously; never call
+        // them under the state lock. A concurrent close retains Closed state.
+        if self.user_closed.load(Ordering::Acquire) {
+            return Err("SSH reconnect cancelled before publishing connected".into());
+        }
         let _ = config.on_status.send(SshStatusEvent::connected(
             &config.params.host,
             config.params.port,
@@ -1042,13 +1151,21 @@ impl<R: tauri::Runtime> SshSession<R> {
     /// 保留旧接口契约: 任何一边死了都返回 true。
     /// 调用方若要区分 PTY 死 vs 连接死, 用 `is_pty_exited` / `is_connection_closed`。
     pub fn is_exited(&self) -> bool {
-        self.exited.load(Ordering::Acquire)
-            || self.connection_closed.load(Ordering::Acquire)
+        self.is_pty_exited() || self.connection_closed.load(Ordering::Acquire)
     }
 
     /// PTY 通道是否已退出 (reader task 拿到 ExitStatus/Eof/Close/None)
     pub fn is_pty_exited(&self) -> bool {
-        self.exited.load(Ordering::Acquire)
+        self.exited
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .load(Ordering::Acquire)
+    }
+
+    fn swap_reader_exit_flag(&self, new_session: &Self) {
+        let mut current = self.exited.write().unwrap_or_else(|e| e.into_inner());
+        let mut next = new_session.exited.write().unwrap_or_else(|e| e.into_inner());
+        std::mem::swap(&mut *current, &mut *next);
     }
 
     /// SSH 连接是否已关闭 (close()/Drop/服务器主动 disconnect)
@@ -1467,7 +1584,7 @@ impl RemoteShellKind {
     }
 }
 
-/// 远端 bash 注入脚本: 恢复用户 .bashrc + OSC 7/133/633 钩子
+/// 远端 Bash 纯 hooks；用户 rc 与父连接文件清理由启动入口负责。
 ///
 /// 时序 (每个命令周期): `... 133;D;<exit> → OSC7 → 633;P;Cwd → 133;A → 133;B`
 /// → (用户敲命令) `633;E;<cmd>;<nonce> → 133;C` → (输出) → 下一个 precmd。
@@ -1475,8 +1592,6 @@ impl RemoteShellKind {
 /// 会被前端状态机忽略, 已发 C 未闭合的周期由 D 正常闭合。
 const BASH_INTEGRATION_SCRIPT: &str = r#"# TDSF SSH terminal integration (bash) — OSC 7 + 133 A/B/C/D + 633;E/P
 if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
-  __TDSF_OSC133_GUARD=1
-  [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
   # 健壮性②: 仅交互 shell 注入 (iTerm2/VS Code 同款检查)
   case $- in
     *i*) ;;
@@ -1484,9 +1599,29 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   esac
   # 健壮性③: dumb 终端 (编辑器内嵌/CI) 不注入
   if [ "${TERM:-}" = "dumb" ]; then return 0 2>/dev/null || exit 0; fi
-  # bash-preexec 同款: extdebug 开启时 DEBUG trap 被占用, 拒装 (仅失去 633;E)
-  __TDSF_NO_TRAP=0
-  shopt -q extdebug 2>/dev/null && __TDSF_NO_TRAP=1
+  __TDSF_OSC133_GUARD=1
+  # source 内会隐藏调用者 DEBUG；只有入口明确报告未占用才安装。
+  # 未提供该参数的 source 保守保留原 trap，仍安装 prompt/CWD hooks。
+  __TDSF_NO_TRAP=1
+  if [ "${1:-}" = "--tdsf-debug-unclaimed" ] && ! shopt -q extdebug 2>/dev/null; then
+    __TDSF_NO_TRAP=0
+  fi
+  __TDSF_CONNECTION_CONTEXT="${BASH_SOURCE[0]##*/}"
+  __TDSF_CONNECTION_CONTEXT="${__TDSF_CONNECTION_CONTEXT#tdsf-osc7-}"
+  __TDSF_CONNECTION_CONTEXT="${__TDSF_CONNECTION_CONTEXT%.hooks.bash}"
+  __TDSF_SHELL_INSTANCE="${BASHPID:-$$}-$RANDOM-$RANDOM"
+  # 按 UTF-8 字节编码，分号、控制字符和百分号不能破坏 OSC 字段。
+  _tdsf_uri_encode() {
+    local LC_ALL=C v="$1" c i byte
+    for ((i=0; i<${#v}; i++)); do
+      c="${v:i:1}"
+      case "$c" in
+        [a-zA-Z0-9/._~-]) printf '%s' "$c" ;;
+        *) printf -v byte '%d' "'$c"; printf '%%%02X' "$((byte & 255))" ;;
+      esac
+    done
+  }
+  __TDSF_REPORT_USER="$(_tdsf_uri_encode "$(id -un)")"
   # OSC 633;E 的命令字段随后跟 nonce，分号必须转义；反斜杠也必须双写。
   # 前端 decodeOscText 与 VS Code shell integration 使用同一 \xHH/\\ 协议。
   _tdsf_escape_osc_value() {
@@ -1510,18 +1645,30 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   # 再保序执行用户原 PROMPT_COMMAND (健壮性④: 包装式 prepend, 用户钩子不丢)
   _tdsf_precmd() {
     local ec=$?
+    # 哨兵保留目录名尾部的换行，只去掉 pwd 自己输出的一个换行。
+    local cwd="$(pwd -P; printf '.')"
+    cwd="${cwd%.}"
+    cwd="${cwd%$'\n'}"
+    printf '\033]633;P;TdsfContext=%s;%s;%s;%s\007' \
+      "$__TDSF_CONNECTION_CONTEXT" "$__TDSF_SHELL_INSTANCE" \
+      "$__TDSF_REPORT_USER" "$(_tdsf_uri_encode "$cwd")"
     printf '\033]133;D;%s\007' "$ec"
-    printf '\033]7;file://localhost%s\007' "$(pwd -P)"
-    printf '\033]633;P;Cwd=%s\007' "$(pwd -P)"
+    printf '\033]7;file://localhost%s\007' "$cwd"
+    printf '\033]633;P;Cwd=%s\007' "$cwd"
     printf '\033]133;A\007'
     printf '\033]133;B\007'
-    __TDSF_CMD_REPORTED=0
-    trap - DEBUG
+    # Array prompt hooks run after this function; do not label them as user input.
+    __TDSF_CMD_REPORTED="$__TDSF_PROMPT_ARRAY"
+    if [ "$__TDSF_NO_TRAP" = "0" ]; then trap - DEBUG; fi
     if [ -n "${__TDSF_ORIG_PC:-}" ]; then eval "$__TDSF_ORIG_PC"; fi
-    trap '_tdsf_preexec' DEBUG
+    if [ "$__TDSF_NO_TRAP" = "0" ]; then trap '_tdsf_preexec' DEBUG; fi
   }
-  if [ "$(declare -p PROMPT_COMMAND 2>/dev/null | head -c 11)" = "declare -a" ]; then
-    PROMPT_COMMAND=("_tdsf_precmd" "${PROMPT_COMMAND[@]}")
+  __TDSF_PROMPT_ARRAY=0
+  # Older Bash versions execute only the first element, so keep their scalar hook.
+  if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) &&
+     [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+    __TDSF_PROMPT_ARRAY=1
+    PROMPT_COMMAND=("_tdsf_precmd" "${PROMPT_COMMAND[@]}" "__TDSF_CMD_REPORTED=0")
   else
     __TDSF_ORIG_PC="${PROMPT_COMMAND:-}"
     PROMPT_COMMAND="_tdsf_precmd"
@@ -1675,10 +1822,9 @@ async fn probe_remote_shell<R: tauri::Runtime>(
 async fn write_shell_integration<R: tauri::Runtime>(
     handle: &Handle<SshClientHandler<R>>,
     kind: RemoteShellKind,
+    connection_id: &str,
 ) -> Result<String, SshSessionError> {
-    // uuid simple (32 hex 无连字符), 避免并发连接共享同名临时文件
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let tmp = format!("/tmp/tdsf-osc7-{id}");
+    let tmp = format!("/tmp/tdsf-osc7-{connection_id}");
 
     let (write_cmd, launch_cmd) = build_integration_commands(kind, &tmp)?;
 
@@ -1700,11 +1846,20 @@ fn build_integration_commands(
 ) -> Result<(String, String), SshSessionError> {
     match kind {
         RemoteShellKind::Bash => {
-            // EXIT trap 清理 rcfile (交互 bash 退出时执行)。
-            // 清理行必须在 heredoc 内容里 (写入 .bash 文件本身), 不能放在
-            // 写命令层 —— 否则只存在于瞬态 exec shell, 永远不会触发。
+            // hooks 无用户 rc/EXIT 清理，子登录 source 时不重复初始化或删父文件。
+            // 文件无凭据；hooks 可供同机子用户读，只有父入口注册精确退出清理。
             let script = format!(
-                "cat > {tmp}.bash <<'TDSF_OSC7'\ntrap 'rm -f {tmp}.bash' EXIT\n{BASH_INTEGRATION_SCRIPT}TDSF_OSC7"
+                "(umask 077; set -C\n\
+                 cat > {tmp}.hooks.bash <<'TDSF_HOOKS' &&\n{BASH_INTEGRATION_SCRIPT}TDSF_HOOKS\n\
+                 chmod 0444 {tmp}.hooks.bash &&\n\
+                 cat > {tmp}.bash <<'TDSF_OSC7'\n\
+                 trap 'rm -f {tmp}.bash {tmp}.hooks.bash' EXIT\n\
+                 [ -f \"$HOME/.bashrc\" ] && source \"$HOME/.bashrc\"\n\
+                 if [ -z \"$(trap -p DEBUG)\" ]; then\n\
+                   source {tmp}.hooks.bash --tdsf-debug-unclaimed\n\
+                 else\n\
+                   source {tmp}.hooks.bash\n\
+                 fi\nTDSF_OSC7\n)"
             );
             let launch = format!("exec bash --rcfile {tmp}.bash -i");
             Ok((script, launch))
@@ -1759,12 +1914,31 @@ impl<R: tauri::Runtime> Drop for SshSession<R> {
         // 会触发底层 disconnect, 后续 open_sftp_channel 会因 connection_closed
         // 立即拒绝, 避免 "Channel send error" 之类下游 panic)。
         // PTY exited 也设上 (整连接都死了, PTY 自然也死)。
-        if !self.exited.load(Ordering::Acquire) {
-            self.exited.store(true, Ordering::Release);
+        if !self.is_pty_exited() {
+            self.exited
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .store(true, Ordering::Release);
         }
         self.connection_closed.store(true, Ordering::Release);
     }
 }
+
+#[cfg(test)]
+#[path = "bash_integration_tests.rs"]
+mod bash_integration_tests;
+
+#[cfg(test)]
+#[path = "reader_exit_lifecycle_tests.rs"]
+mod reader_exit_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "reconnect_notify_tests.rs"]
+mod reconnect_notify_tests;
+
+#[cfg(test)]
+#[path = "reconnect_cancel_tests.rs"]
+mod reconnect_cancel_tests;
 
 #[cfg(test)]
 // make_test_session 为 pub(crate), 供 tunnel.rs / mod.rs 测试复用
@@ -1850,9 +2024,11 @@ pub(crate) mod tests {
             } else {
                 SshSessionState::Connected
             })),
-            exited: Arc::new(AtomicBool::new(exited)),
+            terminal_context: std::sync::RwLock::new(Arc::new(std::sync::RwLock::new(None))),
+            exited: std::sync::RwLock::new(Arc::new(AtomicBool::new(exited))),
             connection_closed: Arc::new(AtomicBool::new(connection_closed)),
             user_closed: Arc::new(AtomicBool::new(connection_closed)),
+            closed_notify: tokio::sync::Notify::new(),
             host: String::new(),
             port: 0,
             user: String::new(),
@@ -1881,6 +2057,30 @@ pub(crate) mod tests {
     }
 
     // === P3 #20 自动重连测试 ====================================================
+
+    #[tokio::test]
+    async fn terminal_context_uses_a_short_snapshot_and_hides_unusable_connections() {
+        let session = make_test_session::<tauri::test::MockRuntime>(false, false);
+        let snapshot = session.terminal_context.read().unwrap().clone();
+        *snapshot.write().unwrap() = Some(SshTerminalContext {
+            connection_id: "current-connection".to_string(),
+            bash_hooks_path: None,
+        });
+        let _held_exec_lock = session.handle.lock().await;
+        assert_eq!(
+            session.terminal_context().unwrap().connection_id,
+            "current-connection"
+        );
+        assert!(session.terminal_context().unwrap().bash_hooks_path.is_none());
+        *session.state.write().unwrap() = SshSessionState::Reconnecting;
+        assert!(session.terminal_context().is_none());
+        *session.state.write().unwrap() = SshSessionState::Connected;
+        session.user_closed.store(true, Ordering::Release);
+        assert!(session.terminal_context().is_none());
+        session.user_closed.store(false, Ordering::Release);
+        session.connection_closed.store(true, Ordering::Release);
+        assert!(session.terminal_context().is_none());
+    }
 
     #[test]
     fn test_reconnect_backoff_delay_progression() {
@@ -2122,8 +2322,10 @@ pub(crate) mod tests {
         assert!(s.contains("trap - DEBUG"), "bash 用户 PC 期间关 trap 缺失");
         // extdebug 拒装 (bash-preexec 同款)
         assert!(s.contains("extdebug"), "bash extdebug 检查缺失");
-        // ⑦ 脚本先 source 用户 rc (放 rc 末尾语义)
-        assert!(s.contains("source \"$HOME/.bashrc\""), "bash 未恢复用户 rc");
+        // ⑦ 用户 rc 只在首次启动入口恢复，纯 hooks 可重复 source。
+        let (entry, _) = build_integration_commands(RemoteShellKind::Bash, "/tmp/tdsf-test").unwrap();
+        assert!(entry.contains("source \"$HOME/.bashrc\""), "bash 启动未恢复用户 rc");
+        assert!(!s.contains("source \"$HOME/.bashrc\""), "纯 hooks 不得重复加载 rc");
         // 633;E 发送前清洗控制字符 (BEL/ESC 会截断 OSC 序列)
         assert!(s.contains("${c//$'\\a'/}"), "bash 633;E 控制字符清洗缺失");
         // 与 VS Code 633 协议一致：命令字段里的分号/反斜杠不可与 nonce 分隔符混淆。
@@ -2188,15 +2390,14 @@ pub(crate) mod tests {
 
     #[test]
     fn test_integration_cleanup_line_prepended_bash() {
-        // 清理行必须在 heredoc 内、且位于注入脚本 const 之前 ——
-        // 覆盖 const 内 early-return 路径 (非交互/TERM=dumb), 保证 trap 已注册
+        // 清理只属于父入口，必须在 source hooks 前注册，覆盖 early-return。
         let (write_cmd, launch) =
             build_integration_commands(RemoteShellKind::Bash, "/tmp/tdsf-osc7-abc123").unwrap();
         let cleanup_idx = write_cmd
-            .find("trap 'rm -f /tmp/tdsf-osc7-abc123.bash' EXIT")
+            .find("trap 'rm -f /tmp/tdsf-osc7-abc123.bash /tmp/tdsf-osc7-abc123.hooks.bash' EXIT")
             .expect("bash 清理行缺失");
         let heredoc_idx = write_cmd.find("<<'TDSF_OSC7'").unwrap();
-        let script_idx = write_cmd.find(BASH_INTEGRATION_SCRIPT).unwrap();
+        let script_idx = write_cmd.find("source /tmp/tdsf-osc7-abc123.hooks.bash").unwrap();
         assert!(
             heredoc_idx < cleanup_idx && cleanup_idx < script_idx,
             "bash 清理行必须位于 heredoc 内且先于注入脚本"

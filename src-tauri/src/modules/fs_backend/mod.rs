@@ -13,6 +13,9 @@ mod local;
 pub mod commands;
 pub mod sftp;
 
+#[cfg(test)]
+mod create_tests;
+
 use serde::Serialize;
 use std::fmt;
 
@@ -79,6 +82,9 @@ pub trait FsBackend: Send + Sync {
 
     /// 写入文件 (创建/覆盖)
     async fn write(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError>;
+
+    /// Create a file exclusively; existing paths must remain unchanged.
+    async fn create_file(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError>;
 
     /// 重命名/移动
     async fn rename(&self, from: &str, to: &str) -> Result<(), FsBackendError>;

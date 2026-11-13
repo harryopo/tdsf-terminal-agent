@@ -21,7 +21,11 @@ import {
   PREDICTION_CLEAR_EVENT,
 } from "@/lib/predictionEvents";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { setPredictionImportShellHistory } from "@/modules/settings/store";
+import {
+  setPredictionImportShellHistory,
+  setSshRemoteCarapacePrompt,
+} from "@/modules/settings/store";
+import { RemoteCarapaceCard } from "./RemoteCarapaceCard";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SectionHeader } from "../components/SectionHeader";
@@ -31,26 +35,68 @@ export function PredictionHistorySection() {
   const importShellHistory = usePreferencesStore(
     (s) => s.predictionImportShellHistory,
   );
+  const sshRemoteCarapacePrompt = usePreferencesStore(
+    (s) => s.sshRemoteCarapacePrompt,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [sent, setSent] = useState(false);
 
-  const clearHistory = () => {
+  const clearHistory = async () => {
     setConfirming(false);
-    // 真正清的是主窗那份内存；浏览器预览（无 Tauri）下这条会 reject，安静忽略
-    void emitTo(MAIN_WINDOW_LABEL, PREDICTION_CLEAR_EVENT).catch(() => undefined);
-    void setPredictionImportShellHistory(false);
-    setSent(true);
+    setBusy(true);
+    setSent(false);
+    setError(null);
+    let dispatched = false;
+    try {
+      await emitTo(MAIN_WINDOW_LABEL, PREDICTION_CLEAR_EVENT);
+      dispatched = true;
+      await setPredictionImportShellHistory(false);
+      setSent(true);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      setError(
+        dispatched
+          ? `清空请求已发送，但关闭历史导入失败：${detail}`
+          : `未能发送清空请求，请重试：${detail}`,
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        title="终端预测历史"
-        description="命令预测按你实际敲过的命令补全候选；这份历史只存在应用运行内存里，退出即消失。"
+        title="终端预测与补全"
+        description="管理历史候选与服务器补全组件。静态命令和参数无需安装额外组件。"
       />
 
+      <div className="rounded-xl border border-border/60 bg-card p-4 space-y-3">
+        <SettingRow
+          title="在 SSH 终端里提示装补全组件"
+          description="某台服务器还没装这个组件时，在那格终端的右下角显示一个小图标，点开可以一键安装。关掉这里只是不再显示那个图标，下面这块入口照样能装。"
+        >
+          <Switch
+            checked={sshRemoteCarapacePrompt}
+            onCheckedChange={(v) => void setSshRemoteCarapacePrompt(v)}
+          />
+        </SettingRow>
+        <div className="flex flex-col gap-1.5">
+          <Label>远端补全组件</Label>
+          <span className="text-[11px] leading-relaxed text-muted-foreground">
+            不装也照常提示静态参数（命令词典与参数库）；装上才能提示这台机器上
+            真实存在的分支、文件名与服务名 ——
+            补全要在命令真正执行的那台机器上跑，
+            本机这份看不到远端。装一次对该服务器上所有终端都有效。
+          </span>
+          <RemoteCarapaceCard />
+        </div>
+      </div>
+
       <div className="flex flex-col gap-2">
-        <Label>清空</Label>
+        <Label>预测历史</Label>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           只清空本应用的预测历史，<strong>不会</strong>删除或改写 shell
           自己的历史文件（如 ~/.bash_history、~/.zsh_history、PowerShell
@@ -60,17 +106,29 @@ export function PredictionHistorySection() {
           variant={confirming ? "destructive" : "outline"}
           size="sm"
           className="w-fit"
-          onClick={() => (confirming ? clearHistory() : setConfirming(true))}
+          disabled={busy}
+          onClick={() =>
+            confirming ? void clearHistory() : setConfirming(true)
+          }
           onBlur={() => setConfirming(false)}
         >
-          {confirming ? "再次点击确认清空" : "清空预测历史"}
+          {busy
+            ? "正在发送…"
+            : confirming
+              ? "再次点击确认清空"
+              : "清空预测历史"}
         </Button>
+        {error && (
+          <p role="alert" className="text-[11px] text-destructive">
+            {error}
+          </p>
+        )}
         {sent && (
           <p
             data-testid="prediction-clear-result"
             className="text-[11px] text-muted-foreground"
           >
-            已清空当前会话的预测历史，并停止启动时导入（本会话新敲成功的命令仍会计入）。
+            清空请求已发送至主窗口，并已停止启动时导入；本会话新敲成功的命令仍会计入。
           </p>
         )}
       </div>

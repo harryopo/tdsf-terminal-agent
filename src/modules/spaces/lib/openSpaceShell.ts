@@ -1,9 +1,12 @@
 import { toast } from "sonner";
 import {
-  isSshEnvConnected,
-} from "./sshSpaceSession";
+  diagnoseSshFailure,
+  type SshDiagnosis,
+} from "@/modules/ssh-explorer/lib/sshFailureDiagnosis";
 import { useSshStore } from "@/modules/ssh-explorer/sshStore";
 import type { WorkspaceEnv } from "@/modules/workspace";
+import { isSshEnvConnected } from "./sshSpaceSession";
+import { useSpaces } from "./useSpaces";
 
 /**
  * #89：在 SSH 工作区里**为这一个标签页**开一条自己的连接。
@@ -71,13 +74,13 @@ const reconnecting = new Set<string>();
  * 只覆盖"最近使用的那一台"，其余的没人管 → 界面按 SSH 渲染，左侧文件树拿着失效的
  * 会话号去开 SFTP，握手 10 秒后整块面板报 `[fsb] sftp session error: SFTP error: Timeout`。
  *
- * 口径：**重连成功**由连接成功订阅接管（改回工作区主会话、绑终端）；**重连不起来**
- * 绝不静默把服务器工作区显示成本地文件树 —— 原因由 `connect()` 弹一次人话 toast，
- * 落点由左侧离线面板就地说明（两边都说不清就是两条重复通知，见 #110）。
+ * 成功由连接订阅绑定工作区和终端。失败由 `connect()` 提示，
+ * 详细诊断只交给仍在查看发起重连的工作区。
  */
 export async function reconnectSshSpace(
   spaceId: string,
   env: WorkspaceEnv,
+  onFailure?: (diagnosis: SshDiagnosis) => void,
 ): Promise<string | null> {
   if (env.kind !== "ssh") return null;
   if (reconnecting.has(spaceId)) return null;
@@ -95,6 +98,23 @@ export async function reconnectSshSpace(
     // 连接订阅据此不再凭空新建/切换工作区。
     const sessionId = await useSshStore.getState().connectWithSaved(profile, {
       autoConnect: true,
+      ...(onFailure && {
+        onFailure: (message: string) => {
+          const { activeId, spaces } = useSpaces.getState();
+          if (activeId !== spaceId) return;
+          const current = spaces.find((space) => space.id === spaceId)?.env;
+          if (
+            current?.kind !== "ssh" ||
+            current.host !== env.host ||
+            current.user !== env.user ||
+            current.port !== env.port ||
+            isSshEnvConnected(current)
+          ) {
+            return;
+          }
+          onFailure(diagnoseSshFailure(message, env));
+        },
+      }),
     });
     // #110：连不上时**不再**在这里补一条 toast —— connect() 已经按翻译后的原因弹过一条，
     // 两条叠在一起就是用户截图那样（一条英文 Debug + 一条"可在 SSH 面板重试"，

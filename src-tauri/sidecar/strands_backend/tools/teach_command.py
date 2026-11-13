@@ -7,6 +7,7 @@ tool's parameter schema (for example, a deployment step).
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from strands_backend.tools import ToolContext, emit_tool_call_card, tool
 from strands_backend.tools.command_impact import analyze
@@ -73,9 +74,17 @@ def make_teach_command_tool(ctx: ToolContext):
             "explanation": explanation,
             "predicted_output": predicted_output,
         }
-        emit_tool_call_card(ctx, "teach_command", params, "started")
-        result = invoke_teach_command_tool(params, ctx)
-        emit_tool_call_card(ctx, "teach_command", params, "completed", result)
+        call_id = str(uuid4())
+        emit_tool_call_card(ctx, "teach_command", params, "started", tool_call_id=call_id)
+        try:
+            result = invoke_teach_command_tool(params, ctx)
+        except Exception as exc:
+            emit_tool_call_card(
+                ctx, "teach_command", params, "error",
+                {"status": "error", "message": str(exc)}, tool_call_id=call_id,
+            )
+            raise
+        emit_tool_call_card(ctx, "teach_command", params, "completed", result, tool_call_id=call_id)
         return result
 
     teach_command.__name__ = "teach_command"

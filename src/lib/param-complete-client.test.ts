@@ -15,6 +15,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@tauri-apps/api/event', async () => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return { emit: (event: string, payload: unknown) => invoke('plugin:event|emit', { event, payload }) };
+});
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
   Channel: class {},
@@ -538,6 +543,7 @@ describe('installRemoteCarapace', () => {
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
       calls.push({ cmd, args });
+      if (cmd === 'plugin:event|emit') return undefined;
       if (cmd === 'carapace_linux_path') return 'C:/pkg/carapace-linux-amd64';
       if (cmd === 'sftp_upload_file') return undefined;
       if (cmd === 'ssh_command') {
@@ -566,13 +572,17 @@ describe('installRemoteCarapace', () => {
     ).resolves.toBe(true);
 
     const kinds = calls.map((c) => c.cmd);
-    // 顺序断言：mkdir（ssh_command #1）在 sftp_upload_file 之前，chmod 验证在最后
+    // 顺序断言：mkdir 在上传前，chmod 验证成功后才通知。
     expect(kinds).toEqual([
       'ssh_command',
       'carapace_linux_path',
       'sftp_upload_file',
       'ssh_command',
+      'plugin:event|emit',
     ]);
+    expect(calls[4]?.args).toEqual({
+      event: 'tdsf:ssh-carapace-changed', payload: { sessionId: 42 },
+    });
     // upload 参数：sessionId + localPath + 远端绝对路径（$HOME 展开，~ 不被 sftp 展开）
     const upload = calls[2] as { args: Record<string, unknown> };
     expect(upload.args).toEqual({
@@ -595,6 +605,7 @@ describe('installRemoteCarapace', () => {
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
       calls.push({ cmd, args });
+      if (cmd === 'plugin:event|emit') return undefined;
       if (cmd === 'carapace_linux_path') return 'C:/pkg/carapace-linux-amd64';
       if (cmd === 'sftp_upload_file') return undefined;
       if (cmd === 'ssh_command') {

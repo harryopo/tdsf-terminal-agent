@@ -12,7 +12,19 @@ low_risk:
   - name: ls
     description: 列出目录内容
     patterns:
-      - "^ls\\s+.*"
+      - "^ls(\\s+.*)?$"
+  - name: pwd
+    description: 显示当前工作目录
+    patterns:
+      - "^pwd\\s*$"
+  - name: cd
+    description: 切换当前 shell 工作目录（不修改系统状态）
+    patterns:
+      - "^cd(\\s+.*)?$"
+  - name: systemctl_read
+    description: 查看 systemd 服务状态（只读）
+    patterns:
+      - "^systemctl\\s+(status|show|is-active|is-enabled|list-units|list-unit-files)(\\s+.*)?$"
   - name: grep
     description: 文本搜索
     patterns:

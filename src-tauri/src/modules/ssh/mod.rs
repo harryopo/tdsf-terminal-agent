@@ -53,7 +53,7 @@ use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 // TDSF B2 (2026-08-29): 可视教学打字机（human_type pump 编排）
-use crate::modules::human_type::{write_human_common, HumanTypeReport};
+use crate::modules::human_type::{write_human_common, HumanTypeReport, HumanTypingInput};
 
 /// SSH 会话注册表 (全局,通过 Tauri State 注入)
 ///
@@ -522,6 +522,7 @@ pub async fn ssh_write_human(
     session_id: u32,
     text: String,
     speed: f64,
+    clear_input: Option<bool>,
 ) -> Result<HumanTypeReport, String> {
     let session = state
         .get(session_id)
@@ -541,8 +542,15 @@ pub async fn ssh_write_human(
         }
     };
 
-    write_human_common(&app, "ssh", session_id, session.human_typing_guard(), write, text, speed)
-        .await
+    write_human_common(
+        &app,
+        "ssh",
+        session_id,
+        session.human_typing_guard(),
+        write,
+        HumanTypingInput { text, speed, clear_input: clear_input.unwrap_or(true) },
+    )
+    .await
 }
 
 /// ssh_resize 命令: 调整 SSH PTY 窗口大小
@@ -617,6 +625,7 @@ pub struct SshSessionDetail {
     pub state: SshSessionState,
     /// 建立这条连接的 webview 窗口 label (#117)；认不出出身时为 None
     pub owner_window: Option<String>,
+    pub terminal_context: Option<session::SshTerminalContext>,
 }
 
 /// 列出全部会话详情 (按 session_id 升序)
@@ -635,6 +644,7 @@ pub async fn sessions_detail(state: &SshState) -> Vec<SshSessionDetail> {
             user: s.user().to_string(),
             state: s.state(),
             owner_window: owners.get(id).cloned(),
+            terminal_context: s.terminal_context(),
         })
         .collect();
     result.sort_by_key(|d| d.session_id);
@@ -930,11 +940,13 @@ pub struct SshCommandResult {
     pub operation_id: Option<String>,
 }
 
-/// 后台 exec 的原生输出增量。前端按 operationId 聚合；最终事实仍以
+/// 后台 exec 的原生输出增量。前端按 toolCallId 关联调用及 operationId；最终事实仍以
 /// SshCommandResult.exit_code 为准。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshCommandOutputEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     pub operation_id: Option<String>,
     pub conversation_session_id: Option<String>,
     pub ssh_session_id: u32,
@@ -944,6 +956,33 @@ pub struct SshCommandOutputEvent {
     pub chunk: String,
     pub status: String,
     pub exit_code: Option<i32>,
+}
+
+fn decode_command_output(pending: &mut Vec<u8>, bytes: &[u8], finished: bool) -> String {
+    let mut joined = std::mem::take(pending);
+    let input = if joined.is_empty() {
+        bytes
+    } else {
+        joined.extend_from_slice(bytes);
+        joined.as_slice()
+    };
+    let mut complete_len = input.len();
+    if !finished {
+        let mut consumed = 0;
+        while let Err(error) = std::str::from_utf8(&input[consumed..]) {
+            consumed += error.valid_up_to();
+            match error.error_len() {
+                Some(len) => consumed += len,
+                None => {
+                    // Only an incomplete UTF-8 tail (at most three bytes) waits for the next packet.
+                    pending.extend_from_slice(&input[consumed..]);
+                    complete_len = consumed;
+                    break;
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(&input[..complete_len]).into_owned()
 }
 
 /// ssh_command 命令: 执行单条 SSH 命令并返回结构化结果 (exec 模式, 非 PTY)
@@ -989,6 +1028,7 @@ pub async fn ssh_command(
     operation_id: Option<String>,
     conversation_session_id: Option<String>,
     tool_name: Option<String>,
+    tool_call_id: Option<String>,
 ) -> Result<SshCommandResult, String> {
     let start = std::time::Instant::now();
     log::info!(
@@ -1008,12 +1048,14 @@ pub async fn ssh_command(
     // 2. 每个原生 stdout/stderr chunk 立即推送到前端。开始事件让无首屏输出的
     // 命令也能立刻显示“执行中”，并刷新 Agent 活动计时。
     let event_operation_id = operation_id.clone();
+    let event_tool_call_id = tool_call_id.clone();
     let event_conversation_session_id = conversation_session_id.clone();
     let event_command = command.clone();
     let event_tool_name = tool_name.unwrap_or_else(|| "ssh_command".to_string());
     let _ = app.emit(
         "sidecar:ssh_command_output",
         SshCommandOutputEvent {
+            tool_call_id: tool_call_id.clone(),
             operation_id: operation_id.clone(),
             conversation_session_id: conversation_session_id.clone(),
             ssh_session_id: session_id,
@@ -1027,16 +1069,28 @@ pub async fn ssh_command(
     );
     let callback_tool_name = event_tool_name.clone();
     let event_app = app.clone();
+    let output_decoder = Arc::new(std::sync::Mutex::new((Vec::new(), Vec::new())));
+    let callback_decoder = output_decoder.clone();
     let output_callback: Arc<dyn Fn(Vec<u8>, bool) + Send + Sync> = Arc::new(
         move |bytes, is_stderr| {
+            let chunk = {
+                let mut buffers = callback_decoder.lock().expect("SSH output decoder");
+                let pending = if is_stderr {
+                    &mut buffers.1
+                } else {
+                    &mut buffers.0
+                };
+                decode_command_output(pending, &bytes, false)
+            };
             let event = SshCommandOutputEvent {
+                tool_call_id: event_tool_call_id.clone(),
                 operation_id: event_operation_id.clone(),
                 conversation_session_id: event_conversation_session_id.clone(),
                 ssh_session_id: session_id,
                 tool_name: callback_tool_name.clone(),
                 command: event_command.clone(),
                 stream: if is_stderr { "stderr" } else { "stdout" }.to_string(),
-                chunk: String::from_utf8_lossy(&bytes).into_owned(),
+                chunk,
                 status: "running".to_string(),
                 exit_code: None,
             };
@@ -1048,6 +1102,35 @@ pub async fn ssh_command(
     let result = session
         .exec_command_streaming(&command, timeout, Some(output_callback))
         .await;
+
+    let remaining_output = {
+        let mut buffers = output_decoder.lock().expect("SSH output decoder");
+        [
+            ("stdout", decode_command_output(&mut buffers.0, &[], true)),
+            ("stderr", decode_command_output(&mut buffers.1, &[], true)),
+        ]
+    };
+    for (stream, chunk) in remaining_output {
+        if !chunk.is_empty() {
+            if let Err(error) = app.emit(
+                "sidecar:ssh_command_output",
+                SshCommandOutputEvent {
+                    tool_call_id: tool_call_id.clone(),
+                    operation_id: operation_id.clone(),
+                    conversation_session_id: conversation_session_id.clone(),
+                    ssh_session_id: session_id,
+                    tool_name: event_tool_name.clone(),
+                    command: command.clone(),
+                    stream: stream.to_string(),
+                    chunk,
+                    status: "running".to_string(),
+                    exit_code: None,
+                },
+            ) {
+                log::warn!("[ssh] failed to emit command output: {}", error);
+            }
+        }
+    }
 
     let duration = start.elapsed().as_secs_f64();
 
@@ -1067,6 +1150,7 @@ pub async fn ssh_command(
             let _ = app.emit(
                 "sidecar:ssh_command_output",
                 SshCommandOutputEvent {
+                    tool_call_id: tool_call_id.clone(),
                     operation_id: operation_id.clone(),
                     conversation_session_id: conversation_session_id.clone(),
                     ssh_session_id: session_id,
@@ -1101,6 +1185,7 @@ pub async fn ssh_command(
             let _ = app.emit(
                 "sidecar:ssh_command_output",
                 SshCommandOutputEvent {
+                    tool_call_id,
                     operation_id: operation_id.clone(),
                     conversation_session_id,
                     ssh_session_id: session_id,
@@ -1276,6 +1361,10 @@ pub async fn tunnel_list(
 // - exec_command 真实执行 (依赖 russh Handle, 见 session.rs tests 注释)
 
 #[cfg(test)]
+#[path = "command_output_tests.rs"]
+mod command_output_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1363,6 +1452,7 @@ mod tests {
     #[test]
     fn test_ssh_command_output_event_serialization() {
         let event = SshCommandOutputEvent {
+            tool_call_id: Some("call-1".to_string()),
             operation_id: Some("operation-1".to_string()),
             conversation_session_id: Some("chat-1".to_string()),
             ssh_session_id: 7,
@@ -1375,10 +1465,17 @@ mod tests {
         };
 
         let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"toolCallId\":\"call-1\""));
         assert!(json.contains("\"conversationSessionId\":\"chat-1\""));
         assert!(json.contains("\"sshSessionId\":7"));
         assert!(json.contains("\"toolName\":\"package_manage\""));
         assert!(json.contains("\"chunk\":\"Downloading 10%\\n\""));
+        let legacy_event = SshCommandOutputEvent {
+            tool_call_id: None,
+            ..event
+        };
+        let legacy_json = serde_json::to_value(legacy_event).unwrap();
+        assert!(legacy_json.get("toolCallId").is_none());
     }
 
     #[tokio::test]

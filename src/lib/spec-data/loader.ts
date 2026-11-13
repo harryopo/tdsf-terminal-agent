@@ -14,7 +14,7 @@ import type { FigSpec } from "./types";
 import { SPEC_INDEX, type SpecIndexEntry } from "./generated/spec-index";
 
 // vite 会把大 JSON 拆成独立 chunk 并按需加载
-const specsImporters = import.meta.glob("../generated/specs.json", {
+const specsImporters = import.meta.glob("./generated/specs.json", {
   import: "default",
 });
 

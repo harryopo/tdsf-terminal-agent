@@ -6,6 +6,9 @@ import {
   watchRemove,
 } from "@/modules/explorer/lib/watch";
 import type { Tab } from "@/modules/tabs";
+import { editorWorkspace } from "@/modules/tabs/lib/editorWorkspace";
+import type { LocalWorkspaceEnv } from "@/modules/workspace";
+import { fileSourceKey } from "@/modules/workspace/fileSource";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type RefObject, useEffect, useRef } from "react";
 import type { EditorPaneHandle } from "./EditorPane";
@@ -14,6 +17,11 @@ type Params = {
   tabs: Tab[];
   tabsRef: RefObject<Tab[]>;
   editorRefs: RefObject<Map<number, EditorPaneHandle>>;
+};
+
+type EditorWatchGroup = {
+  workspace: LocalWorkspaceEnv;
+  paths: Set<string>;
 };
 
 /**
@@ -68,22 +76,38 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
     };
   }, [tabsRef, editorRefs]);
 
-  const editorWatchRef = useRef<Set<string>>(new Set());
+  const editorWatchRef = useRef<Map<string, EditorWatchGroup>>(new Map());
   useEffect(() => {
-    const want = new Set<string>();
+    const want = new Map<string, EditorWatchGroup>();
     for (const t of tabs) {
       if (t.kind !== "editor") continue;
       // TDSF 2026-07-30: 远程 tab 不加本地 fs watch（远程路径无意义）。
       if (t.remote) continue;
-      want.add(parentDir(t.path));
+      const workspace = editorWorkspace(t);
+      if (!workspace) continue;
+      const key = fileSourceKey(workspace)!;
+      const group = want.get(key) ?? { workspace, paths: new Set<string>() };
+      group.paths.add(parentDir(t.path));
+      want.set(key, group);
     }
     const prev = editorWatchRef.current;
-    const toAdd = [...want].filter((d) => !prev.has(d));
-    const toRemove = [...prev].filter((d) => !want.has(d));
-    watchAdd(toAdd);
-    watchRemove(toRemove);
+    for (const [key, group] of want) {
+      const oldPaths = prev.get(key)?.paths;
+      watchAdd([...group.paths].filter((d) => !oldPaths?.has(d)), group.workspace);
+    }
+    for (const [key, group] of prev) {
+      const nextPaths = want.get(key)?.paths;
+      watchRemove([...group.paths].filter((d) => !nextPaths?.has(d)), group.workspace);
+    }
     editorWatchRef.current = want;
   }, [tabs]);
+
+  useEffect(() => () => {
+    for (const group of editorWatchRef.current.values()) {
+      watchRemove([...group.paths], group.workspace);
+    }
+    editorWatchRef.current.clear();
+  }, []);
 
   useEffect(() => {
     let alive = true;

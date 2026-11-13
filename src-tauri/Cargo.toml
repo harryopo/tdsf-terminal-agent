@@ -1,18 +1,22 @@
 [package]
 name = "tdsf-terminal-agent"
-version = "0.9.2"
+version = "1.0.0-rc.1"
 description = "TDSF Terminal Agent — 终端优先的 Linux 运维 AI 工作台"
 authors = ["TDSF Team"]
 license = "Apache-2.0"
 repository = "https://github.com/harryopo/tdsf-terminal-agent"
 edition = "2021"
-# russh 0.64 requires Rust 1.89 or later.
+# russh 0.65 requires Rust 1.89 or later.
 rust-version = "1.89"
 
 # Tauri 2 标准入口 (二进制 = 产品名)
 [[bin]]
 name = "tdsf-terminal-agent"
 path = "src/main.rs"
+
+[[example]]
+name = "verify_updater_signature"
+test = true
 
 [lib]
 name = "tdsf_terminal_agent_lib"
@@ -84,7 +88,7 @@ thiserror = "1.0"
 # - 原生 keepalive / inactivity_timeout / known_hosts / agent forwarding
 # - ring feature: 预编译 crypto backend,Windows 零系统依赖
 # - 禁用默认 aws-lc-rs (Windows MSVC 编译失败,需 NASM + alignas 支持)
-russh = { version = "0.64.1", default-features = false, features = ["ring"] }
+russh = { version = "0.65.1", default-features = false, features = ["ring"] }
 # russh 内置 keys 模块 (0.50+ 已合并 russh-keys),无需单独 crate
 # 指纹计算: russh::keys::ssh_key::HashAlg::Sha256 (russh 重新导出 ssh-key crate)
 # 测试随机数: russh::keys::ssh_key::rand_core::OsRng (无需额外 rand 依赖)
@@ -116,9 +120,9 @@ sha2 = "0.10"
 # 注: bollard-stubs 由 bollard 内部自动传递依赖(bollard-stubs 0.17 不存在,
 #     实际版本是 1.45.0-rc.x 格式), 无需显式声明
 bollard = { version = "0.17", features = ["ssl"] }
-tauri-plugin-updater = "2"
 
 [target.'cfg(unix)'.dependencies]
+tauri-plugin-updater = "2"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -130,6 +134,7 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSUserDefaults"] 
 tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -148,6 +153,9 @@ tauri-plugin-single-instance = "2.4.4"
 tauri-plugin-window-state = "2"
 
 [dev-dependencies]
+base64 = "=0.22.1"
+minisign-verify = "=0.2.5"
+tokio = { version = "1", features = ["test-util"] }
 # SSH 测试用随机数 (russh 0.61 / ssh-key 0.7 依赖 rand_core 0.10)
 # rand 0.10 才兼容 rand_core 0.10
 

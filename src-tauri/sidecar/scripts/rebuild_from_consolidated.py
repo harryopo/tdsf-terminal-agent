@@ -37,9 +37,9 @@ import sys
 import uuid
 from pathlib import Path
 
-# 与应用读写同一个 rag.db（<项目根>/.tdsf-data）
+# 优先使用调用方指定目录；未配置时与应用默认目录一致
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-os.environ["TDSF_DATA_DIR"] = str(PROJECT_ROOT / ".tdsf-data")
+os.environ.setdefault("TDSF_DATA_DIR", str(PROJECT_ROOT / ".tdsf-data"))
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:

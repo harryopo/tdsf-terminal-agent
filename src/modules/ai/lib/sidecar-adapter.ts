@@ -30,16 +30,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { UIMessageChunk } from "ai";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
+import type { SshCommandOutputEvent } from "@/lib/sidecar-bridge";
+import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
+import { getToolResultStatus } from "./tool-result";
+import { syncRunningMode, type AgentModeSource } from "./live-mode-sync";
 import {
   TDSF_AGENTS,
   type AgentMode,
   type TdsfAgentId,
+  toSidecarMode,
 } from "../agents/registry";
 // TDSF 2026-08-28: sidecar LLM 配置同步（首次对话前把当前模型配置推给 sidecar）
 import {
-  isSidecarConfigSynced,
-  markSidecarConfigSynced,
-  syncSidecarLlmConfig,
+  ensureSidecarConfigReady,
+  isSidecarConfigResultCurrent,
 } from "./sidecar-config-sync";
 // #133 无活动预算（等用户的时间不记账）
 import { createActivityBudget } from "./activityBudget";
@@ -166,17 +170,17 @@ export function buildSidecarErrorHint(
     // 「简化问题描述后重试」把 AI 的等待说成用户问得不好。
     if (awaitingUserResponse) {
       return [
-        "AI 在等你确认，但这一轮的时间用完了，已中止。",
+        "AI 在等你确认时，本轮调用超时。",
         "",
-        "命令没有被执行。审批卡上的「执行 / 拒绝」还在，回答它即可继续；" +
-          "卡已经不在了就重新发起这一轮。",
+        "超时不能证明命令尚未执行，也不代表远端命令已经停止。" +
+          "请先查看终端和运行日志，确认状态后再决定下一步；不要直接重复状态不明的命令。",
       ].join("\n");
     }
     return [
       `AI 任务超时未完成：${rawError}`,
       "",
-      "说明：这段时间里既没有输出、也没有工具调用（等你确认的时间不计算在内）。",
-      "建议：1) 看界面是否有没回答的审批卡或弹窗 2) 重新发起这一轮",
+      "超时不代表远端命令已经停止。",
+      "请先查看终端和运行日志，确认状态后再决定下一步；不要直接重复状态不明的命令。",
     ].join("\n");
   }
   if (
@@ -273,6 +277,9 @@ const STREAM_CHUNK_SIZE = 96;
  */
 const STREAM_CHUNK_DELAY_MS = 0;
 
+// The shared output store must distinguish invokes within one clock tick.
+let streamSeq = 0;
+
 /**
  * invoke 完成后等待 in-flight `sidecar:tool_call` / `sidecar:agent_message`
  * 事件 drain 的窗口（ms）。
@@ -340,6 +347,7 @@ const EVENT_LOOP_PROGRESS = "sidecar:loop_progress";
 
 /** `runSidecarStream` 调用参数 */
 export interface SidecarStreamOptions {
+  modeSource?: AgentModeSource;
   /** TDSF agent id（前端业务 id，会被映射到 Python AGENT_REGISTRY key） */
   agentId: TdsfAgentId;
   /**
@@ -527,10 +535,6 @@ interface AgentMessagePayload {
   [k: string]: unknown;
 }
 
-interface SshCommandOutputPayload {
-  conversationSessionId?: string | null;
-}
-
 // === 内部工具函数 ============================================================
 
 /**
@@ -666,9 +670,11 @@ async function* streamText(
   text: string,
   id: string,
   kind: "text" | "reasoning" = "text",
+  abortSignal?: AbortSignal,
 ): AsyncIterable<SidecarStreamPart> {
   if (!text) return;
   for (let i = 0; i < text.length; i += STREAM_CHUNK_SIZE) {
+    if (abortSignal?.aborted) return;
     const delta = text.slice(i, i + STREAM_CHUNK_SIZE);
     yield kind === "reasoning"
       ? { type: "reasoning-delta", id, delta }
@@ -699,14 +705,27 @@ async function registerSidecarListeners(
   onToolCall?: (payload: ToolCallPayload) => void,
   onAgentMessage?: (payload: AgentMessagePayload) => void,
   onLoopProgress?: (progress: { round: number; toolCount: number }) => void,
+  requestStreamId?: string,
+  isActive: () => boolean = () => true,
 ): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [];
+  let rpcRequestId: number | undefined;
 
-  const belongsToSession = (payload: unknown): boolean => {
-    if (!sessionId) return true;
+  const belongsToInvocation = (payload: unknown): boolean => {
+    if (!isActive()) return false;
+    if (!sessionId && !requestStreamId) return true;
     if (payload == null || typeof payload !== "object") return false;
     const outer = payload as Record<string, unknown>;
-    return outer.session_id === sessionId;
+    if (sessionId && outer.session_id !== sessionId) return false;
+    if (requestStreamId) {
+      const id = outer.rpc_request_id;
+      if (outer.rpc_stream_id !== requestStreamId || typeof id !== "number" ||
+          !Number.isSafeInteger(id) || id < 0) return false;
+      // Bind only after the dispatch has echoed this invocation's private tag.
+      if (rpcRequestId === undefined) rpcRequestId = id;
+      if (rpcRequestId !== id) return false;
+    }
+    return true;
   };
 
   // mood 变化事件
@@ -714,7 +733,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_MOOD_CHANGE, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<{ mood?: string }>(e.payload);
           const mood = p?.mood;
           if (mood) onMood(mood);
@@ -730,7 +749,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_LOOP_PROGRESS, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<{
             round?: number;
             tool_count?: number;
@@ -752,7 +771,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_TOOL_CALL, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<ToolCallPayload>(e.payload);
           if (!p) return;
           const name = p.tool_name;
@@ -774,7 +793,7 @@ async function registerSidecarListeners(
     try {
       unlisteners.push(
         await listen<unknown>(EVENT_AGENT_MESSAGE, (e) => {
-          if (!belongsToSession(e.payload)) return;
+          if (!belongsToInvocation(e.payload)) return;
           const p = unwrapEventPayload<AgentMessagePayload>(e.payload);
           if (!p) return;
           onAgentMessage(p);
@@ -801,6 +820,37 @@ async function registerSidecarListeners(
   };
 }
 
+const pendingSidecarCancellations = new Map<string, Promise<void>>();
+const CANCELLATION_PENDING_ERROR =
+  "上一轮停止请求未获确认，本次新任务未启动。后台任务可能仍在运行；请先查看终端和运行日志，确认状态后再重试。";
+const MODEL_CONFIG_NOT_READY_ERROR =
+  "当前模型配置未就绪，本条消息未发送。请在「设置 → AI 模型」中检查并重新连接后重试。";
+
+async function waitForSidecarPreparation(
+  completion: Promise<unknown>,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  if (abortSignal?.aborted) return false;
+  let removeAbortListener = () => {};
+  try {
+    await (abortSignal
+      ? Promise.race([
+          completion,
+          new Promise<void>((resolve) => {
+            const onAbort = () => resolve();
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+          }),
+        ])
+      : completion);
+    return !abortSignal?.aborted;
+  } catch {
+    return false;
+  } finally {
+    removeAbortListener();
+  }
+}
+
 /**
  * #69: 告诉 sidecar「这一轮别再往下跑了」。
  *
@@ -811,14 +861,29 @@ async function registerSidecarListeners(
  * 失败必须出声：没送到 = 用户看到的"停了"只是界面停了，后端还在花钱。
  * 非桌面运行时（vitest / 纯浏览器 dev）没有 ipc_invoke，直接跳过。
  */
-export async function cancelSidecarTurn(sessionId: string): Promise<void> {
+export async function cancelSidecarTurn(
+  sessionId: string,
+  reason = "用户点击停止",
+): Promise<void> {
   if (!sessionId) return;
   if (!isTauriRuntime()) return;
-  await invoke("ipc_invoke", {
-    method: "agent.cancel",
-    params: { session_id: sessionId, reason: "用户点击停止" },
-    timeoutMs: 10_000,
-  });
+  const send = () =>
+    invoke<void>("ipc_invoke", {
+      method: "agent.cancel",
+      params: { session_id: sessionId, reason },
+      timeoutMs: 10_000,
+    });
+  const previous = pendingSidecarCancellations.get(sessionId);
+  // Explicit subsequent stops still run after a failure; this is not an automatic retry.
+  const cancellation = previous ? previous.then(send, send) : send();
+  pendingSidecarCancellations.set(sessionId, cancellation);
+  try {
+    await cancellation;
+  } finally {
+    if (pendingSidecarCancellations.get(sessionId) === cancellation) {
+      pendingSidecarCancellations.delete(sessionId);
+    }
+  }
 }
 
 // === 主函数: runSidecarStream ================================================
@@ -879,23 +944,33 @@ export async function* runSidecarStream(
     onUsage,
   } = opts;
 
-  // TDSF 2026-08-28: 首次对话前把前端当前模型配置同步给 sidecar
-  // （agent.configure 一次 configure 永久生效）。失败不阻塞对话——sidecar
-  // 沿用上次落盘配置；置位标志防止每条消息重复打 IPC，配置变更时由
-  // ModelsSection 重置标志（scheduleSidecarConfigSync）。
-  if (!isSidecarConfigSynced()) {
-    markSidecarConfigSynced();
-    const sync = await syncSidecarLlmConfig();
-    if (!sync.ok) {
-      console.warn(
-        "[sidecar-adapter] sidecar LLM 配置未同步（不影响本次对话）:",
-        sync.detail,
-      );
+  if (abortSignal?.aborted) return;
+
+  while (sessionId) {
+    const cancellation = pendingSidecarCancellations.get(sessionId);
+    if (!cancellation) break;
+    if (!(await waitForSidecarPreparation(cancellation, abortSignal))) {
+      if (!abortSignal?.aborted) yield { type: "error", error: CANCELLATION_PENDING_ERROR };
+      return;
     }
   }
+  if (abortSignal?.aborted) return;
+
+  // 等待当前配置完成；停止只退出本条等待，不取消共享同步。
+  const configSync = ensureSidecarConfigReady();
+  const configPrepared = await waitForSidecarPreparation(configSync, abortSignal);
+  if (abortSignal?.aborted) return;
+  const configResult = configPrepared ? await configSync : null;
+  if (!configResult?.ok) {
+    yield { type: "error", error: MODEL_CONFIG_NOT_READY_ERROR };
+    return;
+  }
+
+  if (abortSignal?.aborted) return;
 
   const pythonName = mapToPythonName(agentId);
-  const streamId = `tdsf-${agentId}-${Date.now()}`;
+  const streamId = `tdsf-${agentId}-${Date.now()}-${++streamSeq}`;
+  const requestStreamId = isTauriRuntime() ? crypto.randomUUID() : undefined;
   const thinkingId = `${streamId}-thinking`;
   const outputId = `${streamId}-output`;
   // TDSF: TeachAgent 教学内容独立 stream id（与 thinking/output 同级）
@@ -903,6 +978,8 @@ export async function* runSidecarStream(
 
   // === AsyncQueue：生产者（事件监听器）push part，消费者（主流程）yield ===
   const queue = createAsyncQueue<SidecarStreamPart>();
+  let acceptingEvents = true;
+  const isActive = () => acceptingEvents && !abortSignal?.aborted;
 
   // 跟踪 event 推送的 thinking/output（用于 invoke 完成后去重，避免与 result 重复）
   let streamedThinking = "";
@@ -938,6 +1015,22 @@ export async function* runSidecarStream(
       ids.push(toolCallId);
       toolIdsByName.set(name, ids);
       if (eventKey) toolIdsByEventId.set(eventKey, toolCallId);
+      const params = p.params && typeof p.params === "object"
+        ? p.params as Record<string, unknown> : null;
+      if (eventCallId && params &&
+          (typeof params.command === "string" || name === "write_remote_file")) {
+        const target = params.ssh_session_id === "" || params.ssh_session_id == null
+          ? live.sshSessionId : Number(params.ssh_session_id);
+        useSshCommandOutputStore.getState().begin({
+          toolCallId,
+          backendToolCallId: eventCallId,
+          conversationSessionId: sessionId ?? null,
+          toolName: name,
+          command: typeof params.command === "string" ? params.command : "",
+          sshSessionId: target != null && Number.isInteger(target) && target > 0
+            ? target : undefined,
+        });
+      }
       // #143：从这一刻起这条链路上没有事件是"正常"的 —— 工具在跑。
       toolInFlight(true);
       queue.push({
@@ -978,6 +1071,7 @@ export async function* runSidecarStream(
       }
       // #143：这条工具落地了 —— 没有别的在飞、也没在等人时计时才重新开始走。
       toolInFlight(false);
+      useSshCommandOutputStore.getState().finish(toolCallId);
       queue.push({
         type: "tool-output",
         toolCallId,
@@ -991,13 +1085,12 @@ export async function* runSidecarStream(
   // onAgentMessage 回调：把 agent_message 事件转成 reasoning-delta/text-delta part
   // （TDSF 修复 2026-07-31 P1: 实现深度思考 UI + LLM 文本真正流式）
   const onAgentMessage = (p: AgentMessagePayload) => {
-    // TDSF debug 2026-07-31: 记录 agent_message 事件到 console，便于 CDP 排障
-    // 生产环境日志量极小（每条消息一次），不影响性能
+    // Debug metadata only; returned content stays in the scoped response stream.
     const msgType = p.type ?? p.message_type ?? "output";
     console.info(
       "[sidecar-adapter] agent_message",
       msgType,
-      p.content?.slice(0, 80),
+      { contentChars: p.content?.length ?? 0 },
     );
     const content = p.content;
     if (!content) return;
@@ -1025,15 +1118,22 @@ export async function* runSidecarStream(
     onToolCall,
     onAgentMessage,
     opts.onLoopProgress,
+    requestStreamId,
+    isActive,
   );
   let unlistenSshOutput: UnlistenFn = () => {};
   try {
-    unlistenSshOutput = await listen<SshCommandOutputPayload>(
+    unlistenSshOutput = await listen<SshCommandOutputEvent>(
       "sidecar:ssh_command_output",
       (event) => {
+        if (!isActive()) return;
         const eventSessionId = event.payload?.conversationSessionId;
         if (eventSessionId && eventSessionId !== sessionId) return;
-        queue.push({ type: "activity" });
+        const { toolCallId, toolName } = event.payload;
+        if (toolCallId && toolName && toolIdsByEventId.has(`${toolName}:${toolCallId}`)) {
+          useSshCommandOutputStore.getState().record(event.payload);
+          queue.push({ type: "activity" });
+        }
       },
     );
   } catch {
@@ -1041,7 +1141,38 @@ export async function* runSidecarStream(
   }
 
   let disposeActivityTimeout = () => {};
+  let disposeModeSync = () => {};
   try {
+    // Recheck after preparation awaits; the last check and dispatch must not yield.
+    while (sessionId) {
+      const cancellation = pendingSidecarCancellations.get(sessionId);
+      if (!cancellation) break;
+      if (!(await waitForSidecarPreparation(cancellation, abortSignal))) {
+        if (!abortSignal?.aborted) yield { type: "error", error: CANCELLATION_PENDING_ERROR };
+        return;
+      }
+    }
+    if (abortSignal?.aborted) return;
+
+    if (!isSidecarConfigResultCurrent(configResult)) {
+      yield { type: "error", error: MODEL_CONFIG_NOT_READY_ERROR };
+      return;
+    }
+
+    const currentMode = opts.modeSource?.get();
+    const invocationLive = currentMode ? { ...live, ...toSidecarMode(currentMode) } : live;
+    if (requestStreamId && sessionId && currentMode && opts.modeSource) {
+      disposeModeSync = syncRunningMode({
+        sessionId, streamId: requestStreamId, initialMode: currentMode,
+        source: opts.modeSource,
+        onError: (error) => {
+          if (!isActive()) return;
+          queue.push({ type: "error", error });
+          void cancelSidecarTurn(sessionId, "运行模式同步失败");
+        },
+      });
+    }
+
     // 2026-09-03（用户钦定）: 移除 "调用 Sidecar Agent" step——它是内部实现细节，
     // 显示在 Header 与输入区重叠；step 从后续 Thinking / 工具调用开始即可。
 
@@ -1070,8 +1201,8 @@ export async function* runSidecarStream(
     // 而一条命令被允许跑多久是模型声明的 timeout 决定的 —— Rust clamp 到 300s，
     // Python 再等 timeout+200 ⇒ 最坏合法静默 500s，比这里的 300s 长 200 秒。
     // 真机 79 次配对里最长已经到 259.6s，余量只剩 40 秒。所以工具在飞期间停表，
-    // 上限不由前端猜：Rust 对整条 agent.invoke 有 600s 硬顶（toolSilentBudget.test.ts
-    // 把这两个数的大小关系钉成闸），到点报错的是带着原因的 Rust，不是前端的臆断。
+    // 工具自身 deadline 仍由执行层裁定。Rust 的 600s 是请求级传输无存活窗口，
+    // 私有 watchdog 信号只续传输，不计入这里的模型活动预算。
     const activityTimeoutMs = getSidecarTimeoutMs();
     let noteActivity: () => void = () => {};
     let applyAwaitingUser: (awaiting: boolean) => void = () => {};
@@ -1120,11 +1251,13 @@ export async function* runSidecarStream(
             method: "agent.invoke",
             params: {
               name: pythonName,
-              state: { input, messages, live, session_id: sessionId ?? "" },
+              state: {
+                input, messages, live: invocationLive, session_id: sessionId ?? "",
+                ...(requestStreamId ? { _rpc_stream_id: requestStreamId } : {}),
+              },
             },
-            // P0 活动感知(2026-09-03): Rust 侧用总时长硬上限 600s（对齐 Python
-            // watchdog），前端活动感知（默认 300s 无活动）先触发——避免 Rust 总时长
-            // 先于前端活动感知掐断有进展的长任务。
+            // Rust 按原始请求 ID 的私有存活续传输窗口，不再裁整轮总时长；
+            // 此值仍封顶 600s。前端活动/Python空闲/工具与审批各自期限不变。
             timeoutMs: SIDECAR_TIMEOUT_MAX_MS,
           }),
           timeout,
@@ -1150,6 +1283,7 @@ export async function* runSidecarStream(
     // 先 settle 取 invoke 分支，被 shift 的 item（如工具 completed 的
     // tool-output）永久丢失（drain 阶段只剩空 queue）。
     let invokeDone = false;
+    let pendingQueueNext: ReturnType<typeof queue.next> | undefined;
     while (!invokeDone) {
       if (abortSignal?.aborted) {
         queue.close();
@@ -1163,11 +1297,14 @@ export async function* runSidecarStream(
       }
       // 等待 queue 有 item 或 invoke 完成
       const queueNext = queue.next();
+      pendingQueueNext = queueNext;
       const result = await Promise.race([
         invokePromise.then((r) => ({ kind: "invoke" as const, value: r })),
         queueNext.then((r) => ({ kind: "queue" as const, value: r })),
       ]);
+      if (abortSignal?.aborted) return;
       if (result.kind === "queue") {
+        pendingQueueNext = undefined;
         // queue 有 item → yield
         if (result.value.done) {
           // queue 被 close（不应发生在 invoke 完成前，防御性 break）
@@ -1189,7 +1326,10 @@ export async function* runSidecarStream(
 
     // drain queue 剩余 items（invoke 完成前 push 但未被消费的 part）
     while (true) {
-      const next = await queue.next();
+      // An invoke winner leaves a waiter that can already own the last event.
+      const next = await (pendingQueueNext ?? queue.next());
+      pendingQueueNext = undefined;
+      if (abortSignal?.aborted) return;
       if (next.done) break;
       yield next.value;
     }
@@ -1201,22 +1341,33 @@ export async function* runSidecarStream(
 
     // 6. 获取 invoke 结果
     const invokeResult = await invokePromise;
+    if (abortSignal?.aborted) return;
 
     // 7. 错误处理: sidecar 不可用
     if (!invokeResult && invokeError) {
       // TDSF P0-3: 移除 mock 降级，直接报错让用户看到真实问题
       // P0-4 (2026-08-01): 结构化错误提示——按错误类型区分文案与行动建议
       // #133: 中止那一刻是不是正停在"等你确认"上，决定这句"超时"该怎么说
-      yield {
-        type: "error",
-        error: buildSidecarErrorHint(
-          invokeError,
-          pythonName,
-          false,
-          "",
-          isAwaitingUser(useNeedsYouWait.getState(), sessionId),
-        ),
-      };
+      let error = buildSidecarErrorHint(
+        invokeError,
+        pythonName,
+        false,
+        "",
+        isAwaitingUser(useNeedsYouWait.getState(), sessionId),
+      );
+      if (/超时|timeout/i.test(invokeError) && sessionId && isTauriRuntime()) {
+        // 放弃消息流不等于停止后台任务；先通知停止后续工具、结掉待答请求再退场。
+        disposeActivityTimeout();
+        try {
+          await cancelSidecarTurn(sessionId, "AI 任务超时，停止后续工具调用");
+          error += "\n\n已请求停止后续工具调用；正在执行的命令不会自动撤销。";
+        } catch {
+          console.error("[sidecar-adapter] agent.cancel 超时退场请求未获确认");
+          error += "\n\n取消请求未获确认，后台任务可能仍在运行；请先核对终端状态。";
+        }
+        if (abortSignal?.aborted) return;
+      }
+      yield { type: "error", error };
       return;
     }
 
@@ -1242,9 +1393,10 @@ export async function* runSidecarStream(
             // 本轮已有正文流出 → 降级说明接在正文末尾，不另起文本段
             yield { type: "text-delta", id: outputId, delta: `\n\n${note}` };
           } else {
-            yield* streamText(note, outputId);
+            yield* streamText(note, outputId, "text", abortSignal);
           }
         }
+        if (abortSignal?.aborted) return;
         onStep?.(null);
         yield { type: "finish", id: streamId };
         return;
@@ -1281,16 +1433,18 @@ export async function* runSidecarStream(
     // 10. 处理 thinking：event 未推送时走兜底切片，已推送时跳过避免重复。
     if (!streamedThinking && invokeResult.thinking) {
       onStep?.("Thinking");
-      yield* streamText(invokeResult.thinking, thinkingId, "reasoning");
+      yield* streamText(invokeResult.thinking, thinkingId, "reasoning", abortSignal);
     }
+    if (abortSignal?.aborted) return;
 
     // 11. 处理 output：event 未推送时走兜底切片，已推送时跳过避免重复。
     //     Strands 返回 `observation` 字段；回退到 `output` 兼容测试桩。
     const outputText = invokeResult.observation ?? invokeResult.output ?? "";
     if (!streamedOutput && outputText) {
       onStep?.("Streaming");
-      yield* streamText(outputText, outputId);
+      yield* streamText(outputText, outputId, "text", abortSignal);
     }
+    if (abortSignal?.aborted) return;
 
     // 教学模式走 observation 与 TeachCard 工具事件，不另产 teaching_content。
 
@@ -1298,11 +1452,16 @@ export async function* runSidecarStream(
     onStep?.(null);
     yield { type: "finish", id: streamId };
   } finally {
+    acceptingEvents = false;
     // 无论成功失败，都取消事件监听 + close queue，避免内存泄漏
     disposeActivityTimeout();
+    disposeModeSync();
     queue.close();
     unlisten();
     unlistenSshOutput();
+    for (const ids of toolIdsByName.values()) {
+      for (const id of ids) useSshCommandOutputStore.getState().finish(id, true);
+    }
   }
 }
 
@@ -1416,7 +1575,9 @@ export function sidecarStreamToUIMessageStream(
           } else if (part.type === "tool-output") {
             closeText();
             closeReasoning();
-            if (part.isError) {
+            // A received business outcome (including unknown/rejected/failed)
+            // must keep its payload. SDK errors have no output field.
+            if (part.isError && getToolResultStatus(part.output) === null) {
               controller.enqueue({
                 type: "tool-output-error",
                 toolCallId: part.toolCallId,

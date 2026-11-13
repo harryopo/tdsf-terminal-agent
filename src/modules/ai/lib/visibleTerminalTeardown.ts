@@ -19,13 +19,15 @@ export type AbandonedVisibleExecutionResult = {
 
 export function resultForAbandonedVisibleExecution(input: {
   phase: "typing" | "running";
+  /** A dispatched typewriter request may have already written or executed input. */
+  inputDispatched?: boolean;
   cause: AbandonedVisibleExecutionCause;
 }): AbandonedVisibleExecutionResult {
   const reason =
     input.cause === "page-unload"
       ? "visible_terminal_page_reloaded"
       : "visible_terminal_bridge_reset";
-  if (input.phase === "typing") {
+  if (input.phase === "typing" && !input.inputDispatched) {
     return {
       status: "unavailable",
       reason,
@@ -38,7 +40,9 @@ export function resultForAbandonedVisibleExecution(input: {
     status: "indeterminate",
     reason,
     message:
-      "命令已经写进终端，但界面在结果回来前刷新／重挂了，退出码取不回。" +
-      "它可能仍在终端里跑到结束，请先看终端输出再决定下一步。",
+      input.phase === "typing"
+        ? "终端输入请求已经发出，但界面在输入结束前刷新／重挂了，无法确认命令是否已执行。请先看终端输出，确认后再决定是否重试。"
+        : "命令已经写进终端，但界面在结果回来前刷新／重挂了，退出码取不回。" +
+          "它可能仍在终端里跑到结束，请先看终端输出再决定下一步。",
   };
 }

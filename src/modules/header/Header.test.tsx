@@ -8,7 +8,7 @@
 // 与"分隔线对齐"jsdom 量不出来，由 `pnpm probe:ui` 的 dividerMisaligned +
 // controlOutsideLeftCluster 两条规则在真机把关。
 // -----------------------------------------------------------------------------
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // 子组件一律换成带同样 data-testid 的桩：本测的是 Header 的摆位，不是它们内部。
@@ -31,7 +31,9 @@ vi.mock("@/modules/tabs", () => ({
   ),
 }));
 vi.mock("./SearchInline", () => ({
-  SearchInline: () => <div data-testid="search-inline" />,
+  SearchInline: (props: { compact?: boolean }) => (
+    <div data-testid="search-inline" data-compact={String(props.compact)} />
+  ),
 }));
 vi.mock("@/modules/theme", () => ({
   useTheme: () => ({ resolvedMode: "dark", setMode: vi.fn() }),
@@ -78,6 +80,36 @@ function insideLeftCluster(testId: string): boolean {
 }
 
 describe("Header — ⌘ 与通知在顶栏左簇的最右侧（用户实测口径）", () => {
+  it("窄窗口将搜索框收为图标，给工作区与标签控件留出空间", () => {
+    let notify: ResizeObserverCallback | undefined;
+    const observers: ResizeObserver[] = [];
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) { notify = callback; observers.push(this); }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    try {
+      const { container } = renderHeader();
+      const resize = (width: number) => act(() => notify?.([{
+        target: container.firstElementChild!, contentRect: new DOMRect(0, 0, width, 40),
+        borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [],
+      }], observers[0]));
+      resize(800);
+      expect(screen.getByTestId("search-inline").dataset.compact).toBe("true");
+      resize(1200);
+      expect(screen.getByTestId("search-inline").dataset.compact).toBe("false");
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
+  it("工作区容器不被标签压窄，滚动区域与它是相邻兄弟", () => {
+    renderHeader();
+    const workspace = screen.getByTestId("space-switcher").parentElement!;
+    expect(workspace.classList.contains("shrink-0")).toBe(true);
+    expect(workspace.nextElementSibling?.getAttribute("data-testid")).toBe("tab-bar");
+  });
   it("命令面板与通知都挂在左簇容器里，不在窗口右端那一簇", () => {
     renderHeader();
     expect(insideLeftCluster("header-command-palette")).toBe(true);

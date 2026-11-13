@@ -147,6 +147,15 @@ impl FsBackend for SftpFs {
             .map_err(|e| map_err(p, e))
     }
 
+    async fn create_file(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError> {
+        let p = validate_sftp_path(path)?;
+        ensure_parent_dirs(&self.session, p).await?;
+        self.session
+            .create_file(p, data)
+            .await
+            .map_err(|e| map_err(p, e))
+    }
+
     async fn rename(&self, from: &str, to: &str) -> Result<(), FsBackendError> {
         let src = validate_sftp_path(from)?;
         let dst = validate_sftp_path(to)?;

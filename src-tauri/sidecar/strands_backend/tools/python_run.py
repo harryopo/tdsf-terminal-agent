@@ -36,8 +36,8 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
               truncated, message}（stdout/stderr 为 kill 前已捕获的部分输出）
     fail-closed: {status:"error", exit_code:None, stdout:"", stderr:"",
               duration_ms:0, truncated:False, message}（参数/环境拒绝，未执行）
-    审批未过: {status:"rejected" | "needs_approval", exit_code:None, ...,
-              risk_l:<级>, message}（用户拒绝 / 审批未建立或超时，未执行）
+    审批未过: {status:"rejected" | "cancelled" | "needs_approval", exit_code:None, ...,
+              risk_l:<级>, message}（用户拒绝 / 取消 / 审批未建立或超时，未执行）
     只读拦截: {status:"command_blocked", ...}（observe 档，message 带
               "command_blocked!" 前缀——给 LLM 的双轨契约，勿改）
 
@@ -47,11 +47,12 @@ strands_backend/tools/python_run.py — Python 代码执行工具（T5，无沙�
 
 已知限制（无沙箱版，进程级受控边界）：
 - 只 kill 直接子进程，代码内 spawn 的孙进程不追踪（沙箱版再收口）。
-- 代码以 sidecar 同款解释器（``sys.executable``）执行。
+- 源码运行使用同款解释器；冻结版使用随包运行时的独立 Python worker 入口。
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -59,6 +60,7 @@ import time
 from typing import Any
 
 from needs_you import NeedsYouStatus
+from python_worker import WORKER_ARG
 from strands_backend.modes import decide
 from strands_backend.tools import (
     ToolContext,
@@ -67,6 +69,7 @@ from strands_backend.tools import (
     request_approval_and_wait,
     tool,
 )
+from strands_backend.tools.tool_lifecycle import bind_tool_call_id
 
 logger = logging.getLogger("sidecar.strands_backend.tools.python_run")
 
@@ -117,7 +120,9 @@ def _timeout_params(timeout: Any) -> int:
 # 核心实现（无 Strands 依赖，便于单测）
 # ============================================================================
 
-def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_python_run_tool(
+    params: dict[str, Any], ctx: ToolContext, *, tool_call_id: str | None = None,
+) -> dict[str, Any]:
     """Python 代码执行工具核心实现
 
     Args:
@@ -142,7 +147,7 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
             "truncated": False,
             "message": "python_run 工具必填参数缺失或为空: code",
         }
-        _emit_tool_call_completed(ctx, params, result)
+        _emit_tool_call_completed(ctx, params, result, tool_call_id)
         return result
     code = str(code)
 
@@ -160,7 +165,7 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
                 "未执行任何代码；远程分析请用 ssh_command 等远端工具。"
             ),
         }
-        _emit_tool_call_completed(ctx, params, result)
+        _emit_tool_call_completed(ctx, params, result, tool_call_id)
         return result
 
     # ---- fail-closed：workspace 不可得（不臆测目录）----
@@ -178,7 +183,7 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
                 "未执行任何代码；请先打开本地终端/工作区再试。"
             ),
         }
-        _emit_tool_call_completed(ctx, params, result)
+        _emit_tool_call_completed(ctx, params, result, tool_call_id)
         return result
 
     wsl_distro = str(getattr(ctx, "wsl_distro", "") or "")
@@ -196,17 +201,17 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
             "truncated": False,
             "message": "WSL 发行版或工作目录无效，未执行任何代码。",
         }
-        _emit_tool_call_completed(ctx, params, result)
+        _emit_tool_call_completed(ctx, params, result, tool_call_id)
         return result
 
     timeout_s = _timeout_params(params.get("timeout", DEFAULT_TIMEOUT_SECONDS))
 
     # ---- #66 分级审批门：AST 判级 → decide(risk_l, ctx.mode) → 必要时弹审批卡 ----
     blocked, approved_req = _approval_gate(
-        ctx, code, str(params.get("explanation", "") or "")
+        ctx, code, str(params.get("explanation", "") or ""), tool_call_id=tool_call_id,
     )
     if blocked is not None:
-        _emit_tool_call_completed(ctx, params, blocked)
+        _emit_tool_call_completed(ctx, params, blocked, tool_call_id)
         return blocked
 
     # ---- 受控执行 ----
@@ -216,7 +221,7 @@ def invoke_python_run_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str
         if approved_req is not None:
             complete_approval_execution(approved_req)
 
-    _emit_tool_call_completed(ctx, params, result)
+    _emit_tool_call_completed(ctx, params, result, tool_call_id)
     return result
 
 
@@ -229,7 +234,7 @@ def _execute_python(
     """真正跑 subprocess 的一段（已通过 fail-closed 与审批门）"""
     start = time.perf_counter()
     try:
-        command = [sys.executable, "-c", code]
+        command = [sys.executable, WORKER_ARG if getattr(sys, "frozen", False) else "-c", code]
         cwd = workspace
         if wsl_distro:
             command = [
@@ -239,8 +244,13 @@ def _execute_python(
             cwd = None
         completed = subprocess.run(  # noqa: S603 — executable is fixed
             command,
+            # This non-interactive tool must not inherit the JSON-RPC input pipe.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             timeout=timeout_s,
             cwd=cwd,
         )
@@ -335,6 +345,8 @@ def _approval_gate(
     ctx: ToolContext,
     code: str,
     purpose: str,
+    *,
+    tool_call_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, Any | None]:
     """python_run 的执行前审批门（#66，用户 2026-09-19 决策 3）
 
@@ -408,6 +420,7 @@ def _approval_gate(
         explanation=purpose,
         impact=impact,
         risk_l=risk_l,
+        **({"tool_call_id": tool_call_id} if tool_call_id else {}),
     )
     if req is None:
         return {
@@ -451,7 +464,19 @@ def _approval_gate(
             ),
         }, None
 
-    # TIMEOUT / CANCELLED / 未知 —— fail-closed 按拒绝处理
+    if req.status == NeedsYouStatus.CANCELLED:
+        return {
+            "status": "cancelled",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 0,
+            "truncated": False,
+            "risk_l": risk_l,
+            "message": "审批已取消，未执行任何代码。",
+        }, None
+
+    # TIMEOUT / 未知 —— fail-closed 按拒绝处理
     logger.warning(
         f"python_run approval not answered: status={req.status}, "
         f"risk_l={risk_l}, code_len={len(code)}"
@@ -475,6 +500,7 @@ def _emit_tool_call_completed(
     ctx: ToolContext,
     params: dict[str, Any],
     result: dict[str, Any],
+    tool_call_id: str | None = None,
 ) -> None:
     """推送 tool_call 完成事件（started 由 make_python_run_tool 推送）
 
@@ -485,6 +511,7 @@ def _emit_tool_call_completed(
     try:
         ctx.event_bus.emit_tool_call(
             tool_name="python_run",
+            tool_call_id=tool_call_id,
             params={"code": str(params.get("code", ""))[:500]},
             result=result,
             status="completed",
@@ -502,8 +529,8 @@ def _emit_tool_call_completed(
 def make_python_run_tool(ctx: ToolContext):
     """构建 Python 代码执行工具（带 ctx 闭包）"""
 
-    @tool
-    def python_run(code: str) -> dict:
+    @tool(context="sdk_tool_context")
+    def python_run(code: str, *, sdk_tool_context: Any = None) -> dict:
         """在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB）。
 
         使用场景（写一段 Python 一次完成，优于逐工具往返）：
@@ -528,14 +555,23 @@ def make_python_run_tool(ctx: ToolContext):
             dict: {status, exit_code, stdout, stderr, duration_ms, truncated}。
             status: success（退出码 0）/ error（脚本失败或参数/环境被拒，
             fail-closed 未执行）/ timeout（超时被终止）/ rejected（用户拒绝，
-            未执行）/ needs_approval（等待审批或审批未建立，未执行）/
+            未执行）/ cancelled（审批已取消，未执行）/
+            needs_approval（等待审批或审批未建立，未执行）/
             command_blocked（只读模式禁止，未执行）。
         """
+        import uuid
+
+        call_id = uuid.uuid4().hex
+        bind_tool_call_id(
+            sdk_tool_context, tool_name="python_run", tool_call_id=call_id,
+            session_id=ctx.session_id or None, agent_name=ctx.agent_name,
+        )
         # 推送 tool_call 开始事件，让前端实时显示工具调用卡片
         if ctx.event_bus is not None:
             try:
                 ctx.event_bus.emit_tool_call(
                     tool_name="python_run",
+                    tool_call_id=call_id,
                     params={"code": str(code)[:500]},
                     status="started",
                     session_id=ctx.session_id or None,
@@ -544,7 +580,16 @@ def make_python_run_tool(ctx: ToolContext):
             except Exception as e:  # noqa: BLE001 — 事件推送失败不影响工具主流程
                 logger.debug(f"emit_tool_call started failed: {e}")
 
-        return invoke_python_run_tool(params={"code": code}, ctx=ctx)
+        try:
+            return invoke_python_run_tool(params={"code": code}, ctx=ctx, tool_call_id=call_id)
+        except Exception as exc:
+            from strands_backend.tools import emit_tool_call_card
+
+            emit_tool_call_card(
+                ctx, "python_run", {"code": str(code)[:500]}, "error",
+                {"status": "error", "message": str(exc)}, tool_call_id=call_id,
+            )
+            raise
 
     python_run.__name__ = "python_run"
     return python_run

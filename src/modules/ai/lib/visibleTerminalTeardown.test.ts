@@ -18,6 +18,14 @@ import {
 const CAUSES: AbandonedVisibleExecutionCause[] = ["bridge-reset", "page-unload"];
 
 describe("可见终端在飞请求被丢弃时的结算", () => {
+  it.each(CAUSES)("输入已派发但尚未收到结束事件，%s 不能声称未执行", (cause) => {
+    const r = resultForAbandonedVisibleExecution({ phase: "typing", cause, inputDispatched: true });
+    expect(r.status).toBe("indeterminate");
+    expect(r.reason).toBe(cause === "page-unload" ? "visible_terminal_page_reloaded" : "visible_terminal_bridge_reset");
+    expect(r.message).not.toContain("未执行");
+    expect(r.message).toContain("先看终端输出");
+  });
+
   it("命令还没写进终端 → unavailable（诚实：确实没执行，可以让模型重来）", () => {
     for (const cause of CAUSES) {
       const r = resultForAbandonedVisibleExecution({phase: "typing", cause});

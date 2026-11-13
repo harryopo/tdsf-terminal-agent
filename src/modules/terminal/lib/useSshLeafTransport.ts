@@ -15,8 +15,10 @@
  *     （SFTP 文件树共用同一条 SSH 连接，断连会废掉 SFTP）
  */
 import { useMemo, useRef } from "react";
-import { getOsc7Log, useSshStore } from "@/modules/ssh-explorer/sshStore";
-import type { TerminalTransport } from "./pty-bridge";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { sshSessionsDetail } from "@/lib/ssh-bridge";
+import { useSshStore } from "@/modules/ssh-explorer/sshStore";
+import type { TerminalTransport, TerminalTransportHandlers } from "./pty-bridge";
 
 export function useSshLeafTransport(sessionId: string) {
   // 订阅 SSH 会话状态（handle 由 sshStore.connect 成功后填充，可能晚于挂载）
@@ -32,10 +34,62 @@ export function useSshLeafTransport(sessionId: string) {
 
   // openTransport 工厂：仅依赖 sessionId + subscribeTerminalData（稳定引用），不重创建
   const openTransport = useMemo(() => {
-    return (h: {
-      onData: (b: Uint8Array) => void;
-      onExit: (c: number) => void;
-    }): Promise<TerminalTransport> => {
+    return (h: TerminalTransportHandlers): Promise<TerminalTransport> => {
+      let retired = false;
+      let epoch = 0;
+      let unsubscribeContext = () => {};
+      let refreshIntegrationContext: (() => Promise<void>) | undefined;
+      if (h.onIntegrationContext) {
+        const onContext = h.onIntegrationContext;
+        const readSession = () => useSshStore.getState().sessions.find(
+          (it) => it.id === sessionId,
+        );
+        const boundary = () => {
+          const current = readSession();
+          return {
+            state: current?.state,
+            id: current?.rustSessionId,
+            handle: current?.handle,
+            host: current?.params.host,
+            port: current?.params.port,
+            user: current?.params.user,
+          };
+        };
+        let previous = boundary();
+        const refresh = async () => {
+          if (retired) return;
+          const request = ++epoch;
+          onContext(null);
+          const current = readSession();
+          if (current?.state !== "connected" || current.rustSessionId == null ||
+              current.handle?.id !== current.rustSessionId) return;
+          const { rustSessionId, params } = current;
+          // Never await this on the input/output path; stale replies are inert.
+          await Promise.resolve().then(async () => {
+            if (retired || epoch !== request) return;
+            const owner = getCurrentWebviewWindow().label;
+            const rows = await sshSessionsDetail();
+            if (retired || epoch !== request || getCurrentWebviewWindow().label !== owner) return;
+            const detail = rows.find((row) => row.sessionId === rustSessionId);
+            if (detail?.state !== "connected" || detail.ownerWindow !== owner ||
+                detail.host !== params.host || detail.port !== params.port ||
+                detail.user !== params.user) return;
+            onContext(detail.terminalContext ?? null);
+          }).catch(() => {
+            // Source remains unknown; raw terminal traffic still flows normally.
+          });
+        };
+        refreshIntegrationContext = refresh;
+        unsubscribeContext = useSshStore.subscribe(() => {
+          const next = boundary();
+          if (next.state === previous.state && next.id === previous.id &&
+              next.handle === previous.handle && next.host === previous.host &&
+              next.port === previous.port && next.user === previous.user) return;
+          previous = next;
+          void refresh();
+        });
+        void refresh();
+      }
       // 订阅 PTY 输出：sshStore 的 fan-out + 先到数据缓冲
       // （挂载即 flush 缓冲，修复"连接就绪早于组件挂载导致前 N 字节丢失"竞态）
       const unsubscribe = subscribeTerminalData(sessionId, h.onData);
@@ -43,19 +97,12 @@ export function useSshLeafTransport(sessionId: string) {
       const transport: TerminalTransport = {
         // 字符串 id 与本地 PTY 数字 id 区分（日志/诊断用）
         id: sessionId,
+        refreshIntegrationContext,
         write: (data: string) => {
-          const log = getOsc7Log();
           const handle = handleRef.current;
           // handle 还没到（连接中）或已断开：丢弃写入，避免抛错
           // （用户在 MOTD 之前的输入会进 pendingInput，由 useTerminalSession 在 pty 就绪后 flush）
-          if (!handle) {
-            log?.push({
-              source: "useSshLeafTransport.transport.write",
-              data,
-              matched: false,
-            });
-            return;
-          }
+          if (!handle) return;
           // 输入原样透传（方案 A 后不再做任何行缓冲/命令改写，
           // 远端 shell 的注入钩子负责 OSC 7 cwd 上报）
           return handle.write(data);
@@ -68,6 +115,9 @@ export function useSshLeafTransport(sessionId: string) {
         close: () => {
           // 关键：只 unsubscribe 前端订阅，不调 handle.close()
           // SFTP 文件树共用同一条 SSH 连接，断连会废掉 SFTP
+          retired = true;
+          epoch += 1;
+          unsubscribeContext();
           unsubscribe();
         },
       };

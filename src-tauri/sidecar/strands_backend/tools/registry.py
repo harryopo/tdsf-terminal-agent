@@ -87,6 +87,8 @@ class ToolSpec:
     description: str
     policy: ToolPolicy
     to_shell_command: str | None = None
+    # 展示事件的归属，不参与风险/审批裁决；其余工具由 SDK hook 补齐卡片。
+    emits_tool_events: bool = False
 
 
 def resolve_factory(spec: ToolSpec) -> Callable[..., Any]:
@@ -135,6 +137,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "read_remote_file": ToolSpec(
         name="read_remote_file",
+        emits_tool_events=True,
         factory="strands_backend.tools.remote_file:make_remote_file_tool",
         description="读取远程文件内容（只读）",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=True),
@@ -142,6 +145,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "write_remote_file": ToolSpec(
         name="write_remote_file",
+        emits_tool_events=True,
         factory="strands_backend.tools.remote_file:make_write_remote_file_tool",
         description="安全覆盖已有远程 UTF-8 文本文件（写前备份、确认后写入、写后回读校验）",
         policy=ToolPolicy(readonly=False, needs_approval=True, sanitize_output=True),
@@ -169,6 +173,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "skill_invoke": ToolSpec(
         name="skill_invoke",
+        emits_tool_events=True,
         factory="strands_backend.tools.skill_invoke:make_skill_invoke_tool",
         description="调用已注册的 Skill，获取领域知识卡或执行预定义脚本",
         # skill_invoke 可触发 SKILL.md executor 的 shell 执行 → 非 readonly
@@ -177,12 +182,14 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "suggest_command": ToolSpec(
         name="suggest_command",
+        emits_tool_events=True,
         factory="strands_backend.tools.suggest_command:make_suggest_command_tool",
         description="根据用户意图生成可执行的命令建议（不执行）。target_os 必须与用户当前终端实际所在系统一致：本地 Windows 终端传 \"windows\"（返回 PowerShell 命令），Linux/SSH 传 \"linux\"。",
         policy=ToolPolicy(readonly=True, needs_approval=False, sanitize_output=False),
     ),
     "knowledge_search": ToolSpec(
         name="knowledge_search",
+        emits_tool_events=True,
         factory="strands_backend.tools.knowledge_search:make_knowledge_search_tool",
         description="检索本地知识库精简版（中文提炼知识点，RAG 混合检索）返回相关片段",
         # 2026-08-31 语义修正：纯本地只读检索（不触碰系统/远端），L1 免确认
@@ -191,6 +198,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "knowledge_get_doc": ToolSpec(
         name="knowledge_get_doc",
+        emits_tool_events=True,
         factory="strands_backend.tools.knowledge_get_doc:make_knowledge_get_doc_tool",
         description="按 url 读取知识库完整文档（检索结果 url → 全文 markdown）",
         # 纯本地只读（同 knowledge_search，读精简库）
@@ -234,6 +242,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     #     收编后受 schema-level safety 管辖（L1 只保留 readonly）——fail-closed 收紧）---
     "todo_write": ToolSpec(
         name="todo_write",
+        emits_tool_events=True,
         factory="strands_backend.tools.todo_write:make_todo_write_tool",
         description="更新当前任务列表（多步骤任务规划，前端任务 UI 联动，自动执行）",
         # 只写前端 todo 状态，无系统风险 → readonly（L1 下保留，与原行为一致）
@@ -294,6 +303,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     # 就是不可信文本；这个声明位现在有唯一消费者（adapter._sanitize_tool_result）。
     "python_run": ToolSpec(
         name="python_run",
+        emits_tool_events=True,
         factory="strands_backend.tools.python_run:make_python_run_tool",
         description=(
             "在本地工作区执行一段 Python 代码（受控：30s 超时、输出截断 10KB、"

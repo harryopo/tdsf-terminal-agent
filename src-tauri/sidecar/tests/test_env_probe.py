@@ -6,7 +6,7 @@ test_env_probe.py — env_probe（系统环境探测）单测
 - parse_os_release_pretty_name：引号/无引号/缺失
 - parse_probe_output：合并命令输出三段解析（os-release + kernel + shell）
 - probe_env 本地分支（platform 降级路径）
-- probe_env SSH 分支：mock main._rust_bridge（成功/失败/rust_bridge 未注入）
+- probe_env SSH 分支：注册的 RustBridge（成功/失败/rust_bridge 未注入）
 - 会话级缓存命中 + TTL 过期 + 不同 ssh_session_id 隔离
 - register_methods 注册协议（**kwargs 解包签名）
 """
@@ -27,8 +27,10 @@ import env_probe  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
+    env_probe.register_methods(mock.MagicMock())
     env_probe.clear_cache()
     yield
+    env_probe.register_methods(mock.MagicMock())
     env_probe.clear_cache()
 
 
@@ -138,25 +140,19 @@ _PROBE_OUTPUT = (
 )
 
 
-def _mock_main_bridge(send_result, injected=True):
-    """构造 main 模块 mock：_rust_bridge.send_request → send_result"""
+def _mock_bridge(send_result):
+    """Replace only the Rust transport boundary."""
     fake_bridge = mock.MagicMock()
-    if injected:
-        fake_bridge.send_request.return_value = send_result
-    fake_main = mock.MagicMock()
-    if injected:
-        fake_main._rust_bridge = fake_bridge
-    else:
-        fake_main._rust_bridge = None
-    return fake_main, fake_bridge
+    fake_bridge.send_request.return_value = send_result
+    return fake_bridge
 
 
 class TestProbeRemote:
     def test_success_via_rust_bridge(self):
-        fake_main, fake_bridge = _mock_main_bridge(
-            {"ok": True, "output": _PROBE_OUTPUT, "exit_code": 0, "duration": 0.1}
+        fake_bridge = _mock_bridge(
+            {"ok": True, "output": _PROBE_OUTPUT, "exitCode": 0, "duration": 0.1}
         )
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
             data = env_probe.probe_remote(15)
         assert data == {
             "os_pretty_name": "Ubuntu 22.04.4 LTS",
@@ -176,23 +172,21 @@ class TestProbeRemote:
         assert "os-release" in params["command"] and "uname -r" in params["command"]
 
     def test_failure_returns_none(self):
-        fake_main, _ = _mock_main_bridge(
-            {"ok": False, "output": "", "exit_code": -1}
+        fake_bridge = _mock_bridge(
+            {"ok": False, "output": "", "exitCode": -1}
         )
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
             assert env_probe.probe_remote(15) is None
 
     def test_bridge_not_injected_returns_none(self):
-        fake_main, _ = _mock_main_bridge(None, injected=False)
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        with mock.patch.object(env_probe, "_rust_bridge", None):
             assert env_probe.probe_remote(15) is None
 
     def test_exception_returns_none(self):
-        with mock.patch.dict(
-            "sys.modules",
-            {"main": mock.MagicMock(side_effect=RuntimeError("boom"))},
-        ):
-            # import main 抛异常也要降级 None，不向上抛
+        fake_bridge = _mock_bridge(None)
+        fake_bridge.send_request.side_effect = RuntimeError("boom")
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
+            # 真实请求边界抛异常也要降级 None，不向上抛
             assert env_probe.probe_remote(15) is None
 
 
@@ -208,10 +202,10 @@ class TestProbeEnv:
         assert "os_pretty_name" in result
 
     def test_ssh_mode_and_cache_hit(self):
-        fake_main, fake_bridge = _mock_main_bridge(
-            {"ok": True, "output": _PROBE_OUTPUT, "exit_code": 0}
+        fake_bridge = _mock_bridge(
+            {"ok": True, "output": _PROBE_OUTPUT, "exitCode": 0}
         )
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
             first = env_probe.probe_env(session_id="s1", ssh_session_id=15)
             assert first["source"] == "ssh"
             assert first["ok"] is True
@@ -222,19 +216,19 @@ class TestProbeEnv:
         assert fake_bridge.send_request.call_count == 1
 
     def test_different_ssh_sessions_isolated(self):
-        fake_main, fake_bridge = _mock_main_bridge(
-            {"ok": True, "output": _PROBE_OUTPUT, "exit_code": 0}
+        fake_bridge = _mock_bridge(
+            {"ok": True, "output": _PROBE_OUTPUT, "exitCode": 0}
         )
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
             env_probe.probe_env(ssh_session_id=15)
             env_probe.probe_env(ssh_session_id=16)
         assert fake_bridge.send_request.call_count == 2
 
     def test_ttl_expiry(self):
-        fake_main, fake_bridge = _mock_main_bridge(
-            {"ok": True, "output": _PROBE_OUTPUT, "exit_code": 0}
+        fake_bridge = _mock_bridge(
+            {"ok": True, "output": _PROBE_OUTPUT, "exitCode": 0}
         )
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
             env_probe.probe_env(ssh_session_id=15)
             # 手动把缓存时间戳拨到 TTL 之前
             key = "ssh:15"
@@ -245,8 +239,8 @@ class TestProbeEnv:
         assert fake_bridge.send_request.call_count == 2
 
     def test_remote_failure_returns_ok_false(self):
-        fake_main, _ = _mock_main_bridge({"ok": False, "output": "", "exit_code": -1})
-        with mock.patch.dict("sys.modules", {"main": fake_main}):
+        fake_bridge = _mock_bridge({"ok": False, "output": "", "exitCode": -1})
+        with mock.patch.object(env_probe, "_rust_bridge", fake_bridge):
             result = env_probe.probe_env(ssh_session_id=15)
         assert result["ok"] is False
         assert result["os_pretty_name"] == ""
@@ -259,6 +253,24 @@ class TestProbeEnv:
 # ============================================================================
 
 class TestRegisterMethods:
+    def test_bridge_registration_owns_cache_and_remote_requests(self):
+        dispatcher = mock.MagicMock()
+        first_bridge = mock.MagicMock()
+        first_bridge.send_request.return_value = {"ok": True, "output": _PROBE_OUTPUT}
+        env_probe.register_methods(dispatcher, rust_bridge=first_bridge)
+        _, handler = dispatcher.register.call_args[0]
+        assert handler(sshSessionId=15)["source"] == "ssh"
+        env_probe.register_methods(dispatcher, rust_bridge=first_bridge)
+        assert handler(sshSessionId=15)["source"] == "cache"
+        first_bridge.send_request.assert_called_once()
+
+        second_bridge = mock.MagicMock()
+        second_bridge.send_request.return_value = {"ok": False, "output": ""}
+        env_probe.register_methods(dispatcher, rust_bridge=second_bridge)
+        assert handler(sshSessionId=15)["ok"] is False
+        second_bridge.send_request.assert_called_once()
+        assert "ssh:15" not in env_probe._CACHE
+
     def test_registers_system_probe_env(self):
         dispatcher = mock.MagicMock()
         env_probe.register_methods(dispatcher)

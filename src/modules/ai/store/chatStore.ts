@@ -1,6 +1,7 @@
 import type { Chat, UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { canSwitchRunningMode } from "../lib/live-mode-sync";
 import { create } from "zustand";
 import {
   DEFAULT_MODEL_ID,
@@ -37,6 +38,7 @@ import {
   type SessionMeta,
 } from "../lib/sessions";
 import { pushRecentModel } from "../lib/modelPrefs";
+import { scheduleSidecarConfigSync } from "../lib/sidecar-config-sync";
 // 出身登记（2026-09-21）：从盘读回来的消息不再参与命令卡自动打字
 import { markMessagesRestored } from "../lib/autoTypeProvenance";
 // #91 第⑤条：命令卡的归属终端类型（真源在 commandCardTarget，chatStore 只借类型）
@@ -482,7 +484,8 @@ type StoreState = {
   /**
    * 会话级只读免审标志（Task 5，方案书 v3.1 §4.5 免确认记忆三级）
    *
-   * ⚡「批准且本会话只读免审」按钮点击时置位；纯内存不落盘（spec：
+   * 审批所属链维护显示标记；needs_you 仅在确认接受且原归属仍为当前聊天时置位。
+   * 纯内存不落盘（spec：
    * 会话级不落盘），切会话/新建会话时重置为 false。Python 侧经
    * needs_you.respond 的 trust 响应同步记录（trust_store.SessionTrustStore），
    * 本字段仅承载前端会话状态（审批卡提示等 UI 消费）。
@@ -759,8 +762,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
 
   selectedModelId: DEFAULT_MODEL_ID,
   setSelectedModelId: (id) => {
+    const changed = get().selectedModelId !== id;
     set({ selectedModelId: id });
     void pushRecentModel(id);
+    if (changed) scheduleSidecarConfigSync();
   },
 
   // TDSF Agent: 默认 'main'，唯一入口（v3.1 收敛）
@@ -773,6 +778,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
   // 切回其他档自动 teach=false，保证两者永远一致。
   agentMode: DEFAULT_AGENT_MODE,
   setAgentMode: (mode) => {
+    if (!canSwitchRunningMode(get().activeSessionId, mode)) {
+      toast.info("请先停止当前任务，再切换观察或教学模式。确认与自动模式可在运行中切换。");
+      return;
+    }
     set({ agentMode: mode, teach: mode === "teach" });
     persistModeToActiveSession(get(), {
       agentMode: mode,

@@ -1,5 +1,6 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { ipcWorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv, type LocalWorkspaceEnv } from "@/modules/workspace";
+import { fileSourceKey, type FileSource } from "@/modules/workspace/fileSource";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -78,8 +79,9 @@ function sameDirListing(a: DirEntry[], b: DirEntry[]): boolean {
 }
 
 type Options = {
-  onPathRenamed?: (from: string, to: string) => void;
-  onPathDeleted?: (path: string) => void;
+  onBeforePathRenamed?: (from: string, to: string, source: FileSource | null) => Promise<(committed: boolean) => void>;
+  onPathRenamed?: (from: string, to: string, source: FileSource | null) => void;
+  onPathDeleted?: (path: string, source: FileSource | null) => void;
   /**
    * WorkspaceFs P2-3: 数据源 (后端统一入口 fsb_*)。
    * 缺省 = local (保持旧行为: fs_read_dir + watch + git 装饰)。
@@ -89,8 +91,8 @@ type Options = {
 };
 
 export type FileTreeSource =
-  | { kind: "local" }
-  | { kind: "sftp"; sessionId: number; root: string };
+  | { kind: "local"; workspace?: LocalWorkspaceEnv }
+  | { kind: "sftp"; sessionId: number; root: string; frontendSessionId?: string };
 
 /**
  * 根目录相同并不代表数据源相同：两个 SSH 会话都位于 /root 时，仍必须
@@ -98,8 +100,8 @@ export type FileTreeSource =
  */
 export function fileTreeSourceKey(source: FileTreeSource | undefined): string {
   return source?.kind === "sftp"
-    ? `sftp:${source.sessionId}:${source.root}`
-    : "local";
+    ? `sftp:${source.sessionId}:${source.root}:${source.frontendSessionId ?? ""}`
+    : fileSourceKey(source?.workspace ?? { kind: "local" })!;
 }
 
 /** sftp 分支的 fsb_* 公共参数 */
@@ -148,6 +150,19 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   const expandedRef = useRef(expanded);
   const nodesRef = useRef(nodes);
   const watchedRef = useRef<Set<string>>(new Set());
+  const watchWorkspaceRef = useRef<LocalWorkspaceEnv | undefined>(undefined);
+  const listingRequests = useRef(new Map<string, object>());
+  const mutationGeneration = useRef({});
+  const editToken = useRef({});
+  const captureMutation = useCallback(() => {
+    const generation = mutationGeneration.current;
+    const workspace = source?.kind === "local" ? source.workspace ?? ipcWorkspaceEnv() : ipcWorkspaceEnv();
+    const owner: FileSource | null = source?.kind === "sftp"
+      ? source.frontendSessionId ? { kind: "ssh", sessionId: source.frontendSessionId } : null
+      : workspace;
+    return { sftp: sftpArgs(source), workspace, owner,
+      isCurrent: () => mutationGeneration.current === generation && fileTreeSourceKey(sourceRef.current) === sourceKey };
+  }, [source, sourceKey]);
 
   useEffect(() => {
     showHiddenRef.current = showHidden;
@@ -169,15 +184,19 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     if (sourceRef.current?.kind === "sftp") return;
     if (watchedRef.current.has(path)) return;
     watchedRef.current.add(path);
-    watchAdd([path]);
+    watchAdd([path], watchWorkspaceRef.current);
   }, []);
 
   const removeWatch = useCallback((path: string) => {
     if (!watchedRef.current.delete(path)) return;
-    watchRemove([path]);
+    watchRemove([path], watchWorkspaceRef.current);
   }, []);
 
   const fetchChildren = useCallback(async (path: string) => {
+    // A root/source change invalidates all tokens; refreshes replace only their
+    // own path so unrelated expanded directories can still load in parallel.
+    const request = {};
+    listingRequests.current.set(path, request);
     if (nodesRef.current[path]?.status !== "loaded") {
       setNodes((s) => ({ ...s, [path]: { status: "loading" } }));
     }
@@ -199,10 +218,11 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           path,
           showHidden: showHiddenRef.current,
           gitDecorations: gitDecorationsRef.current,
-          workspace: ipcWorkspaceEnv(),
+          workspace: sourceRef.current?.kind === "local" ? sourceRef.current.workspace ?? ipcWorkspaceEnv() : ipcWorkspaceEnv(),
         });
       }
 
+      if (listingRequests.current.get(path) !== request) return;
       const prev = nodesRef.current[path];
       if (prev?.status === "loaded" && sameDirListing(prev.entries, entries)) {
         return;
@@ -213,19 +233,24 @@ export function useFileTree(rootPath: string | null, options?: Options) {
           .filter((e) => e.kind === "dir")
           .map((e) => joinPath(path, e.name)),
       );
+      // Pending paths may not have reached nodesRef yet in this render turn.
+      const knownPaths = new Set([...Object.keys(nodesRef.current), ...listingRequests.current.keys()]);
       const removedRoots: string[] = [];
-      for (const key of Object.keys(nodesRef.current)) {
-        if (dirname(key) === path && !liveDirs.has(key)) removedRoots.push(key);
+      for (const key of knownPaths) {
+        if (key !== path && dirname(key) === path && !liveDirs.has(key)) removedRoots.push(key);
       }
       const dead = new Set<string>();
       if (removedRoots.length > 0) {
         const candidates = new Set<string>([
-          ...Object.keys(nodesRef.current),
+          ...knownPaths,
           ...expandedRef.current,
           ...watchedRef.current,
         ]);
         for (const k of candidates) {
-          if (removedRoots.some((r) => isUnder(k, r))) dead.add(k);
+          if (removedRoots.some((r) => isUnder(k, r))) {
+            dead.add(k);
+            listingRequests.current.delete(k);
+          }
         }
       }
 
@@ -246,25 +271,41 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         const toUnwatch: string[] = [];
         for (const d of dead)
           if (watchedRef.current.delete(d)) toUnwatch.push(d);
-        watchRemove(toUnwatch);
+        watchRemove(toUnwatch, watchWorkspaceRef.current);
       }
     } catch (e) {
+      if (listingRequests.current.get(path) !== request) return;
       setNodes((s) => ({
         ...s,
         [path]: { status: "error", message: String(e) },
       }));
+    } finally {
+      if (listingRequests.current.get(path) === request) {
+        listingRequests.current.delete(path);
+      }
     }
   }, []);
 
   // Root change → restore the cached expansion for this root, re-scope watches,
   // and persist the outgoing root's expansion on the way out.
   useEffect(() => {
+    const generation = {};
+    mutationGeneration.current = generation;
+    editToken.current = {};
+    const requests = listingRequests.current;
+    requests.clear();
+    // Release watches against their original workspace, not the active one.
+    const workspace = sourceRef.current?.kind === "local"
+      ? sourceRef.current.workspace ?? ipcWorkspaceEnv()
+      : ipcWorkspaceEnv();
+    watchWorkspaceRef.current = workspace;
     if (!rootPath) {
+      nodesRef.current = {};
       setNodes({});
       setExpanded(new Set());
       setPendingCreate(null);
       setRenaming(null);
-      return;
+      return () => { requests.clear(); mutationGeneration.current = {}; };
     }
     setPendingCreate(null);
     setRenaming(null);
@@ -285,13 +326,15 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     if (source?.kind !== "sftp") {
       const toWatch = [rootPath, ...restored];
       for (const p of toWatch) watchedRef.current.add(p);
-      watchAdd(toWatch);
+      watchAdd(toWatch, workspace);
     }
 
     return () => {
+      mutationGeneration.current = {};
+      requests.clear();
       rememberExpansion(expansionKey, expandedRef.current);
       if (watchedRef.current.size > 0) {
-        watchRemove([...watchedRef.current]);
+        watchRemove([...watchedRef.current], workspace);
         // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
         watchedRef.current.clear();
       }
@@ -324,10 +367,11 @@ export function useFileTree(rootPath: string | null, options?: Options) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: nodes is intentionally omitted so ordinary tree edits don't refetch every expanded directory; showHidden/gitDecorations are the triggers that force a refresh when prefs change.
   useEffect(() => {
     if (!rootPath || source?.kind === "sftp") return;
-    const loadedPaths = Object.entries(nodes)
-      .filter(([, state]) => state.status === "loaded")
+    // Root/source effects may have reset the current tree since this render.
+    const refreshPaths = Object.entries(nodesRef.current)
+      .filter(([, state]) => state.status === "loaded" || state.status === "loading")
       .map(([path]) => path);
-    for (const path of loadedPaths) void fetchChildren(path);
+    for (const path of refreshPaths) void fetchChildren(path);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- 上游既有依赖设计, 变更 deps 有回归风险
   }, [showHidden, gitDecorations, rootPath, sourceKey, fetchChildren]);
 
@@ -378,6 +422,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
 
   const beginCreate = useCallback(
     (parentPath: string, kind: "file" | "dir") => {
+      editToken.current = {};
       setRenaming(null);
       setPendingCreate({ parentPath, kind });
       // Ensure the parent is expanded so the input row is visible.
@@ -398,7 +443,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     [rootPath, fetchChildren, addWatch],
   );
 
-  const cancelCreate = useCallback(() => setPendingCreate(null), []);
+  const cancelCreate = useCallback(() => { editToken.current = {}; setPendingCreate(null); }, []);
 
   const commitCreate = useCallback(
     async (name: string) => {
@@ -409,20 +454,21 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         return;
       }
       const path = joinPath(pendingCreate.parentPath, trimmed);
-      const sftp = sftpArgs(sourceRef.current);
+      const scope = captureMutation(), token = editToken.current;
+      const sftp = scope.sftp;
       try {
         if (sftp) {
           if (pendingCreate.kind === "dir") {
             await invoke("fsb_mkdir", { ...sftp, path });
           } else {
-            await invoke("fsb_write", { ...sftp, path, data: [] });
+            await invoke("fsb_write", { ...sftp, path, data: [], createNew: true });
           }
         } else {
           const cmd =
             pendingCreate.kind === "dir" ? "fs_create_dir" : "fs_create_file";
-          await invoke(cmd, { path, workspace: ipcWorkspaceEnv() });
+          await invoke(cmd, { path, workspace: scope.workspace });
         }
-        await fetchChildren(pendingCreate.parentPath);
+        if (scope.isCurrent()) await fetchChildren(pendingCreate.parentPath);
       } catch (e) {
         // TDSF 2026-08-28: 新建失败必须有可见反馈（此前静默 console，
         // 用户点新建后"什么都没发生"误以为功能坏了）。Rust 端 SFTP 已支持
@@ -435,18 +481,19 @@ export function useFileTree(rootPath: string | null, options?: Options) {
             : `新建文件失败：${detail}`,
         );
       } finally {
-        setPendingCreate(null);
+        if (scope.isCurrent() && editToken.current === token) setPendingCreate(null);
       }
     },
-    [pendingCreate, fetchChildren],
+    [pendingCreate, fetchChildren, captureMutation],
   );
 
   const beginRename = useCallback((path: string) => {
+    editToken.current = {};
     setPendingCreate(null);
     setRenaming(path);
   }, []);
 
-  const cancelRename = useCallback(() => setRenaming(null), []);
+  const cancelRename = useCallback(() => { editToken.current = {}; setRenaming(null); }, []);
 
   const commitRename = useCallback(
     async (newName: string) => {
@@ -459,44 +506,52 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         return;
       }
       const to = joinPath(parent, trimmed);
+      const scope = captureMutation(), token = editToken.current;
+      let finish: ((committed: boolean) => void) | undefined;
+      let committed = false;
       try {
-        const sftp = sftpArgs(sourceRef.current);
+        if (options?.onBeforePathRenamed) finish = await options.onBeforePathRenamed(renaming, to, scope.owner);
+        const sftp = scope.sftp;
         if (sftp) {
           await invoke("fsb_rename", { ...sftp, from: renaming, to });
         } else {
           await invoke("fs_rename", {
             from: renaming,
             to,
-            workspace: ipcWorkspaceEnv(),
+            workspace: scope.workspace,
           });
         }
-        options?.onPathRenamed?.(renaming, to);
-        await fetchChildren(parent);
+        committed = true;
+        options?.onPathRenamed?.(renaming, to, scope.owner);
+        if (scope.isCurrent()) await fetchChildren(parent);
       } catch (e) {
         console.error("rename failed:", e);
+        toast.error(`重命名失败：${String(e)}`);
       } finally {
-        setRenaming(null);
+        finish?.(committed);
+        if (scope.isCurrent() && editToken.current === token) setRenaming(null);
       }
     },
-    [renaming, fetchChildren, options],
+    [renaming, fetchChildren, options, captureMutation],
   );
 
   const deletePath = useCallback(
     async (path: string) => {
+      const scope = captureMutation();
       try {
-        const sftp = sftpArgs(sourceRef.current);
+        const sftp = scope.sftp;
         if (sftp) {
           await invoke("fsb_delete", { ...sftp, path });
         } else {
-          await invoke("fs_delete", { path, workspace: ipcWorkspaceEnv() });
+          await invoke("fs_delete", { path, workspace: scope.workspace });
         }
-        options?.onPathDeleted?.(path);
-        await fetchChildren(dirname(path));
+        options?.onPathDeleted?.(path, scope.owner);
+        if (scope.isCurrent()) await fetchChildren(dirname(path));
       } catch (e) {
         console.error("delete failed:", e);
       }
     },
-    [fetchChildren, options],
+    [fetchChildren, options, captureMutation],
   );
 
   const movePath = useCallback(
@@ -504,6 +559,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
       const name = from.slice(from.lastIndexOf("/") + 1);
       const to = joinPath(toDir, name);
       if (to === from) return;
+      const scope = captureMutation();
       const target = nodesRef.current[toDir];
       if (
         target?.status === "loaded" &&
@@ -512,24 +568,31 @@ export function useFileTree(rootPath: string | null, options?: Options) {
         console.warn(`move skipped: "${name}" already exists in ${toDir}`);
         return;
       }
+      let finish: ((committed: boolean) => void) | undefined;
+      let committed = false;
       try {
-        const sftp = sftpArgs(sourceRef.current);
+        if (options?.onBeforePathRenamed) finish = await options.onBeforePathRenamed(from, to, scope.owner);
+        const sftp = scope.sftp;
         if (sftp) {
           await invoke("fsb_rename", { ...sftp, from, to });
         } else {
           await invoke("fs_rename", {
             from,
             to,
-            workspace: ipcWorkspaceEnv(),
+            workspace: scope.workspace,
           });
         }
-        options?.onPathRenamed?.(from, to);
-        await Promise.all([fetchChildren(dirname(from)), fetchChildren(toDir)]);
+        committed = true;
+        options?.onPathRenamed?.(from, to, scope.owner);
+        if (scope.isCurrent()) await Promise.all([fetchChildren(dirname(from)), fetchChildren(toDir)]);
       } catch (e) {
         console.error("move failed:", e);
+        toast.error(`移动失败：${String(e)}`);
+      } finally {
+        finish?.(committed);
       }
     },
-    [fetchChildren, options],
+    [fetchChildren, options, captureMutation],
   );
 
   return {

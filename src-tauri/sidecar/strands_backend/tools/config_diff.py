@@ -18,6 +18,8 @@ logger = logging.getLogger("sidecar.strands_backend.tools.config_diff")
 def invoke_config_diff(
     params: dict[str, Any],
     ctx: ToolContext,
+    *,
+    sdk_tool_context: Any = None,
 ) -> dict[str, Any]:
     """对比两个配置文件的差异
 
@@ -29,12 +31,12 @@ def invoke_config_diff(
         ctx: ToolContext
 
     Returns:
-        dict: {diff: str, identical: bool, exit_code: int}
+        dict: {status: str, diff: str, identical: bool | None, exit_code: int | None}
     """
     file_a = str(params.get("file_a", "")).strip()
     file_b = str(params.get("file_b", "")).strip()
     if not file_a or not file_b:
-        return {"diff": "", "identical": False, "exit_code": 1,
+        return {"status": "error", "diff": "", "identical": None, "exit_code": None,
                 "error": "file_a and file_b are required"}
 
     # 构建 diff 命令（shlex.quote 转义路径, 防止含引号的路径拼接成任意命令）
@@ -54,17 +56,19 @@ def invoke_config_diff(
             "tool_name": "config_diff",
         },
         ctx=ctx,
+        sdk_tool_context=sdk_tool_context,
     )
 
-    output = result.get("output", "")
-    exit_code = result.get("exit_code", 1)
-    # diff 返回 0=相同，1=有差异，2=错误
-    # 防御: 若执行层未回传 exit_code (缺失时上面兜底 1), 再用输出空判定
-    identical = (exit_code == 0) if result.get("exit_code") is not None else (output.strip() == "")
+    exit_code = result.get("exit_code")
+    status = result["status"]
+    # 空输出不是相同的证据；只有已完成的 diff 0/1 才能判断相同或不同。
+    verified = status == "success" and type(exit_code) is int and exit_code in (0, 1)
 
     return {
-        "diff": output,
-        "identical": identical,
+        **result,
+        "status": "error" if status == "success" and not verified else status,
+        "diff": result.get("output", ""),
+        "identical": exit_code == 0 if verified else None,
         "exit_code": exit_code,
         "file_a": file_a,
         "file_b": file_b,
@@ -74,11 +78,13 @@ def invoke_config_diff(
 def make_config_diff_tool(ctx: ToolContext):
     """构建 config_diff 工具"""
 
-    @tool
+    @tool(context="sdk_tool_context")
     def config_diff(
         file_a: str,
         file_b: str,
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """对比两个配置文件的差异（在 SSH 远端执行 diff -u）。
 
@@ -95,6 +101,7 @@ def make_config_diff_tool(ctx: ToolContext):
         return invoke_config_diff(
             {"file_a": file_a, "file_b": file_b, "ssh_session_id": ssh_session_id},
             ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     config_diff.__name__ = "config_diff"

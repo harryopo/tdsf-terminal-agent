@@ -38,7 +38,11 @@ function chipLabel(input: {
   return `可更新 ${input.version ?? ""}`.trim();
 }
 
-export function UpdateChip() {
+export function UpdateChip({
+  getUnsavedEditors,
+}: {
+  getUnsavedEditors: () => number;
+}) {
   const phase = useUpdateStore((s) => s.phase);
   const version = useUpdateStore((s) => s.version);
   const bytes = useUpdateStore((s) => s.bytes);
@@ -58,7 +62,22 @@ export function UpdateChip() {
   };
   const startInstall = async () => {
     const m = await import("../update/installUpdate");
-    const result = await m.installHeldUpdate();
+    const result = await m.installHeldUpdate({
+      ...m.liveInstallDeps,
+      blockers: async () => {
+        const current = await m.liveInstallDeps.blockers();
+        const unsaved = getUnsavedEditors();
+        return unsaved > 0
+          ? [
+              ...current,
+              {
+                key: "unsaved-editors" as const,
+                text: `本窗口有 ${unsaved} 个文件尚未保存，请先保存或关闭这些文件后再安装更新。`,
+              },
+            ]
+          : current;
+      },
+    });
     if (result.ok) setOpen(false);
   };
   const recheck = async () => {

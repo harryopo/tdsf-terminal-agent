@@ -165,7 +165,9 @@ def _parse_processes(raw_output: str, mode: str) -> list[dict[str, Any]]:
     return processes
 
 
-def invoke_process_inspector_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_process_inspector_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     """进程检查工具核心实现
 
     Args:
@@ -204,6 +206,7 @@ def invoke_process_inspector_tool(params: dict[str, Any], ctx: ToolContext) -> d
         timeout=15,
         tool_name="inspect_processes",
         readonly=True,
+        sdk_tool_context=sdk_tool_context,
     )
 
     if exec_result.get("status") != "success":
@@ -232,7 +235,7 @@ def invoke_process_inspector_tool(params: dict[str, Any], ctx: ToolContext) -> d
     }
 
     return {
-        "status": "success",
+        **exec_result,
         "mode": mode,
         "command": command,
         "ssh_session_id": exec_result.get("ssh_session_id", ""),
@@ -257,7 +260,7 @@ def make_process_inspector_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def inspect_processes(
         mode: str = "list",
         filter_user: str = "",
@@ -265,6 +268,8 @@ def make_process_inspector_tool(ctx: ToolContext):
         pid: int = 0,
         top_n: int = _DEFAULT_TOP_N,
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """检查 SSH 会话上的远程服务器进程状态。
 
@@ -295,6 +300,7 @@ def make_process_inspector_tool(ctx: ToolContext):
                 "ssh_session_id": ssh_session_id,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     inspect_processes.__name__ = "inspect_processes"

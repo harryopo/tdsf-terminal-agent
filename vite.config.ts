@@ -26,7 +26,8 @@ export default defineConfig({
       // Tauri 官方模板同款: 不监视 src-tauri —— cargo 冷构建大量写 target/
       // 文件时 vite watcher 会撞 EBUSY 崩溃 (tauri dev 的 beforeDevCommand
       // 与 Rust 编译并发), 导致 dev 启动失败
-      ignored: ['**/src-tauri/**'],
+      // 打包归档与 QA 虚拟环境不是前端源码，避免为它们创建海量监听句柄。
+      ignored: ['**/src-tauri/**', '**/outputs/**', '**/.tmp/**'],
     },
   },
   // 修复: Vite v6 在 Windows 上 EACCES 的根因 — 显式禁用 host 检查

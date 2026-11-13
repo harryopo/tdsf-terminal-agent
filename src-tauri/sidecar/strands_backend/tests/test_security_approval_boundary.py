@@ -149,7 +149,11 @@ def test_remote_overwrite_approval_with_real_ledger(tmp_path, mode, status):
             assert bridge.ipc_invoke.call_args_list[2].args[1]["content"] == list(after)
             release.assert_called_once_with(request)
         else:
-            assert result["status"] in {"rejected", "needs_approval"}
+            if status == NeedsYouStatus.CANCELLED:
+                assert result["status"] == "cancelled"
+                assert operation["error_code"] == "approval_cancelled"
+            else:
+                assert result["status"] in {"rejected", "needs_approval"}
             assert operation["state"] == "cancelled"
             bridge.ipc_invoke.assert_not_called()
             release.assert_not_called()

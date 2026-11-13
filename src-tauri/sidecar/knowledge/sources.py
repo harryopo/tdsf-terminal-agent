@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from knowledge.crawlers.clean import clean_markdown
+from knowledge.crawlers.clean import _next_fence, clean_markdown
 from knowledge.fts5 import KnowledgeEntry
 from knowledge.rag import get_global_rag
 
@@ -198,28 +198,21 @@ def _chunk_markdown(text: str) -> list[tuple[str, str]]:
     sections: list[tuple[str, list[str]]] = []
     cur_title = ""
     cur_lines: list[str] = []
-    in_fence = False
     fence_marker = ""
     for line in text.splitlines():
-        stripped = line.lstrip()
         # 代码围栏（``` / ~~~）内的 # 是注释不是标题，跳过标题识别
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            marker = stripped[:3]
-            if not in_fence:
-                in_fence = True
-                fence_marker = marker
-            elif marker == fence_marker:
-                in_fence = False
+        next_fence = _next_fence(line, fence_marker)
+        if fence_marker or next_fence:
+            fence_marker = next_fence
             cur_lines.append(line)
             continue
-        if not in_fence:
-            m = _HEADING_RE.match(line)
-            if m:
-                if cur_lines:
-                    sections.append((cur_title, cur_lines))
-                cur_title = m.group(2).strip()
-                cur_lines = [line]
-                continue
+        m = _HEADING_RE.match(line)
+        if m:
+            if cur_lines:
+                sections.append((cur_title, cur_lines))
+            cur_title = m.group(2).strip()
+            cur_lines = [line]
+            continue
         cur_lines.append(line)
     if cur_lines:
         sections.append((cur_title, cur_lines))
@@ -251,7 +244,20 @@ def _split_long_section(body: str) -> list[str]:
     单段自身超限时整段独立成块（不硬切行，保住表格/代码块完整性；
     向量入库侧已有 text[:500] 截断，FTS5 全文仍覆盖整块）。
     """
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    paragraphs: list[str] = []
+    lines: list[str] = []
+    fence = ""
+    for line in body.splitlines():
+        next_fence = _next_fence(line, fence)
+        if not line.strip() and not fence:
+            if lines:
+                paragraphs.append("\n".join(lines))
+                lines = []
+        else:
+            lines.append(line)
+        fence = next_fence
+    if lines:
+        paragraphs.append("\n".join(lines))
     parts: list[str] = []
     buf: list[str] = []
     buf_len = 0
@@ -461,9 +467,9 @@ def knowledge_stats() -> dict[str, Any]:
 
 def _embed_loaded() -> bool:
     try:
-        from knowledge.rag import _load_embed_model
+        from knowledge.rag import _embed_model
 
-        return _load_embed_model() is not None
+        return _embed_model is not None
     except Exception:
         return False
 

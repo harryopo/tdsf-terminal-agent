@@ -11,13 +11,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PredictionHistorySection } from "./PredictionHistorySection";
 import { getSuggestEngine } from "@/lib/suggest-engine";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import * as settingsStore from "@/modules/settings/store";
 
-const emitTo = vi.fn(async (_label: string, _event: string) => undefined);
+const emitTo = vi.fn<
+  (_label: string, _event: string) => Promise<void>
+>(async (_label, _event) => undefined);
 vi.mock("@tauri-apps/api/event", () => ({
   emitTo: (label: string, event: string) => emitTo(label, event),
   listen: async () => () => undefined,
@@ -27,7 +29,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  emitTo.mockClear();
+  emitTo.mockReset();
+  emitTo.mockResolvedValue(undefined);
   getSuggestEngine().clearHistory();
   usePreferencesStore.setState({ predictionImportShellHistory: true });
 });
@@ -45,7 +48,7 @@ describe("PredictionHistorySection", () => {
     ).toBeTruthy();
   });
 
-  it("asks the main window to clear and disables shell-history import", () => {
+  it("asks the main window to clear and disables shell-history import", async () => {
     // 本窗引擎先塞一条：确认按钮**不该**去动它（动了就是清错了对象）
     const engine = getSuggestEngine();
     engine.addHistory("git", "linux");
@@ -58,9 +61,74 @@ describe("PredictionHistorySection", () => {
     fireEvent.click(screen.getByRole("button", { name: /再次点击确认清空/ }));
 
     expect(emitTo).toHaveBeenCalledWith("main", "tdsf:prediction-clear");
-    expect(spy).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(false));
     expect(engine.getHistory("linux")).toHaveLength(1);
-    expect(screen.getByTestId("prediction-clear-result")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("prediction-clear-result").textContent,
+      ).toContain("清空请求已发送");
+    });
+  });
+
+  it("does not claim success or change import preferences when dispatch fails", async () => {
+    emitTo.mockRejectedValueOnce(new Error("主窗口不可用"));
+    const setter = vi
+      .spyOn(settingsStore, "setPredictionImportShellHistory")
+      .mockResolvedValue();
+    render(<PredictionHistorySection />);
+    fireEvent.click(screen.getByRole("button", { name: /清空预测历史/ }));
+    fireEvent.click(screen.getByRole("button", { name: /再次点击确认清空/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "未能发送清空请求",
+      ),
+    );
+    expect(setter).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("prediction-clear-result")).toBeNull();
+  });
+
+  it("reports partial completion if disabling import fails", async () => {
+    vi.spyOn(
+      settingsStore,
+      "setPredictionImportShellHistory",
+    ).mockRejectedValueOnce(new Error("写入失败"));
+    render(<PredictionHistorySection />);
+    fireEvent.click(screen.getByRole("button", { name: /清空预测历史/ }));
+    fireEvent.click(screen.getByRole("button", { name: /再次点击确认清空/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "清空请求已发送，但关闭历史导入失败",
+      ),
+    );
+    expect(screen.queryByTestId("prediction-clear-result")).toBeNull();
+  });
+
+  it("waits for dispatch and blocks repeat clicks without inventing success", async () => {
+    let resolveDispatch!: () => void;
+    emitTo.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDispatch = resolve;
+        }),
+    );
+    vi.spyOn(
+      settingsStore,
+      "setPredictionImportShellHistory",
+    ).mockResolvedValue();
+    render(<PredictionHistorySection />);
+    fireEvent.click(screen.getByRole("button", { name: /清空预测历史/ }));
+    fireEvent.click(screen.getByRole("button", { name: /再次点击确认清空/ }));
+    const busy = screen.getByRole("button", {
+      name: "正在发送…",
+    }) as HTMLButtonElement;
+    expect(busy.disabled).toBe(true);
+    expect(screen.queryByTestId("prediction-clear-result")).toBeNull();
+    fireEvent.click(busy);
+    expect(emitTo).toHaveBeenCalledTimes(1);
+    resolveDispatch();
+    await waitFor(() =>
+      expect(screen.getByTestId("prediction-clear-result")).toBeTruthy(),
+    );
   });
 
   it("shows the shell history files as read-only in the copy (文案承诺不碰用户文件)", () => {
@@ -71,7 +139,9 @@ describe("PredictionHistorySection", () => {
 
 describe("预测历史的来源边界", () => {
   it("preference defaults to importing shell history", () => {
-    expect(usePreferencesStore.getState().predictionImportShellHistory).toBe(true);
+    expect(usePreferencesStore.getState().predictionImportShellHistory).toBe(
+      true,
+    );
   });
 
   it("history loading is gated by the preference", () => {
