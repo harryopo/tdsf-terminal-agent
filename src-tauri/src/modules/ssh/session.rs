@@ -1612,12 +1612,12 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
   __TDSF_SHELL_INSTANCE="${BASHPID:-$$}-$RANDOM-$RANDOM"
   # 按 UTF-8 字节编码，分号、控制字符和百分号不能破坏 OSC 字段。
   _tdsf_uri_encode() {
-    local LC_ALL=C v="$1" c i
+    local LC_ALL=C v="$1" c i byte
     for ((i=0; i<${#v}; i++)); do
       c="${v:i:1}"
       case "$c" in
         [a-zA-Z0-9/._~-]) printf '%s' "$c" ;;
-        *) printf '%%%02X' "'$c" ;;
+        *) printf -v byte '%d' "'$c"; printf '%%%02X' "$((byte & 255))" ;;
       esac
     done
   }

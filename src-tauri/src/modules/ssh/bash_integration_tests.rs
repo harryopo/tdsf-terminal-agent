@@ -233,6 +233,41 @@ fn sourcing_pure_hooks_does_not_load_the_users_bashrc() {
 }
 
 #[test]
+fn uri_encoding_preserves_utf8_with_signed_printf_ordinals() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (base, _, _) = create_files(&dir);
+    let script = format!(
+        r#"source "{base}.hooks.bash" || exit 93
+trap - DEBUG
+{}
+builtin printf '\nTDSF_SIGNED_BYTE='
+tdsf_test_byte=$'\347'
+printf '%d' "'$tdsf_test_byte"
+builtin printf '\nTDSF_BYTE_RESULT='
+_tdsf_uri_encode $'\347\233\256\345\275\225% space'
+builtin printf '\n'
+"#,
+        include_str!("fixtures/signed_octet_printf.bash")
+    );
+    let mut command = Command::new(bash_program());
+    command
+        .args(["--noprofile", "--norc", "-i", "-c", &script])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("TERM", "xterm-256color");
+    let output = run_command_with_deadline(&mut command);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let stdout = String::from_utf8(output.stdout).expect("ASCII encoded result");
+    assert!(stdout.contains("\nTDSF_SIGNED_BYTE=-25\n"));
+    let encoded = stdout
+        .split_once("\nTDSF_BYTE_RESULT=")
+        .expect("encoder result marker")
+        .1
+        .trim();
+    assert_eq!(encoded, "%E7%9B%AE%E5%BD%95%25%20space");
+}
+
+#[test]
 fn startup_loads_user_rc_once_and_repeated_hooks_keep_prompt_state() {
     let dir = tempfile::tempdir().expect("temporary HOME");
     let (base, _, launch_cmd) = create_files(&dir);
