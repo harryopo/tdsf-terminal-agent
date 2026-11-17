@@ -20,7 +20,7 @@ flowchart TD
 
 ## 1. 仓库与权限
 
-队长已于 2026-11-13 选择：EchoSinklair、Yan-0914 分别 Fork `harryopo/tdsf-terminal-agent`，在自己的 Fork 建任务分支，向上游 `main` 提 PR。协作模式不需要为成员新增主库写权限；本轮未核/改变既有权限。成员自己的 Fork 不等于拥有上游合并权限。阅读和首轮任务见 [组员入门](team-onboarding.md)。
+队长已于 2026-11-13 选择：EchoSinklair、Yan-0914 分别 Fork `harryopo/tdsf-terminal-agent`，在自己的 Fork 建任务分支，向队长指定的目标分支提 PR（正式默认main；当前未合main阶段为`codex/2026-11-13-root-shared-review`）。协作模式不需要为成员新增主库写权限；本轮未核/改变既有权限。成员自己的 Fork 不等于拥有上游合并权限。阅读和首轮任务见 [组员入门](team-onboarding.md)。
 
 如果队长选择同仓库分支，先核分支保护和成员权限，再下发任务。不能只靠 CODEOWNERS 或一条文字约定承诺“只有队长能合并”。本轮只写规范，没有启用或更改远端设置。
 
@@ -161,3 +161,16 @@ git rev-parse HEAD
 ## 8. 一手依据
 
 [GitHub Fork 权限](https://docs.github.com/en/pull-requests/reference/forks)、[分支保护](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)、[CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)、[Fork CI 事件与权限](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)。
+
+## 完整工作包与阶段交付（2026-11-17）
+
+① 接续任务/基线 → ② 环境/已有覆盖 → ③ 实现与反例 → ④ 编译验证 → ⑤ 材料 → ⑥ 整包审批。
+
+| 情况 | 固定做法 |
+|---|---|
+| 一个完整用户路径/明确成果包 | 一份Draft PR持续积累；普通小改动、小提交和包内验证自主完成，不一行一PR |
+| 阶段中 | 当天一次进度/证据清单；发现真实严重风险、接口/策略/依赖变化、权限或文件冲突才暂停相关部分询问 |
+| 整包就绪 | 代码、定向/影响检查、更新说明、截图/工具证明索引、失败/未测一次性交验 |
+| 比赛材料 | 按[赛事三人共享规范](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)归档；private原件私发队长，Fork不自动共享它们 |
+
+来源归属按实际工具，AI辅助意见不冒充独立人类审批；合并权仍属于队长。
