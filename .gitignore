@@ -57,6 +57,7 @@ competitions/2026-huawei-agent/**
 !competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-EchoSinklair-完整工作包.md
 !competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-完整工作包.md
 !competitions/2026-huawei-agent/04-AI协作与交接/README.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-RDP-VNC远程桌面长任务.md
 !competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md
 !competitions/2026-huawei-agent/05-作品材料/00-模板/证据记录模板.md
 !competitions/2026-huawei-agent/05-作品材料/00-模板/阶段交付模板.md
@@ -274,6 +275,10 @@ docs/**
 !docs/plans/*/README.md
 !docs/plans/project-organization/2026-11-13-v1.0-目录与文档治理.md
 !docs/plans/terminal-prediction/2026-11-13-v1.0-输入与建议边界.md
+!docs/plans/remote-desktop/2026-11-17-v1.0-RDP-VNC架构与连续开发方案.md
+!docs/plans/remote-desktop/README.md
+!docs/research/remote-desktop/
+!docs/research/remote-desktop/*.md
 .ai/
 .trae/
 knowledge-slim-preview/
