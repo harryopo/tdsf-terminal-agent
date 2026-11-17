@@ -31,7 +31,7 @@ TDSF Terminal Agent 是围绕本地、WSL 和 SSH 终端的桌面工作台，组
 
 ## 比赛与旧 Wiki 在哪里
 
-当前比赛资料从 [比赛总入口](../../competitions/README.md) → [华为赛事目录](../../competitions/2026-huawei-agent/README.md)进入。先看 [三人分工](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)和[当前完整工作包方案v1.2](../../competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.2-完整工作包与材料协作.md)，技术事实以现行架构和代码为准。赛事资格、既有项目增量参赛和工具证明要求仍待组织方规则核验，不把作品计划当已参赛结果。
+当前比赛资料从 [比赛总入口](../../competitions/README.md) → [华为赛事目录](../../competitions/2026-huawei-agent/README.md)进入。先看 [三人分工](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)和[当前完整工作包方案v1.3](../../competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.3-截图入库与成员整包复核.md)，技术事实以现行架构和代码为准。赛事资格、既有项目增量参赛和工具证明要求仍待组织方规则核验，不把作品计划当已参赛结果。
 
 旧 Repo Wiki、Qoder Wiki、火山杯与其它比赛介绍已保留在队长本机的历史资料区，未随公开源码整体分发。它们有旧能力描述、路径和部分私人资料；需要某一专题时由队长选出并核验/脱敏后提供。现行 Wiki 的阅读作用由 `docs/architecture` 承担，不要求新成员重新恢复旧目录。
 

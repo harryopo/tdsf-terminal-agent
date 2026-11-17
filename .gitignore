@@ -92,6 +92,22 @@ competitions/2026-huawei-agent/**
 !competitions/2026-huawei-agent/06-验收与演示/01-测试记录/*.md
 !competitions/2026-huawei-agent/06-验收与演示/02-演示脚本/*.md
 !competitions/2026-huawei-agent/06-验收与演示/03-演示视频/*.md
+# 可公开截图按成员归档随任务分支提交；不放开private、日志、视频或ZIP。
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.md
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.png
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.jpg
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.jpeg
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.webp
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.md
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.png
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.jpg
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.jpeg
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.webp
+!competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.3-截图入库与成员整包复核.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-整包收尾清单.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-EchoSinklair-审查后回归工作包.md
 competitions/2026-huawei-agent/private/**
 !competitions/2026-huawei-agent/private/README.md
 
