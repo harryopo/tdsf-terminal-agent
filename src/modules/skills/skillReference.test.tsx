@@ -173,6 +173,19 @@ describe("invokeSkill — 结果合同", () => {
     expect(res.output).toContain("无法识别");
   });
 
+  it("非法参考字段（数组/标量/null）同样返回 unknown", async () => {
+    const cases: unknown[] = [[], 123, null, true];
+    for (const value of cases) {
+      mockedInvoke.mockResolvedValueOnce({
+        ok: true,
+        result: { content: value, when_to_use: value },
+      } as never);
+      const res = await invokeSkill("bad", "");
+      expect(res.mode).toBe("unknown");
+      expect(res.success).toBe(false);
+    }
+  });
+
   it("未知/格式错误结果返回 unknown", async () => {
     mockedInvoke.mockResolvedValueOnce({ ok: true, result: {} } as never);
     const empty = await invokeSkill("a", "");
@@ -252,6 +265,25 @@ describe("invokeSkill — 结果合同", () => {
     expect(res.mode).toBe("executed");
     expect(res.output).toContain("synthetic actual output");
     expect(res.output).not.toContain("(无输出)");
+  });
+
+  it("有 stdout 时不重复展示 output 字段", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      result: {
+        success: true,
+        exit_code: 0,
+        output: "same text",
+        stdout: "same text",
+      },
+    } as never);
+
+    const res = await invokeSkill("legacy", "");
+    const occurrences = res.output.split("same text").length - 1;
+
+    expect(res.mode).toBe("executed");
+    expect(occurrences).toBe(1);
+    expect(res.output).not.toContain("## output");
   });
 });
 
@@ -383,6 +415,30 @@ describe("SkillInvoker — 参考界面文案", () => {
     expect(screen.queryByText(/仅提供参考资料，未执行命令/)).toBeNull();
     expect(screen.queryByText(/执行完成/)).toBeNull();
   });
+
+  it("executed 失败显示 stderr 与执行失败，不写未执行", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      result: {
+        ...executedResult,
+        success: false,
+        exit_code: 1,
+        stdout: "",
+        stderr: "boom",
+      },
+    } as never);
+
+    render(<SkillInvoker skill={skill} onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByTestId("skill-invoker-submit"));
+
+    await waitFor(() => {
+      expect(textOf(screen.getByTestId("skill-invoker-output"))).toContain(
+        "boom",
+      );
+    });
+    expect(screen.getByText(/执行失败/)).toBeTruthy();
+    expect(screen.queryByText(/仅提供参考资料，未执行命令/)).toBeNull();
+  });
 });
 
 describe("SkillContentDialog — 侧栏入口同样按 mode 展示", () => {
@@ -435,6 +491,28 @@ describe("SkillContentDialog — 侧栏入口同样按 mode 展示", () => {
     expect(screen.getByText(/返回既有执行结果/)).toBeTruthy();
     expect(screen.queryByText(/仅提供参考资料，未执行命令/)).toBeNull();
     expect(screen.queryByText(/暂无内容/)).toBeNull();
+  });
+
+  it("executed 失败展示 stderr，不显示暂无内容或未执行", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      result: {
+        ...executedResult,
+        success: false,
+        exit_code: 1,
+        stdout: "",
+        stderr: "boom",
+      },
+    } as never);
+
+    render(<SkillContentDialog skill={skill} onOpenChange={() => {}} />);
+
+    await waitFor(() => {
+      expect(textOf(screen.getByTestId("streamdown"))).toContain("boom");
+    });
+    expect(screen.getByText(/执行失败/)).toBeTruthy();
+    expect(screen.queryByText(/暂无内容/)).toBeNull();
+    expect(screen.queryByText(/仅提供参考资料，未执行命令/)).toBeNull();
   });
 });
 
