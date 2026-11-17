@@ -75,17 +75,28 @@ export interface SkillInvokeResult {
 }
 
 /**
+ * `invokeSkill` 的结果语义（TEAM-FIX-01）
+ *
+ * - reference: 只读取了技能参考资料，没有执行任何命令
+ * - executed:  既有 executor 结果，代表真实执行
+ * - failed:    读取/调用失败，不能当作成功
+ */
+export type SkillExecutionMode = "reference" | "executed" | "failed";
+
+/**
  * `invokeSkill` 的执行结果（前端最终拿到的结构）
  *
  * 包含调用耗时和成功/失败标志，便于 UI 展示。
  */
 export interface SkillExecution {
-  /** 是否成功 */
+  /** 是否成功（reference 表示读取成功，不代表执行成功） */
   success: boolean;
   /** 输出内容（成功时为 skill content，失败时为错误信息） */
   output: string;
   /** 调用耗时（毫秒） */
   durationMs: number;
+  /** 结果语义；旧调用方未提供时按 success 兼容展示 */
+  mode?: SkillExecutionMode;
   /** 完整结果（成功时存在） */
   result?: SkillInvokeResult;
 }
@@ -215,13 +226,29 @@ export interface SkillInvokeKnowledgeResult {
   /** 完整 Markdown body (skill 的主体内容) */
   content: string;
   /** 触发条件 */
-  whenToUse: string;
+  whenToUse?: string;
   /** 执行步骤 */
-  steps: string;
+  steps?: string;
   /** 使用示例 (原始字符串) */
-  examples: string;
+  examples?: string;
   /** 调用参数 (透传) */
   params: Record<string, unknown>;
   /** 来源标识 (builtin / mock) */
   source: string;
+  /** Python 端现有字段：说明本次只返回参考资料，未执行 executor */
+  execution?: "not_run";
+  /** 描述（参考结果会带上，仅展示用） */
+  description?: string;
+  /** tags（参考结果会带上，仅展示用） */
+  tags?: string[];
+  /** 触发词（参考结果会带上，仅展示用） */
+  triggers?: string[];
+  /** 建议配合使用的工具白名单（空 = 不限制） */
+  allowed_tools?: string[];
+  /** 结构化剧本（仅参考，不代表已执行） */
+  playbook?: Array<Record<string, string>>;
+  /** 元数据：有 executor 也只表示目标环境的步骤声明，不代表已执行 */
+  executor?: SkillExecutor | null;
+  /** 附加说明（例如 mock skill 提示） */
+  note?: string;
 }

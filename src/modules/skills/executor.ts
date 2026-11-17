@@ -1,16 +1,20 @@
 // TDSF (P4-T4.4): Skill 执行器
 // -----------------------------------------------------------------------------
-// 通过 IPC 调用 Python sidecar 的 `skill.invoke` 方法执行 skill，
+// 通过 IPC 调用 Python sidecar 的 `skill.invoke` 方法读取技能资料或执行 skill，
 // 失败时返回 `{success: false, output: error}`，不抛错。
 //
 // 协议链路:
 //   前端 invoke('ipc_invoke', {method:'skill.invoke', params:{name, params}})
 //     → Rust ipc_invoke → Python MethodDispatcher
 //     → skills.registry._skill_invoke(name, params)
-//     → SkillRegistry.invoke(name, params)
-//     - builtin skill: 返回 {name, content, when_to_use, steps, examples, params, source:"builtin"}
-//     - mock skill:    返回 {name, content:"mock skill: ...", description, tags, params, source:"mock"}
+//     → SkillRegistry.get_reference(name, params)
+//     - 返回参考资料，`execution: "not_run"`；即使带 executor 元数据也不执行
 //     → 前端包装层 {ok: true, result: {...}}
+//
+// TEAM-FIX-01 (2026-11-17): 当前入口只读参考，结果语义必须如实展示：
+//   - reference: 参考资料已加载，未执行命令
+//   - executed:  既有 executor 结果（兼容保留）
+//   - failed:    读取/调用失败
 //
 // 错误处理:
 //   - skill 不存在 → Python 返回 {ok: false, error: "skill not found: ..."}
@@ -29,11 +33,11 @@ import type {
 const SKILL_INVOKE_TIMEOUT_MS = 30_000;
 
 /**
- * 调用 Skill
+ * 读取 Skill 参考资料（或兼容既有执行结果）
  *
  * @param name Skill 名称（大小写不敏感，Python 端处理）
  * @param args 调用参数（字符串，会作为 params.input 传给 Python）
- * @returns SkillExecution（含 success / output / durationMs / result）
+ * @returns SkillExecution（含 success / output / durationMs / mode / result）
  */
 export async function invokeSkill(
   name: string,
@@ -69,6 +73,7 @@ export async function invokeSkill(
         success: false,
         output: "Sidecar 返回空响应",
         durationMs,
+        mode: "failed",
       };
     }
 
@@ -77,6 +82,7 @@ export async function invokeSkill(
         success: false,
         output: resp.error ?? "Skill 调用失败（未知错误）",
         durationMs,
+        mode: "failed",
       };
     }
 
@@ -95,10 +101,12 @@ export async function invokeSkill(
         success: false,
         output: "Sidecar 返回 ok=true 但缺少 result 字段",
         durationMs,
+        mode: "failed",
       };
     }
 
     // 分支 1: executor 模式 (有 output 字段 + 布尔 success) → 真正执行结果
+    // TEAM-FIX-01：只有该分支才允许叫“执行结果”，其余一律按参考资料展示。
     if (
       "output" in result &&
       typeof (result as SkillInvokeExecutedResult).success === "boolean"
@@ -153,21 +161,25 @@ export async function invokeSkill(
         success: execResult.success,
         output: outputParts.join("\n"),
         durationMs,
+        mode: "executed",
         result: execResult as never, // 前端 SkillExecution.result 仍用宽类型兼容
       };
     }
 
-    // 分支 2: 知识卡模式 (无 executor, 返回 SKILL.md 内容)
+    // 分支 2: 参考模式（TEAM-FIX-01）
+    // 当前 skill.invoke → get_reference 只返回参考资料，execution="not_run"。
+    // 即使结果带 executor 元数据，也只表示目标环境的步骤声明，不代表执行；
+    // 文案不得写“执行完成”，空资料也不得伪装成成功输出。
     const knowledgeResult = result as SkillInvokeKnowledgeResult;
-    const output =
-      knowledgeResult.content ||
-      knowledgeResult.whenToUse ||
-      `Skill ${name} 执行完成（无输出内容）`;
+    const content = knowledgeResult.content?.trim() ?? "";
+    const whenToUse = knowledgeResult.whenToUse?.trim() ?? "";
+    const output = content || whenToUse;
 
     return {
       success: true,
       output,
       durationMs,
+      mode: "reference",
       result: knowledgeResult as never,
     };
   } catch (err) {
@@ -175,8 +187,9 @@ export async function invokeSkill(
     const msg = err instanceof Error ? err.message : String(err);
     return {
       success: false,
-      output: `Skill ${name} 调用失败: ${msg}`,
+      output: `Skill ${name} 读取失败: ${msg}`,
       durationMs,
+      mode: "failed",
     };
   } finally {
     // 无论成功失败都清理 timer，避免内存泄漏
