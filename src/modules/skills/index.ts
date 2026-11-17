@@ -26,10 +26,18 @@ export { SkillsPanel } from "./SkillsPanel";
 export { type ParsedSkillCommand, parseSkillCommand } from "./skillCommand";
 // === 结果合同（两个入口共用） ===
 export {
+  describeSkillContext,
   describeSkillResult,
   type SkillNoticeTone,
   type SkillResultNotice,
 } from "./resultNotice";
+// === /skill 消费段 ===
+export {
+  runSlashSkillCommand,
+  type SlashSkillInput,
+  type SlashSkillInvoke,
+  type SlashSkillNotify,
+} from "./slashSkill";
 // === Store ===
 export {
   filterSkills,

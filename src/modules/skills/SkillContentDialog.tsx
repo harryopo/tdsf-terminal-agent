@@ -27,7 +27,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Streamdown } from "streamdown";
-import { describeSkillResult } from "./resultNotice";
+import { describeSkillContext, describeSkillResult } from "./resultNotice";
 import { useSkillsStore } from "./skillsStore";
 import type { SkillExecution, SkillMetadata } from "./types";
 
@@ -93,9 +93,11 @@ export function SkillContentDialog({ skill, onOpenChange }: Props) {
   const referenceContent = result?.mode === "reference" ? result.output : "";
   const isReferenceEmpty =
     result?.mode === "reference" && result.empty === true;
+  const executedContent = result?.mode === "executed" ? result.output : "";
   const readFailed =
     result?.mode === "failed" || result?.mode === "unknown";
-  const content = referenceContent || (readFailed ? fallbackContent : "");
+  const content =
+    referenceContent || executedContent || (readFailed ? fallbackContent : "");
   const hasContent = content.trim().length > 0;
 
   // TDSF: 调用系统文件管理器聚焦 SKILL.md
@@ -130,7 +132,7 @@ export function SkillContentDialog({ skill, onOpenChange }: Props) {
           <DialogDescription>
             Skill 完整内容（SKILL.md）
             <span className="mt-1 block text-[11px] opacity-80">
-              仅提供参考资料，未执行命令。
+              {describeSkillContext(result)}
             </span>
             {loading && (
               <span className="mt-1 flex items-center gap-1.5 text-[11px] opacity-80">

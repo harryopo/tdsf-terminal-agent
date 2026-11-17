@@ -45,8 +45,8 @@ import { TodoStrip } from "./TodoStrip";
 import { WorkspaceGate } from "./WorkspaceGate";
 // TDSF (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
-  describeSkillResult,
   parseSkillCommand,
+  runSlashSkillCommand,
   useSkillsStore,
 } from "@/modules/skills";
 
@@ -389,18 +389,18 @@ function Body({
     if (parsed) {
       setSending(true);
       try {
-        // TEAM-FIX-01: 与侧栏对话框共用 store 结果合同；
-        // 当前入口只读取参考资料，executor 元数据不代表执行
-        const res = await invokeSkill(parsed.name, parsed.args);
-        const notice = describeSkillResult(parsed.name, res);
-        const options = { description: notice.description, duration: 4000 };
-        if (notice.tone === "success") {
-          toast.success(notice.title, options);
-        } else if (notice.tone === "warning") {
-          toast.warning(notice.title, options);
-        } else {
-          toast.error(notice.title, options);
-        }
+        // TEAM-FIX-01: /skill 消费段统一走 runSlashSkillCommand，
+      // 与侧栏对话框共用 store 结果合同与通知文案
+        await runSlashSkillCommand(parsed, invokeSkill, (notice) => {
+          const options = { description: notice.description, duration: 4000 };
+          if (notice.tone === "success") {
+            toast.success(notice.title, options);
+          } else if (notice.tone === "warning") {
+            toast.warning(notice.title, options);
+          } else {
+            toast.error(notice.title, options);
+          }
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         toast.error(`Skill "${parsed.name}" 调用失败`, {

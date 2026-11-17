@@ -29,7 +29,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSkillsStore } from "./skillsStore";
-import { describeSkillResult } from "./resultNotice";
+import { describeSkillContext, describeSkillResult } from "./resultNotice";
 import type { SkillExecution, SkillMetadata } from "./types";
 
 interface Props {
@@ -139,7 +139,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
               </span>
             ) : null}
             <span className="mt-1 block text-[11px] opacity-80">
-              仅提供参考资料，未执行命令。
+              {describeSkillContext(result)}
             </span>
           </DialogDescription>
         </DialogHeader>

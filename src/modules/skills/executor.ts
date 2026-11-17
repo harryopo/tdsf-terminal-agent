@@ -184,6 +184,8 @@ function executedExecution(
   const executor = toExecutor(raw.executor);
   const stdout = readString(raw, "stdout") ?? "";
   const stderr = readString(raw, "stderr") ?? "";
+  const outputOnly = readString(raw, "output") ?? "";
+  const combined = [stdout, stderr].filter(Boolean).join("\n");
   const exitCode = readNumber(raw, "exit_code", "exitCode");
   const execDuration = readNumber(raw, "duration_ms", "durationMs");
 
@@ -212,7 +214,14 @@ function executedExecution(
     parts.push("## stderr");
     parts.push(stderr.trimEnd());
   }
-  if (!stdout && !stderr) {
+  // 旧 executed-result 可能只有 output 字段：没有 stdout/stderr 时展示真实 output，
+  // 不能显示“无输出”；有分流输出时不再重复展示 output。
+  const showOutputOnly = !stdout && !stderr && outputOnly.trim().length > 0;
+  if (showOutputOnly) {
+    parts.push("## output");
+    parts.push(outputOnly.trimEnd());
+  }
+  if (!stdout && !stderr && !showOutputOnly) {
     parts.push("(无输出)");
   }
   const error = readString(raw, "error");
@@ -228,7 +237,7 @@ function executedExecution(
     executor,
     success,
     exit_code: exitCode,
-    output: readString(raw, "output") ?? [stdout, stderr].filter(Boolean).join("\n"),
+    output: outputOnly || combined,
     stdout,
     stderr,
     duration_ms: execDuration,
@@ -316,13 +325,17 @@ export async function invokeSkill(
     }
 
     // 3) 参考形状（snake/camel 都可）
-    const hasReferenceShape =
-      hasKey(raw, "content") ||
-      hasKey(raw, "body") ||
-      hasKey(raw, "when_to_use") ||
-      hasKey(raw, "whenToUse") ||
-      hasKey(raw, "steps") ||
-      hasKey(raw, "examples");
+    // 参考字段必须是字符串：{content:{...}} 这类格式错误不能被当作成功参考
+    const hasStringField = (...keys: string[]) =>
+      keys.some((key) => typeof raw[key] === "string");
+    const hasReferenceShape = hasStringField(
+      "content",
+      "body",
+      "when_to_use",
+      "whenToUse",
+      "steps",
+      "examples",
+    );
     if (hasReferenceShape) {
       return referenceExecution(name, raw, durationMs);
     }

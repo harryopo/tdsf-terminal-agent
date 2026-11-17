@@ -1,30 +1,29 @@
 /**
  * TEAM-FIX-01 定向用例：技能结果合同与两个入口
  * -----------------------------------------------------------------------------
- * 覆盖 Issue #53 验收矩阵：
- *   1. not_run + executor + success/output 混合 → 以 not_run 为准
- *   2. 正常参考、空参考、when_to_use/whenToUse 兼容
- *   3. 空/未知/格式错误结果、IPC 异常 → 不落到成功参考兜底
- *   4. 确证旧 executed 成功/失败 → 保持真实语义
- *   5. store → 对话框、store → /skill：mode 一致，通知文案一致
+ * 覆盖 Issue #53 第二阶段与 ROOT 本轮新增边界：
+ *   1. not_run 优先于 executor/success/output 混合字段
+ *   2. 正常/空参考、when_to_use 与 whenToUse 兼容
+ *   3. 非法参考字段（content 为对象）、未知对象、IPC 异常 → 不成功兜底
+ *   4. 确证 executed 成功/失败；output-only 旧结果必须展示真实 output
+ *   5. store → 对话框、store → /skill：mode/通知一致
  *   6. 历史缺 mode 不清除、不反推执行；recordHistory=false 不写历史
+ *   7. 两个对话框收到 executed 时不得同时出现“未执行命令”
  *
- * 参考路径只允许一次 skill.invoke，没有额外 shell/SSH/终端写入调用。
+ * 断言使用原生 DOM 属性，不依赖全局 jest-dom matcher。
  */
-import "@testing-library/jest-dom/vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillContentDialog } from "./SkillContentDialog";
 import { SkillInvoker } from "./SkillInvoker";
 import { invokeSkill } from "./executor";
-import { describeSkillResult } from "./resultNotice";
+import {
+  describeSkillContext,
+  describeSkillResult,
+  type SkillResultNotice,
+} from "./resultNotice";
+import { runSlashSkillCommand } from "./slashSkill";
 import { useSkillsStore } from "./skillsStore";
 import type { SkillExecution, SkillHistoryEntry, SkillMetadata } from "./types";
 
@@ -34,7 +33,7 @@ vi.mock("sonner", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
 vi.mock("streamdown", () => ({
-  Streamdown: ({ children }: { children?: React.ReactNode }) => (
+  Streamdown: ({ children }: { children?: string }) => (
     <div data-testid="streamdown">{children}</div>
   ),
 }));
@@ -77,6 +76,10 @@ const executedResult = {
   params: {},
   source: "builtin",
 };
+
+function textOf(el: Element | null): string {
+  return el?.textContent ?? "";
+}
 
 function oldHistoryEntry(): SkillHistoryEntry {
   return {
@@ -155,10 +158,22 @@ describe("invokeSkill — 结果合同", () => {
     expect(res.mode).toBe("reference");
     expect(res.empty).toBe(true);
     expect(res.output).toBe("");
-    expect(res.output).not.toContain("执行完成");
   });
 
-  it("未知/格式错误结果返回 unknown，不落到成功参考", async () => {
+  it("非法参考字段（content 为对象）返回 unknown，不按成功参考兜底", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      result: { content: { unexpected: true } },
+    } as never);
+
+    const res = await invokeSkill("linux-ops", "");
+
+    expect(res.mode).toBe("unknown");
+    expect(res.success).toBe(false);
+    expect(res.output).toContain("无法识别");
+  });
+
+  it("未知/格式错误结果返回 unknown", async () => {
     mockedInvoke.mockResolvedValueOnce({ ok: true, result: {} } as never);
     const empty = await invokeSkill("a", "");
     expect(empty.mode).toBe("unknown");
@@ -221,6 +236,23 @@ describe("invokeSkill — 结果合同", () => {
     expect(bad.output).toContain("boom");
     expect(bad.output).toContain("退出码: 1");
   });
+
+  it("output-only 旧执行结果展示真实 output，不显示“无输出”", async () => {
+    mockedInvoke.mockResolvedValue({
+      ok: true,
+      result: {
+        success: true,
+        exit_code: 0,
+        output: "synthetic actual output",
+      },
+    } as never);
+
+    const res = await invokeSkill("legacy", "");
+
+    expect(res.mode).toBe("executed");
+    expect(res.output).toContain("synthetic actual output");
+    expect(res.output).not.toContain("(无输出)");
+  });
 });
 
 describe("skillsStore — mode 传递与历史兼容", () => {
@@ -260,7 +292,7 @@ describe("skillsStore — mode 传递与历史兼容", () => {
   });
 });
 
-describe("describeSkillResult — 两个入口共用文案", () => {
+describe("describeSkillResult / describeSkillContext", () => {
   const base: SkillExecution = {
     success: true,
     output: "参考",
@@ -268,31 +300,37 @@ describe("describeSkillResult — 两个入口共用文案", () => {
     mode: "reference",
   };
 
-  it("reference / 空参考 / executed / unknown / failed 各有明确语义", () => {
+  it("四种 mode 的标签与顶部说明互不矛盾", () => {
     expect(describeSkillResult("s", base).label).toBe("参考资料已加载");
     expect(describeSkillResult("s", { ...base, empty: true }).label).toBe(
       "未提供参考资料",
     );
+    expect(describeSkillResult("s", { ...base, mode: "executed" }).label).toBe(
+      "执行结束",
+    );
     expect(
-      describeSkillResult("s", { ...base, mode: "executed" }).label,
-    ).toBe("执行结束");
-    expect(
-      describeSkillResult("s", {
-        ...base,
-        mode: "executed",
-        success: false,
-      }).label,
+      describeSkillResult("s", { ...base, mode: "executed", success: false })
+        .label,
     ).toBe("执行失败");
     expect(describeSkillResult("s", { ...base, mode: "unknown" }).label).toBe(
       "结果无法识别",
     );
     expect(
-      describeSkillResult("s", {
-        ...base,
-        mode: "failed",
-        success: false,
-      }).label,
+      describeSkillResult("s", { ...base, mode: "failed", success: false })
+        .label,
     ).toBe("读取失败");
+
+    expect(describeSkillContext(null)).toContain("仅提供参考资料");
+    expect(describeSkillContext(base)).toContain("仅提供参考资料");
+    expect(describeSkillContext({ ...base, mode: "executed" })).toContain(
+      "执行结果",
+    );
+    expect(describeSkillContext({ ...base, mode: "executed" })).not.toContain(
+      "未执行命令",
+    );
+    expect(describeSkillContext({ ...base, mode: "unknown" })).not.toContain(
+      "未执行命令",
+    );
   });
 });
 
@@ -304,14 +342,14 @@ describe("SkillInvoker — 参考界面文案", () => {
     fireEvent.click(screen.getByTestId("skill-invoker-submit"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("skill-invoker-output")).toHaveTextContent(
+      expect(textOf(screen.getByTestId("skill-invoker-output"))).toContain(
         "仅作参考",
       );
     });
     expect(screen.getAllByText(/参考资料已加载/).length).toBeGreaterThan(0);
     expect(
       screen.getByText(/仅提供参考资料，未执行命令/),
-    ).toBeInTheDocument();
+    ).toBeTruthy();
     expect(screen.queryByText(/执行完成/)).toBeNull();
     expect(mockedInvoke).toHaveBeenCalledTimes(1);
   });
@@ -323,11 +361,27 @@ describe("SkillInvoker — 参考界面文案", () => {
     fireEvent.click(screen.getByTestId("skill-invoker-submit"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("skill-invoker-output")).toHaveTextContent(
+      expect(textOf(screen.getByTestId("skill-invoker-output"))).toContain(
         "无法识别",
       );
     });
     expect(screen.queryByText(/参考资料已加载/)).toBeNull();
+  });
+
+  it("executed 结果显示执行输出，不再固定声称未执行", async () => {
+    mockedInvoke.mockResolvedValue({ ok: true, result: executedResult } as never);
+
+    render(<SkillInvoker skill={skill} onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByTestId("skill-invoker-submit"));
+
+    await waitFor(() => {
+      expect(textOf(screen.getByTestId("skill-invoker-output"))).toContain(
+        "up 3 days",
+      );
+    });
+    expect(screen.getByText(/返回既有执行结果/)).toBeTruthy();
+    expect(screen.queryByText(/仅提供参考资料，未执行命令/)).toBeNull();
+    expect(screen.queryByText(/执行完成/)).toBeNull();
   });
 });
 
@@ -338,10 +392,10 @@ describe("SkillContentDialog — 侧栏入口同样按 mode 展示", () => {
     render(<SkillContentDialog skill={skill} onOpenChange={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("streamdown")).toHaveTextContent("仅作参考");
+      expect(textOf(screen.getByTestId("streamdown"))).toContain("仅作参考");
     });
-    expect(screen.getByText(/仅提供参考资料，未执行命令/)).toBeInTheDocument();
-    expect(screen.getByText("参考资料已加载")).toBeInTheDocument();
+    expect(screen.getByText(/仅提供参考资料，未执行命令/)).toBeTruthy();
+    expect(screen.getByText("参考资料已加载")).toBeTruthy();
   });
 
   it("空参考明确显示未提供参考资料", async () => {
@@ -353,7 +407,7 @@ describe("SkillContentDialog — 侧栏入口同样按 mode 展示", () => {
     render(<SkillContentDialog skill={skill} onOpenChange={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText("该技能未提供参考资料。")).toBeInTheDocument();
+      expect(screen.getByText("该技能未提供参考资料。")).toBeTruthy();
     });
   });
 
@@ -365,8 +419,75 @@ describe("SkillContentDialog — 侧栏入口同样按 mode 展示", () => {
     await waitFor(() => {
       expect(
         screen.getByText(/以下为本地 SKILL.md 预览（未执行命令）/),
-      ).toBeInTheDocument();
+      ).toBeTruthy();
     });
-    expect(screen.getByTestId("streamdown")).toHaveTextContent("本地预览内容");
+    expect(textOf(screen.getByTestId("streamdown"))).toContain("本地预览内容");
+  });
+
+  it("executed 结果展示真实输出，不丢内容也不自称未执行", async () => {
+    mockedInvoke.mockResolvedValue({ ok: true, result: executedResult } as never);
+
+    render(<SkillContentDialog skill={skill} onOpenChange={() => {}} />);
+
+    await waitFor(() => {
+      expect(textOf(screen.getByTestId("streamdown"))).toContain("up 3 days");
+    });
+    expect(screen.getByText(/返回既有执行结果/)).toBeTruthy();
+    expect(screen.queryByText(/仅提供参考资料，未执行命令/)).toBeNull();
+    expect(screen.queryByText(/暂无内容/)).toBeNull();
+  });
+});
+
+describe("/skill 消费段 — runSlashSkillCommand", () => {
+  it("只调用一次 invoke，通知与 reference 结果一致", async () => {
+    const invokeFn = vi.fn().mockResolvedValue({
+      success: true,
+      output: "参考",
+      durationMs: 1,
+      mode: "reference",
+    } as SkillExecution);
+    const notices: SkillResultNotice[] = [];
+
+    await runSlashSkillCommand(
+      { name: "linux-ops", args: "uptime" },
+      invokeFn,
+      (n) => notices.push(n),
+    );
+
+    expect(invokeFn).toHaveBeenCalledTimes(1);
+    expect(invokeFn).toHaveBeenCalledWith("linux-ops", "uptime");
+    expect(notices[0]?.label).toBe("参考资料已加载");
+    expect(notices[0]?.description).toContain("未执行命令");
+  });
+
+  it("executed 通知执行结束，unknown 通知无法识别", async () => {
+    const executedInvoke = vi.fn().mockResolvedValue({
+      success: true,
+      output: "up",
+      durationMs: 1,
+      mode: "executed",
+    } as SkillExecution);
+    const executedNotices: SkillResultNotice[] = [];
+    await runSlashSkillCommand(
+      { name: "uptime", args: "" },
+      executedInvoke,
+      (n) => executedNotices.push(n),
+    );
+    expect(executedNotices[0]?.label).toBe("执行结束");
+    expect(executedNotices[0]?.title).not.toContain("参考资料");
+
+    const unknownInvoke = vi.fn().mockResolvedValue({
+      success: false,
+      output: "无法识别",
+      durationMs: 1,
+      mode: "unknown",
+    } as SkillExecution);
+    const unknownNotices: SkillResultNotice[] = [];
+    await runSlashSkillCommand(
+      { name: "mystery", args: "" },
+      unknownInvoke,
+      (n) => unknownNotices.push(n),
+    );
+    expect(unknownNotices[0]?.label).toBe("结果无法识别");
   });
 });

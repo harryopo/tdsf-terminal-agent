@@ -84,3 +84,20 @@ export function describeSkillResult(
     description: brief(result.output),
   };
 }
+/**
+ * 顶部上下文说明：按 mode 区分
+ *
+ * executed 结果不能同时显示“未执行命令”；失败/未知也不能据此推断远端状态。
+ */
+export function describeSkillContext(
+  result?: SkillExecution | null,
+): string {
+  if (!result) return "仅提供参考资料，未执行命令。";
+  if (result.mode === "executed") {
+    return "返回既有执行结果，未提供执行主机信息。";
+  }
+  if (result.mode === "failed" || result.mode === "unknown") {
+    return "未取得可展示的参考资料，不能据此推断执行结果。";
+  }
+  return "仅提供参考资料，未执行命令。";
+}
