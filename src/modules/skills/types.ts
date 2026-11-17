@@ -80,8 +80,13 @@ export interface SkillInvokeResult {
  * - reference: 只读取了技能参考资料，没有执行任何命令
  * - executed:  既有 executor 结果，代表真实执行
  * - failed:    读取/调用失败，不能当作成功
+ * - unknown:   返回结构无法识别，不能落到成功参考兜底
  */
-export type SkillExecutionMode = "reference" | "executed" | "failed";
+export type SkillExecutionMode =
+  | "reference"
+  | "executed"
+  | "failed"
+  | "unknown";
 
 /**
  * `invokeSkill` 的执行结果（前端最终拿到的结构）
@@ -95,10 +100,15 @@ export interface SkillExecution {
   output: string;
   /** 调用耗时（毫秒） */
   durationMs: number;
-  /** 结果语义；旧调用方未提供时按 success 兼容展示 */
-  mode?: SkillExecutionMode;
-  /** 完整结果（成功时存在） */
-  result?: SkillInvokeResult;
+  /** 结果语义；两个入口必须按 mode 展示，不能只看 success */
+  mode: SkillExecutionMode;
+  /** 参考结果是否为空（仅 reference 有意义，不推断执行） */
+  empty?: boolean;
+  /** 完整结果（成功时存在，按 mode 区分具体形状） */
+  result?:
+    | SkillInvokeResult
+    | SkillInvokeKnowledgeResult
+    | SkillInvokeExecutedResult;
 }
 
 /**
@@ -117,6 +127,11 @@ export interface SkillHistoryEntry {
   durationMs: number;
   /** 输出片段（截断前 200 字符，便于列表展示） */
   outputPreview: string;
+  /**
+   * 结果语义（TEAM-FIX-01）。
+   * 历史数据可能没有该字段：不得把旧 success 直接反推为执行成功。
+   */
+  mode?: SkillExecutionMode;
 }
 
 /** Python `skill.list` 返回的顶层结构 */
@@ -193,20 +208,20 @@ export type SkillExecutor =
 export interface SkillInvokeExecutedResult {
   /** Skill 名称 */
   name: string;
-  /** 执行器描述 */
-  executor: SkillExecutor;
+  /** 执行器描述；旧结果可能缺省，只影响展示，不代表未执行 */
+  executor?: SkillExecutor | null;
   /** 是否成功 (exit_code == 0) */
   success: boolean;
-  /** 进程退出码 */
-  exit_code: number;
+  /** 进程退出码；旧结果可能缺省，不伪造 */
+  exit_code?: number;
   /** 组合后的输出 (stdout + [stderr]) */
-  output: string;
+  output?: string;
   /** 标准输出 */
-  stdout: string;
+  stdout?: string;
   /** 标准错误 */
-  stderr: string;
+  stderr?: string;
   /** 耗时毫秒 */
-  duration_ms: number;
+  duration_ms?: number;
   /** 调用参数 (透传) */
   params: Record<string, unknown>;
   /** 来源 builtin/mock */

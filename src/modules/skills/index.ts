@@ -24,6 +24,12 @@ export { SkillCard } from "./SkillCard";
 export { SkillsPanel } from "./SkillsPanel";
 // === 命令解析 ===
 export { type ParsedSkillCommand, parseSkillCommand } from "./skillCommand";
+// === 结果合同（两个入口共用） ===
+export {
+  describeSkillResult,
+  type SkillNoticeTone,
+  type SkillResultNotice,
+} from "./resultNotice";
 // === Store ===
 export {
   filterSkills,

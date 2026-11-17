@@ -29,6 +29,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSkillsStore } from "./skillsStore";
+import { describeSkillResult } from "./resultNotice";
 import type { SkillExecution, SkillMetadata } from "./types";
 
 interface Props {
@@ -43,27 +44,6 @@ const STREAM_CHUNK_SIZE = 32;
 /** 流式输出的 chunk 间隔（ms） */
 const STREAM_CHUNK_DELAY_MS = 12;
 
-/** 结果状态文案（TEAM-FIX-01：参考与执行分开） */
-function resultLabel(result: SkillExecution): string {
-  if (result.mode === "executed") {
-    return result.success ? "执行结束" : "执行失败";
-  }
-  if (result.mode === "failed" || !result.success) {
-    return "读取失败";
-  }
-  return "参考资料已加载";
-}
-
-/** 结果状态配色：失败用 destructive，其余用 primary */
-function resultTone(result: SkillExecution): string {
-  if (result.mode === "executed") {
-    return result.success ? "text-primary" : "text-destructive";
-  }
-  if (result.mode === "failed" || !result.success) {
-    return "text-destructive";
-  }
-  return "text-primary";
-}
 
 export function SkillInvoker({ skill, onOpenChange }: Props) {
   const invoke = useSkillsStore((s) => s.invoke);
@@ -76,6 +56,14 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
 
   const open = skill !== null;
   const isInvoking = invokingSkill === skill?.name || streaming;
+  // TEAM-FIX-01: 状态与 toast 统一走结果适配器，避免两个入口文案分叉
+  const notice = result ? describeSkillResult(skill?.name ?? "", result) : null;
+  const statusTone =
+    notice?.tone === "error"
+      ? "text-destructive"
+      : notice?.tone === "warning"
+        ? "text-muted-foreground"
+        : "text-primary";
 
   // 切换 skill 时重置状态（仅依赖 skillName 字符串，避免 skill 对象引用变化触发不必要重置）
   const skillName = skill?.name ?? "";
@@ -103,9 +91,8 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
     setStreaming(true);
     try {
       // 调用 store.invoke（会触发 executor.invokeSkill + 写入历史）
-      // TEAM-FIX-01: store 的返回类型尚未包含 mode（skillsStore 不在本任务允许
-      // 文件范围），这里按 executor 的完整结果窄化，只影响展示语义。
-      const res = (await invoke(skill.name, args)) as SkillExecution;
+      // TEAM-FIX-01: store 已返回统一的 SkillExecution，展示侧不再做类型强转
+      const res = await invoke(skill.name, args);
       setResult(res);
 
       // 流式追加输出（模拟 LLM 流式效果）
@@ -116,28 +103,14 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
       }
       setOutput(text);
 
-      if (res.mode === "executed") {
-        if (res.success) {
-          toast.success(`Skill "${skill.name}" 执行结束`, {
-            description: `耗时 ${res.durationMs}ms`,
-            duration: 3000,
-          });
-        } else {
-          toast.error(`Skill "${skill.name}" 执行失败`, {
-            description: res.output.slice(0, 120),
-            duration: 3000,
-          });
-        }
-      } else if (res.mode === "failed" || !res.success) {
-        toast.error(`Skill "${skill.name}" 参考资料读取失败`, {
-          description: res.output.slice(0, 120),
-          duration: 3000,
-        });
+      const notice = describeSkillResult(skill.name, res);
+      const options = { description: notice.description, duration: 3000 };
+      if (notice.tone === "success") {
+        toast.success(notice.title, options);
+      } else if (notice.tone === "warning") {
+        toast.warning(notice.title, options);
       } else {
-        toast.success(`Skill "${skill.name}" 参考资料已加载`, {
-          description: `仅提供参考资料，未执行命令 · 耗时 ${res.durationMs}ms`,
-          duration: 3000,
-        });
+        toast.error(notice.title, options);
       }
     } finally {
       setStreaming(false);
@@ -206,10 +179,10 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
                 className={cn(
                   "text-[10px] tabular-nums",
                   // TDSF: 成功状态使用 text-primary，失败保持 text-destructive
-                  resultTone(result),
+                  statusTone,
                 )}
               >
-                {resultLabel(result)} · {result.durationMs}ms
+                {notice?.label} · {result.durationMs}ms
               </span>
             )}
           </div>
