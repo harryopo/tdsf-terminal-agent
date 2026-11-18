@@ -9,8 +9,8 @@
 | [终端预测与纠错](terminal-prediction/README.md) | 先输入/目标归属与接受边界，再无模型完整交互 |
 | [终端输入与回显](terminal-input/README.md) | 原始命令、真实块、工具输出与模型等待分段定位 |
 | [端侧模型](local-model/README.md) | 隔离来源、裁判、原型和实测；尚未生产接线 |
-| [Agent 运行时](agent-runtime/README.md) | 保持单运行时，改动按真实工具链验证 |
-| [RDP/VNC远程桌面](remote-desktop/README.md) | Yan长任务：开源深入调研/现有可行性后自主开发，候选内技术取舍不逐项审批 |
+| [Agent 运行时](agent-runtime/README.md) | 保持单运行时；11-18授权Echo按ROOT方案做D1/D6/D7安全窄修复与完整回归，D9待定 |
+| [RDP/VNC远程桌面](remote-desktop/README.md) | Yan长任务v1.1：可信会话/生命周期/输入/帧通道→原生RDP→VNC→稳定性；完整阶段再技术验收 |
 | [SSH 与工作区](ssh-workspace/README.md) | 终端和文件身份、目录跟随、连接生命周期 |
 | [知识整理](knowledge/README.md) | 保留来源、私人中文整理与可恢复导入 |
 | [置信度与日志](confidence-logs/README.md) | 已有追溯面板继续完善，不虚称校准概率 |

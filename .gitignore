@@ -15,8 +15,8 @@ experiments/model-client/handoff.md
 experiments/model-client/result.json
 experiments/model-client/__pycache__/
 
-# Competition raw material stays private. Share directory guides, templates
-# and reviewed Markdown drafts only; screenshots/video/archives stay ignored.
+# Competition material is allowlisted below: reviewed Markdown and safe
+# member screenshots; private originals, logs, video and archives stay ignored.
 competitions/**
 !competitions/README.md
 !competitions/2026-huawei-agent/
@@ -109,6 +109,12 @@ competitions/2026-huawei-agent/**
 !competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.3-截图入库与成员整包复核.md
 !competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-整包收尾清单.md
 !competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-EchoSinklair-审查后回归工作包.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-18-Yan-0914-原生桌面闭环与双协议长任务.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-18-EchoSinklair-安全修复与闭环长任务.md
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/*/
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/*/*.md
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/*/
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/*/*.md
 competitions/2026-huawei-agent/private/**
 !competitions/2026-huawei-agent/private/README.md
 
@@ -276,6 +282,8 @@ docs/**
 !docs/plans/project-organization/2026-11-13-v1.0-目录与文档治理.md
 !docs/plans/terminal-prediction/2026-11-13-v1.0-输入与建议边界.md
 !docs/plans/remote-desktop/2026-11-17-v1.0-RDP-VNC架构与连续开发方案.md
+!docs/plans/remote-desktop/2026-11-18-v1.1-RDP原生闭环与VNC连续开发.md
+!docs/plans/agent-runtime/2026-11-18-v1.1-安全修复与离线闭环授权.md
 !docs/plans/remote-desktop/README.md
 !docs/research/remote-desktop/
 !docs/research/remote-desktop/*.md
