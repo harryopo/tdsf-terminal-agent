@@ -4,4 +4,5 @@
 
 ## 报告索引
 
-- 2026-11-18 [Yan-0914：远程桌面开源调研与可行性初核](2026-11-18-Yan-0914-远程桌面开源调研与可行性初核.md)：IronRDP/noVNC 静态核验（HEAD/许可/MSRV/接入点）；原生 PoC 因本机无 cargo/MSVC 与测试服务端未执行。- 2026-11-18 [Yan-0914：G1 服务端实测与环境问题](2026-11-18-Yan-0914-G1-服务端实测与环境问题.md)：CentOS 8.5 + xrdp/xorgxrdp 经 SSH 隧道由 mstsc 看到 GNOME Classic 桌面；1 vCPU soft lockup、加速检查 segfault、版本不匹配待处理。
+- 2026-11-18 [Yan-0914：远程桌面开源调研与可行性初核](2026-11-18-Yan-0914-远程桌面开源调研与可行性初核.md)：IronRDP/noVNC 静态核验（HEAD/许可/MSRV/接入点）。
+- 2026-11-18 [Yan-0914：G1 服务端实测与环境问题](2026-11-18-Yan-0914-G1-服务端实测与环境问题.md)：CentOS 8.5 + xrdp/xorgxrdp 经 SSH 隧道由 mstsc 看到 GNOME Classic 桌面；IronRDP 客户端已实测连接并解出桌面帧；1 vCPU soft lockup、加速检查 segfault、版本不匹配待处理。
