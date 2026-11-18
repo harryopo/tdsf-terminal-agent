@@ -13,6 +13,7 @@
 | 实际 clone HEAD | `4ae3ae1792d3d1f03e5d387d597c72439365d0a3` |
 | 基线关系 | `210c787` 是 HEAD 的祖先（`git merge-base --is-ancestor` 退出码 0） |
 | 基线后差异 | 仅 `.gitignore`、`AGENTS.md`、`competitions/**`、`docs/**` 等治理与材料文档；未修改 `src/`、`src-tauri/` 产品源码 |
+| 共享分支当前 HEAD（2026-11-18 同步） | `81e7793f8471a5d843a198bdda2cc1572782b7af`；比 clone HEAD 又前进文档/流程提交，产品源码未变 |
 
 因此本报告的行号对应 HEAD 工作树；产品源码事实与 `210c787` 相同。未把后续文档提交当成产品改动，也未把旧 main 或本地未提交内容当成本次基线。
 

@@ -22,6 +22,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # 确保 sidecar 目录在 sys.path（与其他 tests/*.py 一致）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -447,3 +449,34 @@ class TestReadonlyObjectExtraction:
         r = classify_segment("systemctl is-active nginx")
         assert r["category"] == CATEGORY_READONLY
         assert r["objects"] == ["nginx"]
+
+class TestD1ReadonlyParameterSideEffects:
+    """D1 RED：只读命令名带写参数，当前被误分 L0；交 ROOT 修复分类。"""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "date -s '2020-01-01'",
+            "hostname evil",
+            "dmesg -C",
+            "journalctl --vacuum-time=1s",
+            "ss -K dst 1.1.1.1",
+        ],
+    )
+    @pytest.mark.xfail(
+        strict=True,
+        reason="D1 RED：参数级写操作被误分 L0，待 ROOT 修复分类",
+    )
+    def test_side_effect_parameter_is_not_free_readonly(self, command: str) -> None:
+        result = analyze(command)
+        assert result["max_risk_l"] >= 2, result
+        assert result["segments"][0]["category"] != CATEGORY_READONLY, result
+
+    @pytest.mark.parametrize(
+        "command",
+        ["date", "hostname", "dmesg", "journalctl -n 5", "ss -tlnp"],
+    )
+    def test_plain_query_remains_readonly(self, command: str) -> None:
+        result = analyze(command)
+        assert result["max_risk_l"] == 0, result
+        assert result["segments"][0]["category"] == CATEGORY_READONLY, result

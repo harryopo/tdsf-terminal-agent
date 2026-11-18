@@ -164,3 +164,30 @@ class TestClassifySegmentShape:
         seg = classify_segment("cat /root/.ssh/id_rsa")
         assert seg["category_label"]
         assert seg["category"] == CATEGORY_CREDENTIAL
+
+class TestD9CredentialPathMatrix:
+    """D9 路径/误报矩阵：候选凭据文件当前未覆盖；RED 交 ROOT 决定是否扩名单。"""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "cat .env",
+            "cat credentials.json",
+            "cat ~/.netrc",
+            "cat ~/.pypirc",
+            "cat ~/.docker/config.json",
+        ],
+    )
+    @pytest.mark.xfail(
+        strict=True,
+        reason="D9 RED：候选凭据路径未在名单，待 ROOT 决定是否扩名单",
+    )
+    def test_candidate_credential_paths_should_be_gated(self, cmd: str) -> None:
+        seg = _seg(cmd)
+        assert seg["category"] == CATEGORY_CREDENTIAL, seg
+        assert seg["risk_l"] >= 3, seg
+
+    def test_env_example_is_not_treated_as_secret(self) -> None:
+        seg = _seg("cat .env.example")
+        assert seg["category"] == CATEGORY_READONLY, seg
+        assert seg["risk_l"] == 0, seg
