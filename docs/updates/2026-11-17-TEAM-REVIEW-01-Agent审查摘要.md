@@ -1,7 +1,7 @@
 # TEAM-REVIEW-01：Agent 安全与稳定性审查摘要
 
 日期：2026-11-17。任务编号：TEAM-REVIEW-01。负责人：EchoSinklair。
-状态：首轮审查完成，待队长与 ROOT 评审；本文不是产品修复、模型接入或真实环境验收记录。
+状态：首轮审查完成；PR #56 于 2026-11-17 收到队长 `harryopo` 的 CHANGES_REQUESTED。本文已按行评审收窄 D2/D3/D4/D9/D10 的策略、别名与归属结论；D1/D6/D7 的核心线索获 ROOT 认可。438 项离线用例是原报告结果，不重复计为 ROOT 新验收。本文不是产品修复、模型接入或真实环境验收记录。
 
 ## 1. 基线与范围
 
@@ -54,15 +54,15 @@
 | 编号 | 主题 | 状态 | 优先级 | 摘要 |
 |---|---|---|---|---|
 | D1 | 只读白名单未按参数区分 | 可复现缺陷 | 高 | `date -s`、`hostname`、`dmesg -C`、`journalctl --vacuum-*`、`ss -K` 被判 L0，confirm/auto 免审批 |
-| D2 | auto 模式关键系统写入仍为 L2 | 源码可证明 | 高 | `sed -i /etc/ssh/sshd_config`、`mv ... /etc/passwd` 在 auto 免审批；关键路径分级不完整 |
-| D3 | 注册显示名与真实工具名不一致 | 源码可证明 | 中 | `agent.info` 的 4 个工具名与 `TOOL_REGISTRY` 实际名不一致 |
-| D4 | 后台通道终端归属放宽 | 源码可证明 | 中 | 任意 connected SSH 会话可被后台执行；auto 无审批；可见终端有 gate，后台通道无对应 gate |
+| D2 | 关键路径是否提级到 L3 | 策略提案待定（评审 P2） | 待定 | auto L0-L2 是已定义映射；D2 是“关键路径是否提级”的策略设计，需分级/验收，不称绕过 |
+| D3 | 注册显示名与真实工具名差异 | 观察/待补证（评审 P2） | 低-中 | 差异有显式 `OPS_TOOL_ALIASES` 解释；需验证 SDK 注册名、`agent.info` 契约与前端消费方，只有映射丢失/错误可达链才定缺陷 |
+| D4 | 后台通道多主机目标 | 设计边界/待验证（评审 P2） | 中 | 后台 connected live 是既有 P2 #42 多主机设计；需分开验证授权/选择来源、结果标注、ctx.host 缺失回退，不整体按等于当前终端修掉 |
 | D5 | 实时 SSH 回显未脱敏 | 源码可证明 | 中低 | Rust 原始 chunk 进入前端 store 并直接渲染，未过 `redactSensitive`；最终结果已脱敏 |
 | D6 | 日志脱敏覆盖不全 | 可复现缺陷 | 中 | `mysql -p<密码>` 在 `agent_log` 明文；`sshpass -p <密码>` 在日志/审计链均未脱敏 |
 | D7 | 审批描述/审计副本脱敏不完整 | 源码可证明 | 低 | 审批 description 保留命令原文；`_audit_append` 只脱敏 command，reason 未脱敏 |
 | D8 | 取消/超时与批准竞态 | 待验证推测/已声明边界 | 低 | watchdog 不杀 worker；批准后未再检查取消；文案已声明已派发命令不可撤销 |
 | D9 | 凭据路径名单覆盖不足 | 源码可证明 | 中低 | `.env`、`credentials.json`、`.netrc`、`.pypirc`、`.docker/config.json` 等不在名单；`cat .env` 判 L0 |
-| D10 | skill 持久化与 executor 防回归 | 当前安全/防回归 | 观察 | `skill_invoke` 当前只用 `get_reference`，不执行 executor；`save_skill` 无审批写技能目录 |
+| D10 | skill 持久化与 executor 防回归 | 当前安全/防回归 | 观察 | 保留当前参考不执行；不擅自剥离用户 SKILL 数据；仅做防回归验证 |
 | D11 | RiskEngine 与执行链判据分离 | 架构观察 | 观察 | 执行链用 `command_impact`，YAML RiskEngine 只服务前端 `risk.evaluate`；不能把 YAML 当执行链门禁 |
 
 ## 4. 发现详情
@@ -82,42 +82,43 @@
 - 建议：为上述命令增加参数级 veto（只允许明确查询形式），或将其移出 `_READONLY_CMDS`，按 unknown L3 fail-closed；补最小反例测试（成功/拒绝两条路径都要有）。
 - 未验证：真实 SSH root 环境下的实际系统影响；不同发行版 `dmesg`/`journalctl`/`ss` 参数差异。
 
-### D2 auto 模式关键系统写入仍为 L2（高，源码可证明）
+### D2 关键路径是否提级到 L3：待定策略提案（评审 P2，非既有合同绕过）
 
 - 位置：`src-tauri/sidecar/strands_backend/modes.py:99-110`（auto：L0-L2 allow）；`command_impact.py:635-637`（只读命令带重定向才抬 file_write）、`:492-540`（对象提取不看系统关键路径）；`_credential_paths.py:19-37`（仅少数路径抬级）。
-- 预期：修改 SSH 配置、账户/认证文件、系统启动路径等关键写入，至少 L3 或独立审批，即使 auto 模式。
+- 预期（待定提案）：关键路径写入（如 SSH 配置、账户/认证文件、系统启动路径）是否应提级到 L3，由队长与 ROOT 决定。
+- 已定义映射（不称绕过）：`modes.decide` 明确 auto 允许 L0-L2、confirm 对 L2 逐条审批；ROOT 完整 assess 对照也符合该映射。D2 是“关键路径是否提级”的策略设计，D1 才是真实副作用被误分 L0。
 - 实际（离线分级）：
   - `sed -i '...' /etc/ssh/sshd_config` → `config` L2，auto `allow`。
   - `mv /tmp/x /etc/passwd` → `file_write` L2，auto `allow`。
   - `cp /tmp/x /etc/sudoers` → 因 `/etc/sudoers` 命中凭据名单抬到 L3，auto `confirm`；说明名单机制有效，但覆盖不完整。
-- 影响：auto 模式下无需审批即可修改 SSH 服务配置或覆盖账户文件；这与“写操作需审批”的安全预期冲突，属于产品策略边界，不是静默绕过 denylist。用户在 auto 下应知道 L2 包含这些写入。
+- 影响：在既有 auto 映射下，L2 写入会免审批；这是产品策略边界，不是绕过 denylist，也不能据此改写 auto 合同。是否把关键路径提到 L3 需单独分级/验收。
 - 证据：离线脚本输出（见上）；`_credential_paths` 的命中抬级逻辑可反证“关键路径应分级”的可行性。
-- 建议：增加关键路径分级（`/etc`、`/boot`、`/usr`、`/bin`、`/sbin`、`/lib`、`/var/lib` 等，或至少 `/etc/passwd`、`/etc/group`、`/etc/ssh/**`、`/etc/sudoers.d/**`）；在 auto 下对 `config`/`file_write` 命中关键路径仍要求审批。是否调整 auto 的产品定义需队长与 ROOT 决定，本报告不擅自改策略。
+- 建议：提交“关键路径提级”提案（例如 `/etc/passwd`、`/etc/group`、`/etc/ssh/**`、`/etc/sudoers.d/**`），由队长/ROOT 决定是否及如何提级；不直接改 auto 定义、不泛化整个 `/etc`、不在本 PR 改产品策略。
 - 未验证：真实 auto 模式的用户预期；不同命令的目标路径提取准确性；误报对只读排查的影响。
 
-### D3 注册显示名与真实工具名不一致（中，源码可证明）
+### D3 注册显示名与真实工具名差异：观察/待补证（评审 P2）
 
 - 位置：`src-tauri/sidecar/strands_backend/tools/registry.py:394-399`（`OPS_TOOL_ALIASES`）；`src-tauri/sidecar/strands_backend/tools/__init__.py:2115-2117`（`OPS_TOOL_NAMES`）；`src-tauri/sidecar/agent_facade.py:157-159`（`agent.info` 使用 `OPS_TOOL_NAMES`）。
-- 预期：`agent.info` 暴露的工具名与实际注册到 Strands 的 `@tool` 名一致，便于诊断、前端映射和能力核对。
+- 预期：先验证实际 SDK 注册名、`agent.info` 契约及前端真实消费方；集合差异已有显式 `OPS_TOOL_ALIASES` 解释，不能据集合不等直接判注册缺陷或要求静态集合相等。
 - 实际：4 个显示名与注册名不一致：
   - `remote_file` ↔ `read_remote_file`
   - `log_analyzer` ↔ `analyze_logs`
   - `process_inspector` ↔ `inspect_processes`
   - `network_diagnostic` ↔ `network_diagnose`
   - 离线核对：`registry_count=25`、`ops_count=25`，`only_registry` 与 `only_ops` 各 4 个。
-- 影响：`agent.info`/工具目录展示与实际 schema 名不一致，前端按显示名做映射或诊断时可能错配；不影响实际执行（`make_all_ops_tools` 用 `spec.name`）。
+- 影响：只有别名映射丢失或错误可达链才构成缺陷；当前仅证明显示名集合与注册名集合存在 4 个差异，尚未证明前端/诊断真实消费方会错配。不影响实际执行（`make_all_ops_tools` 用 `spec.name`）。
 - 证据：离线脚本输出；`registry.py` 注释也承认“注册显示名与 `@tool` 函数名不同”。
-- 建议：`agent.info` 返回真实注册名，或统一别名映射并在展示/过滤/诊断处只消费一个真源；补一条“显示名集合 == 注册名集合”的静态测试。
+- 建议：保留观察并补证（SDK 注册名、`agent.info` 契约、前端真实消费方）；只有发现别名映射丢失/错误可达链才定缺陷；不静默删别名或更名接口，不要求静态集合相等。
 - 未验证：前端是否存在按 `OPS_TOOL_NAMES` 匹配图标/分类的逻辑（需检索前端）。
 
-### D4 后台通道终端归属放宽（中，源码可证明）
+### D4 后台通道多主机目标：设计边界/待验证（评审 P2）
 
 - 位置：`src-tauri/sidecar/strands_backend/tools/__init__.py:1374-1436`（目标只需是 Rust `SshState` 中 `connected` 的会话）、`:1538-1646`（`background` 通道直接 `ipc_invoke("ssh_command")`）；前端 `src/modules/ai/lib/visibleTerminalGate.ts:73-104` 只保护可见终端通道。
-- 预期：执行目标应与当前对话/当前终端绑定；跨服务器执行至少需要显式选择或审批。
+- 预期：后台 connected live 是现有多主机运维设计（源码明确 P2 #42）。需分开验证：授权/选择目标来源、结果标注、live 查询失败且 `ctx.ssh_host` 缺失时的回退；再报告具体不变量是否失效。
 - 实际：只要 `ssh_session_id` 在 `ssh_status` 的 live 列表中 `connected` 就放行，不再要求等于 `ctx.ssh_session_id`（`ctx.ssh_host` 为空时旧严格校验也会跳过）。visible-terminal 通道有前端 `currentSessionId === requestedSessionId` gate；background 通道没有对应的归属 gate。auto 模式 L0-L2 无需审批。
-- 影响：Agent 可以向用户当前没在看的另一台已连接服务器执行命令；审批卡带 `ssh_session_id`、结果带 `target_endpoint`，但 auto 无卡，用户可能误以为只作用于当前终端。这是多主机运维特性与“终端归属”要求之间的边界。
+- 影响：这是多主机运维特性与“终端归属”要求之间的边界，产品策略待定；不能整体按“必须只等于激活终端”修掉功能，也不把一般多主机执行等同串会话或越权。
 - 证据：源码；`test_approval_call_identity.py` 验证审批请求携带调用身份，但不验证 background 的归属范围。
-- 建议：background 通道也校验目标是否属于当前对话绑定的服务器（或当前 active 会话），或要求用户显式开启多主机执行；UI/结果显著展示 `target_endpoint`；为“目标不等于当前终端”补拒绝/允许两条路径测试。
+- 建议：保持产品策略待定；分开验证授权/选择来源、结果标注、`ctx.ssh_host` 缺失回退；只有确认具体不变量失效再报告，不直接修掉多主机功能。
 - 未验证：真实多会话 UI 行为；产品对多主机后台执行的定义。
 
 ### D5 实时 SSH 回显未脱敏（中低，源码可证明）
@@ -125,7 +126,7 @@
 - 位置：`src-tauri/src/modules/ssh/mod.rs:1048-1133`（每个原生 chunk 原样 `emit`）；`src/modules/ai/store/sshCommandOutputStore.ts:61-121`（原样累积 stdout/stderr）；`src/components/ai-elements/tool.tsx:595-639`（直接渲染 `live.stdout`/`live.stderr`）。
 - 预期：进入 UI/可持久化区域的输出应至少与应用最终结果同等脱敏。
 - 实际：Python 最终结果在 `execute_via_ssh` 内经过 `redact_sensitive`（`tools/__init__.py:1786-1792`），但 Rust 实时事件先到达前端并被 store 保存；实时渲染函数未调用 `redactSensitive`。
-- 影响：命令输出中的密码/密钥会在“实时回显”阶段原样出现，并可能留在前端内存或随会话记录导出；完成后切换到已脱敏的最终结果，但实时阶段已暴露。
+- 影响：工具卡原文路径可由源码确认，实时回显未过 `redactSensitive`；持久化/导出影响仍未验证，不能仅据源码断言已发生落盘泄露。
 - 证据：源码；未运行真实 SSH 生成含敏感串的输出。
 - 建议：在 store 层累积后脱敏再渲染，或在 Rust emit 前缓冲脱敏；注意流式分段可能切断 token，不能只对单个 chunk 做正则。
 - 未验证：前端会话持久化是否保存 live 输出；真实输出样本与脱敏覆盖率。
@@ -161,7 +162,7 @@
 - 影响：用户停止后可能仍发生一次已批准执行；不是静默重放，也不是成功伪报。现有 `cancelled`/`indeterminate` 状态区分较好。
 - 证据：源码；现有 `test_agent_cancel.py`、`test_cancel_entry.py` 覆盖取消主路径，但未覆盖“批准与取消同刻”的竞态。
 - 建议：审批返回后、派发前检查本轮 cancellation token；为竞态补可控测试；在 UI 再次明确已派发命令不可撤销。
-- 未验证：真实并发时序；worker 自然结束与 stalled 标记的窗口。
+- 未验证：需可控时序反例验证“批准与取消同刻”；worker 自然结束与 stalled 标记的窗口。
 
 ### D9 凭据路径名单覆盖不足（中低，源码可证明）
 
@@ -170,7 +171,7 @@
 - 实际：名单覆盖 `.ssh`、`id_*`、`.aws`、`.gnupg`、`/etc/shadow`、`/etc/sudoers`、`.npmrc`、history 等；未覆盖 `.env`、`.env.*`、`credentials.json`、`.netrc`、`.pypirc`、`.docker/config.json`、`kubeconfig`。离线分级：`cat .env` → readonly L0，confirm/auto `allow`；`cat ~/.bash_history` → credential L3。
 - 影响：confirm 模式可免审批读取项目 `.env`（常含 API key）；输出脱敏只覆盖已知 key 形状，不能保证完整保密。
 - 证据：源码 + 离线分级输出；`python_risk.py:171-180` 已对凭据路径抬到 L3，说明同一名单被两条通道共享，扩充可同时受益。
-- 建议：扩充名单（优先 `.env*`、`credentials*`、`.netrc`、`.pypirc`、`.docker/config.json`、`kubeconfig`）；注意 `.env.example` 这类非敏感文件，按文件名精确匹配而非整目录通配；补读取/写入两条审批路径测试。
+- 建议：先做路径/误报矩阵（覆盖 `.env*`、`credentials*`、`.netrc`、`.pypirc`、`.docker/config.json`、`kubeconfig` 与 `.env.example` 等非敏感对照），再决定是否及如何扩充名单；补读取/写入两条审批路径测试，避免直接扩名单造成误报。
 - 未验证：真实 `.env` 内容与脱敏覆盖；误报对正常配置查看的影响。
 
 ### D10 skill 持久化与 executor 防回归（观察，当前安全）
@@ -180,7 +181,7 @@
 - 实际：当前生产 `skill_invoke` 只用 `get_reference`，只返回内容/剧本/executor 元数据，不执行 shell/python/http；`save_skill` 只写用户技能目录，name 有 slug 校验，无路径穿越。故当前没有可执行面。
 - 影响：若未来把 `skill_invoke` 切回 `registry.invoke`，或在 `save_skill` 写入的 SKILL.md 中启用 executor，将形成“模型可无审批持久化脚本 + 后续执行”的回归风险。
 - 证据：源码；`skill_invoke.py` 动态 docstring 明确“本工具绝不执行 shell/python/http”。
-- 建议：在 `save_skill` 中剥离/拒绝 executor frontmatter；用测试钉住 `skill_invoke` 只调用 `get_reference`；若启用 executor，必须接入与 `ssh_command` 同一套 `assess_command`/`decide` 与审批链。
+- 建议：保留当前参考不执行；不擅自剥离用户 SKILL 数据；用测试钉住 `skill_invoke` 只调用 `get_reference`，并加防回归注释；若未来启用 executor，必须接入与 `ssh_command` 同一套 `assess_command`/`decide` 与审批链。
 - 未验证：未来 executor 路径；用户技能目录现有内容。
 
 ### D11 RiskEngine 与执行链判据分离（观察，非缺陷）
@@ -205,11 +206,12 @@
 
 ## 6. 结论与建议拆分
 
-1. 先修 D1、D2、D6：三者都能在离线合成输入下复现或直接由源码证明，且影响默认 confirm/auto 的执行边界与凭据落盘。建议由 ROOT 分配有界修复，不在本审查分支改产品代码。
-2. D3、D4、D5、D9 需要产品/前端/安全共同确认范围：D3 是展示与诊断一致性；D4 涉及多主机产品语义；D5 涉及前端回显与持久化；D9 是名单扩充与误报权衡。
-3. D8、D10 作为防回归项：审批后派发前检查取消、skill executor 不回到生产路径；不改现有策略。
-4. D11 是文档/架构说明项，避免把 YAML 规则误当执行链门禁。
+1. D1、D6、D7 的核心线索获 ROOT 认可：D1 是真实副作用被误分 L0；D6/D7 是短选项脱敏与副本缺口。生产风险/脱敏/审批/信任修复由 ROOT 负责；本分支只在授权测试/fixtures/既有辅助器范围补真实缺口；不把 438 项重复计为 ROOT 新验收。
+2. D2 是“关键路径是否提级到 L3”的待定策略提案，不先修、不改 auto 定义、不泛化整个 `/etc`；D3/D4 保留观察并补证，不静默删别名/更名接口，也不整体修掉多主机功能；D5/D9 需补持久化验证/路径误报矩阵。
+3. D8、D10 作为防回归项：D8 需可控时序反例；D10 保留当前参考不执行，不擅自剥离用户 SKILL 数据，仅加防回归测试/注释；不改现有策略。
+4. D11 是文档/架构说明项，保留“风险判据分层”事实，避免把 YAML 规则误当执行链门禁。
 5. 本轮未发现“可绕过 denylist 直接自动执行 `rm -rf /`”的路径：`split_compound` 会拆出 `rm -rf /` 并命中 denylist；`bash -c`/`python -c` 包装落 unknown L3，confirm/auto 都要求审批。该结论仅覆盖本轮合成输入，不代表所有 shell 语义。
+6. 不要求为每条报告修订另开 PR：接续 Issue #55 完整回归包，优先在本 PR 保留首轮历史并扩展测试/材料；若已有 55 独立分支则保留并给链接，选择一个后续主 PR；允许保留 RED 交 ROOT，不降断言凑绿。
 
 ## 7. 限制与未验证
 
@@ -226,4 +228,5 @@
 - 计划分支：`docs/2026-11-17-echosinklair-agent-review`（任务卡指定的 `docs/` 命名，日期按实际开工日更新）。后续完整工作包如另开 `codex/2026-11-17-echosinklair-agent-replay`，不在本 PR 内混入。
 - PR 目标：`codex/2026-11-13-root-shared-review`；等待队长与 ROOT 验收，不合并 PR #49，不合并 main，不自行宣布验收。
 - 完整复现命令、原始输出与未脱敏证据只在本地保留，按 `SECURITY.md` 私下交队长；公开 PR 只保留本报告的脱敏摘要。
-- 产品修复、测试补充与策略调整另行分配；本报告不修改产品源码、依赖、审批策略或既有断言。
+- 2026-11-17 PR #56 收到 `harryopo` 的 CHANGES_REQUESTED；本版按行评审收窄 D2/D3/D4/D9/D10，保留 D1/D6/D7 线索；不另开每条修订 PR，接续 Issue #55 完整回归包。
+- 生产风险/脱敏/审批/信任修复由 ROOT 负责；本分支只在授权测试/fixtures/既有辅助器范围补真实缺口，不修改产品源码、依赖、审批策略或既有断言；允许保留 RED 交 ROOT，不降断言凑绿。
