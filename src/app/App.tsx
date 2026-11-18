@@ -31,6 +31,7 @@ import { AiMiniWindow } from "@/modules/ai/components/lazy";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
+import { RemoteDesktopDialog } from "@/modules/desktop";
 import {
   type EditorPaneHandle,
   NewEditorDialog,
@@ -485,6 +486,7 @@ export default function App() {
   }, [activeSpaceId, sidebarView, persistSidebarView]);
 
   const [newEditorOpen, setNewEditorOpen] = useState(false);
+  const [remoteDesktopOpen, setRemoteDesktopOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [paletteInitialMode, setPaletteInitialMode] = useState<
     "commands" | "content"
@@ -2440,6 +2442,7 @@ export default function App() {
             askAiSelection: askFromSelection,
             openSettings: () => void openSettingsWindow(),
             openKeyboardShortcuts: () => void openSettingsWindow("shortcuts"),
+            openRemoteDesktop: () => setRemoteDesktopOpen(true),
             spaces: useSpaces.getState().spaces,
             activeSpaceId,
             // TDSF 修复 2026-08-01: SSH 空间隐藏本地专属命令（网页预览）。
@@ -2913,6 +2916,11 @@ export default function App() {
             workspaceRoot={displayExplorerRoot}
             onOpenContentHit={openContentHit}
             insertCommand={insertHistoryCommand}
+          />
+
+          <RemoteDesktopDialog
+            open={remoteDesktopOpen}
+            onOpenChange={setRemoteDesktopOpen}
           />
 
           <NewEditorDialog

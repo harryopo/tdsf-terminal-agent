@@ -49,6 +49,8 @@ export type CommandPaletteActionContext = {
   askAiSelection: () => void;
   openSettings: () => void;
   openKeyboardShortcuts: () => void;
+  /** 远程桌面（RDP）入口。 */
+  openRemoteDesktop?: () => void;
   spaces: { id: string; name: string }[];
   activeSpaceId: string | null;
   openSpacesOverview: () => void;
@@ -79,6 +81,14 @@ export function createCommandItems(
     onlyOneTab && activePaneCount < 2 ? "最后一个标签页" : undefined;
 
   return [
+    {
+      id: "desktop.open",
+      title: "远程桌面（RDP）...",
+      group: "常规",
+      keywords: ["rdp", "remote desktop", "desktop", "远程桌面", "远程登录"],
+      icon: DashboardSquare01Icon,
+      run: ctx.openRemoteDesktop ?? noop,
+    },
     {
       id: "settings.open",
       title: "打开设置",

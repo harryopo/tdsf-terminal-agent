@@ -1,6 +1,6 @@
 pub mod modules;
 
-use modules::{agent, fs, fs_backend, git, history, ipc, lsp, net, param_complete, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
+use modules::{agent, desktop, fs, fs_backend, git, history, ipc, lsp, net, param_complete, pty, secrets, shell, shell_history, sidecar, ssh, workspace};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -723,6 +723,8 @@ pub fn run() {
         .manage(fs::grep::ContentSearchState::default())
         // TDSF (P4-T4.1): SSH 远程资源管理器全局状态 (sessions + sftp_sessions 缓存)
         .manage(ssh::SshState::default())
+        // 远程桌面（RDP）会话注册表
+        .manage(desktop::DesktopState::default())
         .manage({
             let registry = workspace::WorkspaceRegistry::default();
             workspace::bootstrap_registry(&registry);
@@ -854,6 +856,9 @@ pub fn run() {
             // sftp_*: 远程文件 list/stat/read/write/mkdir/remove/rename
             ssh::ssh_connect,
             ssh::ssh_write,
+            desktop::desktop_connect,
+            desktop::desktop_input,
+            desktop::desktop_close,
             ssh::ssh_write_human,
             ssh::ssh_resize,
             ssh::ssh_disconnect,
