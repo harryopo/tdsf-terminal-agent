@@ -7904,6 +7904,7 @@ dependencies = [
  "ignore",
  "ironrdp-client",
  "ironrdp-pdu",
+ "ironrdp-tls",
  "keyring",
  "libc",
  "log",

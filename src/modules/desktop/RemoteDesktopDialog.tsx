@@ -1,12 +1,10 @@
-// 远程桌面（RDP）对话框：IronRDP 帧经 Tauri 事件推到 Canvas。
+// 远程桌面（RDP）对话框：IronRDP 帧经定向 Channel 推到 Canvas。
 //
-// 产品内最小闭环：
-// - 表单建立会话（host/port/user/password，密码仅内存）
-// - `desktop-frame` 事件（RGBA base64）绘制到 Canvas
-// - 键盘/鼠标经 `desktop_input` 转发
-// - 关闭时 `desktop_close`
-//
-// 已知限制（后续迭代）：中文 IME、缩放/全屏、断线恢复、剪贴板、音频。
+// ROOT 复审收口：
+// - owner + generation + sessionId 绑定，输入/关闭/状态查询同身份校验。
+// - 连接状态由 desktop_status 轮询确认，不把 connect 返回 id 当作已连接。
+// - mouseup 用 event.button 释放；pointer capture、失焦释放、hover/wheel 支持。
+// - 组件关闭时退订/断开，Pending 也可取消。
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,9 +16,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { mapButton } from "./desktopInput";
 
 interface Props {
   open: boolean;
@@ -34,12 +32,13 @@ interface DesktopFrame {
   rgba_base64: string;
 }
 
-interface DesktopError {
-  session_id: number;
-  message: string;
+type SessionStatus = "pending" | "connected" | "failed" | "closed";
+interface SessionStatusInfo {
+  status: SessionStatus;
+  error?: string | null;
 }
 
-/** 常用键的 RDP scancode（US 布局，非扩展）。 */
+const OWNER = "desktop-dialog";
 const SCANCODES: Record<string, number> = {
   Escape: 0x01,
   Tab: 0x0f,
@@ -59,15 +58,19 @@ const SCANCODES: Record<string, number> = {
   PageDown: 0x51,
 };
 
+
 export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sessionRef = useRef<number | null>(null);
+  const generationRef = useRef(1);
   const remoteSizeRef = useRef({ width: 0, height: 0 });
+  const cancelledRef = useRef(false);
 
   const [host, setHost] = useState("127.0.0.1");
   const [port, setPort] = useState("13389");
   const [username, setUsername] = useState("tdsf-test");
   const [password, setPassword] = useState("");
+  const [fingerprint, setFingerprint] = useState("");
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">(
     "idle",
   );
@@ -75,7 +78,8 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
 
   const drawFrame = useCallback((frame: DesktopFrame) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || cancelledRef.current) return;
+    if (frame.session_id !== sessionRef.current) return;
     if (canvas.width !== frame.width || canvas.height !== frame.height) {
       canvas.width = frame.width;
       canvas.height = frame.height;
@@ -92,35 +96,45 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
     ctx.putImageData(image, 0, 0);
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    let unlistenFrame: UnlistenFn | undefined;
-    let unlistenError: UnlistenFn | undefined;
-    void (async () => {
-      unlistenFrame = await listen<DesktopFrame>("desktop-frame", (event) => {
-        if (event.payload.session_id === sessionRef.current) {
-          drawFrame(event.payload);
+  const pollStatus = useCallback(async (id: number, generation: number) => {
+    const started = Date.now();
+    while (!cancelledRef.current && sessionRef.current === id && generationRef.current === generation) {
+      try {
+        const info = await invoke<SessionStatusInfo>("desktop_status", {
+          sessionId: id,
+          owner: OWNER,
+          generation,
+        });
+        if (info.status === "connected") {
+          setStatus("connected");
+          return;
         }
-      });
-      unlistenError = await listen<DesktopError>("desktop-error", (event) => {
-        if (event.payload.session_id === sessionRef.current) {
+        if (info.status === "failed" || info.status === "closed") {
           setStatus("error");
-          setError(event.payload.message);
+          setError(info.error ?? "连接已关闭");
+          sessionRef.current = null;
+          return;
         }
-      });
-    })();
-    return () => {
-      unlistenFrame?.();
-      unlistenError?.();
-    };
-  }, [open, drawFrame]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      if (Date.now() - started > 60_000) {
+        setStatus("error");
+        setError("连接超时（60s）");
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }, []);
 
   const disconnect = useCallback(async () => {
     const id = sessionRef.current;
+    const generation = generationRef.current;
     sessionRef.current = null;
     if (id !== null) {
       try {
-        await invoke("desktop_close", { sessionId: id });
+        await invoke("desktop_close", { sessionId: id, owner: OWNER, generation });
       } catch {
         // 会话可能已结束
       }
@@ -129,54 +143,68 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
   }, []);
 
   const connect = useCallback(async () => {
-    setStatus("connecting");
     setError("");
+    setStatus("connecting");
+    cancelledRef.current = false;
+    const generation = ++generationRef.current;
     try {
+      const channel = new Channel<DesktopFrame>();
+      channel.onmessage = drawFrame;
       const id = await invoke<number>("desktop_connect", {
         params: {
           host,
           port: Number(port),
           username,
           password,
+          owner: OWNER,
+          generation,
+          certificate_fingerprint: fingerprint.trim() || null,
         },
+        onFrame: channel,
       });
       sessionRef.current = id;
-      setStatus("connected");
+      void pollStatus(id, generation);
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [host, port, username, password]);
+  }, [host, port, username, password, fingerprint, drawFrame, pollStatus]);
 
-  const sendKey = useCallback((code: number, pressed: boolean) => {
+  const sendInput = useCallback((event: Record<string, unknown>) => {
     const id = sessionRef.current;
     if (id === null) return;
     void invoke("desktop_input", {
       sessionId: id,
-      event: { kind: "key", code, pressed },
+      owner: OWNER,
+      generation: generationRef.current,
+      event,
     }).catch(() => {});
   }, []);
 
-  const sendUnicode = useCallback((text: string) => {
-    const id = sessionRef.current;
-    if (id === null || text.length === 0) return;
-    void invoke("desktop_input", {
-      sessionId: id,
-      event: { kind: "unicode", text },
-    }).catch(() => {});
-  }, []);
+  const sendKey = useCallback(
+    (code: number, pressed: boolean) => {
+      sendInput({ kind: "key", code, pressed });
+    },
+    [sendInput],
+  );
+
+  const sendUnicode = useCallback(
+    (text: string) => {
+      if (text.length > 0) sendInput({ kind: "unicode", text });
+    },
+    [sendInput],
+  );
 
   const sendMouse = useCallback(
     (
       clientX: number,
       clientY: number,
-      buttons: number,
+      button: number,
       down: boolean,
       element: HTMLCanvasElement,
     ) => {
-      const id = sessionRef.current;
       const remote = remoteSizeRef.current;
-      if (id === null || remote.width === 0 || remote.height === 0) return;
+      if (remote.width === 0 || remote.height === 0) return;
       const rect = element.getBoundingClientRect();
       const x = Math.max(
         0,
@@ -192,18 +220,49 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
           Math.round(((clientY - rect.top) / rect.height) * remote.height),
         ),
       );
-      void invoke("desktop_input", {
-        sessionId: id,
-        event: { kind: "mouse", x, y, buttons, down },
-      }).catch(() => {});
+      sendInput({ kind: "mouse", x, y, button, down });
     },
-    [],
+    [sendInput],
   );
 
-  const handleOpenChange = (next: boolean) => {
-    if (!next) {
-      void disconnect();
+  const sendWheel = useCallback(
+    (clientX: number, clientY: number, delta: number, element: HTMLCanvasElement) => {
+      const remote = remoteSizeRef.current;
+      if (remote.width === 0 || remote.height === 0) return;
+      const rect = element.getBoundingClientRect();
+      const x = Math.round(((clientX - rect.left) / rect.width) * remote.width);
+      const y = Math.round(((clientY - rect.top) / rect.height) * remote.height);
+      sendInput({ kind: "wheel", x, y, delta });
+    },
+    [sendInput],
+  );
+
+  const releaseAll = useCallback(() => {
+    for (const code of [SCANCODES.Control, SCANCODES.Shift, SCANCODES.Alt]) {
+      sendKey(code, false);
     }
+    for (const button of [1, 2, 3]) {
+      sendInput({ kind: "mouse", x: 0, y: 0, button, down: false });
+    }
+  }, [sendInput, sendKey]);
+
+  useEffect(() => {
+    cancelledRef.current = !open;
+    if (!open) {
+      const id = sessionRef.current;
+      sessionRef.current = null;
+      if (id !== null) {
+        void invoke("desktop_close", {
+          sessionId: id,
+          owner: OWNER,
+          generation: generationRef.current,
+        }).catch(() => {});
+      }
+    }
+  }, [open]);
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) void disconnect();
     onOpenChange(next);
   };
 
@@ -213,7 +272,7 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>远程桌面（RDP）</DialogTitle>
           <DialogDescription>
-            通过 IronRDP 连接到远端 RDP 服务。画面仅在当前应用内渲染，密码不落盘。
+            通过 IronRDP 连接到远端 RDP 服务。画面仅在当前应用内渲染，密码不落盘；证书默认严格校验，可填自签指纹。
           </DialogDescription>
         </DialogHeader>
 
@@ -221,29 +280,15 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
           <div className="grid grid-cols-[1fr_120px] gap-3 text-[12px]">
             <div className="space-y-1">
               <Label htmlFor="rdp-host">主机</Label>
-              <Input
-                id="rdp-host"
-                value={host}
-                onChange={(e) => setHost(e.target.value)}
-                placeholder="127.0.0.1"
-              />
+              <Input id="rdp-host" value={host} onChange={(e) => setHost(e.target.value)} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="rdp-port">端口</Label>
-              <Input
-                id="rdp-port"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                placeholder="13389"
-              />
+              <Input id="rdp-port" value={port} onChange={(e) => setPort(e.target.value)} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="rdp-user">用户名</Label>
-              <Input
-                id="rdp-user"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
+              <Input id="rdp-user" value={username} onChange={(e) => setUsername(e.target.value)} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="rdp-pass">密码</Label>
@@ -252,6 +297,15 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <Label htmlFor="rdp-fp">证书指纹（可选，自签 SHA256 hex）</Label>
+              <Input
+                id="rdp-fp"
+                value={fingerprint}
+                onChange={(e) => setFingerprint(e.target.value)}
+                placeholder="aa:bb:cc..."
               />
             </div>
           </div>
@@ -275,32 +329,43 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
               }}
               onKeyUp={(event) => {
                 const code = SCANCODES[event.key];
-                if (code !== undefined) {
-                  sendKey(code, false);
-                }
+                if (code !== undefined) sendKey(code, false);
               }}
+              onBlur={releaseAll}
               onMouseDown={(event) => {
                 canvasRef.current?.focus();
-                const buttons =
-                  (event.buttons & 1 ? 1 : 0) |
-                  (event.buttons & 2 ? 2 : 0) |
-                  (event.buttons & 4 ? 4 : 0);
-                sendMouse(event.clientX, event.clientY, buttons, true, event.currentTarget);
+                event.currentTarget.setPointerCapture(1);
+                sendMouse(
+                  event.clientX,
+                  event.clientY,
+                  mapButton(event.button),
+                  true,
+                  event.currentTarget,
+                );
               }}
               onMouseUp={(event) => {
-                const buttons =
-                  (event.buttons & 1 ? 1 : 0) |
-                  (event.buttons & 2 ? 2 : 0) |
-                  (event.buttons & 4 ? 4 : 0);
-                sendMouse(event.clientX, event.clientY, buttons, false, event.currentTarget);
+                event.currentTarget.releasePointerCapture(1);
+                sendMouse(
+                  event.clientX,
+                  event.clientY,
+                  mapButton(event.button),
+                  false,
+                  event.currentTarget,
+                );
               }}
               onMouseMove={(event) => {
-                if (event.buttons === 0) return;
-                const buttons =
-                  (event.buttons & 1 ? 1 : 0) |
-                  (event.buttons & 2 ? 2 : 0) |
-                  (event.buttons & 4 ? 4 : 0);
-                sendMouse(event.clientX, event.clientY, buttons, true, event.currentTarget);
+                const button = event.buttons === 0 ? 0 : mapButton(event.button);
+                sendMouse(
+                  event.clientX,
+                  event.clientY,
+                  button,
+                  event.buttons !== 0,
+                  event.currentTarget,
+                );
+              }}
+              onWheel={(event) => {
+                sendWheel(event.clientX, event.clientY, event.deltaY, event.currentTarget);
+                event.preventDefault();
               }}
             />
           </div>
@@ -314,30 +379,15 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
 
         <DialogFooter>
           {status === "connected" ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void disconnect()}
-              className="text-[12px]"
-            >
+            <Button type="button" variant="outline" onClick={() => void disconnect()} className="text-[12px]">
               断开
             </Button>
           ) : (
-            <Button
-              type="button"
-              onClick={() => void connect()}
-              disabled={status === "connecting"}
-              className="text-[12px]"
-            >
+            <Button type="button" onClick={() => void connect()} disabled={status === "connecting"} className="text-[12px]">
               {status === "connecting" ? "连接中…" : "连接"}
             </Button>
           )}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-            className="text-[12px]"
-          >
+          <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} className="text-[12px]">
             关闭
           </Button>
         </DialogFooter>
