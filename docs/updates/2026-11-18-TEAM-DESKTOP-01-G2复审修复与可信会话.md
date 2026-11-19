@@ -38,8 +38,31 @@
 - 未改 SSH/Agent/审批/信任/公共协议；未引入云依赖；密码仅内存，不落盘。
 - 合并权在队长；本 PR 继续 Draft。
 
+## 2026-11-19 真实窗口排错追加
+
+- 在 Tauri 命令注册表补入 `desktop_status`，修复运行时报 `desktop_status not found`。
+- 连接失败时后端保留 `Failed` 与真实错误，由 `desktop_close` 清理，避免失败会话被提前删除后只剩 `session not found`。
+- 前端读取到 `failed` / `closed` 后保留原始错误展示，并按相同 `sessionId + owner + generation` 调用 `desktop_close`，避免失败会话无法回收。
+- 新增组件回归，先复现未调用 `desktop_close` 的失败，再修复为通过。
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| Rust 定向回归 | `cargo test --locked --lib desktop`（src-tauri） | exit 0，5 passed / 0 failed，482 filtered out |
+| 前端红→绿回归 | `pnpm exec vitest run src/modules/desktop/RemoteDesktopDialog.test.tsx` | 修复前 1 failed（未调用 `desktop_close`）；修复后与 `desktopInput.test.ts` 合计 5 passed / 0 failed |
+| 前端类型 | `pnpm typecheck` | exit 0 |
+| 定向规范 | `pnpm exec eslint src/modules/desktop/RemoteDesktopDialog.tsx src/modules/desktop/RemoteDesktopDialog.test.tsx src/modules/desktop/desktopInput.ts src/modules/desktop/desktopInput.test.ts --max-warnings 0` | exit 0 |
+
+## 2026-11-19 产品内真实连接收口
+
+- 首次真实连接进入 TLS 后因同时启用 `aws-lc-rs` 与 `ring`，Rustls 无法自动选择进程级 `CryptoProvider`，`tdsf-rdp-1` panic，界面停在连接中。
+- 显式安装 IronRDP 已启用的 `aws_lc_rs` provider，不改变 Strict TLS 与指纹信任策略；RDP 线程 panic 统一转为 `Failed`，避免状态永久停在 Pending。
+- 修复后日志出现第二轮 `connect_finalize`，未再次 panic；用户在 `.local/src` 开发版 TDSF 窗口中输入证书指纹，确认可以登录远程图形界面。此项是产品内真实 RDP 登录验收，不是外部 mstsc 或 PoC 结果。
+- 本轮再次执行 `cargo test --locked --lib desktop`：exit 0，5 passed / 0 failed，482 filtered out。
+
+当前仍未覆盖：产品内键鼠完整操作、中文 IME、缩放/全屏、断线恢复、失败/超时全路径与 VNC。
+
 ## 下一步
 
-- 在 TDSF 应用内打开“远程桌面”，连接测试 VM，验证真实首帧/键鼠/关闭；
-- 证书指纹首次确认与保存；
+- 验证产品内键鼠、中文输入、缩放与断线恢复；
+- 补证书指纹首次确认与保存；
 - 进入 VNC/RFB 与稳定性阶段。

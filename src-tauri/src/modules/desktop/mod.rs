@@ -317,6 +317,8 @@ pub async fn desktop_connect(
         return Err("desktop generation must be positive".to_string());
     }
 
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let session_id = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE_CAPACITY);
     let (close_tx, close_rx) = watch::channel(false);
@@ -354,19 +356,34 @@ pub async fn desktop_connect(
                 }
             };
 
-            if let Err(err) = runtime.block_on(run_session(
-                thread_app.clone(),
-                session_id,
-                params,
-                on_frame,
-                input_rx,
-                close_rx,
-            )) {
-                set_status(&thread_app, session_id, SessionStatus::Failed, Some(err));
-            } else {
-                set_status(&thread_app, session_id, SessionStatus::Closed, None);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                runtime.block_on(run_session(
+                    thread_app.clone(),
+                    session_id,
+                    params,
+                    on_frame,
+                    input_rx,
+                    close_rx,
+                ))
+            }));
+            match result {
+                Ok(Err(err)) => {
+                    // 失败保留状态与错误，desktop_close 才清理，避免 session not found 掩盖真实原因。
+                    set_status(&thread_app, session_id, SessionStatus::Failed, Some(err));
+                }
+                Ok(Ok(())) => {
+                    set_status(&thread_app, session_id, SessionStatus::Closed, None);
+                    remove_session(&thread_app, session_id);
+                }
+                Err(_) => {
+                    set_status(
+                        &thread_app,
+                        session_id,
+                        SessionStatus::Failed,
+                        Some("desktop session panicked".to_string()),
+                    );
+                }
             }
-            remove_session(&thread_app, session_id);
         })
         .map_err(|err| err.to_string())?;
 
@@ -452,11 +469,12 @@ pub async fn desktop_close(
     };
 
     let _ = close_tx.send(true);
-    let app = state
+    let mut sessions = state
         .sessions
         .lock()
         .map_err(|_| "desktop state poisoned".to_string())?;
-    drop(app);
+    // 真正清理：desktop_close 关闭并移除句柄；失败状态此前由 run_session 保留。
+    sessions.remove(&session_id);
     Ok(())
 }
 

@@ -859,6 +859,7 @@ pub fn run() {
             desktop::desktop_connect,
             desktop::desktop_input,
             desktop::desktop_close,
+            desktop::desktop_status,
             ssh::ssh_write_human,
             ssh::ssh_resize,
             ssh::ssh_disconnect,

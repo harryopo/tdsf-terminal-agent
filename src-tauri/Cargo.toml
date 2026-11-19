@@ -76,6 +76,7 @@ notify = "8.2.0"
 ironrdp-client = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b299f04622cb7860f344a35bbea9bd4361", features = ["rustls"] }
 ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b299f04622cb7860f344a35bbea9bd4361" }
 ironrdp-tls = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b299f04622cb7860f344a35bbea9bd4361" }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 smallvec = "1"
 base64 = "=0.22.1"
 

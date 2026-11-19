@@ -113,6 +113,11 @@ export function RemoteDesktopDialog({ open, onOpenChange }: Props) {
           setStatus("error");
           setError(info.error ?? "连接已关闭");
           sessionRef.current = null;
+          await invoke("desktop_close", {
+            sessionId: id,
+            owner: OWNER,
+            generation,
+          }).catch(() => undefined);
           return;
         }
       } catch (err) {
