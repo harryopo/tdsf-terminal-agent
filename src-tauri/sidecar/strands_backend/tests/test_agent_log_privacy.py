@@ -198,3 +198,31 @@ def test_unserializable_or_recursive_inputs_fail_closed(isolated_log, caplog):
         assert agent_log.log_event("privacy", "tool_result", "普通正文", meta={"x": recursive}) is False
     assert "unsupported-secret-17" not in _raw_log(isolated_log) + caplog.text
     assert "REDACTION_UNAVAILABLE" in _raw_log(isolated_log)
+
+@pytest.mark.parametrize(
+    "command,secret",
+    [
+        ("mysql -uroot -pS3cretPw -e 'select 1'", "S3cretPw"),
+        ("sshpass -p Hunter2 ssh root@example.invalid", "Hunter2"),
+    ],
+)
+@pytest.mark.xfail(
+    strict=True,
+    reason="D6 RED：短选项密码未在 agent_log 脱敏，待 ROOT 修复脱敏规则",
+)
+def test_short_option_password_is_redacted_from_agent_log(isolated_log, command, secret):
+    from strands_backend.agent_log import log_event
+
+    assert log_event("privacy", "tool_call", {"command": command})
+    raw = _raw_log(isolated_log)
+    assert secret not in raw
+    assert "REDACTED" in raw or "***" in raw
+
+
+def test_named_password_remains_redacted_as_positive_control(isolated_log):
+    from strands_backend.agent_log import log_event
+
+    assert log_event("privacy", "tool_call", {"command": "export DB_PASSWORD=hunter2"})
+    raw = _raw_log(isolated_log)
+    assert "hunter2" not in raw
+    assert "DB_PASSWORD" in raw
