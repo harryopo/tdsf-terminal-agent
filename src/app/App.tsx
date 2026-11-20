@@ -196,6 +196,7 @@ import { ServerMonitorEntry } from "@/modules/server-monitor";
 import { AgentTypingIndicator } from "@/modules/ai/components/AgentTypingIndicator";
 // TDSF 2026-08-09: 终端命令预测弹窗（统一本地+SSH）
 import { TerminalCompletionPopup } from "@/modules/terminal/components/TerminalCompletionPopup";
+import { NextCommandPopup } from "@/modules/terminal/components/NextCommandPopup";
 import { translateText } from "@/modules/translate/translateApi";
 
 import { CloseDialogs } from "./components/CloseDialogs";
@@ -2948,6 +2949,8 @@ export default function App() {
 
           {/* TDSF 2026-08-09: 终端命令预测弹窗（本地+SSH 统一，通过 rendererPool 注入） */}
           <TerminalCompletionPopup />
+          {/* 纠错/下一步建议弹窗：必须挂载，否则只有状态没有 UI */}
+          <NextCommandPopup />
 
           <CloseDialogs
             tabs={tabs}

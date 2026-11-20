@@ -132,7 +132,7 @@ describe("会话内保守纠错", () => {
     }
   });
 
-  it("可用性/风险未知时不猜可用", () => {
+  it("可用性未知或高风险（L3+）时不猜可用", () => {
     const noAvailability = suggestBufferCorrection({
       request: request("sytemctl status httpd"),
       current: SCOPE,
@@ -152,7 +152,7 @@ describe("会话内保守纠错", () => {
       now: 1000,
       vocabulary: VOCABULARY,
       availability: availabilityOf("systemctl"),
-      risk: new Map([["systemctl", "L2" as const]]),
+      risk: new Map([["systemctl", "L3" as const]]),
     });
     expect(risky.status).toBe("unknown");
     expect(risky.candidates).toEqual([]);
@@ -230,5 +230,47 @@ describe("会话内保守纠错", () => {
       expect(candidate.constraints).toContain("no-execution");
       expect(candidate.constraints).toContain("no-privilege-change");
     }
+  });
+
+  // ---- 研究能力守卫：把 Linux专利 研究线的反例固化成产品回归 ----
+
+  it("路径形式的命令名不改写（研究反例：bin/grep 不得变成 grep）", () => {
+    expect(isSingleEdit("bin/grep", "grep")).toBe(false);
+    const view = correct("bin/grep -n error app.log");
+    expect(view.candidates).toEqual([]);
+  });
+
+  it("参数与文件字面量不参与纠错（研究反例：notes.tx 不得猜成 notes.txt）", () => {
+    const view = correct("printf %s notes.tx");
+    expect(view.candidates).toEqual([]);
+  });
+
+  it("一处换位叠加一处替换（Lev d=3）不产生候选（距离能力边界）", () => {
+    expect(isSingleEdit("gxrp", "grep")).toBe(false);
+    const view = correct("gxrp -n error app.log");
+    expect(view.candidates).toEqual([]);
+  });
+
+  it("L2 候选保留用于展示（仅回填），L3 仍隐藏", () => {
+    const base = {
+      request: request("grpe -n error app.log"),
+      current: SCOPE,
+      currentInputVersion: 5,
+      now: 1000,
+      vocabulary: VOCABULARY,
+      availability: availabilityOf(...VOCABULARY.commands),
+    };
+    const l2 = suggestBufferCorrection({
+      ...base,
+      risk: new Map([["grep", "L2" as const]]),
+    });
+    expect(l2.candidates.map((candidate) => candidate.insertText)).toContain(
+      "grep -n error app.log",
+    );
+    const l3 = suggestBufferCorrection({
+      ...base,
+      risk: new Map([["grep", "L3" as const]]),
+    });
+    expect(l3.candidates).toEqual([]);
   });
 });

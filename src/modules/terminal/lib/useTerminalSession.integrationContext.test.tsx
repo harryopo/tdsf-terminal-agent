@@ -17,7 +17,12 @@ vi.mock("./terminalBlocksStore", () => ({ useTerminalBlocksStore: { getState: ()
 vi.mock("./osc-handlers", () => ({ createShellIntegrationState: vi.fn(() => ({})), registerCwdHandler: vi.fn(() => ({ dispose: vi.fn() })), registerOsc52ClipboardHandler: vi.fn(() => vi.fn()), registerPromptTracker: vi.fn(() => ({ dispose: vi.fn() })) }));
 vi.mock("./pty-bridge", () => ({ openPty: mocks.openPty }));
 vi.mock("./completionInjection", () => ({ clearLeafEnvironment: vi.fn(), setLeafEnvironment: vi.fn() }));
-vi.mock("@/lib/param-complete-client", () => ({ setLeafCwd: vi.fn() }));
+vi.mock("@/lib/param-complete-client", () => ({
+  setLeafCwd: vi.fn(),
+  setLeafCommandList: vi.fn(),
+  setLeafWslDistro: vi.fn(),
+  fetchWslCommands: vi.fn(async () => null),
+}));
 vi.mock("./agentActivity", () => ({ ensureAgentActivityListener: vi.fn(), isAgentActivePty: vi.fn(() => false) }));
 vi.mock("./rendererPool", () => {
   const noop = vi.fn();

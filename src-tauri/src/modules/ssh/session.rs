@@ -1630,21 +1630,74 @@ if [ -z "${__TDSF_OSC133_GUARD:-}" ]; then
     v="${v//;/\\x3b}"
     printf '%s' "$v"
   }
+  # 命令行完整性校验（CORR-02 C3）：DEBUG trap 每个简单命令触发一次，
+  # $BASH_COMMAND 只是片段；133;D 的退出码属于整行最后一个命令。
+  # 只用 history 作证据，命令文本始终取 $BASH_COMMAND，绝不回填 history 文本。
+  _tdsf_line_complete() {
+    local want="$1" h num text
+    [ -n "${HISTCMD:-}" ] || return 1
+    local HISTTIMEFORMAT=
+    h=$(builtin history 1 2>/dev/null) || return 1
+    [ -n "$h" ] || return 1
+    [[ "$h" =~ ^[[:space:]]*([0-9]+)[[:space:]]{1,2}(.*)$ ]] || return 1
+    num="${BASH_REMATCH[1]}"
+    text="${BASH_REMATCH[2]}"
+    [ "$num" = "$HISTCMD" ] || return 1
+    if [ -n "${__TDSF_LAST_HISTCMD:-}" ] && [ "$num" = "$__TDSF_LAST_HISTCMD" ]; then
+      return 1
+    fi
+    text="${text#"${text%%[![:space:]]*}"}"
+    [ "$text" = "$want" ]
+  }
   # preexec: DEBUG trap (bash-preexec 思路) — 捕获命令行原文 → 633;E + 133;C
+  # 同一输入行的后续简单命令只计数，由 precmd 的 633;F 上报段数与完整性。
   _tdsf_preexec() {
     trap '_tdsf_preexec' DEBUG
     local c="$BASH_COMMAND"
-    case "$c" in _tdsf_*|__TDSF_*) return ;; esac
+    case "$c" in _tdsf_*|__TDSF_*|local\ _tdsf_*) return ;; esac
+    if [ "${__TDSF_CMD_ACTIVE:-0}" = "1" ]; then
+      __TDSF_LINE_SEGMENTS=$(( ${__TDSF_LINE_SEGMENTS:-1} + 1 ))
+      return
+    fi
     [ "${__TDSF_CMD_REPORTED:-}" = "1" ] && return
     __TDSF_CMD_REPORTED=1
-    c="${c//$'\a'/}"; c="${c//$'\e'/}"; c="${c//$'\r'/ }"; c="${c//$'\n'/ }"
-    printf '\033]633;E;%s;%s\007' "$( _tdsf_escape_osc_value "$c" )" "$RANDOM"
+    __TDSF_CMD_ACTIVE=1
+    __TDSF_LINE_SEGMENTS=1
+    # CORR-03 P0（ROOT CAP-01）：上报文本一旦被截断或清洗，就不再是完整原文，
+    # 完整性必须降为 0；512 上限保留，避免任意长输入进入 OSC。
+    local _tdsf_lossy=0
+    if [ "${#c}" -gt 512 ]; then _tdsf_lossy=1; fi
+    local _tdsf_clean="${c//$'\a'/}"
+    _tdsf_clean="${_tdsf_clean//$'\e'/}"
+    _tdsf_clean="${_tdsf_clean//$'\r'/ }"
+    _tdsf_clean="${_tdsf_clean//$'\n'/ }"
+    if [ "$_tdsf_clean" != "$c" ]; then _tdsf_lossy=1; fi
+    if [ "$_tdsf_lossy" = "0" ] && _tdsf_line_complete "$c"; then
+      __TDSF_LINE_VALID=1
+    else
+      __TDSF_LINE_VALID=0
+    fi
+    __TDSF_LAST_HISTCMD="${HISTCMD:-}"
+    __TDSF_LINE_NONCE="${RANDOM}${RANDOM}"
+    c="$_tdsf_clean"
+    printf '\033]633;E;%s;%s\007' "$( _tdsf_escape_osc_value "${c:0:512}" )" "$__TDSF_LINE_NONCE"
     printf '\033]133;C\007'
   }
-  # precmd: 发 133;D;<exit>(孤儿 D 自愈) + OSC7 + 633;P;Cwd + 133;A/B,
-  # 再保序执行用户原 PROMPT_COMMAND (健壮性④: 包装式 prepend, 用户钩子不丢)
+  # precmd: 先发 633;F(段数;完整性) 再发 133;D;<exit>(孤儿 D 自愈) + OSC7 +
+  # 633;P;Cwd + 133;A/B，再保序执行用户原 PROMPT_COMMAND (健壮性④)。
   _tdsf_precmd() {
     local ec=$?
+    local _tdsf_seg="${__TDSF_LINE_SEGMENTS:-0}"
+    local _tdsf_val="${__TDSF_LINE_VALID:-0}"
+    local _tdsf_nonce="${__TDSF_LINE_NONCE:-}"
+    __TDSF_CMD_ACTIVE=0
+    __TDSF_LINE_SEGMENTS=0
+    __TDSF_LINE_VALID=0
+    __TDSF_LINE_NONCE=""
+    case "$_tdsf_seg" in ''|*[!0-9]*) _tdsf_seg=0 ;; esac
+    if [ "$_tdsf_seg" -gt 0 ]; then
+      printf '\033]633;F;%s;%s;%s\007' "$_tdsf_seg" "$_tdsf_val" "$_tdsf_nonce"
+    fi
     # 哨兵保留目录名尾部的换行，只去掉 pwd 自己输出的一个换行。
     local cwd="$(pwd -P; printf '.')"
     cwd="${cwd%.}"
@@ -1709,12 +1762,22 @@ if [[ -z "${__TDSF_OSC133_GUARD:-}" ]]; then
     printf '\033]133;B\007'
   }
   # preexec: zsh 原生 $1 = 命令行原文 → 633;E;<cmd>;<nonce> + 133;C
+  # CORR-02 C3：同一行若含 shell 运算符/换行则标记为非单一简单命令（F;1;0），
+  # 前端据此停用该行的失败纠错与学习；引号内运算符会保守地判为复合。
   _tdsf_preexec() {
     local c="$1"
     [[ "$c" == _tdsf_* || "$c" == __TDSF_* ]] && return
+    # CORR-03 P0（ROOT CAP-01）：控制字符清洗与 256 截断都会改变原文 →
+    # 完整性必须降为 0，不能把清洗后的短文本当成完整命令。
+    local _tdsf_simple=1
+    local _tdsf_nonce="${RANDOM}${RANDOM}"
+    if [[ "$c" == *[';&|<>()']* || "$c" == *[[:cntrl:]]* || ${#c} -gt 256 ]]; then
+      _tdsf_simple=0
+    fi
     c="${c//$'\a'/}"; c="${c//$'\e'/}"; c="${c//$'\r'/ }"; c="${c//$'\n'/ }"
-    printf '\033]633;E;%s;%s\007' "$( _tdsf_escape_osc_value "$c" )" "$RANDOM"
+    printf '\033]633;E;%s;%s\007' "$( _tdsf_escape_osc_value "${c[1,256]}" )" "$_tdsf_nonce"
     printf '\033]133;C\007'
+    printf '\033]633;F;1;%s;%s\007' "$_tdsf_simple" "$_tdsf_nonce"
   }
   precmd_functions=(_tdsf_precmd ${precmd_functions[@]})
   preexec_functions=(_tdsf_preexec ${preexec_functions[@]})

@@ -627,19 +627,35 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
             // ================================================================
-            // B1 (M0-2): dev 启动预检 — 探测 Vite dev server (端口 9300)
+            // B1 (M0-2): dev 启动预检 — 探测实际 devUrl 的 Vite dev server
             // ================================================================
-            // debug 构建内嵌 devUrl 指向 127.0.0.1:9300，Vite 未启动则 WebView
-            // 加载失败 → 黑屏无提示。此处提前探测端口，失败时弹窗告知后退出。
+            // 不能硬编码 9300：隔离工作树/备用端口会通过 --config 覆盖 devUrl。
+            // 从合并后的 app.config().build.dev_url 取 host/port，Vite 未启动则
+            // WebView 加载失败 → 黑屏无提示；此处提前探测并弹窗后退出。
             // release 构建跳过此检查（内嵌 dist 产物，不依赖 Vite）。
             #[cfg(debug_assertions)]
             {
                 use tauri_plugin_dialog::MessageDialogKind;
-                if TcpStream::connect("127.0.0.1:9300").is_err() {
+                let dev_url = _app.config().build.dev_url.clone();
+                let reachable = match dev_url.as_ref() {
+                    Some(url) => {
+                        let host = url.host_str().unwrap_or("127.0.0.1");
+                        let port = url.port_or_known_default().unwrap_or(9300);
+                        TcpStream::connect((host, port)).is_ok()
+                    }
+                    None => true,
+                };
+                if !reachable {
+                    let url_text = dev_url
+                        .as_ref()
+                        .map(|url| url.to_string())
+                        .unwrap_or_else(|| "devUrl".to_string());
                     // SHOULD-FIX-3 (2026-09-04): 直接在 setup 主线程阻塞调用 dialog，
                     // 不在后台线程调用 blocking_show()（macOS 上可能死锁）
                     let _ = _app.handle().dialog()
-                        .message("Vite dev server 未启动 (端口 9300 无响应)\n\n请先运行 pnpm dev 或 启动-日志版.bat，再启动本程序。")
+                        .message(format!(
+                            "Vite dev server 未启动 ({url_text} 无响应)\n\n请先运行 pnpm dev 或 启动-日志版.bat，再启动本程序。"
+                        ))
                         .title("TDSF Terminal Agent — Dev Server 未就绪")
                         .kind(MessageDialogKind::Error)
                         .blocking_show();

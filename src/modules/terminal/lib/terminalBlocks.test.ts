@@ -13,6 +13,7 @@ import {
   registerBlockOscHandlers,
   type TerminalBlock,
 } from "./terminalBlocks";
+import { shouldOfferBlockCorrection } from "./nextCommandInjection";
 
 type CollectorHarness = {
   collector: TerminalBlockCollector;
@@ -215,6 +216,118 @@ describe("TerminalBlockCollector output metadata", () => {
     collector.handle133("D;0");
     expect(blocks[0].outputTail).toBe("last lines");
     expect(blocks[0].outputTruncated).toBe(true);
+  });
+});
+
+// CORR-02 C3：命令文本完整性与退出码归属。F 标记由 shell 在 133;D 之前上报：
+// segments=1 且 valid=1 才是完整单一简单命令；其它都是片段/复合/未知。
+describe("CORR-02 C3 命令行完整性", () => {
+  it("完整单一简单命令 → commandComplete=true", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;grpe -n error app.log;4242");
+    collector.handle633("C");
+    collector.handle633("F;1;1;4242");
+    collector.handle133("D;127");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].command).toBe("grpe -n error app.log");
+    expect(blocks[0].exitCode).toBe(127);
+    expect(blocks[0].commandComplete).toBe(true);
+  });
+
+  it("复合/管道（多段）→ commandComplete=false，退出码不再归属首段", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;printf ROOT_OK;11");
+    collector.handle633("C");
+    collector.handle633("F;2;0;11");
+    collector.handle133("D;127");
+    expect(blocks[0].command).toBe("printf ROOT_OK");
+    expect(blocks[0].exitCode).toBe(127);
+    expect(blocks[0].commandComplete).toBe(false);
+  });
+
+  it("单一命令但历史校验失败（前导空格/历史过滤）→ false", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;grpe x;7");
+    collector.handle633("C");
+    collector.handle633("F;1;0;7");
+    collector.handle133("D;127");
+    expect(blocks[0].commandComplete).toBe(false);
+  });
+
+  it("nonce 不一致的 F 不得污染本行（其它 shell 的迟到标记）", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;grpe x;1");
+    collector.handle633("C");
+    collector.handle633("F;1;1;999");
+    collector.handle133("D;127");
+    // CORR-03 P0（ROOT v1.2）：本轮已经收到 F 但 nonce 不匹配 = 无效新证据，
+    // 必须显式拒绝（false），不能退回“旧 shell 无 F”的 undefined 学习路径。
+    expect(blocks[0].commandComplete).toBe(false);
+  });
+
+  it("第一份 F 为准：迟到/嵌套标记不能把不完整改判为完整", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;printf x | cat;2");
+    collector.handle633("C");
+    collector.handle633("F;2;0;2");
+    collector.handle633("F;1;1;2");
+    collector.handle133("D;0");
+    expect(blocks[0].commandComplete).toBe(false);
+  });
+
+  it("旧 shell／非 Bash 集成没有 F → undefined（保守，不冒充完整）", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;grpe x;1");
+    collector.handle633("C");
+    collector.handle133("D;127");
+    expect(blocks[0].commandComplete).toBeUndefined();
+
+    const local = makeCollector();
+    local.collector.handle133("C;grpe x");
+    local.collector.handle133("D;127");
+    expect(local.blocks[0].commandComplete).toBeUndefined();
+  });
+
+  it("F 在 E/C 之后、D 之前到达才生效；缺失 D 的孤儿结算保留标记但退出码未知", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;ls;5");
+    collector.handle633("C");
+    collector.handle633("F;1;1;5");
+    // D 丢失，下一条 A 触发孤儿结算（exit=null）
+    collector.handle133("A");
+    expect(blocks[0].commandComplete).toBe(true);
+    expect(blocks[0].exitCode).toBeNull();
+  });
+
+  it("ROOT C3 原始事件流：片段绑定 127 时不得触发失败纠错", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;printf ROOT_OK;7654");
+    collector.handle633("C");
+    collector.handle633("F;2;0;7654");
+    collector.handle133("D;127");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].command).toBe("printf ROOT_OK");
+    expect(blocks[0].exitCode).toBe(127);
+    expect(blocks[0].commandComplete).toBe(false);
+    expect(shouldOfferBlockCorrection(blocks[0])).toBe(false);
+  });
+
+  it("完整单命令事件流：grpe → 127 才允许失败纠错", () => {
+    const { collector, blocks } = makeCollector();
+    collector.handle133("A");
+    collector.handle633("E;grpe -n error app.log;81");
+    collector.handle633("C");
+    collector.handle633("F;1;1;81");
+    collector.handle133("D;127");
+    expect(shouldOfferBlockCorrection(blocks[0])).toBe(true);
   });
 });
 

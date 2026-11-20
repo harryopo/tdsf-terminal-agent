@@ -564,16 +564,22 @@ describe("matchesVisibleTerminalCommand — 本地 bash 无命令文本（#141�
     ).toBe(false);
   });
 
-  it("漂移闸：本地 bash 若不回报命令文本，上面这条通道就有存在理由", () => {
-    // 读我们自己的发报脚本，钉住"为什么需要这条通道"这个事实。
-    // 哪天 bashrc.bash 开始回报文本（例如补上 633;E），这条用例会红 ——
-    // 那时该重新判断：空文本通道还要不要留。
+  it("漂移闸：本地 bash 已回报命令文本（633;E），空文本通道保留给降级与旧会话", () => {
+    // 2026-11-19: bashrc.bash 改为 DEBUG trap 上报 633;E，本地 bash 不再是
+    // "无命令文本"的形状。空文本通道仍然保留，理由是：
+    //   ① 升级前已启动的会话继续用旧 rcfile，拿不到 E；
+    //   ② 用户占用 DEBUG trap（bash-preexec/extdebug）时脚本主动降级不上报；
+    //   ③ 教学单步结算是兜底能力，不能因为本地壳能力提升而回归。
     const bashrc = readFileSync(
       join(process.cwd(), "src-tauri/src/modules/pty/scripts/bashrc.bash"),
       "utf8",
     );
-    expect(bashrc).not.toMatch(/633;E/);
-    // zsh 是带文本的（对照：证明"没文本"是 bash 特有的形状，不是全部本地壳）
+    expect(bashrc).toMatch(/633;E/);
+    // 必须用 DEBUG trap 取命令行原文：history 1 会被多行历史条目、
+    // HISTCONTROL=ignorespace、HISTIGNORE 污染，上报错误文本。
+    expect(bashrc).toMatch(/trap '_tdsf_preexec' DEBUG/);
+    expect(bashrc).not.toMatch(/HISTTIMEFORMAT= history 1/);
+    // zsh 是带文本的（对照：证明两套本地壳现在都上报命令原文）
     const zshrc = readFileSync(
       join(process.cwd(), "src-tauri/src/modules/pty/scripts/zshrc.zsh"),
       "utf8",

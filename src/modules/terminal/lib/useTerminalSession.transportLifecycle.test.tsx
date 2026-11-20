@@ -65,7 +65,12 @@ vi.mock("./completionInjection", () => ({
   clearLeafEnvironment: vi.fn(),
   setLeafEnvironment: vi.fn(),
 }));
-vi.mock("@/lib/param-complete-client", () => ({ setLeafCwd: vi.fn() }));
+vi.mock("@/lib/param-complete-client", () => ({
+  setLeafCwd: vi.fn(),
+  setLeafCommandList: vi.fn(),
+  setLeafWslDistro: vi.fn(),
+  fetchWslCommands: vi.fn(async () => null),
+}));
 vi.mock("./agentActivity", () => ({
   ensureAgentActivityListener: vi.fn(),
   isAgentActivePty: vi.fn(() => false),

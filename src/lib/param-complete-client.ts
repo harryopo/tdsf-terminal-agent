@@ -406,8 +406,25 @@ export function parseRemoteCommandLines(output: string): Set<string> {
   return names;
 }
 
+type ShellRunOutput = {
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number | null;
+  timed_out?: boolean;
+  truncated?: boolean;
+};
+
 /** 会话级缓存：rustSessionId → 远端命令全集（连接成功后预取一次） */
 const remoteCommandsCache = new Map<number, Set<string>>();
+
+/** WSL distro → 真实命令全集（本地 compgen -c，一次性缓存） */
+const wslCommandsCache = new Map<string, Set<string>>();
+
+/** leafId → 当前终端可用命令全集（WSL 本地会话用；SSH 仍走 rustSessionId 缓存） */
+const leafCommandLists = new Map<number, Set<string>>();
+
+/** leafId → WSL distro（命令词表按 leaf 拉取，不依赖全局 workspace 状态） */
+const leafWslDistros = new Map<number, string>();
 
 /** 读取缓存的远端命令全集（未拉到 → null，调用方降级为不过滤） */
 export function getCachedRemoteCommands(sessionId: number): Set<string> | null {
@@ -417,6 +434,79 @@ export function getCachedRemoteCommands(sessionId: number): Set<string> | null {
 /** 使缓存失效（调试/重连时调用，下次 fetchRemoteCommands 重新 exec） */
 export function invalidateRemoteCommands(sessionId: number): void {
   remoteCommandsCache.delete(sessionId);
+}
+
+/**
+ * WSL 本地命令集：不依赖 SSH 会话，用 `compgen -c` 取真实命令名。
+ * 失败/空输出 → null，不缓存，下次重试；自身不抛错。
+ */
+/** 读取 WSL 命令全集缓存（未拉取 → null）。 */
+export function getCachedWslCommands(distro: string): Set<string> | null {
+  return wslCommandsCache.get(distro) ?? null;
+}
+
+/** 使 WSL 命令缓存失效（调试/发行版重装后调用）。 */
+export function invalidateWslCommands(distro: string): void {
+  wslCommandsCache.delete(distro);
+}
+
+/**
+ * 拉取 WSL 真实命令全集（本地 `compgen -c`，20s 超时）。
+ * 只执行固定枚举命令，不拼用户输入；失败静默返回 null。
+ */
+export async function fetchWslCommands(distro: string): Promise<Set<string> | null> {
+  const cached = wslCommandsCache.get(distro);
+  if (cached) return cached;
+  try {
+    // shell_run_command 走 POSIX sh；compgen 是 bash 内建，必须显式 bash -c。
+    // 关键：WSL 继承的 PATH 含大量 /mnt/c/... Windows 路径，compgen -c 会扫描
+    // 超时；这里只枚举 Linux 路径（含用户 ~/.local/bin、~/bin），不扫 Windows 挂载。
+    const r = await invoke<ShellRunOutput>('shell_run_command', {
+      command:
+        "bash -c 'PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\" compgen -c 2>/dev/null | sort -u'",
+      cwd: null,
+      timeoutSecs: 20,
+      workspace: { kind: 'wsl', distro },
+    });
+    if (r.timed_out || r.exit_code !== 0) return null;
+    const out = (r.stdout ?? '').trim();
+    if (!out) return null;
+    const cmds = parseRemoteCommandLines(out);
+    if (cmds.size === 0) return null;
+    wslCommandsCache.set(distro, cmds);
+    return cmds;
+  } catch (e) {
+    console.warn('[param-complete] fetchWslCommands failed:', e);
+    return null;
+  }
+}
+
+/** 注册 leaf 的可用命令全集（WSL 会话创建后预取；null 清除）。 */
+export function setLeafCommandList(
+  leafId: number,
+  commands: Set<string> | null,
+): void {
+  if (commands && commands.size > 0) leafCommandLists.set(leafId, commands);
+  else leafCommandLists.delete(leafId);
+}
+
+/** 读取 leaf 的可用命令全集（WSL 本地会话；未预取 → null）。 */
+export function getLeafCommandList(leafId: number): Set<string> | null {
+  return leafCommandLists.get(leafId) ?? null;
+}
+
+/** 注册 leaf 的 WSL distro（null 清除）。 */
+export function setLeafWslDistro(
+  leafId: number,
+  distro: string | null,
+): void {
+  if (distro) leafWslDistros.set(leafId, distro);
+  else leafWslDistros.delete(leafId);
+}
+
+/** 读取 leaf 的 WSL distro（非 WSL/未注册 → null）。 */
+export function getLeafWslDistro(leafId: number): string | null {
+  return leafWslDistros.get(leafId) ?? null;
 }
 
 /**

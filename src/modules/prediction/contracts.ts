@@ -277,11 +277,15 @@ export type AcceptDecision =
  * 接受守卫（纯函数，供 UI 与测试共用）。
  * 只检查候选本身与当前 owner/输入版本；真正的终端写入仍由调用方复核可见终端
  * 与空闲状态，绝不在这里执行命令。
+ *
+ * allowRisk：纠错任务允许 L2（只回填、不执行，见 ROOT v1.1 §2）；普通预测
+ * 保持只接受 L0/L1。默认值不变，避免影响既有调用方。
  */
 export function checkCandidateAcceptable(
   candidate: Candidate,
   current: ScopeToken,
   currentInputVersion: number,
+  allowRisk: readonly RiskLevel[] = ["L0", "L1"],
 ): AcceptDecision {
   if (!isSameOwner(candidate.owner, current)) {
     return { ok: false, reason: "owner-changed" };
@@ -296,7 +300,7 @@ export function checkCandidateAcceptable(
   if (/<[A-Z][A-Z0-9_]*>/.test(text)) {
     return { ok: false, reason: "template-placeholder" };
   }
-  if (candidate.risk !== "L0" && candidate.risk !== "L1") {
+  if (!allowRisk.includes(candidate.risk)) {
     return { ok: false, reason: "risk-not-low" };
   }
   if (candidate.availability === "unavailable") {

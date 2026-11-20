@@ -33,6 +33,12 @@ import {
   registerBlockOscHandlers,
 } from "./terminalBlocks";
 import { useTerminalBlocksStore } from "./terminalBlocksStore";
+// TDSF 2026-11-12（工作包 C）：命令 block 旁路喂会话内预测；不接 RPC/存储/UI。
+import {
+  dropLeafPrediction,
+  recordTerminalBlock,
+  rotateLeafPrediction,
+} from "@/modules/prediction/sessionBridge";
 import type { IMarker } from "@xterm/xterm";
 // outputTail 复用 AI 模块的脱敏函数（redact.ts 零依赖，无循环导入）
 import { redactSensitive } from "@/modules/ai/lib/redact";
@@ -53,7 +59,13 @@ import { restoreShellIntegration } from "./restoreShellIntegration";
 import { isUserLineDirty } from "./terminalInputState";
 import { clearLeafEnvironment, setLeafEnvironment } from "./completionInjection";
 // carapace 参数补全的 cwd 注册表（动态候选按当前目录取数据，见 param-complete-client）
-import { setLeafCwd } from "@/lib/param-complete-client";
+import {
+  fetchWslCommands,
+  setLeafCommandList,
+  setLeafCwd,
+  setLeafWslDistro,
+} from "@/lib/param-complete-client";
+import { openCorrectionForCommand, shouldOfferBlockCorrection } from "./nextCommandInjection";
 import "../block/block.css";
 import { ensureAgentActivityListener, isAgentActivePty } from "./agentActivity";
 import {
@@ -1038,6 +1050,15 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         onOutputCapture: () => s.blockRenderer?.captureOutput() ?? { text: "", truncated: true },
         onBlock: (block) => {
           useTerminalBlocksStore.getState().pushBlock(block);
+          recordTerminalBlock(block);
+          // 先让命令执行并看到报错；只有“用户手动输入 + 命令行完整且为
+          // 单一简单命令 + exit 127”才弹纠错（CORR-02 C3）。复合/管道/多行
+          // 的片段文本与退出码归属不可信，不参与自动纠错。
+          if (shouldOfferBlockCorrection(block)) {
+            void openCorrectionForCommand(leafId, block.command, {
+              blockId: block.id,
+            });
+          }
         },
       });
       const disposeBlockRenderer = () => {
@@ -1258,6 +1279,7 @@ export async function respawnSession(
   s.pty?.close();
   s.pty = null;
   s.blockCollector?.switchContext();
+  rotateLeafPrediction(leafId);
   s.snapshot = null;
   s.dormantRing = new DormantRing();
   s.shellExited = false;
@@ -1352,6 +1374,9 @@ export function disposeSession(leafId: number): void {
   const s = sessions.get(leafId);
   if (!s) return;
   retireSession(leafId, s);
+  dropLeafPrediction(leafId);
+  setLeafCommandList(leafId, null);
+  setLeafWslDistro(leafId, null);
   blockViewportListeners.delete(leafId);
   pendingRiskListeners.delete(leafId);
 }
@@ -1422,13 +1447,24 @@ export function useTerminalSession({
     // TDSF 2026-08-28（用户反馈）: WSL Space 的本地 PTY 实际运行 Linux，
     // 命令预测同样按 linux 命令集分流。WorkspaceSurface 只渲染当前 Space 的
     // tabs，session 创建时 active Space 即 leaf 所属 Space。
-    const spaceEnvKind = useSpaces
+    const spaceEnv = useSpaces
       .getState()
-      .spaces.find((x) => x.id === useSpaces.getState().activeId)?.env.kind;
+      .spaces.find((x) => x.id === useSpaces.getState().activeId)?.env;
     setLeafEnvironment(
       leafId,
-      s.remote || spaceEnvKind === "wsl" ? "linux" : "windows",
+      s.remote || spaceEnv?.kind === "wsl" ? "linux" : "windows",
     );
+    // WSL 没有 SSH rustSessionId，纠错不能只依赖远端命令缓存。
+    // 用固定 `compgen -c` 拉一次真实命令集，缓存到 leaf；失败保持 null（保守隐藏）。
+    setLeafCommandList(leafId, null);
+    setLeafWslDistro(leafId, spaceEnv?.kind === "wsl" ? spaceEnv.distro : null);
+    if (spaceEnv?.kind === "wsl") {
+      void fetchWslCommands(spaceEnv.distro).then((commands) => {
+        if (!cancelled && !s.disposed && commands) {
+          setLeafCommandList(leafId, commands);
+        }
+      });
+    }
     s.ready.then(() => {
       if (cancelled || s.disposed) return;
       const node = container.current;
@@ -1443,6 +1479,8 @@ export function useTerminalSession({
     return () => {
       cancelled = true;
       clearLeafEnvironment(leafId);
+      setLeafCommandList(leafId, null);
+      setLeafWslDistro(leafId, null);
       detachSession(leafId);
     };
   }, [leafId, container, blocks, transportKey, remote]);

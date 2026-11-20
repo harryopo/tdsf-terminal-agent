@@ -9,7 +9,34 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type FontWeight, Terminal } from "@xterm/xterm";
 import { shouldCursorBlink } from "./cursorBlink";
-import { completionKeyHandler, initCompletionInjection, loadHistoryIfNeeded } from "./completionInjection";
+import {
+  completionKeyHandler,
+  getCompletionLine,
+  getCompletionLineState,
+  getCompletionLineVersion,
+  initCompletionInjection,
+  loadHistoryIfNeeded,
+  noteTerminalInput,
+  writeCompletionLine,
+} from "./completionInjection";
+import {
+  cancelAutoCorrection,
+  handleAutoCorrectionInput,
+  handleLeafInvalidated,
+  initNextCommandInjection,
+  nextCommandKeyHandler,
+} from "./nextCommandInjection";
+import { getLeafEnvironment, getLeafEpoch } from "./executionHistory";
+import {
+  fetchWslCommands,
+  getCachedRemoteCommands,
+  getCachedWslCommands,
+  getLeafCommandList,
+  getLeafSshSession,
+  getLeafWslDistro,
+  setLeafCommandList,
+} from "@/lib/param-complete-client";
+import { evaluateRisk } from "@/lib/risk-engine/riskClient";
 import { IS_MAC, isTerminalCopy, terminalReadlineSequence } from "./keymap";
 import {
   readTerminalClipboard,
@@ -75,6 +102,9 @@ const slots: Slot[] = [];
 let recyclerEl: HTMLDivElement | null = null;
 let adapter: SlotAdapter | null = null;
 let configuredFont: RendererFont | null = null;
+// 真正持有键盘焦点的 xterm leaf（2026-11-13）。xterm 的 textarea 不可用
+// （block 模式的 ShellInput）时回落到 adapter.isLeafFocused。
+let focusedLeafId: number | null = null;
 
 type RendererFont = {
   fontFamily: string;
@@ -108,6 +138,22 @@ function setWindowActive(active: boolean): void {
   }
 }
 
+/** 本地风险等级 → 预测合同的 L0–L4（仅用于候选过滤；来源不是 rpc 时上层按 unknown 处理）。 */
+function toPredictionRisk(level: string): "L0" | "L1" | "L2" | "L3" | "L4" {
+  switch (level) {
+    case "safe":
+      return "L0";
+    case "low":
+      return "L1";
+    case "medium":
+      return "L2";
+    case "high":
+      return "L3";
+    default:
+      return "L4";
+  }
+}
+
 export function configureRendererPool(a: SlotAdapter): void {
   adapter = a;
   bindWindowActivityListeners();
@@ -119,6 +165,48 @@ export function configureRendererPool(a: SlotAdapter): void {
     noteUserInput(leafId, data);
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
   });
+  // “下一步建议”显式入口：与逐键补全分开，只在显式组合键时请求。
+  initNextCommandInjection({
+    getLine: getCompletionLine,
+    writeLine: writeCompletionLine,
+    getEnvironment: (leafId) => getLeafEnvironment(leafId),
+    getRustSessionId: (leafId) => getLeafSshSession(leafId),
+    getAvailableCommands: (leafId, rustSessionId) =>
+      rustSessionId == null
+        ? getLeafCommandList(leafId)
+        : getCachedRemoteCommands(rustSessionId),
+    ensureAvailableCommands: async (leafId) => {
+      if (getLeafSshSession(leafId) != null) return null;
+      const epoch = getLeafEpoch(leafId);
+      const existing = getLeafCommandList(leafId);
+      if (existing) return existing;
+      const distro = getLeafWslDistro(leafId);
+      if (!distro) return null;
+      const cached = getCachedWslCommands(distro);
+      if (cached) {
+        setLeafCommandList(leafId, cached);
+        return cached;
+      }
+      const commands = await fetchWslCommands(distro);
+      // leaf 可能在拉取期间销毁/重建：换代后不得把旧结果写进复用的 leafId。
+      if (
+        getLeafEpoch(leafId) !== epoch ||
+        getLeafSshSession(leafId) != null ||
+        getLeafWslDistro(leafId) !== distro
+      ) return null;
+      if (commands) setLeafCommandList(leafId, commands);
+      return commands;
+    },
+    getActiveLeafId: resolveActiveLeafId,
+    getLineState: (leafId) => getCompletionLineState(leafId),
+    getLineVersion: (leafId) => getCompletionLineVersion(leafId),
+    getScopeToken: (leafId) =>
+      `${getLeafEnvironment(leafId)}|${getLeafSshSession(leafId) ?? "local"}|${getLeafEpoch(leafId)}`,
+    evaluateRisk: async (command) => {
+      const result = await evaluateRisk(command);
+      return { level: toPredictionRisk(result.level), source: result.source };
+    },
+  });
 }
 
 export function forEachSlot(fn: (slot: Slot) => void): void {
@@ -127,6 +215,20 @@ export function forEachSlot(fn: (slot: Slot) => void): void {
 
 export function poolSize(): number {
   return slots.length;
+}
+
+/**
+ * 当前接收键盘输入的终端 leaf（2026-11-13）：优先 xterm textarea 的焦点，
+ * 其次回落到分屏焦点。供“下一步建议 / 纠错”的全局快捷键入口使用——
+ * 入口不再要求 xterm 自己有焦点，否则输入条/弹窗抢焦点后组合键就失效。
+ */
+export function resolveActiveLeafId(): number | null {
+  if (focusedLeafId !== null) return focusedLeafId;
+  for (const s of slots) {
+    if (s.currentLeafId === null) continue;
+    if (adapter?.isLeafFocused(s.currentLeafId)) return s.currentLeafId;
+  }
+  return null;
 }
 
 // TDSF debug (Phase 2): 暴露指定 leafId 的 xterm Terminal 实例，供 CDP
@@ -315,6 +417,9 @@ function createSlot(): Slot {
     const leafId = slot.currentLeafId;
     if (leafId === null) return false;
 
+    // “下一步建议”弹窗优先消费自己的按键；未打开时只拦截显式组合键。
+    if (nextCommandKeyHandler(leafId, event) === false) return false;
+
     // TDSF (2026-08-09): 命令预测拦截——在 readlineSequence 之前执行
     // 如果补全引擎返回 false（拦截了按键），直接阻止 xterm 默认行为
     // P0-2 修复：首次按键时异步加载 shell history（不阻塞）
@@ -370,9 +475,22 @@ function createSlot(): Slot {
     // 记账"用户正在这一行上输入"，供 AI 命令卡自动打字前避让（#55）。
     noteUserInput(leafId, data);
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
+    // 粘贴/IME/控制序列不经过逐键缓冲：立即把输入行标为未知（CORR-02 C2）。
+    noteTerminalInput(leafId, data);
+    // 自动纠错：输入停顿后检查行首命令是否拼错，不再依赖快捷键。
+    handleAutoCorrectionInput(leafId, data);
   });
 
   slots.push(slot);
+
+  // 记录真正接收键盘输入的 leaf。xterm 的 keydown 只发到 textarea，
+  // 但全局显式入口（下一步建议/纠错）不应依赖它是否有焦点。
+  term.textarea?.addEventListener("focus", () => {
+    focusedLeafId = slot.currentLeafId;
+  });
+  term.textarea?.addEventListener("blur", () => {
+    if (focusedLeafId === slot.currentLeafId) focusedLeafId = null;
+  });
   return slot;
 }
 
@@ -511,6 +629,8 @@ function bindSlot(slot: Slot, p: AcquireParams): void {
   slot.retainedLeafId = null;
   slot.currentLeafId = p.leafId;
   slot.lastUsedAt = performance.now();
+  // 槽位被复用给新的 leaf 时 focus 事件不会重发，直接同步焦点归属。
+  if (document.activeElement === slot.term.textarea) focusedLeafId = p.leafId;
 
   cancelPendingUnhide(slot);
   cancelWebglReap(slot);
@@ -745,7 +865,13 @@ function detachSlotFromLeaf(slot: Slot, retain: boolean): void {
   slot.host.style.visibility = "";
 
   // leafId 可能被复用，先清掉该行的"用户正在输入"记账，避免串台误挡自动打字。
-  if (slot.currentLeafId !== null) clearUserLine(slot.currentLeafId);
+  if (slot.currentLeafId !== null) {
+    clearUserLine(slot.currentLeafId);
+    // 绘制槽位解绑不等于终端销毁，但该 leaf 的纠错/建议面板不能再指向旧输入行。
+    handleLeafInvalidated(slot.currentLeafId);
+  }
+  cancelAutoCorrection();
+  if (focusedLeafId === slot.currentLeafId) focusedLeafId = null;
   slot.currentLeafId = null;
   slot.lastUsedAt = performance.now();
   scheduleWebglReap(slot);

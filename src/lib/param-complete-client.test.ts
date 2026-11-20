@@ -33,8 +33,11 @@ import {
   escapeShSingleQuote,
   fetchRemoteCommands,
   fetchRemoteOsInfo,
+  fetchWslCommands,
   getCachedRemoteCommands,
   getCachedRemoteOsInfo,
+  getCachedWslCommands,
+  getLeafCommandList,
   getLeafCwd,
   getLeafRemoteCwd,
   getLeafSshSession,
@@ -42,12 +45,14 @@ import {
   invalidateRemoteCarapaceCache,
   invalidateRemoteCommands,
   invalidateRemoteOsInfo,
+  invalidateWslCommands,
   mergeCandidates,
   parseCarapaceJson,
   parseRemoteCommandLines,
   REMOTE_COMMANDS_CMD,
   remoteCarapaceInstalled,
   remoteParamComplete,
+  setLeafCommandList,
   setLeafCwd,
   setLeafSshSession,
 } from './param-complete-client';
@@ -342,6 +347,59 @@ describe('remoteCarapaceInstalled', () => {
   it('invoke 抛错 → false（静默，不抛给调用方）', async () => {
     mockInvoke.mockRejectedValueOnce(new Error('session gone'));
     await expect(remoteCarapaceInstalled(42)).resolves.toBe(false);
+  });
+});
+
+// === WSL 本地命令全集（无 SSH session 时供纠错）=============================
+
+describe('WSL command list', () => {
+  beforeEach(() => {
+    invalidateWslCommands('Ubuntu-24.04');
+    setLeafCommandList(9300, null);
+  });
+
+  it('fetchWslCommands 用 shell_run_command 枚举并缓存', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      stdout: 'grep\ncat\nls\n',
+      stderr: '',
+      exit_code: 0,
+      timed_out: false,
+      truncated: false,
+    });
+
+    const cmds = await fetchWslCommands('Ubuntu-24.04');
+    expect(cmds?.has('grep')).toBe(true);
+    expect(cmds?.has('cat')).toBe(true);
+    expect(getCachedWslCommands('Ubuntu-24.04')).toBe(cmds);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'shell_run_command',
+      expect.objectContaining({
+        command: expect.stringContaining('compgen -c'),
+        workspace: { kind: 'wsl', distro: 'Ubuntu-24.04' },
+      }),
+    );
+
+    await fetchWslCommands('Ubuntu-24.04');
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('失败/空输出返回 null 且不缓存', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      stdout: '',
+      stderr: 'no bash',
+      exit_code: 1,
+      timed_out: false,
+      truncated: false,
+    });
+    await expect(fetchWslCommands('Ubuntu-24.04')).resolves.toBeNull();
+    expect(getCachedWslCommands('Ubuntu-24.04')).toBeNull();
+  });
+
+  it('leaf 命令集 set/get/clear', () => {
+    setLeafCommandList(9300, new Set(['grep', 'cat']));
+    expect(getLeafCommandList(9300)?.has('grep')).toBe(true);
+    setLeafCommandList(9300, null);
+    expect(getLeafCommandList(9300)).toBeNull();
   });
 });
 
