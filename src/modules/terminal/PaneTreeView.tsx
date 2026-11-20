@@ -117,28 +117,63 @@ type PaneProps = {
 
 /**
  * leaf 内容分发：已连接或持有匹配 handle 的重连阶段保留 SSH 叶子，
- * 避免短暂状态变化替换传输并清掉远端补全绑定；未建立/已结束仍走本地路径。
+ * 避免短暂状态变化替换传输并清掉远端补全绑定；**最终断开/会话被移除时渲染
+ * 离线占位，不回退本地 TerminalPane**（S0：否则会在 SSH 标签页里隐式创建本地 PTY）。
+ * 首次连接/无匹配 handle 的过渡态维持原"本地保活"行为。
  * 拆成子组件是为了满足 hook 规则：useSshStore 每次渲染都调用，
  * 条件渲染的是子组件而非 hook。
  */
+type PaneRenderMode = "local" | "ssh" | "offline";
+
 function TerminalPaneContent({
   effectiveSsh,
   ...paneProps
 }: PaneProps & { effectiveSsh: string | null }) {
-  const renderSshPane = useSshStore((s) => {
-    const session = effectiveSsh
-      ? s.sessions.find((it) => it.id === effectiveSsh)
-      : undefined;
-    return !!session && (
+  const mode = useSshStore((s): PaneRenderMode => {
+    if (!effectiveSsh) return "local";
+    const session = s.sessions.find((it) => it.id === effectiveSsh);
+    // 最终断开（closed/failed）或会话已从 store 移除：保留远端意图，只显示离线占位。
+    if (!session) return "offline";
+    if (session.state === "closed" || session.state === "failed") return "offline";
+    const usableSsh =
       session.state === "connected" ||
-      (isSessionConnecting(session) && session.rustSessionId != null &&
-        session.handle?.id === session.rustSessionId)
-    );
+      (isSessionConnecting(session) &&
+        session.rustSessionId != null &&
+        session.handle?.id === session.rustSessionId);
+    return usableSsh ? "ssh" : "local";
   });
-  if (effectiveSsh && renderSshPane) {
+  if (mode === "offline") {
+    return <SshLeafOffline leafId={paneProps.leafId} />;
+  }
+  if (mode === "ssh" && effectiveSsh) {
     return <SshLeafPane sessionId={effectiveSsh} {...paneProps} />;
   }
   return <TerminalPane {...paneProps} />;
+}
+
+/**
+ * S0（2026-11-12）：SSH 叶子的最终断开占位。
+ * 绑定会话已结束/被移除时显示在这里 —— 不挂载 TerminalPane，因此不会创建本地 PTY；
+ * 重新连接成功后会话恢复，同一个 leaf 会回到远端 shell。重连入口仍走工作区/左侧
+ * 离线面板，本组件只负责状态呈现。
+ */
+function SshLeafOffline({ leafId }: { leafId: number }) {
+  return (
+    <div
+      data-testid="pane-ssh-offline"
+      data-offline-leaf={leafId}
+      className="flex h-full w-full items-center justify-center px-6 text-center"
+    >
+      <div className="space-y-1">
+        <div className="text-[13px] font-medium text-foreground">
+          SSH 会话已断开
+        </div>
+        <p className="text-[12px] leading-relaxed text-muted-foreground">
+          这里保留远端终端的位置；重新连接后会回到本标签页。
+        </p>
+      </div>
+    </div>
+  );
 }
 
 /**
