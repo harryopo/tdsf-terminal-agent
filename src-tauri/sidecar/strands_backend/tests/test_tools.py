@@ -2610,7 +2610,12 @@ class TestModeDecision(unittest.TestCase):
         self.assertNotIn("ssh_command", called_methods)
 
     def test_host_check_skipped_when_host_unknown(self):
-        """Task 3.3: 激活终端 host 不可得（ssh_host 空）→ 跳过校验"""
+        """Task 3.3 → T2（V4）：host 不可得时不再跳过目标比对。
+
+        旧行为：激活 host 为空 → 跳过校验，目标会话 2 在激活会话 1 上也能执行，
+        这正是"命令可能被打到非目标服务器"的漏洞场景。新行为：目标与激活会话
+        ID 不一致即阻断，host 仅用于展示与审计；目标一致时不受 host 缺失影响。
+        """
         from strands_backend.tools import execute_via_ssh
 
         bridge = make_mock_rust_bridge()
@@ -2624,7 +2629,10 @@ class TestModeDecision(unittest.TestCase):
             ctx=ctx, command="uptime", ssh_session_id="2",
             timeout=10, tool_name="ssh_command",
         )
-        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["status"], "command_blocked")
+        # 只允许 ssh_status 状态查询，不得发生任何真实命令派发。
+        for call in bridge.ipc_invoke.call_args_list:
+            self.assertEqual(call.args[0], "ssh_status")
 
     def test_context_reads_permission_level_and_mode_from_live(self):
         """_build_tool_context 注入 permission_level + mode + ssh_host"""
@@ -3319,7 +3327,12 @@ class TestExecuteViaSshHostRelaxed(unittest.TestCase):
         self.assertNotIn("ssh_command", calls)
 
     def test_status_malformed_falls_back_to_legacy_skip(self):
-        """live 查询返回不可识别结构 + 激活 host 不可得 → 旧逻辑跳过校验放行"""
+        """live 不可识别 + host 缺失：T2 起目标 != 激活会话即阻断，不再放行。
+
+        旧行为：live 结构不可识别且激活 host 为空时跳过校验，目标会话 2 在
+        激活会话 1 上也能执行成功。新行为（V4 修复）：目标与激活会话 ID 不一致
+        即阻断，host 仅用于展示；只有目标与激活一致时才不受 host 缺失影响。
+        """
         from strands_backend.tools import execute_via_ssh
 
         bridge = make_dispatch_bridge({
@@ -3328,14 +3341,15 @@ class TestExecuteViaSshHostRelaxed(unittest.TestCase):
         })
         ctx = make_ctx(rust_bridge=bridge, ssh_session_id="1")
         ctx.mode = AgentMode.CONFIRM
-        ctx.ssh_host = ""  # 激活 host 不可得 → 旧校验跳过
+        ctx.ssh_host = ""
         result = execute_via_ssh(
             ctx=ctx, command="uptime", ssh_session_id="2",
             timeout=10, tool_name="ssh_command",
         )
-        self.assertEqual(result["status"], "success")
-        # 旧路径放行时无 live 端点信息
-        self.assertEqual(result["target_endpoint"], "")
+        self.assertEqual(result["status"], "command_blocked")
+        # 只允许 ssh_status 状态查询，不得发生任何真实命令派发。
+        for call in bridge.ipc_invoke.call_args_list:
+            self.assertEqual(call.args[0], "ssh_status")
 
     def test_active_session_still_allowed(self):
         """回归保障：默认路径（目标 == 激活会话）不受放宽影响"""

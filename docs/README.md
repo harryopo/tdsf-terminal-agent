@@ -7,7 +7,7 @@
 | 新组员先建立认知 | [五份入门文档与两人审查任务](development/team-onboarding.md) |
 | 确认共同代码纳入范围 | [共享基线与保留候选](development/shared-baseline.md) |
 | 了解当前范围与待办 | [项目状态](STATUS.md) |
-| 理解系统与代码入口 | [架构地图](architecture/README.md)、[模块索引](architecture/modules.md) |
+| 理解系统与代码入口、AI快速接手 | [架构地图与快速接手](architecture/README.md)、[模块索引](architecture/modules.md) |
 | 修改 Agent、工具或风控 | [Agent 链路](architecture/agent.md)、[安全边界](architecture/safety.md) |
 | 排查终端、SSH 与输入 | [终端与工作区](architecture/terminal-workspace.md) |
 | 理解知识库与追溯 | [知识与日志](architecture/knowledge-observability.md) |

@@ -84,6 +84,26 @@ MAX_TIMEOUT_SECONDS = 30
 MAX_OUTPUT_CHARS = 10 * 1024  # 10KB（text 模式按字符近似）
 _WSL_DISTRO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,254}$")
 
+# T5（V5）：子进程只允许继承最小必要环境。
+_BASE_ENV_KEYS = ("PATH", "HOME", "USERPROFILE", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
+_WINDOWS_ENV_KEYS = ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP")
+
+
+def _minimal_subprocess_env() -> dict[str, str]:
+    """只从父进程继承白名单变量，避免把凭据与注入变量交给被执行的代码。
+
+    修复前 `env={**os.environ}` 会把 Agent 进程里的 OPENAI_API_KEY、各类 TOKEN、
+    PYTHONPATH、LD_PRELOAD 等全部转发给 `python -c` 的子进程。
+    注意：白名单只约束"从父进程显式继承"，**不构成沙箱**——经批准的代码仍可
+    访问当前用户权限可及的资源。PYTHONIOENCODING 强制 utf-8，父进程同名值不得覆盖。
+    """
+    allowed = set(_BASE_ENV_KEYS)
+    if os.name == "nt":
+        allowed.update(_WINDOWS_ENV_KEYS)
+    env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
 
 def _as_text(data: Any) -> str:
     """把 TimeoutExpired.stdout/stderr 统一为 str（防御 bytes 形态）
@@ -250,7 +270,7 @@ def _execute_python(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            env=_minimal_subprocess_env(),
             timeout=timeout_s,
             cwd=cwd,
         )

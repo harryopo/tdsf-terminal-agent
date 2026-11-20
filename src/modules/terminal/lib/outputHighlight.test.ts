@@ -102,6 +102,16 @@ describe("outputHighlightSpans", () => {
     spanFor("[INFO] listening on 127.0.0.1:8080", "127.0.0.1:8080", "address");
   });
 
+  it("classifies compact JSON whose first value is a literal or negative number", () => {
+    // 2026-10-30: 之前 jsonStart 只看 "[{" 后面是不是 空格/引号/数字/{[/]，"[-1,...]"
+    // 与 "[true,...]" 这类紧凑数组整行不高亮。这里钉住四种首值形态。
+    spanFor("[-1,2,3]", "-1", "number");
+    spanFor("[true,false,null]", "true", "number");
+    spanFor("[null,0]", "null", "number");
+    spanFor('result: [-3,"x"]', "-3", "number");
+    expect(outputHighlightSpans("[-1,2,3]").length).toBeGreaterThan(0);
+  });
+
   it("leaves ordinary prose without recognizable tokens unclassified", () => {
     spanFor("  -h, --help <FILE>  显示帮助", "--help", "option");
     for (const text of ["A normal sentence with no technical values.", "the service is ready"]) {
