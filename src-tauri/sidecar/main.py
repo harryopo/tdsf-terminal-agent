@@ -681,6 +681,15 @@ def register_business_methods(dispatcher: MethodDispatcher) -> None:
     except Exception as e:
         logger.exception(f"failed to register tdsf_loader: {e}")
 
+    # TEAM-AGENT-03: usage 查询与 Agent 共用同一持久化事实源；登记失败不改变模型链。
+    try:
+        from strands_backend.usage import register_methods as register_usage_methods
+
+        register_usage_methods(dispatcher)
+        logger.info("usage methods registered")
+    except Exception as e:
+        logger.exception("failed to register usage methods: %s", e)
+
     # T-P1-11: 单一 main Agent RPC 门面
     # 必须在 event_bus 之后注册（Agent 通过 event_bus 推送 mood/message 事件）
     agent_facade_module = None

@@ -7,8 +7,11 @@ single ``main`` Agent to callers.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from typing import Any, Callable
+import threading
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger("sidecar.agent_facade")
 
@@ -20,6 +23,8 @@ AGENT_REGISTRY: dict[str, str] = {"main": "StrandsAgentAdapter"}
 
 _global_backend: BackendInvokeCallable | None = None
 _global_strands_adapter: Any = None
+_configure_lock = threading.RLock()
+_latest_client_generation = 0
 
 
 def _require_known_agent(name: str) -> None:
@@ -93,9 +98,10 @@ def invoke_agent(name: str, state: dict[str, Any]) -> dict[str, Any]:
 
 def reset_for_test() -> None:
     """Reset facade state for isolated tests."""
-    global _global_backend, _global_strands_adapter
+    global _global_backend, _global_strands_adapter, _latest_client_generation
     _global_backend = None
     _global_strands_adapter = None
+    _latest_client_generation = 0
 
 
 def register_methods(dispatcher: Any) -> None:
@@ -179,24 +185,38 @@ def _model_is_configured() -> bool:
         return False
 
 
-def configure(
+def _configure_impl(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the model before publishing configuration and hot-reloading."""
     if not config:
-        return {"ok": True, "llm_call_set": _model_is_configured()}
+        adapter = _global_strands_adapter
+        return {
+            "ok": True,
+            "llm_call_set": _model_is_configured(),
+            "turn_snapshot": getattr(adapter, "_model_turn_snapshot", None),
+        }
 
     try:
-        from core.llm_config import LLMConfig, save_config, set_runtime_config
+        from core.llm_config import (
+            LLMConfig,
+            _get_config_path,
+            load_config,
+            save_config,
+            set_runtime_config,
+        )
         from strands_backend.model_adapter import create_strands_model
+        from strands_backend.model_params import resolve_model_params
 
         llm_config = LLMConfig(
             provider=config.get("provider", "openai"),
             api_key=config.get("api_key", ""),
             base_url=config.get("base_url", ""),
             model=config.get("model", "gpt-4o-mini"),
-            temperature=config.get("temperature", 0.7),
-            max_tokens=config.get("max_tokens", 2048),
+            temperature=config.get("temperature", 0.1),
+            max_tokens=config.get("max_tokens"),
+            thinking=config.get("thinking", "provider_default"),
+            reasoning_effort=config.get("reasoning_effort", "provider_default"),
         )
         if not llm_config.is_configured:
             return {
@@ -213,6 +233,21 @@ def configure(
                 "message": "Strands 后端未激活，请重启 sidecar 后重试",
             }
 
+        receipt = resolve_model_params(
+            provider=llm_config.provider,
+            model=llm_config.model,
+            base_url=llm_config.base_url,
+            temperature=llm_config.temperature,
+            max_tokens=llm_config.max_tokens,
+            thinking=llm_config.thinking,
+            reasoning_effort=llm_config.reasoning_effort,
+        )
+        current_snapshot = getattr(adapter, "_model_turn_snapshot", None)
+        current_generation = (
+            int(current_snapshot.get("configGeneration", 0))
+            if isinstance(current_snapshot, dict)
+            else 0
+        )
         new_model = create_strands_model(llm_config)
         if new_model is None:
             return {
@@ -220,16 +255,54 @@ def configure(
                 "llm_call_set": False,
                 "message": "Strands 模型创建失败，请检查 API Key、模型和端点",
             }
+        get_model_config = getattr(new_model, "get_config", None)
+        resolved_config = get_model_config() if callable(get_model_config) else {}
+        resolved_model = str(resolved_config.get("model_id") or llm_config.model)
+        next_generation = current_generation + 1
+        snapshot_id = hashlib.sha256(
+            f"{next_generation}|{receipt['parameter_fingerprint']}|{resolved_model}".encode()
+        ).hexdigest()[:24]
+        turn_snapshot = {
+            **receipt["turn_snapshot"],
+            "configGeneration": next_generation,
+            "configSnapshotId": snapshot_id,
+            "resolvedModel": resolved_model,
+        }
 
-        # 模型构造通过后才发布配置；保存失败不替换当前运行时。
+        # 模型构造通过后才发布配置；任何发布失败都恢复旧磁盘/模型/运行时。
         # key 仍只进进程内缓存（不落盘，#158-①）。
-        save_config(llm_config)
-        set_runtime_config(llm_config)
-        adapter.update_model(new_model)
+        config_path = _get_config_path()
+        previous_disk = config_path.read_bytes() if config_path.exists() else None
+        previous_config = load_config()
+        previous_model = getattr(adapter, "strands_model", None)
+        previous_snapshot = getattr(adapter, "_model_turn_snapshot", None)
+        try:
+            save_config(llm_config)
+            adapter.update_model(new_model, turn_snapshot=turn_snapshot)
+            set_runtime_config(llm_config)
+        except Exception:
+            try:
+                if previous_disk is None:
+                    if config_path.exists():
+                        config_path.unlink()
+                else:
+                    config_path.write_bytes(previous_disk)
+                adapter.update_model(previous_model, turn_snapshot=previous_snapshot)
+                set_runtime_config(previous_config)
+            except Exception as rollback_error:
+                logger.error("LLM 配置回滚失败: %s", rollback_error)
+            raise
         return {
             "ok": True,
             "llm_call_set": True,
             "message": f"LLM 配置已更新: {llm_config.provider}/{llm_config.model}",
+            "requested": receipt["requested"],
+            "effective": receipt["effective"],
+            "applied": receipt["applied"],
+            "sources": receipt["sources"],
+            "warnings": receipt["warnings"],
+            "capabilities": receipt["capabilities"],
+            "turn_snapshot": turn_snapshot,
         }
     except Exception as error:
         logger.exception("Strands model hot-reload failed: %s", error)
@@ -238,6 +311,35 @@ def configure(
             "llm_call_set": False,
             "message": f"LLM 配置异常: {error}",
         }
+
+
+def configure(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _latest_client_generation
+    with _configure_lock:
+        client_generation = config.get("client_generation") if config else None
+        if client_generation is not None:
+            if (
+                isinstance(client_generation, bool)
+                or not isinstance(client_generation, int)
+                or client_generation < 0
+            ):
+                return {
+                    "ok": False,
+                    "llm_call_set": False,
+                    "reason_code": "invalid_client_generation",
+                    "message": "client_generation 必须是非负整数",
+                }
+            if client_generation < _latest_client_generation:
+                return {
+                    "ok": False,
+                    "llm_call_set": False,
+                    "reason_code": "stale_config",
+                    "message": "模型配置已更新，已拒绝过期配置发布",
+                }
+        result = _configure_impl(config)
+        if result.get("ok") and client_generation is not None:
+            _latest_client_generation = client_generation
+        return result
 
 
 __all__ = [

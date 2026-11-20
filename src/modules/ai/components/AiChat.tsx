@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   ArrowRight01Icon,
   CodeIcon,
@@ -607,6 +608,7 @@ const RenderedPart = memo(function RenderedPart({
   streaming: boolean;
   turnEnded: boolean;
 }) {
+  const showReasoning = usePreferencesStore((state) => state.showReasoning);
   if (part.type === "text") {
     const text = (part as unknown as { text: string }).text;
     // Teach 模式的显式标记可在流式期间直接渲染；无标记的旧输出则等
@@ -630,6 +632,7 @@ const RenderedPart = memo(function RenderedPart({
   }
 
   if (part.type === "reasoning") {
+    if (!showReasoning) return null;
     const text = compactReasoningText(
       (part as unknown as { text: string }).text,
     );

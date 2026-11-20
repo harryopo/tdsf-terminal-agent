@@ -165,3 +165,59 @@ def test_success_constructs_before_publish_then_updates_real_adapter(
     assert disk_config["temperature"] == 0.4
     assert disk_config["max_tokens"] == 300
     assert disk_config["api_key"] == ""
+
+def test_success_returns_non_secret_receipt_and_binds_config_generation(seeded_config, monkeypatch):
+    from strands_backend import model_adapter
+
+    monkeypatch.setattr(model_adapter, "create_strands_model", lambda _config: object())
+    facade = seeded_config["facade"]
+
+    first = facade.configure(_new_payload())
+    second_payload = {**_new_payload(), "temperature": 0, "max_tokens": None}
+    second = facade.configure(second_payload)
+
+    assert first["requested"]["temperature"] == 0.4
+    assert first["effective"]["max_tokens"] == 300
+    assert first["turn_snapshot"]["configGeneration"] == 1
+    assert second["requested"]["temperature"] == 0
+    assert second["requested"]["max_tokens"] is None
+    assert second["turn_snapshot"]["configGeneration"] == 2
+    assert first["turn_snapshot"]["configGeneration"] == 1
+    assert seeded_config["adapter"]._model_turn_snapshot == second["turn_snapshot"]
+    assert "api_key" not in str(first)
+    assert first["capabilities"]["reasoning_parameter_style"] == "unknown"
+
+
+def test_update_failure_rolls_back_disk_model_and_runtime(seeded_config, monkeypatch):
+    from strands_backend import model_adapter
+
+    monkeypatch.setattr(model_adapter, "create_strands_model", lambda _config: object())
+    adapter = seeded_config["adapter"]
+    original_update = adapter.update_model
+    calls = []
+
+    def fail_then_allow(model, turn_snapshot=None):
+        calls.append((model, turn_snapshot))
+        if len(calls) == 1:
+            raise RuntimeError("fixture update failure")
+        return original_update(model, turn_snapshot=turn_snapshot)
+
+    monkeypatch.setattr(adapter, "update_model", fail_then_allow)
+    result = seeded_config["facade"].configure(_new_payload())
+
+    assert result["ok"] is False
+    assert len(calls) == 2
+    _assert_old_state(seeded_config)
+
+
+def test_invalid_generation_does_not_construct_or_publish(seeded_config, monkeypatch):
+    from strands_backend import model_adapter
+
+    create = MagicMock()
+    monkeypatch.setattr(model_adapter, "create_strands_model", create)
+    result = seeded_config["facade"].configure({**_new_payload(), "temperature": True})
+
+    assert result["ok"] is False
+    assert "temperature 必须是 0 到 2 的有限数值或 null" in result["message"]
+    create.assert_not_called()
+    _assert_old_state(seeded_config)

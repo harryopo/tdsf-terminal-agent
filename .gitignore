@@ -285,6 +285,10 @@ docs/**
 !docs/plans/remote-desktop/2026-11-17-v1.0-RDP-VNC架构与连续开发方案.md
 !docs/plans/remote-desktop/2026-11-18-v1.1-RDP原生闭环与VNC连续开发.md
 !docs/plans/agent-runtime/2026-11-18-v1.1-安全修复与离线闭环授权.md
+!docs/plans/agent-runtime/2026-11-20-v1.0-运维Agent确定性生成与模型用量PRD.md
+!docs/plans/agent-runtime/2026-11-20-v1.0-模型行为路由与Token统计技术方案.md
+!docs/plans/agent-runtime/2026-11-20-v1.0-模型行为与Token实施任务卡.md
+!docs/plans/agent-runtime/2026-11-20-v1.1-模型行为与Token连续实施合同.md
 !docs/plans/product/2026-11-20-v1.1-ROOT评审与连续开发授权.md
 !docs/plans/remote-desktop/README.md
 !docs/research/remote-desktop/

@@ -65,8 +65,10 @@ class LLMConfig:
         api_key: str = "",
         base_url: str = "",
         model: str = "gpt-4o-mini",
-        temperature: float = 0.7,
-        max_tokens: int = 8192,  # <=0 表示无上限（OpenAI/LiteLLM 不传该参数；Anthropic 兜底 8192）
+        temperature: float | None = 0.1,
+        max_tokens: int | None = None,
+        thinking: str = "provider_default",
+        reasoning_effort: str = "provider_default",
     ) -> None:
         self.provider = provider      # "openai" / "anthropic"
         self.api_key = api_key
@@ -74,6 +76,8 @@ class LLMConfig:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.thinking = thinking
+        self.reasoning_effort = reasoning_effort
 
     @property
     def is_configured(self) -> bool:
@@ -88,6 +92,8 @@ class LLMConfig:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "thinking": self.thinking,
+            "reasoning_effort": self.reasoning_effort,
         }
 
 
@@ -147,8 +153,10 @@ def load_config() -> LLMConfig:
                 api_key="",
                 base_url=data.get("base_url", ""),
                 model=data.get("model", "gpt-4o-mini"),
-                temperature=data.get("temperature", 0.7),
-                max_tokens=data.get("max_tokens", 8192),
+                temperature=data.get("temperature", 0.1),
+                max_tokens=data.get("max_tokens"),
+                thinking=data.get("thinking", "provider_default"),
+                reasoning_effort=data.get("reasoning_effort", "provider_default"),
             )
         except (json.JSONDecodeError, KeyError, OSError) as e:
             logger.warning(f"Failed to load LLM config from {config_path}: {e}")
@@ -298,9 +306,10 @@ def _make_openai_call(config: LLMConfig) -> LLMCallFunction:
         request_kwargs: dict[str, Any] = {
             "model": config.model,
             "messages": normalized_messages,
-            "temperature": config.temperature,
         }
-        if config.max_tokens > 0:
+        if config.temperature is not None:
+            request_kwargs["temperature"] = config.temperature
+        if config.max_tokens is not None and config.max_tokens > 0:
             request_kwargs["max_tokens"] = config.max_tokens
 
         response = client.chat.completions.create(**request_kwargs)
@@ -362,9 +371,14 @@ def _make_anthropic_call(config: LLMConfig) -> LLMCallFunction:
         request_kwargs: dict[str, Any] = {
             "model": config.model,
             "messages": normalized_messages,
-            "temperature": config.temperature,
-            "max_tokens": config.max_tokens if config.max_tokens > 0 else 8192,
+            "max_tokens": (
+                config.max_tokens
+                if config.max_tokens is not None and config.max_tokens > 0
+                else 8192
+            ),
         }
+        if config.temperature is not None:
+            request_kwargs["temperature"] = config.temperature
         if system_parts:
             request_kwargs["system"] = "\n\n".join(system_parts)
 

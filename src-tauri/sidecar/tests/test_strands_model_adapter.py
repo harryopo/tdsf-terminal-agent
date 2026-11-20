@@ -73,12 +73,13 @@ class _MockOpenAIModel(_MockModelBase):
 class _MockAnthropicModel(_MockModelBase):
     """Mock AnthropicModel"""
 
-    def __init__(self, *, client_args: dict, model_id: str, params: dict) -> None:
+    def __init__(self, *, client_args: dict, model_id: str, max_tokens: int, params: dict) -> None:
         super().__init__(
-            client_args=client_args, model_id=model_id, params=params
+            client_args=client_args, model_id=model_id, max_tokens=max_tokens, params=params
         )
         self.client_args = dict(client_args)
         self.model_id = model_id
+        self.max_tokens = max_tokens
         self.params = dict(params)
 
 
@@ -312,7 +313,8 @@ class TestCreateStrandsModelAnthropic:
         assert result.client_args["max_retries"] == 0
         # 验证 params
         assert result.params["temperature"] == 0.3
-        assert result.params["max_tokens"] == 4096
+        assert result.max_tokens == 4096
+        assert "max_tokens" not in result.params
 
     def test_anthropic_model_ignores_base_url(
         self, injected_model_adapter
@@ -741,7 +743,8 @@ class TestEndToEndParameterMapping:
         assert "base_url" not in result.client_args
         assert result.model_id == "claude-3-5-haiku-20241022"
         assert result.params["temperature"] == 0.2
-        assert result.params["max_tokens"] == 4096
+        assert result.max_tokens == 4096
+        assert "max_tokens" not in result.params
 
     def test_litellm_full_config_mapping(self, injected_model_adapter):
         """LiteLLM provider 全字段映射（base_url → api_base）"""

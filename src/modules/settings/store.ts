@@ -12,6 +12,11 @@ import {
   OPENAI_COMPATIBLE_DEFAULT_BASE_URL,
 } from "@/modules/ai/config";
 import type { KeyBinding, ShortcutId } from "@/modules/shortcuts/shortcuts";
+import {
+  DEFAULT_MODEL_GENERATION,
+  readModelGeneration,
+  type ModelGenerationPreferences,
+} from "@/modules/ai/lib/modelGeneration";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { coerceAgentCommandColor, DEFAULT_AGENT_COMMAND_COLOR } from "./agentCommandColor";
@@ -118,6 +123,9 @@ export type Preferences = {
   backgroundOpacity: number;
   backgroundBlur: number;
   defaultModelId: ModelId;
+  /** 模型生成参数；showReasoning 独立为纯展示偏好，不进入模型 RPC。 */
+  modelGeneration: ModelGenerationPreferences;
+  showReasoning: boolean;
   editorTheme: EditorThemePref;
   editorFontSize: number;
   customInstructions: string;
@@ -235,6 +243,8 @@ const KEY_BG_IMAGE_ID = "backgroundImageId";
 const KEY_BG_OPACITY = "backgroundOpacity";
 const KEY_BG_BLUR = "backgroundBlur";
 const KEY_DEFAULT_MODEL = "defaultModelId";
+const KEY_MODEL_GENERATION = "modelGeneration";
+const KEY_SHOW_REASONING = "showReasoning";
 const KEY_EDITOR_THEME = "editorTheme";
 const KEY_EDITOR_FONT_SIZE = "editorFontSize";
 const KEY_CUSTOM_INSTRUCTIONS = "customInstructions";
@@ -331,6 +341,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   backgroundOpacity: 0.5,
   backgroundBlur: 0,
   defaultModelId: DEFAULT_MODEL_ID,
+  modelGeneration: { ...DEFAULT_MODEL_GENERATION },
+  showReasoning: true,
   editorTheme: EDITOR_THEME_AUTO,
   editorFontSize: EDITOR_FONT_SIZE_DEFAULT,
   customInstructions: "",
@@ -426,6 +438,13 @@ export async function loadPreferences(): Promise<Preferences> {
   const entries = await store.entries();
   const map = new Map<string, unknown>(entries);
   const get = <T>(k: string): T | undefined => map.get(k) as T | undefined;
+  const modelGeneration = (() => {
+    try {
+      return readModelGeneration(get(KEY_MODEL_GENERATION));
+    } catch {
+      return { ...DEFAULT_MODEL_GENERATION };
+    }
+  })();
   return {
     theme: get<ThemePref>(KEY_THEME) ?? DEFAULT_PREFERENCES.theme,
     themeId: get<string>(KEY_THEME_ID) ?? DEFAULT_PREFERENCES.themeId,
@@ -446,6 +465,9 @@ export async function loadPreferences(): Promise<Preferences> {
         ? stored
         : DEFAULT_PREFERENCES.defaultModelId;
     })(),
+    modelGeneration,
+    showReasoning:
+      get<boolean>(KEY_SHOW_REASONING) ?? DEFAULT_PREFERENCES.showReasoning,
     editorTheme: ((): EditorThemePref => {
       const stored = get<string>(KEY_EDITOR_THEME);
       if (stored === EDITOR_THEME_AUTO || isEditorThemeId(stored))
@@ -683,6 +705,16 @@ export async function setBackgroundBlur(value: number): Promise<void> {
 
 export async function setDefaultModel(value: ModelId): Promise<void> {
   await writePref(KEY_DEFAULT_MODEL, value);
+}
+
+export async function setModelGeneration(
+  value: ModelGenerationPreferences,
+): Promise<void> {
+  await writePref(KEY_MODEL_GENERATION, readModelGeneration(value));
+}
+
+export async function setShowReasoning(value: boolean): Promise<void> {
+  await writePref(KEY_SHOW_REASONING, value);
 }
 
 export async function setEditorTheme(value: EditorThemePref): Promise<void> {

@@ -61,6 +61,7 @@ import { AiChatView } from "./AiChat";
 import { PlanDiffReview } from "./PlanDiffReview";
 import { TodoStrip } from "./TodoStrip";
 import { ConfidencePanel } from "./ConfidencePanel";
+import { UsagePanel } from "./UsagePanel";
 
 const SUGGESTIONS = [
   {
@@ -221,6 +222,7 @@ function Body({
 
       <PlanModeStrip />
       <TodoStrip sessionId={sessionId} />
+      <UsagePanel sessionId={sessionId} compact />
 
       <div className="flex min-h-0 flex-1 flex-col">
         {gated ? (

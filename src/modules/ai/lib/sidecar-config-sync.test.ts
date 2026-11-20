@@ -239,6 +239,7 @@ describe("syncSidecarLlmConfig", () => {
           api_key: "sk-ds-key",
           base_url: "https://api.deepseek.com",
           model: "deepseek-v4-flash",
+          client_generation: expect.any(Number),
         },
       },
     });
@@ -260,6 +261,7 @@ describe("syncSidecarLlmConfig", () => {
           api_key: "sk-ant-key",
           base_url: "",
           model: "claude-sonnet-5",
+          client_generation: expect.any(Number),
         },
       },
     });
@@ -317,6 +319,7 @@ describe("syncSidecarLlmConfig", () => {
           api_key: "sk-ep",
           base_url: "https://api.example.com/v1",
           model: "llama-3.3-70b",
+          client_generation: expect.any(Number),
         },
       },
     });
@@ -343,6 +346,37 @@ describe("syncSidecarLlmConfig", () => {
       ok: false,
       detail: "sidecar not running",
     });
+  });
+
+  it("生成参数进入 RPC，showReasoning 仅留前端且不进入配置", async () => {
+    prefsState.value = {
+      ...prefsState.value,
+      modelGeneration: {
+        temperature: 0,
+        maxTokens: null,
+        thinking: "on",
+        reasoningEffort: "high",
+      },
+      showReasoning: false,
+    } as unknown as typeof prefsState.value;
+    getKeyMock.mockResolvedValue("sk-ds-key");
+    const receipt = { turn_snapshot: { configGeneration: 7 } };
+    invokeMock.mockResolvedValue({ ok: true, ...receipt });
+
+    const result = await syncSidecarLlmConfig();
+
+    expect(result.ok).toBe(true);
+    expect(result.receipt).toEqual(receipt);
+    const request = invokeMock.mock.calls[0][1] as {
+      params: { config: Record<string, unknown> };
+    };
+    expect(request.params.config).toMatchObject({
+      temperature: 0,
+      max_tokens: null,
+      thinking: "on",
+      reasoning_effort: "high",
+    });
+    expect(request.params.config).not.toHaveProperty("showReasoning");
   });
 });
 
