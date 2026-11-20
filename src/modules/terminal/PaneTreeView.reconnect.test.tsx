@@ -1,4 +1,4 @@
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type { SshSession } from "@/lib/ssh-bridge";
@@ -241,7 +241,7 @@ describe("PaneTreeView SSH leaf residency during reconnect", () => {
   });
 
   it.each(["failed", "closed"] as const)(
-    "clears the leaf binding and returns to local on %s",
+    "keeps the remote intent and shows an offline leaf on %s",
     async (state) => {
       installSessions(makeSession(SESSION_A, 43, "connected", makeHandle(43)));
       const view = render(pane(tree(LEAF_A)));
@@ -250,7 +250,14 @@ describe("PaneTreeView SSH leaf residency during reconnect", () => {
 
       transition(SESSION_A, state);
 
-      await waitFor(() => expect(mockTerminal.localLeaves.has(LEAF_A)).toBe(true));
+      await waitFor(() =>
+        expect(screen.getByTestId("pane-ssh-offline")).toBeTruthy(),
+      );
+      // S0：最终断开不得隐式创建本地 PTY（离线占位，不挂 TerminalPane）。
+      expect(mockTerminal.localLeaves.has(LEAF_A)).toBe(false);
+      expect(screen.getByTestId("pane-ssh-offline").dataset.offlineLeaf).toBe(
+        String(LEAF_A),
+      );
       expect(getLeafSshSession(LEAF_A)).toBeNull();
       expect(close).toHaveBeenCalledOnce();
       view.unmount();
@@ -306,7 +313,7 @@ describe("PaneTreeView SSH leaf residency during reconnect", () => {
     },
   );
 
-  it("returns to local and clears the binding when the session disappears", async () => {
+  it("keeps the remote intent when the session disappears and recovers on reconnect", async () => {
     installSessions(makeSession(SESSION_A, 47, "connected", makeHandle(47)));
     const view = render(pane(tree(LEAF_A)));
     const transport = await waitForTransport(LEAF_A);
@@ -314,9 +321,67 @@ describe("PaneTreeView SSH leaf residency during reconnect", () => {
 
     act(() => installSessions());
 
-    await waitFor(() => expect(mockTerminal.localLeaves.has(LEAF_A)).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByTestId("pane-ssh-offline")).toBeTruthy(),
+    );
+    expect(mockTerminal.localLeaves.has(LEAF_A)).toBe(false);
     expect(getLeafSshSession(LEAF_A)).toBeNull();
     expect(close).toHaveBeenCalledOnce();
+
+    // 旧会话迟到事件不能把离线叶子复活成 SSH。
+    transition(SESSION_A, "connected");
+    expect(screen.getByTestId("pane-ssh-offline")).toBeTruthy();
+    expect(mockTerminal.transports.has(LEAF_A)).toBe(false);
+
+    // 同一 leaf 绑定回到可用会话时回到远端 shell（重连成功回原标签的渲染侧）。
+    act(() =>
+      installSessions(makeSession(SESSION_A, 53, "connected", makeHandle(53))),
+    );
+    await waitForTransport(LEAF_A);
+    expect(screen.queryByTestId("pane-ssh-offline")).toBeNull();
+    expect(mockTerminal.localLeaves.has(LEAF_A)).toBe(false);
+    view.unmount();
+  });
+
+  it("keeps an explicit local leaf and another SSH leaf when one session is lost", async () => {
+    const handleB = makeHandle(52);
+    installSessions(
+      makeSession(SESSION_A, 51, "connected", makeHandle(51)),
+      makeSession(SESSION_B, 52, "connected", handleB),
+    );
+    const mixed: PaneNode = {
+      kind: "split",
+      id: 74000,
+      dir: "row",
+      children: [
+        { kind: "leaf", id: LEAF_A },
+        { kind: "leaf", id: LEAF_B, sshSessionId: null },
+        { kind: "leaf", id: 73103, sshSessionId: SESSION_B },
+      ],
+    };
+    const view = render(pane(mixed, SESSION_A));
+    const transportA = await waitForTransport(LEAF_A);
+    const closeA = vi.spyOn(transportA, "close");
+    const transportB = await waitForTransport(73103);
+
+    act(() => installSessions(makeSession(SESSION_B, 52, "connected", handleB)));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("pane-ssh-offline")).toBeTruthy(),
+    );
+    // 断开的绑定叶子：离线占位，不开本地 PTY。
+    expect(screen.getByTestId("pane-ssh-offline").dataset.offlineLeaf).toBe(
+      String(LEAF_A),
+    );
+    expect(mockTerminal.localLeaves.has(LEAF_A)).toBe(false);
+    expect(closeA).toHaveBeenCalledOnce();
+    // 显式本地叶子是正向控制：仍是本地。
+    expect(mockTerminal.localLeaves.has(LEAF_B)).toBe(true);
+    // 同 tab 另一条 SSH 叶子不受牵连。
+    expect(mockTerminal.transports.get(73103)).toBe(transportB);
+    expect(getLeafSshSession(73103)).toBe(52);
+    transportB.write("echo still-on-b\n");
+    expect(handleB.write).toHaveBeenCalledWith("echo still-on-b\n");
     view.unmount();
   });
 

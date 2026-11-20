@@ -856,7 +856,14 @@ export const useChatStore = create<StoreState>((set, get) => ({
 
   hydrateSessions: async () => {
     if (get().sessionsHydrated) return;
-    const { sessions } = await loadAll();
+    const loaded = await loadAll().catch(() => null);
+    if (get().sessionsHydrated) return;
+    if (!loaded) {
+      toast.error("无法读取历史会话，已创建临时新会话", {
+        description: "新会话仅保留到应用退出。重启后可重试读取历史。",
+      });
+    }
+    const sessions = loaded?.sessions ?? [];
 
     // Reuse the most recent untitled "新会话" session if one exists from
     // the previous run — no point stacking empty placeholder sessions every
@@ -880,9 +887,9 @@ export const useChatStore = create<StoreState>((set, get) => ({
         scope: deriveSessionScope(),
       };
       nextSessions = [fresh, ...sessions];
-      void saveSessionsList(nextSessions);
+      if (loaded) void saveSessionsList(nextSessions);
     }
-    void saveActiveId(freshId);
+    if (loaded) void saveActiveId(freshId);
 
     // v3.1: 恢复激活会话的信任模式/教学开关（重启后恢复上次选择）
     restoreModeFromMeta(reusable ?? undefined);

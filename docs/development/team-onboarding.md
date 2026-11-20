@@ -1,6 +1,6 @@
 # 新组员入门与阅读路线
 
-更新：2026-11-17。面向 EchoSinklair 和 Yan-0914。采用“各自 Fork → 任务分支 → 向主库提 PR”。[草稿 PR #49](https://github.com/harryopo/tdsf-terminal-agent/pull/49)尚未合入main，但当前完整工作包已下发；产品起点210c787，后续文档按审查分支最新HEAD读取，不再等待重复公布。Yan接续PR52/54，Echo保留本人首轮成果再接续。
+更新：2026-11-20。面向 EchoSinklair 和 Yan-0914。采用“各自 Fork → 任务分支 → 向主库提 PR”。[草稿 PR #49](https://github.com/harryopo/tdsf-terminal-agent/pull/49)尚未合入main，但当前完整工作包已下发；产品起点210c787，后续文档按审查分支最新HEAD读取，不再等待重复公布。Yan当前沿PR58推进RDP/VNC完整远程桌面，Echo当前沿PR56推进Agent安全修复与离线闭环；旧PR52/54和首轮审查成果保留，不再作为当前主线描述。
 
 ## 先理解项目
 
@@ -35,15 +35,15 @@ TDSF Terminal Agent 是围绕本地、WSL 和 SSH 终端的桌面工作台，组
 
 旧 Repo Wiki、Qoder Wiki、火山杯与其它比赛介绍已保留在队长本机的历史资料区，未随公开源码整体分发。它们有旧能力描述、路径和部分私人资料；需要某一专题时由队长选出并核验/脱敏后提供。现行 Wiki 的阅读作用由 `docs/architecture` 承担，不要求新成员重新恢复旧目录。
 
-## 11-17 完整包与材料入口
+## 当前工作包与材料入口
 
-当前按[三人分工与材料共享](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)和[工作包入口](../../competitions/2026-huawei-agent/04-AI协作与交接/README.md)接续。Yan已有PR52/54，Echo先保留既有成果；不再把无新PR写成未开工。产品原始基线210c787，治理文档后续更新；任务Issue给出实际起点和目标分支。
+Yan 的运维审查与 Skill 修复已进入团队分支，下一步继续原远程桌面 PR。Echo 已提交 Agent 审查、回归和材料，继续原安全工作包。产品原始基线为 `210c787`，接手时以任务 Issue 的 SHA 和目标分支为准。参见 [三人分工与材料共享](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)及 [工作包入口](../../competitions/2026-huawei-agent/04-AI协作与交接/README.md)。
 
 ## 收到任务后怎样开工
 
 1. 按当前Issue/任务卡的可获取SHA接续，先核分支与未提交成果；记录起始基线、最近同步和当前HEAD，不以截图或队长本机路径代替源码。
 2. Fork 主库，在自己的 Fork 建任务分支；无需为这一模式取得主库写权限。按固定流程每日开工、PR 前和 main 更新后同步。
-3. 当前交付以[完整包表格](../../competitions/2026-huawei-agent/04-AI协作与交接/README.md)为准：Echo审查/离线回放，Yan技能结果整条链路。小提交更新同一Draft PR，整包完成再提审；不越范围重构、整理私人数据库或接入模型。
+3. 当前交付以[完整包表格](../../competitions/2026-huawei-agent/04-AI协作与交接/README.md)为准：Echo沿PR56完成Agent安全D1/D6/D7窄修复、回归与离线闭环，Yan沿PR58完成RDP/VNC可信会话、原生交互与稳定性。小提交更新同一Draft PR，整包完成再提审；不越范围重构、整理私人数据库或接入模型。
 4. 发现可利用安全问题，完整细节按安全政策私下报告；公开 PR 只保留合适的脱敏摘要。自己的 Fork 同样不能上传凭据和私人日志。
 5. 两人提交各自 PR 后保持待审，由队长与 ROOT 检查对应提交；成员不自行合并或开启自动合并。
 

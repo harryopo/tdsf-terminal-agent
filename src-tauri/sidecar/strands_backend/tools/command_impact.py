@@ -541,6 +541,219 @@ def _extract_objects(category: str, base: str, toks: list[str]) -> list[str]:
 
 
 # ============================================================================
+# 敏感目标与特殊构造（T1 安全修复：目标对象 + 效果等价 + 特殊类别）
+# ============================================================================
+# 修复前的根因：定级主要看"命令动词"，不看"目标对象的敏感性"与"实际效果"。
+# 于是 `rm /etc/passwd` 是 L4，而同样让它消失的 `mv /etc/passwd /tmp/p` 只有 L2，
+# auto 档（L0-L2 免审）下可不经审批完成等价破坏。这里补齐三个维度：
+#   1. 目标对象：系统关键路径 / 账户认证 / 持久化点，写改导出即 ≥L3；
+#   2. 效果等价：mv/cp/install/ln/chmod/chown/重定向同时看源与目的，取最高；
+#   3. 特殊类别：审计规避、交互式、后台常驻单独打标，供 assess_command 强制审批。
+# 归一化是纯词法转换：不 expanduser、不读当前用户目录、不访问文件系统。
+
+_HOME_PREFIX = "<HOME>"
+
+_SENSITIVE_SYSTEM_EXACT = {"/etc/passwd", "/etc/shadow", "/etc/sudoers"}
+_SENSITIVE_SYSTEM_PREFIXES = ("/etc/ssh/", "/etc/sudoers.d/", "/etc/cron", "/etc/systemd/")
+_PERSISTENT_HOME_FILES = {".bashrc", ".profile"}
+_PERSISTENT_HOME_PREFIXES = (".ssh/", ".config/autostart/")
+
+_ACCOUNT_COMMANDS = {"useradd", "userdel", "usermod", "passwd", "chpasswd", "visudo"}
+_INTERACTIVE_COMMANDS = {"vi", "vim", "nano", "passwd", "top", "less"}
+_BACKGROUND_COMMANDS = {"nohup", "setsid", "disown"}
+# 这些命令会对操作数产生写/改/移动/链接/导出效果，需要同时检查源与目的路径。
+_WRITE_EFFECT_BASES = {
+    "mv", "cp", "install", "ln", "chmod", "chown", "chgrp", "setfacl",
+    "rm", "rmdir", "shred", "unlink", "tee", "dd", "mkdir", "touch",
+    "sed", "ed", "ex", "vi", "vim", "nano",
+}
+
+
+def _normalize_target_path(tok: str) -> str:
+    """把 home 等价写法归一到 `<HOME>/` 逻辑前缀；非路径 token 原样返回。
+
+    只覆盖需求批准的等价类：`~/`、`$HOME/`、相对 `.bashrc`/`.profile`、
+    `/home/<user>/`、`/root/`、引号包裹与重复斜杠。不做任意变量展开。
+    """
+    if not tok:
+        return ""
+    p = _strip_quotes(tok.strip())
+    if not p or p.startswith("-"):
+        return ""
+    # Linux等价分隔符和"."必须先清理，再识别home/敏感目标。
+    # 不折叠".."：符号链接使其不能仅靠词法确定真实目标。
+    p = "/".join(part for part in re.sub(r"/{2,}", "/", p).split("/") if part != ".")
+    if p in (".bashrc", ".profile"):
+        p = f"{_HOME_PREFIX}/{p}"
+    elif p in ("./.bashrc", "./.profile"):
+        p = f"{_HOME_PREFIX}/{p[2:]}"
+    elif p == "~":
+        p = _HOME_PREFIX
+    elif p.startswith("~/"):
+        p = f"{_HOME_PREFIX}/{p[2:]}"
+    elif p.startswith("$HOME/"):
+        p = f"{_HOME_PREFIX}/{p[len('$HOME/'):]}"
+    elif p.startswith("/root/"):
+        p = f"{_HOME_PREFIX}/{p[len('/root/'):]}"
+    elif p.startswith("/home/"):
+        parts = p.split("/", 3)
+        p = f"{_HOME_PREFIX}/{parts[3]}" if len(parts) >= 4 else _HOME_PREFIX
+    return re.sub(r"/{2,}", "/", p)
+
+
+def _is_sensitive_target(path: str) -> bool:
+    if not path:
+        return False
+    if path in _SENSITIVE_SYSTEM_EXACT:
+        return True
+    if any(path.startswith(pref) for pref in _SENSITIVE_SYSTEM_PREFIXES):
+        return True
+    if path.startswith(_HOME_PREFIX + "/"):
+        rel = path[len(_HOME_PREFIX) + 1:]
+        if rel in _PERSISTENT_HOME_FILES:
+            return True
+        if any(rel.startswith(pref) for pref in _PERSISTENT_HOME_PREFIXES):
+            return True
+    return False
+
+
+def _segment_special_effects(seg: str, base: str, toks: list[str]) -> tuple[int, set[str]]:
+    """返回 (最低风险, 特殊标记)。只读查看普通文件不应在这里被提级。"""
+    flags: set[str] = set()
+    min_risk = 0
+    raw = [_strip_quotes(t) for t in seg.split()]
+    args = toks[1:]
+    has_help = any(a in ("--help", "-h", "--version") for a in args)
+
+    if base in _ACCOUNT_COMMANDS and not has_help:
+        # 账户与认证变更：动词本身即敏感，与目标路径无关。
+        if not (base == "passwd" and any(a in ("-S", "--status") for a in args)):
+            min_risk = max(min_risk, 3)
+
+    if base in _INTERACTIVE_COMMANDS and not has_help:
+        # top 的批处理模式不是交互式；短选项可能合并书写（`-bn1` 含 `-b`）。
+        batch_top = base == "top" and any(
+            a.startswith("-") and not a.startswith("--") and "b" in a[1:] for a in args
+        )
+        if not batch_top:
+            if not (base == "passwd" and any(a in ("-S", "--status") for a in args)):
+                flags.add("interactive")
+
+    if base == "history":
+        for a in args:
+            if a in ("-c", "-d", "-w") or (
+                a.startswith("-") and not a.startswith("--") and any(ch in a[1:] for ch in "cdw")
+            ):
+                flags.add("audit_evasion")
+                min_risk = max(min_risk, 3)
+                break
+    if base == "unset" and any(a == "HISTFILE" for a in args):
+        flags.add("audit_evasion")
+        min_risk = max(min_risk, 3)
+    try:
+        assignment_tokens = shlex.split(seg)
+    except ValueError:
+        assignment_tokens = raw
+    assignments: list[str] = []
+    if assignment_tokens and assignment_tokens[0] == "export":
+        assignments = assignment_tokens[1:]
+    else:
+        for token in assignment_tokens:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+                break
+            assignments.append(token)
+    if "HISTSIZE=0" in assignments:
+        flags.add("audit_evasion")
+        min_risk = max(min_risk, 3)
+
+    if base in _BACKGROUND_COMMANDS or (
+        raw and _base_name(raw[0]).lower() in _BACKGROUND_COMMANDS
+    ):
+        flags.add("background")
+        min_risk = max(min_risk, 2)
+
+    redirect_targets = re.findall(r">>?\s*(?!/dev/null\b)([^\s;|&]+)", seg)
+    # 保留shell词边界及词内引号拼接，不用空白切分后的残片比较目标路径。
+    path_operands = [
+        t for t in _normalize_tokens(assignment_tokens)[1:] if not t.startswith("-")
+    ]
+    if base in _WRITE_EFFECT_BASES or redirect_targets:
+        for tok in [*path_operands, *redirect_targets]:
+            if _is_sensitive_target(_normalize_target_path(tok)):
+                min_risk = max(min_risk, 3)
+                break
+    return min_risk, flags
+
+
+def _split_with_background(cmd: str) -> list[tuple[str, bool]]:
+    """与 ``split_compound`` 同口径拆分，同时保留"段尾后台 ``&``"信息。
+
+    ``split_compound`` 把单个 ``&`` 当分隔符丢弃，导致 `sleep 999 &` 的后台语义
+    在定级时完全消失（V2 的成因之一）。这里单独保留，且不改变原函数签名，
+    避免影响 trust_store 等既有调用方。``&&``、``2>&1``、``&>`` 都不算后台。
+    """
+    segments: list[tuple[str, bool]] = []
+    buf: list[str] = []
+    background = False
+    i = 0
+    n = len(cmd)
+    quote: str | None = None
+
+    def flush() -> None:
+        nonlocal buf, background
+        text = "".join(buf).strip()
+        if text:
+            segments.append((text, background))
+        buf = []
+        background = False
+
+    while i < n:
+        ch = cmd[i]
+        if quote is not None:
+            buf.append(ch)
+            if quote == '"' and ch == "\\" and i + 1 < n:
+                buf.append(cmd[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            buf.append(ch)
+            buf.append(cmd[i + 1])
+            i += 2
+            continue
+        next_ch = cmd[i + 1 : i + 2]
+        if (ch in "<>" and next_ch == "&") or (ch == "&" and next_ch == ">"):
+            buf.extend((ch, next_ch))
+            i += 2
+            continue
+        if ch == "&" and next_ch != "&":
+            background = True
+            flush()
+            i += 1
+            continue
+        if ch in ";\n" or (ch == "&" and next_ch == "&"):
+            flush()
+            i += 2 if ch == "&" else 1
+            continue
+        if ch == "|":
+            flush()
+            i += 2 if next_ch == "|" else 1
+            continue
+        buf.append(ch)
+        i += 1
+    flush()
+    return segments
+
+
+# ============================================================================
 # 单段分类
 # ============================================================================
 
@@ -651,13 +864,19 @@ def classify_segment(seg: str) -> dict:
             category = CATEGORY_CREDENTIAL
             objects = [credential_hit]
         risk_l = max(risk_l, CATEGORY_RISK[CATEGORY_CREDENTIAL])
-    return {
+    special_risk, special_flags = _segment_special_effects(seg, base, toks)
+    risk_l = max(risk_l, special_risk)
+    result = {
         "command": seg,
         "category": category,
         "category_label": CATEGORY_LABELS.get(category, CATEGORY_LABELS[CATEGORY_UNKNOWN]),
         "objects": objects,
         "risk_l": risk_l,
     }
+    # 特殊标记仅非空时写入，保持既有返回形状（不破坏段结构断言）。
+    if special_flags:
+        result["flags"] = sorted(special_flags)
+    return result
 
 
 def _readonly_veto_hit(base: str, seg: str) -> bool:
@@ -750,14 +969,18 @@ def analyze(cmd: str) -> dict:
             denied: bool（denylist 硬底线命中 → 执行链直接 command_blocked）
             dangerous_construct: bool（危险构造 → 永不自动放行，供 Task 5 白名单）
     """
-    segments_raw = split_compound(cmd or "")
+    segments_raw = _split_with_background(cmd or "")
     segments: list[dict] = []
     max_risk = 0
     denied = False
     dangerous = False
 
-    for seg in segments_raw:
+    for seg, is_background in segments_raw:
         info = classify_segment(seg)
+        if is_background:
+            # 段尾真实后台 `&`：让进程脱离前台生命周期，至少 L2 并强制审批。
+            info["risk_l"] = max(info["risk_l"], 2)
+            info["flags"] = sorted({*info.get("flags", []), "background"})
         hit = match_denylist(seg)
         if hit:
             rule, reason = hit

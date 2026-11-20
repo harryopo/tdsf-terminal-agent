@@ -31,7 +31,10 @@ export function outputHighlightSpans(text: string): OutputSpan[] {
     return spans;
   }
   const trimmed = text.trimStart();
-  const jsonStart = /[{[](?:\s|"|\d|[{[]|\])/.exec(text)?.index;
+  // 首值可能是字符串、数字、负数字面量、true/false/null，或嵌套/空容器；
+  // 旧写法只看 "[{" 后一个字符是否 空白/引号/数字/{[/]，于是 "[-1,…]"、
+  // "[true,…]"、"[null]" 这类紧凑数组整行漏色（2026-10-30 修）。
+  const jsonStart = /[{[]\s*(?:"|-?\d|true\b|false\b|null\b|[{[]|[}\]])/.exec(text)?.index;
   const offset = jsonStart ?? 0;
   const parser = /^(?:const|let|var|function|async function|import .* from|export (?:const|function))\b/.test(trimmed) ? javascriptLanguage.parser
     : /^(?:def|class|from \w+ import|import \w+)\b|^[A-Za-z_]\w*\s+=\s+/.test(trimmed) ? pythonLanguage.parser
