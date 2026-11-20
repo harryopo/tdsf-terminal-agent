@@ -285,7 +285,7 @@ class TestCancelledApprovalBranch:
         ), patch("strands_backend.tools.complete_approval_execution"):
             result = execute_via_ssh(ctx, "rm -rf /tmp/old")
 
-        assert result["status"] == "rejected"
+        assert result["status"] == "cancelled"
         message = result["message"]
         assert "停止了本次任务" in message
         # 关键区别：说"超时"模型会以为再等一次就能跑，说"停止"它才会收尾

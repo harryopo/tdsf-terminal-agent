@@ -16,6 +16,7 @@ const base = {
   onWorkspaceChange: () => {},
   hasComposer: false,
   privateActive: false,
+  getUnsavedEditors: () => 0,
 };
 
 /** StatusBar 内的 Private / RemoteOs 徽标用了 Tooltip，必须在 TooltipProvider 下渲染 */

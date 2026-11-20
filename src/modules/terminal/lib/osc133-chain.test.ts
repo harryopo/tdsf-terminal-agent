@@ -146,10 +146,17 @@ describe("OSC 633（块收集器的另一半）同一条规矩", () => {
   // 今天它**零引用**，所以不构成缺陷；但谁接上它就是第二个拦链者 —— 这条先红，
   // 逼改手当场处理返回语义，而不是事后照着 #151 再查一遍。
   it("command-tracker-addon.ts 仍是零引用的死文件（要接之前先解决 633 拦链）", () => {
+    // Both queries inspect one snapshot, captured inside this timed test.
+    const files = new Map<string, string>();
+    for (const rel of sourceFiles()) {
+      files.set(rel, readFileSync(join(process.cwd(), rel), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, ""));
+    }
     // 先证明这套扫描真的找得到东西 —— 否则"零命中"可能只是扫错了（负向必配正向）。
-    const live = referrers("@/modules/terminal/lib/osc-handlers");
+    const live = referrers(files, "@/modules/terminal/lib/osc-handlers");
     expect(live.length).toBeGreaterThan(0);
-    const importers = referrers("command-tracker-addon", {
+    const importers = referrers(files, "command-tracker-addon", {
       skip: "src/lib/command-tracker-addon.ts",
     });
     expect(importers).toEqual([]);
@@ -157,15 +164,10 @@ describe("OSC 633（块收集器的另一半）同一条规矩", () => {
 });
 
 /** src 下（剥掉注释后）提到某个词的文件清单；skip 指定要排除的文件自身 */
-function referrers(term: string, opts?: { skip?: string }): string[] {
-  return sourceFiles()
-    .filter((rel) => rel !== opts?.skip)
-    .filter((rel) => {
-      const code = readFileSync(join(process.cwd(), rel), "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/^\s*\/\/.*$/gm, "");
-      return code.includes(term);
-    });
+function referrers(files: ReadonlyMap<string, string>, term: string, opts?: { skip?: string }): string[] {
+  return [...files]
+    .filter(([rel, code]) => rel !== opts?.skip && code.includes(term))
+    .map(([rel]) => rel);
 }
 
 /** 递归列出 src 下的 .ts/.tsx（跳过测试与快照，判"有没有人用"够了） */

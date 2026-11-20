@@ -6,15 +6,10 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
-  ArrowDown01Icon,
-  ArrowUp01Icon,
   CheckmarkCircle02Icon,
-  Loading03Icon,
   Notification01Icon,
-  Notification03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { invoke } from "@tauri-apps/api/core";
 import { useMemo, useState } from "react";
 import { AgentIcon } from "../lib/agentIcon";
 import { displayAgent } from "../lib/format";
@@ -79,62 +74,6 @@ const NOTIF_LABEL: Record<AgentNotification["kind"], string> = {
   error: "失败",
 };
 
-const HOOK_AGENTS = ["claude", "codex", "gemini", "pi"] as const;
-
-function HookAgentRow({
-  id,
-  label,
-  ready,
-  installing,
-  onEnable,
-}: {
-  id: string;
-  label: string;
-  ready: boolean;
-  installing: boolean;
-  onEnable: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-2 py-1">
-      <AgentIcon
-        agent={id}
-        size={14}
-        className="shrink-0 text-muted-foreground"
-      />
-      <span className="flex-1 truncate text-[12px] text-muted-foreground">
-        {label}
-      </span>
-      {ready ? (
-        <span className="flex items-center gap-1 text-[11px] font-medium text-primary">
-          <HugeiconsIcon
-            icon={CheckmarkCircle02Icon}
-            size={13}
-            strokeWidth={1.75}
-          />
-          已启用
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={onEnable}
-          disabled={installing}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
-        >
-          {installing ? (
-            <HugeiconsIcon
-              icon={Loading03Icon}
-              size={12}
-              strokeWidth={1.75}
-              className="animate-spin"
-            />
-          ) : null}
-          {installing ? "启用中…" : "启用"}
-        </button>
-      )}
-    </div>
-  );
-}
-
 function NotificationRow({
   n,
   onClick,
@@ -178,9 +117,6 @@ function NotificationRow({
 
 export function NotificationBell({ onActivate, onActivateLocal }: Props) {
   const [open, setOpen] = useState(false);
-  const [hooks, setHooks] = useState<Record<string, boolean>>({});
-  const [installing, setInstalling] = useState<string | null>(null);
-  const [alertsOpen, setAlertsOpen] = useState(false);
   const sessions = useAgentStore((s) => s.sessions);
   const localAgent = useAgentStore((s) => s.localAgent);
   const notifications = useAgentStore((s) => s.notifications);
@@ -198,33 +134,11 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
     (n) => !n.read && n.kind !== "attention",
   ).length;
   const badge = waitingCount + unreadDone;
-  const enabledCount = HOOK_AGENTS.filter((id) => hooks[id] === true).length;
-
-  const refreshHooks = () => {
-    for (const id of HOOK_AGENTS) {
-      invoke<boolean>("agent_hooks_status", { agent: id })
-        .then((ok) => setHooks((h) => ({ ...h, [id]: ok })))
-        .catch(() => setHooks((h) => ({ ...h, [id]: false })));
-    }
-  };
 
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
       markAllRead();
-      refreshHooks();
-    }
-  };
-
-  const enableHooks = async (id: string) => {
-    setInstalling(id);
-    try {
-      await invoke("agent_enable_hooks", { agent: id });
-      setHooks((h) => ({ ...h, [id]: true }));
-    } catch {
-      setHooks((h) => ({ ...h, [id]: false }));
-    } finally {
-      setInstalling(null);
     }
   };
 
@@ -330,45 +244,6 @@ export function NotificationBell({ onActivate, onActivateLocal }: Props) {
           </div>
         )}
 
-        <div className="border-t border-border/60 p-1">
-          <button
-            type="button"
-            onClick={() => setAlertsOpen((v) => !v)}
-            aria-expanded={alertsOpen}
-            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground"
-          >
-            <HugeiconsIcon
-              icon={Notification03Icon}
-              size={11}
-              strokeWidth={2}
-            />
-            智能体提醒
-            <span className="ml-auto flex items-center gap-1.5 normal-case tracking-normal">
-              {enabledCount > 0 ? (
-                <span className="text-[10px] text-muted-foreground/60">
-                  {enabledCount} 项已开启
-                </span>
-              ) : null}
-              <HugeiconsIcon
-                icon={alertsOpen ? ArrowUp01Icon : ArrowDown01Icon}
-                size={13}
-                strokeWidth={2}
-              />
-            </span>
-          </button>
-          {alertsOpen
-            ? HOOK_AGENTS.map((id) => (
-                <HookAgentRow
-                  key={id}
-                  id={id}
-                  label={displayAgent(id)}
-                  ready={hooks[id] === true}
-                  installing={installing === id}
-                  onEnable={() => enableHooks(id)}
-                />
-              ))
-            : null}
-        </div>
       </PopoverContent>
     </Popover>
   );

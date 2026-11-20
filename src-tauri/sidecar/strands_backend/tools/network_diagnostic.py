@@ -215,7 +215,9 @@ def _parse_ping_summary(raw_output: str) -> dict[str, Any]:
     return summary
 
 
-def invoke_network_diagnostic_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def invoke_network_diagnostic_tool(
+    params: dict[str, Any], ctx: ToolContext, *, sdk_tool_context: Any = None,
+) -> dict[str, Any]:
     """网络诊断工具核心实现
 
     Args:
@@ -252,6 +254,7 @@ def invoke_network_diagnostic_tool(params: dict[str, Any], ctx: ToolContext) -> 
         timeout=30,
         tool_name="network_diagnose",
         readonly=True,
+        sdk_tool_context=sdk_tool_context,
     )
 
     if exec_result.get("status") != "success":
@@ -285,7 +288,7 @@ def invoke_network_diagnostic_tool(params: dict[str, Any], ctx: ToolContext) -> 
         summary["resolved"] = bool(raw_output.strip())
 
     return {
-        "status": "success",
+        **exec_result,
         "mode": mode,
         "target": target,
         "command": command,
@@ -311,13 +314,15 @@ def make_network_diagnostic_tool(ctx: ToolContext):
     Returns:
         Strands @tool 装饰后的工具函数
     """
-    @tool
+    @tool(context="sdk_tool_context")
     def network_diagnose(
         mode: str = "ping",
         target: str = "",
         count: int = _DEFAULT_COUNT,
         port: int = 0,
         ssh_session_id: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
         """在 SSH 会话上执行网络诊断命令。
 
@@ -348,6 +353,7 @@ def make_network_diagnostic_tool(ctx: ToolContext):
                 "ssh_session_id": ssh_session_id,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
 
     network_diagnose.__name__ = "network_diagnose"

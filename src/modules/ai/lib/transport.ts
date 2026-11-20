@@ -10,6 +10,7 @@ import { formatAiError } from "./errors";
 import type { CustomEndpointKeys, ProviderKeys } from "./keyring";
 import { native } from "./native";
 import { redactSensitive } from "./redact";
+import type { AgentModeSource } from "./live-mode-sync";
 import {
   runSidecarStream,
   sidecarStreamToUIMessageStream,
@@ -150,6 +151,7 @@ type Deps = {
   getCustomInstructions: () => string;
   getAgentPersona: () => { name: string; instructions: string } | null;
   getLive: () => LiveSnapshot;
+  modeSource?: AgentModeSource;
   getLmstudioBaseURL?: () => string | undefined;
   getLmstudioModelId?: () => string | undefined;
   getMlxBaseURL?: () => string | undefined;
@@ -287,6 +289,7 @@ export function createContextAwareTransport(deps: Deps) {
       // SidecarStreamOptions.live 必填，Python 侧 _build_tool_context / _build_prompt
       // 从 state.live 取 sshSessionId / cwd / activeFile 等
       const sidecarStream = runSidecarStream({
+        modeSource: deps.modeSource,
         agentId: tdsfAgent,
         sessionId: deps.toolContext.getSessionId() ?? undefined,
         messages: trimmedMessages,

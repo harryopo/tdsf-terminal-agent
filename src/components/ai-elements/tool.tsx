@@ -6,10 +6,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { useSshCommandOutputStore } from "@/modules/ai/store/sshCommandOutputStore";
+import { NeedsYouApprovalContext } from "@/modules/ai/lib/needsYouApprovalContext";
 import {
-  onSshCommandOutput,
-  type SshCommandOutputEvent,
-} from "@/lib/sidecar-bridge";
+  getToolResultStatus,
+  legacyToolResultStatus,
+  toolResultLabel,
+} from "@/modules/ai/lib/tool-result";
 import { cn } from "@/lib/utils";
 import {
   formatTeachingResultForAgent,
@@ -57,7 +60,7 @@ import { toast } from "sonner";
 import { useTerminalCardTarget } from "@/modules/ai/lib/useTerminalCardTarget";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import type { ComponentProps, ReactNode } from "react";
-import { isValidElement, memo, useEffect, useRef, useState } from "react";
+import { isValidElement, memo, useContext, useEffect, useId, useRef, useState } from "react";
 
 
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
@@ -116,6 +119,9 @@ type ToolApprovalCardProps = {
   /** 工具调用 input（四层字段：semantic / command / explanation / impact / risk_l） */
   input?: unknown;
   onRespond: ToolApprovalRespond;
+  submitting?: boolean;
+  draftNote?: string;
+  onDraftNoteChange?: (note: string) => void;
   className?: string;
 };
 
@@ -128,10 +134,14 @@ export function ToolApprovalCard({
   toolName,
   input,
   onRespond,
+  submitting = false,
+  draftNote,
+  onDraftNoteChange,
   className,
 }: ToolApprovalCardProps) {
-  const [showNote, setShowNote] = useState(false);
-  const [note, setNote] = useState("");
+  const [showNote, setShowNote] = useState(Boolean(draftNote));
+  const [localNote, setLocalNote] = useState("");
+  const note = draftNote ?? localNote;
   const i = (input ?? {}) as Record<string, unknown>;
   const semantic = typeof i.semantic === "string" ? i.semantic : "";
   const command = typeof i.command === "string" ? i.command : "";
@@ -203,6 +213,7 @@ export function ToolApprovalCard({
         className,
       )}
       data-approval-card={toolName}
+      aria-busy={submitting}
     >
       {/* 卡头 */}
       <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-1.5">
@@ -214,10 +225,10 @@ export function ToolApprovalCard({
           className="shrink-0 text-muted-foreground"
         />
         <span className="text-[12px] font-medium text-foreground">
-          等待你的确认
+          {submitting ? "正在提交确认…" : "等待你的确认"}
         </span>
         <span className="ml-auto text-[10px] text-muted-foreground">
-          确认后才会执行
+          {submitting ? "等待后台确认" : "确认后才会执行"}
         </span>
       </div>
 
@@ -254,8 +265,9 @@ export function ToolApprovalCard({
         {showNote && (
           <div className="space-y-1.5">
             <textarea
+              disabled={submitting}
               value={note}
-              onChange={(e) => setNote(e.target.value)}
+              onChange={(e) => (onDraftNoteChange ?? setLocalNote)(e.target.value)}
               placeholder="附言（可选）：告诉 Agent 为什么拒绝 / 期望的替代方案"
               rows={2}
               className="w-full resize-none rounded border border-border bg-background px-2 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -271,6 +283,7 @@ export function ToolApprovalCard({
             <Button
               size="sm"
               variant="ghost"
+              disabled={submitting}
               onClick={() => setShowNote(false)}
               className="h-7 text-[11px]"
             >
@@ -279,6 +292,7 @@ export function ToolApprovalCard({
             <Button
               size="sm"
               variant="destructive"
+              disabled={submitting}
               onClick={rejectWithNote}
               className="h-7 gap-1.5 text-[11px]"
             >
@@ -290,6 +304,7 @@ export function ToolApprovalCard({
           <Button
             size="sm"
             variant="ghost"
+            disabled={submitting}
             onClick={() => setShowNote(true)}
             className="h-7 gap-1.5 text-[11px] text-destructive hover:text-destructive"
           >
@@ -301,10 +316,9 @@ export function ToolApprovalCard({
           <Button
             size="sm"
             variant="ghost"
+            disabled={submitting}
             onClick={() => {
-              // Task 5: ⚡点击 → 前端会话级免审标志置位（内存不落盘，切会话
-              // 重置）；Python 侧经 needs_you.respond 的 trust 响应同步记录
-              useChatStore.getState().setSessionReadOnlyTrust(true);
+              // 显示标记与业务接受确认由所属审批链处理，通用卡只回传意图。
               onRespond({ approved: true, sessionTrust: true });
             }}
             className="h-7 gap-1.5 text-[11px] text-muted-foreground"
@@ -317,6 +331,7 @@ export function ToolApprovalCard({
         <Button
           size="sm"
           variant="default"
+          disabled={submitting}
           onClick={() => onRespond({ approved: true })}
           className="h-7 gap-1.5 text-[11px]"
         >
@@ -385,12 +400,14 @@ const TOOL_META: Record<
   performance_analyze: { label: "性能", icon: TerminalIcon, category: "diagnose" },
   config_diff: { label: "配置对比", icon: FileEditIcon, category: "diagnose" },
   get_terminal_output: { label: "终端输出", icon: TerminalIcon, category: "diagnose" },
+  retrieve_offloaded_content: { label: "回读结果", icon: File01Icon, category: "diagnose" },
   search_history: { label: "历史案例", icon: GlobalSearchIcon, category: "diagnose" },
   ssh_list_sessions: { label: "SSH 会话", icon: TerminalIcon, category: "diagnose" },
   // 规划建议（青）
   suggest_command: { label: "命令建议", icon: SparklesIcon, category: "plan" },
   teach_command: { label: "教学命令", icon: BookOpen01Icon, category: "plan" },
   todo_write: { label: "Todos", icon: CheckListIcon, category: "plan" },
+  ask_user: { label: "询问用户", icon: ToolsIcon, category: "plan" },
   run_subagent: { label: "Subagent", icon: RobotIcon, category: "plan" },
   // TDSF 2026-09-18: 标签不再叫「置信度」——旧的分数算法已被会话证据三态取代，
   // 这是 UI 里最后一处常驻「置信度」字样（任何模式都渲染），保留会误导。
@@ -516,7 +533,10 @@ function deriveSummary(toolName: string, input: unknown): string | null {
 
 export type ToolProps = ComponentProps<typeof Collapsible> & {
   toolName: string;
+  toolCallId?: string;
   state: ToolPart["state"];
+  /** The displayed turn ended; this is not proof that the operation stopped. */
+  turnEnded?: boolean;
   input?: unknown;
   output?: unknown;
   errorText?: string;
@@ -538,84 +558,97 @@ const HEAVY_CONTENT_TOOLS = new Set([
   "todo_write",
 ]);
 
-const MAX_LIVE_SSH_OUTPUT = 65_536;
-
-function appendLiveSshOutput(current: string, chunk: string): string {
-  const combined = current + chunk;
-  return combined.length <= MAX_LIVE_SSH_OUTPUT
-    ? combined
-    : combined.slice(-MAX_LIVE_SSH_OUTPUT);
-}
-
-function SshCommandLiveOutput({ command }: { command: string }) {
-  const sessionId = useChatStore((state) => state.activeSessionId);
-  const [live, setLive] = useState<SshCommandOutputEvent | null>(null);
-  const [output, setOutput] = useState("");
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten = () => {};
-
-    void onSshCommandOutput((event) => {
-      if (disposed) return;
-      if (
-        event.conversationSessionId &&
-        event.conversationSessionId !== sessionId
-      ) {
-        return;
-      }
-      if (event.command.trim() !== command.trim()) return;
-
-      setLive(event);
-      setOutput((current) =>
-        event.status === "running" && event.stream === "status"
-          ? event.chunk
-          : appendLiveSshOutput(current, event.chunk),
-      );
-    }).then((dispose) => {
-      if (disposed) dispose();
-      else unlisten = dispose;
-    });
-
-    return () => {
-      disposed = true;
-      unlisten();
-    };
-  }, [command, sessionId]);
-
-  const completed = live?.status === "completed";
-  const failed = live?.status === "failed";
-  const label = completed ? "已完成" : failed ? "执行失败" : "实时回显";
-
+function SshOutputStreams({
+  stdout,
+  stderr,
+  emptyText,
+  merged = false,
+}: {
+  stdout: string;
+  stderr: string;
+  emptyText: string;
+  merged?: boolean;
+}) {
+  const streams = [
+    [merged ? "终端回显（合流）" : "stdout", stdout],
+    ["stderr", stderr],
+  ] as const;
   return (
     <div className="space-y-1.5">
+      {streams.filter(([, content]) => content).map(([stream, content]) => (
+        <div key={stream} className="space-y-1">
+          <div className="text-[10px] font-medium text-muted-foreground">
+            {stream}
+          </div>
+          <pre className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
+            {content}
+          </pre>
+        </div>
+      ))}
+      {!stdout && !stderr ? (
+        <div className="text-[11px] text-muted-foreground">{emptyText}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SshCommandLiveOutput({ toolCallId }: { toolCallId: string }) {
+  const live = useSshCommandOutputStore((state) => state.calls[toolCallId]);
+  if (!live) return null;
+  const completed = live.ended;
+  const unknownExit = live.exitCode == null || live.exitCode < 0;
+  // Native stream termination is not the Python risk/business verdict.
+  const label = live.resultMissing
+    ? "工具结果未收到"
+    : completed
+      ? unknownExit
+        ? "退出状态未确认"
+        : "输出已返回"
+      : "实时回显";
+
+  return (
+    <div className="space-y-1.5" aria-live="polite">
       <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
         <span
           aria-hidden="true"
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            completed && "bg-emerald-500",
-            failed && "bg-destructive",
-            !completed && !failed && "animate-pulse bg-sky-500",
+            completed && (unknownExit || live.resultMissing ? "bg-amber-500" : "bg-emerald-500"),
+            !completed && "animate-pulse bg-sky-500",
           )}
         />
         <span
           className={cn(
             "font-medium",
-            completed && "text-emerald-700 dark:text-emerald-400",
-            failed && "text-destructive",
-            !completed && !failed && "text-sky-700 dark:text-sky-400",
+            completed && (unknownExit || live.resultMissing
+              ? "text-amber-700 dark:text-amber-400"
+              : "text-emerald-700 dark:text-emerald-400"),
+            !completed && "text-sky-700 dark:text-sky-400",
           )}
         >
           {label}
         </span>
+        {!unknownExit ? <span>退出码 {live.exitCode}</span> : null}
       </div>
-      <pre
-        aria-live="polite"
-        className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words"
-      >
-        {output || (live?.status === "running" ? "等待远端输出…" : "等待命令开始…")}
-      </pre>
+      <SshOutputStreams
+        stdout={live.stdout}
+        stderr={live.stderr}
+        emptyText={completed
+          ? "（未收到可展示的原生输出）"
+          : live.operationId ? "等待远端输出…" : "等待命令开始…"}
+      />
+      {live.resultMissing ? (
+        <div className="text-[10px] text-muted-foreground">
+          {unknownExit
+            ? "本轮已结束，未收到工具结果；不代表远端命令已经停止，请核对终端。"
+            : "已收到原生退出状态，但未收到工具结果；不据此判定操作成功。"}
+        </div>
+      ) : null}
+      {live.truncated ? (
+        <div className="text-[10px] text-muted-foreground">
+          实时回显已截断，仅保留各流最近 65,536 个字符。
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -623,14 +656,23 @@ function SshCommandLiveOutput({ command }: { command: string }) {
 const ToolImpl = ({
   className,
   toolName,
+  toolCallId,
   state,
   input,
   output,
   errorText,
   onApprovalRespond,
   defaultOpen,
+  inlineApproval,
+  turnEnded = false,
   ...props
-}: ToolProps) => {
+}: ToolProps & { inlineApproval?: ReactNode }) => {
+  const hasSshOutputCall = useSshCommandOutputStore(
+    (store) => Boolean(toolCallId && store.calls[toolCallId]),
+  );
+  const sshResultMissing = useSshCommandOutputStore(
+    (store) => Boolean(toolCallId && store.calls[toolCallId]?.resultMissing),
+  );
   // Task 3.1: 审批等待态 + 提供了响应回调 → 渲染四层审批卡（三按钮）。
   // 未提供回调时保持通用折叠卡渲染（向后兼容，approval 交互由上层处理）。
   if (state === "approval-requested" && onApprovalRespond) {
@@ -650,25 +692,24 @@ const ToolImpl = ({
   const catColor = CATEGORY_META[meta.category].color;
   const summary = deriveSummary(toolName, input);
   const isError = state === "output-error";
-  const sshCommand =
-    toolName === "ssh_command" &&
-    input &&
-    typeof input === "object" &&
-    typeof (input as Record<string, unknown>).command === "string"
-      ? ((input as Record<string, unknown>).command as string)
-      : null;
-  const showLiveSshOutput = state === "input-streaming" && Boolean(sshCommand);
-  // 部分后端工具失败时仍走 completed 事件（内层 ok/success=false 或 status 为失败态），
-  // part 状态停在 output-available → 状态点会谎报 done。内容判失败时同步降级徽标。
-  const innerFailure = state === "output-available" && isFailedOutput(output);
-  const innerFailureStatus =
-    innerFailure && typeof output === "object" && output !== null
-      ? typeof (output as Record<string, unknown>).status === "string"
-        ? (output as Record<string, unknown>).status
-        : ""
-      : "";
-  const innerFailureLabel =
-    innerFailureStatus === "unmatched" ? "未匹配" : "failed";
+  const showLiveSshOutput =
+    !inlineApproval && (state === "input-streaming" || state === "input-available") && hasSshOutputCall;
+  const missingSshResult = showLiveSshOutput && sshResultMissing;
+  const missingResult = !inlineApproval &&
+    (state === "input-streaming" || state === "input-available") &&
+    (turnEnded || missingSshResult);
+  // SDK output-available 仅表示收到结果；业务状态仍由原始结果决定。
+  const resultStatus =
+    state === "output-available"
+      ? getToolResultStatus(output)
+      : isError
+        ? legacyToolResultStatus(errorText)
+        : missingResult
+          ? "indeterminate"
+          : null;
+  const innerFailure = state === "output-available" && resultStatus !== null;
+  const resultIsFailure = resultStatus === "error" || resultStatus === "failed";
+  const resultLabel = resultStatus ? toolResultLabel(resultStatus) : "failed";
   const open = defaultOpen ?? (isError || showLiveSshOutput);
   const isHeavy = HEAVY_CONTENT_TOOLS.has(toolName);
   const isTeachingCard =
@@ -680,14 +721,14 @@ const ToolImpl = ({
   // 教学命令的 JSON 参数会和下方的命令卡重复；无论来自专用工具还是映射工具，
   // 教学界面只保留可执行卡。
   const showInputBody =
-    !isTeachingCard && !isHeavy && Boolean(input);
+    !inlineApproval && !isTeachingCard && !isHeavy && Boolean(input);
   // 重量级工具只在失败时展示输出体：成功路径的结果很小且重复，
   // 但内层 ok/success=false 的失败说明是用户唯一能看到「为什么失败」的地方。
   const showOutputBody =
     output !== undefined &&
     (!isHeavy || innerFailure || isError || toolName === "write_remote_file");
   const hasDetails =
-    showInputBody || showOutputBody || Boolean(errorText) || showLiveSshOutput;
+    showInputBody || showOutputBody || Boolean(errorText) || showLiveSshOutput || missingResult;
 
   return (
     <Collapsible
@@ -707,14 +748,18 @@ const ToolImpl = ({
         <span
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            innerFailure ? "bg-orange-500" : STATUS_DOT[state],
+            resultStatus
+              ? resultIsFailure
+                ? "bg-destructive"
+                : "bg-amber-500"
+              : STATUS_DOT[inlineApproval ? "approval-requested" : state],
           )}
           aria-label={
-            innerFailure
-              ? innerFailureStatus === "unmatched"
-                ? "unmatched"
-                : "failed"
-              : STATUS_LABEL[state]
+            resultStatus
+              ? resultIsFailure
+                ? "failed"
+                : resultStatus
+              : STATUS_LABEL[inlineApproval ? "approval-requested" : state]
           }
         />
         <HugeiconsIcon
@@ -731,23 +776,37 @@ const ToolImpl = ({
         ) : (
           <span className="flex-1" />
         )}
-        {(isError || innerFailure) && (
-          <span className="shrink-0 text-[10px] font-medium text-destructive">
-            {isError ? "failed" : innerFailureLabel}
+        {(isError || innerFailure || missingResult) && (
+          <span
+            className={cn(
+              "shrink-0 text-[10px] font-medium",
+              resultStatus && !resultIsFailure
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-destructive",
+            )}
+          >
+            {resultLabel}
           </span>
         )}
       </CollapsibleTrigger>
+
+      {inlineApproval}
 
       {hasDetails && (
         <CollapsibleContent
           className={cn("tdsf-collapsible-content")}
         >
           <div className="ml-3 mt-1 space-y-2 border-l border-border/60 pl-3 pb-1">
+            {missingResult && !showLiveSshOutput ? (
+              <div className="text-[10px] text-muted-foreground">
+                本轮对话已结束，未收到工具最终结果；不代表操作已停止，请核对运行日志或目标环境。
+              </div>
+            ) : null}
             {showInputBody ? (
               <ToolInput toolName={toolName} input={input} />
             ) : null}
-            {showLiveSshOutput && sshCommand ? (
-              <SshCommandLiveOutput command={sshCommand} />
+            {showLiveSshOutput && toolCallId ? (
+              <SshCommandLiveOutput toolCallId={toolCallId} />
             ) : null}
             {showOutputBody || errorText ? (
               <ToolOutput
@@ -766,8 +825,11 @@ const ToolImpl = ({
 // For heavy tools, the only thing that should trigger a re-render is a
 // state transition or the path summary changing — NOT every input-content
 // token. We compare the cheap derived summary instead of the input ref.
-export const Tool = memo(ToolImpl, (a, b) => {
+const ToolBody = memo(ToolImpl, (a, b) => {
+  if (a.turnEnded !== b.turnEnded) return false;
+  if (a.inlineApproval !== b.inlineApproval) return false;
   if (a.toolName !== b.toolName || a.state !== b.state) return false;
+  if (a.toolCallId !== b.toolCallId) return false;
   if (a.errorText !== b.errorText) return false;
   if (a.output !== b.output) return false;
   if (a.className !== b.className) return false;
@@ -778,6 +840,21 @@ export const Tool = memo(ToolImpl, (a, b) => {
   }
   return a.input === b.input;
 });
+
+export function Tool(props: ToolProps) {
+  const approvals = useContext(NeedsYouApprovalContext);
+  const registerTool = approvals?.registerTool;
+  const slotId = useId();
+  const { toolCallId, toolName, state } = props;
+  useEffect(() => {
+    if (!toolCallId || (state !== "input-streaming" && state !== "input-available")) return;
+    return registerTool?.(toolCallId, toolName, slotId);
+  }, [registerTool, toolCallId, toolName, state, slotId]);
+  // Context changes must not re-render every historical tool's heavy body.
+  const inlineApproval = approvals?.inline?.slotId === slotId
+    ? approvals.inline.card : null;
+  return <ToolBody {...props} inlineApproval={inlineApproval} />;
+}
 
 function ToolInput({ toolName, input }: { toolName: string; input: unknown }) {
   if (input == null) return null;
@@ -912,10 +989,24 @@ function ToolOutput({
   errorText?: string;
 }) {
   if (errorText) {
+    const status = legacyToolResultStatus(errorText);
+    const warning = status && status !== "error" && status !== "failed";
     return (
       <div className="space-y-1">
-        <div className="text-[10px] font-medium text-destructive">Error</div>
-        <div className="rounded bg-destructive/10 px-2 py-1.5 font-mono text-[11px] text-destructive whitespace-pre-wrap">
+        <div
+          className={cn(
+            "text-[10px] font-medium",
+            warning ? "text-amber-700 dark:text-amber-400" : "text-destructive",
+          )}
+        >
+          {status ?? "Error"}
+        </div>
+        <div
+          className={cn(
+            "rounded px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap",
+            warning ? "border border-border bg-card text-foreground" : "bg-destructive/10 text-destructive",
+          )}
+        >
           {errorText}
         </div>
       </div>
@@ -979,6 +1070,34 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
         predictedOutput={predictedOutput}
         toolName={toolName}
       />
+    );
+  }
+
+  const failure = pickToolFailure(o);
+  // 无命令的 unmatched 建议仍交给下方专用卡，保留说明和示例。
+  if (
+    failure &&
+    !(
+      toolName === "suggest_command" &&
+      o.status === "unmatched" &&
+      (typeof o.command !== "string" || !o.command)
+    )
+  ) {
+    const stdout =
+      typeof o.output === "string" ? o.output : typeof o.stdout === "string" ? o.stdout : "";
+    const stderr = typeof o.stderr === "string" ? o.stderr : "";
+    return (
+      <div className="space-y-1">
+        <div className="text-[10px] font-medium text-muted-foreground">{failure.status}</div>
+        {failure.text && failure.text !== stdout && failure.text !== stderr ? (
+          <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+            {failure.text}
+          </div>
+        ) : null}
+        {stdout || stderr || typeof o.exit_code === "number" || failure.status === "indeterminate" ? (
+          <SshCommandOutput data={o} hideReturnedStatus />
+        ) : null}
+      </div>
     );
   }
 
@@ -1065,7 +1184,6 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
   // Tool failure（上方 failure 逻辑保持原有语义）。
   if (
     toolName === "ssh_command" &&
-    !TOOL_FAILURE_STATUSES.has(typeof o.status === "string" ? o.status : "") &&
     (typeof o.output === "string" || typeof o.exit_code === "number")
   ) {
     return <SshCommandOutput data={o} />;
@@ -1097,8 +1215,8 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
         ? o.suggestions.filter((item): item is string => typeof item === "string")
         : [];
       return (
-        <div className="space-y-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px]">
-          <div className="font-medium text-amber-700 dark:text-amber-400">
+        <div className="space-y-2 rounded-lg border border-border bg-card px-3 py-2.5 text-[11px] leading-relaxed">
+          <div className="font-medium text-foreground">
             未匹配命令
           </div>
           <div className="text-muted-foreground">{message}</div>
@@ -1107,7 +1225,7 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
               {suggestions.map((item) => (
                 <span
                   key={item}
-                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                  className="rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground"
                 >
                   {item}
                 </span>
@@ -1282,43 +1400,8 @@ function renderToolOutput(toolName: string, output: unknown): ReactNode | null {
     );
   }
 
-  // 通用失败兜底（放在所有专用分支之后，避免抢掉定制渲染）：后端工具失败态
-  // 或显式 ok/success=false → 状态徽标 + 中文说明，替代落到 JSON.stringify 的裸 JSON
-  const failure = pickToolFailure(o);
-  if (failure) {
-    return (
-      <div className="space-y-1">
-        <div className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
-          {failure.status}
-        </div>
-        {failure.text ? (
-          <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
-            {failure.text}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   return null;
 }
-
-/**
- * 后端工具失败态词汇（与 Python `ToolCallLimitHook._result_status` 对齐）。
- *
- * 注：`exit_code != 0` **不在**此列——命令非零退出是正常输出信息，把它算失败会
- * 污染熔断计数并削弱 T7「写操作后必须验证」的判定（决策记录见 dev-state §37.103）。
- */
-const TOOL_FAILURE_STATUSES = new Set([
-  "command_blocked",
-  "rejected",
-  "needs_approval",
-  "unavailable",
-  "stale_source",
-  "indeterminate",
-  "unmatched",
-  "error",
-]);
 
 /** 失败说明文本候选字段（按信息量优先级） */
 const TOOL_FAILURE_TEXT_KEYS = ["message", "error", "stderr", "reason"];
@@ -1326,24 +1409,14 @@ const TOOL_FAILURE_TEXT_KEYS = ["message", "error", "stderr", "reason"];
 function pickToolFailure(
   o: Record<string, unknown>,
 ): { status: string; text: string } | null {
-  const status = typeof o.status === "string" ? o.status : "";
-  const explicitFailure = o.ok === false || o.success === false;
-  if (!explicitFailure && !TOOL_FAILURE_STATUSES.has(status)) return null;
+  const status = getToolResultStatus(o);
+  if (!status) return null;
   const raw = TOOL_FAILURE_TEXT_KEYS.map((key) =>
     typeof o[key] === "string" ? (o[key] as string).trim() : "",
   ).find(Boolean);
   // 剥掉 `command_blocked!` / `rejected!` 前缀——那是给 LLM 的双轨反馈关键字
   const text = raw ? raw.replace(/^[a-z_]+!\s*/, "") : "";
   return { status: status || "failed", text };
-}
-
-/** 工具输出内容本身是否表示失败（与 pickToolFailure 同一口径） */
-function isFailedOutput(output: unknown): boolean {
-  return (
-    typeof output === "object" &&
-    output !== null &&
-    pickToolFailure(output as Record<string, unknown>) !== null
-  );
 }
 
 // ============================================================================
@@ -2070,16 +2143,25 @@ function TerminalOutputCard({ data }: { data: Record<string, unknown> }) {
   );
 }
 
-function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
-  const output = typeof data.output === "string" ? data.output : "";
+function SshCommandOutput({
+  data,
+  hideReturnedStatus = false,
+}: {
+  data: Record<string, unknown>;
+  hideReturnedStatus?: boolean;
+}) {
+  const output =
+    typeof data.output === "string" ? data.output : typeof data.stdout === "string" ? data.stdout : "";
   const stderr = typeof data.stderr === "string" ? data.stderr : "";
   const explanation =
     typeof data.explanation === "string" && data.explanation.trim()
       ? data.explanation.trim()
       : null;
-  const exit = typeof data.exit_code === "number" ? data.exit_code : null;
+  const exit =
+    typeof data.exit_code === "number" && Number.isInteger(data.exit_code) && data.exit_code >= 0
+      ? data.exit_code
+      : null;
   const duration = typeof data.duration === "number" ? data.duration : null;
-  const body = output || stderr || "（命令没有产生可展示的输出）";
   const durationLabel =
     duration == null
       ? null
@@ -2090,9 +2172,9 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
-          命令已返回
-        </span>
+        {!hideReturnedStatus && exit != null ? (
+          <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400">命令已返回</span>
+        ) : null}
         {exit != null ? (
           <span
             className={cn(
@@ -2104,7 +2186,9 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
           >
             退出码 {exit}
           </span>
-        ) : null}
+        ) : (
+          <span className="text-[10px] text-amber-700 dark:text-amber-400">退出状态未确认</span>
+        )}
         {durationLabel ? (
           <span className="font-mono text-[10px] text-muted-foreground">
             耗时 {durationLabel}
@@ -2118,9 +2202,12 @@ function SshCommandOutput({ data }: { data: Record<string, unknown> }) {
         </div>
       ) : null}
       <div className="text-[10px] font-medium text-muted-foreground">终端输出</div>
-      <pre className="max-h-72 overflow-auto rounded-md border border-border/45 bg-muted/35 p-2 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-        {body}
-      </pre>
+      <SshOutputStreams
+        stdout={output}
+        stderr={stderr}
+        emptyText="（命令没有产生可展示的输出）"
+        merged={data.execution_channel === "visible-terminal"}
+      />
     </div>
   );
 }

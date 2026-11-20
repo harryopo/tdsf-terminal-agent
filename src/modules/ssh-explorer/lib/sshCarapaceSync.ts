@@ -11,13 +11,15 @@
 import { listen } from '@tauri-apps/api/event';
 import {
   invalidateRemoteCarapaceCache,
-  remoteCarapaceInstalled,
+  probeRemoteCarapace,
 } from '@/lib/param-complete-client';
 import {
   CARAPACE_CHANGED_EVENT,
   type CarapaceChangedPayload,
 } from '@/lib/sshCarapaceEvents';
 import { useSshStore } from '../sshStore';
+
+const syncRequests = new Map<string, symbol>();
 
 /**
  * @returns 本窗处理了这条消息吗（没有对应会话 = 别的窗建的连接，安静忽略）
@@ -26,17 +28,31 @@ export async function applyCarapaceChanged(
   payload: CarapaceChangedPayload,
 ): Promise<boolean> {
   const store = useSshStore.getState();
-  const sess = store.sessions.find((s) => s.rustSessionId === payload.sessionId);
-  if (!sess) return false;
-  // 清掉本窗缓存，让下一次读真去问服务器（受 preferences 开关控制的那个
-  // detectRemoteCarapace 这里不走：它"已有结果就不重查"，而我们要的正是重查）
-  invalidateRemoteCarapaceCache(payload.sessionId);
-  store.setRemoteCarapaceState(sess.id, 'checking');
-  const installed = await remoteCarapaceInstalled(payload.sessionId);
-  const latest = useSshStore.getState();
-  // 探测期间可能断开：会话不在了就别把清掉的状态又写回来（同 detectRemoteCarapace 的守卫）
-  if (!latest.sessions.some((s) => s.id === sess.id)) return true;
-  latest.setRemoteCarapaceState(sess.id, installed ? 'installed' : 'missing');
+  const source = store.sessions.find((s) => s.rustSessionId === payload.sessionId);
+  if (!source) return false;
+  // 组件按服务器账号安装，但状态和预测缓存按连接保存；同身份会话各自重查。
+  const targets = store.sessions.filter((s) => s.id === source.id || (
+    s.state === 'connected' && s.params.host === source.params.host &&
+    s.params.user === source.params.user && s.params.port === source.params.port
+  ));
+  await Promise.all(targets.map(async (sess) => {
+    const rustSessionId = sess.rustSessionId;
+    if (rustSessionId === null) return;
+    const request = Symbol();
+    syncRequests.set(sess.id, request);
+    invalidateRemoteCarapaceCache(rustSessionId);
+    store.setRemoteCarapaceState(sess.id, 'checking');
+    try {
+      const state = await probeRemoteCarapace(rustSessionId);
+      const latest = useSshStore.getState();
+      const current = latest.sessions.find((s) => s.id === sess.id);
+      if (syncRequests.get(sess.id) !== request || current?.rustSessionId !== rustSessionId ||
+          latest.remoteCarapaceBySession[sess.id] !== 'checking') return;
+      latest.setRemoteCarapaceState(sess.id, state);
+    } finally {
+      if (syncRequests.get(sess.id) === request) syncRequests.delete(sess.id);
+    }
+  }));
   return true;
 }
 

@@ -1,10 +1,79 @@
 # Changelog
 
-Version numbering: `0.x` builds are pre-stable releases; `1.x` is reserved for the first
-stable release.
+Version numbering: `0.x` builds and `-rc.N` release candidates are pre-stable;
+`1.x` without a prerelease suffix is reserved for stable releases.
 
 ## Unreleased
 
+## 1.0.0-rc.1 — 2026-10-27
+
+Windows x64 release candidate, not the stable 1.0 release. Native core-flow,
+installation and upgrade acceptance remain pending; automated checks alone do
+not establish those results.
+
+- Separate built-in and personal knowledge browsing, keep file lists, titles,
+  search and details in the selected library, and expose complete category
+  counts with entry pagination. Ignore stale responses after changing views,
+  show retryable loading errors, and keep imports in personal knowledge.
+- Keep failed remote-completion probes retryable, reject unconfirmed install
+  status, and prevent refresh or late probes from overwriting installation state.
+  Show refresh guidance before querying connected servers.
+- Correlate remote-file and standalone teaching cards through completion or
+  errors. Bind remote-write approvals to their original call and SSH target;
+  reject SSH output on non-command records. Local Python approvals keep their
+  actionable fallback, and file contents stay out of remote-read UI events.
+- Show the unconfigured-model prompt in Chinese. Remove the extra evidence panel
+  and fixed evidence footnotes from chat while preserving backend evidence,
+  post-write verification and safety approvals.
+- Add a monochrome session-inspector dialog through the chat's Confidence button:
+  runtime, conversation and tool-evidence views, search, actual call-ID links and
+  confirmed local redacted JSON export. Bounded records are not a complete
+  persistent audit or calibrated correctness probabilities. Earlier 0.9.2
+  installers do not include this feature.
+- Keep the confirmed diagnostic-export preview unchanged while its save is in
+  progress, and restore export controls after completion or failure.
+- Add correlated cards for terminal readback and other tools without an existing
+  event owner. Preserve structured results, cancellations and errors without
+  duplicating SSH cards; pair Python, suggestion and teaching-wrapper events
+  with call IDs. Existing execution and approval policies remain unchanged.
+- Add PowerShell directory-size suggestions with literal paths, recursive file
+  lengths and descending totals. Explain unreadable files and logical-size limits;
+  unmatched suggestions use neutral theme colours and cannot be run.
+
+- SSH executor approvals appear in their original tool card only when call,
+  chat and target identities match. Folding tool details does not hide the
+  approval. Within their owning chat, unbound requests and questions remain
+  answerable in the fallback area; response state and rejection notes survive
+  placement changes. This
+  changes presentation only, not backend approval or execution rules.
+- Sidecar approval and question cards show response submission and disable repeat
+  actions while awaiting acknowledgement. Invalid acknowledgements retain the
+  card and answer with a visible retry message; retrying responds to the request,
+  not the command. Late RPC failures cannot revive settled requests. The frontend
+  read-only-trust indicator updates only after an accepted approval for the same
+  known, currently active chat. Backend execution and safety rules are unchanged;
+  response acceptance does not mean command completion.
+- Remove the legacy in-memory OSC diagnostic buffer that could retain discarded
+  SSH input and directory paths. Terminal input and directory-following behavior
+  remain unchanged; this does not erase existing terminal history or saved logs.
+- Settled approval and question requests cannot be restored by a delayed pending-list
+  snapshot. Other pending requests are still recovered, without changing backend
+  approval or cancellation rules.
+- Agent tool cards accept the SDK's running `input-available` state and collect
+  background SSH output by call identity even while collapsed. Standard output
+  and standard error remain separately visible; visible-terminal output is labelled
+  as merged. Missing identities are not guessed, and final output is not appended twice.
+- Structured tool outcomes retain stdout, stderr, messages and reported exit codes
+  instead of being flattened into error text. Rejected, cancelled and indeterminate
+  results are distinct from execution failures; missing exit status is not shown
+  as command completion. Backend safety and execution verdicts are unchanged.
+- Windows builds restore and verify both pinned completion binaries before packaging,
+  and reject NSIS installers that omit them. Archive and extracted-binary checksums
+  are checked separately, so verified local resources are not downloaded again.
+- Command prediction discards stale replies after input changes, cancellation or
+  terminal-target changes, while retaining debouncing and single-flight requests.
+- Dynamic command candidates accumulate without losing earlier batches. Common
+  operations commands gain short Chinese descriptions, reused by history suggestions.
 - Remote file overwrites now require approval in both Auto and Confirm modes, while
   retaining backup, version-hash checks and post-write verification.
 - Python risk classification recognises qualified built-ins, imported aliases and
@@ -14,6 +83,14 @@ stable release.
 - Public repository presentation and history cleanup preserve application code,
   formal tests and license notices. Existing release installers are not rebuilt by
   these source changes.
+- Fix late completion-probe results and synchronize successful installation
+  notifications across connected sessions with the same SSH identity. Keep
+  failed or unconfirmed installs retryable rather than reporting success.
+- Preserve live settings changes while loading startup preferences. Keep file
+  tree and editor watches bound to their original local or WSL workspace, retire
+  removed-directory requests, and release watches when their owner unmounts.
+- Update the Vitest development toolchain to 4.1.12 for the Windows mocker
+  advisory; production dependency versions remain unchanged by this candidate.
 
 ## 0.9.2
 

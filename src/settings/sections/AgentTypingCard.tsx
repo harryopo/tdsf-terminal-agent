@@ -8,6 +8,7 @@
 // send_human Weibull 算法）逐字符写 PTY/SSH channel，远端回显天然形成
 // 逐字打字视觉。sudo/密码场景自动降级整段注入；演示中按任意键接管。
 
+import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
   Select,
@@ -17,8 +18,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { coerceAgentCommandColor, DEFAULT_AGENT_COMMAND_COLOR } from "@/modules/settings/agentCommandColor";
 import {
   coerceAgentTypingSpeed,
+  setAgentCommandColor,
   setAgentExecutionChannel,
   setAgentTypingMode,
   setAgentTypingSpeed,
@@ -64,6 +67,7 @@ function speedHint(speed: number): string {
 export function AgentTypingCard() {
   const agentTypingMode = usePreferencesStore((s) => s.agentTypingMode);
   const agentTypingSpeed = usePreferencesStore((s) => s.agentTypingSpeed);
+  const agentCommandColor = coerceAgentCommandColor(usePreferencesStore((s) => s.agentCommandColor));
   const agentExecutionChannel = usePreferencesStore(
     (s) => s.agentExecutionChannel,
   );
@@ -134,6 +138,29 @@ export function AgentTypingCard() {
           <span className="w-10 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
             {agentTypingSpeed.toFixed(1)}×
           </span>
+        </div>
+      </SettingRow>
+      <SettingRow
+        title="Agent 命令颜色"
+        description="设置 Agent 输入终端的命令文字颜色，默认蓝色；下一条命令生效。"
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            aria-label="Agent 命令颜色"
+            className="h-7 w-9 cursor-pointer rounded border border-border bg-transparent p-0.5"
+            value={agentCommandColor}
+            onChange={(event) => void setAgentCommandColor(event.target.value)}
+          />
+          <span className="font-mono text-[11px] text-muted-foreground">{agentCommandColor}</span>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={agentCommandColor === DEFAULT_AGENT_COMMAND_COLOR}
+            onClick={() => void setAgentCommandColor(DEFAULT_AGENT_COMMAND_COLOR)}
+          >
+            恢复默认
+          </Button>
         </div>
       </SettingRow>
       <p className="text-[11px] leading-5 text-muted-foreground">

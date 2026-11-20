@@ -1,998 +1,260 @@
 /**
- * KnowledgeBrowser.tsx — 知识库浏览器（P2-4 可视化）
- * -----------------------------------------------------------------------------
- * 左侧栏「知识库」视图，双模式（TDSF 2026-08-30: 6+1 分类两级文件视图）：
- *
- *   浏览模式（默认）：分类分组（6+1：Linux 哲学与命令对照/基础概念/命令与工具/
- *     系统管理/网络与远程/安全加固/服务部署；未分类归「其他」沉底）→
- *     组内列「文件」（knowledge.list_files({group: category})，按 url 聚合的
- *     文件级条目：filename/块数/source 中文名副行），点文件弹出「完整文档」
- *     （knowledge.get_doc 拼接全部分块）。无 url 的条目（case-* 会话沉淀、
- *     philosophy 卡片）保持原条目式展示。
- *
- *   搜索模式：输入搜索词走 knowledge.search（按块命中，语义不变），
- *     命中条目显示 source 中文名副行 + 所属文件名（从 hit.url 提取）；
- *     点击优先打开完整文档（get_doc），并提示「来自搜索命中，第 N 块」
- *     （N 从分块 id 尾部序号提取，id 形如 doc-<hash>-<seq>，seq 从 0 起）；
- *     清空搜索回落浏览模式。
- *
- *   导入 md（TDSF 2026-08-30）：内置教学语料剔除（个人语料不随应用
- *     分发），头部「导入 md」按钮 → HTML input 多选 .md（WebView 下读
- *     内容传后端）→ knowledge.import_docs（fail-closed 仅 .md）→
- *     清缓存 + 重载列表。
- *
- * 数据链路：
- *   knowledge.list(limit)              → 浏览模式分类清单 + 无 url 条目
- *   knowledge.list_files({group})      → 组内文件级列表（懒加载，per category 缓存）
- *   knowledge.get_doc({url})           → 完整文档 md（per url 缓存，弹窗重开不重复请求）
- *   knowledge.search(query, limit)     → 搜索（按块命中，语义不变）
- *   knowledge.get(id)                  → 无 url 条目详情（案例）
- *   knowledge.import_docs({files})     → 导入 md（{name, content} 列表）
- *   knowledge.titles_zh({source})      → 中文标题映射（组级合并 per source 请求）
- *
- * 设计规范：UI 组件套（Input/Button/Badge/Dialog）+ Hugeicons 图标，不使用 emoji。
+ * Knowledge panel: built-in/personal documents, with raw references kept separate.
+ * Reading and recovery have their own static, non-terminal components.
  */
-
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { MessageResponse } from "@/components/ai-elements/message";
-import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { invokeRpc } from "@/lib/sidecar-bridge";
 import { toast } from "sonner";
-import {
-  clearKnowledgeCaches,
-  docCache,
-  filesCache,
-  titlesZhCache,
-  type KnowledgeDoc,
-  type KnowledgeFile,
-} from "@/modules/ai/lib/knowledge-cache";
-import {
-  categoryGroupLabel,
-  plainSummary,
-  sourceGroupLabel,
-} from "@/modules/ai/lib/knowledge-labels";
-import {
-  ArrowDown01Icon,
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
-  BookOpen01Icon,
-  FileImportIcon,
-  GlobalSearchIcon,
-  SparklesIcon,
-} from "@hugeicons/core-free-icons";
+import { clearKnowledgeCaches, docCache, knowledgeCacheKey, type KnowledgeDoc, type KnowledgeDocument, type KnowledgeGroupSummary } from "@/modules/ai/lib/knowledge-cache";
+import { categoryGroupLabel, plainSummary, sourceGroupLabel } from "@/modules/ai/lib/knowledge-labels";
+import { knowledgeDisplayTitle } from "@/modules/ai/lib/knowledge-reader";
+import { diagnosticText } from "@/modules/ai/lib/sessionDiagnostics";
+import { KnowledgeReader } from "./KnowledgeReader";
+import { KnowledgeRecoveryDialog } from "./KnowledgeRecoveryDialog";
+import { ArrowDown01Icon, ArrowRight01Icon, BookOpen01Icon, FileImportIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
-// ============================================================================
-// 类型（与后端 knowledge.* RPC 返回对齐）
-// ============================================================================
+type BrowserLibrary = "builtin" | "personal" | "reference";
+type BrowserRow = KnowledgeDocument & { content?: string; title?: string };
+type Page = { documents: BrowserRow[]; total: number; groups: KnowledgeGroupSummary[] };
+type DetailTarget = { row: BrowserRow; library: BrowserLibrary; searched: boolean };
+const PAGE_SIZE = 30;
+const CATEGORY_ORDER = ["linux-philosophy", "basic-ops", "cmd-tools", "sys-admin", "net-remote", "security", "services", ""];
+const libraryNames = { builtin: "内置知识", personal: "我的知识", reference: "原始参考" };
 
-interface KnowledgeHit {
-  id: string;
-  source: string;
-  title: string;
-  content: string;
-  url: string;
-  tags: string[];
-  /** 6+1 分类 key（TDSF 2026-08-30；空/缺失 = 未分类，归「其他」） */
-  category?: string;
-  match_type?: string;
-  rrf_score?: number;
-}
+function rowKey(row: BrowserRow) { return row.url ? `url:${row.url}` : `entry:${row.id}`; }
+function categoryRank(category: string) { const rank = CATEGORY_ORDER.indexOf(category); return rank < 0 ? CATEGORY_ORDER.length - 1 : rank; }
 
-/** knowledge.list_files 返回的文件级条目与 knowledge.get_doc 返回的完整文档
- *  类型见 @/modules/ai/lib/knowledge-cache（KnowledgeFile / KnowledgeDoc） */
-
-/** 详情弹窗打开目标：docUrl 优先走 get_doc 完整文档；entryId 走 get 条目详情 */
-type DetailTarget = {
-  /** 无 url 条目（会话案例沉淀）：走 knowledge.get(id) */
-  entryId?: string;
-  /** 文档 url：走 knowledge.get_doc(url) 取完整文档 */
-  docUrl?: string;
-  /** 搜索命中原条目（弹窗提示「来自搜索命中，第 N 块」） */
-  hit?: KnowledgeHit;
-};
-
-/** 组内文件级列表的懒加载状态（per source） */
-type FilesLoadState =
-  | { status: "loading" }
-  | { status: "ready"; files: KnowledgeFile[] }
-  | { status: "error" };
-
-// ============================================================================
-// 分类分组（TDSF 2026-08-30: 按 category 6+1 分组浏览，source 名作副行）
-// source/category 中文标签映射已抽至 @/modules/ai/lib/knowledge-labels
-// （与 tool.tsx 知识卡片共享，2026-08-31）
-// ============================================================================
-
-/** 6+1 分类 key 固定排列顺序（未分类「其他」沉底） */
-const CATEGORY_ORDER = [
-  "linux-philosophy",
-  "basic-ops",
-  "cmd-tools",
-  "sys-admin",
-  "net-remote",
-  "security",
-  "services",
-  "",
-];
-
-/** 从 url 提取文件名（本地路径与 http URL 通用，与后端 _filename_from_url 对齐） */
-function fileNameFromUrl(url: string): string {
-  if (!url) return "";
-  let path = url;
-  if (url.includes("://")) {
-    try {
-      path = new URL(url).pathname;
-    } catch {
-      // 非法 URL 原样按路径处理
-    }
-  } else {
-    path = url.replace(/\\/g, "/");
+async function loadPage(library: BrowserLibrary, offset: number, category: string | null, query: string): Promise<Page> {
+  if (query) {
+    const result = await invokeRpc<{ results: (BrowserRow & { title: string })[] }>("knowledge.search", { query, limit: PAGE_SIZE, method: "hybrid", library });
+    if (!Array.isArray(result.results)) throw new Error("Invalid knowledge search response");
+    return { documents: result.results.map((row) => ({ ...row, library, title0: row.title, chunks: 1, total_chars: row.content?.length ?? 0, summary_zh: plainSummary(row.content) })), total: result.results.length, groups: [] };
   }
-  const name = path.replace(/\/+$/, "").split("/").pop() ?? "";
-  return name || url;
+  const result = await invokeRpc<Page>("knowledge.documents", { library, limit: PAGE_SIZE, offset, ...(category !== null ? { category } : {}) });
+  if (!Array.isArray(result.documents)) throw new Error("Invalid knowledge document response");
+  return result;
 }
 
-/** 从分块 id 尾部提取块序号（doc-<hash>-3 → 3；无尾部数字 → null，与后端 _chunk_seq 对齐） */
-function chunkSeqFromId(id: string): number | null {
-  const tail = id.slice(id.lastIndexOf("-") + 1);
-  return /^\d+$/.test(tail) ? parseInt(tail, 10) : null;
+function KnowledgeDetailDialog({ target, onClose }: { target: DetailTarget; onClose: () => void }) {
+  const [doc, setDoc] = useState<KnowledgeDoc | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [errorDetails, setErrorDetails] = useState("");
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setDoc(null);
+    setFailed(false);
+    setErrorDetails("");
+    const { row, library } = target;
+    const key = knowledgeCacheKey(library, row.url);
+    const cached = row.url ? docCache.get(key) : undefined;
+    if (cached) { setDoc(cached); return; }
+    const pending = row.url
+      ? invokeRpc<KnowledgeDoc>("knowledge.get_doc", { url: row.url, library })
+      : invokeRpc<{ entry?: { content: string; content_zh?: string; title?: string; source?: string } }>("knowledge.get", { id: row.id, library }).then((value): KnowledgeDoc => value.entry ? { ...value.entry, ok: true, chunks: 1, total_chars: value.entry.content.length } : { ok: false });
+    void pending.then((value) => {
+      if (cancelled) return;
+      if (!value.ok) { setErrorDetails(diagnosticText(value.error ?? "").slice(0, 1500)); setFailed(true); return; }
+      const owned = { ...value, library };
+      if (row.url) docCache.set(key, owned);
+      setDoc(owned);
+    }).catch((error: unknown) => {
+      if (!cancelled) { setErrorDetails(diagnosticText(error instanceof Error ? error.message : error).slice(0, 1500)); setFailed(true); }
+    });
+    return () => { cancelled = true; };
+  }, [target, revision]);
+  const title = knowledgeDisplayTitle(doc ?? target.row);
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogContent showCloseButton={false} aria-describedby={undefined} className="flex h-[82vh] max-h-[900px] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-4xl">
+      <DialogHeader className="flex-row items-start gap-4 border-b border-border px-5 py-4">
+        <div className="min-w-0 flex-1">
+          <p className="mb-1 text-[11px] tracking-wide text-muted-foreground">{libraryNames[target.library]}{target.searched ? " · 从搜索命中打开" : ""}</p>
+          <DialogTitle className="break-words text-lg font-semibold leading-7">{title}</DialogTitle>
+          {doc?.summary_zh && <p className="mt-2 text-xs leading-6 text-muted-foreground">{plainSummary(doc.summary_zh, 220)}</p>}
+        </div>
+        <Button variant="ghost" size="sm" onClick={onClose}>返回</Button>
+      </DialogHeader>
+      {doc ? <KnowledgeReader key={`${target.library}:${rowKey(target.row)}`} doc={doc} /> : failed
+        ? <div role="status" className="space-y-3 overflow-auto p-6 text-sm text-muted-foreground"><p>文档加载失败，请重试或返回列表。</p>{errorDetails && <details><summary className="cursor-pointer text-xs">技术详情（已脱敏）</summary><pre className="mt-2 whitespace-pre-wrap break-all text-xs">{errorDetails}</pre></details>}<Button variant="outline" onClick={() => setRevision((value) => value + 1)}>重试</Button></div>
+        : <div role="status" className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground"><Spinner className="size-4" />读取文档…</div>}
+    </DialogContent>
+  </Dialog>;
 }
-
-/** 搜索命中提示后缀：块序号可提取则「，第 N 块」（1 起计），否则空串 */
-function hitSeqSuffix(id: string): string {
-  const seq = chunkSeqFromId(id);
-  return seq === null ? "" : `，第 ${seq + 1} 块`;
-}
-
-type KnowledgeGroup = {
-  /** category key（作为折叠状态 key；未分类为空串） */
-  category: string;
-  label: string;
-  /** 组内出现的 source 集合（titles_zh / 副行中文名用） */
-  sources: string[];
-  entries: KnowledgeHit[];
-  /** 组内是否含带 url 的文档条目（决定浏览模式下是否列文件） */
-  hasFiles: boolean;
-};
-
-/** 按 category 分组（6+1 固定顺序，未分类沉底；作用于当前搜索/过滤结果） */
-function groupKnowledgeHits(hits: KnowledgeHit[]): KnowledgeGroup[] {
-  const groups = new Map<string, KnowledgeGroup>();
-  for (const hit of hits) {
-    const cat = hit.category ?? "";
-    let group = groups.get(cat);
-    if (!group) {
-      group = {
-        category: cat,
-        label: categoryGroupLabel(cat),
-        sources: [],
-        entries: [],
-        hasFiles: false,
-      };
-      groups.set(cat, group);
-    }
-    if (!group.sources.includes(hit.source)) group.sources.push(hit.source);
-    group.entries.push(hit);
-    if (hit.url) group.hasFiles = true;
-  }
-  return [...groups.values()].sort(
-    (a, b) =>
-      CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category),
-  );
-}
-
-// ============================================================================
-// RPC + 模块级浏览缓存
-// ============================================================================
-// invokeRpc 静态导入（与 BackendPill/NeedsYouApprovalCards 一致）：动态
-// import("@/lib/sidecar-bridge") 在 Vite SSR 下对同一模块多 callsite 的
-// vi.mock 拦截不一致（实测 list_files 命中 mock、titles_zh 却解析到真实
-// 模块抛 browser-only 错误），故统一走静态导入。
-
-async function searchKnowledge(
-  query: string,
-  limit = 30,
-): Promise<KnowledgeHit[]> {
-  try {
-    const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
-      "knowledge.search",
-      { query, limit, method: "hybrid" },
-    );
-    return res?.results ?? [];
-  } catch {
-    return [];
-  }
-}
-
-async function getKnowledge(id: string): Promise<KnowledgeHit | null> {
-  try {
-    const res = await invokeRpc<{ entry?: KnowledgeHit } | null>(
-      "knowledge.get",
-      { id },
-    );
-    return res?.entry ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function listKnowledge(limit = 50): Promise<KnowledgeHit[]> {
-  try {
-    const res = await invokeRpc<{ results?: KnowledgeHit[] } | null>(
-      "knowledge.list",
-      { limit, offset: 0 },
-    );
-    return res?.results ?? [];
-  } catch {
-    return [];
-  }
-}
-
-/** 组内文件级列表（按 category 过滤；不吞错：RPC 失败上抛，由调用方置
- *  error 态，不伪装成空列表） */
-async function listKnowledgeFiles(
-  group: string,
-  source?: string,
-): Promise<KnowledgeFile[]> {
-  const res = await invokeRpc<{ files?: KnowledgeFile[] } | null>(
-    "knowledge.list_files",
-    source ? { group, source } : { group },
-  );
-  return res?.files ?? [];
-}
-
-/** 完整文档（不吞错：RPC 异常上抛，由弹窗统一显示错误态，fail-closed） */
-async function getKnowledgeDoc(url: string): Promise<KnowledgeDoc> {
-  return invokeRpc<KnowledgeDoc>("knowledge.get_doc", { url });
-}
-
-/** 中文标题映射（knowledge.titles_zh，gen_titles_zh.py 离线 LLM 生成）：
- *  url → 中文标题。吞错返回空 Map——无映射时前端回退英文原标题，不报错 */
-async function listTitlesZh(source: string): Promise<Map<string, string>> {
-  try {
-    const res = await invokeRpc<{
-      titles?: { url: string; zh: string }[];
-    } | null>("knowledge.titles_zh", { source });
-    const map = new Map<string, string>();
-    for (const t of res?.titles ?? []) {
-      if (t.url && t.zh) map.set(t.url, t.zh);
-    }
-    return map;
-  } catch {
-    return new Map();
-  }
-}
-
-// ============================================================================
-// SourceFileList — 组内文件级列表（浏览模式，懒加载状态由父组件持有）
-// ============================================================================
-
-function SourceFileList({
-  state,
-  titles,
-  onOpenDoc,
-}: {
-  state: FilesLoadState;
-  /** url → 中文标题（knowledge.titles_zh 组级合并；无映射回退英文 filename） */
-  titles: Map<string, string>;
-  onOpenDoc: (url: string) => void;
-}) {
-  if (state.status === "loading") {
-    return (
-      <div className="flex items-center gap-1.5 px-1 py-1 text-[10px] text-muted-foreground/70">
-        <Spinner className="size-3" />
-        正在加载文件列表…
-      </div>
-    );
-  }
-  if (state.status === "error") {
-    return (
-      <div className="px-1 py-1 text-[10px] leading-relaxed text-muted-foreground/70">
-        文件列表加载失败，收起后再展开可重试。
-      </div>
-    );
-  }
-  if (state.files.length === 0) {
-    return (
-      <div className="px-1 py-1 text-[10px] text-muted-foreground/60">
-        该分类暂无文档文件。
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-1 pl-5">
-      {state.files.map((file) => {
-        const zh = titles.get(file.url);
-        return (
-          <button
-            key={file.url}
-            type="button"
-            onClick={() => onOpenDoc(file.url)}
-            className={cn(
-              "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-1.5 text-left",
-              "transition-colors hover:border-border hover:bg-muted/40",
-            )}
-          >
-            {/* TDSF 2026-08-30: 中文预览标题主行 + 英文 filename 副行
-                （无中文映射时只显示英文 filename 主行，不报错）
-                TDSF 2026-08-31: 层级修复——主行 10.5px 与组头同级
-                （原 11.5px 比组头还大），缩进 pl-5 体现从属关系；计数
-                badge 统一为纯数字 + 块数与组头同款式 */}
-            <div className="flex items-center gap-1.5">
-              <span
-                className={cn(
-                  "flex-1 truncate text-[10.5px] font-medium text-foreground",
-                  !zh && "font-mono text-[10px]",
-                )}
-              >
-                {zh ?? file.filename}
-              </span>
-              <Badge
-                variant="secondary"
-                className="shrink-0 px-1 py-px text-[9px] tabular-nums"
-                title={`此文档共 ${file.chunks} 个知识块（检索/引用的最小单位）`}
-              >
-                {file.chunks} 块
-              </Badge>
-            </div>
-            {/* TDSF 2026-08-30: 副行 = source 中文名（6+1 分组后同一分类
-                聚合多来源，source 名保留辨识度）；有中文映射时再补英文
-                filename（无映射时主行已是 filename，不重复显示） */}
-            <div className="mt-0.5 flex items-center gap-1.5">
-              <span className="shrink-0 truncate text-[10px] text-muted-foreground/70">
-                {sourceGroupLabel(file.source)}
-              </span>
-              {zh && (
-                <span className="truncate font-mono text-[10px] text-muted-foreground/50">
-                  {file.filename}
-                </span>
-              )}
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ============================================================================
-// KnowledgePanel — 左侧栏内嵌面板（搜索 + 两级浏览列表）
-// ============================================================================
 
 export function KnowledgePanel() {
+  const [library, setLibrary] = useState<BrowserLibrary>("builtin");
+  const primaryLibrary = useRef<"builtin" | "personal">("builtin");
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<KnowledgeHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
-  const [detail, setDetail] = useState<DetailTarget | null>(null);
-  // TDSF 2026-08-30: 可折叠分组（记录已折叠组的 category key）
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
-    new Set(),
-  );
-  // 组内文件级列表懒加载状态（per category，6+1 分组浏览）
-  const [filesByCategory, setFilesByCategory] = useState<
-    ReadonlyMap<string, FilesLoadState>
-  >(new Map());
-  // TDSF 2026-08-30: 导入 md（个人语料手动导入的唯一入口）
+  const [searchTerm, setSearchTerm] = useState("");
+  const [category, setCategory] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [rows, setRows] = useState<BrowserRow[]>([]);
+  const [groups, setGroups] = useState<KnowledgeGroupSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [importing, setImporting] = useState(false);
-  // 中文预览标题映射（组级合并：category → url→zh；底层仍 per source 缓存）
-  const [titlesByCategory, setTitlesByCategory] = useState<
-    ReadonlyMap<string, Map<string, string>>
-  >(new Map());
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [detail, setDetail] = useState<DetailTarget | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const fileInput = useRef<HTMLInputElement>(null);
+  const viewVersion = useRef(0);
+  const pageOffset = useRef(0);
+  const pagePending = useRef(false);
+  const importPending = useRef(false);
+  const viewReady = useRef(false);
+  const mounted = useRef(false);
+  const recoveryOwner = useRef(0);
 
-  // 分组作用于当前搜索/过滤结果（6+1 固定顺序，未分类沉底）
-  const groups = useMemo(() => groupKnowledgeHits(results), [results]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; viewVersion.current += 1; }; }, []);
+  useEffect(() => {
+    const owner = ++viewVersion.current;
+    viewReady.current = false;
+    pagePending.current = false;
+    pageOffset.current = 0;
+    setRows([]); setGroups([]); setTotal(0); setLoadError(false); setLoadingMore(false); setLoading(true);
+    void loadPage(library, 0, category, searchTerm).then((page) => {
+      if (!mounted.current || owner !== viewVersion.current) return;
+      if (page.documents.length === 0 && page.total > 0) throw new Error("Empty knowledge page");
+      setRows(page.documents); setGroups(page.groups); setTotal(page.total);
+      pageOffset.current = page.documents.length;
+      viewReady.current = true;
+    }).catch(() => { if (mounted.current && owner === viewVersion.current) setLoadError(true); })
+      .finally(() => { if (mounted.current && owner === viewVersion.current) setLoading(false); });
+    return () => { if (viewVersion.current === owner) viewVersion.current += 1; };
+  }, [library, category, searchTerm, revision]);
 
-  /** 导入 md：HTML input 多选（WebView 下 File 无绝对路径，读内容传后端，
-   *  与 composer 附件/主题导入同款机制）→ knowledge.import_docs
-   *  （fail-closed 仅 .md）→ 清浏览缓存 + 重载列表 */
-  const handleImportFiles = useCallback(
-    async (e: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
-      e.target.value = ""; // 允许重复选择同一文件
-      if (files.length === 0) return;
-      const mdRe = /\.md$/i;
-      const mdFiles = files.filter((f) => mdRe.test(f.name));
-      const rejectedNames = files
-        .filter((f) => !mdRe.test(f.name))
-        .map((f) => f.name);
-      if (mdFiles.length === 0) {
-        toast.error("仅支持导入 .md 文件");
-        return;
-      }
-      setImporting(true);
-      try {
-        const payload = await Promise.all(
-          mdFiles.map(async (f) => ({ name: f.name, content: await f.text() })),
-        );
-        const res = await invokeRpc<{
-          imported?: number;
-          errors?: number;
-          rejected?: { name: string; reason: string }[];
-        }>("knowledge.import_docs", { files: payload });
-        const importedCount = res?.imported ?? 0;
-        const rejected = res?.rejected ?? [];
-        // 成功后刷新：清浏览缓存 + 组内文件态 + 中文标题态 + 重载列表（回落浏览模式）
-        clearKnowledgeCaches();
-        setFilesByCategory(new Map());
-        setTitlesByCategory(new Map());
-        const hits = await listKnowledge(50);
-        setResults(hits);
-        setSearched(false);
-        if (rejectedNames.length > 0 || rejected.length > 0) {
-          const names = [
-            ...new Set([...rejectedNames, ...rejected.map((r) => r.name)]),
-          ];
-          toast.warning(
-            `已导入 ${importedCount} 个文档，非 .md 文件被拒绝：${names.join("、")}`,
-          );
-        } else {
-          toast.success(`已导入 ${importedCount} 个文档`);
-        }
-      } catch {
-        toast.error("导入失败：知识库服务暂不可用，请稍后重试");
-      } finally {
-        setImporting(false);
-      }
-    },
-    [],
-  );
+  function invalidate() { viewVersion.current += 1; viewReady.current = false; }
+  function chooseLibrary(next: BrowserLibrary) {
+    if (next === library) return;
+    invalidate();
+    if (next !== "reference") primaryLibrary.current = next;
+    setLibrary(next); setCategory(null); setCollapsed(new Set()); setDetail(null);
+  }
+  function search() { invalidate(); setSearchTerm(query.trim()); setRevision((value) => value + 1); }
 
-  const toggleGroup = useCallback((category: string) => {
-    setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) next.delete(category);
-      else next.add(category);
-      return next;
-    });
-  }, []);
-
-  const loadFiles = useCallback((category: string) => {
-    const cached = filesCache.get(category);
-    if (cached) {
-      setFilesByCategory((prev) =>
-        new Map(prev).set(category, { status: "ready", files: cached }),
-      );
-      return;
-    }
-    setFilesByCategory((prev) =>
-      new Map(prev).set(category, { status: "loading" }),
-    );
-    listKnowledgeFiles(category)
-      .then((files) => {
-        filesCache.set(category, files);
-        setFilesByCategory((prev) =>
-          new Map(prev).set(category, { status: "ready", files }),
-        );
-      })
-      .catch(() => {
-        setFilesByCategory((prev) =>
-          new Map(prev).set(category, { status: "error" }),
-        );
+  async function loadMore() {
+    if (pagePending.current || !viewReady.current || searchTerm || pageOffset.current >= total) return;
+    pagePending.current = true;
+    const owner = viewVersion.current;
+    const offset = pageOffset.current;
+    setLoadingMore(true); setLoadError(false);
+    try {
+      const page = await loadPage(library, offset, category, "");
+      if (!mounted.current || owner !== viewVersion.current) return;
+      if (page.documents.length === 0 && offset < page.total) throw new Error("Empty knowledge page");
+      setRows((previous) => {
+        const merged = new Map(previous.map((row) => [rowKey(row), row]));
+        for (const row of page.documents) if (!merged.has(rowKey(row))) merged.set(rowKey(row), row);
+        return [...merged.values()];
       });
-  }, []);
+      pageOffset.current = offset + page.documents.length;
+      setGroups(page.groups); setTotal(page.total);
+    } catch { if (mounted.current && owner === viewVersion.current) setLoadError(true); }
+    finally { if (mounted.current && owner === viewVersion.current) { pagePending.current = false; setLoadingMore(false); } }
+  }
 
-  // 浏览模式下为「已展开且含文档」的组懒加载 list_files（缓存 per category，
-  // 跳过已加载组）
-  useEffect(() => {
-    if (searched) return;
-    for (const group of groups) {
-      if (!group.hasFiles) continue;
-      if (collapsedCategories.has(group.category)) continue;
-      if (filesByCategory.has(group.category)) continue;
-      loadFiles(group.category);
-    }
-  }, [searched, groups, collapsedCategories, filesByCategory, loadFiles]);
+  function refreshPersonal(owner: number) {
+    clearKnowledgeCaches();
+    if (!mounted.current || owner !== viewVersion.current) return;
+    invalidate(); primaryLibrary.current = "personal"; setLibrary("personal"); setCategory(null); setSearchTerm(""); setQuery(""); setRevision((value) => value + 1);
+  }
 
-  /** 中文标题映射懒加载（组级：对组内每个 source 拉 titles_zh 后合并；
-   *  底层缓存 per source，组级合并结果缓存 per category，失败缓存空 Map） */
-  const loadTitlesForGroup = useCallback((group: KnowledgeGroup) => {
-    const cached = titlesZhCache.get(group.category);
-    if (cached) {
-      setTitlesByCategory((prev) => new Map(prev).set(group.category, cached));
-      return;
-    }
-    Promise.all(group.sources.map((s) => listTitlesZh(s))).then((maps) => {
-      const merged = new Map<string, string>();
-      for (const m of maps) {
-        for (const [url, zh] of m) merged.set(url, zh);
-      }
-      titlesZhCache.set(group.category, merged);
-      setTitlesByCategory((prev) => new Map(prev).set(group.category, merged));
-    });
-  }, []);
+  async function importFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (importPending.current || files.length === 0) return;
+    const accepted = files.filter((file) => /\.(?:md|markdown)$/i.test(file.name));
+    if (accepted.length !== files.length) toast.warning("只导入 Markdown 文件，其他格式已跳过。");
+    if (accepted.length === 0) return;
+    importPending.current = true; setImporting(true);
+    const owner = viewVersion.current;
+    try {
+      const values = await Promise.all(accepted.map(async (file) => ({ name: file.name, content: await file.text() })));
+      const result = await invokeRpc<{ imported: number; skipped: number; errors: number; rejected: string[]; conflicts?: number; error?: string }>("knowledge.import_docs", { files: values, library: "personal" });
+      if (result.error || result.errors > 0) toast.error("部分文档导入失败，请检查文件后重试。");
+      if (result.imported > 0) { toast.success(`已导入 ${result.imported} 篇文档`); refreshPersonal(owner); }
+      if (result.conflicts) toast.warning(`${result.conflicts} 篇同名文档有冲突，未覆盖原内容。`);
+      if (result.imported === 0 && !result.error && !result.errors && !result.conflicts) toast.warning("没有新增内容，重复或不支持的文件已跳过。");
+    } catch { toast.error("文档导入失败，未自动切换知识来源。"); }
+    finally { importPending.current = false; if (mounted.current) setImporting(false); }
+  }
 
-  // 出现的组即预取中文标题（浏览/搜索两模式共用；缓存命中跳过，不阻塞列表渲染）
-  useEffect(() => {
-    for (const group of groups) {
-      if (titlesByCategory.has(group.category)) continue;
-      loadTitlesForGroup(group);
-    }
-  }, [groups, titlesByCategory, loadTitlesForGroup]);
+  const categories = [...new Set(groups.map((group) => group.category))].sort((a, b) => categoryRank(a) - categoryRank(b));
+  const visibleCategories = [...new Set(rows.map((row) => row.category || ""))].sort((a, b) => categoryRank(a) - categoryRank(b));
+  const hasMore = !searchTerm && pageOffset.current < total;
 
-  const search = useCallback(async (q: string) => {
-    const keyword = q.trim();
-    if (!keyword) {
-      // 空查询 → 回到浏览模式（列出全部）
-      setLoading(true);
-      const hits = await listKnowledge(50);
-      setResults(hits);
-      setSearched(false);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setSearched(true);
-    const hits = await searchKnowledge(keyword);
-    setResults(hits);
-    setLoading(false);
-  }, []);
-
-  // 打开即浏览（来源分组 → 组内文件/条目）
-  useEffect(() => {
-    void listKnowledge(50).then((hits) => {
-      setResults(hits);
-      setLoading(false);
-    });
-  }, []);
-
-  // 条目样式：搜索命中条目与无 url 条目（案例）复用；
-  // TDSF 2026-08-30: 中文预览标题主行 + 英文原标题副行（无映射只显示英文）
-  const renderEntry = (hit: KnowledgeHit) => {
-    const zh = hit.url
-      ? titlesByCategory.get(hit.category ?? "")?.get(hit.url)
-      : undefined;
-    return (
-      <button
-        key={hit.id}
-        type="button"
-        onClick={() =>
-          setDetail(hit.url ? { docUrl: hit.url, hit } : { entryId: hit.id, hit })
-        }
-        className={cn(
-          "block w-full rounded-lg border border-border/50 bg-card/40 px-2.5 py-2 text-left",
-          "transition-colors hover:border-border hover:bg-muted/40",
-        )}
-      >
-        <div className="flex items-center gap-1.5">
-          <span className="flex-1 truncate text-[11.5px] font-medium text-foreground">
-            {zh ?? hit.title}
-          </span>
-          {hit.match_type && (
-            <Badge
-              variant="secondary"
-              className="shrink-0 px-1 py-px text-[9px]"
-            >
-              {hit.match_type === "both"
-                ? "混合"
-                : hit.match_type === "fts"
-                  ? "关键词"
-                  : "语义"}
-            </Badge>
-          )}
-        </div>
-        {/* TDSF 2026-08-30: source 中文名副行（6+1 分组后保留来源辨识度）；
-            有中文标题时英文原标题再降一级 */}
-        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
-          {sourceGroupLabel(hit.source)}
-        </div>
-        {zh && (
-          <div className="truncate font-mono text-[10px] text-muted-foreground/50">
-            {hit.title}
-          </div>
-        )}
-        {hit.url && (
-          <div className="mt-1 flex items-center gap-1">
-            <span className="rounded bg-muted px-1 py-px font-mono text-[9px] text-muted-foreground/80">
-              {fileNameFromUrl(hit.url)}
-            </span>
-          </div>
-        )}
-      </button>
-    );
-  };
-
-  return (
-    <div className="flex h-full flex-col">
-      {/* 隐藏的 md 文件选择 input（多选，仅 .md；WebView 下读内容传后端） */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept=".md,.markdown"
-        className="hidden"
-        onChange={(e) => void handleImportFiles(e)}
-      />
-
-      {/* 头部：标题 + 导入 md 按钮（TDSF 2026-08-30，个人语料手动导入入口） */}
-      <div className="flex items-center gap-1.5 border-b border-border/50 px-3 py-2">
-        <HugeiconsIcon icon={BookOpen01Icon} size={13} strokeWidth={1.75} />
-        {/* TDSF 2026-08-29: 视图标签中文化（推翻 2026-08-18 统一英文决策），与侧边栏一致 */}
-        <span className="text-[11px] font-medium uppercase tracking-wide text-foreground">
-          知识库
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="ml-auto h-6 gap-1 px-1.5 text-[10.5px] text-muted-foreground hover:text-foreground"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={importing}
-        >
-          {importing ? (
-            <Spinner className="size-3" />
-          ) : (
-            <HugeiconsIcon icon={FileImportIcon} size={11} strokeWidth={1.75} />
-          )}
-          {importing ? "导入中…" : "导入 md"}
-        </Button>
-      </div>
-
-      {/* 搜索区 */}
-      <div className="flex items-center gap-1.5 border-b border-border/50 px-2.5 py-2">
-        <div className="flex flex-1 items-center gap-1.5 rounded-md border border-border/60 bg-muted/20 px-2">
-          <HugeiconsIcon
-            icon={GlobalSearchIcon}
-            size={12}
-            strokeWidth={1.75}
-            className="shrink-0 text-muted-foreground"
-          />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void search(query);
-            }}
-            placeholder="搜索命令/概念/案例…"
-            className="h-6.5 border-0 bg-transparent px-0 py-1 text-[11px] shadow-none focus-visible:ring-0"
-          />
-        </div>
-        <Button
-          type="button"
-          size="icon"
-          className="size-6.5 shrink-0"
-          onClick={() => void search(query)}
-          disabled={loading || !query.trim()}
-          aria-label="检索"
-        >
-          <HugeiconsIcon icon={SparklesIcon} size={12} strokeWidth={1.75} />
-        </Button>
-      </div>
-
-      {/* 列表区：浏览模式 = 来源分组 → 文件/条目；搜索模式 = 来源分组 → 命中条目 */}
-      <div className="flex-1 overflow-y-auto p-2">
-        {loading && (
-          <div className="flex items-center justify-center gap-2 py-6 text-[11px] text-muted-foreground">
-            <Spinner className="size-3.5" />
-            检索中…
-          </div>
-        )}
-        {!loading && searched && results.length === 0 && (
-          <div className="py-6 text-center text-[11px] leading-relaxed text-muted-foreground">
-            未找到相关条目。
-            <br />
-            可导入文档或沉淀案例扩充知识库。
-          </div>
-        )}
-        {!loading && !searched && results.length === 0 && (
-          <div className="py-6 text-center text-[11px] leading-relaxed text-muted-foreground">
-            知识库为空。
-            <br />
-            可导入文档或沉淀案例扩充知识库。
-          </div>
-        )}
-        <div className="space-y-2.5">
-          {groups.map((group) => {
-            const isCollapsed = collapsedCategories.has(group.category);
-            // 分组头副行：组内来源中文名（1 个直接显示；多个取前 2 个 + 等）
-            const sourceNames = group.sources.map(sourceGroupLabel);
-            const sourcesSubtitle =
-              sourceNames.length === 0
-                ? ""
-                : sourceNames.length <= 2
-                  ? sourceNames.join(" · ")
-                  : `${sourceNames[0]} · ${sourceNames[1]} 等 ${sourceNames.length} 个来源`;
-            return (
-              <div key={group.category || "(uncategorized)"} className="space-y-1.5">
-                {/* 分组头：分类中文名 + 来源副行 + 条数 badge，可折叠 */}
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.category)}
-                  aria-expanded={!isCollapsed}
-                  className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/40"
-                >
-                  <HugeiconsIcon
-                    icon={isCollapsed ? ArrowRight01Icon : ArrowDown01Icon}
-                    size={11}
-                    strokeWidth={2}
-                    className="shrink-0 text-muted-foreground/70"
-                  />
-                  <span className="min-w-0">
-                    <span className="block truncate text-[10.5px] font-semibold text-foreground/85">
-                      {group.label}
-                    </span>
-                    {sourcesSubtitle && (
-                      <span className="block truncate text-[9px] text-muted-foreground/60">
-                        {sourcesSubtitle}
-                      </span>
-                    )}
-                  </span>
-                  <Badge
-                    variant="secondary"
-                    className="ml-auto shrink-0 px-1 py-px text-[9px] tabular-nums"
-                  >
-                    {/* 计数口径统一（TDSF 2026-08-31 用户反馈"有的数字有的N块
-                        看不懂"）：仅搜索模式显示"N 条"（命中条目数）；浏览模式
-                        不显示——组头 list 采样计数与组内文件卡块数不同源，数字
-                        对不上反而误导，文件卡块数与详情弹窗"共 N 块"同口径 */}
-                    {searched ? `${group.entries.length} 条` : null}
-                  </Badge>
-                </button>
-                {!isCollapsed && (
-                  <div className="space-y-1.5">
-                    {searched ? (
-                      // 搜索模式：按块命中的条目平铺（所属文件名在条目内显示）
-                      group.entries.map(renderEntry)
-                    ) : (
-                      <>
-                        {/* 浏览模式：含文档的组列文件级列表（懒加载，按 category） */}
-                        {group.hasFiles && (
-                          <SourceFileList
-                            state={
-                              filesByCategory.get(group.category) ?? {
-                                status: "loading",
-                              }
-                            }
-                            titles={
-                              titlesByCategory.get(group.category) ?? new Map()
-                            }
-                            onOpenDoc={(url) => setDetail({ docUrl: url })}
-                          />
-                        )}
-                        {/* 浏览模式：无 url 条目（案例）保持条目式 */}
-                        {group.entries
-                          .filter((e) => !e.url)
-                          .map(renderEntry)}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 详情弹窗 */}
-      <KnowledgeDetailDialog target={detail} onClose={() => setDetail(null)} />
+  return <div className="flex h-full min-h-0 flex-col">
+    <input ref={fileInput} type="file" multiple accept=".md,.markdown" className="hidden" onChange={(event) => void importFiles(event)} />
+    <div className="flex items-center gap-2 border-b border-border/60 px-3 py-3">
+      <HugeiconsIcon icon={BookOpen01Icon} size={16} strokeWidth={1.75} />
+      <span className="text-xs font-semibold">知识库</span>
+      <Button variant="ghost" size="sm" className="ml-auto h-7 gap-1 px-1.5 text-[11px] text-muted-foreground" disabled={importing} onClick={() => fileInput.current?.click()}>
+        {importing ? <Spinner className="size-3" /> : <HugeiconsIcon icon={FileImportIcon} size={13} strokeWidth={1.75} />}{importing ? "导入中…" : "导入 md"}
+      </Button>
     </div>
-  );
+    <nav aria-label="知识库来源" className="mx-2.5 mt-3 grid grid-cols-2 rounded-lg bg-muted/50 p-1">
+      {(["builtin", "personal"] as const).map((value) => <Button key={value} variant={library === value ? "secondary" : "ghost"} aria-pressed={library === value} className="h-8 rounded-md text-xs" onClick={() => chooseLibrary(value)}>{libraryNames[value]}</Button>)}
+    </nav>
+    <div className="space-y-2 border-b border-border/60 px-3 py-3">
+      <p className="text-[11px] leading-5 text-muted-foreground">{library === "builtin" ? "随应用提供的教学资料与参考整理" : library === "personal" ? "你的翻译、笔记与手动导入文档" : "本机爬取缓存 · 未整理的原始参考"}</p>
+      <form className="flex gap-1.5" onSubmit={(event) => { event.preventDefault(); search(); }}>
+        <Input value={query} onChange={(event) => { setQuery(event.target.value); if (!event.target.value && searchTerm) { invalidate(); setSearchTerm(""); } }} placeholder="搜索命令、概念或章节…" className="h-8 min-w-0 text-xs" />
+        <Button type="submit" variant="outline" size="sm" className="h-8 shrink-0 text-xs" aria-label="检索">搜索</Button>
+      </form>
+      {!searchTerm && <Select value={category === null ? "(all)" : category || "(uncategorized)"} onValueChange={(value) => { invalidate(); setCategory(value === "(all)" ? null : value === "(uncategorized)" ? "" : value); }}>
+        <SelectTrigger aria-label="按主题筛选" size="sm" className="w-full text-xs text-muted-foreground"><SelectValue /></SelectTrigger>
+        <SelectContent position="popper">
+          <SelectItem value="(all)">全部主题</SelectItem>
+          {categories.map((value) => <SelectItem key={value} value={value || "(uncategorized)"}>{categoryGroupLabel(value)} · {groups.filter((group) => group.category === value).reduce((sum, group) => sum + group.files, 0)} 篇</SelectItem>)}
+        </SelectContent>
+      </Select>}
+      {library === "personal" && <Button variant="ghost" size="sm" className="h-6 px-0 text-[11px] text-muted-foreground" onClick={() => { recoveryOwner.current = viewVersion.current; setRecoveryOpen(true); }}>恢复已有中文整理</Button>}
+    </div>
+    <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+      {loading && <div role="status" className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><Spinner className="size-3.5" />读取知识…</div>}
+      {!loading && loadError && <div role="status" className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-xs leading-6 text-muted-foreground"><p>加载失败，请重试。未将服务异常当作空知识库。</p><Button variant="outline" size="sm" onClick={() => { invalidate(); setRevision((value) => value + 1); }}>重试</Button></div>}
+      {!loading && !loadError && rows.length === 0 && <div className="space-y-2 py-10 text-center text-xs leading-6 text-muted-foreground">
+        <p>{searchTerm ? "未找到相关内容。" : library === "personal" ? "还没有个人整理文档。" : library === "reference" ? "本机暂无原始参考缓存。" : "内置资料暂不可用。"}</p>
+        <p>{library === "personal" ? "导入 Markdown，或恢复你已有的中文整理。" : searchTerm ? "换一个命令、概念或关键词再试。" : "不会自动调用模型翻译或重新爬取。"}</p>
+      </div>}
+      {visibleCategories.map((value) => <section key={value} className="mb-4">
+        <button type="button" aria-expanded={!collapsed.has(value)} onClick={() => setCollapsed((previous) => { const next = new Set(previous); if (next.has(value)) next.delete(value); else next.add(value); return next; })} className="flex w-full items-center gap-1 py-2 text-left text-[11px] font-semibold text-muted-foreground">
+          <HugeiconsIcon icon={collapsed.has(value) ? ArrowRight01Icon : ArrowDown01Icon} size={11} />{categoryGroupLabel(value)}
+        </button>
+        {!collapsed.has(value) && rows.filter((row) => (row.category || "") === value).map((row) => <button key={searchTerm ? row.id : rowKey(row)} type="button" onClick={() => setDetail({ row, library, searched: Boolean(searchTerm) })} className="group block w-full rounded-lg border-b border-border/50 px-2 py-3 text-left transition-colors hover:bg-muted/50">
+          <span className="block break-words text-[13px] font-medium leading-5 text-foreground">{knowledgeDisplayTitle(row)}</span>
+          {row.summary_zh && <span className="mt-1.5 line-clamp-2 block text-[11px] leading-5 text-muted-foreground">{plainSummary(row.summary_zh)}</span>}
+          <span className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[10px] leading-4 text-muted-foreground/80"><span>{sourceGroupLabel(row.source)}</span><span>{library === "reference" ? "未整理缓存" : library === "builtin" ? "教学 / 整理版" : "个人资料"}{searchTerm ? " · 命中章节" : ""}</span></span>
+        </button>)}
+      </section>)}
+      {!loading && rows.length > 0 && <div className="space-y-2 border-t border-border/50 py-3 text-center text-[11px] text-muted-foreground">
+        <p>{searchTerm ? `${rows.length} 个匹配片段` : `已载入 ${rows.length} / ${total} 篇文档`}</p>
+        {hasMore && <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? "加载中…" : "加载更多"}</Button>}
+      </div>}
+    </div>
+    <div className="shrink-0 border-t border-border/60 p-2">
+      <Button variant="ghost" size="sm" aria-expanded={library === "reference"} className="h-8 w-full justify-start gap-2 text-[11px] text-muted-foreground" onClick={() => chooseLibrary(library === "reference" ? primaryLibrary.current : "reference")}>
+        <HugeiconsIcon icon={library === "reference" ? ArrowDown01Icon : ArrowRight01Icon} size={12} />{library === "reference" ? "收起原始参考" : "原始参考 · 未整理"}
+      </Button>
+    </div>
+    {detail && <KnowledgeDetailDialog key={`${detail.library}:${rowKey(detail.row)}`} target={detail} onClose={() => setDetail(null)} />}
+    {recoveryOpen && <KnowledgeRecoveryDialog onClose={() => setRecoveryOpen(false)} onRecovered={() => refreshPersonal(recoveryOwner.current)} />}
+  </div>;
 }
 
-// ============================================================================
-// KnowledgeDetailDialog — 详情弹窗
-// 浏览模式点文件 / 搜索命中带 url → get_doc 完整文档（标题=filename，
-// 头部「共 N 块 · 约 X 字」元信息，保留 streamdown heading 紧凑覆盖）；
-// 无 url 条目（案例）→ knowledge.get 条目详情（原样式）。
-// get_doc 失败（RPC 异常或 ok=false）→ 弹窗内错误提示（fail-closed）。
-// ============================================================================
-
-export function KnowledgeDetailDialog({
-  target,
-  onClose,
-}: {
-  target: DetailTarget | null;
-  onClose: () => void;
-}) {
-  const [doc, setDoc] = useState<KnowledgeDoc | null>(null);
-  const [entry, setEntry] = useState<KnowledgeHit | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDoc(null);
-    setEntry(null);
-    setError(null);
-    if (!target) return;
-    if (target.docUrl) {
-      const url = target.docUrl;
-      const cached = docCache.get(url);
-      if (cached) {
-        setDoc(cached);
-        return;
-      }
-      setLoading(true);
-      getKnowledgeDoc(url)
-        .then((res) => {
-          if (res?.ok && typeof res.content === "string") {
-            docCache.set(url, res);
-            setDoc(res);
-          } else {
-            setError(res?.error ?? "未知错误");
-          }
-        })
-        .catch(() => setError("知识库服务暂不可用，请稍后重试"))
-        .finally(() => setLoading(false));
-      return;
-    }
-    if (target.entryId) {
-      setLoading(true);
-      void getKnowledge(target.entryId).then((e) => {
-        setEntry(e);
-        setLoading(false);
-      });
-    }
-  }, [target]);
-
-  const isDocMode = !!target?.docUrl;
-  const titleText = isDocMode
-    ? doc?.filename || fileNameFromUrl(target?.docUrl ?? "") || "完整文档"
-    : "知识详情";
-
-  return (
-    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex h-[70vh] max-w-2xl flex-col gap-0 p-0 sm:max-w-3xl">
-        <DialogHeader className="border-b border-border/50 px-4 py-3">
-          <DialogTitle className="flex items-center gap-2 text-sm">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="-ml-1 h-6 gap-1 px-1.5 text-[11px]"
-              onClick={onClose}
-            >
-              <HugeiconsIcon icon={ArrowLeft01Icon} size={12} strokeWidth={1.75} />
-              返回
-            </Button>
-            <HugeiconsIcon icon={BookOpen01Icon} size={15} strokeWidth={1.75} />
-            <span className="truncate">{titleText}</span>
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="flex-1 overflow-y-auto p-4">
-          {loading && (
-            <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-              <Spinner className="size-3.5" />
-              加载中…
-            </div>
-          )}
-          {!loading && error && (
-            <div className="py-8 text-center text-xs leading-relaxed text-muted-foreground">
-              文档加载失败：{error}
-              <br />
-              请关闭后从列表重新打开该文档重试。
-            </div>
-          )}
-          {!loading && !error && isDocMode && doc && (
-            <div className="space-y-3">
-              {doc.title && (
-                <h2 className="text-[15px] font-semibold text-foreground">
-                  {doc.title}
-                </h2>
-              )}
-              <div className="flex flex-wrap items-center gap-1.5">
-                {typeof doc.chunks === "number" && (
-                  <Badge
-                    variant="secondary"
-                    className="px-1.5 py-px text-[10px] tabular-nums"
-                  >
-                    共 {doc.chunks} 块 · 约 {doc.total_chars ?? 0} 字
-                  </Badge>
-                )}
-                {target?.hit && (
-                  <Badge variant="outline" className="px-1.5 py-px text-[10px]">
-                    来自搜索命中{hitSeqSuffix(target.hit.id)}
-                  </Badge>
-                )}
-                {doc.source && (
-                  <Badge
-                    variant="secondary"
-                    className="px-1.5 py-px text-[10px]"
-                  >
-                    {sourceGroupLabel(doc.source)}
-                  </Badge>
-                )}
-              </div>
-              {/* TDSF 2026-08-30: 中文摘要条（doc_titles_zh.summary_zh，
-                  生成端已清洗；plainSummary 前端兜底剥残留 markdown 符号，
-                  TDSF 2026-08-31 用户实测反馈摘要以 ###/--- 开头） */}
-              {doc.summary_zh && (
-                <div className="rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                  <span className="font-medium text-foreground/80">摘要：</span>
-                  {plainSummary(doc.summary_zh)}
-                </div>
-              )}
-              {/* TDSF 2026-08-18: 完整 md 渲染（MessageResponse = Streamdown），
-                  像看本地 md 文件一样滚动阅读。
-                  TDSF 2026-08-29: 任意值子选择器覆盖 streamdown 内置大字号 heading，
-                  知识文档标题改为紧凑层级。 */}
-              <MessageResponse className="text-[12.5px] leading-relaxed [&_[data-streamdown=heading-1]]:mt-4 [&_[data-streamdown=heading-1]]:text-base [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-2]]:mt-3.5 [&_[data-streamdown=heading-2]]:text-[14.5px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-3 [&_[data-streamdown=heading-3]]:text-[13.5px] [&_[data-streamdown=heading-3]]:font-semibold">
-                {doc.content}
-              </MessageResponse>
-              {doc.url && (
-                <div className="text-[10.5px] text-muted-foreground/60">
-                  来源：{doc.url}
-                </div>
-              )}
-            </div>
-          )}
-          {!loading && !error && !isDocMode && (
-            <>
-              {entry ? (
-                <div className="space-y-3">
-                  <h2 className="text-[15px] font-semibold text-foreground">
-                    {entry.title}
-                  </h2>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {entry.source && (
-                      <Badge
-                        variant="secondary"
-                        className="px-1.5 py-px text-[10px]"
-                      >
-                        {entry.source}
-                      </Badge>
-                    )}
-                    {entry.tags?.map((t) => (
-                      <Badge
-                        key={t}
-                        variant="outline"
-                        className="px-1.5 py-px text-[10px]"
-                      >
-                        {t}
-                      </Badge>
-                    ))}
-                  </div>
-                  <MessageResponse className="text-[12.5px] leading-relaxed [&_[data-streamdown=heading-1]]:mt-4 [&_[data-streamdown=heading-1]]:text-base [&_[data-streamdown=heading-1]]:font-semibold [&_[data-streamdown=heading-2]]:mt-3.5 [&_[data-streamdown=heading-2]]:text-[14.5px] [&_[data-streamdown=heading-2]]:font-semibold [&_[data-streamdown=heading-3]]:mt-3 [&_[data-streamdown=heading-3]]:text-[13.5px] [&_[data-streamdown=heading-3]]:font-semibold">
-                    {entry.content}
-                  </MessageResponse>
-                  {entry.url && (
-                    <div className="text-[10.5px] text-muted-foreground/60">
-                      来源：{entry.url}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="py-8 text-center text-xs text-muted-foreground">
-                  未获取到该条目的详情。
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ============================================================================
-// 向后兼容：KnowledgeBrowser（Dialog 外壳版，弃用建议用 KnowledgePanel）
-// ============================================================================
-
-export function KnowledgeBrowser({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[70vh] max-w-2xl flex-col gap-0 p-0 sm:max-w-2xl">
-        <KnowledgePanel />
-      </DialogContent>
-    </Dialog>
-  );
+export function KnowledgeBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent aria-describedby={undefined} className="flex h-[75vh] flex-col gap-0 p-0 sm:max-w-2xl">
+      <DialogHeader className="sr-only"><DialogTitle>知识库</DialogTitle></DialogHeader>
+      <KnowledgePanel />
+    </DialogContent>
+  </Dialog>;
 }

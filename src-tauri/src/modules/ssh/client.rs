@@ -78,6 +78,16 @@ pub struct SshClient<R: tauri::Runtime = tauri::Wry> {
     handle: Handle<SshClientHandler<R>>,
     /// Identity of this transport, renewed even when reconnecting the same session.
     connection_id: uuid::Uuid,
+    // Closing this socket also wakes a detached protocol task on cancellation.
+    _socket: ConnectionSocket,
+}
+
+struct ConnectionSocket(std::net::TcpStream);
+
+impl Drop for ConnectionSocket {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// SSH 客户端错误
@@ -176,14 +186,12 @@ impl<R: tauri::Runtime> SshClient<R> {
         }
 
         // 5. 建立 TCP + SSH 握手
-        //    client::connect 内部:
-        //    a. TcpStream::connect((host, port))
-        //    b. SSH 协议握手 (version exchange + kex)
-        //    c. 调用 handler.check_server_key (TOFU, 内部 5min 审批超时)
+        //    TCP建立后交给connect_stream进行version exchange/kex，
+        //    handler.check_server_key仍负责TOFU与内部5min审批超时。
         //    2026-08-18 修复: 15s 超时只包 TCP 可达性探测。历史实现整包
         //    connect 加 15s 超时, 会把 TOFU 审批等待(最长 5min)一起杀掉——
         //    用户点"信任"时连接早已断开 (HANDshakeTimeout vs HOST_APPROVAL_TIMEOUT 矛盾)。
-        let tcp_probe = tokio::time::timeout(
+        let tcp_stream = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
             tokio::net::TcpStream::connect((host.as_str(), port)),
         )
@@ -192,12 +200,23 @@ impl<R: tauri::Runtime> SshClient<R> {
             secs: HANDSHAKE_TIMEOUT.as_secs(),
         })?
         .map_err(|e| SshClientError::Other(format!("TCP 连接失败: {e}")))?;
-        drop(tcp_probe); // 探测即弃, russh 会自行建立连接
+        // Keep the same connection. The duplicate socket handle shuts it down
+        // if this future is cancelled while russh's key-exchange task is running.
+        let socket = tcp_stream
+            .into_std()
+            .map_err(|e| SshClientError::Other(format!("TCP socket conversion failed: {e}")))?;
+        let socket_guard = ConnectionSocket(
+            socket
+                .try_clone()
+                .map_err(|e| SshClientError::Other(format!("TCP socket clone failed: {e}")))?,
+        );
+        let tcp_stream = tokio::net::TcpStream::from_std(socket)
+            .map_err(|e| SshClientError::Other(format!("TCP socket registration failed: {e}")))?;
 
         // 完整握手不再包网络超时: TCP 已可达, kex 秒级; TOFU 审批等待由
         // handler.check_server_key 内部 5min 超时管理, 不再被误杀
         // russh Handle::authenticate_password 需 &mut self, 声明 mut
-        let mut handle = client::connect(Arc::new(config), (host.as_str(), port), handler)
+        let mut handle = client::connect_stream(Arc::new(config), tcp_stream, handler)
             .await?;
 
         log::info!("[ssh] TCP+SSH handshake done, starting authentication");
@@ -235,7 +254,11 @@ impl<R: tauri::Runtime> SshClient<R> {
                 if let Some(ref ch) = on_status {
                     let _ = ch.send(SshStatusEvent::authenticated(&host, port, &user));
                 }
-                Ok(Self { handle, connection_id })
+                Ok(Self {
+                    handle,
+                    connection_id,
+                    _socket: socket_guard,
+                })
             }
             other => {
                 let reason = format!("{:?}", other);

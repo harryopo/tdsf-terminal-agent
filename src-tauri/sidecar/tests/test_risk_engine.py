@@ -302,3 +302,65 @@ class TestL0L4Mapping:
         assert result.risk_level == RiskLevel.LOW
         assert result.adjusted_risk_level == RiskLevel.MEDIUM
         assert result.l0_l4_level == "L2"  # 上调后为 L2
+
+
+class TestSharedReadOnlyBoundary:
+    @pytest.mark.parametrize("command", [
+        "systemctl status demo.service; touch /tmp/tdsf-risk-probe",
+        "systemctl status demo.service && touch /tmp/tdsf-risk-probe",
+        "systemctl status demo.service > /tmp/tdsf-risk-probe",
+        "systemctl status demo.service 2>> /tmp/tdsf-risk-probe",
+        "systemctl status $(printf demo.service)",
+        "systemctl status `printf demo.service`",
+        "cd /tmp && touch /tmp/tdsf-risk-probe",
+        "cd /tmp || touch /tmp/tdsf-risk-probe",
+        "cd /tmp & touch /tmp/tdsf-risk-probe",
+        "cd /tmp\ntouch /tmp/tdsf-risk-probe",
+        "cd /tmp\rtouch /tmp/tdsf-risk-probe",
+        "ls -l; touch /tmp/tdsf-risk-probe",
+        "df -h | head -n 1",
+        "cat /tmp/input > /tmp/tdsf-risk-probe",
+        "cat <(printf sample)",
+        "cat ${TDSF_RISK_SAMPLE}",
+        "ls /tmp/{one,two}",
+        "ls /tmp/one\\\ntouch /tmp/tdsf-risk-probe",
+        "sudo -u root ls /tmp; touch /tmp/tdsf-risk-probe",
+        "grep ';' /tmp/example",
+    ])
+    def test_shell_construct_cannot_inherit_readonly_prefix(self, risk_engine, command):
+        # Classification only: none of these strings is passed to a shell.
+        result = risk_engine.assess(command)
+        assert result.risk_level != RiskLevel.LOW
+        assert result.requires_confirmation or result.risk_level == RiskLevel.DENY
+        assert risk_engine.assess_layer2_risk_level(command)[0] != RiskLevel.LOW
+
+    @pytest.mark.parametrize("command", [
+        "ls", "ls -la /tmp", "pwd", "cd /tmp",
+        "systemctl status demo.service", "df -h",
+    ])
+    def test_simple_readonly_queries_stay_available(self, risk_engine, command):
+        result = risk_engine.assess(command)
+        assert result.risk_level == RiskLevel.LOW
+        assert not result.requires_confirmation
+
+    @pytest.mark.parametrize("command, expected", [
+        ("rm -rf /", RiskLevel.DENY),
+        ("rm -rf /tmp/tdsf-risk-probe", RiskLevel.HIGH),
+        ("systemctl restart demo.service", RiskLevel.MEDIUM),
+    ])
+    def test_higher_priority_rules_are_preserved(self, risk_engine, command, expected):
+        assert risk_engine.assess(command).risk_level == expected
+
+    def test_risk_rpc_uses_same_boundary_from_another_cwd(self, tmp_path, monkeypatch):
+        from tools.risk import invoke_risk_tool, reset_risk_engine
+
+        monkeypatch.chdir(tmp_path)
+        reset_risk_engine()
+        try:
+            safe = invoke_risk_tool({"command": "systemctl status demo.service"})
+            changed = invoke_risk_tool({"command": "systemctl status demo.service > /tmp/tdsf-risk-probe"})
+            assert safe["risk_level"] == "low"
+            assert changed["risk_level"] != "low"
+            assert changed["require_approval"]
+        finally:
+            reset_risk_engine()

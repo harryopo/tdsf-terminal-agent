@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isTauriRuntime } from "@/lib/tauriRuntime";
 import {
   DEFAULT_PREFERENCES,
   loadPreferences,
@@ -51,18 +52,27 @@ export const usePreferencesStore = create<State>((set) => ({
   init: () => {
     if (initPromise) return initPromise;
     initPromise = (async () => {
+      let unsubscribe: (() => void) | undefined;
+      let pendingChanges: Partial<Preferences> | null = {};
       try {
+        if (isTauriRuntime()) {
+          unsubscribe = await onPreferencesChange((key, value) => {
+            const change = { [key]: value } as Partial<Preferences>;
+            if (pendingChanges !== null) Object.assign(pendingChanges, change);
+            set(change);
+            if (key === "backgroundKind" || key === "backgroundImageId") {
+              const s = usePreferencesStore.getState();
+              mirrorBgFastPath(s.backgroundKind, s.backgroundImageId);
+            }
+          });
+        }
         const prefs = await loadPreferences();
-        set({ ...prefs, hydrated: true });
-        mirrorBgFastPath(prefs.backgroundKind, prefs.backgroundImageId);
-        void onPreferencesChange((key, value) => {
-          set({ [key]: value } as Partial<State>);
-          if (key === "backgroundKind" || key === "backgroundImageId") {
-            const s = usePreferencesStore.getState();
-            mirrorBgFastPath(s.backgroundKind, s.backgroundImageId);
-          }
-        });
+        set({ ...prefs, ...pendingChanges, hydrated: true });
+        pendingChanges = null;
+        const s = usePreferencesStore.getState();
+        mirrorBgFastPath(s.backgroundKind, s.backgroundImageId);
       } catch (e) {
+        unsubscribe?.();
         initPromise = null;
         throw e;
       }

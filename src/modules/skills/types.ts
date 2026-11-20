@@ -75,19 +75,40 @@ export interface SkillInvokeResult {
 }
 
 /**
+ * `invokeSkill` 的结果语义（TEAM-FIX-01）
+ *
+ * - reference: 只读取了技能参考资料，没有执行任何命令
+ * - executed:  既有 executor 结果，代表真实执行
+ * - failed:    读取/调用失败，不能当作成功
+ * - unknown:   返回结构无法识别，不能落到成功参考兜底
+ */
+export type SkillExecutionMode =
+  | "reference"
+  | "executed"
+  | "failed"
+  | "unknown";
+
+/**
  * `invokeSkill` 的执行结果（前端最终拿到的结构）
  *
  * 包含调用耗时和成功/失败标志，便于 UI 展示。
  */
 export interface SkillExecution {
-  /** 是否成功 */
+  /** 是否成功（reference 表示读取成功，不代表执行成功） */
   success: boolean;
   /** 输出内容（成功时为 skill content，失败时为错误信息） */
   output: string;
   /** 调用耗时（毫秒） */
   durationMs: number;
-  /** 完整结果（成功时存在） */
-  result?: SkillInvokeResult;
+  /** 结果语义；两个入口必须按 mode 展示，不能只看 success */
+  mode: SkillExecutionMode;
+  /** 参考结果是否为空（仅 reference 有意义，不推断执行） */
+  empty?: boolean;
+  /** 完整结果（成功时存在，按 mode 区分具体形状） */
+  result?:
+    | SkillInvokeResult
+    | SkillInvokeKnowledgeResult
+    | SkillInvokeExecutedResult;
 }
 
 /**
@@ -106,6 +127,11 @@ export interface SkillHistoryEntry {
   durationMs: number;
   /** 输出片段（截断前 200 字符，便于列表展示） */
   outputPreview: string;
+  /**
+   * 结果语义（TEAM-FIX-01）。
+   * 历史数据可能没有该字段：不得把旧 success 直接反推为执行成功。
+   */
+  mode?: SkillExecutionMode;
 }
 
 /** Python `skill.list` 返回的顶层结构 */
@@ -182,20 +208,20 @@ export type SkillExecutor =
 export interface SkillInvokeExecutedResult {
   /** Skill 名称 */
   name: string;
-  /** 执行器描述 */
-  executor: SkillExecutor;
+  /** 执行器描述；旧结果可能缺省，只影响展示，不代表未执行 */
+  executor?: SkillExecutor | null;
   /** 是否成功 (exit_code == 0) */
   success: boolean;
-  /** 进程退出码 */
-  exit_code: number;
+  /** 进程退出码；旧结果可能缺省，不伪造 */
+  exit_code?: number;
   /** 组合后的输出 (stdout + [stderr]) */
-  output: string;
+  output?: string;
   /** 标准输出 */
-  stdout: string;
+  stdout?: string;
   /** 标准错误 */
-  stderr: string;
+  stderr?: string;
   /** 耗时毫秒 */
-  duration_ms: number;
+  duration_ms?: number;
   /** 调用参数 (透传) */
   params: Record<string, unknown>;
   /** 来源 builtin/mock */
@@ -215,13 +241,29 @@ export interface SkillInvokeKnowledgeResult {
   /** 完整 Markdown body (skill 的主体内容) */
   content: string;
   /** 触发条件 */
-  whenToUse: string;
+  whenToUse?: string;
   /** 执行步骤 */
-  steps: string;
+  steps?: string;
   /** 使用示例 (原始字符串) */
-  examples: string;
+  examples?: string;
   /** 调用参数 (透传) */
   params: Record<string, unknown>;
   /** 来源标识 (builtin / mock) */
   source: string;
+  /** Python 端现有字段：说明本次只返回参考资料，未执行 executor */
+  execution?: "not_run";
+  /** 描述（参考结果会带上，仅展示用） */
+  description?: string;
+  /** tags（参考结果会带上，仅展示用） */
+  tags?: string[];
+  /** 触发词（参考结果会带上，仅展示用） */
+  triggers?: string[];
+  /** 建议配合使用的工具白名单（空 = 不限制） */
+  allowed_tools?: string[];
+  /** 结构化剧本（仅参考，不代表已执行） */
+  playbook?: Array<Record<string, string>>;
+  /** 元数据：有 executor 也只表示目标环境的步骤声明，不代表已执行 */
+  executor?: SkillExecutor | null;
+  /** 附加说明（例如 mock skill 提示） */
+  note?: string;
 }

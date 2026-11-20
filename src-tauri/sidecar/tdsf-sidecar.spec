@@ -42,7 +42,7 @@ a = Analysis(
         ('skills/builtin', 'skills/builtin'),
     ],
     hiddenimports=_tool_hiddenimports,
-    hookspath=[],
+    hookspath=[str(pathlib.Path(SPECPATH) / "pyinstaller-hooks")],
     hooksconfig={},
     runtime_hooks=[],
     # 大件旁路排除: chromadb/torch 等仅在降级路径被引用 (rag 主链路是 FTS5);
@@ -60,6 +60,7 @@ exe = EXE(
     a.datas,
     [],
     name='tdsf-sidecar',
+    exclude_binaries=True,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

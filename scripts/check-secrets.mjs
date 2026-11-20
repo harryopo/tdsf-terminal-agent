@@ -217,13 +217,7 @@ export function mask(value) {
 // ---------------------------------------------------------------------------
 
 function git(args) {
-  try {
-    return execFileSync("git", args, { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
-  } catch (err) {
-    const out = String(err.stdout || "") + String(err.stderr || "");
-    // git grep / git diff 无输出时可能非 0 退出，不算错
-    return out;
-  }
+  return execFileSync("git", args, { encoding: "utf8", stdio: "pipe", maxBuffer: 512 * 1024 * 1024 });
 }
 
 /** 取新增行：`git diff -U0` 里只认 `+` 开头且非 `+++` 的行，并带上文件与行号 */
@@ -365,5 +359,10 @@ function main() {
 // Windows 下 process.argv[1] 是 `D:\…` 反斜杠路径，与 `file://` 字面拼出来的 URL 永不相等
 // ⇒ 必须用 pathToFileURL 归一（否则直接跑这个脚本时 main 根本不执行）
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  try {
+    process.exit(main());
+  } catch {
+    console.error("凭据扫描未完成：请检查 Git 工作目录、提交引用和读取权限；不能将读取失败视为通过。");
+    process.exit(2);
+  }
 }

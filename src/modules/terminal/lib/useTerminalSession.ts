@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { registerOutputHighlight } from "./outputHighlight";
 import {
   BlockDecorations,
   type BlockMatch,
@@ -45,7 +46,11 @@ import {
   registerOsc52ClipboardHandler,
   registerPromptTracker,
 } from "./osc-handlers";
-import { openPty, type TerminalTransport } from "./pty-bridge";
+import { openPty, type TerminalTransport, type TerminalTransportHandlers } from "./pty-bridge";
+import { RemoteShellIntegration, type SshTerminalContext } from "./remoteShellIntegration";
+import type { ShellReceipt } from "./remoteShellIntegration";
+import { restoreShellIntegration } from "./restoreShellIntegration";
+import { isUserLineDirty } from "./terminalInputState";
 import { clearLeafEnvironment, setLeafEnvironment } from "./completionInjection";
 // carapace 参数补全的 cwd 注册表（动态候选按当前目录取数据，见 param-complete-client）
 import { setLeafCwd } from "@/lib/param-complete-client";
@@ -76,22 +81,6 @@ import {
 } from "./rendererPool";
 import { useTerminalFont } from "./useTerminalFont";
 
-// TDSF 诊断 (Phase 2): 集中 OSC 7 cwd 同步调试日志，避免污染控制台。
-// 通过 window.__TDSF_OSC7_LOG__ 收集，CDP 实测可读取。
-type Osc7LogEntry = Record<string, unknown>;
-
-declare global {
-  interface Window {
-    __TDSF_OSC7_LOG__?: Osc7LogEntry[];
-  }
-}
-
-function getOsc7Log(): Osc7LogEntry[] | null {
-  if (typeof window === "undefined") return null;
-  if (!window.__TDSF_OSC7_LOG__) window.__TDSF_OSC7_LOG__ = [];
-  return window.__TDSF_OSC7_LOG__;
-}
-
 type Callbacks = {
   onSearchReady?: (addon: SearchAddon) => void;
   onExit?: (code: number) => void;
@@ -103,14 +92,27 @@ type Session = {
   // 本地路径 s.pty 是 PtySession（结构子类型，id 是 number）；
   // SSH 路径 s.pty 是 SSH transport（id 是 sessionId 字符串）。
   pty: TerminalTransport | null;
+  transportKey?: string;
   // TDSF (#16): SSH 传输注入 seam。若提供，openPtyForSession 走 SSH 分支，
   // 跳过 terminalShell/ConPTY/resize-warmup 等本地专属逻辑。
   openTransport?: (
-    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+    h: TerminalTransportHandlers,
   ) => Promise<TerminalTransport>;
   // TDSF (#16): remote 护栏标志。控制 leafHasForegroundJob/Process、
   // kickPty、respawnSession 等 PTY 专属调用对 SSH 不生效。
   remote: boolean;
+  remoteContext: SshTerminalContext | null;
+  restoreCancel: (() => void) | null;
+  remoteIntegration: RemoteShellIntegration | null;
+  remoteConsumers: {
+    onCwd: (cwd: string) => void;
+    onContextChange: () => void;
+  } | null;
+  blockCollector: TerminalBlockCollector | null;
+  blockRenderer: {
+    onExecStart: () => void;
+    captureOutput: () => { text: string; truncated: boolean };
+  } | null;
   ptyOpening: boolean;
   initialCwd: string | undefined;
   lastCwd: string | null;
@@ -166,6 +168,7 @@ const blockViewportListeners = new Map<number, Set<() => void>>();
 
 // TDSF: 待风险确认命令的 listeners，UI 层订阅以弹出 RiskGuardDialog
 const pendingRiskListeners = new Map<number, Set<() => void>>();
+const integrationContextListeners = new Map<number, Set<() => void>>();
 
 // TDSF 2026-08-28 (B1-G2 防伪造): 最近被用户拒绝/取消的高危命令记录。
 // deny/取消时 RiskGuard 静默不执行，sidecar 侧 LLM 无从感知，可能编造"已执行"。
@@ -260,6 +263,73 @@ export function writeToSession(leafId: number, data: string): boolean {
   return true;
 }
 
+export function getSshIntegrationContext(leafId: number): SshTerminalContext | null {
+  const s = sessions.get(leafId);
+  return s?.remote && !s.disposed ? s.remoteContext : null;
+}
+
+export function subscribeSshIntegrationContext(leafId: number, cb: () => void): () => void {
+  let listeners = integrationContextListeners.get(leafId);
+  if (!listeners) {
+    listeners = new Set();
+    integrationContextListeners.set(leafId, listeners);
+  }
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+    if (!listeners.size) integrationContextListeners.delete(leafId);
+  };
+}
+
+function notifyIntegrationContext(leafId: number): void {
+  for (const cb of integrationContextListeners.get(leafId) ?? []) cb();
+}
+
+export async function refreshSshIntegrationContext(leafId: number): Promise<SshTerminalContext | null> {
+  const s = sessions.get(leafId);
+  const transport = s?.pty;
+  if (!s?.remote || s.disposed || !transport?.refreshIntegrationContext) return null;
+  await transport.refreshIntegrationContext();
+  return sessions.get(leafId) === s && !s.disposed && s.pty === transport
+    ? s.remoteContext : null;
+}
+
+export function restoreSshIntegration(
+  leafId: number,
+  expectedConnectionId: string,
+  signal: AbortSignal,
+): Promise<ShellReceipt> {
+  const s = sessions.get(leafId);
+  const slot = getLiveSlotForLeaf(leafId);
+  const context = s?.remoteContext;
+  if (!s || !slot || !context || s.restoreCancel) {
+    return Promise.reject(new Error("当前终端尚未就绪或正在等待恢复回执。"));
+  }
+  const isCurrent = () => sessions.get(leafId) === s && !s.disposed && s.remote &&
+    s.visibleNow && s.focusedNow && !!s.pty && !s.shellExited &&
+    getLiveSlotForLeaf(leafId) === slot && slot.term.buffer.active.type === "normal" &&
+    !s.pendingInput && !s.inputDraft && !s.inputActive && !getPendingRiskCommand(leafId) &&
+    !isUserLineDirty(leafId) && s.remoteContext?.connectionId === expectedConnectionId;
+  if (!isCurrent()) {
+    return Promise.reject(new Error("请回到原终端，退出全屏程序并处理未提交输入，再确认空闲 Bash 提示符。"));
+  }
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) controller.abort();
+  s.restoreCancel = cancel;
+  return restoreShellIntegration({
+    term: slot.term,
+    context,
+    write: (data) => isCurrent() ? s.pty!.write(data) : false,
+    isCurrent,
+    signal: controller.signal,
+  }).finally(() => {
+    signal.removeEventListener("abort", cancel);
+    if (s.restoreCancel === cancel) s.restoreCancel = null;
+  });
+}
+
 /** Mark the next matching terminal echo as an Agent command, display-only. */
 export function armAgentCommandEcho(
   leafId: number,
@@ -267,7 +337,10 @@ export function armAgentCommandEcho(
   options?: AgentCommandEchoOptions,
 ): void {
   const s = sessions.get(leafId);
-  if (s) s.agentCommandEcho = new AgentCommandEcho(command, options);
+  if (s) s.agentCommandEcho = new AgentCommandEcho(command, {
+    ...options,
+    color: usePreferencesStore.getState().agentCommandColor,
+  });
 }
 
 /**
@@ -702,6 +775,12 @@ function ensureSession(
     // TDSF (#16): SSH 传输注入字段初始化（默认本地路径，由 hook 同步覆盖）。
     openTransport: undefined,
     remote: false,
+    remoteContext: null,
+    restoreCancel: null,
+    remoteIntegration: null,
+    remoteConsumers: null,
+    blockCollector: null,
+    blockRenderer: null,
     ptyOpening: false,
     initialCwd,
     lastCwd: null,
@@ -802,8 +881,18 @@ async function openPtyForSession(
   // close 只 unsubscribe 前端订阅，不断底层 SSH 连接（SFTP 共用）。
   if (s.openTransport) {
     const transport = await s.openTransport({
-      onData: (bytes) => deliverPtyBytes(leafId, bytes),
+      onIntegrationContext: (context) => {
+        if (s.disposed) return;
+        if (s.remoteContext?.connectionId !== context?.connectionId) s.restoreCancel?.();
+        s.remoteContext = context;
+        s.remoteIntegration?.setConnection(context);
+        notifyIntegrationContext(leafId);
+      },
+      onData: (bytes) => {
+        if (!s.disposed) deliverPtyBytes(leafId, bytes);
+      },
       onExit: (code) => {
+        if (s.disposed) return;
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
@@ -822,15 +911,18 @@ async function openPtyForSession(
     }
     return transport;
   }
-  // 本地 PTY 路径（原逻辑，零改动）
+  // 本地 PTY 路径，同样隔离退场会话的回调。
   const startCols = s.cols > 0 ? s.cols : 80;
   const startRows = s.rows > 0 ? s.rows : 24;
   const pty = await openPty(
     startCols,
     startRows,
     {
-      onData: (bytes) => deliverPtyBytes(leafId, bytes),
+      onData: (bytes) => {
+        if (!s.disposed) deliverPtyBytes(leafId, bytes);
+      },
       onExit: (code) => {
+        if (s.disposed) return;
         s.shellExited = true;
         s.pty = null;
         s.pendingInput = "";
@@ -897,6 +989,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
     cols: s.cols,
     rows: s.rows,
     registerOsc: (term) => {
+      const disposeOutputHighlight = registerOutputHighlight(term);
       // TDSF B1 (2026-08-29): block 流水账 collector——本地/SSH 分支共用。
       // 133 在 xterm 里是"一个 id 一串 handler，**后注册的先调用**，谁先返回 true
       // 链就到此为止"（读 OscParser 核对过，不是注释里曾写的"先注册者先调用"）。
@@ -904,17 +997,16 @@ function bindLeafToSlot(leafId: number, s: Session): void {
       // 133 的 C/D/A/B 全到了 xterm，`blocksByLeaf` 却整片为空。
       // 判据 `osc133-chain.test.ts`（真解析器）要求 133 的消费者一律返回 false。
       let execStartMarker: IMarker | null = null;
-      const collector = new TerminalBlockCollector({
-        sessionId: leafId,
-        resolveAuthor: (command) =>
-          useTerminalBlocksStore.getState().resolveAuthor(leafId, command),
+      const renderer = {
         onExecStart: () => {
-          // #113③：把"这台 shell 会回报执行标记"这件事记到 leaf 上，
-          // 可见终端执行据此区分"没集成"与"命令还在跑"。
-          useTerminalBlocksStore.getState().noteExecStarted(leafId);
+          execStartMarker?.dispose();
           execStartMarker = term.registerMarker(0);
         },
-        onOutputCapture: () => {
+        captureOutput: () => {
+          // 旧 renderer 的 marker 不能关联新屏幕的滚屏内容。
+          if (!execStartMarker || execStartMarker.isDisposed) {
+            return { text: "", truncated: true };
+          }
           const endMarker = term.registerMarker(0);
           try {
             const captured = captureBlockOutputWithMeta(
@@ -927,15 +1019,63 @@ function bindLeafToSlot(leafId: number, s: Session): void {
               truncated: captured.truncated,
             };
           } finally {
+            execStartMarker.dispose();
             execStartMarker = null;
             endMarker?.dispose();
           }
         },
+      };
+      s.blockRenderer = renderer;
+      // 执行周期与编号属于会话，不随绘制槽位被回收或重绑而重建。
+      const collector = s.blockCollector ??= new TerminalBlockCollector({
+        sessionId: leafId,
+        resolveAuthor: (command) =>
+          useTerminalBlocksStore.getState().resolveAuthor(leafId, command),
+        onExecStart: () => {
+          useTerminalBlocksStore.getState().noteExecStarted(leafId);
+          s.blockRenderer?.onExecStart();
+        },
+        onOutputCapture: () => s.blockRenderer?.captureOutput() ?? { text: "", truncated: true },
         onBlock: (block) => {
           useTerminalBlocksStore.getState().pushBlock(block);
         },
       });
-      const disposeBlockHandlers = registerBlockOscHandlers(term, collector);
+      const disposeBlockRenderer = () => {
+        if (s.blockRenderer === renderer) s.blockRenderer = null;
+        execStartMarker?.dispose();
+        execStartMarker = null;
+      };
+      const remoteShellState = s.remote ? createShellIntegrationState() : null;
+      if (s.remote) {
+        if (s.lastCwd) collector.setCwd(s.lastCwd);
+        const consumers = {
+          onCwd: (next: string) => {
+            collector.setCwd(next);
+            markSessionReady(leafId);
+            if (s.lastCwd === next) return;
+            s.lastCwd = next;
+            setLeafCwd(leafId, next);
+            s.callbacks.onCwd?.(next);
+          },
+          onContextChange: () => {
+            collector.switchContext();
+            execStartMarker?.dispose();
+            execStartMarker = null;
+            if (remoteShellState) remoteShellState.inCommand = false;
+            onLeafCommandState(leafId, false);
+          },
+        };
+        s.remoteConsumers = consumers;
+        // Retain source association and command state across renderer parking;
+        // detached markers are disposed. Transport changes replace Session.
+        s.remoteIntegration ??= new RemoteShellIntegration({
+          onCwd: (next) => s.remoteConsumers?.onCwd(next),
+          onContextChange: () => s.remoteConsumers?.onContextChange(),
+        });
+        s.remoteIntegration.setConnection(s.remoteContext);
+      }
+      const acceptFrame = s.remote ? s.remoteIntegration?.acceptFrame : undefined;
+      const disposeBlockHandlers = registerBlockOscHandlers(term, collector, acceptFrame);
       if (s.blocks) {
         const osc52 = registerOsc52ClipboardHandler(term);
         const deco = new BlockDecorations(term, {
@@ -961,20 +1101,17 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         term.textarea?.addEventListener("focus", onGridFocus);
         return [
           () => {
+            disposeOutputHighlight();
             s.blockDecorations = null;
             osc52();
             deco.dispose();
             disposeBlockHandlers();
+            disposeBlockRenderer();
             term.textarea?.removeEventListener("focus", onGridFocus);
           },
         ];
       }
-      // For remote transports (SSH) the remote shell may not emit OSC 133
-      // integration markers, and SshTerminalHost injects a trusted OSC 7
-      // sequence right after `cd` commands from the transport seam. Use the
-      // cwd handler without the in-command guard so our injected OSC 7 is
-      // honored, and skip the local teach trigger for remote shells.
-      const disposers: (() => void)[] = [disposeBlockHandlers];
+      const disposers: (() => void)[] = [disposeBlockHandlers, disposeBlockRenderer, disposeOutputHighlight];
       if (!s.remote) {
         // Shared in-command flag — see osc-handlers.ts. The prompt tracker
         // flips it on OSC 133 B/C/D/A; the cwd handler reads it to ignore OSC
@@ -999,16 +1136,15 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         );
         disposers.push(cwd);
       } else {
+        const shellState = remoteShellState!;
+        const prompt = registerPromptTracker(term, shellState, (running) =>
+          onLeafCommandState(leafId, running),
+          acceptFrame,
+        );
+        disposers.push(prompt.dispose);
         const cwd = registerCwdHandler(
           term,
           (next) => {
-            const log = getOsc7Log();
-            log?.push({
-              source: "useTerminalSession.registerCwdHandler",
-              cwd: next,
-              leafId,
-              remote: s.remote,
-            });
             collector.setCwd(next);
             markSessionReady(leafId);
             if (s.lastCwd === next) return;
@@ -1017,9 +1153,15 @@ function bindLeafToSlot(leafId: number, s: Session): void {
             setLeafCwd(leafId, next);
             s.callbacks.onCwd?.(next);
           },
-          undefined,
+          shellState,
+          "posix",
+          acceptFrame,
         );
         disposers.push(cwd);
+        const consumers = s.remoteConsumers;
+        disposers.push(() => {
+          if (s.remoteConsumers === consumers) s.remoteConsumers = null;
+        });
       }
       const osc52 = registerOsc52ClipboardHandler(term);
       disposers.push(osc52);
@@ -1115,6 +1257,7 @@ export async function respawnSession(
   }
   s.pty?.close();
   s.pty = null;
+  s.blockCollector?.switchContext();
   s.snapshot = null;
   s.dormantRing = new DormantRing();
   s.shellExited = false;
@@ -1179,9 +1322,8 @@ export async function leafHasForegroundProcess(
   }
 }
 
-export function disposeSession(leafId: number): void {
-  const s = sessions.get(leafId);
-  if (!s) return;
+function retireSession(leafId: number, s: Session): void {
+  s.restoreCancel?.();
   s.disposed = true;
   cancelHiddenRelease(s);
   disposeLeafSlot(leafId);
@@ -1191,8 +1333,7 @@ export function disposeSession(leafId: number): void {
   s.pty = null;
   s.pendingInput = "";
   sessions.delete(leafId);
-  blockViewportListeners.delete(leafId);
-  pendingRiskListeners.delete(leafId);
+  notifyIntegrationContext(leafId);
   searchAddons.delete(leafId);
   // TDSF B1 (2026-08-29): 同步清理 block 流水账 store（防泄漏）
   useTerminalBlocksStore.getState().clearLeaf(leafId);
@@ -1207,6 +1348,14 @@ export function disposeSession(leafId: number): void {
   }
 }
 
+export function disposeSession(leafId: number): void {
+  const s = sessions.get(leafId);
+  if (!s) return;
+  retireSession(leafId, s);
+  blockViewportListeners.delete(leafId);
+  pendingRiskListeners.delete(leafId);
+}
+
 type Options = {
   leafId: number;
   container: React.RefObject<HTMLDivElement | null>;
@@ -1214,10 +1363,12 @@ type Options = {
   focused?: boolean;
   initialCwd?: string;
   blocks?: boolean;
+  /** Stable connection identity, independent of transport factory references. */
+  transportKey?: string;
   // TDSF (#16): SSH 传输注入 seam。若提供，useTerminalSession 走 SSH 分支，
   // 由 SshTerminalHost 提供 subscribeTerminalData + handle.write/resize。
   openTransport?: (
-    h: { onData: (b: Uint8Array) => void; onExit: (c: number) => void },
+    h: TerminalTransportHandlers,
   ) => Promise<TerminalTransport>;
   // TDSF (#16): remote 护栏标志。true 时跳过 PTY 专属 invoke。
   remote?: boolean;
@@ -1233,6 +1384,7 @@ export function useTerminalSession({
   focused = true,
   initialCwd,
   blocks = false,
+  transportKey,
   openTransport,
   remote = false,
   onSearchReady,
@@ -1248,20 +1400,23 @@ export function useTerminalSession({
   const initialCwdRef = useRef(initialCwd);
   initialCwdRef.current = initialCwd;
 
-  // TDSF (#16): openTransport/remote 同样不能是 effect dep（每次 render 引用变化
-  // 会重订阅），用 ref 同步到 session，与 initialCwd 同模式。
+  // Factory references may change on render; only connection identity and
+  // transport kind should replace the retained session.
   const openTransportRef = useRef(openTransport);
   openTransportRef.current = openTransport;
-  const remoteRef = useRef(remote);
-  remoteRef.current = remote;
 
   useEffect(() => {
     let cancelled = false;
+    const previous = sessions.get(leafId);
+    if (previous && (previous.transportKey !== transportKey || previous.remote !== remote)) {
+      retireSession(leafId, previous);
+      notifyPendingRiskListeners(leafId);
+    }
     const s = ensureSession(leafId, initialCwdRef.current, blocks);
-    // TDSF (#16): 同步传输注入与护栏标志到 session。
-    // 不放进 deps，防止每次 render 重订阅 effect。
+    s.transportKey = transportKey;
+    // Factory updates alone do not restart a connection.
     s.openTransport = openTransportRef.current;
-    s.remote = remoteRef.current;
+    s.remote = remote;
     // TDSF 2026-08-28: 命令预测按环境分流——本地终端预测 Windows 命令，
     // SSH 终端预测 Linux 命令（远程 remote=true → linux 命令集）。
     // TDSF 2026-08-28（用户反馈）: WSL Space 的本地 PTY 实际运行 Linux，
@@ -1290,7 +1445,7 @@ export function useTerminalSession({
       clearLeafEnvironment(leafId);
       detachSession(leafId);
     };
-  }, [leafId, container, blocks]);
+  }, [leafId, container, blocks, transportKey, remote]);
 
   const [blockMode, setBlockMode] = useState<BlockMode>("prompt");
   useEffect(() => {
@@ -1302,7 +1457,7 @@ export function useTerminalSession({
     return () => {
       s.blockListeners.delete(cb);
     };
-  }, [leafId, blocks]);
+  }, [leafId, blocks, transportKey, remote]);
 
   const { fontFamily, fontWeight, fontSize } = useTerminalFont();
   const zoomLevel = usePreferencesStore((p) => p.zoomLevel);
@@ -1346,6 +1501,7 @@ export function useTerminalSession({
     if (!s) return;
     s.visibleNow = visible;
     s.focusedNow = focused;
+    if (!visible || !focused) s.restoreCancel?.();
     if (visible) {
       cancelHiddenRelease(s);
       if (s.container && !s.hasSlot) bindLeafToSlot(leafId, s);
@@ -1362,7 +1518,7 @@ export function useTerminalSession({
         void releaseIfIdle(leafId, s);
       }
     }
-  }, [leafId, visible, focused, blocks]);
+  }, [leafId, visible, focused, blocks, transportKey, remote]);
 
   const write = useCallback(
     (data: string) => {
@@ -1542,4 +1698,15 @@ export function terminalDebugStats() {
 if (import.meta.env?.DEV && typeof window !== "undefined") {
   (window as unknown as { __tdsfTerm?: unknown }).__tdsfTerm =
     terminalDebugStats;
+}
+
+if (import.meta.hot) {
+  import.meta.hot.accept(() => window.location.reload());
+  import.meta.hot.dispose(() => {
+    for (const { leafId } of terminalDebugStats().sessions) disposeSession(leafId);
+    if (typeof window !== "undefined") {
+      const debugWindow = window as unknown as { __tdsfTerm?: unknown };
+      if (debugWindow.__tdsfTerm === terminalDebugStats) delete debugWindow.__tdsfTerm;
+    }
+  });
 }

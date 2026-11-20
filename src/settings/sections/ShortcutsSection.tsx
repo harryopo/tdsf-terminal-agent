@@ -5,8 +5,8 @@
 
 import { Button } from "@/components/ui/button";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { setShortcuts } from "@/modules/settings/store";
 import {
-  getBindingTokens,
   type KeyBinding,
   SHORTCUTS,
   type ShortcutGroup,
@@ -91,6 +91,7 @@ export function ShortcutsSection() {
         setDraft(null);
         return;
       }
+      if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
       const next: KeyBinding = {
         key: e.key,
         ctrl: e.ctrlKey,
@@ -98,10 +99,10 @@ export function ShortcutsSection() {
         alt: e.altKey,
         meta: e.metaKey,
       };
-      void (async () => {
-        // 走 store.set 暂存,这里我们简单刷新 UI
-        setDraft({ id: draft.id, bindings: [next] });
-      })();
+      const value = { ...usePreferencesStore.getState().shortcuts, [draft.id]: [next] };
+      usePreferencesStore.setState({ shortcuts: value });
+      void setShortcuts(value).catch((error: unknown) => console.warn("[shortcuts] could not save binding", error));
+      setDraft(null);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -179,12 +180,9 @@ export function ShortcutsSection() {
                           // 重置当前快捷键到默认值 (从 SHORTCUTS 中查 defaultBindings)
                           const def = SHORTCUTS.find((x) => x.id === s.id);
                           if (!def) return;
-                          usePreferencesStore.setState((prev) => ({
-                            shortcuts: {
-                              ...prev.shortcuts,
-                              [s.id]: def.defaultBindings,
-                            },
-                          }));
+                          const value = { ...usePreferencesStore.getState().shortcuts, [s.id]: def.defaultBindings };
+                          usePreferencesStore.setState({ shortcuts: value });
+                          void setShortcuts(value).catch((error: unknown) => console.warn("[shortcuts] could not reset binding", error));
                         }}
                         className="h-6 px-2 text-[10.5px]"
                       >
@@ -200,7 +198,7 @@ export function ShortcutsSection() {
       </div>
 
       <p className="text-[11px] text-muted-foreground">
-        提示：{getBindingTokens.length} 个内置快捷键分布在 {GROUP_ORDER.length}{" "}
+        提示：{SHORTCUTS.length} 个内置快捷键分布在 {GROUP_ORDER.length}{" "}
         个分组中。
       </p>
     </div>

@@ -47,7 +47,7 @@ export interface SuggestionResult {
   command: string;
   /** 来源：history / dictionary / fuzzy（命令层）/ arg（参数层） */
   source: "history" | "dictionary" | "fuzzy" | "arg";
-  /** 中文翻译（仅手编词典覆盖的命令有） */
+  /** 简短中文说明；未知环境命令与历史命令只标来源 */
   zh?: string;
   /** 英文描述（Fig spec description / 参数说明） */
   description?: string;
@@ -81,13 +81,10 @@ export class SuggestEngine {
   /** 历史最大保留条数 */
   private readonly maxHistory = 500;
 
-  /** linux 环境：Fig spec 索引 + 中文（tldr zh 优先，手编词典次之） */
+  /** linux 环境：Fig spec 索引 + 中文（简短词典优先，tldr zh 兜底） */
   private linuxCommands: EnvCommand[];
   /** windows 环境：手编 PowerShell/cmd 命令表 */
   private windowsCommands: EnvCommand[];
-  /** 静态词典快照：环境命令集是"词典 ∪ 真实环境"，重新播种时不能把上次播种的留下 */
-  private readonly baseLinux: EnvCommand[];
-  private readonly baseWindows: EnvCommand[];
   /** 已播种的真实环境命令名，避免每次按键都重扫一遍远端全集 */
   private readonly envSeen: Record<TerminalEnv, Set<string>> = {
     windows: new Set(),
@@ -95,7 +92,7 @@ export class SuggestEngine {
   };
 
   constructor() {
-    // 手编词典（180+ 常用 Linux 命令，含 ll/la 等 shell 别名）
+    // 手编词典（常用 Linux 命令，含 ll/la 等 shell 别名）
     const manualMap = new Map<string, CommandDictEntry>(
       COMMAND_LIST.map((e) => [e.command, e]),
     );
@@ -121,10 +118,8 @@ export class SuggestEngine {
     this.linuxCommands = [
       ...SPEC_INDEX.map((e) => ({
         name: e.name,
-        // 中文优先级: tldr zh（开源全量）> 手编词典 > 无。
-        // 注意: 别名解释不覆盖 SPEC_INDEX 标准命令（ls/grep/rm 的别名
-        // 只是加参数，tldr 的标准解释更准确）。
-        zh: TLDR_ZH[e.name] ?? manualMap.get(e.name)?.zh,
+        // 预测行先用简述；词典未覆盖的命令保留 tldr 解释兜底。
+        zh: manualMap.get(e.name)?.zh ?? TLDR_ZH[e.name],
         description: e.description,
       })),
       ...extra.map((e) => ({
@@ -146,8 +141,8 @@ export class SuggestEngine {
       name: e.command,
       zh: e.zh,
     }));
-    this.baseLinux = this.linuxCommands;
-    this.baseWindows = this.windowsCommands;
+    this.envSeen.linux = new Set(this.linuxCommands.map((c) => c.name));
+    this.envSeen.windows = new Set(this.windowsCommands.map((c) => c.name));
   }
 
   /**
@@ -164,13 +159,13 @@ export class SuggestEngine {
       const name = raw.trim();
       if (!name || seen.has(name)) continue;
       seen.add(name);
-      extra.push({ name });
+      extra.push({ name, zh: "当前环境命令" });
     }
     if (extra.length === 0) return;
     if (env === "windows") {
-      this.windowsCommands = [...this.baseWindows, ...extra];
+      this.windowsCommands = [...this.windowsCommands, ...extra];
     } else {
-      this.linuxCommands = [...this.baseLinux, ...extra];
+      this.linuxCommands = [...this.linuxCommands, ...extra];
     }
   }
 
@@ -193,17 +188,20 @@ export class SuggestEngine {
    * @param input 当前输入前缀
    * @param limit 返回最大条数（默认 5）
    * @param env 终端环境（决定命令集与历史，默认 linux）
+   * @param acceptCommand 当前会话的命令可用性过滤，先于排序截断；历史仍保留
    */
   getSuggestions(
     input: string,
     limit = 5,
     env: TerminalEnv = "linux",
+    acceptCommand?: (command: string) => boolean,
   ): SuggestionResult[] {
     if (!input || input.length < 1) return [];
     if (input.includes(" ")) return []; // 含空格 = 在输参数，不预测命令名
 
-    const commands =
+    const dictionary =
       env === "windows" ? this.windowsCommands : this.linuxCommands;
+    const commands = acceptCommand ? dictionary.filter((c) => acceptCommand(c.name)) : dictionary;
     const history = this.history[env];
 
     const results: SuggestionResult[] = [];
@@ -253,7 +251,9 @@ export class SuggestEngine {
       if (results.length >= limit) break;
       if (seen.has(cmd)) continue;
       seen.add(cmd);
-      results.push({ command: cmd, source: "history" });
+      const firstCommand = cmd.trim().split(/\s+/)[0];
+      const known = dictionary.find((c) => c.name === firstCommand);
+      results.push({ command: cmd, source: "history", zh: known?.zh ?? "历史命令", description: known?.description });
     }
 
     // ── Layer 3: fuzzysort 模糊匹配（严格阈值 + 首字符约束，仅兜底）──────
@@ -279,6 +279,7 @@ export class SuggestEngine {
           command: fr.target,
           source: "fuzzy",
           zh: c?.zh,
+          description: c?.description,
           score: fr.score,
         });
       }

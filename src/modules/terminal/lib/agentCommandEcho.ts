@@ -19,10 +19,10 @@
  * A multi-line command is matched line by line, so every line of it is either
  * colored as a unit or left completely alone.
  */
-const AGENT_COMMAND_BLUE = "\x1b[38;2;91;140;255m";
+import { coerceAgentCommandColor } from "@/modules/settings/agentCommandColor";
+
 const RESET_STYLE = "\x1b[0m";
 const encoder = new TextEncoder();
-const AGENT_COMMAND_BLUE_BYTES = encoder.encode(AGENT_COMMAND_BLUE);
 const RESET_STYLE_BYTES = encoder.encode(RESET_STYLE);
 /**
  * Confirmed mode withholds candidate bytes. A real echo needs at most a handful
@@ -39,11 +39,15 @@ export type AgentCommandEchoOptions = {
    * whole line first.
    */
   progressive?: boolean;
+  /** The caller has already established a clean, idle prompt. */
+  promptReady?: boolean;
+  color?: string;
 };
 
 export class AgentCommandEcho {
   private readonly lines: Uint8Array[];
   private readonly progressive: boolean;
+  private readonly colorBytes: Uint8Array;
   private lineIndex = 0;
   private matched = 0;
   private complete = false;
@@ -63,7 +67,10 @@ export class AgentCommandEcho {
       .filter((line) => line.length > 0);
     this.complete = this.lines.length === 0;
     this.progressive = options.progressive === true;
-    this.promptReady = !this.progressive;
+    this.promptReady = !this.progressive || options.promptReady === true;
+    const hex = coerceAgentCommandColor(options.color).slice(1);
+    const rgb = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+    this.colorBytes = encoder.encode(`\x1b[38;2;${rgb.join(";")}m`);
   }
 
   isComplete(): boolean {
@@ -187,7 +194,7 @@ export class AgentCommandEcho {
         // Opening the span on the first echoed byte is what keeps human-paced
         // input from looking frozen; the cost is that a false start colors a
         // prompt fragment, which is why this mode needs the gate above.
-        output.push(...AGENT_COMMAND_BLUE_BYTES, byte);
+        output.push(...this.colorBytes, byte);
         this.spanOpen = true;
         this.matched = 1;
       } else {
@@ -205,7 +212,7 @@ export class AgentCommandEcho {
 
     this.closeSpan(output);
     if (byte === line[0]) {
-      output.push(...AGENT_COMMAND_BLUE_BYTES, byte);
+      output.push(...this.colorBytes, byte);
       this.spanOpen = true;
       this.matched = 1;
     } else {
@@ -237,7 +244,7 @@ export class AgentCommandEcho {
   }
 
   private commitCandidate(output: number[]): void {
-    output.push(...AGENT_COMMAND_BLUE_BYTES, ...this.held, ...RESET_STYLE_BYTES);
+    output.push(...this.colorBytes, ...this.held, ...RESET_STYLE_BYTES);
     this.held = [];
   }
 

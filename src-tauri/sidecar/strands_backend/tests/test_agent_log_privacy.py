@@ -97,7 +97,7 @@ def test_existing_text_redaction_and_clip_contract_remain(isolated_log):
 
     pem = "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"
     assert log_event(
-        "privacy", "user_msg", f"Authorization: Bearer {'x' * 24}; {pem}; 内网 10.0.0.4",
+        "privacy", "user_msg", f"Authorization: Bearer {'x' * 24}\n{pem}\n内网 10.0.0.4",
     )
     assert log_event("privacy", "assistant_msg", "x" * 5000)
     lines = tail(session_id="privacy", lines=2)["lines"]
@@ -113,21 +113,21 @@ def test_redaction_and_write_exceptions_never_leak_or_escape(
     isolated_log, monkeypatch, caplog,
 ):
     from strands_backend import agent_log
-    from strands_backend.tools import _redact
+    from strands_backend import diagnostics
 
     secret = "exception_secret_77"
 
     def fail_redact(_text):
         raise RuntimeError(secret)
 
-    original_redactor = _redact.redact_sensitive_text
-    monkeypatch.setattr(_redact, "redact_sensitive_text", fail_redact)
+    original_redactor = diagnostics.redact_sensitive_text
+    monkeypatch.setattr(diagnostics, "redact_sensitive_text", fail_redact)
     with caplog.at_level(logging.DEBUG):
         assert agent_log.log_event("privacy", "user_msg", "ordinary") is True
     assert secret not in caplog.text
     assert secret not in _raw_log(isolated_log)
 
-    monkeypatch.setattr(_redact, "redact_sensitive_text", original_redactor)
+    monkeypatch.setattr(diagnostics, "redact_sensitive_text", original_redactor)
     real_open = open
 
     def fail_open(*args, **kwargs):

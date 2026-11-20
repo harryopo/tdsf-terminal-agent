@@ -225,15 +225,12 @@ export function Header({
       {IS_MAC && <span className="mr-1 h-full w-px shrink-0 bg-border/70" />}
 
       {/* ===== 中间: SpaceSwitcher + TabBar ===== */}
-      {/* TDSF 2026-07-30: 多 space 时防止 TabBar 溢出遮住左侧工作区
-          - 容器加 overflow-hidden, 内部 TabBar 用 overflow-x-auto 横向滚动
-          - SpaceSwitcher 允许 shrink 并收窄 (max-w-24) 在空间不足时让位
-          - 移除末尾的 flex-1 占位 div, 改为 min-w-0 让容器真正受父级 flex-1 约束 */}
+      {/* The workspace keeps its own width; only the tab viewport shrinks. */}
       <div
         className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden"
         data-tauri-drag-region
       >
-        <div className="min-w-0 shrink">
+        <div className="min-w-0 shrink-0">
           {spaceSwitcher}
         </div>
         <TabBar
@@ -250,11 +247,10 @@ export function Header({
           compact={compact}
           hasWorkspace={hasWorkspace}
         />
-        <div data-tauri-drag-region className="h-full min-w-1 flex-1" />
       </div>
 
       {/* TDSF 2026-09-21：命令面板与通知在左簇靠右顶格（见上面），右簇从搜索框起。 */}
-      <SearchInline ref={searchRef} target={searchTarget} compact={compact} />
+      <SearchInline ref={searchRef} target={searchTarget} compact={narrow || compact} />
 
       {/* ===== 右侧: 主题切换 + 设置 + 窗口控制 ===== */}
       {/* TDSF: 主题切换按钮（亮/暗模式切换，使用 ThemeProvider 持久化） */}

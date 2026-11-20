@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 import pytest
 
@@ -140,3 +141,42 @@ def test_borrowed_execution_is_labelled_with_the_calling_tool():
     assert [e["status"] for e in events] == ["started", "completed"]
     assert {e["tool_name"] for e in events} == {"backup_restore"}
     assert events[0]["params"]["command"].startswith("cp -p /etc/nginx/nginx.conf")
+
+
+def test_native_output_and_card_share_a_unique_call_id():
+    ctx = _ctx()
+    with patch("strands_backend.tools.assess_command", return_value=_ALLOW), patch(
+        "strands_backend.tools._track_evidence"
+    ):
+        execute_via_ssh(ctx, "df -h")
+        execute_via_ssh(ctx, "df -h")
+
+    events = _events(ctx)
+    ids = [event["tool_call_id"] for event in events]
+    assert ids[0] == ids[1]
+    assert ids[2] == ids[3]
+    assert ids[0] != ids[2]
+    assert all(UUID(call_id).version == 4 for call_id in ids)
+    dispatches = ctx.rust_bridge.ipc_invoke.call_args_list
+    assert [call.args[1]["toolCallId"] for call in dispatches] == [ids[0], ids[2]]
+    assert all(call.args[0] == "ssh_command" for call in dispatches)
+
+
+def test_blocked_and_exception_cards_keep_the_started_call_id():
+    ctx = _ctx()
+    with patch("strands_backend.tools.assess_command", return_value=_BLOCKED):
+        execute_via_ssh(ctx, "rm -rf /")
+    started, ended = _events(ctx)
+    assert started["tool_call_id"] == ended["tool_call_id"]
+    ctx.rust_bridge.ipc_invoke.assert_not_called()
+
+    ctx = _ctx()
+    with patch(
+        "strands_backend.tools._execute_via_ssh_impl",
+        side_effect=RuntimeError("boom"),
+    ):
+        with pytest.raises(RuntimeError):
+            execute_via_ssh(ctx, "df -h")
+    started, ended = _events(ctx)
+    assert started["tool_call_id"] == ended["tool_call_id"]
+    assert ended["status"] == "error"

@@ -3,7 +3,7 @@ name: Release Windows
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 jobs:
   publish-windows:
@@ -37,14 +37,24 @@ jobs:
       - name: Validate release tag and manifest versions
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -cnotmatch '\Av[0-9]+\.[0-9]+\.[0-9]+\z') {
             throw "Release tag must use vMAJOR.MINOR.PATCH, got: $tag"
           }
           ./scripts/check-release-version.ps1 -ExpectedVersion $tag.Substring(1)
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Restore and verify completion resources
+        shell: pwsh
+        run: |
+          pnpm fetch:carapace
+          if ($LASTEXITCODE -ne 0) { throw "Completion resource restore failed" }
+          pnpm check:carapace
+          if ($LASTEXITCODE -ne 0) { throw "Completion resource verification failed" }
+          pnpm test:carapace
+          if ($LASTEXITCODE -ne 0) { throw "Completion resource tests failed" }
 
       - name: Install sidecar build dependencies
         shell: pwsh
@@ -53,14 +63,19 @@ jobs:
           # 显式指到那里，并且会核对里面的 strands 版本 == STRANDS_RUNTIME_VERSION。
           # 装在 PATH python 里等于没装（#77 的成因就是"谁在 PATH 上算谁"）。
           python -m venv src-tauri/sidecar/.venv
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar virtual environment creation failed" }
           src-tauri/sidecar/.venv/Scripts/python.exe -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar pip upgrade failed" }
           src-tauri/sidecar/.venv/Scripts/python.exe -m pip install -r src-tauri/sidecar/requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar build dependency installation failed" }
 
       - name: Build and smoke-test bundled sidecar
         shell: pwsh
         run: |
           pnpm build:sidecar:win
+          if ($LASTEXITCODE -ne 0) { throw "Sidecar build failed" }
           pnpm test:sidecar:exe
+          if ($LASTEXITCODE -ne 0) { throw "Bundled sidecar smoke test failed" }
 
       - name: Require updater signing key
         shell: pwsh
@@ -80,7 +95,7 @@ jobs:
         run: |
           # 发布说明的唯一主人是 CHANGELOG.md 里对应版本那一节：
           # 缺这一节就直接失败，不许发一个"说明空着"或临时手写的 Release。
-          $version = "${{ github.ref_name }}".Substring(1)
+          $version = $env:GITHUB_REF_NAME.Substring(1)
           $lines = Get-Content -LiteralPath CHANGELOG.md -Encoding utf8
           $start = -1
           for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -91,6 +106,7 @@ jobs:
           for ($i = $start; $i -lt $lines.Count; $i++) {
             if ($lines[$i] -match '^## ') { $end = $i; break }
           }
+          if ($end -le $start) { throw "CHANGELOG.md 的 $version 一节是空的。" }
           $section = (($lines[$start..($end - 1)]) -join "`n").Trim()
           if (-not $section) { throw "CHANGELOG.md 的 $version 一节是空的。" }
           Set-Content -LiteralPath release-notes.md -Value $section -Encoding utf8
@@ -112,9 +128,17 @@ jobs:
           releaseDraft: true
           prerelease: false
           # tauri.release.conf.json 只把 createUpdaterArtifacts 打开：
-          # 签名产物（.nsis.zip + .sig + latest.json）只在这里生成，
+          # 更新使用原始 NSIS 安装器；.exe.sig 和 latest.json 只在发布流程中生成。
           # 所以本地 pnpm build:win 不需要私钥。
           args: --config src-tauri/tauri.release.conf.json --bundles nsis
+
+      - name: Verify installer against the configured updater public key
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe")
+          if ($installers.Count -ne 1) { throw "Expected exactly one NSIS installer for signature verification" }
+          cargo run --release --locked --manifest-path src-tauri/Cargo.toml --example verify_updater_signature -- $installers[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Updater signature verification failed; keep release unpublished" }
 
       - name: Append installer checksum to the notes
         shell: pwsh
@@ -126,9 +150,11 @@ jobs:
           # 现在不额外发文件，把校验值并到发布说明里。
           $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer not found" }
+          node scripts/check-carapace.mjs --installer $installer.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Installer is missing completion resources; keep release unpublished" }
           $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $notes = (Get-Content -LiteralPath release-notes.md -Raw -Encoding utf8).TrimEnd()
           Set-Content -LiteralPath release-notes.md -Value "$notes`n`nSHA-256（Windows x64 安装包）：$hash" -Encoding utf8
-          gh release edit "${{ github.ref_name }}" --notes-file release-notes.md
+          gh release edit $env:GITHUB_REF_NAME --notes-file release-notes.md
           Write-Host "installer sha256 = $hash"
 

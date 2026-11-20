@@ -35,6 +35,7 @@ spec 要求：
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from core.risk_engine import RiskEngine
@@ -48,8 +49,13 @@ logger = logging.getLogger("sidecar.tools.risk")
 # ============================================================================
 
 _engine_instance: RiskEngine | None = None
-_DEFAULT_RISK_RULES_PATH: str = "config/risk_rules.yaml"
-_DEFAULT_ASSETS_PATH: str = "config/assets.yaml"
+# 配置路径必须相对 sidecar 包定位，而不是相对进程 cwd：
+# Rust 在 dev 模式从工作区根启动 `python src-tauri/sidecar/main.py`，
+# cwd 不是 sidecar 目录，原来写死 "config/risk_rules.yaml" 会直接报
+# FileNotFoundError，risk.evaluate 全部失败 → 前端候选被保守隐藏。
+_SIDECAR_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_RISK_RULES_PATH: str = str(_SIDECAR_ROOT / "config" / "risk_rules.yaml")
+_DEFAULT_ASSETS_PATH: str = str(_SIDECAR_ROOT / "config" / "assets.yaml")
 
 
 # ============================================================================

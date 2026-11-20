@@ -77,7 +77,7 @@ def test_sidecar_version_is_importable_when_frozen() -> None:
     import sidecar_version
 
     assert sidecar_version.__file__ and Path(sidecar_version.__file__).parent == _SIDECAR_DIR
-    assert re.fullmatch(r"\d+\.\d+\.\d+", SIDECAR_VERSION)
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?", SIDECAR_VERSION)
 
 
 def test_status_payload_uses_real_version() -> None:

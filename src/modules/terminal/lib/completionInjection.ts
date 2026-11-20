@@ -19,6 +19,7 @@
  * -----------------------------------------------------------------------------
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
+import { IS_MAC, isTerminalCopy } from './keymap';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PREDICTION_CLEAR_EVENT } from '@/lib/predictionEvents';
@@ -46,12 +47,14 @@ import {
   tldrParamSuggestions,
 } from '@/lib/spec-data/tldr-params';
 import { getCommandSpec } from '@/lib/spec-data/loader';
-import { parseCommandLine, suggestParams } from '@/lib/spec-data/paramSuggest';
+import { suggestOptionValues, suggestParams } from '@/lib/spec-data/paramSuggest';
+import { commandContext, completionReplacement } from '@/lib/command-context';
 import {
+  clearLeafEnvironment as clearEnvironment,
   getLeafEnvironment,
 } from './executionHistory';
 
-export { clearLeafEnvironment, setLeafEnvironment } from './executionHistory';
+export { setLeafEnvironment } from './executionHistory';
 
 // ============================================================================
 // 类型
@@ -86,6 +89,8 @@ let activeState: CompletionState = {
   cursor: null,
 };
 
+let activePredictionIsCurrent: (() => boolean) | null = null;
+
 const subscribers = new Set<(state: CompletionState) => void>();
 
 let writeFn: ((leafId: number, data: string) => void) | null = null;
@@ -99,6 +104,14 @@ let getTermFn: ((leafId: number) => XTerm | null) | null = null;
 
 /** 每个终端的输入缓冲区 */
 const inputBuffers = new Map<number, string>();
+const unknownInputLines = new Set<number>();
+
+export function clearLeafEnvironment(leafId: number): void {
+  clearEnvironment(leafId);
+  inputBuffers.delete(leafId);
+  unknownInputLines.delete(leafId);
+  if (activeState.visible && activeState.leafId === leafId) closeCompletion();
+}
 
 /** 每个终端的环境（windows=本地 pwsh/cmd，linux=SSH 远程）。
  * TDSF 2026-08-28：命令预测必须区分环境——本地终端预测 Windows 命令，
@@ -109,11 +122,21 @@ function getInputBuffer(leafId: number): string {
 }
 
 function setInputBuffer(leafId: number, value: string): void {
+  // Input changes invalidate replies immediately, not after the debounce fires.
+  predictSeq++;
   inputBuffers.set(leafId, value);
+  setState((s) => (s.visible ? { ...s, visible: false } : s));
 }
 
 function clearInputBuffer(leafId: number): void {
-  inputBuffers.set(leafId, '');
+  unknownInputLines.delete(leafId);
+  setInputBuffer(leafId, '');
+}
+
+function invalidateInputLine(leafId: number): void {
+  setInputBuffer(leafId, '');
+  unknownInputLines.add(leafId);
+  closeCompletion();
 }
 
 // ============================================================================
@@ -227,6 +250,7 @@ type SetStateArg = CompletionState | ((prev: CompletionState) => CompletionState
 function setState(arg: SetStateArg): void {
   const next = typeof arg === 'function' ? arg(activeState) : arg;
   if (next === activeState) return;
+  if (!next.visible) activePredictionIsCurrent = null;
   activeState = next;
   for (const sub of subscribers) sub(next);
 }
@@ -272,21 +296,7 @@ function schedulePredictionUpdate(leafId: number): void {
 }
 
 async function runPredictionUpdate(leafId: number): Promise<void> {
-  if (predictInFlight) {
-    predictQueuedLeaf = leafId;
-    return;
-  }
-  predictInFlight = true;
-  try {
-    await updatePredictions(leafId);
-  } finally {
-    predictInFlight = false;
-    if (predictQueuedLeaf !== null) {
-      const next = predictQueuedLeaf;
-      predictQueuedLeaf = null;
-      schedulePredictionUpdate(next);
-    }
-  }
+  await updatePredictions(leafId);
 }
 
 /**
@@ -294,6 +304,7 @@ async function runPredictionUpdate(leafId: number): Promise<void> {
  * 更新会拿旧行去请求参数，甚至把弹窗按一个已经不存在的 prefix 弹出来。
  */
 function cancelScheduledPredictionUpdate(): void {
+  predictSeq++;
   if (predictTimer) {
     clearTimeout(predictTimer);
     predictTimer = null;
@@ -366,20 +377,21 @@ export function mergeCommandWithParamItems(
 
 /**
  * 参数模式候选追加子命令缩写（二轮改进：ip a → address 等教学高频缩写）。
- * 缩写排在 carapace/tldr/Fig specs 之后（真实数据优先），整体限 8。
+ * 子命令位置优先保留四条常用中文候选，不被满表选项挤掉，整体限 8。
  */
 export function appendAbbrevItems(
   items: readonly SuggestionResult[],
   cmd: string,
   prefix: string,
 ): SuggestionResult[] {
-  if (items.length >= 8) return items.slice(0, 8);
-  const { current } = parseCommandLine(prefix);
-  const abbrevs = findAbbrevSuggestions(cmd, current);
+  const { tokens, current } = buildParamRequest(prefix);
+  const bare = tokens.length === 1;
+  if (!bare && (tokens.length !== 2 || current === '')) return items.slice(0, 8);
+  const abbrevs = findAbbrevSuggestions(cmd, bare ? '' : current);
   if (abbrevs.length === 0) return items.slice(0, 8);
-  const seen = new Set(items.map((it) => it.command));
-  const out = [...items.slice(0, 8)];
-  for (const it of abbrevs) {
+  const seen = new Set<string>();
+  const out: SuggestionResult[] = [];
+  for (const it of [...abbrevs.slice(0, 4), ...items, ...abbrevs.slice(4)]) {
     if (out.length >= 8) break;
     if (seen.has(it.command)) continue;
     seen.add(it.command);
@@ -388,124 +400,125 @@ export function appendAbbrevItems(
   return out;
 }
 
-/**
- * 参数模式候选加载（按环境分流 + 三源串联，TDSF 2026-08-28 二轮改进）。
- *
- * - windows（本地 pwsh）：invoke param_complete（Rust spawn 打包内 carapace.exe），
- *   结果与 tldr 参数候选合并（tldr 对 windows 命令查不到返回 []，无害）；
- *   param_complete 不可用（后端旧版本/浏览器 dev）→ 降级 tldr 单源。
- * - linux（SSH）：三源按优先级串联去重（限 8）：
- *     1. 远端 carapace（远端真实环境的动态值：分支/文件/PID），
- *        描述经 tldr 中文钩子中文化（MergeOptions.zhDescription 预留钩子在此接上）
- *     2. tldr 选项级中文（ls/systemctl/grep/chmod 等基础命令的主力数据源——
- *        carapace/Fig specs 都不覆盖这些命令，用户实测确认）
- *     3. Fig specs 静态层回退（行为与历史版本一致）
- *
- * 过期结果由调用方 predictSeq 校验统一丢弃，本函数内部不再重复校验。
- */
+/** Static and dynamic sources publish independently; only dynamic work is single-flight. */
 async function loadParamPredictions(
   leafId: number,
   env: TerminalEnv,
   cmd: string,
   prefix: string,
+  isCurrent: () => boolean,
+  showStatic: (items: SuggestionResult[]) => void,
 ): Promise<SuggestionResult[]> {
   const { tokens, current } = buildParamRequest(prefix);
-
-  if (env === 'windows') {
-    try {
-      // tokens 约定【含命令名】（param_complete.rs 接口约定，Rust 侧自行消费）
-      // cwd：本地 leaf 的 OSC 7 跟踪目录 —— git 分支等动态 action 按 cwd 取数据，
-      // 不传则 carapace 继承应用进程目录（几乎总是错的仓库）
-      const candidates = await invoke<CarapaceCandidate[]>('param_complete', {
-        cmd,
-        tokens,
-        current,
-        cwd: getLeafCwd(leafId),
-      });
-      // tldr 作为 fallback 合并（按 value 去重，carapace 动态值优先）
-      return mergeCandidates(candidates ?? [], tldrParamSuggestions(cmd, current));
-    } catch {
-      // 后端旧版本无 param_complete 命令 / 浏览器 dev 模式 → 静默降级，
-      // 仍给 tldr 候选（如 git/curl 等跨平台命令在 Windows 也有中文参数提示）
-      console.warn('[completion] param_complete unavailable, fallback to tldr');
-      return tldrParamSuggestions(cmd, current);
-    }
-  }
-
-  // ── linux（SSH）：三源串联 ─────────────────────────────────────────────
   const sessionId = getLeafSshSession(leafId);
-  // 远端存在性门禁（用户实测反馈：输 ag 弹出 -l，远端根本没装 ag）：
-  // tldr/Fig specs 是静态数据——有这个命令的参数 ≠ 远端装了这个命令。
-  // 远端命令集就绪时：cmd 不在其中 → 只保留 carapace 源（它对无 completer
-  // 的命令返回空），tldr/Fig 全跳过 → 不弹假参数。
-  // 命令集未拉到（null，连接初期/失败）→ 不过滤，避免 ls/git 等正常场景失效。
-  const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
-  const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
+  const cmds = env === 'linux' && sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+  const family = env === 'linux' && sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
   if (!commandSupportsFamily(cmd, family)) return [];
   const remoteGate = cmds === null || cmds.has(cmd);
-  const merged: SuggestionResult[] = [];
-  const seen = new Set<string>();
+  const local: SuggestionResult[] = [];
+  let dynamic: SuggestionResult[] = [];
+  const merge = () => {
+    const descriptions = new Map(local.map((item) => [item.command, item.description]));
+    const result: SuggestionResult[] = dynamic.map((item) => ({ ...item, description: tldrOptionZh(cmd, item.command) ?? descriptions.get(item.command) ?? item.description }));
+    for (const item of local) if (!result.some((entry) => entry.command === item.command) && result.length < 8) result.push(item);
+    return result.slice(0, 8);
+  };
   const push = (items: readonly SuggestionResult[]) => {
     for (const it of items) {
-      if (seen.has(it.command) || merged.length >= 8) continue;
-      seen.add(it.command);
-      merged.push(it);
+      if (local.some((item) => item.command === it.command) || local.length >= 8) continue;
+      local.push({ ...it, description: tldrOptionZh(cmd, it.command) ?? it.description });
     }
   };
-
-  // 源 1：远端 carapace（tokens 去掉命令名——carapace CLI 语义；
-  // remoteCwd：exec 通道默认在远端 home，git 分支会取错仓库 → cd 到跟踪目录）
-  if (sessionId !== null && (await remoteCarapaceInstalled(sessionId))) {
-    const remote = await remoteParamComplete(
-      sessionId,
-      cmd,
-      tokens.slice(1),
-      current,
-      getLeafRemoteCwd(leafId),
-      { zhDescription: (v) => tldrOptionZh(cmd, v) },
-    );
-    if (remote !== null) push(remote);
-  }
-
-  // 源 2：tldr 选项级中文（键序稳定输出，高频示例在前）——受远端门禁约束
-  if (remoteGate) push(tldrParamSuggestions(cmd, current));
-
-  // 源 3：Fig specs 静态层兜底（首次触发全量 spec 懒加载，~11MB 独立 chunk）
-  // —— 同受远端门禁约束（specs 里的 ag/adb 等远端没装就不弹参数）
-  if (remoteGate && merged.length < 8) {
-    const spec = await getCommandSpec(cmd);
-    if (spec) push(suggestParams(spec, prefix, 8));
-  }
-  return merged;
+  const staticRequest = (async () => {
+    const spec = remoteGate ? await getCommandSpec(cmd).catch(() => null) : null;
+    if (!isCurrent()) return;
+    const values = spec ? suggestOptionValues(spec, prefix, 8) : null;
+    if (values !== null) {
+      push(values);
+    } else if (remoteGate) {
+      const fig = spec ? suggestParams(spec, prefix, 8) : [];
+      // Real nested subcommands/positional values must not be crowded out by flags.
+      push(fig.filter((item) => !item.command.startsWith('-')));
+      push(tldrParamSuggestions(cmd, current));
+      push(fig);
+    }
+    showStatic(merge());
+  })();
+  const dynamicRequest = (async () => {
+    if (predictInFlight) {
+      predictQueuedLeaf = leafId;
+      return;
+    }
+    predictInFlight = true;
+    try {
+      if (env === 'windows') {
+        const candidates = await invoke<CarapaceCandidate[]>('param_complete', {
+          cmd, tokens, current, cwd: getLeafCwd(leafId),
+        });
+        dynamic = mergeCandidates(candidates ?? [], [], { zhDescription: (value) => tldrOptionZh(cmd, value) });
+      } else if (sessionId !== null && await remoteCarapaceInstalled(sessionId) && isCurrent()) {
+        dynamic = await remoteParamComplete(sessionId, cmd, tokens.slice(1), current, getLeafRemoteCwd(leafId), {
+          zhDescription: (value) => tldrOptionZh(cmd, value),
+        }) ?? [];
+      }
+      if (isCurrent()) showStatic(merge());
+    } catch {
+      // The independent static source remains available on request failure.
+    } finally {
+      predictInFlight = false;
+      if (predictQueuedLeaf !== null) {
+        const next = predictQueuedLeaf;
+        predictQueuedLeaf = null;
+        schedulePredictionUpdate(next);
+      }
+    }
+  })();
+  await Promise.all([staticRequest, dynamicRequest]);
+  return merge();
 }
 
 async function updatePredictions(leafId: number): Promise<void> {
-  const seq = ++predictSeq;
+  if (unknownInputLines.has(leafId)) return;
+  const seq = predictSeq;
   const env = getLeafEnvironment(leafId);
   const prefix = getInputBuffer(leafId);
+  const sessionId = getLeafSshSession(leafId);
+  const cwd = sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId);
+  const isContextCurrent = () => seq === predictSeq && prefix === getInputBuffer(leafId) &&
+    env === getLeafEnvironment(leafId) && sessionId === getLeafSshSession(leafId) &&
+    cwd === (sessionId !== null ? getLeafRemoteCwd(leafId) : getLeafCwd(leafId));
+  const isCurrent = () => {
+    const term = getTermFn?.(leafId);
+    return isContextCurrent() &&
+      (!term?.element || term.element.contains(document.activeElement));
+  };
+  if (!isCurrent()) return;
   if (!prefix || prefix.trim() === '') {
     setState((s) => (s.visible ? { ...s, visible: false } : s));
     return;
   }
 
-  if (prefix.includes(' ')) {
+  const context = commandContext(prefix);
+  if (!context.cmd) {
+    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    return;
+  }
+  if (context.tokens.length > 1 || context.current === '') {
     // ── 参数模式：命令 + 子命令/选项/参数值/动态值（分支/目录/PID）────────
     // TDSF 2026-08-28：移除 env === 'linux' 硬限制（spec: add-carapace-param-completion），
     // 按环境分流到本地 carapace（param_complete）/ 远端 carapace（ssh_command），
     // 失败统一回退 Fig specs 静态层（linux），Windows 无 spec 可回退则静默无预测。
     // TDSF 2026-08-28(二)：loadParamPredictions 内部已串联 carapace→tldr→Fig specs
     // 三源；此处再追加子命令缩写候选（ip a → address 等教学高频缩写）。
-    const { cmd } = parseCommandLine(prefix);
-    if (!cmd) {
-      setState((s) => (s.visible ? { ...s, visible: false } : s));
-      return;
-    }
-    const loaded = await loadParamPredictions(leafId, env, cmd, prefix);
-    if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
-    const items = appendAbbrevItems(loaded, cmd, prefix);
-    if (items.length === 0) {
-      setState((s) => (s.visible ? { ...s, visible: false } : s));
-    } else {
+    const cmd = context.cmd;
+    const show = (loaded: SuggestionResult[]) => {
+      if (!isCurrent()) return;
+      const items = appendAbbrevItems(loaded, cmd, prefix);
+      if (!items.length) {
+        setState((s) => (s.visible ? { ...s, visible: false } : s));
+        return;
+      }
+      activePredictionIsCurrent = isContextCurrent;
       setState({
         visible: true,
         items,
@@ -514,30 +527,33 @@ async function updatePredictions(leafId: number): Promise<void> {
         leafId,
         cursor: measureCursorPx(getTermFn, leafId),
       });
-    }
+    };
+    const loaded = await loadParamPredictions(leafId, env, cmd, prefix, isCurrent, show);
+    show(loaded);
     return;
   }
 
   // ── 命令模式：history → 索引 startsWith → fuzzy（fish 三层，按环境分流）──
-  // TDSF 2026-08-28(二)：linux 环境先取 30 条，再按远端命令全集（compgen -c
-  // 预取缓存）过滤假候选后截 5——词典/fuzzy 层会弹远端根本没装的命令。
-  // 缓存未拉到（null）→ 降级不过滤，照旧取 5（无损）。
+  // 可用性先参与候选选择，避免不存在的别名占满截断窗口。
+  // 缓存未拉到时只应用已知发行版边界，历史候选继续保留。
   const engine = getSuggestEngine();
   const isLinux = env === 'linux';
-  let items = engine.getSuggestions(prefix, isLinux ? 30 : 5, env);
+  const cmds = isLinux && sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
+  // Seed before querying, including commands absent from the static dictionary.
+  // Current-session filtering below still prevents cross-host candidates.
+  if (cmds) engine.setEnvironmentCommands(cmds, 'linux');
+  const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
+  const acceptCommand = isLinux
+    ? (command: string) => commandSupportsFamily(command, family) && (cmds === null || cmds.has(command))
+    : undefined;
+  let items = engine.getSuggestions(context.cmd, 5, env, acceptCommand);
   if (isLinux) {
-    const sessionId = getLeafSshSession(leafId);
-    const cmds = sessionId !== null ? getCachedRemoteCommands(sessionId) : null;
-    // 远端命令全集（compgen -c 预取）既是过滤器也是候选来源：只被用来"剔掉假候选"
-    // 时，远端装了但静态字典没收录的工具永远预测不出来（用户反馈"有的命令没法预测"）。
-    // 播种进候选集后，跨主机的污染仍由下面 filterCommandItems 按当前会话剔除。
-    if (cmds) engine.setEnvironmentCommands(cmds, 'linux');
-    const family = sessionId !== null ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown' : 'unknown';
     items = filterCommandItems(items, cmds, 5, family);
   }
 
   // P2 #13 的弹窗展示统一入口（光标像素坐标在按键后 xterm 已刷新）
   const show = (list: readonly SuggestionResult[]) => {
+    activePredictionIsCurrent = isContextCurrent;
     setState({
       visible: true,
       items: [...list],
@@ -548,7 +564,7 @@ async function updatePredictions(leafId: number): Promise<void> {
     });
   };
 
-  const token = prefix.trim();
+  const token = context.cmd;
   let shown = false;
   // 有命令候选先立即展示（参数加载是异步远端 exec，不能阻塞命令预测显示）
   if (items.length > 0) {
@@ -565,15 +581,10 @@ async function updatePredictions(leafId: number): Promise<void> {
   // 场景）；windows 以引擎词典为准。详见 shouldTriggerTailParams。
   const engineHit =
     items.length > 0 || engine.getSuggestions(token, 1, env).length > 0;
-  const sessionId = getLeafSshSession(leafId);
   const remoteCmds =
     env === 'linux' && sessionId !== null
       ? getCachedRemoteCommands(sessionId)
       : null;
-  const family =
-    env === 'linux' && sessionId !== null
-      ? getCachedRemoteOsInfo(sessionId)?.family ?? 'unknown'
-      : 'unknown';
   const hasParamSource = shouldTriggerTailParams(
     env,
     token,
@@ -586,10 +597,16 @@ async function updatePredictions(leafId: number): Promise<void> {
   if (hasParamSource) {
     // 加尾空格使 buildParamRequest 的 current=''（全量参数候选）；
     // 缩写候选在 appendAbbrevItems 内追加（与参数模式同一套合并逻辑）
-    const paramItems = await loadParamPredictions(leafId, env, token, prefix + ' ');
-    if (seq !== predictSeq) return; // 输入已变化，丢弃过期结果
+    const commandItems = items;
+    const showParams = (params: SuggestionResult[]) => {
+      if (!isCurrent()) return;
+      items = mergeCommandWithParamItems(commandItems, appendAbbrevItems(params, token, prefix + ' '));
+      if (items.length) { show(items); shown = true; }
+    };
+    const paramItems = await loadParamPredictions(leafId, env, token, prefix + ' ', isCurrent, showParams);
+    if (!isCurrent()) return;
     const before = items.length;
-    items = mergeCommandWithParamItems(items, appendAbbrevItems(paramItems, token, prefix + ' '));
+    items = mergeCommandWithParamItems(commandItems, appendAbbrevItems(paramItems, token, prefix + ' '));
     if (items.length > before) {
       // 参数候选有新增 → 覆盖展示（命令候选在前，参数候选追加在后）
       show(items);
@@ -603,6 +620,7 @@ async function updatePredictions(leafId: number): Promise<void> {
 }
 
 export function closeCompletion(): void {
+  cancelScheduledPredictionUpdate();
   setState((s) => (s.visible ? { ...s, visible: false } : s));
 }
 
@@ -610,57 +628,29 @@ export function closeCompletion(): void {
 // 接受预测
 // ============================================================================
 
-function acceptPrediction(leafId: number, entry: SuggestionResult): void {
-  if (!writeFn) return;
+function acceptPrediction(leafId: number, entry: SuggestionResult): boolean {
+  if (!writeFn || /[\x00-\x1f\x7f]/.test(entry.command)) return false;
+  // 鼠标点击会把焦点移到弹窗；接受时只复核候选所属行、环境、连接和目录。
+  if (!activePredictionIsCurrent?.()) {
+    closeCompletion();
+    return false;
+  }
   // 接受即改写缓冲区：待跑的更新必须撤掉，否则延迟到达的那次会按接受前的
   // 半行去请求参数，并把弹窗重新弹回来。
   cancelScheduledPredictionUpdate();
 
-  // ── 参数模式：替换当前 token（-n/--noheadings/子命令/参数值） ──────────
-  if (entry.kind === 'arg') {
-    const line = getInputBuffer(leafId);
-    if (/\s+$/.test(line)) {
-      // 刚打完空格（如 `lsblk -o ` 选 NAME）：直接追加建议文本 + 空格
-      writeFn(leafId, entry.command + ' ');
-      setInputBuffer(leafId, line + entry.command + ' ');
-    } else {
-      // 光标在行尾 token 中间（如 `lsblk -` 选 --noheadings）：
-      // 先退格删掉已回显的当前 token，再写入建议文本
-      const tokens = line.trimEnd().split(/\s+/).filter(Boolean);
-      const current = tokens[tokens.length - 1] ?? '';
-      if (current) {
-        writeFn(leafId, '\b'.repeat(current.length) + entry.command);
-        // 缓冲区同步替换（保留前面的 "cmd sub " 前缀）
-        setInputBuffer(
-          leafId,
-          line.slice(0, line.length - current.length) + entry.command,
-        );
-      } else {
-        writeFn(leafId, entry.command);
-        setInputBuffer(leafId, line + entry.command);
-      }
-    }
-    setState((s) => ({ ...s, visible: false }));
-    return;
-  }
-
-  // ── 命令模式 ────────────────────────────────────────────────────────────
-  const prefix = getInputBuffer(leafId);
-  // 修复 ipp bug（2026-08-15）：屏幕上已回显 prefix，若直接追加 remaining
-  // 会拼成 prefix+remaining（输入 ip 接受 pip 变 ipp）；且 fuzzy 匹配的
-  // 命令不以 prefix 开头，slice(prefix.length) 取剩余部分不可靠。
-  // 方案：先发等量退格清掉屏幕上已回显的 prefix（PTY canonical 行编辑
-  // 删除行尾字符并回显），再写入完整命令，保证结果精确等于选中项。
-  const backspaces = prefix.length > 0 ? '\b'.repeat(prefix.length) : '';
-  writeFn(leafId, backspaces + entry.command);
-  // 更新输入缓冲区为完整命令
-  setInputBuffer(leafId, entry.command);
+  const line = getInputBuffer(leafId);
+  const { from, text } = completionReplacement(line, entry.command, entry.kind === 'arg', getLeafEnvironment(leafId) === 'windows');
+  // Replace only the active token/command, preserving wrappers, pipes and quotes.
+  writeFn(leafId, '\b'.repeat(Array.from(line.slice(from)).length) + text);
+  setInputBuffer(leafId, line.slice(0, from) + text);
   // 历史污染止血（2026-08-28，用户实测反馈）：原来"接受预测即记历史"——
   // 输入 ag 点 → 就算执行过，ag: command not found 也进历史。第二轮 OSC
   // 真实执行记录（exit code + 完整命令行）上线前，停止一切运行时历史写入；
   // windows 环境保留启动时 shell history 文件注入（PSReadLine 只写执行过的）。
   // getSuggestEngine().addHistory(entry.command, getLeafEnvironment(leafId));
   setState((s) => ({ ...s, visible: false }));
+  return true;
 }
 
 export function selectCompletionByIndex(index: number): void {
@@ -685,8 +675,13 @@ export function completionKeyHandler(
   // IME 组合输入不处理
   if (event.isComposing || event.keyCode === 229) return true;
 
+  // Copy never changes the shell's input line.
+  if (isTerminalCopy(event, { isMac: IS_MAC })) return true;
+
   const current = activeState;
   const isVisible = current.visible && current.leafId === leafId;
+  // Modified arrows belong to the terminal's readline/xterm handling.
+  const hasModifiers = event.ctrlKey || event.altKey || event.metaKey || event.shiftKey;
 
   // === Ctrl+C / Ctrl+U → 清空缓冲区 + 关闭弹窗 ===
   if (event.ctrlKey && (event.key === 'c' || event.key === 'C' || event.key === 'u' || event.key === 'U')) {
@@ -697,13 +692,12 @@ export function completionKeyHandler(
   }
 
   // === 右箭头 = 接受第一条预测（只在弹窗可见时） ===
-  if (event.key === 'ArrowRight' && isVisible && current.items.length > 0) {
-    acceptPrediction(leafId, current.items[current.selectedIndex]);
-    return false; // 拦截
+  if (event.key === 'ArrowRight' && !hasModifiers && isVisible && current.items.length > 0) {
+    if (acceptPrediction(leafId, current.items[current.selectedIndex])) return false;
   }
 
   // === 向下箭头 = 选择下一条预测 ===
-  if (event.key === 'ArrowDown' && isVisible && current.items.length > 1) {
+  if (event.key === 'ArrowDown' && !hasModifiers && isVisible && current.items.length > 1) {
     event.preventDefault();
     setState((s) => ({
       ...s,
@@ -713,7 +707,7 @@ export function completionKeyHandler(
   }
 
   // === 向上箭头 = 选择上一条预测 ===
-  if (event.key === 'ArrowUp' && isVisible && current.items.length > 1) {
+  if (event.key === 'ArrowUp' && !hasModifiers && isVisible && current.items.length > 1) {
     event.preventDefault();
     setState((s) => ({
       ...s,
@@ -724,13 +718,13 @@ export function completionKeyHandler(
 
   // === Tab = 透传远端原生补全 + 关闭弹窗 ===
   if (event.key === 'Tab') {
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
 
   // === Escape = 关闭弹窗 ===
-  if (event.key === 'Escape' && isVisible) {
-    setState((s) => ({ ...s, visible: false }));
+  if (event.key === 'Escape') {
+    closeCompletion();
     return true;
   }
 
@@ -755,7 +749,8 @@ export function completionKeyHandler(
   }
 
   // === Backspace → 从缓冲区删除 + 更新预测 ===
-  if (event.key === 'Backspace') {
+  if (event.key === 'Backspace' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    if (unknownInputLines.has(leafId)) return true;
     const buf = getInputBuffer(leafId);
     if (buf.length > 0) {
       setInputBuffer(leafId, buf.slice(0, -1));
@@ -770,38 +765,39 @@ export function completionKeyHandler(
   // 预测会给出错误补全破坏命令 (P1-10, 2026-08-18)。失配即失效:
   // 清空缓冲 + 关闭弹窗, 宁可无预测也不给错误预测。
   if (
-    (event.ctrlKey || event.metaKey) &&
-    (event.key === 'v' || event.key === 'V')
+    ((event.ctrlKey || event.metaKey) &&
+      (event.key === 'v' || event.key === 'V')) ||
+    (event.shiftKey && event.key === 'Insert')
   ) {
-    clearInputBuffer(leafId);
-    cancelScheduledPredictionUpdate();
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
   if (
     (event.ctrlKey || event.altKey || event.metaKey) &&
     event.key === 'Backspace'
   ) {
-    clearInputBuffer(leafId);
-    cancelScheduledPredictionUpdate();
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
   if (
     event.key === 'ArrowLeft' ||
+    event.key === 'ArrowRight' ||
+    event.key === 'ArrowUp' ||
+    event.key === 'ArrowDown' ||
     event.key === 'Home' ||
-    event.key === 'End'
+    event.key === 'End' ||
+    (event.ctrlKey && /^[aekwrdhy]$/i.test(event.key)) ||
+    (event.altKey && /^[bfd]$/i.test(event.key))
   ) {
     // 弹窗可见时的 ArrowRight 已在上面"接受预测"分支拦截, 不会落此;
     // 光标移出行尾后缓冲已失配, 清空 + 关闭弹窗。
-    clearInputBuffer(leafId);
-    cancelScheduledPredictionUpdate();
-    setState((s) => (s.visible ? { ...s, visible: false } : s));
+    invalidateInputLine(leafId);
     return true;
   }
 
   // === 可打印字符 → 追加到缓冲区 + 更新预测 ===
   if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (unknownInputLines.has(leafId)) return true;
     const buf = getInputBuffer(leafId);
     setInputBuffer(leafId, buf + event.key);
     schedulePredictionUpdate(leafId);

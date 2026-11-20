@@ -35,6 +35,7 @@ logger = logging.getLogger("sidecar.env_probe")
 # 会话级缓存: key → {data..., _ts}（SSH 重连后 rustSessionId 变化 → key 变 → 自动失效）
 _CACHE: dict[str, dict[str, Any]] = {}
 _CACHE_TTL_MS = 5 * 60 * 1000
+_rust_bridge: Any = None
 
 # 合并命令一次往返（exec 通道每条命令有固定握手开销，三次往返 ≈ 3× 延迟）。
 # 分隔哨兵用非常量字符串避免与 os-release 内容撞车。
@@ -186,18 +187,14 @@ def probe_local() -> dict[str, Any]:
     }
 
 
-def probe_remote(ssh_session_id: int) -> dict[str, str] | None:
+def probe_remote(ssh_session_id: int) -> dict[str, Any] | None:
     """远端环境探测：经 RustBridge ssh_command 在目标机执行合并命令
 
     Returns:
         解析后的字段 dict；RustBridge 未注入 / 执行失败返回 None（调用方降级）
     """
     try:
-        # 惰性导入 main 拿全局 RustBridge（main 启动时已创建；此模块在
-        # register_methods 阶段才被导入，main 模块已完全加载，无循环导入风险）
-        import main as _main
-
-        bridge = getattr(_main, "_rust_bridge", None)
+        bridge = _rust_bridge
         if bridge is None:
             logger.warning("probe_env remote skipped: rust_bridge not injected")
             return None
@@ -288,8 +285,13 @@ def clear_cache() -> None:
 # JSON-RPC 注册
 # ============================================================================
 
-def register_methods(dispatcher: Any) -> None:
+def register_methods(dispatcher: Any, *, rust_bridge: Any = None) -> None:
     """注册 system.* JSON-RPC 方法（main.register_business_methods 调用）"""
+    global _rust_bridge
+    # Script entry runs as __main__; importing main would create a second bridge owner.
+    if _rust_bridge is not rust_bridge:
+        clear_cache()
+    _rust_bridge = rust_bridge
 
     # MethodDispatcher.dispatch 对 dict params 走 handler(**params) 解包
     # （与 session_memory.register_methods 同模式）

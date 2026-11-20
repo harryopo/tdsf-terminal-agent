@@ -56,17 +56,22 @@ pub async fn fsb_read(
     backend.read(&path).await.map_err(err_str)
 }
 
-/// 写入文件
+/// 写入文件；create_new 仅在新建时为 true，省略则保持覆盖保存。
 #[tauri::command]
 pub async fn fsb_write(
     session_id: Option<u32>,
     root: Option<String>,
     path: String,
     data: Vec<u8>,
+    create_new: Option<bool>,
     state: State<'_, SshState>,
 ) -> Result<(), String> {
     let backend = resolve_backend(session_id, root, &state).await?;
-    backend.write(&path, &data).await.map_err(err_str)
+    if create_new.unwrap_or(false) {
+        backend.create_file(&path, &data).await.map_err(err_str)
+    } else {
+        backend.write(&path, &data).await.map_err(err_str)
+    }
 }
 
 /// 重命名/移动

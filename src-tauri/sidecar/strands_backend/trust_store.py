@@ -47,6 +47,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -242,43 +243,101 @@ class WhitelistStore:
         self._path = path if path is not None else _whitelist_path()
         self._lock = threading.Lock()
         self._rules: list[dict[str, Any]] = []
+        # T4（V3）：白名单健康状态。降级时 allow 自动放行失效，deny/ask 仍按
+        # 最后可信规则执行；"文件不存在"不属于降级。
+        self._degraded = False
+        self._degraded_reason = ""
         self.load()
 
     # --- 持久化 -------------------------------------------------------------
 
-    def load(self) -> None:
-        """从磁盘加载规则（文件缺失/损坏 → 空规则表 + warning，不抛错）"""
+    @property
+    def degraded(self) -> bool:
+        """白名单是否处于降级锁定态（allow 自动放行失效）。"""
         with self._lock:
-            if not self._path.exists():
-                self._rules = []
-                return
-            try:
-                data = json.loads(self._path.read_text(encoding="utf-8"))
-                rules = data.get("rules", []) if isinstance(data, dict) else data
-                self._rules = [
-                    r for r in rules
-                    if isinstance(r, dict)
-                    and str(r.get("pattern", "")).strip()
-                    and str(r.get("decision", "")) in _VALID_DECISIONS
-                ]
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(
-                    f"whitelist load failed, starting empty: {self._path}, error={e}"
-                )
-                self._rules = []
+            return self._degraded
 
-    def save(self) -> None:
-        """写回磁盘（失败 warning 不抛错——放行判定退化为仅会话级记忆）"""
+    def health(self) -> dict[str, Any]:
+        """供 RPC / 设置卡展示的真实健康状态。"""
         with self._lock:
-            rules = list(self._rules)
+            return {
+                "degraded": self._degraded,
+                "reason": self._degraded_reason,
+                "rule_count": len(self._rules),
+            }
+
+    def load(self) -> None:
+        """从磁盘加载规则。
+
+        T4（V3 修复）：文件"不存在"与"不可信"是两种状态。
+        - 不存在：首次使用，正常空规则，不降级；
+        - 已存在但为空/截断/非法 JSON/结构非法/读取失败：进入降级锁定态，
+          保留运行中已加载的最后可信规则，而不是静默替换为空表。
+        """
+        with self._lock:
+            try:
+                if not self._path.exists():
+                    self._rules = []
+                    self._degraded = False
+                    self._degraded_reason = ""
+                    return
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+                rules = data.get("rules") if isinstance(data, dict) else data
+                if not isinstance(rules, list):
+                    raise ValueError("whitelist rules is not a list")
+                for rule in rules:
+                    if (
+                        not isinstance(rule, dict)
+                        or not isinstance(rule.get("pattern"), str)
+                        or not rule["pattern"].strip()
+                        or not isinstance(rule.get("decision"), str)
+                        or rule["decision"] not in _VALID_DECISIONS
+                    ):
+                        raise ValueError("invalid whitelist rule")
+                self._rules = rules
+                self._degraded = False
+                self._degraded_reason = ""
+            except (json.JSONDecodeError, ValueError, OSError) as e:
+                # 运行中重载失败：保留 self._rules（最后可信规则）；
+                # 冷启动失败：self._rules 为空，降级使 allow 一律不生效。
+                self._degraded = True
+                self._degraded_reason = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    f"whitelist degraded (allow auto-approval disabled): "
+                    f"{self._path}, error={e}"
+                )
+
+    def _persist(self, rules: list[dict[str, Any]]) -> None:
+        """原子保存：同目录临时文件 + os.replace，崩溃不会留下半个 JSON。
+
+        调用方持有self._lock，覆盖读规则、落盘、内存提交的完整事务。
+        失败时抛异常并进入降级态，调用方不得据此更新内存规则。
+        """
+        tmp: Path | None = None
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(
-                json.dumps({"rules": rules}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self._path.parent,
+                prefix=self._path.name + ".", suffix=".tmp", delete=False,
+            ) as stream:
+                tmp = Path(stream.name)
+                json.dump({"rules": rules}, stream, ensure_ascii=False, indent=2)
+            os.replace(tmp, self._path)
         except OSError as e:
-            logger.warning(f"whitelist save failed: {self._path}, error={e}")
+            self._degraded = True
+            self._degraded_reason = f"save failed: {type(e).__name__}: {e}"
+            logger.error(f"whitelist save failed: {self._degraded_reason}")
+            try:
+                if tmp is not None and tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            raise
+
+    def save(self) -> None:
+        """写回磁盘（原子保存；失败抛异常，不再静默吞错）"""
+        with self._lock:
+            self._persist(list(self._rules))
 
     # --- CRUD ---------------------------------------------------------------
 
@@ -301,9 +360,11 @@ class WhitelistStore:
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         with self._lock:
-            self._rules = [r for r in self._rules if r.get("pattern") != pattern]
-            self._rules.append(rule)
-        self.save()
+            candidate = [r for r in self._rules if r.get("pattern") != pattern]
+            candidate.append(rule)
+            # 事务提交前不释放锁，避免其它写入从旧内存构造候选。
+            self._persist(candidate)
+            self._rules = candidate
         logger.info(f"whitelist rule added: pattern={pattern}, decision={decision}")
         return dict(rule)
 
@@ -312,10 +373,12 @@ class WhitelistStore:
         pattern = (pattern or "").strip()
         with self._lock:
             before = len(self._rules)
-            self._rules = [r for r in self._rules if r.get("pattern") != pattern]
-            removed = len(self._rules) < before
+            candidate = [r for r in self._rules if r.get("pattern") != pattern]
+            removed = len(candidate) < before
+            if removed:
+                self._persist(candidate)
+                self._rules = candidate
         if removed:
-            self.save()
             logger.info(f"whitelist rule removed: pattern={pattern}")
         return removed
 
@@ -346,6 +409,9 @@ class WhitelistStore:
         with self._lock:
             hit: str | None = None
             for rule in self._rules:
+                # T4：降级锁定态下 allow 自动放行失效；deny/ask 继续生效。
+                if self._degraded and rule.get("decision") == DECISION_ALLOW:
+                    continue
                 pattern = str(rule.get("pattern", ""))
                 for cand in candidates:
                     try:

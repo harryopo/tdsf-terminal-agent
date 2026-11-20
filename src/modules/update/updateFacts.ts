@@ -39,7 +39,10 @@ export type InstallBlockerKey =
   | "sidecar-approvals"
   | "host-approvals"
   | "agent-running"
-  | "pending-executions";
+  | "pending-executions"
+  | "unsaved-editors"
+  | "other-windows"
+  | "window-state";
 
 export type InstallBlocker = { key: InstallBlockerKey; text: string };
 

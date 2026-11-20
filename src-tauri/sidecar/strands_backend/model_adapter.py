@@ -53,20 +53,20 @@ strands_backend/model_adapter.py — Strands Model 适配工厂（TDSF P0-C5）
 from __future__ import annotations
 
 import logging
+from functools import cache
 from typing import Any
 
 logger = logging.getLogger("sidecar.strands_backend.model_adapter")
 
 
 # ============================================================================
-# Strands Model Provider 条件导入
+# Strands Model Provider 按需导入
 # ============================================================================
 #
 # Strands 是条件依赖（requirements.txt 声明 strands-agents>=1.0,<2.0），
 # 安装缺失时优雅降级返回 None，让 StrandsAgentAdapter 走降级路径。
 #
-# 单独 try 每个 provider 的导入，允许部分 provider 可用（如 strands-agents 已安装
-# 但 strands-agents-openai 扩展未装时 OpenAIModel 不可用）。
+# 未配置模型时不加载各家 SDK；选用或显式查询时分别探测，允许部分 provider 可用。
 # ============================================================================
 
 # 基础 Model 抽象类（用于类型注解）
@@ -76,26 +76,28 @@ try:
 except ImportError:
     _STRANDS_MODEL_BASE = None
 
-# OpenAIModel（支持任意 OpenAI 兼容端点：DeepSeek/Ollama/OneAPI/SiliconFlow/vLLM 等）
-_OpenAIModel: Any = None
-try:
-    from strands.models.openai import OpenAIModel as _OpenAIModel  # type: ignore[import]
-except ImportError:
-    pass
+_UNLOADED = object()
+_OpenAIModel: Any = _UNLOADED
+_AnthropicModel: Any = _UNLOADED
+_LiteLLMModel: Any = _UNLOADED
 
-# AnthropicModel（claude-3-* 系列）
-_AnthropicModel: Any = None
-try:
-    from strands.models.anthropic import AnthropicModel as _AnthropicModel  # type: ignore[import]
-except ImportError:
-    pass
 
-# LiteLLMModel（万能适配器，支持 100+ provider，未来扩展用）
-_LiteLLMModel: Any = None
-try:
-    from strands.models.litellm import LiteLLMModel as _LiteLLMModel  # type: ignore[import]
-except ImportError:
-    pass
+@cache
+def _load_provider_class(provider: str) -> Any:
+    """首次使用时探测；保留静态导入供冻结打包分析。"""
+    try:
+        if provider == "openai":
+            from strands.models.openai import OpenAIModel  # type: ignore[import]
+            return OpenAIModel
+        if provider == "anthropic":
+            from strands.models.anthropic import AnthropicModel  # type: ignore[import]
+            return AnthropicModel
+        if provider == "litellm":
+            from strands.models.litellm import LiteLLMModel  # type: ignore[import]
+            return LiteLLMModel
+    except ImportError:
+        pass
+    return None
 
 
 # ============================================================================
@@ -271,7 +273,8 @@ def _create_openai_model(config: Any) -> Any:
         ImportError: strands.models.openai.OpenAIModel 不可用
         Exception: 配置错误或 OpenAI SDK 内部错误
     """
-    if _OpenAIModel is None:
+    provider_class = _load_provider_class("openai") if _OpenAIModel is _UNLOADED else _OpenAIModel
+    if provider_class is None:
         raise ImportError(
             "strands.models.openai.OpenAIModel not available, "
             "install strands-agents with openai extra: "
@@ -305,7 +308,7 @@ def _create_openai_model(config: Any) -> Any:
     if max_tokens > 0:
         params["max_tokens"] = max_tokens
 
-    model = _OpenAIModel(
+    model = provider_class(
         client_args=client_args,
         model_id=config.model,
         params=params,
@@ -339,7 +342,8 @@ def _create_anthropic_model(config: Any) -> Any:
         ImportError: strands.models.anthropic.AnthropicModel 不可用
         Exception: 配置错误或 Anthropic SDK 内部错误
     """
-    if _AnthropicModel is None:
+    provider_class = _load_provider_class("anthropic") if _AnthropicModel is _UNLOADED else _AnthropicModel
+    if provider_class is None:
         raise ImportError(
             "strands.models.anthropic.AnthropicModel not available, "
             "install strands-agents with anthropic extra: "
@@ -364,7 +368,7 @@ def _create_anthropic_model(config: Any) -> Any:
         "max_tokens": max(getattr(config, "max_tokens", 8192), 1) if getattr(config, "max_tokens", 8192) > 0 else 8192,
     }
 
-    model = _AnthropicModel(
+    model = provider_class(
         client_args=client_args,
         model_id=config.model,
         params=params,
@@ -404,7 +408,8 @@ def _create_litellm_model(config: Any) -> Any:
         ImportError: strands.models.litellm.LiteLLMModel 不可用
         Exception: 配置错误或 LiteLLM 内部错误
     """
-    if _LiteLLMModel is None:
+    provider_class = _load_provider_class("litellm") if _LiteLLMModel is _UNLOADED else _LiteLLMModel
+    if provider_class is None:
         raise ImportError(
             "strands.models.litellm.LiteLLMModel not available, "
             "install strands-agents with litellm extra: "
@@ -426,7 +431,7 @@ def _create_litellm_model(config: Any) -> Any:
     if max_tokens > 0:
         params["max_tokens"] = max_tokens
 
-    model = _LiteLLMModel(
+    model = provider_class(
         client_args=client_args,
         model_id=config.model,
         params=params,
@@ -453,12 +458,13 @@ def get_available_providers() -> list[str]:
         可用 provider 名称列表（如 ["openai", "anthropic"]）
     """
     available = []
-    if _OpenAIModel is not None:
-        available.append("openai")
-    if _AnthropicModel is not None:
-        available.append("anthropic")
-    if _LiteLLMModel is not None:
-        available.append("litellm")
+    for provider, provider_class in (
+        ("openai", _OpenAIModel), ("anthropic", _AnthropicModel), ("litellm", _LiteLLMModel),
+    ):
+        if provider_class is _UNLOADED:
+            provider_class = _load_provider_class(provider)
+        if provider_class is not None:
+            available.append(provider)
     return available
 
 

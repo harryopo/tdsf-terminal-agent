@@ -1,0 +1,50 @@
+# 新组员入门与阅读路线
+
+更新：2026-11-20。面向 EchoSinklair 和 Yan-0914。采用“各自 Fork → 任务分支 → 向主库提 PR”。[草稿 PR #49](https://github.com/harryopo/tdsf-terminal-agent/pull/49)尚未合入main，但当前完整工作包已下发；产品起点210c787，后续文档按审查分支最新HEAD读取，不再等待重复公布。Yan当前沿PR58推进RDP/VNC完整远程桌面，Echo当前沿PR56推进Agent安全修复与离线闭环；旧PR52/54和首轮审查成果保留，不再作为当前主线描述。
+
+## 先理解项目
+
+TDSF Terminal Agent 是围绕本地、WSL 和 SSH 终端的桌面工作台，组合文件浏览编辑、AI 协作、运维教学、知识检索与运行追溯。产品源码只有一份，比赛使用它的具体版本，不复制出另一套长期“参赛源码”。
+
+主要分层是 React/TypeScript 界面、负责终端与系统能力的 Tauri/Rust，以及通过 stdio JSON-RPC 连接的 Python sidecar。生产 Agent 保持 Strands 单入口；可见执行、审批、回显和日志需要沿真实会话归属核对。命令审批不构成操作系统沙箱，置信度面板也不是校准后的正确概率。
+
+项目已有生产链路和较多开发历史，但“源码存在、自动测试、真实桌面/SSH、安装包验收”分别成立。新预测/纠错仍有本地候选，专用端侧模型未作为已完成生产能力。先读状态，再选择审查对象，不从宣传稿推导安全结论。
+
+## 第一遍只读这五份
+
+| 顺序 | 文档 | 要建立的认知 |
+|---|---|---|
+| 1 | [项目 README](../../README.md) | 产品用途、主要界面和演示入口；其中描述仍需结合当前状态 |
+| 2 | [项目状态](../STATUS.md) | 哪些已有实现，哪些待审、待实测或仅是研究 |
+| 3 | [系统架构](../architecture/README.md) | 前端、Rust、sidecar、Agent 和工具如何相连 |
+| 4 | [安全边界](../architecture/safety.md) | 审批、身份、数据可信度、日志与凭据的边界 |
+| 5 | [团队固定流程](team-workflow.md) | 同步 main、任务分支、更新说明、PR 待审和队长合并 |
+
+开始检查源码前，再读 [AGENTS](../../AGENTS.md)、[安全报告政策](../../SECURITY.md)、[开发准备](setup.md)和[验证分层](testing.md)。总体入口是 [docs/README](../README.md)，不需要先通读所有历史文件。
+
+## 按自己的方向深入
+
+| 成员 | 建议继续阅读 | 首轮方向（历史任务；当前包见下） |
+|---|---|---|
+| EchoSinklair：AI Agent | [Agent 链路](../architecture/agent.md)、[模块地图](../architecture/modules.md)、[输入与建议边界](../plans/terminal-prediction/2026-11-13-v1.0-输入与建议边界.md) | [TEAM-REVIEW-01：Agent 安全与稳定性](../../competitions/2026-huawei-agent/04-AI协作与交接/2026-11-13-EchoSinklair-首轮审查任务.md) |
+| Yan-0914：运维 | [终端与工作区](../architecture/terminal-workspace.md)、[知识与日志](../architecture/knowledge-observability.md)、[模块地图](../architecture/modules.md) | [TEAM-REVIEW-02：连接、文件与知识链路](../../competitions/2026-huawei-agent/04-AI协作与交接/2026-11-13-Yan-0914-首轮审查任务.md) |
+
+## 比赛与旧 Wiki 在哪里
+
+当前比赛资料从 [比赛总入口](../../competitions/README.md) → [华为赛事目录](../../competitions/2026-huawei-agent/README.md)进入。先看 [三人分工](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)和[当前完整工作包方案v1.3](../../competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.3-截图入库与成员整包复核.md)，技术事实以现行架构和代码为准。赛事资格、既有项目增量参赛和工具证明要求仍待组织方规则核验，不把作品计划当已参赛结果。
+
+旧 Repo Wiki、Qoder Wiki、火山杯与其它比赛介绍已保留在队长本机的历史资料区，未随公开源码整体分发。它们有旧能力描述、路径和部分私人资料；需要某一专题时由队长选出并核验/脱敏后提供。现行 Wiki 的阅读作用由 `docs/architecture` 承担，不要求新成员重新恢复旧目录。
+
+## 当前工作包与材料入口
+
+Yan 的运维审查与 Skill 修复已进入团队分支，下一步继续原远程桌面 PR。Echo 已提交 Agent 审查、回归和材料，继续原安全工作包。产品原始基线为 `210c787`，接手时以任务 Issue 的 SHA 和目标分支为准。参见 [三人分工与材料共享](../../competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md)及 [工作包入口](../../competitions/2026-huawei-agent/04-AI协作与交接/README.md)。
+
+## 收到任务后怎样开工
+
+1. 按当前Issue/任务卡的可获取SHA接续，先核分支与未提交成果；记录起始基线、最近同步和当前HEAD，不以截图或队长本机路径代替源码。
+2. Fork 主库，在自己的 Fork 建任务分支；无需为这一模式取得主库写权限。按固定流程每日开工、PR 前和 main 更新后同步。
+3. 当前交付以[完整包表格](../../competitions/2026-huawei-agent/04-AI协作与交接/README.md)为准：Echo沿PR56完成Agent安全D1/D6/D7窄修复、回归与离线闭环，Yan沿PR58完成RDP/VNC可信会话、原生交互与稳定性。小提交更新同一Draft PR，整包完成再提审；不越范围重构、整理私人数据库或接入模型。
+4. 发现可利用安全问题，完整细节按安全政策私下报告；公开 PR 只保留合适的脱敏摘要。自己的 Fork 同样不能上传凭据和私人日志。
+5. 两人提交各自 PR 后保持待审，由队长与 ROOT 检查对应提交；成员不自行合并或开启自动合并。
+
+11-13本地阅读包只含说明文档，属于历史快照；当前源码和工作包从GitHub审查分支获取，不拿旧压缩包代替最新任务与依赖。

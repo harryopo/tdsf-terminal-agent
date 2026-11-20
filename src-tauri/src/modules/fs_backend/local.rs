@@ -1,6 +1,7 @@
 // modules/fs_backend/local.rs — 本地文件系统后端 (WorkspaceFs P2-1)
 
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 
 use super::{FsBackend, FsBackendError, FsCapabilities, FsEntry, FsKind};
 // FsErrorCode 仅测试引用 (tests 里 super::FsErrorCode), lib 目标不使用 →
@@ -89,6 +90,16 @@ impl FsBackend for LocalFs {
     async fn write(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError> {
         let p = validate_local_path(path)?;
         Ok(tokio::fs::write(&p, data).await?)
+    }
+
+    async fn create_file(&self, path: &str, data: &[u8]) -> Result<(), FsBackendError> {
+        let p = validate_local_path(path)?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(p)
+            .await?;
+        Ok(file.write_all(data).await?)
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<(), FsBackendError> {

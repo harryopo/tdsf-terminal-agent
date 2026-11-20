@@ -8,7 +8,7 @@
 
 **中文** · [English](README.en.md)
 
-[宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [下载与安装](#安装windows-x64) · [核心能力](#核心能力) · [工具清单](#工具清单25-个) · [架构](#架构) · [开发指南](#开发指南)
+[宣传页](https://harryopo.github.io/tdsf-terminal-agent/) · [下载与安装](#安装windows-x64) · [核心能力](#核心能力) · [工具清单](#工具清单25-个) · [架构](#架构) · [开发指南](#开发指南) · [开发文档](docs/README.md) · [参与协作](CONTRIBUTING.md)
 
 [![Windows 下载](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
 [![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
@@ -247,6 +247,8 @@ src-tauri/
   tauri.*.conf.json 正式 / 开发 / 各平台配置
 scripts/            构建与资源生成脚本；probe/ 下是真机门禁
 website/            宣传页（部署到 GitHub Pages）
+docs/               现行架构、开发协作、专题方案与项目状态
+competitions/       按赛事整理的材料入口（私人凭证不入库）
 assets/             logo 源文件
 .github/workflows/  CI（前端 / Python / Rust 三平台） · 发布 · Pages
 ```

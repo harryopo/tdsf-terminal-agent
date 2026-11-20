@@ -1,6 +1,8 @@
 import { nextActiveInSpace, type Tab } from "@/modules/tabs";
+import { editorMatchesSource } from "@/modules/tabs/lib/editorWorkspace";
+import type { FileSource } from "@/modules/workspace/fileSource";
 import { leafHasForegroundProcess, leafIds } from "@/modules/terminal";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 type Params = {
   tabs: Tab[];
@@ -13,6 +15,8 @@ type Params = {
  * Owns the three pending-close states the dialogs render from.
  */
 export function useTabCloseGuards({ tabs, disposeTab }: Params) {
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   const [pendingCloseTab, setPendingCloseTab] = useState<number | null>(null);
   const [pendingTerminalCloseTab, setPendingTerminalCloseTab] = useState<
     number | null
@@ -76,10 +80,11 @@ export function useTabCloseGuards({ tabs, disposeTab }: Params) {
   }, []);
 
   const handlePathDeleted = useCallback(
-    (path: string) => {
+    (path: string, source: FileSource | null) => {
       const dirty: number[] = [];
-      for (const t of tabs) {
+      for (const t of tabsRef.current) {
         if (t.kind !== "editor") continue;
+        if (!editorMatchesSource(t, source)) continue;
         if (t.path !== path && !t.path.startsWith(`${path}/`)) continue;
         if (t.dirty) {
           dirty.push(t.id);
@@ -89,7 +94,7 @@ export function useTabCloseGuards({ tabs, disposeTab }: Params) {
       }
       if (dirty.length > 0) setPendingDeleteTabs(dirty);
     },
-    [tabs, disposeTab],
+    [disposeTab],
   );
 
   return {

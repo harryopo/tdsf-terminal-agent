@@ -12,6 +12,8 @@ import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { diagnosticText } from "@/modules/ai/lib/sessionDiagnostics";
+import { LogRecord } from "../components/LogRecord";
 import { SectionHeader } from "../components/SectionHeader";
 import { LEVEL_FILTER_LABEL, LEVEL_FILTERS } from "../lib/runtimeLogLevels";
 
@@ -36,15 +38,6 @@ type LogTailResponse = {
   error?: string;
 };
 
-/** 日志级别 → 徽标配色 */
-const LEVEL_META: Record<string, { badge: string }> = {
-  DEBUG: { badge: "bg-muted text-muted-foreground" },
-  INFO: { badge: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
-  WARNING: { badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  ERROR: { badge: "bg-red-500/15 text-red-600 dark:text-red-400" },
-  CRITICAL: { badge: "bg-red-600/25 text-red-700 dark:text-red-300" },
-};
-
 // 协议值与界面标签的唯一主人在 `../lib/runtimeLogLevels.ts`
 // （拆出去有两个原因：值不许被"顺手翻译"、而组件文件导出常量会破 react-refresh 边界）
 
@@ -62,66 +55,115 @@ export function RuntimeLogsSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [refreshRevision, setRefreshRevision] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const requestVersion = useRef(0);
+  const pending = useRef<{ key: string; version: number } | null>(null);
+  const displayedFilter = useRef("");
+  const selectedFilter = useRef(levelFilter);
+  selectedFilter.current = levelFilter;
+  const mounted = useRef(true);
+  const clearPending = useRef(false);
 
   const load = useCallback(async () => {
+    if (
+      selectedFilter.current !== levelFilter ||
+      pending.current?.key === levelFilter
+    )
+      return;
+    if (displayedFilter.current !== levelFilter) {
+      setLines([]);
+      setTotal(0);
+    }
+    displayedFilter.current = levelFilter;
+    if (clearPending.current) return;
+    const version = ++requestVersion.current;
+    pending.current = { key: levelFilter, version };
     setLoading(true);
     setError(null);
+    const current = () =>
+      mounted.current &&
+      selectedFilter.current === levelFilter &&
+      version === requestVersion.current;
     try {
       const params: Record<string, unknown> = { lines: 300 };
       if (levelFilter !== "ALL") params.level_filter = levelFilter;
       const res = await invokeRpc<LogTailResponse>("log.tail", params);
-      if (res.ok === false) {
-        setError(res.error ?? "读取日志失败");
-        setLines([]);
-      } else {
-        // 按 ts 升序（旧→新，终端风格），无论后端返回顺序
-        const sorted = [...(res.lines ?? [])].sort(
-          (a, b) => (a.ts ?? 0) - (b.ts ?? 0),
-        );
-        setLines(sorted);
-        setTotal(res.total ?? sorted.length);
-      }
+      if (!current()) return;
+      if (res.ok !== true || !Array.isArray(res.lines))
+        throw new Error(res.error || "读取日志失败");
+      const sorted = [...res.lines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      setLines(sorted);
+      setTotal(res.total ?? sorted.length);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current()) {
+        setError(diagnosticText(e instanceof Error ? e.message : String(e)));
+        setLines([]);
+        setTotal(0);
+      }
     } finally {
-      setLoading(false);
+      if (current()) {
+        pending.current = null;
+        setLoading(false);
+      }
     }
   }, [levelFilter]);
 
   useEffect(() => {
-    if (!isTauriRuntime()) return;
-    void load();
-  }, [load]);
-
-  // 自动刷新（2s 轮询）
+    const counter = requestVersion;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      counter.current++;
+      pending.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    if (isTauriRuntime()) void load();
+  }, [load, refreshRevision]);
   useEffect(() => {
     if (!autoRefresh || !isTauriRuntime()) return;
     const t = window.setInterval(() => void load(), 2000);
     return () => window.clearInterval(t);
   }, [autoRefresh, load]);
-
-  // 加载后滚到底（看最新）
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current)
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
   }, [lines]);
 
   const clearLogs = useCallback(async () => {
+    if (clearPending.current) return;
+    clearPending.current = true;
+    requestVersion.current++;
+    pending.current = null;
+    setClearing(true);
+    setLoading(false);
+    setError(null);
     try {
-      await invokeRpc("log.clear", {});
-      await load();
+      const res = await invokeRpc<{ ok?: boolean; error?: string }>(
+        "log.clear",
+        {},
+      );
+      if (!mounted.current) return;
+      if (res.ok !== true) throw new Error(res.error || "清空日志失败");
+      setLines([]);
+      setTotal(0);
+      setRefreshRevision((v) => v + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mounted.current)
+        setError(diagnosticText(e instanceof Error ? e.message : String(e)));
+    } finally {
+      clearPending.current = false;
+      if (mounted.current) setClearing(false);
     }
-  }, [load]);
+  }, []);
 
   return (
     <div className="flex flex-col gap-4">
       <SectionHeader
         title="运行日志"
-        description="后端 Python 引擎（sidecar）运行日志，便于检查检测与开发调试。数据源：内存环形缓冲（最近 5000 行），经 log.tail 读取。"
+        description="查看后端运行情况与错误。每次读取最近 300 行内存日志；它与按会话保存的对话流水独立。"
       />
 
       {!isTauriRuntime() ? (
@@ -131,9 +173,12 @@ export function RuntimeLogsSection() {
       ) : (
         <>
           {/* 控制栏 */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card p-3">
             <Select value={levelFilter} onValueChange={setLevelFilter}>
-              <SelectTrigger className="h-8 w-32 text-[12px]">
+              <SelectTrigger
+                aria-label="日志级别"
+                className="h-8 w-32 text-[12px]"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -150,7 +195,7 @@ export function RuntimeLogsSection() {
               size="sm"
               className="h-8 gap-1.5 px-2.5 text-xs"
               onClick={() => void load()}
-              disabled={loading}
+              disabled={loading || clearing}
             >
               <HugeiconsIcon
                 icon={RefreshIcon}
@@ -175,8 +220,9 @@ export function RuntimeLogsSection() {
               size="sm"
               className="h-8 px-2.5 text-xs text-destructive/80 hover:text-destructive"
               onClick={() => void clearLogs()}
+              disabled={clearing}
             >
-              清空
+              {clearing ? "清空中…" : "清空"}
             </Button>
 
             <span className="ml-auto text-[11px] text-muted-foreground">
@@ -185,13 +231,16 @@ export function RuntimeLogsSection() {
           </div>
 
           {error ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 font-mono text-[11px] break-all text-destructive/90">
+            <div
+              role="alert"
+              className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 font-mono text-[11px] break-all text-destructive/90"
+            >
               {error}
             </div>
           ) : null}
 
           {/* 日志行 */}
-          <div className="rounded-xl border border-border/60 bg-card/40">
+          <div className="rounded-xl border border-border/60 bg-card p-3">
             {lines.length === 0 ? (
               <div className="p-6 text-center text-[12px] text-muted-foreground">
                 {loading ? "加载中…" : "暂无日志"}
@@ -201,38 +250,20 @@ export function RuntimeLogsSection() {
                 ref={scrollRef}
                 className="max-h-[52vh] overflow-y-auto font-mono"
               >
-                {lines.map((line, i) => {
-                  const lm = LEVEL_META[line.level ?? ""] ?? {
-                    badge: "bg-muted text-muted-foreground",
-                  };
-                  return (
-                    <div
-                      key={i}
-                      className="flex items-start gap-2 border-b border-border/30 px-3 py-1 text-[11px] last:border-b-0"
-                    >
-                      <span className="shrink-0 text-muted-foreground tabular-nums">
-                        {formatTs(line.ts)}
-                      </span>
-                      <span
-                        className={cn(
-                          "w-16 shrink-0 rounded px-1 text-center text-[10px]",
-                          lm.badge,
-                        )}
-                      >
-                        {line.level ?? "?"}
-                      </span>
-                      <span
-                        className="max-w-[200px] shrink-0 truncate text-muted-foreground"
-                        title={line.logger}
-                      >
-                        {line.logger ?? ""}
-                      </span>
-                      <span className="min-w-0 flex-1 break-words whitespace-pre-wrap text-foreground">
-                        {line.msg ?? ""}
-                      </span>
-                    </div>
-                  );
-                })}
+                {lines.map((line, i) => (
+                  <LogRecord
+                    key={i}
+                    time={formatTs(line.ts)}
+                    label={line.level || "未知级别"}
+                    source={
+                      line.logger ? diagnosticText(line.logger) : undefined
+                    }
+                    text={diagnosticText(line.msg)}
+                    critical={
+                      line.level === "ERROR" || line.level === "CRITICAL"
+                    }
+                  />
+                ))}
               </div>
             )}
           </div>

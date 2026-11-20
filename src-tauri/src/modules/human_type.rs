@@ -17,7 +17,7 @@
 //! ## 8 项注意事项的分工（§4.8.2）
 //!
 //! 1. 清行等 prompt      → 调用方命令（`pty_write_human` / `ssh_write_human`）：
-//!    pump 前写 `\x03\r` 清理旧输入并换行，随后立即开始写入（不人为等待 prompt）
+//!    默认写 `\x03\r` 清理旧输入并换行；已确认空闲且无旧输入的调用可跳过
 //! 2. 控制字符禁令       → `sanitize_typing_text`：剥 `\t` 与转义序列，
 //!    只允许可打印字符 + `\r`；多字节整块写
 //! 3. 随机延迟           → `weibull_delay`（本模块内置，禁止匀速）
@@ -192,6 +192,7 @@ pub async fn human_type_write<W, Fut, S>(
     write: W,
     text: &str,
     speed: f64,
+    clear_input: bool,
     should_stop: S,
 ) -> HumanTypeOutcome
 where
@@ -200,6 +201,11 @@ where
     S: Fn() -> bool,
 {
     let (clean, _warnings) = sanitize_typing_text(text);
+    if clear_input {
+        if let Err(e) = write(b"\x03\r".to_vec()).await {
+            log::warn!("[human_type] clear-line failed: {e}");
+        }
+    }
     // 非法倍率 clamp 到滑杆范围（防 0 除 / 负数）
     let speed = if speed.is_finite() {
         speed.clamp(SPEED_MIN, SPEED_MAX)
@@ -310,8 +316,15 @@ pub struct HumanTypingGuard {
     pub typing_active: Arc<AtomicBool>,
 }
 
+/// 本次输入及清行策略；不修改会话或全局设置。
+pub struct HumanTypingInput {
+    pub text: String,
+    pub speed: f64,
+    pub clear_input: bool,
+}
+
 /// 两端共用的人味注入编排：sudo 降级判定 → 重入闸门 → start 事件 →
-/// 清行 → 立即 spawn 后台 pump → end 事件。
+/// 立即 spawn 后台 pump（按请求清行）→ end 事件。
 ///
 /// `write` 为该端的具体写入实现（pty writer / russh data_bytes）；
 /// pump 在 tauri async runtime 后台运行，本函数立即返回。
@@ -321,13 +334,13 @@ pub async fn write_human_common<W, Fut>(
     id: u32,
     guard: HumanTypingGuard,
     write: W,
-    text: String,
-    speed: f64,
+    input: HumanTypingInput,
 ) -> Result<HumanTypeReport, String>
 where
     W: Fn(Vec<u8>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<(), String>> + Send,
 {
+    let HumanTypingInput { text, speed, clear_input } = input;
     let (clean, warnings) = sanitize_typing_text(&text);
     let bang_warning = warnings.into_iter().next();
 
@@ -408,14 +421,7 @@ where
     // bang_warning 同时被 pump 任务与返回值消费，clone 一份进任务
     let task_bang_warning = bang_warning.clone();
     tauri::async_runtime::spawn(async move {
-        // 8 项之 1：清掉用户可能已经输入的旧行并提交空行；不要固定等待，
-        // 否则点击 Run 后首字符会出现可感知的空档。PTY/SSH 会按字节顺序
-        // 处理 Ctrl-C + Enter 后续输入，首字符由 human_type_write 立即写出。
-        if let Err(e) = write(b"\x03\r".to_vec()).await {
-            log::warn!("[human_type] {target} id={id} clear-line failed: {e}");
-        }
-
-        let outcome = human_type_write(write, &clean, speed, should_stop).await;
+        let outcome = human_type_write(write, &clean, speed, clear_input, should_stop).await;
         if outcome.stopped {
             log::info!(
                 "[human_type] {target} id={id} interrupted by user after {} chars",
@@ -504,6 +510,7 @@ mod tests {
             },
             &command,
             0.2,
+            false,
             || false,
         )
         .await;
@@ -578,6 +585,7 @@ mod tests {
             },
             "yum install httpd -y\n",
             SPEED_MAX, // 5×：单测加速（min/speed = 10ms）
+            false,
             || false,
         )
         .await;
@@ -587,6 +595,34 @@ mod tests {
             String::from_utf8(written.lock().unwrap().clone()).unwrap(),
             "yum install httpd -y\r"
         );
+    }
+
+    #[tokio::test]
+    async fn pump_only_clears_input_when_requested() {
+        for clear_input in [false, true] {
+            let written = Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+            let captured = written.clone();
+            let outcome = human_type_write(
+                move |bytes| {
+                    let captured = captured.clone();
+                    async move {
+                        captured.lock().unwrap().push(bytes);
+                        Ok(())
+                    }
+                },
+                "pwd\n",
+                SPEED_MAX,
+                clear_input,
+                || false,
+            )
+            .await;
+            let writes = written.lock().unwrap();
+            let expected = if clear_input { b"\x03\rpwd\r".as_slice() } else { b"pwd\r".as_slice() };
+            assert_eq!(writes.concat(), expected, "clear_input={clear_input}");
+            assert_eq!(writes.len(), if clear_input { 5 } else { 4 });
+            assert_eq!(outcome.typed_chars, 4);
+            assert!(!outcome.stopped);
+        }
     }
 
     #[tokio::test]
@@ -605,6 +641,7 @@ mod tests {
             },
             "systemctl status nginx.service",
             SPEED_MAX,
+            false,
             move || sc.load(Ordering::SeqCst) >= 3,
         )
         .await;

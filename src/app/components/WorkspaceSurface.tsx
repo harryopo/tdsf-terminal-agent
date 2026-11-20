@@ -8,7 +8,7 @@ import { SshConnectingOverlay } from "@/modules/ssh-explorer/SshConnectingOverla
 import type { Tab } from "@/modules/tabs";
 import { TerminalStack } from "@/modules/terminal";
 import { NoTerminalEmptyState } from "@/modules/terminal/NoTerminalEmptyState";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 type TerminalStackProps = ComponentProps<typeof TerminalStack>;
 type EditorStackProps = ComponentProps<typeof EditorStack>;
@@ -39,6 +39,8 @@ type Props = {
   // === TDSF 2026-07-28 (P1-A): 未连接 SSH 时显示空状态页 ===
   /** 当 default cold tab + 无 SSH 时, 渲染 NoTerminalEmptyState 替代 TerminalStack */
   showNoTerminalEmptyState?: boolean;
+  /** An offline SSH placeholder can reconnect here even with the sidebar hidden. */
+  sshOfflineTerminal?: ReactNode;
   /** 强行 warm 一个 cold tab, 启动本地 shell (从 NoTerminalEmptyState 调用) */
   onWarmUpColdTab?: (tabId: number) => void;
   /** 唤起 AI Agent 面板 (从 NoTerminalEmptyState 调用) */
@@ -83,6 +85,7 @@ export function WorkspaceSurface({
   onGitHistorySearchHandle,
   onSetMarkdownView,
   showNoTerminalEmptyState,
+  sshOfflineTerminal,
   onWarmUpColdTab,
   onOpenAgentFromEmptyState,
   onSwitchToSshFromEmptyState,
@@ -99,7 +102,8 @@ export function WorkspaceSurface({
 
   // TDSF 2026-07-28 (P1-A): 空状态页的可见性
   // 仅在 active tab 是 terminal 且 App 判定需要空状态时显示
-  const showEmptyState = isTerminalTab && !!showNoTerminalEmptyState;
+  const sshPending = activeTab?.kind === "terminal" && activeTab.sshPending;
+  const showEmptyState = isTerminalTab && !sshPending && !!showNoTerminalEmptyState;
 
   // TDSF 2026-08-11 (#21): SSH 终端渲染已迁入 TerminalStack → PaneTreeView
   // leaf 级（SSH 叶子与本地叶子共用 PaneTree，支持分屏），本层不再做 workspace
@@ -127,6 +131,12 @@ export function WorkspaceSurface({
         </div>
       ) : null}
 
+      {sshPending && !showSshConnecting && sshOfflineTerminal ? (
+        <div className="absolute inset-0 px-3 pt-2 pb-2">
+          {sshOfflineTerminal}
+        </div>
+      ) : null}
+
       {/* === TDSF (2026-08-09): SSH 连接进度界面 === */}
       {/* 渲染顺序：空状态页 → connecting overlay → TerminalStack (后者覆盖前者)。
           SSH 连接成功后 overlay 消失，PaneTreeView 的 SSH leaf 接管渲染。
@@ -150,10 +160,10 @@ export function WorkspaceSurface({
           // 类, 导致 SSH 终端接管时本地终端内容仍显示 (盖在 SSH 之上,
           // 用户看到"本地桌面终端")。opacity 无继承覆盖问题, 强制整树透明。
           // 2026-08-11 (#21): showSshTerminal 已删除（SSH 渲染在 PaneTree 内）。
-          (!isTerminalTab || showEmptyState || showSshConnecting) &&
+          (!isTerminalTab || showEmptyState || sshPending || showSshConnecting) &&
             "invisible opacity-0 pointer-events-none",
         )}
-        aria-hidden={!isTerminalTab}
+        aria-hidden={!isTerminalTab || sshPending}
       >
         <TerminalStack
           tabs={tabs}

@@ -141,13 +141,17 @@ def _restore_entities(text: str) -> str:
 # ============================================================================
 
 
-def _fence_marker(stripped: str) -> str | None:
-    """识别围栏行，返回围栏标记（``` / ~~~）；非围栏行返回 None"""
-    if stripped.startswith("```"):
-        return "```"
-    if stripped.startswith("~~~"):
-        return "~~~"
-    return None
+def _next_fence(line: str, current: str) -> str:
+    """Keep the opening length: a shorter nested fence is literal code."""
+    match = re.match(r"^(`{3,}|~{3,})(.*)$", line.lstrip())
+    if not match:
+        return current
+    marker, tail = match.groups()
+    if not current:
+        return marker
+    if marker[0] == current[0] and len(marker) >= len(current) and not tail.strip():
+        return ""
+    return current
 
 
 def _is_lang_nav_line(s: str) -> bool:
@@ -199,7 +203,6 @@ def _clean_text(text: str, markdown: bool) -> str:
     """
     out: list[str] = []
     blank_run = 0  # 连续空行计数（含清洗后变空的行）
-    in_fence = False
     fence_marker = ""
 
     def flush_blanks() -> None:
@@ -211,20 +214,12 @@ def _clean_text(text: str, markdown: bool) -> str:
 
     for line in text.splitlines():
         stripped = line.strip()
-        # ---- 围栏状态机（与 sources._chunk_markdown 同规则）----
-        marker = _fence_marker(stripped)
-        if marker:
-            if not in_fence:
-                in_fence = True
-                fence_marker = marker
-            elif marker == fence_marker:
-                in_fence = False
+        # Shared with the chunker: preserve all lines inside the same fence.
+        next_fence = _next_fence(line, fence_marker)
+        if fence_marker or next_fence:
+            fence_marker = next_fence
             flush_blanks()
             out.append(line)
-            continue
-        if in_fence:
-            flush_blanks()
-            out.append(line)  # 代码块内容原样保留
             continue
         # ---- 缩进代码块（4 空格 / tab）：整行保留，不做行级清洗 ----
         if line.startswith(("    ", "\t")):

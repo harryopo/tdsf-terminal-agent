@@ -80,6 +80,7 @@ export interface IPCError {
 
 /** SSH 后台命令的原生增量输出（Rust exec channel 直接推送）。 */
 export interface SshCommandOutputEvent {
+  toolCallId?: string | null;
   operationId?: string | null;
   conversationSessionId?: string | null;
   sshSessionId: number;
@@ -278,15 +279,6 @@ export async function onNeedsYou(
   cb: NotificationCallback
 ): Promise<UnlistenFn> {
   return subscribe('needs_you', cb);
-}
-
-/** 订阅 SSH 后台命令的逐块原生输出。 */
-export async function onSshCommandOutput(
-  cb: (payload: SshCommandOutputEvent) => void
-): Promise<UnlistenFn> {
-  return subscribe('ssh_command_output', (payload) =>
-    cb(payload as SshCommandOutputEvent)
-  );
 }
 
 /**
