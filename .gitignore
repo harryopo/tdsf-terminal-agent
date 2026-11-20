@@ -281,9 +281,11 @@ docs/**
 !docs/plans/*/README.md
 !docs/plans/project-organization/2026-11-13-v1.0-目录与文档治理.md
 !docs/plans/terminal-prediction/2026-11-13-v1.0-输入与建议边界.md
+!docs/plans/terminal-prediction/2026-11-20-v1.2-CORR-03失败反馈与原文采集连续开发.md
 !docs/plans/remote-desktop/2026-11-17-v1.0-RDP-VNC架构与连续开发方案.md
 !docs/plans/remote-desktop/2026-11-18-v1.1-RDP原生闭环与VNC连续开发.md
 !docs/plans/agent-runtime/2026-11-18-v1.1-安全修复与离线闭环授权.md
+!docs/plans/product/2026-11-20-v1.1-ROOT评审与连续开发授权.md
 !docs/plans/remote-desktop/README.md
 !docs/research/remote-desktop/
 !docs/research/remote-desktop/*.md

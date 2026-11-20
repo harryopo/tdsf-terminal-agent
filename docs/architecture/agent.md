@@ -1,6 +1,6 @@
 # Agent 与工具链路
 
-生产 Agent 使用 Strands 单运行时。前端对话的主要定位路径为 [transport](../../src/modules/ai/lib/transport.ts)、[sidecar adapter](../../src/modules/ai/lib/sidecar-adapter.ts)、Rust IPC/sidecar 桥，再到 [Python 门面](../../src-tauri/sidecar/agent_facade.py) 与 [Strands 实现](../../src-tauri/sidecar/strands_backend/)。
+批准的生产边界是 Strands 单运行时、唯一公开 `main` 门面。前端对话的主要定位路径为 [transport](../../src/modules/ai/lib/transport.ts)、[sidecar adapter](../../src/modules/ai/lib/sidecar-adapter.ts)、Rust IPC/sidecar 桥，再到 [Python 门面](../../src-tauri/sidecar/agent_facade.py) 与 [Strands 实现](../../src-tauri/sidecar/strands_backend/)。截至 2026-11-20，共享源码仍在空 `tdsfAgentId` 时保留前端 AI SDK 工具执行 fallback；它不是另一套批准生产入口，而是待按单运行时边界清理或严格隔离的既有缺口，不能用于绕开 sidecar 审批与账本。
 
 模型请求、工具启动、等待审批、执行、输出可用、业务结果与回合结束是不同阶段。输出已经可读不自动等于命令成功；没有可靠退出状态时保留未知，而不是生成成功结论。
 

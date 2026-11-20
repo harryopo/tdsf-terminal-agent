@@ -86,7 +86,7 @@ git push -u origin $taskBranch
 
 项目对部分文档/比赛目录采用公开白名单。任务明确要求公开的新文件若被忽略，先由队长确认路径，再在同一PR加入精确白名单；不关闭整体保护，不强制加入私人目录，也不能因为文件被忽略就漏交配套说明。
 
-在 GitHub 新建 PR：base 为 `harryopo/tdsf-terminal-agent:main`，compare 为自己的任务分支。未完成用 Draft；自测完成后转待审，填写 [PR 模板](../../.github/PULL_REQUEST_TEMPLATE.md)。完成按钮是“请求审阅”，不是 Merge。
+在 GitHub 新建 PR 时，base 取任务卡指定的上游分支。正式任务默认使用 `main`，现有团队工作包继续使用 `codex/2026-11-13-root-shared-review`，直到 Issue 公布切换和可获取的基线 SHA。compare 选自己的 Fork 与任务分支。未完成时保留 Draft，整包自测完成后请求审阅。参见 [PR 模板](../../.github/PULL_REQUEST_TEMPLATE.md)。
 
 ## 5. 等待评审和处理反馈
 
@@ -107,7 +107,7 @@ git rev-parse upstream/main
 git rev-parse HEAD
 ```
 
-把 main 合入自己的任务分支只是同步，不是获准把 PR 合入主库。若要更新本地 main 镜像，先在干净工作区切到 main，再用 `git pull --ff-only upstream main`，之后回自己的任务分支继续。原有未提交工作先保留，不用强制切换、reset、覆盖或重写历史。
+每天获取上游。在干净的任务树同步任务指定的 base。base 为团队分支时，用其完整分支名替换示例中的 `upstream/main`，同时记录当日 main SHA。已有未提交工作先按文件归属保留。更新本地 main 镜像时，用 `git pull --ff-only upstream main`。
 
 在任务/PR中同时记录起始基线、最近同步的 main SHA 和当前 HEAD。不要悄悄把最初任务基线改成最新值来伪装原验收已覆盖。
 
@@ -143,6 +143,8 @@ git rev-parse HEAD
 4. 对应 `docs/updates` 已在同一 PR 中，方案/使用步骤/索引/证据和限制同步；不把模拟或单测当真实模型/安装验收。
 5. 队长明确同意合并，且没有在批准之后加入未审改动。
 
+维护者受队长授权代办时，以审阅过的 PR SHA 为合并条件。合并后记录目标分支与实际合并 SHA，将已进入团队分支和已进入 main 分别写入项目状态。团队分支的 CI 范围以远端工作流为准，缺少自动检查时附同一提交的本地验证。
+
 采用 **Squash and merge** 进入 main，合并前检查提交标题、来源说明与必要的共同作者信息。CI通过或ROOT给建议都不自动授予合并权。合并后做对应范围的集成检查；队长确认后才清理任务分支。
 
 队长自己的 PR 也不能用自己的 GitHub 审批冒充独立审查；安排真实的另一位成员复核，并遵循实际保护规则。AI不是第二个GitHub审批账号。
@@ -156,7 +158,7 @@ git rev-parse HEAD
 - 必需检查名从当前仓库实际 CI 中选，不抄虚构名称；现有源码工作流包含 frontend、python、rust、rust-platforms 和 coverage，实际运行状态另核。
 - Fork PR 不应获得模型/SSH密钥；不要为了跑CI改成以高权限执行未审PR代码的流程。初次贡献可能需队长批准CI运行，批准运行不等于批准合并。
 
-这是待配置/核验清单，不是已经启用的保证。本轮不修改仓库设置、不邀请成员、不推送代码。
+2026-11-20 远端核验显示 `main` 的保护未启用。现阶段由队长按人工流程控制合并。分支规则与账号权限有变更时，更新此处及团队任务入口。
 
 ## 8. 一手依据
 
