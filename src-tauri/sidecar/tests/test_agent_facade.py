@@ -150,7 +150,7 @@ def test_configure_creates_saves_and_updates_in_order(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("core.llm_config.save_config", save)
     monkeypatch.setattr("strands_backend.model_adapter.create_strands_model", create)
-    adapter.update_model.side_effect = lambda value: events.append(("update", value))
+    adapter.update_model.side_effect = lambda value, **kwargs: events.append(("update", value))
 
     result = facade.configure(
         {"provider": "openai", "api_key": "sk-test", "model": "gpt-test"}
@@ -160,7 +160,9 @@ def test_configure_creates_saves_and_updates_in_order(monkeypatch: pytest.Monkey
     assert [entry[0] for entry in events] == ["create", "save", "update"]
     assert events[0][1] is events[1][1]
     assert events[2][1] is model
-    adapter.update_model.assert_called_once_with(model)
+    adapter.update_model.assert_called_once_with(
+        model, turn_snapshot=result["turn_snapshot"]
+    )
 
 
 def test_configure_fails_when_adapter_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

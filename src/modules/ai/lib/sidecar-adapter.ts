@@ -33,6 +33,7 @@ import { isTauriRuntime } from "@/lib/tauriRuntime";
 import type { SshCommandOutputEvent } from "@/lib/sidecar-bridge";
 import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
 import { getToolResultStatus } from "./tool-result";
+import { notifyUsageChanged } from "./usage";
 import { syncRunningMode, type AgentModeSource } from "./live-mode-sync";
 import {
   TDSF_AGENTS,
@@ -483,11 +484,14 @@ interface AgentInvokeResult {
     output?: number;
     /** Python _extract_tokens 实际返回的 snake_case 字段（此前字段名错位
      *  导致 sidecar 路径真实用量从未上报——上下文面板恒显估算 0） */
-    input_tokens?: number;
-    output_tokens?: number;
-    cached_input_tokens?: number;
-    last_input_tokens?: number;
-    last_cached_input_tokens?: number;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    total_tokens?: number | null;
+    cached_input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+    reasoning_tokens?: number | null;
+    last_input_tokens?: number | null;
+    last_cached_input_tokens?: number | null;
   };
 }
 
@@ -1419,15 +1423,25 @@ export async function* runSidecarStream(
     }
     if (invokeResult.tokens) {
       const t = invokeResult.tokens;
-      onUsage?.({
-        // Python _extract_tokens 返回 snake_case（input_tokens），兼容旧 camelCase
-        inputTokens: t.input_tokens ?? t.input ?? 0,
-        outputTokens: t.output_tokens ?? t.output ?? 0,
-        cachedInputTokens: t.cached_input_tokens ?? 0,
-        lastInputTokens: t.last_input_tokens ?? t.input_tokens ?? t.input ?? 0,
-        lastCachedTokens:
-          t.last_cached_input_tokens ?? t.cached_input_tokens ?? 0,
-      });
+      const inputTokens = t.input_tokens ?? t.input ?? null;
+      const outputTokens = t.output_tokens ?? t.output ?? null;
+      const cachedInputTokens = t.cached_input_tokens ?? null;
+      const lastInputTokens = t.last_input_tokens ?? inputTokens;
+      const lastCachedTokens = t.last_cached_input_tokens ?? cachedInputTokens;
+      // 旧 agentMeta 只接受完整数值；缺字段时不再伪造 0，部分实报由 UsagePanel 展示。
+      if (
+        inputTokens !== null && outputTokens !== null && cachedInputTokens !== null &&
+        lastInputTokens !== null && lastCachedTokens !== null
+      ) {
+        onUsage?.({
+          inputTokens,
+          outputTokens,
+          cachedInputTokens,
+          lastInputTokens,
+          lastCachedTokens,
+        });
+      }
+      notifyUsageChanged(sessionId ?? "");
     }
 
     // 10. 处理 thinking：event 未推送时走兜底切片，已推送时跳过避免重复。

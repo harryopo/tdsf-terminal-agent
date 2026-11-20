@@ -1837,6 +1837,7 @@ class StrandsAgentAdapter:
         self.backend_enabled = backend_enabled
         self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self.strands_model = strands_model
+        self._model_turn_snapshot: dict[str, Any] | None = None
         self.extra_tools = list(extra_tools) if extra_tools else []
         self.operation_service = operation_service
         self.require_operation_ledger = require_operation_ledger
@@ -1936,12 +1937,40 @@ class StrandsAgentAdapter:
         except Exception as e:
             logger.debug(f"emit_agent_switch failed: {e}")
 
+    def _record_usage_event(
+        self,
+        response: Any,
+        *,
+        session_id: str,
+        turn_id: str,
+        call_id: str,
+        status: str,
+        config_snapshot: dict[str, Any] | None,
+        record_empty: bool = False,
+    ) -> None:
+        try:
+            from strands_backend.usage import record_response_usage
+
+            record_response_usage(
+                response,
+                session_id=session_id,
+                turn_id=turn_id,
+                call_id=call_id,
+                status=status,
+                config_snapshot=config_snapshot,
+                record_empty=record_empty,
+            )
+        except Exception as usage_error:
+            logger.warning("usage persistence failed without model retry: %s", usage_error)
+
     def _invoke_with_token_continuation(
         self,
         strands_agent: Any,
         prompt: str,
         agent_id: str,
         session_id: str,
+        turn_id: str,
+        config_snapshot: dict[str, Any] | None,
     ) -> Any:
         """调用 Strands Agent；max_tokens 触顶自动续跑（A2 T9, 2026-09-01）
 
@@ -1960,7 +1989,16 @@ class StrandsAgentAdapter:
         attempt = 0
         while True:
             try:
-                return strands_agent(current_prompt)
+                response = strands_agent(current_prompt)
+                self._record_usage_event(
+                    response,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:main" if attempt == 0 else f"{turn_id}:continuation:{attempt}",
+                    status="completed",
+                    config_snapshot=config_snapshot,
+                )
+                return response
             except MaxTokensReachedException:
                 attempt += 1
                 if attempt > MAX_TOKEN_CONTINUATIONS:
@@ -2209,6 +2247,13 @@ class StrandsAgentAdapter:
         # 知识 gate 注入 → 课程卡死。_TEACH_INTENT_RE/_TEACH_CONTINUATION_RE
         # 与对应判定函数保留（供非教学场景判别与单测引用）。
         teach_intent = bool(teach)
+        from strands_backend.turn_policy import route_turn
+
+        turn_policy = route_turn(
+            input,
+            teach=teach,
+            skill=input.lstrip().startswith("/skill:"),
+        )
 
         logger.info(
             f"StrandsAgentAdapter.invoke: agent_id={agent_id}, "
@@ -2258,6 +2303,12 @@ class StrandsAgentAdapter:
         strands_agent: Any = None
         handler: Any = None
         handler_stats: dict[str, Any] = {}
+        turn_snapshot: dict[str, Any] | None = None
+        turn_id = str(
+            state.get("_rpc_stream_id")
+            or state.get("rpc_request_id")
+            or f"{session_id}:{start_time}"
+        )
 
         try:
             # 3. 构建工具上下文（Task 3: 传入 invoke 已解析的三模式，
@@ -2334,7 +2385,7 @@ class StrandsAgentAdapter:
             wait_owner = object()
 
             def _locked_invoke() -> None:
-                nonlocal strands_agent, handler, handler_stats
+                nonlocal strands_agent, handler, handler_stats, turn_snapshot
                 limit_hook = None
                 refresh_mode = None
                 try:
@@ -2351,6 +2402,11 @@ class StrandsAgentAdapter:
                                     return
                                 strands_agent = self._get_or_create_agent(
                                     agent_id, ctx, mode=ctx.mode, teach=teach,
+                                )
+                                turn_snapshot = (
+                                    dict(self._model_turn_snapshot)
+                                    if self._model_turn_snapshot is not None
+                                    else None
                                 )
                                 # 策略绑定本轮实例，换模清缓存不能换掉在跑回合的预算。
                                 retry_policy = self._retry_policies.get(lock_key)
@@ -2394,6 +2450,16 @@ class StrandsAgentAdapter:
                                 # 未取消且真正开始的回合才消费上次中断现场。
                                 prompt = self._build_prompt(input, state)
                                 prompt += _teach_turn_gate(teach, teach_intent)
+                                from strands_backend.turn_policy import (
+                                    render_turn_policy_prompt,
+                                )
+
+                                prompt = render_turn_policy_prompt(
+                                    prompt,
+                                    input,
+                                    teach=teach,
+                                    skill=input.lstrip().startswith("/skill:"),
+                                )
 
                             # P3: 单回合请求预算与护栏同口径。
                             if retry_policy is not None:
@@ -2405,7 +2471,12 @@ class StrandsAgentAdapter:
 
                             # A2: max_tokens 截断自动续跑（续跑轮共享护栏计数）
                             response = self._invoke_with_token_continuation(
-                                strands_agent, prompt, agent_id, session_id
+                                strands_agent,
+                                prompt,
+                                agent_id,
+                                session_id,
+                                turn_id,
+                                turn_snapshot,
                             )
 
                             # T3: todo 未完成项追加一轮（锁内调用，限一次）。
@@ -2414,6 +2485,8 @@ class StrandsAgentAdapter:
                                 agent_id,
                                 session_id,
                                 limit_hook.tool_log if limit_hook is not None else [],
+                                turn_id,
+                                turn_snapshot,
                             )
 
                             # T7: 写类调用后无只读验证时追加一轮补验证。
@@ -2422,6 +2495,8 @@ class StrandsAgentAdapter:
                                 agent_id,
                                 session_id,
                                 limit_hook.tool_log if limit_hook is not None else [],
+                                turn_id,
+                                turn_snapshot,
                             )
                         finally:
                             # 成功/异常历史均在解锁前提交，下一回合才可迁移最新快照。
@@ -2469,6 +2544,15 @@ class StrandsAgentAdapter:
                     f"session={session_id}, duration={duration:.1f}s"
                 )
                 self._emit_mood("error", agent_id, session_id)
+                self._record_usage_event(
+                    None,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:watchdog",
+                    status="timeout",
+                    config_snapshot=turn_snapshot,
+                    record_empty=True,
+                )
                 try:
                     from strands_backend.agent_log import log_event as _log_event
 
@@ -2493,8 +2577,26 @@ class StrandsAgentAdapter:
                 # worker 已失败——抛给下方 except 统一处理（含 T9.2 降级分类）
                 raise outcome["error"]
             if outcome.get("cancelled"):
+                self._record_usage_event(
+                    None,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:cancelled",
+                    status="cancelled",
+                    config_snapshot=turn_snapshot,
+                    record_empty=True,
+                )
                 return self._cancelled_response(agent_id, session_id)
             if outcome.get("degraded_reason"):
+                self._record_usage_event(
+                    None,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:degraded",
+                    status="degraded",
+                    config_snapshot=turn_snapshot,
+                    record_empty=True,
+                )
                 return self._degraded_response(
                     agent_id=agent_id,
                     input=input,
@@ -2572,6 +2674,11 @@ class StrandsAgentAdapter:
                 f"duration={duration:.3f}s, output_len={len(observation)}"
             )
 
+            from strands_backend.turn_policy import assess_output_profile
+
+            tokens = self._extract_tokens(response)
+            profile_assessment = assess_output_profile(observation, turn_policy.intent)
+
             return {
                 "observation": observation,
                 "next_step": "done",
@@ -2589,11 +2696,26 @@ class StrandsAgentAdapter:
                     "timestamp": time.time(),
                     "duration": round(duration, 3),
                 }],
-                "tokens": self._extract_tokens(response),
+                "tokens": tokens,
+                "model_turn_snapshot": turn_snapshot,
+                "turn_policy": {
+                    "intent": turn_policy.intent,
+                    "reason": turn_policy.reason,
+                    "format_issues": list(profile_assessment.issues),
+                },
             }
 
         except Exception as e:
             duration = time.time() - start_time
+            self._record_usage_event(
+                None,
+                session_id=session_id,
+                turn_id=turn_id,
+                call_id=f"{turn_id}:invoke_error",
+                status="error",
+                config_snapshot=turn_snapshot,
+                record_empty=True,
+            )
             logger.exception(
                 f"StrandsAgentAdapter.invoke error: agent_id={agent_id}, "
                 f"error={e}, duration={duration:.3f}s"
@@ -3021,6 +3143,8 @@ class StrandsAgentAdapter:
         agent_id: str,
         session_id: str,
         tool_log: list[dict[str, Any]] | None = None,
+        turn_id: str | None = None,
+        config_snapshot: dict[str, Any] | None = None,
     ) -> str:
         """T3.2: invoke 后收尾校验——todo 有未完成项则追加一轮续做提示
 
@@ -3089,8 +3213,27 @@ class StrandsAgentAdapter:
         )
         try:
             resp = strands_agent(followup_prompt)
+            if turn_id is not None:
+                self._record_usage_event(
+                    resp,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:todo_followup",
+                    status="completed",
+                    config_snapshot=config_snapshot,
+                )
             return self._extract_response_text(resp)
         except Exception as e:  # noqa: BLE001 — 追加轮失败降级用主轮结果
+            if turn_id is not None:
+                self._record_usage_event(
+                    None,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:todo_followup",
+                    status="error",
+                    config_snapshot=config_snapshot,
+                    record_empty=True,
+                )
             logger.warning(f"todo followup round failed (fallback: main result): {e}")
             return ""
 
@@ -3100,6 +3243,8 @@ class StrandsAgentAdapter:
         agent_id: str,
         session_id: str,
         tool_log: list[dict[str, Any]],
+        turn_id: str | None = None,
+        config_snapshot: dict[str, Any] | None = None,
     ) -> str:
         """T7: invoke 后收尾检测——写类成功调用后无验证类调用则追加一轮
 
@@ -3165,8 +3310,27 @@ class StrandsAgentAdapter:
         )
         try:
             resp = strands_agent(followup_prompt)
+            if turn_id is not None:
+                self._record_usage_event(
+                    resp,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:verify_followup",
+                    status="completed",
+                    config_snapshot=config_snapshot,
+                )
             return self._extract_response_text(resp)
         except Exception as e:  # noqa: BLE001 — 追加轮失败降级用主轮结果
+            if turn_id is not None:
+                self._record_usage_event(
+                    None,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    call_id=f"{turn_id}:verify_followup",
+                    status="error",
+                    config_snapshot=config_snapshot,
+                    record_empty=True,
+                )
             logger.warning(f"verify followup round failed (fallback: main result): {e}")
             return ""
 
@@ -3419,72 +3583,10 @@ class StrandsAgentAdapter:
 
     @staticmethod
     def _extract_tokens(response: Any) -> dict[str, Any]:
-        """从 Strands Agent 响应中提取 token 统计
+        """兼容旧调用点；真实归一化与精度标记由 usage 纯模块负责。"""
+        from strands_backend.usage import extract_usage
 
-        Strands 1.x 在 response.metrics 或 response.usage 暴露 token 统计。
-        """
-        if response is None:
-            return {}
-
-        def normalize_usage(usage: Any) -> dict[str, int]:
-            if not isinstance(usage, dict):
-                return {}
-            input_tokens = usage.get("input_tokens", usage.get("inputTokens", 0))
-            output_tokens = usage.get("output_tokens", usage.get("outputTokens", 0))
-            total_tokens = usage.get("total_tokens", usage.get("totalTokens", 0))
-            cached = usage.get(
-                "cache_read_input_tokens",
-                usage.get("cacheReadInputTokens", 0),
-            )
-            return {
-                "input_tokens": int(input_tokens or 0),
-                "output_tokens": int(output_tokens or 0),
-                "total_tokens": int(total_tokens or 0),
-                "cached_input_tokens": int(cached or 0),
-            }
-
-        metrics = getattr(response, "metrics", None)
-        if isinstance(metrics, dict):
-            return normalize_usage(metrics)
-        if metrics is not None:
-            invocation = getattr(metrics, "latest_agent_invocation", None)
-            aggregate = normalize_usage(getattr(invocation, "usage", None))
-            if aggregate:
-                cycles = getattr(invocation, "cycles", None) or []
-                latest = normalize_usage(
-                    getattr(cycles[-1], "usage", None) if cycles else None
-                )
-                aggregate["last_input_tokens"] = latest.get(
-                    "input_tokens", aggregate["input_tokens"]
-                )
-                aggregate["last_cached_input_tokens"] = latest.get(
-                    "cached_input_tokens", aggregate["cached_input_tokens"]
-                )
-                return aggregate
-
-        usage = getattr(response, "usage", None)
-        if isinstance(usage, dict):
-            # A1 上下文面板 (2026-09-01): 透出缓存命中——OpenAI 兼容
-            # （DeepSeek: prompt_cache_hit_tokens / OpenAI: prompt_tokens_details.
-            # cached_tokens；Strands 聚合后也可能平铺为 cache_read_input_tokens）
-            cached = (
-                usage.get("cache_read_input_tokens", 0)
-                or usage.get("prompt_cache_hit_tokens", 0)
-                or (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-                or 0
-            )
-            return {
-                "input_tokens": usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-                "cached_input_tokens": int(cached or 0),
-                "last_input_tokens": int(
-                    usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
-                ),
-                "last_cached_input_tokens": int(cached or 0),
-            }
-
-        return {}
+        return extract_usage(response)
 
     # ========================================================================
     # event_bus 事件推送辅助方法
@@ -3672,7 +3774,9 @@ class StrandsAgentAdapter:
         # P0-A1: 子 agent 工具缓存已随委派机制删除（原 _sub_agent_cache）
         logger.info(f"Strands Agent cache cleared: {count} entries")
 
-    def update_model(self, new_model: Any) -> None:
+    def update_model(
+        self, new_model: Any, turn_snapshot: dict[str, Any] | None = None
+    ) -> None:
         """更新 LLM 模型并清空 Agent 缓存（agent.configure 调用时同步更新）
 
         P1-NEW-v3-1 修复 (2026-07-30):
@@ -3688,6 +3792,9 @@ class StrandsAgentAdapter:
         with self._model_lock:
             old_available = self._model_available
             self.strands_model = new_model
+            self._model_turn_snapshot = (
+                dict(turn_snapshot) if turn_snapshot is not None else None
+            )
             self._model_available = new_model is not None
             # 必须清缓存: 旧 Agent 实例闭包绑定旧 model, 不清会用旧 model
             self.clear_cache()

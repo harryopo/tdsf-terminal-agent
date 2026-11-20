@@ -56,7 +56,21 @@ import logging
 from functools import cache
 from typing import Any
 
+from strands_backend.model_params import resolve_model_params
+
 logger = logging.getLogger("sidecar.strands_backend.model_adapter")
+
+
+def _parameter_receipt(config: Any) -> dict[str, Any]:
+    return resolve_model_params(
+        provider=getattr(config, "provider", "openai") or "openai",
+        model=getattr(config, "model", ""),
+        base_url=getattr(config, "base_url", ""),
+        temperature=getattr(config, "temperature", 0.1),
+        max_tokens=getattr(config, "max_tokens", None),
+        thinking=getattr(config, "thinking", "provider_default"),
+        reasoning_effort=getattr(config, "reasoning_effort", "provider_default"),
+    )
 
 
 # ============================================================================
@@ -299,25 +313,20 @@ def _create_openai_model(config: Any) -> Any:
     client_args["timeout"] = 300.0
     client_args["max_retries"] = 0
 
-    # 构建 params（OpenAI Chat Completions 接口参数）
-    # TDSF (2026-08-09): max_tokens <= 0 时不传 → 模型自行决定停止（无上限）
-    params: dict[str, Any] = {
-        "temperature": getattr(config, "temperature", 0.7),
-    }
-    max_tokens = getattr(config, "max_tokens", 8192)
-    if max_tokens > 0:
-        params["max_tokens"] = max_tokens
+    # 唯一参数映射点：0/null/能力白名单与回执共用同一纯模块。
+    receipt = _parameter_receipt(config)
+    params = receipt["params"]
 
     model = provider_class(
         client_args=client_args,
-        model_id=config.model,
+        **receipt["provider_config"],
         params=params,
     )
 
     logger.info(
         f"OpenAIModel created: model_id={config.model}, "
         f"base_url={'configured' if resolved_base_url else 'default'}, "
-        f"temperature={params['temperature']}, max_tokens={params.get('max_tokens', 'unlimited')}"
+        f"temperature={params.get('temperature', 'provider_default')}, max_tokens={params.get('max_tokens', 'unlimited')}"
     )
     return model
 
@@ -361,22 +370,19 @@ def _create_anthropic_model(config: Any) -> Any:
     client_args["timeout"] = 300.0
     client_args["max_retries"] = 0
 
-    # TDSF (2026-08-09): Anthropic max_tokens 是必填参数（必须正整数）
-    # max_tokens <= 0（无上限语义）时兜底为 8192
-    params: dict[str, Any] = {
-        "temperature": getattr(config, "temperature", 0.7),
-        "max_tokens": max(getattr(config, "max_tokens", 8192), 1) if getattr(config, "max_tokens", 8192) > 0 else 8192,
-    }
+    # Anthropic 的 max_tokens 必填默认值与思考代际由纯模块独立映射。
+    receipt = _parameter_receipt(config)
+    params = receipt["params"]
 
     model = provider_class(
         client_args=client_args,
-        model_id=config.model,
+        **receipt["provider_config"],
         params=params,
     )
 
     logger.info(
         f"AnthropicModel created: model_id={config.model}, "
-        f"temperature={params['temperature']}, max_tokens={params['max_tokens']}"
+        f"temperature={params.get('temperature', 'provider_default')}, max_tokens={receipt['provider_config']['max_tokens']}"
     )
     return model
 
@@ -423,24 +429,20 @@ def _create_litellm_model(config: Any) -> Any:
     if config.base_url:
         client_args["api_base"] = config.base_url
 
-    # TDSF (2026-08-09): max_tokens <= 0 时不传 → 无上限（同 OpenAI 路径）
-    params: dict[str, Any] = {
-        "temperature": getattr(config, "temperature", 0.7),
-    }
-    max_tokens = getattr(config, "max_tokens", 8192)
-    if max_tokens > 0:
-        params["max_tokens"] = max_tokens
+    # LiteLLM 仅接收已验证的中性字段，不允许任意 providerOptions 透传。
+    receipt = _parameter_receipt(config)
+    params = receipt["params"]
 
     model = provider_class(
         client_args=client_args,
-        model_id=config.model,
+        **receipt["provider_config"],
         params=params,
     )
 
     logger.info(
         f"LiteLLMModel created: model_id={config.model}, "
         f"api_base={'custom' if config.base_url else 'default'}, "
-        f"temperature={params['temperature']}, max_tokens={params.get('max_tokens', 'unlimited')}"
+        f"temperature={params.get('temperature', 'provider_default')}, max_tokens={params.get('max_tokens', 'unlimited')}"
     )
     return model
 

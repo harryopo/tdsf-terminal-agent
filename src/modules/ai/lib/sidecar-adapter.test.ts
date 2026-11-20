@@ -239,6 +239,7 @@ describe("runSidecarStream — 成功路径", () => {
         input: 10,
         output: 5,
         last_input_tokens: 8,
+        cached_input_tokens: 3,
         last_cached_input_tokens: 3,
       },
     });
@@ -267,11 +268,11 @@ describe("runSidecarStream — 成功路径", () => {
 
     // mood / usage 回调应该被调用
     expect(onMood).toHaveBeenCalledWith("streaming");
-    // 2026-09-01: onUsage 透传缓存命中字段（sidecar 未上报时为 0）
+    // 完整的实报字段原样透传；未知字段由另一个反例保证不伪造 0。
     expect(onUsage).toHaveBeenCalledWith({
       inputTokens: 10,
       outputTokens: 5,
-      cachedInputTokens: 0,
+      cachedInputTokens: 3,
       lastInputTokens: 8,
       lastCachedTokens: 3,
     });
@@ -282,6 +283,27 @@ describe("runSidecarStream — 成功路径", () => {
     expect(stepArgs).toContain("Thinking");
     expect(stepArgs).toContain("Streaming");
     expect(stepArgs).toContain(null);
+  });
+
+  it("usage 字段不完整时不伪造 0 或更新旧汇总，正文仍正常完成", async () => {
+    _setDevModeCheck(() => false);
+    mockInvoke.mockResolvedValue({
+      output: "partial usage",
+      tokens: { input: 10, output: 5 },
+    });
+    const onUsage = vi.fn();
+
+    const parts = await collect(runSidecarStream({
+      agentId: "main",
+      messages: makeMessages("hi"),
+      input: "hi",
+      live: makeLive(),
+      onUsage,
+    }));
+
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(parts.some((part) => part.type === "text-delta" && part.delta.includes("partial usage"))).toBe(true);
+    expect(parts.at(-1)?.type).toBe("finish");
   });
 
   it("invoke 只返回 output（无 thinking/mood/tokens）→ 仅 output + finish", async () => {

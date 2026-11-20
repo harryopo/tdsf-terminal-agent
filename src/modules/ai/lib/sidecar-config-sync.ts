@@ -40,6 +40,11 @@ import {
   resolveModel,
 } from "../config";
 import { getCustomEndpointKey, getKey } from "./keyring";
+import {
+  type ModelConfigureReceipt,
+  type ModelGenerationPreferences,
+  toSidecarGeneration,
+} from "./modelGeneration";
 
 // === 类型 ====================================================================
 
@@ -49,16 +54,24 @@ export type SidecarLlmConfig = {
   api_key: string;
   base_url: string;
   model: string;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  thinking?: ModelGenerationPreferences["thinking"];
+  reasoning_effort?: ModelGenerationPreferences["reasoningEffort"];
 };
 
-/** agent.configure 的稳定返回值：{ok, llm_call_set, message} */
-type SidecarConfigureResult = {
+/** agent.configure 的稳定返回值与非敏感参数回执。 */
+export type SidecarConfigureResult = ModelConfigureReceipt & {
   ok?: boolean;
   llm_call_set?: boolean;
   message?: string;
 };
 
-export type SidecarSyncResult = { ok: boolean; detail?: string };
+export type SidecarSyncResult = {
+  ok: boolean;
+  detail?: string;
+  receipt?: ModelConfigureReceipt;
+};
 
 /**
  * 偏好快照（resolveSidecarTarget 的入参，纯数据便于单测）。
@@ -74,6 +87,7 @@ export type SidecarPrefsSnapshot = {
   openaiCompatibleBaseURL: string;
   openaiCompatibleModelId: string;
   openrouterModelId: string;
+  modelGeneration?: ModelGenerationPreferences;
   customEndpoints: readonly {
     id: string;
     baseURL: string;
@@ -200,12 +214,22 @@ export function buildSidecarLlmConfig(input: {
   model: string;
   apiKey: string | null;
   baseURL: string;
+  generation?: ModelGenerationPreferences;
 }): SidecarLlmConfig {
   const model = input.model.trim();
   const apiKey = input.apiKey?.trim() ?? "";
+  const generation = input.generation
+    ? toSidecarGeneration(input.generation)
+    : {};
   if (input.provider === "anthropic") {
     // sidecar ChatAnthropic 固定官方端点（不支持自定义 base_url），置空
-    return { provider: "anthropic", api_key: apiKey, base_url: "", model };
+    return {
+      provider: "anthropic",
+      api_key: apiKey,
+      base_url: "",
+      model,
+      ...generation,
+    };
   }
   return {
     // 实测 sidecar：非 anthropic 的任意 provider 字符串均按 OpenAI 兼容处理
@@ -217,6 +241,7 @@ export function buildSidecarLlmConfig(input: {
     api_key: apiKey,
     base_url: input.baseURL.trim(),
     model,
+    ...generation,
   };
 }
 
@@ -229,7 +254,13 @@ export function buildSidecarLlmConfig(input: {
  */
 let _sidecarConfigSynced = false;
 let syncGeneration = 0;
+let lastClientGeneration = 0;
 let lastSyncResult: SidecarSyncResult | null = null;
+
+function nextClientGeneration(): number {
+  lastClientGeneration = Math.max(Date.now(), lastClientGeneration + 1);
+  return lastClientGeneration;
+}
 let pendingSync: {
   promise: Promise<SidecarSyncResult>;
   cancel: () => void;
@@ -337,14 +368,26 @@ async function performSidecarLlmConfigSync(generation: number): Promise<SidecarS
       model: target.model,
       apiKey: effectiveKey,
       baseURL: target.baseURL,
+      generation: prefs.modelGeneration,
     });
 
+    const clientGeneration = nextClientGeneration();
     const res = await invoke<SidecarConfigureResult>("ipc_invoke", {
       method: "agent.configure",
-      params: { config },
+      params: { config: { ...config, client_generation: clientGeneration } },
     });
 
-    if (res?.ok) return { ok: true };
+    if (generation !== syncGeneration) {
+      return STALE_SYNC_RESULT;
+    }
+
+    if (res?.ok) {
+      const { ok: _ok, llm_call_set: _llmCallSet, message: _message, ...receipt } = res;
+      return {
+        ok: true,
+        ...(Object.keys(receipt).length > 0 ? { receipt } : {}),
+      };
+    }
     return {
       ok: false,
       detail: res?.message || "sidecar 返回配置失败（检查 API Key 与模型名）",
@@ -460,6 +503,7 @@ async function getPrefsSnapshot(): Promise<SidecarPrefsSnapshot> {
     openaiCompatibleBaseURL: s.openaiCompatibleBaseURL,
     openaiCompatibleModelId: s.openaiCompatibleModelId,
     openrouterModelId: s.openrouterModelId,
+    modelGeneration: s.modelGeneration,
     customEndpoints: s.customEndpoints,
   };
 }

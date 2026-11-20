@@ -84,6 +84,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ProviderKeyCard } from "../components/ProviderKeyCard";
 import { SectionHeader } from "../components/SectionHeader";
+import { GenerationSettings } from "./GenerationSettings";
+import { UsagePanel } from "@/modules/ai/components/UsagePanel";
 
 type KeysMap = Record<ProviderId, string | null>;
 
@@ -370,6 +372,9 @@ export function ModelsSection() {
         keys={keys}
         customEndpoints={customEndpoints}
       />
+
+      <GenerationSettings modelId={defaultModel} />
+      <UsagePanel showFilters />
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
