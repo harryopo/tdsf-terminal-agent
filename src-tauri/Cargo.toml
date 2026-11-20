@@ -7,7 +7,8 @@ license = "Apache-2.0"
 repository = "https://github.com/harryopo/tdsf-terminal-agent"
 edition = "2021"
 # russh 0.65 requires Rust 1.89 or later.
-rust-version = "1.89"
+# IronRDP (remote desktop) requires Rust 1.94 or later.
+rust-version = "1.94"
 
 # Tauri 2 标准入口 (二进制 = 产品名)
 [[bin]]
@@ -70,6 +71,14 @@ tempfile = "3"
 which = "8.0.4"
 dirs = "6"
 notify = "8.2.0"
+
+# 远程桌面（RDP）：IronRDP commit pin，避免跟随上游变动；MSRV 1.94
+ironrdp-client = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b299f04622cb7860f344a35bbea9bd4361", features = ["rustls"] }
+ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b299f04622cb7860f344a35bbea9bd4361" }
+ironrdp-tls = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b299f04622cb7860f344a35bbea9bd4361" }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+smallvec = "1"
+base64 = "=0.22.1"
 
 # 文件搜索
 ignore = "0.4"

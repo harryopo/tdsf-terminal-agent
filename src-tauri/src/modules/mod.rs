@@ -58,6 +58,9 @@ pub mod ipc;
 // 模块结构: handler (Handler trait) + client (connect/auth) + known_hosts (TOFU) + session (PTY)
 pub mod ssh;
 
+// 远程桌面（RDP）：IronRDP 会话 + Tauri 事件推帧
+pub mod desktop;
+
 // ============================================================================
 // TDSF 自有模块（P2-C side-git 影子仓库）
 // ============================================================================
