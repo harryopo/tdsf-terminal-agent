@@ -21,12 +21,14 @@ import {
   type Candidate,
   type CandidateView,
   type PredictionRequest,
+  type RiskLevel,
   type ScopeToken,
 } from "./contracts";
 import { ObservationTracker } from "./context";
 import {
   isCorrectionTargetCurrent,
   suggestBufferCorrection,
+  suggestBufferCorrectionMore,
   type CorrectionAvailability,
   type CorrectionRisk,
   type CorrectionVocabulary,
@@ -43,6 +45,11 @@ export type ObservedBlock = {
   durationMs: number;
   author: "user" | "agent";
   startedAt: number;
+  /**
+   * 命令行完整性（CORR-02 C3）：false = 片段/复合命令，不参与学习；
+   * true/undefined 保持既有行为（undefined 来自旧 shell 或非 Bash 集成）。
+   */
+  commandComplete?: boolean;
 };
 
 type LeafState = {
@@ -120,6 +127,7 @@ export function recordTerminalBlock(block: ObservedBlock): void {
     commandRaw: block.command,
     cwdKey: cwdKeyOf(state.namespaceId, block.cwd || null),
     learningGeneration: 0,
+    commandComplete: block.commandComplete,
   });
   if (!result.ok || result.event.eligibility !== "eligible") {
     // 不可学习事件不造邻接；下一条另开 epoch。
@@ -197,6 +205,8 @@ export type CorrectionSuggestionInput = {
   vocabulary: CorrectionVocabulary;
   availability: CorrectionAvailability;
   risk: CorrectionRisk;
+  /** CORR-03 P2：显式“更多词形候选”次级入口（有界距离 ≤2）；缺省为自动单编辑。 */
+  more?: boolean;
 };
 
 /** 显式“当前行纠错”请求；buffer 原文/光标必须与请求时一致才可接受。 */
@@ -234,7 +244,7 @@ export function suggestCorrectionForLeaf(
     snapshot.commands.map((item) => [item.displayText, item.count]),
   );
   return {
-    view: suggestBufferCorrection({
+    view: (input.more ? suggestBufferCorrectionMore : suggestBufferCorrection)({
       request,
       current: state.scope,
       currentInputVersion: input.inputVersion,
@@ -253,6 +263,7 @@ export function acceptPredictionCandidate(
   candidate: Candidate,
   leafId: number,
   currentInputVersion: number,
+  allowRisk?: readonly RiskLevel[],
 ): AcceptDecision {
   const state = leaves.get(leafId);
   if (!state) return { ok: false, reason: "owner-changed" };
@@ -260,6 +271,7 @@ export function acceptPredictionCandidate(
     candidate,
     state.scope,
     currentInputVersion,
+    allowRisk,
   );
 }
 

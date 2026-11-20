@@ -62,6 +62,8 @@ export type CompletionInput = {
   commandRaw: string;
   cwdKey: string | null;
   learningGeneration: number;
+  /** false = 命令文本只是片段/复合行，不能作为完整命令参与学习。 */
+  commandComplete?: boolean;
 };
 
 export type CompletionResult =
@@ -179,7 +181,8 @@ export class ObservationTracker {
     const eligibility: Eligibility =
       handle.origin === "user" &&
       projected.replayText !== null &&
-      input.exitCode !== null
+      input.exitCode !== null &&
+      input.commandComplete !== false
         ? "eligible"
         : "ineligible";
 

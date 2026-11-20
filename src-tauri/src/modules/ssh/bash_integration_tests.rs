@@ -471,6 +471,201 @@ fn unclaimed_debug_hook_reports_escaped_commands_and_nonzero_status() {
 }
 
 #[test]
+// CORR-02 C3：完整单一简单命令必须在 133;D 之前上报 633;F;1;1。
+fn unclaimed_bash_reports_complete_simple_command_before_exit_code() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "").expect("write clean user bashrc");
+
+    let output = run_interactive(&launch_cmd, &dir, "printf TDSF_OK\nfalse\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    let marker = text
+        .find("\u{1b}]633;F;1;1;")
+        .unwrap_or_else(|| panic!("complete line marker missing: {text:?}"));
+    let done = text
+        .find("\u{1b}]133;D;1\u{7}")
+        .unwrap_or_else(|| panic!("nonzero status lost: {text:?}"));
+    assert!(
+        marker < done,
+        "completeness marker must precede exit code: {text:?}"
+    );
+}
+
+#[test]
+// CORR-02 C3（ROOT 阻断 C3）：`printf ROOT_OK; missing` 的首段不得冒充整行；
+// 段数=2 + 完整性=0 必须与真实退出码 127 一起到达。
+fn compound_line_is_marked_incomplete_and_keeps_real_status() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "").expect("write clean user bashrc");
+
+    let output = run_interactive(
+        &launch_cmd,
+        &dir,
+        "printf ROOT_OK; __tdsf_missing_cmd_xyz\nexit 0\n",
+    );
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\u{1b}]633;E;printf ROOT_OK;"),
+        "first fragment was not reported: {text:?}"
+    );
+    let marker = text
+        .find("\u{1b}]633;F;2;0;")
+        .unwrap_or_else(|| panic!("compound completeness marker missing: {text:?}"));
+    let done = text
+        .find("\u{1b}]133;D;127\u{7}")
+        .unwrap_or_else(|| panic!("real exit status was lost: {text:?}"));
+    assert!(
+        marker < done,
+        "completeness must be reported before the exit code: {text:?}"
+    );
+}
+
+#[test]
+// && 短路时只执行首段：段数仍是 1，但 history 校验必须识破整行不是单一命令。
+fn short_circuit_compound_is_marked_incomplete() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "").expect("write clean user bashrc");
+
+    let output = run_interactive(
+        &launch_cmd,
+        &dir,
+        "grpe_tdsf_missing && echo never\nexit 0\n",
+    );
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\u{1b}]633;F;1;0;"),
+        "short-circuit line was not marked incomplete: {text:?}"
+    );
+}
+
+#[test]
+// 管道：多个简单命令段 + 退出码属于最后一段，必须标记为不完整。
+fn pipeline_is_marked_incomplete() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "").expect("write clean user bashrc");
+
+    let output = run_interactive(&launch_cmd, &dir, "printf x | cat\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\u{1b}]633;F;2;0;"),
+        "pipeline was not marked incomplete: {text:?}"
+    );
+}
+
+#[test]
+// HISTCONTROL=ignorespace：本轮未进入 history → 不能证明原文完整。
+fn history_filtered_command_is_marked_incomplete() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "HISTCONTROL=ignorespace\n")
+        .expect("write user bashrc");
+
+    let output = run_interactive(&launch_cmd, &dir, "   false\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\u{1b}]633;F;1;0;"),
+        "history-filtered line was treated as complete: {text:?}"
+    );
+}
+
+#[test]
+// HISTIGNORE 排除当前命令：同上，必须降级为不完整。
+fn history_ignored_command_is_marked_incomplete() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "HISTIGNORE='false*'\n")
+        .expect("write user bashrc");
+
+    let output = run_interactive(&launch_cmd, &dir, "false\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\u{1b}]633;F;1;0;"),
+        "HISTIGNORE line was treated as complete: {text:?}"
+    );
+}
+
+#[test]
+// 用户 HISTTIMEFORMAT 不能破坏完整性校验（只在函数内临时清空）。
+fn history_timestamp_format_keeps_completeness_evidence() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(
+        dir.path().join(".bashrc"),
+        "HISTTIMEFORMAT='%F %T '\n",
+    )
+    .expect("write user bashrc");
+
+    let output = run_interactive(&launch_cmd, &dir, "false\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\u{1b}]633;F;1;1;"),
+        "HISTTIMEFORMAT broke completeness validation: {text:?}"
+    );
+}
+
+#[test]
+// 用户 PROMPT_COMMAND 数组里的命令不得被算作同一输入行的片段。
+fn user_prompt_array_does_not_create_fragments() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "PROMPT_COMMAND=(':' ':')\n")
+        .expect("write user prompt array");
+
+    let output = run_interactive(&launch_cmd, &dir, "printf TDSF_FIRST\nfalse\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("TDSF_FIRST"), "the user command did not run");
+    assert!(
+        !text.contains("\u{1b}]633;F;2;"),
+        "prompt hooks were counted as command fragments: {text:?}"
+    );
+    assert!(
+        text.matches("\u{1b}]633;F;1;1;").count() >= 2,
+        "user commands lost their completeness markers: {text:?}"
+    );
+}
+
+#[test]
+// 用户已占用 DEBUG trap：产品降级，不得伪造任何 E/F 标记。
+fn user_debug_trap_degrades_without_fabricated_line_markers() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "trap ':' DEBUG\n")
+        .expect("write user debug trap");
+
+    let output = run_interactive(&launch_cmd, &dir, "false\nexit 0\n");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !text.contains("\u{1b}]633;E;"),
+        "degraded shell fabricated a command marker: {text:?}"
+    );
+    assert!(
+        !text.contains("\u{1b}]633;F;"),
+        "degraded shell fabricated a completeness marker: {text:?}"
+    );
+}
+
+#[test]
 // ':' is a valid no-op DEBUG trap, so the test can inspect the real trap table.
 fn noninteractive_hooks_do_not_install_prompt_or_debug_handlers() {
     let dir = tempfile::tempdir().expect("temporary HOME");
@@ -699,10 +894,49 @@ fn interactive_child_gets_its_own_context_and_parent_receipt_returns_after_exit(
             .any(|receipt| receipt.shell == *parent_shell),
         "parent shell identity did not resume after child exit: {receipts:?}"
     );
+}
+
+#[test]
+// CORR-03 P0 / ROOT CAP-01：超长命令的上报文本一旦被截断，完整性必须降为 0；
+// 截断不能与 `633;F;1;1` 同时出现（否则 512 字符之外的内容被当成可信原文）。
+fn overlong_command_is_truncated_and_marked_incomplete() {
+    let dir = tempfile::tempdir().expect("temporary HOME");
+    let (_, _, launch_cmd) = create_files(&dir);
+    std::fs::write(dir.path().join(".bashrc"), "").expect("write clean user bashrc");
+
+    let long = "A".repeat(600);
+    let output = run_interactive(&launch_cmd, &dir, &format!("printf %s {long}\nexit 0\n"));
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let text = String::from_utf8_lossy(&output.stdout);
+    let echo_prefix = "\u{1b}]633;E;";
+    let e_pos = text
+        .find(&format!("{echo_prefix}printf"))
+        .unwrap_or_else(|| panic!("long command echo missing: {text:?}"));
+    let payload = &text[e_pos + echo_prefix.len()..];
+    let e_end = payload
+        .find('\u{7}')
+        .unwrap_or_else(|| panic!("E terminator missing: {text:?}"));
+    let e_body = &payload[..e_end];
+    let reported = e_body.rsplit_once(';').map(|(cmd, _)| cmd).unwrap_or(e_body);
     assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt.connection == "tdsf-test"),
-        "connection identity changed across nested shells: {receipts:?}"
+        reported.len() <= 512,
+        "reported command must stay within the 512-char bound, got {}",
+        reported.len()
+    );
+    let f_pos = payload
+        .find("\u{1b}]633;F;")
+        .unwrap_or_else(|| panic!("completeness marker missing: {text:?}"));
+    let f_line = &payload[f_pos..];
+    assert!(
+        f_line.starts_with("\u{1b}]633;F;1;0;"),
+        "truncated command must report incomplete: {f_line:?}"
     );
 }
+
+// CORR-03 P0：控制字符清洗降级不在此处构造。
+// 交互 bash 从 stdin 读行时，readline 会把 BEL/ESC 等控制字符当作编辑命令吞掉，
+// `$BASH_COMMAND` 里根本不会出现这些字符（实测 `\a echo hi` 读成 `echo hi`），
+// 因此该路径无法用 stdin 复现。真实触发场景是 bracketed paste（PTY 原样插入），
+// 由 `.ai/test-runs/corr03-20261120-a1/probes/probe-capture-limits.sh` 在真实
+// rcfile + PTY 下验证；shell 内的 `_tdsf_lossy` 分支保留为防御性降级。

@@ -65,7 +65,18 @@ if [[ -z "$__TDSF_HOOKS_LOADED" ]]; then
     # row (first prompt, no block above) to two (end gap + header row).
     [[ -n "$TDSF_BLOCKS" ]] && _tdsf_block_seen=1
     local cmd="${1//[[:cntrl:]]/ }"
+    # CORR-02 C3：zsh preexec 的 $1 是整行原文；这里保守判断它是否是单一简单
+    # 命令（出现未加引号的 shell 运算符/换行即视为复合）。引号内的运算符会
+    # 被误判为复合，方向是安全的：只损失自动纠错，不会张冠李戴。
+    # CORR-03 P0（ROOT CAP-01）：控制字符会被清洗、超 256 会被截断，两者都
+    # 使上报文本不再是原文 → 完整性降为 0。
+    local _tdsf_simple=1
+    local _tdsf_nonce="${RANDOM}${RANDOM}"
+    if [[ "$1" == *[';&|<>()']* || "$1" == *[[:cntrl:]]* || ${#1} -gt 256 ]]; then
+      _tdsf_simple=0
+    fi
     printf '\e]133;C;%s\e\\' "${cmd[1,256]}"
+    printf '\e]633;F;1;%s;%s\e\\' "$_tdsf_simple" "$_tdsf_nonce"
   }
 
   if (( $+functions[add-zsh-hook] )); then

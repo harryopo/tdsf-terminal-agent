@@ -5,8 +5,8 @@
  * `{command, cwd, exitCode, durationMs, author, outputTail, startedAt}`
  * （atuin history schema 同款字段集，调研 §1.2.2）。
  *
- * 数据源：OSC 133 A/B/C/D + OSC 633;E(命令行原文)/633;P(Cwd)——本地终端
- * (pty/scripts 注入) 与 SSH 终端 (session.rs 方案 A 注入) 统一发同一协议，
+ * 数据源：OSC 133 A/B/C/D + OSC 633;E(命令行原文)/633;P(Cwd)/633;F(完整性)——
+ * 本地终端 (pty/scripts 注入) 与 SSH 终端 (session.rs 方案 A 注入) 统一发同一协议，
  * 经 xterm registerOscHandler 直接解析（SSH 输出与本地一样写入 xterm，
  * 单一代码路径，无需 Rust 侧解析转发——agent_detect 只管 agent 活跃检测）。
  *
@@ -41,6 +41,14 @@ export type TerminalBlock = {
   outputTail: string;
   /** true when the bounded capture omitted earlier lines or long line tails. */
   outputTruncated?: boolean;
+  /**
+   * 命令行完整性与退出码归属（CORR-02 C3）：
+   * - true：原文是该输入行的完整单一简单命令，退出码可信；
+   * - false：复合/管道/被历史过滤/多行等，文本只是片段，退出码属于最后一段；
+   * - undefined：旧 shell 或非 Bash 集成，没有完整性证据。
+   * 只有 true 才允许失败自动纠错；false 不参与学习与纠错。
+   */
+  commandComplete?: boolean;
   /** 命令开始执行时刻（E/C 到达时刻） */
   startedAt: number;
 };
@@ -64,6 +72,10 @@ type PendingBlock = {
   startedAt: number;
   /** 是否已收到 C/E（决定 D 时结算还是丢弃） */
   execStarted: boolean;
+  /** 633;E 的 nonce，用于把 633;F 归属到同一次输入行。 */
+  nonce?: string;
+  /** true/false = 收到完整性标记；undefined = 旧 shell 无证据。 */
+  commandComplete?: boolean;
 };
 
 export class TerminalBlockCollector {
@@ -134,8 +146,10 @@ export class TerminalBlockCollector {
         this.finish(parseExitCode(args));
         break;
       case "E": {
-        // E;<cmd>[;<nonce>] — nonce 防错配，本状态机按序处理，忽略之
-        const raw = args.includes(";") ? args.slice(0, args.indexOf(";")) : args;
+        // E;<cmd>[;<nonce>] — nonce 防错配，同时把 633;F 完整性标记绑到本行。
+        const sep = args.indexOf(";");
+        const raw = sep >= 0 ? args.slice(0, sep) : args;
+        const nonce = sep >= 0 ? args.slice(sep + 1) : "";
         const cmd = decodeOscText(raw);
         if (!cmd) break;
         if (!this.pending) {
@@ -145,15 +159,63 @@ export class TerminalBlockCollector {
             cwd: this.cwd,
             startedAt: this.now(),
             execStarted: true,
+            nonce,
           };
           this.onExecStart?.();
           break;
         }
-        if (!this.pending.command) this.pending.command = cmd;
+        if (!this.pending.command) {
+          this.pending.command = cmd;
+          if (nonce) this.pending.nonce = nonce;
+        }
         if (!this.pending.execStarted) {
           this.pending.execStarted = true;
           this.onExecStart?.();
         }
+        break;
+      }
+      case "F": {
+        // F;<segments>;<valid>;<nonce> — 由 shell 在 133;D 之前上报：
+        // segments=1 且 valid=1 才表示“完整单一简单命令，退出码归属可信”。
+        // 第一份标记为准；带 nonce 的行必须与 633;E 的 nonce 完全一致，
+        // 防止嵌套 shell/迟到标记把本行改判为完整。
+        //
+        // CAP-02（ROOT 2026-11-20）：字段必须严格十进制/严格三段。过去用
+        // parseInt 会把 "1junk"/"1.5"/"01x" 读成 1，让畸形证据冒充完整。
+        // 畸形属于“本轮已有新证据但无效”，显式记 false；只有完全没有 F
+        // 的旧 shell 才是 undefined（保留既有学习行为）。
+        if (!this.pending) break;
+        if (this.pending.commandComplete !== undefined) break;
+        const rejectFraming = () => {
+          if (this.pending) this.pending.commandComplete = false;
+        };
+        const parts = args.split(";");
+        if (parts.length !== 3) {
+          rejectFraming();
+          break;
+        }
+        const [segText, validText, nonceText] = parts;
+        // 正整数，无前导零/符号/小数/指数；上限防止异常大值进入后续逻辑。
+        if (!/^[1-9][0-9]{0,6}$/.test(segText)) {
+          rejectFraming();
+          break;
+        }
+        if (validText !== "0" && validText !== "1") {
+          rejectFraming();
+          break;
+        }
+        if (this.pending.nonce) {
+          if (nonceText !== this.pending.nonce) {
+            rejectFraming();
+            break;
+          }
+        } else if (nonceText !== "") {
+          // E 没有 nonce（旧/降级路径）时，F 自带 nonce 说明来源不匹配。
+          rejectFraming();
+          break;
+        }
+        const segments = Number.parseInt(segText, 10);
+        this.pending.commandComplete = segments === 1 && validText === "1";
         break;
       }
       case "P": {
@@ -214,6 +276,9 @@ export class TerminalBlockCollector {
       author: this.resolveAuthor(p.command),
       outputTail,
       outputTruncated,
+      ...(p.commandComplete === undefined
+        ? {}
+        : { commandComplete: p.commandComplete }),
       startedAt: p.startedAt,
     };
     this.onBlock?.(block);

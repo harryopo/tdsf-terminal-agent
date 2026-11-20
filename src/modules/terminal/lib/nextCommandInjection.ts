@@ -24,17 +24,38 @@ import {
 } from "@/modules/prediction/sessionBridge";
 import { registerShortcutInterceptor } from "@/modules/shortcuts/shortcuts";
 
+export type TerminalLineState = "known-empty" | "known-text" | "unknown";
+
+/**
+ * 回填守卫（CORR-02 C2）：写入方在同一同步调用里复核真实输入行，
+ * 未知状态或版本/原文不一致一律拒绝——不猜清行，也不发送 Ctrl+C。
+ */
+export type WriteLineGuard =
+  | { requireState: "known-empty"; expectedVersion?: number }
+  | { requireState: "known-text"; expectedText: string; expectedVersion?: number };
+
 export type NextCommandDeps = {
   getLine: (leafId: number) => string;
-  writeLine: (leafId: number, nextLine: string) => boolean;
+  writeLine: (leafId: number, nextLine: string, guard?: WriteLineGuard) => boolean;
   getEnvironment: (leafId: number) => "windows" | "linux";
   getRustSessionId: (leafId: number) => number | null;
-  getAvailableCommands: (rustSessionId: number | null) => Set<string> | null;
+  getAvailableCommands: (
+    leafId: number,
+    rustSessionId: number | null,
+  ) => Set<string> | null;
+  /** 命令集尚未就绪时按需拉取（WSL 本地 compgen；SSH 可不实现）。 */
+  ensureAvailableCommands?: (leafId: number) => Promise<Set<string> | null>;
   /** 当前真正接收键盘输入的终端 leaf；用于全局快捷键入口。 */
   getActiveLeafId: () => number | null;
   evaluateRisk: (
     command: string,
   ) => Promise<{ level: RiskLevel; source: "rpc" | "local" }>;
+  /** 输入行三态（粘贴/光标移动后为 unknown）；缺省时退化为文本判断。 */
+  getLineState?: (leafId: number) => TerminalLineState;
+  /** 输入行版本：每次可见输入变化递增。 */
+  getLineVersion?: (leafId: number) => number;
+  /** 终端/连接作用域摘要（环境 + 连接代次 + leaf 代次）；await 后复核。 */
+  getScopeToken?: (leafId: number) => string;
 };
 
 export type NextCommandState = {
@@ -51,6 +72,12 @@ export type NextCommandState = {
   auto: boolean;
   /** line = 当前输入行；block = 刚执行失败的上一行命令。 */
   source: "line" | "block";
+  /** false = 只显示最优先的一条（默认）；true = 展开全部候选。 */
+  expanded: boolean;
+  /** 请求时的终端/连接作用域；接受前必须仍然一致。 */
+  scopeToken: string | null;
+  /** 请求时的输入行版本（line 来源纠错）；接受前必须仍然一致。 */
+  lineVersion: number | null;
 };
 
 const EMPTY: NextCommandState = {
@@ -65,6 +92,9 @@ const EMPTY: NextCommandState = {
   correctionRequest: null,
   auto: false,
   source: "line",
+  expanded: false,
+  scopeToken: null,
+  lineVersion: null,
 };
 
 let deps: NextCommandDeps | null = null;
@@ -105,10 +135,75 @@ export function getNextCommandState(): NextCommandState {
   return state;
 }
 
+/** 请求时的作用域摘要；未注入 scope 回调时退化为环境 + 连接代次。 */
+function readScopeToken(leafId: number): string | null {
+  if (!deps) return null;
+  if (deps.getScopeToken) return deps.getScopeToken(leafId);
+  return `${deps.getEnvironment(leafId)}|${deps.getRustSessionId(leafId) ?? "local"}`;
+}
+
+function scopeStillCurrent(leafId: number, scope: string | null): boolean {
+  const activeLeaf = deps?.getActiveLeafId();
+  if (activeLeaf != null && activeLeaf !== leafId) return false;
+  return scope !== null && readScopeToken(leafId) === scope;
+}
+
+function readLineState(leafId: number): TerminalLineState | null {
+  return deps?.getLineState?.(leafId) ?? null;
+}
+
+function readLineVersion(leafId: number): number | null {
+  return deps?.getLineVersion?.(leafId) ?? null;
+}
+
+/** await 之后、写状态之前：请求代次与真实 owner 都必须仍然有效。 */
+function requestStillCurrent(
+  leafId: number,
+  requestVersion: number,
+  scope: string | null,
+  lineVersion: number | null,
+): boolean {
+  return (
+    requestVersion === versionSeq &&
+    scopeStillCurrent(leafId, scope) &&
+    readLineVersion(leafId) === lineVersion
+  );
+}
+
+/**
+ * 请求已失效但面板仍是它自己打开的（例如上下文在计算期间变化）→ 收起。
+ * 若已被更新的请求替换（state.requestVersion 不同），不能误关新面板。
+ */
+function abandonRequest(leafId: number, requestVersion: number): void {
+  if (
+    state.visible &&
+    state.leafId === leafId &&
+    state.requestVersion === requestVersion
+  ) {
+    closeNextCommand();
+  }
+}
+
+/**
+ * 关闭/取消/终端变更都必须让在飞请求过期：代次递增后，任何 await 返回都在
+ * 写状态前被 requestStillCurrent 拦下，不能重新打开面板或覆盖新面板。
+ */
 export function closeNextCommand(): void {
+  versionSeq += 1;
+  cancelAutoCorrection();
   autoVisible = false;
   if (!state.visible) return;
-  setState({ ...EMPTY, requestVersion: state.requestVersion });
+  setState({ ...EMPTY, requestVersion: versionSeq });
+}
+
+/** leaf 销毁/重建/切换：只作废该 leaf 的请求与面板，不影响其它终端。 */
+export function handleLeafInvalidated(leafId: number): void {
+  versionSeq += 1;
+  cancelAutoCorrection();
+  autoVisible = false;
+  if (state.visible && state.leafId === leafId) {
+    setState({ ...EMPTY, requestVersion: versionSeq });
+  }
 }
 
 /** 取消尚未执行的自动纠错检查（回车、粘贴、切上下文时调用）。 */
@@ -136,6 +231,12 @@ export function scheduleAutoCorrection(leafId: number, delayMs = 450): void {
  */
 export function handleAutoCorrectionInput(leafId: number, data: string): void {
   if (!data) return;
+  // 多字符输入（粘贴/IME/ESC 序列）不经过逐键缓冲，不能当作“仍在敲同一行”。
+  if (data.length > 1) {
+    cancelAutoCorrection();
+    if (autoVisible) closeNextCommand();
+    return;
+  }
   if (data === "\x7f") {
     scheduleAutoCorrection(leafId);
     return;
@@ -162,7 +263,10 @@ function correctionContext(
   if (!trimmed || trimmed.length > 160) return null;
   if (/[|&;<>`$(){}[\]\\]/.test(trimmed)) return null;
   if (deps.getEnvironment(leafId) !== "linux") return null;
-  const available = deps.getAvailableCommands(deps.getRustSessionId(leafId));
+  const available = deps.getAvailableCommands(
+    leafId,
+    deps.getRustSessionId(leafId),
+  );
   if (!available || available.size === 0) return null;
   const first = trimmed.split(/\s+/)[0] ?? "";
   if (!first || first.includes("/") || first.includes("=") || first.startsWith("-")) {
@@ -197,14 +301,53 @@ async function runAutoCorrection(leafId: number, seq: number): Promise<void> {
 export async function openCorrectionForCommand(
   leafId: number,
   command: string,
+  opts?: { blockId?: string },
 ): Promise<void> {
   const text = command.trim();
   if (!text) return;
   if (!deps) return;
-  // 用户已经开始敲下一条命令时不打扰。
+  // 用户已经切到别的终端：不要在其他 pane 上弹出旧终端的纠错。
+  const activeLeaf = deps.getActiveLeafId();
+  if (activeLeaf !== null && activeLeaf !== leafId) return;
+  // 只能在“可证明的空提示符”上回填：未知输入（粘贴/光标移动）或被用户
+  // 改了半行时都不打扰，避免候选写进错误位置。
+  const lineState = readLineState(leafId);
+  if (lineState !== null && lineState !== "known-empty") return;
   if (deps.getLine(leafId).trim() !== "") return;
+  // CORR-03 P1：同一 block 的零候选说明只提示一次；关闭后不晚弹。
+  const scope = readScopeToken(leafId);
+  const noticeKey = opts?.blockId ? `${scope ?? ""}|${opts.blockId}` : null;
+  if (noticeKey && lastEmptyNoticeKey === noticeKey) return;
   if (state.visible) closeNextCommand();
-  await openCorrection(leafId, { auto: true, text });
+  await openCorrection(leafId, {
+    auto: true,
+    text,
+    notifyEmpty: true,
+    blockKey: opts?.blockId,
+  });
+}
+
+/**
+ * CORR-03 P2：显式“更多词形候选”。只有用户点击按钮才调用；
+ * 使用有界距离 ≤2 的次级规则，候选仍只回填、不执行，并沿用当前面板的
+ * scope/行守卫（unknown 行、已切 leaf、输入已变化都拒绝）。
+ */
+export async function requestMoreCorrection(): Promise<void> {
+  if (!deps || !state.visible || state.leafId === null) return;
+  if (state.task !== "correct") return;
+  const leafId = state.leafId;
+  if (!scopeStillCurrent(leafId, state.scopeToken)) return;
+  if (readLineVersion(leafId) !== state.lineVersion) return;
+  const fromBlock = state.source === "block";
+  const text = fromBlock
+    ? (state.correctionRequest?.buffer?.text ?? "")
+    : deps.getLine(leafId);
+  if (!text.trim()) return;
+  await openCorrection(leafId, {
+    auto: false,
+    text: fromBlock ? text : undefined,
+    more: true,
+  });
 }
 
 function explain(status: string, reason?: string): string {
@@ -251,12 +394,26 @@ export async function openNextCommand(leafId: number): Promise<void> {
   cancelAutoCorrection();
   autoVisible = false;
   const requestVersion = ++versionSeq;
+  const scope = readScopeToken(leafId);
+  const lineVersion = readLineVersion(leafId);
+  if (readLineState(leafId) === "unknown") {
+    setState({
+      ...EMPTY,
+      visible: true,
+      leafId,
+      requestVersion,
+      scopeToken: scope,
+      messageZh: "输入状态未知（粘贴或光标移动后）；请按 Ctrl+C 清空后再试",
+    });
+    return;
+  }
   if (deps.getLine(leafId).trim() !== "") {
     setState({
       ...EMPTY,
       visible: true,
       leafId,
       requestVersion,
+      scopeToken: scope,
       messageZh: "当前输入行不为空；下一步建议只用于空行",
     });
     return;
@@ -267,17 +424,30 @@ export async function openNextCommand(leafId: number): Promise<void> {
       visible: true,
       leafId,
       requestVersion,
+      scopeToken: scope,
       messageZh: "当前终端不是 Bash/SSH，暂不提供下一步建议",
     });
     return;
   }
-  const available = deps.getAvailableCommands(deps.getRustSessionId(leafId));
+  let available = deps.getAvailableCommands(
+    leafId,
+    deps.getRustSessionId(leafId),
+  );
+  if ((!available || available.size === 0) && deps.ensureAvailableCommands) {
+    available = await deps.ensureAvailableCommands(leafId);
+    // 词表可能跨 leaf/连接返回：写任何状态之前复核代次与真实 owner。
+    if (!requestStillCurrent(leafId, requestVersion, scope, lineVersion)) {
+      abandonRequest(leafId, requestVersion);
+      return;
+    }
+  }
   if (!available || available.size === 0) {
     setState({
       ...EMPTY,
       visible: true,
       leafId,
       requestVersion,
+      scopeToken: scope,
       messageZh: "缺少可用命令信息；先在「设置 → 终端预测 → 远端补全组件」刷新",
     });
     return;
@@ -289,6 +459,7 @@ export async function openNextCommand(leafId: number): Promise<void> {
       visible: true,
       leafId,
       requestVersion,
+      scopeToken: scope,
       messageZh: "本次会话还没有可学习的命令",
     });
     return;
@@ -302,6 +473,8 @@ export async function openNextCommand(leafId: number): Promise<void> {
     selectedIndex: 0,
     messageZh: "正在计算…",
     requestVersion,
+    scopeToken: scope,
+    expanded: false,
   });
 
   const evaluate = deps.evaluateRisk;
@@ -311,7 +484,10 @@ export async function openNextCommand(leafId: number): Promise<void> {
       risk: await evaluate(entry.displayText),
     })),
   );
-  if (requestVersion !== versionSeq) return;
+  if (!requestStillCurrent(leafId, requestVersion, scope, lineVersion)) {
+    abandonRequest(leafId, requestVersion);
+    return;
+  }
 
   const availability = new Map<string, Availability>();
   const risk = new Map<string, RiskLevel>();
@@ -328,12 +504,29 @@ export async function openNextCommand(leafId: number): Promise<void> {
       result.source === "rpc" ? result.level : "unknown",
     );
   }
+  const lineState = readLineState(leafId);
+  if (lineState === "unknown") {
+    closeNextCommand();
+    return;
+  }
+  if (lineState === "known-text") {
+    setState({
+      ...EMPTY,
+      visible: true,
+      leafId,
+      requestVersion,
+      scopeToken: scope,
+      messageZh: "输入行已变化，请重新请求",
+    });
+    return;
+  }
   if (deps.getLine(leafId).trim() !== "") {
     setState({
       ...EMPTY,
       visible: true,
       leafId,
       requestVersion,
+      scopeToken: scope,
       messageZh: "输入行已变化，请重新请求",
     });
     return;
@@ -357,13 +550,65 @@ export async function openNextCommand(leafId: number): Promise<void> {
     requestVersion,
     correctionRequest: null,
     auto: false,
+    expanded: false,
+    scopeToken: scope,
+    lineVersion,
+  });
+}
+
+/**
+ * CORR-03 P1：失败命令零候选时的“一次简短反馈”。
+ * 键 = scope 代次 + block id，只用于防止同一结果重复提示；不做命令文本永久去重。
+ */
+let lastEmptyNoticeKey: string | null = null;
+
+function emptyNoticeMessage(status: string): string {
+  if (status === "empty") return "上一条命令未找到；没有可靠的单字符修正建议";
+  if (status === "unavailable") return "上一条命令未找到；该命令不是可自动纠正的简单命令";
+  return "上一条命令未找到；未生成可用的修正建议";
+}
+
+function showEmptyCorrectionNotice(args: {
+  leafId: number;
+  requestVersion: number;
+  scope: string | null;
+  lineVersion: number | null;
+  source: "line" | "block";
+  messageZh: string;
+  blockKey?: string;
+  request?: PredictionRequest | null;
+}): void {
+  if (args.blockKey) {
+    lastEmptyNoticeKey = `${args.scope ?? ""}|${args.blockKey}`;
+  }
+  // 空候选说明面板：不设置 autoVisible、不提供接受路径；Esc 关闭、Enter/→ 继续终端语义。
+  setState({
+    ...EMPTY,
+    visible: true,
+    leafId: args.leafId,
+    task: "correct",
+    requestVersion: args.requestVersion,
+    scopeToken: args.scope,
+    lineVersion: args.lineVersion,
+    messageZh: args.messageZh,
+    source: args.source,
+    auto: true,
+    correctionRequest: args.request ?? null,
   });
 }
 
 /** 显式“当前行纠错”：只改一个 token，保留其它参数，不执行。 */
 export async function openCorrection(
   leafId: number,
-  opts?: { auto?: boolean; text?: string },
+  opts?: {
+    auto?: boolean;
+    text?: string;
+    /** CORR-03 P1：block 来源零候选时给出一次准确反馈（行内自动检测保持静默）。 */
+    notifyEmpty?: boolean;
+    blockKey?: string;
+    /** CORR-03 P2：使用“更多词形候选”次级规则（有界距离 ≤2）。 */
+    more?: boolean;
+  },
 ): Promise<void> {
   if (!deps) return;
   const source: "line" | "block" = opts?.text ? "block" : "line";
@@ -372,7 +617,27 @@ export async function openCorrection(
     autoVisible = false;
   }
   const requestVersion = ++versionSeq;
+  const scope = readScopeToken(leafId);
+  const lineState = readLineState(leafId);
+  // 失败命令纠错只在“可证明的空提示符”上回填；未知输入不弹，避免覆盖用户内容。
+  if (source === "block" && lineState !== null && lineState !== "known-empty") {
+    return;
+  }
+  const lineVersion = readLineVersion(leafId);
   const line = opts?.text ?? deps.getLine(leafId);
+  if (lineState === "unknown") {
+    if (opts?.auto) return;
+    setState({
+      ...EMPTY,
+      visible: true,
+      leafId,
+      task: "correct",
+      requestVersion,
+      scopeToken: scope,
+      messageZh: "输入状态未知（粘贴或光标移动后）；请按 Ctrl+C 清空后再试",
+    });
+    return;
+  }
   if (line.trim() === "") {
     if (opts?.auto) return;
     setState({
@@ -381,6 +646,7 @@ export async function openCorrection(
       leafId,
       task: "correct",
       requestVersion,
+      scopeToken: scope,
       messageZh: "当前输入行为空，没有可纠错的内容",
     });
     return;
@@ -393,19 +659,44 @@ export async function openCorrection(
       leafId,
       task: "correct",
       requestVersion,
+      scopeToken: scope,
       messageZh: "当前终端不是 Bash/SSH，暂不提供纠错",
     });
     return;
   }
-  const available = deps.getAvailableCommands(deps.getRustSessionId(leafId));
+  let available = deps.getAvailableCommands(
+    leafId,
+    deps.getRustSessionId(leafId),
+  );
+  if ((!available || available.size === 0) && deps.ensureAvailableCommands) {
+    available = await deps.ensureAvailableCommands(leafId);
+    if (!requestStillCurrent(leafId, requestVersion, scope, lineVersion)) {
+      abandonRequest(leafId, requestVersion);
+      return;
+    }
+  }
   if (!available || available.size === 0) {
-    if (opts?.auto) return;
+    if (opts?.auto) {
+      if (opts.notifyEmpty) {
+        showEmptyCorrectionNotice({
+          leafId,
+          requestVersion,
+          scope,
+          lineVersion,
+          source,
+          messageZh: "上一条命令未找到；当前无法读取可用命令表，未能生成建议",
+          blockKey: opts.blockKey,
+        });
+      }
+      return;
+    }
     setState({
       ...EMPTY,
       visible: true,
       leafId,
       task: "correct",
       requestVersion,
+      scopeToken: scope,
       messageZh: "缺少可用命令信息；先在「设置 → 终端预测 → 远端补全组件」刷新",
     });
     return;
@@ -413,13 +704,27 @@ export async function openCorrection(
   const vocabulary = getCorrectionVocabulary(available);
   const names = vocabulary.names;
   if (names.length === 0) {
-    if (opts?.auto) return;
+    if (opts?.auto) {
+      if (opts.notifyEmpty) {
+        showEmptyCorrectionNotice({
+          leafId,
+          requestVersion,
+          scope,
+          lineVersion,
+          source,
+          messageZh: "上一条命令未找到；当前可用命令表为空，未能生成建议",
+          blockKey: opts.blockKey,
+        });
+      }
+      return;
+    }
     setState({
       ...EMPTY,
       visible: true,
       leafId,
       task: "correct",
       requestVersion,
+      scopeToken: scope,
       messageZh: "远端命令列表为空，暂不提供纠错",
     });
     return;
@@ -436,6 +741,9 @@ export async function openCorrection(
       messageZh: "正在计算…",
       requestVersion,
       correctionRequest: null,
+      expanded: false,
+      scopeToken: scope,
+      lineVersion,
     });
   }
 
@@ -448,8 +756,9 @@ export async function openCorrection(
     vocabulary: { commands: names },
     availability: vocabulary.availability,
     risk: vocabulary.risk,
+    more: opts?.more === true,
   });
-  if (requestVersion !== versionSeq) return;
+  if (!requestStillCurrent(leafId, requestVersion, scope, lineVersion)) return;
   if (source === "line") {
     if (deps.getLine(leafId) !== line) {
       if (opts?.auto) return;
@@ -459,22 +768,38 @@ export async function openCorrection(
         leafId,
         task: "correct",
         requestVersion,
+        scopeToken: scope,
         messageZh: "输入行已变化，请重新请求",
       });
       return;
     }
-  } else if (deps.getLine(leafId).trim() !== "") {
-    // 失败命令的纠错：用户已经开始敲下一条命令，不打扰。
+  } else if (readLineState(leafId) === "unknown" || deps.getLine(leafId).trim() !== "") {
+    // 失败命令的纠错：用户已经开始敲下一条命令（或输入状态未知）时不打扰。
     return;
   }
   if (result.view.status !== "ok") {
-    if (opts?.auto) return;
+    if (opts?.auto) {
+      if (opts.notifyEmpty && result.view.status !== "stale") {
+        showEmptyCorrectionNotice({
+          leafId,
+          requestVersion,
+          scope,
+          lineVersion,
+          source,
+          messageZh: emptyNoticeMessage(result.view.status),
+          blockKey: opts.blockKey,
+          request: result.request,
+        });
+      }
+      return;
+    }
     setState({
       ...EMPTY,
       visible: true,
       leafId,
       task: "correct",
       requestVersion,
+      scopeToken: scope,
       messageZh: result.view.reasonZh ?? explain(result.view.status),
     });
     return;
@@ -487,12 +812,29 @@ export async function openCorrection(
       risk: await evaluate(candidate.insertText ?? candidate.displayText),
     })),
   );
-  if (requestVersion !== versionSeq) return;
+  if (!requestStillCurrent(leafId, requestVersion, scope, lineVersion)) {
+    abandonRequest(leafId, requestVersion);
+    return;
+  }
+  if (source === "line" && deps.getLine(leafId) !== line) {
+    abandonRequest(leafId, requestVersion);
+    return;
+  }
+  if (source === "block") {
+    const currentState = readLineState(leafId);
+    if (currentState === "unknown" || deps.getLine(leafId).trim() !== "") return;
+  }
   const firstToken = line.trim().split(/\s+/)[0] ?? "";
+  // 纠错只“填入、不执行”；L2（medium，需确认）可以展示并标记，L3/L4 仍隐藏。
+  // 不能只放行 L0/L1：read-only 命令（如 grep）在风险引擎里常因 no rule matched
+  // 落到 L2，否则纠错对最常见的安全命令永远不出候选。
   const candidates = evaluated
     .filter(
       ({ risk }) =>
-        risk.source === "rpc" && (risk.level === "L0" || risk.level === "L1"),
+        risk.source === "rpc" &&
+        (risk.level === "L0" ||
+          risk.level === "L1" ||
+          risk.level === "L2"),
     )
     .filter(
       ({ candidate }) =>
@@ -500,7 +842,21 @@ export async function openCorrection(
     )
     .map(({ candidate, risk }) => ({ ...candidate, risk: risk.level }));
   if (opts?.auto) {
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) {
+      if (opts.notifyEmpty) {
+        showEmptyCorrectionNotice({
+          leafId,
+          requestVersion,
+          scope,
+          lineVersion,
+          source,
+          messageZh: "上一条命令未找到；候选可用性或风险未确认，已保守隐藏",
+          blockKey: opts.blockKey,
+          request: result.request,
+        });
+      }
+      return;
+    }
     autoVisible = true;
   }
   setState({
@@ -517,7 +873,20 @@ export async function openCorrection(
     correctionRequest: result.request,
     auto: opts?.auto === true,
     source,
+    expanded: false,
+    scopeToken: scope,
+    lineVersion,
   });
+}
+
+/** 点击弹窗头部“展开/收起”：只改展示状态，不改变候选与当前选中项。 */
+export function toggleNextCommandExpanded(): void {
+  if (!state.visible) return;
+  if (state.expanded) {
+    setState({ expanded: false, selectedIndex: 0 });
+  } else {
+    setState({ expanded: true });
+  }
 }
 
 /** 接受选中候选：只写输入行，不追加换行、不执行。 */
@@ -526,40 +895,105 @@ export function acceptNextCommand(index?: number): boolean {
   const candidate = state.candidates[index ?? state.selectedIndex];
   if (!candidate) return false;
   const leafId = state.leafId;
+  // 请求代次与真实 owner（leaf/连接/环境）任一变化即作废，不写半行。
+  if (state.requestVersion !== versionSeq) {
+    closeNextCommand();
+    return false;
+  }
+  if (
+    !scopeStillCurrent(leafId, state.scopeToken) ||
+    readLineVersion(leafId) !== state.lineVersion
+  ) {
+    closeNextCommand();
+    return false;
+  }
+  const current = deps?.getLine(leafId) ?? "";
+  const lineState = readLineState(leafId);
+  if (lineState === "unknown") {
+    closeNextCommand();
+    return false;
+  }
+  const knownEmpty = lineState === null ? current.trim() === "" : lineState === "known-empty";
   if (state.task === "correct") {
     if (!state.correctionRequest) return false;
-    const current = deps?.getLine(leafId) ?? "";
     if (state.source === "block") {
-      // 失败命令纠错：只要求当前提示符仍为空，不要求与失败命令相同。
-      if (current.trim() !== "") {
+      // 失败命令纠错：只要求当前提示符仍是“可证明的空”。
+      if (!knownEmpty) {
         closeNextCommand();
         return false;
       }
-    } else if (
-      !correctionTargetIsCurrent(
-        state.correctionRequest,
-        leafId,
-        state.requestVersion,
-        current,
-        current.length,
-      )
-    ) {
-      closeNextCommand();
-      return false;
+    } else {
+      // 当前行纠错：目标行必须仍可证明（known-text），再核对原文/光标/版本。
+      const knownLine = lineState === null ? current.trim() !== "" : lineState === "known-text";
+      if (!knownLine) {
+        closeNextCommand();
+        return false;
+      }
+      if (
+        !correctionTargetIsCurrent(
+          state.correctionRequest,
+          leafId,
+          state.requestVersion,
+          current,
+          current.length,
+        )
+      ) {
+        closeNextCommand();
+        return false;
+      }
     }
+  } else if (!knownEmpty) {
+    closeNextCommand();
+    return false;
   }
   const decision = acceptPredictionCandidate(
     candidate,
     leafId,
     state.requestVersion,
+    state.task === "correct" ? ["L0", "L1", "L2"] : undefined,
   );
   if (!decision.ok) {
     closeNextCommand();
     return false;
   }
-  if (!deps?.writeLine(leafId, decision.insertText)) return false;
+  const guard: WriteLineGuard | undefined =
+    lineState === null
+      ? undefined
+      : state.task === "correct" && state.source === "line"
+        ? {
+            requireState: "known-text",
+            expectedText: state.correctionRequest?.buffer?.text ?? "",
+            expectedVersion: state.lineVersion ?? undefined,
+          }
+        : {
+            requireState: "known-empty",
+            expectedVersion: state.lineVersion ?? undefined,
+          };
+  if (!deps?.writeLine(leafId, decision.insertText, guard)) {
+    closeNextCommand();
+    return false;
+  }
   closeNextCommand();
   return true;
+}
+
+/**
+ * 失败命令（exit 127）是否允许自动弹出纠错（CORR-02 C3）：
+ * 只有“用户手动输入 + 命令行完整且为单一简单命令 + 非空文本”才成立；
+ * 片段/复合命令、Agent 自动执行、旧 shell 无完整性证据都不参与。
+ */
+export function shouldOfferBlockCorrection(block: {
+  author: "user" | "agent";
+  exitCode: number | null;
+  command: string;
+  commandComplete?: boolean;
+}): boolean {
+  return (
+    block.author === "user" &&
+    block.exitCode === 127 &&
+    block.command.trim() !== "" &&
+    block.commandComplete === true
+  );
 }
 
 /**
@@ -646,23 +1080,39 @@ export function nextCommandKeyHandler(
   event: KeyboardEvent,
 ): boolean {
   if (event.type !== "keydown") return true;
+  // 面板属于另一个 leaf：用户已切到新终端，旧面板必须在按键路径上失效。
+  if (state.visible && state.leafId !== null && state.leafId !== leafId) {
+    handleLeafInvalidated(state.leafId);
+    return true;
+  }
   if (state.visible && state.leafId === leafId) {
     if (event.key === "Escape") {
       closeNextCommand();
       return false;
     }
+    // ↓ 第一次只展开（保留首选），已展开后再移动；↑ 在首项时收起。
+    // 弹窗可见期间上下键一律不落到 shell（否则会翻到上一条命令）。
     if (
-      (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-      state.candidates.length > 1
+      state.candidates.length > 0 &&
+      (event.key === "ArrowDown" || event.key === "ArrowUp")
     ) {
       event.preventDefault();
-      setState({
-        selectedIndex:
-          event.key === "ArrowDown"
-            ? (state.selectedIndex + 1) % state.candidates.length
-            : (state.selectedIndex - 1 + state.candidates.length) %
-              state.candidates.length,
-      });
+      if (event.key === "ArrowDown") {
+        if (!state.expanded) {
+          setState({ expanded: true });
+        } else {
+          setState({
+            selectedIndex:
+              (state.selectedIndex + 1) % state.candidates.length,
+          });
+        }
+      } else if (state.expanded) {
+        if (state.selectedIndex === 0) {
+          setState({ expanded: false, selectedIndex: 0 });
+        } else {
+          setState({ selectedIndex: state.selectedIndex - 1 });
+        }
+      }
       return false;
     }
     if (

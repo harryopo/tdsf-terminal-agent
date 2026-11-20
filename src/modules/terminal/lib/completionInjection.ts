@@ -20,6 +20,11 @@
  */
 import type { Terminal as XTerm } from '@xterm/xterm';
 import { IS_MAC, isTerminalCopy } from './keymap';
+import {
+  cancelAutoCorrection,
+  handleLeafInvalidated,
+  scheduleAutoCorrection,
+} from './nextCommandInjection';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PREDICTION_CLEAR_EVENT } from '@/lib/predictionEvents';
@@ -105,12 +110,58 @@ let getTermFn: ((leafId: number) => XTerm | null) | null = null;
 /** 每个终端的输入缓冲区 */
 const inputBuffers = new Map<number, string>();
 const unknownInputLines = new Set<number>();
+/** 输入行版本：每次可见输入变化递增，回填必须与请求时一致。 */
+const lineVersions = new Map<number, number>();
+
+/**
+ * 输入行三态（CORR-02 C2）：
+ * - known-empty：缓冲区可证明当前提示符为空；
+ * - known-text：缓冲区可证明整行内容，且光标在行尾（只能追加/退格维护）；
+ * - unknown：粘贴、光标移动、删除键、IME/多字节输入等使内存缓冲与真实行失配。
+ * unknown 时任何回填都必须拒绝——不能把候选写进未知光标位置。
+ */
+export type CompletionLineState = "known-empty" | "known-text" | "unknown";
+
+export type CompletionLineSnapshot = {
+  state: CompletionLineState;
+  text: string;
+  version: number;
+};
+
+export type WriteCompletionLineGuard =
+  | { requireState: "known-empty"; expectedVersion?: number }
+  | { requireState: "known-text"; expectedText: string; expectedVersion?: number };
+
+function bumpLineVersion(leafId: number): void {
+  lineVersions.set(leafId, (lineVersions.get(leafId) ?? 0) + 1);
+}
+
+export function getCompletionLineVersion(leafId: number): number {
+  return lineVersions.get(leafId) ?? 0;
+}
+
+export function getCompletionLineSnapshot(leafId: number): CompletionLineSnapshot {
+  const text = getInputBuffer(leafId);
+  const state: CompletionLineState = unknownInputLines.has(leafId)
+    ? "unknown"
+    : text === ""
+      ? "known-empty"
+      : "known-text";
+  return { state, text, version: getCompletionLineVersion(leafId) };
+}
+
+export function getCompletionLineState(leafId: number): CompletionLineState {
+  return getCompletionLineSnapshot(leafId).state;
+}
 
 export function clearLeafEnvironment(leafId: number): void {
   clearEnvironment(leafId);
   inputBuffers.delete(leafId);
   unknownInputLines.delete(leafId);
+  lineVersions.delete(leafId);
   if (activeState.visible && activeState.leafId === leafId) closeCompletion();
+  // 终端销毁/重建：让该 leaf 的在飞纠错/建议请求立即过期。
+  handleLeafInvalidated(leafId);
 }
 
 /** 每个终端的环境（windows=本地 pwsh/cmd，linux=SSH 远程）。
@@ -124,16 +175,19 @@ function getInputBuffer(leafId: number): string {
 function setInputBuffer(leafId: number, value: string): void {
   // Input changes invalidate replies immediately, not after the debounce fires.
   predictSeq++;
+  bumpLineVersion(leafId);
   inputBuffers.set(leafId, value);
   setState((s) => (s.visible ? { ...s, visible: false } : s));
 }
 
 function clearInputBuffer(leafId: number): void {
   unknownInputLines.delete(leafId);
+  cancelAutoCorrection();
   setInputBuffer(leafId, '');
 }
 
 function invalidateInputLine(leafId: number): void {
+  cancelAutoCorrection();
   setInputBuffer(leafId, '');
   unknownInputLines.add(leafId);
   closeCompletion();
@@ -624,6 +678,75 @@ export function closeCompletion(): void {
   setState((s) => (s.visible ? { ...s, visible: false } : s));
 }
 
+/** 供“下一步建议”显式入口读取当前输入行（与逐键补全同一缓冲区）。 */
+export function getCompletionLine(leafId: number): string {
+  return getInputBuffer(leafId);
+}
+
+/**
+ * 供“下一步建议”接受候选：只替换当前可见输入行，不追加换行、不执行。
+ * 与逐键补全共用 writeFn / noteUserInput / 输入缓冲区，避免两套状态打架。
+ *
+ * CORR-02 C2：回填必须原子复核“当前 leaf 的真实输入行”：
+ * - unknown（粘贴/光标移动/删除键后）一律拒绝，不猜清行、不发送 Ctrl+C；
+ * - guard 要求状态与版本一致；known-text 还要求原文与请求时完全相同。
+ * 检查和写入在同一同步调用内完成，中间没有 await。
+ */
+export function writeCompletionLine(
+  leafId: number,
+  nextLine: string,
+  guard?: WriteCompletionLineGuard,
+): boolean {
+  if (!writeFn) return false;
+  if (/[\r\n]/.test(nextLine)) return false;
+  const snapshot = getCompletionLineSnapshot(leafId);
+  if (snapshot.state === "unknown") return false;
+  if (guard) {
+    if (guard.requireState !== snapshot.state) return false;
+    if (
+      guard.requireState === "known-text" &&
+      guard.expectedText !== snapshot.text
+    ) {
+      return false;
+    }
+    if (
+      guard.expectedVersion !== undefined &&
+      guard.expectedVersion !== snapshot.version
+    ) {
+      return false;
+    }
+  }
+  writeFn(leafId, '\b'.repeat(Array.from(snapshot.text).length) + nextLine);
+  setInputBuffer(leafId, nextLine);
+  setState((s) => (s.visible ? { ...s, visible: false } : s));
+  return true;
+}
+
+/**
+ * 终端实际输出到 PTY 的输入回执（term.onData）。
+ *
+ * keydown 已按单键维护缓冲区；这里只处理“按键追踪覆盖不到”的输入：
+ * 粘贴、IME/多字节文本、ESC 控制序列、鼠标报告等。出现即视为输入行失配，
+ * 三态转为 unknown——宁可暂停预测/纠错，也不把候选写到错误光标处。
+ * 单字符可打印 ASCII、退格、回车、Ctrl+C、Ctrl+U、单独 ESC 已被按键路径
+ * 正确处理，不在这里作废。
+ */
+export function noteTerminalInput(leafId: number, data: string): void {
+  if (!data) return;
+  const tracked =
+    data === '\x7f' ||
+    data === '\r' ||
+    data === '\n' ||
+    data === '\x03' ||
+    data === '\x15' ||
+    data === '\x1b' ||
+    // 单独 Insert（xterm 发 \e[2~）只切换覆盖模式，不改变当前行内容。
+    data === '\x1b[2~' ||
+    (data.length === 1 && data >= ' ' && data <= '~');
+  if (tracked) return;
+  invalidateInputLine(leafId);
+}
+
 // ============================================================================
 // 接受预测
 // ============================================================================
@@ -756,6 +879,7 @@ export function completionKeyHandler(
       setInputBuffer(leafId, buf.slice(0, -1));
     }
     schedulePredictionUpdate(leafId);
+    scheduleAutoCorrection(leafId);
     return true;
   }
 
@@ -786,11 +910,21 @@ export function completionKeyHandler(
     event.key === 'ArrowDown' ||
     event.key === 'Home' ||
     event.key === 'End' ||
+    // Delete 向前删除：缓冲区只追踪“追加/尾部退格”，会让内存行与终端真实行失配。
+    // Insert 只切换覆盖模式、不改变当前行；在行尾（已知状态）覆盖即追加，保持追踪。
+    event.key === 'Delete' ||
     (event.ctrlKey && /^[aekwrdhy]$/i.test(event.key)) ||
     (event.altKey && /^[bfd]$/i.test(event.key))
   ) {
     // 弹窗可见时的 ArrowRight 已在上面"接受预测"分支拦截, 不会落此;
     // 光标移出行尾后缓冲已失配, 清空 + 关闭弹窗。
+    invalidateInputLine(leafId);
+    return true;
+  }
+
+  // 其余带 Ctrl/Alt/Meta 的按键（readline 编辑、历史搜索、换位、yank 等）
+  // 都可能改写真实输入行；宁可暂停预测，也不在未知行上继续猜。
+  if (event.ctrlKey || event.altKey || event.metaKey) {
     invalidateInputLine(leafId);
     return true;
   }
@@ -801,6 +935,8 @@ export function completionKeyHandler(
     const buf = getInputBuffer(leafId);
     setInputBuffer(leafId, buf + event.key);
     schedulePredictionUpdate(leafId);
+    // 自动纠错：输入停顿后检查命令名是否拼错（不依赖快捷键）。
+    scheduleAutoCorrection(leafId);
     return true;
   }
 

@@ -112,6 +112,28 @@ describe("终端 block → 会话内预测桥", () => {
     expect(viewB.status).toBe("empty");
   });
 
+  it("片段/复合命令（commandComplete=false）不进入学习统计", () => {
+    const leaf = 908;
+    feed(leaf, "pwd");
+    // 复合行的首段被 shell 上报为片段：文本与退出码归属都不可信。
+    feed(leaf, "printf ROOT_OK", { exitCode: 127, commandComplete: false });
+    feed(leaf, "ls");
+    const scope = predictionScopeForLeaf(leaf);
+    const view = suggestNextForLeaf({
+      leafId: leaf,
+      inputVersion: 1,
+      now: clock + 100,
+      ...tables(scope.namespaceId, ["pwd", "printf", "ls"]),
+    });
+    const commands = view.candidates.map((item) => item.displayText);
+    expect(commands).not.toContain("printf ROOT_OK");
+    expect(
+      view.candidates.some((item) =>
+        item.evidence.some((evidence) => evidence.source === "markov"),
+      ),
+    ).toBe(false);
+  });
+
   it("rotate 后旧候选 owner-changed，新请求仍可用新 scope 召回", () => {
     const leaf = 905;
     for (const command of ["pwd", "ls", "pwd", "ls", "pwd", "ls"]) {

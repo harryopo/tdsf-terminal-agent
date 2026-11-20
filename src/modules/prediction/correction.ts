@@ -223,7 +223,9 @@ export function suggestBufferCorrection(input: CorrectionInput): CandidateView {
       input.availability.get(replacement.commandText) ?? "unknown";
     const risk = input.risk.get(replacement.commandText) ?? "unknown";
     if (availability !== "available") continue;
-    if (risk !== "L0" && risk !== "L1") continue;
+    // 候选只回填、不执行：L2（中风险，需用户确认）可以展示，L3/L4 仍隐藏。
+    // 与 nextCommandInjection 的最终过滤保持一致，避免两层规则分叉。
+    if (risk !== "L0" && risk !== "L1" && risk !== "L2") continue;
     const insertText = `${text.slice(0, replacement.span.start)}${replacement.text}${text.slice(replacement.span.end)}`;
     if (/[\r\n]/.test(insertText)) continue;
     const sameSpan = replacements.filter(
@@ -238,7 +240,7 @@ export function suggestBufferCorrection(input: CorrectionInput): CandidateView {
         displayText: insertText,
         insertText,
         source: replacement.source,
-        summaryZh: `词形修正：${replacement.span.text} → ${replacement.text}（只改一个词，不保证符合你的原意）`,
+        summaryZh: `词形校正：${replacement.span.text} → ${replacement.text}（单 token 替换，语义未经校验）`,
         evidence: [
           {
             source: replacement.source,
@@ -321,4 +323,182 @@ export function countsFromEvents(events: readonly CommandEvent[]): Map<string, n
     counts.set(event.replayText, (counts.get(event.replayText) ?? 0) + 1);
   }
   return counts;
+}
+
+// ============================================================================
+// CORR-03 P2：显式“更多词形候选”（次级入口，不影响自动层单编辑）
+// ============================================================================
+
+/**
+ * 有界编辑距离（含相邻换位，算 1 次）。超过 max 立即返回 max+1。
+ * 只用于次级入口的“有界相邻换位编辑距离 ≤2”门槛；自动层仍用 isSingleEdit。
+ */
+export function boundedEditDistance(a: string, b: string, max = 2): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2: number[] | null = null;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = new Array<number>(b.length + 1);
+    cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let value = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (
+        i > 1 &&
+        j > 1 &&
+        a[i - 1] === b[j - 2] &&
+        a[i - 2] === b[j - 1] &&
+        prev2
+      ) {
+        value = Math.min(value, prev2[j - 2] + 1);
+      }
+      cur[j] = value;
+      if (value < rowMin) rowMin = value;
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length] > max ? max + 1 : prev[b.length];
+}
+
+/** 次级召回门槛（ROOT v1.2 §P2.2）。 */
+const MORE_MIN_INPUT = 5;
+const MORE_MAX_INPUT = 64;
+const MORE_MIN_CANDIDATE = 4;
+const MORE_MAX_DISTANCE = 2;
+const MORE_MAX_RATIO = 0.4;
+const MORE_MAX_RESULTS = 3;
+
+function collectMoreReplacements(
+  text: string,
+  vocabulary: CorrectionVocabulary,
+): { span: TokenSpan; text: string; commandText: string; distance: number }[] {
+  const tokens = tokenize(text);
+  if (tokens.length === 0) return [];
+  const head = tokens[0];
+  if (head.text.length < MORE_MIN_INPUT || head.text.length > MORE_MAX_INPUT) {
+    return [];
+  }
+  const found: {
+    span: TokenSpan;
+    text: string;
+    commandText: string;
+    distance: number;
+  }[] = [];
+  for (const command of vocabulary.commands) {
+    if (command.length < MORE_MIN_CANDIDATE) continue;
+    if (command === head.text) continue;
+    const distance = boundedEditDistance(head.text, command, MORE_MAX_DISTANCE);
+    if (distance < 1 || distance > MORE_MAX_DISTANCE) continue;
+    const longest = Math.max(head.text.length, command.length);
+    if (longest === 0 || distance / longest > MORE_MAX_RATIO) continue;
+    found.push({ span: head, text: command, commandText: command, distance });
+  }
+  found.sort(
+    (a, b) => a.distance - b.distance || a.text.localeCompare(b.text),
+  );
+  return found;
+}
+
+/**
+ * 显式“更多词形候选”：只在用户点按钮/快捷键后调用。
+ * 规则：首 token 5–64 字符、候选 ≥4 字符、有界距离 ≤2 且 ≤40% 长度、最多 3 条。
+ * 自动层（suggestBufferCorrection）完全不调用本函数。
+ */
+export function suggestBufferCorrectionMore(input: CorrectionInput): CandidateView {
+  const { request, current, currentInputVersion, now } = input;
+  const base = {
+    requestId: request.requestId,
+    task: request.task,
+    owner: request.scope,
+    snapshotVersion: 0,
+    generatedAt: now,
+  };
+  if (!isSameOwner(request.scope, current)) {
+    return { ...base, status: "stale", candidates: [], reasonZh: "上下文已切换" };
+  }
+  if (request.inputVersion !== currentInputVersion) {
+    return { ...base, status: "stale", candidates: [], reasonZh: "输入已变化" };
+  }
+  if (request.task !== "correct_buffer" || request.buffer == null) {
+    return { ...base, status: "unavailable", candidates: [], reasonZh: "该请求不是当前行纠错" };
+  }
+  const text = request.buffer.text;
+  if (text.trim() === "" || COMPLEX_BUFFER.test(text)) {
+    return { ...base, status: "unavailable", candidates: [], reasonZh: "复杂语法不自动纠正" };
+  }
+  const head = tokensOf(text)[0]?.text ?? "";
+  if (head.length < MORE_MIN_INPUT) {
+    return {
+      ...base,
+      status: "empty",
+      candidates: [],
+      reasonZh: "短命令名不做二次编辑扩展",
+    };
+  }
+  const replacements = collectMoreReplacements(text, input.vocabulary);
+  if (replacements.length === 0) {
+    return { ...base, status: "empty", candidates: [], reasonZh: "没有更宽的相近词形" };
+  }
+  const accepted: { candidate: Candidate; distance: number }[] = [];
+  for (const replacement of replacements) {
+    const availability = input.availability.get(replacement.commandText) ?? "unknown";
+    const risk = input.risk.get(replacement.commandText) ?? "unknown";
+    if (availability !== "available") continue;
+    if (risk !== "L0" && risk !== "L1" && risk !== "L2") continue;
+    const insertText = `${text.slice(0, replacement.span.start)}${replacement.text}${text.slice(replacement.span.end)}`;
+    if (/[\r\n]/.test(insertText)) continue;
+    accepted.push({
+      distance: replacement.distance,
+      candidate: {
+        candidateId: `${request.requestId}:more:${replacement.span.start}:${replacement.text}`,
+        task: "correct_buffer",
+        displayText: insertText,
+        insertText,
+        source: "dictionary",
+        summaryZh: `相近命令：${replacement.span.text} → ${replacement.text}（二次编辑，语义未经校验）`,
+        evidence: [{ source: "dictionary", count: 0, detailZh: "命令词典（更多词形）" }],
+        rankScore: 0,
+        rankerVersion: RANKER_VERSION,
+        risk,
+        availability,
+        constraints: ["single-token", "only-insert", "no-execution", "no-privilege-change"],
+        ambiguities: accepted.length > 0 ? ["存在多个相近词形"] : [],
+        owner: request.scope,
+        inputVersion: request.inputVersion,
+      },
+    });
+  }
+  if (accepted.length === 0) {
+    return {
+      ...base,
+      status: "unknown",
+      candidates: [],
+      reasonZh: "候选的可用性或风险未知，已保守隐藏",
+    };
+  }
+  accepted.sort(
+    (a, b) =>
+      a.distance - b.distance ||
+      a.candidate.displayText.localeCompare(b.candidate.displayText),
+  );
+  return {
+    ...base,
+    status: "ok",
+    candidates: accepted.slice(0, MORE_MAX_RESULTS).map((item) => item.candidate),
+  };
+}
+
+function tokensOf(text: string): TokenSpan[] {
+  const spans: TokenSpan[] = [];
+  const pattern = /\S+/g;
+  let match: RegExpExecArray | null = pattern.exec(text);
+  while (match) {
+    spans.push({ text: match[0], start: match.index, end: match.index + match[0].length });
+    match = pattern.exec(text);
+  }
+  return spans;
 }
