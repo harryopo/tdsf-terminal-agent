@@ -255,7 +255,8 @@ class ToolContext:
     # allow/confirm/deny；缺省 confirm（中间态最安全，fail-closed）
     mode: AgentMode = AgentMode.CONFIRM
     # Task 3.3 host 校验: 激活终端会话主机名（前端 live.sshConnection
-    # "user@host" 提取 @ 后部分；空 = 不可得 → execute_via_ssh 跳过校验）
+    # "user@host" 提取 @ 后部分；空 = 证据不可得。T2 起：实时校验不可用且
+    # 该证据缺失时一律 command_blocked，不再跳过校验）
     ssh_host: str = ""
     # TDSF (2026-09-23, #113④): 只保留前端"命令卡自动执行"开关的语义；
     # ssh_command 的 visible 参数已删（全仓无人读取，通道由 execution_channel 定）
@@ -591,6 +592,13 @@ def assess_command(
     #     自动放行（fail-closed）；impact 解析失败
     #     （dangerous 不可判）时同样不放行。
     force_confirm = False
+    # T1：段级特殊标记。交互式/后台常驻即使数值风险不高，也不允许任何自动放行
+    # 旁路（白名单 allow、会话免审、auto 档 L0-L2）；审计规避已由 L3+ 进入审批。
+    segment_flags: set[str] = set()
+    if impact is not None:
+        for _seg in impact.get("segments", []) or []:
+            segment_flags.update(_seg.get("flags", []) or [])
+    special_force_confirm = bool(segment_flags & {"interactive", "background"})
     try:
         from strands_backend.trust_store import (
             DECISION_ASK,
@@ -599,7 +607,11 @@ def assess_command(
             get_global_whitelist,
         )
 
-        wl_decision = get_global_whitelist().match_command(command)
+        whitelist = get_global_whitelist()
+        wl_decision = whitelist.match_command(command)
+        if getattr(whitelist, "degraded", False) and risk_l >= 2:
+            # T4：白名单不可信时，写操作不得因 auto 档或会话免审而自动放行。
+            force_confirm = True
         if wl_decision == DECISION_DENY:
             logger.info(
                 f"assess_command whitelist deny hit: command_chars={len(command)}"
@@ -617,7 +629,7 @@ def assess_command(
         dangerous = bool(impact.get("dangerous_construct")) if impact else True
         mode_value = getattr(ctx.mode, "value", str(ctx.mode))
         observe = mode_value == "observe"
-        if wl_decision == "allow" and not dangerous and not observe and risk_l <= 2:
+        if wl_decision == "allow" and not dangerous and not observe and not special_force_confirm and risk_l <= 2:
             logger.info(
                 f"assess_command whitelist allow hit: command_chars={len(command)}"
             )
@@ -630,7 +642,7 @@ def assess_command(
                 "trust_source": "whitelist",
             }
 
-        if not dangerous and not observe and not force_confirm:
+        if not dangerous and not observe and not force_confirm and not special_force_confirm:
             trust = get_global_trust_store()
             sid = ctx.session_id
             if risk_l <= 1 and trust.is_session_trusted(sid):
@@ -676,7 +688,8 @@ def assess_command(
         decision = "deny"
 
     # 4.5 白名单 ask 命中 → 所有可执行模式均强制逐条审批；deny/blocked 不受影响。
-    if force_confirm and decision == "allow":
+    # T1：交互式/后台常驻同样强制逐条审批（数值风险可保持不变）。
+    if (force_confirm or special_force_confirm) and decision == "allow":
         decision = "confirm"
 
     # 5. observe 只读短路（方案书 §3.2：只读类由调用方按 ToolPolicy.readonly
@@ -697,6 +710,7 @@ def assess_command(
         "impact": impact,
         "risk": risk,
         "reason": reason,
+        "flags": sorted(segment_flags),
     }
 
 
@@ -1436,11 +1450,42 @@ def _execute_via_ssh_impl(
         # live_sessions is None（查询失败/不可识别）→ 落入下方旧严格校验
     if not live_checked:
         # 旧严格校验（Task 3.3 原逻辑，保留作回退）：目标会话必须 == 激活
-        # 终端会话。数据源：ctx.ssh_host（前端 live.sshConnection "user@host"
-        # 提取）。若激活终端 host 不可得（ctx.ssh_host 为空，如旧前端未下发
-        # 或本地模式）→ 跳过校验（fail-open 仅此一处，其余门禁仍生效）。
+        # 终端会话。数据源：ctx.ssh_host（前端 live.sshConnection "user@host" 提取）。
         ssh_host = getattr(ctx, "ssh_host", "") or ""
-        if ssh_host and ssh_session_id and ctx.ssh_session_id:
+        if ssh_session_id and not ctx.ssh_session_id:
+            # T2（V4 修复）：激活会话未知时无法比对目标身份，必须阻断。
+            # 真正需要阻断的是"目标不是当前激活会话"或"无法确认目标身份"，
+            # 而不是"缺少主机名字符串"——目标与激活会话 ID 一致时身份本来确定。
+            logger.warning(
+                f"execute_via_ssh target unverified: target={ssh_session_id}, "
+                f"active session unknown, tool={tool_name}"
+            )
+            _audit_append(
+                event="command_blocked",
+                decision="target_unverified",
+                tool=tool_name,
+                command=command,
+                session_id=session_id,
+                agent=ctx.agent_name,
+                reason="live session query failed and active session unknown",
+            )
+            _cancel_operation("target_unverified")
+            return _complete_after_execution({
+                "status": "command_blocked",
+                "command": command,
+                "ssh_session_id": session_id,
+                "risk": risk,
+                "impact": impact,
+                "message": (
+                    "command_blocked! 无法验证目标会话身份：实时会话状态不可用，"
+                    "且当前激活会话未知。为避免把命令执行到错误的服务器，"
+                    "本次派发已被阻断。请重新连接并选择目标 SSH 会话后重试。"
+                ),
+            })
+        # T2：目标与激活会话的比对不再以 ssh_host 为前提。旧逻辑在 host 缺失时
+        # 跳过比对（fail-open），模型给出的其它 session_id 会被直接派发；
+        # 现在只要目标与激活会话 ID 不一致就阻断，host 仅用于展示与审计。
+        if ssh_session_id and ctx.ssh_session_id:
             try:
                 if int(ssh_session_id) != int(ctx.ssh_session_id):
                     logger.warning(
