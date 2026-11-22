@@ -79,6 +79,7 @@ ironrdp-tls = { git = "https://github.com/Devolutions/IronRDP", rev = "abfc97b29
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 smallvec = "1"
 base64 = "=0.22.1"
+tokio-tungstenite = "0.29"
 
 # 文件搜索
 ignore = "0.4"

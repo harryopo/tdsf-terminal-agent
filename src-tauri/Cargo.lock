@@ -7941,6 +7941,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
  "which",
  "windows-sys 0.61.2",

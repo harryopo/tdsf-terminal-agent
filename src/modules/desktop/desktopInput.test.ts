@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapButton, RELEASE_BUTTONS, RELEASE_KEYS, withOwner } from "./desktopInput";
+import { fitDesktopSize, mapButton, RELEASE_BUTTONS, RELEASE_KEYS, withOwner } from "./desktopInput";
 
 describe("desktopInput", () => {
   it("mapButton 把 React 的左/中/右键映射为 RDP 语义", () => {
@@ -30,5 +30,23 @@ describe("desktopInput", () => {
     expect(RELEASE_KEYS).toContain(0x2a);
     expect(RELEASE_KEYS).toContain(0x38);
     expect(RELEASE_BUTTONS).toEqual([1, 2, 3]);
+  });
+
+  it("适应窗口可以把 720p 按比例放大到 1080p", () => {
+    expect(fitDesktopSize(
+      { width: 1280, height: 720 },
+      { width: 1920, height: 1080 },
+    )).toEqual({ width: 1920, height: 1080 });
+    expect(fitDesktopSize(
+      { width: 1280, height: 720 },
+      { width: 800, height: 600 },
+    )).toEqual({ width: 800, height: 450 });
+  });
+
+  it("没有远端帧时不伪造显示尺寸", () => {
+    expect(fitDesktopSize(
+      { width: 0, height: 0 },
+      { width: 1920, height: 1080 },
+    )).toEqual({ width: 0, height: 0 });
   });
 });

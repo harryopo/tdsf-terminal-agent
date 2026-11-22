@@ -36,6 +36,11 @@ export default defineConfig({
     port: 9300,
   },
   envPrefix: ['VITE_', 'TAURI_'],
+  optimizeDeps: {
+    esbuildOptions: {
+      target: 'esnext',
+    },
+  },
   worker: {
     format: 'es',
   },

@@ -860,6 +860,7 @@ pub fn run() {
             desktop::desktop_input,
             desktop::desktop_close,
             desktop::desktop_status,
+            desktop::vnc::vnc_connect,
             ssh::ssh_write_human,
             ssh::ssh_resize,
             ssh::ssh_disconnect,

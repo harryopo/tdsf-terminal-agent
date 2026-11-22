@@ -6,6 +6,8 @@
 //! - 连接状态由真实后端事件驱动（Pending/Connected/Failed/Closed），支持 Pending 取消。
 //! - 画面通过调用方 `Channel` 定向传输，不用全局事件广播。
 //! - 输入有序背压，不丢 key-up/鼠标释放；非 BMP 字符用 UTF-16 code units。
+pub mod vnc;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,7 +40,7 @@ struct SessionHandle {
     generation: u64,
     status: SessionStatus,
     error: Option<String>,
-    input_tx: mpsc::Sender<RdpInputEvent>,
+    input_tx: Option<mpsc::Sender<RdpInputEvent>>,
     close_tx: watch::Sender<bool>,
 }
 
@@ -83,7 +85,12 @@ pub struct DesktopFrameEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DesktopInputEvent {
     Unicode { text: String },
-    Key { code: u8, pressed: bool },
+    Key {
+        code: u8,
+        pressed: bool,
+        #[serde(default)]
+        extended: bool,
+    },
     Mouse {
         x: u16,
         y: u16,
@@ -91,7 +98,13 @@ pub enum DesktopInputEvent {
         button: u8,
         down: bool,
     },
-    Wheel { x: u16, y: u16, delta: i16 },
+    Wheel {
+        x: u16,
+        y: u16,
+        delta: i16,
+        #[serde(default)]
+        horizontal: bool,
+    },
 }
 
 fn fingerprint_hex(der: &[u8]) -> String {
@@ -135,6 +148,8 @@ fn unicode_events(text: &str) -> Vec<RdpInputEvent> {
             events.push(RdpInputEvent::FastPath(smallvec![
                 FastPathInputEvent::UnicodeKeyboardEvent(KeyboardFlags::empty(), *unit)
             ]));
+        }
+        for unit in encoded.iter() {
             events.push(RdpInputEvent::FastPath(smallvec![
                 FastPathInputEvent::UnicodeKeyboardEvent(KeyboardFlags::RELEASE, *unit)
             ]));
@@ -162,7 +177,10 @@ fn session_sender(
     if handle.status == SessionStatus::Closed {
         return Err("desktop session is closed".to_string());
     }
-    Ok(handle.input_tx.clone())
+    handle
+        .input_tx
+        .clone()
+        .ok_or_else(|| "desktop session does not accept RDP input".to_string())
 }
 
 fn set_status(app: &AppHandle, session_id: u32, status: SessionStatus, error: Option<String>) {
@@ -219,6 +237,7 @@ async fn run_session(
         .with_client_name("tdsf-terminal-agent")
         .with_client_dir("")
         .with_client_build(0)
+
         // ROOT: 显式可信 TLS，不用默认 accept-all。
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict);
 
@@ -334,7 +353,7 @@ pub async fn desktop_connect(
                 generation: params.generation,
                 status: SessionStatus::Pending,
                 error: None,
-                input_tx,
+                input_tx: Some(input_tx),
                 close_tx,
             },
         );
@@ -406,12 +425,19 @@ pub async fn desktop_input(
                 send_event(&sender, event).await?;
             }
         }
-        DesktopInputEvent::Key { code, pressed } => {
-            let flags = if pressed {
+        DesktopInputEvent::Key {
+            code,
+            pressed,
+            extended,
+        } => {
+            let mut flags = if pressed {
                 KeyboardFlags::empty()
             } else {
                 KeyboardFlags::RELEASE
             };
+            if extended {
+                flags |= KeyboardFlags::EXTENDED;
+            }
             send_event(
                 &sender,
                 RdpInputEvent::FastPath(smallvec![FastPathInputEvent::KeyboardEvent(flags, code)]),
@@ -426,8 +452,17 @@ pub async fn desktop_input(
         } => {
             send_event(&sender, map_mouse(x, y, button, down)).await?;
         }
-        DesktopInputEvent::Wheel { x, y, delta } => {
-            let mut flags = PointerFlags::VERTICAL_WHEEL;
+        DesktopInputEvent::Wheel {
+            x,
+            y,
+            delta,
+            horizontal,
+        } => {
+            let mut flags = if horizontal {
+                PointerFlags::HORIZONTAL_WHEEL
+            } else {
+                PointerFlags::VERTICAL_WHEEL
+            };
             if delta < 0 {
                 flags |= PointerFlags::WHEEL_NEGATIVE;
             }
@@ -435,7 +470,7 @@ pub async fn desktop_input(
                 &sender,
                 RdpInputEvent::FastPath(smallvec![FastPathInputEvent::MouseEvent(MousePdu {
                     flags,
-                    number_of_wheel_rotation_units: delta,
+                    number_of_wheel_rotation_units: delta.clamp(-256, 255),
                     x_position: x,
                     y_position: y,
                 })]),
@@ -552,7 +587,7 @@ mod tests {
                 generation: 3,
                 status: SessionStatus::Pending,
                 error: None,
-                input_tx: tx,
+                input_tx: Some(tx),
                 close_tx,
             },
         );
