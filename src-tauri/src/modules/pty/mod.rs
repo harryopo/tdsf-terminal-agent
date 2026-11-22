@@ -12,7 +12,7 @@ use std::thread;
 use portable_pty::PtySize;
 use tauri::ipc::{Channel, Response};
 
-use crate::modules::human_type::{write_human_common, HumanTypeReport, HumanTypingGuard};
+use crate::modules::human_type::{write_human_common, HumanTypeReport, HumanTypingGuard, HumanTypingInput};
 use crate::modules::workspace::{user_spawn_cwd_or_home, WorkspaceEnv, WorkspaceRegistry};
 use session::Session;
 
@@ -186,7 +186,15 @@ pub async fn pty_write_human(
         typing_active: session.typing_active.clone(),
     };
 
-    write_human_common(&app, "pty", id, guard, write, text, speed).await
+    write_human_common(
+        &app,
+        "pty",
+        id,
+        guard,
+        write,
+        HumanTypingInput { text, speed, clear_input: true },
+    )
+    .await
 }
 
 #[tauri::command]

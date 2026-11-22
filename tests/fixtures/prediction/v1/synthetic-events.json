@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "prediction-f0-v1",
+  "description": "F0 synthetic observation stream. All commands are synthetic and safe; no real host, user, credential or private history is included.",
+  "streams": [
+    {
+      "namespaceId": "ns-syn-bash-01",
+      "leafId": 101,
+      "rustSessionId": null,
+      "shellEpoch": "epoch-01",
+      "observations": [
+        {
+          "observationId": "obs-01",
+          "origin": "user",
+          "startedAt": 1000,
+          "endedAt": 1120,
+          "command": "pwd",
+          "exitCode": 0,
+          "cwd": null,
+          "sourceBlockId": "blk-01"
+        },
+        {
+          "observationId": "obs-02",
+          "origin": "user",
+          "startedAt": 2000,
+          "endedAt": 2140,
+          "command": "ls -la",
+          "exitCode": 0,
+          "cwd": "/srv/app",
+          "sourceBlockId": "blk-02"
+        },
+        {
+          "observationId": "obs-03",
+          "origin": "user",
+          "startedAt": 3000,
+          "endedAt": 3090,
+          "command": "cd /var/log",
+          "exitCode": 0,
+          "cwd": "/srv/app",
+          "sourceBlockId": "blk-03"
+        },
+        {
+          "observationId": "obs-04",
+          "origin": "user",
+          "startedAt": 4000,
+          "endedAt": 4180,
+          "command": "tail -n 20 syslog",
+          "exitCode": 0,
+          "cwd": "/var/log",
+          "sourceBlockId": "blk-04"
+        },
+        {
+          "observationId": "obs-05",
+          "origin": "user",
+          "startedAt": 5000,
+          "endedAt": 5220,
+          "command": "grep -i error syslog",
+          "exitCode": 1,
+          "cwd": "/var/log",
+          "sourceBlockId": "blk-05"
+        }
+      ]
+    },
+    {
+      "namespaceId": "ns-syn-bash-01",
+      "leafId": 102,
+      "rustSessionId": null,
+      "shellEpoch": "epoch-02",
+      "observations": [
+        {
+          "observationId": "obs-06",
+          "origin": "user",
+          "startedAt": 6000,
+          "endedAt": 6100,
+          "command": "pwd",
+          "exitCode": 0,
+          "cwd": null,
+          "sourceBlockId": "blk-06"
+        },
+        {
+          "observationId": "obs-07",
+          "origin": "user",
+          "startedAt": 7000,
+          "endedAt": 7120,
+          "command": "df -h",
+          "exitCode": 0,
+          "cwd": null,
+          "sourceBlockId": "blk-07"
+        },
+        {
+          "observationId": "obs-08",
+          "origin": "user",
+          "startedAt": 8000,
+          "endedAt": 8210,
+          "command": "systemctl status httpd",
+          "exitCode": 0,
+          "cwd": null,
+          "sourceBlockId": "blk-08"
+        },
+        {
+          "observationId": "obs-09",
+          "origin": "user",
+          "startedAt": 9000,
+          "endedAt": 9310,
+          "command": "journalctl -u httpd -n 50",
+          "exitCode": 0,
+          "cwd": null,
+          "sourceBlockId": "blk-09"
+        }
+      ]
+    }
+  ],
+  "anomalies": [
+    {
+      "kind": "missing-start",
+      "observationId": "obs-missing-start",
+      "note": "complete without a matching begin must be rejected and break the chain"
+    },
+    {
+      "kind": "duplicate-end",
+      "observationId": "obs-01",
+      "note": "a second complete for the same observation must be rejected"
+    },
+    {
+      "kind": "overlapping",
+      "observationId": "obs-overlap",
+      "note": "begin while another observation is pending must be rejected"
+    },
+    {
+      "kind": "owner-mismatch",
+      "observationId": "obs-owner",
+      "note": "complete under a different leaf/epoch must be rejected"
+    },
+    {
+      "kind": "invalid-duration",
+      "observationId": "obs-duration",
+      "note": "endedAt earlier than startedAt must be rejected"
+    }
+  ],
+  "privacySamples": [
+    {
+      "kind": "leading-space",
+      "command": " echo hidden",
+      "expected": "leading-space"
+    },
+    {
+      "kind": "templated-home",
+      "command": "ls ~/project",
+      "expected": "allowed-but-not-replayable"
+    },
+    {
+      "kind": "blocked-path",
+      "command": "cat /etc/passwd",
+      "expected": "allowed"
+    }
+  ]
+}

@@ -38,3 +38,20 @@ def _isolate_slim_knowledge(tmp_path):
     reset_slim_rag(db_path=str(tmp_path / "rag-slim-test.db"))
     yield
     reset_slim_rag()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_new_knowledge_collections(monkeypatch):
+    """Lifecycle tests must not start reading real personal/bundled knowledge."""
+    import knowledge.collections as collections
+
+    original = collections.get_library
+
+    class EmptyCollection:
+        def hybrid_search(self, _query, *, top_k):
+            return []
+
+    def isolated(library):
+        return EmptyCollection() if library in {"personal", "builtin"} else original(library)
+
+    monkeypatch.setattr(collections, "get_library", isolated)

@@ -14,6 +14,7 @@ import {
 import type { KeyBinding, ShortcutId } from "@/modules/shortcuts/shortcuts";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import { coerceAgentCommandColor, DEFAULT_AGENT_COMMAND_COLOR } from "./agentCommandColor";
 
 export type ThemePref = "system" | "light" | "dark";
 
@@ -144,6 +145,7 @@ export type Preferences = {
   showHidden: boolean;
   explorerGitDecorations: boolean;
   terminalWebglEnabled: boolean;
+  terminalOutputHighlightEnabled: boolean;
   terminalCursorBlink: boolean;
   terminalFontFamily: string;
   terminalFontWeight: string;
@@ -183,6 +185,8 @@ export type Preferences = {
   agentTypingMode: AgentTypingMode;
   /** 打字速度倍率 0.2×~5×（expect send_human 参数等比缩放，默认 1.0） */
   agentTypingSpeed: number;
+  /** Display color for Agent-entered commands; never part of terminal input. */
+  agentCommandColor: string;
   /** Agent tool commands use one real execution channel; this does not alter approval policy. */
   agentExecutionChannel: AgentExecutionChannel;
   /**
@@ -261,6 +265,7 @@ const KEY_SHOW_HIDDEN = "showHidden";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_EXPLORER_GIT_DECORATIONS = "explorerGitDecorations";
 const KEY_TERMINAL_WEBGL_ENABLED = "terminalWebglEnabled";
+const KEY_TERMINAL_OUTPUT_HIGHLIGHT_ENABLED = "terminalOutputHighlightEnabled";
 const KEY_TERMINAL_CURSOR_BLINK = "terminalCursorBlink";
 const KEY_TERMINAL_FONT_FAMILY = "terminalFontFamily";
 const KEY_TERMINAL_FONT_WEIGHT = "terminalFontWeight";
@@ -291,6 +296,7 @@ const KEY_SSH_REMOTE_CARAPACE_PROMPT = "sshRemoteCarapacePrompt";
 // TDSF B2 (2026-08-29): 可视教学打字机 key
 const KEY_AGENT_TYPING_MODE = "agentTypingMode";
 const KEY_AGENT_TYPING_SPEED = "agentTypingSpeed";
+const KEY_AGENT_COMMAND_COLOR = "agentCommandColor";
 const KEY_AGENT_EXECUTION_CHANNEL = "agentExecutionChannel";
 // ROADMAP #58: 命令自动打字开关（持久化，取代 chatStore.autoExecuteInTerminal）
 const KEY_AGENT_AUTO_TYPE_COMMANDS = "agentAutoTypeCommands";
@@ -352,6 +358,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   showHidden: false,
   explorerGitDecorations: true,
   terminalWebglEnabled: true,
+  terminalOutputHighlightEnabled: true,
   terminalCursorBlink: false,
   terminalFontFamily: "",
   terminalFontWeight: "normal",
@@ -384,6 +391,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   // 教学演示逐字模式由用户显式开启）
   agentTypingMode: "instant",
   agentTypingSpeed: 1.0,
+  agentCommandColor: DEFAULT_AGENT_COMMAND_COLOR,
   agentExecutionChannel: "background",
   // 与迁移前 chatStore.autoExecuteInTerminal 的默认值保持一致（默认开）
   agentAutoTypeCommands: true,
@@ -517,6 +525,9 @@ export async function loadPreferences(): Promise<Preferences> {
     terminalWebglEnabled:
       get<boolean>(KEY_TERMINAL_WEBGL_ENABLED) ??
       DEFAULT_PREFERENCES.terminalWebglEnabled,
+    terminalOutputHighlightEnabled:
+      get<boolean>(KEY_TERMINAL_OUTPUT_HIGHLIGHT_ENABLED) ??
+      DEFAULT_PREFERENCES.terminalOutputHighlightEnabled,
     terminalCursorBlink:
       get<boolean>(KEY_TERMINAL_CURSOR_BLINK) ??
       DEFAULT_PREFERENCES.terminalCursorBlink,
@@ -600,6 +611,7 @@ export async function loadPreferences(): Promise<Preferences> {
     agentTypingSpeed: coerceAgentTypingSpeed(
       get<number>(KEY_AGENT_TYPING_SPEED) ?? DEFAULT_PREFERENCES.agentTypingSpeed,
     ),
+    agentCommandColor: coerceAgentCommandColor(get<unknown>(KEY_AGENT_COMMAND_COLOR)),
     agentExecutionChannel: coerceAgentExecutionChannel(
       get<string>(KEY_AGENT_EXECUTION_CHANNEL) ??
         DEFAULT_PREFERENCES.agentExecutionChannel,
@@ -800,6 +812,10 @@ export async function setTerminalWebglEnabled(value: boolean): Promise<void> {
   await writePref(KEY_TERMINAL_WEBGL_ENABLED, value);
 }
 
+export async function setTerminalOutputHighlightEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_TERMINAL_OUTPUT_HIGHLIGHT_ENABLED, value);
+}
+
 export async function setTerminalCursorBlink(value: boolean): Promise<void> {
   await writePref(KEY_TERMINAL_CURSOR_BLINK, value);
 }
@@ -971,6 +987,10 @@ export async function setAgentTypingSpeed(value: number): Promise<void> {
   await writePref(KEY_AGENT_TYPING_SPEED, coerceAgentTypingSpeed(value));
 }
 
+export async function setAgentCommandColor(value: string): Promise<void> {
+  await writePref(KEY_AGENT_COMMAND_COLOR, coerceAgentCommandColor(value));
+}
+
 /** ROADMAP #58: 命令自动打字开关（持久化，重启后保持用户的选择）。 */
 export async function setAgentAutoTypeCommands(value: boolean): Promise<void> {
   await writePref(KEY_AGENT_AUTO_TYPE_COMMANDS, value);
@@ -1046,6 +1066,7 @@ export async function onPreferencesChange(
     [KEY_SHOW_HIDDEN]: "showHidden",
     [KEY_EXPLORER_GIT_DECORATIONS]: "explorerGitDecorations",
     [KEY_TERMINAL_WEBGL_ENABLED]: "terminalWebglEnabled",
+    [KEY_TERMINAL_OUTPUT_HIGHLIGHT_ENABLED]: "terminalOutputHighlightEnabled",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",
     [KEY_TERMINAL_FONT_FAMILY]: "terminalFontFamily",
     [KEY_TERMINAL_FONT_WEIGHT]: "terminalFontWeight",
@@ -1076,6 +1097,7 @@ export async function onPreferencesChange(
     // TDSF B2 (2026-08-29): 可视教学打字机偏好映射
     [KEY_AGENT_TYPING_MODE]: "agentTypingMode",
     [KEY_AGENT_TYPING_SPEED]: "agentTypingSpeed",
+    [KEY_AGENT_COMMAND_COLOR]: "agentCommandColor",
     [KEY_AGENT_EXECUTION_CHANNEL]: "agentExecutionChannel",
     [KEY_AGENT_AUTO_TYPE_COMMANDS]: "agentAutoTypeCommands",
   };
@@ -1083,19 +1105,24 @@ export async function onPreferencesChange(
   // arrive via the Tauri event emitted by writePref().
   const unsubLocal = await store.onChange<unknown>((key, value) => {
     const mapped = map[key];
-    if (mapped) cb(mapped, value);
+    if (mapped) cb(mapped, mapped === "agentCommandColor" ? coerceAgentCommandColor(value) : value);
   });
-  const unsubEvent = await listen<{ key: string; value: unknown }>(
-    PREFS_CHANGED_EVENT,
-    (e) => {
-      const mapped = map[e.payload.key];
-      if (mapped) cb(mapped, e.payload.value);
-    },
-  );
-  return () => {
+  try {
+    const unsubEvent = await listen<{ key: string; value: unknown }>(
+      PREFS_CHANGED_EVENT,
+      (e) => {
+        const mapped = map[e.payload.key];
+        if (mapped) cb(mapped, mapped === "agentCommandColor" ? coerceAgentCommandColor(e.payload.value) : e.payload.value);
+      },
+    );
+    return () => {
+      unsubLocal();
+      unsubEvent();
+    };
+  } catch (e) {
     unsubLocal();
-    unsubEvent();
-  };
+    throw e;
+  }
 }
 
 // API key changes are stored in OS keychain (not the prefs store),

@@ -1,5 +1,6 @@
 import { ipcWorkspaceEnv } from "@/modules/workspace";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { SshTerminalContext } from "./remoteShellIntegration";
 
 // TDSF 修复 2026-07-31 (Phase 2 收尾) → 2026-09-21 收进单一主人：
 // 本地 PTY 只能跑在本地/WSL，Rust 端 `WorkspaceEnv` 没有 ssh 变体。
@@ -11,6 +12,12 @@ const textEncoder = new TextEncoder();
 export type PtyHandlers = {
   onData: (bytes: Uint8Array) => void;
   onExit?: (code: number) => void;
+};
+
+export type TerminalTransportHandlers = {
+  onData: (bytes: Uint8Array) => void;
+  onExit: (code: number) => void;
+  onIntegrationContext?: (context: SshTerminalContext | null) => void;
 };
 
 /**
@@ -30,6 +37,7 @@ export interface TerminalTransport {
   write(data: string): Promise<void> | void;
   resize(cols: number, rows: number): Promise<void> | void;
   close(): Promise<void> | void;
+  refreshIntegrationContext?: () => Promise<void>;
 }
 
 export type PtySession = {

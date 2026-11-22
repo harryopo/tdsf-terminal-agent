@@ -7,12 +7,11 @@ export function AiInputBarConnect({ onAdd }: { onAdd: () => void }) {
     <div className="shrink-0 border-t border-border/60 bg-card/40 px-3 py-2">
       <div className="flex h-10 items-center justify-between gap-3 rounded-lg px-3 text-xs">
         <span className="text-muted-foreground">
-          Connect any AI provider (or use local models) - your key stays in your
-          OS keychain.
+          连接 AI 服务或使用本地模型，API 密钥保存在系统钥匙串中。
         </span>
         <Button size="xs" onClick={onAdd}>
           <HugeiconsIcon icon={Key01Icon} />
-          Connect provider
+          连接模型
         </Button>
       </div>
     </div>

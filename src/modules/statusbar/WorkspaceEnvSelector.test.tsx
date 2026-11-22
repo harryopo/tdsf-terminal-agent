@@ -87,7 +87,7 @@ describe("WorkspaceEnvSelector — 标签取值优先级", () => {
     );
   });
 
-  it("ssh 会话真活着 → 只显示 user@host，且 tooltip 说命令落在远端", () => {
+  it("ssh 会话真活着 → 显示认证身份，不冒称 su 后的 shell 用户", () => {
     seedSpace("ssh-space", { ...SSH_ENV, sessionId: "s-live" });
     useSshStore.setState({
       sessions: [
@@ -97,7 +97,7 @@ describe("WorkspaceEnvSelector — 标签取值优先级", () => {
     render(<WorkspaceEnvSelector onSelect={() => {}} />);
     expect(label()).toBe("root@192.168.45.200");
     expect(screen.getByRole("button").getAttribute("title")).toContain(
-      "当前终端命令执行于 root@192.168.45.200",
+      "SSH 连接认证身份：root@192.168.45.200",
     );
   });
 

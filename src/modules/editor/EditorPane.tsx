@@ -3,6 +3,8 @@ import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { onKeysChanged } from "@/modules/settings/store";
+import type { LocalWorkspaceEnv } from "@/modules/workspace";
+import { fileSourceKey } from "@/modules/workspace/fileSource";
 import { acceptCompletion, startCompletion } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import {
@@ -52,14 +54,16 @@ import {
   runExternalFormatter,
 } from "./lib/externalFormat";
 import { detectIndentUnit } from "./lib/indent";
+import { trackFileSave } from "./lib/pendingFileSaves";
 import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
-import { FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
+import { type DocumentRelocation, FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { initVimGlobals, vimHandlersExtension } from "./lib/vim";
 
 initVimGlobals();
 
 export type EditorPaneHandle = {
+  beginRelocation: (to: string) => DocumentRelocation;
   setQuery: (q: string) => void;
   findNext: () => void;
   findPrevious: () => void;
@@ -89,6 +93,8 @@ type Props = {
    * TDSF 2026-07-30: 远程文件标记，跳过 LSP/外部 formatter/convertFileSrc 媒体预览。
    */
   remote?: { sessionId: string } | null;
+  workspace?: LocalWorkspaceEnv | null;
+  relocation?: { from: string; to: string };
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
@@ -108,12 +114,14 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, remote, onDirtyChange, onSaved, onClose } = props;
+    const { path, overrideLanguage, remote, workspace, relocation, onDirtyChange, onSaved, onClose } = props;
 
-    const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
+    const { doc, onChange, save, reload, adoptDiskText, openAnyway, beginRelocation, isRelocating, workspace: documentWorkspace } =
       useDocument({
         path,
         remote,
+        workspace,
+        relocation,
         onDirtyChange,
       });
     const reloadRef = useRef(reload);
@@ -183,8 +191,20 @@ export const EditorPane = memo(
     const lspActiveRef = useRef(false);
     const warnedNoLspRef = useRef(false);
     const warnedNoFormatRef = useRef(false);
+    const sourceKey = fileSourceKey(remote ? { kind: "ssh", sessionId: remote.sessionId } : documentWorkspace);
+    const saveIdentity = useMemo(() => ({ path, sourceKey }), [path, sourceKey]);
+    const saveIdentityRef = useRef(saveIdentity);
+    saveIdentityRef.current = saveIdentity;
+    const isRelocatingRef = useRef(isRelocating);
+    isRelocatingRef.current = isRelocating;
+    const savePipelinesRef = useRef(new Set<Promise<void>>());
 
-    const performSave = useCallback(async () => {
+    const savePipeline = useCallback(async () => {
+      if (isRelocatingRef.current()) return;
+      const owner = saveIdentityRef.current;
+      const saveDocument = saveRef.current;
+      const ownsDocument = () => saveIdentityRef.current === owner;
+      const savePath = pathRef.current;
       const view = cmRef.current?.view;
       const prefs = usePreferencesStore.getState();
       const formatter = resolveFormatter(languageRef.current, prefs);
@@ -214,23 +234,25 @@ export const EditorPane = memo(
           });
         }
       }
+      if (!ownsDocument() || isRelocatingRef.current()) return;
       // Snapshot before save: edits typed during the formatter round-trip
       // must not be clobbered by the disk read-back.
       const docAtSave = view?.state.doc;
-      const saved = await saveRef.current();
-      if (!saved) return;
+      const saved = await saveDocument();
+      if (!saved || !ownsDocument() || isRelocatingRef.current()) return;
       // TDSF 2026-07-30: 远程文件跳过外部格式化。
       if (prefs.editorFormatOnSave && formatter !== "lsp" && !remote) {
         const error = await runExternalFormatter(
           formatter,
-          pathRef.current,
+          savePath,
           prefs.editorCustomFormatCommand,
+          documentWorkspace ?? undefined,
         );
         if (error) {
           toast.error(`${formatter} format failed`, { description: error });
         } else {
-          const readBack = await readFileText(pathRef.current);
-          if (readBack !== null && view && view.state.doc === docAtSave) {
+          const readBack = await readFileText(savePath, documentWorkspace ?? undefined);
+          if (readBack !== null && view && view.state.doc === docAtSave && ownsDocument()) {
             applyFormattedContent(
               view,
               adoptDiskTextRef.current(readBack.text, readBack.mtime),
@@ -238,8 +260,18 @@ export const EditorPane = memo(
           }
         }
       }
-      onSavedRef.current?.();
-    }, [remote]);
+      if (ownsDocument()) onSavedRef.current?.();
+    }, [remote, documentWorkspace]);
+    const performSave = useCallback(() => {
+      const owner = saveIdentityRef.current;
+      const pending = savePipeline();
+      trackFileSave(owner.sourceKey, owner.path, pending);
+      const pipelines = savePipelinesRef.current;
+      pipelines.add(pending);
+      const release = () => { pipelines.delete(pending); };
+      void pending.then(release, release);
+      return pending;
+    }, [savePipeline]);
     const performSaveRef = useRef(performSave);
     performSaveRef.current = performSave;
 
@@ -282,7 +314,7 @@ export const EditorPane = memo(
         ),
         vimHandlersExtension(() => ({
           save: () => {
-            void performSaveRef.current();
+            void performSaveRef.current().catch(e => toast.error("保存失败", { description: String(e) }));
           },
           close: () => onCloseRef.current?.(),
         })),
@@ -338,7 +370,7 @@ export const EditorPane = memo(
             key: "Mod-s",
             preventDefault: true,
             run: () => {
-              void performSaveRef.current();
+              void performSaveRef.current().catch(e => toast.error("保存失败", { description: String(e) }));
               return true;
             },
           },
@@ -447,6 +479,13 @@ export const EditorPane = memo(
     useImperativeHandle(
       ref,
       () => ({
+        beginRelocation: (to: string) => {
+          const document = beginRelocation(to);
+          return {
+            ready: Promise.all([document.ready, ...savePipelinesRef.current]).then(() => {}),
+            cancel: document.cancel,
+          };
+        },
         setQuery: (q: string) => {
           const view = cmRef.current?.view;
           if (!view) return;
@@ -511,7 +550,7 @@ export const EditorPane = memo(
           startCompletion(view);
         },
       }),
-      [path, applyPendingGoto],
+      [path, applyPendingGoto, beginRelocation],
     );
 
     if (doc.status === "loading") {

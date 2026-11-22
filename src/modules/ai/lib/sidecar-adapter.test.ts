@@ -26,6 +26,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import type { UIMessage } from "@ai-sdk/react";
+import { readUIMessageStream } from "ai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -526,6 +527,47 @@ describe("sidecarStreamToUIMessageStream — reasoning / 工具行 part 转换",
     expect(errChunk).toBeDefined();
     expect(errChunk.toolCallId).toBe("t-2");
     expect(errChunk.errorText).toBe("boom");
+  });
+});
+
+describe("sidecar structured outcomes — real SDK", () => {
+  it.each(["indeterminate", "rejected", "command_blocked", "cancelled", "canceled", "failed", "error", "needs_approval", "unavailable", "stale_source", "unmatched"])(
+    "retains the complete %s result instead of flattening it into errorText",
+    async (status) => {
+      const output = {
+        status,
+        message: "远端结果说明",
+        command: "diagnose",
+        output: "partial stdout",
+        stderr: "partial stderr",
+        exit_code: -1,
+        operation_id: "operation-a",
+      };
+      const parts: SidecarStreamPart[] = [
+        { type: "tool-input", toolCallId: "outcome-1", toolName: "ssh_command", input: { command: "diagnose" } },
+        { type: "tool-output", toolCallId: "outcome-1", toolName: "ssh_command", output, isError: true },
+        { type: "finish", id: "outcome-stream" },
+      ];
+      let message: UIMessage | undefined;
+      for await (const next of readUIMessageStream({
+        stream: sidecarStreamToUIMessageStream((async function* () { yield* parts; })()),
+      })) message = next;
+      const part = message?.parts.find((p) => "toolCallId" in p) as Record<string, unknown>;
+      expect(part.state).toBe("output-available");
+      expect(part.output).toEqual(output);
+      expect(part.errorText).toBeUndefined();
+    },
+  );
+
+  it("an unclassified error object remains a genuine SDK error", async () => {
+    const parts: SidecarStreamPart[] = [
+      { type: "tool-input", toolCallId: "transport-1", toolName: "ssh_command", input: {} },
+      { type: "tool-output", toolCallId: "transport-1", toolName: "ssh_command", output: { detail: "transport unavailable" }, isError: true },
+      { type: "finish", id: "transport-stream" },
+    ];
+    const chunks = await readStream(sidecarStreamToUIMessageStream((async function* () { yield* parts; })()));
+    expect(chunks.some((c) => c.type === "tool-output-error")).toBe(true);
+    expect(chunks.some((c) => c.type === "tool-output-available")).toBe(false);
   });
 });
 

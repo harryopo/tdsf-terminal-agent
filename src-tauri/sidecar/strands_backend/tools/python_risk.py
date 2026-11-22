@@ -117,6 +117,13 @@ _MODULE_MEMBERS: dict[str, dict[str, RiskHit]] = {
     "marshal": {"load": (_L4, "反序列化执行"), "loads": (_L4, "反序列化执行")},
     "yaml": {"load": (_L4, "反序列化执行")},
     "webbrowser": {"*": (_L2, "打开外部浏览器")},
+    # T5：解码是常见的混淆入口——`base64.b64decode(...)` 之后再 eval/exec，
+    # 静态分级看不到真实内容，按至少 L3 进入审批而不是当作纯计算放行。
+    "base64": {
+        "b64decode": (_L3, "解码内容可能被动态执行"),
+        "b32decode": (_L3, "解码内容可能被动态执行"),
+        "b16decode": (_L3, "解码内容可能被动态执行"),
+    },
 }
 
 # 裸函数名（内置函数，或 from x import y 之后的本地名）
@@ -126,6 +133,12 @@ _BARE_CALL_RISK: dict[str, RiskHit] = {
     "compile": (_L4, "动态执行代码"),
     "__import__": (_L4, "动态导入"),
     "breakpoint": (_L4, "进入调试器"),
+    # T5：动态属性/命名空间访问是最常见的绕过形态（`getattr(os, "sys"+"tem")`、
+    # `globals()["os"]`）。无法静态确认最终调用对象时不得按纯计算放行。
+    "getattr": (_L3, "动态属性访问，真实调用对象不可静态确认"),
+    "globals": (_L3, "动态全局命名空间访问"),
+    "locals": (_L3, "动态命名空间访问"),
+    "vars": (_L3, "动态命名空间访问"),
 }
 
 # 接收者解析不出来时，仍凭「方法名」判定的无歧义危险 API。

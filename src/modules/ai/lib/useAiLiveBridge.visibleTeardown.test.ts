@@ -59,9 +59,9 @@ describe("可见终端离场结算的接线（#119）", () => {
     ).toBeLessThanOrEqual(1);
   });
 
-  it("每条在飞请求都要带上自己那份 phase 去结算（两档口径不许塌成一档）", () => {
+  it("每条在飞请求都要带上自己的 phase 与输入派发状态去结算", () => {
     expect(CODE).toMatch(
-      /resultForAbandonedVisibleExecution\(\{\s*phase: pending\.phase,\s*cause,?\s*\}\)/,
+      /resultForAbandonedVisibleExecution\(\{\s*phase: pending\.phase,\s*inputDispatched: pending\.inputDispatched,\s*cause,?\s*\}\)/,
     );
   });
 });

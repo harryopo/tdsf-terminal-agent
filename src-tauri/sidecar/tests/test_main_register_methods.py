@@ -27,6 +27,19 @@ import pytest
 import main
 
 
+@pytest.fixture(autouse=True)
+def isolate_tdsf_watcher(monkeypatch: pytest.MonkeyPatch):
+    """Keep registration tests isolated from the TDSF background watcher."""
+    import tdsf_loader
+
+    tdsf_loader.stop_watcher()
+    monkeypatch.setattr(tdsf_loader, "initialize_on_startup", lambda **_: None)
+    try:
+        yield
+    finally:
+        tdsf_loader.stop_watcher()
+
+
 # ============================================================================
 # Fake Dispatcher
 # ============================================================================

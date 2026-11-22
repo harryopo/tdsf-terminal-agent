@@ -297,6 +297,9 @@ class BaseCrawler(abc.ABC):
             error=last_error,
         )
 
+    def _validate_response_url(self, url: str) -> None:
+        """Subclasses can reject a redirected document before caching its body."""
+
     def _http_get(self, url: str) -> str:
         """HTTP GET 请求
 
@@ -323,6 +326,7 @@ class BaseCrawler(abc.ABC):
             timeout=10,
         )
         resp.raise_for_status()
+        self._validate_response_url(resp.url)
         return resp.text
 
     def _build_result(

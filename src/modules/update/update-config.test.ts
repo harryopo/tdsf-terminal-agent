@@ -105,7 +105,14 @@ describe("接线：实现了还得真接上（#125 那一类缺口只能靠这�
   it("状态栏真的渲染了那个小尾巴（不是只写了组件）", () => {
     const bar = read("src/modules/statusbar/StatusBar.tsx");
     expect(bar).toContain('import { UpdateChip } from "./UpdateChip"');
-    expect(bar).toContain("<UpdateChip />");
+    expect(bar).toContain("<UpdateChip getUnsavedEditors={getUnsavedEditors} />");
+  });
+
+  it("安装保护从主窗实时读取所有未保存的编辑标签页", () => {
+    const app = read("src/app/App.tsx");
+    expect(app).toMatch(
+      /getUnsavedEditors=\{\(\) =>\s*tabsRef\.current\.filter\(\(t\) => t\.kind === "editor" && t\.dirty\)\.length/,
+    );
   });
 
   it("更新插件不得进主窗的 eager 启动包 —— 同时证明那条懒边界真通向更新模块", () => {

@@ -106,6 +106,13 @@ const questionCreated = () => ({
   session_id: "sess-1",
 });
 
+const responseAck = (
+  id = "ny-abc123",
+  type = "approval",
+  status = "approved",
+  sessionId: string | null = null,
+) => ({ id, type, status, session_id: sessionId });
+
 async function mount() {
   render(<NeedsYouApprovalCards />);
   // flush useEffect 内 onNeedsYou 订阅 promise，确保回调已注册
@@ -210,7 +217,7 @@ describe("NeedsYouApprovalCards — 事件渲染", () => {
 
 describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
   it("提问卡选择后确认 → 回传 answer 并移除", async () => {
-    vi.mocked(invokeRpc).mockResolvedValue({});
+    vi.mocked(invokeRpc).mockResolvedValue(responseAck("ny-q1", "question", "resolved", "sess-1"));
     await mount();
     emitNeedsYou(questionCreated());
 
@@ -229,7 +236,7 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
   });
 
   it("执行按钮 → needs_you.respond(approved:true) → 成功后卡移除", async () => {
-    vi.mocked(invokeRpc).mockResolvedValue({});
+    vi.mocked(invokeRpc).mockResolvedValue(responseAck());
     await mount();
     emitNeedsYou(
       toolDirectCreated({
@@ -252,14 +259,15 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     });
     await waitFor(() => {
       expect(screen.queryByText("等待你的确认")).toBeNull();
+      expect(document.querySelector("[data-approval-card]")).toBeNull();
     });
   });
 
   it("⚡批准且本会话只读免审 → response 带 decision/sessionTrust + 前端标志置位", async () => {
-    vi.mocked(invokeRpc).mockResolvedValue({});
+    vi.mocked(invokeRpc).mockResolvedValue(responseAck("ny-abc123", "approval", "approved", "sess-1"));
     await mount();
     emitNeedsYou(
-      toolDirectCreated({
+      serviceCreated({
         risk_l: 1,
         impact: {
           summary: "只读查看服务状态",
@@ -281,12 +289,12 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
         },
       });
     });
-    // 前端会话免审标志同步置位（chatStore.sessionReadOnlyTrust）
-    expect(useChatStore.getState().sessionReadOnlyTrust).toBe(true);
+    // 后端接受后才置前端显示标记。
+    await waitFor(() => expect(useChatStore.getState().sessionReadOnlyTrust).toBe(true));
   });
 
   it("拒绝附言 → response 带 reason/note（approved:false）", async () => {
-    vi.mocked(invokeRpc).mockResolvedValue({});
+    vi.mocked(invokeRpc).mockResolvedValue(responseAck("ny-abc123", "approval", "rejected"));
     await mount();
     emitNeedsYou(toolDirectCreated({ risk_l: 3 }));
 
@@ -306,6 +314,7 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
         },
       });
     });
+    await waitFor(() => expect(document.querySelector("[data-approval-card]")).toBeNull());
   });
 
   it("responded/timeout 事件到达 → 卡自动移除（无需用户操作）", async () => {
@@ -359,7 +368,7 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     // 卡保留（请求仍 pending），可再次点击重试
     expect(screen.getByText("等待你的确认")).toBeTruthy();
     vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
-      if (method === "needs_you.respond") return {};
+      if (method === "needs_you.respond") return responseAck();
       return [];
     });
     fireEvent.click(screen.getByText("执行"));
@@ -368,6 +377,7 @@ describe("NeedsYouApprovalCards — 三按钮 RPC 回传", () => {
     });
     await waitFor(() => {
       expect(screen.queryByText("等待你的确认")).toBeNull();
+      expect(document.querySelector("[data-approval-card]")).toBeNull();
     });
   });
 });
@@ -404,7 +414,7 @@ describe("NeedsYouApprovalCards FIFO", () => {
     expect(screen.queryByText("echo SECOND_APPROVAL")).toBeNull();
 
     await act(async () => {
-      resolveResponse?.({});
+      resolveResponse?.(responseAck("ny-first"));
       await Promise.resolve();
     });
     expect(await screen.findByText("echo SECOND_APPROVAL")).toBeTruthy();
@@ -455,7 +465,7 @@ describe("NeedsYouApprovalCards — #59 挂载补水合", () => {
   it("补水合后用户作答 → needs_you.respond 带 answer 唤醒后端等待线程", async () => {
     vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
       if (method === "needs_you.list") return [pendingQuestionRow()];
-      return {};
+      return responseAck("ny-r1", "question", "resolved", "sess-1");
     });
     render(<NeedsYouApprovalCards />);
     await act(async () => {
@@ -587,7 +597,7 @@ describe("NeedsYouApprovalCards — 等待事实记账（#133）", () => {
   it("点「执行」→ RPC 成功后撤销记账", async () => {
     vi.mocked(invokeRpc).mockImplementation(async (method: string) => {
       if (method === "needs_you.list") return [];
-      return {};
+      return responseAck("ny-abc123", "approval", "approved", "sess-1");
     });
     await mount();
     emitNeedsYou(serviceCreated());

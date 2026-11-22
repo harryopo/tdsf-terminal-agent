@@ -196,6 +196,7 @@ export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderP
   }, [prefsTheme, prefsHydrated, mode]);
 
   const setMode = useCallback((next: ThemeModePref) => {
+    usePreferencesStore.setState({ theme: next });
     setModeState(next);
     writeLS(LS_KEY_MODE, next);
     // TDSF 修复 2026-07-31 (P3): 反向同步 — Header 顶栏切换主题时也写入
@@ -209,9 +210,13 @@ export function ThemeProvider({ children, defaultMode = "dark" }: ThemeProviderP
   }, []);
 
   const setThemeId = useCallback((id: string) => {
+    usePreferencesStore.setState({ themeId: id });
     setPreviewId(null);
     setThemeIdState(id);
     writeLS(LS_KEY_THEME_ID, id);
+    void import("@/modules/settings/store")
+      .then(({ setThemeId: persistThemeId }) => persistThemeId(id))
+      .catch((error: unknown) => console.warn("[theme] could not persist theme selection", error));
     // TDSF 修复 2026-07-31: 主题切换需立即生效。
     //   设置窗口与主窗口是独立 webview, 仅靠 useEffect 监听 preferences store
     //   可能因 hydrate 竞态/引用未变导致不触发 applyTheme; 这里显式应用一次。

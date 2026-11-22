@@ -9,9 +9,9 @@
  *   模型声明 timeout            → Rust clamp 到 1..=300s
  *   Rust 内层等可见终端回执      → timeout + VISIBLE_TERMINAL_TRANSPORT_GRACE_SECS
  *   Python 等 Rust 的 ipc 回执   → timeout + VISIBLE_TERMINAL_IPC_OVERHEAD_SECS
- *   Rust 对整条 agent.invoke     → ipc_invoke 的 timeoutMs clamp 上限（硬顶）
+ *   Rust agent.invoke 无存活窗口 → ipc_invoke 的 timeoutMs clamp 上限
  *
- * 判据是**不等式**而不是"某个数是不是 300"：整条 invoke 的硬顶必须大于最坏合法静默，
+ * 判据是**不等式**而不是"某个数是不是 300"：传输无存活窗口必须大于最坏合法静默，
  * 否则前端（以及 Rust 自己）会在一条**完全合法**的长命令跑到一半时先撒手 ——
  * 界面报超时、服务器上命令照跑，正是 #119 那一族。
  */
@@ -48,7 +48,7 @@ const PY_OVERHEAD_S = num(
   /VISIBLE_TERMINAL_IPC_OVERHEAD_SECS\s*=\s*([\d._]+)/,
   "Python ipc 宽限",
 );
-/** Rust 对整条 agent.invoke 的硬顶（ipc_invoke 的 timeoutMs clamp 右端点，单位 ms） */
+/** Rust agent.invoke 无存活窗口（ipc_invoke 的 timeoutMs clamp 右端点，单位 ms） */
 const INVOKE_CEILING_MS = num(
   ipcRs,
   /ms\.clamp\(\s*[\d_]+\s*,\s*([\d_]+)\s*\)/,
@@ -62,7 +62,7 @@ describe("#143 一次工具调用的合法静默上限 vs 前端会不会先撒�
     expect(PY_OVERHEAD_S).toBeGreaterThan(RUST_GRACE_S);
   });
 
-  it("Rust 对整条 invoke 的硬顶 > 最坏合法静默 ⇒ 前端不需要用固定窗口去兜长命令", () => {
+  it("Rust invoke 无存活窗口 > 最坏合法静默 ⇒ 前端不需要用固定窗口去兜长命令", () => {
     expect(INVOKE_CEILING_MS / 1000).toBeGreaterThan(worstSilenceS);
   });
 
@@ -78,7 +78,7 @@ describe("#143 一次工具调用的合法静默上限 vs 前端会不会先撒�
     console.info(
       `[143] timeout 上限=${TIMEOUT_MAX_S}s  Rust 宽限=+${RUST_GRACE_S}s  ` +
         `Python 宽限=+${PY_OVERHEAD_S}s  最坏静默=${worstSilenceS}s  ` +
-        `整条 invoke 硬顶=${INVOKE_CEILING_MS / 1000}s`,
+        `invoke 无存活窗口=${INVOKE_CEILING_MS / 1000}s`,
     );
     expect(worstSilenceS).toBeGreaterThan(0);
   });

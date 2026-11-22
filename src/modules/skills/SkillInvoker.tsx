@@ -6,11 +6,11 @@
 //   - 调用按钮：primary 主色 + Spinner
 //   - 输出区：流式展示（monospace 字体 + 滚动）+ 耗时
 //
-// 调用流程:
-//   1. 用户输入 args，点击"调用 Skill"
-//   2. 调用 store.invoke(name, args) → executor.invokeSkill → IPC skill.invoke
-//   3. 流式追加输出到输出区（按字符切片模拟流式效果）
-//   3. 完成后显示耗时，失败显示 toast.error
+// 流程:
+//   1. 用户输入补充说明，点击“查看参考”
+//   2. store.invoke(name, args) → executor.invokeSkill → IPC skill.invoke
+//   3. 流式展示参考资料；界面明确“仅提供参考资料，未执行命令”
+//   4. 失败或空资料如实提示，不宣称执行成功
 
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSkillsStore } from "./skillsStore";
+import { describeSkillContext, describeSkillResult } from "./resultNotice";
 import type { SkillExecution, SkillMetadata } from "./types";
 
 interface Props {
@@ -43,6 +44,7 @@ const STREAM_CHUNK_SIZE = 32;
 /** 流式输出的 chunk 间隔（ms） */
 const STREAM_CHUNK_DELAY_MS = 12;
 
+
 export function SkillInvoker({ skill, onOpenChange }: Props) {
   const invoke = useSkillsStore((s) => s.invoke);
   const invokingSkill = useSkillsStore((s) => s.invokingSkill);
@@ -54,6 +56,14 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
 
   const open = skill !== null;
   const isInvoking = invokingSkill === skill?.name || streaming;
+  // TEAM-FIX-01: 状态与 toast 统一走结果适配器，避免两个入口文案分叉
+  const notice = result ? describeSkillResult(skill?.name ?? "", result) : null;
+  const statusTone =
+    notice?.tone === "error"
+      ? "text-destructive"
+      : notice?.tone === "warning"
+        ? "text-muted-foreground"
+        : "text-primary";
 
   // 切换 skill 时重置状态（仅依赖 skillName 字符串，避免 skill 对象引用变化触发不必要重置）
   const skillName = skill?.name ?? "";
@@ -81,6 +91,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
     setStreaming(true);
     try {
       // 调用 store.invoke（会触发 executor.invokeSkill + 写入历史）
+      // TEAM-FIX-01: store 已返回统一的 SkillExecution，展示侧不再做类型强转
       const res = await invoke(skill.name, args);
       setResult(res);
 
@@ -92,16 +103,14 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
       }
       setOutput(text);
 
-      if (res.success) {
-        toast.success(`Skill "${skill.name}" 执行完成`, {
-          description: `耗时 ${res.durationMs}ms`,
-          duration: 3000,
-        });
+      const notice = describeSkillResult(skill.name, res);
+      const options = { description: notice.description, duration: 3000 };
+      if (notice.tone === "success") {
+        toast.success(notice.title, options);
+      } else if (notice.tone === "warning") {
+        toast.warning(notice.title, options);
       } else {
-        toast.error(`Skill "${skill.name}" 执行失败`, {
-          description: res.output.slice(0, 120),
-          duration: 3000,
-        });
+        toast.error(notice.title, options);
       }
     } finally {
       setStreaming(false);
@@ -129,6 +138,9 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
                 触发条件：{skill.whenToUse}
               </span>
             ) : null}
+            <span className="mt-1 block text-[11px] opacity-80">
+              {describeSkillContext(result)}
+            </span>
           </DialogDescription>
         </DialogHeader>
 
@@ -138,7 +150,7 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
             htmlFor="skill-args-input"
             className="text-[11px] font-medium text-muted-foreground"
           >
-            调用参数（可选，作为 input 传给 skill）
+            补充说明（可选，随参考请求传给 Skill）
           </label>
           <Textarea
             id="skill-args-input"
@@ -160,17 +172,17 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-medium text-muted-foreground">
-              输出
+              {result?.mode === "executed" ? "执行输出" : "参考资料"}
             </span>
             {result && (
               <span
                 className={cn(
                   "text-[10px] tabular-nums",
                   // TDSF: 成功状态使用 text-primary，失败保持 text-destructive
-                  result.success ? "text-primary" : "text-destructive",
+                  statusTone,
                 )}
               >
-                {result.success ? "成功" : "失败"} · {result.durationMs}ms
+                {notice?.label} · {result.durationMs}ms
               </span>
             )}
           </div>
@@ -192,10 +204,12 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
                 {isInvoking ? (
                   <span className="flex items-center gap-1.5">
                     <Spinner className="size-3" />
-                    调用中...
+                    读取中...
                   </span>
+                ) : result?.mode === "reference" ? (
+                  "该技能未提供参考资料"
                 ) : (
-                  "点击「调用 Skill」查看输出"
+                  "点击「查看参考」加载技能资料"
                 )}
               </div>
             )}
@@ -226,12 +240,12 @@ export function SkillInvoker({ skill, onOpenChange }: Props) {
             {isInvoking ? (
               <>
                 <Spinner className="size-3" />
-                调用中
+                读取中
               </>
             ) : (
               <>
                 <HugeiconsIcon icon={PlayIcon} size={12} strokeWidth={2} />
-                调用 Skill
+                查看参考
               </>
             )}
           </Button>

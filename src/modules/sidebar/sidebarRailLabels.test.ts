@@ -19,9 +19,10 @@ function codeOnly(src: string): string {
 }
 
 function listFiles(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const name = entry.name;
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) listFiles(full, out);
+    if (entry.isDirectory() || (entry.isSymbolicLink() && statSync(full).isDirectory())) listFiles(full, out);
     // 排除测试文件：本文件自己就要写出这个词才能挡住它（否则判据抓到的是自己）
     else if (/\.tsx?$/.test(name) && !name.includes(".test.")) out.push(full);
   }

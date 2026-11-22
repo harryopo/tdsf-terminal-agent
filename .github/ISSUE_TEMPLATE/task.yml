@@ -1,0 +1,61 @@
+name: 团队任务卡
+description: 明确范围、基线和验收，队长确认后开工
+body:
+  - type: markdown
+    attributes:
+      value: 所有开发、测试、调研和比赛任务按AGENTS及团队流程执行。提议不等于领工；组员提交PR后待队长与ROOT审查，不自行合并。不要填写凭据或私人原始日志。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 活动类型
+      options:
+        - 新功能
+        - 缺陷修复
+        - 测试与排错
+        - 研究与调研
+        - 文档与规范
+        - 隔离实验
+        - 比赛与演示
+        - 维护
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: 负责人GitHub账号
+    validations:
+      required: true
+  - type: input
+    id: base
+    attributes:
+      label: 队长公布的共同基线完整SHA
+      description: 未发布则填待确认，不能自行把最新main当已批准基线。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 目标及允许与禁止修改的文件
+    validations:
+      required: true
+  - type: input
+    id: branch
+    attributes:
+      label: 任务分支
+      description: 类型/YYYY-MM-DD-本人GitHub名-简述；AI默认codex前缀。
+  - type: textarea
+    id: output
+    attributes:
+      label: 产物位置与验收标准
+      description: 写明更新文档、正常与边界场景、测试或调研依据及隐私范围。
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 前置决定、接口依赖或需要讨论的冲突
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 队长确认与交接
+      description: 记录确认引用、后续PR、当前HEAD与真实验证；未确认写待确认，不预填通过。

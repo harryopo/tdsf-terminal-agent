@@ -1,5 +1,5 @@
 /**
- * sshCarapaceEvents.ts — 设置窗 → 主窗的「远端补全组件已变更」通道
+ * sshCarapaceEvents.ts — 设置页或终端角标安装 → 主窗的「远端补全组件已变更」通道
  * -----------------------------------------------------------------------------
  * 存在性检测结果缓存在 `param-complete-client` 的模块级 Map 里，而设置窗与主窗
  * 是两个 JS context（同 PREDICTION_CLEAR_EVENT 那条实测），各拿一份缓存。所以在

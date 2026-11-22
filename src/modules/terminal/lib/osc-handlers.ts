@@ -1,12 +1,13 @@
 import { IS_WINDOWS } from "@/lib/platform";
 import type { IMarker, Terminal } from "@xterm/xterm";
+import type { RemoteOscGate } from "./remoteShellIntegration";
 
 const MAX_OSC52_CLIPBOARD_BYTES = 1024 * 1024;
 
 /**
- * Cross-handler state shared between the OSC 7 cwd handler and the OSC 133
+ * Cross-handler state shared between the OSC 7 cwd handler and the OSC 133/633
  * prompt-marker handler. Tracks whether we are currently inside a running
- * command (between OSC 133 B and the next OSC 133 D / A), so the cwd handler
+ * command (between B and the next D / A), so the cwd handler
  * can ignore OSC 7 updates emitted by command output. Only OSC 7 issued by
  * the local shell between commands should be honored.
  */
@@ -22,11 +23,14 @@ export function registerCwdHandler(
   term: Terminal,
   onCwd: (cwd: string) => void,
   state?: ShellIntegrationState,
+  pathStyle: "native" | "posix" = "native",
+  acceptFrame?: RemoteOscGate,
 ): () => void {
   const d = term.parser.registerOscHandler(7, (data) => {
+    if (acceptFrame && !acceptFrame(7, data)) return true;
     // Command stdout/stderr can contain attacker-controlled OSC 7 bytes.
     if (state?.inCommand) return true;
-    const cwd = parseOsc7(data);
+    const cwd = parseOsc7(data, pathStyle);
     if (cwd) onCwd(cwd);
     return true;
   });
@@ -44,9 +48,10 @@ export function registerPromptTracker(
   // Fires on C (process executing) and A/D (back at prompt). Distinct from
   // inCommand, which is already true from B while the user merely types.
   onCommandState?: (running: boolean) => void,
+  acceptFrame?: RemoteOscGate,
 ): PromptTracker {
   let marker: IMarker | null = null;
-  const d = term.parser.registerOscHandler(133, (data) => {
+  const updatePrompt = (data: string) => {
     // OSC 133 A: start of a new prompt (between commands).
     if (data.startsWith("A")) {
       if (state) state.inCommand = false;
@@ -65,14 +70,25 @@ export function registerPromptTracker(
       if (state) state.inCommand = false;
       onCommandState?.(false);
     }
+  };
+  const d = term.parser.registerOscHandler(133, (data) => {
+    if (acceptFrame && !acceptFrame(133, data)) return false;
+    updatePrompt(data);
     // 必须放行：xterm 的 OSC handler 是"后注册的先调用，谁先返回 true 就到此为止"，
     // 拦下来会让先注册的块收集器收不到 133 ⇒ 本地终端一条块都产不出来（#130 真机）。
+    return false;
+  });
+  const d633 = term.parser.registerOscHandler(633, (data) => {
+    if (acceptFrame && !acceptFrame(633, data)) return false;
+    if (data.startsWith("E;")) updatePrompt("C");
+    else if (/^[ABCD](?:;|$)/.test(data)) updatePrompt(data);
     return false;
   });
   return {
     getMarker: () => (marker && !marker.isDisposed ? marker : null),
     dispose: () => {
       d.dispose();
+      d633.dispose();
       marker?.dispose();
       marker = null;
     },
@@ -98,13 +114,14 @@ export function registerOsc52ClipboardHandler(
   return () => d.dispose();
 }
 
-function parseOsc7(data: string): string | null {
+function parseOsc7(data: string, pathStyle: "native" | "posix"): string | null {
   const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
   if (!m) return null;
   let path = m[1];
   try {
     path = decodeURIComponent(path);
   } catch {}
+  if (pathStyle === "posix") return path;
   // /C:/Users/foo -> C:/Users/foo so it is a valid Windows path.
   if (/^\/[A-Za-z]:/.test(path)) {
     path = path.slice(1);

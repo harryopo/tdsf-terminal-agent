@@ -13,6 +13,7 @@ import {
   type SidecarStreamPart,
 } from "./sidecar-adapter";
 import { markSidecarConfigSynced } from "./sidecar-config-sync";
+import { useSshCommandOutputStore } from "../store/sshCommandOutputStore";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -195,5 +196,75 @@ describe("runSidecarStream — concurrent same-name tool calls", () => {
     expect(mockInvoke.mock.calls[0][1].params.state.session_id).toBe(
       "conversation-a",
     );
+  });
+
+  it("registers and finishes a remote write without a command against its explicit SSH target", async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    vi.mocked(listen).mockImplementation(
+      ((event: string, callback: (event: unknown) => void) => {
+        listeners.set(event, callback);
+        return Promise.resolve(() => listeners.delete(event));
+      }) as never,
+    );
+
+    let resolveInvoke!: (value: unknown) => void;
+    mockInvoke.mockImplementation(
+      () => new Promise((resolve) => { resolveInvoke = resolve; }),
+    );
+
+    const live = { ...makeLive(), sshSessionId: 9 };
+    const iterator = runSidecarStream({
+      agentId: "main",
+      sessionId: "chat-write",
+      messages: makeMessages("write a remote file"),
+      input: "write a remote file",
+      live,
+    })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    await vi.waitFor(() => expect(listeners.has("sidecar:tool_call")).toBe(true));
+    await vi.waitFor(() => expect(typeof resolveInvoke).toBe("function"));
+
+    live.sshSessionId = 88;
+    const emit = listeners.get("sidecar:tool_call")!;
+    const event = (payload: Record<string, unknown>) =>
+      emit({ payload: { event_type: "tool_call", session_id: "chat-write", payload } });
+    event({
+      tool_name: "write_remote_file",
+      tool_call_id: "backend-write-1",
+      status: "started",
+      params: {
+        path: "/srv/app.conf",
+        ssh_session_id: 42,
+        size: 12,
+        backup_path: "/srv/app.conf.bak",
+      },
+    });
+    event({
+      tool_name: "write_remote_file",
+      tool_call_id: "backend-write-1",
+      status: "completed",
+      result: { status: "success", path: "/srv/app.conf" },
+    });
+    resolveInvoke({ observation: "done", mood: "done" });
+
+    const parts: SidecarStreamPart[] = [
+      (await first).value as SidecarStreamPart,
+      ...(await collect(iterator)),
+    ];
+    const toolInput = parts.find(
+      (part): part is Extract<SidecarStreamPart, { type: "tool-input" }> =>
+        part.type === "tool-input" && part.toolName === "write_remote_file",
+    );
+    expect(toolInput).toBeDefined();
+    const owner = useSshCommandOutputStore.getState().calls[toolInput!.toolCallId];
+    expect(owner).toMatchObject({
+      toolCallId: toolInput!.toolCallId,
+      backendToolCallId: "backend-write-1",
+      conversationSessionId: "chat-write",
+      toolName: "write_remote_file",
+      command: "",
+      sshSessionId: 42,
+      ended: true,
+    });
   });
 });

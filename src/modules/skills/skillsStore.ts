@@ -12,7 +12,12 @@ import { create } from "zustand";
 import { invokeSkill } from "./executor";
 import { loadSkills } from "./loader";
 import { writeEnabledState } from "./registry";
-import type { SkillCategory, SkillHistoryEntry, SkillMetadata } from "./types";
+import type {
+  SkillCategory,
+  SkillExecution,
+  SkillHistoryEntry,
+  SkillMetadata,
+} from "./types";
 
 /** 调用历史最大保留条数 */
 const MAX_HISTORY = 20;
@@ -52,11 +57,12 @@ interface SkillsState {
   setSearchQuery: (q: string) => void;
   /** 切换 skill 启用状态（持久化到 localStorage） */
   toggleEnabled: (name: string) => void;
-  /** 调用 skill（返回执行结果，同时写入历史） */
+  /** 调用 skill（返回统一结果合同；recordHistory=false 供纯查看入口复用） */
   invoke: (
     name: string,
     args: string,
-  ) => Promise<{ success: boolean; output: string; durationMs: number }>;
+    options?: { recordHistory?: boolean },
+  ) => Promise<SkillExecution>;
 }
 
 /**
@@ -132,20 +138,24 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     set({ skills: updated });
   },
 
-  invoke: async (name, args) => {
+  invoke: async (name, args, options) => {
     set({ invokingSkill: name });
     try {
       const result = await invokeSkill(name, args);
-      const entry: SkillHistoryEntry = {
-        timestamp: Date.now(),
-        skillName: name,
-        args,
-        success: result.success,
-        durationMs: result.durationMs,
-        outputPreview: result.output.slice(0, 200),
-      };
-      const history = [entry, ...get().history].slice(0, MAX_HISTORY);
-      set({ history });
+      if (options?.recordHistory !== false) {
+        const entry: SkillHistoryEntry = {
+          timestamp: Date.now(),
+          skillName: name,
+          args,
+          success: result.success,
+          durationMs: result.durationMs,
+          outputPreview: result.output.slice(0, 200),
+          // TEAM-FIX-01: 新记录保留结果语义；旧记录缺 mode 时不反推执行
+          mode: result.mode,
+        };
+        const history = [entry, ...get().history].slice(0, MAX_HISTORY);
+        set({ history });
+      }
       return result;
     } finally {
       set({ invokingSkill: null });

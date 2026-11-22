@@ -234,6 +234,32 @@ class EventBus:
     # 发布事件
     # ========================================================================
 
+    def emit_rpc_liveness(self, sequence: int, phase: str) -> bool:
+        """Private invoke transport lease, not activity, history or evidence."""
+        from rpc_request_context import current_agent_request_id
+
+        request_id = current_agent_request_id()
+        if (
+            request_id is None
+            or self._rust_notifier is None
+            or type(sequence) is not int
+            or not 0 < sequence <= (1 << 64) - 1
+            or phase not in ("working", "waiting_user")
+        ):
+            return False
+        try:
+            self._rust_notifier("agent.rpc_liveness", {
+                "schema_version": 1,
+                "rpc_request_id": request_id,
+                "seq": sequence,
+                "phase": phase,
+            })
+        except Exception:
+            # Transport failures must not leak raw exception/command content.
+            logger.warning("rpc liveness notification failed")
+            return False
+        return True
+
     def publish(self, event: Event) -> int:
         """发布事件
 

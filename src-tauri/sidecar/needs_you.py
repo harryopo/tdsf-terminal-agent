@@ -47,11 +47,25 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Iterator
 
 logger = logging.getLogger("sidecar.needs_you")
+
+_response_wait_owner: ContextVar[object | None] = ContextVar("response_wait_owner", default=None)
+
+
+@contextmanager
+def response_wait_scope(owner: object) -> Iterator[None]:
+    """让 SDK 复制的调用上下文携带本轮等待归属，不进入模型或 RPC。"""
+    token = _response_wait_owner.set(owner)
+    try:
+        yield
+    finally:
+        _response_wait_owner.reset(token)
 
 
 # ============================================================================
@@ -255,6 +269,7 @@ class NeedsYouService:
             event_bus:               EventBus 实例（None 时使用全局 bus）
         """
         self._requests: dict[str, NeedsYouRequest] = {}
+        self._response_waiters: dict[tuple[str, object | None], int] = {}
         self._lock = threading.RLock()
         # 状态锁只保护内存状态；事件发布在状态锁外完成。transition lock 保证
         # “前一项终结事件 → 下一项 created”不会被并发响应/超时重排。
@@ -745,12 +760,43 @@ class NeedsYouService:
         Args:
             req_id: 请求 ID
             timeout: 调用方最大等待秒数。None 时 approval 由活动 deadline
-                     终结，不让排队时间消耗审批窗口；其他类型保留
-                     service 默认等待上限。
+                     终结，不让排队时间消耗审批窗口；其他类型持续等待
+                     直到响应或取消。
 
         Returns:
             最终状态的 NeedsYouRequest；请求不存在返回 None
         """
+        key = (req_id, _response_wait_owner.get())
+        with self._lock:
+            self._response_waiters[key] = self._response_waiters.get(key, 0) + 1
+        try:
+            return self._wait_for_response(req_id, timeout)
+        finally:
+            with self._lock:
+                remaining = self._response_waiters[key] - 1
+                if remaining:
+                    self._response_waiters[key] = remaining
+                else:
+                    del self._response_waiters[key]
+
+    def has_response_waiter(self, session_id: str, *, owner: object | None = None) -> bool:
+        """查询真实待答等待者；提供 owner 时只认本轮调用上下文。"""
+        if not session_id:
+            return False
+        with self._lock:
+            for req_id, wait_owner in self._response_waiters:
+                if owner is not None and wait_owner is not owner:
+                    continue
+                req = self._requests.get(req_id)
+                if req is not None and req.is_pending and req.session_id == session_id:
+                    return True
+        return False
+
+    def _wait_for_response(
+        self,
+        req_id: str,
+        timeout: float | None,
+    ) -> NeedsYouRequest | None:
         with self._lock:
             req = self._requests.get(req_id)
             if req is None:
@@ -807,6 +853,9 @@ class NeedsYouService:
             if approval_deadline is not None and time.time() >= approval_deadline:
                 # 不依赖扫描线程恰好先运行；竞态由 transition lock 线性化。
                 self._scan_timeouts()
+                continue
+            # 等待可提前返回；调用方预算未耗尽时，重新核对两个 deadline。
+            if wait_deadline is None or time.monotonic() < wait_deadline:
                 continue
             with self._lock:
                 return self._requests.get(req_id)

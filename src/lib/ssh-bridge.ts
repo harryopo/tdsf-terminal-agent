@@ -190,7 +190,8 @@ export async function sshConnect(
   onStatus.onmessage = (event) => handlers.onStatus?.(event);
   onExit.onmessage = (code) => {
     handlers.onExit?.(code);
-    releaseHandlers();
+    // Unknown exit status can be followed by reconnect on these same channels.
+    if (code !== -1) releaseHandlers();
   };
 
   // 调用 Rust ssh_connect 命令
@@ -284,6 +285,11 @@ export interface SshSessionDetail {
   state: SshSessionStateValue;
   /** 建这条连接的 webview 窗口 label；Rust 不认识出身时为 null */
   ownerWindow: string | null;
+  /** 只读关联资料；不代表 shell 用户或文件认证身份已变更。 */
+  terminalContext?: {
+    connectionId: string;
+    bashHooksPath: string | null;
+  } | null;
 }
 
 /**

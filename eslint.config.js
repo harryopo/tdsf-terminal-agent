@@ -15,6 +15,8 @@ export default tseslint.config(
       '**/coverage',
       // TDSF: 上游开源项目源码克隆（仅供调研参考，不参与 lint/typecheck）
       'opensource-reference/**',
+      // Local read-only research checkouts.
+      '2026-11-02/multi-server-ops/work/opensource/**',
       // TDSF 运行时数据目录（SQLite/CDP 脚本/临时备份），不参与 lint
       '.tdsf-data/**',
       // better-harness 机器产物目录（report.canvas.tsx 等由所有者生成），不参与 lint

@@ -49,6 +49,7 @@ import logging
 from typing import Any
 
 from strands_backend.tools import ToolContext, tool
+from strands_backend.tools.tool_lifecycle import tool_call_lifecycle
 
 logger = logging.getLogger("sidecar.strands_backend.tools.skill_invoke")
 
@@ -158,6 +159,7 @@ def _sync_playbook_to_todos(
 # 核心实现（无 Strands 依赖，便于单测）
 # ============================================================================
 
+@tool_call_lifecycle("skill_invoke", failed=lambda result: result.get("status") != "success")
 def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Skill 调用工具核心实现
 
@@ -179,19 +181,6 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     skill_input = params.get("input", "") or ""
     invoke_params = {"input": skill_input} if skill_input else {}
-
-    # 推送 tool_call 事件（前端 AgentStatusPill + 工具调用面板展示）
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="skill_invoke",
-                params={"skill_name": skill_name, "input": skill_input},
-                status="started",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.skill_invoke",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call started failed: {e}")
 
     # 直接 Python 内部调用 SkillRegistry，不走 IPC
     # 避免跨进程往返开销，且能复用已加载的 skill 缓存
@@ -216,19 +205,6 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             "error": str(e),
         }
         logger.warning(f"skill_invoke not found: name={skill_name}")
-        # 推送 tool_call error 事件
-        if ctx.event_bus is not None:
-            try:
-                ctx.event_bus.emit_tool_call(
-                    tool_name="skill_invoke",
-                    params={"skill_name": skill_name, "input": skill_input},
-                    result=result,
-                    status="error",
-                    session_id=ctx.session_id or None,
-                    source=f"{ctx.agent_name}_agent.strands_tool.skill_invoke",
-                )
-            except Exception as e2:
-                logger.debug(f"emit_tool_call error failed: {e2}")
         return result
     except Exception as e:
         # skill 调用异常
@@ -240,18 +216,6 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             "skill_name": skill_name,
             "error": f"skill invoke exception: {e}",
         }
-        if ctx.event_bus is not None:
-            try:
-                ctx.event_bus.emit_tool_call(
-                    tool_name="skill_invoke",
-                    params={"skill_name": skill_name, "input": skill_input},
-                    result=result,
-                    status="error",
-                    session_id=ctx.session_id or None,
-                    source=f"{ctx.agent_name}_agent.strands_tool.skill_invoke",
-                )
-            except Exception as e2:
-                logger.debug(f"emit_tool_call error failed: {e2}")
         return result
 
     # 整理返回结果，统一加 status / skill_name 字段
@@ -321,20 +285,6 @@ def invoke_skill_tool(params: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     if playbook:
         final_result["playbook"] = playbook
         final_result["playbook_text"] = playbook_text
-
-    # 推送 tool_call 完成事件
-    if ctx.event_bus is not None:
-        try:
-            ctx.event_bus.emit_tool_call(
-                tool_name="skill_invoke",
-                params={"skill_name": skill_name, "input": skill_input},
-                result=final_result,
-                status="completed" if final_result.get("status") == "success" else "error",
-                session_id=ctx.session_id or None,
-                source=f"{ctx.agent_name}_agent.strands_tool.skill_invoke",
-            )
-        except Exception as e:
-            logger.debug(f"emit_tool_call completed failed: {e}")
 
     return final_result
 
@@ -412,19 +362,26 @@ def make_skill_invoke_tool(ctx: ToolContext):
     def skill_invoke(
         skill_name: str,
         input: str = "",
+        *,
+        sdk_tool_context: Any = None,
     ) -> dict:
-        return invoke_skill_tool(
+        result = invoke_skill_tool(
             params={
                 "skill_name": skill_name,
                 "input": input,
             },
             ctx=ctx,
+            sdk_tool_context=sdk_tool_context,
         )
+        if sdk_tool_context is None:
+            return result
+        # Keep business status/content inside a valid SDK content block.
+        return {"status": "success", "content": [{"json": result}]}
 
     # Strands 从 __name__ 提取工具名、从 __doc__ 提取描述与参数说明
     skill_invoke.__name__ = "skill_invoke"
     skill_invoke.__doc__ = dynamic_doc
-    return tool(skill_invoke)
+    return tool(context="sdk_tool_context")(skill_invoke)
 
 
 __all__ = [

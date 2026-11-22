@@ -1,4 +1,123 @@
 # Dependencies
+.local/
+.screenshots/
+.learnings/
+/probe-venv.tmp
+# Machine-specific output path; do not rely on a developer's .git/info/exclude.
+/src-tauri/.cargo/config.toml
+
+# Experiment handoff/raw evidence stays private across fresh clones as well.
+experiments/prediction-replay/evidence/
+experiments/prediction-replay/handoff.md
+experiments/prediction-replay/result.json
+experiments/model-client/evidence/
+experiments/model-client/handoff.md
+experiments/model-client/result.json
+experiments/model-client/__pycache__/
+
+# Competition material is allowlisted below: reviewed Markdown and safe
+# member screenshots; private originals, logs, video and archives stay ignored.
+competitions/**
+!competitions/README.md
+!competitions/2026-huawei-agent/
+competitions/2026-huawei-agent/**
+!competitions/2026-huawei-agent/01-赛事要求/
+!competitions/2026-huawei-agent/02-调研资料/
+!competitions/2026-huawei-agent/03-方案书/
+!competitions/2026-huawei-agent/04-AI协作与交接/
+!competitions/2026-huawei-agent/05-作品材料/
+!competitions/2026-huawei-agent/06-验收与演示/
+!competitions/2026-huawei-agent/07-提交清单/
+!competitions/2026-huawei-agent/private/
+!competitions/2026-huawei-agent/05-作品材料/00-模板/
+!competitions/2026-huawei-agent/05-作品材料/01-项目说明/
+!competitions/2026-huawei-agent/05-作品材料/02-答辩PPT/
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/
+!competitions/2026-huawei-agent/05-作品材料/07-开源与数据说明/
+!competitions/2026-huawei-agent/06-验收与演示/01-测试记录/
+!competitions/2026-huawei-agent/06-验收与演示/02-演示脚本/
+!competitions/2026-huawei-agent/06-验收与演示/03-演示视频/
+!competitions/2026-huawei-agent/07-提交清单/作品提交/
+!competitions/2026-huawei-agent/07-提交清单/作品提交/codearts_proof/
+!competitions/2026-huawei-agent/07-提交清单/作品提交/ppt/
+!competitions/2026-huawei-agent/07-提交清单/作品提交/project/
+!competitions/2026-huawei-agent/07-提交清单/作品提交/readme/
+!competitions/2026-huawei-agent/07-提交清单/作品提交/video/
+!competitions/2026-huawei-agent/01-赛事要求/README.md
+!competitions/2026-huawei-agent/02-调研资料/README.md
+!competitions/2026-huawei-agent/03-方案书/2026-11-13-v1.0-协作备赛计划.md
+!competitions/2026-huawei-agent/03-方案书/2026-11-13-v1.1-审查优先与成员分工.md
+!competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.2-完整工作包与材料协作.md
+!competitions/2026-huawei-agent/03-方案书/README.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-13-EchoSinklair-首轮审查任务.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-13-Yan-0914-首轮审查任务.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-EchoSinklair-完整工作包.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-完整工作包.md
+!competitions/2026-huawei-agent/04-AI协作与交接/README.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-RDP-VNC远程桌面长任务.md
+!competitions/2026-huawei-agent/04-AI协作与交接/三人分工与开发说明.md
+!competitions/2026-huawei-agent/05-作品材料/00-模板/证据记录模板.md
+!competitions/2026-huawei-agent/05-作品材料/00-模板/阶段交付模板.md
+!competitions/2026-huawei-agent/05-作品材料/01-项目说明/README.md
+!competitions/2026-huawei-agent/05-作品材料/02-答辩PPT/README.md
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/README.md
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/README.md
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/README.md
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/README.md
+!competitions/2026-huawei-agent/05-作品材料/07-开源与数据说明/README.md
+!competitions/2026-huawei-agent/05-作品材料/README.md
+!competitions/2026-huawei-agent/06-验收与演示/01-测试记录/README.md
+!competitions/2026-huawei-agent/06-验收与演示/02-演示脚本/README.md
+!competitions/2026-huawei-agent/06-验收与演示/03-演示视频/README.md
+!competitions/2026-huawei-agent/06-验收与演示/README.md
+!competitions/2026-huawei-agent/07-提交清单/README.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/README.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/codearts_proof/README.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/ppt/README.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/project/README.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/readme/README.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/readme/包清单模板.md
+!competitions/2026-huawei-agent/07-提交清单/作品提交/video/README.md
+!competitions/2026-huawei-agent/README.md
+!competitions/2026-huawei-agent/private/README.md
+!competitions/2026-huawei-agent/05-作品材料/01-项目说明/*.md
+!competitions/2026-huawei-agent/05-作品材料/02-答辩PPT/*.md
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/*.md
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*.md
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*.md
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/*.md
+!competitions/2026-huawei-agent/05-作品材料/07-开源与数据说明/*.md
+!competitions/2026-huawei-agent/06-验收与演示/01-测试记录/*.md
+!competitions/2026-huawei-agent/06-验收与演示/02-演示脚本/*.md
+!competitions/2026-huawei-agent/06-验收与演示/03-演示视频/*.md
+# 可公开截图按成员归档随任务分支提交；不放开private、日志、视频或ZIP。
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.md
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.png
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.jpg
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.jpeg
+!competitions/2026-huawei-agent/05-作品材料/04-功能截图/*/*.webp
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.md
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.png
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.jpg
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.jpeg
+!competitions/2026-huawei-agent/05-作品材料/05-码道使用证明/*/*.webp
+!competitions/2026-huawei-agent/03-方案书/2026-11-17-v1.3-截图入库与成员整包复核.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-Yan-0914-整包收尾清单.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-17-EchoSinklair-审查后回归工作包.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-18-Yan-0914-原生桌面闭环与双协议长任务.md
+!competitions/2026-huawei-agent/04-AI协作与交接/2026-11-18-EchoSinklair-安全修复与闭环长任务.md
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/*/
+!competitions/2026-huawei-agent/05-作品材料/03-架构与图表/*/*.md
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/*/
+!competitions/2026-huawei-agent/05-作品材料/06-成员贡献/*/*.md
+competitions/2026-huawei-agent/private/**
+!competitions/2026-huawei-agent/private/README.md
+
 node_modules/
 .pnp
 .pnp.js
@@ -18,7 +137,7 @@ src-tauri/gen/
 # CI 以 `cargo check --locked` 校验；2026-09-11 调整）
 
 # carapace 二进制 (参数补全引擎, ~155MB 不入 git)
-# 恢复方式: scripts/fetch-carapace.ps1 (下载 + sha256 校验, 版本/哈希见 src-tauri/bin/CHECKSUMS.txt)
+# 恢复方式: pnpm fetch:carapace (下载 + sha256 校验, 版本/哈希见 src-tauri/bin/carapace-manifest.json)
 src-tauri/bin/carapace.exe
 src-tauri/bin/carapace-linux-amd64
 target-test/
@@ -138,22 +257,46 @@ agent-logs/
 # ============================================================================
 # 仓库精简：以下为开发过程资料，仅保留在本地工作区，不入库（2026-09-11）
 # ============================================================================
-docs/
+docs/**
+!docs/README.md
+!docs/STATUS.md
+!docs/architecture/
+!docs/architecture/*.md
+!docs/development/
+!docs/development/*.md
+!docs/guides/
+!docs/guides/README.md
+!docs/api/
+!docs/api/README.md
+!docs/research/
+!docs/research/README.md
+!docs/decisions/
+!docs/decisions/README.md
+!docs/decisions/*.md
+!docs/updates/
+!docs/updates/*.md
+!docs/plans/
+!docs/plans/README.md
+!docs/plans/*/
+!docs/plans/*/README.md
+!docs/plans/project-organization/2026-11-13-v1.0-目录与文档治理.md
+!docs/plans/terminal-prediction/2026-11-13-v1.0-输入与建议边界.md
+!docs/plans/terminal-prediction/2026-11-20-v1.2-CORR-03失败反馈与原文采集连续开发.md
+!docs/plans/remote-desktop/2026-11-17-v1.0-RDP-VNC架构与连续开发方案.md
+!docs/plans/remote-desktop/2026-11-18-v1.1-RDP原生闭环与VNC连续开发.md
+!docs/plans/agent-runtime/2026-11-18-v1.1-安全修复与离线闭环授权.md
+!docs/plans/product/2026-11-20-v1.1-ROOT评审与连续开发授权.md
+!docs/plans/remote-desktop/README.md
+!docs/research/remote-desktop/
+!docs/research/remote-desktop/*.md
 .ai/
 .trae/
 knowledge-slim-preview/
-AGENTS.md
-CLAUDE.md
-CONTRIBUTING.md
-CODE_OF_CONDUCT.md
 .coderabbit.yaml
 nix/
 flake.nix
 flake.lock
 启动-日志版.bat
-.github/CODEOWNERS
-.github/ISSUE_TEMPLATE/
-.github/PULL_REQUEST_TEMPLATE.md
 .github/dependabot.yml
 .github/workflows/signpath-test.yml
 .github/workflows/update-nix-sources.yml
@@ -165,6 +308,8 @@ scripts/*
 !scripts/build-fig-specs.mjs
 !scripts/build-tldr-zh.mjs
 !scripts/fetch-carapace.ps1
+!scripts/check-carapace.mjs
+!scripts/check-carapace.test.mjs
 !scripts/make-app-icon.py
 !scripts/check-readme-links.mjs
 !scripts/eager-graph.mjs
@@ -239,3 +384,7 @@ ssh-credentials.json
 # 2026-09-28：用户把发布版安装到仓库目录里做验收（326 MB，含应用自带的 .tdsf-data 真数据）。
 # 这一整个目录都不许进仓库 —— 一次  就会把安装产物和他机器上的会话数据一起推上去。
 测试安装/
+
+# Protected, read-only reference trees awaiting a filesystem-level move; no
+# task output or third-party clone in a dated root is public source by default.
+/2026-*/

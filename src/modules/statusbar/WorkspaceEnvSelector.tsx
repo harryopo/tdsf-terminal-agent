@@ -95,7 +95,7 @@ export function WorkspaceEnvSelector({
             switching
               ? "正在切换环境…"
               : remote
-                ? `当前终端命令执行于 ${label}`
+                ? `SSH 连接认证身份：${label}；终端内切换用户不会改变文件连接身份`
                 : "切换工作区环境"
           }
         >

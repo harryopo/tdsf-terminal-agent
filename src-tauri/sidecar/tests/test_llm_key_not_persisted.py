@@ -222,12 +222,17 @@ class TestWiring(_ConfigFileCase):
             node.func.id: node.lineno
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id in {"set_runtime_config", "create_strands_model"}
+            and node.func.id in {"set_runtime_config", "create_strands_model", "save_config"}
         }
         self.assertLess(
-            lines["set_runtime_config"],
             lines["create_strands_model"],
-            "缓存必须先登记：create_strands_model / 后续任何 load_config() 都靠它拿 key",
+            lines["save_config"],
+            "模型构造显式接收配置，构造失败不能发布新身份",
+        )
+        self.assertLess(
+            lines["save_config"],
+            lines["set_runtime_config"],
+            "持久化成功后才替换运行时，保存失败不能推进新配置",
         )
 
     def test_boot_strips_stored_secret_before_loading(self):

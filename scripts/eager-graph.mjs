@@ -26,19 +26,27 @@ export const DEFAULT_WATCH = [
 ];
 
 const exts = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs"];
-function resolveLocal(spec, fromFile) {
+function resolveLocal(spec, fromFile, resolutions) {
   let base;
   if (spec.startsWith("@/")) base = join(srcAlias, spec.slice(2));
   else if (spec.startsWith(".")) base = resolve(dirname(fromFile), spec);
   else return null; // bare package
+  if (resolutions.has(base)) return resolutions.get(base);
   for (const e of exts) {
     const p = base + e;
-    if (e && existsSync(p) && statSync(p).isFile()) return p;
+    if (e && existsSync(p) && statSync(p).isFile()) {
+      resolutions.set(base, p);
+      return p;
+    }
   }
   for (const e of exts.slice(1)) {
     const p = join(base, "index" + e);
-    if (existsSync(p) && statSync(p).isFile()) return p;
+    if (existsSync(p) && statSync(p).isFile()) {
+      resolutions.set(base, p);
+      return p;
+    }
   }
+  resolutions.set(base, null);
   return null;
 }
 
@@ -85,6 +93,7 @@ export function traceEager(entry, watch = DEFAULT_WATCH) {
   const queue = [entryFile];
   const lazyFiles = new Set();
   const hits = new Map();
+  const resolutions = new Map();
   while (queue.length) {
     const file = queue.shift();
     if (seen.has(file)) continue;
@@ -96,7 +105,7 @@ export function traceEager(entry, watch = DEFAULT_WATCH) {
       continue;
     }
     for (const spec of staticSpecs(code)) {
-      const local = resolveLocal(spec, file);
+      const local = resolveLocal(spec, file, resolutions);
       if (local) {
         queue.push(local);
         continue;
@@ -107,7 +116,7 @@ export function traceEager(entry, watch = DEFAULT_WATCH) {
       }
     }
     for (const spec of dynamicSpecs(code)) {
-      const local = resolveLocal(spec, file);
+      const local = resolveLocal(spec, file, resolutions);
       if (local) lazyFiles.add(rel(local));
     }
   }

@@ -31,7 +31,7 @@ export interface FigArg {
   name?: string;
   description?: string;
   /** 静态参数值建议，如 ["json", "yaml"] 或 [{ name, description }] */
-  suggestions?: Array<string | { name?: string; description?: string }>;
+  suggestions?: Array<string | { name?: string | string[]; description?: string }>;
   isOptional?: boolean;
   isVariadic?: boolean;
 }

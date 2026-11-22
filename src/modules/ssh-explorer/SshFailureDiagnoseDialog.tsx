@@ -122,6 +122,23 @@ export function SshFailureDiagnoseDialog({
             </p>
           ) : null}
 
+          {diagnosis.commonCauses.length > 0 ? (
+            <section className="space-y-1.5">
+              <h3 className="text-[12px] font-medium">常见原因（按这一步排查）</h3>
+              <ul
+                className="space-y-1 rounded-md bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground"
+                data-testid="ssh-diagnose-causes"
+              >
+                {diagnosis.commonCauses.map((cause) => (
+                  <li key={cause} className="flex gap-2 leading-relaxed">
+                    <span aria-hidden className="mt-[7px] size-1 shrink-0 rounded-full bg-muted-foreground/70" />
+                    <span>{cause}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           <section className="space-y-1.5">
             <h3 className="text-[12px] font-medium">怎么办</h3>
             <p

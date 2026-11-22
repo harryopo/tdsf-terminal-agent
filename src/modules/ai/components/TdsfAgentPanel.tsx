@@ -46,6 +46,7 @@ import { WorkspaceGate } from "./WorkspaceGate";
 // TDSF (P4-T4.4): 集成 Skill 调用 — /skill:<name> <args>
 import {
   parseSkillCommand,
+  runSlashSkillCommand,
   useSkillsStore,
 } from "@/modules/skills";
 
@@ -388,18 +389,24 @@ function Body({
     if (parsed) {
       setSending(true);
       try {
-        const res = await invokeSkill(parsed.name, parsed.args);
-        if (res.success) {
-          toast.success(`Skill "${parsed.name}" 执行完成`, {
-            description: `耗时 ${res.durationMs}ms`,
-            duration: 3000,
-          });
-        } else {
-          toast.error(`Skill "${parsed.name}" 执行失败`, {
-            description: res.output.slice(0, 120),
-            duration: 4000,
-          });
-        }
+        // TEAM-FIX-01: /skill 消费段统一走 runSlashSkillCommand，
+      // 与侧栏对话框共用 store 结果合同与通知文案
+        await runSlashSkillCommand(parsed, invokeSkill, (notice) => {
+          const options = { description: notice.description, duration: 4000 };
+          if (notice.tone === "success") {
+            toast.success(notice.title, options);
+          } else if (notice.tone === "warning") {
+            toast.warning(notice.title, options);
+          } else {
+            toast.error(notice.title, options);
+          }
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toast.error(`Skill "${parsed.name}" 调用失败`, {
+          description: msg,
+          duration: 4000,
+        });
       } finally {
         setSending(false);
         setInput("");

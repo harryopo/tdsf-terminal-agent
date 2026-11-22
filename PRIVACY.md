@@ -16,6 +16,20 @@ product analytics or telemetry to the project maintainers by default.
   sidecar when the selected model is used. Protect the Windows account and its
   local application-data directory accordingly.
 
+Unreleased source removes the legacy in-memory OSC diagnostic buffer that could
+retain discarded SSH input and directory paths. This does not erase terminal
+scrollback, saved conversations or existing operational logs. Previously published
+installers do not receive this change until a rebuilt version is installed.
+
+Unreleased approval-response feedback uses request identity and in-memory UI
+state, without adding telemetry, persistent logs or a new network destination.
+The read-only-trust indicator is not an execution permission; backend safety
+checks remain authoritative.
+
+Unreleased inline approval placement uses existing call/chat/SSH-session identifiers
+and an in-memory rejection-note draft. It adds no persistent store, telemetry or
+network destination, and does not infer target hosts from the current terminal.
+
 ## Network connections
 
 Network connections include the following, depending on the features used:

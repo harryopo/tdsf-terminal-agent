@@ -9,6 +9,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
 import { quoteShellArg } from "@/lib/shellQuote";
+import { getLeafSshSession } from "@/lib/param-complete-client";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { usePresence } from "@/lib/usePresence";
 import { useZoom } from "@/lib/useZoom";
@@ -42,7 +43,9 @@ import {
   type FileExplorerHandle,
 } from "@/modules/explorer";
 import { explorerSshGate } from "@/modules/explorer/lib/explorerSshGate";
+import { explorerSessionIdForTab } from "@/modules/explorer/lib/explorerSession";
 import { useWorkspaceFsStore } from "@/modules/explorer/lib/workspaceFsStore";
+import type { FileTreeSource } from "@/modules/explorer/lib/useFileTree";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
   Header,
@@ -121,6 +124,8 @@ import {
   subscribeHostVerify,
 } from "@/lib/ssh-bridge";
 import { HostApprovalDialog } from "@/modules/ssh-explorer/HostApprovalDialog";
+import { SshFailureDiagnoseDialog } from "@/modules/ssh-explorer/SshFailureDiagnoseDialog";
+import type { SshDiagnosis } from "@/modules/ssh-explorer/lib/sshFailureDiagnosis";
 // TDSF 2026-07-29: SSH 远程文件编辑器（远程文件点击后编辑）
 // TDSF 2026-07-30: SshFileEditor（侧栏 textarea）已废弃，
 // 远程文件改走主区 EditorStack（与本地文件同一套 CodeMirror + tab 流程）。
@@ -156,12 +161,22 @@ import { leafCwdOf } from "@/modules/terminal/lib/leafCwd";
 import {
   getRendererPoolDebug,
   getSlotTerm,
+  isLeafAltScreen,
 } from "@/modules/terminal/lib/rendererPool";
+import {
+  getLeafDraft,
+  getPendingRiskCommand,
+  isLeafBusy,
+} from "@/modules/terminal/lib/useTerminalSession";
+import { isUserLineDirty } from "@/modules/terminal/lib/terminalInputState";
 // TDSF 修复 2026-07-30 (Bug 3): 暴露 formatEnvBlock 供 CDP 验证 <env> 注入
 // 注意: 不静态 import formatEnvBlock (会拉入 @ai-sdk 污染启动包, 见 eager-budget.test.ts)
 // getEnvBlock 内联 formatEnvBlock 逻辑, 与 transport.ts:249-257 保持同步
 import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
-import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
+import { ipcWorkspaceEnv, useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
+import { fileSourceKey, type FileSource } from "@/modules/workspace/fileSource";
+import { editorMatchesSource } from "@/modules/tabs/lib/editorWorkspace";
+import { pendingFileSaves } from "@/modules/editor/lib/pendingFileSaves";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -260,6 +275,7 @@ export default function App() {
   // captureActiveSelection 需要优先用这个 leafId 查 terminalRefs）
   const sshActiveLeafIdRef = useRef<number | null>(null);
   const editorRefs = useRef<Map<number, EditorPaneHandle>>(new Map());
+  const fileRelocationsRef = useRef<{ from: string; to: string; sourceKey: string }[]>([]);
   const previewRefs = useRef<Map<number, PreviewPaneHandle>>(new Map());
   const [activeEditorHandle, setActiveEditorHandle] =
     useState<EditorPaneHandle | null>(null);
@@ -302,6 +318,20 @@ export default function App() {
   });
 
   const activeSpaceId = useSpaces((s) => s.activeId);
+  const [sshReconnectFailure, setSshReconnectFailure] = useState<{
+    spaceId: string;
+    env: Extract<WorkspaceEnv, { kind: "ssh" }>;
+    diagnosis: SshDiagnosis;
+  } | null>(null);
+  const reconnectWorkspace = useCallback(
+    (spaceId: string, env: Extract<WorkspaceEnv, { kind: "ssh" }>) => {
+      setSshReconnectFailure(null);
+      return reconnectSshSpace(spaceId, env, (diagnosis) =>
+        setSshReconnectFailure({ spaceId, env, diagnosis }),
+      );
+    },
+    [],
+  );
   const spacesHydrated = useSpaces((s) => s.hydrated);
   // TDSF 修复 2026-08-01: 工作区数量（0 = 欢迎界面）
   const spaceCount = useSpaces((s) => s.spaces.length);
@@ -380,17 +410,21 @@ export default function App() {
     // 生命周期没了，而启动自动连接只覆盖"最近使用的那一台"。进这种工作区若不重连，
     // 界面按 SSH 渲染、左侧文件树拿着失效的会话号去开 SFTP，握手 10 秒后整块面板
     // 报 `[fsb] sftp session error: SFTP error: Timeout`（用户实测那条）。
-    if (meta && meta.env.kind === "ssh" && !isSshEnvConnected(meta.env)) {
-      void reconnectSshSpace(meta.id, meta.env);
+    const env = meta?.env;
+    const sshPending = env?.kind === "ssh" && !isSshEnvConnected(env);
+    if (sshPending) {
+      void reconnectWorkspace(activeSpaceId, env);
     }
-    if (meta) void adoptWorkspaceEnv(meta.env);
+    if (env) void adoptWorkspaceEnv(env);
     const inSpace = tabsRef.current.filter((t) => t.spaceId === activeSpaceId);
     if (inSpace.length === 0) {
       // TDSF 修复 2026-09-18（深度体检 F3）：#61-A 之后"从欢迎页点进一个还没标签的
       // 工作区"是常规路径。原先这里直接 return —— activeId 仍指着**别的空间**的冷
       // 标签，于是顶栏标签条整条空白、点「+」继承外来 cwd、资源管理器根目录错位，
       // 2026-08-01 的"按 Space 隔离"被绕过。就地给这个空间补一个终端标签并激活。
-      const tabId = newTabInSpace(activeSpaceId, meta?.root ?? undefined);
+      const tabId = newTabInSpace(activeSpaceId, meta?.root ?? undefined, {
+        sshPending,
+      });
       setActiveId(tabId);
       return;
     }
@@ -406,6 +440,7 @@ export default function App() {
     setActiveId,
     newTabInSpace,
     adoptWorkspaceEnv,
+    reconnectWorkspace,
   ]);
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -547,15 +582,31 @@ export default function App() {
   // 同一工作区里现在可以有多条各连各的 shell，切 tab 却还看着另一个 tab 的目录，
   // 就是用户报的"我在 tab2 cd，tab1 的资源管理器也跟着变"的另一半。
   // 活动 tab 是终端 → 完全以它为准（它开的是本地壳时这里就是 null，不再借用
-  // Space 的远端会话）；活动 tab 是编辑器/预览 → 回退 Space 级会话。
-  const explorerSshSessionId = activeTerminalTab
-    ? activeTabSshSessionId
-    : spaceSshSessionId;
+  // Space 的远端会话）；远端编辑器继续使用文件来源会话，不能退回 Space 主会话。
+  const explorerSshSessionId = explorerSessionIdForTab(
+    activeTab,
+    activeTabSshSessionId,
+    spaceSshSessionId,
+  );
   const explorerSshSession = useSshStore((s) =>
     selectSessionById(s, explorerSshSessionId),
   );
   const explorerSshConnected =
     !!explorerSshSession && isSessionConnected(explorerSshSession);
+  const directorySource: FileTreeSource | null = explorerSshSessionId
+    ? explorerSshConnected && explorerSshSession?.rustSessionId != null
+      ? { kind: "sftp", sessionId: explorerSshSession.rustSessionId, root: "/" }
+      : null
+    : activeSpace?.env.kind === "ssh" &&
+        activeTab?.kind !== "editor" &&
+        !(
+          activeTerminalTab && activeLeafId !== null &&
+          effectiveLeafSsh(
+            activeTerminalTab.paneTree, activeLeafId, activeTerminalTab.sshSessionId,
+          ) === null
+        )
+      ? null
+      : { kind: "local" };
   const explorerCurrentPath = useSshStore((s) =>
     selectSessionCurrentPath(s, explorerSshSessionId),
   );
@@ -591,6 +642,26 @@ export default function App() {
       ? sshEnvIsConnecting(activeSpace.env, s.sessions)
       : false,
   );
+  const offlineSshPanel = offlineSshSpace ? (
+    <SshExplorerOffline
+      key={offlineSshSpace.id}
+      host={offlineSshSpace.env.host}
+      port={offlineSshSpace.env.port}
+      user={offlineSshSpace.env.user}
+      connecting={explorerSshReconnecting}
+      onReconnect={() =>
+        reconnectWorkspace(offlineSshSpace.id, offlineSshSpace.env)
+      }
+    />
+  ) : null;
+  const currentReconnectDiagnosis =
+    offlineSshSpace &&
+    sshReconnectFailure?.spaceId === offlineSshSpace.id &&
+    sshReconnectFailure.env.host === offlineSshSpace.env.host &&
+    sshReconnectFailure.env.user === offlineSshSpace.env.user &&
+    sshReconnectFailure.env.port === offlineSshSpace.env.port
+      ? sshReconnectFailure.diagnosis
+      : null;
   const isDefaultColdTab =
     !!activeTab &&
     activeTab.kind === "terminal" &&
@@ -1553,19 +1624,54 @@ export default function App() {
 
   const sendCd = useCallback(
     (path: string) => {
-      // TDSF 修复 2026-07-29: SSH 模式下状态栏路径显示远程位置,
-      // 但本地 terminalRefs 对应的是隐藏的本地终端, 点击 breadcrumb 不应
-      // 把 cd 命令写入错误终端。SSH 目录切换由用户在 SSH 终端内操作。
-      // TDSF 修复 2026-07-31: 按当前 Space 判定，避免本地 Space 仍受全局 SSH 连接影响。
-      // TDSF #89：判据跟随活动 tab —— 这个 tab 自己连的是远端就不该写本地终端。
-      if (explorerSshConnected) return;
       if (activeLeafId === null) return;
+      const tab = tabsRef.current.find(
+        (item) => item.id === activeIdRef.current,
+      );
+      if (
+        tab?.kind !== "terminal" ||
+        tab.id !== activeTerminalTab?.id ||
+        tab.activeLeafId !== activeLeafId ||
+        tab.cold
+      ) {
+        toast.info("终端已切换，请在当前终端重新选择目录");
+        return;
+      }
       const term = terminalRefs.current.get(activeLeafId);
-      if (!term) return;
-      term.write(`cd ${quoteShellArg(path)}\r`);
+      if (
+        !term ||
+        !getSlotTerm(activeLeafId) ||
+        isLeafAltScreen(activeLeafId) ||
+        isLeafBusy(activeLeafId) ||
+        isUserLineDirty(activeLeafId) ||
+        getLeafDraft(activeLeafId) ||
+        getPendingRiskCommand(activeLeafId)
+      ) {
+        toast.info("请先结束当前操作并清空输入行，再切换目录");
+        return;
+      }
+      if (activeTabSshSessionId) {
+        const session = useSshStore
+          .getState()
+          .sessions.find((item) => item.id === activeTabSshSessionId);
+        if (
+          !session ||
+          !isSessionConnected(session) ||
+          getLeafSshSession(activeLeafId) !== session.rustSessionId
+        ) {
+          toast.info("当前 SSH 终端未连接或连接已变化，请重新连接后切换目录");
+          return;
+        }
+      } else if (getLeafSshSession(activeLeafId) !== null) {
+        toast.info("终端连接已变化，请在当前终端重新选择目录");
+        return;
+      }
+      term.write(
+        `cd ${quoteShellArg(path, activeTabSshSessionId ? false : undefined)}\r`,
+      );
       term.focus();
     },
-    [activeLeafId, explorerSshConnected],
+    [activeLeafId, activeTerminalTab, activeTabSshSessionId],
   );
 
   const cdInNewTab = useCallback(
@@ -1583,15 +1689,57 @@ export default function App() {
     [newTab],
   );
 
+  const isFileRelocating = useCallback((path: string, source: FileSource | null) => {
+    const sourceKey = fileSourceKey(source);
+    return fileRelocationsRef.current.some(moving => moving.sourceKey === sourceKey &&
+      [moving.from, moving.to].some(root => path === root || path.startsWith(`${root}/`)));
+  }, []);
+
+  const handleBeforePathRenamed = useCallback(async (from: string, to: string, source: FileSource | null) => {
+    const sourceKey = fileSourceKey(source);
+    if (!sourceKey) throw new Error("无法确认文件所属连接，请刷新文件列表后重试。");
+    const roots = [from, to];
+    if (fileRelocationsRef.current.some(moving => moving.sourceKey === sourceKey &&
+      [moving.from, moving.to].some(old => roots.some(root => old === root || old.startsWith(`${root}/`) || root.startsWith(`${old}/`))))) {
+      throw new Error("相关文件正在迁移，请等待本次重命名或移动完成。");
+    }
+    const scope = { from, to, sourceKey };
+    fileRelocationsRef.current.push(scope);
+    const holds: ReturnType<EditorPaneHandle["beginRelocation"]>[] = [];
+    const finish = (committed: boolean) => {
+      if (!fileRelocationsRef.current.includes(scope)) return;
+      fileRelocationsRef.current = fileRelocationsRef.current.filter(item => item !== scope);
+      if (!committed) for (const hold of holds) hold.cancel();
+    };
+    try {
+      for (const tab of tabsRef.current) {
+        if (tab.kind !== "editor" || !editorMatchesSource(tab, source) ||
+          !(tab.path === from || tab.path.startsWith(`${from}/`))) continue;
+        const handle = editorRefs.current.get(tab.id);
+        if (handle) holds.push(handle.beginRelocation(`${to}${tab.path.slice(from.length)}`));
+      }
+      await Promise.all([...holds.map(hold => hold.ready), ...pendingFileSaves(sourceKey, from)]);
+      return finish;
+    } catch (e) {
+      await Promise.allSettled(holds.map(hold => hold.ready));
+      finish(false);
+      throw e;
+    }
+  }, []);
+
   const handleOpenFile = useCallback(
     (path: string, pin?: boolean) => {
+      if (isFileRelocating(path, ipcWorkspaceEnv())) {
+        toast.info("文件正在迁移，请稍后再打开。");
+        return;
+      }
       // Markdown opens in its rendered view by default; a per-tab toggle flips
       // it to the raw editor. Other files default to preview (pin=false);
       // explicit actions like context-menu "Open" pass pin=true to persist.
       if (isMarkdownPath(path)) newMarkdownTab(path);
       else openFileTab(path, pin ?? false);
     },
-    [openFileTab, newMarkdownTab],
+    [openFileTab, newMarkdownTab, isFileRelocating],
   );
 
   // TDSF 2026-07-30: 远程文件点击改走主区 EditorStack（多 tab 并行），
@@ -1603,9 +1751,13 @@ export default function App() {
       // 切 Space 后点击远程文件不会串到其它 session。
       const sessionId = explorerSshSessionId ?? spaceSshSessionId ?? activeSshSessionId;
       if (!sessionId) return;
+      if (isFileRelocating(path, { kind: "ssh", sessionId })) {
+        toast.info("文件正在迁移，请稍后再打开。");
+        return;
+      }
       openFileTab(path, false, { sessionId });
     },
-    [explorerSshSessionId, spaceSshSessionId, activeSshSessionId, openFileTab],
+    [explorerSshSessionId, spaceSshSessionId, activeSshSessionId, openFileTab, isFileRelocating],
   );
 
   // "Open With" files arrive via the event (warm start) and get_launch_files
@@ -1626,12 +1778,13 @@ export default function App() {
   }, [handleOpenFile]);
 
   const handlePathRenamed = useCallback(
-    (from: string, to: string) => {
-      for (const t of tabs) {
+    (from: string, to: string, source: FileSource | null) => {
+      for (const t of tabsRef.current) {
         if (t.kind !== "editor") continue;
+        if (!editorMatchesSource(t, source)) continue;
         if (t.path === from) {
           const i = to.lastIndexOf("/");
-          updateTab(t.id, { path: to, title: i === -1 ? to : to.slice(i + 1) });
+          updateTab(t.id, { path: to, title: i === -1 ? to : to.slice(i + 1), relocation: { from: t.path, to } });
         } else if (t.path.startsWith(`${from}/`)) {
           const suffix = t.path.slice(from.length);
           const newPath = `${to}${suffix}`;
@@ -1639,11 +1792,12 @@ export default function App() {
           updateTab(t.id, {
             path: newPath,
             title: i === -1 ? newPath : newPath.slice(i + 1),
+            relocation: { from: t.path, to: newPath },
           });
         }
       }
     },
-    [tabs, updateTab],
+    [updateTab],
   );
 
   const activeTerminalLeafCwd =
@@ -2472,20 +2626,9 @@ export default function App() {
                             </button>
                           </div>
                         ) : offlineSshSpace ? (
-                          // TDSF #102 收尾：服务器工作区断话 → 说清是哪台 + 就地重连，
+                          // TDSF #102 收尾：服务器工作区断开 → 说清是哪台 + 就地重连，
                           // 不拿本地文件树冒充远端。
-                          <SshExplorerOffline
-                            host={offlineSshSpace.env.host}
-                            port={offlineSshSpace.env.port}
-                            user={offlineSshSpace.env.user}
-                            connecting={explorerSshReconnecting}
-                            onReconnect={() =>
-                              reconnectSshSpace(
-                                offlineSshSpace.id,
-                                offlineSshSpace.env,
-                              )
-                            }
-                          />
+                          offlineSshPanel
                         ) : (
                           <div className="flex h-full min-h-0 flex-col">
                             <div className="min-h-0 flex-1">
@@ -2504,8 +2647,9 @@ export default function App() {
                                         sessionId:
                                           explorerSshSession.rustSessionId,
                                         root: explorerCurrentPath ?? "/",
+                                        frontendSessionId: explorerSshSession.id,
                                       }
-                                    : { kind: "local" }
+                                    : { kind: "local", workspace: workspaceEnv.kind === "wsl" ? workspaceEnv : { kind: "local" } }
                                 }
                                 gitStatus={
                                   explorerSource === "local" &&
@@ -2523,16 +2667,9 @@ export default function App() {
                                     ? handleOpenRemoteFile
                                     : handleOpenFile
                                 }
-                                onPathRenamed={
-                                  explorerSource === "ssh"
-                                    ? undefined
-                                    : handlePathRenamed
-                                }
-                                onPathDeleted={
-                                  explorerSource === "ssh"
-                                    ? undefined
-                                    : handlePathDeleted
-                                }
+                                onBeforePathRenamed={handleBeforePathRenamed}
+                                onPathRenamed={handlePathRenamed}
+                                onPathDeleted={handlePathDeleted}
                                 onRevealInTerminal={
                                   explorerSource === "ssh"
                                     ? undefined
@@ -2643,6 +2780,11 @@ export default function App() {
                         onSetMarkdownView={setMarkdownView}
                         // TDSF 2026-07-28 (P1-A): 空状态页
                         showNoTerminalEmptyState={showNoTerminalEmptyState}
+                        sshOfflineTerminal={
+                          activeTab?.spaceId === offlineSshSpace?.id
+                            ? offlineSshPanel
+                            : null
+                        }
                         onWarmUpColdTab={warmUpTab}
                         onOpenAgentFromEmptyState={togglePanelAndFocus}
                         onSwitchToSshFromEmptyState={() => {
@@ -2690,13 +2832,23 @@ export default function App() {
             onApprove={() => resolveApproval(true)}
             onReject={() => resolveApproval(false)}
           />
+          <SshFailureDiagnoseDialog
+            open={currentReconnectDiagnosis !== null}
+            diagnosis={currentReconnectDiagnosis}
+            onClose={() => setSshReconnectFailure(null)}
+          />
 
           {!zenMode && (
             <StatusBar
+              getUnsavedEditors={() =>
+                tabsRef.current.filter((t) => t.kind === "editor" && t.dirty).length
+              }
               cwd={statusBarCwd}
               filePath={activeFilePath}
               home={home}
               onCd={sendCd}
+              directorySource={directorySource}
+              canNavigateDirectories={activeLeafId !== null && !activeTerminalTab?.cold}
               onWorkspaceChange={handleWorkspaceChange}
               onWorkspaceSshClick={handleWorkspaceSshClick}
               workspaceSwitching={workspaceSwitching}

@@ -98,98 +98,100 @@ export function HostApprovalDialog({
           `data-[size=default]:sm:max-w-md`，只写 `sm:max-w-lg` 时 tailwind-merge 认为
           两者变体不同、都保留，最后按特异性仍是 448px 赢（实测过）。
           高度同样必须显式设上限：基础类没有 max-h，加了「可能原因」后实测长到 787px。 */}
-      <AlertDialogContent className="max-h-[70vh] overflow-y-auto data-[size=default]:sm:max-w-[42rem]">
-        <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2.5">
-            <span
-              aria-hidden
-              className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-lg",
-                g.danger
-                  ? "bg-destructive/15 text-destructive"
-                  : "bg-muted text-foreground/70",
-              )}
-            >
-              <HugeiconsIcon
-                icon={g.danger ? Alert02Icon : InformationCircleIcon}
-                size={18}
-                strokeWidth={1.75}
-              />
-            </span>
-            {g.title}
-          </AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <p className="text-[13px] leading-relaxed">{g.summary}</p>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-
-        {/* 内容区限高可滚：可能原因 + 命令 + 指纹一起放时曾经顶满整窗 */}
-        <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
-          {request.fingerprint ? (
-            <pre
-              className="overflow-x-auto rounded-md border border-border/40 bg-muted/40 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-foreground/80"
-              data-testid="ssh-host-randomart"
-              role="img"
-              aria-label="OpenSSH 艺术指纹"
-            >
-              {generateRandomArt(
-                request.fingerprint,
-                request.keyType ?? "ssh-ed25519",
-              )}
-            </pre>
-          ) : null}
-
-          <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1.5 rounded-md bg-muted/60 px-3 py-2.5 text-[12px]">
-            <dt className="text-muted-foreground">主机</dt>
-            <dd className="break-all font-mono">
-              {request.host}:{request.port}
-            </dd>
-            <dt className="text-muted-foreground">算法</dt>
-            <dd className="break-all font-mono">{request.keyType ?? "未知"}</dd>
-            <dt className="text-muted-foreground">SHA256 指纹</dt>
-            <dd className="break-all font-mono">{request.fingerprint}</dd>
-          </dl>
-
-          <section className="space-y-1.5">
-            <h3 className="text-[12px] font-medium">可能原因（按常见程度排）</h3>
-            <ol className="space-y-1 text-[12px] leading-relaxed text-muted-foreground">
-              {g.causes.map((cause, i) => (
-                <li key={cause} className="flex gap-2">
-                  <span className="shrink-0 tabular-nums">{i + 1}.</span>
-                  <span>{cause}</span>
-                </li>
-              ))}
-            </ol>
-          </section>
-
-          <section className="space-y-1.5">
-            <h3 className="text-[12px] font-medium">核对方法</h3>
-            <p className="text-[11px] text-muted-foreground">{g.verifyNote}</p>
-            <div className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1.5">
-              <code
-                data-testid="ssh-host-verify-command"
-                className="min-w-0 flex-1 break-all font-mono text-[11px]"
-              >
-                {g.verifyCommand}
-              </code>
-              <button
-                type="button"
-                onClick={() => void copyVerifyCommand()}
-                aria-label="复制核对命令"
-                className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+      <AlertDialogContent className="flex max-h-[70vh] flex-col overflow-hidden data-[size=default]:sm:max-w-[42rem]">
+        <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2.5">
+              <span
+                aria-hidden
+                className={cn(
+                  "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                  g.danger
+                    ? "bg-destructive/15 text-destructive"
+                    : "bg-muted text-foreground/70",
+                )}
               >
                 <HugeiconsIcon
-                  icon={copied ? Tick02Icon : Copy01Icon}
-                  size={12}
+                  icon={g.danger ? Alert02Icon : InformationCircleIcon}
+                  size={18}
                   strokeWidth={1.75}
                 />
-                {copied ? "已复制" : "复制"}
-              </button>
-            </div>
-          </section>
+              </span>
+              {g.title}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <p className="text-[13px] leading-relaxed">{g.summary}</p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {/* 内容区限高可滚：可能原因 + 命令 + 指纹一起放时曾经顶满整窗 */}
+          <div className="space-y-3">
+            {request.fingerprint ? (
+              <pre
+                className="overflow-x-auto rounded-md border border-border/40 bg-muted/40 px-2.5 py-1.5 font-mono text-[10px] leading-tight text-foreground/80"
+                data-testid="ssh-host-randomart"
+                role="img"
+                aria-label="OpenSSH 艺术指纹"
+              >
+                {generateRandomArt(
+                  request.fingerprint,
+                  request.keyType ?? "ssh-ed25519",
+                )}
+              </pre>
+            ) : null}
+
+            <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1.5 rounded-md bg-muted/60 px-3 py-2.5 text-[12px]">
+              <dt className="text-muted-foreground">主机</dt>
+              <dd className="break-all font-mono">
+                {request.host}:{request.port}
+              </dd>
+              <dt className="text-muted-foreground">算法</dt>
+              <dd className="break-all font-mono">{request.keyType ?? "未知"}</dd>
+              <dt className="text-muted-foreground">SHA256 指纹</dt>
+              <dd className="break-all font-mono">{request.fingerprint}</dd>
+            </dl>
+
+            <section className="space-y-1.5">
+              <h3 className="text-[12px] font-medium">可能原因（按常见程度排）</h3>
+              <ol className="space-y-1 text-[12px] leading-relaxed text-muted-foreground">
+                {g.causes.map((cause, i) => (
+                  <li key={cause} className="flex gap-2">
+                    <span className="shrink-0 tabular-nums">{i + 1}.</span>
+                    <span>{cause}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            <section className="space-y-1.5">
+              <h3 className="text-[12px] font-medium">核对方法</h3>
+              <p className="text-[11px] text-muted-foreground">{g.verifyNote}</p>
+              <div className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1.5">
+                <code
+                  data-testid="ssh-host-verify-command"
+                  className="min-w-0 flex-1 break-all font-mono text-[11px]"
+                >
+                  {g.verifyCommand}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => void copyVerifyCommand()}
+                  aria-label="复制核对命令"
+                  className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <HugeiconsIcon
+                    icon={copied ? Tick02Icon : Copy01Icon}
+                    size={12}
+                    strokeWidth={1.75}
+                  />
+                  {copied ? "已复制" : "复制"}
+                </button>
+              </div>
+            </section>
+          </div>
         </div>
 
-        <AlertDialogFooter>
+        <AlertDialogFooter className="shrink-0">
           {/* 两个按钮显式同尺寸：AlertDialogCancel/Action 默认都是 size=default(h-9)，
               但主要按钮文案比次会长，靠 min-w 让它们宽度也别差得太随意 */}
           <AlertDialogCancel

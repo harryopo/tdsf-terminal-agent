@@ -5,8 +5,7 @@ strands_backend/tools/knowledge_get_doc.py — 知识库整篇文档读取工具
 与 knowledge_search 配套：检索命中后，按 url 读取该文档全部块按序拼接的
 完整 markdown（知识浏览器「完整文档」同数据源）。
 
-- 读精简库（rag_slim.db，中文提炼版）——双库方案 TDSF 2026-08-31，
-  与 knowledge_search 同源（knowledge.rag.get_slim_rag().get_doc）
+- 旧 url 默认读精简库；本地引用绑定内置/个人来源，不抓取外部网页。
 - fail-closed：url 缺失 → error；查无文档 → not_found
 - 内容上限 30000 字符截断（防单篇超长文档撑爆 LLM 上下文）
 
@@ -17,9 +16,9 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import uuid4
 
 from strands_backend.tools import tool
+from strands_backend.tools.tool_lifecycle import tool_call_lifecycle
 
 logger = logging.getLogger("sidecar.strands_backend.tools.knowledge_get_doc")
 
@@ -27,34 +26,7 @@ logger = logging.getLogger("sidecar.strands_backend.tools.knowledge_get_doc")
 _MAX_CONTENT_CHARS = 30000
 
 
-def _emit_tool_call(
-    ctx: Any,
-    *,
-    call_id: str,
-    status: str,
-    params: dict[str, Any],
-    result: dict[str, Any] | None = None,
-) -> None:
-    """Publish the started/completed lifecycle used by the tool UI."""
-    event_bus = getattr(ctx, "event_bus", None)
-    if event_bus is None:
-        return
-    try:
-        kwargs: dict[str, Any] = {
-            "tool_name": "knowledge_get_doc",
-            "tool_call_id": call_id,
-            "params": params,
-            "status": status,
-            "session_id": getattr(ctx, "session_id", "") or None,
-            "source": f"{getattr(ctx, 'agent_name', 'main')}_agent.strands_tool.knowledge_get_doc",
-        }
-        if result is not None:
-            kwargs["result"] = result
-        event_bus.emit_tool_call(**kwargs)
-    except Exception as exc:  # event delivery must not break retrieval
-        logger.debug("knowledge_get_doc emit_tool_call failed: %s", exc)
-
-
+@tool_call_lifecycle("knowledge_get_doc")
 def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     """知识库整篇文档读取核心实现
 
@@ -69,36 +41,26 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
         }
     """
     url = str(params.get("url") or "").strip()
-    call_id = uuid4().hex
-    event_params = {"url": url}
-    _emit_tool_call(ctx, call_id=call_id, status="started", params=event_params)
-
     if not url:
         result = {"status": "error", "url": "", "message": "url 参数缺失"}
-        _emit_tool_call(
-            ctx,
-            call_id=call_id,
-            status="completed",
-            params=event_params,
-            result=result,
-        )
         return result
 
     try:
         from knowledge.rag import get_slim_rag
 
-        # TDSF 2026-08-31: 与 knowledge_search 同源读精简库（中文提炼版）
-        doc = get_slim_rag().get_doc(url)
+        if url.startswith("tdsf-kb:"):
+            from urllib.parse import unquote, urlsplit
+            from knowledge.collections import get_document
+
+            reference = urlsplit(url)
+            if reference.scheme != "tdsf-kb" or reference.netloc not in {"builtin", "personal"} or reference.query or reference.fragment:
+                raise ValueError("知识引用无效，请重新检索")
+            doc = get_document(unquote(reference.path.removeprefix("/")), reference.netloc)
+        else:
+            doc = get_slim_rag().get_doc(url)
     except Exception as e:
         logger.exception(f"knowledge_get_doc failed: url={url[:80]}, error={e}")
         result = {"status": "error", "url": url, "message": f"知识库读取异常: {e}"}
-        _emit_tool_call(
-            ctx,
-            call_id=call_id,
-            status="completed",
-            params=event_params,
-            result=result,
-        )
         return result
 
     if doc is None:
@@ -107,13 +69,6 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
             "url": url,
             "message": "知识库中不存在该文档（url 需与检索结果返回的 url 完全一致）",
         }
-        _emit_tool_call(
-            ctx,
-            call_id=call_id,
-            status="completed",
-            params=event_params,
-            result=result,
-        )
         return result
 
     content = str(doc.get("content") or "")
@@ -128,24 +83,18 @@ def invoke_knowledge_get_doc_tool(params: dict[str, Any], ctx: Any = None) -> di
         "content": content,
         "chunks": int(doc.get("chunks") or 0),
         "truncated": truncated,
+        "source_url": str(doc.get("url") or url),
     }
-    _emit_tool_call(
-        ctx,
-        call_id=call_id,
-        status="completed",
-        params=event_params,
-        result=result,
-    )
     return result
 
 
 def make_knowledge_get_doc_tool(ctx: Any):
     """构建知识库整篇文档读取工具（带 ctx 闭包，Strands @tool 装饰）"""
-    @tool
-    def knowledge_get_doc(url: str) -> dict:
+    @tool(context="sdk_tool_context")
+    def knowledge_get_doc(url: str, *, sdk_tool_context: Any = None) -> dict:
         """按 url 读取知识库完整文档（全部章节按序拼接的 markdown 全文）。
 
-        先用 knowledge_search 检索，命中结果的 url 字段传给本工具读取
+        先用 knowledge_search 检索，将命中结果的 url 字段原样传给本工具读取
         该文档完整内容（适用于需要系统讲解某主题/引用完整配置示例时）。
 
         Args:
@@ -156,7 +105,13 @@ def make_knowledge_get_doc_tool(ctx: Any):
             dict: 含 status / url / title / category / content（完整
             markdown，超 30000 字符截断）/ chunks。
         """
-        return invoke_knowledge_get_doc_tool(params={"url": url}, ctx=ctx)
+        result = invoke_knowledge_get_doc_tool(
+            params={"url": url}, ctx=ctx, sdk_tool_context=sdk_tool_context,
+        )
+        if sdk_tool_context is None:
+            return result
+        # Keep business status/content inside a valid SDK content block.
+        return {"status": "success", "content": [{"json": result}]}
 
     knowledge_get_doc.__name__ = "knowledge_get_doc"
     return knowledge_get_doc

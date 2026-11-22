@@ -8,7 +8,7 @@
 
 [中文](README.md) · **English**
 
-[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Install](#installation-windows-x64) · [Capabilities](#core-capabilities) · [Tools](#tool-catalog-25) · [Architecture](#architecture) · [Development](#development)
+[Website](https://harryopo.github.io/tdsf-terminal-agent/) · [Install](#installation-windows-x64) · [Capabilities](#core-capabilities) · [Tools](#tool-catalog-25) · [Architecture](#architecture) · [Development](#development) · [Developer docs (Chinese)](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
 [![Windows download](https://img.shields.io/github/v/release/harryopo/tdsf-terminal-agent?label=Windows%20x64&color=7c3aed)](https://github.com/harryopo/tdsf-terminal-agent/releases/latest)
 [![CI](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/harryopo/tdsf-terminal-agent/actions/workflows/ci.yml)
@@ -31,7 +31,7 @@
 | Real operations | Controlled collaboration | Learn by doing |
 |---|---|---|
 | Local / WSL / SSH workspaces, SFTP browsing and editing | Visible-terminal or background execution, real output, risk levels and approval cards | One command card per step, predicted output and result-based explanations |
-| Directory following, drag-and-drop uploads, service and network inspection | Expandable reasoning, task progress and evidence | Terminal translation, command prediction, skills and local knowledge retrieval |
+| Directory following, drag-and-drop uploads, service and network inspection | Expandable reasoning, task progress and collapsible tool cards | Terminal translation, command prediction, skills and local knowledge retrieval |
 
 ---
 
@@ -94,12 +94,14 @@ Two properties separate it from "AI in a sidebar":
 ### Terminal, editor and everyday tooling
 
 - Local PTY / WSL / SSH terminals share one xterm.js render pool; split panes; per-workspace tab sets.
-- **Command prediction**: bundled spec index, carapace parameter completion, curated Chinese tldr descriptions and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke. Static flags work without any install; to suggest branches, files and services that actually exist **on the server**, install the completion component there once from Settings → 通用 (General) → 远端补全组件.
+- **Terminal output highlighting**: enhances recognizable code, configuration, parameter tables and diagnostic output by default, preserving native ANSI colors and copied text. Active input lines and full-screen terminal applications remain untouched.
+- **Command prediction**: bundled spec index, carapace parameter completion, short Chinese descriptions with tldr fallbacks, and the remote shell's own command set. Parameter completion is throttled, so it does not spawn a process per keystroke. Static flags work without any install; to suggest branches, files and services that actually exist **on the server**, connect SSH first, then open Settings → 终端预测 (Terminal prediction) → 远端补全组件, click 刷新 (Refresh), and install for that server. Failed probes are not cached as missing, and this card's refresh button is disabled while installing.
 - CodeMirror 6 editor with LSP and remote file editing, snippets, and selection translation that resolves against the built-in dictionaries offline — the "AI 补全释义" button is what additionally asks your configured model for a richer explanation.
 
 ### Local knowledge retrieval
 
 - Indexes documents already present in the local data directory or imported by you; the entry count depends on the machine.
+- The browser separates built-in and personal knowledge, with complete category counts and paginated entries. Imports go only to personal knowledge, without merging or overwriting the built-in library.
 - Retrieval runs entirely locally: SQLite **FTS5** keyword search plus **sqlite-vec** semantic search (fastembed / BGE-small-zh, 512 dimensions), fused with RRF.
 - Reasoning still uses the model provider you configure; knowledge retrieval itself sends nothing out.
 
@@ -133,6 +135,8 @@ In teaching mode, explanations follow a fixed section contract (concepts and pri
 | Sessions | `ssh_list_sessions` |
 
 Teaching mode is not a 26th tool: it intercepts the tools above and returns a structured single-step command card, which the terminal then really executes.
+
+Unreleased source adds cards for terminal readback and other previously unrepresented tools, and removes the extra evidence section and fixed verification footnotes from chat. Backend evidence recording, post-write checks and safety approvals remain intact. The "置信度" (Confidence) button at the bottom right of chat opens a session inspector for viewing and searching runtime events, conversation messages and tool evidence, with confirmed, redacted JSON export to this computer. Records are bounded summaries, not a complete persistent audit or calibrated correctness probabilities; review logs before sharing. These changes are not yet included in existing installers.
 
 ## Safety boundary
 
@@ -210,12 +214,24 @@ On Windows you can also double-click `启动.bat` in the repository root. The de
 |---------|---------|
 | `pnpm typecheck` / `pnpm lint` | Type and static checks |
 | `pnpm test` | Frontend unit tests (vitest) |
-| `pnpm test:python` | Sidecar tests (pytest: agent, tools, safety policy, knowledge) |
+| `pnpm test:carapace` | Completion resource gate tests (small offline fixtures) |
+| `pnpm test:python` | Sidecar tests (pytest: agent, tools, safety policy, knowledge; explicit UTF-8 for the Windows test process) |
 | `cargo test` (in `src-tauri/`) | Rust side: PTY / SSH / filesystem / system boundaries |
 | `pnpm probe:ui` | Real-window UI gate: control hit areas, clipping and alignment measured over CDP |
 | `pnpm probe:dialog` / `probe:ssh` / `probe:ipc` | Dialog geometry, SSH session reaping, IPC method allowlist |
 | `pnpm check:release-version` | Verifies the five version declarations match |
-| `pnpm build:win` | Version check → sidecar packaging and smoke test → NSIS installer |
+| `pnpm fetch:carapace` / `pnpm check:carapace` | Restore pinned completion binaries / verify local resource sizes and SHA-256 |
+| `pnpm build:win` | Version check → restore and verify completion resources → sidecar packaging and smoke test → NSIS installer and bundled-resource check |
+
+Before a direct Tauri build, run `pnpm fetch:carapace` as well. Missing or damaged resources block the build instead of producing an installer without the components. Source maintenance fixes are listed under [Unreleased](CHANGELOG.md#unreleased); they do not modify previously published installers.
+
+The latest source also fixes live SSH output wiring in agent tool cards: collection stays bound to each call while collapsed, background stdout/stderr remain separate, and visible-terminal output is labelled as merged. Structured failure results retain output and exit codes; rejected, cancelled and indeterminate outcomes are shown separately. Missing exit status is not presented as command completion. These changes still require a rebuilt installer and native acceptance; they are not included in the current download.
+
+The source also removes a legacy terminal diagnostic buffer that could retain discarded input and directory paths, and prevents settled approval/question cards from being restored by delayed pending-list snapshots. Normal input, directory following and recovery of pending requests are preserved. These fixes are not yet in the download and do not establish that manual-input jitter is resolved.
+
+Source approval and question cards show response submission and temporarily disable repeated actions. A response is accepted only with a backend acknowledgement matching the request identity and expected status. Failed submissions retain the card and answer for retrying the response, not rerunning the command; late failures cannot revive settled requests. The read-only-trust indicator updates only after an accepted approval whose original owner is still the active chat. This change covers the sidecar `needs_you` response path, is not yet in the download, and does not equate approval acceptance with command completion.
+
+SSH executor approvals appear in their original tool card when call, chat and target identities match exactly; folding tool details does not hide approval controls. Within their owning chat, unbound requests and questions remain answerable in the fallback area; requests belonging to other chats stay isolated. Rejection notes and submission state survive placement changes. Targets use known session identity without guessing a host. Backend approval and execution rules are unchanged; this change is also not yet in the download.
 
 Release flow: push a `v*` tag → CI builds the signed installer and update manifest into a **draft** release → you verify, then publish. The manifest only resolves published releases, so clients cannot see it before you click publish.
 
@@ -231,6 +247,8 @@ src-tauri/
   tauri.*.conf.json release / dev / per-platform configuration
 scripts/            build and data-generation scripts; probe/ holds the real-window gates
 website/            promo page (deployed to GitHub Pages)
+docs/               architecture, collaboration, plans and project status
+competitions/       event-specific material indexes; private proof stays local
 assets/             logo sources
 .github/workflows/  CI (frontend / Python / Rust on three platforms) · release · Pages
 ```
