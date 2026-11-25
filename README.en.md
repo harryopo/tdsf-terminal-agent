@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="assets/logo.svg" width="104" alt="TDSF Terminal Agent logo" />
-
 # TDSF Terminal Agent
 
-**A terminal-first Linux operations workbench where the AI agent works inside your real shell — visibly, step by step.**
+<img src="assets/tdsf-readme-hero.jpg" width="100%" alt="TDSF Terminal Agent screenshot showing the Linux terminal, file browser, and agent panel" />
+
+An AI terminal workspace for Linux operations and hands-on learning. Connect local shells, WSL, and SSH, ask the agent to explain output and help troubleshoot, and follow each step through approvals and real terminal feedback.
 
 [中文](README.md) · **English**
 
@@ -34,10 +34,6 @@
 | Directory following, drag-and-drop uploads, service and network inspection | Expandable reasoning, task progress and evidence | Terminal translation, command prediction, skills and local knowledge retrieval |
 
 ---
-
-<a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">
-  <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent demo poster" width="100%" />
-</a>
 
 The demo shows: connecting an SSH workspace, the agent typing a command into the real terminal character by character, an approval card gating the write, and remote output flowing back into the tool card.
 ▶ Full video in the [demo section of the promo page](https://harryopo.github.io/tdsf-terminal-agent/#demo).
