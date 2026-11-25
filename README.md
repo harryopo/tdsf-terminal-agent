@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="assets/logo.svg" width="104" alt="TDSF Terminal Agent logo" />
-
 # TDSF Terminal Agent
 
-**终端优先的 Linux 运维工作台 —— AI Agent 直接在你的真实 shell 里干活，每一步都看得见。**
+<img src="assets/tdsf-readme-hero.jpg" width="100%" alt="TDSF Terminal Agent 实机界面，展示 Linux 终端、文件浏览器和 Agent 面板" />
+
+面向 Linux 运维与实训的 AI 终端工作台。在同一处连接本地、WSL 和 SSH 终端，让 Agent 帮你读懂输出、排查问题，并通过审批和真实回显跟进每一步。
 
 **中文** · [English](README.en.md)
 
@@ -34,10 +34,6 @@
 | 目录跟随、拖拽上传、服务与网络巡检 | 深度思考展开、任务进度与折叠工具卡 | 终端翻译、命令预测、Skill 与本地知识检索 |
 
 ---
-
-<a href="https://harryopo.github.io/tdsf-terminal-agent/#demo">
-  <img src="website/assets/video/poster.png" alt="TDSF Terminal Agent 演示封面" width="100%" />
-</a>
 
 演示内容：接入 SSH 工作区 → Agent 把命令逐字符敲进真实终端 → 写操作被审批卡拦下等人确认 → 远端输出回流到工具卡。
 ▶ 完整视频在[宣传页的 Demo 区块](https://harryopo.github.io/tdsf-terminal-agent/#demo)。
