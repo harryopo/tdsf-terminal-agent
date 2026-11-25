@@ -24,8 +24,10 @@ shamefullyHoist: true
 verifyDepsBeforeRun: false
 
 # Mermaid/Streamdown transitive sanitizer security patch.
+# 3.4.17 fixes GHSA-cg2g-xh64-v4q7 (critical), GHSA-mrv2-3pqr-j5jr (high)
+# and GHSA-c6gr-qvv4-5v3f (low); 3.4.16 is inside the vulnerable range.
 overrides:
-  dompurify: 3.4.16
+  dompurify: 3.4.17
   # Mermaid's public MathML renderer needs the prototype-inheritance security fix.
   'mermaid>katex': 0.18.2
 
