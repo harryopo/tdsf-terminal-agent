@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-11-28T04:07:20.331Z",
+  "generatedAt": "2026-11-28T04:19:17.133Z",
   "algorithm": "sha256",
   "root": "site/ + backend/",
-  "fileCount": 54,
-  "aggregateSha256": "50e432e0e5491477f5a28e43c6d52274a43ce8c876484b1f55f743bb1dbb2ef7",
+  "fileCount": 56,
+  "aggregateSha256": "1c7c7507aef2937d073e9ea3b9c74ab81ec94b858b772b72cfddc7a9f76bdd07",
   "files": [
     {
       "path": "backend/dev/full-server.mjs",
@@ -67,7 +67,7 @@
     },
     {
       "path": "site/api-client.js",
-      "sha256": "4e593614826fc85f8a03337e2a242e94ade5f8828062b4e2775d0e1246b3fd50"
+      "sha256": "ebf41441b5c7e3fc97083ca7f33fc57c4887e9868a7fea5191dc0fec8473a72a"
     },
     {
       "path": "site/app.js",
@@ -142,6 +142,10 @@
       "sha256": "14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972"
     },
     {
+      "path": "site/catalog.json",
+      "sha256": "c7655fb3af492f1d2142bd6b752dafd406989f22d85578ad72e215a35c9d40b0"
+    },
+    {
       "path": "site/favicon.svg",
       "sha256": "fbe8fc2940f4dabb3144bb9ab52bbf7fb1a2dd01f2f6e7153ce11b7e70365415"
     },
@@ -167,7 +171,7 @@
     },
     {
       "path": "site/tests/api-client.test.js",
-      "sha256": "b896abea00e4b42a4d5df7c48af8d665be0bc6b7904468ef6e59866c8d21b901"
+      "sha256": "cced7157366e58ec51ad18a08932d3be5fdd21c579fe6b95dd4d0e7f38425463"
     },
     {
       "path": "site/tests/card-pack-probe.js",
@@ -200,6 +204,10 @@
     {
       "path": "site/tests/shell-session.test.js",
       "sha256": "3d83ea89a139a6d96f91bbadbf1cf6e7e18af637e16361e7125a46e869617ad3"
+    },
+    {
+      "path": "site/tests/static-playthrough-probe.js",
+      "sha256": "93cf2f91eeee608c37daca595e338e281bee9b152ab4f48bdd2f01ba1775459f"
     },
     {
       "path": "site/tests/task-queue.test.js",

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadTaskCatalog } from "../api-client.js";
+import catalog from "../../backend/functions/tasks.json" with { type: "json" };
 
 test("server task rules become regular expressions without losing metadata", async () => {
   const originalFetch = globalThis.fetch;
@@ -19,14 +20,32 @@ test("server task rules become regular expressions without losing metadata", asy
   }
 });
 
-test("catalog falls back to the bundled tasks when the API is unavailable", async () => {
+test("catalog uses the complete static catalog when the API is unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (path) => {
+    if (path === "/api/tasks") throw new Error("offline");
+    if (path === "./catalog.json") return Response.json(catalog);
+    throw new Error(`unexpected path: ${path}`);
+  };
+  try {
+    const local = await loadTaskCatalog();
+    assert.equal(local.source, "local");
+    assert.equal(local.version, catalog.version);
+    assert.equal(local.tasks.length, 6);
+    assert.equal(local.tasks.reduce((total, task) => total + task.steps.length, 0), 18);
+    assert.equal(local.tasks[0].steps[0].expect instanceof RegExp, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("catalog keeps a minimal bundled fallback when all catalog sources fail", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => { throw new Error("offline"); };
   try {
-    const catalog = await loadTaskCatalog();
-    assert.equal(catalog.source, "local");
-    assert.equal(catalog.tasks.length, 3);
-    assert.equal(catalog.tasks[0].steps[0].expect instanceof RegExp, true);
+    const local = await loadTaskCatalog();
+    assert.equal(local.source, "local");
+    assert.equal(local.tasks.length, 3);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -5,12 +5,12 @@
   "probe": "site/tests/v86-learning-probe.js",
   "sourceFingerprint": {
     "file": "evidence/source-fingerprint.json",
-    "aggregateSha256": "50e432e0e5491477f5a28e43c6d52274a43ce8c876484b1f55f743bb1dbb2ef7",
-    "fileCount": 54
+    "aggregateSha256": "1c7c7507aef2937d073e9ea3b9c74ab81ec94b858b772b72cfddc7a9f76bdd07",
+    "fileCount": 56
   },
   "unitTests": {
     "command": "node --test site/tests/api-client.test.js site/tests/command-display.test.js site/tests/shell-session.test.js site/tests/v86-runtime.test.js site/tests/task-queue.test.js",
-    "passed": 44,
+    "passed": 45,
     "failed": 0
   },
   "backend": {
@@ -54,6 +54,15 @@
     ],
     "consoleErrors": 0,
     "pageErrors": 0
+  },
+  "staticFallback": {
+    "catalogStatus": "本地目录 · 后端未连接",
+    "packCount": 6,
+    "commandCount": 18,
+    "completion": "6 / 6 已完成",
+    "recapItems": 18,
+    "invalidProgressWrites": 0,
+    "progressPersistence": "current page memory only"
   },
   "fullPlaythrough": {
     "probe": "site/tests/full-playthrough-probe.js",

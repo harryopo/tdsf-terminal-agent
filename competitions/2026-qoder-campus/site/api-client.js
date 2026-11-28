@@ -31,12 +31,22 @@ async function request(path, { method = "GET", body, timeoutMs = 5000 } = {}) {
   }
 }
 
+function normalizeCatalog(catalog) {
+  if (!Array.isArray(catalog.tasks) || typeof catalog.version !== "string") throw new Error("invalid catalog");
+  return { version: catalog.version, tasks: normalizeTasks(catalog.tasks) };
+}
+
 export async function loadTaskCatalog() {
   try {
     const catalog = await request("/api/tasks");
-    if (!Array.isArray(catalog.tasks) || typeof catalog.version !== "string") throw new Error("invalid catalog");
-    return { version: catalog.version, tasks: normalizeTasks(catalog.tasks), source: "server" };
+    return { ...normalizeCatalog(catalog), source: "server" };
   } catch {
+    try {
+      const response = await fetch("./catalog.json", { cache: "force-cache" });
+      if (response.ok) return { ...normalizeCatalog(await response.json()), source: "local" };
+    } catch {
+      return { version: "local-3", tasks: normalizeTasks(bundledTasks), source: "local" };
+    }
     return { version: "local-3", tasks: normalizeTasks(bundledTasks), source: "local" };
   }
 }
