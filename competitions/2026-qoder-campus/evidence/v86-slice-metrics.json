@@ -1,0 +1,64 @@
+{
+  "measuredAt": "2026-11-26T06:58:00+08:00",
+  "runtime": "xterm.js 6.0.0 + addon-fit 0.11.0 + v86 latest (2026-11-21) + Buildroot 2013.08.1 linux.iso",
+  "browser": "Chromium via Playwright",
+  "viewport": { "width": 1440, "height": 900 },
+  "percentileMethod": "nearest-rank",
+  "coldBootMs": {
+    "samples": [3687, 4236, 4239, 4137, 3752],
+    "p50": 4137,
+    "p95": 4239
+  },
+  "warmBootMs": {
+    "samples": [3587, 3585, 3570, 3590, 4063],
+    "p50": 3587,
+    "p95": 4063
+  },
+  "commandLatencyMs": {
+    "samples": [55, 61, 100, 69, 47, 65, 63, 56, 34, 43, 62, 55, 44, 50, 78, 79, 49, 61, 75, 64],
+    "p50": 61,
+    "p95": 79,
+    "max": 100,
+    "note": "每条命令后追加唯一 echo 完成标记；测到标记输出为止，包含探针输入开销。"
+  },
+  "reset": {
+    "attempts": 50,
+    "successes": 50,
+    "durationsMs": [91, 61, 62, 61, 57, 62, 62, 54, 59, 58, 61, 61, 55, 56, 56, 54, 63, 60, 57, 60, 57, 55, 54, 60, 69, 55, 59, 58, 56, 59, 56, 56, 57, 55, 54, 61, 57, 59, 56, 57, 72, 57, 54, 60, 62, 57, 60, 55, 62, 63],
+    "p50": 58,
+    "p95": 69,
+    "max": 91,
+    "postResetCommand": "pwd -> /root",
+    "learningProgressPreserved": true
+  },
+  "memoryProxy": {
+    "configuredV86MemoryBytes": 67108864,
+    "readySnapshotUsedJSHeapBytes": [84824722, 79394260, 84701919, 79362955, 79395940],
+    "readySnapshotMaxUsedJSHeapBytes": 84824722,
+    "note": "这是 Linux 基线就绪后的 JS 堆快照代理值，不是浏览器进程 RSS，也不是整个启动过程峰值。"
+  },
+  "mobile": {
+    "viewport": { "width": 390, "height": 844 },
+    "isMobile": true,
+    "hasTouch": true,
+    "bootMs": 4212,
+    "scrollWidth": 390,
+    "horizontalOverflow": false,
+    "terminalWidthPx": 361.14288330078125,
+    "command": "pwd -> /root",
+    "consoleErrors": 0,
+    "note": "探针先滚动终端进入视口再读取 xterm 文本；真实用户也需要滚动到工作区。"
+  },
+  "console": {
+    "desktopErrors": 0,
+    "mobileErrors": 0,
+    "knownWarning": "v86 Web Audio autoplay warning before first user gesture"
+  },
+  "gates": {
+    "coldBootP95MaxMs": 15000,
+    "warmBootP95MaxMs": 8000,
+    "commandP95MaxMs": 500,
+    "resetMinSuccess": 49,
+    "result": "PASS"
+  }
+}

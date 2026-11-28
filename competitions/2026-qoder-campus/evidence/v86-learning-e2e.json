@@ -1,0 +1,193 @@
+{
+  "measuredOn": "2026-11-28",
+  "browser": "Chromium via Playwright",
+  "viewport": { "width": 1440, "height": 900 },
+  "probe": "site/tests/v86-learning-probe.js",
+  "sourceFingerprint": {
+    "file": "evidence/source-fingerprint.json",
+    "aggregateSha256": "50e432e0e5491477f5a28e43c6d52274a43ce8c876484b1f55f743bb1dbb2ef7",
+    "fileCount": 54
+  },
+  "unitTests": {
+    "command": "node --test site/tests/api-client.test.js site/tests/command-display.test.js site/tests/shell-session.test.js site/tests/v86-runtime.test.js site/tests/task-queue.test.js",
+    "passed": 44,
+    "failed": 0
+  },
+  "backend": {
+    "catalogVersion": "2026-11-27.2",
+    "taskPacks": 6,
+    "steps": 18,
+    "testCommand": "npm --prefix backend test",
+    "testsPassed": 18,
+    "testsFailed": 0,
+    "localHttpFlow": "passed",
+    "anonymousSession": "HttpOnly opaque cookie",
+    "rawOutputStored": false,
+    "endpoints": ["GET /api/tasks", "GET /api/tasks/:id", "POST /api/session", "GET /api/progress", "POST /api/attempts", "POST /api/progress/reset"],
+    "productionDeployed": false,
+    "cloudDatabaseCreated": false
+  },
+  "cardPack": {
+    "probe": "site/tests/card-pack-probe.js",
+    "catalogStatus": "云端目录 · 匿名进度已连接",
+    "packCount": 6,
+    "commandCount": 18,
+    "accents": ["cyan", "violet", "amber", "blue", "green", "rose"],
+    "selectedTask": "磁盘容量",
+    "stepCount": 3,
+    "collapse": "passed",
+    "dockLeft": "passed",
+    "closeAndReopen": "passed",
+    "serverProgress": ["network-ifconfig"],
+    "progressHydratedAfterReload": true,
+    "mobile": {
+      "width": 390,
+      "scrollWidth": 375,
+      "horizontalOverflow": false,
+      "panelPosition": "fixed",
+      "panelBottomPx": 12
+    },
+    "screenshots": [
+      "evidence/shelllab-card-pack.png",
+      "evidence/shelllab-task-panel-docked.png",
+      "evidence/shelllab-card-pack-mobile.png"
+    ],
+    "consoleErrors": 0,
+    "pageErrors": 0
+  },
+  "fullPlaythrough": {
+    "probe": "site/tests/full-playthrough-probe.js",
+    "commandsCompleted": 18,
+    "progress": "6 / 6 已完成",
+    "recapItems": 18,
+    "resetRace": {
+      "inputBlockedDuringReset": true,
+      "progressAfterReset": [],
+      "progressAfterNewAttempt": ["files-pwd"],
+      "newProgressSurvivedOldReset": true
+    },
+    "sessionFailureStatus": "云端目录 · 进度仅本机",
+    "consoleErrors": 0,
+    "pageErrors": 0
+  },
+  "runtime": {
+    "phase": "ready",
+    "guideLabel": "环境就绪",
+    "guideText": "基线已就绪 · Buildroot 2013.08.1 / 32 位 / 无 systemd、stat。命令卡只填入，按 Enter 执行。",
+    "announcer": "Linux 已就绪，可以输入命令或重置环境。"
+  },
+  "focus": {
+    "afterTaskRerender": "0",
+    "afterCommandResultRerender": "0"
+  },
+  "wrongCommand": {
+    "command": "whoami",
+    "title": "任务 01 · 文件系统 · 2/3",
+    "progress": "0 / 3 已完成",
+    "receipt": "未通过",
+    "announcer": "命令 whoami 与当前目标不一致，未推进。",
+    "advanced": false
+  },
+  "hint": {
+    "command": "pwd",
+    "receipt": "已填入",
+    "progressBeforeEnter": "0 / 3 已完成",
+    "announcer": "已填入命令 pwd，按 Enter 执行。",
+    "executedOnClick": false,
+    "executedAfterEnter": true
+  },
+  "receiptDisplay": {
+    "command": "ls -la",
+    "visible": "ls · -la",
+    "ariaLabel": "ls -la",
+    "tokens": ["ls", "-la"],
+    "screenshot": "evidence/shelllab-receipt-spaces.png",
+    "invisibleCharactersSanitized": true
+  },
+  "learning": {
+    "commandsCompleted": 9,
+    "commands": [
+      "pwd",
+      "ls -la",
+      "cat /etc/os-release",
+      "id",
+      "ls -l /etc/passwd",
+      "grep '^root:' /etc/passwd",
+      "uname -a",
+      "dmesg | tail -n 5",
+      "uptime"
+    ],
+    "progress": "3 / 3 已完成",
+    "completionVisible": true,
+    "recapItems": 9,
+    "announcer": "练习完成，3 个卡包共 9 条命令已全部执行。"
+  },
+  "reset": {
+    "attempts": 50,
+    "successes": 50,
+    "failures": [],
+    "learningProgressPreserved": true,
+    "sentinel": {
+      "created": "touch /tmp/shelllab-reset-sentinel",
+      "checkedAfterReset": "ls /tmp/shelllab-reset-sentinel",
+      "screenshot": "evidence/shelllab-v86-reset-sentinel.png",
+      "manualScreenshotVerified": true,
+      "automatedOutputAssertion": false
+    }
+  },
+  "failurePaths": {
+    "preflightTimeout": {
+      "headSeen": true,
+      "elapsedMs": 10200,
+      "status": "Linux 启动失败：资源预检超时，请检查网络后重试",
+      "retryVisible": true
+    },
+    "missingWasm": {
+      "status": "Linux 启动失败：资源加载失败：assets/vendor/v86/v86.wasm（HTTP 404）",
+      "retryVisible": true
+    },
+    "constructorFailure": {
+      "status": "Linux 启动失败：probe constructor failure",
+      "retryVisible": true
+    }
+  },
+  "commandOrdering": {
+    "input": ["/root", "uptime"],
+    "receiptEvents": [
+      { "command": "ls /tmp/shelllab-reset-sentinel", "status": "未通过" },
+      { "command": "/root", "status": "未通过" },
+      { "command": "/root", "status": "未通过" },
+      { "command": "uptime", "status": "已执行" }
+    ],
+    "wrongCommandDidNotAdvance": true,
+    "laterCommandCompleted": true
+  },
+  "mobile": {
+    "widthsChecked": [320, 360, 390, 430],
+    "horizontalOverflow": false,
+    "minVisibleButtonHeightPx": 36,
+    "primaryControls": {
+      "openPackHeightPx": 67.55,
+      "hintHeightPx": 44,
+      "resetHeightPx": 44
+    },
+    "permanentAnnouncer": true,
+    "screenReaderInputLabel": "Terminal input"
+  },
+  "consoleErrors": 1,
+  "expectedConsoleErrors": [
+    "Static-only fallback requests /api/tasks and receives the expected 404 before using bundled tasks."
+  ],
+  "pageErrors": 0,
+  "performanceSnapshot": {
+    "file": "evidence/v86-slice-metrics.json",
+    "measuredOn": "2026-11-26",
+    "note": "性能样本来自 2026-11-26 的独立测量；2026-11-28 全套回归未重新采样 P50/P95。"
+  },
+  "notTested": [
+    "NVDA/VoiceOver 真机读屏",
+    "真实 iOS/Android 软键盘与旋转",
+    "低端手机长时间多开",
+    "公网 Qoder Sites 部署与资产响应头"
+  ]
+}

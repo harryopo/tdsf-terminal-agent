@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ShellLab 在浏览器里启动真实 Linux，练习文件、权限与日志命令。基于 xterm.js 与 v86，不连接真实服务器。">
+  <meta name="theme-color" content="#0c0d0f">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <title>ShellLab · 浏览器里的真实 Linux 演练场</title>
+  <link rel="stylesheet" href="assets/vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="ShellLab 首页">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>ShellLab</span>
+      </a>
+      <div class="header-note">
+        <span class="status-dot" aria-hidden="true"></span>
+        浏览器内真实 Linux · v86 隔离运行
+      </div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-main">
+          <p class="eyebrow"><span>Runtime 001</span> 浏览器里的真实 Linux</p>
+          <h1 id="page-title">真的 Linux，<br><em>真的命令。</em></h1>
+          <p class="intro-copy">不是预写好的答案，而是在浏览器里启动一套 Linux。文件、权限和命令输出都来自真实系统；重置后回到同一基线。</p>
+          <div class="intro-facts" aria-label="运行时概览">
+            <span><strong>01</strong> 个 Linux 内核</span>
+            <span><strong id="command-count">09</strong> 条检查命令</span>
+            <span><strong>00</strong> 台远程服务器</span>
+          </div>
+          <a class="start-link" href="#workspace">开始练习 <span aria-hidden="true">↓</span></a>
+        </div>
+        <div class="intro-aside" aria-hidden="true">
+          <div class="terminal-snippet">
+            <div class="snippet-bar"><span></span> shelllab / real output</div>
+            <div class="snippet-command"><b>❯</b> pwd</div>
+            <div class="snippet-output">/root</div>
+            <div class="snippet-command"><b>❯</b> cat /etc/os-release</div>
+            <div class="snippet-output">PRETTY_NAME="Buildroot 2013.08.1"</div>
+          </div>
+          <p>真实客户机输出。<br>重置后回到同一基线。</p>
+        </div>
+      </section>
+
+      <section id="workspace" class="workspace" aria-label="命令练习工作区">
+        <aside class="task-rail" aria-labelledby="task-heading">
+          <div class="rail-heading">
+            <p class="eyebrow">练习路径</p>
+            <h2 id="task-heading">卡包架</h2>
+            <p id="catalog-status" class="catalog-status">正在读取任务目录…</p>
+          </div>
+          <button id="open-pack" class="pack-button" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <span class="pack-button-icon" aria-hidden="true">▱</span>
+            <span><strong>抽取任务卡</strong><small id="pack-count">3 个卡包</small></span>
+            <span aria-hidden="true">↗</span>
+          </button>
+          <div id="task-list" class="task-list" aria-label="任务卡包列表"></div>
+          <div class="rail-footer">
+            <span id="progress-count">0 / 3 已完成</span>
+            <div class="progress-track" aria-hidden="true"><span id="progress-fill"></span></div>
+          </div>
+        </aside>
+
+        <section class="terminal-card" aria-labelledby="terminal-title">
+          <div class="terminal-bar">
+            <div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div>
+              <strong id="terminal-title">真实 Linux · 基础检查</strong>
+              <span id="terminal-subtitle">Buildroot 2013.08.1 · 32 位 i686 · xterm.js + v86</span>
+            </div>
+            <div class="terminal-actions">
+              <button id="reset-task" class="text-button" type="button" disabled>重置环境</button>
+              <button id="retry-runtime" class="text-button" type="button" hidden>重新加载</button>
+            </div>
+          </div>
+          <div class="terminal-context">
+            <span>当前目标</span>
+            <p id="terminal-goal">启动 Linux，确认文件、权限与命令输出都来自真实系统。</p>
+          </div>
+          <div id="runtime-guide" class="runtime-guide">
+            <span id="runtime-guide-label">运行时</span>
+            <p id="runtime-guide-text">在 <code>login:</code> 后输入 <code>root</code>，无需密码；仅限隔离客户机。</p>
+          </div>
+          <div id="terminal-mount" class="terminal-mount" role="application" aria-label="真实 Linux 终端" aria-describedby="runtime-guide terminal-help"></div>
+          <div id="runtime-status" class="runtime-status">正在加载 Linux 镜像…</div>
+          <div class="terminal-help">
+            <span><kbd>Enter</kbd> 发送命令</span>
+            <span><kbd>Ctrl</kbd><kbd>L</kbd> 清屏</span>
+            <button id="hint-button" type="button" disabled>填入命令</button>
+          </div>
+        </section>
+
+        <aside id="task-panel" class="task-panel" aria-labelledby="task-panel-title" data-open="false" data-collapsed="false" data-dock="right" hidden>
+          <div class="panel-toolbar">
+            <div>
+              <p class="eyebrow">任务卡</p>
+              <span id="card-number">01</span>
+            </div>
+            <div class="panel-actions">
+              <button id="change-pack" class="icon-button" type="button" aria-label="打开卡包">▱</button>
+              <button id="collapse-panel" class="icon-button" type="button" aria-label="折叠任务卡" aria-expanded="true">−</button>
+              <button id="dock-panel" class="icon-button" type="button" aria-label="停靠到左侧" aria-pressed="false">⇄</button>
+              <button id="close-panel" class="icon-button" type="button" aria-label="关闭任务卡">×</button>
+            </div>
+          </div>
+          <div id="task-overview" class="task-overview">
+            <div class="task-kicker"><span id="task-category">基础</span><span id="task-difficulty">入门</span></div>
+            <h2 id="task-panel-title">文件系统</h2>
+            <p id="task-panel-goal">确认当前位置、目录内容和 Linux 发行版。</p>
+            <div class="task-meta"><span id="task-duration">6 分钟</span><span id="task-step-count">3 步</span><span id="task-progress-label">0/3</span></div>
+            <ol id="task-step-list" class="task-step-list"></ol>
+          </div>
+          <div id="explain-empty" class="explain-empty">
+            <div class="empty-symbol" aria-hidden="true">?</div>
+            <h2 id="explain-title">敲一条命令</h2>
+            <p>运行当前任务的命令后，这里会出现中文解释、输出含义和下一小步。</p>
+          </div>
+          <div id="explain-content" class="explain-content" hidden>
+            <div class="receipt-head"><span>COMMAND RECEIPT</span><b id="receipt-status">已填入</b></div>
+            <code id="explain-command"></code>
+            <div id="command-tokens" class="command-tokens" aria-label="命令分段"></div>
+            <h2 id="explain-heading"></h2>
+            <p id="explain-body"></p>
+            <div class="meaning-box">
+              <span>输出意味着</span>
+              <p id="explain-meaning"></p>
+            </div>
+            <div class="next-step">
+              <span>下一小步</span>
+              <p id="explain-next"></p>
+            </div>
+          </div>
+        </aside>
+        <button id="panel-tab" class="panel-tab" type="button" hidden>展开任务卡</button>
+      </section>
+
+      <dialog id="pack-dialog" class="pack-dialog" aria-labelledby="pack-title">
+        <div class="pack-dialog-shell">
+          <div class="pack-dialog-head">
+            <div>
+              <p class="eyebrow">TASK PACK / 任务卡包</p>
+              <h2 id="pack-title">抽一张，开始排查。</h2>
+              <p>选择一张任务卡。命令只在隔离 Linux 中执行，进度自动同步。</p>
+            </div>
+            <button id="close-pack" class="icon-button" type="button" aria-label="关闭卡包">×</button>
+          </div>
+          <div id="pack-grid" class="pack-grid"></div>
+        </div>
+      </dialog>
+
+      <section id="learning-complete" class="completion" hidden aria-labelledby="completion-title">
+        <div class="completion-copy">
+          <p class="eyebrow">Learning report / 练习完成</p>
+          <h2 id="completion-title">从基础检查，<br>到独立排障。</h2>
+          <p>每条命令都在隔离 Linux 中真实执行。重置环境不会清除学习进度；你可以随时回到任一组复习。</p>
+          <div class="completion-stamp" aria-hidden="true">COMPLETE<span>REAL LINUX · SHELLLAB</span></div>
+        </div>
+        <div id="recap-list" class="recap-list"></div>
+        <button id="restart-learning" class="secondary-button" type="button">重新开始</button>
+      </section>
+
+    </main>
+
+    <footer class="site-footer">
+      <span>ShellLab · StudyHack 学习科研</span>
+      <span>真实 Linux / 零安装 / 无账号</span>
+    </footer>
+  </div>
+  <script src="assets/vendor/xterm/xterm.js"></script>
+  <script src="assets/vendor/xterm/addon-fit.js"></script>
+  <script src="assets/vendor/v86/libv86.js"></script>
+  <script type="module" src="app.js?v=20261128a"></script>
+</body>
+</html>

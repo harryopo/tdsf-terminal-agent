@@ -1,0 +1,16 @@
+{
+  "name": "shelllab-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev/server.mjs",
+    "dev:full": "node dev/full-server.mjs",
+    "start": "node dev/server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "smoke": "node --test tests/server.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
