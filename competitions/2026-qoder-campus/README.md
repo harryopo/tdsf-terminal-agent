@@ -76,6 +76,8 @@ node site/tests/fingerprint.mjs
 
 ## 比赛材料
 
+- [比赛项目说明书（Markdown）](ShellLab-比赛项目说明书-2026-11-28.md)
+- [比赛项目说明书（Word）](ShellLab-比赛项目说明书-2026-11-28.docx)
 - [作品帖草稿](作品帖草稿-2026-11-28.md)
 - [验收清单](SHELLLAB-验收清单-2026-11-26.md)
 - [桌面卡包截图](evidence/shelllab-card-pack.png)
