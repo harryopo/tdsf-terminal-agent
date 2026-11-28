@@ -1,6 +1,6 @@
 async (page) => {
   const base = "http://127.0.0.1:4173/";
-  const evidence = globalThis.process?.env?.SHELLLAB_EVIDENCE_DIR || "competitions/2026-qoder-campus/evidence";
+  const evidence = globalThis.process?.env?.SHELLLAB_EVIDENCE_DIR || "competitions/2026-qoder-campus/05-作品材料/04-功能截图/harryopo/2026-11-28";
   const browser = page.context().browser();
   const consoleErrors = [];
   const pageErrors = [];
@@ -30,7 +30,7 @@ async (page) => {
     announcer: document.querySelector("#announcer")?.textContent,
     phase: document.querySelector("#terminal-mount")?.dataset.state
   }));
-  await page.screenshot({ path: `${evidence}/shelllab-v86-desktop.png`, fullPage: true });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_01_desktop.png`, fullPage: true });
 
   const taskButtons = page.locator(".task-button");
   await taskButtons.nth(0).click();
@@ -95,7 +95,7 @@ async (page) => {
     progress: document.querySelector("#progress-count")?.textContent,
     announcer: document.querySelector("#announcer")?.textContent
   }));
-  await page.screenshot({ path: `${evidence}/shelllab-v86-complete.png`, fullPage: true });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_05_completion.png`, fullPage: true });
 
   const resetFailures = [];
   for (let index = 0; index < 50; index += 1) {
@@ -121,7 +121,7 @@ async (page) => {
   await waitForReceiptCommand("ls /tmp/shelllab-reset-sentinel");
   await page.locator("#receipt-status").filter({ hasText: "未通过" }).waitFor({ state: "visible", timeout: 5000 });
   await page.locator("#terminal-mount").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: `${evidence}/shelllab-v86-reset-sentinel.png`, fullPage: true });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_07_reset-sentinel.png`, fullPage: true });
 
   const responsive = [];
   for (const width of [320, 360, 390, 430]) {
@@ -139,7 +139,7 @@ async (page) => {
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator("#workspace").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: `${evidence}/shelllab-v86-mobile.png`, fullPage: false });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_06_mobile-terminal.png`, fullPage: false });
 
   await page.evaluate(() => {
     window.__shelllabReceiptEvents = [];
@@ -232,7 +232,7 @@ async (page) => {
     resetSentinel: {
       created: "touch /tmp/shelllab-reset-sentinel",
       checkedAfterReset: "ls /tmp/shelllab-reset-sentinel",
-      screenshot: "evidence/shelllab-v86-reset-sentinel.png",
+      screenshot: "05-作品材料/04-功能截图/harryopo/2026-11-28/2026-11-28_harryopo_QODER-CAMPUS-20261126_07_reset-sentinel.png",
       automatedOutputAssertion: false
     },
     responsive,

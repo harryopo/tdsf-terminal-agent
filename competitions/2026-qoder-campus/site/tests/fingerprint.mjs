@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const outputPath = fileURLToPath(new URL("../../evidence/source-fingerprint.json", import.meta.url));
+const outputPath = fileURLToPath(new URL("../../06-验收与演示/01-测试记录/source-fingerprint.json", import.meta.url));
 
 function listFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

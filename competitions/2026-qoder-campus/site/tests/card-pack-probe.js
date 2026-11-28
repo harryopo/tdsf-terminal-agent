@@ -1,6 +1,6 @@
 async (page) => {
   const base = "http://127.0.0.1:8080/";
-  const evidence = globalThis.process?.env?.SHELLLAB_EVIDENCE_DIR || "competitions/2026-qoder-campus/evidence";
+  const evidence = globalThis.process?.env?.SHELLLAB_EVIDENCE_DIR || "competitions/2026-qoder-campus/05-作品材料/04-功能截图/harryopo/2026-11-28";
   const errors = [];
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   page.on("pageerror", (error) => errors.push(error.message));
@@ -24,7 +24,7 @@ async (page) => {
   await page.waitForTimeout(450);
   const packCards = await page.locator(".pack-card").count();
   const accents = await page.locator(".pack-card").evaluateAll((cards) => [...new Set(cards.map((card) => card.dataset.accent))]);
-  await page.screenshot({ path: `${evidence}/shelllab-card-pack.png`, fullPage: true });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_02_card-pack.png`, fullPage: true });
   await page.locator("#pack-dialog").getByRole("button", { name: /磁盘容量/ }).click();
   await page.locator('#task-panel[data-open="true"]').waitFor({ state: "visible" });
   const selected = await page.evaluate(() => ({
@@ -42,7 +42,7 @@ async (page) => {
     dock: document.querySelector("#task-panel")?.dataset.dock,
     workspace: document.querySelector("#workspace")?.classList.contains("dock-left")
   }));
-  await page.screenshot({ path: `${evidence}/shelllab-task-panel-docked.png`, fullPage: true });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_03_task-panel-docked.png`, fullPage: true });
   await page.locator("#dock-panel").click();
   await page.locator("#close-panel").click();
   const tabVisible = await page.locator("#panel-tab").isVisible();
@@ -79,7 +79,7 @@ async (page) => {
     scrollWidth: document.documentElement.scrollWidth,
     columns: getComputedStyle(document.querySelector("#pack-grid")).gridTemplateColumns
   }));
-  await page.screenshot({ path: `${evidence}/shelllab-card-pack-mobile.png`, fullPage: false });
+  await page.screenshot({ path: `${evidence}/2026-11-28_harryopo_QODER-CAMPUS-20261126_04_mobile-card-pack.png`, fullPage: false });
   await page.locator("#close-pack").click();
   await page.locator("#open-pack").click();
   await page.locator("#pack-dialog").getByRole("button", { name: /磁盘容量/ }).click();

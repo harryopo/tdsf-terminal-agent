@@ -240,21 +240,28 @@ ssh-credentials.json
 # 这一整个目录都不许进仓库 —— 一次  就会把安装产物和他机器上的会话数据一起推上去。
 测试安装/
 
-# Qoder campus entry: publish only reviewed source, final evidence and submission material.
+# Qoder campus entry: reviewed public material follows the event's 01-07 structure.
 !competitions/2026-qoder-campus/
 competitions/2026-qoder-campus/**
 !competitions/2026-qoder-campus/README.md
-!competitions/2026-qoder-campus/SHELLLAB-验收清单-2026-11-26.md
-!competitions/2026-qoder-campus/作品帖草稿-2026-11-28.md
-!competitions/2026-qoder-campus/THIRD_PARTY_NOTICES.md
-!competitions/2026-qoder-campus/ShellLab-比赛项目说明书-2026-11-28.md
-!competitions/2026-qoder-campus/ShellLab-比赛项目说明书-2026-11-28.docx
+!competitions/2026-qoder-campus/01-赛事要求/
+!competitions/2026-qoder-campus/01-赛事要求/**
+!competitions/2026-qoder-campus/02-调研资料/
+!competitions/2026-qoder-campus/02-调研资料/**
+!competitions/2026-qoder-campus/03-方案书/
+!competitions/2026-qoder-campus/03-方案书/**
+!competitions/2026-qoder-campus/04-AI协作与交接/
+!competitions/2026-qoder-campus/04-AI协作与交接/**
+!competitions/2026-qoder-campus/05-作品材料/
+!competitions/2026-qoder-campus/05-作品材料/**
+!competitions/2026-qoder-campus/06-验收与演示/
+!competitions/2026-qoder-campus/06-验收与演示/**
+!competitions/2026-qoder-campus/07-提交清单/
+!competitions/2026-qoder-campus/07-提交清单/**
 !competitions/2026-qoder-campus/backend/
 !competitions/2026-qoder-campus/backend/**
 !competitions/2026-qoder-campus/site/
 !competitions/2026-qoder-campus/site/**
-!competitions/2026-qoder-campus/evidence/
-!competitions/2026-qoder-campus/evidence/shelllab-*.png
-!competitions/2026-qoder-campus/evidence/v86-learning-e2e.json
-!competitions/2026-qoder-campus/evidence/v86-slice-metrics.json
-!competitions/2026-qoder-campus/evidence/source-fingerprint.json
+!competitions/2026-qoder-campus/private/
+competitions/2026-qoder-campus/private/**
+!competitions/2026-qoder-campus/private/README.md
