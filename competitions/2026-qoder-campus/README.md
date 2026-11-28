@@ -1,7 +1,10 @@
 # ShellLab · 浏览器里的真实 Linux 演练场
 
 赛道：Qoder 高校创造力大赛 · StudyHack 学习科研
-作品状态：发布候选（2026-11-28）
+作品状态：已公网发布（2026-11-28）
+公网地址：https://shelllab-linux-swyzioy6s1k.qoder.website
+
+> 当前 Qoder 订阅支持静态站点，不支持 Database/Functions。公网版保留完整 6 包 18 步与真实 Linux，学习进度仅保留在当前页面内存；升级套餐后可启用匿名云端进度。
 
 ShellLab 让学习者在浏览器里启动一套隔离的 Buildroot Linux，通过真实命令输出练习文件系统、权限、磁盘、进程、网络与日志排障。它不是预写答案的终端模拟器，也不连接用户的电脑或服务器。
 
@@ -61,7 +64,7 @@ node site/tests/fingerprint.mjs
 - `backend/dev/`：本地 Node 服务与内存存储。
 - `dist/`：发布用静态输出，由 `site/` 生成，不纳入 Git。
 
-公网部署使用 Qoder Sites 的静态站点、Function 与数据库能力。前端只调用同源 `/api/*`，不直接访问数据库。
+公网部署使用 Qoder Sites 静态站点。Function 与数据库代码已保留，但当前订阅套餐不能分配云端后端，因此公网版使用完整静态任务目录与页面内存进度；前端不会向不可用接口发送写入。
 
 ## 数据与安全
 
