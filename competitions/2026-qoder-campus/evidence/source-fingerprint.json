@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-11-28T04:19:17.133Z",
+  "generatedAt": "2026-11-28T04:27:58.068Z",
   "algorithm": "sha256",
   "root": "site/ + backend/",
-  "fileCount": 56,
-  "aggregateSha256": "1c7c7507aef2937d073e9ea3b9c74ab81ec94b858b772b72cfddc7a9f76bdd07",
+  "fileCount": 57,
+  "aggregateSha256": "b59d110198897175f4764c4e56405897c3f03ced661027895e56bff5dde85df6",
   "files": [
     {
       "path": "backend/dev/full-server.mjs",
@@ -71,7 +71,7 @@
     },
     {
       "path": "site/app.js",
-      "sha256": "e6d3b48fe49e4da609e2f5f3a0375bc8b176d8494a3e4f849e6a3354b3b6f4df"
+      "sha256": "8fb4bc44c3b55ad259c82e81e1c097e28beddb2bb4b0f20e000be7b38528c99b"
     },
     {
       "path": "site/assets/fonts/OFL.txt",
@@ -151,7 +151,7 @@
     },
     {
       "path": "site/index.html",
-      "sha256": "e2d718d70633838d09b50dafa95cbae07bdcaa168bbbac05c21ffb761bb39c0d"
+      "sha256": "10854f09b264855ee001123c6c5b74d189a42d25fcdee46db022277bef71152f"
     },
     {
       "path": "site/lesson-tasks.js",
@@ -163,7 +163,7 @@
     },
     {
       "path": "site/styles.css",
-      "sha256": "2f88652d8aacb9945cff7e86cf24f05552ff49362be8a11b6d8b196b177a9011"
+      "sha256": "cd970526b5d6ee06395b353b5810b4910c2a62412b3374fedbe486a14641896d"
     },
     {
       "path": "site/task-queue.js",
@@ -212,6 +212,10 @@
     {
       "path": "site/tests/task-queue.test.js",
       "sha256": "dc56fa6bb8b35e1afa5f58a9eda665959105ff950681d1b32f045b7afe30b527"
+    },
+    {
+      "path": "site/tests/terminal-lastline-probe.js",
+      "sha256": "3681b71c29c03e65c2fae5b5ee99eba7916196f4c0aad63997653ebb5d3b5ba4"
     },
     {
       "path": "site/tests/v86-boot-probe.js",

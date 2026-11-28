@@ -44,6 +44,7 @@ const elements = {
   terminalSubtitle: document.querySelector("#terminal-subtitle"),
   terminalGoal: document.querySelector("#terminal-goal"),
   terminalMount: document.querySelector("#terminal-mount"),
+  terminalHost: document.querySelector("#terminal-host"),
   runtimeStatus: document.querySelector("#runtime-status"),
   runtimeGuideLabel: document.querySelector("#runtime-guide-label"),
   runtimeGuideText: document.querySelector("#runtime-guide-text"),
@@ -599,9 +600,9 @@ function createTerminal() {
   const resizeHandler = () => requestAnimationFrame(() => fitAddon.fit());
   const resizeObserver = new ResizeObserver(resizeHandler);
   terminal.loadAddon(fitAddon);
-  terminal.open(elements.terminalMount);
+  terminal.open(elements.terminalHost);
   fitAddon.fit();
-  resizeObserver.observe(elements.terminalMount);
+  resizeObserver.observe(elements.terminalHost);
   window.addEventListener("resize", resizeHandler);
   document.fonts.ready.then(() => fitAddon.fit());
   terminalCleanup = () => {
